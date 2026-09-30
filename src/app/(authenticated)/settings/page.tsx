@@ -2668,13 +2668,18 @@ export default function SettingsPage() {
     }
     setAuthLoading(true);
     try {
-      const res = await fetch("/api/settings/auth", {
+      // Turning local login on gives the password its power back, which needs
+      // a recent sign-in by another method.
+      const res = await fetchWithReauth("/api/settings/auth", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ localAuthEnabled: checked }),
       });
       if (res.ok) {
         setAuthInfo((prev) => prev ? { ...prev, localAuthEnabled: checked } : prev);
+        // Whether the password is now accepted also depends on SSO: re-read it.
+        const infoRes = await fetch("/api/settings/auth");
+        if (infoRes.ok) setAuthInfo(await infoRes.json());
         toast.success(checked ? "Local login enabled" : "Local login disabled");
       } else {
         // Surface the lockout-guard error inline. The UI also gates the
@@ -2731,9 +2736,10 @@ export default function SettingsPage() {
 
     setCredentialsSaving(true);
     try {
-      const body: Record<string, string> = {
-        currentPassword: credentialsForm.currentPassword,
-      };
+      // Sent only when the form asked for it (password sign-in on); otherwise
+      // the server wants a recent sign-in, which fetchWithReauth prompts for.
+      const body: Record<string, string> = {};
+      if (credentialsForm.currentPassword) body.currentPassword = credentialsForm.currentPassword;
       if (credentialsForm.newPassword) body.newPassword = credentialsForm.newPassword;
       if (credentialsForm.newUsername) body.newUsername = credentialsForm.newUsername;
 
@@ -2793,8 +2799,8 @@ export default function SettingsPage() {
         setPromptError(data.error || "Failed to create credentials");
         return;
       }
-      // Enable local auth
-      const authRes = await fetch("/api/settings/auth", {
+      // Enable local auth (needs a recent sign-in, like the first password)
+      const authRes = await fetchWithReauth("/api/settings/auth", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ localAuthEnabled: true }),

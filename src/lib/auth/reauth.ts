@@ -8,6 +8,7 @@ import {
   type SsoSettings,
 } from "@/lib/sso/config";
 import { RECENT_LOGIN_WINDOW_MS } from "@/lib/auth/recent-login";
+import { passwordSignInEnabled } from "@/lib/auth/password-sign-in";
 import type { ReauthMethod } from "@/lib/auth/reauth-client";
 
 export type { ReauthMethod } from "@/lib/auth/reauth-client";
@@ -34,7 +35,9 @@ export function reauthNonceFromState(state: string | null): string | undefined {
  * exactly as a fresh login would. The browser side is reauth-client.ts
  * (`fetchWithReauth`).
  *
- * - `password`: the account's current password (`POST /api/auth/reauth/password`).
+ * - `password`: the account's current password (`POST /api/auth/reauth/password`)
+ *   — offered only while password sign-in is on (password-sign-in.ts), since
+ *   the login would refuse it otherwise.
  * - `plex`: a Plex OAuth round-trip whose Plex account is the one linked to
  *   this user (`POST /api/auth/reauth/plex`) — offered only while Plex sign-in
  *   is allowed, since that is what `/api/auth/plex/token` requires for a login.
@@ -84,7 +87,7 @@ export async function loadReauthContext(userId: string): Promise<ReauthContext> 
       where: { id: userId },
       select: { plexId: true, passwordHash: true, ssoEnabled: true, ssoSubject: true, ssoIssuer: true },
     }),
-    prisma.appSettings.findFirst({ select: { plexLoginEnabled: true } }),
+    prisma.appSettings.findFirst({ select: { plexLoginEnabled: true, localAuthEnabled: true } }),
     getSsoSettings(),
   ]);
   if (!user) return { methods: [], sso };
@@ -100,9 +103,12 @@ export async function loadReauthContext(userId: string): Promise<ReauthContext> 
   if (sso && isSsoUsable(sso) && ssoLinkedToIssuer(user, currentSsoIssuer(sso))) {
     methods.push(sso.ssoMode === "OIDC" ? "oidc" : "forward");
   }
-  // The password is accepted wherever it exists, as the API-key step-up and
-  // the password change already accept it.
-  if (user.passwordHash) methods.push("password");
+  // The password only while password sign-in is on — the login's own rule
+  // (password-sign-in.ts). With local login off, or SSO replacing it, the
+  // password is accepted for nothing, here included.
+  if (user.passwordHash && passwordSignInEnabled({ localAuthEnabled: settings?.localAuthEnabled, sso })) {
+    methods.push("password");
+  }
   return { methods, sso };
 }
 

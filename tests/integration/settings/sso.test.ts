@@ -302,6 +302,50 @@ describe("PUT /api/settings/sso", () => {
     expect(body.ssoEnabled).toBe(false);
   });
 
+  // With local login on, SSO replacing the local form is what keeps the
+  // password powerless; turning SSO off gives it back. A stale cookie that
+  // knows the password must not be able to do that and then use it.
+  it("asks a stale session to confirm before turning SSO off gives the password its power back", async () => {
+    const user = await createTestUser({ plexId: "p1" });
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        ssoSubject: "abc",
+        ssoIssuer: "https://idp.example.com",
+        ssoEnabled: true,
+        passwordHash: "h",
+        localUsername: "alice",
+      },
+    });
+    await prisma.appSettings.create({
+      data: {
+        userId: user.id,
+        ssoMode: "OIDC",
+        ssoEnabled: true,
+        oidcIssuer: "https://idp.example.com",
+        oidcClientId: "client",
+        plexLoginEnabled: true,
+        localAuthEnabled: true,
+      },
+    });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() - 16 * 60 * 1000 });
+
+    const refused = await expectJson<{ code: string; methods: string[] }>(
+      await callRoute(PUT, { method: "PUT", body: { ssoEnabled: false } }),
+      403,
+    );
+    expect(refused.code).toBe("reauth_required");
+    expect(refused.methods).not.toContain("password");
+    expect((await prisma.appSettings.findFirstOrThrow()).ssoEnabled).toBe(true);
+
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
+    const body = await expectJson<{ ssoEnabled: boolean }>(
+      await callRoute(PUT, { method: "PUT", body: { ssoEnabled: false } }),
+      200,
+    );
+    expect(body.ssoEnabled).toBe(false);
+  });
+
   it("refuses to disable SSO when Plex is linked but plexLoginEnabled is false", async () => {
     const user = await createTestUser({ plexId: "p1" });
     await prisma.user.update({

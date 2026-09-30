@@ -7,6 +7,7 @@ import { validateRequest, changePasswordSchema } from "@/lib/validation";
 import { checkAuthRateLimit } from "@/lib/rate-limit/rate-limiter";
 import { hasRecentLogin } from "@/lib/auth/recent-login";
 import { reauthRequired } from "@/lib/auth/reauth";
+import { isPasswordSignInEnabled } from "@/lib/auth/password-sign-in";
 
 export async function POST(request: NextRequest) {
   // Rate-limit even though the route is authenticated. bcrypt.compare runs on
@@ -46,23 +47,30 @@ export async function POST(request: NextRequest) {
     // Verify currentPassword *first* so the route doesn't become a username-
     // enumeration oracle for callers without the current password (the
     // 409 "Username is already taken" response would otherwise leak which
-    // local usernames exist before any auth check). Skipped only when the
-    // user has no password yet — initial credential setup for a Plex/SSO-
-    // only account.
-    if (user.passwordHash) {
+    // local usernames exist before any auth check). Skipped when the user has
+    // no password yet — initial credential setup for a Plex/SSO-only account —
+    // and when password sign-in is off, when the password is accepted for
+    // nothing (password-sign-in.ts) and a recent sign-in stands in for it.
+    const acceptedHash = user.passwordHash && (await isPasswordSignInEnabled()) ? user.passwordHash : null;
+    if (acceptedHash) {
       if (!currentPassword) {
         return NextResponse.json(
           { error: "Current password is required" },
           { status: 400 }
         );
       }
-      const valid = await bcrypt.compare(currentPassword, user.passwordHash);
+      const valid = await bcrypt.compare(currentPassword, acceptedHash);
       if (!valid) {
         return NextResponse.json(
           { error: "Current password is incorrect" },
           { status: 401 }
         );
       }
+    } else if (user.passwordHash && !hasRecentLogin(session)) {
+      // Password sign-in is off, so the current password proves nothing. Any
+      // credential change still needs proof, as it does with the password on:
+      // a recent sign-in by another method.
+      return reauthRequired(session.userId!, "Changing your local credentials");
     } else if (hasNewPassword && !hasRecentLogin(session)) {
       // There is no current password to confirm, and a first password is a
       // lasting way in that outlives this session (see recent-login.ts): a

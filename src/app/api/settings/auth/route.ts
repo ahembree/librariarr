@@ -3,6 +3,9 @@ import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { validateRequest, authSettingsSchema } from "@/lib/validation";
 import { getSsoSettings, isSsoUsable } from "@/lib/sso/config";
+import { passwordSignInEnabled, turnsPasswordSignInOn } from "@/lib/auth/password-sign-in";
+import { hasRecentLogin } from "@/lib/auth/recent-login";
+import { reauthRequired } from "@/lib/auth/reauth";
 
 export async function GET() {
   const session = await getSession();
@@ -32,7 +35,8 @@ export async function GET() {
   // localAuthEnabled is true in the DB — so the Authentication tab should
   // surface that to avoid the confusion of "Local Login is ON but the form
   // doesn't appear on the login page".
-  const ssoUsableNow = isSsoUsable(await getSsoSettings());
+  const sso = await getSsoSettings();
+  const ssoUsableNow = isSsoUsable(sso);
 
   return NextResponse.json({
     plexConnected: !!user.plexId,
@@ -41,6 +45,12 @@ export async function GET() {
     localAuthEnabled: user.appSettings?.localAuthEnabled ?? false,
     plexLoginEnabled: user.appSettings?.plexLoginEnabled ?? true,
     localAuthHiddenBySso: ssoUsableNow,
+    // Whether the password is accepted at all (password-sign-in.ts). The
+    // settings page asks for the current password only while it is.
+    passwordSignInEnabled: passwordSignInEnabled({
+      localAuthEnabled: user.appSettings?.localAuthEnabled,
+      sso,
+    }),
     displayName: user.username,
   });
 }
@@ -113,6 +123,21 @@ export async function PUT(request: NextRequest) {
       },
       { status: 400 }
     );
+  }
+
+  // Turning local login on gives an existing password its power back, and
+  // while it was off the password counted for nothing — so a stolen cookie
+  // that knows an old password must not be able to switch it on and then use
+  // it. Confirmed by another method (password-sign-in.ts).
+  if (
+    turnsPasswordSignInOn(
+      { localAuthEnabled: user.appSettings?.localAuthEnabled, sso: ssoSettings },
+      { localAuthEnabled: nextLocal, sso: ssoSettings },
+      !!user.passwordHash,
+    ) &&
+    !hasRecentLogin(session)
+  ) {
+    return reauthRequired(session.userId, "Turning on local login");
   }
 
   await prisma.appSettings.upsert({

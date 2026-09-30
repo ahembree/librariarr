@@ -43,6 +43,10 @@ import { POST } from "@/app/api/auth/local/change-password/route";
 describe("POST /api/auth/local/change-password", () => {
   const prisma = getTestPrisma();
 
+  /** Password sign-in on: the only state in which the password is proof. */
+  const enablePasswordSignIn = (userId: string) =>
+    prisma.appSettings.create({ data: { userId, localAuthEnabled: true } });
+
   beforeEach(async () => {
     await cleanDatabase();
     clearMockSession();
@@ -115,6 +119,7 @@ describe("POST /api/auth/local/change-password", () => {
       where: { id: user.id },
       data: { passwordHash: "hashed_oldpassword" },
     });
+    await enablePasswordSignIn(user.id);
 
     setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
 
@@ -138,6 +143,7 @@ describe("POST /api/auth/local/change-password", () => {
       where: { id: user.id },
       data: { passwordHash: "hashed_correctpassword" },
     });
+    await enablePasswordSignIn(user.id);
 
     setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
 
@@ -156,6 +162,7 @@ describe("POST /api/auth/local/change-password", () => {
       where: { id: user.id },
       data: { passwordHash: "hashed_existing" },
     });
+    await enablePasswordSignIn(user.id);
 
     setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
 
@@ -212,6 +219,7 @@ describe("POST /api/auth/local/change-password", () => {
   it("still changes an existing password on an old sign-in when the current password is right", async () => {
     const user = await createTestUser();
     await prisma.user.update({ where: { id: user.id }, data: { passwordHash: "hashed_oldpassword1" } });
+    await enablePasswordSignIn(user.id);
     setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() - 60 * 60 * 1000 });
 
     const response = await callRoute(POST, {
@@ -222,6 +230,61 @@ describe("POST /api/auth/local/change-password", () => {
     await expectJson(response, 200);
     const updated = await prisma.user.findUnique({ where: { id: user.id } });
     expect(updated?.passwordHash).toBe("hashed_newpassword123");
+  });
+
+  // Password sign-in off (local login off, or SSO replacing it): the
+  // password is accepted for nothing, so it is never compared, and a
+  // credential change needs a recent sign-in by another method instead.
+  describe("with password sign-in turned off", () => {
+    const withPassword = async (settings: Record<string, unknown>) => {
+      const user = await createTestUser();
+      await prisma.user.update({ where: { id: user.id }, data: { passwordHash: "hashed_oldpassword1" } });
+      await prisma.appSettings.create({ data: { userId: user.id, ...settings } });
+      return user;
+    };
+    const ssoOn = {
+      localAuthEnabled: true,
+      ssoEnabled: true,
+      ssoMode: "OIDC",
+      oidcIssuer: "https://idp.example.com",
+      oidcClientId: "librariarr",
+    };
+
+    it.each([
+      ["local login off", { localAuthEnabled: false }],
+      ["SSO replacing the local form", ssoOn],
+    ])("%s: the right current password does not stand in for a recent sign-in", async (_label, settings) => {
+      const user = await withPassword(settings);
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() - 60 * 60 * 1000 });
+
+      const response = await callRoute(POST, {
+        url: "/api/auth/local/change-password",
+        method: "POST",
+        body: { currentPassword: "oldpassword1", newPassword: "newpassword123", newUsername: "someone" },
+      });
+      const body = await expectJson<{ code: string; methods: string[] }>(response, 403);
+      expect(body.code).toBe("reauth_required");
+      expect(body.methods).not.toContain("password");
+      expect(mockBcrypt.compare).not.toHaveBeenCalled();
+      const unchanged = await prisma.user.findUnique({ where: { id: user.id } });
+      expect(unchanged?.passwordHash).toBe("hashed_oldpassword1");
+      expect(unchanged?.localUsername).toBeNull();
+    });
+
+    it("a recent sign-in changes the credentials without the current password", async () => {
+      const user = await withPassword({ localAuthEnabled: false });
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
+
+      const response = await callRoute(POST, {
+        url: "/api/auth/local/change-password",
+        method: "POST",
+        body: { currentPassword: "not-even-the-password", newPassword: "newpassword123" },
+      });
+      await expectJson(response, 200);
+      expect(mockBcrypt.compare).not.toHaveBeenCalled();
+      const updated = await prisma.user.findUnique({ where: { id: user.id } });
+      expect(updated?.passwordHash).toBe("hashed_newpassword123");
+    });
   });
 
   it("changes username successfully", async () => {
@@ -267,6 +330,7 @@ describe("POST /api/auth/local/change-password", () => {
       where: { id: user.id },
       data: { passwordHash: "hashed_oldpw" },
     });
+    await enablePasswordSignIn(user.id);
 
     setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
 

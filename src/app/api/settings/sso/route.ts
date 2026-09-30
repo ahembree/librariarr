@@ -7,6 +7,9 @@ import { isSsoOverrideActive } from "@/lib/sso/config";
 import { invalidateOidcDiscoveryCache } from "@/lib/sso/oidc-client";
 import { resolveSecretWrite } from "@/lib/sso/secret-write";
 import { isSameOriginRequest } from "@/lib/url";
+import { loadPasswordSignInState, turnsPasswordSignInOn } from "@/lib/auth/password-sign-in";
+import { hasRecentLogin } from "@/lib/auth/recent-login";
+import { reauthRequired } from "@/lib/auth/reauth";
 
 const SSO_SELECT = {
   ssoEnabled: true,
@@ -189,6 +192,29 @@ export async function PUT(request: NextRequest) {
     forwardAuthEmailHeader: next.forwardAuthEmailHeader,
     forwardAuthNameHeader: next.forwardAuthNameHeader,
   };
+
+  // Turning SSO off hands the login page back to the local form, and with it
+  // gives an existing password its power back — while SSO was on the password
+  // counted for nothing, so a stolen cookie that knows an old password must
+  // not be able to switch SSO off and then use it (password-sign-in.ts).
+  const before = await loadPasswordSignInState();
+  const me = await prisma.user.findUnique({
+    where: { id: session.userId },
+    select: { passwordHash: true },
+  });
+  if (
+    turnsPasswordSignInOn(
+      before,
+      {
+        localAuthEnabled: before.localAuthEnabled,
+        sso: { ...writeData, ssoMode: writeData.ssoMode === "FORWARD_AUTH" ? "FORWARD_AUTH" : "OIDC" },
+      },
+      !!me?.passwordHash,
+    ) &&
+    !hasRecentLogin(session)
+  ) {
+    return reauthRequired(session.userId, "Turning off SSO");
+  }
 
   // Snapshot the *current* SSO config into previousSsoConfig — but only if
   // the writable fields actually changed. Without this guard, a no-op save

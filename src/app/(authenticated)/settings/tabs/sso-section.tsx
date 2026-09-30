@@ -216,7 +216,9 @@ export function SsoSection() {
         forwardAuthEmailHeader: config.forwardAuthEmailHeader,
         forwardAuthNameHeader: config.forwardAuthNameHeader,
       };
-      const res = await fetch("/api/settings/sso", {
+      // Turning SSO off gives an existing password its power back, which
+      // needs a recent sign-in: fetchWithReauth prompts for it.
+      const res = await fetchWithReauth("/api/settings/sso", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -301,7 +303,8 @@ export function SsoSection() {
     setLinkNotice(null);
     setLinking(true);
     try {
-      const res = await fetch("/api/settings/sso/link", { method: "DELETE" });
+      // Unlinking with SSO on turns SSO off too (see the save above).
+      const res = await fetchWithReauth("/api/settings/sso/link", { method: "DELETE" });
       const data = await res.json();
       if (!res.ok) {
         setLinkError(data.error || "Failed to unlink");
@@ -331,7 +334,8 @@ export function SsoSection() {
     setError(null);
     setReverting(true);
     try {
-      const res = await fetch("/api/settings/sso/revert", { method: "POST" });
+      // A revert leaves SSO off (see the save above).
+      const res = await fetchWithReauth("/api/settings/sso/revert", { method: "POST" });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         setError(data.error || "Failed to revert SSO configuration");
@@ -385,7 +389,7 @@ export function SsoSection() {
     setEnableError(null);
     setTogglingEnabled(true);
     try {
-      const res = await fetch("/api/settings/sso", {
+      const res = await fetchWithReauth("/api/settings/sso", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ssoEnabled: enabled }),

@@ -7,6 +7,7 @@ import { currentSsoIssuer, getSsoSettings } from "@/lib/sso/config";
 import { isSameOriginRequest } from "@/lib/url";
 import { hasRecentLogin } from "@/lib/auth/recent-login";
 import { reauthRequired } from "@/lib/auth/reauth";
+import { loadPasswordSignInState, turnsPasswordSignInOn } from "@/lib/auth/password-sign-in";
 
 /**
  * Link an SSO subject identifier to the currently signed-in admin account.
@@ -163,6 +164,23 @@ export async function DELETE(request: NextRequest) {
       },
       { status: 400 }
     );
+  }
+
+  // Unlinking with SSO on also turns SSO off (below), which gives an existing
+  // password its power back when local login is on — a recent sign-in first,
+  // as for turning SSO off in the settings (password-sign-in.ts).
+  if (globalSsoEnabled) {
+    const before = await loadPasswordSignInState();
+    if (
+      turnsPasswordSignInOn(
+        before,
+        { localAuthEnabled: before.localAuthEnabled, sso: null },
+        !!me.passwordHash,
+      ) &&
+      !hasRecentLogin(session)
+    ) {
+      return reauthRequired(session.userId, "Unlinking SSO");
+    }
   }
 
   const user = await prisma.$transaction(async (tx) => {

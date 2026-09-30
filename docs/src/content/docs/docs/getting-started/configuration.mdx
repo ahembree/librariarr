@@ -84,6 +84,14 @@ Username/password authentication. Configured in **Settings → Authentication
   you (signing in again with Plex or SSO in a pop-up) and then sets it
 - Hidden on the login page when SSO is active (SSO is intended to replace
   local credentials)
+- **While local login is off, or SSO is active, the password is accepted for
+  nothing** — not to sign in, not to confirm it's you, not to create an API
+  key, not to change your credentials. Those ask for a sign-in from the last
+  15 minutes with Plex or SSO instead. Turning password sign-in back on (this
+  toggle, or turning SSO off while local login is on) needs the same recent
+  sign-in, so a stolen browser session cannot switch it on and then use an old
+  password. `SSO_DISABLE_OVERRIDE` turns password sign-in on regardless, as
+  the recovery path when SSO is down
 
 The toggle is disabled and shows a warning when disabling local auth would
 leave you with no working sign-in method.

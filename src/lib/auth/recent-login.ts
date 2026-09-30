@@ -6,6 +6,9 @@
  * - setting the account's first local password,
  * - linking a Plex account,
  * - linking an SSO identity,
+ * - turning password sign-in back on — local login on, or SSO off while local
+ *   login is on — since the password counts for nothing while it is off
+ *   (password-sign-in.ts),
  *
  * and for an action that hands over or replaces a credential that signs in:
  *

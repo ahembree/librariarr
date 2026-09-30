@@ -635,6 +635,13 @@ Toggle **Enable SSO Login** off and save. The local username/password form
 returns on the login page (provided local auth is enabled in
 **Settings → Authentication → Local Authentication**).
 
+While SSO is on, your local password is accepted for nothing — not to sign in,
+confirm it's you, create an API key or change your credentials. Turning SSO
+off (the toggle, **Unlink SSO** or **Revert**) while local login is on gives
+the password its power back, so it needs a sign-in from the last 15 minutes;
+if it has been longer, Librariarr asks you to confirm it's you with SSO or
+Plex first.
+
 To remove the link entirely, click **Unlink SSO**. Unlinking also
 automatically turns off the global SSO toggle — keeping it on after removing
 your identity would silently hide the local form without giving you a way to

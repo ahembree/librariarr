@@ -139,7 +139,7 @@ function isExpired(key: ApiKeyRow): boolean {
 }
 
 
-export function ApiKeysSection({ hasPassword }: { hasPassword: boolean }) {
+export function ApiKeysSection({ confirmsWithPassword }: { confirmsWithPassword: boolean }) {
   const [keys, setKeys] = useState<ApiKeyRow[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [retrying, setRetrying] = useState(false);
@@ -317,7 +317,7 @@ export function ApiKeysSection({ hasPassword }: { hasPassword: boolean }) {
         open={createOpen}
         onOpenChange={setCreateOpen}
         existingNames={keys?.map((k) => k.name) ?? []}
-        hasPassword={hasPassword}
+        confirmsWithPassword={confirmsWithPassword}
         returnFocusTo={createButtonRef}
         onCreated={(created) => {
           // Shown at once; the refresh then fills in anything this list was
@@ -473,7 +473,7 @@ function CreateApiKeyDialog({
   open,
   onOpenChange,
   existingNames,
-  hasPassword,
+  confirmsWithPassword,
   returnFocusTo,
   onCreated,
   onListStale,
@@ -481,8 +481,11 @@ function CreateApiKeyDialog({
   open: boolean;
   onOpenChange: (open: boolean) => void;
   existingNames: string[];
-  /** The account has a local password, which creating a key must confirm. */
-  hasPassword: boolean;
+  /**
+   * Creating a key confirms the account password: it has one and password
+   * sign-in is on. Otherwise the server asks for a recent sign-in instead.
+   */
+  confirmsWithPassword: boolean;
   /** Focused once the dialog has closed. */
   returnFocusTo: RefObject<HTMLButtonElement | null>;
   onCreated: (apiKey: ApiKeyRow) => void;
@@ -572,7 +575,7 @@ function CreateApiKeyDialog({
     !duplicateName &&
     scopes.length > 0 &&
     expiresAt !== undefined &&
-    (!hasPassword || currentPassword.length > 0) &&
+    (!confirmsWithPassword || currentPassword.length > 0) &&
     !saving;
 
   const toggleScope = (scope: ApiScope, checked: boolean) => {
@@ -621,7 +624,7 @@ function CreateApiKeyDialog({
           name: trimmedName,
           scopes,
           expiresAt: expiresAtNow,
-          ...(hasPassword && { currentPassword }),
+          ...(confirmsWithPassword && { currentPassword }),
         }),
       });
       const data = await res.json().catch(() => null);
@@ -654,7 +657,7 @@ function CreateApiKeyDialog({
       }
       if (data?.code === "password_required") {
         // A password was set since this page loaded.
-        setError("This account now has a password. Reload the page, then enter it here to create the key.");
+        setError("Creating a key now needs this account's password. Reload the page, then enter it here.");
         return;
       }
       setError(saveErrorMessage(data, "Failed to create API key"));
@@ -947,7 +950,7 @@ function CreateApiKeyDialog({
                 )}
               </div>
 
-              {hasPassword && (
+              {confirmsWithPassword && (
                 <div className="space-y-1">
                   <Label htmlFor="api-key-current-password">Current password</Label>
                   <Input

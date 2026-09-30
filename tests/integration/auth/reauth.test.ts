@@ -262,14 +262,32 @@ describe("/api/auth/reauth/*", () => {
     const call = (body: unknown) =>
       callRoute(passwordPOST, { url: "/api/auth/reauth/password", method: "POST", body });
 
-    async function signInWithPassword() {
+    /** A password and password sign-in on, unless `settings` say otherwise. */
+    async function signInWithPassword(settings: Record<string, unknown> = { localAuthEnabled: true }) {
       const user = await signIn();
       await prisma.user.update({
         where: { id: user.id },
         data: { passwordHash: await bcrypt.hash(PASSWORD, 4) },
       });
+      await prisma.appSettings.create({ data: { userId: user.id, ...settings } });
       return user;
     }
+
+    // With password sign-in off the password is accepted for nothing — here
+    // included — so it is never even compared.
+    it.each([
+      ["local login is off", { localAuthEnabled: false }],
+      [
+        "SSO replaces the local form",
+        { localAuthEnabled: true, ssoEnabled: true, ssoMode: "OIDC", oidcIssuer: ISSUER, oidcClientId: "c" },
+      ],
+    ])("refuses the right password while %s", async (_label, settings) => {
+      await signInWithPassword(settings);
+      const body = await expectJson<{ error: string }>(await call({ password: PASSWORD }), 400);
+      expect(body.error).toBe("Password sign-in is turned off");
+      expect(getMockSession().authenticatedAt).toBe(STALE);
+      expect(mockReserve).not.toHaveBeenCalled();
+    });
 
     it("returns 401 when not signed in", async () => {
       await expectJson(await call({ password: PASSWORD }), 401);

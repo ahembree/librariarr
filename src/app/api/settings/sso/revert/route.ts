@@ -5,6 +5,9 @@ import { Prisma } from "@/generated/prisma/client";
 import { apiLogger } from "@/lib/logger";
 import { invalidateOidcDiscoveryCache } from "@/lib/sso/oidc-client";
 import { isSameOriginRequest } from "@/lib/url";
+import { loadPasswordSignInState, turnsPasswordSignInOn } from "@/lib/auth/password-sign-in";
+import { hasRecentLogin } from "@/lib/auth/recent-login";
+import { reauthRequired } from "@/lib/auth/reauth";
 
 /**
  * Restore the previously-saved SSO configuration from the snapshot taken on
@@ -36,7 +39,7 @@ export async function POST(request: NextRequest) {
 
   const existing = await prisma.appSettings.findUnique({
     where: { userId: session.userId },
-    select: { previousSsoConfig: true },
+    select: { previousSsoConfig: true, user: { select: { passwordHash: true } } },
   });
 
   if (!existing || !existing.previousSsoConfig) {
@@ -44,6 +47,21 @@ export async function POST(request: NextRequest) {
       { error: "No previous SSO configuration to revert to." },
       { status: 404 }
     );
+  }
+
+  // A revert leaves SSO off, which gives an existing password its power back
+  // when local login is on — a recent sign-in first, as for turning SSO off
+  // in the settings (password-sign-in.ts).
+  const before = await loadPasswordSignInState();
+  if (
+    turnsPasswordSignInOn(
+      before,
+      { localAuthEnabled: before.localAuthEnabled, sso: null },
+      !!existing.user?.passwordHash,
+    ) &&
+    !hasRecentLogin(session)
+  ) {
+    return reauthRequired(session.userId, "Reverting the SSO configuration");
   }
 
   // The snapshot is stored as Json; cast and pull the fields out. Defensive

@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from "vitest";
 import bcrypt from "bcryptjs";
 import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
-import { setMockSession, clearMockSession } from "../../setup/mock-session";
+import { setMockSession, clearMockSession, getMockSession } from "../../setup/mock-session";
 import {
   callRoute,
   callRouteWithParams,
@@ -337,11 +337,17 @@ describe("/api/settings/api-keys", () => {
       for (const store of stores()) store.clear();
     });
 
-    async function loginWithPassword() {
+    /** A password and password sign-in on, unless `settings` say otherwise. */
+    async function loginWithPassword(settings: Record<string, unknown> = { localAuthEnabled: true }) {
       const user = await login(Date.now() - 2 * RECENT_LOGIN_WINDOW_MS);
       await prisma.user.update({
         where: { id: user.id },
         data: { passwordHash: bcrypt.hashSync(PASSWORD, 4) },
+      });
+      await prisma.appSettings.upsert({
+        where: { userId: user.id },
+        update: settings,
+        create: { userId: user.id, ...settings },
       });
       return user;
     }
@@ -387,6 +393,24 @@ describe("/api/settings/api-keys", () => {
       expect(statuses.filter((s) => s === 429)).toHaveLength(15);
       expect((await create(body({ currentPassword: PASSWORD }))).status).toBe(429);
       expect(await prisma.apiKey.count()).toBe(0);
+    });
+
+    // With password sign-in off the password is accepted for nothing: the
+    // right one does not create a key on an old sign-in, and a recent sign-in
+    // by another method is what the step-up asks for instead.
+    it("with password sign-in off, the password is not the step-up", async () => {
+      await loginWithPassword({ localAuthEnabled: false });
+      const refused = await expectJson<{ code: string; methods: string[] }>(
+        await create(body({ currentPassword: PASSWORD })),
+        403,
+      );
+      expect(refused.code).toBe("reauth_required");
+      expect(refused.methods).not.toContain("password");
+      expect(await prisma.apiKey.count()).toBe(0);
+
+      setMockSession({ ...getMockSession(), authenticatedAt: Date.now() });
+      await expectJson(await create(body()), 201);
+      expect(await prisma.apiKey.count()).toBe(1);
     });
 
     it("correct passwords are never counted against the budget", async () => {

@@ -87,6 +87,8 @@ describe("POST /api/auth/local/change-password", () => {
       where: { id: user.id },
       data: { passwordHash: "hashed_oldpassword" },
     });
+    // Password sign-in on: the only state in which the password is proof.
+    await prisma.appSettings.create({ data: { userId: user.id, localAuthEnabled: true } });
 
     setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
 
@@ -144,6 +146,8 @@ describe("POST /api/auth/local/change-password", () => {
       where: { id: user.id },
       data: { passwordHash: "hashed_correctpassword" },
     });
+    // Password sign-in on: the only state in which the password is proof.
+    await prisma.appSettings.create({ data: { userId: user.id, localAuthEnabled: true } });
 
     setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
 
@@ -193,6 +197,8 @@ describe("POST /api/auth/local/change-password", () => {
       where: { id: user.id },
       data: { passwordHash: "hashed_existing" },
     });
+    // Password sign-in on: the only state in which the password is proof.
+    await prisma.appSettings.create({ data: { userId: user.id, localAuthEnabled: true } });
 
     setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
 

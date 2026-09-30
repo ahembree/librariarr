@@ -88,6 +88,36 @@ describe("POST /api/settings/sso/revert", () => {
     expect(row?.previousSsoConfig).toBeNull();
   });
 
+  // A revert leaves SSO off, which with local login on gives the password
+  // its power back — the same confirmation as turning SSO off.
+  it("asks a stale session to confirm when the revert would turn password sign-in back on", async () => {
+    const user = await createTestUser();
+    await prisma.user.update({ where: { id: user.id }, data: { passwordHash: "h", localUsername: "alice" } });
+    await prisma.appSettings.create({
+      data: {
+        userId: user.id,
+        localAuthEnabled: true,
+        ssoMode: "OIDC",
+        ssoEnabled: true,
+        oidcIssuer: "https://broken.example.com",
+        oidcClientId: "broken-client",
+        previousSsoConfig: { ssoMode: "OIDC", oidcIssuer: "https://working.example.com", oidcClientId: "c" },
+      },
+    });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() - 16 * 60 * 1000 });
+
+    const body = await expectJson<{ code: string; methods: string[] }>(await callRoute(POST, { method: "POST" }), 403);
+    expect(body.code).toBe("reauth_required");
+    expect(body.methods).not.toContain("password");
+    const row = await prisma.appSettings.findUniqueOrThrow({ where: { userId: user.id } });
+    expect(row.ssoEnabled).toBe(true);
+    expect(row.oidcIssuer).toBe("https://broken.example.com");
+
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
+    await expectJson(await callRoute(POST, { method: "POST" }), 200);
+    expect((await prisma.appSettings.findUniqueOrThrow({ where: { userId: user.id } })).ssoEnabled).toBe(false);
+  });
+
   it("clears the admin's user-level SSO link so the admin must re-link", async () => {
     // If we restored an SSO config with a different issuer but left the
     // user's ssoSubject/Issuer pinned to the abandoned config, login would

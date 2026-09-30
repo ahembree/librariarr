@@ -187,6 +187,9 @@ export interface AuthInfo {
   /** True when SSO is currently usable and is hiding the local form on the
    *  login page (regardless of the localAuthEnabled DB value). */
   localAuthHiddenBySso?: boolean;
+  /** Whether the password is accepted at all: local login on and SSO not
+   *  replacing it. While it is off the current password is never asked for. */
+  passwordSignInEnabled?: boolean;
   displayName: string;
 }
 
