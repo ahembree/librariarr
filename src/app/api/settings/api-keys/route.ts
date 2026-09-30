@@ -7,10 +7,11 @@ import { logger } from "@/lib/logger";
 import { validateRequest, apiKeyCreateSchema } from "@/lib/validation";
 import { generateApiKey } from "@/lib/api-keys/keys";
 import { API_KEY_PUBLIC_SELECT, MAX_API_KEYS } from "@/lib/api-keys/manage";
-import { hasRecentLogin, recentLoginRequired } from "@/lib/auth/recent-login";
+import { hasRecentLogin } from "@/lib/auth/recent-login";
+import { reauthRequired } from "@/lib/auth/reauth";
 import { notifyApiKeyChange } from "@/lib/api-keys/notify";
 import { normalizeScopes } from "@/lib/api-keys/scopes";
-import { peekAuthRateLimit, recordAuthFailure } from "@/lib/rate-limit/rate-limiter";
+import { PASSWORD_CONFIRM_BUCKET, peekAuthRateLimit, recordAuthFailure } from "@/lib/rate-limit/rate-limiter";
 
 /**
  * API key management for the settings page — cookie session only. These routes
@@ -23,7 +24,8 @@ import { peekAuthRateLimit, recordAuthFailure } from "@/lib/rate-limit/rate-limi
  * password where it has one, and otherwise (Plex or SSO only) a login made in
  * the last `RECENT_LOGIN_WINDOW_MS` (`src/lib/auth/recent-login.ts`, which
  * also guards setting a first password and linking a Plex account or an SSO
- * identity, the other ways a cookie could make itself last); either way the
+ * identity, the other ways a cookie could make itself last) — which the
+ * dialog renews in place through `/api/auth/reauth/*`; either way the
  * creation is also announced on Discord where a webhook is set.
  */
 
@@ -65,7 +67,7 @@ export async function POST(request: NextRequest) {
     // Charged only on a wrong password (a routine that creates ten keys in a
     // row must not lock itself out), but a wrong one costs what a failed
     // login does, so this route is not a cheaper password oracle than login.
-    const limited = peekAuthRateLimit(request, "api-key-create");
+    const limited = peekAuthRateLimit(request, PASSWORD_CONFIRM_BUCKET);
     if (limited) return limited;
     if (!data.currentPassword) {
       return NextResponse.json(
@@ -75,7 +77,7 @@ export async function POST(request: NextRequest) {
     }
     const valid = await bcrypt.compare(data.currentPassword, user.passwordHash);
     if (!valid) {
-      recordAuthFailure(request, "api-key-create");
+      recordAuthFailure(request, PASSWORD_CONFIRM_BUCKET);
       logger.warn("Auth", "API key creation refused — the current password was incorrect");
       return NextResponse.json(
         { error: "Current password is incorrect", code: "password_incorrect" },
@@ -83,7 +85,9 @@ export async function POST(request: NextRequest) {
       );
     }
   } else if (!hasRecentLogin(session)) {
-    return recentLoginRequired("Creating an API key", "create the key");
+    // Names the ways to confirm the identity in place (Plex, SSO), which the
+    // settings dialog offers instead of making the user sign out and back in.
+    return reauthRequired(session.userId!, "Creating an API key");
   }
 
   const expiresAt = data.expiresAt ? new Date(data.expiresAt) : null;

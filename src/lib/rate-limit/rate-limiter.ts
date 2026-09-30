@@ -207,6 +207,14 @@ export function checkAuthRateLimit(request: Request, bucket: string): Response |
  * routine they may run ten times in a row, while a wrong password still costs
  * exactly what a failed login does.
  */
+/**
+ * The one bucket every current-password confirmation on a signed-in route is
+ * charged to (the API-key step-up and `/api/auth/reauth/password`). Each
+ * bucket carries its own per-address and global budget, so giving each route
+ * its own would add a fresh budget of guesses per route.
+ */
+export const PASSWORD_CONFIRM_BUCKET = "password-confirm";
+
 export function peekAuthRateLimit(request: Request, bucket: string): Response | null {
   const ip = getClientIp(request);
   const perIp = authRateLimiter.peek(`${bucket}:${ip}`);

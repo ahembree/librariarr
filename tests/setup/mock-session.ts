@@ -17,7 +17,7 @@ export interface MockSessionData {
   // assertion in the test sees the cleared state.
   oidcState?: string;
   oidcVerifier?: string;
-  oidcFlow?: "link";
+  oidcFlow?: "link" | "reauth";
 }
 
 let currentSession: MockSessionData = { isLoggedIn: false };

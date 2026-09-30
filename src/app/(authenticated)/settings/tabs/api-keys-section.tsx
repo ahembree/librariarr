@@ -14,6 +14,7 @@ import {
   KeySquare,
   Loader2,
   Plus,
+  ShieldCheck,
   SlidersHorizontal,
   Trash2,
   type LucideIcon,
@@ -61,6 +62,8 @@ import {
   normalizeScopes,
   type ApiScope,
 } from "@/lib/api-keys/scopes";
+import { ReauthPanel } from "@/components/reauth-panel";
+import { reauthMethodsOf, type ReauthMethod } from "@/lib/auth/reauth-client";
 import { SettingsSection } from "../components";
 
 interface ApiKeyRow {
@@ -134,6 +137,7 @@ async function fetchApiKeys(): Promise<ApiKeyRow[]> {
 function isExpired(key: ApiKeyRow): boolean {
   return !!key.expiresAt && new Date(key.expiresAt).getTime() <= Date.now();
 }
+
 
 export function ApiKeysSection({ hasPassword }: { hasPassword: boolean }) {
   const [keys, setKeys] = useState<ApiKeyRow[] | null>(null);
@@ -494,6 +498,9 @@ function CreateApiKeyDialog({
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Set when the server wants a recent sign-in (no local password): the ways
+  // this account can confirm it in place, instead of signing out and back in.
+  const [reauthMethods, setReauthMethods] = useState<ReauthMethod[] | null>(null);
   // The plaintext key, held only while the reveal step is on screen.
   const [revealedKey, setRevealedKey] = useState<{ key: string; name: string } | null>(null);
   const [copied, setCopied] = useState(false);
@@ -523,6 +530,7 @@ function CreateApiKeyDialog({
     setPasswordError(null);
     setSaving(false);
     setError(null);
+    setReauthMethods(null);
     setRevealedKey(null);
     revealedKeyRef.current = null;
     setCopied(false);
@@ -636,6 +644,12 @@ function CreateApiKeyDialog({
       if (data?.code === "password_incorrect") {
         setCurrentPassword("");
         setPasswordError("That password is not correct.");
+        return;
+      }
+      const methods = reauthMethodsOf(data);
+      if (methods) {
+        // Confirmed in place below, then the key is created.
+        setReauthMethods(methods);
         return;
       }
       if (data?.code === "password_required") {
@@ -958,6 +972,28 @@ function CreateApiKeyDialog({
                       A key keeps working after you sign out, so creating one confirms it is you.
                     </p>
                   )}
+                </div>
+              )}
+
+              {reauthMethods && (
+                <div role="alert" className="space-y-3 rounded-md border border-amber/40 bg-amber/10 p-3 text-sm">
+                  <p className="flex items-start gap-2">
+                    <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-amber" />
+                    <span>
+                      <span className="font-medium">Confirm it&rsquo;s you.</span> A key keeps working after
+                      you sign out, so creating one needs a sign-in from the last 15 minutes.
+                      {reauthMethods.length > 0 && " The key is created as soon as you confirm."}
+                    </span>
+                  </p>
+                  <ReauthPanel
+                    methods={reauthMethods}
+                    disabled={saving}
+                    onConfirmed={async () => {
+                      setReauthMethods(null);
+                      // Closed while the sign-in was under way: create nothing.
+                      if (open) await handleCreate();
+                    }}
+                  />
                 </div>
               )}
 

@@ -201,6 +201,8 @@ describe("POST /api/auth/local/change-password", () => {
     const body = await expectJson<{ error: string; code: string }>(response, 403);
     expect(body.code).toBe("reauth_required");
     expect(body.error).toMatch(/sign-in from the last 15 minutes/);
+    // The settings page offers these to confirm in place.
+    expect((body as unknown as { methods: string[] }).methods).toEqual(["plex"]);
 
     const unchanged = await prisma.user.findUnique({ where: { id: user.id } });
     expect(unchanged?.passwordHash).toBeNull();

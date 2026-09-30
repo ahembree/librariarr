@@ -38,6 +38,9 @@ export async function GET(request: NextRequest) {
     const session = await getSession();
     session.oidcState = state;
     session.oidcVerifier = verifier;
+    // A login, whatever an abandoned link or re-authentication handshake left
+    // behind: the callback would otherwise finish that flow instead.
+    session.oidcFlow = undefined;
     await session.save();
 
     const url = buildAuthorizationUrl({

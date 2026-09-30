@@ -386,7 +386,7 @@ describe("/api/settings/api-keys", () => {
       await login(Date.now() - RECENT_LOGIN_WINDOW_MS - 1000);
       const stale = await expectJson<{ code: string; error: string }>(await create(body()), 403);
       expect(stale.code).toBe("reauth_required");
-      expect(stale.error).toMatch(/sign out, sign back in/i);
+      expect(stale.error).toMatch(/confirm it's you/i);
       expect(await prisma.apiKey.count()).toBe(0);
 
       // A session with no login stamp at all (one from before the stamp existed).
@@ -396,6 +396,45 @@ describe("/api/settings/api-keys", () => {
 
       await login(Date.now() - 1000);
       await expectJson(await create(body()), 201);
+    });
+
+    // The dialog offers these instead of making the user sign out and back in.
+    it("names the ways the account can confirm its identity in place", async () => {
+      const user = await login(Date.now() - RECENT_LOGIN_WINDOW_MS - 1000);
+      const plexOnly = await expectJson<{ methods: string[] }>(await create(body()), 403);
+      expect(plexOnly.methods).toEqual(["plex"]);
+
+      await prisma.appSettings.create({
+        data: {
+          userId: user.id,
+          ssoMode: "OIDC",
+          ssoEnabled: true,
+          oidcIssuer: "https://idp.example.com/",
+          oidcClientId: "client",
+        },
+      });
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { ssoEnabled: true, ssoSubject: "sub-1", ssoIssuer: "https://idp.example.com" },
+      });
+      const both = await expectJson<{ methods: string[] }>(await create(body()), 403);
+      expect(both.methods).toEqual(["plex", "oidc"]);
+
+      // Plex sign-in turned off: a Plex round-trip is no longer offered.
+      await prisma.appSettings.update({ where: { userId: user.id }, data: { plexLoginEnabled: false } });
+      const noPlex = await expectJson<{ methods: string[] }>(await create(body()), 403);
+      expect(noPlex.methods).toEqual(["oidc"]);
+
+      await prisma.user.update({ where: { id: user.id }, data: { plexId: null } });
+      await prisma.appSettings.update({ where: { userId: user.id }, data: { ssoMode: "FORWARD_AUTH" } });
+      await prisma.user.update({ where: { id: user.id }, data: { ssoIssuer: "forward-auth" } });
+      const proxy = await expectJson<{ methods: string[]; error: string }>(await create(body()), 403);
+      expect(proxy.methods).toEqual(["forward"]);
+
+      await prisma.appSettings.update({ where: { userId: user.id }, data: { ssoEnabled: false } });
+      const none = await expectJson<{ methods: string[]; error: string }>(await create(body()), 403);
+      expect(none.methods).toEqual([]);
+      expect(none.error).toMatch(/sign out, sign back in/i);
     });
 
     it("ignores a password sent for an account that has none", async () => {

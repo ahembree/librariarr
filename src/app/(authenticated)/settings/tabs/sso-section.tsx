@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
+import { fetchWithReauth } from "@/lib/auth/reauth-client";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -273,7 +274,7 @@ export function SsoSection() {
     }
     setLinking(true);
     try {
-      const res = await fetch("/api/settings/sso/link", {
+      const res = await fetchWithReauth("/api/settings/sso/link", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ssoSubject: linkSubject.trim() }),
@@ -361,7 +362,7 @@ export function SsoSection() {
     setLinkNotice(null);
     setOidcLinkStarting(true);
     try {
-      const res = await fetch("/api/settings/sso/link/oidc/start", {
+      const res = await fetchWithReauth("/api/settings/sso/link/oidc/start", {
         method: "POST",
       });
       const data = await res.json();

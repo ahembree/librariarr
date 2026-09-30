@@ -1,5 +1,3 @@
-import { NextResponse } from "next/server";
-
 /**
  * How recent a sign-in must be for an action that adds a lasting way into the
  * account without proving the current password:
@@ -17,26 +15,12 @@ import { NextResponse } from "next/server";
  *
  * Every login path goes through `rotateSession()`, which stamps
  * `authenticatedAt` (epoch ms). A session from before that stamp existed has
- * none and reads as not recent.
+ * none and reads as not recent. A refusal goes out through `reauthRequired`
+ * (reauth.ts), which names the ways to renew it in place — Plex, OIDC or the
+ * forward-auth proxy — so nobody has to sign out and back in.
  */
 export const RECENT_LOGIN_WINDOW_MS = 15 * 60 * 1000;
 
 export function hasRecentLogin(session: { authenticatedAt?: number }, now = Date.now()): boolean {
   return typeof session.authenticatedAt === "number" && now - session.authenticatedAt <= RECENT_LOGIN_WINDOW_MS;
-}
-
-/**
- * The 403 for a session whose sign-in is older than the window. The message
- * reads "<what> needs a sign-in from the last 15 minutes. Sign out, sign back
- * in, then <then>." — the settings page shows `error` as it is.
- */
-export function recentLoginRequired(what: string, then: string): NextResponse {
-  const minutes = Math.round(RECENT_LOGIN_WINDOW_MS / 60_000);
-  return NextResponse.json(
-    {
-      error: `${what} needs a sign-in from the last ${minutes} minutes. Sign out, sign back in, then ${then}.`,
-      code: "reauth_required",
-    },
-    { status: 403 },
-  );
 }

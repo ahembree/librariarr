@@ -9,6 +9,7 @@ import { Menu, AlertTriangle } from "lucide-react";
 import { Logo } from "@/components/logo";
 import { Button } from "@/components/ui/button";
 import { BackToTop } from "@/components/back-to-top";
+import { ReauthDialogHost } from "@/components/reauth-dialog-host";
 import { findScrollContainer } from "@/lib/scroll-utils";
 import { useScrollToTop } from "@/hooks/use-scroll-to-top";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -160,6 +161,8 @@ export function AuthenticatedShell({
         <main className="canvas-atmosphere pb-safe flex-1 overflow-y-auto overflow-x-hidden overscroll-y-contain bg-background">{children}</main>
         <BackToTop />
       </div>
+      {/* The "Confirm it's you" prompt behind fetchWithReauth. */}
+      <ReauthDialogHost />
     </div>
   );
 }

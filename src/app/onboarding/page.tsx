@@ -17,6 +17,8 @@ import {
 import { Server, Loader2, Check, AlertCircle, Pencil, ShieldOff, ArrowLeft, Plug, CheckCircle, XCircle } from "lucide-react";
 import { Logo } from "@/components/logo";
 import { usePlexOAuth } from "@/hooks/use-plex-oauth";
+import { fetchWithReauth } from "@/lib/auth/reauth-client";
+import { ReauthDialogHost } from "@/components/reauth-dialog-host";
 import { SERVER_TYPE_STYLES } from "@/lib/server-styles";
 
 // ─── Types ───
@@ -68,7 +70,7 @@ function getDefaultUrl(connections: PlexConnection[]): string {
   return (remote || connections[0])?.uri ?? "";
 }
 
-export default function OnboardingPage() {
+function OnboardingContent() {
   const router = useRouter();
 
   // Mode & detection
@@ -143,7 +145,7 @@ export default function OnboardingPage() {
   const { startAuth: startPlexAuth, isLoading: plexAuthLoading, error: plexAuthError, authUrl: plexAuthUrl } = usePlexOAuth({
     onSuccess: async (authToken) => {
       // Link the Plex account to the current (local) user
-      const res = await fetch("/api/auth/plex/link", {
+      const res = await fetchWithReauth("/api/auth/plex/link", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ authToken }),
@@ -845,5 +847,16 @@ export default function OnboardingPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function OnboardingPage() {
+  return (
+    <>
+      <OnboardingContent />
+      {/* Onboarding sits outside the authenticated shell, so it hosts its own
+          "Confirm it's you" prompt for the Plex link above. */}
+      <ReauthDialogHost />
+    </>
   );
 }

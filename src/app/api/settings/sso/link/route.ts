@@ -5,7 +5,8 @@ import { validateRequest, ssoLinkSchema } from "@/lib/validation";
 import { apiLogger } from "@/lib/logger";
 import { currentSsoIssuer, getSsoSettings } from "@/lib/sso/config";
 import { isSameOriginRequest } from "@/lib/url";
-import { hasRecentLogin, recentLoginRequired } from "@/lib/auth/recent-login";
+import { hasRecentLogin } from "@/lib/auth/recent-login";
+import { reauthRequired } from "@/lib/auth/reauth";
 
 /**
  * Link an SSO subject identifier to the currently signed-in admin account.
@@ -30,7 +31,7 @@ export async function POST(request: NextRequest) {
   // A linked SSO identity is a way to sign in that outlives this session — a
   // stolen cookie must not be enough (see recent-login.ts).
   if (!hasRecentLogin(session)) {
-    return recentLoginRequired("Linking an SSO identity", "link it");
+    return reauthRequired(session.userId, "Linking an SSO identity");
   }
 
   const { data, error } = await validateRequest(request, ssoLinkSchema);

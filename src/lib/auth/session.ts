@@ -32,9 +32,10 @@ export interface SessionData {
    * page. The link path captures the IdP-issued `sub` directly so admins
    * don't need to find it in logs — and it doubles as live verification
    * that client_id + client_secret + redirect URI all work before SSO is
-   * activated.
+   * activated. `"reauth"` confirms the signed-in admin's identity in place
+   * (`/api/auth/reauth/oidc`) and stamps `authenticatedAt`.
    */
-  oidcFlow?: "link";
+  oidcFlow?: "link" | "reauth";
 }
 
 const SESSION_SECRET_FILE = "/config/.session-secret";
