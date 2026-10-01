@@ -37,6 +37,13 @@ import { getDuplicateServerNames } from "@/lib/server-styles";
 import { ServerTypeChip } from "@/components/server-type-chip";
 import { DashboardSkeleton } from "@/components/skeletons";
 import { useRealtime } from "@/hooks/use-realtime";
+import {
+  ALL_SERVERS,
+  dashboardStatsUrl,
+  reconcileSelectedServer,
+  selectableServers,
+  type DashboardServer,
+} from "@/lib/dashboard/server-selection";
 
 interface Stats {
   movieCount: number;
@@ -127,8 +134,8 @@ export default function DashboardPage() {
   const [layout, setLayout] = useState<DashboardLayout | null>(null);
   const [scheduleInfo, setScheduleInfo] = useState<ScheduleInfo | null>(null);
   const [editMode, setEditMode] = useState(false);
-  const [servers, setServers] = useState<{ id: string; name: string; type: string }[]>([]);
-  const [selectedServerId, setSelectedServerId] = useState<string>("all");
+  const [servers, setServers] = useState<DashboardServer[]>([]);
+  const [selectedServerId, setSelectedServerId] = useState<string>(ALL_SERVERS);
   const [selectedMediaType, setSelectedMediaType] = useState<string>("all");
   const [availableTypes, setAvailableTypes] = useState<string[]>([]);
   const [editingCustomCard, setEditingCustomCard] = useState<{ cardId: string; config: CustomCardConfig } | null>(null);
@@ -148,11 +155,7 @@ export default function DashboardPage() {
   const fetchStats = useCallback(async () => {
     const token = ++statsReqToken.current;
     try {
-      const params = new URLSearchParams();
-      if (selectedServerId !== "all") {
-        params.set("serverId", selectedServerId);
-      }
-      const url = `/api/media/stats${params.toString() ? `?${params}` : ""}`;
+      const url = dashboardStatsUrl(selectedServerId);
       const res = await fetch(url);
       // An error body ({error}) is truthy — setting it as stats would crash
       // the tiles. Leave stats as they were (null on first load, so the retry
@@ -198,23 +201,9 @@ export default function DashboardPage() {
 
       if (serversRes.ok) {
         const serversData = await serversRes.json();
-        // Stats, timelines and Recently Added cover enabled servers only and
-        // answer 404 for a disabled one, so offering it left the previous
-        // selection's figures on screen under its name.
-        const list = ((serversData.servers ?? []) as {
-          id: string;
-          name: string;
-          type: string;
-          enabled?: boolean;
-        }[])
-          .filter((s) => s.enabled !== false)
-          .map((s) => ({ id: s.id, name: s.name, type: s.type }));
+        const list = selectableServers(serversData.servers ?? []);
         setServers(list);
-        // A selected server that was deleted or disabled falls back to all;
-        // otherwise every later stats fetch 404s and the figures freeze.
-        setSelectedServerId((prev) =>
-          prev !== "all" && !list.some((s) => s.id === prev) ? "all" : prev,
-        );
+        setSelectedServerId((prev) => reconcileSelectedServer(prev, list));
       }
 
       if (typesRes.ok) {
@@ -375,7 +364,7 @@ export default function DashboardPage() {
     );
   }
 
-  const serverId = selectedServerId !== "all" ? selectedServerId : undefined;
+  const serverId = selectedServerId !== ALL_SERVERS ? selectedServerId : undefined;
 
   return (
     <div className="p-4 sm:p-6 lg:p-8">
@@ -427,7 +416,7 @@ export default function DashboardPage() {
                   <SelectValue placeholder="All Servers" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All Servers</SelectItem>
+                  <SelectItem value={ALL_SERVERS}>All Servers</SelectItem>
                   {servers.map((server) => (
                     <SelectItem key={server.id} value={server.id}>
                       <span className="inline-flex items-center gap-1.5">

@@ -7,12 +7,7 @@ import { ArrowUpRight, Film, HardDrive, Music, Tv } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatBytesNum, formatDurationLarge } from "@/lib/format";
 import { useRealtime } from "@/hooks/use-realtime";
-
-interface SparkPoint {
-  /** Month bucket label from the timeline API ("YYYY-MM"). */
-  date: string;
-  total: number;
-}
+import { buildSparkPoints, type SparkPoint } from "@/lib/dashboard/sparkline";
 
 /** "2026-03" → "Mar 2026" for the hover tooltip. */
 function formatMonth(bucket: string): string {
@@ -43,31 +38,6 @@ interface LibraryStats {
 
 /** Months of addedAt history shown in each tile's growth sparkline. */
 const SPARK_MONTHS = 12;
-
-/**
- * Extend a month series through the current month. The timeline API fills
- * gaps only between its first and last non-empty buckets, so without this a
- * library that added nothing recently charted the 12 months ending at its last
- * addition under a "last 12mo" caption. `carry` repeats the last value (a
- * running size) instead of padding with zero additions.
- */
-function extendToCurrentMonth(points: SparkPoint[], carry: boolean): SparkPoint[] {
-  if (points.length === 0) return points;
-  const now = new Date();
-  const current = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
-  const last = points[points.length - 1];
-  const [y, m] = last.date.split("-").map(Number);
-  if (!y || !m) return points;
-  const out = [...points];
-  const cursor = new Date(y, m - 1, 1);
-  for (let i = 0; i < 1200; i++) {
-    cursor.setMonth(cursor.getMonth() + 1);
-    const label = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}`;
-    if (label > current) break;
-    out.push({ date: label, total: carry ? last.total : 0 });
-  }
-  return out;
-}
 
 /** Per-month sparkline (area + line, brand-tinted). Hovering snaps a
  *  cursor line + dot to the nearest month and shows a tooltip with the
@@ -310,8 +280,6 @@ export function LibraryTiles({
         if (type) {
           params.set("type", type);
         } else {
-          // Totals tile charts library size over time: per-month byte sums,
-          // accumulated below so each point is the size at that month.
           params.set("measure", "size");
         }
         if (serverId) params.set("serverId", serverId);
@@ -319,17 +287,13 @@ export function LibraryTiles({
           const res = await fetch(`/api/media/stats/timeline?${params}`);
           if (!res.ok) return [type ?? "ALL", []] as const;
           const data = await res.json();
-          let points = ((data.points ?? []) as SparkPoint[])
-            .map((p) => ({ date: p.date, total: p.total }));
-          if (!type) {
-            // Running sum over the FULL history before slicing, so the
-            // window starts from the true size at its first month and the
-            // last point matches the tile's headline total.
-            let cum = 0;
-            points = points.map((p) => ({ date: p.date, total: (cum += p.total) }));
-          }
-          points = extendToCurrentMonth(points, !type);
-          return [type ?? "ALL", points.slice(-SPARK_MONTHS)] as const;
+          // The totals tile charts library size over time: per-month byte
+          // sums, accumulated so each point is the size at that month.
+          const points = buildSparkPoints(data.points ?? [], {
+            cumulative: !type,
+            months: SPARK_MONTHS,
+          });
+          return [type ?? "ALL", points] as const;
         } catch {
           return [type ?? "ALL", []] as const;
         }
