@@ -384,7 +384,12 @@ export function BreakdownCard({
             >
               <div
                 className="absolute inset-y-0 left-0 rounded-md transition-[width] duration-300"
-                style={{ width: `${fillPct}%`, backgroundColor: `${color}1f` }}
+                style={{
+                  width: `${fillPct}%`,
+                  // color-mix, not a hex alpha suffix: past the palette the
+                  // color is an oklch() string, and "oklch(…)1f" is invalid.
+                  backgroundColor: `color-mix(in oklch, ${color} 12%, transparent)`,
+                }}
               />
               <span
                 className="relative h-2 w-2 shrink-0 rounded-full"

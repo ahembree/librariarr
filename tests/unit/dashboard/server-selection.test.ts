@@ -1,8 +1,10 @@
 import { describe, it, expect } from "vitest";
 import {
   ALL_SERVERS,
+  ALL_TYPES,
   dashboardStatsUrl,
   reconcileSelectedServer,
+  reconcileSelectedType,
   selectableServers,
 } from "@/lib/dashboard/server-selection";
 
@@ -53,5 +55,31 @@ describe("dashboardStatsUrl", () => {
 
   it("encodes the id", () => {
     expect(dashboardStatsUrl("a&b")).toBe("/api/media/stats?serverId=a%26b");
+  });
+});
+
+describe("reconcileSelectedType", () => {
+  it("keeps all types", () => {
+    expect(reconcileSelectedType(ALL_TYPES, ["MOVIE"])).toBe(ALL_TYPES);
+  });
+
+  it("keeps a type still in the library", () => {
+    expect(reconcileSelectedType("MOVIE", ["MOVIE", "SERIES"])).toBe("MOVIE");
+  });
+
+  it("falls back to all types when the selected type is gone", () => {
+    expect(reconcileSelectedType("MOVIE", ["SERIES"])).toBe(ALL_TYPES);
+  });
+
+  it("keeps the selection while the types are unknown", () => {
+    expect(reconcileSelectedType("MOVIE", [])).toBe("MOVIE");
+  });
+});
+
+describe("reconcileSelectedType with a custom all-value", () => {
+  it("falls back to the caller's all-value", () => {
+    expect(reconcileSelectedType("MOVIE", ["SERIES"], "ALL")).toBe("ALL");
+    expect(reconcileSelectedType("ALL", ["SERIES"], "ALL")).toBe("ALL");
+    expect(reconcileSelectedType("SERIES", ["SERIES"], "ALL")).toBe("SERIES");
   });
 });

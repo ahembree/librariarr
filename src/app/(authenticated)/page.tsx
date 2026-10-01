@@ -39,8 +39,10 @@ import { DashboardSkeleton } from "@/components/skeletons";
 import { useRealtime } from "@/hooks/use-realtime";
 import {
   ALL_SERVERS,
+  ALL_TYPES,
   dashboardStatsUrl,
   reconcileSelectedServer,
+  reconcileSelectedType,
   selectableServers,
   type DashboardServer,
 } from "@/lib/dashboard/server-selection";
@@ -136,7 +138,7 @@ export default function DashboardPage() {
   const [editMode, setEditMode] = useState(false);
   const [servers, setServers] = useState<DashboardServer[]>([]);
   const [selectedServerId, setSelectedServerId] = useState<string>(ALL_SERVERS);
-  const [selectedMediaType, setSelectedMediaType] = useState<string>("all");
+  const [selectedMediaType, setSelectedMediaType] = useState<string>(ALL_TYPES);
   const [availableTypes, setAvailableTypes] = useState<string[]>([]);
   const [editingCustomCard, setEditingCustomCard] = useState<{ cardId: string; config: CustomCardConfig } | null>(null);
   const [userName, setUserName] = useState<string>("");
@@ -208,7 +210,9 @@ export default function DashboardPage() {
 
       if (typesRes.ok) {
         const typesData = await typesRes.json();
-        setAvailableTypes(typesData.types ?? []);
+        const types: string[] = typesData.types ?? [];
+        setAvailableTypes(types);
+        setSelectedMediaType((prev) => reconcileSelectedType(prev, types));
       }
 
       if (scheduleRes.ok) {
@@ -483,7 +487,7 @@ export default function DashboardPage() {
                   <SelectValue placeholder="All Types" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All Types</SelectItem>
+                  <SelectItem value={ALL_TYPES}>All Types</SelectItem>
                   {(availableTypes.length === 0 || availableTypes.includes("MOVIE")) && (
                     <SelectItem value="MOVIE">Movies</SelectItem>
                   )}
@@ -527,7 +531,7 @@ export default function DashboardPage() {
             cards={insightCards}
             stats={stats}
             editMode={editMode}
-            filterType={selectedMediaType !== "all" ? selectedMediaType as "MOVIE" | "SERIES" | "MUSIC" : undefined}
+            filterType={selectedMediaType !== ALL_TYPES ? selectedMediaType as "MOVIE" | "SERIES" | "MUSIC" : undefined}
             serverId={serverId}
             servers={servers}
             availableTypes={availableTypes}

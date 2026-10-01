@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/tooltip";
 import { CheckCircle, XCircle, Loader2 } from "lucide-react";
 import { ServerTypeChip } from "@/components/server-type-chip";
+import { latestSyncOutcome } from "@/lib/sync/latest-outcome";
 
 interface SyncJob {
   id: string;
@@ -220,18 +221,9 @@ export function SyncIndicator({ onSyncComplete }: SyncIndicatorProps) {
   const activeJobs = jobs.filter(
     (j) => j.status === "RUNNING" || j.status === "PENDING"
   );
-  // Pick the MOST RECENT completed/failed job by completedAt rather than
-  // trusting the API to return newest-first (find() did) — otherwise the
-  // indicator could show a stale job and the wrong "time ago".
-  const mostRecentByCompletedAt = (status: "COMPLETED" | "FAILED") =>
-    jobs
-      .filter((j) => j.status === status)
-      .sort(
-        (a, b) =>
-          new Date(b.completedAt ?? 0).getTime() - new Date(a.completedAt ?? 0).getTime(),
-      )[0];
-  const recentCompleted = mostRecentByCompletedAt("COMPLETED");
-  const recentFailed = mostRecentByCompletedAt("FAILED");
+  const outcome = latestSyncOutcome(jobs);
+  const recentCompleted = outcome?.status === "COMPLETED" ? outcome.job : undefined;
+  const recentFailed = outcome?.status === "FAILED" ? outcome.job : undefined;
 
   if (activeJobs.length > 0) {
     return (

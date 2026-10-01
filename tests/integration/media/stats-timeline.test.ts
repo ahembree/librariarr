@@ -191,4 +191,17 @@ describe("GET /api/media/stats/timeline", () => {
     const body = await expectJson<TimelineBody>(response, 200);
     expect(body.points).toEqual([{ date: "2024-01", total: 2 }]);
   });
+
+  it("refuses a breakdown it cannot colour by instead of returning a plain total", async () => {
+    const user = await createTestUser();
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+    for (const breakdown of ["genre", "countries", "audioLanguage", "subtitleLanguage", "lastPlayedAt"]) {
+      const response = await callRoute(GET, {
+        url: "/api/media/stats/timeline",
+        searchParams: { dateField: "addedAt", breakdown },
+      });
+      await expectJson(response, 400);
+    }
+  });
 });

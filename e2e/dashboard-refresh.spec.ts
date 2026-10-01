@@ -59,6 +59,8 @@ interface Harness {
   layoutGets: () => number;
   /** Servers `/api/servers` reports from now on. */
   setServers: (list: ReturnType<typeof server>[]) => void;
+  /** Library types `/api/media/library-types` reports from now on. */
+  setTypes: (types: string[]) => void;
   /** Deliver one `sync:completed` event and wait for the page to refetch. */
   fireSyncCompleted: () => Promise<void>;
 }
@@ -69,6 +71,7 @@ async function setup(page: Page): Promise<Harness> {
     server("srv-b", "Bravo", true),
     server("srv-off", "Disabled Box", false),
   ];
+  let types = ["MOVIE"];
   let layoutGets = 0;
   const statsRequests: Request[] = [];
   let releaseStream: (() => void) | null = null;
@@ -79,7 +82,7 @@ async function setup(page: Page): Promise<Harness> {
       : route.continue(),
   );
   await page.route(isPath("/api/media/library-types"), (route) =>
-    route.fulfill({ json: { types: ["MOVIE"], allTypes: ["MOVIE"] } }),
+    route.fulfill({ json: { types, allTypes: types } }),
   );
   await page.route(
     (url) => isStats(url.toString()),
@@ -120,6 +123,9 @@ async function setup(page: Page): Promise<Harness> {
     layoutGets: () => layoutGets,
     setServers: (list) => {
       servers = list;
+    },
+    setTypes: (list) => {
+      types = list;
     },
     fireSyncCompleted: async () => {
       await expect.poll(() => releaseStream !== null).toBe(true);
@@ -208,5 +214,98 @@ test.describe("dashboard refresh", () => {
           .some((req) => !new URL(req.url()).searchParams.has("serverId")),
       )
       .toBe(true);
+  });
+
+  test("a type filter whose type has gone falls back to all types", async ({ page }) => {
+    const h = await setup(page);
+    h.setTypes(["MOVIE", "SERIES"]);
+    // One custom timeline card, binned by year so its requests are told apart
+    // from the library tiles' monthly sparklines; it sends the Insights filter
+    // as `type`. Registered after setup(), so it takes precedence.
+    const layout = {
+      main: [
+        {
+          id: "custom-e2e-timeline",
+          size: 12,
+          config: { chartType: "timeline", dimension: "addedAt", timelineBin: "year" },
+        },
+      ],
+      movies: [],
+      series: [],
+      music: [],
+    };
+    await page.route(isPath("/api/settings/dashboard-layout"), (route) =>
+      route.fulfill({ json: { layout } }),
+    );
+    const cardTypes: (string | null)[] = [];
+    page.on("request", (req) => {
+      const url = new URL(req.url());
+      if (url.pathname === "/api/media/stats/timeline" && url.searchParams.get("bin") === "year") {
+        cardTypes.push(url.searchParams.get("type"));
+      }
+    });
+
+    await page.goto("/");
+    // Recently Added has its own "All Types" selector above this one.
+    const insights = page.locator("section", {
+      has: page.getByRole("heading", { name: "Insights", exact: true }),
+    });
+    await insights.getByRole("combobox").filter({ hasText: "All Types" }).click();
+    await page.getByRole("option", { name: "Movies", exact: true }).click();
+    await expect.poll(() => cardTypes.at(-1)).toBe("MOVIE");
+
+    // Movies leave the library: the selector hides itself (one type left),
+    // so the filter must not stay on MOVIE with no way to clear it.
+    h.setTypes(["SERIES"]);
+    await h.fireSyncCompleted();
+
+    await expect.poll(() => cardTypes.at(-1)).toBeNull();
+  });
+
+  test("a shelf tile retries artwork when a newer item takes it over", async ({ page }) => {
+    const h = await setup(page);
+    const shelfItem = (id: string) => ({
+      id,
+      groupKey: "movie:group-1",
+      title: "Arrival",
+      year: 2016,
+      type: "MOVIE",
+      parentTitle: null,
+      albumTitle: null,
+      seasonNumber: null,
+      episodeNumber: null,
+      addedAt: new Date().toISOString(),
+      thumbUrl: null,
+      parentThumbUrl: null,
+      seasonThumbUrl: null,
+      memberCount: 1,
+    });
+    let representative = "old-item";
+    await page.route(isPath("/api/media/recently-added"), (route) =>
+      route.fulfill({ json: { items: [shelfItem(representative)], total: 1 } }),
+    );
+    // 1x1 transparent PNG.
+    const png = Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",
+      "base64",
+    );
+    await page.route(
+      (url) => /^\/api\/media\/[^/]+\/image$/.test(url.pathname),
+      (route) =>
+        new URL(route.request().url()).pathname.startsWith("/api/media/old-item/")
+          ? route.fulfill({ status: 404, body: "" })
+          : route.fulfill({ status: 200, contentType: "image/png", body: png }),
+    );
+
+    await page.goto("/");
+    const tile = page.getByRole("button", { name: "Arrival (2016)" });
+    await expect(tile).toBeVisible();
+    // The old row's art 404s: the tile falls back to the icon.
+    await expect(tile.locator("img")).toHaveCount(0);
+
+    representative = "new-item";
+    await h.fireSyncCompleted();
+
+    await expect(tile.locator('img[src*="/api/media/new-item/image"]')).toHaveCount(1);
   });
 });

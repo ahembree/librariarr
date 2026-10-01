@@ -37,3 +37,23 @@ export function dashboardStatsUrl(selected: string): string {
     ? "/api/media/stats"
     : `/api/media/stats?${new URLSearchParams({ serverId: selected })}`;
 }
+
+/** The value of the Insights type selector meaning "every type". */
+export const ALL_TYPES = "all";
+
+/**
+ * Keep the Insights type filter only while that type is still in the library.
+ * The selector hides itself once a single type remains, so a filter left on a
+ * type that has gone (its server removed, its libraries disabled) could no
+ * longer be cleared and every card showed empty. An empty list means the
+ * types are unknown, so the selection is kept. `all` is the caller's "every
+ * type" value (custom cards use "ALL").
+ */
+export function reconcileSelectedType(
+  selected: string,
+  availableTypes: string[],
+  all: string = ALL_TYPES,
+): string {
+  if (selected === all || availableTypes.length === 0) return selected;
+  return availableTypes.includes(selected) ? selected : all;
+}
