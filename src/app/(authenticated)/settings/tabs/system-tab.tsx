@@ -232,7 +232,7 @@ export function SystemTab({
             </div>
             <div>
               <p className="text-sm text-muted-foreground">Database Migration</p>
-              <p className="font-medium font-mono text-sm">{systemInfo?.latestMigration ?? "..."}</p>
+              <p className="font-medium font-mono text-sm break-all">{systemInfo?.latestMigration ?? "..."}</p>
             </div>
             <div>
               <p className="text-sm text-muted-foreground">Database Size</p>

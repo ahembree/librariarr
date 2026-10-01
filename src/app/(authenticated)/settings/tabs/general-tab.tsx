@@ -612,9 +612,9 @@ export function GeneralTab({
                   <div key={b.filename} className="space-y-1.5 rounded-md border p-2.5 text-sm">
                     <div className="flex items-center justify-between">
                       <div className="min-w-0">
-                        <p className="font-medium truncate flex items-center gap-1.5">
+                        <p className="font-medium break-all">
                           {b.filename}
-                          {b.encrypted && <Lock className="h-3 w-3 text-muted-foreground" />}
+                          {b.encrypted && <Lock className="ml-1.5 inline h-3 w-3 align-[-1px] text-muted-foreground" />}
                         </p>
                         <p className="text-xs text-muted-foreground">
                           {new Date(b.createdAt).toLocaleString()} — {b.size < 1024 * 1024 ? `${(b.size / 1024).toFixed(1)} KB` : `${(b.size / 1024 / 1024).toFixed(1)} MB`}

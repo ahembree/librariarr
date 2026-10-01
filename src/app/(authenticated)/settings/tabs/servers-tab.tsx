@@ -912,11 +912,11 @@ export function ServersTab({
               return (
                 <Card key={server.id} className="overflow-hidden">
                   <CardHeader className="overflow-hidden pb-2">
-                    <div className="flex items-center justify-between gap-2">
+                    <div className="flex min-w-0 items-center justify-between gap-2">
                       <div className="flex-1 min-w-0">
                         <CardTitle className="flex flex-wrap items-center gap-2">
                           <Server className="h-5 w-5 shrink-0" />
-                          <span className="truncate">{server.name}</span>
+                          <span className="min-w-0 truncate">{server.name}</span>
                           <ServerTypeChip type={server.type} className="shrink-0" />
                           {!server.enabled && (
                             <ColorChip className="shrink-0 text-xs font-normal bg-amber-500/20 text-amber-400">

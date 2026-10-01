@@ -26,7 +26,7 @@ export function SettingsSection({
 }) {
   return (
     <section className="overflow-hidden rounded-[14px] border bg-card shadow-[var(--shadow-card)]">
-      <header className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
+      <header className="flex flex-col gap-3 border-b border-border px-5 py-4 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
         <div className="min-w-0">
           <h3 className="flex items-center gap-2 font-display text-[14.5px] font-semibold tracking-[-0.01em]">
             {Icon && <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />}
@@ -34,7 +34,7 @@ export function SettingsSection({
           </h3>
           {description && <p className="mt-1 text-[13px] text-muted-foreground">{description}</p>}
         </div>
-        {action && <div className="shrink-0">{action}</div>}
+        {action && <div className="sm:shrink-0">{action}</div>}
       </header>
       <div className={cn("p-5", contentClassName)}>{children}</div>
     </section>
