@@ -11,7 +11,7 @@
   "dependencies": {
     "@astrojs/starlight": "^0.42.0",
     "astro": "^7.2.9",
-    "sharp": "^0.35.4"
+    "sharp": "^0.35.5"
   },
   "devDependencies": {
     "swagger-ui-dist": "^5.33.0",
