@@ -9,7 +9,7 @@
     "generate:openapi": "tsx ../scripts/generate-openapi.ts"
   },
   "dependencies": {
-    "@astrojs/starlight": "^0.42.0",
+    "@astrojs/starlight": "^0.42.4",
     "astro": "^7.2.9",
     "sharp": "^0.35.4"
   },
