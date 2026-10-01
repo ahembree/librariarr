@@ -96,7 +96,7 @@
     "sonner": "^2.0.8",
     "swagger-ui-dist": "^5.33.0",
     "tailwind-merge": "^3.6.0",
-    "ws": "^8.21.1",
+    "ws": "^8.22.0",
     "zod": "^4.5.4"
   },
   "devDependencies": {
