@@ -6,6 +6,7 @@ import type { LucideIcon } from "lucide-react";
 import { ArrowUpRight, Film, HardDrive, Music, Tv } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatBytesNum, formatDurationLarge } from "@/lib/format";
+import { useRealtime } from "@/hooks/use-realtime";
 
 interface SparkPoint {
   /** Month bucket label from the timeline API ("YYYY-MM"). */
@@ -42,6 +43,31 @@ interface LibraryStats {
 
 /** Months of addedAt history shown in each tile's growth sparkline. */
 const SPARK_MONTHS = 12;
+
+/**
+ * Extend a month series through the current month. The timeline API fills
+ * gaps only between its first and last non-empty buckets, so without this a
+ * library that added nothing recently charted the 12 months ending at its last
+ * addition under a "last 12mo" caption. `carry` repeats the last value (a
+ * running size) instead of padding with zero additions.
+ */
+function extendToCurrentMonth(points: SparkPoint[], carry: boolean): SparkPoint[] {
+  if (points.length === 0) return points;
+  const now = new Date();
+  const current = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const last = points[points.length - 1];
+  const [y, m] = last.date.split("-").map(Number);
+  if (!y || !m) return points;
+  const out = [...points];
+  const cursor = new Date(y, m - 1, 1);
+  for (let i = 0; i < 1200; i++) {
+    cursor.setMonth(cursor.getMonth() + 1);
+    const label = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, "0")}`;
+    if (label > current) break;
+    out.push({ date: label, total: carry ? last.total : 0 });
+  }
+  return out;
+}
 
 /** Per-month sparkline (area + line, brand-tinted). Hovering snaps a
  *  cursor line + dot to the nearest month and shows a tooltip with the
@@ -257,6 +283,10 @@ export function LibraryTiles({
   serverId?: string;
 }) {
   const [sparks, setSparks] = useState<Record<string, SparkPoint[]>>({});
+  // The headline counts refresh after a sync; the sparklines must too, or the
+  // tile shows a new total over a chart that has not caught up with it.
+  const [refreshKey, setRefreshKey] = useState(0);
+  useRealtime("sync:completed", () => setRefreshKey((k) => k + 1));
 
   const showAll = availableTypes.length === 0;
   const show = {
@@ -298,6 +328,7 @@ export function LibraryTiles({
             let cum = 0;
             points = points.map((p) => ({ date: p.date, total: (cum += p.total) }));
           }
+          points = extendToCurrentMonth(points, !type);
           return [type ?? "ALL", points.slice(-SPARK_MONTHS)] as const;
         } catch {
           return [type ?? "ALL", []] as const;
@@ -311,7 +342,7 @@ export function LibraryTiles({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serverId, show.movie, show.series, show.music]);
+  }, [serverId, show.movie, show.series, show.music, refreshKey]);
 
   const visibleCount = Number(show.movie) + Number(show.series) + Number(show.music) + 1;
   const gridCols =

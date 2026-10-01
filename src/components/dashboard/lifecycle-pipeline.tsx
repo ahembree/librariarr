@@ -93,6 +93,9 @@ export function LifecyclePipeline({ scheduleInfo }: { scheduleInfo: ScheduleInfo
         reclaimedBytes: Number(stats?.totalBytesDeleted ?? 0),
         reclaimedActions: stats?.actionCount ?? 0,
       });
+      // A refresh that succeeds after a failed one must clear the error, or
+      // the zone keeps saying it couldn't load over figures it now has.
+      setFailed(false);
       setLoading(false);
     }
   }, []);

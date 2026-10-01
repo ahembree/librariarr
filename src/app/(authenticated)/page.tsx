@@ -141,34 +141,79 @@ export default function DashboardPage() {
       .catch(() => {});
   }, []);
 
+  // Monotonic token guards against out-of-order responses when the server
+  // filter flips quickly (a stale slow response must not win).
+  const statsReqToken = useRef(0);
+
+  const fetchStats = useCallback(async () => {
+    const token = ++statsReqToken.current;
+    try {
+      const params = new URLSearchParams();
+      if (selectedServerId !== "all") {
+        params.set("serverId", selectedServerId);
+      }
+      const url = `/api/media/stats${params.toString() ? `?${params}` : ""}`;
+      const res = await fetch(url);
+      // An error body ({error}) is truthy — setting it as stats would crash
+      // the tiles. Leave stats as they were (null on first load, so the retry
+      // empty-state renders).
+      if (!res.ok || token !== statsReqToken.current) return;
+      const data = await res.json();
+      if (token !== statsReqToken.current) return;
+      setStats(data);
+    } catch (error) {
+      console.error("Failed to fetch stats:", error);
+    }
+  }, [selectedServerId]);
+
+  // `fetchData` is stable (it backs the realtime subscriptions), but its stats
+  // refresh must honour the CURRENT server filter: fetching unfiltered stats
+  // there replaced one server's figures with every server's on each sync or
+  // lifecycle event while the selector still named the one server.
+  const fetchStatsRef = useRef(fetchStats);
+  useEffect(() => {
+    fetchStatsRef.current = fetchStats;
+  }, [fetchStats]);
+
+  // The saved layout is read once. Re-reading it on every realtime refresh
+  // could land a GET issued before an in-flight layout PUT and revert the edit
+  // the user just made on screen.
+  const layoutLoadedRef = useRef(false);
+
   const fetchData = useCallback(async () => {
     try {
-      const [statsRes, layoutRes, serversRes, typesRes, scheduleRes] = await Promise.all([
-        fetch("/api/media/stats"),
-        fetch("/api/settings/dashboard-layout"),
+      const [, layoutRes, serversRes, typesRes, scheduleRes] = await Promise.all([
+        fetchStatsRef.current(),
+        layoutLoadedRef.current ? null : fetch("/api/settings/dashboard-layout"),
         fetch("/api/servers"),
         fetch("/api/media/library-types"),
         fetch("/api/settings/schedule-info"),
       ]);
-      // An error body ({error}) is truthy — setting it as stats would crash
-      // the tiles. Leave stats null so the retry empty-state renders.
-      if (statsRes.ok) {
-        setStats(await statsRes.json());
-      }
 
-      if (layoutRes.ok) {
+      if (layoutRes?.ok) {
         const layoutData = await layoutRes.json();
+        layoutLoadedRef.current = true;
         setLayout(layoutData.layout);
       }
 
       if (serversRes.ok) {
         const serversData = await serversRes.json();
-        setServers(
-          (serversData.servers ?? []).map((s: { id: string; name: string; type: string }) => ({
-            id: s.id,
-            name: s.name,
-            type: s.type,
-          }))
+        // Stats, timelines and Recently Added cover enabled servers only and
+        // answer 404 for a disabled one, so offering it left the previous
+        // selection's figures on screen under its name.
+        const list = ((serversData.servers ?? []) as {
+          id: string;
+          name: string;
+          type: string;
+          enabled?: boolean;
+        }[])
+          .filter((s) => s.enabled !== false)
+          .map((s) => ({ id: s.id, name: s.name, type: s.type }));
+        setServers(list);
+        // A selected server that was deleted or disabled falls back to all;
+        // otherwise every later stats fetch 404s and the figures freeze.
+        setSelectedServerId((prev) =>
+          prev !== "all" && !list.some((s) => s.id === prev) ? "all" : prev,
         );
       }
 
@@ -186,28 +231,6 @@ export default function DashboardPage() {
       setLoading(false);
     }
   }, []);
-
-  // Monotonic token guards against out-of-order responses when the server
-  // filter flips quickly (a stale slow response must not win).
-  const statsReqToken = useRef(0);
-
-  const fetchStats = useCallback(async () => {
-    const token = ++statsReqToken.current;
-    try {
-      const params = new URLSearchParams();
-      if (selectedServerId !== "all") {
-        params.set("serverId", selectedServerId);
-      }
-      const url = `/api/media/stats${params.toString() ? `?${params}` : ""}`;
-      const res = await fetch(url);
-      if (!res.ok || token !== statsReqToken.current) return;
-      const data = await res.json();
-      if (token !== statsReqToken.current) return;
-      setStats(data);
-    } catch (error) {
-      console.error("Failed to fetch stats:", error);
-    }
-  }, [selectedServerId]);
 
   // `fetchStats` refreshes only the headline tiles. `fetchData` also reloads the
   // server list, library types and schedule info — all of which a sync, a
