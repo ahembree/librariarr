@@ -7,7 +7,8 @@ import { Label } from "@/components/ui/label";
 /**
  * Settings section card matching the handoff's `card-head` pattern: a 14px
  * card with a display-font header (icon + title), optional description, an
- * optional right-aligned action, and a padded body.
+ * optional action (right-aligned beside the title, wrapping below it when
+ * the card is too narrow for both), and a padded body.
  */
 export function SettingsSection({
   icon: Icon,
@@ -26,15 +27,15 @@ export function SettingsSection({
 }) {
   return (
     <section className="overflow-hidden rounded-[14px] border bg-card shadow-[var(--shadow-card)]">
-      <header className="flex flex-col gap-3 border-b border-border px-5 py-4 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
-        <div className="min-w-0">
+      <header className="flex flex-wrap items-start justify-between gap-x-4 gap-y-3 border-b border-border px-5 py-4">
+        <div className="min-w-0 flex-[1_1_16rem]">
           <h3 className="flex items-center gap-2 font-display text-[14.5px] font-semibold tracking-[-0.01em]">
             {Icon && <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />}
             {title}
           </h3>
           {description && <p className="mt-1 text-[13px] text-muted-foreground">{description}</p>}
         </div>
-        {action && <div className="sm:shrink-0">{action}</div>}
+        {action && <div className="max-w-full">{action}</div>}
       </header>
       <div className={cn("p-5", contentClassName)}>{children}</div>
     </section>

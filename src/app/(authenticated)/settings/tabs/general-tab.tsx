@@ -612,7 +612,7 @@ export function GeneralTab({
                   <div key={b.filename} className="space-y-1.5 rounded-md border p-2.5 text-sm">
                     <div className="flex items-center justify-between">
                       <div className="min-w-0">
-                        <p className="font-medium break-all">
+                        <p className="font-medium [overflow-wrap:anywhere]">
                           {b.filename}
                           {b.encrypted && <Lock className="ml-1.5 inline h-3 w-3 align-[-1px] text-muted-foreground" />}
                         </p>

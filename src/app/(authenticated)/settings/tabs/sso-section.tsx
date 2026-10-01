@@ -542,7 +542,7 @@ export function SsoSection({ onChanged }: { onChanged?: () => void } = {}) {
             <div className="rounded-md bg-muted p-3 text-xs text-muted-foreground">
               Register a confidential client at your IdP and set the redirect
               URI to{" "}
-              <code className={cn(codeClass, "break-all")}>
+              <code className={cn(codeClass, "[overflow-wrap:anywhere]")}>
                 {typeof window !== "undefined"
                   ? `${window.location.origin}/api/auth/sso/oidc/callback`
                   : "/api/auth/sso/oidc/callback"}
