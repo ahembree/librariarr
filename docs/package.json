@@ -1,7 +1,7 @@
 {
   "name": "librariarr-docs",
   "private": true,
-  "packageManager": "pnpm@11.1.2",
+  "packageManager": "pnpm@12.8.1",
   "scripts": {
     "dev": "pnpm run generate:openapi && astro dev",
     "build": "pnpm run generate:openapi && astro build",

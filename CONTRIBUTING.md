@@ -6,7 +6,7 @@ Thanks for your interest in contributing! This guide will help you get started.
 
 - [Docker](https://docs.docker.com/get-docker/) and Docker Compose
 - [Node.js](https://nodejs.org/) 22.13+
-- [pnpm](https://pnpm.io/) (or enable via `corepack enable`)
+- [pnpm](https://pnpm.io/) 12 (`npm install -g pnpm`)
 
 ## Development Setup
 
