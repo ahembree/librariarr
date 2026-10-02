@@ -16,7 +16,8 @@ route tests mock the session, DB and external clients, so a breaking runtime cha
    the breaking changes against them.
 2. Update the branch to main (`update_pull_request_branch`) — the ruleset only merges
    up-to-date branches, so every merge makes the rest stale.
-3. Check it out and run: `pnpm install --frozen-lockfile && pnpm exec prisma generate`,
+3. Check it out and run (`corepack enable` first so pnpm matches `packageManager`):
+   `pnpm install --frozen-lockfile && pnpm exec prisma generate`,
    `pnpm lint`, `pnpm exec tsc --noEmit`, `pnpm test:unit`, integration tests (below),
    `pnpm build`.
 4. If code changes are needed, push them to the Dependabot branch.
@@ -40,11 +41,15 @@ VITEST_SKIP_DB_SETUP=true pnpm exec vitest run tests/integration
 
 ## Gotchas
 
-- **Lockfile conflicts:** take main's lockfile, then re-apply the bump pinned to the PR's
-  exact version — `pnpm add <pkg>@<version> --lockfile-only` (`-D` for dev deps). Plain
-  `pnpm install --lockfile-only` resolves to the newest matching version instead.
-- **`docs/` uses npm**, not pnpm. Relock with `npx npm@12` (older npm strips `libc` fields)
-  and validate with `npm ci && npm run build` in `docs/`.
+- **Lockfile conflicts:** take main's lockfile, then pin the PR's exact version —
+  `pnpm add <pkg>@<version> --lockfile-only` (`-D` for dev deps). pnpm 12 writes that as an
+  exact range, so put package.json back to `^<version>` and run `pnpm install --lockfile-only`;
+  it keeps the pinned version. Skipping the pin (plain `pnpm install --lockfile-only` on the
+  merged range) resolves to the newest matching release instead of the PR's.
+- **`docs/` is a separate pnpm project** with its own `docs/pnpm-lock.yaml` and
+  `docs/pnpm-workspace.yaml`. Resolve its conflicts the same way from inside `docs/`, and
+  validate with `pnpm install --frozen-lockfile && pnpm build` there, after the root install
+  (the build generates the API reference from the app's source).
 - **Dependabot force-rebases** its branches when main moves; re-fetch before pushing. Once
   you push to a branch, it stops managing it.
 - **Titles go stale** when Dependabot rebases onto a newer version. Check the real version
