@@ -1,7 +1,7 @@
 import axios, { AxiosInstance } from "axios";
 import { logger } from "@/lib/logger";
 import { IntegrationError } from "@/lib/integration-error";
-import { configureRetry } from "@/lib/http-retry";
+import { configureRetry, NO_RETRY } from "@/lib/http-retry";
 import type {
   ServiceType,
   ArrCustomFormat,
@@ -41,6 +41,12 @@ export class GuideArrClient {
       return config;
     });
 
+    // Must be registered BEFORE the IntegrationError conversion below: axios
+    // runs response interceptors in registration order, and the retry handler
+    // needs the raw AxiosError (`config`/`response`). Registered after it, the
+    // retry only ever saw an IntegrationError and rethrew every failure.
+    configureRetry(this.client, label, logger);
+
     this.client.interceptors.response.use(
       (response) => response,
       (error) => {
@@ -59,13 +65,11 @@ export class GuideArrClient {
         return Promise.reject(error);
       },
     );
-
-    configureRetry(this.client, label, logger);
   }
 
   async testConnection(): Promise<{ ok: boolean; error?: string; version?: string }> {
     try {
-      const { data } = await this.client.get("/api/v3/system/status");
+      const { data } = await this.client.get("/api/v3/system/status", { ...NO_RETRY });
       const expected = this.service === "SONARR" ? "Sonarr" : "Radarr";
       if (data.appName && data.appName !== expected) {
         return { ok: false, error: `Expected ${expected} but connected to ${data.appName}` };

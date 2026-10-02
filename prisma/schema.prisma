@@ -38,6 +38,7 @@ model User {
   prerollSchedules      PrerollSchedule[]
   savedQueries          SavedQuery[]
   trashManagedResources TrashManagedResource[]
+  apiKeys               ApiKey[]
 
   // SSO subjects are only unique per-issuer. Two users can have sub "abc" if
   // they came from different IdPs. This composite key prevents the cross-IdP
@@ -77,6 +78,9 @@ model AppSettings {
   discordWebhookUsername          String?
   discordWebhookAvatarUrl         String?
   discordNotifyMaintenance        Boolean   @default(false)
+  /// Tell Discord when an API key is created or deleted — a stolen browser
+  /// session can mint one, so on by default wherever a webhook is set.
+  discordNotifyApiKeys            Boolean   @default(true)
   localAuthEnabled                Boolean   @default(false)
   // Allow signing in with Plex from the login page. When false, the Plex
   // button is hidden and /api/auth/plex/token rejects logins — but the
@@ -138,6 +142,14 @@ model AppSettings {
   /// arbitrary subset of a suspect match set is not safer, just quieter.
   maxAutoDeleteItems              Int?
   deletionStatsResetAt            DateTime?
+  /// Until this passes, a grouped SERIES or MUSIC action (one that acts on a
+  /// show or an artist, not a single item) is scheduled no earlier than it.
+  /// Before migration `0024` the scheduled executor cancelled every such action
+  /// as an identity change, so none had ever run; that migration held the
+  /// pending ones for a week and set this, so the ones scheduled during that
+  /// week wait as long — a rule set with no delay had nothing pending to hold.
+  /// Null on an install created since, which has no such backlog.
+  groupedActionsHeldUntil         DateTime?
   // AI analysis (read-only library assistant). Provider-neutral so any backend
   // works — "openai-compatible" covers OpenAI, Ollama, LM Studio, OpenRouter,
   // Groq, vLLM, LocalAI, etc.; "anthropic" is the native Claude Messages API.
@@ -298,6 +310,8 @@ model SeerrInstance {
   name      String
   url       String
   apiKey    String
+  /// Browser-facing base URL for "Open in Seerr" links; `url` is used when null.
+  externalUrl String?
   enabled   Boolean  @default(true)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -606,6 +620,18 @@ model LifecycleAction {
   mediaItem              MediaItem?            @relation(fields: [mediaItemId], references: [id], onDelete: SetNull)
   mediaItemTitle         String?
   mediaItemParentTitle   String?
+  /// The item's year and the external id its Arr app resolves it by (TMDB for
+  /// a movie, TVDB for a series, MusicBrainz for music — `arrIdSourceFor`), as
+  /// they were when the action was scheduled. With the titles above, this is
+  /// the identity the scheduled executor re-checks before it acts: a Fix Match
+  /// that keeps the title ("Dune" 1984 → 2021) changes only these.
+  mediaItemYear          Int?
+  mediaItemExternalId    String?
+  /// An episode's season and episode numbers (SERIES only), so the history of
+  /// an action on ONE episode still names it "<Show> SxxExx" once the
+  /// episode's MediaItem row is gone.
+  mediaItemSeasonNumber  Int?
+  mediaItemEpisodeNumber Int?
   ruleSetId              String?
   ruleSet                RuleSet?              @relation(fields: [ruleSetId], references: [id], onDelete: SetNull)
   ruleSetName            String?
@@ -640,10 +666,15 @@ model RuleMatch {
   mediaItemId String
   mediaItem   MediaItem @relation(fields: [mediaItemId], references: [id], onDelete: Cascade)
   itemData    Json
+  /// Other servers' copies of the title this match was collapsed from (the ids
+  /// in itemData.copies), as a column so "is this item matched as a copy" is
+  /// an index probe rather than a scan over every match's JSON.
+  copyIds     String[]  @default([])
   detectedAt  DateTime  @default(now())
 
   // [ruleSetId] alone is covered by the composite unique's leading column.
   @@unique([ruleSetId, mediaItemId])
+  @@index([copyIds], type: Gin)
 }
 
 model LifecycleException {
@@ -852,6 +883,10 @@ model WatchHistory {
   @@index([mediaServerId])
   @@index([serverUsername])
   @@index([watchedAt])
+  // The incremental native refresh resolves its window from MAX("watchedAt")
+  // per server and dedups against the rows at or after it; both are one index
+  // probe with this, and a scan of the server's whole history without it.
+  @@index([mediaServerId, watchedAt])
   @@index([deviceName])
   @@index([platform])
   @@index([source])
@@ -901,4 +936,40 @@ model TrashManagedResource {
   @@index([userId])
   @@index([sonarrInstanceId])
   @@index([radarrInstanceId])
+}
+
+/// A credential third-party applications use to call the public `/api/v1` API
+/// (see `src/lib/api-keys/`). Only a salted scrypt hash of the key is stored:
+/// the plaintext is returned once, by the create route, and cannot be
+/// recovered afterwards. Deleting the row revokes the key on its very next
+/// request — authentication reads this row on every call; what it remembers in
+/// memory is only that a key's hash has already been verified.
+///
+/// Deliberately NOT in the backup's `TABLE_ORDER`: a restore truncates `User`
+/// with CASCADE, so it wipes every key rather than resurrecting ones that were
+/// deleted after the backup was taken.
+model ApiKey {
+  id         String    @id @default(cuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name       String
+  /// The key's leading characters (`lbr_` + 6), shown so a key can be told
+  /// apart in the list, and how its row is found. Far too short to
+  /// authenticate with.
+  prefix     String
+  /// Salted scrypt hash of the full key (`scrypt$N$r$p$salt$hash`), verified
+  /// after the lookup by `prefix`. The plaintext is never stored.
+  keyHash    String    @unique
+  /// Granted scopes, stored explicitly (with implied read scopes expanded) so a
+  /// scope added in a later version never silently widens an existing key.
+  scopes     String[]
+  /// null = never expires.
+  expiresAt  DateTime?
+  lastUsedAt DateTime?
+  lastUsedIp String?
+  createdAt  DateTime  @default(now())
+
+  @@unique([userId, name])
+  @@index([userId])
+  @@index([prefix])
 }

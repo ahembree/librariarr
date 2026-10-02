@@ -240,6 +240,26 @@ describe("Sonarr integration endpoints", () => {
       expect(body.error).toBe("Not found");
     });
 
+    it("saves a rename while the instance is unreachable when the URL is unchanged", async () => {
+      mockTestConnection.mockResolvedValue({ ok: false, error: "Timeout" });
+      const user = await createTestUser();
+      const instance = await createTestSonarrInstance(user.id);
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      const response = await callRouteWithParams(
+        PUT,
+        { id: instance.id },
+        {
+          url: `/api/integrations/sonarr/${instance.id}`,
+          method: "PUT",
+          body: { name: "Renamed", url: instance.url },
+        }
+      );
+      const body = await expectJson<{ instance: { name: string } }>(response, 200);
+      expect(body.instance.name).toBe("Renamed");
+      expect(mockTestConnection).not.toHaveBeenCalled();
+    });
+
     it("returns 400 when connection test fails on update", async () => {
       mockTestConnection.mockResolvedValue({ ok: false, error: "Timeout" });
 

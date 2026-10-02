@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/select";
 import { AlertCircle, RotateCcw, Loader2, LogIn } from "lucide-react";
 import { Logo } from "@/components/logo";
+import { newPasswordProblem } from "@/lib/auth/password-rules";
 
 const SSO_ERROR_MESSAGES: Record<string, string> = {
   sso_not_configured: "SSO is not configured.",
@@ -30,6 +31,7 @@ const SSO_ERROR_MESSAGES: Record<string, string> = {
   token_exchange_failed: "Failed to verify your identity with the SSO provider.",
   not_linked: "Your SSO account is not linked to a Librariarr user. Ask an administrator to link it. (If you recently changed the configured SSO issuer, the previous link no longer applies — re-link from Settings.)",
   missing_user_header: "Forward-auth proxy did not provide a user identity header.",
+  untrusted_proxy: "Forward-auth sign-in must come through the configured reverse proxy: the proxy secret header was missing or wrong.",
   csrf_blocked: "SSO login can only be initiated from the Librariarr login page. Open the login page directly and click Sign in with SSO.",
 };
 
@@ -42,7 +44,10 @@ export default function LoginPage() {
   const [ssoError] = useState<string | null>(() => {
     if (typeof window === "undefined") return null;
     const code = new URLSearchParams(window.location.search).get("sso_error");
-    return code ? (SSO_ERROR_MESSAGES[code] ?? "SSO login failed.") : null;
+    if (!code) return null;
+    // Own keys only: `__proto__` or `constructor` in a crafted link would read
+    // an object off the prototype, which React cannot render.
+    return Object.hasOwn(SSO_ERROR_MESSAGES, code) ? SSO_ERROR_MESSAGES[code] : "SSO login failed.";
   });
   const [localUsername, setLocalUsername] = useState("");
   const [localPassword, setLocalPassword] = useState("");
@@ -167,8 +172,9 @@ export default function LoginPage() {
       return;
     }
 
-    if (setupPassword.length < 8) {
-      setSetupError("Password must be at least 8 characters");
+    const passwordProblem = newPasswordProblem(setupPassword);
+    if (passwordProblem) {
+      setSetupError(passwordProblem);
       return;
     }
 

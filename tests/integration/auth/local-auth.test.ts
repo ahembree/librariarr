@@ -13,11 +13,14 @@ vi.mock("bcryptjs", () => ({
   default: mockBcrypt,
 }));
 
-// Mock rate limiter — change-password is now rate-limited and the limiter's
-// in-memory state would persist across tests.
+// Mock rate limiter — login and change-password are rate-limited and the
+// limiter's in-memory state would persist across tests.
 const mockCheckAuthRateLimit = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/rate-limit/rate-limiter", () => ({
+  PASSWORD_CONFIRM_BUCKET: "password-confirm",
   checkAuthRateLimit: mockCheckAuthRateLimit,
+  peekAuthRateLimit: () => null,
+  reserveAuthAttempt: () => ({ refused: null, refund: () => {} }),
   authRateLimiter: { check: vi.fn().mockReturnValue({ limited: false }) },
   getClientIp: vi.fn().mockReturnValue("127.0.0.1"),
 }));
@@ -87,6 +90,8 @@ describe("POST /api/auth/local/change-password", () => {
       where: { id: user.id },
       data: { passwordHash: "hashed_oldpassword" },
     });
+    // Password sign-in on: the only state in which the password is proof.
+    await prisma.appSettings.create({ data: { userId: user.id, localAuthEnabled: true } });
 
     setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
 
@@ -144,6 +149,8 @@ describe("POST /api/auth/local/change-password", () => {
       where: { id: user.id },
       data: { passwordHash: "hashed_correctpassword" },
     });
+    // Password sign-in on: the only state in which the password is proof.
+    await prisma.appSettings.create({ data: { userId: user.id, localAuthEnabled: true } });
 
     setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
 
@@ -193,6 +200,8 @@ describe("POST /api/auth/local/change-password", () => {
       where: { id: user.id },
       data: { passwordHash: "hashed_existing" },
     });
+    // Password sign-in on: the only state in which the password is proof.
+    await prisma.appSettings.create({ data: { userId: user.id, localAuthEnabled: true } });
 
     setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
 
@@ -208,9 +217,10 @@ describe("POST /api/auth/local/change-password", () => {
   it("allows setting password without currentPassword when user has no existing password", async () => {
     const prisma = getTestPrisma();
     const user = await createTestUser();
-    // User has no passwordHash set (null by default)
+    // User has no passwordHash set (null by default). Setting a first
+    // password needs a recent sign-in (see recent-login.ts).
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
 
     const response = await callRoute(POST, {
       url: "/api/auth/local/change-password",

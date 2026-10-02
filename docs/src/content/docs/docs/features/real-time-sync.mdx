@@ -16,11 +16,13 @@ This runs alongside — not instead of — the [scheduled sync](/docs/getting-st
 | Active sessions view | Refreshes every 5s | Pushes within ~2s of a play/pause/stop |
 | Maintenance / blackout / transcode enforcement | New streams seen up to 30s late | New streams seen within ~½s, so the termination delay starts promptly |
 | New / removed / updated media | Appears on the next scheduled sync | Syncs just the changed/removed items seconds after the server's scan settles |
-| Watch state (played / unplayed, last watched) | Refreshed on the next full sync | Refreshed shortly after a play finishes |
+| Watch state (played / unplayed, last watched) | Refreshed on the next full sync | Refreshed shortly after a play finishes — on Plex, by fetching only the plays since the last refresh |
 | Sidebar stream count | Polled every 30s | Pushed when a stream starts or stops |
 | Server-unreachable banner | Appeared when a 30s poll failed | Appears as soon as the connection drops |
 
 Watch state comes from your server's **server-wide** history, so a play by anyone in the household counts — not just the account Librariarr signs in as. Each refresh updates the **Play Count** and **Last Played** values that rules and queries read, so the [History page](/docs/features/library/) and your rules stay in agreement.
+
+On Plex the refresh is **incremental**: it asks the server only for plays recorded since the newest one already stored (with an hour of overlap, so nothing falls through the gap) and appends the new ones. The full import — which re-reads the whole history and is what removes plays the server has since deleted — still runs on the scheduled sync and when you press **Refresh** on the History page. Jellyfin and Emby report a per-user "played" set rather than dated play events, so their refresh always re-reads the full set.
 
 Real-time library changes carry the specific items that changed, so Librariarr fetches and updates **only those items** (and deletes the removed ones) instead of re-scanning the whole server. Adding one movie syncs one movie, and deleting one episode removes one row — typically in well under a second.
 
@@ -51,6 +53,8 @@ This is why the UI updates on its own. A sync finishing, a lifecycle rule matchi
 What that means in practice:
 
 - **Progress is pushed, not polled.** A running sync reports each committed batch, so progress bars advance without the page asking every couple of seconds. The same applies to a Tracearr history import, which can run for hours.
+- **Every way a sync can end is pushed.** Finished, failed or stopped with **Stop Sync**, every open tab updates as soon as it happens, and only after the sync's changes are visible, so a refreshed list never shows the data from before the sync. Only one background job runs at a time, so a sync you start while something else is running waits its turn — it appears as **Queued** on Settings → Servers the moment you press **Sync** (or **Sync All**). A sync you asked for goes ahead of queued background work, and a Tracearr history import that is mid-slice pauses at its next page to let it start, then carries on afterwards. Pressing **Stop Sync** on a queued sync cancels it straight away.
+- **Stop Sync on a running sync takes effect at the sync's next checkpoint**: between batches of items, between libraries, or between stages. A watch-history import stops at its next page. The only step that can't be interrupted is downloading a Plex, Jellyfin or Emby server's own watch history, so a stop pressed then takes effect once that download finishes.
 - **Changes reach every tab.** Toggling maintenance mode, adding a server, or executing a pending action updates every window you have open, not just the one you did it in.
 - **Only the affected data is refetched.** Events carry no figures of their own — a page receiving one re-reads the endpoint that owns the number. That keeps a single source of truth for every value on screen, and stops a play import from forcing a full re-read of your library.
 

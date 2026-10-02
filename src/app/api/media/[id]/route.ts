@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
+import { jsonResponse } from "@/lib/api/json-response";
 import { prisma } from "@/lib/db";
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const session = await getSession();
@@ -111,7 +112,7 @@ export async function GET(
     servers.sort((a, b) => a.serverName.localeCompare(b.serverName));
   }
 
-  return NextResponse.json({
+  return jsonResponse(request, {
     item: {
       ...item,
       fileSize: item.fileSize?.toString() ?? null,

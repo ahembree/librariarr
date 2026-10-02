@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
-import { cleanDatabase, disconnectTestDb } from "../../setup/test-db";
+import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
 import {
   callRoute,
@@ -42,6 +42,7 @@ vi.mock("@/lib/dedup/recompute-canonical", () => ({
 
 // Import route handlers AFTER mocks
 import { POST as discordTest } from "@/app/api/settings/discord/test/route";
+import { MASKED_VALUE } from "@/lib/api/sanitize";
 import {
   GET as getImageCache,
   DELETE as deleteImageCache,
@@ -110,6 +111,26 @@ describe("Settings misc endpoints", () => {
             expect.objectContaining({ title: "Test Notification" }),
           ]),
         })
+      );
+    });
+
+    it("resolves the echoed mask to the saved webhook URL", async () => {
+      const user = await createTestUser();
+      setMockSession({ userId: user.id, isLoggedIn: true });
+      await getTestPrisma().appSettings.create({
+        data: { userId: user.id, discordWebhookUrl: "https://discord.com/api/webhooks/555/saved" },
+      });
+      mockSendDiscordNotification.mockResolvedValue({ ok: true });
+
+      const response = await callRoute(discordTest, {
+        url: "/api/settings/discord/test",
+        method: "POST",
+        body: { webhookUrl: MASKED_VALUE },
+      });
+      await expectJson(response, 200);
+      expect(mockSendDiscordNotification).toHaveBeenCalledWith(
+        "https://discord.com/api/webhooks/555/saved",
+        expect.anything()
       );
     });
 

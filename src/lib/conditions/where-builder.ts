@@ -44,14 +44,15 @@ export function applyNegate(clause: Prisma.MediaItemWhereInput, negate?: boolean
  * Prisma's `mode: "insensitive"` compiles to Postgres `ILIKE`, in which `%`,
  * `_`, and `\` are pattern metacharacters — so an un-escaped `equals "%"`
  * becomes `ILIKE '%'` and matches EVERY row (a fail-open), while Phase 2's
- * `===` / `.includes()` treat the same value literally. Escaping the
- * metacharacters (`\` is the default ILIKE escape char) makes Postgres
- * match them literally, restoring parity. Apply to every value handed to an
+ * `===` / `.includes()` treat the same value literally. Escaping restores
+ * parity. The helper lives in `@/lib/filters/escape-like` (the media list
+ * routes and `build-where.ts` need it too, and the filter layer must not
+ * depend on the rule engine); it is re-exported here so every existing
+ * rule-engine import keeps working. Apply to every value handed to an
  * insensitive `equals` / `not` / `contains` comparison.
  */
-export function escapeLike(value: string): string {
-  return value.replace(/[\\%_]/g, (c) => `\\${c}`);
-}
+import { escapeLike } from "@/lib/filters/escape-like";
+export { escapeLike };
 
 /**
  * Wrap a "not"-shaped clause (notEquals / notContains / etc.) so that NULL
@@ -686,11 +687,16 @@ const watchedByUserHandler: FieldHandler = (operator, value, _field, negate) => 
   const strVal = String(value);
   let clause: Prisma.MediaItemWhereInput;
   switch (operator) {
+    // `escapeLike`, like every other insensitive `equals` here (see its doc):
+    // un-escaped, `_` in a username was a wildcard in SQL and a literal in
+    // Phase 2, so the same rule matched different sets depending on whether
+    // anything else forced in-memory re-evaluation. The `in:` branches below
+    // stay unescaped — Prisma compiles those to `LOWER(col) IN (LOWER(…))`.
     case "equals":
-      clause = { watchHistory: { some: { ...COMPLETED_PLAY_FILTER, serverUsername: { equals: strVal, mode: "insensitive" } } } };
+      clause = { watchHistory: { some: { ...COMPLETED_PLAY_FILTER, serverUsername: { equals: escapeLike(strVal), mode: "insensitive" } } } };
       break;
     case "notEquals":
-      clause = { watchHistory: { none: { ...COMPLETED_PLAY_FILTER, serverUsername: { equals: strVal, mode: "insensitive" } } } };
+      clause = { watchHistory: { none: { ...COMPLETED_PLAY_FILTER, serverUsername: { equals: escapeLike(strVal), mode: "insensitive" } } } };
       break;
     case "contains": {
       // Enumerable multi-select — exact list membership against any user.

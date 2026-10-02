@@ -31,6 +31,7 @@ import type { MediaListItem } from "@/lib/types";
 import { ServerChips } from "@/components/server-chips";
 import { useColumnResize } from "@/hooks/use-column-resize";
 import { formatFileSize, formatDuration, formatDate } from "@/lib/format";
+import { formatEpisodeCode } from "@/lib/media/display-title";
 
 /**
  * Generic over the row type so callers keep whatever they actually have.
@@ -107,9 +108,7 @@ function formatEpisodeLabel(item: MediaListItem, isMusic: boolean): string | nul
   if (isMusic) {
     return item.episodeNumber != null ? String(item.episodeNumber) : null;
   }
-  const s = item.seasonNumber != null ? `S${String(item.seasonNumber).padStart(2, "0")}` : "";
-  const e = item.episodeNumber != null ? `E${String(item.episodeNumber).padStart(2, "0")}` : "";
-  return `${s}${e}`;
+  return formatEpisodeCode(item.seasonNumber, item.episodeNumber);
 }
 
 function buildColumns(getHex: (category: ChipColorCategory, value: string) => string): ColumnDef[] {

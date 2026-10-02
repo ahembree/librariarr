@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
+import { appCache } from "@/lib/cache/memory-cache";
 
 type LibraryTypeName = "MOVIE" | "SERIES" | "MUSIC";
 
@@ -13,6 +14,8 @@ type LibraryTypeName = "MOVIE" | "SERIES" | "MUSIC";
  */
 const BATCH_WINDOW_HOURS = 24;
 const LIBRARY_TYPES: readonly string[] = ["MOVIE", "SERIES", "MUSIC"];
+/** Upper bound only — every sync invalidates the entry outright. */
+const RECENTLY_ADDED_TTL_MS = 10 * 60_000;
 
 /**
  * Recently added shelf for the dashboard.
@@ -169,7 +172,14 @@ export async function GET(request: NextRequest) {
     groupTotal: number;
   }
 
-  const rows = await prisma.$queryRawUnsafe<GroupRow[]>(
+  // Cached under a media-cache prefix: the aggregate walks every item on the
+  // server (~120 ms on a 31k-item library) to produce 24 tiles, and the
+  // dashboard refetches it on every visit and on every `sync:completed`. A sync
+  // is also the only thing that changes the answer, and it calls
+  // `invalidateMediaCaches()`, so the entry is dropped exactly when it goes
+  // stale rather than on a timer.
+  const cacheKey = `recently-added:${[...sf.serverIds].sort().join(",")}:${dedupEnabled}:${artworkServerId}:${type ?? ""}:${limit}`;
+  const rows = await appCache.getOrSet(cacheKey, () => prisma.$queryRawUnsafe<GroupRow[]>(
     `${baseCte}
      SELECT group_key AS "groupKey",
             COUNT(*)::int AS "memberCount",
@@ -194,7 +204,7 @@ export async function GET(request: NextRequest) {
       ORDER BY MAX("addedAt") DESC, group_key
       LIMIT ${limit}`,
     ...params,
-  );
+  ), RECENTLY_ADDED_TTL_MS);
 
   return NextResponse.json({
     items: rows.map((r) => ({

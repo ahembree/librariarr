@@ -613,6 +613,44 @@ describe("PlexClient", () => {
       expect(result[0].sessionId).toBe("abc");
     });
 
+    it("carries an episode's season and episode numbers, so it can be named by show and SxxExx", async () => {
+      mockAxiosInstance.get.mockResolvedValueOnce({
+        data: {
+          MediaContainer: {
+            Metadata: [
+              {
+                title: "Pilot",
+                type: "episode",
+                parentTitle: "Season 1",
+                grandparentTitle: "Breaking Bad",
+                parentIndex: 1,
+                index: 1,
+                User: { id: "1", title: "Admin" },
+                Player: { product: "Plex Web", platform: "Chrome", state: "playing" },
+                Session: { id: "ep-session" },
+              },
+              {
+                title: "Teardrop",
+                type: "track",
+                parentTitle: "Mezzanine",
+                grandparentTitle: "Massive Attack",
+                parentIndex: 1,
+                index: 3,
+                User: { id: "1", title: "Admin" },
+                Player: { product: "Plexamp", platform: "iOS", state: "playing" },
+                Session: { id: "track-session" },
+              },
+            ],
+          },
+        },
+      });
+      const [episode, track] = await client.getSessions();
+      expect(episode).toMatchObject({ grandparentTitle: "Breaking Bad", seasonNumber: 1, episodeNumber: 1 });
+      // A track's parentIndex/index are its disc and track numbers, not an SxxExx.
+      expect(track.seasonNumber).toBeUndefined();
+      expect(track.episodeNumber).toBeUndefined();
+    });
+
     it("falls back to the item sessionKey when no Session element is present", async () => {
       // Plex omits the Session element for some clients; without a fallback the
       // sessionId was "" and multiple such sessions collided on one key.
@@ -1092,6 +1130,45 @@ describe("PlexClient", () => {
       mockAxiosInstance.get.mockRejectedValueOnce(new Error("fail"));
       const result = await client.getDevices();
       expect(result.size).toBe(0);
+    });
+  });
+  describe("getDetailedWatchHistory", () => {
+    const page = (metadata: unknown[]) => ({
+      data: { MediaContainer: { Metadata: metadata, totalSize: metadata.length } },
+    });
+    const emptyContainer = { data: { MediaContainer: {} } };
+
+    it("fetches the whole history when no `since` is given", async () => {
+      mockAxiosInstance.get
+        .mockResolvedValueOnce(emptyContainer) // /accounts
+        .mockResolvedValueOnce(emptyContainer) // /devices
+        .mockResolvedValueOnce(page([{ ratingKey: "1", viewedAt: 1700000000, accountID: 1 }]));
+
+      const entries = await client.getDetailedWatchHistory();
+
+      expect(entries).toHaveLength(1);
+      const historyCall = mockAxiosInstance.get.mock.calls.find((c) =>
+        String(c[0]).startsWith("/status/sessions/history/all"),
+      )!;
+      expect(historyCall[0]).toBe("/status/sessions/history/all");
+    });
+
+    it("puts the `viewedAt>=` filter in the URL verbatim for an incremental fetch", async () => {
+      mockAxiosInstance.get
+        .mockResolvedValueOnce(emptyContainer)
+        .mockResolvedValueOnce(emptyContainer)
+        .mockResolvedValueOnce(page([{ ratingKey: "1", viewedAt: 1700000500, accountID: 1 }]));
+
+      await client.getDetailedWatchHistory({ since: new Date(1700000000 * 1000 + 999) });
+
+      const historyCall = mockAxiosInstance.get.mock.calls.find((c) =>
+        String(c[0]).startsWith("/status/sessions/history/all"),
+      )!;
+      // Epoch seconds, floored, and NOT in `params`: axios percent-encodes
+      // `>=` there and Plex then ignores the filter and returns everything.
+      expect(historyCall[0]).toBe("/status/sessions/history/all?viewedAt>=1700000000");
+      expect(historyCall[1].params).not.toHaveProperty("viewedAt>=");
+      expect(historyCall[1].params).toMatchObject({ sort: "viewedAt:desc" });
     });
   });
 });

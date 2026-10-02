@@ -19,7 +19,8 @@ Seerr integration brings media request data into Librariarr for use in lifecycle
 2. Under the **Seerr** section, click **Add Instance**
 3. Enter:
    - **Name**: A label (e.g., "Seerr")
-   - **URL**: Seerr base URL (e.g., `http://192.168.1.100:5055`)
+   - **URL**: Seerr base URL (e.g., `http://192.168.1.100:5055`) — the address Librariarr uses to reach Seerr
+   - **External URL** (optional): The address your browser uses for Seerr (e.g., `https://requests.example.com`), starting with `http://` or `https://`. Used for the **Open in Seerr** link on media detail pages; falls back to **URL** when empty
    - **API Key**: Found in Seerr → Settings → General → API Key
 4. Click **Test Connection** to verify
 5. Save
@@ -34,9 +35,13 @@ Seerr integration makes request metadata available in Librariarr:
 |------|-------------|
 | **Request status** | Whether media was requested, approved, or declined |
 | **Requester** | Who requested the media |
-| **Request date** | When the request was made |
+| **Request date** | When the most recent request was made |
 | **Request count** | Number of requests for this media |
-| **Approval/decline date** | When the request was acted on |
+| **Approval/decline date** | When the most recent request was approved or declined |
+
+When a title has several requests (an HD and a 4K request, a re-request after it was deleted, or requests on several Seerr instances), the dates are those of the **most recent** one. A title deleted by a lifecycle rule and then requested again therefore counts as freshly requested, not as requested years ago.
+
+A request counts as approved once Seerr has approved it — including requests Seerr has since marked **Completed** (the media arrived) or **Failed** (the hand-off to Sonarr/Radarr failed). Completed is the normal status of anything requested that is now in your library.
 
 ## Use on the Dashboard
 
@@ -57,8 +62,8 @@ The card has two views: a compact top-5 leaderboard (default) and a full sortabl
 
 Click any user row to open a dialog with their full request history. Each entry shows:
 
-- Poster, title, and year (resolved from your library when available, or fetched from Seerr otherwise)
-- Media status badge (Available, Partial, Processing, Pending, Deleted)
+- Poster, title, and year (resolved from your library when available, or fetched from the Seerr instance the request came from otherwise)
+- Media status badge (Available, Partial, Processing, Pending, Blocklisted, Deleted) — for a 4K request, the status of the 4K copy
 - 4K badge when applicable
 - Watch indicator (per-episode progress for series)
 - Created date
@@ -69,15 +74,17 @@ The dialog supports filtering (All / Movies / Series / Watched / In progress) an
 
 ### Watch correlation
 
-Watch history is correlated by matching the requester's **Plex username** in Seerr against the username in your Plex/Jellyfin/Emby watch history. Requirements:
+Watch history is correlated by matching the requester's media-server account in Seerr against the username in your Plex/Jellyfin/Emby watch history. Requirements:
 
-- The Seerr user must have a `plexUsername` set (visible in Seerr → Users)
+- The Seerr user must be linked to a Plex account (`plexUsername`) or a Jellyfin/Emby account (`jellyfinUsername`) — visible in Seerr → Users
 - The matching media server user must share that username
 - Watch history must have been synced from the media server
 
-Users without a linked Plex username appear in the card with an icon indicating that watch history can't be correlated.
+Users without a linked account appear in the card with an icon indicating that watch history can't be correlated. They are left out of the header's overall watched percentage and sort below everyone else in the percentage columns.
 
-For series, the watched count is computed per-episode: the numerator is the number of episodes the user has played, the denominator is the total number of episodes available in your library for that series (matched via TVDB ID).
+**Movie %** counts requests: two requests for the same watched film (an HD and a 4K request, say) are both counted as watched. For series, the watched count is computed per-episode: the numerator is the number of episodes the user has played, the denominator is the total number of episodes available in your library for that series. A series is matched to your library by TVDB ID, or by TMDB ID when either side has no TVDB ID, and counts once however many requests point at it (Seerr creates a separate request for each later batch of seasons).
+
+If a Seerr instance can't be read in full (unreachable, or its request list changed faster than it could be paged), the card and the drill-down show what the other instances returned and are not cached, so the next load tries again.
 
 ## Use in Lifecycle Rules
 
@@ -91,6 +98,14 @@ Seerr data is available as rule conditions in the [lifecycle engine](/docs/featu
 | `seerrRequestedBy` | Who requested | Filter by specific user |
 | `seerrApprovalDate` | When approved | Track time since approval |
 | `seerrDeclineDate` | When declined | Clean up declined requests |
+
+Lifecycle rules and the **Query** page both read every enabled Seerr instance and merge their requests, so a title requested on any of them counts as requested.
+
+### Missing or unreadable data
+
+- An item with no request (or a request that was never approved or declined) has no date for the corresponding field. Date comparisons — **including negated ones** — never match a missing date; use **Is Empty** to target those items.
+- Seerr's request list is read in full for every run. If it can't be read in full — Seerr is unreachable, a page fails, or the list changes faster than it can be paged — the rule set is **skipped** for that run and its existing matches and pending actions are left alone. Evaluating against a partial list would make every request it missed look like media nobody asked for.
+- Older Overseerr and Jellyseerr releases (before Jellyseerr 2.6.0) are supported: Librariarr filters requests by type itself when the server doesn't accept the filter.
 
 ### Example Rule
 
@@ -108,9 +123,10 @@ Create a rule set to find media that was requested but never watched:
 ## Limitations
 
 - Seerr data is fetched live during rule evaluation, which can be slower for large match sets
-- Multiple Seerr instances are supported; the dashboard card aggregates requests across all of them per Plex username
+- Multiple Seerr instances are supported; the dashboard card aggregates requests across all of them per user (Plex username, otherwise Seerr username or email)
+- If an instance can't be read (it's down, or its request list changed faster than it could be paged), the card marks its figures **incomplete** and covers the instances that did answer; the per-user list says so too. Nothing is cached in that state, so the next load tries again
 - Request data availability depends on Seerr having been running when requests were made — historical data before Seerr was set up is not available
-- Watch correlation on the dashboard card relies on the Seerr user's `plexUsername` matching the username in your media server's watch history
+- Watch correlation on the dashboard card relies on the Seerr user's `plexUsername` or `jellyfinUsername` matching the username in your media server's watch history
 
 <Aside>
   Seerr integration is read-only from Librariarr's perspective. Request data is used in lifecycle rules only — approving/declining requests is done through Seerr's own interface.

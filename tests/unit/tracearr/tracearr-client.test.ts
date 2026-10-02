@@ -294,7 +294,7 @@ describe("TracearrClient", () => {
     it("hits the v1 health route (v2 has none)", async () => {
       mockAxiosInstance.get.mockResolvedValueOnce({ data: HEALTH });
       const health = await client.getHealth();
-      expect(mockAxiosInstance.get).toHaveBeenCalledWith(HEALTH_URL);
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith(HEALTH_URL, undefined);
       expect(health).toEqual(HEALTH);
     });
   });

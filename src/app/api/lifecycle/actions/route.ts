@@ -1,9 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
+import { jsonResponse } from "@/lib/api/json-response";
 import { prisma } from "@/lib/db";
 import { isDestructiveActionType } from "@/lib/lifecycle/action-types";
 import { actionConfigSignature } from "@/lib/lifecycle/action-signature";
+import {
+  actionTargetTitle,
+  actionTitleSnapshot,
+  snapshotTargetTitle,
+  type MemberEpisode,
+} from "@/lib/lifecycle/action-target";
 import { loadGroupMemberStats, aggregateGroupMembers, memberIdsFromItemData } from "@/lib/lifecycle/group-aggregate";
+import { heldScheduledFor, loadGroupedActionHold } from "@/lib/lifecycle/grouped-action-hold";
 
 interface ActionItemMediaItem {
   id: string | null;
@@ -72,7 +80,7 @@ interface RuleSetGroup {
  * destructive lifecycle action followed by a library sync).
  */
 const MEDIA_ITEM_SELECT = {
-  id: true, title: true, parentTitle: true, type: true, thumbUrl: true,
+  id: true, title: true, parentTitle: true, type: true, thumbUrl: true, seasonNumber: true, episodeNumber: true,
   year: true, summary: true, parentSummary: true, contentRating: true, rating: true, ratingImage: true, audienceRating: true, audienceRatingImage: true,
   duration: true, resolution: true, dynamicRange: true, audioProfile: true, fileSize: true,
   genres: true, studio: true, playCount: true, lastPlayedAt: true, addedAt: true,
@@ -81,6 +89,7 @@ const MEDIA_ITEM_SELECT = {
 
 type SelectedMediaItem = {
   id: string; title: string; parentTitle: string | null; type: string; thumbUrl: string | null;
+  seasonNumber: number | null; episodeNumber: number | null;
   year: number | null; summary: string | null; parentSummary: string | null; contentRating: string | null;
   rating: number | null; ratingImage: string | null;
   audienceRating: number | null; audienceRatingImage: string | null;
@@ -111,20 +120,31 @@ function serializeMediaItem(mi: SelectedMediaItem): ActionItemMediaItem {
 
 function buildActionMediaItem(
   action: {
-    mediaItemId: string | null;
+    actionType: string;
+    status: string;
+    matchedMediaItemIds: string[];
     mediaItemTitle: string | null;
     mediaItemParentTitle: string | null;
+    mediaItemSeasonNumber?: number | null;
+    mediaItemEpisodeNumber?: number | null;
     ruleSetType: string | null;
     mediaItem: SelectedMediaItem | null;
   },
-  ruleSetType: string
+  ruleSetType: string,
+  /** The members' rows, which name an action on one episode (see actionTargetTitle). */
+  memberEpisodes: ReadonlyMap<string, MemberEpisode>,
 ): ActionItemMediaItem {
+  // A series action is named by what it acts on: the show, or "<Show> SxxExx"
+  // when it acts on one episode — never by the representative episode's own
+  // title (see actionTargetTitle). Once it has run, by the snapshot it recorded
+  // then, as the episode it acted on may be gone since.
   if (action.mediaItem) {
     const mi = serializeMediaItem(action.mediaItem);
-    if (ruleSetType === "SERIES" && mi.parentTitle) {
-      return { ...mi, title: mi.parentTitle, parentTitle: null };
-    }
-    return mi;
+    if (ruleSetType !== "SERIES") return mi;
+    const title = action.status === "PENDING" || !action.mediaItemTitle
+      ? actionTargetTitle({ ...action, mediaItem: action.mediaItem, memberEpisodes })
+      : snapshotTargetTitle(action);
+    return { ...mi, title, parentTitle: null };
   }
   // MediaItem deleted — use denormalized fields
   const title = action.mediaItemTitle ?? "Unknown";
@@ -135,10 +155,36 @@ function buildActionMediaItem(
     audioProfile: null, fileSize: null, genres: null, studio: null,
     playCount: 0, lastPlayedAt: null, addedAt: null, matchedEpisodes: null,
   };
-  if (ruleSetType === "SERIES" && parentTitle) {
-    return { id: null, title: parentTitle, parentTitle: null, type: ruleSetType, ...nullFields };
+  if (ruleSetType === "SERIES") {
+    return { id: null, title: snapshotTargetTitle(action), parentTitle: null, type: ruleSetType, ...nullFields };
   }
   return { id: null, title, parentTitle, type: action.ruleSetType ?? ruleSetType, ...nullFields };
+}
+
+/**
+ * Lazy backfill: snapshot the title of actions that have a live mediaItem but
+ * no denormalized title yet (pre-migration records), so they don't read
+ * "Unknown" once the item is deleted.
+ */
+async function backfillTitleSnapshots(
+  actions: Array<{
+    id: string;
+    actionType: string;
+    matchedMediaItemIds: string[];
+    mediaItemTitle: string | null;
+    mediaItem: SelectedMediaItem | null;
+  }>,
+): Promise<void> {
+  await Promise.all(
+    actions
+      .filter((a) => a.mediaItem && !a.mediaItemTitle)
+      .map((a) =>
+        prisma.lifecycleAction.update({
+          where: { id: a.id },
+          data: actionTitleSnapshot({ ...a, mediaItem: a.mediaItem! }),
+        }),
+      ),
+  );
 }
 
 export async function GET(request: NextRequest) {
@@ -149,19 +195,25 @@ export async function GET(request: NextRequest) {
 
   const { searchParams } = new URL(request.url);
   const status = searchParams.get("status") || "PENDING";
-
-  if (status === "PENDING") {
-    return handlePendingGrouped(session.userId!);
+  if (!["PENDING", "COMPLETED", "FAILED", "ALL"].includes(status)) {
+    return NextResponse.json(
+      { error: "Invalid status. Must be PENDING, COMPLETED, FAILED, or ALL" },
+      { status: 400 }
+    );
   }
 
-  return handleStatusGrouped(session.userId!, status);
+  if (status === "PENDING") {
+    return handlePendingGrouped(request, session.userId!);
+  }
+
+  return handleStatusGrouped(request, session.userId!, status);
 }
 
 /**
  * PENDING: merge actual LifecycleAction PENDING records with RuleMatch-based
  * upcoming items, grouped by rule set.
  */
-async function handlePendingGrouped(userId: string) {
+async function handlePendingGrouped(request: NextRequest, userId: string) {
   // 1. Fetch actual PENDING LifecycleAction records
   const pendingActions = await prisma.lifecycleAction.findMany({
     where: { userId, status: "PENDING", ruleSetId: { not: null } },
@@ -180,18 +232,7 @@ async function handlePendingGrouped(userId: string) {
     orderBy: { scheduledFor: "asc" },
   });
 
-  // Lazy backfill denormalized titles for pre-migration PENDING actions
-  const pendingBackfill = pendingActions.filter((a) => a.mediaItem && !a.mediaItemTitle);
-  if (pendingBackfill.length > 0) {
-    await Promise.all(
-      pendingBackfill.map((a) =>
-        prisma.lifecycleAction.update({
-          where: { id: a.id },
-          data: { mediaItemTitle: a.mediaItem!.title, mediaItemParentTitle: a.mediaItem!.parentTitle },
-        })
-      )
-    );
-  }
+  await backfillTitleSnapshots(pendingActions);
 
   // Fetch every action that could suppress an estimated row:
   // - PENDING actions (already scheduled), and
@@ -313,7 +354,7 @@ async function handlePendingGrouped(userId: string) {
       groupMap.set(a.ruleSetId!, { ruleSet: a.ruleSet!, items: [], count: 0 });
     }
     const group = groupMap.get(a.ruleSetId!)!;
-    const mi = buildActionMediaItem(a, a.ruleSet!.type);
+    const mi = buildActionMediaItem(a, a.ruleSet!.type, memberDataMap);
     group.items.push({
       id: a.id,
       actionType: a.actionType,
@@ -332,23 +373,32 @@ async function handlePendingGrouped(userId: string) {
     group.count++;
   }
 
-  // Add upcoming RuleMatch items (estimated)
+  // Add upcoming RuleMatch items (estimated). A show's or an artist's match
+  // estimates the one-time upgrade hold its action will be scheduled with.
+  const hold = filteredUpcoming.length > 0 ? await loadGroupedActionHold(userId) : null;
   for (const m of filteredUpcoming) {
     if (!groupMap.has(m.ruleSetId)) {
       groupMap.set(m.ruleSetId, { ruleSet: m.ruleSet, items: [], count: 0 });
     }
     const group = groupMap.get(m.ruleSetId)!;
-    const estimatedDate = new Date(m.detectedAt);
-    estimatedDate.setDate(estimatedDate.getDate() + m.ruleSet.actionDelayDays);
+    const snapshot = m.itemData as Record<string, unknown> | null;
+    const detectedPlusDelay = new Date(m.detectedAt);
+    detectedPlusDelay.setDate(detectedPlusDelay.getDate() + m.ruleSet.actionDelayDays);
+    const estimatedDate = heldScheduledFor(detectedPlusDelay, hold, {
+      type: m.ruleSet.type,
+      title: snapshot?.title,
+      parentTitle: snapshot?.parentTitle,
+    });
+    const memberIds = memberIdsFromItemData(m.itemData);
     const mi = buildActionMediaItem({
-      mediaItemId: m.mediaItemId,
+      actionType: m.ruleSet.actionType!,
+      status: "PENDING",
+      matchedMediaItemIds: memberIds,
       mediaItemTitle: m.mediaItem.title,
       mediaItemParentTitle: m.mediaItem.parentTitle,
       ruleSetType: m.ruleSet.type,
       mediaItem: m.mediaItem,
-    }, m.ruleSet.type);
-    const data = m.itemData as Record<string, unknown> | null;
-    const memberIds = (data?.memberIds as string[] | undefined) ?? [];
+    }, m.ruleSet.type, memberDataMap);
 
     group.items.push({
       id: `rm_${m.id}`,
@@ -382,13 +432,13 @@ async function handlePendingGrouped(userId: string) {
     return aFirst.localeCompare(bFirst);
   });
 
-  return NextResponse.json({ groups });
+  return jsonResponse(request, { groups });
 }
 
 /**
  * COMPLETED / FAILED / CANCELLED / ALL: group LifecycleAction records by rule set.
  */
-async function handleStatusGrouped(userId: string, status: string) {
+async function handleStatusGrouped(request: NextRequest, userId: string, status: string) {
   const where: Record<string, unknown> = { userId };
   if (status !== "ALL") {
     where.status = status;
@@ -411,24 +461,7 @@ async function handleStatusGrouped(userId: string, status: string) {
     orderBy: { scheduledFor: "desc" },
   });
 
-  // Lazy backfill: snapshot title for actions that have a live mediaItem but no
-  // denormalized title yet (pre-migration records). Prevents "Unknown" after deletion.
-  const backfillIds: { id: string; title: string; parentTitle: string | null }[] = [];
-  for (const a of actions) {
-    if (a.mediaItem && !a.mediaItemTitle) {
-      backfillIds.push({ id: a.id, title: a.mediaItem.title, parentTitle: a.mediaItem.parentTitle });
-    }
-  }
-  if (backfillIds.length > 0) {
-    await Promise.all(
-      backfillIds.map((b) =>
-        prisma.lifecycleAction.update({
-          where: { id: b.id },
-          data: { mediaItemTitle: b.title, mediaItemParentTitle: b.parentTitle },
-        })
-      )
-    );
-  }
+  await backfillTitleSnapshots(actions);
 
   // Dedup: keep only the most recent record per (ruleSetId, mediaItemId).
   // Actions are ordered by scheduledFor desc, so the first seen per pair is the latest.
@@ -443,15 +476,7 @@ async function handleStatusGrouped(userId: string, status: string) {
   });
 
   // Pre-aggregate series/music member data for actions with matchedMediaItemIds
-  const statusMemberIds = deduped.flatMap((a) => a.matchedMediaItemIds);
-  let statusMemberMap = new Map<string, { fileSize: bigint; playCount: number; lastPlayedAt: Date | null }>();
-  if (statusMemberIds.length > 0) {
-    const members = await prisma.mediaItem.findMany({
-      where: { id: { in: statusMemberIds } },
-      select: { id: true, fileSize: true, playCount: true, lastPlayedAt: true },
-    });
-    statusMemberMap = new Map(members.map((m) => [m.id, { fileSize: m.fileSize ?? BigInt(0), playCount: m.playCount, lastPlayedAt: m.lastPlayedAt }]));
-  }
+  const memberStats = await loadGroupMemberStats(deduped.flatMap((a) => a.matchedMediaItemIds));
 
   const groupMap = new Map<string, RuleSetGroup>();
 
@@ -462,7 +487,7 @@ async function handleStatusGrouped(userId: string, status: string) {
     const ruleSetData = a.ruleSet ?? {
       id: groupKey,
       name: a.ruleSetName ?? "Deleted Rule Set",
-      type: a.ruleSetType ?? "MOVIE",
+      type: a.ruleSetType ?? a.mediaItem?.type ?? "MOVIE",
       actionType: a.actionType,
       actionDelayDays: 0,
       addImportExclusion: false,
@@ -478,30 +503,21 @@ async function handleStatusGrouped(userId: string, status: string) {
       groupMap.set(groupKey, { ruleSet: ruleSetData, items: [], count: 0 });
     }
     const group = groupMap.get(groupKey)!;
-    let mi = buildActionMediaItem(a, ruleSetData.type);
+    let mi = buildActionMediaItem(a, ruleSetData.type, memberStats);
 
     // Apply series/music aggregation from member items
-    if (a.matchedMediaItemIds.length > 0) {
-      let totalSize = BigInt(0);
-      let totalPlays = 0;
-      let latest: Date | null = null;
-      for (const id of a.matchedMediaItemIds) {
-        const d = statusMemberMap.get(id);
-        if (!d) continue;
-        totalSize += d.fileSize;
-        totalPlays += d.playCount;
-        if (d.lastPlayedAt && (!latest || d.lastPlayedAt > latest)) latest = d.lastPlayedAt;
-      }
+    const totals = aggregateGroupMembers(a.matchedMediaItemIds, memberStats);
+    if (totals) {
       // For completed delete actions, prefer deletedBytes (items may no longer exist in DB)
       const useDeletedBytes = a.status === "COMPLETED" && a.deletedBytes;
       mi = {
         ...mi,
         fileSize: useDeletedBytes
           ? a.deletedBytes!.toString()
-          : totalSize > BigInt(0) ? totalSize.toString() : mi.fileSize,
-        playCount: totalPlays > 0 ? totalPlays : mi.playCount,
-        lastPlayedAt: latest?.toISOString() ?? mi.lastPlayedAt,
-        matchedEpisodes: a.matchedMediaItemIds.length,
+          : totals.fileSize > BigInt(0) ? totals.fileSize.toString() : mi.fileSize,
+        playCount: totals.playCount > 0 ? totals.playCount : mi.playCount,
+        lastPlayedAt: totals.lastPlayedAt?.toISOString() ?? mi.lastPlayedAt,
+        matchedEpisodes: totals.matchedEpisodes,
       };
     }
 
@@ -525,5 +541,5 @@ async function handleStatusGrouped(userId: string, status: string) {
 
   const groups = Array.from(groupMap.values());
 
-  return NextResponse.json({ groups });
+  return jsonResponse(request, { groups });
 }

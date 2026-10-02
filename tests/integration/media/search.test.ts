@@ -151,6 +151,27 @@ describe("GET /api/media/search", () => {
     expect(body.items).toHaveLength(2);
   });
 
+  it("returns each episode's season and episode numbers, so it can be named by show and SxxExx", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const lib = await createTestLibrary(server.id, { type: "SERIES" });
+    await createTestMediaItem(lib.id, {
+      title: "Pilot", type: "SERIES", parentTitle: "Breaking Bad", seasonNumber: 1, episodeNumber: 1,
+    });
+
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    const response = await callRoute(GET, {
+      url: "/api/media/search",
+      searchParams: { q: "Pilot", type: "SERIES" },
+    });
+    const body = await expectJson<{
+      items: { title: string; parentTitle: string | null; seasonNumber: number | null; episodeNumber: number | null }[];
+    }>(response, 200);
+    expect(body.items).toEqual([
+      expect.objectContaining({ title: "Pilot", parentTitle: "Breaking Bad", seasonNumber: 1, episodeNumber: 1 }),
+    ]);
+  });
+
   it("searches series by parentTitle only with seriesScope=true", async () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id);

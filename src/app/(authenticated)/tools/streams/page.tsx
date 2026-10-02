@@ -97,6 +97,8 @@ import { useChipColors } from "@/components/chip-color-provider";
 import { normalizeResolutionLabel } from "@/lib/resolution";
 import { formatDurationClock } from "@/lib/format";
 import { hardwareEncoder, hardwareDecoder } from "@/lib/media-server/hardware-transcode";
+import { formatSessionMediaTitle } from "@/lib/media-server/session-title";
+import { formatEpisodeCode } from "@/lib/media/display-title";
 import { cn } from "@/lib/utils";
 import {
   SERVER_TYPE_STYLES,
@@ -144,6 +146,8 @@ interface SessionWithServer {
   grandparentTitle?: string;
   type: string;
   year?: number;
+  seasonNumber?: number;
+  episodeNumber?: number;
   thumb?: string;
   art?: string;
   parentThumb?: string;
@@ -304,30 +308,21 @@ function formatBlackoutScheduleDescription(schedule: BlackoutSchedule): string {
   return `Every ${days} ${start} - ${end}`;
 }
 
-function formatMediaTitle(s: SessionWithServer): string {
-  if (s.type === "episode") {
-    const show = s.grandparentTitle || s.parentTitle || "";
-    return show ? `${show} \u00b7 ${s.title}` : s.title;
-  }
-  if (s.type === "track") {
-    const parts = [s.grandparentTitle, s.parentTitle, s.title].filter(Boolean);
-    return parts.join(" \u00b7 ");
-  }
-  return s.year ? `${s.title} (${s.year})` : s.title;
-}
-
 /** Split a session into a primary line (what to lead with) and a
  *  secondary context line, per media type. */
 function sessionTitleParts(s: SessionWithServer): { primary: string; secondary: string | null } {
   if (s.type === "episode") {
-    const show = s.grandparentTitle || s.parentTitle;
+    // The show is `grandparentTitle` alone: an episode's `parentTitle` is its
+    // season ("Season 1"), never the show. The episode leads with its SxxExx.
+    const show = s.grandparentTitle;
     if (show) {
-      const secondary = [s.parentTitle !== show ? s.parentTitle : null, s.title]
+      const code = formatEpisodeCode(s.seasonNumber, s.episodeNumber);
+      const secondary = [code ?? (s.parentTitle !== show ? s.parentTitle : null), s.title]
         .filter(Boolean)
         .join(" \u00b7 ");
       return { primary: show, secondary: secondary || null };
     }
-    return { primary: s.title, secondary: null };
+    return { primary: formatSessionMediaTitle(s), secondary: null };
   }
   if (s.type === "track") {
     const secondary = [s.grandparentTitle, s.parentTitle].filter(Boolean).join(" \u00b7 ");
@@ -625,7 +620,7 @@ function SessionCard({
     <div
       role="button"
       tabIndex={0}
-      aria-label={`View details for ${primary}`}
+      aria-label={`View details for ${formatSessionMediaTitle(session)}`}
       onClick={() => onOpenDetail(session)}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
@@ -2070,7 +2065,7 @@ export default function StreamManagerPage() {
           {sheetSession && (
             <>
               <SheetHeader>
-                <SheetTitle className="wrap-break-word">{formatMediaTitle(sheetSession)}</SheetTitle>
+                <SheetTitle className="wrap-break-word">{formatSessionMediaTitle(sheetSession)}</SheetTitle>
                 <SheetDescription>
                   {sheetSession.type === "episode" ? "TV Episode" : sheetSession.type === "movie" ? "Movie" : sheetSession.type === "track" ? "Track" : sheetSession.type}
                   {sheetSession.year ? ` (${sheetSession.year})` : ""}
@@ -2086,7 +2081,7 @@ export default function StreamManagerPage() {
                       <div className="overflow-hidden rounded-xl">
                         <FadeImage
                           src={artUrl}
-                          alt={sheetSession.title}
+                          alt={formatSessionMediaTitle(sheetSession)}
                           loading="lazy"
                           className="block max-w-full"
                           style={{ maxHeight: "400px" }}

@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { toast } from "sonner";
 import { usePlexOAuth } from "@/hooks/use-plex-oauth";
+import { fetchWithReauth } from "@/lib/auth/reauth-client";
 import { useRealtime } from "@/hooks/use-realtime";
 import {
   DEFAULT_CHIP_COLORS,
@@ -24,6 +25,7 @@ import {
 import { cn } from "@/lib/utils";
 import { MASKED_VALUE } from "@/lib/api/sanitize";
 import { SettingsSkeleton } from "@/components/skeletons";
+import { isSyncRequestSettled, type PendingSyncRequest } from "@/lib/sync/sync-request";
 
 // ─── Tab components ───
 import { GeneralTab } from "./tabs/general-tab";
@@ -56,6 +58,7 @@ import type {
   ReleaseNote,
 } from "./types";
 import { PRESET_VALUES } from "./types";
+import { newPasswordProblem } from "@/lib/auth/password-rules";
 
 /** Stable empty reference — see `visibleTracearrImportStatus`. */
 const NO_TRACEARR_IMPORT_STATUS: TracearrImportStatus[] = [];
@@ -85,6 +88,26 @@ const VALID_SETTINGS_TABS = new Set<string>(SETTINGS_TABS.map((t) => t.value));
  * reports complete.
  */
 const TRACEARR_IMPORT_POLL_MS = 30_000;
+
+/**
+ * The message to show for a failed integration save. A validation failure
+ * answers `{ error: "Validation failed", details: ["field: why", …] }`, and
+ * the bare `error` names neither the field nor the problem.
+ */
+function integrationSaveError(
+  data: { error?: string; detail?: string; details?: unknown } | null,
+  fallback: string,
+): string {
+  const first = Array.isArray(data?.details) ? data.details[0] : undefined;
+  const detail =
+    typeof first === "string"
+      ? first
+      : typeof (first as { message?: unknown } | undefined)?.message === "string"
+        ? (first as { message: string }).message
+        : data?.detail;
+  const error = data?.error || fallback;
+  return detail ? `${error} — ${detail}` : error;
+}
 
 
 function getInitialSettingsTab(): SettingsTab {
@@ -152,7 +175,10 @@ export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState<SettingsTab>(getInitialSettingsTab);
   const [servers, setServers] = useState<MediaServer[]>([]);
   const [loading, setLoading] = useState(true);
-  const [syncingServer, setSyncingServer] = useState<string | null>(null);
+  // The manual sync this page last requested, until its own run ends — see
+  // `isSyncRequestSettled` for how that run is told apart from the previous one.
+  const [syncRequest, setSyncRequest] = useState<PendingSyncRequest | null>(null);
+  const syncRequestSeq = useRef(0);
   const [testingServer, setTestingServer] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<ServerTestResult | null>(null);
   const [refreshingLibraries, setRefreshingLibraries] = useState<string | null>(null);
@@ -171,7 +197,7 @@ export default function SettingsPage() {
   // Plex OAuth for auth tab (link account, stay on settings)
   const plexOAuth = usePlexOAuth({
     onSuccess: async (authToken) => {
-      const linkRes = await fetch("/api/auth/plex/link", {
+      const linkRes = await fetchWithReauth("/api/auth/plex/link", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ authToken }),
@@ -188,7 +214,7 @@ export default function SettingsPage() {
   // Plex OAuth for servers tab (link account, then redirect to onboarding)
   const plexOAuthForOnboarding = usePlexOAuth({
     onSuccess: async (authToken) => {
-      const linkRes = await fetch("/api/auth/plex/link", {
+      const linkRes = await fetchWithReauth("/api/auth/plex/link", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ authToken }),
@@ -272,7 +298,7 @@ export default function SettingsPage() {
   // Seerr instances
   const [seerrInstances, setSeerrInstances] = useState<SeerrInstance[]>([]);
   const [showSeerrForm, setShowSeerrForm] = useState(false);
-  const [seerrForm, setSeerrForm] = useState({ name: "", url: "", apiKey: "" });
+  const [seerrForm, setSeerrForm] = useState({ name: "", url: "", apiKey: "", externalUrl: "" });
   const [seerrSaving, setSeerrSaving] = useState(false);
   const [seerrError, setSeerrError] = useState("");
 
@@ -343,6 +369,7 @@ export default function SettingsPage() {
   const [backupSaving, setBackupSaving] = useState(false);
   const [creatingBackup, setCreatingBackup] = useState(false);
   const [restoringBackup, setRestoringBackup] = useState<string | null>(null);
+  const [downloadingBackups, setDownloadingBackups] = useState<string[]>([]);
   const [restoreProgress, setRestoreProgress] = useState<string | null>(null);
   const [hasBackupPassword, setHasBackupPassword] = useState(false);
   const [savingBackupPassword, setSavingBackupPassword] = useState(false);
@@ -374,6 +401,7 @@ export default function SettingsPage() {
   const [discordWebhookUrl, setDiscordWebhookUrl] = useState("");
   const [discordWebhookUsername, setDiscordWebhookUsername] = useState("");
   const [discordWebhookAvatarUrl, setDiscordWebhookAvatarUrl] = useState("");
+  const [discordNotifyApiKeys, setDiscordNotifyApiKeys] = useState(true);
   const [discordSaving, setDiscordSaving] = useState(false);
   const [discordTesting, setDiscordTesting] = useState(false);
   const [discordTestResult, setDiscordTestResult] = useState<TestResult | null>(null);
@@ -414,7 +442,7 @@ export default function SettingsPage() {
 
   // Seerr edit state
   const [editingSeerrId, setEditingSeerrId] = useState<string | null>(null);
-  const [editSeerrForm, setEditSeerrForm] = useState({ name: "", url: "", apiKey: "" });
+  const [editSeerrForm, setEditSeerrForm] = useState({ name: "", url: "", apiKey: "", externalUrl: "" });
   const [editSeerrSaving, setEditSeerrSaving] = useState(false);
   const [editSeerrError, setEditSeerrError] = useState("");
   const [editSeerrTesting, setEditSeerrTesting] = useState(false);
@@ -445,6 +473,11 @@ export default function SettingsPage() {
       const data = await response.json();
       const fresh: MediaServer[] = data.servers || [];
       setServers(fresh);
+      // Drop a request whose run has ended. Deriving that during render is not
+      // enough on its own: a request left stored after its run finished would
+      // light the spinner again for the next scheduled or realtime sync of the
+      // same server.
+      setSyncRequest((current) => (current && isSyncRequestSettled(current, fresh) ? null : current));
       return fresh;
     } catch (error) {
       console.error("Failed to fetch servers:", error);
@@ -823,6 +856,7 @@ export default function SettingsPage() {
       setDiscordWebhookUrl(data.webhookUrl ?? "");
       setDiscordWebhookUsername(data.webhookUsername ?? "");
       setDiscordWebhookAvatarUrl(data.webhookAvatarUrl ?? "");
+      setDiscordNotifyApiKeys(data.notifyApiKeys ?? true);
     } catch (error) {
       console.error("Failed to fetch Discord settings:", error);
     }
@@ -934,24 +968,24 @@ export default function SettingsPage() {
   useRealtime("sync:failed", fetchServers);
   useRealtime("server:changed", fetchServers);
 
-  // Fallback only, for a dropped stream.
+  // The per-server "syncing" button state, reconciled against the pushed server
+  // list during render. `fetchServers` also drops a settled request from state;
+  // this covers the render in between.
+  const activeSyncingServer = useMemo(
+    () => (syncRequest && !isSyncRequestSettled(syncRequest, servers) ? syncRequest.serverId : null),
+    [servers, syncRequest],
+  );
+
+  // Fallback only, for a dropped stream. Armed by a pending request as well as
+  // by a job row: between pressing Sync and the first refetch that sees the
+  // new row, `hasActiveSync` is still false, so with the stream down nothing
+  // refetched at all and the button spun to its 5-minute timeout.
+  const pollServers = hasActiveSync || activeSyncingServer !== null;
   useEffect(() => {
-    if (!hasActiveSync) return;
+    if (!pollServers) return;
     const interval = setInterval(fetchServers, 15000);
     return () => clearInterval(interval);
-  }, [hasActiveSync, fetchServers]);
-
-  // The per-server "syncing" button state, reconciled against the pushed server
-  // list. Derived during render rather than written back from an effect: the
-  // sync:* subscriptions above already keep `servers` current, so the finished
-  // state is a pure function of it and storing it again would only add a
-  // cascading render.
-  const activeSyncingServer = useMemo(() => {
-    if (!syncingServer) return null;
-    const latest = servers.find((s) => s.id === syncingServer)?.syncJobs[0];
-    if (latest?.status === "COMPLETED" || latest?.status === "FAILED") return null;
-    return syncingServer;
-  }, [servers, syncingServer]);
+  }, [pollServers, fetchServers]);
 
   // The import readout is PUSHED, not polled. The importer emits
   // `tracearr:import-progress` after each page commits (throttled there, since
@@ -975,7 +1009,12 @@ export default function SettingsPage() {
   // connection staying up. Deliberately slow: the push covers the live case, and
   // this only has to stop the number going stale for good. Runs while a backfill
   // is owed, which is the case that lasts long enough for a drop to matter.
-  const tracearrBackfillRunning = visibleTracearrImportStatus.some((s) => !s.backfillComplete);
+  // Also while any import is live: a catch-up on an already-backfilled server
+  // shows an import card too, and without this a dropped stream would leave
+  // that card up until the next pushed event.
+  const tracearrBackfillRunning = visibleTracearrImportStatus.some(
+    (s) => !s.backfillComplete || s.activeImport !== null,
+  );
   const pollTracearrImport = hasTracearrInstance && tracearrBackfillRunning;
   useEffect(() => {
     if (!pollTracearrImport) return;
@@ -1095,27 +1134,43 @@ export default function SettingsPage() {
   };
 
   const syncServer = async (serverId: string, libraryKey?: string) => {
-    setSyncingServer(serverId);
+    const id = ++syncRequestSeq.current;
+    setSyncRequest({ id, serverId, requestedAt: null });
+    // Every exit ends THIS request only. Matching on the server id let the
+    // first press's 5-minute timer cancel a second press on the same server,
+    // and an error on one request cleared whichever request was current.
+    const release = () => setSyncRequest((current) => (current?.id === id ? null : current));
     try {
-      await fetch(`/api/servers/${serverId}/sync`, {
+      const res = await fetch(`/api/servers/${serverId}/sync`, {
         method: "POST",
         headers: libraryKey ? { "Content-Type": "application/json" } : undefined,
         body: libraryKey ? JSON.stringify({ libraryKey }) : undefined,
       });
-      // No completion poll here any more. `servers` is refreshed by the
-      // sync:* subscriptions above, and the effect below clears the button
-      // state when the freshly pushed list shows the job finished — so this
-      // path no longer runs its own 3s /api/servers loop for up to 5 minutes
-      // alongside the one the page already had.
-      //
-      // The safety timeout stays: if every event is missed AND the fallback
-      // poll is also dead, the button must not spin forever.
-      setTimeout(() => {
-        setSyncingServer((current) => (current === serverId ? null : current));
-      }, 300000);
+      // A rejected request (disabled server, 409 from a race) enqueues nothing,
+      // so no new job will ever appear to end this one. `fetch` does not throw
+      // on a non-2xx, so without this the spinner runs to the 5-minute timeout.
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        toast.error(body?.error ?? "Failed to start sync");
+        release();
+        return;
+      }
+      const body = await res.json().catch(() => null);
+      // The route always sends it; the client clock is only a fallback.
+      const requestedAt: string =
+        typeof body?.requestedAt === "string" ? body.requestedAt : new Date().toISOString();
+      setSyncRequest((current) => (current?.id === id ? { ...current, requestedAt } : current));
+      // A short sync can finish before this response is read, and the events
+      // it sent were checked against a request that could not be matched yet.
+      // One refetch now settles it rather than leaving the request stored.
+      void fetchServers();
+      // No completion poll here: `servers` is refreshed by the sync:*
+      // subscriptions and the fallback poll above. The safety timeout stays so
+      // the button cannot spin forever if every refresh is missed.
+      setTimeout(release, 300000);
     } catch {
       toast.error("Failed to start sync");
-      setSyncingServer(null);
+      release();
     }
   };
 
@@ -1201,7 +1256,9 @@ export default function SettingsPage() {
     setEditServerSaving(true);
     setEditServerError("");
     try {
-      const response = await fetch(`/api/servers/${serverId}`, {
+      // A new URL for a Plex server that keeps its stored token needs a recent
+      // sign-in (the token would go to the new URL).
+      const response = await fetchWithReauth(`/api/servers/${serverId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1814,10 +1871,13 @@ export default function SettingsPage() {
     }
   };
 
+  // Creating, downloading and restoring a backup need a sign-in from the last
+  // 15 minutes (a backup holds the Plex token); `fetchWithReauth` asks the user
+  // to confirm it's them and repeats the request.
   const handleCreateBackup = async (includeMediaData = false) => {
     setCreatingBackup(true);
     try {
-      const res = await fetch("/api/backup", {
+      const res = await fetchWithReauth("/api/backup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ includeMediaData }),
@@ -1858,8 +1918,35 @@ export default function SettingsPage() {
     }
   };
 
-  const handleDownloadBackup = (filename: string) => {
-    window.open(`/api/backup/${encodeURIComponent(filename)}`, "_blank");
+  // Fetched rather than opened in a tab: a plain navigation cannot show the
+  // "Confirm it's you" prompt, so a refused download would open the 403 JSON.
+  const handleDownloadBackup = async (filename: string) => {
+    // One at a time per file: its button stays disabled until this one ends.
+    if (downloadingBackups.includes(filename)) return;
+    setDownloadingBackups((current) => [...current, filename]);
+    try {
+      const res = await fetchWithReauth(`/api/backup/${encodeURIComponent(filename)}`);
+      if (!res.ok) {
+        const data = await res.json().catch(() => null);
+        toast.error("Failed to download backup", { description: data?.error });
+        return;
+      }
+      const url = URL.createObjectURL(await res.blob());
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      // Revoking at once can cancel the download before the browser has read
+      // the blob; FileSaver.js waits 40 seconds for the same reason.
+      setTimeout(() => URL.revokeObjectURL(url), 40_000);
+    } catch {
+      toast.error("Failed to download backup");
+    } finally {
+      // Only this download's spinner: others may still be running.
+      setDownloadingBackups((current) => current.filter((f) => f !== filename));
+    }
   };
 
   // Confirmation happens in the GeneralTab restore dialog before this is called.
@@ -1867,11 +1954,17 @@ export default function SettingsPage() {
     setRestoringBackup(filename);
     setRestoreProgress(null);
     try {
-      const res = await fetch("/api/backup/restore", {
+      const res = await fetchWithReauth("/api/backup/restore", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ filename, ...(passphrase ? { passphrase } : {}) }),
       });
+      if (!res.ok) {
+        // Refused before the stream started: a JSON error, not progress lines.
+        const data = await res.json().catch(() => null);
+        toast.error("Restore failed", { description: data?.error });
+        return;
+      }
       if (!res.body) {
         toast.error("Restore failed", { description: "The server returned an empty response." });
         return;
@@ -1945,7 +2038,7 @@ export default function SettingsPage() {
       });
       const data = await response.json();
       if (!response.ok) {
-        setSonarrError(data.error || "Failed to add Sonarr instance");
+        setSonarrError(integrationSaveError(data, "Failed to add Sonarr instance"));
         return;
       }
       setSonarrForm({ name: "", url: "", apiKey: "", externalUrl: "" });
@@ -1985,7 +2078,7 @@ export default function SettingsPage() {
       });
       const data = await response.json();
       if (!response.ok) {
-        setRadarrError(data.error || "Failed to add Radarr instance");
+        setRadarrError(integrationSaveError(data, "Failed to add Radarr instance"));
         return;
       }
       setRadarrForm({ name: "", url: "", apiKey: "", externalUrl: "" });
@@ -2025,7 +2118,7 @@ export default function SettingsPage() {
       });
       const data = await response.json();
       if (!response.ok) {
-        setLidarrError(data.error || "Failed to add Lidarr instance");
+        setLidarrError(integrationSaveError(data, "Failed to add Lidarr instance"));
         return;
       }
       setLidarrForm({ name: "", url: "", apiKey: "", externalUrl: "" });
@@ -2065,10 +2158,10 @@ export default function SettingsPage() {
       });
       const data = await response.json();
       if (!response.ok) {
-        setSeerrError(data.error || "Failed to add Seerr instance");
+        setSeerrError(integrationSaveError(data, "Failed to add Seerr instance"));
         return;
       }
-      setSeerrForm({ name: "", url: "", apiKey: "" });
+      setSeerrForm({ name: "", url: "", apiKey: "", externalUrl: "" });
       setShowSeerrForm(false);
       await fetchSeerrInstances();
       toast.success("Seerr instance added");
@@ -2112,8 +2205,23 @@ export default function SettingsPage() {
     }
   };
 
+  // Per-form sequence for the edit-form connection test. Only the latest test
+  // may write its result: an auto-test still in flight for another instance
+  // (Edit A → Cancel → Edit B) or for credentials since edited used to land
+  // afterwards and overwrite the form's result — disabling Save on a healthy
+  // instance, or enabling it on one whose new credentials were never tested.
+  const editTestSeq = useRef<Record<"sonarr" | "radarr" | "lidarr" | "seerr", number>>({
+    sonarr: 0, radarr: 0, lidarr: 0, seerr: 0,
+  });
+  const invalidateEditTest = (type: "sonarr" | "radarr" | "lidarr" | "seerr", setTesting: (v: boolean) => void) => {
+    editTestSeq.current[type]++;
+    setTesting(false);
+  };
+
   // Test connection for existing instances (uses server-side stored credentials)
   const testEditArrConnection = async (type: "sonarr" | "radarr" | "lidarr" | "seerr", id: string, overrides: { url?: string; apiKey?: string }, setTesting: (v: boolean) => void, setResult: (v: TestResult | null) => void) => {
+    const seq = ++editTestSeq.current[type];
+    const current = () => editTestSeq.current[type] === seq;
     setTesting(true);
     setResult(null);
     try {
@@ -2126,11 +2234,11 @@ export default function SettingsPage() {
         body: JSON.stringify(body),
       });
       const data = await response.json();
-      setResult(data);
+      if (current()) setResult(data);
     } catch {
-      setResult({ ok: false, error: "Request failed" });
+      if (current()) setResult({ ok: false, error: "Request failed" });
     } finally {
-      setTesting(false);
+      if (current()) setTesting(false);
     }
   };
 
@@ -2151,7 +2259,10 @@ export default function SettingsPage() {
       if (editSonarrForm.name) body.name = editSonarrForm.name;
       if (editSonarrForm.url) body.url = editSonarrForm.url;
       if (editSonarrForm.apiKey) body.apiKey = editSonarrForm.apiKey;
-      body.externalUrl = editSonarrForm.externalUrl;
+      // Only when changed: an External URL stored under an older, looser rule
+      // must not make every rename or re-point of the instance fail validation.
+      const storedSonarrExternalUrl = sonarrInstances.find((i) => i.id === editingSonarrId)?.externalUrl ?? "";
+      if (editSonarrForm.externalUrl !== storedSonarrExternalUrl) body.externalUrl = editSonarrForm.externalUrl;
 
       const response = await fetch(`/api/integrations/sonarr/${editingSonarrId}`, {
         method: "PUT",
@@ -2160,7 +2271,7 @@ export default function SettingsPage() {
       });
       const data = await response.json();
       if (!response.ok) {
-        setEditSonarrError(data.detail ? `${data.error} — ${data.detail}` : (data.error || "Failed to update"));
+        setEditSonarrError(integrationSaveError(data, "Failed to update"));
         return;
       }
       setEditingSonarrId(null);
@@ -2190,7 +2301,10 @@ export default function SettingsPage() {
       if (editRadarrForm.name) body.name = editRadarrForm.name;
       if (editRadarrForm.url) body.url = editRadarrForm.url;
       if (editRadarrForm.apiKey) body.apiKey = editRadarrForm.apiKey;
-      body.externalUrl = editRadarrForm.externalUrl;
+      // Only when changed: an External URL stored under an older, looser rule
+      // must not make every rename or re-point of the instance fail validation.
+      const storedRadarrExternalUrl = radarrInstances.find((i) => i.id === editingRadarrId)?.externalUrl ?? "";
+      if (editRadarrForm.externalUrl !== storedRadarrExternalUrl) body.externalUrl = editRadarrForm.externalUrl;
 
       const response = await fetch(`/api/integrations/radarr/${editingRadarrId}`, {
         method: "PUT",
@@ -2199,7 +2313,7 @@ export default function SettingsPage() {
       });
       const data = await response.json();
       if (!response.ok) {
-        setEditRadarrError(data.detail ? `${data.error} — ${data.detail}` : (data.error || "Failed to update"));
+        setEditRadarrError(integrationSaveError(data, "Failed to update"));
         return;
       }
       setEditingRadarrId(null);
@@ -2229,7 +2343,10 @@ export default function SettingsPage() {
       if (editLidarrForm.name) body.name = editLidarrForm.name;
       if (editLidarrForm.url) body.url = editLidarrForm.url;
       if (editLidarrForm.apiKey) body.apiKey = editLidarrForm.apiKey;
-      body.externalUrl = editLidarrForm.externalUrl;
+      // Only when changed: an External URL stored under an older, looser rule
+      // must not make every rename or re-point of the instance fail validation.
+      const storedLidarrExternalUrl = lidarrInstances.find((i) => i.id === editingLidarrId)?.externalUrl ?? "";
+      if (editLidarrForm.externalUrl !== storedLidarrExternalUrl) body.externalUrl = editLidarrForm.externalUrl;
 
       const response = await fetch(`/api/integrations/lidarr/${editingLidarrId}`, {
         method: "PUT",
@@ -2238,7 +2355,7 @@ export default function SettingsPage() {
       });
       const data = await response.json();
       if (!response.ok) {
-        setEditLidarrError(data.detail ? `${data.error} — ${data.detail}` : (data.error || "Failed to update"));
+        setEditLidarrError(integrationSaveError(data, "Failed to update"));
         return;
       }
       setEditingLidarrId(null);
@@ -2254,7 +2371,7 @@ export default function SettingsPage() {
   // Seerr edit handlers
   const startEditSeerr = (instance: SeerrInstance) => {
     setEditingSeerrId(instance.id);
-    setEditSeerrForm({ name: instance.name, url: instance.url, apiKey: "" });
+    setEditSeerrForm({ name: instance.name, url: instance.url, apiKey: "", externalUrl: instance.externalUrl ?? "" });
     setEditSeerrError("");
     setEditSeerrTestResult(null);
     testEditArrConnection("seerr", instance.id, {}, setEditSeerrTesting, setEditSeerrTestResult);
@@ -2268,6 +2385,10 @@ export default function SettingsPage() {
       if (editSeerrForm.name) body.name = editSeerrForm.name;
       if (editSeerrForm.url) body.url = editSeerrForm.url;
       if (editSeerrForm.apiKey) body.apiKey = editSeerrForm.apiKey;
+      // Only when changed: an External URL stored under an older, looser rule
+      // must not make every rename or re-point of the instance fail validation.
+      const storedSeerrExternalUrl = seerrInstances.find((i) => i.id === editingSeerrId)?.externalUrl ?? "";
+      if (editSeerrForm.externalUrl !== storedSeerrExternalUrl) body.externalUrl = editSeerrForm.externalUrl;
 
       const response = await fetch(`/api/integrations/seerr/${editingSeerrId}`, {
         method: "PUT",
@@ -2276,7 +2397,7 @@ export default function SettingsPage() {
       });
       const data = await response.json();
       if (!response.ok) {
-        setEditSeerrError(data.detail ? `${data.error} — ${data.detail}` : (data.error || "Failed to update"));
+        setEditSeerrError(integrationSaveError(data, "Failed to update"));
         return;
       }
       setEditingSeerrId(null);
@@ -2420,6 +2541,7 @@ export default function SettingsPage() {
           webhookUrl: discordWebhookUrl,
           webhookUsername: discordWebhookUsername,
           webhookAvatarUrl: discordWebhookAvatarUrl,
+          notifyApiKeys: discordNotifyApiKeys,
         }),
       });
       if (!res.ok) {
@@ -2537,6 +2659,18 @@ export default function SettingsPage() {
 
   const handlePlexLink = () => plexOAuth.startAuth();
 
+  // After an SSO change: whether SSO is usable decides whether the password is
+  // accepted at all (passwordSignInEnabled), and with it whether the forms
+  // here ask for the current password.
+  const refreshAuthInfo = useCallback(() => {
+    fetch("/api/settings/auth")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((info) => {
+        if (info) setAuthInfo(info);
+      })
+      .catch(() => {});
+  }, []);
+
   const handleToggleLocalAuth = async (checked: boolean) => {
     setLocalAuthError("");
     // If enabling and no credentials exist, prompt to create them first
@@ -2548,13 +2682,18 @@ export default function SettingsPage() {
     }
     setAuthLoading(true);
     try {
-      const res = await fetch("/api/settings/auth", {
+      // Turning local login on gives the password its power back, which needs
+      // a recent sign-in by another method.
+      const res = await fetchWithReauth("/api/settings/auth", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ localAuthEnabled: checked }),
       });
       if (res.ok) {
         setAuthInfo((prev) => prev ? { ...prev, localAuthEnabled: checked } : prev);
+        // Whether the password is now accepted also depends on SSO: re-read it.
+        const infoRes = await fetch("/api/settings/auth");
+        if (infoRes.ok) setAuthInfo(await infoRes.json());
         toast.success(checked ? "Local login enabled" : "Local login disabled");
       } else {
         // Surface the lockout-guard error inline. The UI also gates the
@@ -2575,7 +2714,9 @@ export default function SettingsPage() {
     setPlexLoginError("");
     setAuthLoading(true);
     try {
-      const res = await fetch("/api/settings/auth", {
+      // Turning Plex login on lets whoever holds the Plex account sign in,
+      // which needs a recent sign-in by another method.
+      const res = await fetchWithReauth("/api/settings/auth", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ plexLoginEnabled: checked }),
@@ -2603,16 +2744,22 @@ export default function SettingsPage() {
       setCredentialsError("Passwords do not match");
       return;
     }
+    const newPasswordIssue = credentialsForm.newPassword ? newPasswordProblem(credentialsForm.newPassword) : null;
+    if (newPasswordIssue) {
+      setCredentialsError(newPasswordIssue);
+      return;
+    }
 
     setCredentialsSaving(true);
     try {
-      const body: Record<string, string> = {
-        currentPassword: credentialsForm.currentPassword,
-      };
+      // Sent only when the form asked for it (password sign-in on); otherwise
+      // the server wants a recent sign-in, which fetchWithReauth prompts for.
+      const body: Record<string, string> = {};
+      if (credentialsForm.currentPassword) body.currentPassword = credentialsForm.currentPassword;
       if (credentialsForm.newPassword) body.newPassword = credentialsForm.newPassword;
       if (credentialsForm.newUsername) body.newUsername = credentialsForm.newUsername;
 
-      const res = await fetch("/api/auth/local/change-password", {
+      const res = await fetchWithReauth("/api/auth/local/change-password", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -2643,8 +2790,9 @@ export default function SettingsPage() {
       setPromptError("Username must be at least 3 characters");
       return;
     }
-    if (promptForm.password.length < 8) {
-      setPromptError("Password must be at least 8 characters");
+    const passwordProblem = newPasswordProblem(promptForm.password);
+    if (passwordProblem) {
+      setPromptError(passwordProblem);
       return;
     }
     if (promptForm.password !== promptForm.confirmPassword) {
@@ -2654,7 +2802,7 @@ export default function SettingsPage() {
     setPromptSaving(true);
     try {
       // Create credentials
-      const credRes = await fetch("/api/auth/local/change-password", {
+      const credRes = await fetchWithReauth("/api/auth/local/change-password", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -2667,8 +2815,8 @@ export default function SettingsPage() {
         setPromptError(data.error || "Failed to create credentials");
         return;
       }
-      // Enable local auth
-      const authRes = await fetch("/api/settings/auth", {
+      // Enable local auth (needs a recent sign-in, like the first password)
+      const authRes = await fetchWithReauth("/api/settings/auth", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ localAuthEnabled: true }),
@@ -2793,6 +2941,7 @@ export default function SettingsPage() {
             backupSaving={backupSaving}
             creatingBackup={creatingBackup}
             restoringBackup={restoringBackup}
+            downloadingBackups={downloadingBackups}
             restoreProgress={restoreProgress}
             hasBackupPassword={hasBackupPassword}
             savingBackupPassword={savingBackupPassword}
@@ -2950,9 +3099,15 @@ export default function SettingsPage() {
               onTest: () => testArrConnection("sonarr", sonarrForm.url, sonarrForm.apiKey, setSonarrTesting, setSonarrTestResult),
               onStartEdit: startEditSonarr,
               onSaveEdit: saveEditSonarr,
-              onCancelEdit: () => setEditingSonarrId(null),
+              onCancelEdit: () => {
+                invalidateEditTest("sonarr", setEditSonarrTesting);
+                setEditingSonarrId(null);
+              },
               onEditFormChange: (form) => {
-                if (form.url !== editSonarrForm.url || form.apiKey !== editSonarrForm.apiKey) setEditSonarrTestResult(null);
+                if (form.url !== editSonarrForm.url || form.apiKey !== editSonarrForm.apiKey) {
+                  invalidateEditTest("sonarr", setEditSonarrTesting);
+                  setEditSonarrTestResult(null);
+                }
                 setEditSonarrForm(form);
               },
               onEditTest: () => testEditArrConnection("sonarr", editingSonarrId!, { url: editSonarrForm.url, apiKey: editSonarrForm.apiKey }, setEditSonarrTesting, setEditSonarrTestResult),
@@ -2984,9 +3139,15 @@ export default function SettingsPage() {
               onTest: () => testArrConnection("radarr", radarrForm.url, radarrForm.apiKey, setRadarrTesting, setRadarrTestResult),
               onStartEdit: startEditRadarr,
               onSaveEdit: saveEditRadarr,
-              onCancelEdit: () => setEditingRadarrId(null),
+              onCancelEdit: () => {
+                invalidateEditTest("radarr", setEditRadarrTesting);
+                setEditingRadarrId(null);
+              },
               onEditFormChange: (form) => {
-                if (form.url !== editRadarrForm.url || form.apiKey !== editRadarrForm.apiKey) setEditRadarrTestResult(null);
+                if (form.url !== editRadarrForm.url || form.apiKey !== editRadarrForm.apiKey) {
+                  invalidateEditTest("radarr", setEditRadarrTesting);
+                  setEditRadarrTestResult(null);
+                }
                 setEditRadarrForm(form);
               },
               onEditTest: () => testEditArrConnection("radarr", editingRadarrId!, { url: editRadarrForm.url, apiKey: editRadarrForm.apiKey }, setEditRadarrTesting, setEditRadarrTestResult),
@@ -3018,9 +3179,15 @@ export default function SettingsPage() {
               onTest: () => testArrConnection("lidarr", lidarrForm.url, lidarrForm.apiKey, setLidarrTesting, setLidarrTestResult),
               onStartEdit: startEditLidarr,
               onSaveEdit: saveEditLidarr,
-              onCancelEdit: () => setEditingLidarrId(null),
+              onCancelEdit: () => {
+                invalidateEditTest("lidarr", setEditLidarrTesting);
+                setEditingLidarrId(null);
+              },
               onEditFormChange: (form) => {
-                if (form.url !== editLidarrForm.url || form.apiKey !== editLidarrForm.apiKey) setEditLidarrTestResult(null);
+                if (form.url !== editLidarrForm.url || form.apiKey !== editLidarrForm.apiKey) {
+                  invalidateEditTest("lidarr", setEditLidarrTesting);
+                  setEditLidarrTestResult(null);
+                }
                 setEditLidarrForm(form);
               },
               onEditTest: () => testEditArrConnection("lidarr", editingLidarrId!, { url: editLidarrForm.url, apiKey: editLidarrForm.apiKey }, setEditLidarrTesting, setEditLidarrTestResult),
@@ -3052,9 +3219,15 @@ export default function SettingsPage() {
               onTest: () => testArrConnection("seerr", seerrForm.url, seerrForm.apiKey, setSeerrTesting, setSeerrTestResult),
               onStartEdit: startEditSeerr,
               onSaveEdit: saveEditSeerr,
-              onCancelEdit: () => setEditingSeerrId(null),
+              onCancelEdit: () => {
+                invalidateEditTest("seerr", setEditSeerrTesting);
+                setEditingSeerrId(null);
+              },
               onEditFormChange: (form) => {
-                if (form.url !== editSeerrForm.url || form.apiKey !== editSeerrForm.apiKey) setEditSeerrTestResult(null);
+                if (form.url !== editSeerrForm.url || form.apiKey !== editSeerrForm.apiKey) {
+                  invalidateEditTest("seerr", setEditSeerrTesting);
+                  setEditSeerrTestResult(null);
+                }
                 setEditSeerrForm(form);
               },
               onEditTest: () => testEditArrConnection("seerr", editingSeerrId!, { url: editSeerrForm.url, apiKey: editSeerrForm.apiKey }, setEditSeerrTesting, setEditSeerrTestResult),
@@ -3096,12 +3269,14 @@ export default function SettingsPage() {
             discordWebhookUrl={discordWebhookUrl}
             discordWebhookUsername={discordWebhookUsername}
             discordWebhookAvatarUrl={discordWebhookAvatarUrl}
+            discordNotifyApiKeys={discordNotifyApiKeys}
             discordSaving={discordSaving}
             discordTesting={discordTesting}
             discordTestResult={discordTestResult}
             onDiscordWebhookUrlChange={setDiscordWebhookUrl}
             onDiscordWebhookUsernameChange={setDiscordWebhookUsername}
             onDiscordWebhookAvatarUrlChange={setDiscordWebhookAvatarUrl}
+            onDiscordNotifyApiKeysChange={setDiscordNotifyApiKeys}
             onSaveDiscordSettings={saveDiscordSettings}
             onTestDiscordWebhook={testDiscordWebhook}
           />
@@ -3130,6 +3305,7 @@ export default function SettingsPage() {
             onChangeCredentials={handleChangeCredentials}
             onPlexLink={handlePlexLink}
             onCreateCredentialsAndEnable={handleCreateCredentialsAndEnable}
+            onAuthSettingsChanged={refreshAuthInfo}
           />
         </TabsContent>
 

@@ -130,6 +130,9 @@ export async function computeLibraryStats(serverIds: string[], dedupEnabled: boo
       GROUP BY g.genre, mi.type
       ORDER BY "_count" DESC
     `,
+    // Artists and albums are keyed by normalized title, as the music library
+    // groups them: rating keys are per server, so with dedup on an artist
+    // whose albums are canonical on two servers counted as two artists.
     prisma.$queryRaw<
       [{
         seriesCount: number; seasonCount: number; artistCount: number; albumCount: number;
@@ -143,9 +146,9 @@ export async function computeLibraryStats(serverIds: string[], dedupEnabled: boo
         COUNT(DISTINCT CASE WHEN mi.type = 'SERIES' AND mi."seasonNumber" IS NOT NULL
           THEN COALESCE(mi."seriesKey" || ':' || mi."seasonNumber", mi."parentRatingKey", mi."parentTitle" || ':' || mi."seasonNumber") END)::int AS "seasonCount",
         COUNT(DISTINCT CASE WHEN mi.type = 'MUSIC'
-          THEN COALESCE(mi."grandparentRatingKey", mi."parentTitle") END)::int AS "artistCount",
+          THEN COALESCE(LOWER(TRIM(mi."parentTitle")), mi."grandparentRatingKey") END)::int AS "artistCount",
         COUNT(DISTINCT CASE WHEN mi.type = 'MUSIC'
-          THEN COALESCE(mi."parentRatingKey", mi."parentTitle" || ':' || mi."albumTitle") END)::int AS "albumCount",
+          THEN COALESCE(LOWER(TRIM(mi."parentTitle")) || ':' || LOWER(TRIM(mi."albumTitle")), mi."parentRatingKey") END)::int AS "albumCount",
         COALESCE(SUM(CASE WHEN mi.type = 'MOVIE' THEN mi."fileSize" END), 0) AS "movieSize",
         COALESCE(SUM(CASE WHEN mi.type = 'SERIES' THEN mi."fileSize" END), 0) AS "seriesSize",
         COALESCE(SUM(CASE WHEN mi.type = 'MUSIC' THEN mi."fileSize" END), 0) AS "musicSize",

@@ -9,6 +9,10 @@ import { sanitize, sanitizeErrorDetail } from "@/lib/api/sanitize";
 import { invalidateMediaCaches } from "@/lib/cache/invalidate";
 import { eventBus } from "@/lib/events/event-bus";
 import { invalidateWatchHistoryEvidence } from "@/lib/media/watch-evidence";
+import { hasRecentLogin } from "@/lib/auth/recent-login";
+import { reauthRequired } from "@/lib/auth/reauth";
+
+const withoutTrailingSlash = (value: string) => value.replace(/\/+$/, "");
 
 export async function PUT(
   request: NextRequest,
@@ -42,10 +46,30 @@ export async function PUT(
   const tracearrMappingChanged =
     tracearrServerId !== undefined && tracearrServerId !== server.tracearrServerId;
 
+  // A new URL with the stored token kept sends that token to the new URL —
+  // the connection test below, then every sync and the realtime socket. A
+  // Plex server's token can be the Plex account's own token, which signs in
+  // to Librariarr, so a stolen cookie must not be able to point it somewhere
+  // of its choosing (see recent-login.ts). Turning certificate checks off is
+  // the same thing by another route: the token then goes to whoever answers
+  // at the URL, and the default one onboarding picks is the remote
+  // plex.direct address. Sending a replacement token, or re-saving the same
+  // settings (the edit form always sends the URL), needs nothing.
+  const urlChanged = url !== undefined && withoutTrailingSlash(url) !== withoutTrailingSlash(server.url);
+  const turnsTlsChecksOff = tlsSkipVerify === true && !server.tlsSkipVerify;
+  const keepsStoredToken = accessToken === undefined || accessToken === "";
+  if (server.type === "PLEX" && (urlChanged || turnsTlsChecksOff) && keepsStoredToken && !hasRecentLogin(session)) {
+    return reauthRequired(
+      session.userId!,
+      urlChanged ? "Changing a Plex server's URL" : "Turning off certificate checks for a Plex server",
+    );
+  }
+
   // Test connection if URL or access token changed (skip if just toggling enabled)
   if ((url || accessToken) && enabled !== false) {
     const testUrl = url ?? server.url;
-    const testToken = accessToken ?? server.accessToken;
+    // `""` keeps the stored token (the write below skips it), so test with that.
+    const testToken = accessToken || server.accessToken;
     const client = createMediaServerClient(server.type, testUrl, testToken, {
       skipTlsVerify: tlsSkipVerify ?? server.tlsSkipVerify,
     });

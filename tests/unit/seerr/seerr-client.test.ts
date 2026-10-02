@@ -59,10 +59,21 @@ describe("SeerrClient", () => {
 
   describe("testConnection", () => {
     it("returns ok on successful connection", async () => {
-      mockAxiosInstance.get.mockResolvedValueOnce({ data: {} });
+      mockAxiosInstance.get.mockResolvedValueOnce({ data: { applicationTitle: "Seerr" } });
       const result = await client.testConnection();
       expect(result).toEqual({ ok: true, appName: "Seerr" });
-      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v1/settings/main");
+      // The connection test opts out of transport retries (NO_RETRY).
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v1/settings/main", { __noRetry: true });
+    });
+
+    it("rejects a 2xx that is not Seerr settings (auth-proxy login page, other app)", async () => {
+      mockAxiosInstance.get.mockResolvedValueOnce({ data: "<!doctype html><title>Sign in</title>" });
+      const html = await client.testConnection();
+      expect(html.ok).toBe(false);
+      expect(html.error).toMatch(/did not return Seerr settings/);
+
+      mockAxiosInstance.get.mockResolvedValueOnce({ data: { version: "4.0" } });
+      expect((await client.testConnection()).ok).toBe(false);
     });
 
     it("returns error on network failure", async () => {
@@ -131,7 +142,27 @@ describe("SeerrClient", () => {
       mockAxiosInstance.get.mockResolvedValueOnce({ data: movie });
       const result = await client.getMovie(12345);
       expect(result).toEqual(movie);
-      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v1/movie/12345");
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v1/movie/12345", undefined);
+    });
+  });
+
+  describe("per-call options", () => {
+    it("passes a cancel signal and a retry opt-out through to the request", async () => {
+      const controller = new AbortController();
+      mockAxiosInstance.get.mockResolvedValue({ data: {} });
+
+      await client.getMovie(1, { signal: controller.signal });
+      expect(mockAxiosInstance.get).toHaveBeenLastCalledWith("/api/v1/movie/1", { signal: controller.signal });
+
+      await client.getTvShow(2, { retry: false });
+      expect(mockAxiosInstance.get).toHaveBeenLastCalledWith("/api/v1/tv/2", { __noRetry: true });
+
+      await client.getRequests({ take: 5 }, { retry: false, signal: controller.signal });
+      expect(mockAxiosInstance.get).toHaveBeenLastCalledWith("/api/v1/request", {
+        params: { take: 5 },
+        __noRetry: true,
+        signal: controller.signal,
+      });
     });
   });
 
@@ -141,7 +172,7 @@ describe("SeerrClient", () => {
       mockAxiosInstance.get.mockResolvedValueOnce({ data: show });
       const result = await client.getTvShow(67890);
       expect(result).toEqual(show);
-      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v1/tv/67890");
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v1/tv/67890", undefined);
     });
   });
 

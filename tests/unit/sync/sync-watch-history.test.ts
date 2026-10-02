@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type { WatchHistoryProgress } from "@/lib/sync/watch-history-progress";
 
 const {
@@ -24,6 +24,7 @@ const {
     },
     mockClient: {
       getDetailedWatchHistory: vi.fn(),
+      supportsHistorySince: false as boolean,
     },
     mockReconcile: vi.fn(async () => 0),
     // The importer's result shape: a count, plus whether the archive walk is
@@ -373,6 +374,7 @@ describe("syncWatchHistory", () => {
       })),
     );
     mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([{ id: "item-1", ratingKey: "100" }]);
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // pg_advisory_xact_lock
     mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // DELETE
     mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // INSERT
 
@@ -397,6 +399,7 @@ describe("syncWatchHistory", () => {
       { ratingKey: "100", username: "bob", watchedAt: "2025-07-02T00:00:00Z", deviceName: null, platform: null },
     ]);
     mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([{ id: "item-1", ratingKey: "100" }]);
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // pg_advisory_xact_lock
     mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // DELETE
     mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // INSERT
 
@@ -418,6 +421,7 @@ describe("syncWatchHistory", () => {
       { ratingKey: "100", username: "Roommate", watchedAt: "2025-07-01T00:00:00Z", deviceName: null, platform: null },
     ]);
     mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([{ id: "item-1", ratingKey: "100" }]);
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // pg_advisory_xact_lock
     mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // DELETE
     mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // INSERT
 
@@ -444,6 +448,7 @@ describe("syncWatchHistory", () => {
       { ratingKey: "100", username: "Admin", watchedAt: "2025-07-01T00:00:00Z", deviceName: null, platform: null },
     ]);
     mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([{ id: "item-1", ratingKey: "100" }]);
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // pg_advisory_xact_lock
     mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // DELETE
     mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // INSERT
     mockReconcile.mockRejectedValueOnce(new Error("deadlock detected"));
@@ -502,6 +507,7 @@ describe("syncWatchHistory", () => {
       const { updates, report } = progressRecorder();
       mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([serverRow()]);
       mockClient.getDetailedWatchHistory.mockResolvedValueOnce([]);
+      mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // pg_advisory_xact_lock
       mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // DELETE
 
       await syncWatchHistory("server-1", report);
@@ -519,6 +525,7 @@ describe("syncWatchHistory", () => {
       const { updates, report } = progressRecorder();
       mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([serverRow()]);
       armEntries(600); // BATCH_SIZE is 500 → two batches
+      mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // pg_advisory_xact_lock
       mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // DELETE
       mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // INSERT batch 1
       mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // INSERT batch 2
@@ -552,6 +559,7 @@ describe("syncWatchHistory", () => {
         { id: "item-1", ratingKey: "100" },
         { id: "item-2", ratingKey: "200" },
       ]);
+      mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // pg_advisory_xact_lock
       mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // DELETE
       mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // INSERT
 
@@ -591,6 +599,7 @@ describe("syncWatchHistory", () => {
       const arm = () => {
         mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([serverRow()]);
         armEntries(3);
+        mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // pg_advisory_xact_lock
         mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // DELETE
         mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // INSERT
       };
@@ -677,6 +686,7 @@ describe("syncWatchHistory", () => {
 
       mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([serverRow()]);
       armEntries(600); // BATCH_SIZE is 500 → two batches
+      mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // pg_advisory_xact_lock
       mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // DELETE
       // The user hits Stop while the first batch is in flight.
       mockPrisma.$queryRawUnsafe.mockImplementationOnce(async () => {
@@ -709,6 +719,7 @@ describe("syncWatchHistory", () => {
 
       mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([serverRow()]);
       armEntries(3);
+      mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // pg_advisory_xact_lock
       mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // DELETE
 
       await expect(
@@ -856,6 +867,7 @@ describe("syncWatchHistory", () => {
       mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([
         { id: "item-1", ratingKey: "100" },
       ]);
+      mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // pg_advisory_xact_lock
       mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // DELETE
       mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // INSERT
 
@@ -935,4 +947,155 @@ describe("syncWatchHistory", () => {
     });
   });
 
+});
+
+describe("syncWatchHistory — incremental refresh", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockReconcile.mockResolvedValue(0);
+    mockEnqueueJob.mockResolvedValue(true);
+    mockPrisma.tracearrInstance.findFirst.mockResolvedValue(null);
+    // The Plex client asserts it filters server-side; the append path is
+    // gated on that assertion, not on the server type.
+    mockClient.supportsHistorySince = true;
+  });
+  afterEach(() => {
+    mockClient.supportsHistorySince = false;
+  });
+
+  const plexRow = (overrides: Record<string, unknown> = {}) => ({
+    id: "server-1",
+    name: "Test Server",
+    url: "http://plex:32400",
+    accessToken: "token",
+    type: "PLEX",
+    tlsSkipVerify: false,
+    enabled: true,
+    userId: "user-1",
+    tracearrServerId: null,
+    ...overrides,
+  });
+
+  const deleteCalls = () =>
+    mockPrisma.$queryRawUnsafe.mock.calls.filter((args) =>
+      (args[0] as string).includes('DELETE FROM "WatchHistory"'),
+    );
+  const insertCalls = () =>
+    mockPrisma.$queryRawUnsafe.mock.calls.filter((args) =>
+      (args[0] as string).includes('INSERT INTO "WatchHistory"'),
+    );
+
+  it("fetches only plays since the newest stored one (minus overlap) and appends the unseen ones", async () => {
+    const newest = new Date("2024-06-01T12:00:00.000Z");
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([plexRow()]); // server row
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([
+      { establishedAt: new Date("2024-05-01T00:00:00Z"), newest },
+    ]); // resolveIncrementalSince
+    mockClient.getDetailedWatchHistory.mockResolvedValueOnce([
+      // Already stored (re-delivered by the overlap window)
+      { ratingKey: "100", username: "Admin", watchedAt: "2024-06-01T12:00:00.000Z", deviceName: "Roku", platform: "Roku" },
+      // New
+      { ratingKey: "200", username: "User1", watchedAt: "2024-06-01T13:00:00.000Z", deviceName: "iPhone", platform: "iOS" },
+      // New, but no matching item
+      { ratingKey: "999", username: "User2", watchedAt: "2024-06-01T13:30:00.000Z", deviceName: null, platform: null },
+      // Undated: cannot be deduplicated, skipped
+      { ratingKey: "200", username: "User1", watchedAt: null, deviceName: null, platform: null },
+      // Older than the window: the server ignored the filter; never appended
+      { ratingKey: "200", username: "User1", watchedAt: "2024-01-01T00:00:00.000Z", deviceName: null, platform: null },
+    ]);
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([
+      { id: "item-1", ratingKey: "100" },
+      { id: "item-2", ratingKey: "200" },
+    ]); // rating key → item, scoped to the fetched keys
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // pg_advisory_xact_lock
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([
+      { mediaItemId: "item-1", serverUsername: "Admin", watchedAt: newest },
+    ]); // existing rows in the overlap window
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // INSERT
+
+    const result = await syncWatchHistory("server-1", undefined, undefined, { incremental: true });
+
+    expect(result).toEqual({ count: 1 });
+    // since = newest − 1h
+    expect(mockClient.getDetailedWatchHistory).toHaveBeenCalledWith({
+      since: new Date("2024-06-01T11:00:00.000Z"),
+    });
+    // Append-only: the stored history is never dropped on this path.
+    expect(deleteCalls()).toHaveLength(0);
+    expect(insertCalls()).toHaveLength(1);
+    const insertParams = insertCalls()[0].slice(1);
+    expect(insertParams).toContain("item-2");
+    expect(insertParams).not.toContain("item-1");
+    // One value set: the in-window new play only.
+    expect(((insertCalls()[0][0] as string).match(/\(\$/g) ?? []).length).toBe(1);
+    expect(mockReconcile).toHaveBeenCalledWith("server-1");
+    // The append runs under the same per-server lock as the full replace.
+    const lockCalls = mockPrisma.$queryRawUnsafe.mock.calls.filter((args) =>
+      (args[0] as string).includes("pg_advisory_xact_lock"),
+    );
+    expect(lockCalls).toHaveLength(1);
+  });
+
+  it("runs the full replace instead when the server holds no stored plays yet", async () => {
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([plexRow()]);
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([
+      { establishedAt: new Date("2024-05-01T00:00:00Z"), newest: null },
+    ]);
+    mockClient.getDetailedWatchHistory.mockResolvedValueOnce([
+      { ratingKey: "100", username: "Admin", watchedAt: "2024-06-01T12:00:00.000Z", deviceName: null, platform: null },
+    ]);
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([{ id: "item-1", ratingKey: "100" }]); // media items
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // pg_advisory_xact_lock
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // DELETE
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // INSERT
+
+    const result = await syncWatchHistory("server-1", undefined, undefined, { incremental: true });
+
+    expect(result).toEqual({ count: 1 });
+    expect(mockClient.getDetailedWatchHistory).toHaveBeenCalledWith(undefined);
+    expect(deleteCalls()).toHaveLength(1);
+  });
+
+  it("runs the full replace when the server's history is not established", async () => {
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([plexRow()]);
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([
+      { establishedAt: null, newest: new Date("2024-06-01T12:00:00Z") },
+    ]);
+    mockClient.getDetailedWatchHistory.mockResolvedValueOnce([]);
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // DELETE (empty history path)
+
+    await syncWatchHistory("server-1", undefined, undefined, { incremental: true });
+
+    expect(mockClient.getDetailedWatchHistory).toHaveBeenCalledWith(undefined);
+    expect(deleteCalls()).toHaveLength(1);
+  });
+
+  it("never goes incremental for a client that does not assert server-side filtering", async () => {
+    mockClient.supportsHistorySince = false;
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([plexRow({ type: "JELLYFIN" })]);
+    mockClient.getDetailedWatchHistory.mockResolvedValueOnce([]);
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // DELETE (empty history path)
+
+    await syncWatchHistory("server-1", undefined, undefined, { incremental: true });
+
+    // No boundary query is even made: the second raw call is the DELETE.
+    expect(mockClient.getDetailedWatchHistory).toHaveBeenCalledWith(undefined);
+    expect(deleteCalls()).toHaveLength(1);
+  });
+
+  it("is a no-op that still emits nothing when the window holds no new plays", async () => {
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([plexRow()]);
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([
+      { establishedAt: new Date("2024-05-01T00:00:00Z"), newest: new Date("2024-06-01T12:00:00Z") },
+    ]);
+    mockClient.getDetailedWatchHistory.mockResolvedValueOnce([]);
+
+    const result = await syncWatchHistory("server-1", undefined, undefined, { incremental: true });
+
+    expect(result).toEqual({ count: 0 });
+    expect(deleteCalls()).toHaveLength(0);
+    expect(insertCalls()).toHaveLength(0);
+    // Nothing appended: no server-wide reconcile per finished playback.
+    expect(mockReconcile).not.toHaveBeenCalled();
+  });
 });

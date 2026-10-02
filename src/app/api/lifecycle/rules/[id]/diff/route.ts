@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
+import { findExceptedItemIds } from "@/lib/lifecycle/exception-guard";
+import { copyRank, crossServerCopyKeys } from "@/lib/lifecycle/cross-server-copies";
 import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasArrRules, hasSeerrRules, hasAnyActiveRules, hasWatchedByUserRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRuleGroup, LifecycleRule } from "@/lib/rules/types";
@@ -10,11 +12,18 @@ import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
 import { checkLifecycleRuleEvaluability } from "@/lib/lifecycle/evaluability";
 import { validateRequest, ruleDiffSchema } from "@/lib/validation";
 import { loadGroupMemberStats, aggregateGroupMembers, memberIdsFromItemData } from "@/lib/lifecycle/group-aggregate";
+import { seriesTitleOf } from "@/lib/media/display-title";
 
 interface DiffItem {
   id: string;
   title: string;
   parentTitle: string | null;
+  /**
+   * Other candidate ids folded into this match — another server's copy of the
+   * title. The preview lists every copy as its own row, so the editor gives
+   * these the match's status too.
+   */
+  copyIds?: string[];
 }
 
 // Serialize BigInt fields (fileSize) to strings for JSON response
@@ -45,7 +54,13 @@ async function applyGroupShape(
   return rows.map((row) => {
     const itemData = itemDataById.get(row.id as string);
     const totals = aggregateGroupMembers(memberIdsFromItemData(itemData), memberStats);
-    if (!totals) return row;
+    if (!totals) {
+      // A series match is its show even when it records no members (one stored
+      // before they were) — never the representative episode's own title.
+      if (row.type !== "SERIES") return row;
+      const title = seriesTitleOf({ title: row.title as string, parentTitle: row.parentTitle as string | null });
+      return { ...row, title, parentTitle: null, seasonNumber: null, episodeNumber: null };
+    }
     return {
       ...row,
       // Identity comes from the stored aggregate so the row reads as the show
@@ -76,7 +91,7 @@ export async function POST(
   // Verify ownership
   const ruleSet = await prisma.ruleSet.findFirst({
     where: { id, userId: session.userId },
-    select: { id: true },
+    select: { id: true, actionEnabled: true, actionType: true },
   });
   if (!ruleSet) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -156,26 +171,68 @@ export async function POST(
     items = type === "SERIES" ? groupSeriesResults(rawItems) : rawItems;
   }
 
-  // Filter out excluded items
+  // Filter out excluded items — an exception on another server's copy of an
+  // item (same dedupKey) excludes it too, exactly as detection does.
   const candidateIds = items.map((item) => (item as Record<string, unknown>).id as string);
-  const excludedItems = await prisma.lifecycleException.findMany({
-    where: {
-      userId: session.userId,
-      mediaItemId: { in: candidateIds },
-    },
-    select: { mediaItemId: true },
-  });
-  const excludedIds = new Set(excludedItems.map((e) => e.mediaItemId));
+  const excludedIds = await findExceptedItemIds(session.userId!, candidateIds);
 
+  // Detection stores a title matched on several servers once, listing the
+  // other copies in `itemData.copies`. Such a copy matching again is that same
+  // match, retained — not a new one to add.
+  const copyOf = new Map<string, string>();
+  for (const [matchId, data] of existingById) {
+    const copies = Array.isArray(data.copies) ? (data.copies as Array<{ id?: unknown }>) : [];
+    for (const c of copies) if (typeof c.id === "string") copyOf.set(c.id, matchId);
+  }
+
+  // Copies of one title that newly match together are ONE match too:
+  // detection collapses them by the same external id (`crossServerCopyKeys`),
+  // so each is folded onto the copy detection would keep — one already
+  // matched, else the lowest id.
+  const candidates = (items as unknown as Record<string, unknown>[]).filter(
+    (rec) => !excludedIds.has(rec.id as string),
+  );
+  const copyKeys = await crossServerCopyKeys(candidates, {
+    type,
+    serverCount: serverIds.length,
+    arrData,
+    // The config being saved, not the stored one: arming an action in the
+    // same edit is what makes detection collapse copies without Arr data.
+    actionArmed: (data.actionEnabled ?? ruleSet.actionEnabled) &&
+      !!(data.actionType !== undefined ? data.actionType : ruleSet.actionType),
+  });
+  // Ranked exactly as detection's collapse ranks them (`copyRank`).
+  const keptForKey = new Map<string, string>();
+  for (const rec of candidates) {
+    const itemId = rec.id as string;
+    const key = copyKeys.get(itemId);
+    if (!key) continue;
+    const current = keptForKey.get(key);
+    if (current === undefined) {
+      keptForKey.set(key, itemId);
+      continue;
+    }
+    const byRank = copyRank(itemId, existingById, copyOf) - copyRank(current, existingById, copyOf);
+    if (byRank < 0 || (byRank === 0 && itemId < current)) keptForKey.set(key, itemId);
+  }
+
+  const candidateById = new Map(candidates.map((rec) => [rec.id as string, rec]));
   const newMatchIds = new Set<string>();
   const newMatchMap = new Map<string, Record<string, unknown>>();
-  for (const item of items) {
-    const rec = item as Record<string, unknown>;
+  const foldedIds = new Map<string, string[]>();
+  for (const rec of candidates) {
     const itemId = rec.id as string;
-    if (!excludedIds.has(itemId)) {
-      newMatchIds.add(itemId);
-      newMatchMap.set(itemId, rec);
+    const key = copyKeys.get(itemId);
+    const keptId = key ? (keptForKey.get(key) ?? itemId) : itemId;
+    const matchId = existingById.has(keptId) ? keptId : (copyOf.get(keptId) ?? keptId);
+    if (itemId !== matchId) {
+      const folded = foldedIds.get(matchId);
+      if (folded) folded.push(itemId);
+      else foldedIds.set(matchId, [itemId]);
     }
+    if (newMatchIds.has(matchId)) continue;
+    newMatchIds.add(matchId);
+    newMatchMap.set(matchId, candidateById.get(keptId) ?? rec);
   }
 
   // Compute diff
@@ -188,6 +245,7 @@ export async function POST(
       id: itemId,
       title: (rec.title as string) ?? (rec.parentTitle as string) ?? "Unknown",
       parentTitle: (rec.parentTitle as string | null) ?? null,
+      copyIds: foldedIds.get(itemId) ?? [],
     };
     if (existingById.has(itemId)) {
       retained.push(diffItem);

@@ -131,6 +131,19 @@ describe("fetchCrossSystemData", () => {
     expect(result.get("b")?.matchedRuleSets).toEqual(["Big Files"]);
   });
 
+  it("counts another server's collapsed copy of a match as matched too", async () => {
+    // Detection stores a multi-server title on one copy and lists the others in
+    // itemData.copies; the rule set matched "b" as well.
+    mockPrisma.ruleMatch.findMany
+      .mockResolvedValueOnce([{ mediaItemId: "a", ruleSet: { name: "Leaving Soon" } }])
+      .mockResolvedValueOnce([{ copyIds: ["b", "x"], ruleSet: { name: "Leaving Soon" } }]);
+
+    const result = await fetchCrossSystemData(["a", "b"]);
+
+    expect(result.get("a")?.matchedRuleSets).toEqual(["Leaving Soon"]);
+    expect(result.get("b")?.matchedRuleSets).toEqual(["Leaving Soon"]);
+  });
+
   it("skips rule matches with empty rule set names", async () => {
     mockPrisma.ruleMatch.findMany.mockResolvedValueOnce([
       { mediaItemId: "a", ruleSet: { name: "" } },

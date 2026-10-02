@@ -60,6 +60,10 @@ Details worth knowing:
 
 - **Deletions only.** Unmonitor, tag and search actions never count toward it and are never held.
 - **Per run, across every rule set** — one number for the whole execution pass.
+- **Counted after the safety checks, not before.** The figure is what the run would actually
+  delete, so actions about to be cancelled anyway — the item stopped matching, it (or a
+  sibling) is on the exception list, the item's identity changed since it was scheduled —
+  are not counted, and they are still cleaned up even on a run the ceiling holds.
 - **All-or-nothing.** Exceeding the limit holds the entire batch rather than deleting up to
   the limit. Acting on an arbitrary slice of a match set you already have reason to distrust
   is not safer.
@@ -184,11 +188,13 @@ These fields require a configured [Seerr](/docs/integrations/seerr/) integration
 | Field | Description |
 |-------|-------------|
 | `seerrRequested` | Whether requested in Seerr |
-| `seerrRequestDate` | When the request was made |
+| `seerrRequestDate` | When the most recent request was made |
 | `seerrRequestCount` | Number of requests |
 | `seerrRequestedBy` | Who requested it |
-| `seerrApprovalDate` | When approved |
-| `seerrDeclineDate` | When declined |
+| `seerrApprovalDate` | When the most recent request was approved (including requests Seerr has since marked Completed or Failed) |
+| `seerrDeclineDate` | When the most recent request was declined |
+
+An item with no such date (never requested, never approved, never declined) fails every date comparison except **Not Equals**, exactly like the library's own date fields, and **Not** then applies as usual — so NOT (Request Date in the last 90 days) includes titles nobody ever requested, while NOT (Request Date not equal to a date) does not. Use **Is Empty** / **Is Not Empty** to target them directly. If Seerr's request list can't be read in full, rule sets using Seerr fields are skipped for that run rather than evaluated against a partial list.
 
 :::caution[Seerr criteria need a connected Seerr instance]
 With no Seerr instance connected — after **importing** a rule set, say — the rule builder shows a **"Seerr instance required"** warning and disables Preview, Test Media, and Save until you connect one under Settings → Integrations. Detection skips such rule sets too, for the same reason as *arr fields above.
@@ -348,7 +354,7 @@ Before executing any actions, use the **Preview** feature to see which media ite
 Preview is **refused** whenever the rules can't be evaluated faithfully, and the reason is shown as an error notification rather than an empty or stale result list. The same guard that pauses detection applies here, so a preview never shows matches that detection would refuse to produce:
 
 - *arr criteria with no enabled Sonarr/Radarr/Lidarr instance, or Seerr criteria with no enabled Seerr instance (Seerr criteria on a music rule set are refused permanently).
-- Criteria that read play activity — *Watched By User*, *Play Count*, *Last Played*, and the series rollups built on them — while any targeted server's play history isn't established yet: it has never synced, was recently cleared, or a [Tracearr](/docs/integrations/tracearr/) history import is still backfilling. Until the import reaches back far enough, every item looks never-watched, so *Play Count = 0* or *not played in N months* would match the entire library. Wait for the import to finish (Settings → Servers shows its progress) and preview again.
+- Criteria that read play activity — *Watched By User*, *Play Count*, *Last Played*, and the series rollups built on them — while any targeted server's play history isn't established yet: it has never synced, was recently cleared, or a [Tracearr](/docs/integrations/tracearr/) history import is still backfilling. Until the history is known, every item looks never-watched, so *Play Count = 0* or *not played in N months* would match the entire library. The warning names the server and which of those applies: a server that is **still importing** clears itself when the import finishes (Settings → Servers shows its progress), while one where **no sync has established what was played** clears on the next successful watch-history sync — run one from **Library → History → Refresh**.
 
 The last case also shows a **"Play history not established yet"** warning in the rule editor, naming the servers involved, so you can see a rule set is paused without having to run anything. It clears itself when the import finishes — no reload needed. The same warning pattern already covers a missing *arr or Seerr instance.
 
@@ -492,6 +498,10 @@ Some fields are **series-aggregate** fields — `availableEpisodeCount`, `watche
 :::
 
 When Series Scope is **off** and your rule mixes an aggregate field with a per-episode field (for example, *available episode count ≥ 20 **and** resolution = 4K*), the show first has to qualify on the aggregate, and then a member-scoped file delete acts only on the episodes that individually satisfy the per-episode conditions (here, just the 4K episodes) — not every episode of the series. With Series Scope **on**, the same rule deletes the whole series.
+
+### How series actions are named
+
+A series match and its action are always named by the **show**. This holds on the Matches and Pending pages, in the action history, in System Logs and in Discord notifications. It is never named by the episode Librariarr stores the match against. An action that acts on **exactly one episode** is named by the show plus that episode's season and episode number, for example *Breaking Bad S03E10*. That happens with a file delete whose rule matched a single episode, or a Query-page action on one episode. The history keeps that name after the episode has been deleted from your server.
 
 ## Scheduling
 

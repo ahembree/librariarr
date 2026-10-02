@@ -17,6 +17,8 @@ import {
 import { Server, Loader2, Check, AlertCircle, Pencil, ShieldOff, ArrowLeft, Plug, CheckCircle, XCircle } from "lucide-react";
 import { Logo } from "@/components/logo";
 import { usePlexOAuth } from "@/hooks/use-plex-oauth";
+import { fetchWithReauth } from "@/lib/auth/reauth-client";
+import { ReauthDialogHost } from "@/components/reauth-dialog-host";
 import { SERVER_TYPE_STYLES } from "@/lib/server-styles";
 
 // ─── Types ───
@@ -35,7 +37,6 @@ interface PlexServer {
   product: string;
   productVersion: string;
   platform: string;
-  accessToken: string;
   connections: PlexConnection[];
 }
 
@@ -68,7 +69,7 @@ function getDefaultUrl(connections: PlexConnection[]): string {
   return (remote || connections[0])?.uri ?? "";
 }
 
-export default function OnboardingPage() {
+function OnboardingContent() {
   const router = useRouter();
 
   // Mode & detection
@@ -143,7 +144,7 @@ export default function OnboardingPage() {
   const { startAuth: startPlexAuth, isLoading: plexAuthLoading, error: plexAuthError, authUrl: plexAuthUrl } = usePlexOAuth({
     onSuccess: async (authToken) => {
       // Link the Plex account to the current (local) user
-      const res = await fetch("/api/auth/plex/link", {
+      const res = await fetchWithReauth("/api/auth/plex/link", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ authToken }),
@@ -188,13 +189,14 @@ export default function OnboardingPage() {
     const url = customUrls[server.clientIdentifier] || getDefaultUrl(server.connections);
 
     try {
-      const response = await fetch("/api/servers", {
+      // No token: discovery never hands it to the browser, and the server looks
+      // it up by machine id — behind a recent sign-in, since it goes to `url`.
+      const response = await fetchWithReauth("/api/servers", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: server.name,
           url,
-          accessToken: server.accessToken,
           machineId: server.clientIdentifier,
           tlsSkipVerify: !!tlsSkipVerify[server.clientIdentifier],
         }),
@@ -205,7 +207,10 @@ export default function OnboardingPage() {
       if (!response.ok) {
         const message = data.detail ? `${data.error} — ${data.detail}` : data.error;
         setErrors((prev) => ({ ...prev, [server.clientIdentifier]: message }));
-        setEditingServer(server.clientIdentifier);
+        // A 400 is the URL (unreachable or malformed); a cancelled "Confirm
+        // it's you" prompt, a server Plex no longer lists or a plex.tv error
+        // is not something editing the URL would fix.
+        if (response.status === 400) setEditingServer(server.clientIdentifier);
         return;
       }
 
@@ -845,5 +850,16 @@ export default function OnboardingPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function OnboardingPage() {
+  return (
+    <>
+      <OnboardingContent />
+      {/* Onboarding sits outside the authenticated shell, so it hosts its own
+          "Confirm it's you" prompt for the Plex link above. */}
+      <ReauthDialogHost />
+    </>
   );
 }

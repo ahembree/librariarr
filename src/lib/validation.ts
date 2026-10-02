@@ -2,6 +2,16 @@ import { z } from "zod/v4";
 import { NextResponse } from "next/server";
 import { MAX_QUERY_ACTION_ITEMS } from "@/lib/query/constants";
 import { MASKED_VALUE } from "@/lib/api/sanitize";
+import { API_SCOPES } from "@/lib/api-keys/scopes";
+import { API_DESTRUCTIVE_PER_REQUEST } from "@/lib/api-keys/limits";
+import { apiKeyNameProblem } from "@/lib/api-keys/name-rules";
+import {
+  MAX_PASSWORD_BYTES,
+  MIN_PASSWORD_LENGTH,
+  PASSWORD_TOO_LONG_MESSAGE,
+  PASSWORD_TOO_SHORT_MESSAGE,
+  passwordByteLength,
+} from "@/lib/auth/password-rules";
 
 /**
  * Parse and validate request JSON against a Zod schema.
@@ -44,22 +54,40 @@ export async function validateRequest<T extends z.ZodType>(
 
 // ─── Reusable schemas ───
 
+/**
+ * A browser-facing base URL for an integration's "Open in …" links; "" clears
+ * it. Restricted to http(s): a bare `z.url()` accepts `seerr.lan:5055` (it
+ * parses with `seerr.lan:` as the scheme), and the stored value then builds a
+ * link the browser cannot open — nothing tests it the way a connection URL is.
+ */
+const externalLinkUrlSchema = z
+  .union([
+    z.url({ protocol: /^https?$/, error: "External URL must start with http:// or https://" }),
+    z.literal(""),
+  ])
+  .optional();
+
 export const arrInstanceCreateSchema = z.object({
   name: z.string().min(1, "Name is required"),
   url: z.url("Invalid URL format"),
   apiKey: z.string().min(1, "API key is required"),
-  externalUrl: z
-    .union([z.url("Invalid URL format"), z.literal("")])
-    .optional(),
+  externalUrl: externalLinkUrlSchema,
 });
 
 export const arrInstanceUpdateSchema = arrInstanceCreateSchema.partial().extend({
   enabled: z.boolean().optional(),
 });
 
+// A new login password: at least 8 characters, and at most the 72 bytes bcrypt
+// actually reads (see `src/lib/auth/password-rules.ts`).
+const newPasswordSchema = z
+  .string()
+  .min(MIN_PASSWORD_LENGTH, PASSWORD_TOO_SHORT_MESSAGE)
+  .refine((value) => passwordByteLength(value) <= MAX_PASSWORD_BYTES, PASSWORD_TOO_LONG_MESSAGE);
+
 export const authSetupSchema = z.object({
   username: z.string().min(3, "Username must be at least 3 characters"),
-  password: z.string().min(8, "Password must be at least 8 characters"),
+  password: newPasswordSchema,
 });
 
 export const authLoginSchema = z.object({
@@ -143,6 +171,7 @@ const discordWebhookUrlSchema = z
   .refine(
     (val) => {
       if (val === "") return true; // Allow empty string to clear
+      if (val === MASKED_VALUE) return true; // The masked placeholder echoed back = keep saved
       try {
         const parsed = new URL(val);
         return (
@@ -164,6 +193,7 @@ export const discordSettingsSchema = z.object({
   webhookUsername: z.string().max(80).optional(),
   webhookAvatarUrl: z.string().optional().transform((v) => v || undefined).pipe(z.string().url().optional()),
   notifyMaintenance: z.boolean().optional(),
+  notifyApiKeys: z.boolean().optional(),
 });
 
 export const discordTestSchema = z.object({
@@ -236,10 +266,21 @@ export const transcodeManagerSchema = z.object({
   exemptHardware: z.boolean().optional(),
 });
 
+// Bounded because the public API reaches this: the message is pushed to every
+// targeted player, and an unbounded list is an unbounded amount of work.
+// Session ids are opaque tokens (Plex: alphanumeric; Jellyfin/Emby: hex) that
+// end up in a media-server request path sent with the server's admin token, so
+// anything that could be read as more than one path segment is refused here.
+// The Jellyfin/Emby client encodes them as well (`sessionPath`).
+const sessionIdSchema = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/, "Invalid session id");
+
 export const terminateSessionSchema = z.object({
-  serverId: z.string().min(1, "Server ID is required"),
-  sessionIds: z.array(z.string()).optional(),
-  message: z.string().min(1, "Message is required"),
+  serverId: z.string().min(1, "Server ID is required").max(200),
+  sessionIds: z.array(sessionIdSchema).max(200, "At most 200 sessions per request").optional(),
+  message: z
+    .string()
+    .min(1, "Message is required")
+    .max(500, "Message must be 500 characters or fewer"),
 });
 
 // Note: cross-field rules (one_time needs dates; recurring needs days + HH:mm
@@ -431,8 +472,15 @@ export const ruleTestItemSchema = z.object({
 });
 
 export const actionExecuteSchema = z.object({
-  ruleSetId: z.string().min(1, "Rule set ID is required"),
-  mediaItemIds: z.array(z.string()).optional(),
+  ruleSetId: z.string().min(1, "Rule set ID is required").max(200),
+  // Omitted = execute every match. An EMPTY list is refused rather than read the
+  // same way: a caller mapping an empty selection to ids would otherwise run
+  // the rule set's action against every match it holds.
+  mediaItemIds: z
+    .array(z.string().min(1).max(200))
+    .min(1, "Pass at least one media item id, or omit mediaItemIds to execute every match")
+    .max(1000, "At most 1000 media item ids per request; omit mediaItemIds to execute every match")
+    .optional(),
 });
 
 export const ruleDiffSchema = z.object({
@@ -440,6 +488,9 @@ export const ruleDiffSchema = z.object({
   type: z.enum(["MOVIE", "SERIES", "MUSIC"]),
   seriesScope: z.boolean().optional(),
   serverIds: z.array(z.string()).min(1, "At least one server is required"),
+  /** The editor's unsaved action config; the stored one when absent. */
+  actionEnabled: z.boolean().optional(),
+  actionType: z.string().nullable().optional(),
 });
 
 export const ruleRunSchema = z.object({
@@ -452,37 +503,71 @@ export const collectionSyncSchema = z.object({
   collectionId: z.string().min(1, "Collection ID is required"),
 });
 
+// Bounded because the public API reaches these: a reason is free text stored
+// per row.
+const exceptionReasonSchema = z.string().max(1000, "Reason must be 1000 characters or fewer");
+// The Exceptions page removes or re-words a grouped row in one request — every
+// episode or track of a show or artist, on every server — so a long show held
+// on two servers is well past a thousand ids, and a cap of 1,000 made such a
+// row impossible to remove from the UI. Both uses are a single
+// deleteMany/updateMany. A key never reaches this cap: the public API's DELETE
+// validates `apiExceptionDeleteSchema` (API_DESTRUCTIVE_PER_REQUEST ids) first,
+// and PATCH is not exposed to keys.
+export const MAX_EXCEPTION_IDS_PER_REQUEST = 100_000;
+const exceptionIdsSchema = z
+  .array(z.string().min(1).max(200))
+  .min(1, "At least one ID is required")
+  .max(MAX_EXCEPTION_IDS_PER_REQUEST, `At most ${MAX_EXCEPTION_IDS_PER_REQUEST} IDs per request`);
+
 export const exceptionCreateSchema = z.object({
-  mediaItemId: z.string().min(1, "Media item ID is required"),
-  reason: z.string().optional(),
+  mediaItemId: z.string().min(1, "Media item ID is required").max(200),
+  reason: exceptionReasonSchema.optional(),
   scope: z
     .enum(["individual", "series", "artist", "album"])
     .default("individual"),
 });
 
 export const exceptionUpdateSchema = z.object({
-  reason: z.string().optional(),
+  reason: exceptionReasonSchema.optional(),
 });
 
 export const exceptionBulkDeleteSchema = z.object({
-  ids: z.array(z.string().min(1)).min(1, "At least one ID is required"),
+  ids: exceptionIdsSchema,
 });
 
 export const exceptionBulkUpdateSchema = z.object({
-  ids: z.array(z.string().min(1)).min(1, "At least one ID is required"),
-  reason: z.string().optional(),
+  ids: exceptionIdsSchema,
+  reason: exceptionReasonSchema.optional(),
 });
 
 // ─── Auth schemas ───
 
 export const changePasswordSchema = z.object({
   currentPassword: z.string().optional(),
-  newPassword: z.string().min(8, "Password must be at least 8 characters").optional(),
+  newPassword: newPasswordSchema.optional(),
   newUsername: z.string().min(3, "Username must be at least 3 characters").optional(),
 });
 
 export const plexTokenSchema = z.object({
   authToken: z.string().min(1),
+});
+
+/**
+ * `POST /api/auth/reauth/password` — the account's current password, to renew
+ * a recent sign-in in place. Bounded like the API-key confirmation; never
+ * trimmed.
+ */
+export const reauthPasswordSchema = z.object({
+  password: z.string().min(1).max(200),
+});
+
+/**
+ * `POST /api/auth/reauth/oidc` — a per-attempt nonce from the browser. It
+ * rides in the OIDC `state` and comes back on the popup's report, so the page
+ * waiting on an attempt ignores a report from any other popup or tab.
+ */
+export const reauthOidcStartSchema = z.object({
+  nonce: z.string().regex(/^[A-Za-z0-9_-]{16,64}$/),
 });
 
 export const plexLinkSchema = z.object({
@@ -492,6 +577,83 @@ export const plexLinkSchema = z.object({
   (data) => data.pinId !== undefined || data.authToken !== undefined,
   { message: "Either pinId or authToken must be provided" }
 );
+
+// ─── API key schemas ───
+
+/**
+ * Issue an API key for the public `/api/v1` API. `expiresAt` is an ISO
+ * timestamp, or null for a key that never expires; "in the future" is checked
+ * by the route, against the server clock. Implied read scopes are added by the
+ * route (`normalizeScopes`), so a client may send just the write scope.
+ */
+export const apiKeyCreateSchema = z.object({
+  // Rules shared with the settings form (see `name-rules.ts`).
+  name: z
+    .string()
+    .trim()
+    .superRefine((name, ctx) => {
+      const problem = apiKeyNameProblem(name);
+      if (problem) ctx.addIssue({ code: "custom", message: problem });
+    }),
+  scopes: z
+    .array(z.enum(API_SCOPES))
+    .min(1, "Choose at least one scope")
+    .max(API_SCOPES.length, "Too many scopes"),
+  expiresAt: z.iso
+    .datetime({ offset: true, error: "Expiration must be an ISO 8601 date-time" })
+    .nullable(),
+  /**
+   * The account's current password, required by the route when the account
+   * has one: a key outlives the browser session that mints it, so minting is
+   * confirmed by something a stolen cookie does not carry. Bounded like a
+   * login password; never trimmed.
+   */
+  currentPassword: z.string().max(200).optional(),
+});
+
+/**
+ * `PUT /api/v1/tools/maintenance` — what a `streams:write` key may change:
+ * maintenance on or off, its message and its delay. Who is exempt and whether
+ * Discord is told stay Settings-only (`maintenanceSchema`), so a leaked key
+ * cannot silence the notification that would reveal it. Strict, so a client
+ * sending those fields gets a 400 rather than a silent partial update.
+ */
+export const apiMaintenanceSchema = z.strictObject({
+  enabled: z.boolean(),
+  message: z.string().max(500, "Message must be 500 characters or fewer").optional(),
+  delay: z.number().int().min(0).max(3600).optional(),
+});
+
+/**
+ * `POST /api/v1/lifecycle/actions/execute` — a key must NAME every item it acts
+ * on. The app's own route reads a missing `mediaItemIds` as "every match" (the
+ * Pending page's Execute All, behind a confirmation dialog); through the API
+ * that one omission would run the rule set's action on its whole match list.
+ * At most `API_DESTRUCTIVE_PER_REQUEST` ids, whatever the action. Strict.
+ */
+export const apiActionExecuteSchema = z.strictObject({
+  ruleSetId: z.string().min(1, "Rule set ID is required").max(200),
+  mediaItemIds: z
+    .array(z.string().min(1).max(200), { error: "mediaItemIds is required: name every item to act on" })
+    .min(1, "mediaItemIds is required: name every item to act on")
+    .max(
+      API_DESTRUCTIVE_PER_REQUEST,
+      `At most ${API_DESTRUCTIVE_PER_REQUEST} media item ids per API request`,
+    ),
+});
+
+/**
+ * `DELETE /api/v1/lifecycle/exceptions` — removing an exception lets the rules
+ * match the item again, so a key may remove at most
+ * `API_DESTRUCTIVE_PER_REQUEST` per request (the app's own route takes a whole
+ * grouped row of the Exceptions page at once).
+ */
+export const apiExceptionDeleteSchema = z.strictObject({
+  ids: z
+    .array(z.string().min(1).max(200))
+    .min(1, "At least one ID is required")
+    .max(API_DESTRUCTIVE_PER_REQUEST, `At most ${API_DESTRUCTIVE_PER_REQUEST} IDs per API request`),
+});
 
 // ─── SSO schemas ───
 
@@ -545,6 +707,8 @@ export const seerrInstanceCreateSchema = z.object({
     "URL must start with http:// or https://"
   ),
   apiKey: z.string().min(1, "API key is required"),
+  /** Browser-facing URL for "Open in Seerr" links; "" clears it. */
+  externalUrl: externalLinkUrlSchema,
 });
 
 export const seerrInstanceUpdateSchema = z.object({
@@ -554,6 +718,7 @@ export const seerrInstanceUpdateSchema = z.object({
     "URL must start with http:// or https://"
   ).optional(),
   apiKey: z.string().optional(),
+  externalUrl: externalLinkUrlSchema,
   enabled: z.boolean().optional(),
 });
 
@@ -607,17 +772,26 @@ export const arrTestConnectionSchema = z.object({
 
 // ─── Server schemas ───
 
+/**
+ * `POST /api/servers`. A Plex server picked from discovery sends its
+ * `machineId` and no `accessToken`: the route looks the token up on plex.tv
+ * itself (behind a recent sign-in), so an owned server's token — which can be
+ * the Plex account's own token — never reaches the browser.
+ */
 export const serverAddSchema = z.object({
   name: z.string().optional(),
   url: z.string().min(1, "URL is required").refine(
     (val) => /^https?:\/\//i.test(val),
     "URL must start with http:// or https://"
   ),
-  accessToken: z.string().min(1, "Access token is required"),
+  accessToken: z.string().min(1, "Access token is required").optional(),
   machineId: z.string().optional(),
   tlsSkipVerify: z.boolean().optional(),
   type: z.string().optional(),
-});
+}).refine(
+  (data) => data.accessToken !== undefined || (!!data.machineId && (data.type ?? "PLEX") === "PLEX"),
+  { message: "Access token is required", path: ["accessToken"] }
+);
 
 export const serverEditSchema = z.object({
   url: z.string().refine(
@@ -671,7 +845,7 @@ export const arrActionSchema = z.object({
 });
 
 export const syncCancelSchema = z.object({
-  serverId: z.string().min(1, "Server ID is required"),
+  serverId: z.string().min(1, "Server ID is required").max(200),
 });
 
 // --- Query Builder ---

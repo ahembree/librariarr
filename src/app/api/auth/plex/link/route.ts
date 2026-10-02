@@ -4,6 +4,8 @@ import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth/session";
 import { apiLogger } from "@/lib/logger";
 import { validateRequest, plexLinkSchema } from "@/lib/validation";
+import { hasRecentLogin } from "@/lib/auth/recent-login";
+import { reauthRequired } from "@/lib/auth/reauth";
 
 export async function POST(request: NextRequest) {
   const session = await getSession();
@@ -18,6 +20,13 @@ export async function POST(request: NextRequest) {
   });
   if (!currentUser) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  // A linked Plex account is a way to sign in that outlives this session, and
+  // any Plex account can be linked here — a stolen cookie must not be enough
+  // (see recent-login.ts).
+  if (!hasRecentLogin(session)) {
+    return reauthRequired(session.userId, "Linking a Plex account");
   }
 
   try {

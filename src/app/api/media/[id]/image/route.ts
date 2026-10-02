@@ -106,7 +106,7 @@ export async function GET(
     if (request.headers.get("if-none-match") === etag) {
       return new NextResponse(null, {
         status: 304,
-        headers: { ETag: etag, "Cache-Control": "public, max-age=86400" },
+        headers: { ETag: etag, "Cache-Control": "private, max-age=86400" },
       });
     }
 
@@ -115,7 +115,7 @@ export async function GET(
       headers: {
         "Content-Type": "image/webp",
         "Content-Length": String(cached.size),
-        "Cache-Control": "public, max-age=86400",
+        "Cache-Control": "private, max-age=86400",
         "ETag": etag,
       },
     });
@@ -157,7 +157,7 @@ export async function GET(
       headers: {
         "Content-Type": result.contentType,
         "Content-Length": String(result.data.length),
-        "Cache-Control": "public, max-age=86400",
+        "Cache-Control": "private, max-age=86400",
         "ETag": etag,
       },
     });

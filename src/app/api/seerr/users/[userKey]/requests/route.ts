@@ -1,16 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
-import { SeerrClient, type SeerrRequest } from "@/lib/seerr/seerr-client";
+import {
+  SeerrClient,
+  seerrMediaUsername,
+  seerrRequesterKey,
+  type SeerrRequest,
+} from "@/lib/seerr/seerr-client";
+import { walkSeerrRequests } from "@/lib/seerr/request-walk";
+import {
+  countShowEpisodes,
+  loadLocalShows,
+} from "@/lib/seerr/library-match";
+import { USER_REQUESTS_CACHE_PREFIX } from "@/lib/seerr/request-stats";
 import { appCache } from "@/lib/cache/memory-cache";
 import { logger } from "@/lib/logger";
 import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
 
-const PAGE_SIZE = 100;
 const CACHE_TTL_MS = 60_000;
-// Hard ceiling on Seerr request pagination so a huge or looping instance can't
-// hang the request indefinitely. 1000 pages × 100 per page = 100k requests.
-const MAX_PAGES = 1000;
 
 interface ResolvedRequest {
   seerrId: number;
@@ -26,6 +33,8 @@ interface ResolvedRequest {
   year: number | null;
   posterUrl: string | null;
   mediaItem: { id: string; route: "movie" | "show" } | null;
+  /** Library show identity for a TV request (null for movies / shows not in the library). */
+  seriesKey: string | null;
   watch: {
     correlatable: boolean;
     watched: boolean;
@@ -40,6 +49,8 @@ interface ResolveResult {
     plexUsername: string | null;
     avatar: string | null;
   } | null;
+  /** True when an instance's request list could not be read in full. */
+  partial: boolean;
   requests: ResolvedRequest[];
 }
 
@@ -51,14 +62,17 @@ export async function GET(
   if (!session.isLoggedIn) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+  // Next.js has already URL-decoded dynamic params. Decoding again threw on a
+  // key containing a literal '%' ("100%Dad" → 500) and rewrote a literal
+  // "%41" to "A", resolving a different user.
   const { userKey } = await params;
-  const decoded = decodeURIComponent(userKey);
 
-  const cacheKey = `seerr-user-requests:${session.userId}:${decoded}`;
+  // Never cache a truncated walk — the next load retries it.
   const result = await appCache.getOrSet(
-    cacheKey,
-    () => resolveUserRequests(session.userId!, decoded),
-    CACHE_TTL_MS
+    `${USER_REQUESTS_CACHE_PREFIX}${userKey}`,
+    () => resolveUserRequests(session.userId!, userKey),
+    CACHE_TTL_MS,
+    { shouldCache: (r) => !r.partial }
   );
   return NextResponse.json(result);
 }
@@ -69,68 +83,80 @@ async function resolveUserRequests(
 ): Promise<ResolveResult> {
   const instances = await prisma.seerrInstance.findMany({
     where: { userId, enabled: true },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
   });
   if (instances.length === 0) {
-    return { user: null, requests: [] };
+    return { user: null, partial: false, requests: [] };
   }
 
   let userInfo: ResolveResult["user"] = null;
+  let mediaUsername: string | null = null;
+  let partial = false;
   const matched: { req: SeerrRequest; instanceId: string }[] = [];
+  // Clients for instances whose walk succeeded — title/poster lookups for
+  // requests not in the library go to the instance the request came from.
+  const clients = new Map<string, SeerrClient>();
 
-  for (const inst of instances) {
-    const client = new SeerrClient(inst.url, inst.apiKey);
-    let skip = 0;
-    let pages = 0;
-    while (true) {
-      if (pages >= MAX_PAGES) {
-        logger.warn(
-          "Seerr",
-          `Request pagination hit MAX_PAGES (${MAX_PAGES}) for ${inst.name} (user ${userKey}) — truncating`
-        );
-        break;
-      }
-      let page;
+  // Walked at once and failing fast, like the stats card this drills into (see
+  // computeSeerrRequestStats): a dead instance costs one timeout, not its
+  // retry budget, and does not hold the others back. Folded in instance order.
+  const walks = await Promise.all(
+    instances.map(async (inst) => {
+      const client = new SeerrClient(inst.url, inst.apiKey);
+      const fromInstance: SeerrRequest[] = [];
       try {
-        page = await client.getRequests({ take: PAGE_SIZE, skip });
+        await walkSeerrRequests(client, { instanceName: inst.name, failFast: true }, (req) => {
+          // Same identity the stats card keys its rows on — see seerrRequesterKey.
+          if (seerrRequesterKey(req.requestedBy) === userKey) fromInstance.push(req);
+        });
+        return { inst, client, fromInstance };
       } catch (error) {
         logger.warn(
           "Seerr",
           `Failed to fetch requests from ${inst.name} for user ${userKey}`,
           { error: error instanceof Error ? error.message : String(error) }
         );
-        break;
+        return null;
       }
-      pages += 1;
-      for (const req of page.results) {
-        const r = req.requestedBy;
-        if (!r) continue;
-        const candidateKeys = [r.plexUsername, r.username, r.email].filter(
-          Boolean
-        ) as string[];
-        if (!candidateKeys.includes(userKey)) continue;
-        matched.push({ req, instanceId: inst.id });
-        if (!userInfo) {
-          userInfo = {
-            seerrUsername: r.username || r.plexUsername || r.email,
-            plexUsername: r.plexUsername ?? null,
-            avatar: r.avatar ?? null,
-          };
-        }
+    }),
+  );
+
+  for (const walk of walks) {
+    if (!walk) {
+      partial = true;
+      continue;
+    }
+    const { inst, client, fromInstance } = walk;
+    clients.set(inst.id, client);
+    for (const req of fromInstance) {
+      const r = req.requestedBy;
+      matched.push({ req, instanceId: inst.id });
+      if (!userInfo) {
+        userInfo = {
+          seerrUsername: r.username || r.plexUsername || r.jellyfinUsername || r.email,
+          plexUsername: r.plexUsername ?? null,
+          avatar: r.avatar ?? null,
+        };
       }
-      if (page.results.length < PAGE_SIZE) break;
-      skip += PAGE_SIZE;
+      // Adopt identity fields a later requester supplies, so correlation does
+      // not depend on which instance or request happened to come first.
+      if (userInfo.plexUsername == null && r.plexUsername) userInfo.plexUsername = r.plexUsername;
+      if (userInfo.avatar == null && r.avatar) userInfo.avatar = r.avatar;
+      if (mediaUsername == null) mediaUsername = seerrMediaUsername(r);
     }
   }
 
   if (matched.length === 0) {
-    return { user: userInfo, requests: [] };
+    return { user: userInfo, partial, requests: [] };
   }
 
   const tmdbIds = new Set<string>();
-  const tvdbIds = new Set<string>();
+  const showRefs: { tvdbId: number | null; tmdbId: number | null }[] = [];
   for (const { req } of matched) {
     if (req.type === "movie" && req.media?.tmdbId) tmdbIds.add(String(req.media.tmdbId));
-    if (req.type === "tv" && req.media?.tvdbId) tvdbIds.add(String(req.media.tvdbId));
+    if (req.type === "tv" && (req.media?.tvdbId || req.media?.tmdbId)) {
+      showRefs.push({ tvdbId: req.media.tvdbId, tmdbId: req.media.tmdbId });
+    }
   }
 
   const servers = await prisma.mediaServer.findMany({
@@ -173,64 +199,21 @@ async function resolveUserRequests(
     }
   }
 
-  // Series: tvdbId -> { representative episode id (used as link target since
-  // Librariarr's sync only stores episodes, not show-level items, for TV
-  // libraries — show detail page resolves the show via the episode's parentTitle),
-  // title, episodes list (for watch correlation). }
-  interface SeriesEntry {
-    representativeEpisodeId: string | null;
-    title: string | null;
-    episodes: { id: string; dedupKey: string | null }[];
-  }
-  const seriesMap = new Map<number, SeriesEntry>();
-  const seriesDedupToTvdb = new Map<string, number>();
-
-  if (tvdbIds.size > 0 && serverIds.length > 0) {
-    const episodes = await prisma.mediaItem.findMany({
-      where: {
-        type: "SERIES",
-        episodeNumber: { not: null },
-        dedupCanonical: true,
-        library: { mediaServerId: { in: serverIds } },
-        externalIds: { some: { source: "TVDB", externalId: { in: Array.from(tvdbIds) } } },
-      },
-      select: {
-        id: true,
-        dedupKey: true,
-        parentTitle: true,
-        externalIds: { where: { source: "TVDB" }, select: { externalId: true } },
-      },
-      orderBy: [{ seasonNumber: "asc" }, { episodeNumber: "asc" }],
-    });
-
-    for (const ep of episodes) {
-      const tvdbStr = ep.externalIds[0]?.externalId;
-      if (!tvdbStr) continue;
-      const tvdb = Number(tvdbStr);
-      if (!Number.isFinite(tvdb)) continue;
-      let entry = seriesMap.get(tvdb);
-      if (!entry) {
-        entry = {
-          representativeEpisodeId: ep.id,
-          title: ep.parentTitle,
-          episodes: [],
-        };
-        seriesMap.set(tvdb, entry);
-      }
-      entry.episodes.push({ id: ep.id, dedupKey: ep.dedupKey });
-      if (ep.dedupKey) seriesDedupToTvdb.set(ep.dedupKey, tvdb);
-      if (!entry.title && ep.parentTitle) entry.title = ep.parentTitle;
-    }
+  // Series: matched by TVDB or TMDB id and grouped by seriesKey. Links go to
+  // a representative episode — the sync stores episodes, not show-level items.
+  const shows = await loadLocalShows(serverIds, showRefs);
+  const seriesDedupToShow = new Map<string, string>();
+  for (const show of shows.shows.values()) {
+    for (const ep of show.episodes) if (ep.dedupKey) seriesDedupToShow.set(ep.dedupKey, show.seriesKey);
   }
 
   // Watch correlation via WatchHistory + dedupKey.
   const watchedMovieTmdbs = new Set<number>();
-  const watchedEpisodesByTvdb = new Map<number, Set<string>>();
-  const plexUsername = userInfo?.plexUsername ?? null;
-  if (plexUsername && (movieDedupToTmdb.size > 0 || seriesDedupToTvdb.size > 0)) {
+  const watchedEpisodesByShow = new Map<string, Set<string>>();
+  if (mediaUsername && (movieDedupToTmdb.size > 0 || seriesDedupToShow.size > 0)) {
     const allDedupKeys = [
       ...Array.from(movieDedupToTmdb.keys()),
-      ...Array.from(seriesDedupToTvdb.keys()),
+      ...Array.from(seriesDedupToShow.keys()),
     ];
     if (allDedupKeys.length > 0) {
       const watched = await prisma.watchHistory.findMany({
@@ -241,7 +224,7 @@ async function resolveUserRequests(
           // as watched here while the summary that sits beside it says it was
           // not. Two views of one fact, disagreeing.
           ...COMPLETED_PLAY_FILTER,
-          serverUsername: plexUsername,
+          serverUsername: mediaUsername,
           mediaItem: { dedupKey: { in: allDedupKeys } },
         },
         select: { mediaItem: { select: { dedupKey: true } } },
@@ -254,12 +237,12 @@ async function resolveUserRequests(
           watchedMovieTmdbs.add(tmdb);
           continue;
         }
-        const tvdb = seriesDedupToTvdb.get(dk);
-        if (tvdb != null) {
-          let set = watchedEpisodesByTvdb.get(tvdb);
+        const seriesKey = seriesDedupToShow.get(dk);
+        if (seriesKey != null) {
+          let set = watchedEpisodesByShow.get(seriesKey);
           if (!set) {
             set = new Set();
-            watchedEpisodesByTvdb.set(tvdb, set);
+            watchedEpisodesByShow.set(seriesKey, set);
           }
           set.add(dk);
         }
@@ -270,17 +253,19 @@ async function resolveUserRequests(
   // For requests not in the library, fetch title/poster from Seerr in parallel.
   // Keyed by TMDB id (always present on Seerr requests; TVDB can be null/0 for
   // shows Seerr couldn't match), so we still get titles for those edge cases.
-  const missingMovieTmdbs = new Set<number>();
-  const missingTvTmdbs = new Set<number>();
-  for (const { req } of matched) {
+  // tmdbId → the instance a request for it came from (its walk succeeded).
+  const missingMovieTmdbs = new Map<number, string>();
+  const missingTvTmdbs = new Map<number, string>();
+  for (const { req, instanceId } of matched) {
+    if (!req.media?.tmdbId) continue;
     if (req.type === "movie") {
-      if (!req.media?.tmdbId) continue;
-      if (!movieMap.has(req.media.tmdbId)) missingMovieTmdbs.add(req.media.tmdbId);
+      if (!movieMap.has(req.media.tmdbId) && !missingMovieTmdbs.has(req.media.tmdbId)) {
+        missingMovieTmdbs.set(req.media.tmdbId, instanceId);
+      }
     } else if (req.type === "tv") {
-      if (!req.media?.tmdbId) continue;
-      const tvdb = req.media.tvdbId;
-      const inLibrary = tvdb != null && tvdb !== 0 && seriesMap.has(tvdb);
-      if (!inLibrary) missingTvTmdbs.add(req.media.tmdbId);
+      if (!shows.resolve(req.media) && !missingTvTmdbs.has(req.media.tmdbId)) {
+        missingTvTmdbs.set(req.media.tmdbId, instanceId);
+      }
     }
   }
 
@@ -294,9 +279,9 @@ async function resolveUserRequests(
   >();
 
   if (missingMovieTmdbs.size > 0 || missingTvTmdbs.size > 0) {
-    const firstInstance = instances[0];
-    const client = new SeerrClient(firstInstance.url, firstInstance.apiKey);
-    const movieFetches = Array.from(missingMovieTmdbs).map(async (tmdb) => {
+    const movieFetches = Array.from(missingMovieTmdbs).map(async ([tmdb, instanceId]) => {
+      const client = clients.get(instanceId);
+      if (!client) return;
       try {
         const detail = await client.getMovie(tmdb);
         const year = detail.releaseDate ? Number(detail.releaseDate.slice(0, 4)) : null;
@@ -309,7 +294,9 @@ async function resolveUserRequests(
         // ignore; fall back to placeholder label
       }
     });
-    const tvFetches = Array.from(missingTvTmdbs).map(async (tmdb) => {
+    const tvFetches = Array.from(missingTvTmdbs).map(async ([tmdb, instanceId]) => {
+      const client = clients.get(instanceId);
+      if (!client) return;
       try {
         const detail = await client.getTvShow(tmdb);
         const year = detail.firstAirDate ? Number(detail.firstAirDate.slice(0, 4)) : null;
@@ -336,7 +323,7 @@ async function resolveUserRequests(
         seerrInstanceId: instanceId,
         type: "movie",
         status: req.status,
-        mediaStatus: req.media?.status ?? 1,
+        mediaStatus: requestMediaStatus(req),
         is4k: req.is4k ?? false,
         createdAt: req.createdAt,
         tmdbId: tmdb,
@@ -345,8 +332,9 @@ async function resolveUserRequests(
         year: local?.year ?? fallback?.year ?? null,
         posterUrl: local ? `/api/media/${local.id}/image` : fallback?.posterUrl ?? null,
         mediaItem: local ? { id: local.id, route: "movie" } : null,
+        seriesKey: null,
         watch: {
-          correlatable: plexUsername != null,
+          correlatable: mediaUsername != null,
           watched: watchedMovieTmdbs.has(tmdb),
           episodesWatched: 0,
           episodesAvailable: 0,
@@ -355,16 +343,16 @@ async function resolveUserRequests(
     } else {
       const tvdb = req.media?.tvdbId ?? 0;
       const tmdb = req.media?.tmdbId ?? 0;
-      const local = tvdb > 0 ? seriesMap.get(tvdb) : undefined;
+      const local = req.media ? shows.resolve(req.media) : undefined;
       const fallback = tmdb > 0 ? seerrTvDetailsByTmdb.get(tmdb) : undefined;
-      const episodesAvailable = local?.episodes.length ?? 0;
-      const episodesWatched = tvdb > 0 ? watchedEpisodesByTvdb.get(tvdb)?.size ?? 0 : 0;
+      const episodesAvailable = local ? countShowEpisodes(local) : 0;
+      const episodesWatched = local ? watchedEpisodesByShow.get(local.seriesKey)?.size ?? 0 : 0;
       resolved.push({
         seerrId: req.id,
         seerrInstanceId: instanceId,
         type: "tv",
         status: req.status,
-        mediaStatus: req.media?.status ?? 1,
+        mediaStatus: requestMediaStatus(req),
         is4k: req.is4k ?? false,
         createdAt: req.createdAt,
         tmdbId: tmdb,
@@ -382,8 +370,9 @@ async function resolveUserRequests(
         mediaItem: local?.representativeEpisodeId
           ? { id: local.representativeEpisodeId, route: "show" }
           : null,
+        seriesKey: local?.seriesKey ?? null,
         watch: {
-          correlatable: plexUsername != null,
+          correlatable: mediaUsername != null,
           watched: episodesWatched > 0,
           episodesWatched,
           episodesAvailable,
@@ -393,7 +382,16 @@ async function resolveUserRequests(
   }
 
   resolved.sort((a, b) => (b.createdAt > a.createdAt ? 1 : -1));
-  return { user: userInfo, requests: resolved };
+  return { user: userInfo, partial, requests: resolved };
+}
+
+/**
+ * The media status a request refers to. Seerr tracks the 4K copy separately
+ * (`status4k`), so a 4K request for a film already available in HD must not
+ * read as available.
+ */
+function requestMediaStatus(req: SeerrRequest): number {
+  return (req.is4k ? req.media?.status4k ?? req.media?.status : req.media?.status) ?? 1;
 }
 
 function tmdbPosterUrl(posterPath: string | null | undefined): string | null {

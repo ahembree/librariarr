@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { SeerrClient } from "@/lib/seerr/seerr-client";
 import { validateRequest, seerrInstanceCreateSchema } from "@/lib/validation";
 import { sanitize, sanitizeErrorDetail } from "@/lib/api/sanitize";
+import { invalidateSeerrCaches } from "@/lib/seerr/request-stats";
 
 export async function GET() {
   const session = await getSession();
@@ -27,7 +28,7 @@ export async function POST(request: NextRequest) {
 
   const { data, error } = await validateRequest(request, seerrInstanceCreateSchema);
   if (error) return error;
-  const { name, url, apiKey } = data;
+  const { name, url, apiKey, externalUrl } = data;
 
   const client = new SeerrClient(url, apiKey);
   const result = await client.testConnection();
@@ -44,8 +45,10 @@ export async function POST(request: NextRequest) {
       name,
       url: url.replace(/\/+$/, ""),
       apiKey,
+      externalUrl: externalUrl ? externalUrl.replace(/\/+$/, "") : null,
     },
   });
+  invalidateSeerrCaches();
 
   return NextResponse.json({ instance: sanitize(instance) }, { status: 201 });
 }

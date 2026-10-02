@@ -3,10 +3,17 @@ import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { validateRequest, ssoConfigSchema } from "@/lib/validation";
 import { sanitize } from "@/lib/api/sanitize";
-import { isSsoOverrideActive } from "@/lib/sso/config";
+import { currentSsoIssuer, isSsoOverrideActive } from "@/lib/sso/config";
 import { invalidateOidcDiscoveryCache } from "@/lib/sso/oidc-client";
 import { resolveSecretWrite } from "@/lib/sso/secret-write";
 import { isSameOriginRequest } from "@/lib/url";
+import {
+  loadPasswordSignInState,
+  lockSignInSettings,
+  turnsPasswordSignInOn,
+} from "@/lib/auth/password-sign-in";
+import { hasRecentLogin } from "@/lib/auth/recent-login";
+import { reauthRequired, ssoLinkedToIssuer } from "@/lib/auth/reauth";
 
 const SSO_SELECT = {
   ssoEnabled: true,
@@ -106,7 +113,8 @@ export async function PUT(request: NextRequest) {
   // that, enabling SSO would lock the admin out (since SSO replaces local auth).
   if (next.ssoEnabled) {
     if (next.ssoMode === "OIDC") {
-      if (!next.oidcIssuer || !next.oidcClientId) {
+      // Trimmed as they will be stored: whitespace alone saves as null.
+      if (!next.oidcIssuer?.trim() || !next.oidcClientId?.trim()) {
         return NextResponse.json(
           { error: "OIDC issuer and client ID are required to enable SSO" },
           { status: 400 }
@@ -123,13 +131,31 @@ export async function PUT(request: NextRequest) {
 
     const me = await prisma.user.findUnique({
       where: { id: session.userId },
-      select: { ssoSubject: true, ssoEnabled: true },
+      select: { ssoSubject: true, ssoEnabled: true, ssoIssuer: true },
     });
     if (!me?.ssoSubject || !me.ssoEnabled) {
       return NextResponse.json(
         {
           error:
             "Link an SSO identity to your account (under SSO Account Linking) before enabling SSO. Otherwise you'd lock yourself out.",
+        },
+        { status: 400 }
+      );
+    }
+    // And linked under the issuer these settings would use. Another issuer,
+    // or the other mode, while SSO stays on would orphan the link: SSO login
+    // refuses it as not_linked, the password is off because SSO replaces it,
+    // and nothing is left to confirm "it's you" with to turn SSO off again.
+    const nextIssuer = currentSsoIssuer({
+      ...next,
+      ssoMode: next.ssoMode === "FORWARD_AUTH" ? "FORWARD_AUTH" : "OIDC",
+      oidcIssuer: next.oidcIssuer?.trim() || null,
+    });
+    if (!ssoLinkedToIssuer(me, nextIssuer)) {
+      return NextResponse.json(
+        {
+          error:
+            "Your SSO identity is linked under a different issuer or mode. Turn SSO login off first, then save these settings, link your identity again and turn SSO login back on. Otherwise you'd lock yourself out.",
         },
         { status: 400 }
       );
@@ -233,12 +259,40 @@ export async function PUT(request: NextRequest) {
   // `previousSsoConfig: undefined` in the update payload means "don't
   // touch this field," preserving any earlier snapshot when this save is
   // a no-op on the writable fields.
-  const updated = await prisma.appSettings.upsert({
-    where: { userId: session.userId },
-    update: { ...writeData, previousSsoConfig: snapshot ?? undefined },
-    create: { userId: session.userId, ...writeData },
-    select: { ...SSO_SELECT, previousSsoConfig: true },
+  //
+  // Turning SSO off hands the login page back to the local form, and with it
+  // gives an existing password its power back — while SSO was on the password
+  // counted for nothing, so a stolen cookie that knows an old password must
+  // not be able to switch SSO off and then use it (password-sign-in.ts).
+  // Checked and written under the sign-in settings lock, against the state as
+  // it is then, so a concurrent change (local login turned on) cannot pass on
+  // this one's old state while this one passes on its.
+  const userId = session.userId;
+  const updated = await prisma.$transaction(async (tx) => {
+    await lockSignInSettings(tx);
+    const before = await loadPasswordSignInState(tx);
+    const me = await tx.user.findUnique({ where: { id: userId }, select: { passwordHash: true } });
+    if (
+      turnsPasswordSignInOn(
+        before,
+        {
+          localAuthEnabled: before.localAuthEnabled,
+          sso: { ...writeData, ssoMode: writeData.ssoMode === "FORWARD_AUTH" ? "FORWARD_AUTH" : "OIDC" },
+        },
+        !!me?.passwordHash,
+      ) &&
+      !hasRecentLogin(session)
+    ) {
+      return null;
+    }
+    return tx.appSettings.upsert({
+      where: { userId },
+      update: { ...writeData, previousSsoConfig: snapshot ?? undefined },
+      create: { userId, ...writeData },
+      select: { ...SSO_SELECT, previousSsoConfig: true },
+    });
   });
+  if (!updated) return reauthRequired(userId, "Turning off SSO");
 
   // Drop any cached discovery docs so a changed issuer URL (or a rotated
   // signing key, etc.) takes effect on the next login instead of waiting for

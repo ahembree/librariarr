@@ -81,7 +81,14 @@ export async function checkWatchHistoryCompleteness(
 ): Promise<{ complete: true } | { complete: false; incomplete: number; reason: string }> {
   const scope = serverIds && serverIds.length > 0 ? { id: { in: serverIds } } : {};
 
-  const incomplete = await prisma.mediaServer.count({
+  // `findMany`, not `count`: the two clauses below are different faults with
+  // different remedies, and a bare tally could distinguish neither. "N server(s)
+  // ... never synced, recently cleared, or still importing" is unactionable —
+  // it names no server and offers three mutually exclusive explanations, so a
+  // user whose import genuinely finished has no way to tell which one applies,
+  // or that none of them do. Naming the server and its specific fault is what
+  // makes a refusal something the user can act on rather than wait out.
+  const servers = await prisma.mediaServer.findMany({
     where: {
       userId,
       enabled: true,
@@ -91,16 +98,50 @@ export async function checkWatchHistoryCompleteness(
         { tracearrServerId: { not: null }, tracearrBackfillComplete: false },
       ],
     },
+    select: {
+      name: true,
+      watchHistorySyncedAt: true,
+      tracearrServerId: true,
+      tracearrBackfillComplete: true,
+    },
+    orderBy: { name: "asc" },
   });
 
-  if (incomplete === 0) return { complete: true };
+  if (servers.length === 0) return { complete: true };
+
+  const faults = servers.map((server) => {
+    // Checked first because it is the one that is NOT resolved by waiting. A
+    // Tracearr-mapped server whose archive walk has finished but whose marker
+    // was withdrawn (a source switch, a purge, a restore, or a sync that could
+    // not load Tracearr's account map) needs its next successful sync, not
+    // patience with an import that already completed.
+    if (server.watchHistorySyncedAt === null) {
+      return (
+        `"${server.name}" (no sync has established what was played there — it has ` +
+        `never synced, or the history was cleared by a watch-history source ` +
+        `change, a purge, or a backup restore)`
+      );
+    }
+    return (
+      `"${server.name}" (its Tracearr history import has not finished walking ` +
+      `back through the archive)`
+    );
+  });
+
+  // Bounded so one badly-configured install cannot turn a 400 body or a log
+  // line into a wall of server names.
+  const NAMED = 5;
+  const listed = faults.slice(0, NAMED).join("; ");
+  const remainder =
+    faults.length > NAMED ? `; and ${faults.length - NAMED} more` : "";
+
   return {
     complete: false,
-    incomplete,
+    incomplete: servers.length,
     reason:
-      `${incomplete} server(s) have no established play history yet (never synced, ` +
-      `recently cleared, or still importing) — evaluating play-activity criteria now ` +
-      `would treat every item as never-watched and match the entire library`,
+      `${servers.length} server(s) have no established play history yet — ` +
+      `${listed}${remainder}. Evaluating play-activity criteria now would treat ` +
+      `every item as never-watched and match the entire library`,
   };
 }
 

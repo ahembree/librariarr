@@ -73,6 +73,13 @@ export interface WatchCountEntry {
 export async function loadWatchCountsFromHistory(
   serverId: string,
   ratingKeys: string[],
+  /**
+   * The library being written. Required because the map is keyed by rating
+   * key, and `@@unique([libraryId, ratingKey])` makes that unique only within a
+   * library — the same server can hold one key in two, and an unscoped
+   * aggregate summed both items' plays into both.
+   */
+  libraryId: string,
 ): Promise<Map<string, WatchCountEntry>> {
   const counts = new Map<string, WatchCountEntry>();
   if (ratingKeys.length === 0) return counts;
@@ -95,9 +102,11 @@ export async function loadWatchCountsFromHistory(
       WHERE wh."mediaServerId"=$1
         AND ${completedPlaySql("wh")}
         AND mi."ratingKey" = ANY($2)
+        AND mi."libraryId" = $3
       GROUP BY mi."ratingKey"`,
     serverId,
     ratingKeys,
+    libraryId,
   );
 
   for (const row of rows) {

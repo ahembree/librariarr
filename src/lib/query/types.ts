@@ -94,5 +94,9 @@ export interface QueryDefinition {
     sonarr?: string;
     lidarr?: string;
   };
+  /**
+   * Ignored — Seerr criteria are evaluated against every enabled instance,
+   * like lifecycle rules. Kept so saved queries that carry it still validate.
+   */
   seerrInstanceId?: string;
 }

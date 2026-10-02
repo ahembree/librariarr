@@ -8,7 +8,9 @@ import {
   createTestServer,
   createTestLibrary,
   createTestMediaItem,
+  createTestMediaStream,
 } from "../../setup/test-helpers";
+import { getTestPrisma } from "../../setup/test-db";
 
 // Redirect prisma to test database
 vi.mock("@/lib/db", async () => {
@@ -216,5 +218,70 @@ describe("GET /api/media/stats/cross-tab", () => {
     const codecs = body.rows.map((r) => r.dim1);
     expect(codecs).toContain("h264");
     expect(codecs).not.toContain("h265");
+  });
+
+  it("counts an item once per stream language, not once per track", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const lib = await createTestLibrary(server.id, { type: "MOVIE" });
+
+    // Main audio and commentary, both English: one English item.
+    const movie = await createTestMediaItem(lib.id, { type: "MOVIE", videoCodec: "h264" });
+    await createTestMediaStream(movie.id, { streamType: 2, index: 1, language: "English" });
+    await createTestMediaStream(movie.id, { streamType: 2, index: 2, language: "English" });
+    await createTestMediaStream(movie.id, { streamType: 2, index: 3, language: "French" });
+
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    const response = await callRoute(GET, {
+      url: "/api/media/stats/cross-tab",
+      searchParams: { dimension1: "audioLanguage", dimension2: "videoCodec" },
+    });
+    const body = await expectJson<{
+      rows: { dim1: string; dim2: string; type: string; _count: number }[];
+    }>(response, 200);
+
+    const cell = (lang: string) => body.rows.find((r) => r.dim1 === lang && r.dim2 === "h264");
+    expect(cell("English")?._count).toBe(1);
+    expect(cell("French")?._count).toBe(1);
+  });
+
+  it("caps direct x direct cells per type, so a small type is not crowded out", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const movies = await createTestLibrary(server.id, { type: "MOVIE" });
+    const music = await createTestLibrary(server.id, { type: "MUSIC" });
+
+    // 2,100 distinct movie cells, each counted twice so they outrank the one
+    // music cell — under an overall 2,000-row cap the music cell was dropped.
+    const prisma = getTestPrisma();
+    const rows = [];
+    for (let i = 0; i < 2100; i++) {
+      for (const copy of [0, 1]) {
+        rows.push({
+          libraryId: movies.id,
+          ratingKey: `m-${i}-${copy}`,
+          title: `Movie ${i}`,
+          type: "MOVIE" as const,
+          year: 1900 + (i % 100),
+          studio: `Studio ${Math.floor(i / 100)}`,
+        });
+      }
+    }
+    await prisma.mediaItem.createMany({ data: rows });
+    await createTestMediaItem(music.id, { type: "MUSIC", year: 1999, studio: "Label" });
+
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    const response = await callRoute(GET, {
+      url: "/api/media/stats/cross-tab",
+      searchParams: { dimension1: "year", dimension2: "studio" },
+    });
+    const body = await expectJson<{
+      rows: { dim1: string; dim2: string; type: string; _count: number }[];
+    }>(response, 200);
+
+    expect(body.rows.filter((r) => r.type === "MOVIE")).toHaveLength(2000);
+    expect(body.rows.filter((r) => r.type === "MUSIC")).toEqual([
+      { dim1: "1999", dim2: "Label", type: "MUSIC", _count: 1 },
+    ]);
   });
 });

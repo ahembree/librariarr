@@ -2,8 +2,21 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
-import { executeAction, extractActionError } from "@/lib/lifecycle/actions";
-import { findExceptionProtectedParents, isWholeRecordDestructiveAction } from "@/lib/lifecycle/exception-guard";
+import { executeAction, extractActionError, describeActionError } from "@/lib/lifecycle/actions";
+import { actionTargetTitle } from "@/lib/lifecycle/action-target";
+import { loadMemberEpisodes } from "@/lib/lifecycle/member-episodes";
+import { tryBeginExecute, endExecute } from "@/lib/lifecycle/execute-in-flight";
+import {
+  findExceptedItemIds,
+  findExceptionProtectedGroups,
+  protectionKey,
+  isWholeRecordDestructiveAction,
+} from "@/lib/lifecycle/exception-guard";
+import { matchIdentityChange } from "@/lib/lifecycle/match-identity";
+import { arrIdSourceFor } from "@/lib/lifecycle/cross-server-copies";
+import { hasSeerrRules } from "@/lib/rules/lifecycle-engine";
+import type { LifecycleRuleGroup } from "@/lib/rules/types";
+import type { Prisma } from "@/generated/prisma/client";
 
 export async function DELETE(
   _request: NextRequest,
@@ -71,6 +84,41 @@ export async function POST(
     );
   }
 
+  // SINGLE-FLIGHT on the action's item within its rule set: this runs the Arr
+  // call inline exactly like the manual execute route, so two overlapping
+  // retries of the same FAILED action — or a retry landing while an Execute of
+  // the same rule set covers the item — each send the same delete and each
+  // record a COMPLETED row with its own `deletedBytes`. Claimed before any read
+  // the response is built from, released in the `finally` on every exit. See
+  // `execute-in-flight.ts` for the live-review finding behind this.
+  const ruleSetId = action.ruleSetId;
+  // An action whose item is gone claims the whole rule set; retryAction refuses it anyway.
+  const lockedItems = action.mediaItemId ? [action.mediaItemId] : undefined;
+  if (!tryBeginExecute(ruleSetId, lockedItems)) {
+    return NextResponse.json(
+      { error: "An execution covering this item is already running for this rule set" },
+      { status: 409 }
+    );
+  }
+  try {
+    return await retryAction(session, { ...action, ruleSetId }, skipTitleValidation);
+  } finally {
+    endExecute(ruleSetId, lockedItems);
+  }
+}
+
+type FailedAction = Prisma.LifecycleActionGetPayload<{
+  include: { mediaItem: { include: { externalIds: true } } };
+}> & { ruleSetId: string };
+
+/** The retry proper. Runs under the execute lock on its item (see `POST`). */
+async function retryAction(
+  session: Awaited<ReturnType<typeof getSession>>,
+  action: FailedAction,
+  skipTitleValidation: boolean,
+): Promise<NextResponse> {
+  const { id } = action;
+
   // A disabled rule set must not fire actions, even via force-retry. Detection
   // skips disabled sets, so their RuleMatch rows are frozen — the stale-match
   // guard below stays green forever and would happily wave a destructive
@@ -78,11 +126,19 @@ export async function POST(
   // enforce this gate; force-retry needs it too.
   const ruleSet = await prisma.ruleSet.findFirst({
     where: { id: action.ruleSetId, userId: session.userId },
-    select: { enabled: true },
+    select: { enabled: true, type: true, rules: true },
   });
   if (!ruleSet?.enabled) {
     return NextResponse.json(
       { error: "Rule set is disabled — enable it before retrying actions" },
+      { status: 400 }
+    );
+  }
+  // Seerr criteria on a MUSIC rule set can never evaluate, so its matches are
+  // vacuous (mirrors the scheduled executor and the manual execute route).
+  if (ruleSet.type === "MUSIC" && hasSeerrRules(ruleSet.rules as unknown as LifecycleRuleGroup[])) {
+    return NextResponse.json(
+      { error: "Seerr criteria are not supported on music rule sets — this action's match is invalid" },
       { status: 400 }
     );
   }
@@ -112,11 +168,9 @@ export async function POST(
   // Exceptions added AFTER an action failed must still protect the item —
   // exception creation deletes PENDING actions, but FAILED rows survive and
   // could otherwise be force-retried against an excluded item.
-  const exception = await prisma.lifecycleException.findFirst({
-    where: { userId: session.userId, mediaItemId: action.mediaItemId },
-    select: { id: true },
-  });
-  if (exception) {
+  // An exception on another server's copy of the item (same dedupKey) counts.
+  const excepted = await findExceptedItemIds(session.userId!, [action.mediaItemId]);
+  if (excepted.size > 0) {
     return NextResponse.json(
       { error: "This item has a lifecycle exception and cannot be actioned" },
       { status: 400 }
@@ -126,11 +180,12 @@ export async function POST(
   // Whole-record destructive actions destroy every episode/track of the
   // series/artist — refuse the retry if ANY sibling is excepted (mirrors the
   // scheduled executor and the manual execute route).
-  if (isWholeRecordDestructiveAction(action.actionType) && action.mediaItem.parentTitle) {
-    const protectedParents = await findExceptionProtectedParents(session.userId!, [
-      { parentTitle: action.mediaItem.parentTitle, type: action.mediaItem.type },
+  const retryGroupKey = protectionKey(action.mediaItem);
+  if (isWholeRecordDestructiveAction(action.actionType) && retryGroupKey) {
+    const protectedGroups = await findExceptionProtectedGroups(session.userId!, [
+      action.mediaItem,
     ]);
-    if (protectedParents.has(action.mediaItem.parentTitle)) {
+    if (protectedGroups.has(retryGroupKey)) {
       return NextResponse.json(
         { error: "An episode/track of this series/artist has a lifecycle exception — a whole-record delete cannot exclude it" },
         { status: 400 }
@@ -139,6 +194,36 @@ export async function POST(
   }
 
   const mediaItem = action.mediaItem;
+
+  // A Fix Match since the action was scheduled: a retry would act on a work
+  // the rules never matched. Compared with the action's own snapshot, exactly
+  // as the scheduled executor does before it runs an action (see
+  // match-identity.ts); a snapshot too old to judge passes.
+  const identityChange = matchIdentityChange(
+    {
+      title: action.mediaItemTitle,
+      parentTitle: action.mediaItemParentTitle,
+      year: action.mediaItemYear,
+      externalIds: action.mediaItemExternalId
+        ? [{ source: arrIdSourceFor(ruleSet.type), externalId: action.mediaItemExternalId }]
+        : [],
+    },
+    mediaItem,
+    ruleSet.type,
+  );
+  if (identityChange) {
+    return NextResponse.json(
+      {
+        error:
+          `This item is no longer the title the action was scheduled for (${identityChange}) — ` +
+          "remove the failed action and run detection again",
+      },
+      { status: 409 }
+    );
+  }
+
+  // A file delete on exactly one other episode is named after it.
+  const targetTitle = actionTargetTitle({ ...action, mediaItem, memberEpisodes: await loadMemberEpisodes([action]) });
 
   try {
     await executeAction({
@@ -152,6 +237,7 @@ export async function POST(
       addArrTags: action.addArrTags,
       removeArrTags: action.removeArrTags,
       skipTitleValidation,
+      targetTitle,
       mediaItem,
     });
 
@@ -161,8 +247,6 @@ export async function POST(
         status: "COMPLETED",
         executedAt: new Date(),
         error: null,
-        mediaItemTitle: mediaItem.title,
-        mediaItemParentTitle: mediaItem.parentTitle,
       },
     });
 
@@ -179,7 +263,7 @@ export async function POST(
       },
     });
 
-    logger.info("Lifecycle", `Force-retried action ${id} for "${mediaItem.title}" — succeeded`);
+    logger.info("Lifecycle", `Force-retried action ${id} for "${targetTitle}" — succeeded`);
 
     return NextResponse.json({ success: true });
   } catch (error) {
@@ -189,7 +273,7 @@ export async function POST(
       data: { error: msg, executedAt: new Date() },
     });
 
-    logger.error("Lifecycle", `Force-retry failed for "${mediaItem.title}"`, { error: msg });
+    logger.error("Lifecycle", `Force-retry failed for "${targetTitle}"`, { error: describeActionError(error) });
 
     return NextResponse.json({ error: msg }, { status: 500 });
   }

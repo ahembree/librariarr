@@ -119,27 +119,31 @@ async function runTrashSyncInner(
   const targets = await resolveTargets(userId, inst, opts);
   targets.sort((a, b) => RESOURCE_ORDER[a.resourceType] - RESOURCE_ORDER[b.resourceType]);
 
-  // Lazily fetched instance state, cached per run. Each getter throws on the
-  // first failure; per-item try/catch turns that into an ERROR plan item.
+  // Lazily fetched instance state, cached per run. The PROMISE is cached, not
+  // the value, so a failed read is remembered too: every target that needs it
+  // fails at once (per-item try/catch turns that into an ERROR plan item)
+  // instead of re-asking an unreachable instance and paying the client's whole
+  // retry budget again for each of dozens of targets. Resolved arrays are
+  // shared by reference, exactly as the cached values were.
   const cfMapByTrashId = new Map(catalog.customFormats.map((c) => [c.trash_id, c]));
-  let arrCfs: ArrCustomFormat[] | undefined;
-  let arrProfiles: ArrQualityProfile[] | undefined;
-  let schema: ArrQualityProfileSchema | undefined;
-  let qualityDefs: ArrQualityDefinition[] | undefined;
-  let namingConfig: ArrNamingConfig | undefined;
-  let languages: ArrLanguage[] | undefined;
+  let arrCfs: Promise<ArrCustomFormat[]> | undefined;
+  let arrProfiles: Promise<ArrQualityProfile[]> | undefined;
+  let schema: Promise<ArrQualityProfileSchema> | undefined;
+  let qualityDefs: Promise<ArrQualityDefinition[]> | undefined;
+  let namingConfig: Promise<ArrNamingConfig> | undefined;
+  let languages: Promise<ArrLanguage[]> | undefined;
 
   // Profiles read for PROFILE_CF overlays are fetched separately (and lazily)
   // so they capture any QUALITY_PROFILE writes made earlier in this same apply.
-  let cfOverlayProfiles: ArrQualityProfile[] | undefined;
+  let cfOverlayProfiles: Promise<ArrQualityProfile[]> | undefined;
 
-  const getArrCfs = async () => (arrCfs ??= await client.getCustomFormats());
-  const getArrProfiles = async () => (arrProfiles ??= await client.getQualityProfiles());
-  const getSchema = async () => (schema ??= await client.getQualityProfileSchema());
-  const getQualityDefs = async () => (qualityDefs ??= await client.getQualityDefinitions());
-  const getNaming = async () => (namingConfig ??= await client.getNamingConfig());
-  const getLanguages = async () => (languages ??= await client.getLanguages());
-  const getCfOverlayProfiles = async () => (cfOverlayProfiles ??= await client.getQualityProfiles());
+  const getArrCfs = () => (arrCfs ??= client.getCustomFormats());
+  const getArrProfiles = () => (arrProfiles ??= client.getQualityProfiles());
+  const getSchema = () => (schema ??= client.getQualityProfileSchema());
+  const getQualityDefs = () => (qualityDefs ??= client.getQualityDefinitions());
+  const getNaming = () => (namingConfig ??= client.getNamingConfig());
+  const getLanguages = () => (languages ??= client.getLanguages());
+  const getCfOverlayProfiles = () => (cfOverlayProfiles ??= client.getQualityProfiles());
 
   const items: PlanItem[] = [];
 

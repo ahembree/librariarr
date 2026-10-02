@@ -1,0 +1,227 @@
+---
+title: API & API Keys
+description: Let other applications read from and act on Librariarr through the public /api/v1 API, authenticated with scoped, expiring API keys.
+---
+
+import { Aside, Steps } from "@astrojs/starlight/components";
+
+Librariarr has a public REST API at `/api/v1` for dashboards, home automation, scripts and other tools. Every request is authenticated with an **API key** that you issue from Librariarr's settings. A key can be **read-only** or carry **scopes** you choose, can expire on a date you set or never, and can be deleted at any time, which cuts off access on the very next request.
+
+## Creating an API key
+
+<Steps>
+
+1. Open **Settings → Authentication** and find **API Keys**.
+2. Click **Create API Key** and give the key a name that says where it will be used (for example "Home Assistant"). Names must be unique and at most 64 characters, and cannot contain control characters, text-direction overrides or invisible characters (emoji are fine).
+3. Choose the **access**:
+   - **Read-only**: every read scope. The key can read everything the API exposes and cannot change anything.
+   - **Custom scopes**: pick exactly what the key may read and do (see [Scopes](#scopes)). Choosing a write scope also adds the read scope it depends on.
+4. Choose when the key **expires**: 7 days, 30 days, 90 days (the default), 1 year, a custom date (the key works until the end of that day), or never.
+5. If your account has a password and password sign-in is on, enter it. A key keeps working after you sign out, so creating one is confirmed by something a signed-in browser alone does not have. An account that signs in only with Plex or SSO — or whose password sign-in is turned off, when the password is accepted for nothing — has no password to enter; it must instead have signed in within the last 15 minutes. If it has been longer, the dialog asks you to confirm it's you — **Sign in with Plex** or **Sign in with SSO** in a pop-up, or **Confirm with SSO** behind a forward-auth proxy — and creates the key as soon as you do, without signing out. Setting a first password and linking a Plex account or SSO identity ask the same way (an account with a password confirms with it). **Sign in with Plex** is offered only while **Allow Plex Login** is on.
+6. Click **Create Key**, then copy the key and give it to the application.
+
+</Steps>
+
+<Aside type="caution" title="The key is shown once">
+  Librariarr stores only a one-way hash of each key, so the key is displayed exactly once, when you create it. If you lose it, delete the key and create a new one.
+</Aside>
+
+The list of keys shows each key's name, the first characters of the key (`lbr_Ab3xYz…`, enough to tell keys apart), its access, when it was created, when it expires, and when and from which address it was last used. The address is the one your reverse proxy reported (`X-Forwarded-For`); without a trusted proxy in front of Librariarr it is whatever the client claimed, so treat it as a hint rather than evidence — see `TRUST_PROXY_HEADERS` in [Installation](/docs/getting-started/installation/). Create one key per application so each can be revoked on its own.
+
+When a [Discord webhook](/docs/features/notifications/) is configured, Librariarr posts a notification every time a key is created or deleted (**Settings → Notifications → API keys**, on by default). A key you did not create means someone else used your login: delete the key, then change your password or review your SSO account.
+
+### Deleting (revoking) a key
+
+Click **Delete** next to a key and confirm. The key stops working immediately. Librariarr checks the key against its database on every request and never caches it, so there is no grace period. Deleting cannot be undone; to restore access, create a new key.
+
+An expired key is refused in the same way. It stays in the list, marked **Expired**, until you delete it.
+
+API keys are separate from your login. Changing your password, unlinking SSO or logging out signs out your browser sessions but does **not** revoke any API key. If you think a key has leaked, or that someone else had access to your account, delete the keys in this list rather than relying on a password change.
+
+## Authenticating requests
+
+Send the key in the `Authorization` header as a bearer token:
+
+```bash
+curl -H "Authorization: Bearer lbr_YOUR_KEY" https://librariarr.example.com/api/v1/me
+```
+
+or in an `X-Api-Key` header, which is useful when a reverse proxy already uses `Authorization` for its own login:
+
+```bash
+curl -H "X-Api-Key: lbr_YOUR_KEY" https://librariarr.example.com/api/v1/me
+```
+
+- **Never put the key in the URL.** A request whose URL contains a Librariarr key anywhere, or has an `api_key`, `apikey`, `api-key`, `x-api-key` or `access_token` query parameter (in any letter case), is rejected with `400`, even if a valid key is also in a header, because URLs end up in proxy logs and browser history. If a real key was ever sent that way, delete it and create a new one.
+- If both headers carry a Librariarr key, it must be the same key. If `Authorization` carries something else, such as the Basic credentials or the token of an authenticating reverse proxy, the key in `X-Api-Key` is used.
+- The API only accepts keys. Being logged in to Librariarr in a browser does not grant access to `/api/v1`, and API keys do not work on the web app's own routes.
+- Use the API from server-side applications. It sends no CORS headers, so a web page on another site cannot call it from a browser, and a key embedded in a web page would be visible to anyone who opens that page.
+
+`GET /api/v1/me` works with any valid key and returns the key's name, scopes and expiry. It is a quick way to check a key before using it. `scopes` lists only the scopes this version of Librariarr grants.
+
+## Scopes
+
+| Scope | Allows |
+|-------|--------|
+| `media:read` | Browse and search movies, series and music; item details, artwork, library stats and watch history. Item details include each file's path on disk and the address of the media server holding it |
+| `servers:read` | List media servers and their libraries, and read sync status. Server tokens are never returned |
+| `sync:write` | Start and cancel library syncs (includes `servers:read`) |
+| `lifecycle:read` | Rule sets, matches, pending and completed actions, exceptions and deletion stats |
+| `lifecycle:write` | Queue lifecycle detection; add exceptions that protect items (includes `lifecycle:read`) |
+| `lifecycle:execute` | Run lifecycle actions on named matches and remove exceptions, **either of which can lead to media being deleted** through Sonarr, Radarr and Lidarr, within the [deletion limits](#deletion-limits) (includes `lifecycle:read`) |
+| `streams:read` | Active playback sessions — who is watching, on which device and from which address, as the media server reports them — and maintenance mode status |
+| `streams:write` | Terminate playback sessions; turn maintenance mode on or off (includes `streams:read`) |
+| `system:read` | App version, database size and library counts |
+
+A **read-only** key has every `:read` scope. Every `GET` endpoint needs a read scope and every other method needs a write scope, so a read-only key cannot change anything. A key keeps exactly the scopes it was created with: a scope added in a later version of Librariarr is never added to an existing key.
+
+<Aside type="danger">
+  Only grant `lifecycle:execute` to an application you trust to delete media. `POST /api/v1/lifecycle/actions/execute` runs a rule set's action straight away, like the **Execute** button on the **Pending** page, without waiting for the scheduled date. The [deletion ceiling](/docs/features/deletion-safety/) is counted per request, so it limits each call but not a client that makes many. Removing an exception needs this scope too: an exception is what stops your rules from matching an item, so removing one can lead to that item being deleted.
+</Aside>
+
+## OpenAPI document
+
+Librariarr describes this API in an OpenAPI 3.1 document, generated from the running version — it is never a file that can fall behind the code. Under **Settings → Authentication → API Keys**, **API docs** opens an interactive reference (Swagger UI, bundled with Librariarr — no internet needed) where every endpoint can be browsed and, after pasting a key into **Authorize**, tried against your own instance; the key is not saved. **Download** saves the document as `librariarr-openapi.json` for Postman, Insomnia or a client generator, and the raw JSON is one click away on the docs page. Applications can fetch the same document with any valid key from `GET /api/v1/openapi.json`, and the [API Reference](/docs/advanced/api-reference/) page on this site renders the one for the latest release. Every operation carries an `x-scope` naming the scope its key needs, and the `servers` URL is the address you fetched it from.
+
+## Endpoints
+
+Most endpoints are the same routes the web app uses, served under `/api/v1`: they take the same query parameters and bodies and return the same JSON. Paths with `{id}` take a Librariarr id, as returned by the listing endpoints.
+
+### Key
+
+| Method | Path | Scope | Description |
+|--------|------|-------|-------------|
+| `GET` | `/api/v1/me` | any valid key | The calling key: `id`, `name`, `prefix`, `scopes`, `expiresAt`, `createdAt`, `lastUsedAt` |
+| `GET` | `/api/v1/openapi.json` | any valid key | This API's OpenAPI 3.1 document |
+
+### Library (`media:read`)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/v1/media/movies` | Movies. Pagination: `page`, `limit` (≤ 100, `0` = all), `offset`; sorting: `sortBy`, `sortOrder`; `search`, `startsWith` (a letter or `#`), `serverId`, plus the library filters (`resolution=4K\|1080P`, `genre`, `yearConditions=gte:2020`, …) |
+| `GET` | `/api/v1/media/series` | Episodes, with the same parameters as movies plus `seriesKey` and `seasonNumber` |
+| `GET` | `/api/v1/media/series/grouped` | Shows, with episode and watched counts. `page`, `limit`, `search`, `startsWith`, `sortBy`, `sortOrder`, `serverId` |
+| `GET` | `/api/v1/media/series/seasons` | Seasons of one show: `seriesKey` (from the grouped listing) |
+| `GET` | `/api/v1/media/music` | Tracks; `parentTitle` (artist) and `albumTitle` narrow the list |
+| `GET` | `/api/v1/media/music/grouped` | Artists |
+| `GET` | `/api/v1/media/music/albums` | Albums of one artist: `parentTitle` |
+| `GET` | `/api/v1/media/search` | Search by title: `q`, `type` (`MOVIE`, `SERIES` or `MUSIC`) |
+| `GET` | `/api/v1/media/recently-added` | Newest additions: `limit` (1–50, default 10), `type`, `serverId` |
+| `GET` | `/api/v1/media/stats` | Library totals: counts, size, and resolution, codec and other breakdowns. `serverId` optional |
+| `GET` | `/api/v1/media/history` | Play history: `page`, `limit` (≤ 200), `search`, `username`, `type` (`MOVIE`, `SERIES` or `MUSIC`; several separated by `\|`), `serverId`, `sortBy`, `sortOrder` |
+| `GET` | `/api/v1/media/{id}` | One item with its streams, external ids and file details. Unlike the app's own view, it omits the file path and its servers' addresses and machine ids |
+| `GET` | `/api/v1/media/{id}/plays` | That item's plays (user, date and time, device): `page`, `limit` (≤ 200, default 50), `serverId` |
+| `GET` | `/api/v1/media/{id}/image` | Artwork (an image, not JSON). `type` (`art`, `parent`, `season`; poster by default) and `w` (`400`, `640` or `800`) |
+
+### Servers and syncs
+
+| Method | Path | Scope | Description |
+|--------|------|-------|-------------|
+| `GET` | `/api/v1/servers` | `servers:read` | Media servers with their libraries and latest sync. Tokens, the servers' addresses, machine ids and owner are omitted |
+| `GET` | `/api/v1/sync/status` | `servers:read` | Running and recent sync jobs. Server addresses and machine ids are omitted, and a failed job's error has internal paths and addresses redacted |
+| `POST` | `/api/v1/servers/{id}/sync` | `sync:write` | Sync one server. Optional body `{ "libraryKey": "…" }` to sync one library. `409` if a sync is already running |
+| `POST` | `/api/v1/sync/cancel` | `sync:write` | Stop a server's running or queued sync: `{ "serverId": "…" }` |
+| `POST` | `/api/v1/jobs/sync` | `sync:write` | Queue a sync of every enabled server, the same as **Run now** under Settings → Scheduling. Answers `202` with `{ "queued": true, "jobs": 2 }`, `jobs` being the number of servers queued (a server already syncing is skipped, so `0` is possible). `500` if a sync could not be queued |
+
+### Lifecycle
+
+| Method | Path | Scope | Description |
+|--------|------|-------|-------------|
+| `GET` | `/api/v1/lifecycle/rules` | `lifecycle:read` | Rule sets |
+| `GET` | `/api/v1/lifecycle/rules/matches` | `lifecycle:read` | Current matches per rule set. Each match carries the item as detection stored it, without its file path. Not paged: each call counts as 20 requests |
+| `GET` | `/api/v1/lifecycle/actions` | `lifecycle:read` | Actions by `status`: `PENDING` (default), `COMPLETED`, `FAILED` or `ALL`. A series action's `mediaItem.title` is the show, or `<Show> SxxExx` (for example `Breaking Bad S03E10`) when the action acts on a single episode; its `parentTitle` is `null`. A failed action's error has internal paths and addresses redacted. Not paged: each call counts as 20 requests |
+| `GET` | `/api/v1/lifecycle/exceptions` | `lifecycle:read` | Exceptions; `type` = `MOVIE`, `SERIES`, `MUSIC` or `ALL`. Not paged: each call counts as 20 requests |
+| `GET` | `/api/v1/lifecycle/stats` | `lifecycle:read` | Deletion statistics |
+| `POST` | `/api/v1/lifecycle/exceptions` | `lifecycle:write` | Exclude an item from every rule: `{ "mediaItemId": "…", "reason": "…", "scope": "individual" }` (`scope` can also be `series`, `artist` or `album`) |
+| `POST` | `/api/v1/jobs/detection` | `lifecycle:write` | Queue lifecycle detection for every enabled rule set, like **Run now**. Answers `202` with `{ "queued": true, "jobs": 1 }`; read the result from `/api/v1/lifecycle/rules/matches` once the job has run |
+| `DELETE` | `/api/v1/lifecycle/exceptions` | `lifecycle:execute` | Remove exceptions: `{ "ids": ["…"] }`, at most 25. Counts against the [deletion limits](#deletion-limits) |
+| `DELETE` | `/api/v1/lifecycle/exceptions/{id}` | `lifecycle:execute` | Remove one exception. Counts against the [deletion limits](#deletion-limits) |
+| `POST` | `/api/v1/lifecycle/actions/execute` | `lifecycle:execute` | Run a rule set's action now on named matches: `{ "ruleSetId": "…", "mediaItemIds": ["…"] }`. `mediaItemIds` is required (1 to 25 ids); there is no "every match". Only ids that are current matches of the rule set are acted on. The rule set must be enabled, with actions turned on (`400` otherwise). `409` if an item changed since it matched, or while another execution of the same rule set covers one of the named items (so an overlapping call never repeats its deletions; calls naming different items run side by side). A deleting action counts against the [deletion limits](#deletion-limits) |
+| `POST` | `/api/v1/jobs/execution` | `lifecycle:execute` | Queue lifecycle execution (every due pending action), like **Run now**. Answers `202` with `{ "queued": true, "jobs": 1 }`. The run is held, deleting nothing, if it would exceed the [deletion limits](#deletion-limits) |
+
+### Streams
+
+| Method | Path | Scope | Description |
+|--------|------|-------|-------------|
+| `GET` | `/api/v1/tools/sessions` | `streams:read` | Active playback sessions on every enabled server, without the path of the file being played |
+| `GET` | `/api/v1/tools/maintenance` | `streams:read` | Maintenance mode status |
+| `POST` | `/api/v1/tools/sessions/terminate` | `streams:write` | Stop playback: `{ "serverId": "…" or "all", "sessionIds": ["…"], "message": "…" }` (omit `sessionIds` to stop every stream on the server). Session ids are the `sessionId` values `/api/v1/tools/sessions` returns; anything but letters, digits, `-` and `_` is refused with `400` |
+| `PUT` | `/api/v1/tools/maintenance` | `streams:write` | Turn maintenance mode on or off: `{ "enabled": true, "message": "Back soon", "delay": 30 }`. `message` (up to 500 characters) and `delay` (0–3600 seconds) are optional and keep their current values when left out. Who is exempt from maintenance mode and whether Discord is notified can only be changed in Librariarr; sending those fields is a `400` |
+
+### System
+
+| Method | Path | Scope | Description |
+|--------|------|-------|-------------|
+| `GET` | `/api/v1/system/info` | `system:read` | App version, latest migration, database size, item/library/server counts, update availability |
+
+### Examples
+
+```bash
+# What can this key do?
+curl -H "Authorization: Bearer $LIBRARIARR_API_KEY" https://librariarr.example.com/api/v1/me
+
+# The 5 newest movies
+curl -H "Authorization: Bearer $LIBRARIARR_API_KEY" \
+  "https://librariarr.example.com/api/v1/media/recently-added?type=MOVIE&limit=5"
+
+# Sync every server (sync:write)
+curl -X POST -H "Authorization: Bearer $LIBRARIARR_API_KEY" \
+  https://librariarr.example.com/api/v1/jobs/sync
+
+# Protect an item from lifecycle rules (lifecycle:write)
+curl -X POST -H "Authorization: Bearer $LIBRARIARR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"mediaItemId": "cm1abc…", "reason": "Family favourite"}' \
+  https://librariarr.example.com/api/v1/lifecycle/exceptions
+
+# Turn maintenance mode on (streams:write)
+curl -X PUT -H "Authorization: Bearer $LIBRARIARR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": true, "message": "Server maintenance, back in 30 minutes"}' \
+  https://librariarr.example.com/api/v1/tools/maintenance
+```
+
+## Errors
+
+Errors are JSON: `{ "error": "…" }`, sometimes with a `details` array (validation) or other fields.
+
+| Status | Meaning |
+|--------|---------|
+| `400` | Bad request: invalid body or parameters, a key in the URL, or two different keys in the headers |
+| `401` | No key, a key that is not valid (never issued, or deleted), or an expired key (`"API key has expired"`). Includes a `WWW-Authenticate: Bearer` header |
+| `403` | The key is valid but lacks the endpoint's scope. The body's `requiredScope` and the `WWW-Authenticate` header (`error="insufficient_scope"`) name the missing scope |
+| `404` | The item, server, rule set or exception does not exist |
+| `409` | A conflict: a sync is already running (`POST /servers/{id}/sync`); an item changed identity since it matched (`POST /lifecycle/actions/execute`, which then executes nothing; run detection again); or another execution of the rule set is running on one of the named items |
+| `429` | Rate limited, or the [deletion limits](#deletion-limits) are spent; wait for the number of seconds in `Retry-After` |
+| `503` | Librariarr could not check the key (for example, the database is unavailable). The request was refused, not let through |
+
+## Rate limits
+
+- **Per key:** 600 requests per minute. Past that, the key's requests are answered `429` until the minute is up. A request with `limit=0` returns a whole library rather than a page, so it counts as 20 requests — thirty full listings a minute. `limit` is read as a number, so every spelling of zero (`00`, `+0`, `0.0`) is a full listing and costs the same. The listings with no paging — rule matches, actions and exceptions — always return everything, so every call to them counts as 20 too.
+- **Unrecognised keys:** at most 1,000 keys that turn out not to exist are looked up per minute, across every client. Past that, until the minute is up, a key that has not been used successfully in the last 15 minutes is answered `429` without being looked up; keys in use are unaffected. This bounds what a flood of random keys can cost, at the price of an idle integration waiting out the minute while such a flood lasts.
+- **Failing keys:** a key that fails 20 times within 15 minutes (deleted, expired, mistyped) is answered `429` for the rest of that window without being looked up, so an application still using a deleted key stops costing anything. Failures are counted per key, not per address, so they never lock out a key that works, even when every client reaches Librariarr from the same address (containers on one Docker host, or `TRUST_PROXY_HEADERS=false`).
+
+## Deletion limits
+
+An API key can never delete in bulk. Bulk deletion stays with Librariarr itself: the rule set's own schedule, and the **Pending** page. These limits are fixed and apply to every key.
+
+- **Every item is named.** `POST /lifecycle/actions/execute` requires `mediaItemIds`. Leaving it out, sending an empty list, or sending any field it does not know is a `400`. There is no way to say "every match".
+- **25 per request.** One request can act on at most 25 items, and remove at most 25 exceptions.
+- **100 per hour, across every key.** Items deleted through the API and exceptions removed through the API share one budget of 100 in any rolling hour. A request that would go over it is answered `429` with `Retry-After`, and nothing in it runs. Actions that delete nothing (unmonitor, tags, search, quality profile) are not counted.
+- **Whole requests only.** A request is either run in full or not at all, never the first few items of it. A refused request is not charged.
+- **Queued runs too.** An execution queued with `POST /jobs/execution` is held when it would delete more than 25 items or go over the hourly budget. Nothing is deleted, the actions stay pending, and a Discord message says so when a webhook is set (at most once every 15 minutes, however often the run is queued). They then run on the rule set's schedule, or from the Pending page. A held API run does not postpone the scheduled one.
+- **The app's own checks still apply.** The item must be a current match of an enabled rule set with actions turned on, lifecycle exceptions are honoured (on every server's copy), and the deletion limit under Settings applies first.
+- **The right item.** An item re-matched on the media server after the rules matched it (a Plex "Fix Match" or a Jellyfin "Identify") is refused with `409`, because acting on it would reach the new title. Run detection again, and review the matches: detection refreshes every match it keeps, so an item that still matches the rules under its new title can then be executed, and one that no longer matches drops out.
+
+The hourly budget is kept in memory, so restarting Librariarr resets it.
+
+## How keys are protected
+
+- **Creating a key is a step up from being signed in.** It needs your password — or, on an account with no password, a sign-in from the last 15 minutes, which the dialog renews by asking you to sign in with Plex or SSO again — and each creation and deletion is posted to Discord when a webhook is set. A stolen browser session could otherwise turn itself into a key that outlives it, since logging out or changing the password revokes sessions, not keys. Wrong passwords here count against the same limit as failed logins.
+- **Only a hash is stored.** A key is `lbr_` followed by 43 random characters (about 256 bits). Librariarr stores only a salted scrypt hash of it and its first 10 characters, which are shown in the list and used to find the key. Neither the database nor a leaked database dump contains a usable key, or anything to test guesses against cheaply. The hash is checked once when a key is first used, and Librariarr remembers in memory that it matched, so later requests cost no extra work. Keys created before this version stored an unsalted SHA-256 hash; upgrading removes them, and they need to be created again.
+- **Immediate revocation.** Keys are checked against the database on every request, so deleting or expiring a key takes effect on the next request.
+- **Not in backups.** API keys are never written to backups, not even their hashes. Restoring a backup deletes every API key, so a key you deleted cannot come back from an older backup. After a restore, create new keys for your applications.
+- **Only on `/api/v1`.** API keys work only on `/api/v1`, and the key-management routes accept only a logged-in browser session, so an API key cannot create, list or delete keys.
+- **Audit log.** **System → Logs** records every request that changes something, with the key's name (API category), and every key created or deleted. Reads are logged only when `LOG_DEBUG=true`. At WARN, once per 15 minutes each: a failing key, a valid key refused for lacking a scope (with the endpoint it tried), and a key that went over its request budget. Failures are logged at WARN at most 50 times per 15 minutes in total and at DEBUG after that, so a flood of bad requests cannot fill the log. The key itself is never logged.
+- **No caching by proxies.** API responses carry `Cache-Control: no-store` (artwork: `private`), so a shared cache cannot serve one client's response to another.
+- **Limits.** At most 50 API keys can exist at once.

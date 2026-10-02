@@ -183,6 +183,26 @@ describe("GET /api/media/[id]/arr-info", () => {
     expect(body.matches).toEqual([]);
   });
 
+  it("does not query disabled instances, and one failing instance does not hide another's match", async () => {
+    const item = await createTestMediaItem(libraryId, { type: "MOVIE" });
+    await createTestExternalId(item.id, "TMDB", "12345");
+    await createTestRadarrInstance(userId, { name: "Off", enabled: false });
+    await createTestRadarrInstance(userId, { name: "Down" });
+    await createTestRadarrInstance(userId, { name: "Up" });
+
+    mockRadarrGetMovieByTmdbId
+      .mockRejectedValueOnce(new Error("Radarr unreachable"))
+      .mockResolvedValue({ id: 99, tmdbId: 12345, qualityProfileId: 4, tags: [] });
+    mockRadarrGetQualityProfiles.mockResolvedValue([{ id: 4, name: "HD-1080p" }]);
+
+    const response = await callRouteWithParams(GET, { id: item.id });
+    const body = await response.json();
+
+    // Only the two enabled instances are asked.
+    expect(mockRadarrGetMovieByTmdbId).toHaveBeenCalledTimes(2);
+    expect(body.matches.map((m: { instanceName: string }) => m.instanceName)).toEqual(["Up"]);
+  });
+
   it("handles arr client errors gracefully", async () => {
     const item = await createTestMediaItem(libraryId, { type: "MOVIE" });
     await createTestExternalId(item.id, "TMDB", "12345");

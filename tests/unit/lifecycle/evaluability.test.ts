@@ -5,10 +5,32 @@ const mockHasEnabledSeerrInstances = vi.hoisted(() => vi.fn());
 
 // Real hasArrRules/hasSeerrRules from the engine classify the rule fixtures;
 // only the instance lookups (DB) are mocked.
-const mockServerCount = vi.hoisted(() => vi.fn());
+// `findMany`, not `count`: the guard names the offending server and states
+// which of its two faults applies, so it reads the rows rather than tallying.
+const mockServerFindMany = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/db", () => ({
-  prisma: { mediaServer: { count: mockServerCount } },
+  prisma: { mediaServer: { findMany: mockServerFindMany } },
 }));
+
+/** An unevidenced server row, in the shape the guard selects. */
+function unsyncedServer(name: string) {
+  return {
+    name,
+    watchHistorySyncedAt: null,
+    tracearrServerId: null,
+    tracearrBackfillComplete: false,
+  };
+}
+
+/** A Tracearr-mapped server whose archive walk has not reached the far end. */
+function importingServer(name: string) {
+  return {
+    name,
+    watchHistorySyncedAt: new Date("2025-07-10T12:00:00.000Z"),
+    tracearrServerId: "trc-1",
+    tracearrBackfillComplete: false,
+  };
+}
 vi.mock("@/lib/lifecycle/fetch-arr-metadata", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/lifecycle/fetch-arr-metadata")>();
   return {
@@ -44,7 +66,7 @@ describe("checkLifecycleRuleEvaluability", () => {
     mockHasEnabledArrInstances.mockResolvedValue(true);
     mockHasEnabledSeerrInstances.mockResolvedValue(true);
     // No server mid-import by default.
-    mockServerCount.mockResolvedValue(0);
+    mockServerFindMany.mockResolvedValue([]);
   });
 
   it("is evaluable for plain DB rules without touching instance lookups", async () => {
@@ -116,7 +138,7 @@ describe("checkLifecycleRuleEvaluability", () => {
       // the re-import is a background walk taking minutes to hours. A detection
       // run in that window would match the entire library, and on a DELETE rule
       // set that is the whole library deleted.
-      mockServerCount.mockResolvedValue(1);
+      mockServerFindMany.mockResolvedValue([importingServer("Plex")]);
 
       const result = await checkLifecycleRuleEvaluability(
         "u1",
@@ -129,11 +151,11 @@ describe("checkLifecycleRuleEvaluability", () => {
       // Transient: it resumes by itself once the backfill finishes, so callers
       // skip rather than disarm.
       expect(result.permanent).toBe(false);
-      expect(result.reason).toMatch(/watch history|importing/i);
+      expect(result.reason).toMatch(/play history|import/i);
     });
 
     it("is evaluable once every Tracearr server has finished importing", async () => {
-      mockServerCount.mockResolvedValue(0);
+      mockServerFindMany.mockResolvedValue([]);
 
       await expect(
         checkLifecycleRuleEvaluability("u1", "MOVIE", groupsWith("watchedByUser")),
@@ -151,11 +173,11 @@ describe("checkLifecycleRuleEvaluability", () => {
       //
       // Asserted through the WHERE clause: the count must consider a cleared
       // history independently of any Tracearr mapping.
-      mockServerCount.mockResolvedValue(0);
+      mockServerFindMany.mockResolvedValue([]);
 
       await checkLifecycleRuleEvaluability("u1", "MOVIE", groupsWith("watchedByUser"));
 
-      const where = mockServerCount.mock.calls[0][0].where;
+      const where = mockServerFindMany.mock.calls[0][0].where;
       expect(where.OR).toEqual(
         expect.arrayContaining([{ watchHistorySyncedAt: null }]),
       );
@@ -169,11 +191,11 @@ describe("checkLifecycleRuleEvaluability", () => {
       // whose history was destroyed by a purge or a restore. A "cleared at"
       // marker could not express either — its null read as healthy, so absence
       // of evidence presented itself as evidence of absence.
-      mockServerCount.mockResolvedValue(0);
+      mockServerFindMany.mockResolvedValue([]);
 
       await checkLifecycleRuleEvaluability("u1", "MOVIE", groupsWith("watchedByUser"));
 
-      const where = mockServerCount.mock.calls[0][0].where;
+      const where = mockServerFindMany.mock.calls[0][0].where;
       expect(where.OR).toEqual(
         expect.arrayContaining([{ watchHistorySyncedAt: null }]),
       );
@@ -185,7 +207,7 @@ describe("checkLifecycleRuleEvaluability", () => {
       // including ones reading only native servers whose history is complete.
       // Worse, a backfill that never finishes (instance disabled, mapping to a
       // server Tracearr no longer monitors) would disable them permanently.
-      mockServerCount.mockResolvedValue(0);
+      mockServerFindMany.mockResolvedValue([]);
 
       await checkLifecycleRuleEvaluability(
         "u1",
@@ -194,7 +216,7 @@ describe("checkLifecycleRuleEvaluability", () => {
         ["server-a", "server-b"],
       );
 
-      expect(mockServerCount).toHaveBeenCalledWith(
+      expect(mockServerFindMany).toHaveBeenCalledWith(
         expect.objectContaining({
           where: expect.objectContaining({ id: { in: ["server-a", "server-b"] } }),
         }),
@@ -204,12 +226,66 @@ describe("checkLifecycleRuleEvaluability", () => {
     it("falls back to every server when the rule set targets all of them", async () => {
       // An empty `serverIds` is the rule set's own default and means "all", so
       // the check must stay broad rather than silently matching nothing.
-      mockServerCount.mockResolvedValue(0);
+      mockServerFindMany.mockResolvedValue([]);
 
       await checkLifecycleRuleEvaluability("u1", "MOVIE", groupsWith("watchedByUser"), []);
 
-      const where = mockServerCount.mock.calls[0][0].where;
+      const where = mockServerFindMany.mock.calls[0][0].where;
       expect(where).not.toHaveProperty("id");
+    });
+
+    it("names the server and its specific fault, not a bare tally", async () => {
+      // The two clauses are different faults with different remedies, and the
+      // old message ("N server(s) ... never synced, recently cleared, or still
+      // importing") could distinguish neither. A user whose Tracearr import had
+      // long since finished was told to go watch its progress bar — which reads
+      // done, because it reflects `tracearrBackfillComplete`, while what had
+      // actually been withdrawn was `watchHistorySyncedAt`. A refusal the user
+      // cannot act on reads as a bug in the rule they were writing.
+      mockServerFindMany.mockResolvedValue([unsyncedServer("Cornerstone")]);
+
+      const result = await checkLifecycleRuleEvaluability(
+        "u1",
+        "MOVIE",
+        groupsWith("playCount"),
+      );
+
+      if (result.evaluable) throw new Error("expected not evaluable");
+      expect(result.reason).toContain('"Cornerstone"');
+      expect(result.reason).toMatch(/no sync has established/i);
+      // ...and must NOT blame an import, which is the other fault entirely.
+      expect(result.reason).not.toMatch(/import/i);
+    });
+
+    it("blames the import only for a server that is actually still importing", async () => {
+      mockServerFindMany.mockResolvedValue([importingServer("Plex")]);
+
+      const result = await checkLifecycleRuleEvaluability(
+        "u1",
+        "MOVIE",
+        groupsWith("playCount"),
+      );
+
+      if (result.evaluable) throw new Error("expected not evaluable");
+      expect(result.reason).toContain('"Plex"');
+      expect(result.reason).toMatch(/import/i);
+    });
+
+    it("keeps the message bounded when many servers are unevidenced", async () => {
+      mockServerFindMany.mockResolvedValue(
+        Array.from({ length: 8 }, (_, i) => unsyncedServer(`Server ${i}`)),
+      );
+
+      const result = await checkLifecycleRuleEvaluability(
+        "u1",
+        "MOVIE",
+        groupsWith("playCount"),
+      );
+
+      if (result.evaluable) throw new Error("expected not evaluable");
+      expect(result.reason).toContain("8 server(s)");
+      expect(result.reason).toContain("and 3 more");
+      expect(result.reason).not.toContain('"Server 5"');
     });
 
     it("does not consult watch history for rules that never read it", async () => {
@@ -217,7 +293,7 @@ describe("checkLifecycleRuleEvaluability", () => {
       // no watchedByUser rule must not pay for it.
       await checkLifecycleRuleEvaluability("u1", "MOVIE", groupsWith("title"));
 
-      expect(mockServerCount).not.toHaveBeenCalled();
+      expect(mockServerFindMany).not.toHaveBeenCalled();
     });
   });
 

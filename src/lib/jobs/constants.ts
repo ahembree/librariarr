@@ -79,11 +79,37 @@ export interface SyncServerPayload {
    * a bug from a legitimate trigger is for the sync to say which one it was.
    */
   trigger?: string;
+  /**
+   * The PENDING `SyncJob` row the requester created at enqueue time, so the
+   * settings page can show the sync as queued the moment it is asked for
+   * instead of only once the serial MAIN_QUEUE reaches it. The run claims
+   * this row rather than inserting its own. Optional: a jobKey collision can
+   * replace the payload with one that lacks it, which is why an unclaimed
+   * PENDING row for the server is adopted as well (see `claimSyncJob`).
+   */
+  syncJobId?: string;
 }
+
+/**
+ * Graphile priority for a sync someone is waiting on (Settings → Sync / Sync
+ * All). Lower runs first; background work keeps the default 0. `MAIN_QUEUE` is
+ * serial and ordered by priority, then enqueue time, so without this a
+ * requested sync waited behind every job already queued — each mapped
+ * server's next 5-minute Tracearr backfill slice included.
+ */
+export const REQUESTED_SYNC_PRIORITY = -10;
 
 /** Payload for {@link TASK_SYNC_WATCH_HISTORY}. */
 export interface SyncWatchHistoryPayload {
   serverId: string;
+  /**
+   * Append only the plays since the newest stored one instead of the full
+   * replace. Set by the realtime manager (one finished playback), and ONLY
+   * there: `/api/sync/by-type` enqueues this same task as the deferred
+   * server-wide refresh for its per-library jobs, and that one must stay a
+   * full replace or the plays a server has since deleted are never reconciled.
+   */
+  incremental?: boolean;
 }
 
 /** Payload for {@link TASK_SYNC_INCREMENTAL}. */
@@ -98,4 +124,14 @@ export interface SyncIncrementalPayload {
 /** Payload for lifecycle detection/execution tasks. */
 export interface UserPayload {
   userId: string;
+}
+
+/**
+ * `TASK_LIFECYCLE_EXECUTION`. `viaApiKey` (the key's name) marks a run queued
+ * through `POST /api/v1/jobs/execution`: it is held by the public API's
+ * destructive limits as well as the app's own ceiling, and is queued under its
+ * own job key so it never rewrites the payload of a scheduled run.
+ */
+export interface LifecycleExecutionPayload extends UserPayload {
+  viaApiKey?: string;
 }

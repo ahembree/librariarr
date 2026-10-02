@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { SecretInput } from "@/components/ui/secret-input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import {
   CheckCircle,
   Loader2,
@@ -18,12 +19,14 @@ export interface NotificationsTabProps {
   discordWebhookUrl: string;
   discordWebhookUsername: string;
   discordWebhookAvatarUrl: string;
+  discordNotifyApiKeys: boolean;
   discordSaving: boolean;
   discordTesting: boolean;
   discordTestResult: TestResult | null;
   onDiscordWebhookUrlChange: (value: string) => void;
   onDiscordWebhookUsernameChange: (value: string) => void;
   onDiscordWebhookAvatarUrlChange: (value: string) => void;
+  onDiscordNotifyApiKeysChange: (value: boolean) => void;
   onSaveDiscordSettings: () => void;
   onTestDiscordWebhook: () => void;
 }
@@ -32,12 +35,14 @@ export function NotificationsTab({
   discordWebhookUrl,
   discordWebhookUsername,
   discordWebhookAvatarUrl,
+  discordNotifyApiKeys,
   discordSaving,
   discordTesting,
   discordTestResult,
   onDiscordWebhookUrlChange,
   onDiscordWebhookUsernameChange,
   onDiscordWebhookAvatarUrlChange,
+  onDiscordNotifyApiKeysChange,
   onSaveDiscordSettings,
   onTestDiscordWebhook,
 }: NotificationsTabProps) {
@@ -84,6 +89,24 @@ export function NotificationsTab({
               placeholder="https://example.com/avatar.png"
               value={discordWebhookAvatarUrl}
               onChange={(e) => onDiscordWebhookAvatarUrlChange(e.target.value)}
+            />
+          </div>
+
+          <div className="flex items-center justify-between gap-3 rounded-md bg-muted/30 px-3 py-2.5">
+            <div className="min-w-0">
+              <Label htmlFor="discord-notify-api-keys" className="text-sm font-medium">
+                API keys
+              </Label>
+              <p className="text-[11px] text-muted-foreground">
+                Notify when an API key is created or deleted. A key keeps working after you sign out, so this
+                is how you hear about one you did not create.
+              </p>
+            </div>
+            <Switch
+              id="discord-notify-api-keys"
+              checked={discordNotifyApiKeys}
+              onCheckedChange={onDiscordNotifyApiKeysChange}
+              className="shrink-0"
             />
           </div>
 

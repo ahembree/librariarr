@@ -55,10 +55,26 @@ export async function fetchCrossSystemData(itemIds: string[]): Promise<CrossSyst
     where: { mediaItemId: { in: itemIds } },
     select: { mediaItemId: true, ruleSet: { select: { name: true } } },
   });
-  for (const match of ruleMatches) {
+  // Detection stores a title matched on several servers ONCE, on one copy, and
+  // records the others in `copyIds` — the rule set matched those copies too, so
+  // "Matched By Rule Set" must say so for them as well. An array-overlap probe
+  // on the column's GIN index.
+  const requested = new Set(itemIds);
+  const copyMatches = (
+    await prisma.ruleMatch.findMany({
+      where: { copyIds: { hasSome: itemIds } },
+      select: { copyIds: true, ruleSet: { select: { name: true } } },
+    })
+  ).flatMap((m) =>
+    m.copyIds.filter((id) => requested.has(id)).map((id) => ({ mediaItemId: id, name: m.ruleSet.name })),
+  );
+  for (const match of [
+    ...ruleMatches.map((m) => ({ mediaItemId: m.mediaItemId, name: m.ruleSet.name })),
+    ...copyMatches,
+  ]) {
     const entry = result.get(match.mediaItemId);
-    if (entry && match.ruleSet.name && !entry.matchedRuleSets.includes(match.ruleSet.name)) {
-      entry.matchedRuleSets.push(match.ruleSet.name);
+    if (entry && match.name && !entry.matchedRuleSets.includes(match.name)) {
+      entry.matchedRuleSets.push(match.name);
     }
   }
 

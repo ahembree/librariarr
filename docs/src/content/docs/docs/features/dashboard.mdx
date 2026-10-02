@@ -19,7 +19,7 @@ A compact row of live operational tiles at the top of the page. Each tile links 
 |-|-|-|
 | Streams | Active playback session count; warns when a media server is unreachable | Tools → Streams |
 | Sync | Whether a sync is running, when the last one finished, and the next scheduled sync | Settings → Scheduling |
-| Integrations | How many Sonarr/Radarr/Lidarr/Seerr instances are reachable, naming any that are down | Settings → Integrations |
+| Integrations | How many Sonarr/Radarr/Lidarr/Seerr instances are reachable, naming any that are down. Re-checked every minute while the page is open | Settings → Integrations |
 | Next runs | Countdown to the next lifecycle detection and execution runs | Settings → Scheduling |
 | Update | Appears only when a newer Librariarr version is available | Settings → System |
 
@@ -27,7 +27,7 @@ Slow data sources (streams and integration health probe your servers) load in th
 
 ### Library Overview
 
-One tile per media type — Movies, Series, Music — plus a Library Size total. Each type tile shows the item count, a **12-month additions sparkline** (hover it to see the exact count for each month), and size/runtime details, and clicks through to that library's browse page. The Library Size tile charts total size over the same window instead — hovering shows what your library size was at each month.
+One tile per media type — Movies, Series, Music — plus a Library Size total. Each type tile shows the item count, a **12-month additions sparkline** (the last 12 calendar months up to this one, so months with no additions show as zero) (hover it to see the exact count for each month), and size/runtime details, and clicks through to that library's browse page. The Library Size tile charts total size over the same window instead — hovering shows what your library size was at each month.
 
 ### Lifecycle Pipeline
 
@@ -75,7 +75,7 @@ Distribution cards share one design: per-type proportion strips (or a donut with
 | Genre Breakdown | Genre distribution across your library |
 | Seerr Requests | Top requesters and watch follow-through |
 
-The **media type filter** above the grid scopes every chart to Movies, Series, or Music.
+The **media type filter** above the grid scopes every chart, custom cards included, to Movies, Series, or Music. A card's own type selector overrides it until the grid filter changes again. If the selected type leaves the library, the filter falls back to all types.
 
 #### Custom Cards
 
@@ -91,9 +91,9 @@ Custom cards let you create charts with any dimension and chart type. Click **Cu
 | Area | Filled area chart |
 | Radar | Spider/radar chart |
 | Treemap | Proportional rectangle grid |
-| Heatmap | Two-dimension correlation grid (requires two dimensions) |
+| Heatmap | Two-dimension correlation grid (requires two different dimensions; Audio Language and Subtitle Language cannot be crossed with each other). A language cell counts items, so a film with two English audio tracks counts once |
 | Count | Large single number |
-| Timeline | Time-series chart with zoom slider; pick a date field for the X-axis, an optional breakdown dimension for colored series, and a time interval (day, week, month, quarter, year) |
+| Timeline | Time-series chart with zoom slider; pick a date field for the X-axis, an optional breakdown dimension for colored series, and a time interval (day, week, month, quarter, year). Genre, Countries, Audio Language and Subtitle Language can't color a timeline, so they aren't offered |
 
 ##### Available Dimensions
 
@@ -107,15 +107,17 @@ Custom cards can visualize data across many dimensions, grouped by category:
 - **Dates** — Added Date, Last Played, Release Date
 - **Engagement** — Critic Rating, Audience Rating, Play Count
 
+If a card's data fails to load, the card says so instead of showing an empty chart or the data from before an edit.
+
 ## Server Filter
 
-When multiple servers are connected, the server selector in the page header scopes the library tiles, sparklines, recently added, and insight charts to a single server.
+When multiple servers are connected, the server selector in the page header scopes the library tiles, sparklines, recently added, and insight charts to a single server. The selection survives live refreshes. Disabled servers aren't offered, and if the selected server is deleted or disabled the dashboard falls back to all servers.
 
 ## Multi-Server Statistics
 
 When multiple servers are connected, the **Deduplicate stats across servers** setting in **Settings → General** controls how items are counted:
 
-- **On**: Media that exists on multiple servers is counted once
+- **On**: Media that exists on multiple servers is counted once. Artists and albums are counted by name, as the music library groups them, so an artist whose albums are spread across servers counts once
 - **Off**: Every copy on every server is counted separately
 
 <Aside>

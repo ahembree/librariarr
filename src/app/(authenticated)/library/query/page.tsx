@@ -75,6 +75,7 @@ import { useChipColors } from "@/components/chip-color-provider";
 import { useServers } from "@/hooks/use-servers";
 import { formatFileSize, formatDuration, formatBytesNum } from "@/lib/format";
 import { normalizeResolutionLabel } from "@/lib/resolution";
+import { formatEpisodeTitle, formatMediaItemTitle } from "@/lib/media/display-title";
 import { generateId } from "@/lib/utils";
 import { MEDIA_TYPE_BADGE_COLORS, mediaTypeLabel } from "@/lib/theme/media-type-colors";
 import { EmptyState } from "@/components/empty-state";
@@ -138,6 +139,15 @@ const FALLBACK_ICONS: Record<string, "movie" | "series" | "music"> = {
   SERIES: "series",
   MUSIC: "music",
 };
+
+/**
+ * How a result is named. A grouped series row already carries its show as its
+ * title; a single episode ("Include individual episodes") is its show and
+ * SxxExx, never its own title, which names no show.
+ */
+function resultTitle(item: QueryResultItem): string {
+  return item.matchedEpisodes != null ? item.title : formatMediaItemTitle(item);
+}
 
 function makeDefaultGroup(): QueryGroup {
   return {
@@ -312,7 +322,8 @@ export default function QueryPage() {
 
   // Seerr integration status
   const [seerrConnected, setSeerrConnected] = useState(false);
-  const [seerrInstanceId, setSeerrInstanceId] = useState<string | null>(null);
+  // Every enabled instance — the query engine merges them all, like lifecycle rules.
+  const [seerrInstanceIds, setSeerrInstanceIds] = useState<readonly string[]>([]);
 
   // Integration reachability (configured but currently online?)
   const { health: integrationsHealth } = useIntegrationsHealth();
@@ -326,10 +337,6 @@ export default function QueryPage() {
       (id): id is string => Boolean(id),
     ),
     [arrServerIds.radarr, arrServerIds.sonarr, arrServerIds.lidarr],
-  );
-  const seerrInstanceIds = useMemo<readonly string[]>(
-    () => (seerrInstanceId ? [seerrInstanceId] : []),
-    [seerrInstanceId],
   );
   const integrationsStatus = useMemo(
     () => deriveIntegrationsStatus(integrationsHealth, {
@@ -418,18 +425,25 @@ export default function QueryPage() {
     fetch("/api/integrations/seerr")
       .then((r) => r.ok ? r.json() : null)
       .then((data) => {
-        const instances = data?.instances ?? [];
+        // Only enabled instances answer Seerr criteria (the engine merges every
+        // enabled one); treating a disabled one as connected hid the
+        // "can't be evaluated" warning.
+        const instances = ((data?.instances ?? []) as Array<{ id: string; enabled?: boolean }>)
+          .filter((i) => i.enabled !== false);
         setSeerrConnected(instances.length > 0);
-        setSeerrInstanceId(instances.length > 0 ? instances[0].id : null);
+        setSeerrInstanceIds(instances.map((i) => i.id));
         if (instances.length > 0) {
-          fetch(`/api/integrations/seerr/${instances[0].id}/metadata`)
-            .then((r) => r.ok ? r.json() : null)
-            .then((metaData) => {
-              if (metaData?.users) {
-                setDistinctValues((prev) => ({ ...prev, seerrRequestedBy: metaData.users }));
-              }
-            })
-            .catch(() => {});
+          Promise.all(
+            instances.map((inst) =>
+              fetch(`/api/integrations/seerr/${inst.id}/metadata`)
+                .then((r) => (r.ok ? r.json() : null))
+                .then((metaData) => (metaData?.users ?? []) as string[])
+                .catch(() => [] as string[]),
+            ),
+          ).then((lists) => {
+            const users = [...new Set(lists.flat())].sort((a, b) => a.localeCompare(b));
+            setDistinctValues((prev) => ({ ...prev, seerrRequestedBy: users }));
+          });
         }
       })
       .catch(() => {});
@@ -545,9 +559,7 @@ export default function QueryPage() {
             </span>
           ) : item.parentTitle ? (
             <span className="text-xs text-muted-foreground truncate">
-              {item.parentTitle}
-              {item.seasonNumber != null && ` S${String(item.seasonNumber).padStart(2, "0")}`}
-              {item.episodeNumber != null && `E${String(item.episodeNumber).padStart(2, "0")}`}
+              {formatEpisodeTitle({ ...item, title: null })}
             </span>
           ) : null}
         </div>
@@ -763,9 +775,8 @@ export default function QueryPage() {
       sortOrder,
       includeEpisodes,
       ...(Object.keys(cleanedArrServerIds).length > 0 && { arrServerIds: cleanedArrServerIds }),
-      ...(seerrInstanceId && { seerrInstanceId }),
     };
-  }, [mediaTypes, selectedServerIds, groups, sortBy, sortOrder, includeEpisodes, arrServerIds, seerrInstanceId]);
+  }, [mediaTypes, selectedServerIds, groups, sortBy, sortOrder, includeEpisodes, arrServerIds]);
 
   // Inverse of buildDefinition: load a QueryDefinition into the builder. Shared
   // by saved-query loads, draft restore, and New, so the field list lives once.
@@ -1111,7 +1122,7 @@ export default function QueryPage() {
           checked={selectedIds.has(item.id)}
           onClick={(e) => e.stopPropagation()}
           onCheckedChange={() => toggleSelect(item.id)}
-          aria-label={`Select ${item.title}`}
+          aria-label={`Select ${resultTitle(item)}`}
         />
       ),
     };
@@ -1749,7 +1760,7 @@ export default function QueryPage() {
                   <MediaHoverPopover
                     imageUrl={`/api/media/${item.id}/image${item.type === "SERIES" || item.parentTitle ? "?type=parent" : ""}`}
                     data={{
-                      title: item.title,
+                      title: resultTitle(item),
                       year: item.year,
                       summary: item.summary,
                       contentRating: item.contentRating,
@@ -1823,13 +1834,13 @@ export default function QueryPage() {
                                   checked={selectedIds.has(item.id)}
                                   onClick={(e) => e.stopPropagation()}
                                   onCheckedChange={() => toggleSelect(item.id)}
-                                  aria-label={`Select ${item.title}`}
+                                  aria-label={`Select ${resultTitle(item)}`}
                                 />
                               </div>
                             <MediaCard
                               priority={virtualRow.index < PRIORITY_ROWS}
                               imageUrl={`/api/media/${item.id}/image${item.type === "SERIES" || item.parentTitle ? "?type=parent" : ""}`}
-                              title={item.title}
+                              title={resultTitle(item)}
                               fallbackIcon={FALLBACK_ICONS[item.type] ?? "movie"}
                               onClick={() => navigateToItem(item)}
                               servers={servers.length > 1 ? item.servers : undefined}
@@ -1864,7 +1875,7 @@ export default function QueryPage() {
                               hoverContent={
                                 <MediaHoverPopover
                                   data={{
-                                    title: item.title,
+                                    title: resultTitle(item),
                                     year: item.year,
                                     summary: item.summary,
                                     contentRating: item.contentRating,

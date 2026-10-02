@@ -14,7 +14,7 @@ const stats = (entries: Array<[string, Partial<GroupMemberStats>]>) =>
   new Map<string, GroupMemberStats>(
     entries.map(([id, s]) => [
       id,
-      { fileSize: BigInt(0), playCount: 0, lastPlayedAt: null, ...s },
+      { fileSize: BigInt(0), playCount: 0, lastPlayedAt: null, title: "", seasonNumber: null, episodeNumber: null, ...s },
     ]),
   );
 
@@ -98,10 +98,12 @@ describe("loadGroupMemberStats", () => {
 
   it("coalesces a null fileSize to zero so the sum stays a BigInt", async () => {
     mockFindMany.mockResolvedValue([
-      { id: "a", fileSize: null, playCount: 3, lastPlayedAt: null },
+      { id: "a", fileSize: null, playCount: 3, lastPlayedAt: null, title: "Pilot", seasonNumber: 1, episodeNumber: 1 },
     ]);
     const result = await loadGroupMemberStats(["a"]);
-    expect(result.get("a")).toEqual({ fileSize: BigInt(0), playCount: 3, lastPlayedAt: null });
+    expect(result.get("a")).toEqual({
+      fileSize: BigInt(0), playCount: 3, lastPlayedAt: null, title: "Pilot", seasonNumber: 1, episodeNumber: 1,
+    });
   });
 
   it("omits ids with no row rather than failing the request", async () => {

@@ -124,7 +124,37 @@ describe("taskList", () => {
       { serverId: "server-1" },
       helpers,
     );
-    expect(syncWatchHistory).toHaveBeenCalledWith("server-1");
+    // No flag (the by-type sync's deferred refresh): the full replace.
+    expect(syncWatchHistory).toHaveBeenCalledWith("server-1", undefined, undefined, { incremental: false });
+    expect(invalidateMediaCaches).toHaveBeenCalledOnce();
+  });
+
+  it("watch-history task appends incrementally when the realtime manager asks, and keeps caches when nothing landed", async () => {
+    syncWatchHistory.mockResolvedValue({ count: 0 });
+    await (taskList[TASK_SYNC_WATCH_HISTORY] as (p: unknown, h: unknown) => Promise<void>)(
+      { serverId: "server-1", incremental: true },
+      helpers,
+    );
+    expect(syncWatchHistory).toHaveBeenCalledWith("server-1", undefined, undefined, { incremental: true });
+    // Nothing appended means every cached listing is still right; this fires
+    // per finished playback, so dropping them here would be pure churn.
+    expect(invalidateMediaCaches).not.toHaveBeenCalled();
+
+    syncWatchHistory.mockResolvedValue({ count: 3 });
+    await (taskList[TASK_SYNC_WATCH_HISTORY] as (p: unknown, h: unknown) => Promise<void>)(
+      { serverId: "server-1", incremental: true },
+      helpers,
+    );
+    expect(invalidateMediaCaches).toHaveBeenCalledOnce();
+  });
+
+  it("watch-history task still drops caches after a full replace that stored nothing", async () => {
+    syncWatchHistory.mockResolvedValue({ count: 0 });
+    await (taskList[TASK_SYNC_WATCH_HISTORY] as (p: unknown, h: unknown) => Promise<void>)(
+      { serverId: "server-1" },
+      helpers,
+    );
+    // A full replace may have removed rows even when it inserted none.
     expect(invalidateMediaCaches).toHaveBeenCalledOnce();
   });
 
@@ -175,6 +205,19 @@ describe("taskList", () => {
     );
   });
 
+  it("sync task does not count a PENDING row as a running sync", async () => {
+    // The sync route creates this job's own row as PENDING at enqueue time;
+    // counting it made every manually requested sync skip itself.
+    await (taskList[TASK_SYNC_SERVER] as (p: unknown, h: unknown) => Promise<void>)(
+      { serverId: "server-1", syncJobId: "route-row" },
+      helpers,
+    );
+    expect(syncJob.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { mediaServerId: "server-1", status: "RUNNING" } }),
+    );
+    expect(syncMediaServer).toHaveBeenCalledWith("server-1", undefined, { syncJobId: "route-row" });
+  });
+
   it("sync task skips when a sync is already running", async () => {
     syncJob.findFirst.mockResolvedValue({ id: "running" });
     await (taskList[TASK_SYNC_SERVER] as (p: unknown, h: unknown) => Promise<void>)(
@@ -189,6 +232,14 @@ describe("taskList", () => {
     await (taskList[TASK_LIFECYCLE_EXECUTION] as (p: unknown, h: unknown) => Promise<void>)({ userId: "u1" }, helpers);
     expect(processLifecycleRules).toHaveBeenCalledWith("u1");
     expect(executeLifecycleActions).toHaveBeenCalledWith("u1");
+  });
+
+  it("an execution run queued through an API key is held to the API's limits", async () => {
+    await (taskList[TASK_LIFECYCLE_EXECUTION] as (p: unknown, h: unknown) => Promise<void>)(
+      { userId: "u1", viaApiKey: "n8n" },
+      helpers,
+    );
+    expect(executeLifecycleActions).toHaveBeenCalledWith("u1", { viaApiKey: "n8n" });
   });
 
   it("archive and cleanup tasks delegate to their helpers", async () => {

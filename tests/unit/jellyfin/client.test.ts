@@ -179,6 +179,38 @@ describe("JellyfinClient", () => {
       expect(sessions[0].transcoding?.audioDecision).toBe("transcode");
     });
 
+    it("carries an episode's season and episode numbers, so it can be named by show and SxxExx", async () => {
+      const client = makeClientWithSessions([
+        {
+          Id: "sess-ep",
+          UserId: "u1",
+          UserName: "bob",
+          Client: "Jellyfin Web",
+          DeviceName: "Chrome",
+          NowPlayingItem: {
+            Id: "ep1",
+            Name: "Pilot",
+            Type: "Episode",
+            SeriesName: "Breaking Bad",
+            SeasonName: "Season 1",
+            ParentIndexNumber: 1,
+            IndexNumber: 1,
+          },
+          PlayState: { IsPaused: false, CanSeek: true },
+        },
+      ]);
+
+      const [session] = await client.getSessions();
+
+      expect(session).toMatchObject({
+        type: "episode",
+        title: "Pilot",
+        grandparentTitle: "Breaking Bad",
+        seasonNumber: 1,
+        episodeNumber: 1,
+      });
+    });
+
     it("falls back to the media stream dimensions when a server does send them", async () => {
       const client = makeClientWithSessions([
         {
@@ -392,6 +424,36 @@ describe("JellyfinClient", () => {
 
       expect(post).toHaveBeenCalledTimes(1);
       expect(post).toHaveBeenCalledWith("/Sessions/sess1/Playing/Stop");
+    });
+
+    // These requests carry the admin token. A raw `../System/Shutdown?x=` would
+    // resolve to POST /System/Shutdown once the URL parser removes the `..`.
+    it("keeps a hostile session id inside one path segment", async () => {
+      const post = axiosClient().post;
+      post.mockResolvedValue({ data: {} });
+      const client = new JellyfinClient("http://jellyfin:8096", "jf-token");
+
+      await client.terminateSession("../System/Shutdown?x=", "Bye");
+
+      const paths = post.mock.calls.map(([path]) => path as string);
+      expect(paths).toEqual([
+        "/Sessions/..%2FSystem%2FShutdown%3Fx%3D/Message",
+        "/Sessions/..%2FSystem%2FShutdown%3Fx%3D/Playing/Stop",
+      ]);
+      for (const path of paths) {
+        const resolved = new URL(path, "http://jellyfin:8096");
+        expect(resolved.pathname.startsWith("/Sessions/")).toBe(true);
+        expect(resolved.search).toBe("");
+      }
+    });
+
+    it.each(["..", ".", ""])("refuses the dot segment or empty id %j without calling the server", async (id) => {
+      const post = axiosClient().post;
+      post.mockResolvedValue({ data: {} });
+      const client = new JellyfinClient("http://jellyfin:8096", "jf-token");
+
+      await expect(client.terminateSession(id, "")).rejects.toThrow("Invalid session id");
+      expect(post).not.toHaveBeenCalled();
     });
   });
 

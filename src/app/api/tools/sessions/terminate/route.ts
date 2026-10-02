@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { createMediaServerClient } from "@/lib/media-server/factory";
-import { apiLogger } from "@/lib/logger";
+import { getRememberedSession, rememberSession } from "@/lib/media-server/session-first-seen";
+import { logTermination, terminationFailureMessage } from "@/lib/media-server/termination-log";
+import type { MediaSession } from "@/lib/media-server/types";
 import { validateRequest, terminateSessionSchema } from "@/lib/validation";
 import { sanitizeErrorDetail } from "@/lib/api/sanitize";
 
@@ -44,23 +46,45 @@ export async function POST(request: NextRequest) {
         skipTlsVerify: server.tlsSkipVerify,
       });
 
-      // If no explicit IDs were given, terminate all sessions on this server.
-      let idsToTerminate = sessionIds;
-      if (!idsToTerminate) {
-        const sessions = await client.getSessions();
-        idsToTerminate = sessions.map((s) => s.sessionId);
+      // Labels come from what the listing routes last saw, not from a fetch
+      // here: a network error on that fetch opens the shared circuit breaker
+      // (see session-first-seen.ts), and the termination right after it is then
+      // refused without reaching the server. A log label must never cost the
+      // operator the ability to stop a stream.
+      let idsToTerminate: string[];
+      const byId = new Map<string, MediaSession>();
+
+      if (sessionIds) {
+        idsToTerminate = sessionIds;
+      } else {
+        // Terminating everything needs the listing anyway, so it also supplies
+        // the labels first-hand.
+        const activeSessions = await client.getSessions();
+        for (const s of activeSessions) {
+          rememberSession(server.id, s);
+          byId.set(s.sessionId, s);
+        }
+        idsToTerminate = activeSessions.map((s) => s.sessionId);
       }
-      // Drop empty ids — terminating "" is a no-op that some servers answer
-      // 400 to, which would surface as a spurious error.
+
+      // Terminating "" is a no-op some servers answer 400 to.
       idsToTerminate = idsToTerminate.filter((id) => id);
 
       for (const sid of idsToTerminate) {
+        const termination = {
+          serverId: server.id,
+          serverName: server.name,
+          sessionId: sid,
+          trigger: "manual",
+          reason: message,
+          session: byId.get(sid) ?? getRememberedSession(server.id, sid),
+        };
         try {
           await client.terminateSession(sid, message);
           terminated++;
-          apiLogger.info("Tools", `Terminated session ${sid} on "${server.name}"`, { message });
+          logTermination(termination);
         } catch (error) {
-          errors.push(`Failed to terminate session ${sid} on "${server.name}": ${sanitizeErrorDetail(String(error))}`);
+          errors.push(terminationFailureMessage(termination, sanitizeErrorDetail(String(error))));
         }
       }
     } catch (error) {

@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
-import { runDetection, syncCollectionsAfterDetection } from "@/lib/lifecycle/detect-matches";
+import {
+  runDetection,
+  syncCollectionsAfterDetection,
+  type DetectionFailure,
+} from "@/lib/lifecycle/detect-matches";
+import { sanitizeErrorDetail } from "@/lib/api/sanitize";
 import { scheduleActionsForRuleSet } from "@/lib/lifecycle/processor";
 import { eventBus } from "@/lib/events/event-bus";
 import { validateRequest, ruleRunSchema } from "@/lib/validation";
@@ -96,7 +101,13 @@ export async function POST(request: NextRequest) {
   const { data, error } = await validateRequest(request, ruleRunSchema);
   if (error) return error;
 
-  const results = await runDetection(session.userId!, data.ruleSetId, data.fullReEval ?? false);
+  // Rule sets that threw mid-run (an unreachable Arr/Seerr instance). They are
+  // missing from the results like a skipped one — their matches are preserved —
+  // but the evaluability re-derivation below cannot explain them, since the
+  // instance IS configured; without this "Re-evaluate All" answered as if every
+  // rule set had been evaluated.
+  const failures: DetectionFailure[] = [];
+  const results = await runDetection(session.userId!, data.ruleSetId, data.fullReEval ?? false, failures);
 
   // Immediately schedule/cancel actions instead of waiting for next scheduler cycle
   if (data.processActions) {
@@ -150,7 +161,15 @@ export async function POST(request: NextRequest) {
   const evaluatedIds = new Set(
     results.map((r) => r.ruleSet?.id).filter((id): id is string => !!id),
   );
-  const skipped = await explainSkippedRuleSets(session.userId!, data.ruleSetId, evaluatedIds);
+  for (const f of failures) evaluatedIds.add(f.ruleSetId);
+  const skipped = [
+    ...failures.map((f) => ({
+      ruleSetId: f.ruleSetId,
+      name: f.name,
+      reason: sanitizeErrorDetail(f.reason) ?? "Detection failed.",
+    })),
+    ...(await explainSkippedRuleSets(session.userId!, data.ruleSetId, evaluatedIds)),
+  ];
 
   return NextResponse.json({ ruleMatches: results, skipped });
 }

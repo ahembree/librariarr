@@ -45,7 +45,8 @@ vi.mock("@/lib/arr/lidarr-client", () => ({
   }),
 }));
 
-vi.mock("@/lib/seerr/seerr-client", () => ({
+vi.mock("@/lib/seerr/seerr-client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/seerr/seerr-client")>()),
   SeerrClient: vi.fn().mockImplementation(function () {
     return { testConnection: mockSeerrTestConnection };
   }),
@@ -148,6 +149,21 @@ describe("GET /api/integrations/health", () => {
       reachable: false,
       error: "Connection timeout",
     });
+  });
+
+  it("scrubs private addresses and internal paths from the error text", async () => {
+    const user = await createTestUser();
+    await createTestRadarrInstance(user.id, { name: "My Radarr" });
+    await createTestSonarrInstance(user.id, { name: "My Sonarr" });
+    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+
+    mockRadarrTestConnection.mockResolvedValue({ ok: false, error: "connect ECONNREFUSED 192.168.1.20:7878" });
+    mockSonarrTestConnection.mockRejectedValue(new Error("boom at /app/src/lib/arr/sonarr-client.ts"));
+
+    const data = await getHealth();
+
+    expect(data.radarr.instances[0].error).toBe("connect ECONNREFUSED [internal]:7878");
+    expect(data.sonarr.instances[0].error).toBe("boom at [internal]");
   });
 
   it("arrAnyReachable=true when at least one of sonarr/radarr/lidarr is reachable", async () => {

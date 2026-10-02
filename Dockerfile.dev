@@ -4,7 +4,9 @@ WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 
 # su-exec for dropping privileges to the host user's UID/GID
-RUN corepack enable && apk add --no-cache su-exec
+# pnpm 12 ships as a native binary that corepack cannot launch, so install it
+# directly. Keep in step with "packageManager" in package.json.
+RUN npm install -g pnpm@12.8.1 && apk add --no-cache su-exec
 
 # Install dependencies first (cached layer)
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./

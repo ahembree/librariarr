@@ -302,6 +302,146 @@ describe("PUT /api/settings/sso", () => {
     expect(body.ssoEnabled).toBe(false);
   });
 
+  // With local login on, SSO replacing the local form is what keeps the
+  // password powerless; turning SSO off gives it back. A stale cookie that
+  // knows the password must not be able to do that and then use it.
+  it("asks a stale session to confirm before turning SSO off gives the password its power back", async () => {
+    const user = await createTestUser({ plexId: "p1" });
+    await prisma.user.update({
+      where: { id: user.id },
+      data: {
+        ssoSubject: "abc",
+        ssoIssuer: "https://idp.example.com",
+        ssoEnabled: true,
+        passwordHash: "h",
+        localUsername: "alice",
+      },
+    });
+    await prisma.appSettings.create({
+      data: {
+        userId: user.id,
+        ssoMode: "OIDC",
+        ssoEnabled: true,
+        oidcIssuer: "https://idp.example.com",
+        oidcClientId: "client",
+        plexLoginEnabled: true,
+        localAuthEnabled: true,
+      },
+    });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() - 16 * 60 * 1000 });
+
+    const refused = await expectJson<{ code: string; methods: string[] }>(
+      await callRoute(PUT, { method: "PUT", body: { ssoEnabled: false } }),
+      403,
+    );
+    expect(refused.code).toBe("reauth_required");
+    expect(refused.methods).not.toContain("password");
+    expect((await prisma.appSettings.findFirstOrThrow()).ssoEnabled).toBe(true);
+
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
+    const body = await expectJson<{ ssoEnabled: boolean }>(
+      await callRoute(PUT, { method: "PUT", body: { ssoEnabled: false } }),
+      200,
+    );
+    expect(body.ssoEnabled).toBe(false);
+  });
+
+  // With local login off the password stays powerless whatever SSO does, so
+  // a stale session turning SSO off gives nothing back: no confirmation.
+  it("lets a stale session with a password turn SSO off while local login is off", async () => {
+    const user = await createTestUser({ plexId: "p1" });
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { ssoSubject: "abc", ssoIssuer: "https://idp.example.com", ssoEnabled: true, passwordHash: "h" },
+    });
+    await prisma.appSettings.create({
+      data: {
+        userId: user.id,
+        ssoMode: "OIDC",
+        ssoEnabled: true,
+        oidcIssuer: "https://idp.example.com",
+        oidcClientId: "client",
+        plexLoginEnabled: true,
+        localAuthEnabled: false,
+      },
+    });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() - 16 * 60 * 1000 });
+
+    const body = await expectJson<{ ssoEnabled: boolean }>(
+      await callRoute(PUT, { method: "PUT", body: { ssoEnabled: false } }),
+      200,
+    );
+    expect(body.ssoEnabled).toBe(false);
+  });
+
+  // ── The admin's link must survive a save while SSO stays on ─────────────
+  //
+  // Another issuer, or the other mode, would orphan it: SSO login refuses the
+  // admin as not_linked, the password is off because SSO replaces it, and
+  // nothing is left to confirm "it's you" with to turn SSO off again.
+  describe("while SSO stays on", () => {
+    async function seedEnabled(ssoIssuer: string | null = "https://idp.example.com") {
+      const user = await createTestUser({ plexId: "p1" });
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { ssoSubject: "abc", ssoIssuer, ssoEnabled: true, passwordHash: "h" },
+      });
+      await prisma.appSettings.create({
+        data: {
+          userId: user.id,
+          ssoMode: "OIDC",
+          ssoEnabled: true,
+          oidcIssuer: "https://idp.example.com",
+          oidcClientId: "client",
+          plexLoginEnabled: false,
+          localAuthEnabled: true,
+        },
+      });
+      setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
+      return user;
+    }
+
+    it("refuses an issuer the admin's identity is not linked under", async () => {
+      await seedEnabled();
+      const body = await expectJson<{ error: string }>(
+        await callRoute(PUT, { method: "PUT", body: { oidcIssuer: "https://other.example.com" } }),
+        400,
+      );
+      expect(body.error).toMatch(/linked under a different issuer/);
+      expect((await prisma.appSettings.findFirstOrThrow()).oidcIssuer).toBe("https://idp.example.com");
+    });
+
+    it("refuses switching to forward-auth", async () => {
+      await seedEnabled();
+      await expectJson(await callRoute(PUT, { method: "PUT", body: { ssoMode: "FORWARD_AUTH" } }), 400);
+      expect((await prisma.appSettings.findFirstOrThrow()).ssoMode).toBe("OIDC");
+    });
+
+    it("refuses turning SSO on when the link is under another issuer", async () => {
+      const user = await seedEnabled("https://old.example.com");
+      await prisma.appSettings.update({ where: { userId: user.id }, data: { ssoEnabled: false } });
+      await expectJson(await callRoute(PUT, { method: "PUT", body: { ssoEnabled: true } }), 400);
+      expect((await prisma.appSettings.findFirstOrThrow()).ssoEnabled).toBe(false);
+    });
+
+    it("accepts the same issuer written with a trailing slash, and a link from before issuers were stored", async () => {
+      await seedEnabled();
+      await expectJson(await callRoute(PUT, { method: "PUT", body: { oidcIssuer: "https://idp.example.com/" } }), 200);
+
+      await cleanDatabase();
+      await seedEnabled(null);
+      await expectJson(await callRoute(PUT, { method: "PUT", body: { oidcIssuer: "https://other.example.com" } }), 200);
+    });
+
+    // Whitespace saves as null, so a blank client ID would store SSO as on
+    // but unusable.
+    it("refuses a blank client ID", async () => {
+      await seedEnabled();
+      await expectJson(await callRoute(PUT, { method: "PUT", body: { oidcClientId: "   " } }), 400);
+      expect((await prisma.appSettings.findFirstOrThrow()).oidcClientId).toBe("client");
+    });
+  });
+
   it("refuses to disable SSO when Plex is linked but plexLoginEnabled is false", async () => {
     const user = await createTestUser({ plexId: "p1" });
     await prisma.user.update({

@@ -15,8 +15,9 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { LayoutGrid, TableProperties, List, Clock, HardDrive } from "lucide-react";
 import { formatFileSize, formatDuration } from "@/lib/format";
+import { formatEpisodeCode } from "@/lib/media/display-title";
 import { useCardSize } from "@/hooks/use-card-size";
-import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
+import { useCardDisplay, SEASON_EPISODE_TOGGLES } from "@/hooks/use-card-display";
 import { CardSizeControl } from "@/components/card-size-control";
 import { CardDisplayControl } from "@/components/card-display-control";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
@@ -240,7 +241,7 @@ export default function SeasonDetailPage() {
             {viewMode === "cards" && (
               <>
                 <CardSizeControl size={size} onChange={setSize} />
-                <CardDisplayControl prefs={prefs} config={TOGGLE_CONFIGS.SERIES_EPISODES} onToggle={setVisible} />
+                <CardDisplayControl prefs={prefs} config={SEASON_EPISODE_TOGGLES} onToggle={setVisible} />
               </>
             )}
           </div>
@@ -288,7 +289,7 @@ export default function SeasonDetailPage() {
                   key={ep.id}
                   imageUrl={`/api/media/${ep.id}/image`}
                   title={ep.episodeNumber != null
-                    ? `E${String(ep.episodeNumber).padStart(2, "0")} — ${ep.title}`
+                    ? `${formatEpisodeCode(null, ep.episodeNumber)} — ${ep.title}`
                     : ep.title}
                   aspectRatio="landscape"
                   fallbackIcon="series"
@@ -321,7 +322,7 @@ export default function SeasonDetailPage() {
                   metadata={
                     <MetadataLine stacked>
                       {show("metadata", "episodeLabel") && ep.seasonNumber != null && ep.episodeNumber != null && (
-                        <MetadataItem icon={<List />}>S{String(ep.seasonNumber).padStart(2, "0")}E{String(ep.episodeNumber).padStart(2, "0")}</MetadataItem>
+                        <MetadataItem icon={<List />}>{formatEpisodeCode(ep.seasonNumber, ep.episodeNumber)}</MetadataItem>
                       )}
                       {show("metadata", "duration") && formatDuration(ep.duration) && <MetadataItem icon={<Clock />}>{formatDuration(ep.duration)}</MetadataItem>}
                       {show("metadata", "fileSize") && formatFileSize(ep.fileSize) && <MetadataItem icon={<HardDrive />}>{formatFileSize(ep.fileSize)}</MetadataItem>}

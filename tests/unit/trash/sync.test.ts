@@ -113,6 +113,27 @@ describe("runTrashSync", () => {
     expect(clientMock.updateQualityDefinitions).not.toHaveBeenCalled();
   });
 
+  it("reads the instance once per run even when that read fails", async () => {
+    // An unreachable instance costs the client's whole retry budget per read;
+    // every target that needs the same data must fail on the first failure
+    // rather than asking again.
+    CATALOG.customFormats.push({ ...CATALOG.customFormats[0], trash_id: "cf2", name: "NF" });
+    try {
+      clientMock.getCustomFormats.mockRejectedValue(new Error("Radarr HTTP 503"));
+      const report = await runTrashSync("u1", INST, {
+        dryRun: true,
+        items: [
+          { resourceType: "CUSTOM_FORMAT", trashId: "cf1" },
+          { resourceType: "CUSTOM_FORMAT", trashId: "cf2" },
+        ],
+      });
+      expect(report.items.map((i) => i.action)).toEqual(["ERROR", "ERROR"]);
+      expect(clientMock.getCustomFormats).toHaveBeenCalledTimes(1);
+    } finally {
+      CATALOG.customFormats.pop();
+    }
+  });
+
   it("processes quality definitions before custom formats", async () => {
     prismaMock.trashManagedResource.findMany.mockResolvedValue([
       { id: "cfRow", resourceType: "CUSTOM_FORMAT", trashId: "cf1", name: "AMZN", selection: null },

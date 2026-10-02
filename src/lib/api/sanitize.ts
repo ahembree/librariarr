@@ -65,5 +65,9 @@ export function sanitizeErrorDetail(
     /(?:::1\b|\b(?:f[cd][0-9a-f]{2}|fe[89ab][0-9a-f])(?:::?[0-9a-f]{1,4})+\b)/gi,
     "[internal]"
   );
+  // A plex.direct hostname is the server's IP address with the dots replaced
+  // by dashes (`192-168-1-5.<hash>.plex.direct`), so it carries the address
+  // the IPv4 rule above cannot see — and for a remote server, the PUBLIC one.
+  cleaned = cleaned.replace(/\b(?:[\w-]+\.)+plex\.direct\b/gi, "[internal]");
   return cleaned;
 }

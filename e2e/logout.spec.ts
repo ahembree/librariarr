@@ -2,9 +2,11 @@ import { test, expect } from "@playwright/test";
 import { ADMIN } from "./constants";
 
 /**
- * Logout returns to the login page. Each test gets a fresh context from the
- * saved storage state, so logging out here does not affect other specs.
- * If local auth is enabled, we also verify logging back in.
+ * Logout returns to the login page. Logging out revokes EVERY session for the
+ * admin (it bumps `sessionVersion`), including the saved `admin.json` state
+ * the other specs reuse — which is why this spec lives in its own Playwright
+ * project (`chromium-logout`) that depends on all the others and so runs
+ * last. If local auth is enabled, we also verify logging back in.
  */
 test("logout returns to the login page and local login works", async ({ page }) => {
   await page.goto("/");

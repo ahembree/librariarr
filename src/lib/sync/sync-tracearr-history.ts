@@ -20,6 +20,12 @@ import {
 } from "@/lib/tracearr/tracearr-client";
 import { invalidateWatchHistoryEvidence } from "@/lib/media/watch-evidence";
 import { eventBus } from "@/lib/events/event-bus";
+import {
+  beginTracearrImport,
+  endTracearrImport,
+  recordTracearrImportPage,
+  type TracearrImportHandle,
+} from "@/lib/sync/tracearr-import-activity";
 
 /**
  * Incremental import of Tracearr play history into `WatchHistory`.
@@ -450,6 +456,17 @@ export interface TracearrImportOptions {
    * one, so a slice always ends on a committed page boundary.
    */
   deadlineMs?: number;
+  /**
+   * End the walk early, at the next page boundary, once this returns true.
+   *
+   * The background backfill passes one so a sync the user is waiting on does
+   * not sit behind the rest of a 5-minute slice: `MAIN_QUEUE` is serial, and
+   * the job cannot be pre-empted from outside. Checked exactly where
+   * `deadlineMs` is — never mid-page, and never before this walk has fetched
+   * one page — so a yield is the same clean, resumable stop as a spent slice
+   * and cannot turn into a slice that makes no progress.
+   */
+  yieldTo?: () => boolean;
 }
 
 export interface TracearrImportResult {
@@ -497,7 +514,25 @@ export async function syncTracearrHistory(
   serverId: string,
   options: TracearrImportOptions = {},
 ): Promise<TracearrImportResult> {
-  const { onProgress, signal, passes = "both", deadlineMs } = options;
+  const activity: { handle?: TracearrImportHandle } = {};
+  try {
+    return await runTracearrImport(serverId, options, activity);
+  } finally {
+    // A normal exit clears its activity entry itself, just before its final
+    // progress event. One still registered here was left by a throw, and
+    // Settings would otherwise report an import running that is not — until a
+    // restart — so clear it and tell the page.
+    const orphaned = activity.handle && endTracearrImport(activity.handle);
+    if (orphaned) emitImportProgress(orphaned.userId, serverId, true);
+  }
+}
+
+async function runTracearrImport(
+  serverId: string,
+  options: TracearrImportOptions,
+  activity: { handle?: TracearrImportHandle },
+): Promise<TracearrImportResult> {
+  const { onProgress, signal, passes = "both", deadlineMs, yieldTo } = options;
   const server = await prisma.mediaServer.findFirst({
     where: { id: serverId },
     select: {
@@ -576,6 +611,11 @@ export async function syncTracearrHistory(
   // Captured for the same reason as `serverName`: read inside the `walk`
   // closure, which TypeScript's control-flow analysis cannot see through.
   const ownerUserId = server.userId;
+  // From here the run is a real import, so Settings shows it as running. Forced
+  // so the card appears now, not a page and a throttle window later.
+  const importRun = beginTracearrImport(serverId, ownerUserId);
+  activity.handle = importRun;
+  emitImportProgress(ownerUserId, serverId, true);
   // Bound once so the paging closure keeps the narrowed, non-null value.
   const mappedServerId = tracearrServerId;
   const window = await resolveImportWindow(
@@ -698,6 +738,12 @@ export async function syncTracearrHistory(
     let cursor: string | undefined;
     /** Pages fetched by THIS walk — see the deadline guard below. */
     let pagesThisWalk = 0;
+    // Per WALK, like `seenCursors`: the passes travel in opposite directions,
+    // and a backfill whose first fetch failed used to inherit the FORWARD pass's
+    // oldest record (~`MAX - 1h`) as its resume cursor, so the next slice
+    // re-walked the whole already-imported archive. `sawAnyRecord` stays
+    // run-scoped — a forward page answers "does this mapping have history" too.
+    walked.oldestSeenAt = null;
     // Per-walk, NOT per-run. The two passes are independent walks whose windows
     // can overlap — `until = MIN(watchedAt)` sits inside `since = MAX - 1h`
     // whenever the stored history spans less than an hour, which is exactly the
@@ -733,6 +779,16 @@ export async function syncTracearrHistory(
             `Tracearr ${pass} pass for "${serverName}" reached its time slice ` +
               `after ${pages} page(s) — ${counters.inserted + counters.updated} ` +
               `row(s) kept; the next run continues from here`,
+          );
+          return "stopped";
+        }
+
+        if (yieldTo !== undefined && pagesThisWalk > 0 && yieldTo()) {
+          logger.info(
+            "WatchHistory",
+            `Tracearr ${pass} pass for "${serverName}" paused after ${pages} page(s) so a ` +
+              `requested sync can run — ${counters.inserted + counters.updated} row(s) kept; ` +
+              `the next run continues from here`,
           );
           return "stopped";
         }
@@ -851,11 +907,6 @@ export async function syncTracearrHistory(
           counters.vanished += written.vanished;
         }
 
-        // Tell any watching client the readout moved. Emitted AFTER the page
-        // commits, so a listener that refetches can never read a figure this
-        // run has not durably written.
-        emitImportProgress(ownerUserId, serverId);
-
         // The page is committed, so its position is now safe to keep. Doing this
         // after the writes is what makes a mid-page failure re-walked rather
         // than silently skipped.
@@ -865,6 +916,18 @@ export async function syncTracearrHistory(
         ) {
           walked.oldestSeenAt = pageOldest;
         }
+
+        // Tell any watching client the readout moved. Emitted AFTER the page
+        // commits, so a listener that refetches can never read a figure this
+        // run has not durably written — and after the live counters are
+        // updated, for the same reason.
+        recordTracearrImportPage(importRun, {
+          pass,
+          pages,
+          imported: counters.inserted + counters.updated,
+          oldestReached: walked.oldestSeenAt,
+        });
+        emitImportProgress(ownerUserId, serverId);
 
         // Report per page, as the rows land — this is the slow path the whole
         // progress feature exists for, and a first import runs for minutes.
@@ -932,6 +995,14 @@ export async function syncTracearrHistory(
   // the pass below rebuild from scratch rather than importing nothing forever.
   let backfillComplete = server.tracearrBackfillComplete && window.hasRows;
   let backfillOutcome: WalkOutcome | undefined;
+  /**
+   * Whether the completion write below already re-established the evidence
+   * marker, so the release at the end of the run doesn't repeat it. That write
+   * carries `watchHistorySyncedAt` in the SAME guarded statement as
+   * `tracearrBackfillComplete` on purpose — one must never land without the
+   * other — so it stays the writer on the run that finishes the archive.
+   */
+  let markerWritten = false;
   const backfillDue = !backfillComplete && wantsBackfill;
 
   // The account map is a PRECONDITION of the archive walk, not a nicety.
@@ -1059,6 +1130,7 @@ export async function syncTracearrHistory(
     if (finished) backfillComplete = true;
 
     if (cursorAdvanced || finished) {
+      markerWritten = finished;
       await persistMappedState(serverId, mappedServerId, serverName, {
         ...(cursorAdvanced ? { tracearrBackfillCursorAt: reached } : {}),
         ...(finished
@@ -1081,6 +1153,41 @@ export async function syncTracearrHistory(
           `only fetch new plays`,
       );
     }
+  }
+
+  // RELEASE the evidence marker — the counterpart to the withdrawal at the top
+  // of this function, and the half that was missing.
+  //
+  // The two were not symmetric, and the asymmetry was an outage. The ONLY place
+  // the Tracearr path ever wrote `watchHistorySyncedAt` is the `finished`
+  // branch above, which fires exactly once in a server's life: the run that
+  // walks the archive to its far end. Every run after that is forward-only
+  // (`backfillDue` is false once the flag is set), so a single forward pass
+  // that could not load the account map withdrew the marker with nothing left
+  // in the system able to put it back. `checkWatchHistoryCompleteness` then
+  // refused every play-activity rule set, preview, test-item and query action
+  // scoped to that server — permanently — while Settings → Servers went on
+  // reporting the import as complete, because it reads
+  // `tracearrBackfillComplete`, which is still true. The user is told to wait
+  // for an import that has already finished. A guard that never releases is its
+  // own outage.
+  //
+  // Conditioned on exactly what the withdrawal is conditioned on — a USABLE
+  // account map, so the rows carry the media server's own account names and
+  // `watchedByUser` matches the vocabulary it was written against — plus the
+  // archive having been walked, which is the other half of what "established"
+  // means for a Tracearr-sourced server. A forward pass that stopped early does
+  // not block it: the marker describes the stored archive, not this run's page
+  // fetches, and a partial forward pass leaves that archive exactly as complete
+  // as it was.
+  //
+  // Written on every healthy run rather than only when currently withdrawn, so
+  // the timestamp keeps meaning what the column says: when a sync last
+  // established what was played here.
+  if (!markerWritten && backfillComplete && accountNames && accountNames.size > 0) {
+    await persistMappedState(serverId, mappedServerId, serverName, {
+      watchHistorySyncedAt: new Date(),
+    });
   }
 
   const total = counters.inserted + counters.updated;
@@ -1136,7 +1243,9 @@ export async function syncTracearrHistory(
   // and this is the one that carries the terminal state — the final count, and
   // whether the backfill just finished. A readout stuck one page short of done
   // is exactly the "it never updates" complaint, arriving at the end instead of
-  // throughout.
+  // throughout. The activity entry is cleared first, so the refetch this
+  // triggers no longer reports the run as live.
+  endTracearrImport(importRun);
   emitImportProgress(ownerUserId, serverId, true);
 
   logger.info(

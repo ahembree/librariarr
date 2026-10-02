@@ -1,4 +1,10 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
+import {
+  beginTracearrImport,
+  endTracearrImport,
+  getTracearrImportActivity,
+  recordTracearrImportPage,
+} from "@/lib/sync/tracearr-import-activity";
 import type { TracearrHistoryRecord } from "@/lib/tracearr/tracearr-client";
 import type { WatchHistoryProgress } from "@/lib/sync/watch-history-progress";
 
@@ -1788,6 +1794,47 @@ describe("syncTracearrHistory", () => {
       expect(mockInvalidate).toHaveBeenCalledTimes(1);
     });
 
+    it("gives way to a requested sync at the next page boundary, keeping the page", async () => {
+      // A slice holds the serial MAIN_QUEUE for up to five minutes and cannot be
+      // pre-empted from outside, so a sync the user is waiting on sat behind it.
+      storedRows({ min: MIN, max: MAX, backfillComplete: false });
+      mockGetHistoryPage.mockResolvedValue({
+        records: [historyRecord({ id: "chain-1" })],
+        nextCursor: "cursor-2",
+      });
+
+      const result = await syncTracearrHistory("server-1", {
+        passes: "backfill",
+        yieldTo: () => true,
+      });
+
+      // One page, never zero: a yield before any progress would re-enqueue a
+      // slice that did nothing.
+      expect(mockGetHistoryPage).toHaveBeenCalledTimes(1);
+      expect(insertCalls()).toHaveLength(1);
+      // The same clean stop as a spent deadline: resumable, never "complete",
+      // and not "errored" (which would make the job back off and burn retries).
+      expect(result).toEqual({ count: 1, backfillPending: true, backfillOutcome: "stopped" });
+      expect(mockPrisma.mediaServer.updateMany).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ tracearrBackfillComplete: true }),
+        }),
+      );
+    });
+
+    it("keeps walking while nothing is waiting", async () => {
+      storedRows({ min: MIN, max: MAX, backfillComplete: false });
+      mockGetHistoryPage
+        .mockResolvedValueOnce({ records: [historyRecord({ id: "chain-1" })], nextCursor: "cursor-2" })
+        .mockResolvedValueOnce({ records: [historyRecord({ id: "chain-2" })], nextCursor: null });
+      const yieldTo = vi.fn(() => false);
+
+      await syncTracearrHistory("server-1", { passes: "backfill", yieldTo });
+
+      expect(mockGetHistoryPage).toHaveBeenCalledTimes(2);
+      expect(yieldTo).toHaveBeenCalled();
+    });
+
     it("runs forward then backfill for an explicit both-passes run", async () => {
       // The default, and the only mode that touches both boundaries. The order
       // is user-visible: a backfill legitimately runs for many minutes, so this
@@ -2290,6 +2337,72 @@ describe("syncTracearrHistory", () => {
     });
   });
 
+  describe("the resume cursor belongs to the walk that measured it", () => {
+    // `passes: "both"` is the DEFAULT, and the two passes travel in opposite
+    // directions: the forward pass reads from `MAX(watchedAt) - 1h` toward now,
+    // the backfill from `MIN(watchedAt)` toward the start of history. The
+    // "oldest instant this run walked past" was tracked per RUN, so a backfill
+    // that recorded nothing of its own inherited the forward pass's value — an
+    // archive's width too NEW — and, with no cursor stored yet, wrote it as the
+    // resume point. The next slice then resumed at `until = MAX - 1h` and
+    // re-walked the whole already-imported archive: ~1,600 pages against a
+    // rate-limited API, every one of them an upsert of rows already held.
+    it("does not let the forward pass set the backfill's resume cursor", async () => {
+      storedRows({
+        min: new Date("2021-03-04T08:00:00.000Z"),
+        max: new Date("2025-07-10T12:00:00.000Z"),
+        backfillComplete: false,
+      });
+      mockGetHistoryPage
+        // Forward pass: one page of recent plays, then the keyset ends.
+        .mockResolvedValueOnce({
+          records: [historyRecord({ id: "chain-new", started_at: "2025-07-10T11:30:00.000Z" })],
+          nextCursor: null,
+        })
+        // Backfill pass: dies on its very first fetch, so it measured nothing.
+        .mockRejectedValueOnce(new Error("tracearr unreachable"));
+
+      await syncTracearrHistory("server-1", { passes: "both" });
+
+      const cursorWrites = mockPrisma.mediaServer.updateMany.mock.calls
+        .map((call) => call[0] as { data: Record<string, unknown> })
+        .filter((call) => "tracearrBackfillCursorAt" in call.data);
+      expect(cursorWrites).toHaveLength(0);
+    });
+
+    it("still records the cursor the backfill measured itself", async () => {
+      // The other side of the same change: scoping the measurement per walk
+      // must not stop a backfill that DID walk from recording where it reached,
+      // which is what keeps a stretch of unstorable history from being re-walked
+      // forever.
+      storedRows({
+        min: new Date("2021-03-04T08:00:00.000Z"),
+        max: new Date("2025-07-10T12:00:00.000Z"),
+        backfillComplete: false,
+      });
+      mockGetHistoryPage
+        .mockResolvedValueOnce({
+          records: [historyRecord({ id: "chain-new", started_at: "2025-07-10T11:30:00.000Z" })],
+          nextCursor: null,
+        })
+        .mockResolvedValueOnce({
+          records: [historyRecord({ id: "chain-old", started_at: "2019-01-02T03:00:00.000Z" })],
+          nextCursor: "more",
+        })
+        .mockRejectedValueOnce(new Error("tracearr unreachable"));
+
+      await syncTracearrHistory("server-1", { passes: "both" });
+
+      const cursorWrites = mockPrisma.mediaServer.updateMany.mock.calls
+        .map((call) => call[0] as { data: Record<string, unknown> })
+        .filter((call) => "tracearrBackfillCursorAt" in call.data);
+      expect(cursorWrites).toHaveLength(1);
+      expect(cursorWrites[0].data.tracearrBackfillCursorAt).toEqual(
+        new Date("2019-01-02T03:00:00.000Z"),
+      );
+    });
+  });
+
   describe("the account map is a precondition, and empty counts as missing", () => {
     it("refuses the archive walk on an EMPTY account map, not just a thrown one", async () => {
       // `getServerAccountNames` returns `new Map()` rather than throwing when
@@ -2405,6 +2518,170 @@ describe("syncTracearrHistory", () => {
     });
   });
 
+  describe("a healthy run releases the marker it withdrew", () => {
+    /** Every write of `watchHistorySyncedAt` this run made. */
+    function markerWrites() {
+      return mockPrisma.mediaServer.updateMany.mock.calls
+        .map((call) => call[0] as { data: Record<string, unknown> })
+        .filter((call) => "watchHistorySyncedAt" in call.data);
+    }
+
+    it("re-establishes play history on a forward run once the account map is back", async () => {
+      // The withdrawal above has no counterpart on the Tracearr path unless
+      // this one exists. `watchHistorySyncedAt` was written in exactly one
+      // place — the run that walks the archive to its far end — and that run
+      // happens once in a server's life. Afterwards every run is forward-only,
+      // so a single sync that could not load the account map paused every
+      // play-activity rule set, preview and query action scoped to the server
+      // with nothing able to put the marker back. Settings → Servers went on
+      // reporting the import complete the whole time (it reads
+      // `tracearrBackfillComplete`, still true), so the user was told to wait
+      // for an import that had already finished.
+      storedRows({
+        min: new Date("2021-03-04T08:00:00.000Z"),
+        max: new Date("2025-07-10T12:00:00.000Z"),
+        backfillComplete: true,
+      });
+      mockGetServerAccountNames.mockResolvedValue(new Map([["srv-user-1", "weingart"]]));
+      mockGetHistoryPage.mockResolvedValue({ records: [], nextCursor: null });
+
+      await syncTracearrHistory("server-1", { passes: "forward" });
+
+      expect(mockInvalidateWatchHistoryEvidence).not.toHaveBeenCalled();
+      const writes = markerWrites();
+      expect(writes).toHaveLength(1);
+      expect(writes[0].data.watchHistorySyncedAt).toBeInstanceOf(Date);
+      // Guarded on the mapping this run walked, like every other write here: a
+      // server re-pointed mid-run must not have the old archive vouched for.
+      expect(writes[0]).toMatchObject({
+        where: { id: "server-1", tracearrServerId: TRACEARR_SERVER_ID },
+      });
+    });
+
+    it("does not release it while the account map is still unusable", async () => {
+      // Releasing on the same run that withdrew would make the withdrawal
+      // decorative: the rows just written still carry Tracearr's identity
+      // labels, and `watchedByUser` matches on that exact string.
+      storedRows({
+        min: new Date("2021-03-04T08:00:00.000Z"),
+        max: new Date("2025-07-10T12:00:00.000Z"),
+        backfillComplete: true,
+      });
+      mockGetServerAccountNames.mockResolvedValue(new Map());
+      mockGetHistoryPage.mockResolvedValue({ records: [], nextCursor: null });
+
+      await syncTracearrHistory("server-1", { passes: "forward" });
+
+      expect(mockInvalidateWatchHistoryEvidence).toHaveBeenCalledWith(["server-1"]);
+      expect(markerWrites()).toHaveLength(0);
+    });
+
+    it("does not vouch for a server whose archive walk is still owed", async () => {
+      // The other half of "established" for a Tracearr-sourced server. The
+      // walk runs newest-first, so until it reaches the far end an item last
+      // played years ago still looks never-watched — exactly what a
+      // "not played in N months" DELETE rule reads.
+      storedRows({
+        min: new Date("2025-07-01T08:00:00.000Z"),
+        max: new Date("2025-07-10T12:00:00.000Z"),
+        backfillComplete: false,
+      });
+      mockGetServerAccountNames.mockResolvedValue(new Map([["srv-user-1", "weingart"]]));
+      mockGetHistoryPage.mockResolvedValue({ records: [], nextCursor: null });
+
+      await syncTracearrHistory("server-1", { passes: "forward" });
+
+      expect(markerWrites()).toHaveLength(0);
+    });
+  });
+
+
+  describe("the run is reported as live while it imports", () => {
+    // Settings shows a running import beside the sync status: the stored rows
+    // say how much history is here, not that a job is importing now — and a
+    // queued sync can be waiting on exactly that job.
+    it("is live while paging, with the committed page's figures, and cleared at the end", async () => {
+      storedRows({
+        min: new Date("2021-01-01T00:00:00.000Z"),
+        max: new Date("2025-07-10T12:00:00.000Z"),
+        backfillComplete: false,
+      });
+      let seenDuring: ReturnType<typeof getTracearrImportActivity> = null;
+      mockGetHistoryPage
+        .mockResolvedValueOnce({ records: [historyRecord({ id: "chain-1" })], nextCursor: "cursor-2" })
+        .mockImplementationOnce(async () => {
+          seenDuring = getTracearrImportActivity("server-1");
+          return { records: [], nextCursor: null };
+        });
+
+      await syncTracearrHistory("server-1", { passes: "backfill" });
+
+      expect(seenDuring).toMatchObject({ pass: "backfill", pages: 1, imported: 1 });
+      expect(getTracearrImportActivity("server-1")).toBeNull();
+    });
+
+    it("leaves a concurrent run of the same server registered when it finishes", async () => {
+      // A History-page Refresh can overlap a backfill slice. Keyed by server
+      // alone, whichever finished first removed the other's live readout.
+      storedRows({
+        min: new Date("2021-01-01T00:00:00.000Z"),
+        max: new Date("2025-07-10T12:00:00.000Z"),
+        backfillComplete: false,
+      });
+      const other = beginTracearrImport("server-1", "user-1");
+      recordTracearrImportPage(other, { pass: "backfill", pages: 40, imported: 3900, oldestReached: null });
+      try {
+        mockGetHistoryPage.mockResolvedValueOnce({ records: [historyRecord({ id: "chain-1" })], nextCursor: null });
+
+        await syncTracearrHistory("server-1", { passes: "backfill" });
+
+        expect(getTracearrImportActivity("server-1")).toMatchObject({ pages: 40, imported: 3900 });
+      } finally {
+        endTracearrImport(other);
+      }
+    });
+
+    it("clears the live entry and tells the page when the run throws", async () => {
+      storedRows({
+        min: new Date("2021-01-01T00:00:00.000Z"),
+        max: new Date("2025-07-10T12:00:00.000Z"),
+        backfillComplete: false,
+      });
+      // Thrown after the run registered itself, from outside the walk's own
+      // catch (which would turn a page failure into a clean "errored" stop).
+      mockInvalidate.mockImplementationOnce(() => {
+        throw new Error("boom");
+      });
+      mockGetHistoryPage.mockResolvedValueOnce({ records: [historyRecord({ id: "chain-1" })], nextCursor: null });
+
+      await expect(syncTracearrHistory("server-1", { passes: "backfill" })).rejects.toThrow("boom");
+
+      // Left registered, the card would say an import is running until a restart.
+      expect(getTracearrImportActivity("server-1")).toBeNull();
+      expect(mockEventBus.emit).toHaveBeenLastCalledWith(
+        expect.objectContaining({ type: "tracearr:import-progress", meta: { serverId: "server-1" } }),
+      );
+    });
+
+    it("announces the run as soon as it starts, before any page", async () => {
+      storedRows({
+        min: new Date("2021-01-01T00:00:00.000Z"),
+        max: new Date("2025-07-10T12:00:00.000Z"),
+        backfillComplete: false,
+      });
+      let emitsBeforeFirstPage = 0;
+      mockGetHistoryPage.mockImplementationOnce(async () => {
+        emitsBeforeFirstPage = mockEventBus.emit.mock.calls.length;
+        return { records: [], nextCursor: null };
+      });
+
+      await syncTracearrHistory("server-1", { passes: "backfill" });
+
+      // The join index and the span measurement run first and can take a
+      // while; the card should appear when the run starts, not a page later.
+      expect(emitsBeforeFirstPage).toBeGreaterThan(0);
+    });
+  });
 
   describe("progress is pushed, not waited for", () => {
     // The settings page and the History page both render an import readout, and

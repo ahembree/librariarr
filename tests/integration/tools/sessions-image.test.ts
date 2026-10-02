@@ -47,7 +47,7 @@ describe("GET /api/tools/sessions/image", () => {
   it("returns 401 without auth", async () => {
     const response = await callRoute(GET, {
       url: "/api/tools/sessions/image",
-      searchParams: { serverId: "some-id", path: "/photo/:/transcode" },
+      searchParams: { serverId: "some-id", path: "/library/metadata/1/thumb/1" },
     });
     const body = await expectJson<{ error: string }>(response, 401);
     expect(body.error).toBe("Unauthorized");
@@ -77,12 +77,63 @@ describe("GET /api/tools/sessions/image", () => {
 
     const response = await callRoute(GET, {
       url: "/api/tools/sessions/image",
-      searchParams: { serverId: server.id, path: "/photo/:/transcode" },
+      searchParams: { serverId: server.id, path: "/library/metadata/1234/thumb/1690000000" },
     });
 
     expect(response.status).toBe(200);
     expect(response.headers.get("Content-Type")).toBe("image/png");
-    expect(response.headers.get("Cache-Control")).toBe("public, max-age=86400");
+    expect(response.headers.get("Cache-Control")).toBe("private, max-age=86400");
+    expect(mockFetchImage).toHaveBeenCalledWith("/library/metadata/1234/thumb/1690000000");
+  });
+
+  it("proxies a Jellyfin session's artwork", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id, { type: "JELLYFIN" });
+    setMockSession({ userId: user.id, isLoggedIn: true });
+    mockFetchImage.mockResolvedValue({ data: Buffer.from([1]), contentType: "image/jpeg" });
+
+    const response = await callRoute(GET, {
+      url: "/api/tools/sessions/image",
+      searchParams: { serverId: server.id, path: "/Items/0123456789abcdef0123456789abcdef/Images/Primary" },
+    });
+    expect(response.status).toBe(200);
+  });
+
+  // The fetch carries the server's admin token and the body goes back as-is:
+  // any other path would let a session cookie read the server's API, and
+  // Plex's /myplex/account answers with the owner's plex.tv token.
+  it.each(["/myplex/account", "/:/prefs", "/library/metadata/1/thumb/../../../myplex/account"])(
+    "refuses %s without asking the server",
+    async (path) => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      setMockSession({ userId: user.id, isLoggedIn: true });
+
+      const response = await callRoute(GET, {
+        url: "/api/tools/sessions/image",
+        searchParams: { serverId: server.id, path },
+      });
+      const body = await expectJson<{ error: string }>(response, 400);
+      expect(body.error).toBe("Invalid path");
+      expect(mockFetchImage).not.toHaveBeenCalled();
+    }
+  );
+
+  it("refuses to pass on a body that is not an image", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    setMockSession({ userId: user.id, isLoggedIn: true });
+    mockFetchImage.mockResolvedValue({
+      data: Buffer.from('{"authToken":"secret"}'),
+      contentType: "application/json",
+    });
+
+    const response = await callRoute(GET, {
+      url: "/api/tools/sessions/image",
+      searchParams: { serverId: server.id, path: "/library/metadata/1234/thumb/1" },
+    });
+    const body = await expectJson<{ error: string }>(response, 502);
+    expect(body.error).toBe("Failed to fetch image");
   });
 
   it("returns 502 on failed fetch", async () => {
@@ -94,7 +145,7 @@ describe("GET /api/tools/sessions/image", () => {
 
     const response = await callRoute(GET, {
       url: "/api/tools/sessions/image",
-      searchParams: { serverId: server.id, path: "/photo/:/transcode" },
+      searchParams: { serverId: server.id, path: "/library/metadata/1234/thumb/1" },
     });
     const body = await expectJson<{ error: string }>(response, 502);
     expect(body.error).toBe("Failed to fetch image");

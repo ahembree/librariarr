@@ -18,6 +18,39 @@ import { emitWatchHistoryUpdated } from "./watch-history-events";
 // transaction comfortably inside its timeout on large histories.
 const BATCH_SIZE = 500;
 
+/**
+ * How far behind the newest stored play an incremental refresh starts. A play
+ * Plex recorded while the previous refresh's request was in flight must not
+ * fall through the gap, so the overlap is re-delivered and deduplicated
+ * against the stored rows instead.
+ */
+const INCREMENTAL_OVERLAP_MS = 60 * 60_000;
+
+export interface WatchHistorySyncOptions {
+  /**
+   * Append only the plays newer than the stored history instead of running
+   * the full replace.
+   *
+   * The realtime `watch-changed` job is what asks for this. Every Plex
+   * playback that ends fires one, and the full replace it used to run
+   * re-fetched the server's ENTIRE history and rewrote every row of it —
+   * measured on a 141k-play server: ~38 s of Plex paging plus ~7 s of
+   * DELETE + INSERT, twice within three minutes on a quiet evening, each run
+   * parked on the serial `MAIN_QUEUE` ahead of every sync and lifecycle job.
+   * With Plex's `viewedAt>=` filter it is one request for the last hour.
+   *
+   * Honoured only where it is safe: a client that asserts
+   * `supportsHistorySince` (Plex — its history API filters server-side), a
+   * server whose history is already established, and one that holds rows to
+   * resume from. Everything else — Jellyfin/Emby (a
+   * per-user "played" set, not dated events, so there is nothing to filter
+   * by), a first import, a server whose history was wiped — falls back to the
+   * full replace, which also remains the scheduled and manual path and is
+   * what reconciles plays the server has since deleted.
+   */
+  incremental?: boolean;
+}
+
 // The full-replace runs as a single interactive transaction (DELETE + all
 // INSERTs) so a mid-insert failure rolls back rather than leaving the table
 // empty. A large history easily exceeds Prisma's 5s default, so give the
@@ -64,7 +97,8 @@ export async function syncWatchHistory(
    * Cancels the sync. Threaded straight into the Tracearr importer (which stops
    * between pages) and checked between the native path's write batches.
    */
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  options: WatchHistorySyncOptions = {}
 ): Promise<{ count: number }> {
   // Load server record
   const serverRows = await prisma.$queryRawUnsafe<
@@ -245,9 +279,17 @@ export async function syncWatchHistory(
   // A fetch failure must NOT reach the destructive full-replace below: the
   // client throws on a hard failure so we can skip the wipe (an empty array
   // here therefore means the server genuinely reported no plays).
+  // Null means "do the full replace" — see `WatchHistorySyncOptions`.
+  const incrementalSince =
+    options.incremental && client.supportsHistorySince
+      ? await resolveIncrementalSince(serverId)
+      : null;
+
   let entries: Awaited<ReturnType<typeof client.getDetailedWatchHistory>>;
   try {
-    entries = await client.getDetailedWatchHistory();
+    entries = await client.getDetailedWatchHistory(
+      incrementalSince ? { since: incrementalSince } : undefined
+    );
   } catch (error) {
     logger.warn(
       "WatchHistory",
@@ -258,15 +300,36 @@ export async function syncWatchHistory(
   }
   logger.info(
     "WatchHistory",
-    `Got ${entries.length} play events from "${server.name}"`
+    incrementalSince
+      ? `Got ${entries.length} play events from "${server.name}" since ${incrementalSince.toISOString()}`
+      : `Got ${entries.length} play events from "${server.name}"`
   );
+
+  if (incrementalSince) {
+    const count = await appendNewEntries(serverId, entries, incrementalSince);
+    await markHistoryEstablished(serverId);
+    logger.info(
+      "WatchHistory",
+      `Appended ${count} new watch history entries for "${server.name}"`
+    );
+    // Nothing appended means nothing to reconcile or announce: this runs per
+    // finished playback, and the reconcile is a server-wide aggregate.
+    if (count > 0) {
+      await reconcileAfterNativeWrite(serverId, server.name);
+      await emitWatchHistoryUpdated(serverId, { imported: count });
+    }
+    return { count };
+  }
 
   if (entries.length === 0) {
     // Still clear old records in case items were removed
-    await prisma.$queryRawUnsafe(
-      `DELETE FROM "WatchHistory" WHERE "mediaServerId"=$1`,
-      serverId
-    );
+    await prisma.$transaction(async (tx) => {
+      await lockServerHistory(tx, serverId);
+      await tx.$executeRawUnsafe(
+        `DELETE FROM "WatchHistory" WHERE "mediaServerId"=$1`,
+        serverId
+      );
+    }, TX_OPTIONS);
     // ...and release the marker here too. This is a SUCCESSFUL full replace —
     // the fetch threw on a hard failure above, so reaching here means the
     // server genuinely reports no plays, which is a complete and faithful
@@ -321,13 +384,13 @@ export async function syncWatchHistory(
 
   // Batch insert new records
   let insertedCount = 0;
-  const { randomUUID } = await import("crypto");
 
   // Wrap the full-replace DELETE and all batch INSERTs in a single transaction
   // so a mid-insert failure rolls back instead of leaving the table empty
   // (the previous out-of-transaction version permanently wiped history on any
   // insert error until the next successful sync).
   await prisma.$transaction(async (tx) => {
+    await lockServerHistory(tx, serverId);
     // Full replace: delete existing watch history for this server
     await tx.$executeRawUnsafe(
       `DELETE FROM "WatchHistory" WHERE "mediaServerId"=$1`,
@@ -346,40 +409,17 @@ export async function syncWatchHistory(
       }
 
       const batch = dedupedEntries.slice(i, i + BATCH_SIZE);
-      const values: string[] = [];
-      const params: unknown[] = [];
-      let paramIndex = 1;
-
+      const rows: NativeRow[] = [];
       for (const entry of batch) {
         const mediaItemId = ratingKeyToId.get(entry.ratingKey);
         if (!mediaItemId) continue;
-
-        values.push(
-          `($${paramIndex++},$${paramIndex++},$${paramIndex++},$${paramIndex++},$${paramIndex++},$${paramIndex++},$${paramIndex++},$${paramIndex++})`
-        );
-        params.push(
-          randomUUID(),
-          mediaItemId,
-          serverId,
-          entry.username,
-          entry.watchedAt ? new Date(entry.watchedAt) : null,
-          entry.deviceName,
-          entry.platform,
-          new Date()
-        );
+        rows.push({ mediaItemId, entry });
       }
 
-      if (values.length > 0) {
-        // No setImmediate yield between batches: the awaited DB round-trip
-        // already yields the event loop, and an extra macrotask only burns the
-        // interactive-transaction timeout budget.
-        await tx.$executeRawUnsafe(
-          `INSERT INTO "WatchHistory" ("id","mediaItemId","mediaServerId","serverUsername","watchedAt","deviceName","platform","createdAt")
-           VALUES ${values.join(",")}`,
-          ...params
-        );
-        insertedCount += values.length;
-      }
+      // No setImmediate yield between batches: the awaited DB round-trip
+      // already yields the event loop, and an extra macrotask only burns the
+      // interactive-transaction timeout budget.
+      insertedCount += await insertNativeRows(tx, serverId, rows);
 
       // The one place in a watch-history sync where a real percentage is
       // honest: `getDetailedWatchHistory()` has already returned, so the
@@ -416,15 +456,7 @@ export async function syncWatchHistory(
   // user on the server landed in `WatchHistory` and nowhere else. Non-fatal:
   // the history rows are already committed, so a failure here is corrected by
   // the next sync rather than being worth failing the whole run over.
-  try {
-    await reconcileWatchStateFromHistory(serverId);
-  } catch (error) {
-    logger.warn(
-      "WatchHistory",
-      `Failed to reconcile play state from watch history for "${server.name}"`,
-      { error: String(error) }
-    );
-  }
+  await reconcileAfterNativeWrite(serverId, server.name);
 
   // Tell open pages the stored plays changed. Emitted from here, not from the
   // callers, so every entry point is covered: the scheduled/realtime job, the
@@ -436,4 +468,178 @@ export async function syncWatchHistory(
   }
 
   return { count: insertedCount };
+}
+
+async function reconcileAfterNativeWrite(serverId: string, serverName: string): Promise<void> {
+  try {
+    await reconcileWatchStateFromHistory(serverId);
+  } catch (error) {
+    logger.warn(
+      "WatchHistory",
+      `Failed to reconcile play state from watch history for "${serverName}"`,
+      { error: String(error) }
+    );
+  }
+}
+
+/**
+ * Where an incremental refresh should start, or `null` for a full replace.
+ *
+ * Derived from the rows rather than a persisted cursor, like the Tracearr
+ * importer's boundaries: the record of what was imported and the point that
+ * resumes it cannot then disagree. `watchHistorySyncedAt` is checked too —
+ * rows can exist on a server whose evidence has been withdrawn, and an
+ * append on top of a history nobody vouches for would leave it that way.
+ */
+async function resolveIncrementalSince(serverId: string): Promise<Date | null> {
+  const rows = await prisma.$queryRawUnsafe<
+    { establishedAt: Date | null; newest: Date | null }[]
+  >(
+    `SELECT ms."watchHistorySyncedAt" AS "establishedAt",
+            (SELECT MAX(wh."watchedAt") FROM "WatchHistory" wh WHERE wh."mediaServerId" = ms."id") AS "newest"
+       FROM "MediaServer" ms
+      WHERE ms."id" = $1`,
+    serverId
+  );
+  const row = rows[0];
+  if (!row?.establishedAt || !row.newest) return null;
+  return new Date(new Date(row.newest).getTime() - INCREMENTAL_OVERLAP_MS);
+}
+
+/**
+ * Store the entries not already present, without touching existing rows.
+ *
+ * Identity is the same `item + user + watchedAt` the full replace dedups on,
+ * checked against the rows stored at or after `since` (the overlap window,
+ * so the set is small). Undated entries are skipped: they cannot be told
+ * apart from a stored one, and Plex — the only server this path runs for —
+ * always dates a play.
+ */
+async function appendNewEntries(
+  serverId: string,
+  entries: Array<{
+    ratingKey: string;
+    username: string;
+    watchedAt: string | null;
+    deviceName: string | null;
+    platform: string | null;
+  }>,
+  since: Date
+): Promise<number> {
+  // Fail closed on the server's filter: a play older than `since` in the
+  // response means the `viewedAt>=` parameter was not honoured (a proxy that
+  // re-encodes the query, a build without the filter), and appending the
+  // whole history it returned would duplicate every stored play. Undated
+  // entries are dropped for the same reason — they cannot be deduplicated.
+  const sinceMs = since.getTime();
+  const dated = entries.filter(
+    (e) => e.watchedAt && new Date(e.watchedAt).getTime() >= sinceMs
+  );
+  if (dated.length === 0) return 0;
+
+  const ratingKeys = [...new Set(dated.map((e) => e.ratingKey))];
+  const mediaItems = await prisma.$queryRawUnsafe<{ id: string; ratingKey: string }[]>(
+    `SELECT mi."id", mi."ratingKey" FROM "MediaItem" mi
+     JOIN "Library" l ON mi."libraryId" = l."id"
+     WHERE l."mediaServerId" = $1 AND mi."ratingKey" = ANY($2::text[])`,
+    serverId,
+    ratingKeys
+  );
+  const ratingKeyToId = new Map(mediaItems.map((m) => [m.ratingKey, m.id]));
+
+  // The read-then-append runs under the same per-server lock as the full
+  // replace. That one runs in a request (the History page's Refresh), outside
+  // the serial job queue, so without the lock it could DELETE + re-INSERT the
+  // history between this read and this append and the same play would land
+  // twice — inflating `playCount`, which is monotonic and never walked back.
+  return prisma.$transaction(async (tx) => {
+    await lockServerHistory(tx, serverId);
+
+    const existing = await tx.$queryRawUnsafe<
+      { mediaItemId: string; serverUsername: string; watchedAt: Date }[]
+    >(
+      `SELECT "mediaItemId", "serverUsername", "watchedAt" FROM "WatchHistory"
+       WHERE "mediaServerId" = $1 AND "watchedAt" >= $2`,
+      serverId,
+      since
+    );
+    const seen = new Set(
+      existing.map((r) => `${r.mediaItemId}|${r.serverUsername}|${new Date(r.watchedAt).toISOString()}`)
+    );
+
+    const fresh: NativeRow[] = [];
+    for (const entry of dated) {
+      const mediaItemId = ratingKeyToId.get(entry.ratingKey);
+      if (!mediaItemId) continue;
+      const key = `${mediaItemId}|${entry.username}|${new Date(entry.watchedAt!).toISOString()}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      fresh.push({ mediaItemId, entry });
+    }
+
+    let inserted = 0;
+    for (let i = 0; i < fresh.length; i += BATCH_SIZE) {
+      inserted += await insertNativeRows(tx, serverId, fresh.slice(i, i + BATCH_SIZE));
+    }
+    return inserted;
+  }, TX_OPTIONS);
+}
+
+type RawWriter = Pick<typeof prisma, "$executeRawUnsafe">;
+
+interface NativeRow {
+  mediaItemId: string;
+  entry: {
+    username: string;
+    watchedAt: string | null;
+    deviceName: string | null;
+    platform: string | null;
+  };
+}
+
+/**
+ * Serialises every writer of one server's native history. Transaction-scoped
+ * (released on commit or rollback), keyed per server so two servers never
+ * wait on each other. Both the full replace and the incremental append take
+ * it; see `appendNewEntries` for the race it closes.
+ */
+async function lockServerHistory(db: RawWriter, serverId: string): Promise<void> {
+  await db.$executeRawUnsafe(
+    `SELECT pg_advisory_xact_lock(hashtext('watch-history:' || $1))`,
+    serverId
+  );
+}
+
+/**
+ * One multi-row INSERT of native play rows. The single column list both the
+ * full replace and the incremental append write through, so a column added
+ * to one path cannot go missing from the other.
+ */
+async function insertNativeRows(db: RawWriter, serverId: string, rows: NativeRow[]): Promise<number> {
+  if (rows.length === 0) return 0;
+  const { randomUUID } = await import("crypto");
+  const values: string[] = [];
+  const params: unknown[] = [];
+  let paramIndex = 1;
+  for (const { mediaItemId, entry } of rows) {
+    values.push(
+      `($${paramIndex++},$${paramIndex++},$${paramIndex++},$${paramIndex++},$${paramIndex++},$${paramIndex++},$${paramIndex++},$${paramIndex++})`
+    );
+    params.push(
+      randomUUID(),
+      mediaItemId,
+      serverId,
+      entry.username,
+      entry.watchedAt ? new Date(entry.watchedAt) : null,
+      entry.deviceName,
+      entry.platform,
+      new Date()
+    );
+  }
+  await db.$executeRawUnsafe(
+    `INSERT INTO "WatchHistory" ("id","mediaItemId","mediaServerId","serverUsername","watchedAt","deviceName","platform","createdAt")
+     VALUES ${values.join(",")}`,
+    ...params
+  );
+  return rows.length;
 }

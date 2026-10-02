@@ -204,3 +204,62 @@ export function getDimensionsByGroup(): Map<string, DimensionMeta[]> {
   }
   return groups;
 }
+
+/**
+ * Whether a dimension can colour a timeline. The timeline's breakdown is one
+ * SQL expression per item, so a dimension that needs a row per value (a JSON
+ * array, a stream join) or is itself a date cannot be one. The dialog offers
+ * only these and the timeline route refuses the rest, rather than returning
+ * an uncoloured total under a "by Genre" title.
+ */
+export function supportsTimelineBreakdown(meta: DimensionMeta): boolean {
+  return meta.category !== "json_unnest"
+    && meta.category !== "stream_group"
+    && meta.category !== "date_bucket";
+}
+
+/**
+ * Whether two dimensions can be cross-tabulated. Two stream dimensions would
+ * need two independent stream joins, which the cross-tab does not do; the
+ * dialog must not offer the pair the route refuses.
+ */
+export function canCrossTabulate(a: DimensionMeta, b: DimensionMeta): boolean {
+  if (a.id === b.id) return false;
+  return !(a.category === "stream_group" && b.category === "stream_group");
+}
+
+/**
+ * The display label of one breakdown value — the label a chart card shows
+ * and a count card's saved selection is compared against. A null value is
+ * the dimension's own `nullLabel` ("Not Rated" for Content Rating), so the
+ * dialog that saves a selection and the card that sums it must both use this.
+ */
+export function breakdownValueLabel(value: string | null, meta: DimensionMeta | undefined): string {
+  return value ?? meta?.nullLabel ?? "Unknown";
+}
+
+/**
+ * Whether the custom-card dialog may save this combination. Mirrors what the
+ * card's routes accept, so a saved card can never be one that only renders
+ * "No data": a heatmap needs two different dimensions that can be crossed, a
+ * timeline a date field and (optionally) a breakdown it can colour by.
+ */
+export function isSubmittableCustomCard(
+  chartType: string,
+  dimension: string,
+  dimension2: string,
+): boolean {
+  const meta = dimension ? getDimensionMeta(dimension) : undefined;
+  if (!meta) return false;
+  if (chartType === "heatmap") {
+    const meta2 = dimension2 ? getDimensionMeta(dimension2) : undefined;
+    return !!meta2 && canCrossTabulate(meta, meta2);
+  }
+  if (chartType === "timeline") {
+    if (!DATE_DIMENSION_IDS.has(dimension)) return false;
+    if (!dimension2) return true;
+    const meta2 = getDimensionMeta(dimension2);
+    return !!meta2 && supportsTimelineBreakdown(meta2);
+  }
+  return true;
+}

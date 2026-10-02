@@ -46,7 +46,8 @@ vi.mock("@/lib/arr/lidarr-client", () => ({
   }),
 }));
 
-vi.mock("@/lib/seerr/seerr-client", () => ({
+vi.mock("@/lib/seerr/seerr-client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/seerr/seerr-client")>()),
   SeerrClient: vi.fn().mockImplementation(function () {
     return { testConnection: mockSeerrTestConnection };
   }),

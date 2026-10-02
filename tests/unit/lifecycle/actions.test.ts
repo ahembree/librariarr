@@ -72,7 +72,7 @@ vi.mock("axios", () => ({
   isAxiosError: vi.fn(),
 }));
 
-import { executeAction, extractActionError, cleanupArrTags } from "@/lib/lifecycle/actions";
+import { executeAction, extractActionError, describeActionError, cleanupArrTags } from "@/lib/lifecycle/actions";
 import type { ActionRecord } from "@/lib/lifecycle/actions";
 import axios from "axios";
 
@@ -87,6 +87,7 @@ function makeAction(overrides: Partial<ActionRecord> = {}): ActionRecord {
     matchedMediaItemIds: [],
     addArrTags: [],
     removeArrTags: [],
+    targetTitle: "Test Movie",
     mediaItem: {
       id: "item1",
       title: "Test Movie",
@@ -101,6 +102,21 @@ function makeAction(overrides: Partial<ActionRecord> = {}): ActionRecord {
 describe("extractActionError", () => {
   it("returns message from Error instance", () => {
     expect(extractActionError(new Error("something broke"))).toBe("something broke");
+  });
+
+  it("sanitizes paths and private addresses out of what is stored and returned", () => {
+    const ie = Object.assign(new Error("Radarr HTTP 500: boom"), {
+      name: "IntegrationError",
+      status: 500,
+      detail: "Unable to delete /data/movies/Arrival (2016)/Arrival.mkv on 192.168.1.20 via https://10-0-0-5.abc123.plex.direct:32400 (/app/src/lib/arr/radarr-client.ts)",
+    });
+    expect(extractActionError(ie)).toBe(
+      "HTTP 500: Unable to delete /data/movies/Arrival (2016)/Arrival.mkv on [internal] via https://[internal]:32400 ([internal])",
+    );
+    // The log line keeps the full text.
+    expect(describeActionError(ie)).toContain("192.168.1.20");
+    expect(describeActionError(ie)).toContain("radarr-client.ts");
+    expect(extractActionError(new Error("ECONNREFUSED 172.16.0.9:8989"))).toBe("ECONNREFUSED [internal]:8989");
   });
 
   it("returns 'Unknown error' for non-Error values", () => {
@@ -269,6 +285,29 @@ describe("executeAction", () => {
     await executeAction(action);
 
     expect(mockSonarrClient.deleteSeries).toHaveBeenCalledWith(2, true, false);
+  });
+
+  it("logs the item by the title its caller named it, never the episode it is stored against", async () => {
+    mockPrisma.sonarrInstance.findUnique.mockResolvedValue({
+      id: "arr1", url: "http://sonarr", apiKey: "key", enabled: true,
+    });
+    mockSonarrClient.getSeriesByTvdbId.mockResolvedValue({ id: 2, title: "Breaking Bad", tvdbId: 81189, tags: [] });
+
+    await executeAction(makeAction({
+      actionType: "DELETE_SONARR",
+      matchedMediaItemIds: ["ep1", "ep2"],
+      targetTitle: "Breaking Bad",
+      mediaItem: {
+        id: "ep1", title: "Pilot", parentTitle: "Breaking Bad", year: 2008,
+        externalIds: [{ source: "TVDB", externalId: "81189" }],
+      },
+    }));
+
+    const { logger } = await import("@/lib/logger");
+    const lines = vi.mocked(logger.info).mock.calls.map((c) => c[1] as string);
+    expect(lines).toContainEqual(expect.stringMatching(/^Starting DELETE_SONARR for "Breaking Bad" /));
+    expect(lines).toContain('Executed DELETE_SONARR for "Breaking Bad"');
+    expect(lines.join("\n")).not.toContain("Pilot");
   });
 
   it("DELETE_SONARR allows an episode that aired years after the series premiered", async () => {

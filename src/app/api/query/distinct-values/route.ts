@@ -1,5 +1,6 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
+import { jsonResponse } from "@/lib/api/json-response";
 import { prisma } from "@/lib/db";
 import { appCache } from "@/lib/cache/memory-cache";
 import { normalizeResolutionLabel } from "@/lib/resolution";
@@ -40,14 +41,14 @@ interface AggRow {
   audioSamplingRates: number[] | null;
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   const session = await getSession();
   if (!session.isLoggedIn) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const cached = appCache.get<Record<string, unknown>>(CACHE_KEY);
-  if (cached) return NextResponse.json(cached);
+  if (cached) return jsonResponse(request, cached);
 
   const [aggRows, genres, labelRows, countryRows, streamDistinct, sqDistinct, ruleSets, watchUsers] = await Promise.all([
     prisma.$queryRaw<AggRow[]>`
@@ -225,5 +226,5 @@ export async function GET() {
   };
 
   appCache.set(CACHE_KEY, result, CACHE_TTL);
-  return NextResponse.json(result);
+  return jsonResponse(request, result);
 }

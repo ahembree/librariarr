@@ -17,6 +17,7 @@ describe("invalidateMediaCaches", () => {
       "custom-stats:",
       "timeline:",
       "watch-history-filters:",
+      "recently-added:",
       "query-action-live:",
     ]) {
       expect(prefixes).toContain(p);

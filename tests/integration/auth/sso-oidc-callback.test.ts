@@ -651,4 +651,181 @@ describe("GET /api/auth/sso/oidc/callback", () => {
     // Login flow → root, not /settings.
     expect(new URL(res.headers.get("location")!).pathname).toBe("/");
   });
+  // ── Re-authentication flow (signed-in admin confirming identity) ──────
+
+  describe("reauth flow", () => {
+    async function seedLinked() {
+      const user = await createTestUser();
+      await seedOidcSettings(user.id);
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { ssoEnabled: true, ssoSubject: "linked-sub", ssoIssuer: ISSUER },
+      });
+      setMockSession({
+        isLoggedIn: true,
+        userId: user.id,
+        authenticatedAt: 1,
+        oidcState: "s",
+        oidcVerifier: "v",
+        oidcFlow: "reauth",
+      });
+      return user;
+    }
+
+    it("stamps the sign-in time and reports success to the popup page for the linked subject", async () => {
+      const user = await seedLinked();
+      setupSuccessfulExchange({ sub: "linked-sub" });
+      const before = Date.now();
+
+      const res = await callRoute(GET, { method: "GET", searchParams: { code: "c", state: "s" } });
+      const loc = new URL(res.headers.get("location")!);
+      expect(loc.pathname).toBe("/login/reauth");
+      expect(loc.searchParams.get("status")).toBe("ok");
+
+      const session = getMockSession();
+      expect(session.userId).toBe(user.id);
+      expect(session.authenticatedAt).toBeGreaterThanOrEqual(before);
+      expect(session.oidcFlow).toBeUndefined();
+      // Nothing about the account changes.
+      const refreshed = await prisma.user.findUnique({ where: { id: user.id } });
+      expect(refreshed?.sessionVersion).toBe(user.sessionVersion);
+    });
+
+    // The popup page addresses its report to the attempt named in the state
+    // the IdP handed back — never to whatever attempt the session holds now.
+    it("hands the attempt nonce from the state to the popup page", async () => {
+      const NONCE = "attempt-nonce-0123456789";
+      await seedLinked();
+      setMockSession({ ...getMockSession(), oidcState: `abc.${NONCE}` });
+      setupSuccessfulExchange({ sub: "linked-sub" });
+
+      const ok = new URL(
+        (await callRoute(GET, { method: "GET", searchParams: { code: "c", state: `abc.${NONCE}` } })).headers.get("location")!,
+      );
+      expect(ok.searchParams.get("status")).toBe("ok");
+      expect(ok.searchParams.get("nonce")).toBe(NONCE);
+
+      // A stale popup's state names ITS attempt, even though the check fails.
+      setMockSession({ ...getMockSession(), oidcState: `new.${NONCE}`, oidcVerifier: "v", oidcFlow: "reauth" });
+      const stale = new URL(
+        (await callRoute(GET, { method: "GET", searchParams: { code: "c", state: "old.other-attempt-nonce-99" } })).headers.get("location")!,
+      );
+      expect(stale.searchParams.get("error")).toBe("state_mismatch");
+      expect(stale.searchParams.get("nonce")).toBe("other-attempt-nonce-99");
+    });
+
+    it("refuses a different subject and leaves the sign-in time alone", async () => {
+      await seedLinked();
+      setupSuccessfulExchange({ sub: "someone-else" });
+
+      const res = await callRoute(GET, { method: "GET", searchParams: { code: "c", state: "s" } });
+      const loc = new URL(res.headers.get("location")!);
+      expect(loc.pathname).toBe("/login/reauth");
+      expect(loc.searchParams.get("error")).toBe("not_linked");
+      expect(getMockSession().authenticatedAt).toBe(1);
+    });
+
+    it("reports a vanished account to the popup page, not the login page", async () => {
+      const user = await createTestUser();
+      await seedOidcSettings(user.id);
+      setMockSession({
+        isLoggedIn: true,
+        userId: "no-such-user",
+        oidcState: "s",
+        oidcVerifier: "v",
+        oidcFlow: "reauth",
+      });
+      setupSuccessfulExchange({ sub: "linked-sub" });
+
+      const res = await callRoute(GET, { method: "GET", searchParams: { code: "c", state: "s" } });
+      const loc = new URL(res.headers.get("location")!);
+      expect(loc.pathname).toBe("/login/reauth");
+      expect(loc.searchParams.get("error")).toBe("session_lost");
+    });
+
+    // `getSession()` reads a revoked session (signed out elsewhere, password
+    // changed) as signed out but keeps the handshake fields: without its own
+    // branch the confirmation fell through to the login flow, and the page
+    // waiting on the popup never heard back.
+    it("reports a confirmation whose session was revoked meanwhile, and never signs in", async () => {
+      await seedLinked();
+      setMockSession({ isLoggedIn: false, oidcState: "s", oidcVerifier: "v", oidcFlow: "reauth" });
+      setupSuccessfulExchange({ sub: "linked-sub" });
+
+      const res = await callRoute(GET, { method: "GET", searchParams: { code: "c", state: "s" } });
+      const loc = new URL(res.headers.get("location")!);
+      expect(loc.pathname).toBe("/login/reauth");
+      expect(loc.searchParams.get("error")).toBe("session_lost");
+      expect(mockExchange).not.toHaveBeenCalled();
+      const session = getMockSession();
+      expect(session.isLoggedIn).toBe(false);
+      expect(session.oidcFlow).toBeUndefined();
+      expect(session.oidcState).toBeUndefined();
+    });
+
+    // A sign-out in another tab of this browser clears the cookie while the
+    // popup is out, handshake fields and all: only the returned state still
+    // says this was a confirmation.
+    it("reports a confirmation whose cookie was cleared meanwhile, by its state", async () => {
+      const NONCE = "attempt-nonce-0123456789";
+      await seedLinked();
+      setMockSession({ isLoggedIn: false });
+      setupSuccessfulExchange({ sub: "linked-sub" });
+
+      const res = await callRoute(GET, { method: "GET", searchParams: { code: "c", state: `abc.${NONCE}` } });
+      const loc = new URL(res.headers.get("location")!);
+      expect(loc.pathname).toBe("/login/reauth");
+      expect(loc.searchParams.get("error")).toBe("session_lost");
+      expect(loc.searchParams.get("nonce")).toBe(NONCE);
+      expect(mockExchange).not.toHaveBeenCalled();
+      expect(getMockSession().isLoggedIn).toBe(false);
+    });
+
+    it("reports a confirmation whose handshake is gone from a live session as expired", async () => {
+      const NONCE = "attempt-nonce-0123456789";
+      const user = await seedLinked();
+      setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: 1 });
+
+      const res = await callRoute(GET, { method: "GET", searchParams: { code: "c", state: `abc.${NONCE}` } });
+      const loc = new URL(res.headers.get("location")!);
+      expect(loc.pathname).toBe("/login/reauth");
+      expect(loc.searchParams.get("error")).toBe("state_mismatch");
+      expect(loc.searchParams.get("nonce")).toBe(NONCE);
+      expect(mockExchange).not.toHaveBeenCalled();
+      expect(getMockSession().authenticatedAt).toBe(1);
+    });
+
+    // A link started since replaced the confirmation's handshake: the late
+    // popup is told, and the link's handshake is left for the link's callback.
+    it("leaves another flow's handshake alone when a stale confirmation returns", async () => {
+      const NONCE = "attempt-nonce-0123456789";
+      const user = await seedLinked();
+      setMockSession({
+        isLoggedIn: true,
+        userId: user.id,
+        authenticatedAt: 1,
+        oidcState: "link-state",
+        oidcVerifier: "link-verifier",
+        oidcFlow: "link",
+      });
+
+      const res = await callRoute(GET, { method: "GET", searchParams: { code: "c", state: `abc.${NONCE}` } });
+      const loc = new URL(res.headers.get("location")!);
+      expect(loc.pathname).toBe("/login/reauth");
+      expect(loc.searchParams.get("error")).toBe("state_mismatch");
+      const session = getMockSession();
+      expect(session.oidcFlow).toBe("link");
+      expect(session.oidcState).toBe("link-state");
+      expect(session.oidcVerifier).toBe("link-verifier");
+    });
+
+    it("returns failures to the popup page, not the login page", async () => {
+      await seedLinked();
+      const res = await callRoute(GET, { method: "GET", searchParams: { code: "c", state: "wrong" } });
+      const loc = new URL(res.headers.get("location")!);
+      expect(loc.pathname).toBe("/login/reauth");
+      expect(loc.searchParams.get("error")).toBe("state_mismatch");
+      expect(getMockSession().authenticatedAt).toBe(1);
+    });
+  });
 });

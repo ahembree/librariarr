@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
-import { cleanDatabase, disconnectTestDb } from "../../setup/test-db";
+import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
 import {
   callRoute,
@@ -419,5 +419,43 @@ describe("GET /api/media/stats", () => {
     expect(body.topSeries.map((s) => s.parentTitle)).toEqual(["The Office", "The Office"]);
     expect(body.topSeries[0].totalPlays).toBe(9);
     expect(body.topSeries[1].totalPlays).toBe(2);
+  });
+
+  it("counts an artist and album spread across servers once", async () => {
+    const user = await createTestUser();
+    const serverA = await createTestServer(user.id, { name: "A" });
+    const serverB = await createTestServer(user.id, { name: "B" });
+    const libA = await createTestLibrary(serverA.id, { type: "MUSIC" });
+    const libB = await createTestLibrary(serverB.id, { type: "MUSIC" });
+    const prisma = getTestPrisma();
+
+    // Radiohead: OK Computer only on A, Kid A only on B, and the two halves of
+    // one album split across servers. Each server has its own rating keys.
+    const tracks = [
+      { lib: libA.id, album: "OK Computer", artistKey: "a-art", albumKey: "a-okc", title: "Airbag" },
+      { lib: libB.id, album: "Kid A", artistKey: "b-art", albumKey: "b-kida", title: "Idioteque" },
+      { lib: libA.id, album: "In Rainbows", artistKey: "a-art", albumKey: "a-ir", title: "Nude" },
+      { lib: libB.id, album: "in rainbows ", artistKey: "b-art", albumKey: "b-ir", title: "Reckoner" },
+    ];
+    for (const t of tracks) {
+      const item = await createTestMediaItem(t.lib, {
+        type: "MUSIC", title: t.title, parentTitle: t.lib === libB.id ? "radiohead" : "Radiohead",
+        albumTitle: t.album,
+      });
+      await prisma.mediaItem.update({
+        where: { id: item.id },
+        data: { grandparentRatingKey: t.artistKey, parentRatingKey: t.albumKey, dedupCanonical: true },
+      });
+    }
+
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    const body = await expectJson<{ artistCount: number; albumCount: number; musicCount: number }>(
+      await callRoute(GET, { url: "/api/media/stats" }),
+      200,
+    );
+
+    expect(body.musicCount).toBe(4);
+    expect(body.artistCount).toBe(1);
+    expect(body.albumCount).toBe(3);
   });
 });

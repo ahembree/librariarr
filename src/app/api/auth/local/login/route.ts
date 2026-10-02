@@ -5,7 +5,14 @@ import bcrypt from "bcryptjs";
 import { apiLogger } from "@/lib/logger";
 import { validateRequest, authLoginSchema } from "@/lib/validation";
 import { checkAuthRateLimit } from "@/lib/rate-limit/rate-limiter";
-import { getSsoSettings, isSsoOverrideActive, isSsoUsable } from "@/lib/sso/config";
+import { loadPasswordSignInState, passwordSignInEnabled } from "@/lib/auth/password-sign-in";
+
+/**
+ * A real cost-12 bcrypt hash of a throwaway string. Compared against on the
+ * unknown-username path purely to equalise timing; nothing ever matches it.
+ */
+const UNKNOWN_USER_DUMMY_HASH =
+  "$2b$12$Hx3w06n5Vs5p8Ajdvdz9FuOw0kR7BGtKcAGI4PyfqiNglFBMsoFY6";
 
 export async function POST(request: NextRequest) {
   try {
@@ -29,16 +36,12 @@ export async function POST(request: NextRequest) {
     // credentials. ssoUsable is already false under override
     // (getSsoSettings forces ssoEnabled=false), so that part of the gate
     // takes care of itself.
-    const [settings, ssoSettings] = await Promise.all([
-      prisma.appSettings.findFirst({ select: { localAuthEnabled: true } }),
-      getSsoSettings(),
-    ]);
-    const overrideActive = isSsoOverrideActive();
-    const localAuthEnabled = overrideActive
-      ? true
-      : (settings?.localAuthEnabled ?? false);
-    const ssoUsable = isSsoUsable(ssoSettings);
-    if (!localAuthEnabled || ssoUsable) {
+    //
+    // The rule lives in password-sign-in.ts: every other place a password is
+    // proof (the API-key step-up, "Confirm it's you", a credential change)
+    // applies the same one, so a password the login refuses counts for
+    // nothing anywhere.
+    if (!passwordSignInEnabled(await loadPasswordSignInState())) {
       return NextResponse.json(
         { error: "Invalid username or password" },
         { status: 401 }
@@ -50,6 +53,10 @@ export async function POST(request: NextRequest) {
     });
 
     if (!user || !user.passwordHash) {
+      // Burn the same bcrypt cost the known-user path pays, so the response
+      // time does not tell the caller whether the username exists (a cost-12
+      // compare is ~250ms; skipping it made an unknown name answer in ~5ms).
+      await bcrypt.compare(password, UNKNOWN_USER_DUMMY_HASH);
       return NextResponse.json(
         { error: "Invalid username or password" },
         { status: 401 }

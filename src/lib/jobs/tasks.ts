@@ -29,9 +29,11 @@ import {
   type SyncWatchHistoryPayload,
   type SyncIncrementalPayload,
   type UserPayload,
+  type LifecycleExecutionPayload,
 } from "@/lib/jobs/constants";
 import { syncTracearrHistory } from "@/lib/sync/sync-tracearr-history";
 import { recoverHistoryForNewItems } from "@/lib/sync/tracearr-backfill-additions";
+import { watchForCancel } from "@/lib/sync/cancel-watch";
 
 /** Remove completed/failed lifecycle actions older than the retention window. */
 export async function cleanupOldActions(): Promise<void> {
@@ -73,6 +75,12 @@ export async function runScheduledBackup(): Promise<void> {
     select: { backupRetentionCount: true },
   });
   const passphrase = await getBackupPassphrase();
+  if (!passphrase) {
+    logger.warn(
+      "Jobs",
+      "Scheduled backup is UNENCRYPTED — it contains plaintext secrets. Set a backup encryption password under Settings → General."
+    );
+  }
   await createBackup(passphrase);
   await pruneBackups(settings?.backupRetentionCount ?? 7);
   logger.info("Jobs", "Scheduled backup completed");
@@ -83,12 +91,15 @@ const dispatch: Task = async () => {
 };
 
 const syncServer: Task = async (payload) => {
-  const { serverId, libraryKey, skipWatchHistory, trigger } = payload as SyncServerPayload;
+  const { serverId, libraryKey, skipWatchHistory, trigger, syncJobId } = payload as SyncServerPayload;
 
   // Skip if a sync is already in progress for this server (belt-and-suspenders
   // alongside the queue serialization and the sync engine's own semaphore).
+  // RUNNING only: a PENDING row is a queued sync waiting for its job — usually
+  // this very job, whose row the sync route created at enqueue time — and the
+  // run below claims it. Counting PENDING here made every such job skip itself.
   const running = await prisma.syncJob.findFirst({
-    where: { mediaServerId: serverId, status: { in: ["RUNNING", "PENDING"] } },
+    where: { mediaServerId: serverId, status: "RUNNING" },
     select: { id: true },
   });
   if (running) {
@@ -105,6 +116,7 @@ const syncServer: Task = async (payload) => {
   await syncMediaServer(serverId, libraryKey, {
     ...(skipWatchHistory ? { skipWatchHistory: true } : {}),
     ...(trigger ? { trigger } : {}),
+    ...(syncJobId ? { syncJobId } : {}),
   });
 };
 
@@ -119,7 +131,7 @@ const syncServer: Task = async (payload) => {
 const TRACEARR_BACKFILL_SLICE_MS = 5 * 60_000;
 
 const syncWatchHistoryTask: Task = async (payload) => {
-  const { serverId } = payload as SyncWatchHistoryPayload;
+  const { serverId, incremental = false } = payload as SyncWatchHistoryPayload;
 
   // A full sync already refreshes watch history — if one is running/queued for
   // this server, skip the standalone refresh to avoid redundant work.
@@ -132,10 +144,17 @@ const syncWatchHistoryTask: Task = async (payload) => {
     return;
   }
 
-  const { count } = await syncWatchHistory(serverId);
+  // The realtime manager enqueues this per finished playback with
+  // `incremental`, so it appends only the plays since the last one rather than
+  // re-importing the server's whole history (see `WatchHistorySyncOptions`).
+  // Without the flag — `/api/sync/by-type`'s deferred refresh — it is the full
+  // replace, which is what reconciles plays the server has since deleted.
+  const { count } = await syncWatchHistory(serverId, undefined, undefined, { incremental });
   // Watch-history-derived caches (filters, stats) must drop so listings reflect
-  // the fresh play data instead of waiting out the TTL.
-  invalidateMediaCaches();
+  // the fresh play data instead of waiting out the TTL. An incremental run that
+  // appended nothing changed nothing, and it fires per playback, so it keeps
+  // every cached listing; a full replace may have removed rows even at count 0.
+  if (count > 0 || !incremental) invalidateMediaCaches();
   logger.info("Jobs", `Watch-history refresh for server ${serverId} synced ${count} entries`);
 };
 
@@ -155,13 +174,49 @@ const syncWatchHistoryTask: Task = async (payload) => {
  * walk ever reached the end — so a slice that dies to a restart, a deploy or a
  * crash simply picks up from the oldest play it managed to import.
  */
+/**
+ * How long a PENDING SyncJob row counts as "a requested sync is waiting".
+ * Bounded so a row whose job was lost (nothing claims it) cannot shrink every
+ * later backfill slice to one page forever.
+ */
+const REQUESTED_SYNC_WAIT_WINDOW_MS = 60 * 60_000;
+
+/**
+ * Is a sync someone asked for queued behind this job? The sync route creates
+ * its PENDING row at enqueue time, and nothing else leaves one behind while a
+ * MAIN_QUEUE job runs (the queue is serial), so a recent PENDING row is exactly
+ * that signal.
+ */
+async function requestedSyncWaiting(): Promise<boolean> {
+  const waiting = await prisma.syncJob.findFirst({
+    where: {
+      status: "PENDING",
+      startedAt: { gte: new Date(Date.now() - REQUESTED_SYNC_WAIT_WINDOW_MS) },
+    },
+    select: { id: true },
+  });
+  return waiting !== null;
+}
+
 const tracearrBackfill: Task = async (payload) => {
   const { serverId } = payload as SyncWatchHistoryPayload;
 
-  const result = await syncTracearrHistory(serverId, {
-    passes: "backfill",
-    deadlineMs: Date.now() + TRACEARR_BACKFILL_SLICE_MS,
-  });
+  // A slice holds the serial MAIN_QUEUE for up to five minutes, and a running
+  // job cannot be pre-empted. So the slice watches for a requested sync and
+  // ends itself at its next page boundary instead — the same resumable stop as
+  // a spent deadline, after which the requested sync (higher priority) runs
+  // and this re-enqueued slice follows it.
+  const waitingSync = watchForCancel(requestedSyncWaiting);
+  let result: Awaited<ReturnType<typeof syncTracearrHistory>>;
+  try {
+    result = await syncTracearrHistory(serverId, {
+      passes: "backfill",
+      deadlineMs: Date.now() + TRACEARR_BACKFILL_SLICE_MS,
+      yieldTo: () => waitingSync.signal.aborted,
+    });
+  } finally {
+    waitingSync.stop();
+  }
 
   // Re-import the plays of items that left the library and came back — their
   // `WatchHistory` was cascade-deleted with the old row, so they read as never
@@ -263,8 +318,11 @@ const lifecycleDetection: Task = async (payload) => {
 };
 
 const lifecycleExecution: Task = async (payload) => {
-  const { userId } = payload as UserPayload;
-  await executeLifecycleActions(userId);
+  const { userId, viaApiKey } = payload as LifecycleExecutionPayload;
+  // A run queued through the public API carries the key's name, which holds
+  // it to the API's destructive limits (see executeLifecycleActions).
+  if (viaApiKey) await executeLifecycleActions(userId, { viaApiKey });
+  else await executeLifecycleActions(userId);
 };
 
 const scheduledBackup: Task = async () => {

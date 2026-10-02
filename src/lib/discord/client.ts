@@ -163,6 +163,47 @@ export function buildMatchChangeEmbed(
   };
 }
 
+/**
+ * An API key was created or deleted. Sent whenever a webhook is set and
+ * `discordNotifyApiKeys` is on (the default): a key outlives the browser
+ * session that minted it, so this is the one notice that reveals a session
+ * someone else got hold of. Blue for created, grey for deleted; never the key.
+ */
+/** The fields of an API key a created/deleted notification shows. */
+export interface ApiKeyEmbedKey {
+  name: string;
+  prefix: string;
+  scopes: readonly string[];
+  expiresAt: Date | null;
+}
+
+export function buildApiKeyEmbed(event: "created" | "deleted", key: ApiKeyEmbedKey): DiscordEmbed {
+  const created = event === "created";
+  return {
+    title: created ? "API Key Created" : "API Key Deleted",
+    description: created
+      ? `A new key for the public API was created. If you did not do this, delete it under Settings → Authentication → API Keys and review who has access to your Librariarr login.`
+      : "An API key was deleted. Anything that was using it has lost access.",
+    color: created ? 0x3b82f6 : 0x6b7280,
+    fields: [
+      { name: "Name", value: key.name, inline: true },
+      { name: "Key", value: `${key.prefix}…`, inline: true },
+      ...(created
+        ? [
+            { name: "Scopes", value: key.scopes.join(", ") || "none", inline: false },
+            {
+              name: "Expires",
+              value: key.expiresAt ? key.expiresAt.toISOString() : "Never",
+              inline: true,
+            },
+          ]
+        : []),
+    ],
+    footer: { text: "Librariarr API Keys" },
+    timestamp: new Date().toISOString(),
+  };
+}
+
 // Amber for enabled, green for disabled
 export function buildMaintenanceEmbed(
   enabled: boolean,

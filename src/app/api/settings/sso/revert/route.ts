@@ -5,6 +5,13 @@ import { Prisma } from "@/generated/prisma/client";
 import { apiLogger } from "@/lib/logger";
 import { invalidateOidcDiscoveryCache } from "@/lib/sso/oidc-client";
 import { isSameOriginRequest } from "@/lib/url";
+import {
+  loadPasswordSignInState,
+  lockSignInSettings,
+  turnsPasswordSignInOn,
+} from "@/lib/auth/password-sign-in";
+import { hasRecentLogin } from "@/lib/auth/recent-login";
+import { reauthRequired } from "@/lib/auth/reauth";
 
 /**
  * Restore the previously-saved SSO configuration from the snapshot taken on
@@ -36,7 +43,7 @@ export async function POST(request: NextRequest) {
 
   const existing = await prisma.appSettings.findUnique({
     where: { userId: session.userId },
-    select: { previousSsoConfig: true },
+    select: { previousSsoConfig: true, user: { select: { passwordHash: true } } },
   });
 
   if (!existing || !existing.previousSsoConfig) {
@@ -71,10 +78,25 @@ export async function POST(request: NextRequest) {
   //
   // sessionVersion bump invalidates any stale sessions that referenced the
   // previous link.
+  //
+  // A revert leaves SSO off, which gives an existing password its power back
+  // when local login is on — a recent sign-in first, as for turning SSO off
+  // in the settings (password-sign-in.ts). Checked and written under the
+  // sign-in settings lock, against the state as it is then.
+  const userId = session.userId;
+  const hasPassword = !!existing.user?.passwordHash;
   try {
-    await prisma.$transaction([
-      prisma.appSettings.update({
-        where: { userId: session.userId },
+    const refused = await prisma.$transaction(async (tx) => {
+      await lockSignInSettings(tx);
+      const before = await loadPasswordSignInState(tx);
+      if (
+        turnsPasswordSignInOn(before, { localAuthEnabled: before.localAuthEnabled, sso: null }, hasPassword) &&
+        !hasRecentLogin(session)
+      ) {
+        return true;
+      }
+      await tx.appSettings.update({
+        where: { userId },
         data: {
           // Never auto-re-enable on revert. The admin opts back in via the
           // step 3 toggle once they've verified the restored config works.
@@ -91,9 +113,9 @@ export async function POST(request: NextRequest) {
           // Json columns use Prisma.JsonNull to explicitly null the value.
           previousSsoConfig: Prisma.JsonNull,
         },
-      }),
-      prisma.user.update({
-        where: { id: session.userId },
+      });
+      await tx.user.update({
+        where: { id: userId },
         data: {
           ssoSubject: null,
           ssoIssuer: null,
@@ -101,8 +123,10 @@ export async function POST(request: NextRequest) {
           ssoEnabled: false,
           sessionVersion: { increment: 1 },
         },
-      }),
-    ]);
+      });
+      return false;
+    });
+    if (refused) return reauthRequired(userId, "Reverting the SSO configuration");
   } catch (err) {
     // P2025 (record not found) — the admin row or AppSettings row was
     // deleted between the load above and this write (e.g. via the recovery

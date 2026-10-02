@@ -254,7 +254,9 @@ describe("RealtimeManager", () => {
     vi.advanceTimersByTime(30_000);
     expect(h.enqueueJob).toHaveBeenCalledWith(
       TASK_SYNC_WATCH_HISTORY,
-      { serverId: "j1" },
+      // One finished playback appends the new plays; it must never be the
+      // full re-import the by-type sync's deferred refresh runs.
+      { serverId: "j1", incremental: true },
       expect.objectContaining({ jobKey: "watch-history:j1", queueName: MAIN_QUEUE }),
     );
   });

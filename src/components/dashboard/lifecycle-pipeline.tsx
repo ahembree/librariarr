@@ -8,17 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatBytesNum, formatUntil } from "@/lib/format";
 import type { ScheduleInfo } from "@/components/dashboard/types";
-
-interface PipelineData {
-  ruleTotal: number;
-  ruleEnabled: number;
-  matchCount: number;
-  matchRuleSets: number;
-  pendingCount: number;
-  pendingBytes: number;
-  reclaimedBytes: number;
-  reclaimedActions: number;
-}
+import { pipelineStateFrom, type PipelineState } from "@/lib/dashboard/pipeline";
 
 function Stage({
   href,
@@ -57,44 +47,21 @@ function Stage({
  * CTA when no rule sets exist yet.
  */
 export function LifecyclePipeline({ scheduleInfo }: { scheduleInfo: ScheduleInfo | null }) {
-  const [data, setData] = useState<PipelineData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [failed, setFailed] = useState(false);
+  // null while the first load runs; every load replaces the whole state.
+  const [state, setState] = useState<PipelineState | null>(null);
 
   const load = useCallback(async () => {
-    {
-      const [rulesRes, matchesRes, statsRes] = await Promise.allSettled([
-        fetch("/api/lifecycle/rules").then((r) => (r.ok ? r.json() : null)),
-        fetch("/api/lifecycle/rules/matches").then((r) => (r.ok ? r.json() : null)),
-        fetch("/api/lifecycle/stats").then((r) => (r.ok ? r.json() : null)),
-      ]);
-
-      // Rules are the source of truth for "no rules yet" — if that fetch
-      // failed, don't show the create-your-first-rule CTA over an outage.
-      if (rulesRes.status !== "fulfilled" || rulesRes.value == null) {
-        setFailed(true);
-        setLoading(false);
-        return;
-      }
-
-      const ruleSets: { enabled: boolean }[] =
-        rulesRes.status === "fulfilled" ? (rulesRes.value?.ruleSets ?? []) : [];
-      const ruleMatches: { count: number }[] =
-        matchesRes.status === "fulfilled" ? (matchesRes.value?.ruleMatches ?? []) : [];
-      const stats = statsRes.status === "fulfilled" ? statsRes.value : null;
-
-      setData({
-        ruleTotal: ruleSets.length,
-        ruleEnabled: ruleSets.filter((r) => r.enabled).length,
-        matchCount: ruleMatches.reduce((a, g) => a + (g.count ?? 0), 0),
-        matchRuleSets: ruleMatches.filter((g) => (g.count ?? 0) > 0).length,
-        pendingCount: stats?.pendingCount ?? 0,
-        pendingBytes: Number(stats?.pendingBytes ?? 0),
-        reclaimedBytes: Number(stats?.totalBytesDeleted ?? 0),
-        reclaimedActions: stats?.actionCount ?? 0,
-      });
-      setLoading(false);
-    }
+    // A request that fails or rejects reads as null.
+    const get = (url: string) =>
+      fetch(url)
+        .then((r) => (r.ok ? r.json() : null))
+        .catch(() => null);
+    const [rules, matches, stats] = await Promise.all([
+      get("/api/lifecycle/rules"),
+      get("/api/lifecycle/rules/matches"),
+      get("/api/lifecycle/stats"),
+    ]);
+    setState(pipelineStateFrom(rules, matches, stats));
   }, []);
 
   useEffect(() => {
@@ -107,11 +74,11 @@ export function LifecyclePipeline({ scheduleInfo }: { scheduleInfo: ScheduleInfo
   useRealtime("lifecycle:detection-completed", load);
   useRealtime("lifecycle:action-executed", load);
 
-  if (loading) {
+  if (state === null) {
     return <Skeleton className="h-[92px] w-full rounded-[14px]" />;
   }
 
-  if (failed) {
+  if (state.status === "failed") {
     return (
       <div className="flex items-center gap-3 rounded-[14px] border bg-card px-5 py-4 shadow-[var(--shadow-card)] text-sm text-muted-foreground">
         <Recycle className="h-4 w-4 shrink-0" />
@@ -120,7 +87,8 @@ export function LifecyclePipeline({ scheduleInfo }: { scheduleInfo: ScheduleInfo
     );
   }
 
-  if (!data || data.ruleTotal === 0) {
+  const { data } = state;
+  if (data.ruleTotal === 0) {
     return (
       <div className="flex flex-col items-start gap-3 rounded-[14px] border bg-card px-5 py-4 shadow-[var(--shadow-card)] sm:flex-row sm:items-center">
         <span className="grid h-9 w-9 shrink-0 place-items-center rounded-[9px] border border-border bg-surface-2 text-muted-foreground">

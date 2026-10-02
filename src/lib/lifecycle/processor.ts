@@ -1,12 +1,26 @@
 import { prisma } from "@/lib/db";
-import type { Prisma } from "@/generated/prisma/client";
+import type { LibraryType, Prisma } from "@/generated/prisma/client";
 import { hasArrRules, hasSeerrRules, hasAnyActiveRules } from "@/lib/rules/lifecycle-engine";
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import { logger } from "@/lib/logger";
-import { normalizeTitle, executeAction, extractActionError } from "@/lib/lifecycle/actions";
+import { executeAction, extractActionError, describeActionError } from "@/lib/lifecycle/actions";
+import { actionTargetTitle, actionTitleSnapshot, type ActionTargetParts } from "@/lib/lifecycle/action-target";
+import { loadMemberEpisodes } from "@/lib/lifecycle/member-episodes";
+import { formatMediaItemTitle, seriesTitleOf } from "@/lib/media/display-title";
+import { matchIdentityChange } from "@/lib/lifecycle/match-identity";
+import { arrExternalIdsOf, arrIdSourceFor } from "@/lib/lifecycle/cross-server-copies";
+import { heldScheduledFor, loadGroupedActionHold } from "@/lib/lifecycle/grouped-action-hold";
+import { UnreachableInstances } from "@/lib/lifecycle/unreachable-instances";
 import { actionHonorsMemberIds, isDestructiveActionType } from "@/lib/lifecycle/action-types";
 import { checkDeleteCeiling } from "@/lib/lifecycle/delete-ceiling";
-import { findExceptionProtectedParents, isWholeRecordDestructiveAction } from "@/lib/lifecycle/exception-guard";
+import { reserveApiDestructive } from "@/lib/api-keys/destructive-budget";
+import {
+  findExceptedItemIds,
+  findExceptionProtectedGroups,
+  protectionKey,
+  isWholeRecordDestructiveAction,
+  type ProtectionTarget,
+} from "@/lib/lifecycle/exception-guard";
 import { actionConfigSignature } from "@/lib/lifecycle/action-signature";
 import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
 import { fetchSeerrMetadata } from "@/lib/lifecycle/fetch-seerr-metadata";
@@ -23,6 +37,31 @@ function formatTitleWithYear(title: string, year: number | null): string {
   const suffix = `(${year})`;
   if (title.endsWith(suffix)) return title;
   return `${title} ${suffix}`;
+}
+
+/**
+ * How this executor's log lines and notifications name the item an action ran
+ * on. A series action is stored against one representative episode but acts on
+ * the show, so it is named by the show — "<Show> SxxExx" when it acts on one
+ * episode (`actionTargetTitle`) — never by that episode's own title. A track is
+ * named by its artist, anything else by its own title.
+ */
+function executedTitle(action: ActionTargetParts): string {
+  const item = action.mediaItem;
+  if (item.type === "SERIES") return actionTargetTitle(action);
+  return item.parentTitle ?? item.title;
+}
+
+/**
+ * `executedTitle`, plus the year for an item named by its own title. A show or
+ * artist gets none: the year is the episode's or track's own, not the show's
+ * (a series action on "Breaking Bad" stored against a 2013 episode is not
+ * "Breaking Bad (2013)").
+ */
+function notificationTitle(action: ActionTargetParts & { mediaItem: { year: number | null } }): string {
+  const item = action.mediaItem;
+  if (item.type === "SERIES" || item.parentTitle) return executedTitle(action);
+  return formatTitleWithYear(item.title, item.year);
 }
 
 interface ActionSchedulingRuleSet {
@@ -170,13 +209,23 @@ export async function scheduleActionsForRuleSet(
   if (newItems.length > 0) {
     const scheduledFor = new Date();
     scheduledFor.setDate(scheduledFor.getDate() + ruleSet.actionDelayDays);
+    const externalIds = await arrExternalIdsOf(ruleSet.type as LibraryType, newItems);
+    // A show's or an artist's action waits out the one-time upgrade hold.
+    const hold = await loadGroupedActionHold(ruleSet.userId);
+    const dueAt = (item: Record<string, unknown>) =>
+      heldScheduledFor(scheduledFor, hold, { type: ruleSet.type, title: item.title, parentTitle: item.parentTitle });
 
     await prisma.lifecycleAction.createMany({
       data: newItems.map((item) => ({
         userId: ruleSet.userId,
         mediaItemId: item.id as string,
+        // The identity the executor re-checks before it acts. A series or
+        // artist match is its group: the show or artist as the title, no
+        // parent — see matchIdentityChange.
         mediaItemTitle: (item.title as string) ?? null,
         mediaItemParentTitle: (item.parentTitle as string | null) ?? null,
+        mediaItemYear: typeof item.year === "number" ? item.year : null,
+        mediaItemExternalId: externalIds.get(item.id as string) ?? null,
         ruleSetId: ruleSet.id,
         ruleSetName: ruleSet.name,
         ruleSetType: ruleSet.type,
@@ -186,7 +235,7 @@ export async function scheduleActionsForRuleSet(
         matchedMediaItemIds: episodeIdMap.get(item.id as string) ?? [],
         addArrTags: ruleSet.addArrTags,
         removeArrTags: ruleSet.removeArrTags,
-        scheduledFor,
+        scheduledFor: dueAt(item),
         arrInstanceId: ruleSet.arrInstanceId,
         targetQualityProfileId: ruleSet.targetQualityProfileId,
       })),
@@ -194,7 +243,7 @@ export async function scheduleActionsForRuleSet(
     });
 
     for (const item of newItems) {
-      logger.info("Lifecycle", `Scheduled ${ruleSet.actionType} for "${item.title}" on ${scheduledFor.toISOString()}`);
+      logger.info("Lifecycle", `Scheduled ${ruleSet.actionType} for "${item.title}" on ${dueAt(item).toISOString()}`);
     }
   }
 }
@@ -214,6 +263,21 @@ export async function processLifecycleRules(userId?: string) {
 
   // Cache Plex library items across rule sets to avoid redundant API calls
   const plexItemsCache = new Map<string, Array<{ title: string; ratingKey: string }>>();
+  // Arr/Seerr metadata shared across rule sets of the same owner + type
+  // (mirrors runDetection). Each Seerr request page makes Seerr query every
+  // Arr instance it knows, so re-walking the whole request list once per rule
+  // set multiplied the cost — and let rule sets in one run read different
+  // snapshots. A failed fetch is cached too, so the remaining rule sets of that
+  // type skip immediately (each through its own catch below).
+  const metadataCache = new Map<string, Promise<ArrDataMap | SeerrDataMap>>();
+  const loadMetadata = <T extends ArrDataMap | SeerrDataMap>(key: string, load: () => Promise<T>): Promise<T> => {
+    let pending = metadataCache.get(key);
+    if (!pending) {
+      pending = load();
+      metadataCache.set(key, pending);
+    }
+    return pending as Promise<T>;
+  };
 
   for (const ruleSet of ruleSets) {
     try {
@@ -262,12 +326,18 @@ export async function processLifecycleRules(userId?: string) {
 
       let arrData: ArrDataMap | undefined;
       if (hasArrRules(rules)) {
-        arrData = await fetchArrMetadata(ruleSet.userId, ruleSet.type);
+        const type = ruleSet.type;
+        arrData = await loadMetadata(`arr:${ruleSet.userId}:${type}`, () =>
+          fetchArrMetadata(ruleSet.userId, type),
+        );
       }
 
       let seerrData: SeerrDataMap | undefined;
       if (hasSeerrRules(rules) && ruleSet.type !== "MUSIC") {
-        seerrData = await fetchSeerrMetadata(ruleSet.userId, ruleSet.type);
+        const type = ruleSet.type;
+        seerrData = await loadMetadata(`seerr:${ruleSet.userId}:${type}`, () =>
+          fetchSeerrMetadata(ruleSet.userId, type),
+        );
       }
 
       // Snapshot previous match IDs before detection writes new ones (for notifications)
@@ -332,8 +402,10 @@ export async function processLifecycleRules(userId?: string) {
                     select: { title: true, parentTitle: true, titleSort: true },
                     orderBy: { titleSort: "asc" },
                   });
+                  // A series match is its show in either scope, stored against
+                  // one representative episode — never name it by that episode.
                   removedTitles = removedItems.map((item) =>
-                    ruleSet.seriesScope && item.parentTitle ? item.parentTitle : item.title
+                    ruleSet.type === "SERIES" || ruleSet.seriesScope ? seriesTitleOf(item) : item.title
                   );
                 }
 
@@ -383,6 +455,16 @@ async function notifyDeleteCeilingReached(
   userId: string,
   verdict: { count: number; limit: number | null },
 ): Promise<void> {
+  await notifyDeletionHeld(
+    userId,
+    `This run would have deleted **${verdict.count}** item(s), above the ` +
+      `configured limit of **${verdict.limit}**.\n\nNothing was deleted. The ` +
+      `actions are still pending — review them on the Pending page and execute ` +
+      `them there if they are correct, or raise the limit in Settings.`,
+  );
+}
+
+async function notifyDeletionHeld(userId: string, description: string): Promise<void> {
   const settings = await prisma.appSettings.findFirst({
     where: { userId },
     select: { discordWebhookUrl: true },
@@ -393,11 +475,7 @@ async function notifyDeleteCeilingReached(
     embeds: [
       {
         title: "Lifecycle deletion held for review",
-        description:
-          `This run would have deleted **${verdict.count}** item(s), above the ` +
-          `configured limit of **${verdict.limit}**.\n\nNothing was deleted. The ` +
-          `actions are still pending — review them on the Pending page and execute ` +
-          `them there if they are correct, or raise the limit in Settings.`,
+        description,
         color: 0xf59e0b,
         timestamp: new Date().toISOString(),
       },
@@ -405,7 +483,28 @@ async function notifyDeleteCeilingReached(
   });
 }
 
-export async function executeLifecycleActions(userId?: string) {
+// A held API-queued run tells Discord at most once per 15 minutes: the run is
+// cheap to queue again, and a client doing so in a loop while the limits hold
+// it would otherwise post a message per call. Every hold is still logged.
+const API_HOLD_NOTICE_INTERVAL_MS = 15 * 60 * 1000;
+let lastApiHoldNoticeAt = Number.NEGATIVE_INFINITY;
+
+/** Forget when the last API hold was announced. Tests only. */
+export function resetApiHoldNotices(): void {
+  lastApiHoldNoticeAt = Number.NEGATIVE_INFINITY;
+}
+
+interface ExecuteLifecycleOptions {
+  /**
+   * The name of the API key that queued this run (`POST /api/v1/jobs/execution`).
+   * Such a run is also held by the public API's destructive limits — see
+   * `src/lib/api-keys/limits.ts` — because a key must not be able to delete
+   * more through a queued run than it could by executing items directly.
+   */
+  viaApiKey?: string;
+}
+
+export async function executeLifecycleActions(userId?: string, options: ExecuteLifecycleOptions = {}) {
   const pendingActions = await prisma.lifecycleAction.findMany({
     where: {
       status: "PENDING",
@@ -471,57 +570,37 @@ export async function executeLifecycleActions(userId?: string) {
     select: { userId: true, mediaItemId: true },
   });
   const exceptionSet = new Set(allExceptions.map((e) => `${e.userId}:${e.mediaItemId}`));
+  // An exception on ANOTHER copy of an action's item or member — the same
+  // dedupKey on another server — protects it too: the action acts on the Arr
+  // record every copy is backed by. Excluding a title from the library page of
+  // the copy detection did not keep left the kept copy's action armed.
+  for (const uid of new Set(allExceptions.map((e) => e.userId))) {
+    const candidates = pendingActions
+      .filter((a) => a.userId === uid)
+      .flatMap((a) => [a.mediaItemId, ...(a.matchedMediaItemIds ?? [])])
+      .filter((id): id is string => !!id);
+    for (const id of await findExceptedItemIds(uid, candidates)) exceptionSet.add(`${uid}:${id}`);
+  }
 
   // Batch the whole-record sibling-exception lookup (exception inviolability,
   // part 2 — see the per-action check below) once per run instead of once per
-  // action: findExceptionProtectedParents is batch-shaped, and when the user
-  // has no exceptions at all there is nothing to look up.
-  const wholeRecordTargetsByUser = new Map<string, Array<{ parentTitle: string; type: string }>>();
+  // action: findExceptionProtectedGroups is batch-shaped, and when the user
+  // has no exceptions at all there is nothing to look up. Targets are the
+  // mediaItem rows themselves so the guard can key on `seriesKey`.
+  const wholeRecordTargetsByUser = new Map<string, ProtectionTarget[]>();
   for (const a of pendingActions) {
-    if (!a.mediaItem?.parentTitle || !isWholeRecordDestructiveAction(a.actionType)) continue;
+    if (!a.mediaItem || !isWholeRecordDestructiveAction(a.actionType)) continue;
+    if (!protectionKey(a.mediaItem)) continue;
     const targets = wholeRecordTargetsByUser.get(a.userId) ?? [];
-    targets.push({ parentTitle: a.mediaItem.parentTitle, type: a.mediaItem.type });
+    targets.push(a.mediaItem);
     wholeRecordTargetsByUser.set(a.userId, targets);
   }
-  const protectedParentsByUser = new Map<string, Set<string>>();
+  const protectedGroupsByUser = new Map<string, Set<string>>();
   if (allExceptions.length > 0) {
     for (const [uid, targets] of wholeRecordTargetsByUser) {
-      protectedParentsByUser.set(uid, await findExceptionProtectedParents(uid, targets));
+      protectedGroupsByUser.set(uid, await findExceptionProtectedGroups(uid, targets));
     }
   }
-
-  // BLAST-RADIUS CEILING. Applied here — after the stale-match, exception and
-  // item-existence filtering above, so the number reflects what would ACTUALLY
-  // be destroyed rather than what was merely scheduled.
-  //
-  // Grouped per user because the ceiling is a per-user setting and this executor
-  // can run for all of them; one user's runaway rule set must not hold another's
-  // legitimate run. Blocked actions stay PENDING and untouched, so the Pending
-  // page's existing Execute button IS the manual approval — there is no separate
-  // approval queue to build or to get out of sync.
-  const blockedUserIds = new Set<string>();
-  {
-    const destructiveByUser = new Map<string, string[]>();
-    for (const a of pendingActions) {
-      if (!a.mediaItem || !a.mediaItemId) continue;
-      const list = destructiveByUser.get(a.userId) ?? [];
-      list.push(a.actionType);
-      destructiveByUser.set(a.userId, list);
-    }
-    for (const [uid, actionTypes] of destructiveByUser) {
-      const verdict = await checkDeleteCeiling(uid, actionTypes);
-      if (verdict.allowed) continue;
-      blockedUserIds.add(uid);
-      logger.warn(
-        "Lifecycle",
-        `Holding this run's destructive actions — ${verdict.reason} ` +
-          `They remain pending and can be executed from the Pending page.`,
-      );
-      await notifyDeleteCeilingReached(uid, verdict).catch(() => {});
-    }
-  }
-
-  logger.info("Lifecycle", `Processing ${pendingActions.length} pending actions (${currentMatches.length} current matches across ${ruleSetIds.length} rule sets)`);
 
   // Track server/library pairs that need a sync after destructive actions
   const librariesToSync = new Map<string, { serverId: string; libraryKey: string }>();
@@ -543,6 +622,23 @@ export async function executeLifecycleActions(userId?: string) {
     failures: { title: string; error: string }[];
   }>();
 
+  // A series action on exactly one episode other than the one it is stored
+  // against is named after that episode ("<Show> SxxExx"), so look those up —
+  // once for the run as scheduled, and again below for what pass 1 leaves.
+  const memberEpisodes = await loadMemberEpisodes(pendingActions);
+
+  // PASS 1 — cancel or narrow. Every check here runs BEFORE the ceiling is
+  // counted, so the count is what the run would actually destroy: counting the
+  // raw pending list included actions about to be cancelled as stale, excepted
+  // or identity-swapped, and a held run (which `continue`d ahead of these
+  // checks) cleaned none of them up, so the next run counted them again.
+  type Pending = (typeof pendingActions)[number];
+  const executable: Array<{
+    action: Pending;
+    mediaItem: NonNullable<Pending["mediaItem"]>;
+    filteredMatchedIds: string[];
+  }> = [];
+
   for (const action of pendingActions) {
     // Delete actions whose media item no longer exists
     if (!action.mediaItem || !action.mediaItemId) {
@@ -551,14 +647,8 @@ export async function executeLifecycleActions(userId?: string) {
       continue;
     }
 
-    // Held by the ceiling: leave it PENDING and untouched so the Pending page
-    // can execute it after review. Only destructive actions are held — an
-    // unmonitor or a tag scheduled in the same run still applies.
-    if (blockedUserIds.has(action.userId) && isDestructiveActionType(action.actionType)) {
-      continue;
-    }
-
     const mediaItem = action.mediaItem;
+    const target = actionTargetTitle({ ...action, mediaItem, memberEpisodes });
 
     // Permanent-invalidity backstop: a MUSIC rule set with Seerr criteria can
     // never evaluate (Seerr has no music requests), so its matches are the
@@ -578,30 +668,55 @@ export async function executeLifecycleActions(userId?: string) {
     // Delete actions for items excluded via LifecycleException
     if (exceptionSet.has(`${action.userId}:${action.mediaItemId}`)) {
       await prisma.lifecycleAction.delete({ where: { id: action.id } });
-      logger.info("Lifecycle", `Deleted action ${action.id} — "${mediaItem.title}" is excluded via lifecycle exception`);
+      logger.info("Lifecycle", `Deleted action ${action.id} — "${formatMediaItemTitle(mediaItem)}" is excluded via lifecycle exception`);
       continue;
     }
 
     // Delete actions for items that are no longer a current match
     if (!matchSet.has(`${action.ruleSetId}:${action.mediaItemId}`)) {
       await prisma.lifecycleAction.delete({ where: { id: action.id } });
-      logger.info("Lifecycle", `Deleted stale action ${action.id} — "${mediaItem.title}" is no longer a match for rule set "${action.ruleSet?.name ?? action.ruleSetId}"`);
+      logger.info("Lifecycle", `Deleted stale action ${action.id} — "${target}" is no longer a match for rule set "${action.ruleSet?.name ?? action.ruleSetId}"`);
       continue;
     }
 
-    // Identity-swap guard: the action's title was snapshotted at creation;
-    // the joined mediaItem is the CURRENT row. If they no longer denote the
-    // same work (e.g. a Plex "Fix Match" / Jellyfin "Identify" rewrote this
-    // ratingKey's row to different content with different external ids before
-    // detection removed the now-stale match), the Arr resolution would target
-    // the NEW item — which never matched. Refuse rather than act on it.
-    if (
-      action.mediaItemTitle &&
-      mediaItem.title &&
-      normalizeTitle(action.mediaItemTitle) !== normalizeTitle(mediaItem.title)
-    ) {
-      await prisma.lifecycleAction.delete({ where: { id: action.id } });
-      logger.warn("Lifecycle", `Cancelled action ${action.id} — item identity changed since scheduling ("${action.mediaItemTitle}" → "${mediaItem.title}"); will re-evaluate on next detection`);
+    // Identity-swap guard: the action recorded its item's identity (titles,
+    // year, Arr external id) when it was scheduled; the joined mediaItem is
+    // the CURRENT row. If they no longer denote the same work (e.g. a Plex
+    // "Fix Match" / Jellyfin "Identify" rewrote this ratingKey's row to
+    // different content with different external ids before detection removed
+    // the now-stale match), the Arr resolution would target the NEW item —
+    // which never matched. Refuse rather than act on it.
+    //
+    // Compared through matchIdentityChange, never title to title: a series or
+    // artist action records its GROUP (title = the show or artist, parent
+    // cleared) against a representative episode or track, whose own title is
+    // the episode's or track's. A direct comparison read every one of them as
+    // a Fix Match ("Breaking Bad" → "Pilot") and cancelled it when due, so no
+    // scheduled series or artist action ever ran.
+    const ruleSetType = (action.ruleSet?.type ?? action.ruleSetType) as LibraryType;
+    const identityChange = matchIdentityChange(
+      {
+        title: action.mediaItemTitle,
+        parentTitle: action.mediaItemParentTitle,
+        year: action.mediaItemYear,
+        externalIds: action.mediaItemExternalId
+          ? [{ source: arrIdSourceFor(ruleSetType), externalId: action.mediaItemExternalId }]
+          : [],
+      },
+      mediaItem,
+      ruleSetType,
+    );
+    if (identityChange) {
+      // The stored match describes the work that was there too, so it goes
+      // with the action and the next detection evaluates the item as it is
+      // now. Left in place, a sticky rule set would re-schedule from that old
+      // snapshot every run and this check would cancel it every time it came
+      // due — and a kept match's snapshot is otherwise never rewritten.
+      await prisma.$transaction([
+        prisma.lifecycleAction.delete({ where: { id: action.id } }),
+        prisma.ruleMatch.deleteMany({ where: { ruleSetId: action.ruleSetId!, mediaItemId: mediaItem.id } }),
+      ]);
+      logger.warn("Lifecycle", `Cancelled action ${action.id} — item identity changed since scheduling (${identityChange}); will re-evaluate on next detection`);
       continue;
     }
 
@@ -625,11 +740,11 @@ export async function executeLifecycleActions(userId?: string) {
         const stillMatching = filteredMatchedIds.filter((mid) => currentMembers.has(mid));
         if (stillMatching.length === 0) {
           await prisma.lifecycleAction.delete({ where: { id: action.id } });
-          logger.info("Lifecycle", `Deleted action ${action.id} — none of the originally targeted members for "${mediaItem.title}" still match`);
+          logger.info("Lifecycle", `Deleted action ${action.id} — none of the originally targeted members for "${target}" still match`);
           continue;
         }
         if (stillMatching.length < filteredMatchedIds.length) {
-          logger.info("Lifecycle", `Dropped ${filteredMatchedIds.length - stillMatching.length} member(s) from action on "${mediaItem.title}" that no longer match`);
+          logger.info("Lifecycle", `Dropped ${filteredMatchedIds.length - stillMatching.length} member(s) from action on "${target}" that no longer match`);
         }
         filteredMatchedIds = stillMatching;
       }
@@ -641,7 +756,7 @@ export async function executeLifecycleActions(userId?: string) {
       if (filteredMatchedIds.length === 0) {
         // All targeted episodes/tracks are now excepted — cancel the action
         await prisma.lifecycleAction.delete({ where: { id: action.id } });
-        logger.info("Lifecycle", `Deleted action ${action.id} — all targeted episodes/tracks for "${mediaItem.title}" are excluded via lifecycle exceptions`);
+        logger.info("Lifecycle", `Deleted action ${action.id} — all targeted episodes/tracks for "${target}" are excluded via lifecycle exceptions`);
         continue;
       }
       if (filteredMatchedIds.length < original.length) {
@@ -653,30 +768,132 @@ export async function executeLifecycleActions(userId?: string) {
         // below and are safe to proceed.
         if (isDestructiveActionType(action.actionType) && !actionHonorsMemberIds(action.actionType)) {
           await prisma.lifecycleAction.delete({ where: { id: action.id } });
-          logger.warn("Lifecycle", `Cancelled whole-record action ${action.id} on "${mediaItem.title}" — ${original.length - filteredMatchedIds.length} member(s) are excepted and a ${action.actionType} cannot exclude them`);
+          logger.warn("Lifecycle", `Cancelled whole-record action ${action.id} on "${target}" — ${original.length - filteredMatchedIds.length} member(s) are excepted and a ${action.actionType} cannot exclude them`);
           continue;
         }
-        logger.info("Lifecycle", `Filtered ${original.length - filteredMatchedIds.length} excepted episodes/tracks from action on "${mediaItem.title}"`);
+        logger.info("Lifecycle", `Filtered ${original.length - filteredMatchedIds.length} excepted episodes/tracks from action on "${target}"`);
       }
     }
 
     // Exception inviolability, part 2: the member check above only sees the
     // MATCHED episodes/tracks. A whole-record destructive action destroys the
     // entire series/artist — including siblings the rule never matched — so an
-    // exception on ANY item of the same parent must also refuse the action.
-    // (Protected parents are batch-resolved before the loop.)
+    // exception on ANY item of the same group must also refuse the action.
+    // The group is `protectionKey` — `seriesKey` for a series, so an exception
+    // filed under another server's title for the same show still counts.
+    // (Protected groups are batch-resolved before the loop.)
+    const groupKey = protectionKey(mediaItem);
     if (
       isWholeRecordDestructiveAction(action.actionType) &&
-      mediaItem.parentTitle &&
-      protectedParentsByUser.get(action.userId)?.has(mediaItem.parentTitle)
+      groupKey &&
+      protectedGroupsByUser.get(action.userId)?.has(groupKey)
     ) {
       await prisma.lifecycleAction.delete({ where: { id: action.id } });
-      logger.warn("Lifecycle", `Cancelled whole-record action ${action.id} on "${mediaItem.parentTitle}" — an episode/track of it is excluded via lifecycle exception and a ${action.actionType} cannot exclude it`);
+      logger.warn("Lifecycle", `Cancelled whole-record action ${action.id} on "${target}" — an episode/track of it is excluded via lifecycle exception and a ${action.actionType} cannot exclude it`);
       continue;
     }
 
+    executable.push({ action, mediaItem, filteredMatchedIds });
+  }
+
+  // BLAST-RADIUS CEILING, counted over the pass-1 survivors.
+  //
+  // Grouped per user because the ceiling is a per-user setting and this executor
+  // can run for all of them; one user's runaway rule set must not hold another's
+  // legitimate run. Blocked actions stay PENDING and untouched, so the Pending
+  // page's existing Execute button IS the manual approval — there is no separate
+  // approval queue to build or to get out of sync.
+  const blockedUserIds = new Set<string>();
+  {
+    const destructiveByUser = new Map<string, string[]>();
+    for (const { action } of executable) {
+      const list = destructiveByUser.get(action.userId) ?? [];
+      list.push(action.actionType);
+      destructiveByUser.set(action.userId, list);
+    }
+    for (const [uid, actionTypes] of destructiveByUser) {
+      const verdict = await checkDeleteCeiling(uid, actionTypes);
+      if (verdict.allowed) continue;
+      blockedUserIds.add(uid);
+      logger.warn(
+        "Lifecycle",
+        `Holding this run's destructive actions — ${verdict.reason} ` +
+          `They remain pending and can be executed from the Pending page.`,
+      );
+      await notifyDeleteCeilingReached(uid, verdict).catch(() => {});
+    }
+  }
+
+  // PUBLIC API LIMITS, for a run queued through an API key: the same budget
+  // the execute endpoint charges (at most 25 items per request, 100 per hour
+  // across every key), counted over what the ceiling left runnable. Refused
+  // whole, like the ceiling — the actions stay pending for the schedule or the
+  // Pending page — and nothing is charged. Without this, queueing a run would
+  // be the way round the limits the execute endpoint enforces.
+  if (options.viaApiKey) {
+    const destructive = executable.filter(
+      ({ action }) => !blockedUserIds.has(action.userId) && isDestructiveActionType(action.actionType),
+    );
+    if (destructive.length > 0) {
+      const reservation = reserveApiDestructive(destructive.length);
+      if (!reservation.ok) {
+        const heldUsers = new Set(destructive.map(({ action }) => action.userId));
+        for (const uid of heldUsers) blockedUserIds.add(uid);
+        logger.warn(
+          "Lifecycle",
+          `Holding this run's destructive actions — it was queued through API key "${options.viaApiKey}": ` +
+            `${reservation.error} They remain pending for the scheduled run or the Pending page.`,
+        );
+        if (Date.now() - lastApiHoldNoticeAt >= API_HOLD_NOTICE_INTERVAL_MS) {
+          lastApiHoldNoticeAt = Date.now();
+          for (const uid of heldUsers) {
+            await notifyDeletionHeld(
+              uid,
+              `A lifecycle run queued through API key **${options.viaApiKey}** would have deleted ` +
+                `**${destructive.length}** item(s), more than the API may.\n\n${reservation.error}\n\n` +
+                `The actions are still pending: they run on the next scheduled execution, or from the Pending page.`,
+            ).catch(() => {});
+          }
+        }
+      }
+    }
+  }
+
+  logger.info(
+    "Lifecycle",
+    `Executing ${executable.length} of ${pendingActions.length} pending action(s) ` +
+      `(${currentMatches.length} current matches across ${ruleSetIds.length} rule sets)`,
+  );
+
+  // Pass 1 can narrow a member-scoped action down to one episode it was not
+  // stored against, which then names it.
+  const runningEpisodes = await loadMemberEpisodes(
+    executable.map(({ action, mediaItem, filteredMatchedIds }) => ({ ...action, mediaItem, matchedMediaItemIds: filteredMatchedIds })),
+  );
+
+  // PASS 2 — execute what survived.
+  // Arr instances that failed at the host level this run: their remaining
+  // actions stay PENDING for the next run rather than each paying the client's
+  // retry budget against a dead instance on the serial MAIN_QUEUE.
+  const unreachable = new UnreachableInstances();
+  const deferredByInstance = new Map<string, number>();
+  for (const { action, mediaItem, filteredMatchedIds } of executable) {
+    // Held by the ceiling: leave it PENDING and untouched so the Pending page
+    // can execute it after review. Only destructive actions are held — an
+    // unmonitor or a tag scheduled in the same run still applies.
+    if (blockedUserIds.has(action.userId) && isDestructiveActionType(action.actionType)) {
+      continue;
+    }
+    if (action.arrInstanceId && unreachable.get(action.arrInstanceId)) {
+      deferredByInstance.set(action.arrInstanceId, (deferredByInstance.get(action.arrInstanceId) ?? 0) + 1);
+      continue;
+    }
+
+    // The action as it runs — with the members pass 1 left it — which is also
+    // what its log line, notifications and history name (see `executedTitle`).
+    const running = { ...action, matchedMediaItemIds: filteredMatchedIds, mediaItem, memberEpisodes: runningEpisodes };
     try {
-      await executeAction({ ...action, matchedMediaItemIds: filteredMatchedIds, mediaItem });
+      await executeAction({ ...running, targetTitle: actionTargetTitle(running) });
 
       // Compute deleted bytes for stats tracking (only for delete actions)
       let deletedBytes: bigint | null = null;
@@ -684,9 +901,15 @@ export async function executeLifecycleActions(userId?: string) {
         if (action.actionType === "DELETE_SONARR" && mediaItem.parentTitle) {
           // Whole-series delete removes EVERY episode of the series, so count the
           // whole series' file size — not just the matched members, which
-          // under-counts when only a subset of episodes matched the rule.
+          // under-counts when only a subset of episodes matched the rule. The
+          // series is its `seriesKey`, not its title: two same-titled shows in
+          // one library are two series (the title only for a row without one).
           const agg = await prisma.mediaItem.aggregate({
-            where: { type: "SERIES", parentTitle: mediaItem.parentTitle, libraryId: mediaItem.libraryId },
+            where: {
+              type: "SERIES",
+              libraryId: mediaItem.libraryId,
+              ...(mediaItem.seriesKey ? { seriesKey: mediaItem.seriesKey } : { parentTitle: mediaItem.parentTitle }),
+            },
             _sum: { fileSize: true },
           });
           deletedBytes = agg._sum.fileSize ?? null;
@@ -713,16 +936,18 @@ export async function executeLifecycleActions(userId?: string) {
             status: "COMPLETED",
             executedAt: new Date(),
             deletedBytes,
-            mediaItemTitle: mediaItem.title,
-            mediaItemParentTitle: mediaItem.parentTitle,
+            // What it acted on, not what was scheduled: pass 1 may have dropped
+            // members that stopped matching or were excepted since.
+            matchedMediaItemIds: filteredMatchedIds,
+            ...actionTitleSnapshot(running),
           },
         }),
         prisma.ruleMatch.deleteMany({
-          where: { ruleSetId: action.ruleSetId!, mediaItemId: action.mediaItemId },
+          where: { ruleSetId: action.ruleSetId!, mediaItemId: mediaItem.id },
         }),
       ]);
 
-      logger.info("Lifecycle", `Executed ${action.actionType} for "${mediaItem.parentTitle ?? mediaItem.title}" in rule set "${action.ruleSet?.name ?? action.ruleSetId}"`);
+      logger.info("Lifecycle", `Executed ${action.actionType} for "${executedTitle(running)}" in rule set "${action.ruleSet?.name ?? action.ruleSetId}"`);
 
       // Queue a targeted library sync for destructive actions
       if (action.actionType.includes("DELETE") && mediaItem.library?.mediaServerId) {
@@ -743,22 +968,21 @@ export async function executeLifecycleActions(userId?: string) {
             titles: [],
           });
         }
-        const displayTitle = mediaItem.parentTitle ?? mediaItem.title;
-        const titleWithYear = formatTitleWithYear(displayTitle, mediaItem.year);
-        successesByRuleSet.get(key)!.titles.push(titleWithYear);
+        successesByRuleSet.get(key)!.titles.push(notificationTitle(running));
       }
 
     } catch (error) {
+      unreachable.record(action.arrInstanceId, error);
       const msg = extractActionError(error);
-      logger.error("Lifecycle", `Failed to execute action ${action.id}`, { error: msg });
+      logger.error("Lifecycle", `Failed to execute action ${action.id}`, { error: describeActionError(error) });
       await prisma.lifecycleAction.update({
         where: { id: action.id },
         data: {
           status: "FAILED",
           error: msg,
           executedAt: new Date(),
-          mediaItemTitle: mediaItem.title,
-          mediaItemParentTitle: mediaItem.parentTitle,
+          matchedMediaItemIds: filteredMatchedIds,
+          ...actionTitleSnapshot(running),
         },
       });
 
@@ -774,14 +998,21 @@ export async function executeLifecycleActions(userId?: string) {
             failures: [],
           });
         }
-        const displayTitle = mediaItem.parentTitle ?? mediaItem.title;
         failuresByRuleSet.get(key)!.failures.push({
-          title: formatTitleWithYear(displayTitle, mediaItem.year),
+          title: notificationTitle(running),
           error: msg,
         });
       }
 
     }
+  }
+
+  for (const [instanceId, count] of deferredByInstance) {
+    logger.warn(
+      "Lifecycle",
+      `Left ${count} action(s) pending for Arr instance ${instanceId} — it is not answering ` +
+        `(${describeActionError(unreachable.get(instanceId))}); they run on the next execution`,
+    );
   }
 
   // Batch-load Discord webhook settings for every user with notifications to send

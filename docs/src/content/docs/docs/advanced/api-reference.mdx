@@ -1,0 +1,15 @@
+---
+title: API Reference
+description: Interactive reference for the public /api/v1 API, generated from the version these docs were built from.
+tableOfContents: false
+---
+
+import ApiReference from "../../../../components/ApiReference.astro";
+
+Every endpoint of the [public API](/docs/advanced/api/), generated from the code these docs were built from. To try a request against your own Librariarr, set the server's **baseUrl** to its address, click **Authorize** and paste an [API key](/docs/advanced/api/#creating-an-api-key); nothing you enter is stored. The same document is served by your instance at `GET /api/v1/openapi.json` and downloadable under **Settings → Authentication → API Keys**.
+
+Your Librariarr has to allow the browser's request, and from this site it allows only reads. It sends no CORS headers, so **Try it out** works here only for `GET` requests, and only when your reverse proxy adds CORS headers. A `POST`, `PUT` or `DELETE` from another site is refused with `403` whatever the proxy allows, because Librariarr rejects any write whose `Origin` is not its own address. To try writes, use the **API docs** page inside Librariarr (**Settings → Authentication → API Keys → API docs**), which has neither limit.
+
+[Download the OpenAPI document](/openapi.json)
+
+<ApiReference />

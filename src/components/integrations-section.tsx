@@ -14,53 +14,43 @@ interface IntegrationsSectionProps {
   compact?: boolean;
 }
 
-interface IntegrationsData {
-  arrMatches: ArrMatch[];
-  seerrMatches: SeerrMatch[];
-}
-
 export function IntegrationsSection({ itemId, mediaType, hideQualityProfile, compact }: IntegrationsSectionProps) {
-  // Keyed by itemId so a stale response from a previous id doesn't render against the new one.
-  const [fetchState, setFetchState] = useState<{ forId: string; data: IntegrationsData | null } | null>(null);
-  const data = fetchState && fetchState.forId === itemId ? fetchState.data : null;
-  const loading = !fetchState || fetchState.forId !== itemId;
+  // Each source is fetched and rendered on its own: Arr answers from the local
+  // DB in milliseconds, while Seerr is a live call per instance — waiting for
+  // both hid the Arr card behind a spinner whenever Seerr was slow or down.
+  // Keyed by itemId so a stale response from a previous id doesn't render
+  // against the new one.
+  const isMusic = mediaType === "MUSIC";
+  const [arrState, setArrState] = useState<{ forId: string; matches: ArrMatch[] } | null>(null);
+  const [seerrState, setSeerrState] = useState<{ forId: string; matches: SeerrMatch[] } | null>(null);
+  const arrLoading = arrState?.forId !== itemId;
+  const seerrLoading = !isMusic && seerrState?.forId !== itemId;
 
   useEffect(() => {
     let cancelled = false;
-    void (async () => {
-      try {
-        const isMusic = mediaType === "MUSIC";
-        const [arrRes, seerrRes] = await Promise.all([
-          fetch(`/api/media/${itemId}/arr-info`)
-            .then((r) => r.json() as Promise<ArrInfoResponse>)
-            .catch(() => ({ matches: [] as ArrMatch[] })),
-          isMusic
-            ? Promise.resolve({ matches: [] as SeerrMatch[] } satisfies SeerrInfoResponse)
-            : fetch(`/api/media/${itemId}/seerr-info`)
-                .then((r) => r.json() as Promise<SeerrInfoResponse>)
-                .catch(() => ({ matches: [] as SeerrMatch[] })),
-        ]);
-        if (cancelled) return;
-        setFetchState({
-          forId: itemId,
-          data: {
-            arrMatches: arrRes.matches ?? [],
-            seerrMatches: seerrRes.matches ?? [],
-          },
+    fetch(`/api/media/${itemId}/arr-info`)
+      .then((r) => r.json() as Promise<ArrInfoResponse>)
+      .catch(() => ({ matches: [] as ArrMatch[] }))
+      .then((res) => {
+        if (!cancelled) setArrState({ forId: itemId, matches: res.matches ?? [] });
+      });
+    if (mediaType !== "MUSIC") {
+      fetch(`/api/media/${itemId}/seerr-info`)
+        .then((r) => r.json() as Promise<SeerrInfoResponse>)
+        .catch(() => ({ matches: [] as SeerrMatch[] }))
+        .then((res) => {
+          if (!cancelled) setSeerrState({ forId: itemId, matches: res.matches ?? [] });
         });
-      } catch {
-        if (cancelled) return;
-        setFetchState({ forId: itemId, data: null });
-      }
-    })();
+    }
     return () => {
       cancelled = true;
     };
   }, [itemId, mediaType]);
 
-  const arrMatches = data?.arrMatches ?? [];
-  const seerrMatches = data?.seerrMatches ?? [];
+  const arrMatches = arrLoading ? [] : arrState!.matches;
+  const seerrMatches = seerrLoading || isMusic ? [] : seerrState!.matches;
   const totalCount = arrMatches.length + seerrMatches.length;
+  const loading = totalCount === 0 && (arrLoading || seerrLoading);
 
   if (loading) {
     return (

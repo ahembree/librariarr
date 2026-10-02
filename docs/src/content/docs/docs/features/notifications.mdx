@@ -18,7 +18,7 @@ Send notifications to a Discord channel via webhook.
 1. In Discord, go to **Channel Settings → Integrations → Webhooks**
 2. Create a new webhook and copy the URL
 3. In Librariarr, go to **Settings → Notifications**
-4. Paste the webhook URL
+4. Paste the webhook URL (once saved it is shown masked — a webhook URL lets anyone post to the channel, so the app never returns it again; paste a new one to replace it)
 5. Optionally set a custom **username** (default: "Librariarr") and **avatar URL**
 6. Click **Test Webhook** to verify it works
 
@@ -31,6 +31,7 @@ Discord notifications are sent for:
 - **Lifecycle actions**: When rules execute actions (delete, unmonitor, etc.) — success or failure, for both scheduled and manual execution
 - **Match changes**: When rule detection finds new matches or removes stale ones (configurable per rule set)
 - **Maintenance mode**: When maintenance mode is toggled on/off
+- **API keys**: When a key for the [public API](/docs/advanced/api/) is created or deleted. On by default whenever a webhook is set (**Settings → Notifications → API keys**), because a key outlives the login session that created it — a creation you did not make is the sign of a stolen session, and the notification says what to do.
 
 Lifecycle notifications are configured **per rule set** via the `discordNotifyOnAction` and `discordNotifyOnMatch` toggles in the rule set settings.
 

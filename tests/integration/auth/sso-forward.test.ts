@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from "vitest";
 import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { clearMockSession, getMockSession } from "../../setup/mock-session";
 import { callRoute, createTestUser } from "../../setup/test-helpers";
@@ -100,6 +100,56 @@ describe("GET /api/auth/sso/forward — strict CSRF + manual link", () => {
     const res = await callRoute(GET, { method: "GET", headers: SAME_ORIGIN_HEADERS });
     const loc = new URL(res.headers.get("location")!);
     expect(loc.searchParams.get("sso_error")).toBe("sso_not_configured");
+  });
+
+  describe("with FORWARD_AUTH_SECRET set", () => {
+    const secret = "proxy-only-5f3a9c";
+    let previous: string | undefined;
+    beforeAll(() => {
+      previous = process.env.FORWARD_AUTH_SECRET;
+      process.env.FORWARD_AUTH_SECRET = secret;
+    });
+    afterAll(() => {
+      if (previous === undefined) delete process.env.FORWARD_AUTH_SECRET;
+      else process.env.FORWARD_AUTH_SECRET = previous;
+    });
+
+    async function linkedAlice() {
+      const user = await createTestUser();
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { ssoSubject: "alice", ssoIssuer: "forward-auth", ssoEnabled: true },
+      });
+      await seedForwardAuth(user.id);
+      return user;
+    }
+
+    // A client reaching the app's port directly can send the identity header
+    // itself; it cannot send the secret only the proxy knows.
+    it.each([
+      ["no secret header", {}],
+      ["a wrong secret", { "X-Librariarr-Proxy-Secret": "guess" }],
+      ["a secret of another length", { "X-Librariarr-Proxy-Secret": `${secret}x` }],
+    ])("refuses a spoofed identity header with %s", async (_label, extra) => {
+      await linkedAlice();
+      const res = await callRoute(GET, {
+        method: "GET",
+        headers: { ...SAME_ORIGIN_HEADERS, "Remote-User": "alice", ...extra },
+      });
+      const loc = new URL(res.headers.get("location")!);
+      expect(loc.searchParams.get("sso_error")).toBe("untrusted_proxy");
+      expect(getMockSession().isLoggedIn).toBeFalsy();
+    });
+
+    it("signs in when the proxy sends the secret", async () => {
+      const user = await linkedAlice();
+      const res = await callRoute(GET, {
+        method: "GET",
+        headers: { ...SAME_ORIGIN_HEADERS, "Remote-User": "alice", "X-Librariarr-Proxy-Secret": secret },
+      });
+      expect(new URL(res.headers.get("location")!).pathname).toBe("/");
+      expect(getMockSession()).toMatchObject({ isLoggedIn: true, userId: user.id });
+    });
   });
 
   it("redirects with missing_user_header when the configured header is absent", async () => {

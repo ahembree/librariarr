@@ -53,12 +53,43 @@ export async function enqueueJob(
 ): Promise<boolean> {
   try {
     const utils = await getWorkerUtils();
-    await utils.addJob(identifier, payload, spec);
+    await utils.addJob(identifier, payload, await keepQueuedPriority(spec));
     return true;
   } catch (error) {
     logger.error("Jobs", `Failed to enqueue job "${identifier}"`, { error: String(error) });
     return false;
   }
+}
+
+/**
+ * Never let a keyed enqueue make an already-queued job less urgent.
+ *
+ * graphile-worker's default `replace` mode overwrites the queued job's priority
+ * with the new spec's. A sync the user requested from Settings is queued at
+ * `REQUESTED_SYNC_PRIORITY` under `sync:<serverId>` — the same key the
+ * scheduler, the realtime layer and the incremental-sync fallback use at the
+ * default 0 — so any of them firing while it waited demoted it back behind
+ * every background job already queued. Keeps the queued job's priority when it
+ * is the more urgent one.
+ *
+ * Best-effort: a failed lookup enqueues with the caller's spec unchanged, as
+ * before, rather than failing the enqueue. The lookup and the add are not
+ * atomic, which only matters if a more urgent job is queued under the same key
+ * in between — the same outcome the replace had without this.
+ */
+async function keepQueuedPriority(spec: TaskSpec | undefined): Promise<TaskSpec | undefined> {
+  if (!spec?.jobKey) return spec;
+  try {
+    const { rows } = await getJobsPool().query<{ priority: number }>(
+      `SELECT "priority" FROM graphile_worker.jobs WHERE "key" = $1 AND "locked_at" IS NULL`,
+      [spec.jobKey],
+    );
+    const queued = rows[0]?.priority;
+    if (queued !== undefined && queued < (spec.priority ?? 0)) return { ...spec, priority: queued };
+  } catch (error) {
+    logger.warn("Jobs", `Could not read the queued priority for "${spec.jobKey}"`, { error: String(error) });
+  }
+  return spec;
 }
 
 /** Release pooled resources. Primarily used by tests. */

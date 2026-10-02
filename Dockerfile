@@ -1,11 +1,14 @@
 FROM node:22-alpine AS base
-RUN corepack enable
+# pnpm 12 ships as a native binary that corepack cannot launch, so install it
+# directly. Keep in step with "packageManager" in package.json.
+RUN npm install -g pnpm@12.8.1
 
 FROM base AS deps
 WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
-    pnpm install --frozen-lockfile --shamefully-hoist
+    pnpm install --frozen-lockfile --shamefully-hoist && \
+    node -p "require('./node_modules/prisma/package.json').version" > /prisma-version
 
 FROM base AS builder
 WORKDIR /app
@@ -26,14 +29,14 @@ RUN mkdir -p /sharp-runtime/node_modules && \
     cp -RL node_modules/@img /sharp-runtime/node_modules/@img
 
 # Isolated prisma CLI install with all transitive dependencies.
-# Pin the CLI to the SAME version range as the generated client (read from
-# package.json) so a future Prisma publish can't install a mismatched `latest`
-# CLI — a CLI/client major mismatch breaks `migrate deploy` / `db push` at
-# runtime and makes the image non-reproducible across builds of one commit.
+# Pinned to the EXACT version the lockfile resolved for the generated client
+# (written by the deps stage), not package.json's range: with the range, a
+# Prisma publish inside it changed what a build of the same commit installed,
+# and a CLI/client mismatch breaks `migrate deploy` / `db push` at runtime.
 FROM base AS prisma-cli
 WORKDIR /opt/prisma
-COPY package.json /tmp/app-package.json
-RUN PRISMA_VERSION="$(node -p "const p=require('/tmp/app-package.json');(p.devDependencies&&p.devDependencies.prisma)||(p.dependencies&&p.dependencies.prisma)")" && \
+COPY --from=deps /prisma-version /tmp/prisma-version
+RUN PRISMA_VERSION="$(cat /tmp/prisma-version)" && \
     echo "Pinning prisma CLI to ${PRISMA_VERSION}" && \
     npm init -y > /dev/null 2>&1 && \
     npm install --no-package-lock --no-fund --no-audit "prisma@${PRISMA_VERSION}"

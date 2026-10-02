@@ -78,7 +78,7 @@ describe("POST /api/lifecycle/rules/run", () => {
     });
     const body = await expectJson<{ ruleMatches: unknown[] }>(response, 200);
 
-    expect(mockRunDetection).toHaveBeenCalledWith(user.id, "rs-1", false);
+    expect(mockRunDetection).toHaveBeenCalledWith(user.id, "rs-1", false, expect.any(Array));
     expect(body.ruleMatches).toEqual(mockResult);
   });
 
@@ -95,7 +95,7 @@ describe("POST /api/lifecycle/rules/run", () => {
     });
     await expectJson(response, 200);
 
-    expect(mockRunDetection).toHaveBeenCalledWith(user.id, "rs-1", true);
+    expect(mockRunDetection).toHaveBeenCalledWith(user.id, "rs-1", true, expect.any(Array));
   });
 
   it("calls runDetection with undefined ruleSetId when not specified", async () => {
@@ -112,7 +112,7 @@ describe("POST /api/lifecycle/rules/run", () => {
     const body = await expectJson<{ ruleMatches: unknown[] }>(response, 200);
     expect(body.ruleMatches).toEqual([]);
 
-    expect(mockRunDetection).toHaveBeenCalledWith(user.id, undefined, false);
+    expect(mockRunDetection).toHaveBeenCalledWith(user.id, undefined, false, expect.any(Array));
   });
 
   it("schedules actions for a specific rule set when processActions is true", async () => {
@@ -366,6 +366,45 @@ describe("POST /api/lifecycle/rules/run", () => {
       expect(body.skipped[0].ruleSetId).toBe(paused.id);
       expect(body.skipped[0].name).toBe("Stale movies");
       expect(body.skipped[0].reason).toMatch(/no established play history/i);
+    });
+
+    // A rule set whose Arr/Seerr fetch THREW is configured correctly, so the
+    // evaluability re-derivation finds nothing to say about it. Unreported, a
+    // "Re-evaluate All" with Seerr down answered 200 with nothing skipped and
+    // the Matches page quietly kept the old rows.
+    it("names a rule set whose detection failed, with the sanitised reason", async () => {
+      const user = await createTestUser();
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      const server = await createTestServer(user.id);
+      const failing = await createTestRuleSet(user.id, {
+        name: "Unrequested",
+        rules: [{ field: "fileSize", operator: "gt", value: "1000" }],
+        serverIds: [server.id],
+      });
+
+      mockRunDetection.mockImplementation(
+        async (_u: string, _id: string | undefined, _full: boolean, failures?: unknown[]) => {
+          failures?.push({
+            ruleSetId: failing.id,
+            name: failing.name,
+            reason: "Detection failed: Seerr unreachable (http://192.168.1.20:5055): ECONNREFUSED",
+          });
+          return [];
+        },
+      );
+
+      const response = await callRoute(POST, {
+        url: "/api/lifecycle/rules/run",
+        method: "POST",
+        body: {},
+      });
+      const body = await expectJson<{ skipped: Array<{ ruleSetId: string; name: string; reason: string }> }>(response, 200);
+
+      expect(body.skipped).toHaveLength(1);
+      expect(body.skipped[0]).toMatchObject({ ruleSetId: failing.id, name: "Unrequested" });
+      expect(body.skipped[0].reason).toMatch(/Detection failed: Seerr unreachable/);
+      expect(body.skipped[0].reason).not.toContain("192.168.1.20");
     });
   });
 });

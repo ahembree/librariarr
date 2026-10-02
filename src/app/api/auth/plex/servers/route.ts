@@ -13,6 +13,12 @@ export async function GET() {
 
     const resources = await getPlexResources(session.plexToken);
 
+    // No `accessToken`: for a server the account owns, plex.tv can hand out
+    // the account's own token here, and a Plex token signs in to Librariarr
+    // (`POST /api/auth/plex/token`) with a fresh `authenticatedAt` — so any
+    // cookie that could read this list could pass every recent-login check.
+    // Adding a discovered server sends only its machine id; `POST
+    // /api/servers` looks the token up itself, behind a recent sign-in.
     const servers = resources
       .filter((r) => r.provides.includes("server") && r.owned)
       .map((s) => ({
@@ -21,15 +27,11 @@ export async function GET() {
         product: s.product,
         productVersion: s.productVersion,
         platform: s.platform,
-        accessToken: s.accessToken,
         connections: s.connections,
       }));
 
     apiLogger.info("Auth", `Found ${servers.length} owned Plex servers`);
 
-    // accessToken is intentionally included unsanitized — the onboarding flow
-    // needs it to register the server. This endpoint requires an active
-    // authenticated session with a valid plexToken.
     return NextResponse.json({ servers });
   } catch (error) {
     apiLogger.error("Auth", "Failed to fetch Plex servers", { error: String(error) });

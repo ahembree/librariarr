@@ -6,6 +6,7 @@ import { SonarrClient } from "@/lib/arr/sonarr-client";
 import { RadarrClient } from "@/lib/arr/radarr-client";
 import { LidarrClient } from "@/lib/arr/lidarr-client";
 import { SeerrClient } from "@/lib/seerr/seerr-client";
+import { sanitizeErrorDetail } from "@/lib/api/sanitize";
 
 /**
  * Aggregate reachability for the user's enabled Arr/Seerr integrations.
@@ -63,15 +64,17 @@ async function checkInstance(
         setTimeout(() => resolve({ ok: false, error: "Timed out after 5s" }), PER_INSTANCE_TIMEOUT_MS),
       ),
     ]);
+    // Error text from a failed connection can name the instance's private
+    // address or an internal path; the rest of the API scrubs it the same way.
     return {
       id,
       name,
       reachable: result.ok,
-      error: result.ok ? null : (result.error ?? "Unknown error"),
+      error: result.ok ? null : (sanitizeErrorDetail(result.error) ?? "Unknown error"),
     };
   } catch (error) {
     const msg = error instanceof Error ? error.message : "Connection failed";
-    return { id, name, reachable: false, error: msg };
+    return { id, name, reachable: false, error: sanitizeErrorDetail(msg) ?? "Connection failed" };
   }
 }
 

@@ -200,7 +200,7 @@ describe("watch-reconcile", () => {
       await addPlay(item.id, server.id, "admin", daysAgo(300));
       await addPlay(item.id, server.id, "roommate", newest);
 
-      const counts = await loadWatchCountsFromHistory(server.id, ["rk-1"]);
+      const counts = await loadWatchCountsFromHistory(server.id, ["rk-1"], library.id);
 
       expect(counts.get("rk-1")).toEqual({
         count: 2,
@@ -212,8 +212,8 @@ describe("watch-reconcile", () => {
       const { server, library } = await setup();
       await createTestMediaItem(library.id, { ratingKey: "rk-unplayed" });
 
-      expect(await loadWatchCountsFromHistory(server.id, ["rk-unplayed"])).toEqual(new Map());
-      expect(await loadWatchCountsFromHistory(server.id, [])).toEqual(new Map());
+      expect(await loadWatchCountsFromHistory(server.id, ["rk-unplayed"], library.id)).toEqual(new Map());
+      expect(await loadWatchCountsFromHistory(server.id, [], library.id)).toEqual(new Map());
     });
 
     it("reports lastWatchedAt 0 when every stored play has a null watchedAt", async () => {
@@ -221,7 +221,7 @@ describe("watch-reconcile", () => {
       const item = await createTestMediaItem(library.id, { ratingKey: "rk-null" });
       await addPlay(item.id, server.id, "roommate", null);
 
-      expect(await loadWatchCountsFromHistory(server.id, ["rk-null"])).toEqual(
+      expect(await loadWatchCountsFromHistory(server.id, ["rk-null"], library.id)).toEqual(
         new Map([["rk-null", { count: 1, lastWatchedAt: 0 }]]),
       );
     });
@@ -236,7 +236,7 @@ describe("watch-reconcile", () => {
       // the count AND lastWatchedAt.
       await addTracearrPlay(item.id, server.id, "kid", daysAgo(1), false);
 
-      const counts = await loadWatchCountsFromHistory(server.id, ["rk-mixed"]);
+      const counts = await loadWatchCountsFromHistory(server.id, ["rk-mixed"], library.id);
 
       expect(counts.get("rk-mixed")).toEqual({
         count: 2,
@@ -251,7 +251,7 @@ describe("watch-reconcile", () => {
 
       // No qualifying row means no GROUP BY group at all — the incremental sync
       // then leaves buildItemData's metadata-derived value alone.
-      expect(await loadWatchCountsFromHistory(server.id, ["rk-partial"])).toEqual(new Map());
+      expect(await loadWatchCountsFromHistory(server.id, ["rk-partial"], library.id)).toEqual(new Map());
     });
 
     it("does not leak another server's plays for the same ratingKey", async () => {
@@ -265,10 +265,41 @@ describe("watch-reconcile", () => {
       await addPlay(theirs.id, otherServer.id, "roommate", daysAgo(1));
       await addPlay(theirs.id, otherServer.id, "kid", daysAgo(2));
 
-      const counts = await loadWatchCountsFromHistory(server.id, ["shared-rk"]);
+      const counts = await loadWatchCountsFromHistory(server.id, ["shared-rk"], library.id);
       expect(counts.get("shared-rk")?.count).toBe(1);
       expect(counts.get("shared-rk")?.lastWatchedAt).toBe(
         Math.floor(daysAgo(100).getTime() / 1000),
+      );
+    });
+
+    it("keeps two libraries of the SAME server apart", async () => {
+      // `@@unique([libraryId, ratingKey])` makes a rating key unique within a
+      // library, not within a server — one server can hold the same key in two
+      // (a movie in "Movies" and in "Movies 4K"), which is why the incremental
+      // sync's `existingByRatingKey` maps to a LIST. The returned map is keyed
+      // by rating key and `processBatch` looks up by rating key, so without the
+      // library scope both items' plays were summed and the total written to
+      // both — inflating `playCount`, which is monotonic and never walked back.
+      const { user, server, library } = await setup();
+      const secondLibrary = await createTestLibrary(server.id, { type: "MOVIE" });
+      void user;
+      const inFirst = await createTestMediaItem(library.id, { ratingKey: "dup-rk" });
+      const inSecond = await createTestMediaItem(secondLibrary.id, { ratingKey: "dup-rk" });
+
+      await addPlay(inFirst.id, server.id, "admin", daysAgo(50));
+      await addPlay(inSecond.id, server.id, "roommate", daysAgo(1));
+      await addPlay(inSecond.id, server.id, "kid", daysAgo(2));
+
+      const first = await loadWatchCountsFromHistory(server.id, ["dup-rk"], library.id);
+      expect(first.get("dup-rk")?.count).toBe(1);
+      expect(first.get("dup-rk")?.lastWatchedAt).toBe(
+        Math.floor(daysAgo(50).getTime() / 1000),
+      );
+
+      const second = await loadWatchCountsFromHistory(server.id, ["dup-rk"], secondLibrary.id);
+      expect(second.get("dup-rk")?.count).toBe(2);
+      expect(second.get("dup-rk")?.lastWatchedAt).toBe(
+        Math.floor(daysAgo(1).getTime() / 1000),
       );
     });
   });
@@ -364,7 +395,7 @@ describe("watch-reconcile", () => {
 
       // The incremental sync's path over the same rows must agree — it feeds
       // buildItemData, which maxes into these very columns.
-      expect(await loadWatchCountsFromHistory(server.id, ["rk-provenance-mix"])).toEqual(
+      expect(await loadWatchCountsFromHistory(server.id, ["rk-provenance-mix"], library.id)).toEqual(
         new Map([
           [
             "rk-provenance-mix",

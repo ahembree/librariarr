@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
-import { SeerrClient, type SeerrRequest } from "@/lib/seerr/seerr-client";
+import { SeerrClient, type SeerrMediaInfo, type SeerrRequest } from "@/lib/seerr/seerr-client";
+import { walkSeerrRequests } from "@/lib/seerr/request-walk";
+import { seerrRequesterName } from "@/lib/seerr/seerr-data-map";
 import { apiLogger } from "@/lib/logger";
+import { withTimeout } from "@/lib/api/bounded";
 
 interface SeerrRequestSummary {
   id: number;
@@ -27,18 +30,12 @@ interface SeerrInfoResponse {
   matches: SeerrMatch[];
 }
 
-const REQUEST_PAGE_SIZE = 100;
-
-function summarizeRequester(req: SeerrRequest): string {
-  return req.requestedBy?.plexUsername || req.requestedBy?.username || req.requestedBy?.email || "Unknown";
-}
-
 function toSummary(req: SeerrRequest): SeerrRequestSummary {
   return {
     id: req.id,
     status: req.status,
     is4k: req.is4k,
-    requestedBy: summarizeRequester(req),
+    requestedBy: seerrRequesterName(req),
     createdAt: req.createdAt,
     updatedAt: req.updatedAt,
   };
@@ -46,36 +43,48 @@ function toSummary(req: SeerrRequest): SeerrRequestSummary {
 
 /**
  * Paginated fallback used when no TMDB ID is available (rare: series with only TVDB).
- * Walks /api/v1/request in pages of 100 until exhausted, filtering by external IDs.
+ * Walks the instance's whole request list (bounded, shift-tolerant — see
+ * `walkSeerrRequests`), filtering by external IDs.
  */
 async function findRequestsByPagination(
   client: SeerrClient,
-  mediaType: "movie" | "tv",
+  instanceName: string,
   tmdbId: string | null,
-  tvdbId: string | null,
-): Promise<{ requests: SeerrRequest[]; mediaStatus: number | null }> {
+  tvdbId: string,
+  signal: AbortSignal,
+): Promise<{ requests: SeerrRequest[]; media: SeerrMediaInfo | null }> {
   const matching: SeerrRequest[] = [];
-  let mediaStatus: number | null = null;
-  let skip = 0;
-  let hasMore = true;
+  let media: SeerrMediaInfo | null = null;
 
-  while (hasMore) {
-    const response = await client.getRequests({ take: REQUEST_PAGE_SIZE, skip, mediaType });
-    for (const req of response.results) {
-      const tmdbMatch = tmdbId !== null && String(req.media.tmdbId) === tmdbId;
-      const tvdbMatch =
-        mediaType === "tv" && tvdbId !== null && req.media.tvdbId !== null && String(req.media.tvdbId) === tvdbId;
-      if (tmdbMatch || tvdbMatch) {
-        matching.push(req);
-        if (mediaStatus === null && req.media?.status != null) mediaStatus = req.media.status;
-      }
+  await walkSeerrRequests(client, { instanceName, mediaType: "tv", failFast: true, signal }, (req) => {
+    const tmdbMatch = tmdbId !== null && String(req.media?.tmdbId) === tmdbId;
+    const tvdbMatch = req.media?.tvdbId != null && String(req.media.tvdbId) === tvdbId;
+    if (tmdbMatch || tvdbMatch) {
+      matching.push(req);
+      if (media === null && req.media) media = req.media;
     }
-    hasMore = response.results.length === REQUEST_PAGE_SIZE;
-    skip += REQUEST_PAGE_SIZE;
-  }
+  });
 
-  return { requests: matching, mediaStatus };
+  return { requests: matching, media };
 }
+
+/**
+ * The media status the card shows. Seerr tracks the 4K copy separately
+ * (`status4k`); when every request is a 4K one, the non-4K `status` describes
+ * a copy nobody asked for (typically still UNKNOWN), so report the 4K copy's.
+ */
+function pickMediaStatus(media: SeerrMediaInfo | null | undefined, requests: SeerrRequest[]): number | null {
+  if (!media) return null;
+  const only4k = requests.length > 0 && requests.every((r) => r.is4k);
+  return (only4k ? media.status4k ?? media.status : media.status) ?? null;
+}
+
+// Each instance is a live call (15s client timeout, plus retries). Query them
+// in parallel and give up on one that takes longer than this rather than
+// holding the detail page's Integrations section — Arr cards included — for
+// the slowest instance. The TVDB-only fallback walks a whole request list, so
+// the bound is looser than the health check's 5s.
+const PER_INSTANCE_TIMEOUT_MS = 10_000;
 
 export async function GET(
   _request: NextRequest,
@@ -123,16 +132,18 @@ export async function GET(
 
   const seerrInstances = await prisma.seerrInstance.findMany({
     where: { userId: session.userId!, enabled: true },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
   });
 
-  const matches: SeerrMatch[] = [];
-
-  for (const instance of seerrInstances) {
+  const queryInstance = async (
+    instance: (typeof seerrInstances)[number],
+    signal: AbortSignal,
+  ): Promise<SeerrMatch | null> => {
     try {
       const client = new SeerrClient(instance.url, instance.apiKey);
 
       let requests: SeerrRequest[] = [];
-      let mediaStatus: number | null = null;
+      let media: SeerrMediaInfo | null = null;
 
       // Fast path: per-media endpoint returns all associated requests in one call.
       // Both /movie/{id} and /tv/{id} are TMDB-based, so we need a TMDB ID to use it.
@@ -140,38 +151,61 @@ export async function GET(
         const tmdbNum = Number(tmdbId);
         if (Number.isFinite(tmdbNum)) {
           const details = mediaType === "movie"
-            ? await client.getMovie(tmdbNum)
-            : await client.getTvShow(tmdbNum);
+            ? await client.getMovie(tmdbNum, { signal })
+            : await client.getTvShow(tmdbNum, { signal });
           requests = details.mediaInfo?.requests ?? [];
-          mediaStatus = details.mediaInfo?.status ?? null;
+          media = details.mediaInfo ?? null;
         }
       }
 
-      // Fallback: TVDB-only series — walk /request to find matches.
-      if (requests.length === 0 && !tmdbId && tvdbId) {
-        const result = await findRequestsByPagination(client, mediaType, tmdbId, tvdbId);
+      // Fallback: TVDB-only series — walk /request to find matches. Series
+      // only: a movie request can be matched by TMDB id alone, so for a movie
+      // without one the walk could never find anything.
+      if (requests.length === 0 && !tmdbId && tvdbId && mediaType === "tv") {
+        const result = await findRequestsByPagination(client, instance.name, tmdbId, tvdbId, signal);
         requests = result.requests;
-        mediaStatus = result.mediaStatus;
+        media = result.media;
       }
 
-      if (requests.length === 0) continue;
+      if (requests.length === 0) return null;
 
-      const baseUrl = (instance.url || "").replace(/\/+$/, "");
-      const seerrUrl = tmdbId ? `${baseUrl}/${mediaType}/${tmdbId}` : null;
+      // The browser follows this link, so prefer the browser-facing URL. Seerr
+      // pages are keyed by TMDB id; a series matched through its TVDB id alone
+      // still has one — on the Seerr media the requests belong to.
+      const baseUrl = (instance.externalUrl || instance.url || "").replace(/\/+$/, "");
+      const linkTmdbId = tmdbId ?? (media?.tmdbId != null ? String(media.tmdbId) : null);
+      const seerrUrl = linkTmdbId ? `${baseUrl}/${mediaType}/${linkTmdbId}` : null;
 
-      matches.push({
+      return {
         instanceId: instance.id,
         instanceName: instance.name,
         matchedVia,
         externalId,
         seerrUrl,
-        mediaStatus,
+        mediaStatus: pickMediaStatus(media, requests),
         requests: requests.map(toSummary),
-      });
+      };
     } catch (error) {
+      // Cancelled because the bound below already gave up on it (and said so).
+      if (signal.aborted) return null;
       apiLogger.error("Media", `Failed to query Seerr instance ${instance.name}`, { error: String(error) });
+      return null;
     }
-  }
+  };
+
+  const settled = await Promise.all(
+    seerrInstances.map((instance) => {
+      // Cancelled when the bound gives up, so an abandoned lookup — above all
+      // the TVDB-only walk of a whole request list — stops paging Seerr
+      // instead of running on in the background after every page view.
+      const controller = new AbortController();
+      return withTimeout(queryInstance(instance, controller.signal), PER_INSTANCE_TIMEOUT_MS, () => {
+        controller.abort();
+        apiLogger.warn("Media", `Seerr instance ${instance.name} did not answer within ${PER_INSTANCE_TIMEOUT_MS / 1000}s`);
+      });
+    }),
+  );
+  const matches = settled.filter((m): m is SeerrMatch => m !== null);
 
   return NextResponse.json({ matches });
 }

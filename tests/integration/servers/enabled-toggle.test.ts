@@ -105,7 +105,8 @@ describe("Server enable/disable toggle", () => {
     it("skips connection test when disabling", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      // A new URL for a Plex server keeping its token needs a recent sign-in.
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
 
       // Send enabled=false with a bad URL — should succeed because connection test is skipped
       const response = await callRouteWithParams(

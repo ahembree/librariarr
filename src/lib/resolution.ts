@@ -74,3 +74,40 @@ export function normalizeResolutionFromDimensions(
   }
   return undefined;
 }
+
+/**
+ * SQL twin of `normalizeResolutionLabel()` for raw aggregate queries.
+ *
+ * `expr` is the column expression to label (e.g. `mi.resolution`). It
+ * mirrors the TS function step for step — lower-case, drop the FIRST `p`,
+ * look the result up, else read the leading digits the way `parseInt` does
+ * (`"1080i"` → 1080, `"abc"` → none) — because two hand-copied CASEs used to
+ * live in the series routes and drifted from it and from each other (one had
+ * 1080/720/480 cut-offs against the helper's 900/600/300, so a show's chips
+ * disagreed with its seasons'). `tests/integration/media/resolution-label-sql.test.ts`
+ * runs this CASE against the TS function over the same inputs.
+ */
+export function resolutionLabelSql(expr: string): string {
+  // LOWER + first-`p` removal, as `resolution.toLowerCase().replace("p", "")`.
+  const key = `regexp_replace(LOWER(${expr}), 'p', '')`;
+  // Leading digits after optional whitespace, as `parseInt` reads them; capped
+  // so the cast cannot overflow.
+  const height = `CAST(LEFT(substring(${key} from '^\\s*([0-9]+)'), 15) AS BIGINT)`;
+  return `CASE
+    WHEN ${expr} IS NULL OR ${expr} = '' THEN 'Other'
+    WHEN ${key} IN ('4k', '2160') THEN '4K'
+    WHEN ${key} = '1080' THEN '1080P'
+    WHEN ${key} = '720' THEN '720P'
+    WHEN ${key} = '480' THEN '480P'
+    WHEN ${key} IN ('360', 'sd') THEN 'SD'
+    WHEN ${key} ~ '^\\s*[0-9]' THEN
+      CASE
+        WHEN ${height} >= 2000 THEN '4K'
+        WHEN ${height} >= 900 THEN '1080P'
+        WHEN ${height} >= 600 THEN '720P'
+        WHEN ${height} >= 300 THEN '480P'
+        ELSE 'SD'
+      END
+    ELSE 'Other'
+  END`;
+}

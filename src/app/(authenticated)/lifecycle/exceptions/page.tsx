@@ -9,7 +9,6 @@ import { EmptyState } from "@/components/empty-state";
 import { TabNav } from "@/components/tab-nav";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -43,7 +42,7 @@ import {
   Trash2,
   Tv,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { formatEpisodeTitle } from "@/lib/media/display-title";
 import type { MediaItemWithRelations } from "@/lib/types";
 
 interface ExceptionItem {
@@ -73,6 +72,7 @@ interface ExceptionItem {
     studio: string | null;
     playCount: number;
     seasonNumber: number | null;
+    episodeNumber: number | null;
     lastPlayedAt: string | null;
     addedAt: string | null;
     library?: {
@@ -228,7 +228,9 @@ function groupExceptions(
       return {
         id: items[0].id,
         exceptionIds: items.map((i) => i.id),
-        displayTitle: seriesName,
+        // One excepted episode is that episode — its show and SxxExx — not
+        // the whole show its title would otherwise claim.
+        displayTitle: items.length === 1 ? formatEpisodeTitle(items[0].mediaItem) : seriesName,
         itemCount: items.length,
         seasonCount: seasons.size || undefined,
         reason: items[0].reason,

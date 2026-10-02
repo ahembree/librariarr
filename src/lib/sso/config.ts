@@ -1,3 +1,4 @@
+import type { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 
@@ -30,9 +31,16 @@ export function isSsoOverrideActive(): boolean {
 
 let overrideWarningLogged = false;
 
-/** Load SSO configuration from the singleton AppSettings row (or null if no admin yet). */
-export async function getSsoSettings(): Promise<SsoSettings | null> {
-  const settings = await prisma.appSettings.findFirst({
+/** Anything that can read AppSettings: the client, or a transaction's. */
+export type SettingsReader = Pick<Prisma.TransactionClient, "appSettings">;
+
+/**
+ * Load SSO configuration from the singleton AppSettings row (or null if no
+ * admin yet). `db` is a transaction's client when the read must see what that
+ * transaction's lock guarantees (see `lockSignInSettings`).
+ */
+export async function getSsoSettings(db: SettingsReader = prisma): Promise<SsoSettings | null> {
+  const settings = await db.appSettings.findFirst({
     select: {
       ssoEnabled: true,
       ssoMode: true,

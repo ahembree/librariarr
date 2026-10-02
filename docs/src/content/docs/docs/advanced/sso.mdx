@@ -36,6 +36,13 @@ Librariarr uses **manual linking**: SSO logins are never auto-provisioned. An
 admin must explicitly link an SSO subject identifier to an existing Librariarr
 user before that user can log in via SSO.
 
+Linking, by pasting a subject or through **Verify & Link via OIDC**, needs a
+sign-in from the last 15 minutes. A linked identity is a way in that outlasts
+the session, so a stolen session cookie alone cannot add one. If it has been
+longer, Librariarr asks you to confirm it's you — with your password, or by
+signing in again with Plex or SSO in a pop-up — and then links it, without
+signing you out.
+
 ### The "subject" — hashed ID vs username
 
 Every OIDC provider returns a `sub` claim that identifies the authenticated
@@ -228,8 +235,38 @@ authentication upstream and injects identity headers.
   directly (e.g. on the LAN at port 3000, or via another reverse-proxy route
   that doesn't enforce auth), they can spoof these headers and bypass
   authentication entirely. Block direct access at the firewall or bind the
-  container to localhost.
+  container to localhost, and set `FORWARD_AUTH_SECRET` (below) so a request
+  that did not come through the proxy is refused even if it reaches the app.
 </Aside>
+
+### Require a proxy secret
+
+Set the `FORWARD_AUTH_SECRET` environment variable on the Librariarr
+container to a random value, and have your proxy add it to every request as
+the `X-Librariarr-Proxy-Secret` header. Forward-auth sign-in then refuses any
+request without the matching header, which a client that reaches port 3000
+directly cannot send. Use an ASCII value, for example the output of
+`openssl rand -hex 32`. While the variable is unset, forward-auth works as
+before.
+
+```yaml title="docker-compose.yml"
+services:
+  librariarr:
+    environment:
+      - FORWARD_AUTH_SECRET=${FORWARD_AUTH_SECRET}
+```
+
+Add the header in the proxy:
+
+- **Traefik:** a `headers` middleware in the chain after your forward-auth
+  middleware:
+  `traefik.http.middlewares.librariarr-secret.headers.customrequestheaders.X-Librariarr-Proxy-Secret=<secret>`
+- **Caddy:** inside `reverse_proxy`, `header_up X-Librariarr-Proxy-Secret <secret>`
+- **nginx:** `proxy_set_header X-Librariarr-Proxy-Secret <secret>;`
+
+A sign-in refused for a missing or wrong secret shows *"Forward-auth sign-in
+must come through the configured reverse proxy"* on the login page, and
+the log records the rejection.
 
 1. Configure your reverse proxy to perform forward auth and inject identity
    headers into requests forwarded to Librariarr. Default headers:
@@ -598,6 +635,20 @@ Toggle **Enable SSO Login** off and save. The local username/password form
 returns on the login page (provided local auth is enabled in
 **Settings → Authentication → Local Authentication**).
 
+While SSO is on, your local password is accepted for nothing — not to sign in,
+confirm it's you, create an API key or change your credentials. Turning SSO
+off (the toggle, **Unlink SSO** or **Revert**) while local login is on gives
+the password its power back, so it needs a sign-in from the last 15 minutes;
+if it has been longer, Librariarr asks you to confirm it's you with SSO or
+Plex first. If SSO itself is what's broken, use the
+[SSO_DISABLE_OVERRIDE recovery flow](#recovery--locked-out-of-sso) instead.
+
+While SSO login is on, saving a different issuer, or switching between OIDC
+and forward-auth, is refused: your linked identity belongs to the current
+one, so SSO would stop recognising you while the password stays off. Turn
+SSO login off first, save the new settings, link your identity again, then
+turn SSO login back on.
+
 To remove the link entirely, click **Unlink SSO**. Unlinking also
 automatically turns off the global SSO toggle — keeping it on after removing
 your identity would silently hide the local form without giving you a way to
@@ -680,10 +731,11 @@ in step 1 next to *Save Configuration*. Clicking it:
   prior state)
 
 The snapshot lives in the `previousSsoConfig` column of `AppSettings` and
-is unaffected by backup rotation. The revert only requires that you can
-sign in to the settings page in some way — see the [SSO_DISABLE_OVERRIDE
-recovery flow](#recovery--locked-out-of-sso) for getting back in via Plex
-or local credentials when SSO is broken.
+is unaffected by backup rotation. The revert needs you signed in to the
+settings page, and — when local login is on, so the revert gives your
+password its power back — a sign-in from the last 15 minutes. See the
+[SSO_DISABLE_OVERRIDE recovery flow](#recovery--locked-out-of-sso) for
+getting back in via Plex or local credentials when SSO is broken.
 
 ## Recovery when fully locked out
 
@@ -838,6 +890,7 @@ The login page surfaces SSO errors as a banner above the SSO button:
 | SSO request expired or was tampered with | State cookie was lost between redirect and callback, or `state` didn't match | Try again. If persistent, check that `COOKIE_SECURE` isn't forcing HTTPS-only on an HTTP host |
 | Failed to verify your identity with the SSO provider | Token exchange with the IdP failed | Check Librariarr logs for the underlying response — usually a redirect URI mismatch or wrong client secret |
 | Forward-auth proxy did not provide a user identity header | The configured user header was absent from the request | Verify the proxy is injecting the header and the name matches what's configured |
+| Forward-auth sign-in must come through the configured reverse proxy | `FORWARD_AUTH_SECRET` is set and the request's `X-Librariarr-Proxy-Secret` header was missing or different | Make the proxy add the header with the same value, or open Librariarr through the proxy rather than its port |
 | SSO is not configured | Settings missing or override active | Complete the OIDC config, or unset `SSO_DISABLE_OVERRIDE` |
 
 ### "Test Discovery" fails

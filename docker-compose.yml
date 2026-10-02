@@ -5,7 +5,9 @@ services:
     ports:
       - "${LIBRARIARR_PORT:-3000}:3000"
     environment:
-      - DATABASE_URL=postgresql://librariarr:librariarr@librariarr-db:5432/librariarr
+      # Set DB_PASSWORD (letters and digits) in a .env file next to this one.
+      # It is only applied when the database volume is first created.
+      - DATABASE_URL=postgresql://librariarr:${DB_PASSWORD:-librariarr}@librariarr-db:5432/librariarr
       - SESSION_SECRET=${SESSION_SECRET:-}
       - TZ=${TZ:-UTC}
       # Optional: run the app process as a specific UID/GID (default: 1000)
@@ -29,7 +31,7 @@ services:
     container_name: librariarr-db
     environment:
       POSTGRES_USER: librariarr
-      POSTGRES_PASSWORD: librariarr
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-librariarr}
       POSTGRES_DB: librariarr
     volumes:
       - librariarr-db:/var/lib/postgresql

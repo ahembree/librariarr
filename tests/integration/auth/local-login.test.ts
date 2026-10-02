@@ -78,6 +78,23 @@ describe("POST /api/auth/local/login", () => {
     expect(body.error).toBe("Invalid username or password");
   });
 
+  it("burns a bcrypt compare for an unknown username so timing does not reveal existence", async () => {
+    await getTestPrisma().appSettings.create({
+      data: { userId: (await createTestUser()).id, localAuthEnabled: true },
+    });
+    mockCompare.mockResolvedValue(false);
+
+    const response = await callRoute(POST, {
+      url: "/api/auth/local/login",
+      method: "POST",
+      body: { username: "nobody-here", password: "whatever" },
+    });
+
+    await expectJson(response, 401);
+    expect(mockCompare).toHaveBeenCalledTimes(1);
+    expect(mockCompare).toHaveBeenCalledWith("whatever", expect.stringMatching(/^\$2[aby]\$12\$/));
+  });
+
   it("returns 401 when user has no password hash", async () => {
     // Create a user without a passwordHash (Plex-only user)
     await createTestUser({ username: "plexuser" });

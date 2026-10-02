@@ -123,7 +123,9 @@ export function formatUntil(dateStr: string | null): string {
 export function formatRelativeDate(dateStr: string): string {
   const date = new Date(dateStr);
   const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
+  // Clamped: a timestamp from a server whose clock runs ahead of the browser's
+  // is "in the future" here, and floored negatives rendered it as "-1d ago".
+  const diffMs = Math.max(0, now.getTime() - date.getTime());
   const diffSec = Math.floor(diffMs / 1000);
   const diffMin = Math.floor(diffSec / 60);
   const diffHour = Math.floor(diffMin / 60);

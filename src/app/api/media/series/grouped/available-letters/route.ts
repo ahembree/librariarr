@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
+import { escapeLike } from "@/lib/filters/escape-like";
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
 import { appCache } from "@/lib/cache/memory-cache";
 
@@ -31,8 +32,10 @@ export async function GET(request: NextRequest) {
   let paramIdx = 2;
 
   if (search) {
+    // `escapeLike`: `search` is spliced into an ILIKE pattern and `%` / `_` /
+    // `\` would act as wildcards (see escape-like.ts for the live case).
     filters.push(`AND mi."parentTitle" ILIKE '%' || $${paramIdx} || '%'`);
-    params.push(search);
+    params.push(escapeLike(search));
     paramIdx++;
   }
 

@@ -35,6 +35,13 @@ const m = vi.hoisted(() => ({
   dispatchScheduledJobs: vi.fn().mockResolvedValue(undefined),
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   syncJob: { findFirst: vi.fn().mockResolvedValue(null) },
+  // The slice's "is a requested sync waiting" watch, driven directly here (the
+  // real poller is covered in cancel-watch.test.ts).
+  waitingWatch: {
+    predicate: null as null | (() => Promise<boolean>),
+    controller: new AbortController(),
+    stopped: false,
+  },
   appSettings: { findFirst: vi.fn().mockResolvedValue(null) },
   lifecycleAction: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
 }));
@@ -59,6 +66,17 @@ vi.mock("@/lib/logs/archive", () => ({ archiveLogs: m.archiveLogs }));
 vi.mock("@/lib/image-cache/image-cache", () => ({ pruneImageCache: m.pruneImageCache }));
 vi.mock("@/lib/jobs/dispatch", () => ({ dispatchScheduledJobs: m.dispatchScheduledJobs }));
 vi.mock("@/lib/logger", () => ({ logger: m.logger }));
+vi.mock("@/lib/sync/cancel-watch", () => ({
+  watchForCancel: (predicate: () => Promise<boolean>) => {
+    m.waitingWatch.predicate = predicate;
+    m.waitingWatch.controller = new AbortController();
+    m.waitingWatch.stopped = false;
+    return {
+      signal: m.waitingWatch.controller.signal,
+      stop: () => { m.waitingWatch.stopped = true; },
+    };
+  },
+}));
 vi.mock("@/lib/db", () => ({
   prisma: { syncJob: m.syncJob, appSettings: m.appSettings, lifecycleAction: m.lifecycleAction },
 }));
@@ -89,6 +107,55 @@ describe("tracearr-backfill task", () => {
     vi.clearAllMocks();
     enqueueJob.mockResolvedValue(true);
     syncTracearrHistory.mockResolvedValue({ count: 0, backfillPending: false });
+  });
+
+  it("gives way to a requested sync that is waiting in the queue", async () => {
+    // The slice cannot be pre-empted, so it must end itself: a sync the user
+    // asked for otherwise waited out the rest of a 5-minute slice.
+    let yieldBefore: boolean | undefined;
+    let yieldAfter: boolean | undefined;
+    syncTracearrHistory.mockImplementation(async (_id: string, options: { yieldTo: () => boolean }) => {
+      yieldBefore = options.yieldTo();
+      m.waitingWatch.controller.abort();
+      yieldAfter = options.yieldTo();
+      return { count: 1, backfillPending: true, backfillOutcome: "stopped" };
+    });
+
+    await runBackfill();
+
+    expect(yieldBefore).toBe(false);
+    expect(yieldAfter).toBe(true);
+    expect(m.waitingWatch.stopped).toBe(true);
+    // Paused, not finished: the next slice is queued (behind the requested
+    // sync, which carries a higher priority).
+    expect(enqueueJob).toHaveBeenCalledWith(
+      TASK_TRACEARR_BACKFILL,
+      { serverId: SERVER_ID },
+      expect.objectContaining({ jobKey: `tracearr-backfill:${SERVER_ID}` }),
+    );
+  });
+
+  it("counts only a recent PENDING SyncJob row as a waiting sync", async () => {
+    await runBackfill();
+    const predicate = m.waitingWatch.predicate!;
+
+    m.syncJob.findFirst.mockResolvedValueOnce({ id: "queued" });
+    await expect(predicate()).resolves.toBe(true);
+    m.syncJob.findFirst.mockResolvedValueOnce(null);
+    await expect(predicate()).resolves.toBe(false);
+
+    // Bounded in time: a row whose job was lost must not shrink every later
+    // slice to a single page forever.
+    const where = m.syncJob.findFirst.mock.calls.at(-1)?.[0]?.where;
+    expect(where.status).toBe("PENDING");
+    expect(where.startedAt.gte).toBeInstanceOf(Date);
+    expect(Date.now() - where.startedAt.gte.getTime()).toBeGreaterThanOrEqual(59 * 60_000);
+  });
+
+  it("stops the watch even when the slice throws", async () => {
+    syncTracearrHistory.mockRejectedValueOnce(new Error("boom"));
+    await expect(runBackfill()).rejects.toThrow("boom");
+    expect(m.waitingWatch.stopped).toBe(true);
   });
 
   it("is registered in taskList under TASK_TRACEARR_BACKFILL", () => {

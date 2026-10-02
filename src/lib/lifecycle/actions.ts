@@ -4,13 +4,27 @@ import { RadarrClient } from "@/lib/arr/radarr-client";
 import { SonarrClient } from "@/lib/arr/sonarr-client";
 import { LidarrClient } from "@/lib/arr/lidarr-client";
 import { logger } from "@/lib/logger";
+import { sanitizeErrorDetail } from "@/lib/api/sanitize";
 import { actionHonorsMemberIds, formatActionLabel, supportsSearchAfter } from "@/lib/lifecycle/action-types";
+import { seriesTitleOf } from "@/lib/media/display-title";
 
 // Re-export constants so server-side consumers can import from here too
 export { MOVIE_ACTION_TYPES, SERIES_ACTION_TYPES, MUSIC_ACTION_TYPES } from "@/lib/lifecycle/action-types";
 
-/** Extract a meaningful error message from Arr API failures, including the response body. */
+/**
+ * Extract a meaningful error message from Arr API failures, including the
+ * response body — SANITIZED: this is what gets persisted on the
+ * `LifecycleAction` row and returned by the execute/retry routes (and, through
+ * them, the public API), and an Arr error body routinely names the file it
+ * could not delete or the host it could not reach. `describeActionError` is
+ * the unsanitized text, for log lines only.
+ */
 export function extractActionError(error: unknown): string {
+  return sanitizeErrorDetail(describeActionError(error)) ?? "Unknown error";
+}
+
+/** The full Arr error text, paths and addresses included. Log it; never store or return it. */
+export function describeActionError(error: unknown): string {
   // Clients now wrap axios errors in IntegrationError, which exposes the
   // status / detail directly and keeps the original AxiosError as `cause`.
   if (error && typeof error === "object" && "name" in error && (error as { name: unknown }).name === "IntegrationError") {
@@ -51,6 +65,12 @@ export interface ActionRecord {
   addArrTags: string[];
   removeArrTags: string[];
   skipTitleValidation?: boolean;
+  /**
+   * What the log lines call the item: `actionTargetTitle` of this action — a
+   * series action by its show, or "<Show> SxxExx" on one episode, never by the
+   * episode it is stored against.
+   */
+  targetTitle: string;
   mediaItem: {
     id: string;
     title: string;
@@ -534,7 +554,7 @@ async function deleteEpisodeFilesForAction(
   if (actionHonorsMemberIds(action.actionType)) {
     logger.warn(
       "Lifecycle",
-      `Skipping ${action.actionType} file deletion for series "${action.mediaItem.title}" — no matched episodes resolved (refusing to delete all episode files without a whole-series signal)`,
+      `Skipping ${action.actionType} file deletion for series "${seriesTitleOf(action.mediaItem)}" — no matched episodes resolved (refusing to delete all episode files without a whole-series signal)`,
     );
     return;
   }
@@ -542,7 +562,7 @@ async function deleteEpisodeFilesForAction(
   // there is nothing scoped to act on — skip.
   logger.warn(
     "Lifecycle",
-    `Skipping ${action.actionType} file deletion for series "${action.mediaItem.title}" — no episodes to act on`,
+    `Skipping ${action.actionType} file deletion for series "${seriesTitleOf(action.mediaItem)}" — no episodes to act on`,
   );
 }
 
@@ -859,7 +879,7 @@ export async function executeAction(
    */
   onStep?: (label: string) => void,
 ): Promise<void> {
-  logger.info("Lifecycle", `Starting ${action.actionType} for "${action.mediaItem.title}" (item: ${action.mediaItem.id}, arr: ${action.arrInstanceId ?? "none"}${action.matchedMediaItemIds.length > 0 ? `, ${action.matchedMediaItemIds.length} matched episodes` : ""})`);
+  logger.info("Lifecycle", `Starting ${action.actionType} for "${action.targetTitle}" (item: ${action.mediaItem.id}, arr: ${action.arrInstanceId ?? "none"}${action.matchedMediaItemIds.length > 0 ? `, ${action.matchedMediaItemIds.length} matched episodes` : ""})`);
 
   // Execute tag operations before the main action
   if (action.addArrTags.length > 0 || action.removeArrTags.length > 0) {
@@ -868,7 +888,7 @@ export async function executeAction(
     const tagOps: string[] = [];
     if (action.addArrTags.length > 0) tagOps.push(`+tags: ${action.addArrTags.join(", ")}`);
     if (action.removeArrTags.length > 0) tagOps.push(`-tags: ${action.removeArrTags.join(", ")}`);
-    logger.info("Lifecycle", `Tag operations for "${action.mediaItem.title}": ${tagOps.join("; ")}`);
+    logger.info("Lifecycle", `Tag operations for "${action.targetTitle}": ${tagOps.join("; ")}`);
   }
 
   // Report the main step. DELETE_FILES / quality-profile actions also trigger a
@@ -952,6 +972,6 @@ export async function executeAction(
 
   logger.info(
     "Lifecycle",
-    `Executed ${action.actionType} for "${action.mediaItem.title}"${action.addImportExclusion ? " (with import exclusion)" : ""}`
+    `Executed ${action.actionType} for "${action.targetTitle}"${action.addImportExclusion ? " (with import exclusion)" : ""}`
   );
 }

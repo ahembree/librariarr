@@ -472,6 +472,35 @@ describe("Tracearr criteria cannot select the whole library", () => {
       ).resolves.toEqual({ complete: true });
     });
 
+    it("keeps refusing a fully-backfilled server whose marker was withdrawn, and says why", async () => {
+      // The state the user actually hits, and the one the old message could not
+      // describe. `tracearrBackfillComplete` stays true — Settings → Servers
+      // reports the import DONE — while `watchHistorySyncedAt` is null, because
+      // something withdrew it: a purge, a restore, or a Tracearr sync that could
+      // not load the account map. Telling that user to "watch the import
+      // progress" points them at a bar that already reads complete.
+      const fx = await seedWatchedLibrary();
+      await invalidateWatchHistoryEvidence([fx.serverId]);
+
+      const refused = await checkWatchHistoryCompleteness(fx.userId, [fx.serverId]);
+      expect(refused.complete).toBe(false);
+      if (refused.complete) throw new Error("expected a refusal");
+      expect(refused.reason).toContain('"Plex"');
+      expect(refused.reason).toMatch(/no sync has established/i);
+      expect(refused.reason).not.toMatch(/import/i);
+
+      // ...and the marker IS the release. `syncTracearrHistory` writes exactly
+      // this at the end of a run whose account map loaded and whose archive walk
+      // is complete — before that release existed, nothing in the system wrote
+      // it after the one run that finished the backfill, so this refusal was
+      // permanent.
+      await markWatchHistoryEstablished([fx.serverId]);
+
+      await expect(
+        checkWatchHistoryCompleteness(fx.userId, [fx.serverId]),
+      ).resolves.toEqual({ complete: true });
+    });
+
     it("treats an unscoped check as covering every server", async () => {
       // An empty/absent `serverIds` means "all", which is also a rule set's own
       // default — it must stay broad rather than silently matching nothing.

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
+import { escapeLike } from "@/lib/filters/escape-like";
 import { resolveSeriesKey } from "@/lib/media/series-key";
 import type { Prisma } from "@/generated/prisma/client";
 
@@ -11,6 +12,9 @@ export async function GET(request: NextRequest) {
   }
 
   const { searchParams } = new URL(request.url);
+  // Trimmed for the empty check; every `contains` below gets `escapeLike(q)`
+  // because `contains` is a LIKE pattern Prisma does not escape — a `%` or
+  // `_` in `q` is otherwise a wildcard (see escape-like.ts for the live case).
   const q = searchParams.get("q")?.trim();
   const type = searchParams.get("type");
   const seriesScope = searchParams.get("seriesScope") === "true";
@@ -34,8 +38,8 @@ export async function GET(request: NextRequest) {
       where: {
         ...ownershipFilter,
         OR: [
-          { parentTitle: { contains: q, mode: "insensitive" } },
-          { albumTitle: { contains: q, mode: "insensitive" } },
+          { parentTitle: { contains: escapeLike(q), mode: "insensitive" } },
+          { albumTitle: { contains: escapeLike(q), mode: "insensitive" } },
         ],
       },
       select: {
@@ -131,15 +135,15 @@ export async function GET(request: NextRequest) {
   const where: Prisma.MediaItemWhereInput = { ...ownershipFilter };
 
   if (type === "MOVIE") {
-    where.title = { contains: q, mode: "insensitive" };
+    where.title = { contains: escapeLike(q), mode: "insensitive" };
   } else if (seriesScope) {
     // Series/music with scope: only search by parentTitle (series/artist name)
-    where.parentTitle = { contains: q, mode: "insensitive" };
+    where.parentTitle = { contains: escapeLike(q), mode: "insensitive" };
   } else {
     // Series/music without scope: search by title and parentTitle
     where.OR = [
-      { title: { contains: q, mode: "insensitive" } },
-      { parentTitle: { contains: q, mode: "insensitive" } },
+      { title: { contains: escapeLike(q), mode: "insensitive" } },
+      { parentTitle: { contains: escapeLike(q), mode: "insensitive" } },
     ];
   }
 
@@ -150,6 +154,9 @@ export async function GET(request: NextRequest) {
       title: true,
       parentTitle: true,
       seriesKey: true,
+      // An episode is named by its show and SxxExx, not its own title.
+      seasonNumber: true,
+      episodeNumber: true,
       year: true,
       thumbUrl: true,
       type: true,

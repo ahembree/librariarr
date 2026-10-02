@@ -104,6 +104,8 @@ export interface GeneralTabProps {
   backupSaving: boolean;
   creatingBackup: boolean;
   restoringBackup: string | null;
+  /** Backups being downloaded right now (each button shows its own). */
+  downloadingBackups: readonly string[];
   restoreProgress: string | null;
   hasBackupPassword: boolean;
   savingBackupPassword: boolean;
@@ -158,6 +160,7 @@ export function GeneralTab({
   backupSaving,
   creatingBackup,
   restoringBackup,
+  downloadingBackups,
   restoreProgress,
   hasBackupPassword,
   savingBackupPassword,
@@ -591,6 +594,11 @@ export function GeneralTab({
             <p className="mt-2 text-xs text-muted-foreground">
               By default, backups only include settings and configuration. Media data, streams, and logs are retrieved during a full sync.
             </p>
+            {!hasBackupPassword && (
+              <p className="mt-2 text-xs text-amber-500">
+                No encryption password is set, so this backup will be written unencrypted. Backups contain your Plex token, integration API keys and SSO client secret in plaintext — set an encryption password above before creating or downloading one.
+              </p>
+            )}
           </div>
 
           {(backups.length > 0 || backupLoading) && <Separator />}
@@ -604,9 +612,9 @@ export function GeneralTab({
                   <div key={b.filename} className="space-y-1.5 rounded-md border p-2.5 text-sm">
                     <div className="flex items-center justify-between">
                       <div className="min-w-0">
-                        <p className="font-medium truncate flex items-center gap-1.5">
+                        <p className="font-medium [overflow-wrap:anywhere]">
                           {b.filename}
-                          {b.encrypted && <Lock className="h-3 w-3 text-muted-foreground" />}
+                          {b.encrypted && <Lock className="ml-1.5 inline h-3 w-3 align-[-1px] text-muted-foreground" />}
                         </p>
                         <p className="text-xs text-muted-foreground">
                           {new Date(b.createdAt).toLocaleString()} — {b.size < 1024 * 1024 ? `${(b.size / 1024).toFixed(1)} KB` : `${(b.size / 1024 / 1024).toFixed(1)} MB`}
@@ -623,9 +631,10 @@ export function GeneralTab({
                           size="icon"
                           className="h-8 w-8"
                           aria-label={`Download backup ${b.filename}`}
+                          disabled={downloadingBackups.includes(b.filename)}
                           onClick={() => onDownloadBackup(b.filename)}
                         >
-                          <Download className="h-3.5 w-3.5" />
+                          {downloadingBackups.includes(b.filename) ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
                         </Button>
                         <Button
                           variant="ghost"
