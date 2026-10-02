@@ -16,7 +16,8 @@ route tests mock the session, DB and external clients, so a breaking runtime cha
    the breaking changes against them.
 2. Update the branch to main (`update_pull_request_branch`) — the ruleset only merges
    up-to-date branches, so every merge makes the rest stale.
-3. Check it out and run (`corepack enable` first so pnpm matches `packageManager`):
+3. Check it out and run (with the pnpm version in `packageManager`, installed via
+   `npm install -g pnpm@<version>` like the Dockerfile — not corepack):
    `pnpm install --frozen-lockfile && pnpm exec prisma generate`,
    `pnpm lint`, `pnpm exec tsc --noEmit`, `pnpm test:unit`, integration tests (below),
    `pnpm build`.
