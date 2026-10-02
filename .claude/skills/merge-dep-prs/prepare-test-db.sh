@@ -13,6 +13,15 @@
 # alone is not equivalent either — migrations lag schema.prisma by design (see "Prisma and
 # Database" in CLAUDE.md), so the schema-only columns db push would have added come from
 # `migrate diff`, which is checked for data-losing statements before it is applied.
+#
+# What that check protects is NOT this database — it is freshly created and empty. It is
+# production startup: docker-entrypoint.sh runs `prisma db push` with no --accept-data-loss, and
+# a failed push is fatal ("The application cannot start safely"). Prisma throws instead of
+# applying a change it expects to lose data, so a destructive diff here means the image built
+# from this commit would refuse to boot against any existing install whose tables hold rows.
+# Dependabot never edits schema.prisma, so when it fires on a dependency PR, re-run on main:
+# firing there too means it is pre-existing on main (report it, it is not this PR's); firing
+# only on the PR means the bump changed what Prisma diffs — almost always a `prisma` bump.
 
 set -uo pipefail
 
@@ -63,8 +72,10 @@ DATABASE_URL="$TEST_URL" pnpm exec prisma migrate diff \
 # `ON DELETE CASCADE` is in every foreign key Prisma emits, and DROP CONSTRAINT / DROP INDEX
 # lose no rows, so a blunt guard would fire on safe diffs until someone learned to ignore it.
 if grep -niE '\b(DROP[[:space:]]+(TABLE|COLUMN|DATABASE|SCHEMA)|TRUNCATE|DELETE[[:space:]]+FROM)\b' "$WORK/drift.sql"; then
-  echo "REFUSING: schema drift is destructive (lines above). Inspect it before going further."
-  cp "$WORK/drift.sql" ./drift-refused.sql && echo "saved to ./drift-refused.sql"
+  # Saved outside the repo: a file left in the working tree is one `git add -A` from main.
+  kept="${TMPDIR:-/tmp}/drift-refused.sql"
+  cp "$WORK/drift.sql" "$kept"
+  echo "REFUSING: production's \`db push\` throws on this wherever the table holds rows, and the entrypoint treats that as fatal (lines above). Full diff: $kept"
   exit 1
 fi
 

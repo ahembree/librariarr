@@ -65,9 +65,17 @@ set `PRISMA_USER_CONSENT_FOR_DANGEROUS_AI_ACTION` and do not edit the setup file
 `prepare-test-db.sh` builds `librariarr_test` instead — `migrate deploy` plus the
 `migrate diff` script for the schema-only columns `db push` would have added (migrations lag
 `schema.prisma` by design; see "Prisma and Database" in CLAUDE.md) — and refuses to apply a
-diff carrying a data-losing statement, so a schema change that would destroy data stops the
-run. It is the one step here that is fiddly enough to be worth a script; everything else is
-the plain command above. It also starts Postgres and creates the role on first run.
+diff carrying a data-losing statement. That refusal is not protecting the test database, which
+is empty; it is a preview of production boot. `docker-entrypoint.sh` runs `prisma db push`
+without `--accept-data-loss` and exits if it fails, and Prisma throws rather than apply a
+change it expects to lose data — so a refusal here means this commit's image would not start
+against an install whose tables hold rows. Dependabot never edits `schema.prisma`: if it fires,
+run it on `main` too. Firing there as well means it is pre-existing (report it, it is not this
+PR's); firing only on the PR means the bump changed how Prisma diffs. It also starts Postgres
+and creates the role on first run.
+
+The two scripts in this directory — this one and `lock-changes.mjs` — exist because each is
+fiddly and runs once per PR. Everything else is a plain command; run it directly.
 
 ## What the mocks hide — check these by hand
 
@@ -76,9 +84,11 @@ the plain command above. It also starts Postgres and creates the role on first r
 | `iron-session` | `tests/setup/mock-session.ts` mocks the whole session module | Drive the real package over an in-memory cookie store. Every login path goes through `rotateSession()`; confirm destroy/re-read/save still works |
 | `axios` | every Arr/Plex/Seerr/Tracearr client is `vi.mock()`ed | Interceptors, error shape (`err.response.status`), timeout option names |
 | `zod` | nothing — but the `details[]` *string* contract is untested | `validateRequest` joins each issue as path-dot-path + ": " + message. Parse a deliberately invalid body and confirm custom messages survive and nested paths still render as `a.b.0` |
-| `pg` / `graphile-worker` | integration tests do exercise these | Usually genuinely covered |
+| `pg` | `tests/integration/jobs/recover-locks.test.ts` uses a real `Pool` | Genuinely covered |
+| `graphile-worker` | only `runMigrations` is real; `run`, `parseCrontab` and `addJob` are mocked everywhere | The graphile-worker check below — the app depends on `jobKey` dedup and named queues (`detection:<userId>`, `tracearr-backfill:<serverId>`, the serial `MAIN_QUEUE`) |
 | `lucide-react` | icons never render in vitest | Every imported name must still exist — the icon check below |
-| `next`, `react`, `prisma` | major bumps touch everything | Do not batch these with anything else |
+| `prisma` | integration tests use it for real | `prepare-test-db.sh` refusing on a `prisma` bump but not on main means the new Prisma diffs the schema differently — and production's `db push` would act on that at boot |
+| `next`, `react` | page rendering is not unit-tested | Lean on Browser E2E (every authenticated page renders in `navigation.spec`) |
 
 Useful one-offs (run from the repo root so package resolution works; delete the file after):
 
@@ -109,15 +119,46 @@ A clean run prints `ok — N icon names resolve`. If it ever prints `MISSING: Lu
 type-import filtering has regressed, not the dependency — type-only exports do not exist at
 runtime, and `tsc --noEmit` is what covers them.
 
+```bash
+# graphile-worker: the real crontab parser, and jobKey dedup on a named queue.
+# Needs librariarr_test (run prepare-test-db.sh first); cleans up after itself.
+cat > .gw-check.mjs <<'EOF'
+import { readFileSync } from "fs";
+import { parseCrontab, makeWorkerUtils } from "graphile-worker";
+// The app's real CRONTAB, read from source with its TASK_* constants substituted, so this
+// check cannot drift from worker.ts the way a hand-copied crontab would.
+const consts = Object.fromEntries([...readFileSync("src/lib/jobs/constants.ts", "utf8")
+  .matchAll(/export const (TASK_\w+) = "([^"]+)"/g)].map(m => [m[1], m[2]]));
+const raw = readFileSync("src/lib/jobs/worker.ts", "utf8").match(/const CRONTAB = `([^`]*)`/)[1];
+const crontab = raw.replace(/\$\{(\w+)\}/g, (_, k) => consts[k] ?? `UNRESOLVED_${k}`).trim();
+if (crontab.includes("UNRESOLVED_")) throw new Error(`unresolved task constant in CRONTAB:\n${crontab}`);
+const lines = crontab.split("\n").filter(Boolean).length;
+console.log(`crontab: ${parseCrontab(crontab).length} of ${lines} lines parsed`);
+const utils = await makeWorkerUtils({ connectionString: "postgresql://librariarr:librariarr@localhost:5432/librariarr_test" });
+await utils.migrate();
+for (let i = 0; i < 3; i++) await utils.addJob("noop", { i }, { jobKey: "dedup-check", queueName: "main" });
+const { rows } = await utils.withPgClient(c => c.query("select count(*)::int n from graphile_worker.jobs where key = 'dedup-check'"));
+console.log(`jobKey: 3 enqueues -> ${rows[0].n} job (want 1)`);
+await utils.withPgClient(c => c.query("select graphile_worker.remove_job('dedup-check')"));
+await utils.release();
+EOF
+node .gw-check.mjs; rm .gw-check.mjs
+```
+
+
 ## Ruleset, and how branches move under you
 
 - Merging requires **6 required checks on a branch that is up to date with main**, so every
   merge invalidates every other PR. Expect one `update_pull_request_branch` + one full CI
   run per PR. A merge attempt on a stale branch fails with
   `405 … 6 of 6 required status checks are expected`.
-- **Dependabot force-rebases its own branches** when main moves, which silently reverts a
-  local merge you have not pushed. Always `git fetch origin '+refs/heads/dependabot/*:refs/remotes/origin/dependabot/*'`
-  (note the `+`) before assuming your local branch matches the remote.
+- **Dependabot force-rebases its own branches** when main moves. Your local branch is
+  untouched, but it is now built on a head the remote no longer has, so your push is rejected
+  as non-fast-forward. Do not force-push over it (that discards Dependabot's rebase) or pull
+  it in (that merges two divergent histories): re-fetch with
+  `git fetch origin '+refs/heads/dependabot/*:refs/remotes/origin/dependabot/*'` (the `+` is
+  what lets a forced update land), re-check-out the remote head, and re-apply your commit on
+  top — often Dependabot's rebase already did the merge you were about to push.
 - **Once you push a commit of your own, Dependabot stops managing the branch** — from then
   on every update to main is yours to merge in manually.
 - Prefer `update_pull_request_branch` (GitHub merges main in cleanly most of the time). Only
@@ -125,41 +166,58 @@ runtime, and `tsc --noEmit` is what covers them.
 
 ## Resolving a lockfile conflict
 
-`pnpm-lock.yaml` conflicts are not worth hand-merging:
+`pnpm-lock.yaml` conflicts are not worth hand-merging. Take main's lockfile and re-apply the
+PR's bump **pinned to the exact version the PR proposes**:
 
 ```bash
 git merge --no-edit origin/main            # resolve package.json by hand: keep BOTH bumps
 git checkout origin/main -- pnpm-lock.yaml
-pnpm install --lockfile-only               # re-applies this PR's bump onto main's lock
-git diff origin/main -- pnpm-lock.yaml | grep '^[-+]' | grep -v '^[-+][-+]' | head
+pnpm add <pkg>@<exact-version> --lockfile-only       # -D for a devDependency
+git add package.json pnpm-lock.yaml && git commit --no-edit   # finishes the merge
+node .claude/skills/merge-dep-prs/lock-changes.mjs   # every line must be intentional
 ```
 
-That last line is the check that matters: the diff should be the bumped package and nothing
-else (orphan-entry pruning is fine and expected).
+Pinned, because `pnpm install --lockfile-only` re-resolves the range to the **newest**
+matching release: a PR proposing `zod ^4.5.4` relocks to 4.6.5 if that exists, so main gets a
+version nobody read the changelog for, under a title naming another. `pnpm add pkg@x.y.z`
+locks exactly x.y.z and writes the same `^x.y.z` range Dependabot uses.
 
-**`docs/` is npm, not pnpm** (`docs/package-lock.json`, built by `withastro/action`). Relock
-it with the **same npm major that wrote main's lockfile** — an older npm silently strips the
-`libc` field from optional platform packages, which is a real (if quiet) regression:
+**If it fails with `ERR_PNPM_NO_MATURE_MATCHING_VERSION`**, the release is under a day old
+and `pnpm-workspace.yaml`'s `minimumReleaseAge: 1440` is holding it — a supply-chain control
+the repo set on purpose. Leave that PR for a later pass. Do **not** follow the error's own
+suggestion of adding the package to `minimumReleaseAgeExclude`.
+
+`lock-changes.mjs` lists every direct dependency whose resolved version differs from main,
+across both lockfiles. A relock can move more than the PR's package — a peer requirement drags
+its peer along — and each of those moves needs naming in the squash title or body. It is how
+the Starlight 0.42 merge was found to have also moved astro 7.2.9 → 7.3.1 unannounced.
+
+**`docs/` is npm, not pnpm** (`docs/package-lock.json`, built by `withastro/action`). Same
+rule — pinned — and relock with the **same npm major that wrote main's lockfile**, because an
+older npm silently strips the `libc` field from optional platform packages. The subshell
+matters: it keeps you at the repo root for the commands after it.
 
 ```bash
 git checkout origin/main -- docs/package-lock.json
-cd docs && npx -y npm@12 install --package-lock-only && npm ci && npm run build
+(cd docs && npx -y npm@12 install <pkg>@<exact-version> --package-lock-only && npm ci && npm run build)
+node .claude/skills/merge-dep-prs/lock-changes.mjs   # also flags a libc strip
 ```
 
-If that `git diff origin/main -- docs/package-lock.json` strips `libc` lines as well as
-bumping the package, the pinned npm is older than the one that wrote main's lockfile — raise
-it and redo the relock.
+`lock-changes.mjs` reports a strip as "N package(s) lost their libc field" and exits 1. Do not
+check for it by counting `libc` lines in the diff: a correct relock that adds or removes a
+platform package changes those lines too (the clean Starlight relock changed eight).
 
 That build is the validation for a docs PR: every page builds, and the MDX components still
-render — grep `dist/` for `sl-steps`, `starlight-aside` and `expressive-code`, since a
+render — grep `docs/dist/` for `sl-steps`, `starlight-aside` and `expressive-code`, since a
 Starlight or Astro major can drop a component and still exit 0.
 
 ## Titles lie — fix them before squashing
 
 Dependabot rebases a PR onto a newer version without retitling, and **the squash title
 becomes the commit subject release-please reads for the changelog**. Always compare the
-title against `git diff origin/main -- package.json` and correct it with
-`update_pull_request` before merging (seen: a PR titled 1.38.0 that bumped to 1.39.0, and
+title against `lock-changes.mjs`' output on the up-to-date branch — not a `git diff` against
+main from a stale branch, which shows main's newer bumps as if this PR reverted them — and
+correct it with `update_pull_request` before merging (seen: a PR titled 1.38.0 that bumped to 1.39.0, and
 one titled 0.41.10 that bumped to 0.42.0 — a minor with real breaking changes).
 
 Squash title format: `build(deps): bump <pkg> from <x> to <y> (#<n>)`, `build(deps-dev):`
