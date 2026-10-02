@@ -6,7 +6,7 @@ description: Evaluate, fix, validate and merge the open Dependabot PRs one at a 
 # /merge-dep-prs
 
 Merge every open PR labelled `dependencies`, one at a time. Don't treat green CI as approval:
-route tests mock the session, DB and external clients, so a breaking runtime change can pass
+route tests mock the session and external clients, so a breaking runtime change can pass
 (iron-session v9 broke every login with only Browser E2E failing).
 
 ## For each PR
@@ -27,10 +27,12 @@ route tests mock the session, DB and external clients, so a breaking runtime cha
 ## Integration tests
 
 The test harness runs `prisma db push --accept-data-loss`, which Prisma blocks for AI agents.
-Don't override that. Build the test DB yourself (Postgres: `service postgresql start`, role
-`librariarr`/`librariarr`):
+Don't override that. Build the test DB yourself:
 
 ```bash
+service postgresql start
+su postgres -c "psql -c \"CREATE ROLE librariarr LOGIN SUPERUSER PASSWORD 'librariarr'\"" # first run only
+export PGPASSWORD=librariarr
 psql -h localhost -U librariarr -d postgres -c "DROP DATABASE IF EXISTS librariarr_test" -c "CREATE DATABASE librariarr_test"
 export DATABASE_URL=postgresql://librariarr:librariarr@localhost:5432/librariarr_test
 pnpm exec prisma migrate deploy
@@ -49,8 +51,7 @@ VITEST_SKIP_DB_SETUP=true pnpm exec vitest run tests/integration
   merged range) resolves to the newest matching release instead of the PR's.
 - **`docs/` is a separate pnpm project** with its own `docs/pnpm-lock.yaml` and
   `docs/pnpm-workspace.yaml`. Resolve its conflicts the same way from inside `docs/`, and
-  validate with `pnpm install --frozen-lockfile && pnpm build` there, after the root install
-  (the build generates the API reference from the app's source).
+  validate with `pnpm install --frozen-lockfile && pnpm build` there.
 - **Dependabot force-rebases** its branches when main moves; re-fetch before pushing. Once
   you push to a branch, it stops managing it.
 - **Titles go stale** when Dependabot rebases onto a newer version. Check the real version
