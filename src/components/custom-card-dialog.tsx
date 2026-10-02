@@ -32,7 +32,14 @@ import {
   Hash,
   CalendarRange,
 } from "lucide-react";
-import { getDimensionsByGroup, DATE_DIMENSION_IDS } from "@/lib/dashboard/custom-dimensions";
+import {
+  getDimensionsByGroup,
+  getDimensionMeta,
+  breakdownValueLabel,
+  canCrossTabulate,
+  isSubmittableCustomCard,
+  supportsTimelineBreakdown,
+} from "@/lib/dashboard/custom-dimensions";
 import {
   CUSTOM_CARD_ICONS,
   HEATMAP_GRADIENTS,
@@ -133,7 +140,8 @@ function CustomCardDialogContent({
       .then((data) => {
         if (cancelled) return;
         const labels = (data.breakdown ?? [])
-          .map((r: { value: string | null }) => r.value ?? "Unknown")
+          // Same label the card compares the saved selection against.
+          .map((r: { value: string | null }) => breakdownValueLabel(r.value, getDimensionMeta(dimension)))
           .filter((v: string, i: number, a: string[]) => a.indexOf(v) === i)
           .sort();
         setFetchedValues({ key: valuesKey, values: labels });
@@ -144,9 +152,8 @@ function CustomCardDialogContent({
 
   const isEditing = !!initialConfig;
   const isTimeline = chartType === "timeline";
-  const canSubmit = dimension !== ""
-    && (chartType !== "heatmap" || dimension2 !== "")
-    && (!isTimeline || DATE_DIMENSION_IDS.has(dimension));
+  const canSubmit = isSubmittableCustomCard(chartType, dimension, dimension2);
+  const dimensionMeta = dimension ? getDimensionMeta(dimension) : undefined;
 
   function handleSubmit() {
     if (!canSubmit) return;
@@ -256,7 +263,8 @@ function CustomCardDialogContent({
               <SelectContent>
                 <SelectItem value="__none__">None</SelectItem>
                 {Array.from(dimensionGroups.entries())
-                  .filter(([group]) => group !== "Dates")
+                  .map(([group, dims]) => [group, dims.filter(supportsTimelineBreakdown)] as const)
+                  .filter(([, dims]) => dims.length > 0)
                   .map(([group, dims]) => (
                   <SelectGroup key={group}>
                     <SelectLabel>{group}</SelectLabel>
@@ -284,11 +292,16 @@ function CustomCardDialogContent({
                 <SelectValue placeholder="Select second dimension..." />
               </SelectTrigger>
               <SelectContent>
-                {Array.from(dimensionGroups.entries()).map(([group, dims]) => (
+                {Array.from(dimensionGroups.entries())
+                  .map(([group, dims]) => [
+                    group,
+                    dims.filter((dim) => !dimensionMeta || canCrossTabulate(dimensionMeta, dim)),
+                  ] as const)
+                  .filter(([, dims]) => dims.length > 0)
+                  .map(([group, dims]) => (
                   <SelectGroup key={group}>
                     <SelectLabel>{group}</SelectLabel>
                     {dims
-                      .filter((dim) => dim.id !== dimension)
                       .map((dim) => (
                         <SelectItem key={dim.id} value={dim.id}>
                           {dim.label}

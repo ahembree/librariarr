@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
-import { getDimensionMeta } from "@/lib/dashboard/custom-dimensions";
+import { getDimensionMeta, canCrossTabulate } from "@/lib/dashboard/custom-dimensions";
 import { appCache } from "@/lib/cache/memory-cache";
 import { resolveStatsScope } from "@/lib/media/stats-scope";
 import { computeCrossTab } from "@/lib/media/cross-tab";
@@ -29,7 +29,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Invalid dimension" }, { status: 400 });
   }
 
-  if (meta1.category === "stream_group" && meta2.category === "stream_group") {
+  if (!canCrossTabulate(meta1, meta2)) {
     return NextResponse.json({ error: "Cannot cross two stream dimensions" }, { status: 400 });
   }
 

@@ -7,7 +7,7 @@ export type CrossTabRow = { dim1: string | null; dim2: string | null; type: stri
  * Compute a 2-D cross-tabulation of two dimensions over the given servers.
  * Shared by `GET /api/media/stats/cross-tab` and the AI analysis `get_cross_tab`
  * tool. Direct×direct runs in pure SQL; anything else fetches raw rows and
- * cross-tabulates in memory. Capped at 2000 result rows.
+ * cross-tabulates in memory. Capped at `MAX_ROWS_PER_TYPE` result rows per type.
  */
 export async function computeCrossTab(
   meta1: DimensionMeta,
@@ -24,6 +24,19 @@ export async function computeCrossTab(
   return queryGeneral(meta1, meta2, serverIds, dedupEnabled);
 }
 
+/** Most cells returned for any one media type. */
+export const MAX_ROWS_PER_TYPE = 2000;
+
+/** Keep the first `MAX_ROWS_PER_TYPE` rows of each type from a sorted list. */
+export function capPerType(rows: CrossTabRow[]): CrossTabRow[] {
+  const seen = new Map<string, number>();
+  return rows.filter((row) => {
+    const n = (seen.get(row.type) ?? 0) + 1;
+    seen.set(row.type, n);
+    return n <= MAX_ROWS_PER_TYPE;
+  });
+}
+
 // ── Direct × Direct (pure SQL) ─────────────────────────────────
 
 async function queryDirectDirect(
@@ -33,16 +46,22 @@ async function queryDirectDirect(
   dedupEnabled: boolean
 ): Promise<CrossTabRow[]> {
   const dedupClause = dedupEnabled ? `AND mi."dedupCanonical" = true` : "";
+  // Capped per TYPE, not overall: the card filters to one type after the
+  // fact, so a global cap let a large library's cells crowd a small one's out
+  // entirely (a Music filter then read "No data available").
   return prisma.$queryRawUnsafe<CrossTabRow[]>(
-    `SELECT mi."${field1}"::text AS "dim1", mi."${field2}"::text AS "dim2",
-       mi.type::text AS "type", COUNT(*)::int AS "_count"
-     FROM "MediaItem" mi
-     JOIN "Library" l ON mi."libraryId" = l.id
-     WHERE l."mediaServerId" = ANY($1)
-       ${dedupClause}
-     GROUP BY mi."${field1}", mi."${field2}", mi.type
-     ORDER BY "_count" DESC
-     LIMIT 2000`,
+    `SELECT "dim1", "dim2", "type", "_count" FROM (
+       SELECT mi."${field1}"::text AS "dim1", mi."${field2}"::text AS "dim2",
+         mi.type::text AS "type", COUNT(*)::int AS "_count",
+         ROW_NUMBER() OVER (PARTITION BY mi.type ORDER BY COUNT(*) DESC) AS "rank"
+       FROM "MediaItem" mi
+       JOIN "Library" l ON mi."libraryId" = l.id
+       WHERE l."mediaServerId" = ANY($1)
+         ${dedupClause}
+       GROUP BY mi."${field1}", mi."${field2}", mi.type
+     ) ranked
+     WHERE "rank" <= ${MAX_ROWS_PER_TYPE}
+     ORDER BY "_count" DESC`,
     serverIds
   );
 }
@@ -84,7 +103,7 @@ async function queryGeneral(
   }
 
   rows.sort((a, b) => b._count - a._count);
-  return rows.slice(0, 2000);
+  return capPerType(rows);
 }
 
 // ── Fetch raw items with both dimension fields ──────────────────
@@ -144,8 +163,11 @@ async function fetchWithStreamJoin(
   const streamAlias = isStreamDim1 ? "dim1_stream" : "dim2_stream";
   const dedupClause = dedupEnabled ? `AND mi."dedupCanonical" = true` : "";
 
+  // DISTINCT per item: an item with two English audio tracks (main and
+  // commentary) is one English item, as in the breakdown's
+  // COUNT(DISTINCT mi.id) — not two.
   return prisma.$queryRawUnsafe<RawItem[]>(
-    `SELECT mi.type::text AS "type", ${otherCols},
+    `SELECT DISTINCT mi.id, mi.type::text AS "type", ${otherCols},
        ${streamCol} AS "${streamAlias}"
      FROM "MediaStream" ms
      JOIN "MediaItem" mi ON ms."mediaItemId" = mi.id

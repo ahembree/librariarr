@@ -237,11 +237,13 @@ export function TopPlayed({
               />
             );
             if (!series.mediaItemId) {
-              return <div key={series.parentTitle}>{row}</div>;
+              return <div key={`${i}:${series.parentTitle}`}>{row}</div>;
             }
             return (
+              // Two shows can share a title (rows are grouped by seriesKey),
+              // so the title alone is not a unique key.
               <LazyMediaHoverPopover
-                key={series.parentTitle}
+                key={series.mediaItemId}
                 fetchUrl={`/api/media/${series.mediaItemId}/group-summary?type=SERIES`}
                 extractData={(json) => json as MediaHoverData}
                 placeholder={placeholder}
