@@ -1,5 +1,7 @@
 FROM node:22-alpine AS base
-RUN corepack enable
+# pnpm 12 ships as a native binary that corepack cannot launch, so install it
+# directly. Keep in step with "packageManager" in package.json.
+RUN npm install -g pnpm@12.8.1
 
 FROM base AS deps
 WORKDIR /app

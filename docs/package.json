@@ -1,17 +1,18 @@
 {
   "name": "librariarr-docs",
   "private": true,
+  "packageManager": "pnpm@12.8.1",
   "scripts": {
-    "dev": "npm run generate:openapi && astro dev",
-    "build": "npm run generate:openapi && astro build",
+    "dev": "pnpm run generate:openapi && astro dev",
+    "build": "pnpm run generate:openapi && astro build",
     "preview": "astro preview",
     "astro": "astro",
     "generate:openapi": "tsx ../scripts/generate-openapi.ts"
   },
   "dependencies": {
-    "@astrojs/starlight": "^0.42.0",
-    "astro": "^7.2.9",
-    "sharp": "^0.35.4"
+    "@astrojs/starlight": "^0.42.4",
+    "astro": "^7.3.5",
+    "sharp": "^0.35.5"
   },
   "devDependencies": {
     "swagger-ui-dist": "^5.33.0",

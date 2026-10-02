@@ -443,6 +443,7 @@ A read-only natural-language assistant over the media library (`/tools/ai`, `src
 The `docs/` directory contains a static documentation website built with **Astro + Starlight**, deployed to GitHub Pages at `librariarr.dev`.
 
 - Completely isolated from the Next.js app — separate `package.json`, `tsconfig.json`, and build toolchain
+- Its own pnpm project: `docs/pnpm-workspace.yaml` makes `docs/` a separate workspace root (so pnpm never walks up to the app's) with its own `docs/pnpm-lock.yaml` and the same supply-chain controls (`minimumReleaseAge`, `strictDepBuilds` — `@scarf/scarf` denied, `esbuild`/`sharp` allowed). `docs-deploy.yml` builds it with `withastro/action`, which reads pnpm's version from `docs/package.json`'s `packageManager` — keep it in step with the root's
 - Root `tsconfig.json` and `eslint.config.mjs` exclude `docs/` to prevent cross-contamination
 - `.dockerignore` excludes `docs/` from Docker builds
 

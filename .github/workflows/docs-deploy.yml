@@ -27,11 +27,6 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    env:
-      # swagger-ui-dist pulls in @scarf/scarf, whose install script reports the
-      # install to a third party. The app's pnpm config refuses to run it; npm
-      # (used for the docs) runs it unless told not to report.
-      SCARF_ANALYTICS: "false"
     steps:
       - name: Checkout
         uses: actions/checkout@v7
