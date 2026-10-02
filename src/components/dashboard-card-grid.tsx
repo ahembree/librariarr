@@ -348,6 +348,9 @@ export function DashboardCardGrid({
               _count: b._count,
             }))}
             nullLabel="Unknown"
+            // formatChannels already returns display labels ("Stereo (2.0)");
+            // the default upper-casing would shout them.
+            labelTransform={(v) => v}
             filterType={filterType}
             lockedFilterType={lockedFilterType}
             availableTypes={availableTypes}

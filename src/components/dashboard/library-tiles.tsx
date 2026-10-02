@@ -6,12 +6,8 @@ import type { LucideIcon } from "lucide-react";
 import { ArrowUpRight, Film, HardDrive, Music, Tv } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatBytesNum, formatDurationLarge } from "@/lib/format";
-
-interface SparkPoint {
-  /** Month bucket label from the timeline API ("YYYY-MM"). */
-  date: string;
-  total: number;
-}
+import { useRealtime } from "@/hooks/use-realtime";
+import { buildSparkPoints, type SparkPoint } from "@/lib/dashboard/sparkline";
 
 /** "2026-03" → "Mar 2026" for the hover tooltip. */
 function formatMonth(bucket: string): string {
@@ -257,6 +253,10 @@ export function LibraryTiles({
   serverId?: string;
 }) {
   const [sparks, setSparks] = useState<Record<string, SparkPoint[]>>({});
+  // The headline counts refresh after a sync; the sparklines must too, or the
+  // tile shows a new total over a chart that has not caught up with it.
+  const [refreshKey, setRefreshKey] = useState(0);
+  useRealtime("sync:completed", () => setRefreshKey((k) => k + 1));
 
   const showAll = availableTypes.length === 0;
   const show = {
@@ -280,8 +280,6 @@ export function LibraryTiles({
         if (type) {
           params.set("type", type);
         } else {
-          // Totals tile charts library size over time: per-month byte sums,
-          // accumulated below so each point is the size at that month.
           params.set("measure", "size");
         }
         if (serverId) params.set("serverId", serverId);
@@ -289,16 +287,13 @@ export function LibraryTiles({
           const res = await fetch(`/api/media/stats/timeline?${params}`);
           if (!res.ok) return [type ?? "ALL", []] as const;
           const data = await res.json();
-          let points = ((data.points ?? []) as SparkPoint[])
-            .map((p) => ({ date: p.date, total: p.total }));
-          if (!type) {
-            // Running sum over the FULL history before slicing, so the
-            // window starts from the true size at its first month and the
-            // last point matches the tile's headline total.
-            let cum = 0;
-            points = points.map((p) => ({ date: p.date, total: (cum += p.total) }));
-          }
-          return [type ?? "ALL", points.slice(-SPARK_MONTHS)] as const;
+          // The totals tile charts library size over time: per-month byte
+          // sums, accumulated so each point is the size at that month.
+          const points = buildSparkPoints(data.points ?? [], {
+            cumulative: !type,
+            months: SPARK_MONTHS,
+          });
+          return [type ?? "ALL", points] as const;
         } catch {
           return [type ?? "ALL", []] as const;
         }
@@ -311,7 +306,7 @@ export function LibraryTiles({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serverId, show.movie, show.series, show.music]);
+  }, [serverId, show.movie, show.series, show.music, refreshKey]);
 
   const visibleCount = Number(show.movie) + Number(show.series) + Number(show.music) + 1;
   const gridCols =

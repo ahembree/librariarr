@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useElementSize } from "@/hooks/use-element-size";
+import { reconcileSelectedType } from "@/lib/dashboard/server-selection";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Select,
@@ -103,7 +104,19 @@ export function CustomChartCard({
   const [heatmapRaw, setHeatmapRaw] = useState<CrossTabRow[]>([]);
   const [timelineData, setTimelineData] = useState<TimelineData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [localFilter, setLocalFilter] = useState<string>("ALL");
+  // A failed load shows an error rather than the previous config's data,
+  // which used to stay on screen under the edited card's new title.
+  const [failed, setFailed] = useState(false);
+  const reqToken = useRef(0);
+  const [localFilter, setLocalFilter] = useState<string>(externalFilterType ?? "ALL");
+  // Follow the Insights type selector, as the built-in cards do; the card's
+  // own selector still overrides it until the Insights one changes again.
+  // Without this the dashboard's type filter did nothing to custom cards.
+  const [prevExternalFilter, setPrevExternalFilter] = useState(externalFilterType);
+  if (prevExternalFilter !== externalFilterType) {
+    setPrevExternalFilter(externalFilterType);
+    setLocalFilter(externalFilterType ?? "ALL");
+  }
   const [hiddenItems, setHiddenItems] = useState<Set<string>>(new Set());
 
   const isHeatmap = config.chartType === "heatmap";
@@ -119,7 +132,10 @@ export function CustomChartCard({
     });
   };
 
-  const filterType = lockedFilterType ? externalFilterType : (localFilter === "ALL" ? undefined : localFilter);
+  // The card's own selector hides once one type is left, so a local choice of
+  // a type that has since gone must not stay applied with no way to clear it.
+  const effectiveLocal = reconcileSelectedType(localFilter, availableTypes ?? [], "ALL");
+  const filterType = lockedFilterType ? externalFilterType : (effectiveLocal === "ALL" ? undefined : effectiveLocal);
 
   const meta = getDimensionMeta(config.dimension);
   const meta2 = config.dimension2 ? getDimensionMeta(config.dimension2) : null;
@@ -134,7 +150,10 @@ export function CustomChartCard({
   );
 
   const fetchData = useCallback(async () => {
+    // Guards against an older config's slow response landing after an edit.
+    const token = ++reqToken.current;
     setLoading(true);
+    let ok = false;
     try {
       if (isTimeline) {
         const params = new URLSearchParams({ dateField: config.dimension, bin: config.timelineBin ?? "month" });
@@ -145,7 +164,9 @@ export function CustomChartCard({
         const res = await fetch(`/api/media/stats/timeline?${params}`);
         if (res.ok) {
           const data = await res.json();
+          if (token !== reqToken.current) return;
           setTimelineData(data);
+          ok = true;
         }
       } else if (isHeatmap && config.dimension2) {
         const params = new URLSearchParams({
@@ -156,7 +177,9 @@ export function CustomChartCard({
         const res = await fetch(`/api/media/stats/cross-tab?${params}`);
         if (res.ok) {
           const data = await res.json();
+          if (token !== reqToken.current) return;
           setHeatmapRaw(data.rows ?? []);
+          ok = true;
         }
       } else {
         const params = new URLSearchParams({ dimension: config.dimension });
@@ -164,13 +187,23 @@ export function CustomChartCard({
         const res = await fetch(`/api/media/stats/custom?${params}`);
         if (res.ok) {
           const data = await res.json();
+          if (token !== reqToken.current) return;
           setBreakdown(data.breakdown ?? []);
+          ok = true;
         }
       }
     } catch {
-      // silently fail
+      // Reported below as a failed load.
     } finally {
-      setLoading(false);
+      if (token === reqToken.current) {
+        if (!ok) {
+          setTimelineData(null);
+          setHeatmapRaw([]);
+          setBreakdown([]);
+        }
+        setFailed(!ok);
+        setLoading(false);
+      }
     }
   }, [config.dimension, config.dimension2, config.timelineBin, config.topN, isHeatmap, isTimeline, serverId, filterType]);
 
@@ -264,6 +297,10 @@ export function CustomChartCard({
               <Skeleton className="h-3 w-16" />
               <Skeleton className="h-3 w-16" />
             </div>
+          </div>
+        ) : failed ? (
+          <div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">
+            Couldn&apos;t load this chart
           </div>
         ) : isCount ? (
           <div className="flex flex-1 items-center justify-center">

@@ -37,6 +37,15 @@ import { getDuplicateServerNames } from "@/lib/server-styles";
 import { ServerTypeChip } from "@/components/server-type-chip";
 import { DashboardSkeleton } from "@/components/skeletons";
 import { useRealtime } from "@/hooks/use-realtime";
+import {
+  ALL_SERVERS,
+  ALL_TYPES,
+  dashboardStatsUrl,
+  reconcileSelectedServer,
+  reconcileSelectedType,
+  selectableServers,
+  type DashboardServer,
+} from "@/lib/dashboard/server-selection";
 
 interface Stats {
   movieCount: number;
@@ -127,9 +136,9 @@ export default function DashboardPage() {
   const [layout, setLayout] = useState<DashboardLayout | null>(null);
   const [scheduleInfo, setScheduleInfo] = useState<ScheduleInfo | null>(null);
   const [editMode, setEditMode] = useState(false);
-  const [servers, setServers] = useState<{ id: string; name: string; type: string }[]>([]);
-  const [selectedServerId, setSelectedServerId] = useState<string>("all");
-  const [selectedMediaType, setSelectedMediaType] = useState<string>("all");
+  const [servers, setServers] = useState<DashboardServer[]>([]);
+  const [selectedServerId, setSelectedServerId] = useState<string>(ALL_SERVERS);
+  const [selectedMediaType, setSelectedMediaType] = useState<string>(ALL_TYPES);
   const [availableTypes, setAvailableTypes] = useState<string[]>([]);
   const [editingCustomCard, setEditingCustomCard] = useState<{ cardId: string; config: CustomCardConfig } | null>(null);
   const [userName, setUserName] = useState<string>("");
@@ -141,40 +150,69 @@ export default function DashboardPage() {
       .catch(() => {});
   }, []);
 
+  // Monotonic token guards against out-of-order responses when the server
+  // filter flips quickly (a stale slow response must not win).
+  const statsReqToken = useRef(0);
+
+  const fetchStats = useCallback(async () => {
+    const token = ++statsReqToken.current;
+    try {
+      const url = dashboardStatsUrl(selectedServerId);
+      const res = await fetch(url);
+      // An error body ({error}) is truthy — setting it as stats would crash
+      // the tiles. Leave stats as they were (null on first load, so the retry
+      // empty-state renders).
+      if (!res.ok || token !== statsReqToken.current) return;
+      const data = await res.json();
+      if (token !== statsReqToken.current) return;
+      setStats(data);
+    } catch (error) {
+      console.error("Failed to fetch stats:", error);
+    }
+  }, [selectedServerId]);
+
+  // `fetchData` is stable (it backs the realtime subscriptions), but its stats
+  // refresh must honour the CURRENT server filter: fetching unfiltered stats
+  // there replaced one server's figures with every server's on each sync or
+  // lifecycle event while the selector still named the one server.
+  const fetchStatsRef = useRef(fetchStats);
+  useEffect(() => {
+    fetchStatsRef.current = fetchStats;
+  }, [fetchStats]);
+
+  // The saved layout is read once. Re-reading it on every realtime refresh
+  // could land a GET issued before an in-flight layout PUT and revert the edit
+  // the user just made on screen.
+  const layoutLoadedRef = useRef(false);
+
   const fetchData = useCallback(async () => {
     try {
-      const [statsRes, layoutRes, serversRes, typesRes, scheduleRes] = await Promise.all([
-        fetch("/api/media/stats"),
-        fetch("/api/settings/dashboard-layout"),
+      const [, layoutRes, serversRes, typesRes, scheduleRes] = await Promise.all([
+        fetchStatsRef.current(),
+        layoutLoadedRef.current ? null : fetch("/api/settings/dashboard-layout"),
         fetch("/api/servers"),
         fetch("/api/media/library-types"),
         fetch("/api/settings/schedule-info"),
       ]);
-      // An error body ({error}) is truthy — setting it as stats would crash
-      // the tiles. Leave stats null so the retry empty-state renders.
-      if (statsRes.ok) {
-        setStats(await statsRes.json());
-      }
 
-      if (layoutRes.ok) {
+      if (layoutRes?.ok) {
         const layoutData = await layoutRes.json();
+        layoutLoadedRef.current = true;
         setLayout(layoutData.layout);
       }
 
       if (serversRes.ok) {
         const serversData = await serversRes.json();
-        setServers(
-          (serversData.servers ?? []).map((s: { id: string; name: string; type: string }) => ({
-            id: s.id,
-            name: s.name,
-            type: s.type,
-          }))
-        );
+        const list = selectableServers(serversData.servers ?? []);
+        setServers(list);
+        setSelectedServerId((prev) => reconcileSelectedServer(prev, list));
       }
 
       if (typesRes.ok) {
         const typesData = await typesRes.json();
-        setAvailableTypes(typesData.types ?? []);
+        const types: string[] = typesData.types ?? [];
+        setAvailableTypes(types);
+        setSelectedMediaType((prev) => reconcileSelectedType(prev, types));
       }
 
       if (scheduleRes.ok) {
@@ -186,28 +224,6 @@ export default function DashboardPage() {
       setLoading(false);
     }
   }, []);
-
-  // Monotonic token guards against out-of-order responses when the server
-  // filter flips quickly (a stale slow response must not win).
-  const statsReqToken = useRef(0);
-
-  const fetchStats = useCallback(async () => {
-    const token = ++statsReqToken.current;
-    try {
-      const params = new URLSearchParams();
-      if (selectedServerId !== "all") {
-        params.set("serverId", selectedServerId);
-      }
-      const url = `/api/media/stats${params.toString() ? `?${params}` : ""}`;
-      const res = await fetch(url);
-      if (!res.ok || token !== statsReqToken.current) return;
-      const data = await res.json();
-      if (token !== statsReqToken.current) return;
-      setStats(data);
-    } catch (error) {
-      console.error("Failed to fetch stats:", error);
-    }
-  }, [selectedServerId]);
 
   // `fetchStats` refreshes only the headline tiles. `fetchData` also reloads the
   // server list, library types and schedule info — all of which a sync, a
@@ -352,7 +368,7 @@ export default function DashboardPage() {
     );
   }
 
-  const serverId = selectedServerId !== "all" ? selectedServerId : undefined;
+  const serverId = selectedServerId !== ALL_SERVERS ? selectedServerId : undefined;
 
   return (
     <div className="p-4 sm:p-6 lg:p-8">
@@ -404,7 +420,7 @@ export default function DashboardPage() {
                   <SelectValue placeholder="All Servers" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All Servers</SelectItem>
+                  <SelectItem value={ALL_SERVERS}>All Servers</SelectItem>
                   {servers.map((server) => (
                     <SelectItem key={server.id} value={server.id}>
                       <span className="inline-flex items-center gap-1.5">
@@ -471,7 +487,7 @@ export default function DashboardPage() {
                   <SelectValue placeholder="All Types" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="all">All Types</SelectItem>
+                  <SelectItem value={ALL_TYPES}>All Types</SelectItem>
                   {(availableTypes.length === 0 || availableTypes.includes("MOVIE")) && (
                     <SelectItem value="MOVIE">Movies</SelectItem>
                   )}
@@ -515,7 +531,7 @@ export default function DashboardPage() {
             cards={insightCards}
             stats={stats}
             editMode={editMode}
-            filterType={selectedMediaType !== "all" ? selectedMediaType as "MOVIE" | "SERIES" | "MUSIC" : undefined}
+            filterType={selectedMediaType !== ALL_TYPES ? selectedMediaType as "MOVIE" | "SERIES" | "MUSIC" : undefined}
             serverId={serverId}
             servers={servers}
             availableTypes={availableTypes}

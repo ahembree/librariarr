@@ -18,6 +18,9 @@ import type { ScheduleInfo } from "@/components/dashboard/types";
 
 type Tone = "ok" | "warn" | "err" | "idle";
 
+/** How often the Integrations tile re-checks instance health. */
+const HEALTH_POLL_MS = 60_000;
+
 const DOT_CLASS: Record<Tone, string> = {
   ok: "bg-green shadow-[0_0_8px_var(--green)]",
   warn: "bg-amber shadow-[0_0_8px_var(--amber)]",
@@ -156,11 +159,20 @@ export function StatusStrip({ scheduleInfo }: { scheduleInfo: ScheduleInfo | nul
   }, [fetchSessions, fetchHealth]);
 
   // The sync tile was wired to all three sync events while the two tiles beside
-  // it were one-shot mount fetches — so a stream starting, or an integration
-  // going down, never showed on the dashboard.
+  // it were one-shot mount fetches — so a stream starting never showed on the
+  // dashboard.
   useRealtime("session-changed", fetchSessions);
   useRealtime("server-status", fetchSessions);
   useRealtime("server:changed", fetchHealth);
+  // No event announces an Arr/Seerr instance going down, being added or being
+  // disabled (`server:changed` covers media servers only), so the tile polls.
+  // The route caches for 30s, so this costs at most one probe round a minute.
+  useEffect(() => {
+    const id = setInterval(() => {
+      if (document.visibilityState === "visible") fetchHealth();
+    }, HEALTH_POLL_MS);
+    return () => clearInterval(id);
+  }, [fetchHealth]);
 
   const fetchSync = () => {
     fetch("/api/sync/status")

@@ -127,6 +127,17 @@ function ShelfTile({
   // those tiles keep the poster they used to show instead of a bare icon.
   const [artTier, setArtTier] = useState<0 | 1>(0);
   const [imgError, setImgError] = useState(false);
+  // The tile is keyed by its group, which outlives the row representing it: a
+  // new episode or track replaces that row and can change the artwork URL.
+  // Retry from the first tier then, or an icon left by the old row's failed
+  // art sticks (React 19 idiom: store the previous render's value).
+  const artKey = artworkUrl(item, 0);
+  const [prevArtKey, setPrevArtKey] = useState(artKey);
+  if (prevArtKey !== artKey) {
+    setPrevArtKey(artKey);
+    setArtTier(0);
+    setImgError(false);
+  }
   const isMusic = item.type === "MUSIC";
   const Icon = TYPE_ICONS[item.type];
 
