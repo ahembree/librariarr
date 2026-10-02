@@ -24,26 +24,33 @@ though they do conflict with each other):
    Dependabot embeds, and `git diff origin/main...origin/<branch> -- package.json` for the
    real bump. Do not trust the title — see "Titles lie" below.
 2. **Bring the branch up to main** (the ruleset requires it — see "Ruleset" below).
-3. **Check the branch out and validate locally** — `git checkout -B pr<n> origin/<branch>`
-   then `validate.sh` in this directory. Running it on `main` validates nothing.
+3. **Check the branch out and run the checks** — `git checkout -B pr<n> origin/<branch>`,
+   then the commands under "Running the checks". Running them on `main` validates nothing.
 4. **Assess the runtime contract** for anything the mocks hide (below).
 5. **Fix if needed**, push to the Dependabot branch, re-validate.
 6. **Wait for CI on the final head**, confirm every check including Browser E2E, then
    squash-merge with an accurate conventional-commit title.
 7. Next PR. Its branch is now behind main again — back to step 2.
 
-At the end, re-list open PRs to confirm nothing labelled `dependencies` is left, and run
-`validate.sh` once on merged `main`.
+At the end, re-list open PRs to confirm nothing labelled `dependencies` is left, and run the
+checks once on merged `main`.
 
-## Setup (once per session)
+## Running the checks
+
+Run these directly and read their output — there is no wrapper, so a failure shows you the
+failure rather than the last three lines of it.
 
 ```bash
-.claude/skills/merge-dep-prs/validate.sh --setup   # starts Postgres, creates the role/DB
-```
+pnpm install --frozen-lockfile && pnpm exec prisma generate
+pnpm lint
+pnpm exec tsc --noEmit
+pnpm test:unit
 
-`validate.sh` (no args) then runs `pnpm install --frozen-lockfile`, `prisma generate`,
-`pnpm lint`, `tsc --noEmit`, `pnpm test:unit`, integration tests, `pnpm build`. `--quick`
-skips the integration tests and the build, for iterating on a fix.
+.claude/skills/merge-dep-prs/prepare-test-db.sh          # builds librariarr_test; see below
+VITEST_SKIP_DB_SETUP=true pnpm exec vitest run tests/integration
+
+DATABASE_URL="postgresql://build:build@localhost/build" pnpm build
+```
 
 **That is four of the six required checks.** Docker Build and **Browser E2E** are not run
 locally: `pnpm e2e:docker` needs a Docker daemon and the cloud container has none (`docker`
@@ -52,16 +59,15 @@ mocks hide, so for anything touching auth, sessions or a runtime contract, push 
 Browser E2E result on the final head before merging — that is the check that failed on the
 unfixed iron-session branch while the other five passed.
 
-**Why integration tests need the wrapper.** `tests/setup/global-setup.ts` runs
-`prisma db push --accept-data-loss`, which Prisma refuses when it detects an AI agent. Do
-not set `PRISMA_USER_CONSENT_FOR_DANGEROUS_AI_ACTION` and do not edit the setup file.
-`validate.sh` instead builds `librariarr_test` itself — `prisma migrate deploy` plus the
-`migrate diff` script for the schema-only columns `db push` would have added (migrations
-lag `schema.prisma` by design; see "Prisma and Database" in CLAUDE.md) — then runs vitest
-with `VITEST_SKIP_DB_SETUP=true`. It refuses to apply a diff carrying a data-losing statement
-— `DROP TABLE`/`DROP COLUMN`, `TRUNCATE`, `DELETE FROM`, matched mid-line since Prisma writes
-column drops inside an `ALTER TABLE` — while letting the routine `ON DELETE CASCADE`,
-`DROP CONSTRAINT` and `DROP INDEX` through, so it stays a signal rather than noise.
+**Why the test DB needs the script.** `tests/setup/global-setup.ts` runs
+`prisma db push --accept-data-loss`, which Prisma refuses when it detects an AI agent. Do not
+set `PRISMA_USER_CONSENT_FOR_DANGEROUS_AI_ACTION` and do not edit the setup file.
+`prepare-test-db.sh` builds `librariarr_test` instead — `migrate deploy` plus the
+`migrate diff` script for the schema-only columns `db push` would have added (migrations lag
+`schema.prisma` by design; see "Prisma and Database" in CLAUDE.md) — and refuses to apply a
+diff carrying a data-losing statement, so a schema change that would destroy data stops the
+run. It is the one step here that is fiddly enough to be worth a script; everything else is
+the plain command above. It also starts Postgres and creates the role on first run.
 
 ## What the mocks hide — check these by hand
 
