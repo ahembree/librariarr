@@ -21,10 +21,11 @@ route tests mock the session and external clients, so a breaking runtime change 
    `pnpm install --frozen-lockfile && pnpm exec prisma generate`,
    `pnpm lint`, `pnpm exec tsc --noEmit`, `pnpm test:unit`, integration tests (below),
    `pnpm build`.
-4. If code changes are needed, push them to the Dependabot branch. Known one: a
-   `@playwright/test` bump must also move the image tag in `docker-compose.e2e.yml`.
+4. If code changes are needed, push them to the Dependabot branch.
 5. Wait for CI on the final head, including Browser E2E, then squash-merge
    (`expectedHeadSha` must be the full 40-character SHA — `git ls-remote origin <branch>`).
+6. Check the CI run the merge starts on `main`. If it fails, fix that before the next PR —
+   every later PR is built on top of it.
 
 When the list is empty, run `pnpm audit` (root and `docs/`). Dependabot stops at 10 open PRs,
 so a security fix can be missing from the list entirely.
@@ -66,5 +67,5 @@ VITEST_SKIP_DB_SETUP=true pnpm exec vitest run tests/integration
   before squashing and fix the title — release-please builds the changelog from it.
 - `ERR_PNPM_NO_MATURE_MATCHING_VERSION` means the release is under a day old
   (`minimumReleaseAge`). Skip it for now; don't add an exclusion.
-- **E2E failing in about 2 minutes with `next/font/google queries have exactly one entry`** is
-  the image build failing to download Google Fonts, not the PR. Re-run the failed job once.
+- A red check is the PR's until proven otherwise. If it really is infrastructure (a download,
+  a runner), fix the cause in its own PR rather than re-running until it passes.

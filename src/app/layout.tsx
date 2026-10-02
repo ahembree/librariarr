@@ -1,26 +1,12 @@
 import type { Metadata, Viewport } from "next";
-import { Sora, Plus_Jakarta_Sans, JetBrains_Mono } from "next/font/google";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "sonner";
+// Self-hosted (Fontsource) rather than next/font/google, which downloads the
+// fonts from Google at build time and fails the build when that request does.
+import "@fontsource-variable/sora";
+import "@fontsource-variable/plus-jakarta-sans";
+import "@fontsource-variable/jetbrains-mono";
 import "./globals.css";
-
-const display = Sora({
-  variable: "--font-display",
-  subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
-});
-
-const sans = Plus_Jakarta_Sans({
-  variable: "--font-sans",
-  subsets: ["latin"],
-  weight: ["300", "400", "500", "600", "700"],
-});
-
-const mono = JetBrains_Mono({
-  variable: "--font-mono",
-  subsets: ["latin"],
-  weight: ["400", "500", "600"],
-});
 
 export const metadata: Metadata = {
   title: "Librariarr",
@@ -59,9 +45,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className="dark">
-      <body
-        className={`${display.variable} ${sans.variable} ${mono.variable} antialiased`}
-      >
+      <body className="antialiased">
         <ThemeProvider>{children}</ThemeProvider>
         {/* Toasts auto-dismiss after 4s; a close button lets users dismiss
             sooner. On phones sonner spans the bottom edge full-width, so the
