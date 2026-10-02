@@ -1,0 +1,14 @@
+# The docs site is its own pnpm project, separate from the app at the repo
+# root. This file makes docs/ its own workspace root so pnpm does not walk up
+# to the app's pnpm-workspace.yaml (whose settings and lockfile are the app's).
+#
+# Same supply-chain controls as the app (see ../pnpm-workspace.yaml).
+minimumReleaseAge: 1440
+blockExoticSubdeps: true
+strictDepBuilds: true
+
+allowBuilds:
+  # swagger-ui-dist's install-time telemetry; never run it.
+  "@scarf/scarf": false
+  esbuild: true
+  sharp: true
