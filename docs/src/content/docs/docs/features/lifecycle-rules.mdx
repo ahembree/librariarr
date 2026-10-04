@@ -179,6 +179,8 @@ If an item isn't in the linked *arr instance, or a specific field has no value (
 
 :::caution[*arr criteria need at least one enabled instance]
 If you disable or delete your only Radarr, Sonarr, or Lidarr instance, rule sets using that family's fields are **skipped entirely** by detection, with a warning in System Logs, and previews return an error. This is deliberate: without an instance to check against, `foundInArr = false` would be true for your whole library. Re-add the instance and the rule set resumes on the next detection run.
+
+When a rule set's action is linked to an *arr instance, its *arr criteria are read from **that instance only** — the same one its action runs against. With a 1080p and a 4K Radarr, a rule set acting on the 4K instance sees the 4K copy's tags, monitored state and quality profile, never the 1080p copy's. If that instance is disabled, the rule set is skipped in the same way, even while another instance of the family is enabled. A rule set with no instance selected reads every enabled instance; a title on more than one of them takes the record from the instance that was added first.
 :::
 
 ### Seerr Fields
@@ -396,7 +398,7 @@ This action triggers an *arr search for a new copy of the matched movie, series,
 
 Each action links a rule set to an *arr instance:
 
-1. Select the *arr integration (e.g., "My Radarr")
+1. Select the *arr integration (e.g., "My Radarr") — the rule set's *arr criteria are also read from this instance
 2. Choose the action type (delete, unmonitor, do nothing)
 3. Set action-specific options (e.g., delete files toggle)
 4. Optionally configure tags to add or remove

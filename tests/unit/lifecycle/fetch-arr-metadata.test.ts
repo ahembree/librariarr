@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 const mockPrisma = vi.hoisted(() => ({
-  radarrInstance: { findMany: vi.fn(), count: vi.fn() },
-  sonarrInstance: { findMany: vi.fn(), count: vi.fn() },
-  lidarrInstance: { findMany: vi.fn(), count: vi.fn() },
+  radarrInstance: { findMany: vi.fn(), count: vi.fn(), findFirst: vi.fn() },
+  sonarrInstance: { findMany: vi.fn(), count: vi.fn(), findFirst: vi.fn() },
+  lidarrInstance: { findMany: vi.fn(), count: vi.fn(), findFirst: vi.fn() },
 }));
 
 const mockRadarrClient = vi.hoisted(() => ({
@@ -49,6 +49,19 @@ describe("hasEnabledArrInstances", () => {
     expect(mockPrisma.radarrInstance.count).toHaveBeenCalledWith({
       where: { userId: "u1", enabled: true },
     });
+  });
+
+  it("answers with the named instance's own state, not the family's", async () => {
+    mockPrisma.radarrInstance.findFirst.mockResolvedValue({ id: "r2", name: "Radarr 4K", enabled: false });
+    mockPrisma.radarrInstance.count.mockResolvedValue(3);
+    await expect(hasEnabledArrInstances("u1", "MOVIE", "r2")).resolves.toBe(false);
+    expect(mockPrisma.radarrInstance.count).not.toHaveBeenCalled();
+  });
+
+  it("counts the family when the named id is not one of its instances", async () => {
+    mockPrisma.radarrInstance.findFirst.mockResolvedValue(null);
+    mockPrisma.radarrInstance.count.mockResolvedValue(1);
+    await expect(hasEnabledArrInstances("u1", "MOVIE", "missing")).resolves.toBe(true);
   });
 
   it("counts enabled Sonarr instances for SERIES", async () => {
@@ -260,6 +273,61 @@ describe("fetchArrMetadata", () => {
       expect(Object.keys(result)).toHaveLength(2);
       expect(result["100"]).toBeDefined();
       expect(result["200"]).toBeDefined();
+    });
+
+    it("keeps the oldest instance's record for a movie on several instances", async () => {
+      mockPrisma.radarrInstance.findMany.mockResolvedValue([
+        { id: "r1", url: "http://radarr1", apiKey: "key1" },
+        { id: "r2", url: "http://radarr2", apiKey: "key2" },
+      ]);
+      mockRadarrClient.getMovies
+        .mockResolvedValueOnce([{ id: 1, tmdbId: 100, tags: [1], qualityProfileId: 1, monitored: true, ratings: {}, added: null, path: null, sizeOnDisk: null, originalLanguage: null, digitalRelease: null, physicalRelease: null, inCinemas: null, runtime: null, movieFile: null }])
+        .mockResolvedValueOnce([{ id: 9, tmdbId: 100, tags: [], qualityProfileId: 1, monitored: true, ratings: {}, added: null, path: null, sizeOnDisk: null, originalLanguage: null, digitalRelease: null, physicalRelease: null, inCinemas: null, runtime: null, movieFile: null }]);
+      mockRadarrClient.getQualityProfiles.mockResolvedValue([]);
+      mockRadarrClient.getTags.mockResolvedValue([{ id: 1, label: "keep" }]);
+
+      const result = await fetchArrMetadata("u1", "MOVIE");
+
+      expect(mockPrisma.radarrInstance.findMany).toHaveBeenCalledWith({
+        where: { userId: "u1", enabled: true },
+        orderBy: { createdAt: "asc" },
+      });
+      expect(result["100"].arrId).toBe(1);
+      expect(result["100"].tags).toEqual(["keep"]);
+    });
+
+    it("reads only the rule set's own instance when one is named", async () => {
+      mockPrisma.radarrInstance.findFirst.mockResolvedValue({ id: "r2", name: "Radarr 4K", enabled: true });
+      mockPrisma.radarrInstance.findMany.mockResolvedValue([
+        { id: "r2", url: "http://radarr2", apiKey: "key2" },
+      ]);
+      mockRadarrClient.getMovies.mockResolvedValueOnce([{ id: 9, tmdbId: 100, tags: [1], qualityProfileId: 1, monitored: true, ratings: {}, added: null, path: null, sizeOnDisk: null, originalLanguage: null, digitalRelease: null, physicalRelease: null, inCinemas: null, runtime: null, movieFile: null }]);
+      mockRadarrClient.getQualityProfiles.mockResolvedValue([]);
+      mockRadarrClient.getTags.mockResolvedValue([{ id: 1, label: "keep" }]);
+
+      const result = await fetchArrMetadata("u1", "MOVIE", undefined, "r2");
+
+      expect(mockPrisma.radarrInstance.findFirst).toHaveBeenCalledWith({
+        where: { id: "r2", userId: "u1" },
+        select: { id: true, name: true, enabled: true },
+      });
+      expect(mockPrisma.radarrInstance.findMany).toHaveBeenCalledWith({
+        where: { id: "r2", userId: "u1", enabled: true },
+        orderBy: { createdAt: "asc" },
+      });
+      expect(result["100"].arrId).toBe(9);
+    });
+
+    it("falls back to every instance when the named id is not a Radarr instance", async () => {
+      mockPrisma.radarrInstance.findFirst.mockResolvedValue(null);
+      mockPrisma.radarrInstance.findMany.mockResolvedValue([]);
+
+      await fetchArrMetadata("u1", "MOVIE", undefined, "sonarr-1");
+
+      expect(mockPrisma.radarrInstance.findMany).toHaveBeenCalledWith({
+        where: { userId: "u1", enabled: true },
+        orderBy: { createdAt: "asc" },
+      });
     });
   });
 

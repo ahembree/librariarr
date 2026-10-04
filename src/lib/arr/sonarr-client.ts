@@ -2,6 +2,7 @@ import axios, { AxiosInstance } from "axios";
 import { logger } from "@/lib/logger";
 import { IntegrationError } from "@/lib/integration-error";
 import { configureRetry, NO_RETRY } from "@/lib/http-retry";
+import { isExistingExclusionError } from "@/lib/arr/exclusion";
 
 // Tracked-download states that mean the item is NOT actively downloading.
 // Anything else (downloading, queued, warning, etc.) counts as an active download.
@@ -172,7 +173,8 @@ export class SonarrClient {
     const { data } = await this.client.get<SonarrSeries[]>("/api/v3/series", {
       params: { tvdbId },
     });
-    return data.length > 0 ? data[0] : null;
+    // Only a record carrying the requested id (see RadarrClient.getMovieByTmdbId).
+    return data.find((s) => s.tvdbId === tvdbId) ?? null;
   }
 
   async deleteSeries(
@@ -237,10 +239,14 @@ export class SonarrClient {
 
   async getQueue(seriesId: number): Promise<{ downloading: boolean; status: string | null }> {
     try {
+      // `indexes: null` sends `seriesIds=1`; axios' default `seriesIds[]=1` is
+      // not bound, so the filter was skipped (see RadarrClient.getQueue).
       const { data } = await this.client.get("/api/v3/queue", {
-        params: { seriesIds: [seriesId], pageSize: 10 },
+        params: { seriesIds: [seriesId], pageSize: 50 },
+        paramsSerializer: { indexes: null },
       });
-      const records = data.records || [];
+      const records = ((data.records || []) as Array<{ seriesId?: number; status?: string; trackedDownloadStatus?: string; trackedDownloadState?: string }>)
+        .filter((r) => r.seriesId === seriesId);
       if (records.length === 0) return { downloading: false, status: null };
       const active = records.find(isActiveDownloadRecord);
       if (!active) {
@@ -266,11 +272,17 @@ export class SonarrClient {
     await this.client.delete(`/api/v3/tag/${id}`);
   }
 
+  /** Idempotent: an exclusion that already exists counts as added. */
   async addExclusion(tvdbId: number, title: string): Promise<void> {
-    await this.client.post("/api/v3/importlistexclusion", {
-      tvdbId,
-      title,
-    });
+    try {
+      await this.client.post("/api/v3/importlistexclusion", {
+        tvdbId,
+        title,
+      });
+    } catch (error) {
+      if (isExistingExclusionError(error)) return;
+      throw error;
+    }
   }
 
   async getLanguages(): Promise<{ id: number; name: string }[]> {

@@ -31,7 +31,7 @@ export async function POST(request: NextRequest) {
   const { data, error } = await validateRequest(request, ruleTestItemSchema);
   if (error) return error;
 
-  const { rules, type, seriesScope, mediaItemId, serverIds } = data;
+  const { rules, type, seriesScope, mediaItemId, serverIds, arrInstanceId } = data;
   const typedRules = rules as unknown as LifecycleRule[] | LifecycleRuleGroup[];
 
   if (!hasAnyActiveRules(typedRules)) {
@@ -92,6 +92,7 @@ export async function POST(request: NextRequest) {
     type,
     typedRules,
     item.library.mediaServer ? [item.library.mediaServer.id] : serverIds,
+    arrInstanceId,
   );
   if (!evaluability.evaluable) {
     return NextResponse.json({ error: evaluability.reason }, { status: 400 });
@@ -100,7 +101,7 @@ export async function POST(request: NextRequest) {
   // Fetch Arr/Seerr metadata if needed
   let arrData: ArrDataMap | undefined;
   if (hasArrRules(typedRules)) {
-    arrData = await fetchArrMetadata(session.userId!, type);
+    arrData = await fetchArrMetadata(session.userId!, type, undefined, arrInstanceId);
   }
 
   let seerrData: SeerrDataMap | undefined;

@@ -893,7 +893,7 @@ describe("processLifecycleRules", () => {
 
     await processLifecycleRules("u1");
 
-    expect(mockFetchArrMetadata).toHaveBeenCalledWith("u1", "MOVIE");
+    expect(mockFetchArrMetadata).toHaveBeenCalledWith("u1", "MOVIE", undefined, null);
     expect(mockDetectAndSaveMatches).toHaveBeenCalled();
   });
 

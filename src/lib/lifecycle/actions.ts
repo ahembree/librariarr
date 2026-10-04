@@ -463,7 +463,7 @@ async function executeUnmonitorRadarr(action: ActionRecord) {
   const { client, movie } = await resolveRadarrMovie(action);
   await client.updateMovie(movie.id, { monitored: false });
   if (action.addImportExclusion) {
-    await client.addExclusion(movie.tmdbId, movie.title, action.mediaItem.year ?? 0);
+    await client.addExclusion(movie.tmdbId, movie.title, movie.year ?? action.mediaItem.year ?? 0);
   }
 }
 
@@ -482,7 +482,7 @@ async function executeUnmonitorDeleteFilesRadarr(action: ActionRecord) {
     await client.deleteMovieFile(movie.movieFileId);
   }
   if (action.addImportExclusion) {
-    await client.addExclusion(movie.tmdbId, movie.title, action.mediaItem.year ?? 0);
+    await client.addExclusion(movie.tmdbId, movie.title, movie.year ?? action.mediaItem.year ?? 0);
   }
   if (action.searchAfterAction) {
     await client.triggerMovieSearch(movie.id);
@@ -723,7 +723,7 @@ async function executeMonitorDeleteFilesRadarr(action: ActionRecord) {
     await client.deleteMovieFile(movie.movieFileId);
   }
   if (action.addImportExclusion) {
-    await client.addExclusion(movie.tmdbId, movie.title, action.mediaItem.year ?? 0);
+    await client.addExclusion(movie.tmdbId, movie.title, movie.year ?? action.mediaItem.year ?? 0);
   }
   if (action.searchAfterAction) {
     await client.triggerMovieSearch(movie.id);
@@ -766,7 +766,7 @@ async function executeDeleteFilesRadarr(action: ActionRecord) {
     await client.deleteMovieFile(movie.movieFileId);
   }
   if (action.addImportExclusion) {
-    await client.addExclusion(movie.tmdbId, movie.title, action.mediaItem.year ?? 0);
+    await client.addExclusion(movie.tmdbId, movie.title, movie.year ?? action.mediaItem.year ?? 0);
   }
   if (action.searchAfterAction) {
     await client.triggerMovieSearch(movie.id);

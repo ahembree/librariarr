@@ -461,6 +461,11 @@ export const rulePreviewSchema = z.object({
   type: z.enum(["MOVIE", "SERIES", "MUSIC"]),
   seriesScope: z.boolean().optional(),
   serverIds: z.array(z.string()).min(1, "At least one server is required"),
+  /**
+   * The editor's (unsaved) Arr instance. Arr criteria are read from this
+   * instance alone, as detection reads them from the rule set's.
+   */
+  arrInstanceId: z.string().max(200).nullable().optional(),
 });
 
 export const ruleTestItemSchema = z.object({
@@ -469,6 +474,11 @@ export const ruleTestItemSchema = z.object({
   seriesScope: z.boolean().optional(),
   mediaItemId: z.string().min(1, "Media item ID is required"),
   serverIds: z.array(z.string()).min(1, "At least one server is required"),
+  /**
+   * The editor's (unsaved) Arr instance. Arr criteria are read from this
+   * instance alone, as detection reads them from the rule set's.
+   */
+  arrInstanceId: z.string().max(200).nullable().optional(),
 });
 
 export const actionExecuteSchema = z.object({
@@ -491,6 +501,8 @@ export const ruleDiffSchema = z.object({
   /** The editor's unsaved action config; the stored one when absent. */
   actionEnabled: z.boolean().optional(),
   actionType: z.string().nullable().optional(),
+  /** The editor's unsaved Arr instance; the stored one when absent. */
+  arrInstanceId: z.string().max(200).nullable().optional(),
 });
 
 export const ruleRunSchema = z.object({

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
-import { cleanDatabase, disconnectTestDb } from "../../setup/test-db";
+import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
 import {
   callRoute,
@@ -7,6 +7,10 @@ import {
   expectJson,
   createTestUser,
   createTestRadarrInstance,
+  createTestRuleSet,
+  createTestServer,
+  createTestLibrary,
+  createTestMediaItem,
 } from "../../setup/test-helpers";
 
 // Redirect prisma to test database
@@ -26,6 +30,7 @@ const mockGetMovies = vi.fn();
 const mockGetQualityProfiles = vi.fn();
 const mockGetTags = vi.fn();
 const mockGetLanguages = vi.fn();
+const mockGetMediaManagementConfig = vi.fn();
 
 vi.mock("@/lib/arr/radarr-client", () => ({
   RadarrClient: vi.fn().mockImplementation(function () {
@@ -35,6 +40,7 @@ vi.mock("@/lib/arr/radarr-client", () => ({
       getQualityProfiles: mockGetQualityProfiles,
       getTags: mockGetTags,
       getLanguages: mockGetLanguages,
+      getMediaManagementConfig: mockGetMediaManagementConfig,
     };
   }),
 }));
@@ -44,6 +50,7 @@ import { GET, POST } from "@/app/api/integrations/radarr/route";
 import { PUT, DELETE } from "@/app/api/integrations/radarr/[id]/route";
 import { POST as TEST_POST } from "@/app/api/integrations/radarr/test/route";
 import { GET as METADATA_GET } from "@/app/api/integrations/radarr/[id]/metadata/route";
+import { GET as RECYCLE_BIN_GET } from "@/app/api/integrations/radarr/[id]/recycle-bin/route";
 
 describe("Radarr integration endpoints", () => {
   beforeEach(async () => {
@@ -341,6 +348,113 @@ describe("Radarr integration endpoints", () => {
       const listResponse = await callRoute(GET, { url: "/api/integrations/radarr" });
       const listBody = await expectJson<{ instances: unknown[] }>(listResponse, 200);
       expect(listBody.instances).toHaveLength(0);
+    });
+
+    it("detaches rule sets and cancels pending actions that used the instance", async () => {
+      const prisma = getTestPrisma();
+      const user = await createTestUser();
+      const instance = await createTestRadarrInstance(user.id);
+      const other = await createTestRadarrInstance(user.id, { name: "Other" });
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id);
+      const movie = await createTestMediaItem(library.id);
+
+      const deleting = await createTestRuleSet(user.id, {
+        actionEnabled: true,
+        actionType: "DELETE_RADARR",
+        arrInstanceId: instance.id,
+      });
+      const doNothing = await createTestRuleSet(user.id, {
+        actionEnabled: true,
+        actionType: "DO_NOTHING",
+        arrInstanceId: instance.id,
+      });
+      const untouched = await createTestRuleSet(user.id, {
+        actionEnabled: true,
+        actionType: "DELETE_RADARR",
+        arrInstanceId: other.id,
+      });
+      const actionBase = {
+        userId: user.id,
+        mediaItemId: movie.id,
+        ruleSetType: "MOVIE",
+        actionType: "DELETE_RADARR",
+        scheduledFor: new Date(Date.now() + 86_400_000),
+      };
+      await prisma.lifecycleAction.create({
+        data: { ...actionBase, ruleSetId: deleting.id, arrInstanceId: instance.id, status: "PENDING" },
+      });
+      await prisma.lifecycleAction.create({
+        data: { ...actionBase, ruleSetId: deleting.id, arrInstanceId: instance.id, status: "COMPLETED" },
+      });
+      await prisma.lifecycleAction.create({
+        data: { ...actionBase, ruleSetId: untouched.id, arrInstanceId: other.id, status: "PENDING" },
+      });
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      const response = await callRouteWithParams(
+        DELETE,
+        { id: instance.id },
+        { url: `/api/integrations/radarr/${instance.id}`, method: "DELETE" }
+      );
+      await expectJson(response, 200);
+
+      const after = await prisma.ruleSet.findMany({
+        where: { id: { in: [deleting.id, doNothing.id, untouched.id] } },
+        select: { id: true, arrInstanceId: true, actionEnabled: true },
+      });
+      const byId = new Map(after.map((r) => [r.id, r]));
+      expect(byId.get(deleting.id)).toMatchObject({ arrInstanceId: null, actionEnabled: false });
+      // A Do Nothing action with no Arr tags never used the instance.
+      expect(byId.get(doNothing.id)).toMatchObject({ arrInstanceId: null, actionEnabled: true });
+      expect(byId.get(untouched.id)).toMatchObject({ arrInstanceId: other.id, actionEnabled: true });
+
+      const actions = await prisma.lifecycleAction.findMany({ select: { arrInstanceId: true, status: true } });
+      expect(actions).toHaveLength(2);
+      expect(actions).toEqual(expect.arrayContaining([
+        { arrInstanceId: instance.id, status: "COMPLETED" },
+        { arrInstanceId: other.id, status: "PENDING" },
+      ]));
+    });
+  });
+
+  // ----- GET /api/integrations/radarr/[id]/recycle-bin -----
+
+  describe("GET /api/integrations/radarr/[id]/recycle-bin", () => {
+    it("links to the external URL when one is set", async () => {
+      const user = await createTestUser();
+      const instance = await createTestRadarrInstance(user.id, { url: "http://radarr:7878" });
+      await getTestPrisma().radarrInstance.update({
+        where: { id: instance.id },
+        data: { externalUrl: "https://radarr.example.com" },
+      });
+      mockGetMediaManagementConfig.mockResolvedValue({ recycleBin: "/recycle", recycleBinCleanupDays: 7 });
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      const response = await callRouteWithParams(
+        RECYCLE_BIN_GET,
+        { id: instance.id },
+        { url: `/api/integrations/radarr/${instance.id}/recycle-bin` }
+      );
+      const body = await expectJson<{ enabled: boolean; arrUrl: string }>(response, 200);
+      expect(body.enabled).toBe(true);
+      expect(body.arrUrl).toBe("https://radarr.example.com");
+    });
+
+    it("falls back to the API URL without an external URL, including on failure", async () => {
+      const user = await createTestUser();
+      const instance = await createTestRadarrInstance(user.id, { url: "http://radarr:7878" });
+      mockGetMediaManagementConfig.mockRejectedValue(new Error("down"));
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      const response = await callRouteWithParams(
+        RECYCLE_BIN_GET,
+        { id: instance.id },
+        { url: `/api/integrations/radarr/${instance.id}/recycle-bin` }
+      );
+      const body = await expectJson<{ enabled: null; arrUrl: string }>(response, 200);
+      expect(body.enabled).toBeNull();
+      expect(body.arrUrl).toBe("http://radarr:7878");
     });
   });
 

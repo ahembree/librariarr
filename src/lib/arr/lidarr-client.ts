@@ -2,6 +2,7 @@ import axios, { AxiosInstance } from "axios";
 import { logger } from "@/lib/logger";
 import { IntegrationError } from "@/lib/integration-error";
 import { configureRetry, NO_RETRY } from "@/lib/http-retry";
+import { isExistingExclusionError } from "@/lib/arr/exclusion";
 
 // Tracked-download states that mean the item is NOT actively downloading.
 // Anything else (downloading, queued, warning, etc.) counts as an active download.
@@ -172,8 +173,9 @@ export class LidarrClient {
       params: { mbId },
     });
     // Lidarr filters by foreignArtistId, but guard in case the param is ignored
-    // by an older version and the full list is returned.
-    return data.find((a) => a.foreignArtistId === mbId) ?? data[0] ?? null;
+    // by an older version and the full list is returned — never fall back to
+    // `data[0]`, which would then be an arbitrary artist.
+    return data.find((a) => a.foreignArtistId === mbId) ?? null;
   }
 
   async deleteArtist(
@@ -239,10 +241,14 @@ export class LidarrClient {
 
   async getQueue(artistId: number): Promise<{ downloading: boolean; status: string | null }> {
     try {
+      // `indexes: null` sends `artistIds=1`; axios' default `artistIds[]=1` is
+      // not bound, so the filter was skipped (see RadarrClient.getQueue).
       const { data } = await this.client.get("/api/v1/queue", {
-        params: { artistIds: [artistId], pageSize: 10 },
+        params: { artistIds: [artistId], pageSize: 50 },
+        paramsSerializer: { indexes: null },
       });
-      const records = data.records || [];
+      const records = ((data.records || []) as Array<{ artistId?: number; status?: string; trackedDownloadStatus?: string; trackedDownloadState?: string }>)
+        .filter((r) => r.artistId === artistId);
       if (records.length === 0) return { downloading: false, status: null };
       const active = records.find(isActiveDownloadRecord);
       if (!active) {
@@ -268,11 +274,17 @@ export class LidarrClient {
     await this.client.delete(`/api/v1/tag/${id}`);
   }
 
+  /** Idempotent: an exclusion that already exists counts as added. */
   async addExclusion(foreignId: string, artistName: string): Promise<void> {
-    await this.client.post("/api/v1/importlistexclusion", {
-      foreignId,
-      artistName,
-    });
+    try {
+      await this.client.post("/api/v1/importlistexclusion", {
+        foreignId,
+        artistName,
+      });
+    } catch (error) {
+      if (isExistingExclusionError(error)) return;
+      throw error;
+    }
   }
 
   /**

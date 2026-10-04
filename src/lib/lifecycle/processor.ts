@@ -309,6 +309,7 @@ export async function processLifecycleRules(userId?: string) {
         ruleSet.type,
         rules,
         ruleSet.serverIds,
+        ruleSet.arrInstanceId,
       );
       if (!evaluability.evaluable) {
         logger.warn("Lifecycle", `Skipping rule set "${ruleSet.name}" — ${evaluability.reason}`);
@@ -327,8 +328,10 @@ export async function processLifecycleRules(userId?: string) {
       let arrData: ArrDataMap | undefined;
       if (hasArrRules(rules)) {
         const type = ruleSet.type;
-        arrData = await loadMetadata(`arr:${ruleSet.userId}:${type}`, () =>
-          fetchArrMetadata(ruleSet.userId, type),
+        // Keyed by the rule set's instance too: its Arr criteria are read from
+        // that instance alone (see `resolveArrInstanceScope`).
+        arrData = await loadMetadata(`arr:${ruleSet.userId}:${type}:${ruleSet.arrInstanceId ?? "*"}`, () =>
+          fetchArrMetadata(ruleSet.userId, type, undefined, ruleSet.arrInstanceId),
         );
       }
 

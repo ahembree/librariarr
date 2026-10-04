@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { RadarrClient } from "@/lib/arr/radarr-client";
 import { validateRequest, arrInstanceUpdateSchema } from "@/lib/validation";
 import { sanitize, sanitizeErrorDetail } from "@/lib/api/sanitize";
+import { detachDeletedArrInstance } from "@/lib/arr/detach-instance";
 
 export async function PUT(
   request: NextRequest,
@@ -79,7 +80,10 @@ export async function DELETE(
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  await prisma.radarrInstance.delete({ where: { id } });
+  await prisma.$transaction(async (tx) => {
+    await detachDeletedArrInstance(tx, session.userId!, id, "Radarr");
+    await tx.radarrInstance.delete({ where: { id } });
+  });
 
   return NextResponse.json({ success: true });
 }

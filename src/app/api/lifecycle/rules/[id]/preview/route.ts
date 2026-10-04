@@ -50,14 +50,14 @@ export async function POST(
 
   // MATCH-ALL SAFETY: mirror detection — Arr/Seerr rules with no enabled
   // instance behind them would preview the entire library as matching.
-  const evaluability = await checkLifecycleRuleEvaluability(session.userId!, ruleSet.type, rules, serverIds);
+  const evaluability = await checkLifecycleRuleEvaluability(session.userId!, ruleSet.type, rules, serverIds, ruleSet.arrInstanceId);
   if (!evaluability.evaluable) {
     return NextResponse.json({ error: evaluability.reason }, { status: 400 });
   }
 
   let arrData: ArrDataMap | undefined;
   if (hasArrRules(rules)) {
-    arrData = await fetchArrMetadata(session.userId!, ruleSet.type);
+    arrData = await fetchArrMetadata(session.userId!, ruleSet.type, undefined, ruleSet.arrInstanceId);
   }
 
   let seerrData: SeerrDataMap | undefined;

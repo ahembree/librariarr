@@ -24,6 +24,7 @@ vi.mock("axios", () => {
 });
 
 import { SonarrClient } from "@/lib/arr/sonarr-client";
+import { IntegrationError } from "@/lib/integration-error";
 
 describe("SonarrClient", () => {
   let client: SonarrClient;
@@ -115,6 +116,11 @@ describe("SonarrClient", () => {
       mockAxiosInstance.get.mockResolvedValueOnce({ data: [] });
       const result = await client.getSeriesByTvdbId(999);
       expect(result).toBeNull();
+    });
+
+    it("never returns a series with a different TVDB id (filter ignored)", async () => {
+      mockAxiosInstance.get.mockResolvedValueOnce({ data: [{ id: 1, tvdbId: 100 }] });
+      expect(await client.getSeriesByTvdbId(999)).toBeNull();
     });
   });
 
@@ -211,10 +217,22 @@ describe("SonarrClient", () => {
   describe("getQueue", () => {
     it("does not report a completed (inactive) record as downloading", async () => {
       mockAxiosInstance.get.mockResolvedValueOnce({
-        data: { records: [{ status: "completed" }] },
+        data: { records: [{ seriesId: 1, status: "completed" }] },
       });
       const result = await client.getQueue(1);
       expect(result).toEqual({ downloading: false, status: "completed" });
+    });
+
+    it("ignores another item's active download and sends seriesIds unbracketed", async () => {
+      mockAxiosInstance.get.mockResolvedValueOnce({
+        data: { records: [{ seriesId: 2, status: "downloading" }] },
+      });
+      const result = await client.getQueue(1);
+      expect(result).toEqual({ downloading: false, status: null });
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+        params: expect.objectContaining({ seriesIds: [1] }),
+        paramsSerializer: { indexes: null },
+      }));
     });
 
     it("returns not downloading when no records", async () => {
@@ -257,6 +275,15 @@ describe("SonarrClient", () => {
   });
 
   describe("addExclusion", () => {
+    it("treats an exclusion that already exists as added", async () => {
+      mockAxiosInstance.post.mockRejectedValueOnce(new IntegrationError("Sonarr", {
+        config: { url: "/api/v3/importlistexclusion", method: "post" },
+        response: { status: 400, data: [{ propertyName: "TvdbId", errorMessage: "This exclusion has already been added." }] },
+        code: "ERR_BAD_REQUEST",
+      } as never));
+      await expect(client.addExclusion(12345, "Test Show")).resolves.toBeUndefined();
+    });
+
     it("posts exclusion data", async () => {
       mockAxiosInstance.post.mockResolvedValueOnce({});
       await client.addExclusion(12345, "Test Show");

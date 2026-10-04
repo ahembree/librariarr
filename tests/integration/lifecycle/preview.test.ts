@@ -12,6 +12,7 @@ import {
   createTestMediaItem,
   createTestRuleSet,
   createTestRadarrInstance,
+  createTestExternalId,
 } from "../../setup/test-helpers";
 
 // Critical: redirect prisma to test database
@@ -27,11 +28,13 @@ vi.mock("@/lib/logger", () => ({
   dbLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-// Mock Arr clients (used by ad-hoc preview for arrMetadata fetching)
+// Mock Arr clients (used by ad-hoc preview for arrMetadata fetching). Movies
+// are served per instance URL so a test can tell which instance was read.
+const radarrMoviesByUrl = vi.hoisted(() => new Map<string, unknown[]>());
 vi.mock("@/lib/arr/radarr-client", () => ({
-  RadarrClient: vi.fn().mockImplementation(function () {
+  RadarrClient: vi.fn().mockImplementation(function (url: string) {
     return {
-      getMovies: vi.fn().mockResolvedValue([]),
+      getMovies: vi.fn().mockResolvedValue(radarrMoviesByUrl.get(url) ?? []),
       getQualityProfiles: vi.fn().mockResolvedValue([]),
       getTags: vi.fn().mockResolvedValue([]),
       getCustomFormatScores: vi.fn().mockResolvedValue(new Map()),
@@ -71,6 +74,7 @@ describe("Lifecycle Rules Preview", () => {
     await cleanDatabase();
     clearMockSession();
     vi.clearAllMocks();
+    radarrMoviesByUrl.clear();
   });
 
   afterAll(async () => {
@@ -535,6 +539,79 @@ describe("Lifecycle Rules Preview", () => {
       // "not found in Arr" legitimately matches the unmanaged item.
       const body = await expectJson<{ count: number }>(response, 200);
       expect(body.count).toBe(1);
+    });
+
+    it("reads Arr criteria from the rule set's own instance, not another one", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "MOVIE" });
+      const movie = await createTestMediaItem(library.id, { title: "Only In 1080p", type: "MOVIE" });
+      await createTestExternalId(movie.id, "TMDB", "100");
+      await createTestRadarrInstance(user.id, { name: "Radarr 1080p", url: "http://radarr-hd:7878" });
+      const uhd = await createTestRadarrInstance(user.id, { name: "Radarr 4K", url: "http://radarr-4k:7878" });
+      radarrMoviesByUrl.set("http://radarr-hd:7878", [
+        { id: 1, tmdbId: 100, title: "Only In 1080p", tags: [], qualityProfileId: 1, monitored: true, hasFile: false },
+      ]);
+
+      const ruleSet = await createTestRuleSet(user.id, {
+        type: "MOVIE",
+        serverIds: [server.id],
+        arrInstanceId: uhd.id,
+        rules: [
+          { id: "r1", field: "foundInArr", operator: "equals", value: "false", condition: "AND" },
+        ],
+      });
+
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const saved = await callRouteWithParams(
+        savedPreviewPOST,
+        { id: ruleSet.id },
+        { url: `/api/lifecycle/rules/${ruleSet.id}/preview`, method: "POST" }
+      );
+      // Not on the 4K instance the rule set acts on — even though the 1080p
+      // instance has it.
+      expect((await expectJson<{ count: number }>(saved, 200)).count).toBe(1);
+
+      const adHoc = await callRoute(adHocPreviewPOST, {
+        url: "/api/lifecycle/rules/preview",
+        method: "POST",
+        body: {
+          type: "MOVIE",
+          serverIds: [server.id],
+          arrInstanceId: uhd.id,
+          rules: [
+            { id: "r1", field: "foundInArr", operator: "equals", value: "false", condition: "AND" },
+          ],
+        },
+      });
+      const { result: adHocBody } = await expectStreamResult<{ count: number }>(adHoc);
+      expect(adHocBody.count).toBe(1);
+    });
+
+    it("refuses when the rule set's own Arr instance is disabled, even with another enabled", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      await createTestLibrary(server.id, { type: "MOVIE" });
+      await createTestRadarrInstance(user.id, { name: "Radarr 1080p", enabled: true });
+      const uhd = await createTestRadarrInstance(user.id, { name: "Radarr 4K", enabled: false });
+
+      const ruleSet = await createTestRuleSet(user.id, {
+        type: "MOVIE",
+        serverIds: [server.id],
+        arrInstanceId: uhd.id,
+        rules: [
+          { id: "r1", field: "foundInArr", operator: "equals", value: "false", condition: "AND" },
+        ],
+      });
+
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const response = await callRouteWithParams(
+        savedPreviewPOST,
+        { id: ruleSet.id },
+        { url: `/api/lifecycle/rules/${ruleSet.id}/preview`, method: "POST" }
+      );
+      const body = await expectJson<{ error: string }>(response, 400);
+      expect(body.error).toMatch(/instance "Radarr 4K" is disabled/);
     });
 
     it("ad-hoc preview returns 400 when rules use Arr criteria and no enabled Arr instance exists", async () => {

@@ -8,8 +8,12 @@ const mockHasEnabledSeerrInstances = vi.hoisted(() => vi.fn());
 // `findMany`, not `count`: the guard names the offending server and states
 // which of its two faults applies, so it reads the rows rather than tallying.
 const mockServerFindMany = vi.hoisted(() => vi.fn());
+const mockRadarrFindFirst = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/db", () => ({
-  prisma: { mediaServer: { findMany: mockServerFindMany } },
+  prisma: {
+    mediaServer: { findMany: mockServerFindMany },
+    radarrInstance: { findFirst: mockRadarrFindFirst },
+  },
 }));
 
 /** An unevidenced server row, in the shape the guard selects. */
@@ -79,7 +83,7 @@ describe("checkLifecycleRuleEvaluability", () => {
   it("is evaluable for Arr rules when an enabled instance exists", async () => {
     const result = await checkLifecycleRuleEvaluability("u1", "MOVIE", groupsWith("foundInArr"));
     expect(result).toEqual({ evaluable: true });
-    expect(mockHasEnabledArrInstances).toHaveBeenCalledWith("u1", "MOVIE");
+    expect(mockHasEnabledArrInstances).toHaveBeenCalledWith("u1", "MOVIE", undefined);
   });
 
   it("refuses Arr rules with no enabled instance (transient — no disarm)", async () => {
@@ -89,6 +93,18 @@ describe("checkLifecycleRuleEvaluability", () => {
     if (!result.evaluable) {
       expect(result.permanent).toBe(false);
       expect(result.reason).toMatch(/no enabled Radarr instance/i);
+    }
+  });
+
+  it("passes the rule set's Arr instance and names it when it is disabled", async () => {
+    mockHasEnabledArrInstances.mockResolvedValue(false);
+    mockRadarrFindFirst.mockResolvedValue({ id: "r2", name: "Radarr 4K", enabled: false });
+    const result = await checkLifecycleRuleEvaluability("u1", "MOVIE", groupsWith("foundInArr"), undefined, "r2");
+    expect(mockHasEnabledArrInstances).toHaveBeenCalledWith("u1", "MOVIE", "r2");
+    expect(result.evaluable).toBe(false);
+    if (!result.evaluable) {
+      expect(result.permanent).toBe(false);
+      expect(result.reason).toMatch(/instance "Radarr 4K" is disabled/);
     }
   });
 

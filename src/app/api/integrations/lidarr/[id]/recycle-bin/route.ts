@@ -32,11 +32,11 @@ export async function GET(
       enabled,
       path,
       cleanupDays: config.recycleBinCleanupDays,
-      arrUrl: instance.url,
+      arrUrl: instance.externalUrl || instance.url,
     });
   } catch (error: unknown) {
     const raw = error instanceof Error ? error.message : "Failed to query Lidarr";
     const msg = sanitizeErrorDetail(raw) ?? "Failed to query Lidarr";
-    return NextResponse.json({ enabled: null, error: msg, arrUrl: instance.url });
+    return NextResponse.json({ enabled: null, error: msg, arrUrl: instance.externalUrl || instance.url });
   }
 }

@@ -84,6 +84,7 @@ vi.mock("@/lib/rules/lifecycle-engine", () => ({
 vi.mock("@/lib/lifecycle/fetch-arr-metadata", () => ({
   fetchArrMetadata: mockFetchArrMetadata,
   hasEnabledArrInstances: mockHasEnabledArrInstances,
+  resolveArrInstanceScope: vi.fn().mockResolvedValue(null),
   arrFamilyLabel: (type: string) =>
     type === "MOVIE" ? "Radarr" : type === "MUSIC" ? "Lidarr" : "Sonarr",
 }));
