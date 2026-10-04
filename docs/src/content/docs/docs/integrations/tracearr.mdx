@@ -103,7 +103,7 @@ To know where your history starts, Librariarr asks Tracearr **once per server** 
 A Tracearr play is joined to a library item by:
 
 1. **Rating key** — the server's own item ID, which Tracearr records. This is the normal path and matches exactly.
-2. **Provider ID**, in TVDB → TMDB → IMDB order, when the rating key doesn't resolve (a re-added item, a rebuilt library). For episodes the provider ID identifies the show, so the season **and** episode number must match as well.
+2. **Provider ID**, TMDB then IMDB, when the rating key doesn't resolve (a re-added item, a rebuilt library) — **movies and tracks only**. The match is refused if the item's other provider ID disagrees with the play's. TVDB is not used for this, because Tracearr and your library often disagree about a film's TVDB ID. Episodes are never matched by provider ID: Tracearr records the episode's own IDs, while Librariarr stores the show's IDs on every episode, so the only way the two could agree is a numeric coincidence with a different show. An episode whose rating key no longer resolves is skipped.
 
 **A play that cannot be matched unambiguously is skipped, not guessed.** Lifecycle rules read this data and delete files with it, so a play attributed to the wrong item is worse than a play that's missing. Skipped plays are counted in the sync's log entry.
 
@@ -150,8 +150,14 @@ So Librariarr goes looking for it. Once a server's backfill has finished, each b
 
 Two limits, stated honestly:
 
-- **It is bounded per run.** Tracearr's history can only be filtered one item at a time, so a targeted lookup costs one request per item against an API that rate-limits per key. Recovery works through a capped number of items each run rather than sweeping the library; the rest are picked up by later runs while they are still inside the window.
+- **It is bounded per run.** Tracearr's history can only be filtered one item at a time, so a targeted lookup costs one request per item against an API that rate-limits per key. Recovery works through a capped number of items each run rather than sweeping the library; an item Tracearr has already answered for is not asked about again, so the rest are picked up by later runs while they are still inside the window. (That record is kept in memory, so a restart simply asks again.)
 - **It only looks at the recent window.** An item added longer ago than that is not revisited. To force a full re-import for a server, switch its **Watch history source** to the server's own history and back again — that clears the stored rows and makes the next sync a first run, so the whole history is walked again.
+
+**Purging media restarts the import.** **Purge** (per library or per type), and disabling a server with its data deleted, remove the plays along with the items. For a Tracearr-mapped server they also restart the history import from the newest play, so once the next sync has brought the media back, the plays come back too. Restoring a **config-only** backup has the same effect: a server marked as fully imported but holding no plays is recognised and imported again from the start. Play-activity rules stay paused until that import finishes.
+
+<Aside type="note">
+  **Changing a server's watch-history source while an import is running is safe.** Every write checks that the server is still mapped to the Tracearr server the import is reading from. Once the mapping changes, nothing more from the old source is stored, and the next run uses the new one.
+</Aside>
 
 <Aside type="note">
   **Deleting media while an import is running is safe.** The import checks that an item is still there immediately before writing its plays and skips whatever has gone, rather than failing the run. The plays already imported stay imported, and the run carries on.

@@ -486,9 +486,10 @@ export class TracearrClient {
       },
     );
 
+    assertHistoryResponse(data);
     return {
-      records: Array.isArray(data?.data) ? data.data : [],
-      nextCursor: data?.meta?.nextCursor ?? null,
+      records: data.data,
+      nextCursor: data.meta?.nextCursor ?? null,
     };
   }
 
@@ -596,7 +597,8 @@ export class TracearrClient {
         { maxRetries: BULK_RATE_LIMIT_MAX_RETRIES, signal },
       );
 
-      if (Array.isArray(data?.data)) records.push(...data.data);
+      assertHistoryResponse(data);
+      records.push(...data.data);
 
       const next = data?.meta?.nextCursor ?? null;
       if (!next || seenCursors.has(next)) break;
@@ -849,5 +851,26 @@ export class TracearrClient {
     }
 
     return RATE_LIMIT_FALLBACK_DELAY_MS;
+  }
+}
+
+/**
+ * Refuse a history response that is not a history response.
+ *
+ * Read leniently, a 200 whose body is something else — a reverse proxy's HTML
+ * sign-in page, an error document — came back as `{ records: [],
+ * nextCursor: null }`, which is a genuinely EXHAUSTED keyset. The archive walk
+ * marks the backfill complete on exactly that, so one such answer mid-archive
+ * abandoned every older play for good. A thrown error is a failed fetch
+ * instead: the walk stops resumably and the backfill task backs off.
+ */
+function assertHistoryResponse(
+  data: RawHistoryResponse | null | undefined,
+): asserts data is RawHistoryResponse {
+  if (!data || typeof data !== "object" || !Array.isArray(data.data)) {
+    throw new Error(
+      "Tracearr returned an unexpected response to a history request (no `data` " +
+        "array) — check that the URL points at Tracearr itself",
+    );
   }
 }

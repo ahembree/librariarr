@@ -8,6 +8,7 @@ import {
   createTestUser,
   createTestServer,
   createTestLibrary,
+  createTestMediaItem,
 } from "../../setup/test-helpers";
 
 // Redirect prisma to test database
@@ -100,6 +101,34 @@ describe("Server enable/disable toggle", () => {
       );
       const body = await expectJson<{ server: { id: string; enabled: boolean } }>(response, 200);
       expect(body.server.enabled).toBe(true);
+    });
+
+    it("restarts the Tracearr archive walk when disabling with deleteData", async () => {
+      // The purge cascades every play away; without a restart the "complete"
+      // backfill would only run the forward pass once the server is re-enabled.
+      const user = await createTestUser();
+      const server = await createTestServer(user.id, {
+        tracearrServerId: "11111111-2222-3333-4444-555555555555",
+        tracearrBackfillComplete: true,
+      });
+      const library = await createTestLibrary(server.id);
+      await createTestMediaItem(library.id);
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      const response = await callRouteWithParams(
+        PUT,
+        { id: server.id },
+        {
+          url: `/api/servers/${server.id}`,
+          method: "PUT",
+          body: { enabled: false, deleteData: true },
+        }
+      );
+      await expectJson(response, 200);
+
+      const updated = await prisma.mediaServer.findUnique({ where: { id: server.id } });
+      expect(updated!.tracearrBackfillComplete).toBe(false);
+      expect(updated!.tracearrBackfillCursorAt).toBeInstanceOf(Date);
     });
 
     it("skips connection test when disabling", async () => {

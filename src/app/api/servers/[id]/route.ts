@@ -8,7 +8,10 @@ import { validateRequest, serverEditSchema } from "@/lib/validation";
 import { sanitize, sanitizeErrorDetail } from "@/lib/api/sanitize";
 import { invalidateMediaCaches } from "@/lib/cache/invalidate";
 import { eventBus } from "@/lib/events/event-bus";
-import { invalidateWatchHistoryEvidence } from "@/lib/media/watch-evidence";
+import {
+  invalidateWatchHistoryEvidence,
+  restartTracearrBackfill,
+} from "@/lib/media/watch-evidence";
 import { hasRecentLogin } from "@/lib/auth/recent-login";
 import { reauthRequired } from "@/lib/auth/reauth";
 
@@ -181,6 +184,9 @@ export async function PUT(
       // history — mark it un-evidenced so `watchedByUser` rules do not read
       // that emptiness as "nobody watched anything".
       await invalidateWatchHistoryEvidence([server.id]);
+      // A Tracearr-mapped server gets its plays back from Tracearr once it is
+      // re-enabled and re-synced — but only if the archive walk runs again.
+      await restartTracearrBackfill([server.id]);
     }
 
     apiLogger.info(

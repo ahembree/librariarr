@@ -29,15 +29,15 @@ import type {
  *     (the schema does not enforce uniqueness on `(library, ratingKey)`, so two
  *     rows can collide and there is no way to pick).
  *
- *  2. Provider-id fallback — `tvdb_id` → `tmdb_id` → `imdb_id`, the same
- *     precedence `computeSeriesKey` uses. This is what rescues a record whose
- *     `rating_key` is null (the server never gave Tracearr one) or stale (the
- *     item was re-added and got a new key). It is also where the mis-join
- *     hazard lives, because the sync stores the **series-level** TVDB/TMDB/IMDB
- *     ids on *every episode row* of a show (see `series-key.ts`): a bare TVDB
- *     match therefore returns the show's entire episode list. Episodes are
- *     consequently narrowed by `seasonNumber` + `episodeNumber` as well, and a
- *     record missing either is skipped outright rather than guessed at.
+ *  2. Provider-id fallback — `tmdb_id` → `imdb_id`, for movies and tracks
+ *     only. This is what rescues a record whose `rating_key` is null (the
+ *     server never gave Tracearr one) or stale (the item was re-added and got
+ *     a new key). TVDB is not used: the two sides disagree about a film's TVDB
+ *     identity. Episodes are never resolved this way: Tracearr sends
+ *     episode-level provider ids while the sync stores the SERIES-level ids on
+ *     every episode row (see `series-key.ts`), so an episode-level id can only
+ *     ever equal a series id by numeric coincidence — a different show. A hit
+ *     is corroborated with `contradictsIdentity`, exactly like a rating-key hit.
  *
  * The index is built once per sync with two queries. A first import can be tens
  * of thousands of records, so a per-record query is not an option.
@@ -239,27 +239,15 @@ function providerIdsFor(
 }
 
 /**
- * Narrow a provider-id candidate list to the rows the record could actually be.
- *
- * The episode constraint is the load-bearing part. Because every episode row of
- * a show carries the show's TVDB id, `candidates` for an episode record is the
- * whole series; only `seasonNumber` + `episodeNumber` single one out. Note that
- * season 0 is real (Specials) and episode numbering starts at 1 — hence the
- * explicit null checks rather than truthiness tests.
+ * Narrow a provider-id candidate list to the rows of the record's own type. A
+ * TMDB movie id and a TMDB TV id share one numeric space, so the type is what
+ * keeps a movie play off a show that happens to carry the same number.
  */
 function narrowCandidates(
   candidates: JoinCandidate[],
-  record: TracearrJoinRecord,
   expectedType: LibraryType,
 ): JoinCandidate[] {
-  const typeMatched = candidates.filter((c) => c.type === expectedType);
-  if (record.media_type !== "episode") return typeMatched;
-
-  return typeMatched.filter(
-    (c) =>
-      c.seasonNumber === record.season_number &&
-      c.episodeNumber === record.episode_number,
-  );
+  return candidates.filter((c) => c.type === expectedType);
 }
 
 /**
@@ -358,32 +346,43 @@ export function resolveMediaItemId(
     // real play needs the provider fallback.
   }
 
-  // 2. Provider ids, in precedence order.
+  // 2. Provider ids — movies and tracks only.
   //
-  // An episode record with an unknown season or episode number cannot be
-  // disambiguated at all here — the show's id alone would match every episode —
-  // so it is refused before a lookup rather than resolving to a coin flip.
-  if (
-    record.media_type === "episode" &&
-    (record.season_number == null || record.episode_number == null)
-  ) {
-    return { skipped: "ambiguous" };
-  }
+  // Never for an episode. Tracearr sends the EPISODE's tvdb/tmdb/imdb ids while
+  // every episode row here carries the SERIES-level ids (see
+  // `contradictsIdentity`), so the two can only meet when an episode's id is
+  // numerically equal to some show's id. Such a hit is always a different
+  // show, and season/episode narrowing then picks one of its episodes — a play
+  // filed against the wrong item, permanently. An episode without a usable
+  // rating key is dropped instead.
+  if (record.media_type === "episode") return { skipped: "unresolved" };
 
   for (const { source, value } of providerIdsFor(record)) {
+    // TVDB is not an identity for a film: the library and Tracearr populate it
+    // from catalogues that disagree (see `contradictsIdentity`), so a TVDB hit
+    // can name a different movie. Only TMDB and IMDB identify a non-episode.
+    if (source === "TVDB") continue;
+
     const candidates = index.byExternalId.get(externalIdKey(source, value));
     if (!candidates || candidates.length === 0) continue;
 
-    const narrowed = narrowCandidates(candidates, record, expectedType);
-    if (narrowed.length === 1) return { mediaItemId: narrowed[0].id };
+    const narrowed = narrowCandidates(candidates, expectedType);
     if (narrowed.length > 1) {
-      // Two rows on one server sharing a provider id AND (for an episode) the
-      // same season/episode. A lower-precedence provider would match the same
-      // pair, so there is nothing left to try.
+      // Two rows on one server sharing a provider id. A lower-precedence
+      // provider would match the same pair, so there is nothing left to try.
       return { skipped: "ambiguous" };
     }
-    // Narrowed to nothing (the id belongs to a different media type, or to
-    // another episode of the show): try the next provider.
+    if (narrowed.length === 1) {
+      // Corroborated exactly like a rating-key hit: a row whose other provider
+      // id disagrees with the record's is a different work that happens to
+      // share this one.
+      if (contradictsIdentity(narrowed[0], record)) {
+        return { skipped: "ambiguous" };
+      }
+      return { mediaItemId: narrowed[0].id };
+    }
+    // Narrowed to nothing (the id belongs to a different media type): try the
+    // next provider.
   }
 
   return { skipped: "unresolved" };
