@@ -274,6 +274,20 @@ describe("tracearr-backfill task", () => {
 
       expect(enqueueJob).toHaveBeenCalledTimes(1);
     });
+
+    it("does not re-enqueue when Tracearr holds no history for the mapping", async () => {
+      // An exhausted walk that saw nothing leaves the backfill pending on
+      // purpose. Re-queueing it asked the same empty question at once, forever,
+      // holding MAIN_QUEUE; the next watch-history sync enqueues a slice anyway.
+      syncTracearrHistory.mockResolvedValue({
+        count: 0,
+        backfillPending: true,
+        backfillOutcome: "exhausted",
+      });
+
+      await expect(runBackfill()).resolves.toBeUndefined();
+      expect(enqueueJob).not.toHaveBeenCalled();
+    });
   });
 
 });

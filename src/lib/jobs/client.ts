@@ -93,6 +93,34 @@ async function keepQueuedPriority(spec: TaskSpec | undefined): Promise<TaskSpec 
 }
 
 /** Release pooled resources. Primarily used by tests. */
+/**
+ * Whether the job under `jobKey` failed and is waiting out graphile-worker's
+ * retry backoff (attempted, not yet exhausted, not running).
+ *
+ * A keyed `addJob` always resets a queued job's `attempts` and `run_at`, so an
+ * enqueue made while a job is backing off silently cancels the backoff and the
+ * retry limit. Callers that re-enqueue a job on every routine run check this
+ * first. A job that used up its attempts is NOT backing off — enqueueing it is
+ * how it gets a fresh start. A failed check answers false, i.e. enqueue as
+ * before.
+ */
+export async function isJobRetrying(jobKey: string): Promise<boolean> {
+  try {
+    const { rows } = await getJobsPool().query<{ retrying: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1 FROM graphile_worker.jobs
+          WHERE "key" = $1 AND "locked_at" IS NULL
+            AND "attempts" > 0 AND "attempts" < "max_attempts"
+       ) AS "retrying"`,
+      [jobKey],
+    );
+    return rows[0]?.retrying === true;
+  } catch (error) {
+    logger.warn("Jobs", `Could not read the retry state of "${jobKey}"`, { error: String(error) });
+    return false;
+  }
+}
+
 export async function releaseJobsClient(): Promise<void> {
   if (workerUtils) {
     await Promise.resolve(workerUtils.release()).catch(() => {});

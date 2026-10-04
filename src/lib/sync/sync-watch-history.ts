@@ -8,7 +8,7 @@ import {
   type WatchHistoryProgressReporter,
 } from "@/lib/sync/watch-history-progress";
 import type { MediaServerType } from "@/generated/prisma/client";
-import { enqueueJob } from "@/lib/jobs/client";
+import { enqueueJob, isJobRetrying } from "@/lib/jobs/client";
 import { TASK_TRACEARR_BACKFILL, MAIN_QUEUE } from "@/lib/jobs/constants";
 import { markWatchHistoryEstablished } from "@/lib/media/watch-evidence";
 import { emitWatchHistoryUpdated } from "./watch-history-events";
@@ -208,12 +208,18 @@ export async function syncWatchHistory(
     // than stacking one per click, and a completed-backfill run is cheap: it
     // walks nothing and the recovery pass costs one indexed query when there
     // are no recent additions.
-    {
+    //
+    // Except while that job is backing off after a failure: a keyed enqueue
+    // resets graphile-worker's attempts and run_at, so enqueueing on every
+    // forward sync re-ran a failing slice (and its join-index build) on every
+    // play instead of letting the backoff and `maxAttempts` apply.
+    const backfillKey = `tracearr-backfill:${serverId}`;
+    if (!(await isJobRetrying(backfillKey))) {
       await enqueueJob(
         TASK_TRACEARR_BACKFILL,
         { serverId },
         {
-          jobKey: `tracearr-backfill:${serverId}`,
+          jobKey: backfillKey,
           queueName: MAIN_QUEUE,
           maxAttempts: 3,
         },

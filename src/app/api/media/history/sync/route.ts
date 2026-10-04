@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db";
 import { validateRequest, watchHistorySyncSchema } from "@/lib/validation";
 import { syncWatchHistory } from "@/lib/sync/sync-watch-history";
 import type { WatchHistoryProgress } from "@/lib/sync/watch-history-progress";
-import { appCache } from "@/lib/cache/memory-cache";
+import { invalidateMediaCaches } from "@/lib/cache/invalidate";
 import { progressStreamResponse } from "@/lib/progress/stream";
 import type { ProgressPhase } from "@/lib/progress/types";
 
@@ -135,8 +135,10 @@ export async function POST(request: Request) {
         }
       }
 
-      // Invalidate cached filter dropdown values
-      appCache.invalidatePrefix("watch-history-filters:");
+      // The sync rewrote plays and reconciled `playCount`/`lastPlayedAt`, which
+      // the stats and query caches read — not only the filter dropdowns. The
+      // queued watch-history task already does this; the Refresh did not.
+      invalidateMediaCaches();
 
       // Tell the client the run was cut short so it can say "run Refresh again
       // to continue" rather than implying the history is now complete. A first

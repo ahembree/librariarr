@@ -294,6 +294,29 @@ describe("Tracearr integration endpoints", () => {
       expect(mockTestConnection).not.toHaveBeenCalled();
     });
 
+    it("renames while Tracearr is down when the form re-sends the unchanged URL", async () => {
+      // The edit form sends its URL (and the masked key) on every save, so a
+      // presence check re-tested the connection and refused a plain rename
+      // whenever Tracearr was unreachable.
+      const user = await createTestUser();
+      const instance = await createTestTracearrInstance(user.id, { name: "Old Name" });
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      mockTestConnection.mockResolvedValue({ ok: false, error: "Connection refused" });
+
+      const response = await callRouteWithParams(
+        PUT,
+        { id: instance.id },
+        {
+          url: `/api/integrations/tracearr/${instance.id}`,
+          method: "PUT",
+          body: { name: "Renamed", url: `${instance.url}/`, apiKey: MASKED_VALUE },
+        }
+      );
+      const body = await expectJson<{ instance: { name: string } }>(response, 200);
+      expect(body.instance.name).toBe("Renamed");
+      expect(mockTestConnection).not.toHaveBeenCalled();
+    });
+
     it("keeps the stored apiKey when the masked value is echoed back", async () => {
       const user = await createTestUser();
       const instance = await createTestTracearrInstance(user.id, { apiKey: "trr_pub_original" });

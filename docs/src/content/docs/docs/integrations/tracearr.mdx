@@ -155,6 +155,8 @@ Two limits, stated honestly:
 
 **Purging media restarts the import.** **Purge** (per library or per type), and disabling a server with its data deleted, remove the plays along with the items. For a Tracearr-mapped server they also restart the history import from the newest play, so once the next sync has brought the media back, the plays come back too. Restoring a **config-only** backup has the same effect: a server marked as fully imported but holding no plays is recognised and imported again from the start. Play-activity rules stay paused until that import finishes.
 
+**One Tracearr server per media server.** A Tracearr server that is already the watch-history source for one of your media servers cannot be picked for a second one. Its plays are matched by that server's own item IDs, which mean something else on another server.
+
 <Aside type="note">
   **Changing a server's watch-history source while an import is running is safe.** Every write checks that the server is still mapped to the Tracearr server the import is reading from. Once the mapping changes, nothing more from the old source is stored, and the next run uses the new one.
 </Aside>

@@ -48,6 +48,15 @@ export function computeBackfillFraction(input: {
   oldestImported: Date | null;
   /** MAX(`watchedAt`) over this server's imported rows. */
   newestImported: Date | null;
+  /**
+   * `MediaServer.tracearrBackfillCursorAt` — how far back the walk has actually
+   * reached. Preferred over `oldestImported` when set: it also counts stretches
+   * of history that could not be stored, and after a purge restarts the walk
+   * (`restartTracearrBackfill` moves it to now) the rows that survived the purge
+   * still reach back to the far end, so measuring by them reported a full bar
+   * for a walk that had only just started again.
+   */
+  cursorAt?: Date | null;
 }): number | null {
   // The flag is the authority, not the arithmetic. The walk stops when a slice
   // comes back empty, which can happen while the oldest *storable* play is still
@@ -70,7 +79,8 @@ export function computeBackfillFraction(input: {
   // there is no span to be a fraction of, and dividing gives Infinity/NaN.
   if (span <= 0) return null;
 
-  const covered = newest - input.oldestImported.getTime();
+  const reached = input.cursorAt ?? input.oldestImported;
+  const covered = newest - reached.getTime();
 
   // Clamped, not asserted: the measurement and the import are separate passes,
   // so a play older than `oldestPlayAt` can legitimately already be imported

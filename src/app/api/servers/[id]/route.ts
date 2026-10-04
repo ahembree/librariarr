@@ -49,6 +49,31 @@ export async function PUT(
   const tracearrMappingChanged =
     tracearrServerId !== undefined && tracearrServerId !== server.tracearrServerId;
 
+  // One Tracearr server's plays belong to one media server. Mapped to a second
+  // as well, they are joined against that server's rating keys — small per-server
+  // integers on Plex, so the same number names an unrelated item there, and a
+  // provider id is often absent to contradict it. Those plays would land on the
+  // wrong items under real usernames, permanently.
+  if (tracearrMappingChanged && tracearrServerId) {
+    const taken = await prisma.mediaServer.findFirst({
+      where: {
+        userId: session.userId!,
+        tracearrServerId,
+        id: { not: server.id },
+      },
+      select: { name: true },
+    });
+    if (taken) {
+      return NextResponse.json(
+        {
+          error: "Tracearr server already in use",
+          detail: `That Tracearr server is already the watch-history source for "${taken.name}".`,
+        },
+        { status: 409 }
+      );
+    }
+  }
+
   // A new URL with the stored token kept sends that token to the new URL —
   // the connection test below, then every sync and the realtime socket. A
   // Plex server's token can be the Plex account's own token, which signs in
@@ -111,6 +136,12 @@ export async function PUT(
         // that means nothing on the new server.
         tracearrOldestPlayAt: null,
         tracearrBackfillCursorAt: null,
+        // The wipe below empties the history, so it is unknown from the same
+        // statement that switches the source. Withdrawn only after the wipe,
+        // an unlink (native, no Tracearr flag to pause it) read as established
+        // over an empty history in between — and for good, if the process died
+        // there.
+        watchHistorySyncedAt: null,
       }),
     },
   });
