@@ -353,10 +353,11 @@ export async function restoreBackup(
   // Restore TRUNCATEs every table in `TABLE_ORDER` — `MediaItem` and
   // `WatchHistory` included — and then re-inserts only what the file actually
   // holds. A config-only backup holds neither, so it empties both and refills
-  // neither: the media comes back on the next sync, the watch history does not
-  // (native history is re-fetched, but a Tracearr server's `MediaServer` row is
-  // restored verbatim with `tracearrBackfillComplete` still true, so only the
-  // one-hour forward pass runs until the archive walk is re-triggered).
+  // neither: the media comes back on the next sync, and so does the history —
+  // native history is re-fetched, and a Tracearr server's row, restored
+  // verbatim with `tracearrBackfillComplete` still true, is recognised by the
+  // importer as "complete with no rows", which resets that state and walks the
+  // archive again.
   //
   // An empty `WatchHistory` reads as "nobody watched anything", so without this
   // the first detection run after a restore-plus-resync matches the WHOLE

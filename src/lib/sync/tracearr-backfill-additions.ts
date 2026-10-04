@@ -11,6 +11,7 @@ import { TracearrClient } from "@/lib/tracearr/tracearr-client";
 import { IntegrationError } from "@/lib/integration-error";
 import { isHostLevelFailure } from "@/lib/lifecycle/unreachable-instances";
 import { formatMediaItemTitle } from "@/lib/media/display-title";
+import { TracearrMappingChangedError } from "@/lib/sync/tracearr-mapping-changed";
 
 /**
  * Recover the watch history of an item that left the library and came back.
@@ -66,10 +67,50 @@ export const RECENT_ADDITION_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
  * servers) while staying well inside a slice.
  *
  * Anything above the cap is not lost, only deferred: the candidate query orders
- * newest-first and the pass runs every backfill slice, so the remainder is
+ * newest-first, skips the items an earlier pass already got an answer for (see
+ * `answeredItems`), and the pass runs every backfill slice, so the remainder is
  * picked up next time — for as long as it stays inside the window above.
  */
 export const DEFAULT_CANDIDATE_LIMIT = 200;
+
+/**
+ * Items Tracearr has already ANSWERED for — item id → when.
+ *
+ * Without it the cap starved the window. An item that was never played gets no
+ * Tracearr row, so it stays a candidate for its whole seven days, and the
+ * candidate query orders newest-first: once more than the cap's worth of
+ * recent items had no plays (the normal state after a purge-and-resync, a
+ * restore or a library move — exactly when recovery matters), every pass asked
+ * about the same newest unplayed items again and never reached the re-added
+ * ones further down, which then aged out of the window still reading as never
+ * watched.
+ *
+ * One answer per item is enough. The plays this pass exists to recover are OLD
+ * ones; a play that happens after the item was added is imported by the
+ * forward pass like any other. Only an answer is recorded — a lookup that
+ * failed leaves the item a candidate. In memory on purpose: a restart merely
+ * re-asks, and entries expire with the window, so the map holds at most a
+ * week's worth of additions. Pinned to `globalThis` like the other registries
+ * a job and the rest of the app may both load.
+ */
+const answeredItems: Map<string, number> = ((
+  globalThis as unknown as { __tracearrRecoveryAnswered?: Map<string, number> }
+).__tracearrRecoveryAnswered ??= new Map());
+
+/** Drop answers older than the candidate window, and return the live ids. */
+function liveAnsweredIds(now: number): string[] {
+  const ids: string[] = [];
+  for (const [id, at] of answeredItems) {
+    if (now - at > RECENT_ADDITION_WINDOW_MS) answeredItems.delete(id);
+    else ids.push(id);
+  }
+  return ids;
+}
+
+/** Test seam: forget every recorded answer. */
+export function resetRecoveryAnswers(): void {
+  answeredItems.clear();
+}
 
 /** A caller cannot opt out of the request budget, only ask for less of it. */
 export const MAX_CANDIDATE_LIMIT = 500;
@@ -98,7 +139,6 @@ export interface RecoverNewItemHistoryResult {
 interface CandidateItem {
   id: string;
   ratingKey: string;
-  tvdbId: string | null;
   tmdbId: string | null;
   imdbId: string | null;
   // What names it in a log line: an episode by its show and SxxExx.
@@ -223,21 +263,20 @@ export async function recoverHistoryForNewItems(
       // that no longer exists anywhere. The provider id is the identity that
       // survives, and the API filters on it.
       //
-      // Deduped per run because the stored ids on an episode are SERIES-level:
-      // without this, a re-added season would issue one identical show-wide
-      // query per episode, and `rating_key` taking a single value per request
-      // is precisely why the request budget is tight.
+      // Only TMDB and IMDB, and never for an episode — the same rule as the
+      // resolver's own fallback (`resolveMediaItemId`), which these records go
+      // through: an episode row stores SERIES-level ids while Tracearr files
+      // plays under EPISODE-level ones, so asking by the show's id can only
+      // return plays of whatever else happens to carry that number, and the
+      // two catalogues disagree about a film's TVDB id. Deduped per run so two
+      // copies of one film cost one request.
       if (records.length === 0) {
         const providerKey = providerIdentityKey(candidate);
         if (providerKey && !queriedProviders.has(providerKey)) {
           queriedProviders.add(providerKey);
           records = await client.getHistoryForItem(
             tracearrServerId,
-            {
-              tvdbId: candidate.tvdbId,
-              tmdbId: candidate.tmdbId,
-              imdbId: candidate.imdbId,
-            },
+            { tmdbId: candidate.tmdbId, imdbId: candidate.imdbId },
             { signal },
           );
           if (records.length > 0) recoveredByProviderId++;
@@ -252,6 +291,7 @@ export async function recoverHistoryForNewItems(
         // The overwhelmingly common answer, and not a failure: most newly added
         // items have simply never been played.
         withoutPlays++;
+        answeredItems.set(candidate.id, Date.now());
         continue;
       }
 
@@ -260,9 +300,11 @@ export async function recoverHistoryForNewItems(
         own,
         joinIndex,
         accountNames,
+        tracearrServerId,
       );
       imported += written.inserted + written.updated;
       skipped += written.skipped;
+      answeredItems.set(candidate.id, Date.now());
     } catch (error) {
       // One item's lookup failing must not cost the rest of the pass. It can be
       // transient (a 429 that outlasted the retry budget, a timeout) or
@@ -272,6 +314,16 @@ export async function recoverHistoryForNewItems(
       // found it derives candidacy from the rows, not from a cursor.
       // Cancelled: not this item's failure, and not the host's either.
       if (signal?.aborted) break;
+      // The server was re-pointed or unlinked mid-pass: nothing more of this
+      // source may be written, and every remaining item would fail the same way.
+      if (error instanceof TracearrMappingChangedError) {
+        logger.info(
+          "WatchHistory",
+          `Stopping Tracearr play recovery on "${server.name}" — its watch-history ` +
+            `source changed while the pass ran`,
+        );
+        break;
+      }
       failed++;
       // A failure of the HOST, not the item, will fail every remaining
       // candidate the same way, and each of those would pay the client's whole
@@ -340,19 +392,20 @@ export async function recoverHistoryForNewItems(
  * evidence that the Tracearr import has seen this item (the importer deletes
  * that stratum once it writes, and a server's history is single-source by
  * construction), so an item carrying only native rows is still worth asking
- * about.
+ * about. Items Tracearr already answered for are excluded — see `answeredItems`.
  */
 async function findCandidates(
   serverId: string,
   limit: number,
 ): Promise<CandidateItem[]> {
-  const addedAfter = new Date(Date.now() - RECENT_ADDITION_WINDOW_MS);
+  const now = Date.now();
+  const addedAfter = new Date(now - RECENT_ADDITION_WINDOW_MS);
   const cap = Math.max(1, Math.min(Math.floor(limit), MAX_CANDIDATE_LIMIT));
+  const answered = liveAnsweredIds(now);
 
   return prisma.$queryRawUnsafe<CandidateItem[]>(
     `SELECT mi."id", mi."ratingKey", mi."title", mi."type"::text AS "type", mi."parentTitle",
             mi."seasonNumber", mi."episodeNumber",
-            MAX(CASE WHEN UPPER(e."source") = 'TVDB' THEN e."externalId" END) AS "tvdbId",
             MAX(CASE WHEN UPPER(e."source") = 'TMDB' THEN e."externalId" END) AS "tmdbId",
             MAX(CASE WHEN UPPER(e."source") = 'IMDB' THEN e."externalId" END) AS "imdbId"
        FROM "MediaItem" mi
@@ -366,6 +419,7 @@ async function findCandidates(
                WHERE wh."mediaItemId" = mi."id"
                  AND wh."source" = 'TRACEARR'
             )
+        AND NOT (mi."id" = ANY($4::text[]))
       -- Newest first: when there are more candidates than the cap allows, the
       -- most recent arrivals are the ones a user is waiting on, and the rest
       -- stay candidates for the next run.
@@ -375,17 +429,18 @@ async function findCandidates(
     serverId,
     addedAfter,
     cap,
+    answered,
   );
 }
 
 /**
  * The identity a provider-id lookup would use for this candidate, or null when
- * it carries none. Mirrors `computeSeriesKey`'s TVDB → TMDB → IMDB precedence
- * so the fallback asks by the same identity the rest of the app trusts, and
- * doubles as the per-run dedup key.
+ * there is none it may use. TMDB → IMDB, matching the order
+ * `getHistoryForItem` picks from the filter it is given; never an episode (see
+ * the call site). Doubles as the per-run dedup key.
  */
 function providerIdentityKey(candidate: CandidateItem): string | null {
-  if (candidate.tvdbId) return `tvdb:${candidate.tvdbId}`;
+  if (candidate.type === "SERIES") return null;
   if (candidate.tmdbId) return `tmdb:${candidate.tmdbId}`;
   if (candidate.imdbId) return `imdb:${candidate.imdbId}`;
   return null;

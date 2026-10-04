@@ -143,13 +143,13 @@ describe("resolveMediaItemId — rating key", () => {
   it("falls through to the provider ids when the rating key is unknown", async () => {
     const index = await buildIndex(
       [movie("item-1", "100")],
-      [{ mediaItemId: "item-1", source: "TVDB", externalId: "77" }],
+      [{ mediaItemId: "item-1", source: "TMDB", externalId: "77" }],
     );
 
     // A stale rating key (the item was removed and re-added) must not cost the
     // play when the provider id still identifies it.
     expect(
-      resolveMediaItemId(index, record({ rating_key: "999", tvdb_id: 77 })),
+      resolveMediaItemId(index, record({ rating_key: "999", tmdb_id: 77 })),
     ).toEqual({ mediaItemId: "item-1" });
   });
 });
@@ -160,21 +160,17 @@ describe("resolveMediaItemId — provider fallback", () => {
   });
 
   /**
-   * The whole reason the episode constraint exists: the sync stores the
-   * SERIES-level TVDB id on every episode row, so a bare id match returns the
-   * show's entire episode list.
+   * Tracearr sends an episode's OWN provider ids; every episode row here
+   * carries the SERIES-level ids. The two only meet when an episode id equals
+   * some show's id by numeric coincidence — a different show — and narrowing by
+   * season/episode then picked one of its episodes.
    */
-  it("picks the right episode when every episode shares the show's TVDB id", async () => {
+  it("never resolves an episode by provider id", async () => {
     const index = await buildIndex(
+      [{ ...episode("other-show-s1e1", "2001", 1, 1), grandparentRatingKey: "77" }],
       [
-        episode("ep-1", "1001", 1, 1),
-        episode("ep-2", "1002", 1, 2),
-        episode("ep-3", "1003", 2, 1),
-      ],
-      [
-        { mediaItemId: "ep-1", source: "TVDB", externalId: "42" },
-        { mediaItemId: "ep-2", source: "TVDB", externalId: "42" },
-        { mediaItemId: "ep-3", source: "TVDB", externalId: "42" },
+        { mediaItemId: "other-show-s1e1", source: "TVDB", externalId: "305288" },
+        { mediaItemId: "other-show-s1e1", source: "TMDB", externalId: "66732" },
       ],
     );
 
@@ -183,91 +179,59 @@ describe("resolveMediaItemId — provider fallback", () => {
         index,
         record({
           media_type: "episode",
-          tvdb_id: 42,
+          rating_key: "deleted-key",
+          grandparent_rating_key: "12",
           season_number: 1,
-          episode_number: 2,
-        }),
-      ),
-    ).toEqual({ mediaItemId: "ep-2" });
-  });
-
-  it("treats season 0 as a real season number, not as absent", async () => {
-    const index = await buildIndex(
-      [episode("special-1", "900", 0, 1), episode("ep-1", "1001", 1, 1)],
-      [
-        { mediaItemId: "special-1", source: "TVDB", externalId: "42" },
-        { mediaItemId: "ep-1", source: "TVDB", externalId: "42" },
-      ],
-    );
-
-    expect(
-      resolveMediaItemId(
-        index,
-        record({
-          media_type: "episode",
-          tvdb_id: 42,
-          season_number: 0,
           episode_number: 1,
+          tvdb_id: 305288,
+          tmdb_id: 66732,
         }),
       ),
-    ).toEqual({ mediaItemId: "special-1" });
+    ).toEqual({ skipped: "unresolved" });
   });
 
-  it("skips an episode whose season number is unknown", async () => {
+  it("never resolves a film by TVDB, which the two catalogues disagree about", async () => {
     const index = await buildIndex(
-      [episode("ep-1", "1001", 1, 1), episode("ep-2", "1002", 1, 2)],
+      [movie("other-film", "100")],
+      [{ mediaItemId: "other-film", source: "TVDB", externalId: "2113" }],
+    );
+
+    expect(
+      resolveMediaItemId(index, record({ rating_key: "555", tvdb_id: 2113 })),
+    ).toEqual({ skipped: "unresolved" });
+  });
+
+  it("refuses a provider-id hit whose other id contradicts the record", async () => {
+    // Corroborated exactly like a rating-key hit: same IMDB-namespace,
+    // different value, so the row is a different work sharing the TMDB id.
+    const index = await buildIndex(
+      [movie("item-1", "100")],
       [
-        { mediaItemId: "ep-1", source: "TVDB", externalId: "42" },
-        { mediaItemId: "ep-2", source: "TVDB", externalId: "42" },
+        { mediaItemId: "item-1", source: "TMDB", externalId: "22" },
+        { mediaItemId: "item-1", source: "IMDB", externalId: "tt0000001" },
       ],
     );
 
-    // The show's id alone would match both rows; guessing one would attribute
-    // the play to the wrong episode.
     expect(
       resolveMediaItemId(
         index,
-        record({
-          media_type: "episode",
-          tvdb_id: 42,
-          season_number: null,
-          episode_number: 2,
-        }),
+        record({ tmdb_id: 22, imdb_id: "tt0133093" }),
       ),
     ).toEqual({ skipped: "ambiguous" });
   });
 
-  it("skips an episode whose episode number is unknown", async () => {
+  it("prefers TMDB over IMDB", async () => {
     const index = await buildIndex(
-      [episode("ep-1", "1001", 1, 1)],
-      [{ mediaItemId: "ep-1", source: "TVDB", externalId: "42" }],
-    );
-
-    expect(
-      resolveMediaItemId(
-        index,
-        record({
-          media_type: "episode",
-          tvdb_id: 42,
-          season_number: 1,
-          episode_number: null,
-        }),
-      ),
-    ).toEqual({ skipped: "ambiguous" });
-  });
-
-  it("prefers TVDB over TMDB", async () => {
-    const index = await buildIndex(
-      [movie("item-tvdb", "100"), movie("item-tmdb", "200")],
+      [movie("item-tmdb", "100"), movie("item-imdb", "200")],
       [
-        { mediaItemId: "item-tvdb", source: "TVDB", externalId: "11" },
         { mediaItemId: "item-tmdb", source: "TMDB", externalId: "22" },
+        { mediaItemId: "item-imdb", source: "IMDB", externalId: "tt0133093" },
       ],
     );
 
     expect(
-      resolveMediaItemId(index, record({ tvdb_id: 11, tmdb_id: 22 })),
-    ).toEqual({ mediaItemId: "item-tvdb" });
+      resolveMediaItemId(index, record({ tmdb_id: 22, imdb_id: "tt0133093" })),
+    ).toEqual({ mediaItemId: "item-tmdb" });
   });
 
   it("falls back to TMDB when no row carries the TVDB id", async () => {
@@ -310,12 +274,13 @@ describe("resolveMediaItemId — provider fallback", () => {
   });
 
   it("does not join a movie record to a series row sharing the id", async () => {
+    // TMDB movie and TV ids share one numeric space.
     const index = await buildIndex(
       [episode("ep-1", "1001", 1, 1)],
-      [{ mediaItemId: "ep-1", source: "TVDB", externalId: "42" }],
+      [{ mediaItemId: "ep-1", source: "TMDB", externalId: "42" }],
     );
 
-    expect(resolveMediaItemId(index, record({ tvdb_id: 42 }))).toEqual({
+    expect(resolveMediaItemId(index, record({ tmdb_id: 42 }))).toEqual({
       skipped: "unresolved",
     });
   });

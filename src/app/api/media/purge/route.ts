@@ -4,7 +4,10 @@ import { prisma } from "@/lib/db";
 import { apiLogger } from "@/lib/logger";
 import { invalidateMediaCaches } from "@/lib/cache/invalidate";
 import { recomputeCanonical } from "@/lib/dedup/recompute-canonical";
-import { invalidateWatchHistoryEvidence } from "@/lib/media/watch-evidence";
+import {
+  invalidateWatchHistoryEvidence,
+  restartTracearrBackfill,
+} from "@/lib/media/watch-evidence";
 import { eventBus } from "@/lib/events/event-bus";
 
 export async function DELETE(request: NextRequest) {
@@ -46,6 +49,9 @@ export async function DELETE(request: NextRequest) {
     });
     if (purgedServer?.mediaServerId) {
       await invalidateWatchHistoryEvidence([purgedServer.mediaServerId]);
+      // Tracearr still holds those plays; re-walk the archive to bring them
+      // back once the re-sync recreates the items.
+      await restartTracearrBackfill([purgedServer.mediaServerId]);
     }
 
     // Recompute canonical so surviving duplicates on other servers don't stay
@@ -95,7 +101,7 @@ export async function DELETE(request: NextRequest) {
       mediaServerId: { in: serverIds },
       type: type as "MOVIE" | "SERIES" | "MUSIC",
     },
-    select: { id: true },
+    select: { id: true, mediaServerId: true },
   });
   const libraryIds = libraries.map((l) => l.id);
 
@@ -109,6 +115,13 @@ export async function DELETE(request: NextRequest) {
 
   // Same cascade, across every enabled server of this media type.
   await invalidateWatchHistoryEvidence(serverIds);
+  await restartTracearrBackfill([
+    ...new Set(
+      libraries
+        .map((l) => l.mediaServerId)
+        .filter((id): id is string => id !== null),
+    ),
+  ]);
 
   await recomputeCanonical(session.userId!);
   invalidateMediaCaches();

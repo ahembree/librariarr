@@ -588,6 +588,33 @@ describe("computeBackfillFraction", () => {
     ).toBe(1);
   });
 
+  it("measures how far the walk reached by its cursor when one is recorded", () => {
+    // The cursor also counts stretches of history that could not be stored.
+    expect(
+      computeBackfillFraction({
+        backfillComplete: false,
+        oldestPlayAt,
+        oldestImported: new Date(Date.UTC(2026, 0, 8)),
+        newestImported,
+        cursorAt: new Date(Date.UTC(2026, 0, 6)),
+      })
+    ).toBeCloseTo(0.5, 10);
+  });
+
+  it("reads a walk restarted by a purge as starting over, not as nearly done", () => {
+    // `restartTracearrBackfill` moves the cursor to now, while the rows that
+    // survived a partial purge still reach back to the far end.
+    expect(
+      computeBackfillFraction({
+        backfillComplete: false,
+        oldestPlayAt,
+        oldestImported: new Date(Date.UTC(2026, 0, 1, 1)),
+        newestImported,
+        cursorAt: new Date(Date.UTC(2026, 0, 12)),
+      })
+    ).toBe(0);
+  });
+
   it("is null for a zero or negative span rather than Infinity or NaN", () => {
     expect(
       computeBackfillFraction({
