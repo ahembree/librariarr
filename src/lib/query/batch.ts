@@ -43,7 +43,32 @@ function groupKey(item: BatchableItem): string {
       item.seriesKey ?? `title:${(item.parentTitle ?? item.title ?? "").trim().toLowerCase()}`;
     return `series:${identity}`;
   }
+  // Every Lidarr action acts on the artist, and the server collapses an
+  // artist's tracks into one action (collapse-actions.ts) — split across
+  // batches, the artist would be acted on once per batch.
+  if (item.type === "MUSIC") {
+    return `artist:${(item.parentTitle ?? "").trim().toLowerCase()}`;
+  }
   return `id:${item.id}`;
+}
+
+/**
+ * How many actions a run over `items` takes: one per show or artist (the
+ * server collapses those), one per movie. Sent with every batch as `runUnits`
+ * so the deletion ceiling is checked against the whole run. Two servers' copies
+ * of one movie count twice here and once on the server, which only errs toward
+ * refusing.
+ */
+export function countActionUnits(
+  items: readonly BatchableItem[],
+  targetType: BatchMediaType | null,
+): number {
+  const keys = new Set<string>();
+  for (const item of items) {
+    if (targetType && item.type !== targetType) continue;
+    keys.add(groupKey(item));
+  }
+  return keys.size;
 }
 
 /**

@@ -151,6 +151,16 @@ export class PlexClient implements MediaServerClient {
     return response.data.MediaContainer.Metadata || [];
   }
 
+  async getLibraryArtists(sectionKey: string): Promise<PlexMetadataItem[]> {
+    const response = await this.client.get(
+      `/library/sections/${sectionKey}/all`,
+      {
+        params: { type: 8, includeGuids: 1 },
+      }
+    );
+    return response.data.MediaContainer.Metadata || [];
+  }
+
   async getLibraryEpisodes(sectionKey: string): Promise<PlexMetadataItem[]> {
     const response = await this.client.get(
       `/library/sections/${sectionKey}/all`,

@@ -30,6 +30,8 @@ const mockSonarrClient = vi.hoisted(() => ({
   deleteEpisodeFiles: vi.fn(),
   getEpisodes: vi.fn(),
   triggerSeriesSearch: vi.fn(),
+  triggerEpisodeSearch: vi.fn(),
+  setEpisodesMonitored: vi.fn(),
   getTags: vi.fn(),
   createTag: vi.fn(),
   deleteTag: vi.fn(),
@@ -535,13 +537,13 @@ describe("executeAction", () => {
       id: 2, title: "Test Show", tvdbId: 67890, tags: [],
     });
     mockPrisma.mediaItem.findMany.mockResolvedValue([
-      { seasonNumber: 1, episodeNumber: 1 },
-      { seasonNumber: 1, episodeNumber: 2 },
+      { id: "ep1", seasonNumber: 1, episodeNumber: 1, originallyAvailableAt: null },
+      { id: "ep2", seasonNumber: 1, episodeNumber: 2, originallyAvailableAt: null },
     ]);
     mockSonarrClient.getEpisodes.mockResolvedValue([
-      { seasonNumber: 1, episodeNumber: 1, episodeFileId: 10 },
-      { seasonNumber: 1, episodeNumber: 2, episodeFileId: 11 },
-      { seasonNumber: 1, episodeNumber: 3, episodeFileId: 12 },
+      { id: 501, seasonNumber: 1, episodeNumber: 1, episodeFileId: 10 },
+      { id: 502, seasonNumber: 1, episodeNumber: 2, episodeFileId: 11 },
+      { id: 503, seasonNumber: 1, episodeNumber: 3, episodeFileId: 12 },
     ]);
     mockSonarrClient.deleteEpisodeFiles.mockResolvedValue(undefined);
     mockSonarrClient.updateSeries.mockResolvedValue({});
@@ -559,6 +561,128 @@ describe("executeAction", () => {
 
     expect(mockSonarrClient.updateSeries).toHaveBeenCalledWith(2, { monitored: false });
     expect(mockSonarrClient.deleteEpisodeFiles).toHaveBeenCalledWith([10, 11]);
+  });
+
+  describe("Sonarr episode-file correlation", () => {
+    const sonarrAction = (actionType: string, matched: string[], extra: Record<string, unknown> = {}) =>
+      makeAction({
+        actionType,
+        matchedMediaItemIds: matched,
+        mediaItem: {
+          id: "item1", title: "Test Show", parentTitle: null, year: 2024,
+          externalIds: [{ source: "TVDB", externalId: "67890" }],
+        },
+        ...extra,
+      });
+
+    beforeEach(() => {
+      mockPrisma.sonarrInstance.findUnique.mockResolvedValue({
+        id: "arr1", url: "http://sonarr", apiKey: "key", enabled: true,
+      });
+      mockSonarrClient.getSeriesByTvdbId.mockResolvedValue({
+        id: 2, title: "Test Show", tvdbId: 67890, tags: [], monitored: true,
+      });
+      mockSonarrClient.deleteEpisodeFiles.mockResolvedValue(undefined);
+      mockSonarrClient.updateSeries.mockResolvedValue({});
+    });
+
+    it("never deletes a multi-episode file that also holds an unmatched episode", async () => {
+      mockPrisma.mediaItem.findMany.mockResolvedValue([
+        { id: "ep1", seasonNumber: 1, episodeNumber: 1, originallyAvailableAt: null },
+        { id: "ep3", seasonNumber: 1, episodeNumber: 3, originallyAvailableAt: null },
+      ]);
+      mockSonarrClient.getEpisodes.mockResolvedValue([
+        // S01E01-E02 share file 10; E02 did not match (or is excepted).
+        { id: 501, seasonNumber: 1, episodeNumber: 1, episodeFileId: 10 },
+        { id: 502, seasonNumber: 1, episodeNumber: 2, episodeFileId: 10 },
+        { id: 503, seasonNumber: 1, episodeNumber: 3, episodeFileId: 12 },
+      ]);
+
+      const outcome = await executeAction(sonarrAction("DELETE_FILES_SONARR", ["ep1", "ep3"]));
+
+      expect(mockSonarrClient.deleteEpisodeFiles).toHaveBeenCalledWith([12]);
+      expect(outcome.deletedMemberIds).toEqual(["ep3"]);
+    });
+
+    it("deletes a shared file when every episode it holds matched", async () => {
+      mockPrisma.mediaItem.findMany.mockResolvedValue([
+        { id: "ep1", seasonNumber: 1, episodeNumber: 1, originallyAvailableAt: null },
+        { id: "ep2", seasonNumber: 1, episodeNumber: 2, originallyAvailableAt: null },
+      ]);
+      mockSonarrClient.getEpisodes.mockResolvedValue([
+        { id: 501, seasonNumber: 1, episodeNumber: 1, episodeFileId: 10 },
+        { id: 502, seasonNumber: 1, episodeNumber: 2, episodeFileId: 10 },
+      ]);
+
+      const outcome = await executeAction(sonarrAction("DELETE_FILES_SONARR", ["ep1", "ep2"]));
+
+      expect(mockSonarrClient.deleteEpisodeFiles).toHaveBeenCalledWith([10]);
+      expect(outcome.deletedMemberIds).toEqual(["ep1", "ep2"]);
+    });
+
+    it("skips an episode whose air date shows Sonarr numbers the show differently", async () => {
+      mockPrisma.mediaItem.findMany.mockResolvedValue([
+        { id: "ep30", seasonNumber: 1, episodeNumber: 30, originallyAvailableAt: new Date("2020-05-01T00:00:00Z") },
+        { id: "ep2", seasonNumber: 1, episodeNumber: 2, originallyAvailableAt: new Date("2019-01-08T00:00:00Z") },
+      ]);
+      mockSonarrClient.getEpisodes.mockResolvedValue([
+        { id: 530, seasonNumber: 1, episodeNumber: 30, episodeFileId: 30, airDate: "2019-09-01" },
+        { id: 502, seasonNumber: 1, episodeNumber: 2, episodeFileId: 2, airDate: "2019-01-08" },
+      ]);
+
+      await executeAction(sonarrAction("DELETE_FILES_SONARR", ["ep30", "ep2"]));
+
+      expect(mockSonarrClient.deleteEpisodeFiles).toHaveBeenCalledWith([2]);
+    });
+
+    it("fails rather than reporting success when no matched episode exists in Sonarr", async () => {
+      mockPrisma.mediaItem.findMany.mockResolvedValue([
+        { id: "ep1", seasonNumber: 9, episodeNumber: 1, originallyAvailableAt: null },
+      ]);
+      mockSonarrClient.getEpisodes.mockResolvedValue([
+        { id: 501, seasonNumber: 1, episodeNumber: 1, episodeFileId: 10 },
+      ]);
+
+      await expect(executeAction(sonarrAction("DELETE_FILES_SONARR", ["ep1"]))).rejects.toThrow(/nothing was deleted/);
+      expect(mockSonarrClient.deleteEpisodeFiles).not.toHaveBeenCalled();
+    });
+
+    it("Monitor & Delete Files re-monitors and searches the deleted episodes by id", async () => {
+      mockSonarrClient.getSeriesByTvdbId.mockResolvedValue({
+        id: 2, title: "Test Show", tvdbId: 67890, tags: [], monitored: false,
+      });
+      mockPrisma.mediaItem.findMany.mockResolvedValue([
+        { id: "ep1", seasonNumber: 1, episodeNumber: 1, originallyAvailableAt: null },
+      ]);
+      mockSonarrClient.getEpisodes.mockResolvedValue([
+        { id: 501, seasonNumber: 1, episodeNumber: 1, episodeFileId: 10 },
+      ]);
+      const order: string[] = [];
+      mockSonarrClient.deleteEpisodeFiles.mockImplementation(async () => { order.push("delete"); });
+      mockSonarrClient.setEpisodesMonitored.mockImplementation(async () => { order.push("monitor"); });
+
+      await executeAction(sonarrAction("MONITOR_DELETE_FILES_SONARR", ["ep1"], { searchAfterAction: true }));
+
+      expect(mockSonarrClient.updateSeries).toHaveBeenCalledWith(2, { monitored: true });
+      expect(mockSonarrClient.setEpisodesMonitored).toHaveBeenCalledWith([501], true);
+      expect(order).toEqual(["delete", "monitor"]);
+      expect(mockSonarrClient.triggerEpisodeSearch).toHaveBeenCalledWith([501]);
+      expect(mockSonarrClient.triggerSeriesSearch).not.toHaveBeenCalled();
+    });
+
+    it("Unmonitor & Delete Files searches the episodes by id, not the (now unmonitored) series", async () => {
+      mockPrisma.mediaItem.findMany.mockResolvedValue([
+        { id: "ep1", seasonNumber: 1, episodeNumber: 1, originallyAvailableAt: null },
+      ]);
+      mockSonarrClient.getEpisodes.mockResolvedValue([
+        { id: 501, seasonNumber: 1, episodeNumber: 1, episodeFileId: 10 },
+      ]);
+
+      await executeAction(sonarrAction("UNMONITOR_DELETE_FILES_SONARR", ["ep1"], { searchAfterAction: true }));
+
+      expect(mockSonarrClient.triggerEpisodeSearch).toHaveBeenCalledWith([501]);
+      expect(mockSonarrClient.triggerSeriesSearch).not.toHaveBeenCalled();
+    });
   });
 
   it("executes CHANGE_QUALITY_PROFILE_RADARR when current profile differs", async () => {
@@ -812,7 +936,7 @@ describe("executeAction", () => {
     });
     // The matched track (resolved from the DB by member id)
     mockPrisma.mediaItem.findMany.mockResolvedValue([
-      { albumTitle: "Album A", title: "Song One" },
+      { id: "track-1", albumTitle: "Album A", title: "Song One", seasonNumber: null, episodeNumber: null, externalIds: [] },
     ]);
     mockLidarrClient.getAlbums.mockResolvedValue([
       { id: 10, title: "Album A" },
@@ -838,6 +962,99 @@ describe("executeAction", () => {
     // path is never used and deleteArtist is never called.
     expect(mockLidarrClient.deleteTrackFiles).toHaveBeenCalledWith([101]);
     expect(mockLidarrClient.deleteArtist).not.toHaveBeenCalled();
+  });
+
+  describe("Lidarr track-file correlation", () => {
+    const lidarrAction = (matched: string[]) =>
+      makeAction({
+        actionType: "DELETE_FILES_LIDARR",
+        matchedMediaItemIds: matched,
+        mediaItem: {
+          id: "item1", title: "Test Artist", parentTitle: null, year: null,
+          externalIds: [{ source: "MUSICBRAINZ", externalId: "mb-123" }],
+        },
+      });
+    const track = (over: Record<string, unknown>) => ({
+      id: "t1", albumTitle: "Album A", title: "Song", seasonNumber: 1, episodeNumber: 1, externalIds: [], ...over,
+    });
+
+    beforeEach(() => {
+      mockPrisma.lidarrInstance.findUnique.mockResolvedValue({
+        id: "arr1", url: "http://lidarr", apiKey: "key", enabled: true,
+      });
+      mockLidarrClient.getArtistByMusicBrainzId.mockResolvedValue({
+        id: 5, artistName: "Test Artist", foreignArtistId: "mb-123", tags: [],
+      });
+      mockLidarrClient.getAlbums.mockResolvedValue([{ id: 10, title: "Album A" }, { id: 11, title: "Live at the BBC" }]);
+    });
+
+    it("tells 'Song' from 'Song (Demo)' on the same album", async () => {
+      mockPrisma.mediaItem.findMany.mockResolvedValue([
+        track({ id: "demo", title: "Song (Demo)", episodeNumber: 12 }),
+      ]);
+      mockLidarrClient.getTracks.mockResolvedValue([
+        { id: 1, albumId: 10, trackFileId: 101, title: "Song", hasFile: true, trackNumber: "1", mediumNumber: 1 },
+        { id: 2, albumId: 10, trackFileId: 102, title: "Song (Demo)", hasFile: true, trackNumber: "12", mediumNumber: 1 },
+      ]);
+
+      await executeAction(lidarrAction(["demo"]));
+
+      expect(mockLidarrClient.deleteTrackFiles).toHaveBeenCalledWith([102]);
+    });
+
+    it("tells the same title on disc 1 and disc 2 apart by disc and track number", async () => {
+      mockPrisma.mediaItem.findMany.mockResolvedValue([
+        track({ id: "d2", title: "Intro", seasonNumber: 2, episodeNumber: 1 }),
+      ]);
+      mockLidarrClient.getTracks.mockResolvedValue([
+        { id: 1, albumId: 10, trackFileId: 101, title: "Intro", hasFile: true, trackNumber: "1", mediumNumber: 1 },
+        { id: 2, albumId: 10, trackFileId: 102, title: "Intro", hasFile: true, trackNumber: "1", mediumNumber: 2 },
+      ]);
+
+      await executeAction(lidarrAction(["d2"]));
+
+      expect(mockLidarrClient.deleteTrackFiles).toHaveBeenCalledWith([102]);
+    });
+
+    it("prefers the MusicBrainz track/recording id when the sync stored one", async () => {
+      mockPrisma.mediaItem.findMany.mockResolvedValue([
+        track({ id: "m", title: "Song", externalIds: [{ source: "MBID", externalId: "REC-2" }] }),
+      ]);
+      mockLidarrClient.getTracks.mockResolvedValue([
+        { id: 1, albumId: 10, trackFileId: 101, title: "Song", hasFile: true, trackNumber: "1", mediumNumber: 1, foreignRecordingId: "rec-1" },
+        { id: 2, albumId: 11, trackFileId: 102, title: "Song", hasFile: true, trackNumber: "4", mediumNumber: 1, foreignRecordingId: "rec-2" },
+      ]);
+
+      await executeAction(lidarrAction(["m"]));
+
+      expect(mockLidarrClient.deleteTrackFiles).toHaveBeenCalledWith([102]);
+    });
+
+    it("never falls back to the same title on another album", async () => {
+      mockPrisma.mediaItem.findMany.mockResolvedValue([
+        track({ id: "y", albumTitle: "Help!", title: "Yesterday", episodeNumber: 13 }),
+      ]);
+      mockLidarrClient.getTracks.mockResolvedValue([
+        { id: 1, albumId: 11, trackFileId: 101, title: "Yesterday", hasFile: true, trackNumber: "5", mediumNumber: 1 },
+      ]);
+
+      await expect(executeAction(lidarrAction(["y"]))).rejects.toThrow(/nothing was deleted/);
+      expect(mockLidarrClient.deleteTrackFiles).not.toHaveBeenCalled();
+    });
+
+    it("skips a position whose title disagrees (a re-ordered edition)", async () => {
+      mockPrisma.mediaItem.findMany.mockResolvedValue([
+        track({ id: "s", title: "Song B", episodeNumber: 3 }),
+      ]);
+      mockLidarrClient.getTracks.mockResolvedValue([
+        { id: 1, albumId: 10, trackFileId: 101, title: "Song A", hasFile: true, trackNumber: "3", mediumNumber: 1 },
+        { id: 2, albumId: 10, trackFileId: 102, title: "Song B", hasFile: true, trackNumber: "4", mediumNumber: 1 },
+      ]);
+
+      await executeAction(lidarrAction(["s"]));
+
+      expect(mockLidarrClient.deleteTrackFiles).toHaveBeenCalledWith([102]);
+    });
   });
 
   // --- onStep sub-step reporting (drives the query-page action progress bar) ---

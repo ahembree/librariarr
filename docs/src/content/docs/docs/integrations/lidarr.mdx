@@ -28,9 +28,11 @@ You can add multiple Lidarr instances.
 
 Librariarr matches music to Lidarr using **MusicBrainz IDs**:
 
-1. During media sync, external IDs are fetched from your media server
-2. When lifecycle rules need Lidarr data, Librariarr queries Lidarr by MusicBrainz artist ID
-3. Fallback: artist name matching
+1. During media sync, Librariarr stores each track's **artist** MusicBrainz ID — on Plex from the artist's own metadata, on Jellyfin and Emby from the track's album artist (or artist) ID
+2. When lifecycle rules need Lidarr data, Librariarr looks the artist up in Lidarr by that ID. An artist MusicBrainz has merged into another is still found under its old ID
+3. A track without an artist MusicBrainz ID cannot be matched to Lidarr
+
+Existing libraries pick the artist IDs up on their next full sync.
 
 ## Available Operations
 

@@ -83,7 +83,7 @@ import { ConvertQueryToRuleDialog } from "@/components/convert-query-to-rule-dia
 import { QueryProgress, useStreamProgress } from "@/components/query-progress";
 import { consumeProgressStream } from "@/lib/progress/client";
 import type { ProgressUpdate } from "@/lib/progress/types";
-import { buildActionBatches, actionMediaType } from "@/lib/query/batch";
+import { buildActionBatches, actionMediaType, countActionUnits } from "@/lib/query/batch";
 import { MAX_QUERY_ACTION_ITEMS } from "@/lib/query/constants";
 import { actionHonorsMemberIds } from "@/lib/lifecycle/action-types";
 import { QueryActionBar, type ArrFamily, type ArrFamilyMeta, type QueryActionConfig } from "@/components/query-action-bar";
@@ -981,6 +981,9 @@ export default function QueryPage() {
       const runId = multi
         ? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
         : undefined;
+      // The whole run's size in actions, so the deletion ceiling is checked
+      // against the run rather than against each batch on its own.
+      const runUnits = countActionUnits(selectedItems, targetType);
 
       // "Did real work happen?" — skips don't count (an all-skipped batch changed
       // nothing), so they must not tip the partial-vs-total-failure decisions.
@@ -1016,7 +1019,7 @@ export default function QueryPage() {
           const resp = await fetch("/api/query/actions", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ query: definition, mediaItemIds: batches[b], runId, ...config }),
+            body: JSON.stringify({ query: definition, mediaItemIds: batches[b], runId, runUnits, ...config }),
           });
           if (!resp.ok) {
             // Auth/validation failures come back as plain JSON (before streaming).
@@ -1043,11 +1046,21 @@ export default function QueryPage() {
             failed: number;
             skipped: number;
             errors: string[];
+            /** The server refused the rest of the run (the deletion ceiling). */
+            stopped?: boolean;
           }>(resp, forward);
           totals.executed += data.executed;
           totals.failed += data.failed;
           totals.skipped += data.skipped;
           if (data.errors?.length) totals.errors.push(...data.errors);
+
+          if (data.stopped) {
+            toast.error(didWork() ? "Action stopped part-way" : "Action refused", {
+              description: `${data.errors?.[0] ?? "The server refused the run."}${didWork() ? ` Completed so far: ${summarize()}.` : ""}`,
+            });
+            if (didWork()) refresh();
+            return;
+          }
 
           // Circuit-breaker: a batch where failures DOMINATE and nothing executed
           // signals a systemic downstream failure (e.g. the Arr instance is down).

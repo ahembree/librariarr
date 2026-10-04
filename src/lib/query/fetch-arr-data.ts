@@ -115,10 +115,11 @@ async function fetchSonarrData(
   if (!instance) return null;
 
   const client = new SonarrClient(instance.url, instance.apiKey);
-  const [series, profiles, tags] = await Promise.all([
+  const [series, profiles, tags, upcoming] = await Promise.all([
     client.getSeries(),
     client.getQualityProfiles(),
     client.getTags(),
+    client.getSeriesIdsWithUpcomingEpisodes(),
   ]);
   onProgress?.(0.5);
 
@@ -129,7 +130,7 @@ async function fetchSonarrData(
   const mapReport = subProgress(onProgress, 0.5, 1);
   for (let i = 0; i < series.length; i++) {
     const s = series[i];
-    arrData[String(s.tvdbId)] = mapSonarrSeries(s, profileMap, tagMap);
+    arrData[String(s.tvdbId)] = mapSonarrSeries(s, profileMap, tagMap, upcoming);
     if (mapReport && (i + 1) % MAP_PROGRESS_INTERVAL === 0) {
       mapReport((i + 1) / series.length);
     }

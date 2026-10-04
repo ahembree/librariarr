@@ -274,6 +274,42 @@ describe("SonarrClient", () => {
     });
   });
 
+  describe("getSeriesIdsWithUpcomingEpisodes", () => {
+    it("asks the calendar for unmonitored episodes too and ignores specials", async () => {
+      mockAxiosInstance.get.mockResolvedValueOnce({
+        data: [
+          { seriesId: 1, seasonNumber: 3 },
+          { seriesId: 2, seasonNumber: 0 },
+          { seriesId: 1, seasonNumber: 3 },
+        ],
+      });
+      const now = new Date("2026-01-01T00:00:00Z");
+      const ids = await client.getSeriesIdsWithUpcomingEpisodes(now);
+      expect([...ids]).toEqual([1]);
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v3/calendar", {
+        params: { start: "2026-01-01T00:00:00.000Z", end: "2046-01-01T00:00:00.000Z", unmonitored: true },
+      });
+    });
+  });
+
+  describe("episode monitor and search", () => {
+    it("monitors episodes by id and searches them with EpisodeSearch", async () => {
+      mockAxiosInstance.put.mockResolvedValueOnce({});
+      mockAxiosInstance.post.mockResolvedValueOnce({});
+      await client.setEpisodesMonitored([5, 6], true);
+      await client.triggerEpisodeSearch([5, 6]);
+      expect(mockAxiosInstance.put).toHaveBeenCalledWith("/api/v3/episode/monitor", { episodeIds: [5, 6], monitored: true });
+      expect(mockAxiosInstance.post).toHaveBeenCalledWith("/api/v3/command", { name: "EpisodeSearch", episodeIds: [5, 6] });
+    });
+
+    it("sends nothing for an empty id list", async () => {
+      await client.setEpisodesMonitored([], true);
+      await client.triggerEpisodeSearch([]);
+      expect(mockAxiosInstance.put).not.toHaveBeenCalled();
+      expect(mockAxiosInstance.post).not.toHaveBeenCalled();
+    });
+  });
+
   describe("addExclusion", () => {
     it("treats an exclusion that already exists as added", async () => {
       mockAxiosInstance.post.mockRejectedValueOnce(new IntegrationError("Sonarr", {

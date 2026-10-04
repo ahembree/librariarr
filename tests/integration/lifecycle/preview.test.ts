@@ -46,6 +46,7 @@ vi.mock("@/lib/arr/sonarr-client", () => ({
   SonarrClient: vi.fn().mockImplementation(function () {
     return {
       getSeries: vi.fn().mockResolvedValue([]),
+      getSeriesIdsWithUpcomingEpisodes: vi.fn().mockResolvedValue(new Set()),
       getQualityProfiles: vi.fn().mockResolvedValue([]),
       getTags: vi.fn().mockResolvedValue([]),
     };

@@ -5,6 +5,7 @@ import { SeerrClient } from "@/lib/seerr/seerr-client";
 import { validateRequest, seerrInstanceUpdateSchema } from "@/lib/validation";
 import { sanitize, sanitizeErrorDetail } from "@/lib/api/sanitize";
 import { invalidateSeerrCaches } from "@/lib/seerr/request-stats";
+import { refuseStoredKeyToNewUrl } from "@/lib/integrations/stored-key-guard";
 
 export async function PUT(
   request: NextRequest,
@@ -27,6 +28,9 @@ export async function PUT(
   if (!existing) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
+
+  const refused = await refuseStoredKeyToNewUrl(session, existing.url, url, apiKey, "Seerr");
+  if (refused) return refused;
 
   // Test the connection only when it changes — a new URL or API key (skip if
   // just toggling enabled). The edit form sends its URL on every save, so

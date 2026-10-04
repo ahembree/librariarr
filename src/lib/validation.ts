@@ -922,6 +922,10 @@ export const queryActionSchema = z.object({
   // whole-library query (+ Arr/Seerr fetch) per batch. Client-generated; used only
   // as a cache-key component, so it's constrained to a safe, bounded charset.
   runId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/, "invalid runId").optional(),
+  // How many actions the whole run (every batch) takes — one per show or
+  // artist, as the server collapses them — so the deletion ceiling is checked
+  // against the run, not one batch of it.
+  runUnits: z.number().int().min(1).max(10_000_000).optional(),
   actionType: z.string().min(1),
   arrInstanceId: z.string().nullable().optional(),
   targetQualityProfileId: z.number().int().nullable().optional(),

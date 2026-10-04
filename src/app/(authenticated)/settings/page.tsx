@@ -2228,7 +2228,7 @@ export default function SettingsPage() {
       const body: Record<string, string> = {};
       if (overrides.url) body.url = overrides.url;
       if (overrides.apiKey) body.apiKey = overrides.apiKey;
-      const response = await fetch(`/api/integrations/${type}/${id}/test-connection`, {
+      const response = await fetchWithReauth(`/api/integrations/${type}/${id}/test-connection`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -2264,7 +2264,7 @@ export default function SettingsPage() {
       const storedSonarrExternalUrl = sonarrInstances.find((i) => i.id === editingSonarrId)?.externalUrl ?? "";
       if (editSonarrForm.externalUrl !== storedSonarrExternalUrl) body.externalUrl = editSonarrForm.externalUrl;
 
-      const response = await fetch(`/api/integrations/sonarr/${editingSonarrId}`, {
+      const response = await fetchWithReauth(`/api/integrations/sonarr/${editingSonarrId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -2306,7 +2306,7 @@ export default function SettingsPage() {
       const storedRadarrExternalUrl = radarrInstances.find((i) => i.id === editingRadarrId)?.externalUrl ?? "";
       if (editRadarrForm.externalUrl !== storedRadarrExternalUrl) body.externalUrl = editRadarrForm.externalUrl;
 
-      const response = await fetch(`/api/integrations/radarr/${editingRadarrId}`, {
+      const response = await fetchWithReauth(`/api/integrations/radarr/${editingRadarrId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -2348,7 +2348,7 @@ export default function SettingsPage() {
       const storedLidarrExternalUrl = lidarrInstances.find((i) => i.id === editingLidarrId)?.externalUrl ?? "";
       if (editLidarrForm.externalUrl !== storedLidarrExternalUrl) body.externalUrl = editLidarrForm.externalUrl;
 
-      const response = await fetch(`/api/integrations/lidarr/${editingLidarrId}`, {
+      const response = await fetchWithReauth(`/api/integrations/lidarr/${editingLidarrId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -2390,7 +2390,7 @@ export default function SettingsPage() {
       const storedSeerrExternalUrl = seerrInstances.find((i) => i.id === editingSeerrId)?.externalUrl ?? "";
       if (editSeerrForm.externalUrl !== storedSeerrExternalUrl) body.externalUrl = editSeerrForm.externalUrl;
 
-      const response = await fetch(`/api/integrations/seerr/${editingSeerrId}`, {
+      const response = await fetchWithReauth(`/api/integrations/seerr/${editingSeerrId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -2469,7 +2469,7 @@ export default function SettingsPage() {
       const body: Record<string, string> = {};
       if (overrides.url) body.url = overrides.url;
       if (overrides.apiKey && overrides.apiKey !== MASKED_VALUE) body.apiKey = overrides.apiKey;
-      const response = await fetch(`/api/integrations/tracearr/${id}/test-connection`, {
+      const response = await fetchWithReauth(`/api/integrations/tracearr/${id}/test-connection`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -2503,7 +2503,7 @@ export default function SettingsPage() {
       if (editTracearrForm.url) body.url = editTracearrForm.url;
       if (editTracearrForm.apiKey) body.apiKey = editTracearrForm.apiKey;
 
-      const response = await fetch(`/api/integrations/tracearr/${editingTracearrId}`, {
+      const response = await fetchWithReauth(`/api/integrations/tracearr/${editingTracearrId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),

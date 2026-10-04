@@ -16,7 +16,7 @@ import { arrFamilyLabel } from "@/lib/lifecycle/fetch-arr-metadata";
 import { hasEnabledSeerrInstances } from "@/lib/lifecycle/fetch-seerr-metadata";
 import { hasArrRules, hasSeerrRules, hasPlayActivityRules } from "@/lib/conditions/helpers";
 import { checkWatchHistoryCompleteness } from "@/lib/lifecycle/evaluability";
-import { checkDeleteCeiling } from "@/lib/lifecycle/delete-ceiling";
+import { checkDeleteCeilingForRun } from "@/lib/lifecycle/delete-ceiling";
 import { tryBeginExecute, endExecute, queryExecuteKey } from "@/lib/lifecycle/execute-in-flight";
 import { eventBus } from "@/lib/events/event-bus";
 import type { ConditionGroup } from "@/lib/conditions/types";
@@ -24,6 +24,7 @@ import { validateRequest, queryActionSchema } from "@/lib/validation";
 import { progressStreamResponse } from "@/lib/progress/stream";
 import type { ProgressPhase, ProgressEmit } from "@/lib/progress/types";
 import type { QueryDefinition } from "@/lib/query/types";
+import { collapseActionItems } from "@/lib/query/collapse-actions";
 
 type MediaType = "MOVIE" | "SERIES" | "MUSIC";
 
@@ -44,19 +45,26 @@ function familyFromActionType(actionType: string): MediaType | null {
   return null; // DO_NOTHING
 }
 
+/** The user's Arr instance of the family serving `type`, or null. */
+async function findArrInstance(
+  arrInstanceId: string,
+  userId: string,
+  type: MediaType,
+): Promise<{ id: string; name: string; enabled: boolean } | null> {
+  const where = { id: arrInstanceId, userId };
+  const select = { id: true, name: true, enabled: true } as const;
+  if (type === "MOVIE") return prisma.radarrInstance.findFirst({ where, select });
+  if (type === "SERIES") return prisma.sonarrInstance.findFirst({ where, select });
+  return prisma.lidarrInstance.findFirst({ where, select });
+}
+
 /** Confirm an Arr instance belongs to the user and matches the expected media type. */
 async function arrInstanceMatchesType(
   arrInstanceId: string,
   userId: string,
   type: MediaType,
 ): Promise<boolean> {
-  if (type === "MOVIE") {
-    return !!(await prisma.radarrInstance.findFirst({ where: { id: arrInstanceId, userId }, select: { id: true } }));
-  }
-  if (type === "SERIES") {
-    return !!(await prisma.sonarrInstance.findFirst({ where: { id: arrInstanceId, userId }, select: { id: true } }));
-  }
-  return !!(await prisma.lidarrInstance.findFirst({ where: { id: arrInstanceId, userId }, select: { id: true } }));
+  return (await findArrInstance(arrInstanceId, userId, type)) !== null;
 }
 
 /** Find which Arr family an instance belongs to (for DO_NOTHING tag-only ops). */
@@ -81,6 +89,7 @@ export async function POST(request: NextRequest) {
     query,
     mediaItemIds,
     runId,
+    runUnits,
     actionType,
     arrInstanceId,
     targetQualityProfileId,
@@ -143,12 +152,31 @@ export async function POST(request: NextRequest) {
   if (hasArrRules(queryGroups)) {
     const familyKey = resolvedType === "MOVIE" ? "radarr" : resolvedType === "SERIES" ? "sonarr" : "lidarr";
     const selectedArrId = query.arrServerIds?.[familyKey];
-    const arrAvailable = selectedArrId
-      ? await arrInstanceMatchesType(selectedArrId, userId, resolvedType)
-      : false;
-    if (!arrAvailable) {
+    const selectedArr = selectedArrId
+      ? await findArrInstance(selectedArrId, userId, resolvedType)
+      : null;
+    if (!selectedArr) {
       return NextResponse.json(
         { error: `The query uses Arr criteria but no ${arrFamilyLabel(resolvedType)} server is selected for it — rules like "Found In Arr = false" would match the entire library` },
+        { status: 400 },
+      );
+    }
+    // A disabled instance is one the user switched off — its server may be
+    // gone or its data stale — and a lifecycle rule set refuses to judge by
+    // one (evaluability.ts); acting immediately on its answers is no safer.
+    if (!selectedArr.enabled) {
+      return NextResponse.json(
+        { error: `The query reads its Arr criteria from ${arrFamilyLabel(resolvedType)} instance "${selectedArr.name}", which is disabled` },
+        { status: 400 },
+      );
+    }
+    // The criteria were judged on the query's instance; acting on another one
+    // judges a different instance's copy by them — a "keep" tag on the 4K
+    // Radarr checked against the 1080p one deletes the 4K copy it protected.
+    // The same rule a lifecycle rule set follows (resolveArrInstanceScope).
+    if (arrInstanceId && arrInstanceId !== selectedArr.id) {
+      return NextResponse.json(
+        { error: `The query's Arr criteria were read from ${arrFamilyLabel(resolvedType)} instance "${selectedArr.name}" — run the action on that instance` },
         { status: 400 },
       );
     }
@@ -193,15 +221,17 @@ export async function POST(request: NextRequest) {
 
   // BLAST-RADIUS CEILING. This route batches — the client chunks a large
   // selection into sequential requests of at most MAX_QUERY_ACTION_ITEMS — so
-  // the per-request cap is not a limit on how much one action can destroy. The
-  // ceiling is, and it is checked per request against the same setting the
-  // automated executor uses, so a batched 5,000-item selection is refused on
-  // its first batch rather than after the first 1,000 are gone.
+  // neither the per-request cap nor a per-request count bounds how much one run
+  // destroys: with a ceiling of 1,000 or more every 1,000-item batch passed on
+  // its own. The client therefore sends the whole run's size in actions
+  // (`runUnits` — one per show or artist, as the server collapses them), and a
+  // run over the ceiling is refused on its first batch, before anything is
+  // gone. A request without `runUnits` is counted by its ids, which over-counts
+  // an episode-view series action (its episodes are one action per show) and
+  // so only errs toward refusing. The run's running total is checked again
+  // once this batch's actions are known (below).
   {
-    const verdict = await checkDeleteCeiling(
-      userId,
-      mediaItemIds.map(() => actionType),
-    );
+    const verdict = await checkDeleteCeilingForRun(userId, actionType, runUnits ?? mediaItemIds.length);
     if (!verdict.allowed) {
       return NextResponse.json({ error: verdict.reason }, { status: 400 });
     }
@@ -495,6 +525,32 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // One action per Arr record: a title on two servers, or N tracks of one
+    // artist, is one Arr record (see collapse-actions.ts).
+    const collapsed = collapseActionItems(resolvedType, items, episodeIdMap);
+    items = collapsed.items;
+    const actionMembers = collapsed.members;
+
+    // The ceiling over the whole run: every earlier batch's actions plus this
+    // one's, counted after the collapse (a show's episodes are one action).
+    const unitsKey = runId ? `query-action-units:${runId}` : null;
+    const priorUnits = (unitsKey && appCache.get<number>(unitsKey)) || 0;
+    const verdict = await checkDeleteCeilingForRun(
+      userId,
+      actionType,
+      Math.max(runUnits ?? 0, priorUnits + items.length),
+    );
+    if (!verdict.allowed) {
+      return {
+        executed: 0,
+        failed: 0,
+        skipped: skipped + items.length,
+        errors: [verdict.reason ?? "Held by the deletion ceiling"],
+        stopped: true,
+      };
+    }
+    if (unitsKey) appCache.set(unitsKey, priorUnits + items.length, RUN_LIVE_TTL_MS);
+
     // Per-item progress drives the determinate "Running action" segment.
     emit({ type: "phase", key: "execute", fraction: 0 });
     const { executed, failed, errors } = await executeActionsForItems(
@@ -509,7 +565,7 @@ export async function POST(request: NextRequest) {
         addArrTags,
         removeArrTags,
       },
-      episodeIdMap,
+      actionMembers,
       {
         ruleSetId: null,
         ruleSetName: "Ad-hoc query action",

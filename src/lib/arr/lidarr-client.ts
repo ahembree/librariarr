@@ -85,6 +85,12 @@ export interface LidarrTrack {
   hasFile: boolean;
   trackNumber?: string;
   absoluteTrackNumber?: number;
+  /** Disc number within the release. */
+  mediumNumber?: number;
+  /** MusicBrainz release-track id. */
+  foreignTrackId?: string;
+  /** MusicBrainz recording id. */
+  foreignRecordingId?: string;
 }
 
 export interface LidarrExclusion {
@@ -172,10 +178,14 @@ export class LidarrClient {
     const { data } = await this.client.get<LidarrArtist[]>("/api/v1/artist", {
       params: { mbId },
     });
-    // Lidarr filters by foreignArtistId, but guard in case the param is ignored
-    // by an older version and the full list is returned — never fall back to
-    // `data[0]`, which would then be an arbitrary artist.
-    return data.find((a) => a.foreignArtistId === mbId) ?? null;
+    // Lidarr filters by foreignArtistId — and, for an artist MusicBrainz has
+    // merged, by its old ids too, answering with the artist under its NEW id.
+    // So a single answer is the artist even when its id differs. Several
+    // answers mean the filter was ignored (an older version returning the
+    // whole library): only an exact id is trusted then, never `data[0]`.
+    const exact = data.find((a) => a.foreignArtistId === mbId);
+    if (exact) return exact;
+    return data.length === 1 ? data[0] : null;
   }
 
   async deleteArtist(

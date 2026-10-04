@@ -110,8 +110,15 @@ describe("LidarrClient", () => {
       expect(result).toBeNull();
     });
 
-    it("never falls back to an artist with a different MusicBrainz id", async () => {
-      mockAxiosInstance.get.mockResolvedValueOnce({ data: [{ id: 1, foreignArtistId: "mb-abc" }] });
+    it("accepts the one artist Lidarr answers for a merged (old) MusicBrainz id", async () => {
+      mockAxiosInstance.get.mockResolvedValueOnce({ data: [{ id: 1, foreignArtistId: "mb-new" }] });
+      expect((await client.getArtistByMusicBrainzId("mb-old"))?.id).toBe(1);
+    });
+
+    it("never picks an arbitrary artist when the filter was ignored", async () => {
+      mockAxiosInstance.get.mockResolvedValueOnce({
+        data: [{ id: 1, foreignArtistId: "mb-abc" }, { id: 2, foreignArtistId: "mb-def" }],
+      });
       expect(await client.getArtistByMusicBrainzId("mb-other")).toBeNull();
     });
   });

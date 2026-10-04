@@ -373,7 +373,7 @@ describe("Tracearr integration endpoints", () => {
     it("updates the url and strips its trailing slashes", async () => {
       const user = await createTestUser();
       const instance = await createTestTracearrInstance(user.id);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
 
       const response = await callRouteWithParams(
         PUT,
@@ -392,7 +392,7 @@ describe("Tracearr integration endpoints", () => {
     it("skips the connection test when disabling the instance", async () => {
       const user = await createTestUser();
       const instance = await createTestTracearrInstance(user.id);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
 
       const response = await callRouteWithParams(
         PUT,
@@ -417,7 +417,7 @@ describe("Tracearr integration endpoints", () => {
 
       const user = await createTestUser();
       const instance = await createTestTracearrInstance(user.id);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
 
       const response = await callRouteWithParams(
         PUT,
@@ -552,7 +552,7 @@ describe("Tracearr integration endpoints", () => {
     it("falls back to the stored apiKey when the masked value is sent", async () => {
       const user = await createTestUser();
       const instance = await createTestTracearrInstance(user.id, { apiKey: "trr_pub_stored" });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
 
       const response = await callRouteWithParams(
         TEST_POST,

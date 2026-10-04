@@ -15,6 +15,7 @@ const mockRadarrClient = vi.hoisted(() => ({
 
 const mockSonarrClient = vi.hoisted(() => ({
   getSeries: vi.fn(),
+  getSeriesIdsWithUpcomingEpisodes: vi.fn().mockResolvedValue(new Set()),
   getQualityProfiles: vi.fn(),
   getTags: vi.fn(),
 }));
@@ -360,8 +361,8 @@ describe("fetchArrMetadata", () => {
           seriesType: "standard",
           nextAiring: null,
           seasons: [
-            { monitored: true, statistics: { episodeCount: 10 } },
-            { monitored: false, statistics: { episodeCount: 13 } },
+            { seasonNumber: 1, monitored: true, statistics: { episodeCount: 10, totalEpisodeCount: 31 } },
+            { seasonNumber: 2, monitored: false, statistics: { episodeCount: 13, totalEpisodeCount: 31 } },
           ],
         },
       ]);
@@ -387,7 +388,8 @@ describe("fetchArrMetadata", () => {
       expect(result["12345"].ended).toBe(true);
       expect(result["12345"].hasUnaired).toBe(false);
       expect(result["12345"].monitoredSeasonCount).toBe(1);
-      expect(result["12345"].monitoredEpisodeCount).toBe(10);
+      // Every episode of the monitored season, aired or not.
+      expect(result["12345"].monitoredEpisodeCount).toBe(31);
     });
 
     it("sets hasUnaired to true when nextAiring exists", async () => {

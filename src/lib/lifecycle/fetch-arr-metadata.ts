@@ -170,10 +170,11 @@ export async function fetchArrMetadata(
       const inst = instances[idx];
       const report = reporters[idx];
       const client = new SonarrClient(inst.url, inst.apiKey);
-      const [series, profiles, tags] = await Promise.all([
+      const [series, profiles, tags, upcoming] = await Promise.all([
         client.getSeries(),
         client.getQualityProfiles(),
         client.getTags(),
+        client.getSeriesIdsWithUpcomingEpisodes(),
       ]);
       report(0.5);
       const tagMap = new Map(tags.map((t) => [t.id, t.label]));
@@ -181,7 +182,7 @@ export async function fetchArrMetadata(
       const mapReport = subProgress(report, 0.5, 1);
       for (let i = 0; i < series.length; i++) {
         const s = series[i];
-        put(String(s.tvdbId), mapSonarrSeries(s, profileMap, tagMap));
+        put(String(s.tvdbId), mapSonarrSeries(s, profileMap, tagMap, upcoming));
         if (mapReport && (i + 1) % MAP_PROGRESS_INTERVAL === 0) {
           mapReport((i + 1) / series.length);
         }

@@ -527,6 +527,32 @@ describe("JellyfinClient", () => {
     });
   });
 
+  describe("music MusicBrainz ids", () => {
+    it("maps a track's own and its album artist's MusicBrainz ids", async () => {
+      const client = new JellyfinClient("http://jellyfin:8096", "jf-token");
+      const axiosClient = mockAxiosCreate.mock.results[0].value as { get: ReturnType<typeof vi.fn> };
+      axiosClient.get.mockImplementation(async (url: string) => {
+        if (url === "/Users/Me") return { data: { Id: "u-admin" } };
+        return {
+          data: {
+            Id: "track-1", Name: "Song", Type: "Audio", AlbumArtist: "Artist",
+            ProviderIds: {
+              MusicBrainzTrack: "1a2b3c4d-1111-2222-3333-444455556666",
+              MusicBrainzAlbumArtist: "0383dadf-2a4e-4d10-a46a-e9e041da8eb3",
+              MusicBrainzArtist: "99999999-9999-9999-9999-999999999999",
+            },
+          },
+        };
+      });
+      const item = await client.getItemMetadata("track-1");
+      expect(item.Guid).toEqual(expect.arrayContaining([
+        { id: "mbid://1a2b3c4d-1111-2222-3333-444455556666" },
+        { id: "musicbrainz://0383dadf-2a4e-4d10-a46a-e9e041da8eb3" },
+      ]));
+      expect(item.Guid).not.toContainEqual({ id: "musicbrainz://99999999-9999-9999-9999-999999999999" });
+    });
+  });
+
   describe("getDetailedWatchHistory", () => {
     const USERS = [{ Id: "u1", Name: "Alice" }, { Id: "u2", Name: "Bob" }];
     const played = (id: string) => ({
