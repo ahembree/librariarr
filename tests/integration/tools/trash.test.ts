@@ -442,6 +442,28 @@ describe("assignments/[id]", () => {
 });
 
 describe("POST /api/tools/trash/sync", () => {
+  it("refuses to apply to a disabled instance (preview still allowed)", async () => {
+    const { user, radarr } = await authedUserWithRadarr();
+    await getTestPrisma().radarrInstance.update({ where: { id: radarr.id }, data: { enabled: false } });
+    await getTestPrisma().trashManagedResource.create({
+      data: { userId: user.id, serviceType: "RADARR", radarrInstanceId: radarr.id, resourceType: "CUSTOM_FORMAT", trashId: "cf1", name: "AMZN" },
+    });
+
+    const applied = await callRoute(postSync, {
+      method: "POST",
+      body: { serviceType: "RADARR", instanceId: radarr.id, dryRun: false },
+    });
+    const body = await expectJson<{ error: string }>(applied, 409);
+    expect(body.error).toMatch(/disabled/i);
+    expect(clientMock.createCustomFormat).not.toHaveBeenCalled();
+
+    const preview = await callRoute(postSync, {
+      method: "POST",
+      body: { serviceType: "RADARR", instanceId: radarr.id, dryRun: true },
+    });
+    await expectJson(preview, 200);
+  });
+
   it("dry-run previews changes without writing to the Arr or DB", async () => {
     const { radarr } = await authedUserWithRadarr();
     const res = await callRoute(postSync, {

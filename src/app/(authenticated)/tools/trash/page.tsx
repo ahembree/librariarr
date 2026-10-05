@@ -233,6 +233,47 @@ function fmt(value: unknown): string {
   return s.length > 160 ? s.slice(0, 157) + "…" : s;
 }
 
+/** `name: reason` for the first few SKIP/ERROR items, as a toast description. */
+function describePlanItems(items: PlanItem[], max = 3): string {
+  const lines = items
+    .slice(0, max)
+    .map((i) => `${i.name}: ${i.action === "ERROR" ? (i.error ?? "failed") : (i.warnings[0] ?? "skipped")}`);
+  if (items.length > max) lines.push(`…and ${items.length - max} more`);
+  return lines.join("\n");
+}
+
+/**
+ * Toast the outcome of a real (non-dry-run) sync. A SKIP item wrote nothing, so
+ * it is never folded into the success message — it's reported with its reason
+ * (`warnings[0]`), as an error when nothing at all was applied. `partial` is the
+ * lead-in used when only some items were skipped (defaults to `success`).
+ * Returns true only when nothing errored or was skipped.
+ */
+function toastSyncOutcome(items: PlanItem[], success: string, partial = success): boolean {
+  const errored = items.filter((i) => i.action === "ERROR");
+  const skipped = items.filter((i) => i.action === "SKIP");
+  const plural = (n: number) => (n === 1 ? "" : "s");
+  if (errored.length) {
+    toast.error(
+      `${errored.length} item${plural(errored.length)} failed` +
+        (skipped.length ? `, ${skipped.length} skipped` : ""),
+      { description: describePlanItems([...errored, ...skipped]) },
+    );
+    return false;
+  }
+  if (skipped.length) {
+    const what = `${skipped.length} item${plural(skipped.length)} skipped`;
+    if (skipped.length === items.length) {
+      toast.error(`Nothing applied — ${what}`, { description: describePlanItems(skipped) });
+    } else {
+      toast.warning(`${partial} — ${what}`, { description: describePlanItems(skipped) });
+    }
+    return false;
+  }
+  toast.success(success);
+  return true;
+}
+
 /**
  * Group items by their TRaSH category (an item may appear under more than one).
  * Items in no category fall into a trailing "Uncategorized" group. Categories
@@ -308,7 +349,9 @@ export default function TrashSyncPage() {
   const [activeTab, setActiveTab] = useState("profilecf");
 
   // Dialog state
-  const [confirmItem, setConfirmItem] = useState<StatusItem | null>(null);
+  // The take-over awaiting confirmation; naming carries its chosen variants.
+  const [confirmTarget, setConfirmTarget] = useState<{ item: StatusItem; selection?: NamingSelection } | null>(null);
+  const confirmItem = confirmTarget?.item ?? null;
   const [optionsItem, setOptionsItem] = useState<StatusItem | null>(null);
   const [diffReport, setDiffReport] = useState<{ title: string; items: PlanItem[]; dryRun: boolean } | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -321,6 +364,15 @@ export default function TrashSyncPage() {
     () => instances.find((i) => `${i.serviceType}:${i.id}` === selectedKey) ?? null,
     [instances, selectedKey],
   );
+
+  // The instance selected NOW, for post-action reloads. An action captures the
+  // instance it started on; if the user switches mid-action, reloading that
+  // captured instance would supersede the new instance's load and render the
+  // old instance's data under the new one's name.
+  const selectedRef = useRef<GuideInstance | null>(selected);
+  useEffect(() => {
+    selectedRef.current = selected;
+  }, [selected]);
 
   const loadInstances = useCallback(async () => {
     try {
@@ -337,8 +389,16 @@ export default function TrashSyncPage() {
     }
   }, []);
 
+  /**
+   * Load the catalog + status for `inst`. Resolves true only when both loaded
+   * (and the catalog behind the status did too) and this load is still the
+   * current one — callers use it to decide whether to report success.
+   */
   const loadStatus = useCallback(
-    async (inst: GuideInstance, opts: { refresh?: boolean; background?: boolean } = {}) => {
+    async (
+      inst: GuideInstance,
+      opts: { refresh?: boolean; background?: boolean } = {},
+    ): Promise<boolean> => {
       const seq = ++loadSeqRef.current;
       const isCurrent = () => loadSeqRef.current === seq;
       // Background refresh (after an action): keep the current view mounted and
@@ -351,38 +411,61 @@ export default function TrashSyncPage() {
       }
       try {
         const svc = inst.serviceType.toLowerCase();
-        const [catRes, statusRes] = await Promise.all([
-          fetch(`/api/tools/trash/catalog?service=${svc}${opts.refresh ? "&refresh=1" : ""}`),
-          fetch(`/api/tools/trash/status?serviceType=${inst.serviceType}&instanceId=${inst.id}`),
-        ]);
+        const catalogUrl = `/api/tools/trash/catalog?service=${svc}${opts.refresh ? "&refresh=1" : ""}`;
+        const statusUrl = `/api/tools/trash/status?serviceType=${inst.serviceType}&instanceId=${inst.id}`;
+        let catRes: Response;
+        let statusRes: Response;
+        if (opts.refresh) {
+          // Force the catalog refresh FIRST: the status route reads the cached
+          // catalog, so in parallel it could be built from the old guide while
+          // the toolbar shows the new one.
+          catRes = await fetch(catalogUrl);
+          statusRes = await fetch(statusUrl);
+        } else {
+          [catRes, statusRes] = await Promise.all([fetch(catalogUrl), fetch(statusUrl)]);
+        }
         // Defensive parse: a proxy/gateway can answer a 5xx with a non-JSON body.
         const catData = await catRes.json().catch(() => ({}));
         const statusData = await statusRes.json().catch(() => ({}));
         // A newer load superseded this one — drop its results so we never render
         // stale data for a no-longer-selected instance.
-        if (!isCurrent()) return;
+        if (!isCurrent()) return false;
         // Replace the catalog on success, and CLEAR it on failure so the
         // previously-selected instance's catalog can't linger against this one.
         setCatalog(catRes.ok ? catData.catalog : null);
+        // An explicit refresh has no other place to report a failed guide fetch.
+        if (!catRes.ok && opts.refresh) {
+          toast.error(catData.error ?? "Failed to refresh the guide catalog");
+        }
         if (statusRes.ok) {
           setStatus(statusData.status);
         } else {
           setStatus(null);
           toast.error(statusData.error ?? "Failed to load status");
         }
+        return catRes.ok && statusRes.ok && !statusData.status?.catalogError;
       } catch {
         if (isCurrent()) toast.error("Failed to load guide status");
+        return false;
       } finally {
         // Only the newest load owns the loading flags; a superseded one must not
-        // flip them off underneath the load that replaced it.
+        // flip them off underneath the load that replaced it. Clear BOTH: a
+        // background reload can supersede a foreground load, whose own finally
+        // then skips, and the loader would otherwise stay up forever.
         if (isCurrent()) {
-          if (opts.background) setRefreshingStatus(false);
-          else setLoadingStatus(false);
+          setRefreshingStatus(false);
+          setLoadingStatus(false);
         }
       }
     },
     [],
   );
+
+  // Post-action reload: always the instance selected NOW (see selectedRef).
+  const reloadCurrent = useCallback(async () => {
+    const current = selectedRef.current;
+    if (current) await loadStatus(current, { background: true });
+  }, [loadStatus]);
 
   useEffect(() => {
     void (async () => {
@@ -402,9 +485,10 @@ export default function TrashSyncPage() {
     if (!selected) return;
     setRefreshing(true);
     // In-place: the Refresh button shows its own spinner, so keep the list up.
-    await loadStatus(selected, { refresh: true, background: true });
+    const ok = await loadStatus(selected, { refresh: true, background: true });
     setRefreshing(false);
-    toast.success("Guide catalog refreshed");
+    // Failures were already toasted by loadStatus (or the catalog-error card shows).
+    if (ok) toast.success("Guide catalog refreshed");
   };
 
   // ─── Assign / unassign ───
@@ -435,7 +519,7 @@ export default function TrashSyncPage() {
         return;
       }
       toast.success(`Librariarr now manages “${item.name}”`);
-      await loadStatus(selected, { background: true });
+      await reloadCurrent();
     } finally {
       setBusyId(null);
     }
@@ -453,7 +537,7 @@ export default function TrashSyncPage() {
         return;
       }
       toast.success(`Stopped managing “${item.name}” (unchanged in the app)`);
-      await loadStatus(selected, { background: true });
+      await reloadCurrent();
     } finally {
       setBusyId(null);
     }
@@ -492,15 +576,13 @@ export default function TrashSyncPage() {
       const data = await syncRes.json().catch(() => ({}));
       if (!syncRes.ok) {
         toast.error(data.error ?? "Added, but sync failed");
-        await loadStatus(selected, { background: true });
+        await reloadCurrent();
         return;
       }
       const report: SyncReport = data.report;
-      const errored = report.items.filter((i) => i.action === "ERROR").length;
-      if (errored) toast.error(`Added “${item.name}” with errors`);
-      else toast.success(`Added “${item.name}” to ${selected.name}`);
+      toastSyncOutcome(report.items, `Added “${item.name}” to ${selected.name}`);
       setDiffReport({ title: `Add: ${item.name}`, items: report.items, dryRun: false });
-      await loadStatus(selected, { background: true });
+      await reloadCurrent();
     } finally {
       setBusyId(null);
     }
@@ -525,7 +607,7 @@ export default function TrashSyncPage() {
       }
       toast.success(`Saved options for “${item.name}” (applied on next sync)`);
       setOptionsItem(null);
-      await loadStatus(selected, { background: true });
+      await reloadCurrent();
     } finally {
       setBusyId(null);
     }
@@ -539,10 +621,18 @@ export default function TrashSyncPage() {
     // Existing resources need explicit confirmation before Librariarr can
     // overwrite them on the next sync; not-yet-existing ones are just added.
     if (item.existsInArr) {
-      setConfirmItem(item);
+      setConfirmTarget({ item });
     } else {
       void addItem(item);
     }
+  };
+
+  // Naming always exists in the app, so taking it over needs the same overwrite
+  // confirmation as any other existing item. Re-choosing variants on an
+  // already-managed naming item was consented to when it was taken over.
+  const onManageNaming = (item: StatusItem, selection: NamingSelection) => {
+    if (!item.managed && item.existsInArr) setConfirmTarget({ item, selection });
+    else void assign(item, selection);
   };
 
   // Bulk-add not-yet-existing resources: assign them all, then create them in
@@ -578,15 +668,18 @@ export default function TrashSyncPage() {
       const data = await syncRes.json().catch(() => ({}));
       if (!syncRes.ok) {
         toast.error(data.error ?? "Added, but sync failed");
-        await loadStatus(selected, { background: true });
+        await reloadCurrent();
         return;
       }
       const report: SyncReport = data.report;
-      const errored = report.items.filter((i) => i.action === "ERROR").length;
-      if (errored) toast.error(`Added ${toAdd.length} item(s) with ${errored} error(s)`);
-      else toast.success(`Added ${toAdd.length} item${toAdd.length === 1 ? "" : "s"} to ${selected.name}`);
+      const added = report.items.filter((i) => i.action !== "ERROR" && i.action !== "SKIP").length;
+      toastSyncOutcome(
+        report.items,
+        `Added ${toAdd.length} item${toAdd.length === 1 ? "" : "s"} to ${selected.name}`,
+        `Added ${added} item${added === 1 ? "" : "s"}`,
+      );
       setDiffReport({ title: `Add ${toAdd.length} item(s)`, items: report.items, dryRun: false });
-      await loadStatus(selected, { background: true });
+      await reloadCurrent();
     } finally {
       setSyncing(false);
     }
@@ -616,7 +709,7 @@ export default function TrashSyncPage() {
       toast.success(
         `Librariarr now manages ${toManage.length} item${toManage.length === 1 ? "" : "s"} — sync to apply`,
       );
-      await loadStatus(selected, { background: true });
+      await reloadCurrent();
     } finally {
       setSyncing(false);
     }
@@ -687,11 +780,15 @@ export default function TrashSyncPage() {
       }
       const report: SyncReport = data.report;
       const changed = report.items.filter((i) => i.action === "CREATE" || i.action === "UPDATE").length;
-      const errored = report.items.filter((i) => i.action === "ERROR").length;
-      if (errored) toast.error(`Sync completed with ${errored} error${errored === 1 ? "" : "s"}`);
-      else toast.success(changed ? `Synced ${changed} change${changed === 1 ? "" : "s"}` : "Everything already up to date");
+      const synced = `Synced ${changed} change${changed === 1 ? "" : "s"}`;
+      // "Everything already up to date" only when nothing was skipped either.
+      toastSyncOutcome(
+        report.items,
+        changed ? synced : "Everything already up to date",
+        changed ? synced : "No other changes",
+      );
       setDiffReport({ title: "Sync results", items: report.items, dryRun: false });
-      await loadStatus(selected, { background: true });
+      await reloadCurrent();
     } finally {
       setSyncing(false);
     }
@@ -719,11 +816,9 @@ export default function TrashSyncPage() {
         return;
       }
       const report: SyncReport = data.report;
-      const errored = report.items.filter((i) => i.action === "ERROR").length;
-      if (errored) toast.error(`“${item.name}” synced with errors`);
-      else toast.success(`Synced “${item.name}”`);
+      toastSyncOutcome(report.items, `Synced “${item.name}”`);
       setDiffReport({ title: `Sync: ${item.name}`, items: report.items, dryRun: false });
-      await loadStatus(selected, { background: true });
+      await reloadCurrent();
     } finally {
       setBusyId(null);
     }
@@ -932,7 +1027,7 @@ export default function TrashSyncPage() {
                 catalogCfs={catalog?.customFormats ?? []}
                 catalogCategories={catalog?.categories ?? []}
                 onShowReport={(title, items, dryRun) => setDiffReport({ title, items, dryRun })}
-                onManagedChange={() => selected && void loadStatus(selected, { background: true })}
+                onManagedChange={() => void reloadCurrent()}
               />
             </TabsContent>
 
@@ -953,7 +1048,7 @@ export default function TrashSyncPage() {
                   item={namingItem}
                   naming={catalog?.naming ?? null}
                   busy={busyId === namingItem.trashId}
-                  onManage={(sel) => assign(namingItem, sel)}
+                  onManage={(sel) => onManageNaming(namingItem, sel)}
                   onUnmanage={() => unassign(namingItem)}
                   onPreview={(sel) => preview(namingItem, sel)}
                   onSync={() => syncOne(namingItem)}
@@ -965,7 +1060,7 @@ export default function TrashSyncPage() {
       )}
 
       {/* Take-over confirmation */}
-      <AlertDialog open={!!confirmItem} onOpenChange={(o) => !o && setConfirmItem(null)}>
+      <AlertDialog open={!!confirmItem} onOpenChange={(o) => !o && setConfirmTarget(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Let Librariarr manage this?</AlertDialogTitle>
@@ -980,8 +1075,8 @@ export default function TrashSyncPage() {
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
               onClick={() => {
-                if (confirmItem) void assign(confirmItem);
-                setConfirmItem(null);
+                if (confirmTarget) void assign(confirmTarget.item, confirmTarget.selection);
+                setConfirmTarget(null);
               }}
             >
               Manage &amp; allow overwrite
@@ -1591,6 +1686,11 @@ function NamingCard({
 
 // ─── Profile custom-format assignment ───
 
+/** Custom-format name key, matching the backend's trimmed, case-insensitive lookup. */
+function normalizeCfName(name: string): string {
+  return name.trim().toLowerCase();
+}
+
 /** Assigned formats are shown highest-score-first (ties broken by name). */
 function sortFormatsByScore(list: ProfileCfFormat[]): ProfileCfFormat[] {
   return [...list].sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
@@ -1698,7 +1798,9 @@ function ProfileFormatsTab({
       const aData = await aRes.json();
       if (pRes.ok) {
         setProfiles(pData.profiles ?? []);
-        setInstanceFormats(new Set<string>(pData.instanceFormatNames ?? []));
+        setInstanceFormats(
+          new Set<string>((pData.instanceFormatNames ?? []).map((n: string) => normalizeCfName(n))),
+        );
         setError(null);
       } else {
         setError(pData.error ?? "Failed to load quality profiles");
@@ -1744,10 +1846,13 @@ function ProfileFormatsTab({
 
   // A score only applies to a custom format that already exists in the app. When
   // we know the instance's format names, flag any assigned format outside that
-  // set (mirrors the backend's exact-name presence check). Until the list has
-  // loaded (`null`), assume present so nothing is falsely flagged — but once
-  // loaded, an empty set correctly reports every format as not-yet-in-app.
-  const isInApp = (name: string) => instanceFormats === null || instanceFormats.has(name);
+  // set. Names compare trimmed and case-insensitively, like the backend's
+  // findArrCfByName — an exact match here would call "hdr" not-in-app while the
+  // sync treats it as the user's existing "HDR", and "Add & apply" would then
+  // overwrite that unmanaged format with no take-over confirmation. Until the
+  // list has loaded (`null`), assume present so nothing is falsely flagged — but
+  // once loaded, an empty set correctly reports every format as not-yet-in-app.
+  const isInApp = (name: string) => instanceFormats === null || instanceFormats.has(normalizeCfName(name));
 
   // Unsaved-edit guard: a real (non-dry-run) Sync applies the STORED selection,
   // so syncing with unsaved edits would silently apply stale scores while
@@ -1767,17 +1872,22 @@ function ProfileFormatsTab({
     setSelectedProfile(name);
     setCfQuery("");
     setAttachedQuery("");
-    const profile = profiles.find((p) => p.name === name);
     const existing = assignmentFor(name);
-    // Seed with every guide custom format currently scored on the profile, so
-    // all assigned formats are listed and their scores can be overridden…
+    // A managed profile opens on exactly its saved list. Merging the app's
+    // current scores in would make it open dirty (Sync disabled) and bring back
+    // any format the user removed, so a removal could never be saved.
+    if (existing) {
+      setFormats(sortFormatsByScore((existing.selection?.formats ?? []).map((f) => ({ ...f }))));
+      return;
+    }
+    // An unmanaged profile is seeded with every guide custom format currently
+    // scored on it, so its assigned formats are listed and can be overridden.
+    const profile = profiles.find((p) => p.name === name);
     const byTrashId = new Map<string, ProfileCfFormat>();
     for (const [cfName, score] of Object.entries(profile?.formatScores ?? {})) {
       const guideCf = cfByName.get(cfName.toLowerCase());
       if (guideCf) byTrashId.set(guideCf.trashId, { trashId: guideCf.trashId, name: guideCf.name, score });
     }
-    // …then layer the user's saved overrides on top.
-    for (const f of existing?.selection?.formats ?? []) byTrashId.set(f.trashId, { ...f });
     setFormats(sortFormatsByScore([...byTrashId.values()]));
   };
 
@@ -1853,15 +1963,15 @@ function ProfileFormatsTab({
         return;
       }
       const items: PlanItem[] = d.report.items;
+      let applied = false;
       if (!dryRun) {
-        const errored = items.filter((i) => i.action === "ERROR").length;
-        if (errored) toast.error(`Applied with ${errored} error(s)`);
-        else toast.success(`Applied custom-format scores to “${selectedProfile}”`);
+        // A SKIPped PROFILE_CF item wrote nothing — never report it as applied.
+        applied = toastSyncOutcome(items, `Applied custom-format scores to “${selectedProfile}”`);
         await load();
         onManagedChange?.();
       }
       onShowReport(
-        dryRun ? `Preview: ${selectedProfile}` : `Applied: ${selectedProfile}`,
+        dryRun ? `Preview: ${selectedProfile}` : applied ? `Applied: ${selectedProfile}` : `Sync: ${selectedProfile}`,
         items,
         dryRun,
       );
@@ -1892,8 +2002,11 @@ function ProfileFormatsTab({
   // One-click "add & score": create the missing custom format(s) in the app
   // (the consent-gated write), then persist and sync this profile's selection so
   // the scores actually apply — without leaving the tab.
+  // It saves and applies the WHOLE local list, so it's refused while there are
+  // unsaved edits — otherwise it would persist and apply changes the user never
+  // previewed, around the save-before-sync guard (the buttons are disabled too).
   const addToAppAndApply = async (toAdd: ProfileCfFormat[]) => {
-    if (!selectedProfile || toAdd.length === 0) return;
+    if (!selectedProfile || toAdd.length === 0 || isDirty) return;
     const postJson = (url: string, body: unknown) =>
       fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     setBusy(true);
@@ -1912,11 +2025,24 @@ function ProfileFormatsTab({
         dryRun: false,
         items: cfItems.map((i) => ({ resourceType: i.resourceType, trashId: i.trashId })),
       });
+      const cfData = await cfSync.json().catch(() => ({}));
       if (!cfSync.ok) {
-        const d = await cfSync.json().catch(() => ({}));
-        toast.error(d.error ?? "Failed to create in app");
+        toast.error(cfData.error ?? "Failed to create in app");
         // The custom format(s) were already assigned (managed rows exist), so
         // refresh the page-level status too — not just this tab.
+        await load();
+        onManagedChange?.();
+        return;
+      }
+      // A format the app refused to create comes back as a 200 with an ERROR
+      // item — don't go on to save and apply scores as if it had been added.
+      const cfErrors = ((cfData.report?.items ?? []) as PlanItem[]).filter((i) => i.action === "ERROR");
+      if (cfErrors.length) {
+        toast.error(
+          `Couldn't add ${cfErrors.length} custom format${cfErrors.length === 1 ? "" : "s"} to ${instanceName}`,
+          { description: describePlanItems(cfErrors) },
+        );
+        onShowReport(`Add to app: ${selectedProfile}`, cfData.report.items, false);
         await load();
         onManagedChange?.();
         return;
@@ -1948,12 +2074,10 @@ function ProfileFormatsTab({
         onManagedChange?.();
         return;
       }
-      const errored = (d.report?.items ?? []).filter((i: PlanItem) => i.action === "ERROR").length;
-      if (errored) toast.error(`Applied with ${errored} error(s)`);
-      else
-        toast.success(
-          `Added ${toAdd.length} custom format${toAdd.length === 1 ? "" : "s"} to ${instanceName} and applied the scores`,
-        );
+      toastSyncOutcome(
+        d.report?.items ?? [],
+        `Added ${toAdd.length} custom format${toAdd.length === 1 ? "" : "s"} to ${instanceName} and applied the scores`,
+      );
       onShowReport(`Add & apply: ${selectedProfile}`, d.report?.items ?? [], false);
       await load();
       onManagedChange?.();
@@ -2006,7 +2130,7 @@ function ProfileFormatsTab({
             {/* Profile picker + always-visible managed profiles */}
             <div className="space-y-3">
               <div className="flex flex-wrap items-center gap-2">
-                <Select value={selectedProfile} onValueChange={selectProfile}>
+                <Select value={selectedProfile} onValueChange={selectProfile} disabled={busy}>
                   <SelectTrigger className="w-72">
                     <SelectValue placeholder="Select a quality profile" />
                   </SelectTrigger>
@@ -2043,6 +2167,7 @@ function ProfileFormatsTab({
                       size="sm"
                       className="h-7"
                       onClick={() => selectProfile(name)}
+                      disabled={busy}
                     >
                       <ShieldCheck className="mr-1 h-3.5 w-3.5 text-green" />
                       {name}
@@ -2078,14 +2203,19 @@ function ProfileFormatsTab({
                           {missingFormats.length} format{missingFormats.length === 1 ? "" : "s"} below{" "}
                           {missingFormats.length === 1 ? "isn't" : "aren't"} in this app yet — the score
                           won&apos;t apply until the custom format exists.
+                          {isDirty && " Save or discard your changes first to add them."}
                         </span>
                         <Button
                           size="sm"
                           variant="outline"
                           className="h-7 shrink-0 border-amber/40 text-amber hover:text-amber"
                           onClick={() => addToAppAndApply(missingFormats)}
-                          disabled={busy}
-                          title="Add the missing custom formats to the app and apply their scores"
+                          disabled={busy || isDirty}
+                          title={
+                            isDirty
+                              ? "Save or discard your changes first"
+                              : "Add the missing custom formats to the app and apply their scores"
+                          }
                         >
                           {busy ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Plus className="mr-1 h-3.5 w-3.5" />}
                           Add all &amp; apply ({missingFormats.length})
@@ -2131,8 +2261,12 @@ function ProfileFormatsTab({
                                       variant="outline"
                                       className="h-8 border-amber/40 text-amber hover:text-amber"
                                       onClick={() => addToAppAndApply([f])}
-                                      disabled={busy}
-                                      title="Add this custom format to the app and apply its score"
+                                      disabled={busy || isDirty}
+                                      title={
+                                        isDirty
+                                          ? "Save or discard your changes first"
+                                          : "Add this custom format to the app and apply its score"
+                                      }
                                     >
                                       <Plus className="mr-1 h-3.5 w-3.5" /> Add
                                     </Button>
@@ -2147,6 +2281,7 @@ function ProfileFormatsTab({
                                     size="icon"
                                     className="h-8 w-8"
                                     onClick={() => removeFormat(f.trashId)}
+                                    disabled={busy}
                                     title="Remove"
                                   >
                                     <X className="h-4 w-4" />
@@ -2188,7 +2323,8 @@ function ProfileFormatsTab({
                                   key={cf.trashId}
                                   type="button"
                                   onClick={() => addFormat(cf)}
-                                  className="flex w-full items-center justify-between gap-2 px-3 py-1.5 pl-8 text-left text-sm hover:bg-white/5"
+                                  disabled={busy}
+                                  className="flex w-full items-center justify-between gap-2 px-3 py-1.5 pl-8 text-left text-sm hover:bg-white/5 disabled:pointer-events-none disabled:opacity-50"
                                 >
                                   <span className="flex min-w-0 items-center gap-1.5">
                                     <Plus className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
@@ -2232,7 +2368,18 @@ function ProfileFormatsTab({
                     <Play className="mr-1 h-3.5 w-3.5" /> Sync
                   </Button>
                   {isDirty && (
-                    <span className="text-xs text-amber">Unsaved changes — Save to sync</span>
+                    <>
+                      <span className="text-xs text-amber">Unsaved changes — Save to sync</span>
+                      {/* Re-selecting a managed profile reloads its saved list. */}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => selectProfile(selectedProfile)}
+                        disabled={busy}
+                      >
+                        Discard
+                      </Button>
+                    </>
                   )}
                   {currentAssignment && (
                     <Button variant="outline" size="sm" onClick={unmanage} disabled={busy}>

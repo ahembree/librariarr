@@ -6,8 +6,8 @@ import { runTrashSync } from "@/lib/trash/sync";
 import { sanitizeErrorDetail } from "@/lib/api/sanitize";
 
 // Run a sync or a dry-run/preview. A real sync (dryRun=false) writes ONLY to
-// resources the user has assigned/managed — `items` is honored only for
-// dry-run previews, never for applying, so nothing is ever written to an Arr
+// resources the user has assigned/managed — on apply, `items` only narrows the
+// run to a subset of the managed rows, so nothing is ever written to an Arr
 // without an explicit managed row.
 export async function POST(request: NextRequest) {
   const session = await getSession();
@@ -22,10 +22,17 @@ export async function POST(request: NextRequest) {
   if (!inst) {
     return NextResponse.json({ error: "Instance not found" }, { status: 404 });
   }
+  const dryRun = data.dryRun ?? false;
+  // A disabled instance is switched off everywhere else in the app; writing
+  // guide resources to it would be the one thing that still reaches it. A
+  // preview only reads, so it stays available.
+  if (!dryRun && !inst.enabled) {
+    return NextResponse.json({ error: "Instance is disabled" }, { status: 409 });
+  }
 
   try {
     const report = await runTrashSync(session.userId!, inst, {
-      dryRun: data.dryRun ?? false,
+      dryRun,
       items: data.items,
     });
     return NextResponse.json({ report });

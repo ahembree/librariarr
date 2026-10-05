@@ -5,6 +5,7 @@ import {
   cfComparable,
   projectManagedFields,
   findArrCfByName,
+  findManagedArrResource,
   applyQualitySizes,
   qualityDefsComparable,
   buildQualityProfile,
@@ -130,6 +131,17 @@ describe("custom format translation", () => {
     expect(findArrCfByName(arr, "AMZN")?.id).toBe(1);
     expect(findArrCfByName(arr, "amzn")?.id).toBe(1);
     expect(findArrCfByName(arr, "Nope")).toBeUndefined();
+  });
+
+  it("findManagedArrResource falls back to the recorded id, preferring a name match", () => {
+    const arr: ArrCustomFormat[] = [
+      { id: 1, name: "Renamed", specifications: [] },
+      { id: 2, name: "amzn", specifications: [] },
+    ];
+    expect(findManagedArrResource(arr, "New Name", 1)?.id).toBe(1);
+    expect(findManagedArrResource(arr, "AMZN", 1)?.id).toBe(2);
+    expect(findManagedArrResource(arr, "New Name", null)).toBeUndefined();
+    expect(findManagedArrResource(arr, "New Name", 99)).toBeUndefined();
   });
 });
 
@@ -417,6 +429,23 @@ describe("quality profile builder", () => {
     const t: TrashQualityProfile = { ...trash, language: "French" };
     const { warnings } = buildQualityProfile(t, schema, "RADARR", cfMap, undefined, []);
     expect(warnings.some((w) => w.includes("French"))).toBe(true);
+  });
+
+  it("keeps the existing profile's language when a named language can't be resolved", () => {
+    const t: TrashQualityProfile = { ...trash, language: "French" };
+    const existing = { id: 5, name: trash.name, upgradeAllowed: true, cutoff: 0, items: [], formatItems: [], language: { id: 2, name: "German" } };
+    const { payload } = buildQualityProfile(t, schema, "RADARR", cfMap, existing as never, []);
+    expect(payload.language).toEqual({ id: 2, name: "German" });
+  });
+
+  it("applies scoreOverrides last, case-insensitively, over guide scores and the reset", () => {
+    const sch = { ...schema, formatItems: [...(schema.formatItems ?? []), { format: 999, name: "Mine", score: 0 }] };
+    const existing = { id: 5, name: trash.name, upgradeAllowed: true, cutoff: 0, items: [], formatItems: [{ format: 999, name: "Mine", score: 40 }] };
+    const { payload } = buildQualityProfile(trash, sch, "RADARR", cfMap, existing as never, undefined, {
+      resetUnmatchedScores: true,
+      scoreOverrides: new Map([["mine", 40]]),
+    });
+    expect(payload.formatItems.find((f) => f.name === "Mine")?.score).toBe(40);
   });
 
   it("includes language in the Radarr comparable so a language change is a real diff", () => {

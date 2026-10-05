@@ -28,7 +28,7 @@ Navigate to **Tools → TRaSH Sync** and pick a Sonarr or Radarr instance. Libra
 | **Not added** | The guide item does not exist in the app and is not managed. |
 | **Exists — unmanaged** | The item already exists in the app, but Librariarr does not manage it. Assigning it requires explicit confirmation because the next sync will overwrite it. |
 | **Managed** | Librariarr manages this item and it is in sync with the guide. |
-| **Update available** | Librariarr manages this item, but the guide changed upstream since the last sync. |
+| **Update available** | Librariarr manages this item, but the guide changed upstream since the last sync — or the last sync could not apply everything (a quality profile whose referenced custom formats are not in the app yet). |
 | **Missing in app** | You manage this item, but it was deleted from the app externally. The next sync re-creates it. |
 
 ## The consent gate
@@ -40,6 +40,7 @@ No modification is ever made to a Sonarr or Radarr app for a resource that you h
 - **Unassigning** (clicking **Unmanage**) removes only Librariarr's management record. It never deletes the resource from the app.
 - A sync only ever writes the resources you currently manage. Preview ("dry-run") items are never written.
 - Resources are scoped to their app type: Sonarr guide items can only be managed on Sonarr instances and Radarr items only on Radarr instances. Assigning an item to the wrong app type is rejected.
+- A **disabled** instance is never written to: syncing it is refused. Preview still works, since it only reads.
 
 <Aside type="caution">
   Taking over management of an existing custom format or quality profile means Librariarr will replace it with the TRaSH Guides definition on the next sync. Use **Preview diff** first to see exactly what will change.
@@ -94,6 +95,10 @@ Quality profiles are rebuilt against the app's live quality schema: quality orde
 
 A quality profile only assigns scores to custom formats that **already exist** in the app. If a profile references a format you haven't managed, the sync surfaces a warning rather than silently creating the format — assign and sync that custom format too if you want its score to apply.
 
+Managed custom formats and quality profiles are tracked by the app id recorded at their last sync as well as by name. When TRaSH renames one upstream (the guide keeps its id stable), or you rename it in the app, the next sync updates that same item — renaming it to the guide's name — instead of creating a second copy beside it.
+
+If a guide profile names a language the app doesn't know, the sync warns and keeps the profile's current language.
+
 Syncing a quality profile **does not reset** custom-format scores it doesn't manage. Only the scores the guide profile defines are changed; every other score on the profile — including ones you assigned in the **Profile Formats** tab or set yourself in the app — is preserved. (This matches Recyclarr's default, where `reset_unmatched_scores` is off.)
 
 #### Per-profile options
@@ -106,6 +111,8 @@ A managed quality profile has an **options** button (the gear icon on its row) t
 
 With reset **off**, unmanaged scores are always preserved regardless of the exception list.
 
+Scores assigned to the profile in the **Profile Formats** tab always win: a quality-profile sync applies them on top of the guide's scores, so neither the reset nor syncing the profile on its own ever overwrites them.
+
 ### Profile custom formats
 
 The **Profile Formats** tab (the first tab) lets you attach guide custom formats — with scores — to **any** quality profile on the instance, including profiles you created yourself in Radarr/Sonarr (not just ones imported from the guide).
@@ -113,13 +120,13 @@ The **Profile Formats** tab (the first tab) lets you attach guide custom formats
 Profiles you already manage are **always listed** as quick-select chips, so you can jump straight to one without opening the dropdown.
 
 1. Pick a target quality profile (from the dropdown, or a managed-profile chip). The editor splits horizontally: **assigned formats on the left, the add-from list on the right**.
-2. On the left, every guide custom format already scored on that profile is **listed with its current score, highest score first**, so you can see and **override** any of them.
+2. On the left, for a profile you don't manage yet, every guide custom format already scored on that profile is **listed with its current score, highest score first**, so you can see and **override** any of them. For a profile you already manage, the list is exactly your saved assignment — so a format you removed stays removed.
 3. On the right, add more from the guide's custom formats — they're grouped into the guide's own **categories**; expand a category to drill down and click a format to add it. Each is added with the guide's **recommended score** (dropping into its score position), and every score is editable inline.
-4. **Save** to record the assignment, then **Sync** to apply the scores to the profile. **Sync is disabled until your edits are saved** (a "Unsaved changes — Save to sync" note appears), because a sync always applies the last-saved assignment — this prevents Preview showing one thing while Sync applies another.
+4. **Save** to record the assignment, then **Sync** to apply the scores to the profile. **Sync is disabled until your edits are saved** (a "Unsaved changes — Save to sync" note appears, with a **Discard** button that reloads the saved assignment), because a sync always applies the last-saved assignment — this prevents Preview showing one thing while Sync applies another.
 
 This is an **overlay**: only the scores for the custom formats you attach are changed. Every other part of the profile — its qualities, cutoff, and any other format scores — is left untouched. **Stop managing** removes the assignment; it does not reset any scores already written.
 
-A custom format only scores if it **actually exists in the app**. An assigned format that isn't in the app yet is flagged **not in app** in the list, and both **Preview diff** and the sync report explain it (*"…is not present in this instance — add & sync it to apply its score"*) rather than silently showing no change. To fix it in one step, click **Add** on the flagged row (or **Add all & apply** in the banner): Librariarr creates the missing custom format in the app and then applies the profile's scores — no need to visit the Custom Formats tab first. A format left at score **0** is flagged **no effect**, since a zero score does nothing.
+A custom format only scores if it **actually exists in the app**. An assigned format that isn't in the app yet is flagged **not in app** in the list, and both **Preview diff** and the sync report explain it (*"…is not present in this instance — add & sync it to apply its score"*) rather than silently showing no change. To fix it in one step, click **Add** on the flagged row (or **Add all & apply** in the banner): Librariarr creates the missing custom format in the app and then applies the profile's scores — no need to visit the Custom Formats tab first. **Add** is unavailable while you have unsaved changes (save or discard them first), so it never applies edits you haven't saved. Format names are compared case-insensitively, so a format already in the app under a differently-cased name is not "not in app" — take it over from the Custom Formats tab, which asks for confirmation. A format left at score **0** is flagged **no effect**, since a zero score does nothing.
 
 ### Quality definitions (sizes)
 
@@ -132,7 +139,7 @@ Naming schemes let you choose recommended file and folder formats:
 - **Radarr** — movie file format and movie folder format.
 - **Sonarr** — series folder, season folder, and standard / daily / anime episode formats.
 
-Pick the variants you want (for example, a Plex- or Jellyfin-flavored layout), then assign and sync. The selection is remembered, and the **Update available** status will flag if the guide changes the chosen variant later.
+Pick the variants you want (for example, a Plex- or Jellyfin-flavored layout), then assign and sync. The selection is remembered, and the **Update available** status will flag if the guide changes the chosen variant later. Because every app already has a naming configuration, managing it asks for the same overwrite confirmation as any other existing item.
 
 ## Refreshing the catalog
 

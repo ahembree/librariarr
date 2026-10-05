@@ -7,8 +7,7 @@ import {
   trashCfToArr,
   cfComparable,
   projectManagedFields,
-  findArrCfByName,
-  findArrProfileByName,
+  findManagedArrResource,
   applyQualitySizes,
   qualityDefsComparable,
   buildQualityProfile,
@@ -50,6 +49,15 @@ interface Target {
   name?: string;
   selection?: Selection;
   managedRowId?: string;
+  /** App id recorded at the last sync — finds the resource again after a rename. */
+  arrId?: number | null;
+}
+
+/** A managed PROFILE_CF overlay: the profile it targets and its format scores. */
+interface ProfileOverlay {
+  profileName: string;
+  arrId: number | null;
+  formats: ProfileCfSelection["formats"];
 }
 
 export interface SyncOptions {
@@ -117,6 +125,9 @@ async function runTrashSyncInner(
   const client = guideClientFor(inst);
 
   const targets = await resolveTargets(userId, inst, opts);
+  const overlays = targets.some((t) => t.resourceType === "QUALITY_PROFILE")
+    ? await loadProfileOverlays(userId, inst)
+    : [];
   targets.sort((a, b) => RESOURCE_ORDER[a.resourceType] - RESOURCE_ORDER[b.resourceType]);
 
   // Lazily fetched instance state, cached per run. The PROMISE is cached, not
@@ -160,7 +171,19 @@ async function runTrashSyncInner(
           const [profiles, sch] = [await getArrProfiles(), await getSchema()];
           const langs = inst.serviceType === "RADARR" ? await getLanguages() : undefined;
           items.push(
-            await planQualityProfile(target, catalog, profiles, sch, langs, cfMapByTrashId, inst, opts, client, userId),
+            await planQualityProfile(
+              target,
+              catalog,
+              profiles,
+              sch,
+              langs,
+              cfMapByTrashId,
+              overlays,
+              inst,
+              opts,
+              client,
+              userId,
+            ),
           );
           break;
         }
@@ -171,7 +194,9 @@ async function runTrashSyncInner(
           items.push(await planNaming(target, catalog, await getNaming(), inst, opts, client, userId));
           break;
         case "PROFILE_CF":
-          items.push(await planProfileCf(target, await getCfOverlayProfiles(), opts, client, userId));
+          items.push(
+            await planProfileCf(target, await getCfOverlayProfiles(), cfMapByTrashId, opts, client, userId),
+          );
           break;
       }
     } catch (err) {
@@ -225,6 +250,7 @@ async function resolveTargets(
     name: r.name,
     selection: (r.selection ?? null) as Selection,
     managedRowId: r.id,
+    arrId: r.arrId,
   }));
   if (opts.items?.length) {
     const wanted = new Set(opts.items.map((i) => `${i.resourceType}:${i.trashId}`));
@@ -233,14 +259,44 @@ async function resolveTargets(
   return targets;
 }
 
+/**
+ * Every managed PROFILE_CF overlay on the instance, whatever the run targets: a
+ * quality-profile sync folds the overlay for its profile in (see
+ * `BuildProfileOptions.scoreOverrides`), including on a per-item apply that
+ * doesn't target the overlay itself.
+ */
+async function loadProfileOverlays(userId: string, inst: ResolvedInstance): Promise<ProfileOverlay[]> {
+  const rows = await prisma.trashManagedResource.findMany({
+    where: { userId, resourceType: "PROFILE_CF", ...managedInstanceWhere(inst.serviceType, inst.id) },
+    select: { trashId: true, arrId: true, selection: true },
+  });
+  return rows.map((r) => ({
+    profileName: r.trashId,
+    arrId: r.arrId,
+    formats: ((r.selection ?? null) as ProfileCfSelection | null)?.formats ?? [],
+  }));
+}
+
+/** The current guide name of an overlay format — the stored name goes stale when the guide renames it. */
+function overlayFormatName(
+  f: ProfileCfSelection["formats"][number],
+  cfMapByTrashId: Map<string, TrashCustomFormat>,
+): string {
+  return cfMapByTrashId.get(f.trashId)?.name ?? f.name;
+}
+
+const nameKey = (name: string) => name.trim().toLowerCase();
+
 async function updateManagedRow(
   userId: string,
   managedRowId: string | undefined,
-  data: { arrId?: number | null; lastSyncHash: string; selection?: Selection },
+  data: { arrId?: number | null; lastSyncHash: string | null; selection?: Selection },
 ) {
   if (!managedRowId) return;
-  await prisma.trashManagedResource.update({
-    where: { id: managedRowId },
+  // updateMany, not update: the row may have been unmanaged while this sync ran,
+  // and by now the app write has landed — a P2025 would report it as an ERROR.
+  await prisma.trashManagedResource.updateMany({
+    where: { id: managedRowId, userId },
     data: {
       ...(data.arrId !== undefined ? { arrId: data.arrId } : {}),
       ...(data.selection ? { selection: data.selection as object } : {}),
@@ -262,7 +318,7 @@ async function planCustomFormat(
   if (!cf) {
     return skip(target, "This custom format is no longer in the guide.");
   }
-  const existing = findArrCfByName(arrCfs, cf.name);
+  const existing = findManagedArrResource(arrCfs, cf.name, target.arrId);
   const payload = trashCfToArr(cf, existing?.id);
   const after = cfComparable(payload);
   // Compare only the fields the guide manages, so app-supplied defaults (e.g. a
@@ -301,6 +357,7 @@ async function planQualityProfile(
   schema: ArrQualityProfileSchema,
   languages: ArrLanguage[] | undefined,
   cfMapByTrashId: Map<string, TrashCustomFormat>,
+  overlays: ProfileOverlay[],
   inst: ResolvedInstance,
   opts: SyncOptions,
   client: ReturnType<typeof guideClientFor>,
@@ -310,18 +367,29 @@ async function planQualityProfile(
   if (!qp) {
     return skip(target, "This quality profile is no longer in the guide.");
   }
-  const existing = findArrProfileByName(arrProfiles, qp.name);
+  const existing = findManagedArrResource(arrProfiles, qp.name, target.arrId);
+  // The PROFILE_CF overlay targeting this profile — matched by name (either the
+  // app's current one or the guide's) or by the profile id it last wrote to.
+  const profileNames = new Set([nameKey(qp.name), ...(existing ? [nameKey(existing.name)] : [])]);
+  const scoreOverrides = new Map<string, number>();
+  for (const o of overlays) {
+    const targetsThis =
+      profileNames.has(nameKey(o.profileName)) ||
+      (existing?.id !== undefined && o.arrId === existing.id);
+    if (!targetsThis) continue;
+    for (const f of o.formats) scoreOverrides.set(nameKey(overlayFormatName(f, cfMapByTrashId)), f.score);
+  }
   // Per-profile options (score set + reset-unmatched-scores) live on the managed
   // row's selection. Dry-run previews may carry an unsaved selection.
   const selection = (target.selection ?? null) as QualityProfileSelection | null;
-  const { payload, warnings } = buildQualityProfile(
+  const { payload, warnings, missingFormats } = buildQualityProfile(
     qp,
     schema,
     inst.serviceType,
     cfMapByTrashId,
     existing,
     languages,
-    selection ?? undefined,
+    { ...(selection ?? {}), scoreOverrides },
   );
   const before = existing ? profileComparable(existing, inst.serviceType) : null;
   const after = profileComparable(payload, inst.serviceType);
@@ -347,7 +415,10 @@ async function planQualityProfile(
     }
     await updateManagedRow(userId, target.managedRowId, {
       arrId,
-      lastSyncHash: trashProfileHash(qp, cfMapByTrashId, selection),
+      // Guide scores left unapplied (their formats aren't in the app yet) mean
+      // the profile is not in sync with the guide: record no hash, so status
+      // keeps it "update available" until a sync applies them.
+      lastSyncHash: missingFormats.length ? null : trashProfileHash(qp, cfMapByTrashId, selection),
     });
     item.applied = true;
   }
@@ -450,6 +521,7 @@ function nonZeroFormatScores(items: ArrQualityProfile["formatItems"]): Record<st
 async function planProfileCf(
   target: Target,
   arrProfiles: ArrQualityProfile[],
+  cfMapByTrashId: Map<string, TrashCustomFormat>,
   opts: SyncOptions,
   client: ReturnType<typeof guideClientFor>,
   userId: string,
@@ -458,24 +530,31 @@ async function planProfileCf(
   const selection = (target.selection ?? null) as ProfileCfSelection | null;
   const formats = selection?.formats ?? [];
 
-  const profile = findArrProfileByName(arrProfiles, profileName);
+  // Matched by name, falling back to the profile id recorded at the last sync
+  // so a renamed profile keeps its overlay.
+  const profile = findManagedArrResource(arrProfiles, profileName, target.arrId);
   if (!profile || profile.id === undefined) {
     return skip(target, `Quality profile "${profileName}" was not found on this instance.`);
   }
 
   const warnings: string[] = [];
-  const present = new Set((profile.formatItems ?? []).map((f) => f.name));
-  const desired = new Map(formats.map((f) => [f.name, f.score]));
+  // Format names resolve through the guide by trash_id (the stored name goes
+  // stale on an upstream rename) and match case-insensitively, as the custom
+  // format sync itself does.
+  const present = new Set((profile.formatItems ?? []).map((f) => nameKey(f.name)));
+  const desired = new Map<string, number>();
   for (const f of formats) {
-    if (!present.has(f.name)) {
+    const name = overlayFormatName(f, cfMapByTrashId);
+    desired.set(nameKey(name), f.score);
+    if (!present.has(nameKey(name))) {
       warnings.push(
-        `Custom format "${f.name}" is not present in this instance — add & sync it to apply its score.`,
+        `Custom format "${name}" is not present in this instance — add & sync it to apply its score.`,
       );
     }
   }
 
   const newFormatItems = (profile.formatItems ?? []).map((fi) =>
-    desired.has(fi.name) ? { ...fi, score: desired.get(fi.name)! } : fi,
+    desired.has(nameKey(fi.name)) ? { ...fi, score: desired.get(nameKey(fi.name))! } : fi,
   );
   const before = { formatScores: nonZeroFormatScores(profile.formatItems) };
   const after = { formatScores: nonZeroFormatScores(newFormatItems) };

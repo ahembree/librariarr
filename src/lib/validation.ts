@@ -997,7 +997,7 @@ const profileCfSelectionSchema = z
 /**
  * Per-profile options for a QUALITY_PROFILE managed resource: which guide score
  * set to use, and whether to reset custom-format scores the profile doesn't
- * manage (with exact-name and regex exceptions). Mirrors Recyclarr's
+ * manage (with exact-name exceptions). Mirrors Recyclarr's
  * `quality_profiles` block (`score_set`, `reset_unmatched_scores`).
  */
 const qualityProfileSelectionSchema = z
