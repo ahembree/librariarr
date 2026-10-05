@@ -265,7 +265,7 @@ describe("Sonarr integration endpoints", () => {
 
       const user = await createTestUser();
       const instance = await createTestSonarrInstance(user.id);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
 
       const response = await callRouteWithParams(
         PUT,
@@ -283,7 +283,7 @@ describe("Sonarr integration endpoints", () => {
     it("updates instance fields successfully", async () => {
       const user = await createTestUser();
       const instance = await createTestSonarrInstance(user.id, { name: "Old Name" });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
 
       const response = await callRouteWithParams(
         PUT,

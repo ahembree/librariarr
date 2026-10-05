@@ -24,6 +24,7 @@ vi.mock("axios", () => {
 });
 
 import { LidarrClient } from "@/lib/arr/lidarr-client";
+import { IntegrationError } from "@/lib/integration-error";
 
 describe("LidarrClient", () => {
   let client: LidarrClient;
@@ -108,6 +109,18 @@ describe("LidarrClient", () => {
       const result = await client.getArtistByMusicBrainzId("nonexistent");
       expect(result).toBeNull();
     });
+
+    it("accepts the one artist Lidarr answers for a merged (old) MusicBrainz id", async () => {
+      mockAxiosInstance.get.mockResolvedValueOnce({ data: [{ id: 1, foreignArtistId: "mb-new" }] });
+      expect((await client.getArtistByMusicBrainzId("mb-old"))?.id).toBe(1);
+    });
+
+    it("never picks an arbitrary artist when the filter was ignored", async () => {
+      mockAxiosInstance.get.mockResolvedValueOnce({
+        data: [{ id: 1, foreignArtistId: "mb-abc" }, { id: 2, foreignArtistId: "mb-def" }],
+      });
+      expect(await client.getArtistByMusicBrainzId("mb-other")).toBeNull();
+    });
   });
 
   describe("deleteArtist", () => {
@@ -182,10 +195,22 @@ describe("LidarrClient", () => {
   describe("getQueue", () => {
     it("does not report a completed (inactive) record as downloading", async () => {
       mockAxiosInstance.get.mockResolvedValueOnce({
-        data: { records: [{ status: "completed" }] },
+        data: { records: [{ artistId: 1, status: "completed" }] },
       });
       const result = await client.getQueue(1);
       expect(result).toEqual({ downloading: false, status: "completed" });
+    });
+
+    it("ignores another item's active download and sends artistIds unbracketed", async () => {
+      mockAxiosInstance.get.mockResolvedValueOnce({
+        data: { records: [{ artistId: 2, status: "downloading" }] },
+      });
+      const result = await client.getQueue(1);
+      expect(result).toEqual({ downloading: false, status: null });
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+        params: expect.objectContaining({ artistIds: [1] }),
+        paramsSerializer: { indexes: null },
+      }));
     });
 
     it("returns not downloading when no records", async () => {
@@ -228,6 +253,15 @@ describe("LidarrClient", () => {
   });
 
   describe("addExclusion", () => {
+    it("treats an exclusion that already exists as added", async () => {
+      mockAxiosInstance.post.mockRejectedValueOnce(new IntegrationError("Lidarr", {
+        config: { url: "/api/v1/importlistexclusion", method: "post" },
+        response: { status: 400, data: [{ propertyName: "ForeignId", errorMessage: "This exclusion has already been added." }] },
+        code: "ERR_BAD_REQUEST",
+      } as never));
+      await expect(client.addExclusion("mb-abc", "A")).resolves.toBeUndefined();
+    });
+
     it("posts exclusion data", async () => {
       mockAxiosInstance.post.mockResolvedValueOnce({});
       await client.addExclusion("foreign-123", "Test Artist");

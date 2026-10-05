@@ -24,6 +24,14 @@ export class IntegrationError extends Error {
   readonly url: string;
   /** HTTP method of the failed request, upper-cased (null when unknown). */
   readonly method: string | null;
+  /**
+   * The `errorMessage` of each entry in a validation-failure body. The *arr
+   * apps answer a refused write with a 400 whose body is an ARRAY of
+   * `{ propertyName, errorMessage, … }` rather than an object with `message`,
+   * so without this the reason ("This exclusion has already been added.")
+   * never reached `detail` or the action's recorded error.
+   */
+  readonly validationMessages: string[];
 
   constructor(
     service: string,
@@ -34,9 +42,22 @@ export class IntegrationError extends Error {
     const status = error.response?.status ?? null;
 
     let detail: string | null = null;
+    const validationMessages: string[] = [];
     if (status !== null) {
       const data = error.response?.data;
-      if (typeof data === "string" && data.trim().length > 0) {
+      if (Array.isArray(data)) {
+        for (const entry of data) {
+          if (entry && typeof entry === "object") {
+            const message = (entry as Record<string, unknown>).errorMessage;
+            if (typeof message === "string" && message.trim().length > 0) {
+              validationMessages.push(message.trim());
+            }
+          }
+        }
+        if (validationMessages.length > 0) {
+          detail = validationMessages.join("; ").slice(0, 200);
+        }
+      } else if (typeof data === "string" && data.trim().length > 0) {
         const trimmed = data.trim();
         // Skip HTML error pages (reverse-proxy 502s, etc.) — they bloat the
         // log without adding signal. Only surface short text bodies.
@@ -62,5 +83,6 @@ export class IntegrationError extends Error {
     this.code = code;
     this.url = url;
     this.method = error.config?.method?.toUpperCase() ?? null;
+    this.validationMessages = validationMessages;
   }
 }

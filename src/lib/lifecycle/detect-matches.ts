@@ -264,6 +264,7 @@ export async function detectAndSaveMatches(
     ruleSet.type,
     rules,
     ruleSet.serverIds,
+    ruleSet.arrInstanceId,
   );
   if (!evaluability.evaluable) {
     const existingMatches = await prisma.ruleMatch.findMany({
@@ -827,9 +828,9 @@ export async function runDetection(
     }
     return cache.data;
   };
-  const movieArrCache: MetaCache<ArrDataMap> = { fetched: false, data: {} };
-  const seriesArrCache: MetaCache<ArrDataMap> = { fetched: false, data: {} };
-  const musicArrCache: MetaCache<ArrDataMap> = { fetched: false, data: {} };
+  // Keyed by type AND the rule set's Arr instance: a rule set's Arr criteria
+  // are read from its own instance alone (see `resolveArrInstanceScope`).
+  const arrCaches = new Map<string, MetaCache<ArrDataMap>>();
   const movieSeerrCache: MetaCache<SeerrDataMap> = { fetched: false, data: {} };
   const seriesSeerrCache: MetaCache<SeerrDataMap> = { fetched: false, data: {} };
 
@@ -878,7 +879,7 @@ export async function runDetection(
       // manual "Re-evaluate All" path refuse rule sets the scheduled path
       // happily evaluates — the same rule set, a different answer depending on
       // how it was triggered.
-      const evaluability = await checkLifecycleRuleEvaluability(userId, rs.type, rules, serverIds);
+      const evaluability = await checkLifecycleRuleEvaluability(userId, rs.type, rules, serverIds, rs.arrInstanceId);
       if (!evaluability.evaluable) {
         logger.warn("Lifecycle", `Skipping rule set "${rs.name}" — ${evaluability.reason}`);
         if (evaluability.permanent) {
@@ -897,8 +898,13 @@ export async function runDetection(
       let arrData: ArrDataMap | undefined;
       if (hasArrRules(rules)) {
         const type = rs.type === "MOVIE" ? "MOVIE" : rs.type === "MUSIC" ? "MUSIC" : "SERIES";
-        const cache = type === "MOVIE" ? movieArrCache : type === "MUSIC" ? musicArrCache : seriesArrCache;
-        arrData = await loadOnce(cache, () => fetchArrMetadata(userId, type));
+        const cacheKey = `${type}:${rs.arrInstanceId ?? "*"}`;
+        let cache = arrCaches.get(cacheKey);
+        if (!cache) {
+          cache = { fetched: false, data: {} };
+          arrCaches.set(cacheKey, cache);
+        }
+        arrData = await loadOnce(cache, () => fetchArrMetadata(userId, type, undefined, rs.arrInstanceId));
       }
 
       // Resolve Seerr metadata (not applicable for MUSIC)

@@ -24,6 +24,7 @@ vi.mock("axios", () => {
 });
 
 import { RadarrClient } from "@/lib/arr/radarr-client";
+import { IntegrationError } from "@/lib/integration-error";
 
 describe("RadarrClient", () => {
   let client: RadarrClient;
@@ -121,6 +122,13 @@ describe("RadarrClient", () => {
       mockAxiosInstance.get.mockResolvedValueOnce({ data: [] });
       const result = await client.getMovieByTmdbId(999);
       expect(result).toBeNull();
+    });
+
+    it("never returns a movie with a different TMDB id (filter ignored)", async () => {
+      mockAxiosInstance.get.mockResolvedValueOnce({ data: [{ id: 1, tmdbId: 111 }, { id: 2, tmdbId: 222 }] });
+      expect(await client.getMovieByTmdbId(999)).toBeNull();
+      mockAxiosInstance.get.mockResolvedValueOnce({ data: [{ id: 1, tmdbId: 111 }, { id: 2, tmdbId: 222 }] });
+      expect(await client.getMovieByTmdbId(222)).toEqual({ id: 2, tmdbId: 222 });
     });
   });
 
@@ -262,7 +270,7 @@ describe("RadarrClient", () => {
   describe("getQueue", () => {
     it("does not report a completed (inactive) record as downloading", async () => {
       mockAxiosInstance.get.mockResolvedValueOnce({
-        data: { records: [{ status: "completed" }] },
+        data: { records: [{ movieId: 1, status: "completed" }] },
       });
       const result = await client.getQueue(1);
       expect(result).toEqual({ downloading: false, status: "completed" });
@@ -276,7 +284,7 @@ describe("RadarrClient", () => {
 
     it("falls back to trackedDownloadStatus", async () => {
       mockAxiosInstance.get.mockResolvedValueOnce({
-        data: { records: [{ trackedDownloadStatus: "warning" }] },
+        data: { records: [{ movieId: 1, trackedDownloadStatus: "warning" }] },
       });
       const result = await client.getQueue(1);
       expect(result).toEqual({ downloading: true, status: "warning" });
@@ -284,10 +292,27 @@ describe("RadarrClient", () => {
 
     it("defaults to 'downloading' when no status fields", async () => {
       mockAxiosInstance.get.mockResolvedValueOnce({
-        data: { records: [{}] },
+        data: { records: [{ movieId: 1 }] },
       });
       const result = await client.getQueue(1);
       expect(result).toEqual({ downloading: true, status: "downloading" });
+    });
+
+    it("sends movieIds unbracketed so Radarr applies the filter", async () => {
+      mockAxiosInstance.get.mockResolvedValueOnce({ data: { records: [] } });
+      await client.getQueue(7);
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v3/queue", expect.objectContaining({
+        params: expect.objectContaining({ movieIds: [7] }),
+        paramsSerializer: { indexes: null },
+      }));
+    });
+
+    it("ignores another movie's active download", async () => {
+      mockAxiosInstance.get.mockResolvedValueOnce({
+        data: { records: [{ movieId: 2, status: "downloading" }] },
+      });
+      const result = await client.getQueue(1);
+      expect(result).toEqual({ downloading: false, status: null });
     });
 
     it("returns not downloading on error", async () => {
@@ -325,6 +350,24 @@ describe("RadarrClient", () => {
   });
 
   describe("addExclusion", () => {
+    it("treats an exclusion that already exists as added", async () => {
+      mockAxiosInstance.post.mockRejectedValueOnce(new IntegrationError("Radarr", {
+        config: { url: "/api/v3/exclusions", method: "post" },
+        response: { status: 400, data: [{ propertyName: "TmdbId", errorMessage: "This exclusion has already been added." }] },
+        code: "ERR_BAD_REQUEST",
+      } as never));
+      await expect(client.addExclusion(12345, "Test Movie", 2024)).resolves.toBeUndefined();
+    });
+
+    it("still throws any other validation failure", async () => {
+      mockAxiosInstance.post.mockRejectedValueOnce(new IntegrationError("Radarr", {
+        config: { url: "/api/v3/exclusions", method: "post" },
+        response: { status: 400, data: [{ propertyName: "MovieTitle", errorMessage: "'MovieTitle' must not be empty." }] },
+        code: "ERR_BAD_REQUEST",
+      } as never));
+      await expect(client.addExclusion(12345, "", 2024)).rejects.toThrow("must not be empty");
+    });
+
     it("posts exclusion data", async () => {
       mockAxiosInstance.post.mockResolvedValueOnce({});
       await client.addExclusion(12345, "Test Movie", 2024);

@@ -1446,7 +1446,13 @@ export function LifecycleRulePage({
     setPreviewing(true);
     resetPreviewProgress();
     try {
-      const previewBody: Record<string, unknown> = { rules: groups, type: mediaType, serverIds };
+      // arrInstanceId: Arr criteria are read from the rule set's own instance.
+      const previewBody: Record<string, unknown> = {
+        rules: groups,
+        type: mediaType,
+        serverIds,
+        arrInstanceId: arrInstanceId || null,
+      };
       if (scopeConfig) {
         previewBody.seriesScope = seriesScope;
       }
@@ -1634,6 +1640,7 @@ export function LifecycleRulePage({
             seriesScope: scopeConfig ? seriesScope : undefined,
             mediaItemId: itemId,
             serverIds,
+            arrInstanceId: arrInstanceId || null,
           }),
         });
         if (response.ok) {
@@ -1653,7 +1660,7 @@ export function LifecycleRulePage({
         setTestMediaEvaluating(false);
       }
     },
-    [groups, mediaType, scopeConfig, seriesScope, serverIds],
+    [groups, mediaType, scopeConfig, seriesScope, serverIds, arrInstanceId],
   );
 
   const takeSnapshot = (): RuleSetSnapshot => ({
@@ -3461,7 +3468,7 @@ export function LifecycleRulePage({
                 if (!activeRuleSetId) return;
                 setLoadingDiff(true);
                 try {
-                  const diffBody: Record<string, unknown> = { rules: groups, type: mediaType, serverIds, actionEnabled, actionType };
+                  const diffBody: Record<string, unknown> = { rules: groups, type: mediaType, serverIds, actionEnabled, actionType, arrInstanceId: arrInstanceId || null };
                   if (scopeConfig) diffBody.seriesScope = seriesScope;
                   const res = await fetch(`/api/lifecycle/rules/${activeRuleSetId}/diff`, {
                     method: "POST",

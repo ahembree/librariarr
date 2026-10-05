@@ -1,6 +1,7 @@
 import axios, { type AxiosInstance } from "axios";
 import https from "https";
 import { configureRetry } from "@/lib/http-retry";
+import { ARTIST_MBID_SCHEME, firstMbid } from "@/lib/media/musicbrainz";
 import {
   isUnreachable,
   markUnreachable,
@@ -746,6 +747,12 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
       if (tmdb) guids.push({ id: `tmdb://${tmdb}` });
       if (tvdb) guids.push({ id: `tvdb://${tvdb}` });
       if (imdb) guids.push({ id: `imdb://${imdb}` });
+      // Music: the track's own MusicBrainz id, and its (album) artist's — the
+      // id Lidarr keys artists by (see src/lib/sync/artist-mbid.ts).
+      const trackMbid = firstMbid(providers.get("musicbrainztrack") ?? providers.get("musicbrainzrecording"));
+      if (trackMbid) guids.push({ id: `mbid://${trackMbid}` });
+      const artistMbid = firstMbid(providers.get("musicbrainzalbumartist") ?? providers.get("musicbrainzartist"));
+      if (artistMbid) guids.push({ id: `${ARTIST_MBID_SCHEME}://${artistMbid}` });
     }
 
     const genreSource =

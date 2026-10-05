@@ -168,10 +168,10 @@ These fields require configured [Sonarr](/docs/integrations/sonarr/), [Radarr](/
 | `arrDateAdded` | When the item was added to *arr |
 | `arrDownloadDate` | When the current file was downloaded (Radarr / movies only) |
 | `arrSeasonCount` | Total season count (Sonarr / series only) |
-| `arrEpisodeCount` | Total episode count (Sonarr / series only) |
-| `arrHasUnaired` | Whether the series has unaired episodes (Sonarr / series only) |
-| `arrMonitoredSeasonCount` | Number of monitored seasons (Sonarr / series only) |
-| `arrMonitoredEpisodeCount` | Number of monitored episodes (Sonarr / series only) |
+| `arrEpisodeCount` | Total episode count, specials excluded — every episode Sonarr knows of, aired or not, monitored or not (Sonarr / series only) |
+| `arrHasUnaired` | Whether the series has an episode airing in the future, monitored or not, or is still upcoming (Sonarr / series only) |
+| `arrMonitoredSeasonCount` | Number of monitored seasons, specials excluded (Sonarr / series only) |
+| `arrMonitoredEpisodeCount` | Number of episodes in monitored seasons, specials excluded. Sonarr reports no per-episode monitored count with the series, so an episode unmonitored inside a monitored season is still counted (Sonarr / series only) |
 
 :::note[Missing *arr data is fail-closed]
 If an item isn't in the linked *arr instance, or a specific field has no value (for example a movie with no downloaded file has no quality name, quality-cutoff, or size), **no comparison operator matches it** — including negative operators like *Not Equals* / *Not Contains* and the *NOT* toggle. This is deliberate so lifecycle rules never delete an item on the strength of absent *arr data. To target items with missing data, use the *Is Empty* (`isNull`) operator, or the `foundInArr` field.
@@ -179,6 +179,8 @@ If an item isn't in the linked *arr instance, or a specific field has no value (
 
 :::caution[*arr criteria need at least one enabled instance]
 If you disable or delete your only Radarr, Sonarr, or Lidarr instance, rule sets using that family's fields are **skipped entirely** by detection, with a warning in System Logs, and previews return an error. This is deliberate: without an instance to check against, `foundInArr = false` would be true for your whole library. Re-add the instance and the rule set resumes on the next detection run.
+
+When a rule set's action is linked to an *arr instance, its *arr criteria are read from **that instance only** — the same one its action runs against. With a 1080p and a 4K Radarr, a rule set acting on the 4K instance sees the 4K copy's tags, monitored state and quality profile, never the 1080p copy's. If that instance is disabled, the rule set is skipped in the same way, even while another instance of the family is enabled. A rule set with no instance selected reads every enabled instance; a title on more than one of them takes the record from the instance that was added first.
 :::
 
 ### Seerr Fields
@@ -339,7 +341,10 @@ Notes:
 - **Any selection size** — larger selections are split automatically into sequential batches of up to 1,000 items, and the Actions bar and confirmation dialog tell you how many. Each batch is recorded before the next starts, so a run that stops part-way loses nothing — re-run to finish the rest. (One exception: a whole-series action on more than 1,000 episodes of a *single* show is refused while you're viewing individual episodes — switch to the grouped series view, which acts on the show in one unit.)
 - **One Arr family per run** — an action applies only to selected results of its media type (e.g. *Delete from Radarr* acts on selected movies); selected items of other types are skipped and reported in the result toast.
 - Before acting, the query is re-run so only items that still match are affected, and items on the [Lifecycle Exceptions](/docs/features/deletion-safety/) list are skipped automatically.
-- Actions are refused when the query's *arr or Seerr criteria can't actually be evaluated — no *arr server selected for the action's media type, no enabled Seerr instance, or Seerr criteria on a music action. Without that data a rule like *Found In Arr = false* would match your entire library, so the run is blocked with an explanatory error.
+- Actions are refused when the query's *arr or Seerr criteria can't actually be evaluated — no *arr server selected for the action's media type, a disabled one, no enabled Seerr instance, or Seerr criteria on a music action. Without that data a rule like *Found In Arr = false* would match your entire library, so the run is blocked with an explanatory error.
+- When the query uses *arr criteria, the action must run on the same *arr instance the criteria were read from. A tag checked on your 1080p Radarr says nothing about the copy on your 4K Radarr.
+- **One action per *arr record.** A title found on two of your servers, or several tracks of one artist, is one record in the *arr app, so it gets one action. A file delete on an artist's tracks deletes all the selected tracks in that one action.
+- The [deletion limit](#limiting-how-much-one-run-can-delete) counts the whole run, not each batch: a run over the limit is refused before its first batch starts. A series action in episode view counts once per show.
 - Every run is recorded in the **Actions** history (and deletion stats) labelled *Ad-hoc query action*, so there's a full audit trail even though no rule set exists.
 
 ## Previewing Matches
@@ -378,6 +383,14 @@ Actions determine what happens to matched media. Configure them in the **Actions
 
 Tags can be added or removed as a supplementary operation alongside any action (including Do Nothing).
 
+### Which files a file delete removes
+
+**Delete Files**, **Unmonitor & Delete Files** and **Monitor & Delete Files** act only on the episodes or tracks that matched, never on the whole series or artist:
+
+- **Sonarr** finds each matched episode by its season and episode number. If your media server's air date for that episode is more than two days from Sonarr's, the two number the show differently (common with absolute-ordered anime), and the episode is skipped. A file that holds several episodes (a double episode) is deleted only when every episode in it matched: otherwise it would also delete an episode that did not match, or one you protected with an exception. **Search after** searches the deleted episodes by id, and **Monitor & Delete Files** also monitors those episodes after the delete, since Sonarr can unmonitor episodes it deletes.
+- **Lidarr** finds each matched track by its MusicBrainz track id, then by its disc and track number on the album of the same name, then by its exact title on that album. Anything ambiguous is skipped. A track is never matched to the same song on a different album.
+- When none of the matched episodes or tracks can be found in the *arr app, the action is recorded as **failed** rather than completed. The deletion stats count only the files actually deleted.
+
 ### Change Quality Profile
 
 This action switches a movie, series, or artist to a different quality profile in the linked *arr instance.
@@ -396,7 +409,7 @@ This action triggers an *arr search for a new copy of the matched movie, series,
 
 Each action links a rule set to an *arr instance:
 
-1. Select the *arr integration (e.g., "My Radarr")
+1. Select the *arr integration (e.g., "My Radarr") — the rule set's *arr criteria are also read from this instance
 2. Choose the action type (delete, unmonitor, do nothing)
 3. Set action-specific options (e.g., delete files toggle)
 4. Optionally configure tags to add or remove

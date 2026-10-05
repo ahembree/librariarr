@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { LidarrClient } from "@/lib/arr/lidarr-client";
 import { validateRequest, arrTestSchema } from "@/lib/validation";
+import { sanitizeErrorDetail } from "@/lib/api/sanitize";
 
 export async function POST(request: NextRequest) {
   const session = await getSession();
@@ -15,5 +16,7 @@ export async function POST(request: NextRequest) {
 
   const client = new LidarrClient(url, apiKey);
   const result = await client.testConnection();
-  return NextResponse.json(result);
+  return NextResponse.json(
+    result.ok ? result : { ...result, error: sanitizeErrorDetail(result.error) },
+  );
 }

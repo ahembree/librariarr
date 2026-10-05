@@ -57,7 +57,22 @@ export async function checkDeleteCeiling(
   userId: string,
   actionTypes: string[],
 ): Promise<DeleteCeilingVerdict> {
-  const count = actionTypes.filter(isDestructiveActionType).length;
+  return ceilingVerdict(userId, actionTypes.filter(isDestructiveActionType).length);
+}
+
+/**
+ * `checkDeleteCeiling` for a run of `count` actions of ONE type — the shape of
+ * an ad-hoc query action — without materialising `count` copies of the type.
+ */
+export async function checkDeleteCeilingForRun(
+  userId: string,
+  actionType: string,
+  count: number,
+): Promise<DeleteCeilingVerdict> {
+  return ceilingVerdict(userId, isDestructiveActionType(actionType) ? count : 0);
+}
+
+async function ceilingVerdict(userId: string, count: number): Promise<DeleteCeilingVerdict> {
   const limit = await getDeleteCeiling(userId);
 
   if (limit == null || count <= limit) return { allowed: true, count, limit };

@@ -11,6 +11,7 @@ import { recomputeCanonical } from "@/lib/dedup/recompute-canonical";
 import { invalidateMediaCaches } from "@/lib/cache/invalidate";
 import { invalidateCachedUrls } from "@/lib/image-cache/image-cache";
 import { eventBus } from "@/lib/events/event-bus";
+import { mbidFromGuids, withArtistMbid } from "@/lib/media/musicbrainz";
 
 /**
  * Incremental sync: apply just the items a real-time `library-changed` event
@@ -371,6 +372,35 @@ export async function syncMediaServerItems(
       // sync. Same rule as the item fetch above: never let a transient error
       // stand in for absent data; reconcile via full sync.
       return fellBack(`show metadata fetch failed for ${seriesId}: ${String(error)}`);
+    }
+  }
+
+  // Tracks on a server whose listings do not carry the artist's MusicBrainz id
+  // (Plex — the one with `getLibraryArtists`) get it from the artist's own
+  // metadata. Not best-effort, for the same reason as the show fetch above:
+  // `processBatch` rewrites a track's external ids from its guids, so a failed
+  // fetch would drop the artist id every Lidarr criterion and action reads.
+  if (client.getLibraryArtists) {
+    const artistKeys = [
+      ...new Set(
+        [...groups]
+          .filter(([libraryId]) => libById.get(libraryId)!.type === "MUSIC")
+          .flatMap(([, items]) => items.map((it) => it.grandparentRatingKey))
+          .filter((x): x is string => !!x),
+      ),
+    ];
+    const artistMbids = new Map<string, string | null>();
+    for (const artistKey of artistKeys) {
+      try {
+        const artist = await client.getItemMetadata(artistKey);
+        artistMbids.set(artistKey, mbidFromGuids(artist?.Guid));
+      } catch (error) {
+        return fellBack(`artist metadata fetch failed for ${artistKey}: ${String(error)}`);
+      }
+    }
+    for (const [libraryId, items] of groups) {
+      if (libById.get(libraryId)!.type !== "MUSIC") continue;
+      for (const item of items) withArtistMbid(item, artistMbids.get(item.grandparentRatingKey ?? "") ?? null);
     }
   }
 

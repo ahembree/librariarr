@@ -26,7 +26,7 @@ const mockPrisma = vi.hoisted(() => ({
   lidarrInstance: { findMany: vi.fn() },
 }));
 const mockRadarr = vi.hoisted(() => ({ getMovies: vi.fn(), getQualityProfiles: vi.fn(), getTags: vi.fn(), getCustomFormatScores: vi.fn() }));
-const mockSonarr = vi.hoisted(() => ({ getSeries: vi.fn(), getQualityProfiles: vi.fn(), getTags: vi.fn() }));
+const mockSonarr = vi.hoisted(() => ({ getSeries: vi.fn(), getSeriesIdsWithUpcomingEpisodes: vi.fn().mockResolvedValue(new Set()), getQualityProfiles: vi.fn(), getTags: vi.fn() }));
 const mockLidarr = vi.hoisted(() => ({ getArtists: vi.fn(), getQualityProfiles: vi.fn(), getTags: vi.fn() }));
 
 vi.mock("@/lib/db", () => ({ prisma: mockPrisma }));

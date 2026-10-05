@@ -22,6 +22,8 @@ import { watchForCancel } from "./cancel-watch";
 import { acquireSyncSlot, releaseSyncSlot } from "@/lib/sync/sync-semaphore";
 import { syncWatchHistory } from "@/lib/sync/sync-watch-history";
 import { reconcileWatchStateFromHistory } from "@/lib/sync/watch-reconcile";
+import { mbidFromGuids, withArtistMbid } from "@/lib/media/musicbrainz";
+import { writeArtistMbids } from "@/lib/sync/artist-mbid";
 
 // --- Filename-based detection using Trash-Guides naming conventions ---
 // These regex patterns are derived from Trash-Guides custom format definitions:
@@ -986,6 +988,9 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
       let showGenreMap: Map<string, string[]> | undefined;
       let showGuidsMap: Map<string, Array<{ id: string }>> | undefined;
       let showSummaryMap: Map<string, string> | undefined;
+      // Music on a server whose tracks do not carry their artist's MusicBrainz
+      // id (Plex): artist rating key → that id, read from the artist listing.
+      let artistMbids: Map<string, string> | undefined;
 
       // For TV shows, fetch show-level data (small dataset, not paginated):
       // - genres (not available on episodes)
@@ -1009,6 +1014,17 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
           }
         }
       }
+      if (lib.type === "artist" && client.getLibraryArtists) {
+        artistMbids = new Map();
+        for (const artist of await client.getLibraryArtists(lib.key)) {
+          const mbid = mbidFromGuids(artist.Guid);
+          if (artist.ratingKey && mbid) artistMbids.set(artist.ratingKey, mbid);
+        }
+      }
+      const addArtistMbids = (batchItems: MediaMetadataItem[]) => {
+        if (!artistMbids) return;
+        for (const item of batchItems) withArtistMbid(item, artistMbids.get(item.grandparentRatingKey ?? "") ?? null);
+      };
 
       // Small page size keeps API response times fast and limits GC pressure
       // from normalizing large batches of items with nested media/stream objects.
@@ -1156,6 +1172,7 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
               // avoids unnecessary per-item API calls.
               await enrichBatch(client, toEnrich);
               carryWatchlistForward(toEnrich);
+              addArtistMbids(toEnrich);
               await processBatch(toEnrich, library.id, libraryType, watchCounts, existingThumbUrls, showGenreMap, showGuidsMap, watchlistGuids, showSummaryMap);
             }
 
@@ -1171,6 +1188,7 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
           } else {
             // No enrichment needed (Jellyfin/Emby) — process all items directly.
             carryWatchlistForward(batch);
+            addArtistMbids(batch);
             await processBatch(batch, library.id, libraryType, watchCounts, existingThumbUrls, showGenreMap, showGuidsMap, watchlistGuids, showSummaryMap);
           }
 
@@ -1231,6 +1249,12 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
         // An empty next page at a full-page boundary also means we've reached
         // the end of the library (the loop condition will exit below).
         if (!pageItems || pageItems.length === 0) reachedLibraryEnd = true;
+      }
+
+      // Tracks Plex reports unchanged skip the upsert above, so the artist id
+      // is written for the whole library in one statement (artist-mbid.ts).
+      if (artistMbids && !cancelled) {
+        await writeArtistMbids(library.id, artistMbids);
       }
 
       if (cancelled) {

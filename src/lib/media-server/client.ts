@@ -46,6 +46,12 @@ export interface MediaServerClient {
   getLibraries(): Promise<MediaLibrarySection[]>;
   getLibraryItems(sectionKey: string): Promise<MediaMetadataItem[]>;
   getLibraryShows(sectionKey: string): Promise<MediaMetadataItem[]>;
+  /**
+   * The artists of a music library, with their guids. Implemented by servers
+   * whose track listings do not carry the artist's MusicBrainz id (Plex); the
+   * sync reads it from the artist instead (see `src/lib/sync/artist-mbid.ts`).
+   */
+  getLibraryArtists?(sectionKey: string): Promise<MediaMetadataItem[]>;
   getLibraryEpisodes(sectionKey: string): Promise<MediaMetadataItem[]>;
   getLibraryTracks(sectionKey: string): Promise<MediaMetadataItem[]>;
 

@@ -31,6 +31,7 @@ import { syncMediaServer } from "@/lib/sync/sync-server";
 import { sendDiscordNotification, buildSuccessSummaryEmbed, buildMatchChangeEmbed, buildFailureSummaryEmbed } from "@/lib/discord/client";
 import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
 import { eventBus } from "@/lib/events/event-bus";
+import { computeDeletedBytes } from "@/lib/lifecycle/deleted-bytes";
 
 function formatTitleWithYear(title: string, year: number | null): string {
   if (!year) return title;
@@ -309,6 +310,7 @@ export async function processLifecycleRules(userId?: string) {
         ruleSet.type,
         rules,
         ruleSet.serverIds,
+        ruleSet.arrInstanceId,
       );
       if (!evaluability.evaluable) {
         logger.warn("Lifecycle", `Skipping rule set "${ruleSet.name}" — ${evaluability.reason}`);
@@ -327,8 +329,10 @@ export async function processLifecycleRules(userId?: string) {
       let arrData: ArrDataMap | undefined;
       if (hasArrRules(rules)) {
         const type = ruleSet.type;
-        arrData = await loadMetadata(`arr:${ruleSet.userId}:${type}`, () =>
-          fetchArrMetadata(ruleSet.userId, type),
+        // Keyed by the rule set's instance too: its Arr criteria are read from
+        // that instance alone (see `resolveArrInstanceScope`).
+        arrData = await loadMetadata(`arr:${ruleSet.userId}:${type}:${ruleSet.arrInstanceId ?? "*"}`, () =>
+          fetchArrMetadata(ruleSet.userId, type, undefined, ruleSet.arrInstanceId),
         );
       }
 
@@ -893,38 +897,10 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
     // what its log line, notifications and history name (see `executedTitle`).
     const running = { ...action, matchedMediaItemIds: filteredMatchedIds, mediaItem, memberEpisodes: runningEpisodes };
     try {
-      await executeAction({ ...running, targetTitle: actionTargetTitle(running) });
+      const outcome = await executeAction({ ...running, targetTitle: actionTargetTitle(running) });
 
       // Compute deleted bytes for stats tracking (only for delete actions)
-      let deletedBytes: bigint | null = null;
-      if (action.actionType.includes("DELETE")) {
-        if (action.actionType === "DELETE_SONARR" && mediaItem.parentTitle) {
-          // Whole-series delete removes EVERY episode of the series, so count the
-          // whole series' file size — not just the matched members, which
-          // under-counts when only a subset of episodes matched the rule. The
-          // series is its `seriesKey`, not its title: two same-titled shows in
-          // one library are two series (the title only for a row without one).
-          const agg = await prisma.mediaItem.aggregate({
-            where: {
-              type: "SERIES",
-              libraryId: mediaItem.libraryId,
-              ...(mediaItem.seriesKey ? { seriesKey: mediaItem.seriesKey } : { parentTitle: mediaItem.parentTitle }),
-            },
-            _sum: { fileSize: true },
-          });
-          deletedBytes = agg._sum.fileSize ?? null;
-        } else if (filteredMatchedIds.length > 0) {
-          // Series/music with episode-level tracking — sum member items' file sizes
-          const memberSizes = await prisma.mediaItem.findMany({
-            where: { id: { in: filteredMatchedIds } },
-            select: { fileSize: true },
-          });
-          const total = memberSizes.reduce((sum, m) => sum + (m.fileSize ?? BigInt(0)), BigInt(0));
-          if (total > BigInt(0)) deletedBytes = total;
-        } else if (mediaItem.fileSize) {
-          deletedBytes = mediaItem.fileSize;
-        }
-      }
+      const deletedBytes = await computeDeletedBytes(action.actionType, mediaItem, filteredMatchedIds, outcome);
 
       // Mark the action complete and remove the match atomically so we never
       // leave a "completed but still matched" ghost on the Matches page if

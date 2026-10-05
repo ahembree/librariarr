@@ -2,6 +2,7 @@ import axios, { AxiosInstance } from "axios";
 import { logger } from "@/lib/logger";
 import { IntegrationError } from "@/lib/integration-error";
 import { configureRetry, NO_RETRY } from "@/lib/http-retry";
+import { isExistingExclusionError } from "@/lib/arr/exclusion";
 
 // Tracked-download states that mean the item is NOT actively downloading.
 // Anything else (downloading, queued, warning, etc.) counts as an active download.
@@ -49,8 +50,12 @@ export interface SonarrSeries {
     value?: number;
   };
   statistics?: {
+    /** Seasons, specials excluded. */
     seasonCount: number;
+    /** Episodes that are (monitored AND aired) OR have a file — NOT the total. */
     episodeCount: number;
+    /** Every episode Sonarr knows of, specials included. */
+    totalEpisodeCount?: number;
     episodeFileCount: number;
     sizeOnDisk: number;
   };
@@ -64,7 +69,7 @@ export interface SonarrSeries {
   seasons?: Array<{
     seasonNumber: number;
     monitored: boolean;
-    statistics?: { episodeCount: number; episodeFileCount: number };
+    statistics?: { episodeCount: number; episodeFileCount: number; totalEpisodeCount?: number };
   }>;
 }
 
@@ -76,6 +81,17 @@ export interface SonarrTag {
 export interface SonarrQualityProfile {
   id: number;
   name: string;
+}
+
+export interface SonarrEpisode {
+  id: number;
+  seasonNumber: number;
+  episodeNumber: number;
+  episodeFileId: number;
+  hasFile: boolean;
+  title?: string;
+  /** Local air date, `YYYY-MM-DD`; absent for an unaired or TBA episode. */
+  airDate?: string;
 }
 
 export interface SonarrEpisodeFile {
@@ -172,7 +188,8 @@ export class SonarrClient {
     const { data } = await this.client.get<SonarrSeries[]>("/api/v3/series", {
       params: { tvdbId },
     });
-    return data.length > 0 ? data[0] : null;
+    // Only a record carrying the requested id (see RadarrClient.getMovieByTmdbId).
+    return data.find((s) => s.tvdbId === tvdbId) ?? null;
   }
 
   async deleteSeries(
@@ -201,13 +218,7 @@ export class SonarrClient {
     return data;
   }
 
-  async getEpisodes(seriesId: number): Promise<Array<{
-    id: number;
-    seasonNumber: number;
-    episodeNumber: number;
-    episodeFileId: number;
-    hasFile: boolean;
-  }>> {
+  async getEpisodes(seriesId: number): Promise<SonarrEpisode[]> {
     const { data } = await this.client.get("/api/v3/episode", {
       params: { seriesId },
     });
@@ -228,6 +239,42 @@ export class SonarrClient {
     return data;
   }
 
+  /**
+   * Ids of the series with at least one regular (non-special) episode airing
+   * after now, monitored or not — from the calendar, the one endpoint that
+   * answers that for every series in one request. A series resource's
+   * `nextAiring` only considers MONITORED episodes, so a continuing show whose
+   * upcoming episodes are unmonitored read as having nothing unaired.
+   */
+  async getSeriesIdsWithUpcomingEpisodes(now = new Date()): Promise<Set<number>> {
+    const end = new Date(now);
+    end.setUTCFullYear(end.getUTCFullYear() + 20);
+    const { data } = await this.client.get<Array<{ seriesId: number; seasonNumber: number }>>(
+      "/api/v3/calendar",
+      { params: { start: now.toISOString(), end: end.toISOString(), unmonitored: true } },
+    );
+    return new Set(data.filter((ep) => ep.seasonNumber > 0).map((ep) => ep.seriesId));
+  }
+
+  /** Sets the monitored flag on the given episodes (`PUT /api/v3/episode/monitor`). */
+  async setEpisodesMonitored(episodeIds: number[], monitored: boolean): Promise<void> {
+    if (episodeIds.length === 0) return;
+    await this.client.put("/api/v3/episode/monitor", { episodeIds, monitored });
+  }
+
+  /**
+   * Searches for the given episodes. Sent from the API the command is a manual
+   * trigger, so Sonarr searches each episode whether or not it is monitored —
+   * unlike `SeriesSearch`, which skips unmonitored seasons and episodes.
+   */
+  async triggerEpisodeSearch(episodeIds: number[]): Promise<void> {
+    if (episodeIds.length === 0) return;
+    await this.client.post("/api/v3/command", {
+      name: "EpisodeSearch",
+      episodeIds,
+    });
+  }
+
   async triggerSeriesSearch(seriesId: number): Promise<void> {
     await this.client.post("/api/v3/command", {
       name: "SeriesSearch",
@@ -237,10 +284,14 @@ export class SonarrClient {
 
   async getQueue(seriesId: number): Promise<{ downloading: boolean; status: string | null }> {
     try {
+      // `indexes: null` sends `seriesIds=1`; axios' default `seriesIds[]=1` is
+      // not bound, so the filter was skipped (see RadarrClient.getQueue).
       const { data } = await this.client.get("/api/v3/queue", {
-        params: { seriesIds: [seriesId], pageSize: 10 },
+        params: { seriesIds: [seriesId], pageSize: 50 },
+        paramsSerializer: { indexes: null },
       });
-      const records = data.records || [];
+      const records = ((data.records || []) as Array<{ seriesId?: number; status?: string; trackedDownloadStatus?: string; trackedDownloadState?: string }>)
+        .filter((r) => r.seriesId === seriesId);
       if (records.length === 0) return { downloading: false, status: null };
       const active = records.find(isActiveDownloadRecord);
       if (!active) {
@@ -266,11 +317,17 @@ export class SonarrClient {
     await this.client.delete(`/api/v3/tag/${id}`);
   }
 
+  /** Idempotent: an exclusion that already exists counts as added. */
   async addExclusion(tvdbId: number, title: string): Promise<void> {
-    await this.client.post("/api/v3/importlistexclusion", {
-      tvdbId,
-      title,
-    });
+    try {
+      await this.client.post("/api/v3/importlistexclusion", {
+        tvdbId,
+        title,
+      });
+    } catch (error) {
+      if (isExistingExclusionError(error)) return;
+      throw error;
+    }
   }
 
   async getLanguages(): Promise<{ id: number; name: string }[]> {

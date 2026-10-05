@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { TracearrClient } from "@/lib/tracearr/tracearr-client";
 import { validateRequest, tracearrInstanceUpdateSchema } from "@/lib/validation";
 import { sanitize, sanitizeErrorDetail } from "@/lib/api/sanitize";
+import { refuseStoredKeyToNewUrl } from "@/lib/integrations/stored-key-guard";
 
 export async function PUT(
   request: NextRequest,
@@ -30,6 +31,9 @@ export async function PUT(
   if (!existing) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
+
+  const refused = await refuseStoredKeyToNewUrl(session, existing.url, url, apiKey, "Tracearr");
+  if (refused) return refused;
 
   // Test the connection only when it changes — a new URL or API key (skip if
   // just toggling enabled). The edit form sends its URL on every save, so

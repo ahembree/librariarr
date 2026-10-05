@@ -242,7 +242,7 @@ describe("Lidarr integration endpoints", () => {
 
       const user = await createTestUser();
       const instance = await createTestLidarrInstance(user.id);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
 
       const response = await callRouteWithParams(
         PUT,
@@ -260,7 +260,7 @@ describe("Lidarr integration endpoints", () => {
     it("updates instance fields successfully", async () => {
       const user = await createTestUser();
       const instance = await createTestLidarrInstance(user.id, { name: "Old Name" });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
 
       const response = await callRouteWithParams(
         PUT,
