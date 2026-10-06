@@ -152,15 +152,17 @@ describe("recoverHistoryForNewItems", () => {
   });
 
   describe("candidate selection", () => {
-    it("asks only about items with no Tracearr plays of their own", async () => {
+    it("keeps an item with Tracearr plays a candidate until Tracearr has answered for it", async () => {
       await recoverHistoryForNewItems(SERVER_ID);
 
       const { sql, params } = candidateQuery();
-      // An item that already has Tracearr rows was never missing its history,
-      // and re-querying it would spend a request to learn nothing.
-      expect(sql).toContain("NOT EXISTS");
-      expect(sql).toContain('"WatchHistory"');
-      expect(sql).toContain("'TRACEARR'");
+      // A re-added item's first NEW play (under its new rating key) is usually
+      // in before this pass reaches it. Excluding items that hold any TRACEARR
+      // row dropped exactly those, leaving every older play — reachable only by
+      // provider id — unrecovered. Candidacy ends on an ANSWER instead.
+      expect(sql).not.toContain("NOT EXISTS");
+      expect(sql).not.toContain("'TRACEARR'");
+      expect(sql).toContain('NOT (mi."id" = ANY($4::text[]))');
       expect(sql).toContain('l."mediaServerId" = $1');
       expect(params[0]).toBe(SERVER_ID);
     });
@@ -587,15 +589,68 @@ describe("recoverHistoryForNewItems", () => {
       expect(m.importTracearrRecords).toHaveBeenCalled();
     });
 
-    it("does not fall back when the rating key already found plays", async () => {
+    it("still asks by provider id when the rating key already found plays", async () => {
+      // The re-add case again, one step later: the item has been played once
+      // since it came back, so its NEW rating key answers with that one play.
+      // The old plays are still filed under the key it had before, which only
+      // the provider id reaches — stopping at the first answer recovered one
+      // ten-minute play and left the item reading as barely watched.
       candidates = [
         { id: "item-1", ratingKey: "1001", title: "Film", tmdbId: "603", imdbId: null },
       ];
-      m.getHistoryForItem.mockResolvedValueOnce([play("chain-1")]);
+      m.getHistoryForItem
+        .mockResolvedValueOnce([play("new-play")])
+        .mockResolvedValueOnce([play("new-play"), play("old-1"), play("old-2")]);
+      m.importTracearrRecords.mockResolvedValue({ inserted: 3, updated: 0, skipped: 0 });
 
       await recoverHistoryForNewItems(SERVER_ID);
 
-      expect(m.getHistoryForItem).toHaveBeenCalledTimes(1);
+      expect(m.getHistoryForItem).toHaveBeenCalledTimes(2);
+      expect(m.getHistoryForItem.mock.calls[1][1]).toEqual({ tmdbId: "603", imdbId: null });
+      // Both answers in one import, the play both returned only once — one
+      // INSERT may not touch the same row twice.
+      expect(m.importTracearrRecords).toHaveBeenCalledTimes(1);
+      const imported = m.importTracearrRecords.mock.calls[0][1] as TracearrHistoryRecord[];
+      expect(imported.map((r) => r.id)).toEqual(["new-play", "old-1", "old-2"]);
+      expect(m.logger.info).toHaveBeenCalledWith(
+        "WatchHistory",
+        expect.stringContaining("1 recovered by provider id"),
+      );
+    });
+
+    it("does not count a provider answer that only repeats the rating key's as a recovery", async () => {
+      candidates = [
+        { id: "item-1", ratingKey: "1001", title: "Film", tmdbId: "603", imdbId: null },
+      ];
+      m.getHistoryForItem.mockResolvedValue([play("chain-1")]);
+      m.importTracearrRecords.mockResolvedValue({ inserted: 0, updated: 1, skipped: 0 });
+
+      await recoverHistoryForNewItems(SERVER_ID);
+
+      expect(m.getHistoryForItem).toHaveBeenCalledTimes(2);
+      expect((m.importTracearrRecords.mock.calls[0][1] as TracearrHistoryRecord[]).map((r) => r.id))
+        .toEqual(["chain-1"]);
+      expect(m.logger.info).toHaveBeenCalledWith(
+        "WatchHistory",
+        expect.stringContaining("0 recovered by provider id"),
+      );
+    });
+
+    it("keeps the item a candidate when the provider lookup fails after the rating key answered", async () => {
+      candidates = [
+        { id: "item-1", ratingKey: "1001", title: "Film", tmdbId: "603", imdbId: null },
+      ];
+      m.getHistoryForItem
+        .mockResolvedValueOnce([play("new-play")])
+        .mockRejectedValueOnce(new Error("provider lookup failed"));
+
+      await recoverHistoryForNewItems(SERVER_ID);
+      // Nothing written from half an answer — the next run asks both again.
+      expect(m.importTracearrRecords).not.toHaveBeenCalled();
+
+      m.prisma.$queryRawUnsafe.mockClear();
+      await recoverHistoryForNewItems(SERVER_ID);
+      expect(candidateQuery().params[3]).toEqual([]);
     });
 
     it("asks a shared provider identity only once across a run", async () => {
@@ -658,8 +713,8 @@ describe("recoverHistoryForNewItems", () => {
 
   describe("account-name map", () => {
     // The rows this pass writes are the ONE case where a degraded username is
-    // permanent. `findCandidates` excludes any item that already has a TRACEARR
-    // row, the forward pass reaches back only an hour, and
+    // permanent. An item is asked about once (`answeredItems`), the forward
+    // pass reaches back only an hour, and
     // `tracearrBackfillComplete` is already true by the time recovery runs — so
     // nothing ever re-delivers these records to correct them. A row stored as
     // "Nick W" sits beside the rest of the server's history stored as

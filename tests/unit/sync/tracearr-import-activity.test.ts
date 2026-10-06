@@ -49,6 +49,36 @@ describe("tracearr import activity", () => {
     });
   });
 
+  it("reports the backfill pass's reach separately, never the forward pass's", () => {
+    // The status route reads this as live archive progress between the slice
+    // writes of `tracearrBackfillCursorAt`. A forward page's oldest play is
+    // near "now", so letting it in would read as the walk barely started.
+    const run = begin("srv-1");
+    recordTracearrImportPage(run, {
+      pass: "forward",
+      pages: 1,
+      imported: 5,
+      oldestReached: new Date("2026-10-06T00:00:00.000Z"),
+    });
+    expect(getTracearrImportActivity("srv-1")?.backfillReached).toBeNull();
+
+    recordTracearrImportPage(run, {
+      pass: "backfill",
+      pages: 2,
+      imported: 105,
+      oldestReached: new Date("2021-01-01T00:00:00.000Z"),
+    });
+    expect(getTracearrImportActivity("srv-1")?.backfillReached).toBe(
+      "2021-01-01T00:00:00.000Z",
+    );
+
+    // A backfill page with no parseable instant keeps the last known reach.
+    recordTracearrImportPage(run, { pass: "backfill", pages: 3, imported: 105, oldestReached: null });
+    expect(getTracearrImportActivity("srv-1")?.backfillReached).toBe(
+      "2021-01-01T00:00:00.000Z",
+    );
+  });
+
   it("never exposes the owner — that is for the cleanup path only", () => {
     begin("srv-1");
     expect(getTracearrImportActivity("srv-1")).not.toHaveProperty("userId");

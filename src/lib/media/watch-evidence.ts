@@ -33,6 +33,110 @@ export async function markWatchHistoryEstablished(serverIds: string[]): Promise<
 }
 
 /**
+ * How many withdrawals this process has made, per server and install-wide.
+ *
+ * The marker is a nullable timestamp, and a withdrawal writes null — so a
+ * withdrawal landing on a server whose marker is ALREADY null (a first sync
+ * still in flight, or one that started after an earlier pause) changes nothing
+ * a later compare-and-set could see. These counters make that null → null
+ * withdrawal visible. In-process is enough: the worker runs inside the app
+ * process, every withdrawal goes through the helpers below, and a sync that
+ * spans a restart dies with the process anyway. Pinned to `globalThis` because
+ * the writers (route bundles) and the reader (the job worker) are different
+ * module instances under Next.js.
+ */
+interface WithdrawalCounters {
+  all: number;
+  perServer: Map<string, number>;
+}
+const globalForEvidence = globalThis as unknown as {
+  __watchEvidenceWithdrawals?: WithdrawalCounters;
+};
+const withdrawals: WithdrawalCounters = (globalForEvidence.__watchEvidenceWithdrawals ??= {
+  all: 0,
+  perServer: new Map(),
+});
+
+function recordWithdrawal(serverIds: string[] | "all"): void {
+  if (serverIds === "all") {
+    withdrawals.all++;
+    return;
+  }
+  for (const id of serverIds) {
+    withdrawals.perServer.set(id, (withdrawals.perServer.get(id) ?? 0) + 1);
+  }
+}
+
+function withdrawalGeneration(serverId: string): string {
+  return `${withdrawals.all}:${withdrawals.perServer.get(serverId) ?? 0}`;
+}
+
+/**
+ * What a sync saw of a server's marker when it STARTED — handed back to
+ * `markWatchHistoryEstablishedIfUnchanged` when it finishes.
+ */
+export interface WatchEvidenceSnapshot {
+  serverId: string;
+  /** `watchHistorySyncedAt` as read at the start of the run. */
+  marker: Date | null;
+  generation: string;
+}
+
+/**
+ * Capture the marker at the start of a sync. `marker` must come from the same
+ * read the sync starts from (it is not re-read here, so a caller that already
+ * loads the server row pays no extra query).
+ */
+export function snapshotWatchEvidence(
+  serverId: string,
+  marker: Date | null | undefined,
+): WatchEvidenceSnapshot {
+  return { serverId, marker: marker ?? null, generation: withdrawalGeneration(serverId) };
+}
+
+/**
+ * `markWatchHistoryEstablished` for a sync that may have been overtaken by a
+ * withdrawal while it ran. Returns whether the marker was written.
+ *
+ * An unconditional write lost the withdrawal: a native full replace takes
+ * tens of seconds of fetching before it writes, and a purge, a source switch or
+ * a disable-with-delete landing in that window destroyed rows and withdrew the
+ * marker — which the finishing sync then put straight back, vouching for a
+ * history it never saw. Two checks, because each covers what the other cannot:
+ *
+ *  - The UPDATE is a compare-and-set on the marker the run started with, which
+ *    catches any established → null withdrawal, from any writer.
+ *  - The withdrawal counters catch a null → null one, which leaves the column
+ *    unchanged. They are read before the write (skip early) and again after it,
+ *    and a withdrawal counted in between is undone by putting the marker back
+ *    to null — but only if it still holds the value this call wrote. Because a
+ *    withdrawal counts BEFORE it writes null, every interleaving ends null.
+ *
+ * Losing a race with another sync that marked first fails the compare as well;
+ * that is harmless, since the marker is then already set.
+ */
+export async function markWatchHistoryEstablishedIfUnchanged(
+  snapshot: WatchEvidenceSnapshot,
+): Promise<boolean> {
+  const { serverId, marker, generation } = snapshot;
+  if (withdrawalGeneration(serverId) !== generation) return false;
+  const now = new Date();
+  const { count } = await prisma.mediaServer.updateMany({
+    where: { id: serverId, watchHistorySyncedAt: marker },
+    data: { watchHistorySyncedAt: now },
+  });
+  if (count === 0) return false;
+  if (withdrawalGeneration(serverId) !== generation) {
+    await prisma.mediaServer.updateMany({
+      where: { id: serverId, watchHistorySyncedAt: now },
+      data: { watchHistorySyncedAt: null },
+    });
+    return false;
+  }
+  return true;
+}
+
+/**
  * Withdraw that record — the server's history is no longer known.
  *
  * **Every path that destroys watch history in bulk has to call this**, not just
@@ -50,6 +154,9 @@ export async function markWatchHistoryEstablished(serverIds: string[]): Promise<
  */
 export async function invalidateWatchHistoryEvidence(serverIds: string[]): Promise<number> {
   if (serverIds.length === 0) return 0;
+  // Counted before the write, and even for a server whose marker is already
+  // null, so a sync in flight cannot re-mark it (`markWatchHistoryEstablishedIfUnchanged`).
+  recordWithdrawal(serverIds);
   const { count } = await prisma.mediaServer.updateMany({
     where: { id: { in: serverIds }, watchHistorySyncedAt: { not: null } },
     data: { watchHistorySyncedAt: null },
@@ -67,6 +174,10 @@ export async function invalidateWatchHistoryEvidence(serverIds: string[]): Promi
  * cannot miss a server the operation reached indirectly.
  */
 export async function invalidateServersWithoutWatchHistory(): Promise<number> {
+  // The caller rewrote the whole database (restore), so no sync that started
+  // before it may vouch for what it now holds — whichever servers the query
+  // below happens to find.
+  recordWithdrawal("all");
   const servers = await prisma.mediaServer.findMany({
     where: { watchHistorySyncedAt: { not: null }, watchHistory: { none: {} } },
     select: { id: true },
@@ -94,7 +205,13 @@ export async function restartTracearrBackfill(serverIds: string[]): Promise<numb
   if (serverIds.length === 0) return 0;
   const { count } = await prisma.mediaServer.updateMany({
     where: { id: { in: serverIds }, tracearrServerId: { not: null } },
-    data: { tracearrBackfillComplete: false, tracearrBackfillCursorAt: new Date() },
+    // The forward floor goes too: the restarted walk starts at the newest play
+    // and covers whatever gap it recorded on its way down.
+    data: {
+      tracearrBackfillComplete: false,
+      tracearrBackfillCursorAt: new Date(),
+      tracearrForwardFloorAt: null,
+    },
   });
   return count;
 }

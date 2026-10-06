@@ -319,4 +319,10 @@ export interface DetailedWatchHistoryEntry {
   watchedAt: string | null;
   deviceName: string | null;
   platform: string | null;
+  /**
+   * The library (`Library.key`) the play was recorded in, when the server
+   * says (Plex `librarySectionID`). Only used to place a play whose rating key
+   * matches items in more than one library of the server.
+   */
+  librarySectionKey?: string | null;
 }

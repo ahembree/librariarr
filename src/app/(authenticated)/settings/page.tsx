@@ -1008,12 +1008,15 @@ export default function SettingsPage() {
   // multi-hour archive walk is progressing — so it must not depend entirely on a
   // connection staying up. Deliberately slow: the push covers the live case, and
   // this only has to stop the number going stale for good. Runs while a backfill
-  // is owed, which is the case that lasts long enough for a drop to matter.
+  // is `pending` — owed AND able to progress, which is the case that lasts long
+  // enough for a drop to matter. Not `!backfillComplete`: that stays false
+  // forever on a disabled server, behind a disabled Tracearr instance and on a
+  // mapping Tracearr holds no plays for, and the poll ran forever with them.
   // Also while any import is live: a catch-up on an already-backfilled server
   // shows an import card too, and without this a dropped stream would leave
   // that card up until the next pushed event.
   const tracearrBackfillRunning = visibleTracearrImportStatus.some(
-    (s) => !s.backfillComplete || s.activeImport !== null,
+    (s) => s.pending || s.activeImport !== null,
   );
   const pollTracearrImport = hasTracearrInstance && tracearrBackfillRunning;
   useEffect(() => {

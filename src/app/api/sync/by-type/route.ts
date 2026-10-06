@@ -73,8 +73,10 @@ export async function POST(request: NextRequest) {
     // MAIN_QUEUE is serial and ordered by enqueue time, so this runs *after*
     // every library job for the server has finished — meaning their `SyncJob`
     // rows are COMPLETED and `syncWatchHistoryTask`'s "a full sync is already
-    // running" guard does not swallow it. Sharing the realtime manager's jobKey
-    // dedupes with any refresh a `watch-changed` event already queued.
+    // running" guard does not swallow it. The key is NOT the realtime manager's
+    // (`watch-history-incremental:<id>`): a keyed enqueue replaces the queued
+    // payload, and a shared key let a later `watch-changed` event downgrade
+    // this full replace to an incremental append.
     await enqueueJob(
       TASK_SYNC_WATCH_HISTORY,
       { serverId: server.id },

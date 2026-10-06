@@ -1435,9 +1435,21 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
       // cannot be interrupted), so the previous history stays intact.
       const cancelWatch = watchForCancel(cancelRequested);
       try {
-        const { count: whCount } = await syncWatchHistory(serverId, undefined, cancelWatch.signal);
-        completedOps.push(`Watch history: ${whCount} plays (${formatDuration(Date.now() - whStart)})`);
-        logger.info("Sync", `Watch history sync completed: ${whCount} play events`);
+        const { count: whCount, failed: whFailed } = await syncWatchHistory(
+          serverId,
+          undefined,
+          cancelWatch.signal,
+        );
+        if (whFailed) {
+          // Still non-fatal, but a failure is reported as one: it returns
+          // rather than throws, and reading only `count` logged "0 play
+          // events" for a history that was never fetched.
+          logger.error("Sync", "Watch history sync failed", { error: whFailed });
+          completedOps.push(`Watch history: failed (${formatDuration(Date.now() - whStart)})`);
+        } else {
+          completedOps.push(`Watch history: ${whCount} plays (${formatDuration(Date.now() - whStart)})`);
+          logger.info("Sync", `Watch history sync completed: ${whCount} play events`);
+        }
       } catch (whError) {
         if (!cancelWatch.signal.aborted) {
           // Non-fatal: don't fail the entire sync if watch history fails

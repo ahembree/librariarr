@@ -149,12 +149,21 @@ const syncWatchHistoryTask: Task = async (payload) => {
   // re-importing the server's whole history (see `WatchHistorySyncOptions`).
   // Without the flag — `/api/sync/by-type`'s deferred refresh — it is the full
   // replace, which is what reconciles plays the server has since deleted.
-  const { count } = await syncWatchHistory(serverId, undefined, undefined, { incremental });
+  const { count, failed } = await syncWatchHistory(serverId, undefined, undefined, { incremental });
   // Watch-history-derived caches (filters, stats) must drop so listings reflect
   // the fresh play data instead of waiting out the TTL. An incremental run that
   // appended nothing changed nothing, and it fires per playback, so it keeps
-  // every cached listing; a full replace may have removed rows even at count 0.
-  if (count > 0 || !incremental) invalidateMediaCaches();
+  // every cached listing; a full replace may have removed rows even at count 0
+  // — unless it failed, in which case it never reached its write.
+  if (count > 0 || (!incremental && !failed)) invalidateMediaCaches();
+  // A run that could not sync left the stored history intact and returned
+  // rather than threw — but this job exists to bring that history up to date,
+  // so it fails here: graphile-worker records the failure and retries with
+  // backoff (`maxAttempts` at the enqueue sites) instead of logging a clean
+  // "synced 0 entries" for a server it never reached.
+  if (failed) {
+    throw new Error(`Watch-history refresh for server ${serverId} failed: ${failed}`);
+  }
   logger.info("Jobs", `Watch-history refresh for server ${serverId} synced ${count} entries`);
 };
 
@@ -231,9 +240,14 @@ const tracearrBackfill: Task = async (payload) => {
   // rows are already committed — graphile-worker would retry the whole job, and
   // the recovery's own candidacy is re-derived from the rows on the next run
   // anyway, so there is nothing to lose by simply logging it.
+  let recovered = 0;
   if (!result.backfillPending) {
     try {
-      await recoverHistoryForNewItems(serverId);
+      // Cheap when there is nothing to recover — the steady state of the job
+      // queued after every forward sync: one indexed candidate query, and no
+      // instance probe, join index or `/users` walk unless it finds a recent
+      // addition to ask about.
+      ({ imported: recovered } = await recoverHistoryForNewItems(serverId));
     } catch (error) {
       logger.warn(
         "Jobs",
@@ -243,23 +257,36 @@ const tracearrBackfill: Task = async (payload) => {
     }
   }
 
-  // Watch-history-derived caches (filters, stats) must drop so listings reflect
-  // the newly imported plays instead of waiting out the TTL.
-  invalidateMediaCaches();
-  // Once per slice (so ~once every 5 minutes over a multi-hour walk), tell open
-  // pages the play data moved. `tracearr:import-progress` fires per page but
-  // only drives the "still importing" notice; this is what makes the rows,
-  // stats and dashboard actually reflect an import in flight.
-  await emitWatchHistoryUpdated(serverId, {
-    imported: result.count,
-    backfillPending: result.backfillPending,
-  });
+  // Only when something moved. This job is queued after EVERY forward sync —
+  // per finished playback on a realtime server — and on a fully backfilled
+  // server it almost always walks nothing and recovers nothing. Dropping every
+  // media cache and making every open History/stats page refetch for that was
+  // pure churn. "Moved" includes the slice that finished the walk with nothing
+  // left to store: the backfill state the pages show changed even so.
+  const finishedWalk = !result.backfillPending && result.backfillOutcome === "exhausted";
+  if (result.count > 0 || recovered > 0 || finishedWalk) {
+    // Watch-history-derived caches (filters, stats) must drop so listings
+    // reflect the newly imported plays instead of waiting out the TTL.
+    invalidateMediaCaches();
+    // Once per slice (so ~once every 5 minutes over a multi-hour walk), tell
+    // open pages the play data moved. `tracearr:import-progress` fires per page
+    // but only drives the "still importing" notice; this is what makes the
+    // rows, stats and dashboard actually reflect an import in flight.
+    await emitWatchHistoryUpdated(serverId, {
+      imported: result.count + recovered,
+      backfillPending: result.backfillPending,
+    });
+  }
 
   if (!result.backfillPending) {
-    logger.info(
-      "Jobs",
-      `Tracearr backfill for server ${serverId} is complete (${result.count} row(s) this slice)`,
-    );
+    // Logged only for a slice that actually walked: a no-op run on a finished
+    // archive happens after every forward sync and is not news.
+    if (result.backfillOutcome !== undefined || result.count > 0) {
+      logger.info(
+        "Jobs",
+        `Tracearr backfill for server ${serverId} is complete (${result.count} row(s) this slice)`,
+      );
+    }
     return;
   }
 

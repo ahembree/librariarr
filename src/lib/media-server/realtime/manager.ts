@@ -443,7 +443,13 @@ export class RealtimeManager {
             // One finished playback: append the new plays, never re-import
             // the server's whole history (see `SyncWatchHistoryPayload`).
             { serverId, incremental: true },
-            { jobKey: `watch-history:${serverId}`, queueName: MAIN_QUEUE, maxAttempts: 3 },
+            // Its own key, never `/api/sync/by-type`'s `watch-history:<id>`.
+            // graphile-worker's keyed enqueue REPLACES the queued payload, so
+            // sharing that key let this `incremental: true` overwrite a queued
+            // full replace — and the plays the server has since deleted, which
+            // only a full replace reconciles, stayed stored. Two keys may mean
+            // both run; the append after a full replace is a one-request no-op.
+            { jobKey: `watch-history-incremental:${serverId}`, queueName: MAIN_QUEUE, maxAttempts: 3 },
           ).then((ok) => {
             if (ok) {
               logger.info(

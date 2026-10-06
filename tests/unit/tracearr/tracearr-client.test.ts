@@ -1280,5 +1280,63 @@ describe("TracearrClient", () => {
       expect(names.get("acct-jesse")).toBeUndefined();
       expect(names.get("acct-jesse-here")).toBe("jesse_pinkman");
     });
+
+    describe("an incomplete walk throws rather than returning what it reached", () => {
+      // A PARTIAL map is non-empty, so the importer's "is the map usable" gate
+      // let it through, and every play of an account it missed was stored
+      // under Tracearr's identity label for good (archive rows are never
+      // re-delivered). Every caller treats a throw as "unavailable".
+      it("throws when the page cap cuts the walk short", async () => {
+        let n = 0;
+        mockAxiosInstance.get.mockImplementation(async () =>
+          usersBody([ACTIVE], `cursor-${++n}`),
+        );
+
+        await expect(client.getServerAccountNames("srv-1")).rejects.toThrow(
+          /did not end within/,
+        );
+      });
+
+      it("throws on a cursor that repeats", async () => {
+        mockAxiosInstance.get
+          .mockResolvedValueOnce(usersBody([ACTIVE], "cursor-2"))
+          .mockResolvedValueOnce(usersBody([DEPARTED], "cursor-2"));
+
+        await expect(client.getServerAccountNames("srv-1")).rejects.toThrow(
+          /stopped advancing/,
+        );
+      });
+
+      it("throws on a page that is not a users page", async () => {
+        mockAxiosInstance.get
+          .mockResolvedValueOnce(usersBody([ACTIVE], "cursor-2"))
+          .mockResolvedValueOnce({ data: "<html>sign in</html>" });
+
+        await expect(client.getServerAccountNames("srv-1")).rejects.toThrow(
+          /unexpected response/,
+        );
+      });
+
+      it("throws when cancelled mid-walk", async () => {
+        const controller = new AbortController();
+        mockAxiosInstance.get.mockImplementationOnce(async () => {
+          controller.abort();
+          return usersBody([ACTIVE], "cursor-2");
+        });
+
+        await expect(
+          client.getServerAccountNames("srv-1", { signal: controller.signal }),
+        ).rejects.toThrow(/cancelled/);
+      });
+
+      it("returns the whole map when the walk ends normally", async () => {
+        mockAxiosInstance.get
+          .mockResolvedValueOnce(usersBody([ACTIVE], "cursor-2"))
+          .mockResolvedValueOnce(usersBody([DEPARTED], null));
+
+        const names = await client.getServerAccountNames("srv-1");
+        expect([...names.keys()].sort()).toEqual(["acct-jesse", "acct-walter"]);
+      });
+    });
   });
 });

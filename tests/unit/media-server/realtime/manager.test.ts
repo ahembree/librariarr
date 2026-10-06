@@ -257,8 +257,12 @@ describe("RealtimeManager", () => {
       // One finished playback appends the new plays; it must never be the
       // full re-import the by-type sync's deferred refresh runs.
       { serverId: "j1", incremental: true },
-      expect.objectContaining({ jobKey: "watch-history:j1", queueName: MAIN_QUEUE }),
+      // Its own key: graphile's keyed enqueue replaces the queued payload, so
+      // sharing by-type's `watch-history:<id>` let this `incremental: true`
+      // overwrite a queued full replace.
+      expect.objectContaining({ jobKey: "watch-history-incremental:j1", queueName: MAIN_QUEUE }),
     );
+    expect(h.enqueueJob.mock.calls.some((c) => c[2]?.jobKey === "watch-history:j1")).toBe(false);
   });
 
   it("coalesces a burst of library changes into a single incremental sync with all ids", async () => {

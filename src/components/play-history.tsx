@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import {
   CircleCheck,
@@ -18,6 +18,7 @@ import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/h
 import { formatDurationClock } from "@/lib/format";
 import { SERVER_TYPE_STYLES, DEFAULT_SERVER_STYLE } from "@/lib/server-styles";
 import { cn } from "@/lib/utils";
+import { PageRequestTracker, pageAfterShrink } from "@/lib/media/history-paging";
 
 /** How many plays one page shows; the footer steps between pages. */
 const PAGE_SIZE = 5;
@@ -809,9 +810,10 @@ export function PlayHistory({
   // page whose five plays happen to share a server must not drop the server
   // names the previous page showed. Cleared with the rest of the scope state.
   const [seenServers, setSeenServers] = useState<string[]>([]);
-  // Guards against a stale slow response landing after the scope changed and
-  // overwriting the current series'/season's rows.
-  const reqToken = useRef(0);
+  // Request sequencing: every request (scope load, page click, refresh) takes a
+  // fresh token so only the newest can apply, and a `refreshKey` bump reloads
+  // the page last asked for rather than page 1 (see PageRequestTracker).
+  const [tracker] = useState(() => new PageRequestTracker());
 
   const fetchPage = useCallback(
     async (target: number): Promise<WatchHistoryResponse> => {
@@ -859,28 +861,32 @@ export function PlayHistory({
 
       try {
         const data = await fetchPage(target);
-        if (token !== reqToken.current) return;
+        if (!tracker.isCurrent(token)) return;
 
         // The list shrank under us — plays purged, or a refresh landed on a
-        // shorter history — so this page no longer exists. Fall back to the
-        // first rather than stranding the user on an empty one.
-        if (data.items.length === 0 && target > 1) {
-          const first = await fetchPage(1);
-          if (token !== reqToken.current) return;
-          apply(first, 1);
+        // shorter history — so this page no longer exists. Step back to the
+        // new last page rather than stranding the user on an empty one or
+        // throwing them back to the first.
+        const clamped = pageAfterShrink(target, data.pagination.totalCount, PAGE_SIZE);
+        if (clamped !== null) {
+          tracker.redirect(token, clamped);
+          const fallback = await fetchPage(clamped);
+          if (!tracker.isCurrent(token)) return;
+          apply(fallback, clamped);
           return;
         }
 
         apply(data, target);
       } catch {
-        if (token === reqToken.current) setError(true);
+        if (tracker.isCurrent(token)) setError(true);
       } finally {
-        if (token !== reqToken.current) return;
-        setLoading(false);
-        setPaging(false);
+        if (tracker.isCurrent(token)) {
+          setLoading(false);
+          setPaging(false);
+        }
       }
     },
-    [fetchPage],
+    [fetchPage, tracker],
   );
 
   // Reset to the loading state when the scope changes, so a new series/season
@@ -899,22 +905,30 @@ export function PlayHistory({
     setLoading(true);
   }
 
+  // Runs on a scope change (fetchPage's identity is the scope) and on every
+  // `refreshKey` bump. A scope change starts at page 1; a refresh — fired on
+  // every `sync:completed` / `watch-history:updated`, i.e. every few minutes
+  // while a Tracearr backfill runs — reloads the page the user is on (or
+  // moving to), clamped if the list shrank, instead of throwing them back to
+  // the first page each time.
   useEffect(() => {
-    const token = ++reqToken.current;
+    const { page: target, token } = tracker.refresh(fetchPage);
     void (async () => {
-      await loadPage(1, token);
+      await loadPage(target, token);
     })();
-  }, [loadPage, refreshKey]);
+  }, [tracker, fetchPage, loadPage, refreshKey]);
 
   const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
 
   const goToPage = useCallback(
     (target: number) => {
-      if (paging || target < 1 || target > totalPages) return;
+      if (target < 1 || target > totalPages) return;
       setPaging(true);
-      void loadPage(target, reqToken.current);
+      // A NEW token: reusing the in-flight one let a refresh started before
+      // this click land after it and put the previous page back on screen.
+      void loadPage(target, tracker.request(target));
     },
-    [loadPage, paging, totalPages],
+    [loadPage, totalPages, tracker],
   );
 
   const card = variant === "card";

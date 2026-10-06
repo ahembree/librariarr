@@ -609,5 +609,80 @@ describe("JellyfinClient", () => {
       expect(logger.warn).toHaveBeenCalledWith("Jellyfin", expect.stringContaining('user "Bob" (HTTP 403)'));
       vi.mocked(axios.isAxiosError).mockImplementation(() => false);
     });
+
+    it("throws on a /Users body that is not a list instead of reading it as no users", async () => {
+      // `usersRes.data || []` turned an HTML page from a proxy into "no users,
+      // no plays", and the full replace deleted every stored play.
+      const client = new JellyfinClient("http://jellyfin:8096", "jf-token");
+      const axiosClient = mockAxiosCreate.mock.results[0].value as { get: ReturnType<typeof vi.fn> };
+      axiosClient.get.mockImplementation(async () => ({ data: "<html>Sign in</html>" }));
+      await expect(client.getDetailedWatchHistory()).rejects.toThrow(/malformed \/Users/);
+    });
+
+    it("throws on a played-items page with no Items list instead of reading it as nothing played", async () => {
+      const { client } = newClient({
+        u1: async () => ({ data: { TotalRecordCount: 5 } }),
+        u2: async () => played("m2"),
+      });
+      await expect(client.getDetailedWatchHistory()).rejects.toThrow(/no Items list/);
+    });
+
+    /** A user's played items served `cap` at a time out of `total`, whatever Limit asked. */
+    function cappedPages(total: number, cap: number, reportTotal: boolean) {
+      return (params: { StartIndex: number }) => {
+        const items = Array.from(
+          { length: Math.max(0, Math.min(cap, total - params.StartIndex)) },
+          (_, i) => ({ Id: `m${params.StartIndex + i}`, UserData: { PlayCount: 1 } }),
+        );
+        return { data: { Items: items, ...(reportTotal ? { TotalRecordCount: total } : {}) } };
+      };
+    }
+
+    function pagedClient(page: (params: { StartIndex: number }) => unknown) {
+      const client = new JellyfinClient("http://jellyfin:8096", "jf-token");
+      const axiosClient = mockAxiosCreate.mock.results[0].value as { get: ReturnType<typeof vi.fn> };
+      axiosClient.get.mockImplementation(async (url: string, config?: { params: { StartIndex: number } }) => {
+        if (url === "/Users") return { data: [{ Id: "u1", Name: "Alice" }] };
+        return page(config!.params);
+      });
+      return { client, axiosClient };
+    }
+
+    it("keeps paging past a short page while TotalRecordCount says more remain", async () => {
+      // A server or proxy capping the page below the 1,000 asked for stopped the
+      // old loop after its first page — truncating the user's history right
+      // before a destructive full replace committed it.
+      const { client, axiosClient } = pagedClient(cappedPages(250, 100, true));
+
+      const entries = await client.getDetailedWatchHistory();
+
+      expect(entries).toHaveLength(250);
+      const starts = axiosClient.get.mock.calls
+        .filter((c) => c[0] === "/Users/u1/Items")
+        .map((c) => c[1].params.StartIndex);
+      // Advanced by what was actually returned, not by the size asked for.
+      expect(starts).toEqual([0, 100, 200]);
+    });
+
+    it("stops on a short page when the server reports no total", async () => {
+      const { client, axiosClient } = pagedClient(cappedPages(250, 100, false));
+      const entries = await client.getDetailedWatchHistory();
+      expect(entries).toHaveLength(100);
+      expect(axiosClient.get.mock.calls.filter((c) => c[0] === "/Users/u1/Items")).toHaveLength(1);
+    });
+
+    it("throws on an empty page short of the reported total rather than ending the walk", async () => {
+      const { client } = pagedClient((params) =>
+        params.StartIndex === 0
+          ? cappedPages(250, 100, true)(params)
+          : { data: { Items: [], TotalRecordCount: 250 } },
+      );
+      await expect(client.getDetailedWatchHistory()).rejects.toThrow(/empty played-items page at 100 of 250/);
+    });
+
+    it("throws instead of looping when the server ignores StartIndex", async () => {
+      const { client } = pagedClient(() => cappedPages(5000, 1000, true)({ StartIndex: 0 }));
+      await expect(client.getDetailedWatchHistory()).rejects.toThrow(/ignored StartIndex/);
+    });
   });
 });

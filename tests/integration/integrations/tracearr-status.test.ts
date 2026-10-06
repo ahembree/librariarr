@@ -1,4 +1,6 @@
-import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
+import { describe, it, expect, beforeEach, beforeAll, afterAll, vi } from "vitest";
+import { Pool } from "pg";
+import { makeWorkerUtils, type WorkerUtils } from "graphile-worker";
 import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
 import {
@@ -26,7 +28,10 @@ vi.mock("@/lib/logger", () => ({
 import { GET } from "@/app/api/integrations/tracearr/status/route";
 // The fraction arithmetic is a pure helper beside the route, so its edge cases
 // are exercised directly as well as through the response shape.
-import { computeBackfillFraction } from "@/app/api/integrations/tracearr/status/backfill-fraction";
+import {
+  computeBackfillFraction,
+  resolveBackfillReach,
+} from "@/app/api/integrations/tracearr/status/backfill-fraction";
 import {
   beginTracearrImport,
   endTracearrImport,
@@ -42,13 +47,17 @@ interface StatusRow {
   oldestImported: string | null;
   newestImported: string | null;
   oldestPlayAt: string | null;
+  reachedAt: string | null;
   backfillFraction: number | null;
+  pending: boolean;
+  pausedReason: "server-disabled" | "instance-unavailable" | null;
   activeImport: {
     pass: "forward" | "backfill" | null;
     startedAt: string;
     pages: number;
     imported: number;
     oldestReached: string | null;
+    backfillReached: string | null;
   } | null;
 }
 
@@ -72,6 +81,13 @@ async function mapToTracearr(
       tracearrBackfillComplete: opts.backfillComplete ?? false,
       tracearrOldestPlayAt: opts.oldestPlayAt ?? null,
     },
+  });
+}
+
+/** An enabled Tracearr instance — without one no mapped server can import. */
+async function createInstance(userId: string, enabled = true) {
+  return getTestPrisma().tracearrInstance.create({
+    data: { userId, name: "Tracearr", url: "http://tracearr.test", apiKey: "key", enabled },
   });
 }
 
@@ -168,7 +184,11 @@ describe("GET /api/integrations/tracearr/status", () => {
       // Nothing has measured the far edge of Tracearr's archive yet, so how far
       // the walk has to go is unknown — indeterminate, not zero.
       oldestPlayAt: null,
+      reachedAt: oldest.toISOString(),
       backfillFraction: null,
+      // Owed, but no Tracearr instance is configured to serve it.
+      pending: false,
+      pausedReason: "instance-unavailable",
       activeImport: null,
     });
   });
@@ -480,6 +500,253 @@ describe("GET /api/integrations/tracearr/status", () => {
     // because with no import there is no near boundary to measure from.
     expect(body.servers[0].oldestPlayAt).toBe(oldestPlayAt.toISOString());
     expect(body.servers[0].backfillFraction).toBeNull();
+  });
+});
+
+describe("GET /api/integrations/tracearr/status — pending and reach", () => {
+  beforeEach(async () => {
+    await cleanDatabase();
+    clearMockSession();
+    vi.clearAllMocks();
+  });
+
+  const read = async () =>
+    (await expectJson<{ servers: StatusRow[] }>(await callRoute(GET, { url: STATUS_URL }))).servers;
+
+  /** A mapped, enabled server with one imported play and its far edge measured. */
+  async function walkingServer(userId: string, name: string, tracearrServerId: string) {
+    const server = await createTestServer(userId, { name });
+    await mapToTracearr(server.id, tracearrServerId, { oldestPlayAt: new Date(Date.UTC(2026, 0, 1)) });
+    const item = await createItemFor(server.id, `${name} item`);
+    for (const [i, watchedAt] of [new Date(Date.UTC(2026, 0, 8)), new Date(Date.UTC(2026, 0, 11))].entries()) {
+      await createWatchRow({ mediaItemId: item.id, mediaServerId: server.id, watchedAt, sourceEventId: `${name}-${i}` });
+    }
+    return server;
+  }
+
+  it("is pending while an owed import has history to walk", async () => {
+    const user = await createTestUser();
+    await createInstance(user.id);
+    await walkingServer(user.id, "Walking", "a0000000-0000-4000-8000-000000000001");
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+    const [row] = await read();
+    expect(row.pending).toBe(true);
+    expect(row.pausedReason).toBeNull();
+    expect(row.backfillComplete).toBe(false);
+  });
+
+  it("is not pending once the backfill is complete", async () => {
+    const user = await createTestUser();
+    await createInstance(user.id);
+    const server = await walkingServer(user.id, "Done", "a0000000-0000-4000-8000-000000000002");
+    await getTestPrisma().mediaServer.update({
+      where: { id: server.id },
+      data: { tracearrBackfillComplete: true },
+    });
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+    expect((await read())[0].pending).toBe(false);
+  });
+
+  it("lists a disabled server as paused, never pending, while backfillComplete stays as stored", async () => {
+    // No sync runs for a disabled server, so a pending import there was a
+    // spinner and a 30-second poll that never ended.
+    const user = await createTestUser();
+    await createInstance(user.id);
+    const server = await walkingServer(user.id, "Disabled", "a0000000-0000-4000-8000-000000000003");
+    await getTestPrisma().mediaServer.update({ where: { id: server.id }, data: { enabled: false } });
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+    const [row] = await read();
+    expect(row.serverId).toBe(server.id);
+    expect(row.backfillComplete).toBe(false);
+    expect(row.pending).toBe(false);
+    expect(row.pausedReason).toBe("server-disabled");
+  });
+
+  it("is paused when no Tracearr instance is enabled", async () => {
+    const user = await createTestUser();
+    await createInstance(user.id, false);
+    await walkingServer(user.id, "Orphaned", "a0000000-0000-4000-8000-000000000004");
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+    const [row] = await read();
+    expect(row.pending).toBe(false);
+    expect(row.pausedReason).toBe("instance-unavailable");
+  });
+
+  it("is not pending for a mapping no run has found any history for", async () => {
+    // Tracearr holds no plays for it: the walk comes back exhausted and empty,
+    // the backfill deliberately stays incomplete and the slice is not
+    // re-enqueued — nothing will ever progress, so nothing may wait on it.
+    const user = await createTestUser();
+    await createInstance(user.id);
+    const server = await createTestServer(user.id, { name: "Empty" });
+    await mapToTracearr(server.id, "a0000000-0000-4000-8000-000000000005");
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+    const [row] = await read();
+    expect(row.backfillComplete).toBe(false);
+    expect(row.importedCount).toBe(0);
+    expect(row.pending).toBe(false);
+    expect(row.pausedReason).toBeNull();
+
+    // A run in progress is the evidence it was missing.
+    const run = beginTracearrImport(server.id, user.id);
+    try {
+      expect((await read())[0].pending).toBe(true);
+    } finally {
+      endTracearrImport(run);
+    }
+  });
+
+  it("is pending with no rows yet once the far edge is measured or the walk restarted", async () => {
+    const user = await createTestUser();
+    await createInstance(user.id);
+    const measured = await createTestServer(user.id, { name: "A measured" });
+    await mapToTracearr(measured.id, "a0000000-0000-4000-8000-000000000006", {
+      oldestPlayAt: new Date(Date.UTC(2020, 0, 1)),
+    });
+    const restarted = await createTestServer(user.id, { name: "B restarted" });
+    await mapToTracearr(restarted.id, "a0000000-0000-4000-8000-000000000007");
+    await getTestPrisma().mediaServer.update({
+      where: { id: restarted.id },
+      data: { tracearrBackfillCursorAt: new Date() },
+    });
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+    expect((await read()).map((row) => row.pending)).toEqual([true, true]);
+  });
+
+  describe("with a backfill job on the queue", () => {
+    let pool: Pool;
+    let utils: WorkerUtils;
+
+    beforeAll(async () => {
+      pool = new Pool({ connectionString: process.env.DATABASE_URL!, max: 2 });
+      await pool.query("DROP SCHEMA IF EXISTS graphile_worker CASCADE");
+      // Runs graphile-worker's own migrations: the real `graphile_worker.jobs`.
+      utils = await makeWorkerUtils({ pgPool: pool });
+      await utils.migrate();
+    });
+
+    afterAll(async () => {
+      if (utils) await Promise.resolve(utils.release()).catch(() => {});
+      if (pool) {
+        await pool.query("DROP SCHEMA IF EXISTS graphile_worker CASCADE").catch(() => {});
+        await pool.end().catch(() => {});
+      }
+    });
+
+    it("is pending with nothing imported yet while its first slice waits on the queue", async () => {
+      const user = await createTestUser();
+      await createInstance(user.id);
+      const server = await createTestServer(user.id, { name: "Queued" });
+      await mapToTracearr(server.id, "a0000000-0000-4000-8000-000000000008");
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      expect((await read())[0].pending).toBe(false);
+
+      await utils.addJob("tracearr-backfill", { serverId: server.id }, {
+        jobKey: `tracearr-backfill:${server.id}`,
+        maxAttempts: 3,
+      });
+      expect((await read())[0].pending).toBe(true);
+
+      // A job that used up its attempts is parked, not waiting.
+      await pool.query(
+        `UPDATE graphile_worker._private_jobs SET attempts = max_attempts WHERE key = $1`,
+        [`tracearr-backfill:${server.id}`],
+      );
+      expect((await read())[0].pending).toBe(false);
+    });
+  });
+
+  it("measures the bar from a live backfill run that is further back than the stored reach", async () => {
+    // The cursor is written once per five-minute slice; between writes the
+    // bar stood still while the walk paged on.
+    const user = await createTestUser();
+    await createInstance(user.id);
+    const server = await walkingServer(user.id, "Live", "a0000000-0000-4000-8000-000000000009");
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+    expect((await read())[0].backfillFraction).toBeCloseTo(0.3, 10);
+
+    const run = beginTracearrImport(server.id, user.id);
+    try {
+      recordTracearrImportPage(run, {
+        pass: "backfill",
+        pages: 40,
+        imported: 0,
+        oldestReached: new Date(Date.UTC(2026, 0, 6)),
+      });
+      const [row] = await read();
+      expect(row.backfillFraction).toBeCloseTo(0.5, 10);
+      expect(row.reachedAt).toBe(new Date(Date.UTC(2026, 0, 6)).toISOString());
+    } finally {
+      endTracearrImport(run);
+    }
+  });
+
+  it("ignores a live forward pass's reach — the newest hour says nothing about the archive", async () => {
+    const user = await createTestUser();
+    await createInstance(user.id);
+    const server = await walkingServer(user.id, "Forward", "a0000000-0000-4000-8000-000000000010");
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+    const run = beginTracearrImport(server.id, user.id);
+    try {
+      recordTracearrImportPage(run, {
+        pass: "forward",
+        pages: 1,
+        imported: 3,
+        oldestReached: new Date(Date.UTC(2025, 0, 1)),
+      });
+      const [row] = await read();
+      expect(row.backfillFraction).toBeCloseTo(0.3, 10);
+      expect(row.reachedAt).toBe(new Date(Date.UTC(2026, 0, 8)).toISOString());
+    } finally {
+      endTracearrImport(run);
+    }
+  });
+
+  it("reports the reach the fraction is measured from, not the oldest surviving row, after a purge restart", async () => {
+    // `restartTracearrBackfill` moves the cursor to now; rows that survived the
+    // purge still reach the far end. The line read "0% … reached 2019".
+    const user = await createTestUser();
+    await createInstance(user.id);
+    const server = await walkingServer(user.id, "Restarted", "a0000000-0000-4000-8000-000000000011");
+    const restartedAt = new Date(Date.UTC(2026, 0, 12));
+    await getTestPrisma().mediaServer.update({
+      where: { id: server.id },
+      data: { tracearrBackfillCursorAt: restartedAt },
+    });
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+    const [row] = await read();
+    expect(row.backfillFraction).toBe(0);
+    expect(row.reachedAt).toBe(restartedAt.toISOString());
+    expect(row.oldestImported).toBe(new Date(Date.UTC(2026, 0, 8)).toISOString());
+  });
+});
+
+describe("resolveBackfillReach", () => {
+  const cursorAt = new Date(Date.UTC(2026, 0, 6));
+  const oldestImported = new Date(Date.UTC(2026, 0, 8));
+
+  it("prefers the cursor over the oldest row", () => {
+    expect(resolveBackfillReach({ oldestImported, cursorAt })).toEqual(cursorAt);
+    expect(resolveBackfillReach({ oldestImported, cursorAt: null })).toEqual(oldestImported);
+    expect(resolveBackfillReach({ oldestImported: null })).toBeNull();
+  });
+
+  it("takes the live reach only when it is further back", () => {
+    const older = new Date(Date.UTC(2026, 0, 3));
+    const newer = new Date(Date.UTC(2026, 0, 7));
+    expect(resolveBackfillReach({ oldestImported, cursorAt, liveReached: older })).toEqual(older);
+    expect(resolveBackfillReach({ oldestImported, cursorAt, liveReached: newer })).toEqual(cursorAt);
+    expect(resolveBackfillReach({ oldestImported: null, liveReached: newer })).toEqual(newer);
   });
 });
 

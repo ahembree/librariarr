@@ -23,6 +23,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
+  AlertTriangle,
   Columns3,
   History,
   Loader2,
@@ -47,6 +48,18 @@ import { normalizeResolutionLabel } from "@/lib/resolution";
 import { MEDIA_TYPE_BADGE_COLORS, MEDIA_TYPE_LABELS } from "@/lib/theme/media-type-colors";
 import { EmptyState } from "@/components/empty-state";
 import type { MediaItemWithRelations } from "@/lib/types";
+import {
+  historyColumnForSortKey,
+  historySortKeyForColumn,
+  isHistorySortableColumn,
+} from "@/lib/media/history-sort";
+import { PageRequestTracker, pageAfterShrink } from "@/lib/media/history-paging";
+import {
+  importBackfillPercent as computeImportBackfillPercent,
+  failedSyncServerNames,
+  isImportPending,
+  type TracearrImportStatus,
+} from "@/lib/media/history-import-status";
 
 // ── Types ────────────────────────────────────────────────────────
 
@@ -120,27 +133,9 @@ const PAGE_SIZE = 100;
  */
 const TRACEARR_IMPORT_POLL_MS = 30_000;
 
-const COLUMN_TO_SORT_FIELD: Record<string, string> = {
-  title: "title",
-  type: "type",
-  serverUsername: "serverUsername",
-  watchedAt: "watchedAt",
-  year: "year",
-  resolution: "resolution",
-  dynamicRange: "dynamicRange",
-  duration: "duration",
-  fileSize: "fileSize",
-  deviceName: "deviceName",
-  platform: "platform",
-  server: "serverUsername",
-  // Tracearr stream facts. `streamResolution` maps to its own API sort key
-  // rather than reusing `resolution`, which sorts the FILE's resolution on the
-  // MediaItem — the two disagree on any transcoded play.
-  transcode: "isTranscode",
-  completion: "percentComplete",
-  player: "player",
-  streamResolution: "streamResolution",
-};
+// Column → API sort key lives in `src/lib/media/history-sort.ts`, shared with
+// the route's ORDER BY whitelist, so a header can only be sortable when the
+// route really sorts by it (see that module for the bugs this replaced).
 
 const VISIBLE_KEY = "history-visible-columns";
 
@@ -360,7 +355,7 @@ export default function HistoryPage() {
           {getItemTitle(item)}
         </span>
       ),
-      sortValue: (item) => item.mediaItem.titleSort ?? item.mediaItem.title,
+      sortValue: (item) => getItemTitle(item),
     },
     {
       id: "type",
@@ -602,10 +597,13 @@ export default function HistoryPage() {
   // ── Column visibility ──────────────────────────────────────────
 
   const activeColumns = useMemo(() => {
-    if (visibleCols.size === 0) {
-      return allColumns.filter((c) => c.defaultVisible);
-    }
-    return allColumns.filter((c) => visibleCols.has(c.id));
+    const shown = visibleCols.size === 0
+      ? allColumns.filter((c) => c.defaultVisible)
+      : allColumns.filter((c) => visibleCols.has(c.id));
+    // Sorting is server-side, so a header is clickable only when the route has
+    // a sort key for it — otherwise the arrow would move while the route
+    // silently sorted by Watched At.
+    return shown.map((c) => (isHistorySortableColumn(c.id) ? c : { ...c, sortable: false }));
   }, [allColumns, visibleCols]);
 
   const toggleColumn = useCallback((colId: string) => {
@@ -636,19 +634,24 @@ export default function HistoryPage() {
     return () => clearTimeout(timeout);
   }, [search]);
 
-  // Token guards against a stale slow response landing after a quick
-  // filter/page flip and overwriting the current result set.
-  const reqToken = useRef(0);
+  // Request sequencing: every request takes a fresh token so only the newest
+  // applies, and a refresh reloads the page last REQUESTED — which a pending
+  // filter change has already reset to 1 and a pending page click has already
+  // moved — rather than the page last shown (see PageRequestTracker).
+  const [tracker] = useState(() => new PageRequestTracker());
+  // The last request failed. Previous rows stay on screen under an error
+  // notice instead of being replaced by the "No watch history … Sync Now"
+  // empty state, which told the user they had no history when the server
+  // merely failed to answer.
+  const [loadError, setLoadError] = useState(false);
   // Separate token for the detail panel so rapidly clicking two rows doesn't
   // let the slower /api/media/:id response win and show the wrong item.
   const detailReqToken = useRef(0);
 
-  const fetchHistory = useCallback(async (fetchPage: number) => {
-    const token = ++reqToken.current;
+  const fetchHistory = useCallback(async (fetchPage: number, token: number) => {
     setLoading(true);
     try {
       const params = new URLSearchParams({
-        page: String(fetchPage),
         limit: String(PAGE_SIZE),
         sortBy,
         sortOrder,
@@ -660,28 +663,60 @@ export default function HistoryPage() {
       if (selectedPlatforms.size > 0) params.set("platform", [...selectedPlatforms].join("|"));
       if (selectedResolutions.size > 0) params.set("resolution", [...selectedResolutions].join("|"));
 
-      const res = await fetch(`/api/media/history?${params}`);
-      if (!res.ok) throw new Error("Failed to fetch");
-      const data = await res.json();
-      if (token !== reqToken.current) return;
+      const load = async (target: number) => {
+        params.set("page", String(target));
+        const res = await fetch(`/api/media/history?${params}`);
+        if (!res.ok) throw new Error("Failed to fetch");
+        return res.json();
+      };
+
+      let shownPage = fetchPage;
+      let data = await load(fetchPage);
+      if (!tracker.isCurrent(token)) return;
+      // The history shrank under the requested page (filters narrowed it, or
+      // plays were removed between the click and the answer): show the new
+      // last page rather than an empty table past the end.
+      const clamped = pageAfterShrink(fetchPage, data.pagination?.totalCount ?? 0, PAGE_SIZE);
+      if (clamped !== null) {
+        tracker.redirect(token, clamped);
+        shownPage = clamped;
+        data = await load(clamped);
+        if (!tracker.isCurrent(token)) return;
+      }
       setItems(data.items || []);
       setTotalCount(data.pagination?.totalCount ?? 0);
-      setPage(fetchPage);
+      setPage(shownPage);
       setUsernames(data.usernames ?? []);
       setPlatforms(data.platforms ?? []);
+      setLoadError(false);
     } catch {
-      if (token !== reqToken.current) return;
-      setItems([]);
-      setTotalCount(0);
+      if (!tracker.isCurrent(token)) return;
+      // Keep what is on screen; the notice above the table says it is stale.
+      setLoadError(true);
     } finally {
-      if (token === reqToken.current) setLoading(false);
+      if (tracker.isCurrent(token)) setLoading(false);
     }
-  }, [debouncedSearch, selectedServerId, selectedTypes, selectedUsernames, selectedPlatforms, selectedResolutions, sortBy, sortOrder]);
+  }, [tracker, debouncedSearch, selectedServerId, selectedTypes, selectedUsernames, selectedPlatforms, selectedResolutions, sortBy, sortOrder]);
 
-  // Reset to page 1 when filters change
+  /** Fetch a specific page (pagination, or page 1 after a sync). */
+  const goToPage = useCallback((target: number) => {
+    void fetchHistory(target, tracker.request(target));
+  }, [fetchHistory, tracker]);
+
+  /**
+   * Reload what the user is looking at. `fetchHistory`'s identity is the
+   * filter/sort scope: a new scope starts at page 1, the same scope reloads
+   * the page last requested.
+   */
+  const reloadHistory = useCallback(() => {
+    const { page: target, token } = tracker.refresh(fetchHistory);
+    void fetchHistory(target, token);
+  }, [fetchHistory, tracker]);
+
+  // Back to page 1 when filters or sort change (a new `fetchHistory`).
   useEffect(() => {
-    void (async () => { await fetchHistory(1); })();
-  }, [fetchHistory]);
+    void (async () => { reloadHistory(); })();
+  }, [reloadHistory]);
 
   // ── Tracearr import progress ───────────────────────────────────
 
@@ -705,10 +740,8 @@ export default function HistoryPage() {
     try {
       const res = await fetch("/api/integrations/tracearr/status");
       if (!res.ok) return;
-      const data = (await res.json()) as {
-        servers?: { backfillComplete: boolean; backfillFraction: number | null }[];
-      };
-      const pending = (data.servers ?? []).filter((s) => !s.backfillComplete);
+      const data = (await res.json()) as { servers?: TracearrImportStatus[] };
+      const pending = (data.servers ?? []).filter(isImportPending);
       setImportBackfillPending(pending.length > 0);
       // Recomputed from every successful read rather than latched, so a backfill
       // that appears later (a server mapped to Tracearr after this page loaded,
@@ -717,17 +750,9 @@ export default function HistoryPage() {
       // The note clears only once EVERY mapped server is finished, so the
       // number that describes it is the least-advanced server's — an average
       // would keep climbing while the laggard that actually gates the note sat
-      // still. One unmeasured server makes the whole note indeterminate: a
-      // server with no fraction could be anywhere, so there is no floor to
-      // report and null (not 0) is the honest answer.
-      const known = pending
-        .map((s) => s.backfillFraction)
-        .filter((fraction): fraction is number => fraction !== null);
-      setImportBackfillPercent(
-        pending.length > 0 && known.length === pending.length
-          ? Math.round(Math.min(...known) * 100)
-          : null,
-      );
+      // still. One unmeasured server makes the whole note indeterminate (null,
+      // not 0).
+      setImportBackfillPercent(computeImportBackfillPercent(data.servers ?? []));
     } catch {
       // Unknown, not finished — see above. No state change, on purpose: the
       // note (and its percentage) keeps saying whatever the last successful
@@ -779,14 +804,16 @@ export default function HistoryPage() {
   // minutes — rather than per page, so this cannot become a refetch storm.
   useRealtime("watch-history:updated", () => {
     void fetchImportBackfillPending();
-    void fetchHistory(page);
+    // The page last REQUESTED, not the `page` state: that only moves after a
+    // successful fetch, so mid filter change it reloaded the old page under the
+    // new filters, and mid page click it put the previous page back.
+    reloadHistory();
   });
 
   // ── Sort handler (server-side) ─────────────────────────────────
 
   const handleSortChange = useCallback((colId: string, order: "asc" | "desc") => {
-    const apiSortBy = COLUMN_TO_SORT_FIELD[colId] ?? "watchedAt";
-    setSortBy(apiSortBy);
+    setSortBy(historySortKeyForColumn(colId));
     setSortOrder(order);
   }, []);
 
@@ -855,7 +882,7 @@ export default function HistoryPage() {
         counts: Record<string, number>;
         cancelled: boolean;
       }>(response, onSyncProgress);
-      await fetchHistory(1);
+      goToPage(1);
 
       // The run reached its terminal result but stopped early — the route's
       // 30-minute lifetime cap fired. (A Stop from this page can't land here:
@@ -873,9 +900,7 @@ export default function HistoryPage() {
       // A per-server count of -1 means that server threw; the run as a whole
       // still succeeded for the others, so name the ones that failed instead of
       // silently presenting a history that's missing a server's plays.
-      const failed = Object.entries(result?.counts ?? {})
-        .filter(([, count]) => count < 0)
-        .map(([serverId]) => servers.find((s) => s.id === serverId)?.name ?? serverId);
+      const failed = failedSyncServerNames(result?.counts, servers);
       if (failed.length > 0) {
         toast.warning(`Couldn't sync ${failed.length === 1 ? "a server" : "some servers"}`, {
           description: `${failed.join(", ")} — check the server's connection and try again.`,
@@ -904,7 +929,7 @@ export default function HistoryPage() {
         });
       }
       // Partial rows are real rows either way, so show them.
-      await fetchHistory(1);
+      goToPage(1);
     } finally {
       setSyncing(false);
       resetSyncProgress();
@@ -970,12 +995,7 @@ export default function HistoryPage() {
   }, []);
 
   // Map current sortBy back to DataTable column ID for sort indicator
-  const activeColumnSortId = useMemo(() => {
-    const reverse = Object.fromEntries(
-      Object.entries(COLUMN_TO_SORT_FIELD).map(([col, field]) => [field, col]),
-    );
-    return reverse[sortBy] ?? "watchedAt";
-  }, [sortBy]);
+  const activeColumnSortId = useMemo(() => historyColumnForSortKey(sortBy), [sortBy]);
 
   // ── Render ─────────────────────────────────────────────────────
 
@@ -1206,9 +1226,38 @@ export default function HistoryPage() {
             </DropdownMenu>
           </div>
 
-          {/* Table */}
-          {loading ? (
+          {/* A failed load keeps whatever was already on screen and says so,
+              rather than falling through to the "No watch history" empty
+              state below — that told the user to sync a history they have. */}
+          {loadError && !loading && (
+            items.length > 0 ? (
+              <div className="mb-4 flex items-center gap-2 text-xs text-muted-foreground">
+                <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber" />
+                <span>Couldn&apos;t load watch history — the plays below may be out of date or not match the current filters.</span>
+                <Button variant="ghost" size="sm" className="h-7 px-2" onClick={reloadHistory}>
+                  Retry
+                </Button>
+              </div>
+            ) : null
+          )}
+
+          {/* Table. The skeleton is for a first load only: a refresh (every
+              backfill slice) or a filter change dims the rows in place
+              instead of blanking the table. */}
+          {loading && items.length === 0 ? (
             <TableRowsSkeleton rows={10} columns={5} />
+          ) : loadError && items.length === 0 ? (
+            <EmptyState
+              icon={AlertTriangle}
+              title="Couldn't load watch history"
+              description="The request failed. Your history is still there — try again."
+              action={
+                <Button variant="outline" size="sm" onClick={reloadHistory}>
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  Retry
+                </Button>
+              }
+            />
           ) : items.length === 0 && totalCount === 0 ? (
             <EmptyState
               icon={History}
@@ -1232,6 +1281,7 @@ export default function HistoryPage() {
             />
           ) : (
             <>
+              <div className={cn("transition-opacity", loading && "opacity-60")}>
               <DataTable
                 columns={activeColumns}
                 data={items}
@@ -1268,6 +1318,7 @@ export default function HistoryPage() {
                   />
                 )}
               />
+              </div>
 
               {/* Pagination */}
               {totalCount > 0 && (
@@ -1276,7 +1327,7 @@ export default function HistoryPage() {
                   page={page}
                   totalCount={totalCount}
                   pageSize={PAGE_SIZE}
-                  onPageChange={fetchHistory}
+                  onPageChange={goToPage}
                   busy={loading}
                 />
               )}

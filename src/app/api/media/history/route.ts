@@ -5,6 +5,7 @@ import { escapeLike } from "@/lib/filters/escape-like";
 import { appCache } from "@/lib/cache/memory-cache";
 import { jsonResponse } from "@/lib/api/json-response";
 import { clampSkip } from "@/lib/api/pagination";
+import { historySortSql } from "@/lib/media/history-sort";
 
 export async function GET(request: NextRequest) {
   const session = await getSession();
@@ -183,39 +184,11 @@ export async function GET(request: NextRequest) {
 
   const whereClause = [...conditions, ...itemConditions].join(" AND ");
 
-  // Build ORDER BY — always sort server-side for paginated results.
-  // This is a strict whitelist: `sortBy` is interpolated into the SQL, so an
-  // unknown value must fall back to the default rather than reach the query.
-  const SORT_MAP: Record<string, string> = {
-    watchedAt: 'wh."watchedAt"',
-    serverUsername: 'wh."serverUsername"',
-    deviceName: 'wh."deviceName"',
-    platform: 'wh."platform"',
-    title: 'mi."titleSort"',
-    type: 'mi."type"',
-    year: 'mi."year"',
-    resolution: 'mi."resolution"',
-    duration: 'mi."duration"',
-    fileSize: 'mi."fileSize"',
-    // Tracearr-sourced play columns. `streamResolution` is deliberately a
-    // separate key from `resolution`: the latter is the FILE's resolution on
-    // the MediaItem, this one is the resolution actually delivered to the
-    // client, and a transcoded 4K file streamed at 1080p differs on the two.
-    percentComplete: 'wh."percentComplete"',
-    isTranscode: 'wh."isTranscode"',
-    player: 'wh."player"',
-    streamResolution: 'wh."resolution"',
-  };
-  // `Object.hasOwn`, not a bare lookup: `SORT_MAP["constructor"]` resolves up
-  // the prototype chain to a function, which is truthy, so `?? default` would
-  // not catch it and the function's source text would be interpolated into the
-  // ORDER BY. Not exploitable (the attacker controls no part of that text, and
-  // Postgres just rejects it) but it turns a bogus `sortBy` into a 500 instead
-  // of the documented fallback. Now that the map is user-extensible via the new
-  // Tracearr columns, pin the lookup to own properties.
-  const orderCol = Object.hasOwn(SORT_MAP, sortBy)
-    ? SORT_MAP[sortBy]
-    : 'wh."watchedAt"';
+  // Build ORDER BY — always sort server-side for paginated results. The
+  // key → SQL map is a strict whitelist shared with the page
+  // (`src/lib/media/history-sort.ts`): `sortBy` is never interpolated itself,
+  // and an unknown value falls back to Watched At.
+  const orderExprs = historySortSql(sortBy);
   const orderDir = sortOrder === "asc" ? "ASC" : "DESC";
   // The ORDER BY below appends wh."id" as a unique tiebreaker so the sort is a
   // total order. Without one Postgres may return tied rows in any order, and a
@@ -352,7 +325,7 @@ export async function GET(request: NextRequest) {
       mi."genres" AS "mi_genres",
       ms."id" AS "ms_id", ms."name" AS "ms_name", ms."type" AS "ms_type"
     ${fromClause}
-    ORDER BY ${orderCol} ${orderDir} NULLS LAST, wh."id" ASC
+    ORDER BY ${orderExprs.map((expr) => `${expr} ${orderDir} NULLS LAST`).join(", ")}, wh."id" ASC
     LIMIT ${limit + 1} OFFSET ${clampSkip((page - 1) * limit)}`,
     ...params,
   );

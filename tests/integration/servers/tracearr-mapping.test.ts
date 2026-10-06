@@ -254,6 +254,54 @@ describe("PUT /api/servers/[id] — Tracearr mapping", () => {
     expect(await countHistory(second.id)).toBe(2);
   });
 
+  it("lets exactly one of two concurrent PUTs map the same Tracearr server", async () => {
+    // Checked against a snapshot read outside any lock, both requests saw the
+    // other server still unmapped and both succeeded — one Tracearr server then
+    // fed two media servers, its plays joined against the wrong rating keys.
+    // Several rounds, because one interleaving proves little either way.
+    const user = await createTestUser();
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+    for (let round = 0; round < 5; round++) {
+      const first = await createTestServer(user.id, { name: `First ${round}` });
+      const second = await createTestServer(user.id, { name: `Second ${round}` });
+      const id = `3f6f0d1e-0000-4000-8000-0000000001${String(round).padStart(2, "0")}`;
+
+      const responses = await Promise.all([
+        putMapping(first.id, { tracearrServerId: id }),
+        putMapping(second.id, { tracearrServerId: id }),
+      ]);
+
+      expect(responses.map((r) => r.status).sort()).toEqual([200, 409]);
+      expect(await prisma.mediaServer.count({ where: { tracearrServerId: id } })).toBe(1);
+    }
+  });
+
+  it("resets every piece of the old mapping's import state, the forward floor included", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id, { tracearrServerId: TRACEARR_SERVER_A });
+    await prisma.mediaServer.update({
+      where: { id: server.id },
+      data: {
+        tracearrBackfillComplete: true,
+        tracearrOldestPlayAt: new Date("2019-01-01T00:00:00Z"),
+        tracearrBackfillCursorAt: new Date("2020-01-01T00:00:00Z"),
+        tracearrForwardFloorAt: new Date("2026-01-01T00:00:00Z"),
+      },
+    });
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+    await expectJson(await putMapping(server.id, { tracearrServerId: TRACEARR_SERVER_B }), 200);
+
+    // Each describes the OLD Tracearr server's archive; carried over, the new
+    // mapping's walks would start from instants that mean nothing there.
+    const stored = await prisma.mediaServer.findUniqueOrThrow({ where: { id: server.id } });
+    expect(stored.tracearrBackfillComplete).toBe(false);
+    expect(stored.tracearrOldestPlayAt).toBeNull();
+    expect(stored.tracearrBackfillCursorAt).toBeNull();
+    expect(stored.tracearrForwardFloorAt).toBeNull();
+  });
+
   it("withdraws the established marker in the same write that switches the source", async () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id, {

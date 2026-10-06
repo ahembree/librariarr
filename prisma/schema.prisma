@@ -238,6 +238,21 @@ model MediaServer {
   /// subsequent slice re-walks the same pages forever. Recording what was SEEN
   /// guarantees forward progress regardless of what was kept.
   tracearrBackfillCursorAt DateTime?
+  /// The `since` the next FORWARD pass must reach back to, because an earlier
+  /// forward walk stopped before covering its window. Null when no forward walk
+  /// is owed anything.
+  ///
+  /// The forward walk goes newest → oldest like every Tracearr walk, so its
+  /// first committed page moves `MAX(watchedAt)` — the forward watermark — to
+  /// "now". A walk that then stops (Stop, the stream's lifetime cap, a 429 that
+  /// outlasted the retries, an error) leaves the plays between the OLD watermark
+  /// and the oldest play it reached unread, and the next run's `since`, derived
+  /// from the new MAX, starts above them. The backfill never reaches them either
+  /// (it walks below `MIN`). Set to the walk's original `since` (only ever moved
+  /// earlier) when a forward walk stops after a page; cleared when one exhausts
+  /// its window. While set, the importer does not re-establish
+  /// `watchHistorySyncedAt`, since there is a known gap.
+  tracearrForwardFloorAt DateTime?
   /// Whether the one-time backfill of this server's Tracearr history has walked
   /// all the way to the oldest play.
   ///

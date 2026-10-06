@@ -7,7 +7,10 @@ import {
   importTracearrRecords,
   resolveInstanceForServer,
 } from "@/lib/sync/sync-tracearr-history";
-import { TracearrClient } from "@/lib/tracearr/tracearr-client";
+import {
+  TracearrClient,
+  type TracearrHistoryRecord,
+} from "@/lib/tracearr/tracearr-client";
 import { IntegrationError } from "@/lib/integration-error";
 import { isHostLevelFailure } from "@/lib/lifecycle/unreachable-instances";
 import { formatMediaItemTitle } from "@/lib/media/display-title";
@@ -53,10 +56,10 @@ import { TracearrMappingChangedError } from "@/lib/sync/tracearr-mapping-changed
  * can be holding recoverable history, and one that arrived long ago has had
  * every run since to be recovered.
  *
- * Without this window the candidate set is "every item with no Tracearr plays",
- * which for a real library is most of it — the untouched back catalogue — and
- * every one of those items would be re-queried on every single run, forever,
- * to learn the same "no plays" answer each time.
+ * Without this window the candidate set is the whole library — the untouched
+ * back catalogue included — and since the answered-items registry lives in
+ * memory, every one of those items would be re-queried after every restart, to
+ * learn the same answer each time.
  */
 export const RECENT_ADDITION_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -74,24 +77,36 @@ export const RECENT_ADDITION_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 export const DEFAULT_CANDIDATE_LIMIT = 200;
 
 /**
- * Items Tracearr has already ANSWERED for — item id → when.
+ * Items Tracearr has already ANSWERED for — item id → when. This registry, not
+ * the presence of Tracearr rows, is what ends an item's candidacy.
  *
- * Without it the cap starved the window. An item that was never played gets no
- * Tracearr row, so it stays a candidate for its whole seven days, and the
- * candidate query orders newest-first: once more than the cap's worth of
- * recent items had no plays (the normal state after a purge-and-resync, a
- * restore or a library move — exactly when recovery matters), every pass asked
- * about the same newest unplayed items again and never reached the re-added
- * ones further down, which then aged out of the window still reading as never
- * watched.
+ * Why not the rows: a re-added item typically gets its first NEW play — under
+ * its NEW rating key — before this pass reaches it (that play is often what
+ * set off the sync that runs the pass). Excluding every item with a Tracearr
+ * row therefore dropped exactly the item this pass exists for, with one
+ * ten-minute row recovered and every old play, filed under the rating key the
+ * item had before it left, never asked for. The item read as barely watched
+ * — which "not played in N months" / `playCount` DELETE rules act on. So an
+ * item stays a candidate until a lookup has actually been answered — for a
+ * movie or track that includes the provider-id lookup, the only one that can
+ * reach the old plays (see the call site).
+ *
+ * Without the registry the cap would also starve the window: candidates are
+ * ordered newest-first, so once more than the cap's worth of recent items had
+ * no plays (the normal state after a purge-and-resync, a restore or a library
+ * move — exactly when recovery matters), every pass asked about the same
+ * newest items again and never reached the re-added ones further down, which
+ * then aged out of the window still reading as never watched.
  *
  * One answer per item is enough. The plays this pass exists to recover are OLD
  * ones; a play that happens after the item was added is imported by the
  * forward pass like any other. Only an answer is recorded — a lookup that
  * failed leaves the item a candidate. In memory on purpose: a restart merely
- * re-asks, and entries expire with the window, so the map holds at most a
- * week's worth of additions. Pinned to `globalThis` like the other registries
- * a job and the rest of the app may both load.
+ * re-asks (one or two requests per item still inside the window, bounded by
+ * the cap, and the upsert makes re-delivered plays a no-op merge), and entries
+ * expire with the window, so the map holds at most a week's worth of
+ * additions. Pinned to `globalThis` like the other registries a job and the
+ * rest of the app may both load.
  */
 const answeredItems: Map<string, number> = ((
   globalThis as unknown as { __tracearrRecoveryAnswered?: Map<string, number> }
@@ -121,9 +136,9 @@ export interface RecoverNewItemHistoryOptions {
   /**
    * Cancels the pass between items (and interrupts an in-flight request plus
    * any rate-limit backoff). Stopping early is a normal outcome: every item
-   * imported so far is committed, and the candidate query re-derives what is
-   * left from the rows themselves, so the next run simply picks up the ones
-   * that still have no Tracearr plays.
+   * imported so far is committed, and an item is only taken off the candidate
+   * list once Tracearr has answered for it, so the next run simply picks up
+   * the ones this pass did not reach.
    */
   signal?: AbortSignal;
 }
@@ -135,7 +150,7 @@ export interface RecoverNewItemHistoryResult {
   imported: number;
 }
 
-/** One candidate: a recently added item with no Tracearr plays of its own. */
+/** One candidate: a recently added item Tracearr has not yet answered for. */
 interface CandidateItem {
   id: string;
   ratingKey: string;
@@ -201,8 +216,8 @@ export async function recoverHistoryForNewItems(
   //
   // This pass REFUSES to run without the map, exactly as the archive walk does,
   // and for the same reason: the rows it writes are old plays that nothing will
-  // ever re-deliver. `findCandidates` excludes any item that already has a
-  // TRACEARR row, the forward pass reaches back only `OVERLAP_MS`, and
+  // ever re-deliver. An item is asked about once (see `answeredItems`), the
+  // forward pass reaches back only `OVERLAP_MS`, and
   // `tracearrBackfillComplete` is already true by the time this runs — so a row
   // written under a Tracearr identity label ("Nick W") sits permanently beside
   // rows written under the media server's account name ("weingart"), and a
@@ -251,17 +266,20 @@ export async function recoverHistoryForNewItems(
     checked++;
 
     try {
-      let records = await client.getHistoryForItem(
+      const byRatingKey = await client.getHistoryForItem(
         tracearrServerId,
         { ratingKey: candidate.ratingKey },
         { signal },
       );
 
-      // Nothing under the rating key. That is the NORMAL answer for the case
-      // this pass exists to serve: Plex mints a new rating key when an item is
-      // removed and added back, so a re-added item's old plays live under a key
-      // that no longer exists anywhere. The provider id is the identity that
-      // survives, and the API filters on it.
+      // ALSO by provider id — whatever the rating key returned. Plex mints a
+      // new rating key when an item is removed and added back, so a re-added
+      // item's old plays live under a key that no longer exists anywhere; the
+      // provider id is the identity that survives, and the API filters on it.
+      // Finding plays under the new key proves nothing about the old ones: the
+      // first play after the re-add is usually the reason this pass runs at
+      // all, and stopping there recovered that one play and abandoned the
+      // history it exists to bring back.
       //
       // Only TMDB and IMDB, and never for an episode — the same rule as the
       // resolver's own fallback (`resolveMediaItemId`), which these records go
@@ -270,17 +288,29 @@ export async function recoverHistoryForNewItems(
       // return plays of whatever else happens to carry that number, and the
       // two catalogues disagree about a film's TVDB id. Deduped per run so two
       // copies of one film cost one request.
-      if (records.length === 0) {
-        const providerKey = providerIdentityKey(candidate);
-        if (providerKey && !queriedProviders.has(providerKey)) {
-          queriedProviders.add(providerKey);
-          records = await client.getHistoryForItem(
-            tracearrServerId,
-            { tmdbId: candidate.tmdbId, imdbId: candidate.imdbId },
-            { signal },
-          );
-          if (records.length > 0) recoveredByProviderId++;
-        }
+      let byProviderId: TracearrHistoryRecord[] = [];
+      const providerKey = providerIdentityKey(candidate);
+      if (providerKey && !queriedProviders.has(providerKey)) {
+        queriedProviders.add(providerKey);
+        byProviderId = await client.getHistoryForItem(
+          tracearrServerId,
+          { tmdbId: candidate.tmdbId, imdbId: candidate.imdbId },
+          { signal },
+        );
+      }
+
+      // The two answers overlap whenever the rating key never changed (the new
+      // play is in both), so merge by chain id: the importer drops a repeat
+      // within one call too (one INSERT may not touch a row twice), but
+      // merging here keeps its `skipped` count from counting a refused record
+      // twice. A record seen before is merged by the upsert, never duplicated.
+      const seen = new Set(byRatingKey.map((record) => record.id));
+      const onlyByProvider = byProviderId.filter((record) => !seen.has(record.id));
+      const records = [...byRatingKey, ...onlyByProvider];
+      if (
+        onlyByProvider.some((record) => record.server_id === tracearrServerId)
+      ) {
+        recoveredByProviderId++;
       }
 
       // One Tracearr instance aggregates many media servers, and a rating key
@@ -310,8 +340,8 @@ export async function recoverHistoryForNewItems(
       // transient (a 429 that outlasted the retry budget, a timeout) or
       // permanent for this item (the row was deleted between the candidate
       // query and the write, so the required media FK rejects it) — either way
-      // the item is still a candidate on the next run, because the query that
-      // found it derives candidacy from the rows, not from a cursor.
+      // the item is still a candidate on the next run, because only an answer
+      // is recorded in `answeredItems`.
       // Cancelled: not this item's failure, and not the host's either.
       if (signal?.aborted) break;
       // The server was re-pointed or unlinked mid-pass: nothing more of this
@@ -375,9 +405,10 @@ export async function recoverHistoryForNewItems(
     `Tracearr recovery for recently added items on "${server.name}": checked ` +
       `${checked} of ${candidates.length} candidate(s), imported ${imported} play(s) — ` +
       `${withoutPlays} with no plays, ${skipped} unjoinable, ${failed} failed, ` +
-      // Worth its own figure: it is the count of items whose rating key had
-      // changed, which is the re-add case this pass exists for. Zero here on a
-      // Plex server with re-added media means the fallback is not firing.
+      // Worth its own figure: it counts items with plays only their provider id
+      // reached — a rating key that changed, which is the re-add case this pass
+      // exists for. Zero here on a Plex server with re-added media means the
+      // provider lookup is not firing.
       `${recoveredByProviderId} recovered by provider id`,
   );
 
@@ -385,14 +416,12 @@ export async function recoverHistoryForNewItems(
 }
 
 /**
- * Recently added items on this server that hold no Tracearr play of their own.
+ * Recently added items on this server that Tracearr has not answered for yet.
  *
- * `NOT EXISTS` rather than a join so an item with many plays is not multiplied,
- * and scoped to `source = 'TRACEARR'` on purpose: a leftover NATIVE row is not
- * evidence that the Tracearr import has seen this item (the importer deletes
- * that stratum once it writes, and a server's history is single-source by
- * construction), so an item carrying only native rows is still worth asking
- * about. Items Tracearr already answered for are excluded — see `answeredItems`.
+ * Deliberately NOT "items with no Tracearr rows": a re-added item usually has
+ * one — its first new play, under its new rating key — while every older play
+ * is still unrecovered (see `answeredItems`, which is what ends candidacy).
+ * Bounded instead by the window, the cap and that registry.
  */
 async function findCandidates(
   serverId: string,
@@ -413,12 +442,6 @@ async function findCandidates(
        LEFT JOIN "MediaItemExternalId" e ON e."mediaItemId" = mi."id"
       WHERE l."mediaServerId" = $1
         AND mi."createdAt" > $2
-        AND NOT EXISTS (
-              SELECT 1
-                FROM "WatchHistory" wh
-               WHERE wh."mediaItemId" = mi."id"
-                 AND wh."source" = 'TRACEARR'
-            )
         AND NOT (mi."id" = ANY($4::text[]))
       -- Newest first: when there are more candidates than the cap allows, the
       -- most recent arrivals are the ones a user is waiting on, and the rest

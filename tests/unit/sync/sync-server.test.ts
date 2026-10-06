@@ -292,6 +292,22 @@ describe("syncMediaServer", () => {
     expect(reconcileWatchStateFromHistory).not.toHaveBeenCalled();
   });
 
+  it("reports a watch-history sync that returned a failure as failed, not as 0 plays", async () => {
+    const { syncWatchHistory } = await import("@/lib/sync/sync-watch-history");
+    const { logger } = await import("@/lib/logger");
+    vi.mocked(syncWatchHistory).mockResolvedValueOnce({ count: 0, failed: "fetch failed" });
+
+    await syncMediaServer("server-1");
+
+    expect(logger.error).toHaveBeenCalledWith("Sync", "Watch history sync failed", {
+      error: "fetch failed",
+    });
+    expect(logger.info).not.toHaveBeenCalledWith(
+      "Sync",
+      expect.stringContaining("Watch history sync completed"),
+    );
+  });
+
   it("reconciles play state from stored history when the watch-history scan is skipped", async () => {
     const { syncWatchHistory } = await import("@/lib/sync/sync-watch-history");
     const { reconcileWatchStateFromHistory } = await import("@/lib/sync/watch-reconcile");

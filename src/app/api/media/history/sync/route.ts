@@ -48,12 +48,21 @@ export async function POST(request: Request) {
     // Validate ownership
     const server = await prisma.mediaServer.findFirst({
       where: { id: data.serverId, userId: session.userId },
-      select: { id: true, name: true },
+      select: { id: true, name: true, enabled: true },
     });
     if (!server) {
       return NextResponse.json({ error: "Server not found" }, { status: 404 });
     }
-    servers = [server];
+    // The History page's server picker lists disabled servers too, and the
+    // sync skips one without touching it — which used to answer as a clean
+    // zero-play sync. Say so instead.
+    if (!server.enabled) {
+      return NextResponse.json(
+        { error: "This server is disabled. Enable it to sync its watch history." },
+        { status: 409 },
+      );
+    }
+    servers = [{ id: server.id, name: server.name }];
   } else {
     // Sync all enabled servers for this user. Ordered by name so the phase
     // list the user sees is stable across runs rather than in whatever order
@@ -119,7 +128,11 @@ export async function POST(request: Request) {
             // `signal.aborted` check above only runs between servers.
             signal,
           );
-          counts[server.id] = result.count;
+          // A sync that could not run (fetch failed, Tracearr instance
+          // unresolvable, the importer's walk errored) returns rather than
+          // throws, so the stored history stays intact — but it is still a
+          // failure, and the History page names it only on -1.
+          counts[server.id] = result.failed ? -1 : result.count;
         } catch {
           // A cancel is not a failure. The native path deliberately THROWS on
           // abort so its full-replace transaction rolls back (breaking would

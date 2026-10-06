@@ -10,7 +10,13 @@ import {
 import type { MediaServerType } from "@/generated/prisma/client";
 import { enqueueJob, isJobRetrying } from "@/lib/jobs/client";
 import { TASK_TRACEARR_BACKFILL, MAIN_QUEUE } from "@/lib/jobs/constants";
-import { markWatchHistoryEstablished } from "@/lib/media/watch-evidence";
+import {
+  markWatchHistoryEstablishedIfUnchanged,
+  snapshotWatchEvidence,
+  type WatchEvidenceSnapshot,
+} from "@/lib/media/watch-evidence";
+import { UNKNOWN_ACCOUNT_NAME } from "@/lib/plex/client";
+import type { DetailedWatchHistoryEntry } from "@/lib/media-server/types";
 import { emitWatchHistoryUpdated } from "./watch-history-events";
 
 // 500 rows × 8 params = 4000 bind params per INSERT — well under Postgres's
@@ -51,6 +57,21 @@ export interface WatchHistorySyncOptions {
   incremental?: boolean;
 }
 
+export interface WatchHistorySyncResult {
+  /** Plays written by this run. */
+  count: number;
+  /**
+   * Set when the run could not do what was asked — the fetch failed, the
+   * Tracearr instance could not be resolved, or the importer reported its own
+   * failure — with the reason. Absent on success and on a deliberate skip (a
+   * disabled server). Returned rather than thrown so the stored history is
+   * left exactly as it was, but it must not read as a clean sync: before it,
+   * every one of these exits returned `{ count: 0 }` and the History page's
+   * Refresh reported a server it never reached as synced.
+   */
+  failed?: string;
+}
+
 // The full-replace runs as a single interactive transaction (DELETE + all
 // INSERTs) so a mid-insert failure rolls back rather than leaving the table
 // empty. A large history easily exceeds Prisma's 5s default, so give the
@@ -82,8 +103,21 @@ const TX_OPTIONS = { timeout: 25 * 60_000, maxWait: 15_000 } as const;
  * Never called on a failed fetch, which returns earlier: the history is still
  * unknown there, and the marker must keep saying so.
  */
-async function markHistoryEstablished(serverId: string): Promise<void> {
-  await markWatchHistoryEstablished([serverId]);
+async function markHistoryEstablished(
+  snapshot: WatchEvidenceSnapshot,
+  serverName: string,
+): Promise<void> {
+  // Compare-and-set against the marker this run started from: a purge, source
+  // switch or disable-with-delete that withdrew it while the run was fetching
+  // must not be overwritten by a run that never saw what it destroyed.
+  const marked = await markWatchHistoryEstablishedIfUnchanged(snapshot);
+  if (!marked) {
+    logger.info(
+      "WatchHistory",
+      `Not marking "${serverName}"'s watch history established — it was withdrawn or ` +
+        `re-established while this sync ran; the next sync settles it`,
+    );
+  }
 }
 
 export async function syncWatchHistory(
@@ -99,7 +133,7 @@ export async function syncWatchHistory(
    */
   signal?: AbortSignal,
   options: WatchHistorySyncOptions = {}
-): Promise<{ count: number }> {
+): Promise<WatchHistorySyncResult> {
   // Load server record
   const serverRows = await prisma.$queryRawUnsafe<
     {
@@ -112,9 +146,10 @@ export async function syncWatchHistory(
       enabled: boolean;
       userId: string;
       tracearrServerId: string | null;
+      watchHistorySyncedAt?: Date | null;
     }[]
   >(
-    `SELECT "id","name","url","accessToken","type","tlsSkipVerify","enabled","userId","tracearrServerId" FROM "MediaServer" WHERE "id"=$1`,
+    `SELECT "id","name","url","accessToken","type","tlsSkipVerify","enabled","userId","tracearrServerId","watchHistorySyncedAt" FROM "MediaServer" WHERE "id"=$1`,
     serverId
   );
 
@@ -123,6 +158,8 @@ export async function syncWatchHistory(
   }
   const server = serverRows[0];
 
+  // A deliberate state, not a failure: nothing syncs a disabled server, and
+  // the History page's Refresh refuses one before it gets here.
   if (!server.enabled) {
     logger.info(
       "WatchHistory",
@@ -130,6 +167,9 @@ export async function syncWatchHistory(
     );
     return { count: 0 };
   }
+
+  // Read in the same statement as everything else the run starts from.
+  const evidence = snapshotWatchEvidence(serverId, server.watchHistorySyncedAt);
 
   // Watch history has two possible provenances per server, and they are
   // mutually exclusive: mapping this server to a Tracearr `server_id` replaces
@@ -171,7 +211,7 @@ export async function syncWatchHistory(
           `history intact. Re-enable the instance, or clear the server's ` +
           `watch-history source to go back to the server's own history.`
       );
-      return { count: 0 };
+      return { count: 0, failed: "no enabled Tracearr instance" };
     }
 
     logger.info(
@@ -254,7 +294,12 @@ export async function syncWatchHistory(
       await emitWatchHistoryUpdated(serverId, { imported: result.count });
     }
 
-    return { count: result.count };
+    // The importer's own failure (instance unresolvable, the forward walk
+    // errored) is passed on, after the bookkeeping above: what it did import
+    // is committed and still has to be reconciled and announced.
+    return result.failed
+      ? { count: result.count, failed: result.failed }
+      : { count: result.count };
   }
 
   logger.debug(
@@ -302,7 +347,7 @@ export async function syncWatchHistory(
       `Skipping watch history sync for "${server.name}" — fetch failed; leaving existing history intact`,
       { error: String(error) }
     );
-    return { count: 0 };
+    return { count: 0, failed: `fetch failed: ${String(error)}` };
   }
   logger.info(
     "WatchHistory",
@@ -312,8 +357,8 @@ export async function syncWatchHistory(
   );
 
   if (incrementalSince) {
-    const count = await appendNewEntries(serverId, entries, incrementalSince);
-    await markHistoryEstablished(serverId);
+    const count = await appendNewEntries(serverId, server.name, entries, incrementalSince);
+    await markHistoryEstablished(evidence, server.name);
     logger.info(
       "WatchHistory",
       `Appended ${count} new watch history entries for "${server.name}"`
@@ -344,24 +389,18 @@ export async function syncWatchHistory(
     // (a fresh Plex, or Jellyfin degrading to a per-user response) marked
     // un-evidenced FOREVER, silently pausing every `watchedByUser` rule set
     // scoped to it with nothing that could ever release it.
-    await markHistoryEstablished(serverId);
+    await markHistoryEstablished(evidence, server.name);
     return { count: 0 };
   }
 
   // Build a lookup from ratingKey -> mediaItemId for this server's items
-  const mediaItems = await prisma.$queryRawUnsafe<
-    { id: string; ratingKey: string }[]
-  >(
-    `SELECT mi."id", mi."ratingKey" FROM "MediaItem" mi
+  const mediaItems = await prisma.$queryRawUnsafe<ItemKeyRow[]>(
+    `SELECT mi."id", mi."ratingKey", l."key" AS "libraryKey" FROM "MediaItem" mi
      JOIN "Library" l ON mi."libraryId" = l."id"
      WHERE l."mediaServerId"=$1`,
     serverId
   );
-
-  const ratingKeyToId = new Map<string, string>();
-  for (const item of mediaItems) {
-    ratingKeyToId.set(item.ratingKey, item.id);
-  }
+  const resolveItem = ratingKeyResolver(mediaItems);
 
   // Dedupe entries in memory before inserting. There is no DB unique constraint
   // on WatchHistory (intentional), so identical play events from the source
@@ -417,7 +456,7 @@ export async function syncWatchHistory(
       const batch = dedupedEntries.slice(i, i + BATCH_SIZE);
       const rows: NativeRow[] = [];
       for (const entry of batch) {
-        const mediaItemId = ratingKeyToId.get(entry.ratingKey);
+        const mediaItemId = resolveItem.resolve(entry);
         if (!mediaItemId) continue;
         rows.push({ mediaItemId, entry });
       }
@@ -446,7 +485,8 @@ export async function syncWatchHistory(
     }
   }, TX_OPTIONS);
 
-  await markHistoryEstablished(serverId);
+  await markHistoryEstablished(evidence, server.name);
+  resolveItem.logAmbiguous(server.name);
 
   logger.info(
     "WatchHistory",
@@ -513,23 +553,33 @@ async function resolveIncrementalSince(serverId: string): Promise<Date | null> {
 }
 
 /**
- * Store the entries not already present, without touching existing rows.
+ * Store the entries not already present.
  *
- * Identity is the same `item + user + watchedAt` the full replace dedups on,
- * checked against the rows stored at or after `since` (the overlap window,
- * so the set is small). Undated entries are skipped: they cannot be told
- * apart from a stored one, and Plex — the only server this path runs for —
- * always dates a play.
+ * A play's identity is item + watchedAt (to the second) + account, checked
+ * against the rows stored at or after `since` (the overlap window, so the set
+ * is small). Undated entries are skipped: they cannot be told apart from a
+ * stored one, and Plex — the only server this path runs for — always dates a
+ * play.
+ *
+ * The account half is where an exact `item|user|watchedAt` key went wrong.
+ * Plex names a play by looking its account up in `/accounts`, and a play whose
+ * account could not be named is stored as "Unknown". When the same play came
+ * back through the overlap with its real name (or the other way round), the
+ * exact key saw two different plays and appended it again — permanently, since
+ * `playCount` is monotonic. So "Unknown" is matched as a wildcard: at the same
+ * item and second, it pairs with one otherwise-unmatched play of any name.
+ * Two DIFFERENT real names at the same item and second stay two plays — Plex
+ * history is per account, and two accounts finishing the same item in the
+ * same second is rare but real, while one account cannot do it twice. Exact
+ * names pair first, so a wildcard never takes a row an exact match needed.
+ *
+ * A stored "Unknown" that pairs with a now-named play is relabelled to the
+ * name, so a `watchedByUser` rule sees whose play it was.
  */
 async function appendNewEntries(
   serverId: string,
-  entries: Array<{
-    ratingKey: string;
-    username: string;
-    watchedAt: string | null;
-    deviceName: string | null;
-    platform: string | null;
-  }>,
+  serverName: string,
+  entries: DetailedWatchHistoryEntry[],
   since: Date
 ): Promise<number> {
   // Fail closed on the server's filter: a play older than `since` in the
@@ -544,51 +594,152 @@ async function appendNewEntries(
   if (dated.length === 0) return 0;
 
   const ratingKeys = [...new Set(dated.map((e) => e.ratingKey))];
-  const mediaItems = await prisma.$queryRawUnsafe<{ id: string; ratingKey: string }[]>(
-    `SELECT mi."id", mi."ratingKey" FROM "MediaItem" mi
+  const mediaItems = await prisma.$queryRawUnsafe<ItemKeyRow[]>(
+    `SELECT mi."id", mi."ratingKey", l."key" AS "libraryKey" FROM "MediaItem" mi
      JOIN "Library" l ON mi."libraryId" = l."id"
      WHERE l."mediaServerId" = $1 AND mi."ratingKey" = ANY($2::text[])`,
     serverId,
     ratingKeys
   );
-  const ratingKeyToId = new Map(mediaItems.map((m) => [m.ratingKey, m.id]));
+  const resolveItem = ratingKeyResolver(mediaItems);
 
   // The read-then-append runs under the same per-server lock as the full
   // replace. That one runs in a request (the History page's Refresh), outside
   // the serial job queue, so without the lock it could DELETE + re-INSERT the
   // history between this read and this append and the same play would land
   // twice — inflating `playCount`, which is monotonic and never walked back.
-  return prisma.$transaction(async (tx) => {
+  const inserted = await prisma.$transaction(async (tx) => {
     await lockServerHistory(tx, serverId);
 
     const existing = await tx.$queryRawUnsafe<
-      { mediaItemId: string; serverUsername: string; watchedAt: Date }[]
+      { id: string; mediaItemId: string; serverUsername: string; watchedAt: Date }[]
     >(
-      `SELECT "mediaItemId", "serverUsername", "watchedAt" FROM "WatchHistory"
+      `SELECT "id", "mediaItemId", "serverUsername", "watchedAt" FROM "WatchHistory"
        WHERE "mediaServerId" = $1 AND "watchedAt" >= $2`,
       serverId,
       since
     );
-    const seen = new Set(
-      existing.map((r) => `${r.mediaItemId}|${r.serverUsername}|${new Date(r.watchedAt).toISOString()}`)
-    );
+    const stored = new Map<string, { id: string; username: string; claimed: boolean }[]>();
+    for (const row of existing) {
+      const key = playInstantKey(row.mediaItemId, row.watchedAt);
+      const list = stored.get(key) ?? [];
+      list.push({ id: row.id, username: row.serverUsername, claimed: false });
+      stored.set(key, list);
+    }
 
-    const fresh: NativeRow[] = [];
+    // Collapse plays the response repeats (same item, instant and name), as
+    // the full replace does.
+    const incoming: Array<{ key: string; row: NativeRow; matched: boolean }> = [];
+    const repeated = new Set<string>();
     for (const entry of dated) {
-      const mediaItemId = ratingKeyToId.get(entry.ratingKey);
+      const mediaItemId = resolveItem.resolve(entry);
       if (!mediaItemId) continue;
-      const key = `${mediaItemId}|${entry.username}|${new Date(entry.watchedAt!).toISOString()}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      fresh.push({ mediaItemId, entry });
+      const key = playInstantKey(mediaItemId, entry.watchedAt!);
+      const exact = `${key}|${entry.username}`;
+      if (repeated.has(exact)) continue;
+      repeated.add(exact);
+      incoming.push({ key, row: { mediaItemId, entry }, matched: false });
     }
 
-    let inserted = 0;
-    for (let i = 0; i < fresh.length; i += BATCH_SIZE) {
-      inserted += await insertNativeRows(tx, serverId, fresh.slice(i, i + BATCH_SIZE));
+    // Exact names first…
+    for (const play of incoming) {
+      const match = stored
+        .get(play.key)
+        ?.find((r) => !r.claimed && r.username === play.row.entry.username);
+      if (match) {
+        match.claimed = true;
+        play.matched = true;
+      }
     }
-    return inserted;
+    // …then "Unknown" on either side pairs with one unmatched play.
+    const relabels: Array<{ id: string; username: string }> = [];
+    for (const play of incoming) {
+      if (play.matched) continue;
+      const incomingUnknown = play.row.entry.username === UNKNOWN_ACCOUNT_NAME;
+      const match = stored
+        .get(play.key)
+        ?.find(
+          (r) => !r.claimed && (incomingUnknown || r.username === UNKNOWN_ACCOUNT_NAME),
+        );
+      if (!match) continue;
+      match.claimed = true;
+      play.matched = true;
+      if (!incomingUnknown) relabels.push({ id: match.id, username: play.row.entry.username });
+    }
+
+    if (relabels.length > 0) {
+      await tx.$executeRawUnsafe(
+        `UPDATE "WatchHistory" wh SET "serverUsername" = v."username"
+           FROM unnest($1::text[], $2::text[]) AS v("id", "username")
+          WHERE wh."id" = v."id"`,
+        relabels.map((r) => r.id),
+        relabels.map((r) => r.username),
+      );
+    }
+
+    const fresh = incoming.filter((p) => !p.matched).map((p) => p.row);
+    let count = 0;
+    for (let i = 0; i < fresh.length; i += BATCH_SIZE) {
+      count += await insertNativeRows(tx, serverId, fresh.slice(i, i + BATCH_SIZE));
+    }
+    return count;
   }, TX_OPTIONS);
+  resolveItem.logAmbiguous(serverName);
+  return inserted;
+}
+
+/** Item + instant, to the second Plex records `viewedAt` in. */
+function playInstantKey(mediaItemId: string, watchedAt: Date | string): string {
+  return `${mediaItemId}|${Math.floor(new Date(watchedAt).getTime() / 1000)}`;
+}
+
+interface ItemKeyRow {
+  id: string;
+  ratingKey: string;
+  libraryKey?: string | null;
+}
+
+/**
+ * Rating key → MediaItem id for one server, refusing to guess.
+ *
+ * `@@unique([libraryId, ratingKey])` makes a rating key unique only WITHIN a
+ * library, so one server can hold the same key in two libraries (a stale row
+ * an item left behind when it moved, until the next full sync purges it). The
+ * lookup used to be a Map built from an unordered query, where whichever row
+ * came last won — filing plays against an arbitrary item. An ambiguous key is
+ * narrowed by the library the play was recorded in when the server says
+ * (Plex's `librarySectionID`), and otherwise skipped: a dropped play beats a
+ * play on the wrong item, whose `playCount` can never be walked back.
+ */
+function ratingKeyResolver(rows: ItemKeyRow[]) {
+  const byKey = new Map<string, ItemKeyRow[]>();
+  for (const row of rows) {
+    const list = byKey.get(row.ratingKey);
+    if (list) list.push(row);
+    else byKey.set(row.ratingKey, [row]);
+  }
+  let ambiguous = 0;
+  return {
+    resolve(entry: Pick<DetailedWatchHistoryEntry, "ratingKey" | "librarySectionKey">): string | null {
+      const candidates = byKey.get(entry.ratingKey);
+      if (!candidates) return null;
+      if (candidates.length === 1) return candidates[0].id;
+      const inSection = entry.librarySectionKey
+        ? candidates.filter((c) => c.libraryKey === entry.librarySectionKey)
+        : [];
+      if (inSection.length === 1) return inSection[0].id;
+      ambiguous++;
+      return null;
+    },
+    logAmbiguous(serverName: string): void {
+      if (ambiguous === 0) return;
+      logger.warn(
+        "WatchHistory",
+        `Skipped ${ambiguous} play(s) on "${serverName}" whose rating key matches items in ` +
+          `more than one library — the next full sync's stale-item purge resolves them`,
+      );
+    },
+  };
 }
 
 type RawWriter = Pick<typeof prisma, "$executeRawUnsafe">;

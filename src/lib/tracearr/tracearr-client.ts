@@ -766,6 +766,15 @@ export class TracearrClient {
    * identity name — the vocabulary split this bridge exists to prevent, landing
    * hardest on the oldest rows. A removed account's name is still the name the
    * native path stored for them, so it is the right answer, not a stale one.
+   *
+   * **All or nothing.** A walk that cannot be finished — cancelled, cut short
+   * by `USER_PAGE_CAP` or by a cursor that repeats, or handed a page that is
+   * not a users page — THROWS rather than returning the accounts it happened to
+   * reach. A partial map is non-empty, so the importer's "is the map usable"
+   * gate let it through, and every play of an account it missed was stored
+   * under Tracearr's identity label for good (archive rows are never
+   * re-delivered). Every caller already treats a throw as "the map is
+   * unavailable".
    */
   async getServerAccountNames(
     serverId: string,
@@ -777,7 +786,9 @@ export class TracearrClient {
     let cursor: string | undefined;
 
     for (let page = 0; page < USER_PAGE_CAP; page++) {
-      if (signal?.aborted) break;
+      if (signal?.aborted) {
+        throw new Error("Loading Tracearr account names was cancelled");
+      }
 
       // Sent as a string because the schema accepts `boolean | string` and our
       // param bag is string|number — axios serialises either identically.
@@ -793,7 +804,14 @@ export class TracearrClient {
         { maxRetries: BULK_RATE_LIMIT_MAX_RETRIES, signal },
       );
 
-      for (const identity of data?.data ?? []) {
+      if (!data || typeof data !== "object" || !Array.isArray(data.data)) {
+        throw new Error(
+          "Tracearr returned an unexpected response to a users request (no `data` " +
+            "array) — check that the URL points at Tracearr itself",
+        );
+      }
+
+      for (const identity of data.data) {
         for (const account of identity?.accounts ?? []) {
           // One Tracearr instance aggregates many servers; an account on a
           // different one would map a stranger's id onto this server.
@@ -804,13 +822,22 @@ export class TracearrClient {
         }
       }
 
-      const next = data?.meta?.nextCursor ?? null;
-      if (!next || seenCursors.has(next)) break;
+      const next = data.meta?.nextCursor ?? null;
+      if (!next) return names;
+      if (seenCursors.has(next)) {
+        throw new Error(
+          "Tracearr's user list stopped advancing (a repeated cursor) — the " +
+            "account-name map would be incomplete",
+        );
+      }
       seenCursors.add(next);
       cursor = next;
     }
 
-    return names;
+    throw new Error(
+      `Tracearr's user list did not end within ${USER_PAGE_CAP} pages — the ` +
+        `account-name map would be incomplete`,
+    );
   }
 
   /** Sleep that resolves early when `signal` aborts, so a cancel is immediate. */

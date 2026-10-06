@@ -354,8 +354,10 @@ function TracearrLiveImportLine({
       </div>
       <p className="text-xs text-muted-foreground">
         {activity.pages === 0 ? "Preparing…" : `${plays} this run · ${pages}`}
-        {activity.pass === "backfill" && activity.oldestReached
-          ? ` · reached ${formatImportBoundaryDate(activity.oldestReached)}`
+        {/* The same reach the percentage is measured from (the live run's when
+            it is further back than the stored one), so the two never disagree. */}
+        {activity.pass === "backfill" && status.reachedAt
+          ? ` · reached ${formatImportBoundaryDate(status.reachedAt)}`
           : ""}
         {activity.pass === "backfill" && status.oldestPlayAt
           ? ` · history starts ${formatImportBoundaryDate(status.oldestPlayAt)}`
@@ -380,11 +382,17 @@ function TracearrLiveImportLine({
  * A run in progress takes precedence over all of these (`TracearrLiveImportLine`),
  * so the server shows one import readout, never two.
  *
- * Otherwise, four distinct renderings, because collapsing any two of them lies:
+ * Otherwise, distinct renderings, because collapsing any two of them lies:
  *   - complete            → the finished line (a count, no bar)
- *   - no rows yet         → "waiting", not "0 plays imported"
+ *   - paused              → why (server or Tracearr instance disabled), no spinner
+ *   - no rows, pending    → "waiting", not "0 plays imported"
+ *   - no rows, not pending→ nothing is queued and nothing has ever come back;
+ *                           say so without a spinner (a fresh mapping before
+ *                           its first sync, or one Tracearr holds no plays for)
  *   - fraction is a number→ a determinate bar at that percentage
  *   - fraction is null    → the original indeterminate line
+ * Spinners key off `pending`, never `!backfillComplete`: that flag stays false
+ * forever in the paused and no-plays cases, so a spinner on it never stopped.
  * The last two are the subtle pair: `backfillFraction` null means the far edge
  * of the archive hasn't been measured yet, so no honest percentage exists —
  * drawing an empty bar there would tell the user "0% done" when the truth is
@@ -400,19 +408,52 @@ function TracearrImportStatusLine({ status }: { status: TracearrImportStatus | u
 
   const rowClass = "mt-2 flex items-start gap-1.5 text-xs text-muted-foreground";
 
-  // Zero rows and unfinished is the gap between "mapping saved" and "first
-  // page landed". Rendering the count here would say "0 plays so far", which
-  // reads as a failed import rather than one that hasn't started yet.
-  if (!status.backfillComplete && status.importedCount === 0) {
+  const plays = `${status.importedCount.toLocaleString()} ${status.importedCount === 1 ? "play" : "plays"}`;
+
+  // Owed but unable to progress: nothing will run until the cause is fixed, so
+  // say what it is rather than spin.
+  if (!status.backfillComplete && status.pausedReason !== null) {
+    const reason =
+      status.pausedReason === "server-disabled"
+        ? "this server is disabled"
+        : "no Tracearr instance is enabled";
     return (
       <p className={rowClass}>
-        <Loader2 className="mt-0.5 h-3 w-3 shrink-0 animate-spin" />
-        <span>Waiting for the first import…</span>
+        <Clock className="mt-0.5 h-3 w-3 shrink-0" />
+        <span>
+          {`History import paused — ${reason}`}
+          {status.importedCount > 0 ? ` · ${plays} so far` : ""}
+        </span>
       </p>
     );
   }
 
-  const plays = `${status.importedCount.toLocaleString()} ${status.importedCount === 1 ? "play" : "plays"}`;
+  // Zero rows and unfinished is the gap between "mapping saved" and "first
+  // page landed". Rendering the count here would say "0 plays so far", which
+  // reads as a failed import rather than one that hasn't started yet.
+  if (!status.backfillComplete && status.importedCount === 0) {
+    if (status.pending) {
+      return (
+        <p className={rowClass}>
+          <Loader2 className="mt-0.5 h-3 w-3 shrink-0 animate-spin" />
+          <span>Waiting for the first import…</span>
+        </p>
+      );
+    }
+    // Nothing queued, nothing running, and no earlier run found anything to
+    // walk. Either the first sync has not happened yet, or it did and Tracearr
+    // returned no plays at all for the linked server — which is also what a
+    // mapping to the wrong server looks like, so point at that.
+    return (
+      <p className={rowClass}>
+        <AlertCircle className="mt-0.5 h-3 w-3 shrink-0" />
+        <span>
+          No plays imported yet. The import runs with the next watch-history sync; if this
+          stays empty, Tracearr has no plays for the linked server — check it&apos;s the right one.
+        </span>
+      </p>
+    );
+  }
 
   if (status.backfillComplete) {
     return (
@@ -461,7 +502,10 @@ function TracearrImportStatusLine({ status }: { status: TracearrImportStatus | u
         </div>
         <p className="text-xs text-muted-foreground">
           {plays}
-          {status.oldestImported ? ` · reached ${formatImportBoundaryDate(status.oldestImported)}` : ""}
+          {/* The point the percentage is measured from — never `oldestImported`,
+              which after a purge still reaches the far end while the walk has
+              started again from now ("0% … reached 2019"). */}
+          {status.reachedAt ? ` · reached ${formatImportBoundaryDate(status.reachedAt)}` : ""}
           {status.oldestPlayAt ? ` · history starts ${formatImportBoundaryDate(status.oldestPlayAt)}` : ""}
         </p>
       </div>
@@ -478,7 +522,7 @@ function TracearrImportStatusLine({ status }: { status: TracearrImportStatus | u
       <Loader2 className="mt-0.5 h-3 w-3 shrink-0 animate-spin" />
       <span>
         {`Importing history — ${plays} so far`}
-        {status.oldestImported ? `, back to ${formatImportBoundaryDate(status.oldestImported)}` : ""}
+        {status.reachedAt ? `, back to ${formatImportBoundaryDate(status.reachedAt)}` : ""}
       </span>
     </p>
   );

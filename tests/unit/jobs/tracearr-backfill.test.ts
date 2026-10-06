@@ -20,6 +20,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const m = vi.hoisted(() => ({
   syncTracearrHistory: vi.fn(),
+  recoverHistoryForNewItems: vi.fn(),
+  emitWatchHistoryUpdated: vi.fn(),
   syncMediaServer: vi.fn().mockResolvedValue(undefined),
   syncWatchHistory: vi.fn().mockResolvedValue({ count: 0 }),
   syncMediaServerItems: vi.fn().mockResolvedValue({ status: "done", upserted: 0, deleted: 0 }),
@@ -48,6 +50,12 @@ const m = vi.hoisted(() => ({
 const { syncTracearrHistory, enqueueJob, invalidateMediaCaches, logger } = m;
 
 vi.mock("@/lib/sync/sync-tracearr-history", () => ({ syncTracearrHistory: m.syncTracearrHistory }));
+vi.mock("@/lib/sync/tracearr-backfill-additions", () => ({
+  recoverHistoryForNewItems: m.recoverHistoryForNewItems,
+}));
+vi.mock("@/lib/sync/watch-history-events", () => ({
+  emitWatchHistoryUpdated: m.emitWatchHistoryUpdated,
+}));
 vi.mock("@/lib/sync/sync-server", () => ({ syncMediaServer: m.syncMediaServer }));
 vi.mock("@/lib/sync/sync-watch-history", () => ({ syncWatchHistory: m.syncWatchHistory }));
 vi.mock("@/lib/sync/sync-incremental", () => ({ syncMediaServerItems: m.syncMediaServerItems }));
@@ -107,6 +115,51 @@ describe("tracearr-backfill task", () => {
     vi.clearAllMocks();
     enqueueJob.mockResolvedValue(true);
     syncTracearrHistory.mockResolvedValue({ count: 0, backfillPending: false });
+    m.recoverHistoryForNewItems.mockResolvedValue({ checked: 0, imported: 0 });
+    m.emitWatchHistoryUpdated.mockResolvedValue(undefined);
+  });
+
+  describe("on a finished archive", () => {
+    // Queued after EVERY forward sync — per finished playback on a realtime
+    // server — and almost always a no-op there. It used to drop every media
+    // cache and make every open History/stats page refetch regardless.
+    it("leaves caches and open pages alone when nothing moved", async () => {
+      syncTracearrHistory.mockResolvedValue({ count: 0, backfillPending: false });
+
+      await runBackfill();
+
+      expect(m.recoverHistoryForNewItems).toHaveBeenCalledWith(SERVER_ID);
+      expect(invalidateMediaCaches).not.toHaveBeenCalled();
+      expect(m.emitWatchHistoryUpdated).not.toHaveBeenCalled();
+      expect(enqueueJob).not.toHaveBeenCalled();
+      // Not news either: no "backfill complete" line per playback.
+      expect(logger.info).not.toHaveBeenCalledWith("Jobs", expect.stringContaining("complete"));
+    });
+
+    it("announces recovered plays", async () => {
+      syncTracearrHistory.mockResolvedValue({ count: 0, backfillPending: false });
+      m.recoverHistoryForNewItems.mockResolvedValue({ checked: 3, imported: 4 });
+
+      await runBackfill();
+
+      expect(invalidateMediaCaches).toHaveBeenCalledOnce();
+      expect(m.emitWatchHistoryUpdated).toHaveBeenCalledWith(
+        SERVER_ID,
+        expect.objectContaining({ imported: 4, backfillPending: false }),
+      );
+    });
+
+    it("announces the slice that finished the walk even when it stored nothing", async () => {
+      syncTracearrHistory.mockResolvedValue({
+        count: 0,
+        backfillPending: false,
+        backfillOutcome: "exhausted",
+      });
+
+      await runBackfill();
+
+      expect(m.emitWatchHistoryUpdated).toHaveBeenCalledOnce();
+    });
   });
 
   it("gives way to a requested sync that is waiting in the queue", async () => {

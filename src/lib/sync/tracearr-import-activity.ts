@@ -29,6 +29,15 @@ export interface TracearrImportActivity {
   imported: number;
   /** Oldest play the current pass has committed, when it has one. */
   oldestReached: string | null;
+  /**
+   * Oldest instant this run's BACKFILL pass has walked past and committed the
+   * page of — stored or not, the same measure as `tracearrBackfillCursorAt`,
+   * which the run only persists when its slice ends. Null until the backfill
+   * pass commits a page, and never written by the forward pass: that pass
+   * walks the newest plays, so its oldest is near "now" and read as archive
+   * progress it would show the walk as having barely started.
+   */
+  backfillReached: string | null;
 }
 
 interface Entry extends TracearrImportActivity {
@@ -66,6 +75,7 @@ export function beginTracearrImport(serverId: string, userId: string): TracearrI
     pages: 0,
     imported: 0,
     oldestReached: null,
+    backfillReached: null,
   };
   registry.set(serverId, [...(registry.get(serverId) ?? []), entry]);
   return { serverId, entry };
@@ -81,6 +91,9 @@ export function recordTracearrImportPage(
   entry.pages = update.pages;
   entry.imported = update.imported;
   entry.oldestReached = update.oldestReached?.toISOString() ?? null;
+  if (update.pass === "backfill" && update.oldestReached) {
+    entry.backfillReached = entry.oldestReached;
+  }
 }
 
 /**
@@ -102,6 +115,6 @@ export function getTracearrImportActivity(serverId: string): TracearrImportActiv
   const runs = registry.get(serverId);
   const entry = runs?.[runs.length - 1];
   if (!entry) return null;
-  const { pass, startedAt, pages, imported, oldestReached } = entry;
-  return { pass, startedAt, pages, imported, oldestReached };
+  const { pass, startedAt, pages, imported, oldestReached, backfillReached } = entry;
+  return { pass, startedAt, pages, imported, oldestReached, backfillReached };
 }

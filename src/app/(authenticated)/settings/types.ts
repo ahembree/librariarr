@@ -158,6 +158,23 @@ export interface TracearrImportStatus {
    */
   backfillFraction: number | null;
   /**
+   * The instant the backwards walk has reached — the point `backfillFraction`
+   * is measured from, so a "reached <date>" line must name this and never
+   * `oldestImported` (after a purge restarts the walk, the surviving rows still
+   * reach the far end while the walk starts again from now). Null when nothing
+   * has been reached.
+   */
+  reachedAt: string | null;
+  /**
+   * Whether the archive import is still owed AND will make progress — what a
+   * spinner or a poll may wait on. Never read `!backfillComplete` for that: it
+   * stays false forever on a disabled server, behind a disabled Tracearr
+   * instance, and on a mapping Tracearr holds no plays for.
+   */
+  pending: boolean;
+  /** Why an owed import cannot progress, when that is the reason it is not pending. */
+  pausedReason: "server-disabled" | "instance-unavailable" | null;
+  /**
    * The import running for this server right now, or null. Live this-run
    * figures the stored rows cannot express — the stored counts above say how
    * much history is here, this says that a job is importing more at this

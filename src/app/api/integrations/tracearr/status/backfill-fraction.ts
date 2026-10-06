@@ -8,6 +8,40 @@
  */
 
 /**
+ * The instant the backwards walk has reached — the same point the fraction
+ * measures from and the "reached <date>" text names, so the two can never
+ * disagree. `null` when nothing has been reached yet.
+ *
+ * Stored reach first: `tracearrBackfillCursorAt` when set (it also counts
+ * stretches of history that could not be stored, and after a purge restarts the
+ * walk `restartTracearrBackfill` moves it to now — the rows that survived the
+ * purge still reach back to the far end, so measuring by them reported a full
+ * bar, and a "reached 2019" line, for a walk that had only just started again),
+ * otherwise the oldest imported row.
+ *
+ * Then the live run, when it is further back. The cursor is written once per
+ * five-minute slice, at its end, and the rows only move when a page held
+ * something storable — so between those writes the stored reach stands still
+ * while the walk visibly pages on, and the bar froze for each slice. The live
+ * run's `backfillReached` is the cursor's own measure, recorded after each
+ * page commits, so it is as safe to measure by. Only the BACKFILL pass's reach
+ * counts (the forward pass never writes it): the forward pass walks the newest
+ * hour, which says nothing about how far back the archive is covered — and
+ * "only if older" keeps a live figure from ever moving the reach forwards.
+ */
+export function resolveBackfillReach(input: {
+  oldestImported: Date | null;
+  cursorAt?: Date | null;
+  /** The live backfill run's oldest reached play, when one is running. */
+  liveReached?: Date | null;
+}): Date | null {
+  const stored = input.cursorAt ?? input.oldestImported;
+  const live = input.liveReached ?? null;
+  if (live && (!stored || live < stored)) return live;
+  return stored;
+}
+
+/**
  * How far the backwards walk has got, as 0..1 — or `null` when that is not yet
  * knowable.
  *
@@ -50,13 +84,11 @@ export function computeBackfillFraction(input: {
   newestImported: Date | null;
   /**
    * `MediaServer.tracearrBackfillCursorAt` — how far back the walk has actually
-   * reached. Preferred over `oldestImported` when set: it also counts stretches
-   * of history that could not be stored, and after a purge restarts the walk
-   * (`restartTracearrBackfill` moves it to now) the rows that survived the purge
-   * still reach back to the far end, so measuring by them reported a full bar
-   * for a walk that had only just started again.
+   * reached. See `resolveBackfillReach`.
    */
   cursorAt?: Date | null;
+  /** The live backfill run's reach, when one is running — see `resolveBackfillReach`. */
+  liveReached?: Date | null;
 }): number | null {
   // The flag is the authority, not the arithmetic. The walk stops when a slice
   // comes back empty, which can happen while the oldest *storable* play is still
@@ -79,7 +111,8 @@ export function computeBackfillFraction(input: {
   // there is no span to be a fraction of, and dividing gives Infinity/NaN.
   if (span <= 0) return null;
 
-  const reached = input.cursorAt ?? input.oldestImported;
+  // Never null here: `oldestImported` is set.
+  const reached = resolveBackfillReach(input) ?? input.oldestImported;
   const covered = newest - reached.getTime();
 
   // Clamped, not asserted: the measurement and the import are separate passes,
