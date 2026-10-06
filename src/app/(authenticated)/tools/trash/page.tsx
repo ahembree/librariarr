@@ -233,6 +233,79 @@ function fmt(value: unknown): string {
   return s.length > 160 ? s.slice(0, 157) + "…" : s;
 }
 
+/** The first few lines of a toast description, with an "…and N more" tail. */
+function capLines(lines: string[], max = 3): string {
+  const shown = lines.slice(0, max);
+  if (lines.length > max) shown.push(`…and ${lines.length - max} more`);
+  return shown.join("\n");
+}
+
+/** `name: reason` for the first few SKIP/ERROR items, as a toast description. */
+function describePlanItems(items: PlanItem[], max = 3): string {
+  return capLines(
+    items.map((i) => `${i.name}: ${i.action === "ERROR" ? (i.error ?? "failed") : (i.warnings[0] ?? "skipped")}`),
+    max,
+  );
+}
+
+/** A fetch that rejected never reached the server — say so rather than nothing. */
+const NETWORK_ERROR = "Network error — could not reach Librariarr";
+
+/** Instance key used by the picker, and to tag in-flight actions. */
+function instanceKeyOf(inst: { serviceType: ServiceType; id: string }): string {
+  return `${inst.serviceType}:${inst.id}`;
+}
+
+/**
+ * Toast the outcome of a real (non-dry-run) sync. A SKIP item wrote nothing, so
+ * it is never folded into the success message — it's reported with its reason
+ * (`warnings[0]`), as an error when nothing at all was applied. An applied item
+ * that carries warnings (e.g. a profile score dropped because its custom format
+ * isn't in the app) didn't fully land either, so it's a warning, not a success.
+ * `partial` is the lead-in used when only some items were skipped or warned
+ * (defaults to `success`); `where` is appended to every title (" on <app>" when
+ * the user has since switched instance). Returns true only when everything
+ * applied cleanly.
+ */
+function toastSyncOutcome(items: PlanItem[], success: string, partial = success, where = ""): boolean {
+  // An empty report means the backend found nothing managed to write — the
+  // assignment was removed between the click and the sync. Not a success.
+  if (items.length === 0) {
+    toast.error(`Nothing was synced — it is no longer managed${where}`);
+    return false;
+  }
+  const errored = items.filter((i) => i.action === "ERROR");
+  const skipped = items.filter((i) => i.action === "SKIP");
+  const plural = (n: number) => (n === 1 ? "" : "s");
+  if (errored.length) {
+    toast.error(
+      `${errored.length} item${plural(errored.length)} failed` +
+        (skipped.length ? `, ${skipped.length} skipped` : "") +
+        where,
+      { description: describePlanItems([...errored, ...skipped]) },
+    );
+    return false;
+  }
+  if (skipped.length) {
+    const what = `${skipped.length} item${plural(skipped.length)} skipped`;
+    if (skipped.length === items.length) {
+      toast.error(`Nothing applied — ${what}${where}`, { description: describePlanItems(skipped) });
+    } else {
+      toast.warning(`${partial} — ${what}${where}`, { description: describePlanItems(skipped) });
+    }
+    return false;
+  }
+  const warnings = items.flatMap((i) => i.warnings.map((w) => `${i.name}: ${w}`));
+  if (warnings.length) {
+    toast.warning(`${partial} — ${warnings.length} warning${plural(warnings.length)}${where}`, {
+      description: capLines(warnings),
+    });
+    return false;
+  }
+  toast.success(success + where);
+  return true;
+}
+
 /**
  * Group items by their TRaSH category (an item may appear under more than one).
  * Items in no category fall into a trailing "Uncategorized" group. Categories
@@ -290,6 +363,9 @@ function CategorySection({
 
 // ─── Page ───
 
+/** In-flight id for an instance-wide/bulk sync (vs a row's trashId). */
+const SYNC_ID = "__sync__";
+
 export default function TrashSyncPage() {
   const [instances, setInstances] = useState<GuideInstance[]>([]);
   const [selectedKey, setSelectedKey] = useState<string>("");
@@ -301,26 +377,64 @@ export default function TrashSyncPage() {
   // (only the first load and instance switches blank the view).
   const [refreshingStatus, setRefreshingStatus] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [syncing, setSyncing] = useState(false);
   // Controlled so the active tab survives the status reload after an action
   // (the Tabs subtree unmounts while status is refetching, and an uncontrolled
   // Tabs would snap back to its default tab).
   const [activeTab, setActiveTab] = useState("profilecf");
 
   // Dialog state
-  const [confirmItem, setConfirmItem] = useState<StatusItem | null>(null);
+  // The take-over awaiting confirmation; naming carries its chosen variants.
+  const [confirmTarget, setConfirmTarget] = useState<{ item: StatusItem; selection?: NamingSelection } | null>(null);
+  const confirmItem = confirmTarget?.item ?? null;
   const [optionsItem, setOptionsItem] = useState<StatusItem | null>(null);
   const [diffReport, setDiffReport] = useState<{ title: string; items: PlanItem[]; dryRun: boolean } | null>(null);
-  const [busyId, setBusyId] = useState<string | null>(null);
+  // In-flight actions, each tagged with the instance it runs against: a row
+  // action's id is its trashId ("__all__" for the dry run), a bulk/global sync
+  // is SYNC_ID. Busy/syncing are derived for the CURRENT instance only, so an
+  // action still running on another app neither spins nor locks this one, and
+  // each action removes only its own entry when it finishes.
+  const [inFlight, setInFlight] = useState<{ instanceKey: string; id: string }[]>([]);
 
   // Monotonic token so a slow load for a previously-selected instance can't
   // clobber the results of a newer one when the user switches quickly.
   const loadSeqRef = useRef(0);
 
   const selected = useMemo(
-    () => instances.find((i) => `${i.serviceType}:${i.id}` === selectedKey) ?? null,
+    () => instances.find((i) => instanceKeyOf(i) === selectedKey) ?? null,
     [instances, selectedKey],
   );
+
+  // The instance selected NOW, for post-action reloads. An action captures the
+  // instance it started on; if the user switches mid-action, reloading that
+  // captured instance would supersede the new instance's load and render the
+  // old instance's data under the new one's name.
+  const selectedRef = useRef<GuideInstance | null>(selected);
+  useEffect(() => {
+    selectedRef.current = selected;
+  }, [selected]);
+
+  const busyIds = useMemo(
+    () => new Set(inFlight.filter((e) => e.instanceKey === selectedKey && e.id !== SYNC_ID).map((e) => e.id)),
+    [inFlight, selectedKey],
+  );
+  const syncing = inFlight.some((e) => e.instanceKey === selectedKey && e.id === SYNC_ID);
+
+  /** Mark an action on `inst` in flight; the returned function clears exactly that entry. */
+  const beginAction = (inst: GuideInstance, id: string) => {
+    const entry = { instanceKey: instanceKeyOf(inst), id };
+    setInFlight((prev) => [...prev, entry]);
+    return () => setInFlight((prev) => prev.filter((e) => e !== entry));
+  };
+
+  /** True while `inst` is still the selected instance (the user hasn't switched away). */
+  const stillSelected = (inst: GuideInstance) =>
+    !!selectedRef.current && instanceKeyOf(selectedRef.current) === instanceKeyOf(inst);
+  /** Toast suffix naming the app once the user has switched away from it mid-action. */
+  const elsewhere = (inst: GuideInstance) => (stillSelected(inst) ? "" : ` on ${inst.name}`);
+  /** Open an action's report only over the instance it ran against. */
+  const showReport = (inst: GuideInstance, report: { title: string; items: PlanItem[]; dryRun: boolean }) => {
+    if (stillSelected(inst)) setDiffReport(report);
+  };
 
   const loadInstances = useCallback(async () => {
     try {
@@ -337,8 +451,16 @@ export default function TrashSyncPage() {
     }
   }, []);
 
+  /**
+   * Load the catalog + status for `inst`. Resolves true only when both loaded
+   * (and the catalog behind the status did too) and this load is still the
+   * current one — callers use it to decide whether to report success.
+   */
   const loadStatus = useCallback(
-    async (inst: GuideInstance, opts: { refresh?: boolean; background?: boolean } = {}) => {
+    async (
+      inst: GuideInstance,
+      opts: { refresh?: boolean; background?: boolean } = {},
+    ): Promise<boolean> => {
       const seq = ++loadSeqRef.current;
       const isCurrent = () => loadSeqRef.current === seq;
       // Background refresh (after an action): keep the current view mounted and
@@ -351,38 +473,62 @@ export default function TrashSyncPage() {
       }
       try {
         const svc = inst.serviceType.toLowerCase();
-        const [catRes, statusRes] = await Promise.all([
-          fetch(`/api/tools/trash/catalog?service=${svc}${opts.refresh ? "&refresh=1" : ""}`),
-          fetch(`/api/tools/trash/status?serviceType=${inst.serviceType}&instanceId=${inst.id}`),
-        ]);
+        const catalogUrl = `/api/tools/trash/catalog?service=${svc}${opts.refresh ? "&refresh=1" : ""}`;
+        const statusUrl = `/api/tools/trash/status?serviceType=${inst.serviceType}&instanceId=${inst.id}`;
+        let catRes: Response;
+        let statusRes: Response;
+        if (opts.refresh) {
+          // Force the catalog refresh FIRST: the status route reads the cached
+          // catalog, so in parallel it could be built from the old guide while
+          // the toolbar shows the new one.
+          catRes = await fetch(catalogUrl);
+          statusRes = await fetch(statusUrl);
+        } else {
+          [catRes, statusRes] = await Promise.all([fetch(catalogUrl), fetch(statusUrl)]);
+        }
         // Defensive parse: a proxy/gateway can answer a 5xx with a non-JSON body.
         const catData = await catRes.json().catch(() => ({}));
         const statusData = await statusRes.json().catch(() => ({}));
         // A newer load superseded this one — drop its results so we never render
         // stale data for a no-longer-selected instance.
-        if (!isCurrent()) return;
+        if (!isCurrent()) return false;
         // Replace the catalog on success, and CLEAR it on failure so the
         // previously-selected instance's catalog can't linger against this one.
         setCatalog(catRes.ok ? catData.catalog : null);
+        // An explicit refresh has no other place to report a failed guide fetch.
+        if (!catRes.ok && opts.refresh) {
+          toast.error(catData.error ?? "Failed to refresh the guide catalog");
+        }
         if (statusRes.ok) {
           setStatus(statusData.status);
         } else {
           setStatus(null);
           toast.error(statusData.error ?? "Failed to load status");
         }
+        return catRes.ok && statusRes.ok && !statusData.status?.catalogError;
       } catch {
-        if (isCurrent()) toast.error("Failed to load guide status");
+        // Only a rejected fetch lands here (every body parse is guarded).
+        if (isCurrent()) toast.error(`${NETWORK_ERROR} to load the guide status`);
+        return false;
       } finally {
         // Only the newest load owns the loading flags; a superseded one must not
-        // flip them off underneath the load that replaced it.
+        // flip them off underneath the load that replaced it. Clear BOTH: a
+        // background reload can supersede a foreground load, whose own finally
+        // then skips, and the loader would otherwise stay up forever.
         if (isCurrent()) {
-          if (opts.background) setRefreshingStatus(false);
-          else setLoadingStatus(false);
+          setRefreshingStatus(false);
+          setLoadingStatus(false);
         }
       }
     },
     [],
   );
+
+  // Post-action reload: always the instance selected NOW (see selectedRef).
+  const reloadCurrent = useCallback(async () => {
+    const current = selectedRef.current;
+    if (current) await loadStatus(current, { background: true });
+  }, [loadStatus]);
 
   useEffect(() => {
     void (async () => {
@@ -402,23 +548,29 @@ export default function TrashSyncPage() {
     if (!selected) return;
     setRefreshing(true);
     // In-place: the Refresh button shows its own spinner, so keep the list up.
-    await loadStatus(selected, { refresh: true, background: true });
+    const ok = await loadStatus(selected, { refresh: true, background: true });
     setRefreshing(false);
-    toast.success("Guide catalog refreshed");
+    // Failures were already toasted by loadStatus (or the catalog-error card shows).
+    if (ok) toast.success("Guide catalog refreshed");
   };
 
   // ─── Assign / unassign ───
+  //
+  // Every action captures the instance it started on (`inst`), tags its busy
+  // state with it, and — if the user switches instance before it finishes —
+  // names that app in its toasts and skips opening its report over the other one.
 
   const assign = async (item: StatusItem, selection?: NamingSelection) => {
-    if (!selected) return;
-    setBusyId(item.trashId);
+    const inst = selected;
+    if (!inst) return;
+    const done = beginAction(inst, item.trashId);
     try {
       const res = await fetch("/api/tools/trash/assignments", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          serviceType: selected.serviceType,
-          instanceId: selected.id,
+          serviceType: inst.serviceType,
+          instanceId: inst.id,
           items: [
             {
               resourceType: item.resourceType,
@@ -431,78 +583,85 @@ export default function TrashSyncPage() {
       });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
-        toast.error(d.error ?? "Failed to assign");
+        toast.error((d.error ?? "Failed to assign") + elsewhere(inst));
         return;
       }
-      toast.success(`Librariarr now manages “${item.name}”`);
-      await loadStatus(selected, { background: true });
+      toast.success(`Librariarr now manages “${item.name}”${elsewhere(inst)}`);
+      await reloadCurrent();
+    } catch {
+      toast.error(NETWORK_ERROR + elsewhere(inst));
     } finally {
-      setBusyId(null);
+      done();
     }
   };
 
   const unassign = async (item: StatusItem) => {
-    if (!selected || !item.managedResourceId) return;
-    setBusyId(item.trashId);
+    const inst = selected;
+    if (!inst || !item.managedResourceId) return;
+    const done = beginAction(inst, item.trashId);
     try {
       const res = await fetch(`/api/tools/trash/assignments/${item.managedResourceId}`, {
         method: "DELETE",
       });
       if (!res.ok) {
-        toast.error("Failed to stop managing");
+        toast.error("Failed to stop managing" + elsewhere(inst));
         return;
       }
-      toast.success(`Stopped managing “${item.name}” (unchanged in the app)`);
-      await loadStatus(selected, { background: true });
+      toast.success(`Stopped managing “${item.name}” (unchanged in the app)${elsewhere(inst)}`);
+      await reloadCurrent();
+    } catch {
+      toast.error(NETWORK_ERROR + elsewhere(inst));
     } finally {
-      setBusyId(null);
+      done();
     }
   };
 
   // Add a resource that does NOT exist in the app yet: assign it and create it
   // in one step. Safe without confirmation — there is nothing to overwrite.
   const addItem = async (item: StatusItem) => {
-    if (!selected) return;
-    setBusyId(item.trashId);
+    const inst = selected;
+    if (!inst) return;
+    const done = beginAction(inst, item.trashId);
     try {
       const assignRes = await fetch("/api/tools/trash/assignments", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          serviceType: selected.serviceType,
-          instanceId: selected.id,
+          serviceType: inst.serviceType,
+          instanceId: inst.id,
           items: [{ resourceType: item.resourceType, trashId: item.trashId, name: item.name }],
         }),
       });
       if (!assignRes.ok) {
         const d = await assignRes.json().catch(() => ({}));
-        toast.error(d.error ?? "Failed to add");
+        toast.error((d.error ?? "Failed to add") + elsewhere(inst));
         return;
       }
       const syncRes = await fetch("/api/tools/trash/sync", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          serviceType: selected.serviceType,
-          instanceId: selected.id,
+          serviceType: inst.serviceType,
+          instanceId: inst.id,
           dryRun: false,
           items: [{ resourceType: item.resourceType, trashId: item.trashId }],
         }),
       });
       const data = await syncRes.json().catch(() => ({}));
       if (!syncRes.ok) {
-        toast.error(data.error ?? "Added, but sync failed");
-        await loadStatus(selected, { background: true });
+        toast.error((data.error ?? "Added, but sync failed") + elsewhere(inst));
+        await reloadCurrent();
         return;
       }
       const report: SyncReport = data.report;
-      const errored = report.items.filter((i) => i.action === "ERROR").length;
-      if (errored) toast.error(`Added “${item.name}” with errors`);
-      else toast.success(`Added “${item.name}” to ${selected.name}`);
-      setDiffReport({ title: `Add: ${item.name}`, items: report.items, dryRun: false });
-      await loadStatus(selected, { background: true });
+      const where = elsewhere(inst);
+      toastSyncOutcome(report.items, `Added “${item.name}”${where ? "" : ` to ${inst.name}`}`, undefined, where);
+      showReport(inst, { title: `Add: ${item.name}`, items: report.items, dryRun: false });
+      await reloadCurrent();
+    } catch {
+      toast.error(NETWORK_ERROR + elsewhere(inst));
     } finally {
-      setBusyId(null);
+      done();
     }
   };
 
@@ -510,8 +669,9 @@ export default function TrashSyncPage() {
   // reset-unmatched-scores). Records the intent only — the profile isn't
   // rewritten until the next Sync.
   const saveProfileOptions = async (item: StatusItem, selection: QualityProfileSelection) => {
-    if (!selected || !item.managedResourceId) return;
-    setBusyId(item.trashId);
+    const inst = selected;
+    if (!inst || !item.managedResourceId) return;
+    const done = beginAction(inst, item.trashId);
     try {
       const res = await fetch(`/api/tools/trash/assignments/${item.managedResourceId}`, {
         method: "PUT",
@@ -520,14 +680,16 @@ export default function TrashSyncPage() {
       });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
-        toast.error(d.error ?? "Failed to save options");
+        toast.error((d.error ?? "Failed to save options") + elsewhere(inst));
         return;
       }
-      toast.success(`Saved options for “${item.name}” (applied on next sync)`);
+      toast.success(`Saved options for “${item.name}” (applied on next sync)${elsewhere(inst)}`);
       setOptionsItem(null);
-      await loadStatus(selected, { background: true });
+      await reloadCurrent();
+    } catch {
+      toast.error(NETWORK_ERROR + elsewhere(inst));
     } finally {
-      setBusyId(null);
+      done();
     }
   };
 
@@ -539,86 +701,114 @@ export default function TrashSyncPage() {
     // Existing resources need explicit confirmation before Librariarr can
     // overwrite them on the next sync; not-yet-existing ones are just added.
     if (item.existsInArr) {
-      setConfirmItem(item);
+      setConfirmTarget({ item });
     } else {
       void addItem(item);
     }
   };
 
+  // Naming always exists in the app, so taking it over needs the same overwrite
+  // confirmation as any other existing item. Re-choosing variants on an
+  // already-managed naming item was consented to when it was taken over.
+  const onManageNaming = (item: StatusItem, selection: NamingSelection) => {
+    if (!item.managed && item.existsInArr) setConfirmTarget({ item, selection });
+    else void assign(item, selection);
+  };
+
   // Bulk-add not-yet-existing resources: assign them all, then create them in
   // the app in one step. Only touches items with nothing to overwrite.
-  const bulkAddItems = async (toAdd: StatusItem[]) => {
-    if (!selected || !toAdd.length) return;
-    setSyncing(true);
+  // Resolves true once the items are assigned (they then leave the selectable
+  // set), so the list keeps its selection for a retry when nothing happened.
+  const bulkAddItems = async (toAdd: StatusItem[]): Promise<boolean> => {
+    const inst = selected;
+    if (!inst || !toAdd.length) return false;
+    const done = beginAction(inst, SYNC_ID);
+    let assigned = false;
     try {
       const assignRes = await fetch("/api/tools/trash/assignments", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          serviceType: selected.serviceType,
-          instanceId: selected.id,
+          serviceType: inst.serviceType,
+          instanceId: inst.id,
           items: toAdd.map((i) => ({ resourceType: i.resourceType, trashId: i.trashId, name: i.name })),
         }),
       });
       if (!assignRes.ok) {
         const d = await assignRes.json().catch(() => ({}));
-        toast.error(d.error ?? "Failed to add");
-        return;
+        toast.error((d.error ?? "Failed to add") + elsewhere(inst));
+        return false;
       }
+      assigned = true;
       const syncRes = await fetch("/api/tools/trash/sync", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          serviceType: selected.serviceType,
-          instanceId: selected.id,
+          serviceType: inst.serviceType,
+          instanceId: inst.id,
           dryRun: false,
           items: toAdd.map((i) => ({ resourceType: i.resourceType, trashId: i.trashId })),
         }),
       });
       const data = await syncRes.json().catch(() => ({}));
       if (!syncRes.ok) {
-        toast.error(data.error ?? "Added, but sync failed");
-        await loadStatus(selected, { background: true });
-        return;
+        toast.error((data.error ?? "Added, but sync failed") + elsewhere(inst));
+        await reloadCurrent();
+        return true;
       }
       const report: SyncReport = data.report;
-      const errored = report.items.filter((i) => i.action === "ERROR").length;
-      if (errored) toast.error(`Added ${toAdd.length} item(s) with ${errored} error(s)`);
-      else toast.success(`Added ${toAdd.length} item${toAdd.length === 1 ? "" : "s"} to ${selected.name}`);
-      setDiffReport({ title: `Add ${toAdd.length} item(s)`, items: report.items, dryRun: false });
-      await loadStatus(selected, { background: true });
+      const added = report.items.filter((i) => i.action !== "ERROR" && i.action !== "SKIP").length;
+      const where = elsewhere(inst);
+      toastSyncOutcome(
+        report.items,
+        `Added ${toAdd.length} item${toAdd.length === 1 ? "" : "s"}${where ? "" : ` to ${inst.name}`}`,
+        `Added ${added} item${added === 1 ? "" : "s"}`,
+        where,
+      );
+      showReport(inst, { title: `Add ${toAdd.length} item(s)`, items: report.items, dryRun: false });
+      await reloadCurrent();
+      return true;
+    } catch {
+      toast.error(NETWORK_ERROR + elsewhere(inst));
+      if (assigned) await reloadCurrent();
+      return assigned;
     } finally {
-      setSyncing(false);
+      done();
     }
   };
 
   // Bulk take-over: assign managed rows for existing resources (the consent
   // gate). Writes nothing to the app — the next sync overwrites them. The
-  // caller (bulk bar) confirms the overwrite first.
-  const bulkManageItems = async (toManage: StatusItem[]) => {
-    if (!selected || !toManage.length) return;
-    setSyncing(true);
+  // caller (bulk bar) confirms the overwrite first. Resolves true on success.
+  const bulkManageItems = async (toManage: StatusItem[]): Promise<boolean> => {
+    const inst = selected;
+    if (!inst || !toManage.length) return false;
+    const done = beginAction(inst, SYNC_ID);
     try {
       const res = await fetch("/api/tools/trash/assignments", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          serviceType: selected.serviceType,
-          instanceId: selected.id,
+          serviceType: inst.serviceType,
+          instanceId: inst.id,
           items: toManage.map((i) => ({ resourceType: i.resourceType, trashId: i.trashId, name: i.name })),
         }),
       });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
-        toast.error(d.error ?? "Failed to manage");
-        return;
+        toast.error((d.error ?? "Failed to manage") + elsewhere(inst));
+        return false;
       }
       toast.success(
-        `Librariarr now manages ${toManage.length} item${toManage.length === 1 ? "" : "s"} — sync to apply`,
+        `Librariarr now manages ${toManage.length} item${toManage.length === 1 ? "" : "s"} — sync to apply${elsewhere(inst)}`,
       );
-      await loadStatus(selected, { background: true });
+      await reloadCurrent();
+      return true;
+    } catch {
+      toast.error(NETWORK_ERROR + elsewhere(inst));
+      return false;
     } finally {
-      setSyncing(false);
+      done();
     }
   };
 
@@ -628,15 +818,16 @@ export default function TrashSyncPage() {
     item?: StatusItem,
     selection?: NamingSelection | QualityProfileSelection,
   ) => {
-    if (!selected) return;
-    setBusyId(item?.trashId ?? "__all__");
+    const inst = selected;
+    if (!inst) return;
+    const done = beginAction(inst, item?.trashId ?? "__all__");
     try {
       const res = await fetch("/api/tools/trash/sync", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          serviceType: selected.serviceType,
-          instanceId: selected.id,
+          serviceType: inst.serviceType,
+          instanceId: inst.id,
           dryRun: true,
           ...(item
             ? {
@@ -653,79 +844,90 @@ export default function TrashSyncPage() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        toast.error(data.error ?? "Preview failed");
+        toast.error((data.error ?? "Preview failed") + elsewhere(inst));
         return;
       }
       const report: SyncReport = data.report;
-      setDiffReport({
+      showReport(inst, {
         title: item ? `Preview: ${item.name}` : "Dry run — all managed resources",
         items: report.items,
         dryRun: true,
       });
+    } catch {
+      toast.error(NETWORK_ERROR + elsewhere(inst));
     } finally {
-      setBusyId(null);
+      done();
     }
   };
 
   const applySync = async () => {
-    if (!selected) return;
-    setSyncing(true);
+    const inst = selected;
+    if (!inst) return;
+    const done = beginAction(inst, SYNC_ID);
     try {
       const res = await fetch("/api/tools/trash/sync", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          serviceType: selected.serviceType,
-          instanceId: selected.id,
+          serviceType: inst.serviceType,
+          instanceId: inst.id,
           dryRun: false,
         }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        toast.error(data.error ?? "Sync failed");
+        toast.error((data.error ?? "Sync failed") + elsewhere(inst));
         return;
       }
       const report: SyncReport = data.report;
       const changed = report.items.filter((i) => i.action === "CREATE" || i.action === "UPDATE").length;
-      const errored = report.items.filter((i) => i.action === "ERROR").length;
-      if (errored) toast.error(`Sync completed with ${errored} error${errored === 1 ? "" : "s"}`);
-      else toast.success(changed ? `Synced ${changed} change${changed === 1 ? "" : "s"}` : "Everything already up to date");
-      setDiffReport({ title: "Sync results", items: report.items, dryRun: false });
-      await loadStatus(selected, { background: true });
+      const synced = `Synced ${changed} change${changed === 1 ? "" : "s"}`;
+      // "Everything already up to date" only when nothing was skipped either.
+      toastSyncOutcome(
+        report.items,
+        changed ? synced : "Everything already up to date",
+        changed ? synced : "No other changes",
+        elsewhere(inst),
+      );
+      showReport(inst, { title: "Sync results", items: report.items, dryRun: false });
+      await reloadCurrent();
+    } catch {
+      toast.error(NETWORK_ERROR + elsewhere(inst));
     } finally {
-      setSyncing(false);
+      done();
     }
   };
 
   // Apply just one managed resource. The backend intersects `items` with the
   // managed set, so this only ever writes an already-assigned resource.
   const syncOne = async (item: StatusItem) => {
-    if (!selected) return;
-    setBusyId(item.trashId);
+    const inst = selected;
+    if (!inst) return;
+    const done = beginAction(inst, item.trashId);
     try {
       const res = await fetch("/api/tools/trash/sync", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          serviceType: selected.serviceType,
-          instanceId: selected.id,
+          serviceType: inst.serviceType,
+          instanceId: inst.id,
           dryRun: false,
           items: [{ resourceType: item.resourceType, trashId: item.trashId }],
         }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        toast.error(data.error ?? "Sync failed");
+        toast.error((data.error ?? "Sync failed") + elsewhere(inst));
         return;
       }
       const report: SyncReport = data.report;
-      const errored = report.items.filter((i) => i.action === "ERROR").length;
-      if (errored) toast.error(`“${item.name}” synced with errors`);
-      else toast.success(`Synced “${item.name}”`);
-      setDiffReport({ title: `Sync: ${item.name}`, items: report.items, dryRun: false });
-      await loadStatus(selected, { background: true });
+      toastSyncOutcome(report.items, `Synced “${item.name}”`, undefined, elsewhere(inst));
+      showReport(inst, { title: `Sync: ${item.name}`, items: report.items, dryRun: false });
+      await reloadCurrent();
+    } catch {
+      toast.error(NETWORK_ERROR + elsewhere(inst));
     } finally {
-      setBusyId(null);
+      done();
     }
   };
 
@@ -750,6 +952,18 @@ export default function TrashSyncPage() {
   const qpItems = status?.items.filter((i) => i.resourceType === "QUALITY_PROFILE") ?? [];
   const qdItem = status?.items.find((i) => i.resourceType === "QUALITY_DEFINITION");
   const namingItem = status?.items.find((i) => i.resourceType === "NAMING");
+  // trashId → "exists in the app", as the status route resolved it (current
+  // guide name, matched case-insensitively). The Profile Formats tab trusts this
+  // over the names saved in a PROFILE_CF row, which go stale on a guide rename.
+  const cfExistsInApp = useMemo(
+    () =>
+      new Map(
+        (status?.items ?? [])
+          .filter((i) => i.resourceType === "CUSTOM_FORMAT")
+          .map((i) => [i.trashId, i.existsInArr] as const),
+      ),
+    [status],
+  );
 
   return (
     <TooltipProvider delayDuration={200}>
@@ -786,7 +1000,7 @@ export default function TrashSyncPage() {
             </SelectTrigger>
             <SelectContent>
               {instances.map((i) => (
-                <SelectItem key={`${i.serviceType}:${i.id}`} value={`${i.serviceType}:${i.id}`}>
+                <SelectItem key={instanceKeyOf(i)} value={instanceKeyOf(i)}>
                   {i.name} · {i.serviceType === "SONARR" ? "Sonarr" : "Radarr"}
                   {!i.enabled ? " (disabled)" : ""}
                 </SelectItem>
@@ -873,12 +1087,12 @@ export default function TrashSyncPage() {
                 variant="outline"
                 size="sm"
                 onClick={() => preview()}
-                disabled={syncing || counts.managed === 0 || busyId !== null}
+                disabled={syncing || counts.managed === 0 || busyIds.size > 0}
               >
-                {busyId === "__all__" ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Eye className="mr-1.5 h-4 w-4" />}
+                {busyIds.has("__all__") ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Eye className="mr-1.5 h-4 w-4" />}
                 Dry run
               </Button>
-              <Button size="sm" onClick={applySync} disabled={syncing || counts.managed === 0 || busyId !== null}>
+              <Button size="sm" onClick={applySync} disabled={syncing || counts.managed === 0 || busyIds.size > 0}>
                 {syncing ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Play className="mr-1.5 h-4 w-4" />}
                 Sync managed
               </Button>
@@ -896,7 +1110,7 @@ export default function TrashSyncPage() {
             <TabsContent value="cf">
               <ResourceList
                 items={cfItems}
-                busyId={busyId}
+                busyIds={busyIds}
                 syncing={syncing}
                 categories={catalog?.categories ?? []}
                 onManage={onManageClick}
@@ -910,7 +1124,7 @@ export default function TrashSyncPage() {
             <TabsContent value="qp">
               <ResourceList
                 items={qpItems}
-                busyId={busyId}
+                busyIds={busyIds}
                 syncing={syncing}
                 onManage={onManageClick}
                 // Preview a QP with its saved options so the per-row diff matches
@@ -923,24 +1137,29 @@ export default function TrashSyncPage() {
               />
             </TabsContent>
 
-            <TabsContent value="profilecf">
+            {/* Profile Formats and Sizes & Naming hold unsaved local edits, so
+                they stay mounted (hidden while inactive) — TabsContent would
+                otherwise unmount them and silently drop the edits on a tab switch. */}
+            <TabsContent value="profilecf" forceMount className="data-[state=inactive]:hidden">
               <ProfileFormatsTab
-                key={`${selected.serviceType}:${selected.id}`}
+                key={instanceKeyOf(selected)}
                 serviceType={selected.serviceType}
                 instanceId={selected.id}
                 instanceName={selected.name}
                 catalogCfs={catalog?.customFormats ?? []}
                 catalogCategories={catalog?.categories ?? []}
-                onShowReport={(title, items, dryRun) => setDiffReport({ title, items, dryRun })}
-                onManagedChange={() => selected && void loadStatus(selected, { background: true })}
+                cfExistsInApp={cfExistsInApp}
+                isCurrentInstance={() => stillSelected(selected)}
+                onShowReport={(title, items, dryRun) => showReport(selected, { title, items, dryRun })}
+                onManagedChange={() => void reloadCurrent()}
               />
             </TabsContent>
 
-            <TabsContent value="misc" className="space-y-4">
+            <TabsContent value="misc" forceMount className="space-y-4 data-[state=inactive]:hidden">
               {qdItem && (
                 <SingletonCard
                   item={qdItem}
-                  busy={busyId === qdItem.trashId}
+                  busy={busyIds.has(qdItem.trashId)}
                   onManage={() => onManageClick(qdItem)}
                   onPreview={() => preview(qdItem)}
                   onSync={() => syncOne(qdItem)}
@@ -948,12 +1167,12 @@ export default function TrashSyncPage() {
               )}
               {namingItem && (
                 <NamingCard
-                  key={`${selected.serviceType}:${selected.id}`}
+                  key={instanceKeyOf(selected)}
                   service={selected.serviceType}
                   item={namingItem}
                   naming={catalog?.naming ?? null}
-                  busy={busyId === namingItem.trashId}
-                  onManage={(sel) => assign(namingItem, sel)}
+                  busy={busyIds.has(namingItem.trashId)}
+                  onManage={(sel) => onManageNaming(namingItem, sel)}
                   onUnmanage={() => unassign(namingItem)}
                   onPreview={(sel) => preview(namingItem, sel)}
                   onSync={() => syncOne(namingItem)}
@@ -965,7 +1184,7 @@ export default function TrashSyncPage() {
       )}
 
       {/* Take-over confirmation */}
-      <AlertDialog open={!!confirmItem} onOpenChange={(o) => !o && setConfirmItem(null)}>
+      <AlertDialog open={!!confirmItem} onOpenChange={(o) => !o && setConfirmTarget(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Let Librariarr manage this?</AlertDialogTitle>
@@ -980,8 +1199,8 @@ export default function TrashSyncPage() {
             <AlertDialogCancel>Cancel</AlertDialogCancel>
             <AlertDialogAction
               onClick={() => {
-                if (confirmItem) void assign(confirmItem);
-                setConfirmItem(null);
+                if (confirmTarget) void assign(confirmTarget.item, confirmTarget.selection);
+                setConfirmTarget(null);
               }}
             >
               Manage &amp; allow overwrite
@@ -994,7 +1213,7 @@ export default function TrashSyncPage() {
       <QualityProfileOptionsDialog
         item={optionsItem}
         scoreSets={catalog?.scoreSets ?? []}
-        busy={!!optionsItem && busyId === optionsItem.trashId}
+        busy={!!optionsItem && busyIds.has(optionsItem.trashId)}
         onClose={() => setOptionsItem(null)}
         onSave={(sel) => optionsItem && void saveProfileOptions(optionsItem, sel)}
       />
@@ -1050,7 +1269,7 @@ function CountPill({
 
 function ResourceList({
   items,
-  busyId,
+  busyIds,
   syncing,
   categories,
   onManage,
@@ -1061,7 +1280,8 @@ function ResourceList({
   onOptions,
 }: {
   items: StatusItem[];
-  busyId: string | null;
+  /** Rows whose own action is in flight on this instance. */
+  busyIds: Set<string>;
   /** A bulk operation is in flight (disables the selection actions). */
   syncing: boolean;
   /** When provided, items are grouped into an expandable category drilldown. */
@@ -1069,10 +1289,10 @@ function ResourceList({
   onManage: (item: StatusItem) => void;
   onPreview: (item: StatusItem) => void;
   onSync: (item: StatusItem) => void;
-  /** Assign + create the given not-yet-existing items. */
-  onBulkAdd: (items: StatusItem[]) => Promise<void>;
-  /** Take over (assign) the given existing items — caller confirms first here. */
-  onBulkManage: (items: StatusItem[]) => Promise<void>;
+  /** Assign + create the given not-yet-existing items; resolves true once assigned. */
+  onBulkAdd: (items: StatusItem[]) => Promise<boolean>;
+  /** Take over (assign) the given existing items — caller confirms first here. Resolves true on success. */
+  onBulkManage: (items: StatusItem[]) => Promise<boolean>;
   /** When provided, managed rows get an options (gear) button. */
   onOptions?: (item: StatusItem) => void;
 }) {
@@ -1118,14 +1338,14 @@ function ResourceList({
     });
   const clearSelection = () => setSelected(new Set());
 
+  // Clear the selection once the action went through; on a failure (already
+  // toasted by the caller) keep it so the user can simply retry.
   const doAdd = async () => {
-    await onBulkAdd(selectedNew);
-    clearSelection();
+    if (await onBulkAdd(selectedNew).catch(() => false)) clearSelection();
   };
   const doManage = async () => {
     setConfirmManage(false);
-    await onBulkManage(selectedExisting);
-    clearSelection();
+    if (await onBulkManage(selectedExisting).catch(() => false)) clearSelection();
   };
 
   const grouped = categories && categories.length ? groupByCategory(filtered, categories) : null;
@@ -1146,7 +1366,7 @@ function ResourceList({
       item={item}
       // Disable a row's actions while its own action runs AND during any global
       // or bulk sync, so per-row and instance-wide writes can't overlap.
-      busy={busyId === item.trashId || syncing}
+      busy={busyIds.has(item.trashId) || syncing}
       selectable={!item.managed}
       selected={selected.has(item.trashId)}
       onToggleSelect={() => toggleOne(item.trashId)}
@@ -1591,6 +1811,11 @@ function NamingCard({
 
 // ─── Profile custom-format assignment ───
 
+/** Custom-format name key, matching the backend's trimmed, case-insensitive lookup. */
+function normalizeCfName(name: string): string {
+  return name.trim().toLowerCase();
+}
+
 /** Assigned formats are shown highest-score-first (ties broken by name). */
 function sortFormatsByScore(list: ProfileCfFormat[]): ProfileCfFormat[] {
   return [...list].sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
@@ -1659,6 +1884,8 @@ function ProfileFormatsTab({
   instanceName,
   catalogCfs,
   catalogCategories,
+  cfExistsInApp,
+  isCurrentInstance,
   onShowReport,
   onManagedChange,
 }: {
@@ -1667,6 +1894,11 @@ function ProfileFormatsTab({
   instanceName: string;
   catalogCfs: CatalogCf[];
   catalogCategories: CfCategory[];
+  /** trashId → exists in the app, from the page's CUSTOM_FORMAT status items. */
+  cfExistsInApp: Map<string, boolean>;
+  /** False once the user has switched to another instance (this tab is keyed per instance). */
+  isCurrentInstance: () => boolean;
+  /** Only opens the report while this tab's instance is still selected. */
   onShowReport: (title: string, items: PlanItem[], dryRun: boolean) => void;
   /** Refresh the page-level status after a change here (managed totals, buttons). */
   onManagedChange?: () => void;
@@ -1675,6 +1907,12 @@ function ProfileFormatsTab({
   const [assignments, setAssignments] = useState<ProfileCfAssignment[]>([]);
   const [selectedProfile, setSelectedProfile] = useState<string>("");
   const [formats, setFormats] = useState<ProfileCfFormat[]>([]);
+  // The list the profile was opened with (a managed profile's saved formats, an
+  // unmanaged one's seeded list), replaced by the saved list after a Save.
+  // Unsaved edits are measured against it, and Discard restores it.
+  const [baseline, setBaseline] = useState<ProfileCfFormat[]>([]);
+  // A profile picked while there are unsaved edits, awaiting confirmation.
+  const [pendingProfile, setPendingProfile] = useState<string | null>(null);
   // Custom-format names that actually exist in the app — a score only applies to
   // one of these, so an assigned format outside this set is flagged inline.
   // `null` means "not loaded yet" (distinct from a genuinely empty instance, so
@@ -1694,11 +1932,14 @@ function ProfileFormatsTab({
         fetch(`/api/tools/trash/profiles?serviceType=${serviceType}&instanceId=${instanceId}`),
         fetch(`/api/tools/trash/assignments?serviceType=${serviceType}&instanceId=${instanceId}`),
       ]);
-      const pData = await pRes.json();
-      const aData = await aRes.json();
+      // Defensive parse: a proxy/gateway can answer a 5xx with a non-JSON body.
+      const pData = await pRes.json().catch(() => ({}));
+      const aData = await aRes.json().catch(() => ({}));
       if (pRes.ok) {
         setProfiles(pData.profiles ?? []);
-        setInstanceFormats(new Set<string>(pData.instanceFormatNames ?? []));
+        setInstanceFormats(
+          new Set<string>((pData.instanceFormatNames ?? []).map((n: string) => normalizeCfName(n))),
+        );
         setError(null);
       } else {
         setError(pData.error ?? "Failed to load quality profiles");
@@ -1711,11 +1952,16 @@ function ProfileFormatsTab({
         );
       }
     } catch {
-      setError("Failed to load quality profiles");
+      // Only a rejected fetch lands here (both body parses are guarded).
+      setError(`${NETWORK_ERROR} to load quality profiles`);
+      toast.error(`${NETWORK_ERROR} to load quality profiles`);
     } finally {
       setLoading(false);
     }
   }, [serviceType, instanceId]);
+
+  // Toast suffix naming the app once the user has switched away mid-action.
+  const elsewhere = () => (isCurrentInstance() ? "" : ` on ${instanceName}`);
 
   useEffect(() => {
     void (async () => {
@@ -1742,43 +1988,103 @@ function ProfileFormatsTab({
     return m;
   }, [catalogCfs]);
 
-  // A score only applies to a custom format that already exists in the app. When
-  // we know the instance's format names, flag any assigned format outside that
-  // set (mirrors the backend's exact-name presence check). Until the list has
-  // loaded (`null`), assume present so nothing is falsely flagged — but once
-  // loaded, an empty set correctly reports every format as not-yet-in-app.
-  const isInApp = (name: string) => instanceFormats === null || instanceFormats.has(name);
+  // Guide trash_ids, to spot a saved format the guide has since removed: the
+  // assignments route refuses an unknown trash_id, so such a row would make the
+  // profile unsavable. Until the catalog has loaded (empty), nothing is flagged.
+  const catalogIds = useMemo(() => new Set(catalogCfs.map((cf) => cf.trashId)), [catalogCfs]);
+  const isRemovedFromGuide = (f: ProfileCfFormat) => catalogCfs.length > 0 && !catalogIds.has(f.trashId);
+
+  // A score only applies to a custom format that already exists in the app. The
+  // page's status (resolved by trash_id against the CURRENT guide name, matched
+  // trimmed and case-insensitively like the backend's findArrCfByName) is the
+  // authority: a saved row's name is from save time and goes stale on a guide
+  // rename. Only a format the status doesn't know falls back to a name check
+  // against the instance's format list — an exact match there would call "hdr"
+  // not-in-app while the sync treats it as the user's existing "HDR". Until that
+  // list has loaded (`null`), assume present so nothing is falsely flagged — but
+  // once loaded, an empty set correctly reports every format as not-yet-in-app.
+  const isInApp = (f: ProfileCfFormat) => {
+    const known = cfExistsInApp.get(f.trashId);
+    if (known !== undefined) return known;
+    return instanceFormats === null || instanceFormats.has(normalizeCfName(f.name));
+  };
+  // "Add & apply" creates the format, so it's offered only where the status
+  // positively says it isn't in the app — never on a name guess, which could
+  // overwrite an unmanaged format with no take-over confirmation.
+  const canAddToApp = (f: ProfileCfFormat) => cfExistsInApp.get(f.trashId) === false;
 
   // Unsaved-edit guard: a real (non-dry-run) Sync applies the STORED selection,
   // so syncing with unsaved edits would silently apply stale scores while
-  // Preview shows the live ones. Disable Sync until the edits are saved.
+  // Preview shows the live ones, and "Add & apply" would save and apply edits
+  // nobody previewed. Both are refused until the edits are saved — for a managed
+  // profile and an unmanaged one alike, measured against the opened list.
   const formatsKey = (fmts?: ProfileCfFormat[] | null) =>
     JSON.stringify(
       (fmts ?? []).map((f) => [f.trashId, f.score]).sort((a, b) => (a[0] < b[0] ? -1 : 1)),
     );
-  const isDirty =
-    !!currentAssignment &&
-    formatsKey(formats) !== formatsKey(currentAssignment.selection?.formats);
+  const isDirty = !!selectedProfile && formatsKey(formats) !== formatsKey(baseline);
 
-  // Assigned formats that don't yet exist in the app (their score can't apply).
-  const missingFormats = formats.filter((f) => !isInApp(f.name));
+  // Assigned formats that don't yet exist in the app (their score can't apply),
+  // and the subset that can be added in one click.
+  const missingFormats = formats.filter((f) => !isRemovedFromGuide(f) && !isInApp(f));
+  const addableMissing = missingFormats.filter(canAddToApp);
 
   const selectProfile = (name: string) => {
     setSelectedProfile(name);
     setCfQuery("");
     setAttachedQuery("");
-    const profile = profiles.find((p) => p.name === name);
     const existing = assignmentFor(name);
-    // Seed with every guide custom format currently scored on the profile, so
-    // all assigned formats are listed and their scores can be overridden…
+    // A managed profile opens on exactly its saved list. Merging the app's
+    // current scores in would make it open dirty (Sync disabled) and bring back
+    // any format the user removed, so a removal could never be saved. Names are
+    // refreshed from the guide by trash_id (the saved one is from save time);
+    // that doesn't make it dirty, which compares trash_ids and scores only.
+    if (existing) {
+      const nameById = new Map(catalogCfs.map((cf) => [cf.trashId, cf.name]));
+      const list = sortFormatsByScore(
+        (existing.selection?.formats ?? []).map((f) => ({ ...f, name: nameById.get(f.trashId) ?? f.name })),
+      );
+      setFormats(list);
+      setBaseline(list.map((f) => ({ ...f })));
+      return;
+    }
+    // An unmanaged profile is seeded with every guide custom format currently
+    // scored on it, so its assigned formats are listed and can be overridden.
+    const profile = profiles.find((p) => p.name === name);
     const byTrashId = new Map<string, ProfileCfFormat>();
     for (const [cfName, score] of Object.entries(profile?.formatScores ?? {})) {
       const guideCf = cfByName.get(cfName.toLowerCase());
       if (guideCf) byTrashId.set(guideCf.trashId, { trashId: guideCf.trashId, name: guideCf.name, score });
     }
-    // …then layer the user's saved overrides on top.
-    for (const f of existing?.selection?.formats ?? []) byTrashId.set(f.trashId, { ...f });
-    setFormats(sortFormatsByScore([...byTrashId.values()]));
+    const list = sortFormatsByScore([...byTrashId.values()]);
+    setFormats(list);
+    setBaseline(list.map((f) => ({ ...f })));
+  };
+
+  // Picking another profile replaces the local list, so ask first when that
+  // would throw away unsaved edits.
+  const requestProfile = (name: string) => {
+    if (name !== selectedProfile && isDirty) setPendingProfile(name);
+    else selectProfile(name);
+  };
+
+  const discardEdits = () => setFormats(baseline.map((f) => ({ ...f })));
+
+  /**
+   * The list to persist: `formats` minus any format the guide has since removed
+   * (the assignments route would refuse the whole save over one). Drops them
+   * from the local list too, and says how many went.
+   */
+  const savableFormats = (): ProfileCfFormat[] => {
+    const kept = formats.filter((f) => !isRemovedFromGuide(f));
+    const dropped = formats.length - kept.length;
+    if (dropped) {
+      setFormats(kept);
+      toast.info(
+        `Dropped ${dropped} custom format${dropped === 1 ? "" : "s"} no longer in the TRaSH guide`,
+      );
+    }
+    return kept;
   };
 
   const addFormat = (cf: CatalogCf) => {
@@ -1795,6 +2101,8 @@ function ProfileFormatsTab({
 
   const save = async () => {
     if (!selectedProfile) return;
+    const profileName = selectedProfile;
+    const toSave = savableFormats();
     setBusy(true);
     try {
       const res = await fetch("/api/tools/trash/assignments", {
@@ -1806,21 +2114,24 @@ function ProfileFormatsTab({
           items: [
             {
               resourceType: "PROFILE_CF",
-              trashId: selectedProfile,
-              name: selectedProfile,
-              selection: { formats },
+              trashId: profileName,
+              name: profileName,
+              selection: { formats: toSave },
             },
           ],
         }),
       });
       const d = await res.json().catch(() => ({}));
       if (!res.ok) {
-        toast.error(d.error ?? "Failed to save");
+        toast.error((d.error ?? "Failed to save") + elsewhere());
         return;
       }
-      toast.success(`Saved custom formats for “${selectedProfile}” (not applied until you Sync)`);
+      setBaseline(toSave.map((f) => ({ ...f })));
+      toast.success(`Saved custom formats for “${profileName}” (not applied until you Sync)${elsewhere()}`);
       await load();
       onManagedChange?.();
+    } catch {
+      toast.error(NETWORK_ERROR + elsewhere());
     } finally {
       setBusy(false);
     }
@@ -1828,6 +2139,7 @@ function ProfileFormatsTab({
 
   const runSync = async (dryRun: boolean) => {
     if (!selectedProfile) return;
+    const profileName = selectedProfile;
     setBusy(true);
     try {
       const res = await fetch("/api/tools/trash/sync", {
@@ -1840,7 +2152,7 @@ function ProfileFormatsTab({
           items: [
             {
               resourceType: "PROFILE_CF",
-              trashId: selectedProfile,
+              trashId: profileName,
               // dry-run previews the current (possibly unsaved) edits.
               ...(dryRun ? { selection: { formats } } : {}),
             },
@@ -1849,22 +2161,32 @@ function ProfileFormatsTab({
       });
       const d = await res.json().catch(() => ({}));
       if (!res.ok) {
-        toast.error(d.error ?? "Sync failed");
+        toast.error((d.error ?? "Sync failed") + elsewhere());
         return;
       }
-      const items: PlanItem[] = d.report.items;
+      const items: PlanItem[] = d.report?.items ?? [];
+      let applied = false;
       if (!dryRun) {
-        const errored = items.filter((i) => i.action === "ERROR").length;
-        if (errored) toast.error(`Applied with ${errored} error(s)`);
-        else toast.success(`Applied custom-format scores to “${selectedProfile}”`);
+        // A SKIPped or warned PROFILE_CF item didn't fully apply — never report
+        // it as applied (a dropped score comes back as an UPDATE with a warning).
+        applied = toastSyncOutcome(
+          items,
+          `Applied custom-format scores to “${profileName}”`,
+          undefined,
+          elsewhere(),
+        );
         await load();
         onManagedChange?.();
       }
-      onShowReport(
-        dryRun ? `Preview: ${selectedProfile}` : `Applied: ${selectedProfile}`,
-        items,
-        dryRun,
-      );
+      if (isCurrentInstance()) {
+        onShowReport(
+          dryRun ? `Preview: ${profileName}` : applied ? `Applied: ${profileName}` : `Sync: ${profileName}`,
+          items,
+          dryRun,
+        );
+      }
+    } catch {
+      toast.error(NETWORK_ERROR + elsewhere());
     } finally {
       setBusy(false);
     }
@@ -1878,12 +2200,14 @@ function ProfileFormatsTab({
         method: "DELETE",
       });
       if (!res.ok) {
-        toast.error("Failed to stop managing");
+        toast.error("Failed to stop managing" + elsewhere());
         return;
       }
-      toast.success("Stopped managing (existing scores left unchanged in the app)");
+      toast.success(`Stopped managing (existing scores left unchanged in the app)${elsewhere()}`);
       await load();
       onManagedChange?.();
+    } catch {
+      toast.error(NETWORK_ERROR + elsewhere());
     } finally {
       setBusy(false);
     }
@@ -1892,10 +2216,17 @@ function ProfileFormatsTab({
   // One-click "add & score": create the missing custom format(s) in the app
   // (the consent-gated write), then persist and sync this profile's selection so
   // the scores actually apply — without leaving the tab.
+  // It saves and applies the WHOLE local list, so it's refused while there are
+  // unsaved edits — otherwise it would persist and apply changes the user never
+  // previewed, around the save-before-sync guard (the buttons are disabled too).
   const addToAppAndApply = async (toAdd: ProfileCfFormat[]) => {
-    if (!selectedProfile || toAdd.length === 0) return;
+    if (!selectedProfile || toAdd.length === 0 || isDirty) return;
+    const profileName = selectedProfile;
     const postJson = (url: string, body: unknown) =>
       fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    const report = (title: string, items: PlanItem[]) => {
+      if (isCurrentInstance()) onShowReport(title, items, false);
+    };
     setBusy(true);
     try {
       const cfItems = toAdd.map((f) => ({ resourceType: "CUSTOM_FORMAT", trashId: f.trashId, name: f.name }));
@@ -1903,7 +2234,7 @@ function ProfileFormatsTab({
       const assignRes = await postJson("/api/tools/trash/assignments", { serviceType, instanceId, items: cfItems });
       if (!assignRes.ok) {
         const d = await assignRes.json().catch(() => ({}));
-        toast.error(d.error ?? "Failed to add to app");
+        toast.error((d.error ?? "Failed to add to app") + elsewhere());
         return;
       }
       const cfSync = await postJson("/api/tools/trash/sync", {
@@ -1912,50 +2243,68 @@ function ProfileFormatsTab({
         dryRun: false,
         items: cfItems.map((i) => ({ resourceType: i.resourceType, trashId: i.trashId })),
       });
+      const cfData = await cfSync.json().catch(() => ({}));
       if (!cfSync.ok) {
-        const d = await cfSync.json().catch(() => ({}));
-        toast.error(d.error ?? "Failed to create in app");
+        toast.error((cfData.error ?? "Failed to create in app") + elsewhere());
         // The custom format(s) were already assigned (managed rows exist), so
         // refresh the page-level status too — not just this tab.
         await load();
         onManagedChange?.();
         return;
       }
-      // 2) Persist this profile's custom-format selection.
-      const saveRes = await postJson("/api/tools/trash/assignments", {
-        serviceType,
-        instanceId,
-        items: [{ resourceType: "PROFILE_CF", trashId: selectedProfile, name: selectedProfile, selection: { formats } }],
-      });
-      if (!saveRes.ok) {
-        const d = await saveRes.json().catch(() => ({}));
-        toast.error(d.error ?? "Added to app, but failed to save the profile");
+      // A format the app refused to create comes back as a 200 with an ERROR
+      // item — don't go on to save and apply scores as if it had been added.
+      const cfErrors = ((cfData.report?.items ?? []) as PlanItem[]).filter((i) => i.action === "ERROR");
+      if (cfErrors.length) {
+        toast.error(
+          `Couldn't add ${cfErrors.length} custom format${cfErrors.length === 1 ? "" : "s"} to ${instanceName}`,
+          { description: describePlanItems(cfErrors) },
+        );
+        report(`Add to app: ${profileName}`, cfData.report.items);
         await load();
         onManagedChange?.();
         return;
       }
+      // 2) Persist this profile's custom-format selection (minus any format the
+      //    guide has since removed, which the save would refuse).
+      const toSave = savableFormats();
+      const saveRes = await postJson("/api/tools/trash/assignments", {
+        serviceType,
+        instanceId,
+        items: [{ resourceType: "PROFILE_CF", trashId: profileName, name: profileName, selection: { formats: toSave } }],
+      });
+      if (!saveRes.ok) {
+        const d = await saveRes.json().catch(() => ({}));
+        toast.error((d.error ?? "Added to app, but failed to save the profile") + elsewhere());
+        await load();
+        onManagedChange?.();
+        return;
+      }
+      setBaseline(toSave.map((f) => ({ ...f })));
       // 3) Apply the profile scores now that the format(s) exist.
       const pfSync = await postJson("/api/tools/trash/sync", {
         serviceType,
         instanceId,
         dryRun: false,
-        items: [{ resourceType: "PROFILE_CF", trashId: selectedProfile }],
+        items: [{ resourceType: "PROFILE_CF", trashId: profileName }],
       });
       const d = await pfSync.json().catch(() => ({}));
       if (!pfSync.ok) {
-        toast.error(d.error ?? "Added to app, but the profile sync failed");
+        toast.error((d.error ?? "Added to app, but the profile sync failed") + elsewhere());
         await load();
         onManagedChange?.();
         return;
       }
-      const errored = (d.report?.items ?? []).filter((i: PlanItem) => i.action === "ERROR").length;
-      if (errored) toast.error(`Applied with ${errored} error(s)`);
-      else
-        toast.success(
-          `Added ${toAdd.length} custom format${toAdd.length === 1 ? "" : "s"} to ${instanceName} and applied the scores`,
-        );
-      onShowReport(`Add & apply: ${selectedProfile}`, d.report?.items ?? [], false);
+      toastSyncOutcome(
+        d.report?.items ?? [],
+        `Added ${toAdd.length} custom format${toAdd.length === 1 ? "" : "s"} to ${instanceName} and applied the scores`,
+      );
+      report(`Add & apply: ${profileName}`, d.report?.items ?? []);
       await load();
+      onManagedChange?.();
+    } catch {
+      toast.error(NETWORK_ERROR + elsewhere());
+      // Any step may already have written (assigned/created) before the failure.
       onManagedChange?.();
     } finally {
       setBusy(false);
@@ -2006,7 +2355,7 @@ function ProfileFormatsTab({
             {/* Profile picker + always-visible managed profiles */}
             <div className="space-y-3">
               <div className="flex flex-wrap items-center gap-2">
-                <Select value={selectedProfile} onValueChange={selectProfile}>
+                <Select value={selectedProfile} onValueChange={requestProfile} disabled={busy}>
                   <SelectTrigger className="w-72">
                     <SelectValue placeholder="Select a quality profile" />
                   </SelectTrigger>
@@ -2042,7 +2391,8 @@ function ProfileFormatsTab({
                       variant={name === selectedProfile ? "secondary" : "outline"}
                       size="sm"
                       className="h-7"
-                      onClick={() => selectProfile(name)}
+                      onClick={() => requestProfile(name)}
+                      disabled={busy}
                     >
                       <ShieldCheck className="mr-1 h-3.5 w-3.5 text-green" />
                       {name}
@@ -2078,18 +2428,25 @@ function ProfileFormatsTab({
                           {missingFormats.length} format{missingFormats.length === 1 ? "" : "s"} below{" "}
                           {missingFormats.length === 1 ? "isn't" : "aren't"} in this app yet — the score
                           won&apos;t apply until the custom format exists.
+                          {isDirty && addableMissing.length > 0 && " Save or discard your changes first to add them."}
                         </span>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-7 shrink-0 border-amber/40 text-amber hover:text-amber"
-                          onClick={() => addToAppAndApply(missingFormats)}
-                          disabled={busy}
-                          title="Add the missing custom formats to the app and apply their scores"
-                        >
-                          {busy ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Plus className="mr-1 h-3.5 w-3.5" />}
-                          Add all &amp; apply ({missingFormats.length})
-                        </Button>
+                        {addableMissing.length > 0 && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 shrink-0 border-amber/40 text-amber hover:text-amber"
+                            onClick={() => addToAppAndApply(addableMissing)}
+                            disabled={busy || isDirty}
+                            title={
+                              isDirty
+                                ? "Save or discard your changes first"
+                                : "Add the missing custom formats to the app and apply their scores"
+                            }
+                          >
+                            {busy ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Plus className="mr-1 h-3.5 w-3.5" />}
+                            Add all &amp; apply ({addableMissing.length})
+                          </Button>
+                        )}
                       </div>
                     )}
                     <div className="h-[24rem] overflow-y-auto overflow-x-hidden rounded-md border border-white/5">
@@ -2105,7 +2462,15 @@ function ProfileFormatsTab({
                               <div key={f.trashId} className="flex items-center gap-2 px-3 py-2">
                                 <span className="min-w-0 flex-1 truncate text-sm">
                                   {f.name}
-                                  {!isInApp(f.name) ? (
+                                  {isRemovedFromGuide(f) ? (
+                                    <Badge
+                                      variant="outline"
+                                      className="ml-2 border-destructive/40 text-[10px] text-destructive"
+                                      title="No longer in the TRaSH guide — it's dropped on the next save; remove it to clear this"
+                                    >
+                                      removed from guide
+                                    </Badge>
+                                  ) : !isInApp(f) ? (
                                     <Badge
                                       variant="outline"
                                       className="ml-2 border-amber/40 text-[10px] text-amber"
@@ -2125,14 +2490,18 @@ function ProfileFormatsTab({
                                   )}
                                 </span>
                                 <div className="flex shrink-0 items-center gap-1.5">
-                                  {!isInApp(f.name) && (
+                                  {canAddToApp(f) && (
                                     <Button
                                       size="sm"
                                       variant="outline"
                                       className="h-8 border-amber/40 text-amber hover:text-amber"
                                       onClick={() => addToAppAndApply([f])}
-                                      disabled={busy}
-                                      title="Add this custom format to the app and apply its score"
+                                      disabled={busy || isDirty}
+                                      title={
+                                        isDirty
+                                          ? "Save or discard your changes first"
+                                          : "Add this custom format to the app and apply its score"
+                                      }
                                     >
                                       <Plus className="mr-1 h-3.5 w-3.5" /> Add
                                     </Button>
@@ -2147,6 +2516,7 @@ function ProfileFormatsTab({
                                     size="icon"
                                     className="h-8 w-8"
                                     onClick={() => removeFormat(f.trashId)}
+                                    disabled={busy}
                                     title="Remove"
                                   >
                                     <X className="h-4 w-4" />
@@ -2188,7 +2558,8 @@ function ProfileFormatsTab({
                                   key={cf.trashId}
                                   type="button"
                                   onClick={() => addFormat(cf)}
-                                  className="flex w-full items-center justify-between gap-2 px-3 py-1.5 pl-8 text-left text-sm hover:bg-white/5"
+                                  disabled={busy}
+                                  className="flex w-full items-center justify-between gap-2 px-3 py-1.5 pl-8 text-left text-sm hover:bg-white/5 disabled:pointer-events-none disabled:opacity-50"
                                 >
                                   <span className="flex min-w-0 items-center gap-1.5">
                                     <Plus className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
@@ -2232,7 +2603,15 @@ function ProfileFormatsTab({
                     <Play className="mr-1 h-3.5 w-3.5" /> Sync
                   </Button>
                   {isDirty && (
-                    <span className="text-xs text-amber">Unsaved changes — Save to sync</span>
+                    <>
+                      <span className="text-xs text-amber">
+                        {currentAssignment ? "Unsaved changes — Save to sync" : "Unsaved changes"}
+                      </span>
+                      {/* Restores the list the profile was opened with (or last saved). */}
+                      <Button variant="ghost" size="sm" onClick={discardEdits} disabled={busy}>
+                        Discard
+                      </Button>
+                    </>
                   )}
                   {currentAssignment && (
                     <Button variant="outline" size="sm" onClick={unmanage} disabled={busy}>
@@ -2249,6 +2628,31 @@ function ProfileFormatsTab({
           </>
         )}
       </CardContent>
+
+      {/* Switching profile with unsaved edits */}
+      <AlertDialog open={pendingProfile !== null} onOpenChange={(o) => !o && setPendingProfile(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Discard unsaved changes?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Your edits to <span className="font-medium text-foreground">{selectedProfile}</span> haven&apos;t
+              been saved. Switching to{" "}
+              <span className="font-medium text-foreground">{pendingProfile}</span> discards them.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep editing</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (pendingProfile !== null) selectProfile(pendingProfile);
+                setPendingProfile(null);
+              }}
+            >
+              Discard &amp; switch
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Card>
   );
 }

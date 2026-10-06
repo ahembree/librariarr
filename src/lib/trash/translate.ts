@@ -141,28 +141,36 @@ export function projectManagedFields(before: CfComparable, after: CfComparable):
   return { ...before, specifications };
 }
 
+/**
+ * Find the app resource a managed row refers to: by the guide name first, then
+ * by the app id recorded at the last sync. The id fallback is what keeps a
+ * rename — TRaSH renames resources under a stable trash_id, and a user can
+ * rename one in the app — from creating a duplicate beside the old copy (which
+ * keeps its scores in every profile, so a matching release is scored twice).
+ * The name match wins when both exist: an app resource already carrying the
+ * guide name is the one the sync would collide with on rename anyway.
+ */
+export function findManagedArrResource<T extends { id?: number; name: string }>(
+  resources: T[],
+  name: string,
+  arrId: number | null | undefined,
+): T | undefined {
+  const lower = name.trim().toLowerCase();
+  const byName =
+    resources.find((r) => r.name === name) ??
+    resources.find((r) => r.name.trim().toLowerCase() === lower);
+  if (byName) return byName;
+  if (arrId == null) return undefined;
+  return resources.find((r) => r.id === arrId);
+}
+
+/** Match by name, exact first then case-insensitive/trimmed — so a resource that
+ *  differs only in case updates instead of erroring on create. */
 export function findArrCfByName(
   arrCfs: ArrCustomFormat[],
   name: string,
 ): ArrCustomFormat | undefined {
-  const lower = name.trim().toLowerCase();
-  return (
-    arrCfs.find((c) => c.name === name) ??
-    arrCfs.find((c) => c.name.trim().toLowerCase() === lower)
-  );
-}
-
-/** Match a quality profile by name, exact first then case-insensitive/trimmed —
- *  so a profile that differs only in case updates instead of erroring on create. */
-export function findArrProfileByName(
-  profiles: ArrQualityProfile[],
-  name: string,
-): ArrQualityProfile | undefined {
-  const lower = name.trim().toLowerCase();
-  return (
-    profiles.find((p) => p.name === name) ??
-    profiles.find((p) => p.name.trim().toLowerCase() === lower)
-  );
+  return findManagedArrResource(arrCfs, name, undefined);
 }
 
 // ─── Quality definitions (sizes) ───
@@ -173,19 +181,32 @@ export function findArrProfileByName(
  * qualities named in the guide are updated. The full array is returned because
  * the Arr bulk-update endpoint replaces the whole set.
  */
+/**
+ * The top of each app's size sliders (MB per minute). The guide writes "no
+ * limit" as these values; the apps store and report it as `null`, so sending the
+ * number instead would turn "unlimited" into a hard cap at the slider's end.
+ */
+const UNLIMITED_SIZE: Record<ServiceType, { max: number; preferred: number }> = {
+  RADARR: { max: 2000, preferred: 1999 },
+  SONARR: { max: 1000, preferred: 995 },
+};
+
 export function applyQualitySizes(
   trash: TrashQualitySize,
   existing: ArrQualityDefinition[],
+  service: ServiceType,
 ): ArrQualityDefinition[] {
+  const limits = UNLIMITED_SIZE[service];
   const byName = new Map(trash.qualities.map((q) => [q.quality, q]));
   return existing.map((def) => {
     const t = byName.get(def.quality.name);
     if (!t) return def;
+    const preferred = t.preferred ?? def.preferredSize ?? null;
     return {
       ...def,
       minSize: t.min,
-      maxSize: t.max,
-      preferredSize: t.preferred ?? def.preferredSize ?? null,
+      maxSize: t.max != null && t.max >= limits.max ? null : t.max,
+      preferredSize: preferred != null && preferred >= limits.preferred ? null : preferred,
     };
   });
 }
@@ -244,12 +265,18 @@ function resolveLanguage(
   warnings.push(
     `Language "${trashLanguage}" could not be resolved on this instance — keeping the profile's existing language.`,
   );
-  return schema.language;
+  return existing ?? schema.language;
 }
 
 export interface BuildProfileResult {
   payload: ArrQualityProfile;
   warnings: string[];
+  /**
+   * Guide custom formats with a non-zero score that could not be applied because
+   * they don't exist in the instance yet. A sync that leaves any behind is not
+   * "in sync" with the guide, so the caller must not record the guide hash.
+   */
+  missingFormats: string[];
 }
 
 /** Per-profile build options (mirrors Recyclarr's `score_set` / `reset_unmatched_scores`). */
@@ -264,6 +291,14 @@ export interface BuildProfileOptions {
   resetUnmatchedScores?: boolean;
   /** Custom-format names excluded from the reset (exact, case-insensitive). */
   resetExcept?: string[];
+  /**
+   * Scores applied last, keyed by custom-format name (case-insensitive) — the
+   * PROFILE_CF overlay assigned to this profile. A full sync applies the overlay
+   * after the profile anyway; folding it in here keeps a profile-only sync from
+   * wiping it (with `resetUnmatchedScores`, or for a guide-managed format) and
+   * stops the two writes undoing each other on every run.
+   */
+  scoreOverrides?: Map<string, number>;
 }
 
 /**
@@ -286,6 +321,7 @@ export function buildQualityProfile(
   options?: BuildProfileOptions,
 ): BuildProfileResult {
   const warnings: string[] = [];
+  const missingFormats: string[] = [];
   const baseByName = flattenSchemaQualities(schema.items);
   // The profile's declared score set selects which entry of each custom
   // format's `trash_scores` to use. A per-profile override (`options.scoreSet`)
@@ -386,10 +422,17 @@ export function buildQualityProfile(
     if (target) {
       target.score = score;
     } else if (score !== 0) {
+      missingFormats.push(cfName);
       warnings.push(
         `Custom format "${cfName}" (score ${score}) is not present in this instance — ` +
           `manage & sync it to apply its score.`,
       );
+    }
+  }
+  if (options?.scoreOverrides?.size) {
+    for (const f of formatItems) {
+      const override = options.scoreOverrides.get(f.name.trim().toLowerCase());
+      if (override !== undefined) f.score = override;
     }
   }
 
@@ -412,7 +455,7 @@ export function buildQualityProfile(
     if (language) payload.language = language;
   }
 
-  return { payload, warnings };
+  return { payload, warnings, missingFormats };
 }
 
 /**

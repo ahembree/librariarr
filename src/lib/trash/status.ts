@@ -2,7 +2,7 @@ import { prisma } from "@/lib/db";
 import { sanitizeErrorDetail } from "@/lib/api/sanitize";
 import { GuideArrClient } from "./arr-guide-client";
 import { fetchTrashCatalog } from "./catalog";
-import { findArrCfByName, findArrProfileByName } from "./translate";
+import { findManagedArrResource } from "./translate";
 import { trashCfHash, trashProfileHash, trashQualitySizeHash, namingSelectionHash } from "./signature";
 import { NAMING_TRASH_ID } from "./types";
 import type {
@@ -183,8 +183,10 @@ export async function computeTrashStatus(
   const items: TrashStatusItem[] = [];
 
   for (const cf of catalog.customFormats) {
-    const existing = findArrCfByName(arrCfs, cf.name);
     const m = keyOf("CUSTOM_FORMAT", cf.trash_id);
+    // The recorded id finds a managed format renamed upstream or in the app —
+    // the sync updates that copy rather than creating a second one.
+    const existing = findManagedArrResource(arrCfs, cf.name, m?.arrId);
     items.push({
       resourceType: "CUSTOM_FORMAT",
       trashId: cf.trash_id,
@@ -199,8 +201,8 @@ export async function computeTrashStatus(
   }
 
   for (const qp of catalog.qualityProfiles) {
-    const existing = findArrProfileByName(arrProfiles, qp.name);
     const m = keyOf("QUALITY_PROFILE", qp.trash_id);
+    const existing = findManagedArrResource(arrProfiles, qp.name, m?.arrId);
     items.push({
       resourceType: "QUALITY_PROFILE",
       trashId: qp.trash_id,
