@@ -188,7 +188,7 @@ async function runTrashSyncInner(
           break;
         }
         case "QUALITY_DEFINITION":
-          items.push(await planQualityDefinition(target, catalog, await getQualityDefs(), opts, client, userId));
+          items.push(await planQualityDefinition(target, catalog, await getQualityDefs(), inst, opts, client, userId));
           break;
         case "NAMING":
           items.push(await planNaming(target, catalog, await getNaming(), inst, opts, client, userId));
@@ -228,12 +228,21 @@ async function resolveTargets(
   inst: ResolvedInstance,
   opts: SyncOptions,
 ): Promise<Target[]> {
-  // Dry-run of a specific set may include not-yet-assigned items (preview).
+  const rows = await prisma.trashManagedResource.findMany({
+    where: { userId, ...managedInstanceWhere(inst.serviceType, inst.id) },
+  });
+
+  // Dry-run of a specific set may include not-yet-assigned items (preview),
+  // with the editor's unsaved selection. A managed item still carries the app id
+  // its row recorded, or the preview could only match by name and would show a
+  // CREATE (or "profile not found") for a renamed item the apply UPDATEs.
   if (opts.dryRun && opts.items?.length) {
+    const arrIdByKey = new Map(rows.map((r) => [`${r.resourceType}:${r.trashId}`, r.arrId]));
     return opts.items.map((i) => ({
       resourceType: i.resourceType,
       trashId: i.trashId,
       selection: i.selection ?? null,
+      arrId: arrIdByKey.get(`${i.resourceType}:${i.trashId}`) ?? null,
     }));
   }
 
@@ -241,9 +250,6 @@ async function resolveTargets(
   // given (a per-item apply, e.g. "sync just this quality profile"), intersect
   // it with the managed rows so nothing outside the managed set is ever
   // written; the stored row selection/metadata is always used.
-  const rows = await prisma.trashManagedResource.findMany({
-    where: { userId, ...managedInstanceWhere(inst.serviceType, inst.id) },
-  });
   let targets: Target[] = rows.map((r) => ({
     resourceType: r.resourceType as ResourceType,
     trashId: r.trashId,
@@ -290,16 +296,17 @@ const nameKey = (name: string) => name.trim().toLowerCase();
 async function updateManagedRow(
   userId: string,
   managedRowId: string | undefined,
-  data: { arrId?: number | null; lastSyncHash: string | null; selection?: Selection },
+  data: { arrId?: number | null; lastSyncHash: string | null },
 ) {
   if (!managedRowId) return;
   // updateMany, not update: the row may have been unmanaged while this sync ran,
   // and by now the app write has landed — a P2025 would report it as an ERROR.
+  // The selection is never written back: it is the one the run started with,
+  // and an edit saved while the sync ran would be reverted to it.
   await prisma.trashManagedResource.updateMany({
     where: { id: managedRowId, userId },
     data: {
       ...(data.arrId !== undefined ? { arrId: data.arrId } : {}),
-      ...(data.selection ? { selection: data.selection as object } : {}),
       lastSyncHash: data.lastSyncHash,
       lastSyncedAt: new Date(),
     },
@@ -429,6 +436,7 @@ async function planQualityDefinition(
   target: Target,
   catalog: TrashCatalog,
   existingDefs: ArrQualityDefinition[],
+  inst: ResolvedInstance,
   opts: SyncOptions,
   client: ReturnType<typeof guideClientFor>,
   userId: string,
@@ -437,7 +445,7 @@ async function planQualityDefinition(
   if (!qs || qs.trash_id !== target.trashId) {
     return skip(target, "Quality sizes are no longer in the guide.");
   }
-  const newDefs = applyQualitySizes(qs, existingDefs);
+  const newDefs = applyQualitySizes(qs, existingDefs, inst.serviceType);
   const before = qualityDefsComparable(existingDefs);
   const after = qualityDefsComparable(newDefs);
   const diff = diffValues(before, after);
@@ -498,7 +506,6 @@ async function planNaming(
     await updateManagedRow(userId, target.managedRowId, {
       arrId: null,
       lastSyncHash: namingSelectionHash(naming, selection, inst.serviceType),
-      selection,
     });
     item.applied = true;
   }
@@ -577,7 +584,6 @@ async function planProfileCf(
     await updateManagedRow(userId, target.managedRowId, {
       arrId: profile.id,
       lastSyncHash: hashDefinition(formats),
-      selection,
     });
     item.applied = true;
   }

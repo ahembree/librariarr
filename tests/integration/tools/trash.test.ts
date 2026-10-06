@@ -390,6 +390,38 @@ describe("assignments/[id]", () => {
     expect((updated?.selection as { file?: string })?.file).toBe("standard");
   });
 
+  it("rejects a selection that doesn't fit the row's resource type", async () => {
+    const { user, radarr } = await authedUserWithRadarr();
+    const row = await getTestPrisma().trashManagedResource.create({
+      data: { userId: user.id, serviceType: "RADARR", radarrInstanceId: radarr.id, resourceType: "NAMING", trashId: "naming", name: "Naming", selection: { file: "standard" } },
+    });
+    // Sonarr naming keys on a Radarr naming row.
+    const wrongApp = await callRouteWithParams(putAssignment, { id: row.id }, {
+      method: "PUT",
+      body: { selection: { series: "default" } },
+    });
+    await expectJson(wrongApp, 400);
+    // A variant the guide doesn't have.
+    const unknownVariant = await callRouteWithParams(putAssignment, { id: row.id }, {
+      method: "PUT",
+      body: { selection: { file: "nope" } },
+    });
+    await expectJson(unknownVariant, 400);
+    const after = await getTestPrisma().trashManagedResource.findUnique({ where: { id: row.id } });
+    expect(after?.selection).toEqual({ file: "standard" });
+
+    // Naming keys on a quality profile, via POST.
+    const post = await callRoute(postAssignment, {
+      method: "POST",
+      body: {
+        serviceType: "RADARR",
+        instanceId: radarr.id,
+        items: [{ resourceType: "CUSTOM_FORMAT", trashId: "cf1", name: "AMZN", selection: { file: "standard" } }],
+      },
+    });
+    await expectJson(post, 400);
+  });
+
   it("404s when deleting another user's row", async () => {
     const other = await createTestUser({ username: "other", plexId: "p2" });
     const otherRadarr = await createTestRadarrInstance(other.id);

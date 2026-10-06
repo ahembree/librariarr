@@ -122,7 +122,7 @@ Profiles you already manage are **always listed** as quick-select chips, so you 
 1. Pick a target quality profile (from the dropdown, or a managed-profile chip). The editor splits horizontally: **assigned formats on the left, the add-from list on the right**.
 2. On the left, for a profile you don't manage yet, every guide custom format already scored on that profile is **listed with its current score, highest score first**, so you can see and **override** any of them. For a profile you already manage, the list is exactly your saved assignment — so a format you removed stays removed.
 3. On the right, add more from the guide's custom formats — they're grouped into the guide's own **categories**; expand a category to drill down and click a format to add it. Each is added with the guide's **recommended score** (dropping into its score position), and every score is editable inline.
-4. **Save** to record the assignment, then **Sync** to apply the scores to the profile. **Sync is disabled until your edits are saved** (a "Unsaved changes — Save to sync" note appears, with a **Discard** button that reloads the saved assignment), because a sync always applies the last-saved assignment — this prevents Preview showing one thing while Sync applies another.
+4. **Save** to record the assignment, then **Sync** to apply the scores to the profile. Unsaved edits survive switching tabs, and picking another profile asks before discarding them. A saved format the guide has since removed is marked **removed from guide** and dropped on the next save. **Sync is disabled until your edits are saved** (a "Unsaved changes — Save to sync" note appears, with a **Discard** button that reloads the saved assignment), because a sync always applies the last-saved assignment — this prevents Preview showing one thing while Sync applies another.
 
 This is an **overlay**: only the scores for the custom formats you attach are changed. Every other part of the profile — its qualities, cutoff, and any other format scores — is left untouched. **Stop managing** removes the assignment; it does not reset any scores already written.
 
@@ -130,7 +130,7 @@ A custom format only scores if it **actually exists in the app**. An assigned fo
 
 ### Quality definitions (sizes)
 
-The per-quality minimum / preferred / maximum file sizes for the app are updated in bulk from the guide's recommended values. Because an app always has a quality-definition table, this resource is treated as **Exists — unmanaged** until you opt in.
+The per-quality minimum / preferred / maximum file sizes for the app are updated in bulk from the guide's recommended values. Where the guide sets a size to the top of the app's slider (2000 / 1999 MB per minute on Radarr, 1000 / 995 on Sonarr), it is written as **unlimited**, as the app itself stores it, rather than as a hard cap. Because an app always has a quality-definition table, this resource is treated as **Exists — unmanaged** until you opt in.
 
 ### Naming schemes
 
@@ -139,7 +139,7 @@ Naming schemes let you choose recommended file and folder formats:
 - **Radarr** — movie file format and movie folder format.
 - **Sonarr** — series folder, season folder, and standard / daily / anime episode formats.
 
-Pick the variants you want (for example, a Plex- or Jellyfin-flavored layout), then assign and sync. The selection is remembered, and the **Update available** status will flag if the guide changes the chosen variant later. Because every app already has a naming configuration, managing it asks for the same overwrite confirmation as any other existing item.
+Pick the variants you want (for example, a Plex- or Jellyfin-flavored layout), then assign and sync. The selection is remembered, and the **Update available** status will flag if the guide changes the chosen variant later. Because every app already has a naming configuration, managing it asks for the same overwrite confirmation as any other existing item. Only variants the guide offers for that app are accepted.
 
 ## Refreshing the catalog
 

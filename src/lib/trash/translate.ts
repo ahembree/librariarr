@@ -181,19 +181,32 @@ export function findArrCfByName(
  * qualities named in the guide are updated. The full array is returned because
  * the Arr bulk-update endpoint replaces the whole set.
  */
+/**
+ * The top of each app's size sliders (MB per minute). The guide writes "no
+ * limit" as these values; the apps store and report it as `null`, so sending the
+ * number instead would turn "unlimited" into a hard cap at the slider's end.
+ */
+const UNLIMITED_SIZE: Record<ServiceType, { max: number; preferred: number }> = {
+  RADARR: { max: 2000, preferred: 1999 },
+  SONARR: { max: 1000, preferred: 995 },
+};
+
 export function applyQualitySizes(
   trash: TrashQualitySize,
   existing: ArrQualityDefinition[],
+  service: ServiceType,
 ): ArrQualityDefinition[] {
+  const limits = UNLIMITED_SIZE[service];
   const byName = new Map(trash.qualities.map((q) => [q.quality, q]));
   return existing.map((def) => {
     const t = byName.get(def.quality.name);
     if (!t) return def;
+    const preferred = t.preferred ?? def.preferredSize ?? null;
     return {
       ...def,
       minSize: t.min,
-      maxSize: t.max,
-      preferredSize: t.preferred ?? def.preferredSize ?? null,
+      maxSize: t.max != null && t.max >= limits.max ? null : t.max,
+      preferredSize: preferred != null && preferred >= limits.preferred ? null : preferred,
     };
   });
 }

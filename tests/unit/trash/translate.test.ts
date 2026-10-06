@@ -153,14 +153,32 @@ describe("quality definition translation", () => {
   const trash: TrashQualitySize = {
     trash_id: "qs",
     type: "series",
-    qualities: [{ quality: "HDTV-720p", min: 10, preferred: 500, max: 1000 }],
+    qualities: [{ quality: "HDTV-720p", min: 10, preferred: 500, max: 900 }],
   };
 
   it("patches only sizes for named qualities and preserves the rest", () => {
-    const out = applyQualitySizes(trash, existing);
-    expect(out[0]).toMatchObject({ minSize: 10, maxSize: 1000, preferredSize: 500, id: 1, weight: 1 });
+    const out = applyQualitySizes(trash, existing, "SONARR");
+    expect(out[0]).toMatchObject({ minSize: 10, maxSize: 900, preferredSize: 500, id: 1, weight: 1 });
     // Untouched quality keeps its values.
     expect(out[1]).toEqual(existing[1]);
+  });
+
+  it("sends the guide's slider-top sizes as unlimited (null), per app", () => {
+    const sonarr = applyQualitySizes(
+      { ...trash, qualities: [{ quality: "HDTV-720p", min: 10, preferred: 995, max: 1000 }] },
+      existing,
+      "SONARR",
+    );
+    expect(sonarr[0]).toMatchObject({ maxSize: null, preferredSize: null });
+    const radarr = applyQualitySizes(
+      { ...trash, qualities: [{ quality: "HDTV-720p", min: 10, preferred: 1999, max: 2000 }] },
+      existing,
+      "RADARR",
+    );
+    expect(radarr[0]).toMatchObject({ maxSize: null, preferredSize: null });
+    // 1000 is a real cap on Radarr, whose slider goes to 2000.
+    const capped = applyQualitySizes(trash, existing, "RADARR");
+    expect(capped[0]).toMatchObject({ maxSize: 900, preferredSize: 500 });
   });
 
   it("summarizes definitions by quality name", () => {

@@ -60,6 +60,7 @@ const INST = { serviceType: "RADARR" as const, id: "r1", name: "R", url: "http:/
 
 beforeEach(() => {
   vi.clearAllMocks();
+  prismaMock.trashManagedResource.findMany.mockResolvedValue([]);
   clientMock.getCustomFormats.mockResolvedValue([]);
   clientMock.getQualityDefinitions.mockResolvedValue([
     { id: 1, quality: { id: 7, name: "Bluray-1080p" }, title: "Bluray-1080p", weight: 1, minSize: 0, maxSize: 100, preferredSize: 95 },
@@ -79,8 +80,29 @@ describe("runTrashSync", () => {
     expect(report.items[0].diff.length).toBeGreaterThan(0);
     expect(clientMock.createCustomFormat).not.toHaveBeenCalled();
     expect(prismaMock.trashManagedResource.updateMany).not.toHaveBeenCalled();
-    // Preview items don't consult the managed set.
-    expect(prismaMock.trashManagedResource.findMany).not.toHaveBeenCalled();
+  });
+
+  it("a per-item preview finds a renamed managed item by its recorded id, as the apply does", async () => {
+    prismaMock.trashManagedResource.findMany.mockResolvedValue([
+      { id: "row1", resourceType: "CUSTOM_FORMAT", trashId: "cf1", name: "AMZN", selection: null, arrId: 42 },
+    ]);
+    clientMock.getCustomFormats.mockResolvedValue([{ id: 42, name: "Amazon (old name)", specifications: [] }]);
+    const report = await runTrashSync("u1", INST, {
+      dryRun: true,
+      items: [{ resourceType: "CUSTOM_FORMAT", trashId: "cf1" }],
+    });
+    expect(report.items[0].action).toBe("UPDATE");
+  });
+
+  it("never writes the selection back (an edit saved during the sync survives)", async () => {
+    prismaMock.trashManagedResource.findMany.mockResolvedValue([
+      { id: "n", resourceType: "NAMING", trashId: "naming", name: "Naming", selection: { file: "standard" } },
+    ]);
+    clientMock.getNamingConfig.mockResolvedValue({ id: 1, standardMovieFormat: "old", movieFolderFormat: "old" });
+    clientMock.updateNamingConfig.mockResolvedValue({});
+    await runTrashSync("u1", INST, { dryRun: false });
+    const call = prismaMock.trashManagedResource.updateMany.mock.calls[0][0] as { data: Record<string, unknown> };
+    expect(call.data).not.toHaveProperty("selection");
   });
 
   it("apply creates the resource and stamps the managed row", async () => {
