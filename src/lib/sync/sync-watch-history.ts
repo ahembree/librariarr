@@ -469,31 +469,49 @@ export async function syncWatchHistory(
   // read unwatched — and arm a negative `watchedByUser` or "not played" DELETE
   // rule against it — over a listing that only failed to answer.
   const keptUsers = [...report.incompleteUsers.keys()];
+  // Only the Jellyfin/Emby client sets users aside.
+  const product = server.type === "EMBY" ? "Emby" : "Jellyfin";
   if (keptUsers.length > 0) {
+    // Every sync, since what it says stays true for as long as they do: the
+    // kept rows are all that is known of them (see the vouching rule below).
     logger.warn(
       "WatchHistory",
       `Not replacing the stored plays of ` +
         [...report.incompleteUsers]
           .map(([name, why]) => `"${name}" (${why === "refused" ? "refused" : "listing incomplete"})`)
           .join(", ") +
-        ` on "${server.name}": their watch history could not be read completely this sync`,
+        ` on "${server.name}": their watch history could not be read completely this sync. ` +
+        `Their plays that are not stored already — new ones, and every play of media added ` +
+        `or re-added since (a newly enabled, purged or re-created library) — stay missing ` +
+        `until their listing can be read, and an item they alone watched reads as never ` +
+        `played unless one of its plays is stored. Make their played items readable in ` +
+        `${product} (their library access, parental controls) or remove the user there`,
     );
   }
   // Whether this run may vouch for the history with users set aside. A
   // REFUSED user never stops it: the key cannot read them and never will, so
   // waiting would block the server for good — they are skipped as they always
   // were. An UNRELIABLE listing reports plays this run did not see (its count
-  // is not zero), so that user's stored rows are the only evidence of them,
-  // and they stand as the user's last reliable record — the gap being the
-  // plays since, which an established marker already accepts. That holds
-  // whether or not the marker was set as the run began, as long as there ARE
-  // stored rows: a null marker is also what every release of a library-resync
-  // hold leaves (a purge, a vanished library, a library's first sync, a
-  // restore), and refusing there kept a server with one persistently
-  // unreliable user paused for good. Only a user with no stored rows at all
-  // on a server whose marker was null — a first sync, a history wiped by a
-  // source switch or a config-only restore — keeps it unestablished: every
-  // item only they watched would read as never played.
+  // is not zero), so that user's stored rows are the only evidence of their
+  // plays. Those rows vouch for the history whether or not the marker was set
+  // as the run began, as long as there ARE some: a null marker is also what
+  // every release of a library-resync hold leaves (a purge, a vanished
+  // library, a library's first sync, a restore), and refusing there kept a
+  // server with one persistently unreliable user paused for good. Only a user
+  // with no stored rows at all on a server whose marker was null — a first
+  // sync, a history wiped by a source switch or a config-only restore — keeps
+  // it unestablished.
+  //
+  // The cost, accepted on purpose: while a set-aside user stays unreadable,
+  // every play of theirs that is not stored is missing from a history that
+  // counts as established. That is their new plays, and every play of media
+  // added or re-added since: their stored rows cover none of a newly enabled
+  // library's items, nor a purged or re-created library's, whose old rows
+  // the deletion took — nothing here can tell "never watched there" from
+  // "plays the deletion took". An item they alone watched, with none of its
+  // plays stored, then reads `playCount` 0 and never played, which "Play
+  // Count = 0" and "not played in N months" rules can match. The per-sync
+  // WARN above says so, by name.
   const unreadableUsers = [...report.incompleteUsers]
     .filter(([, why]) => why === "unreliable")
     .map(([name]) => name);
@@ -563,17 +581,16 @@ export async function syncWatchHistory(
   }
 
   // The replace has committed the readable users' rows either way. Marked
-  // established unless a set-aside unreliable user has nothing stored to
-  // stand in for their plays (see `storedRowsOf` above) — refusing anywhere
-  // else would pause every play-activity rule for as long as one user's items
-  // stay hidden, the stuck state setting them aside exists to end.
+  // established unless a set-aside unreliable user has nothing stored at all
+  // (the vouching rule above, and what it costs) — refusing anywhere else
+  // would pause every play-activity rule for as long as one user's items stay
+  // hidden, the stuck state setting them aside exists to end.
   const unestablishedUsers = storedRowsOf.filter(
     (name) => !outcome.usersWithStoredRows.has(name),
   );
   if (unestablishedUsers.length === 0) {
     await markHistoryEstablished(evidence, server.name);
   } else {
-    const product = server.type === "EMBY" ? "Emby" : "Jellyfin";
     logger.warn(
       "WatchHistory",
       `Not marking "${server.name}"'s watch history established: the played-items ` +

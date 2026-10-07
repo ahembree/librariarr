@@ -6,19 +6,24 @@
  * library-resync hold, which nulls the watch-history marker on purpose, is
  * followed by the history pass exactly as in production.
  *
- * The set-aside user's stored rows stand as their last reliable record, so the
- * history is established again after a release. Only a user with nothing
- * stored at all, on a server whose history was never established, keeps the
- * play-activity rules paused. Before, the first rule held for an established
- * server only, and any hold release (a library's first sync via Sync Now or a
- * full sync, a purge, a restore) left the marker null for good.
+ * The set-aside user's stored rows vouch for the history, so it is established
+ * again after a release. Only a user with nothing stored at all, on a server
+ * whose history was never established, keeps the play-activity rules paused.
+ * Before, the first rule held for an established server only, and any hold
+ * release (a library's first sync via Sync Now or a full sync, a purge, a
+ * restore) left the marker null for good. The price is pinned here too: their
+ * plays that are not stored — those of a purged library, for one — stay
+ * missing while the history counts as established.
  *
  * Real database; the media-server client is faked (what the server lists, and
  * which users the history fetch sets aside).
  */
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
+import { setMockSession, clearMockSession } from "../../setup/mock-session";
 import {
+  callRoute,
+  expectJson,
   createTestUser,
   createTestServer,
   createTestLibrary,
@@ -74,6 +79,7 @@ vi.mock("@/lib/image-cache/image-cache", () => ({
 import { syncMediaServer } from "@/lib/sync/sync-server";
 import { syncWatchHistory } from "@/lib/sync/sync-watch-history";
 import { checkWatchHistoryCompleteness } from "@/lib/lifecycle/evaluability";
+import { DELETE as purge } from "@/app/api/media/purge/route";
 import { logger } from "@/lib/logger";
 import type { DetailedWatchHistoryReport } from "@/lib/media-server/types";
 
@@ -130,6 +136,7 @@ describe("a Jellyfin user whose played-items listing stays unreliable", () => {
 
   beforeEach(async () => {
     await cleanDatabase();
+    clearMockSession();
     vi.clearAllMocks();
     // bob's listing is set aside as unreliable on every history fetch.
     m.history.mockImplementation(async (options?: { report?: DetailedWatchHistoryReport }) => {
@@ -186,6 +193,57 @@ describe("a Jellyfin user whose played-items listing stays unreliable", () => {
       libraryResyncRequiredAt: null,
     });
     await expect(checkWatchHistoryCompleteness(userId, [serverId])).resolves.toEqual({ complete: true });
+  });
+
+  it("establishes it after a purge although bob's plays of the purged library cannot come back — and every sync says so", async () => {
+    // The deliberate cost of vouching on stored rows. m1 (Movies) was watched
+    // only by bob, o1 (Other) too; both rows were stored while his listing
+    // could still be read, long after the items were added.
+    await fixture({ marker: new Date("2026-01-01T00:00:00.000Z"), bobStored: true });
+    const other = await createTestLibrary(serverId, { key: "2", title: "Other", type: "MOVIE" });
+    const o1 = await createTestMediaItem(other.id, { ratingKey: "o1", type: "MOVIE", title: "Movie o1" });
+    await prisma.watchHistory.create({
+      data: { mediaItemId: o1.id, mediaServerId: serverId, serverUsername: "bob", watchedAt: new Date("2025-06-01T00:00:00.000Z") },
+    });
+    await prisma.mediaItem.updateMany({ data: { createdAt: new Date("2025-01-01T00:00:00.000Z") } });
+    m.libraries = [
+      { key: "1", title: "Movies", type: "movie" },
+      { key: "2", title: "Other", type: "movie" },
+    ];
+    m.listings["2"] = [movie("o1")];
+    m.history.mockImplementation(async (options?: { report?: DetailedWatchHistoryReport }) => {
+      options?.report?.incompleteUsers.set("bob", "unreliable");
+      return [];
+    });
+    const movies = await prisma.library.findFirstOrThrow({ where: { mediaServerId: serverId, key: "1" } });
+
+    setMockSession({ isLoggedIn: true, userId });
+    await expectJson(
+      await callRoute(purge, { url: "/api/media/purge", method: "DELETE", searchParams: { libraryId: movies.id } }),
+      200,
+    );
+    await syncMediaServer(serverId, undefined, { trigger: "test: full sync after the purge" });
+
+    // The hold is released, and bob's o1 row vouches for the history...
+    expect(await state()).toEqual({ watchHistorySyncedAt: expect.any(Date), libraryResyncRequiredAt: null });
+    await expect(checkWatchHistoryCompleteness(userId, [serverId])).resolves.toEqual({ complete: true });
+    expect(await bobsRows()).toBe(1);
+    // ...while m1, re-added by that sync, reads as never played: bob's play of
+    // it went with the purge, and nothing can bring it back while he is
+    // unreadable — "Play Count = 0" matches it.
+    const m1 = await prisma.mediaItem.findFirstOrThrow({
+      where: { ratingKey: "m1" },
+      select: { id: true, playCount: true, lastPlayedAt: true },
+    });
+    expect(m1).toMatchObject({ playCount: 0, lastPlayedAt: null });
+    expect(await prisma.watchHistory.count({ where: { mediaItemId: m1.id } })).toBe(0);
+    // Every sync says so, naming bob and what to change.
+    expect(logger.warn).toHaveBeenCalledWith(
+      "WatchHistory",
+      expect.stringMatching(
+        /^Not replacing the stored plays of "bob" \(listing incomplete\) .*every play of media added or re-added since \(a newly enabled, purged or re-created library\) — stay missing until their listing can be read, and an item they alone watched reads as never played unless one of its plays is stored\. Make their played items readable in Jellyfin \(their library access, parental controls\) or remove the user there$/,
+      ),
+    );
   });
 
   it("still does not establish a fresh server where bob has nothing stored — and a Refresh does not lift it", async () => {

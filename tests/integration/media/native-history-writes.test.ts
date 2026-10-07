@@ -227,9 +227,18 @@ describe("native watch-history writes", () => {
           // bob's stands.
           expect.objectContaining({ mediaItemId: y.id, serverUsername: "bob", watchedAt: T1 }),
         ]);
+        // Every sync says what stays missing while bob is set aside, and what
+        // to change on the server.
+        const product = type === "EMBY" ? "Emby" : "Jellyfin";
         expect(logger.warn).toHaveBeenCalledWith(
           "WatchHistory",
-          expect.stringContaining('Not replacing the stored plays of "bob" (listing incomplete)'),
+          'Not replacing the stored plays of "bob" (listing incomplete) on "Test Server": ' +
+            "their watch history could not be read completely this sync. Their plays that are " +
+            "not stored already — new ones, and every play of media added or re-added since " +
+            "(a newly enabled, purged or re-created library) — stay missing until their listing " +
+            "can be read, and an item they alone watched reads as never played unless one of " +
+            `its plays is stored. Make their played items readable in ${product} (their library ` +
+            "access, parental controls) or remove the user there",
         );
         // Still established: bob's rows stand, so nothing became vacuous.
         expect((await markerOf(server.id))!.getTime()).toBeGreaterThan(ESTABLISHED.getTime());
@@ -239,11 +248,13 @@ describe("native watch-history writes", () => {
 
     describe("whether a sync that set a user aside may vouch for the history", () => {
       // The marker says the stored history is a faithful record. A set-aside
-      // user's stored rows stand in for their plays as their last reliable
-      // record; but a user with NO stored rows on a server whose marker was
-      // null (a first sync, or a history wiped by a source switch or a
-      // config-only restore) has nothing to stand in, and an unreliable
-      // listing says by its own count that they have plays this run missed.
+      // user's stored rows are all that is known of them, and they vouch for
+      // it — accepting that their plays not stored stay missing (see
+      // native-history-unreliable-user.test.ts); but a user with NO stored
+      // rows on a server whose marker was null (a first sync, or a history
+      // wiped by a source switch or a config-only restore) has nothing at
+      // all, and an unreliable listing says by its own count that they have
+      // plays this run missed.
       async function server(options: {
         marker: Date | null;
         route: Parameters<typeof jellyfinRoute>[0];

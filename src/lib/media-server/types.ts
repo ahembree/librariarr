@@ -335,14 +335,21 @@ export interface DetailedWatchHistoryEntry {
  * - `refused`: the server refused that user's listing (401/403/404). The key
  *   cannot read the user and will not be able to, so the history is still
  *   established without them, as it always was — waiting would block the
- *   server for good.
+ *   server for good. Their stored rows are kept, and every play of theirs
+ *   that is not stored is missing from it, as for `unreliable`.
  * - `unreliable`: the listing answered, but in a shape that cannot be trusted
  *   to be complete — an empty first page under a non-zero total, or one far
  *   short of it — so by the server's own count the user has plays this run
- *   did not see. Their stored rows are kept and stand as the user's last
- *   reliable record; only a user with no stored rows on the server, while
- *   the history was not established when the run began, keeps it
- *   unestablished.
+ *   did not see. Their stored rows are kept, and they are all that is known
+ *   of the user: until the listing can be read, their new plays and every
+ *   play of media added or re-added since (a newly enabled library, a purged
+ *   or re-created one, whose old rows the deletion took) stay missing, and an
+ *   item they alone watched reads as never played unless one of its plays is
+ *   stored. Only a user with no stored rows on the server, while the history
+ *   was not established when the run began, keeps it unestablished;
+ *   otherwise it is established with those plays missing — a deliberate
+ *   trade, since refusing kept a server with one persistently unreadable user
+ *   paused for good.
  */
 export type IncompleteUserReason = "refused" | "unreliable";
 
