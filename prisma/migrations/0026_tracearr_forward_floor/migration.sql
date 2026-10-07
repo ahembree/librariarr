@@ -36,10 +36,16 @@ ALTER TABLE "MediaServer" ADD COLUMN "tracearrMappingVersion" INTEGER NOT NULL D
 -- server with no Tracearr rows is reset to a fresh walk).
 ALTER TABLE "MediaServer" ADD COLUMN "tracearrForwardWatermarkAt" TIMESTAMP(3);
 
--- When a library's last pass ended short within the release tolerance while a
--- library-resync hold waited for it; the second such pass in a row counts as
--- synced. Null for every existing library.
+-- When a library's last pass ended short within the release tolerance while
+-- its server was held for a library resync; the second such pass in a row
+-- counts as synced. Null for every existing library.
 ALTER TABLE "Library" ADD COLUMN "shortPassSeenAt" TIMESTAMP(3);
+
+-- When detection last skipped a rule set because its servers' play history was
+-- not established, until detection evaluates it again: its matches predate
+-- that refusal, so its actions stay held until they are re-evaluated. Null for
+-- every existing rule set.
+ALTER TABLE "RuleSet" ADD COLUMN "playHistoryPausedAt" TIMESTAMP(3);
 
 -- A native play filed against two library copies of one Jellyfin/Emby item is
 -- stored once per copy; the second row points at the copy that holds the
@@ -94,4 +100,32 @@ UPDATE "MediaServer" ms
    AND ms."tracearrBackfillCursorAt" > (
      SELECT MAX(wh."watchedAt") FROM "WatchHistory" wh
       WHERE wh."mediaServerId" = ms."id" AND wh."source" = 'TRACEARR'
+   );
+
+-- On Jellyfin/Emby two libraries over one folder list the same item under one
+-- id, and a Tracearr play of such an item is now filed against every copy.
+-- Before this release the import skipped such a play as ambiguous, or stored
+-- it on the one copy that existed then, and a walk already past those plays
+-- never reads them again. So every mapped Jellyfin/Emby server holding such
+-- copies whose walk has started walks its archive again from the newest play
+-- (the state a walk restart writes), with play-activity rules paused until it
+-- finishes. After the restart-shaped fix above, so it does not read this
+-- restart as one of those and hold the server.
+UPDATE "MediaServer" ms
+   SET "tracearrBackfillComplete" = false,
+       "tracearrBackfillCursorAt" = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'),
+       "tracearrForwardWatermarkAt" = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC'),
+       "tracearrForwardFloorAt" = NULL,
+       "tracearrForwardFloorRecordedAt" = NULL,
+       "tracearrBackfillLastWalkAt" = NULL
+ WHERE ms."tracearrServerId" IS NOT NULL
+   AND ms."type" IN ('JELLYFIN', 'EMBY')
+   AND (ms."tracearrBackfillComplete" OR ms."tracearrBackfillCursorAt" IS NOT NULL)
+   AND EXISTS (
+     SELECT 1
+       FROM "MediaItem" a
+       JOIN "Library" la ON la."id" = a."libraryId"
+       JOIN "MediaItem" b ON b."ratingKey" = a."ratingKey" AND b."libraryId" <> a."libraryId"
+       JOIN "Library" lb ON lb."id" = b."libraryId"
+      WHERE la."mediaServerId" = ms."id" AND lb."mediaServerId" = ms."id"
    );

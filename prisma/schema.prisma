@@ -423,12 +423,13 @@ model Library {
   enabled       Boolean      @default(true)
   lastSyncedAt  DateTime?
   /// When this library's last pass ended short of the server's reported total
-  /// but within the release tolerance, while a library-resync hold waited for
-  /// it. A hold counts such a library as synced only on the SECOND such pass
-  /// in a row — a server that over-reports is consistently short, a listing
-  /// cut short once is not. Persisted so the two passes may span a restart;
-  /// cleared by any other outcome of a pass, and by a pass that starts on an
-  /// empty library.
+  /// but within the release tolerance, while its server was held for a library
+  /// resync. A hold counts such a library as synced only on the SECOND such
+  /// pass in a row — a server that over-reports is consistently short, a
+  /// listing cut short once is not. Persisted so the two passes may span a
+  /// restart; cleared by any other outcome of a pass, by a pass that starts on
+  /// an empty library, and by a purge, disable-with-delete or restore of the
+  /// library.
   shortPassSeenAt DateTime?
   mediaItems    MediaItem[]
   createdAt     DateTime     @default(now())
@@ -657,6 +658,12 @@ model RuleSet {
   discordNotifyOnMatch   Boolean           @default(false)
   stickyMatches          Boolean           @default(false)
   serverIds              String[]          @default([])
+  /// When detection last skipped this rule set because its servers' play
+  /// history was not established, until a detection run evaluates it again.
+  /// Its matches are from before that refusal — an item watched since still
+  /// holds one — so its actions stay held after the history is established
+  /// again, until detection has re-evaluated them.
+  playHistoryPausedAt    DateTime?
   lifecycleActions       LifecycleAction[]
   ruleMatches            RuleMatch[]
   createdAt              DateTime          @default(now())
