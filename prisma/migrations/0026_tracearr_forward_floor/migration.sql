@@ -13,6 +13,12 @@ ALTER TABLE "MediaServer" ADD COLUMN "tracearrForwardFloorAt" TIMESTAMP(3);
 -- that has never been walked from one whose walk found nothing to import.
 ALTER TABLE "MediaServer" ADD COLUMN "tracearrBackfillLastWalkAt" TIMESTAMP(3);
 
+-- When the archive walk was last restarted after items were deleted (a purge,
+-- disable-with-delete, a restore) and is held until a full library sync
+-- re-adds them. Null for every existing server: none is waiting on a restart
+-- this column recorded.
+ALTER TABLE "MediaServer" ADD COLUMN "tracearrBackfillRestartedAt" TIMESTAMP(3);
+
 -- The importer no longer infers stale walk state from "no Tracearr rows" (that
 -- re-walked an archive that legitimately stored nothing, forever); the paths
 -- that destroy rows now reset the state explicitly. State left behind before
@@ -37,9 +43,3 @@ UPDATE "MediaServer"
    SET "tracearrBackfillLastWalkAt" = CURRENT_TIMESTAMP
  WHERE "tracearrServerId" IS NOT NULL
    AND ("tracearrBackfillComplete" OR "tracearrBackfillCursorAt" IS NOT NULL);
-
--- When the archive walk was last restarted after items were deleted (a purge,
--- disable-with-delete, a restore) and is held until a full library sync
--- re-adds them. Null for every existing server: none is waiting on a restart
--- this column recorded.
-ALTER TABLE "MediaServer" ADD COLUMN "tracearrBackfillRestartedAt" TIMESTAMP(3);
