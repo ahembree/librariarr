@@ -675,7 +675,33 @@ async function runTracearrImport(
   // FORWARD is skipped on a first import, where there is no watermark and the
   // backfill covers everything.
   const forwardDue = wantsForward && window.since !== undefined;
-  const backfillDue = wantsBackfill && !backfillComplete;
+  // A RESTARTED walk waits for the re-sync. `restartTracearrBackfill` runs right
+  // after its callers deleted items (a purge, a restore, disable-with-delete, a
+  // vanished library) whose plays the restarted walk exists to bring back — but
+  // only once those items exist again. Walked before the next full library sync
+  // (any playback queues a slice), their plays resolve to nothing and are
+  // stepped over, and the walk can complete without them for good: the items
+  // come back reading as never watched, which is what "not played in N months"
+  // DELETE rules act on. The state is recognisable — no walk since the restart
+  // (`tracearrBackfillLastWalkAt` null) with the cursor it set — and the cursor
+  // holds the restart instant until a walk moves it, so "a full sync completed
+  // after it" is the condition. Reported as `"exhausted"` with the backfill still
+  // pending, so the task does not re-enqueue; the full sync's own watch-history
+  // phase queues the slice once the items are back.
+  const awaitingResync =
+    wantsBackfill &&
+    !backfillComplete &&
+    server.tracearrBackfillLastWalkAt == null &&
+    cursorAtStart != null &&
+    !(await fullSyncCompletedSince(serverId, cursorAtStart));
+  const backfillDue = wantsBackfill && !backfillComplete && !awaitingResync;
+  if (awaitingResync) {
+    logger.info(
+      "WatchHistory",
+      `Holding the Tracearr archive walk for "${server.name}" until the next full ` +
+        `sync re-adds the items its restart was for`,
+    );
+  }
 
   // Nothing to do. The background backfill task is queued after EVERY forward
   // sync (it doubles as the recovery pass once the archive is walked), so on a
@@ -684,7 +710,51 @@ async function runTracearrImport(
   // whole-server join index and a `/users` walk, nor a marker withdrawal when
   // that walk happens to fail.
   if (!forwardDue && !backfillDue) {
-    return { count: 0, backfillPending: !backfillComplete };
+    return {
+      count: 0,
+      backfillPending: !backfillComplete,
+      ...(awaitingResync ? { backfillOutcome: "exhausted" as const } : {}),
+    };
+  }
+
+  // Nothing to import INTO. With no items in the server's enabled libraries —
+  // a mapping saved before its libraries were enabled or first synced, or a
+  // purge or restore followed by a watch-changed before the next library sync
+  // — every record the walk fetches resolves to nothing, and a walk of nothing
+  // but unresolvable records is indistinguishable, by the rows, from an archive
+  // whose plays all reference media that has since left the library. So it
+  // completed: the flag set, the resume cursor at the archive's far end and
+  // `watchHistorySyncedAt` established over an empty history. Once the items
+  // synced, the whole library read "nobody watched anything" — what negative
+  // `watchedByUser` and `playCount = 0` DELETE rules act on — with nothing
+  // left to walk the archive again.
+  //
+  // So the run makes no claim at all: no walk, no cursor, no completion, no
+  // marker, no forward watermark (`tracearrBackfillLastWalkAt`) and no floor
+  // paid. Reported like a mapping Tracearr holds no plays for — `"exhausted"`
+  // with the backfill still pending — so the queued task does not re-enqueue
+  // itself; the next watch-history sync, which the full library sync runs at
+  // its end, queues another slice once the items are there.
+  //
+  // Only an EMPTY library, deliberately: a populated library whose items match
+  // few or none of the records is the legitimate "the plays are of media since
+  // deleted" archive, and second-guessing that would re-walk it forever. (Nor
+  // does it wait for every enabled library's first full sync: a library whose
+  // sync keeps failing would then hold the walk, and the server's play-activity
+  // rules with it, indefinitely. In practice the walk is queued behind the
+  // full sync on the serial MAIN_QUEUE, after its watch-history phase.)
+  if (!(await hasItemsInEnabledLibraries(serverId))) {
+    logger.info(
+      "WatchHistory",
+      `Skipping the Tracearr import for "${server.name}" — none of its enabled ` +
+        `libraries holds any items yet, so no play could be attributed. The next ` +
+        `sync after its libraries are populated imports the history.`,
+    );
+    return {
+      count: 0,
+      backfillPending: !backfillComplete,
+      ...(backfillDue ? { backfillOutcome: "exhausted" as const } : {}),
+    };
   }
 
   const resolution = await resolveTracearrInstance(
@@ -1271,7 +1341,7 @@ async function runTracearrImport(
     }
   }
 
-  let backfillOutcome: WalkOutcome | undefined;
+  let backfillOutcome: WalkOutcome | undefined = awaitingResync ? "exhausted" : undefined;
   /**
    * Whether the completion write below already re-established the evidence
    * marker, so the release at the end of the run doesn't repeat it. That write
@@ -1811,6 +1881,46 @@ interface ImportWindow {
   maxWatchedAt: Date | null;
   /** Whether this server has any stored Tracearr rows at all. */
   hasRows: boolean;
+}
+
+/**
+ * Whether a full sync of this server COMPLETED at or after `since` — the gate
+ * that holds a restarted archive walk until the items its restart was for have
+ * been re-synced (see `awaitingResync` in `runTracearrImport`).
+ */
+async function fullSyncCompletedSince(serverId: string, since: Date): Promise<boolean> {
+  // Any COMPLETED sync row: `SyncJob` does not record a library scope, and the
+  // by-type fan-out's per-library jobs each re-add their library's items, so a
+  // completed one after the restart is the re-sync the walk waits for.
+  const rows = await prisma.$queryRawUnsafe<{ done: boolean }[]>(
+    `SELECT EXISTS (
+       SELECT 1 FROM "SyncJob"
+        WHERE "mediaServerId" = $1 AND "status" = 'COMPLETED' AND "completedAt" >= $2
+     ) AS "done"`,
+    serverId,
+    since,
+  );
+  return rows[0]?.done === true;
+}
+
+/**
+ * Whether any of the server's ENABLED libraries holds an item — the gate in
+ * `runTracearrImport` against walking an archive into an empty library. One
+ * indexed EXISTS. Enabled only: a disabled library is skipped by the full sync,
+ * so items left there say nothing about whether the libraries it does sync
+ * have been. Holding the walk back fails closed: nothing is stored or claimed,
+ * and while the backfill is owed the server's play-activity rules stay paused.
+ */
+async function hasItemsInEnabledLibraries(serverId: string): Promise<boolean> {
+  const rows = await prisma.$queryRawUnsafe<{ populated: boolean }[]>(
+    `SELECT EXISTS (
+       SELECT 1 FROM "Library" l
+         JOIN "MediaItem" mi ON mi."libraryId" = l."id"
+        WHERE l."mediaServerId" = $1 AND l."enabled" = true
+     ) AS "populated"`,
+    serverId,
+  );
+  return rows[0]?.populated === true;
 }
 
 /**

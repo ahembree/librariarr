@@ -671,20 +671,69 @@ describe("JellyfinClient", () => {
       expect(axiosClient.get.mock.calls.filter((c) => c[0] === "/Users/u1/Items")).toHaveLength(1);
     });
 
-    it("ends the walk on an empty page short of an over-reported total, with a warning", async () => {
-      // Throwing here (as an earlier version did) failed every sync of a
-      // server whose count over-reports, so its history never updated again.
-      const { client } = pagedClient((params) =>
-        params.StartIndex === 0
-          ? cappedPages(250, 100, true)(params)
-          : { data: { Items: [], TotalRecordCount: 250 } },
-      );
+    /** `delivered` items served 100 a page, then an empty page, under a reported `total`. */
+    function shortPages(delivered: number, total: number) {
+      return (params: { StartIndex: number }) =>
+        params.StartIndex >= delivered
+          ? { data: { Items: [], TotalRecordCount: total } }
+          : { data: { ...(cappedPages(delivered, 100, true)(params) as { data: object }).data, TotalRecordCount: total } };
+    }
+
+    it("ends the walk on an empty page a little short of an over-reported total, with a warning", async () => {
+      // Throwing on every shortfall (as an earlier version did) failed every
+      // sync of a server whose count over-reports, so its history never
+      // updated again.
+      const { client, axiosClient } = pagedClient(shortPages(230, 250));
       const { logger } = await import("@/lib/logger");
 
       const entries = await client.getDetailedWatchHistory();
 
-      expect(entries).toHaveLength(100);
-      expect(logger.warn).toHaveBeenCalledWith("Jellyfin", expect.stringContaining("ended at 100 of a reported 250"));
+      expect(entries).toHaveLength(230);
+      expect(axiosClient.get.mock.calls.filter((c) => c[0] === "/Users/u1/Items")).toHaveLength(4);
+      expect(logger.warn).toHaveBeenCalledWith("Jellyfin", expect.stringContaining("ended at 230 of a reported 250"));
+    });
+
+    it("tolerates a shortfall of up to 2% of a large total", async () => {
+      // 10,000 reported: 2% (200) is above the 50-item floor.
+      const { client } = pagedClient(shortPages(9_800, 10_000));
+      await expect(client.getDetailedWatchHistory()).resolves.toHaveLength(9_800);
+    });
+
+    it("throws on a shortfall just past the 2% tolerance", async () => {
+      const { client } = pagedClient(shortPages(9_799, 10_000));
+      await expect(client.getDetailedWatchHistory()).rejects.toThrow(/ended at 9799 of a reported 10000/);
+    });
+
+    it("throws on an empty FIRST page under a non-zero total, even a small one", async () => {
+      // Nothing was read for the user, so there is nothing to tell an
+      // over-reported count from a proxy answering an empty list: ending the
+      // walk let the full replace delete every stored play of this user.
+      const { client } = pagedClient(() => ({ data: { Items: [], TotalRecordCount: 3 } }));
+      await expect(client.getDetailedWatchHistory()).rejects.toThrow(/ended at 0 of a reported 3/);
+    });
+
+    it("throws on an empty first page under a large total", async () => {
+      const { client } = pagedClient(() => ({ data: { Items: [], TotalRecordCount: 5_000 } }));
+      await expect(client.getDetailedWatchHistory()).rejects.toThrow(/ended at 0 of a reported 5000/);
+    });
+
+    it("throws on an empty page far short of the total mid-list instead of committing a truncated history", async () => {
+      // A proxy answering `Items: []` at offset 100 of 250 would otherwise end
+      // the walk there and the full replace would delete the other 150 plays.
+      const { client } = pagedClient(shortPages(100, 250));
+      const { logger } = await import("@/lib/logger");
+      await expect(client.getDetailedWatchHistory()).rejects.toThrow(/ended at 100 of a reported 250/);
+      expect(logger.warn).not.toHaveBeenCalledWith("Jellyfin", expect.stringContaining("over-reported"));
+    });
+
+    it("still reads an empty first page under a zero total as a user with no plays", async () => {
+      const { client } = pagedClient(() => ({ data: { Items: [], TotalRecordCount: 0 } }));
+      await expect(client.getDetailedWatchHistory()).resolves.toEqual([]);
+    });
+
+    it("still reads an empty first page with no total as a user with no plays", async () => {
+      const { client } = pagedClient(() => ({ data: { Items: [] } }));
+      await expect(client.getDetailedWatchHistory()).resolves.toEqual([]);
     });
 
     it("throws instead of looping when the server ignores StartIndex", async () => {

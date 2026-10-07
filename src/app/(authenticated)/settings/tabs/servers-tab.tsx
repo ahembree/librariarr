@@ -63,6 +63,7 @@ import {
   History,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { backfillPercent } from "@/lib/media/history-import-status";
 import type {
   MediaServer,
   PlexServer,
@@ -315,7 +316,7 @@ function TracearrLiveImportLine({
 }) {
   const percent =
     activity.pass === "backfill" && status.backfillFraction !== null
-      ? Math.round(status.backfillFraction * 100)
+      ? backfillPercent(status.backfillFraction, status.backfillComplete)
       : null;
   const label =
     activity.pass === "backfill"
@@ -386,8 +387,9 @@ function TracearrLiveImportLine({
  *   - complete            → the finished line (a count, no bar)
  *   - paused              → why (server or Tracearr instance disabled), no spinner
  *   - failing             → the slice used up its retries; say so, no spinner
- *   - no rows, pending    → "waiting", not "0 plays imported" (this includes a
- *                           fresh mapping no walk has run for yet)
+ *   - awaiting sync       → owed, nothing queued; starts with the next sync
+ *   - no rows, pending    → "waiting", not "0 plays imported" (a fresh
+ *                           mapping's first slice is queued by its save)
  *   - no rows, not pending→ a walk ran, nothing is queued and nothing came
  *                           back: Tracearr holds no plays for the linked server
  *   - fraction is a number→ a determinate bar at that percentage
@@ -422,7 +424,24 @@ function TracearrImportStatusLine({ status }: { status: TracearrImportStatus | u
         <AlertCircle className="mt-0.5 h-3 w-3 shrink-0 text-amber-400" />
         <span>
           {"History import failing — the last attempts could not import from Tracearr " +
-            "(see System Logs). It retries with the next watch-history sync."}
+            "(see System Logs). It retries with the next watch-history sync, or when " +
+            "the Tracearr instance is saved or re-enabled."}
+          {status.importedCount > 0 ? ` · ${plays} so far` : ""}
+        </span>
+      </p>
+    );
+  }
+
+  // Owed, but nothing is queued: it starts with the next sync. After a purge or
+  // a restore that is on purpose — the walk has to follow the re-sync that
+  // brings the purged items back, or their plays would be skipped for good.
+  // No spinner: nothing is running, and the line says what it waits for.
+  if (!status.backfillComplete && status.pausedReason === "awaiting-sync") {
+    return (
+      <p className={rowClass}>
+        <Clock className="mt-0.5 h-3 w-3 shrink-0" />
+        <span>
+          History import starts with the next sync of this server
           {status.importedCount > 0 ? ` · ${plays} so far` : ""}
         </span>
       </p>
@@ -457,10 +476,10 @@ function TracearrImportStatusLine({ status }: { status: TracearrImportStatus | u
         </p>
       );
     }
-    // A walk has run (a never-walked mapping is pending, above), nothing is
-    // queued or running, and it found nothing: Tracearr returned no plays at
-    // all for the linked server — which is also what a mapping to the wrong
-    // server looks like, so point at that.
+    // A walk has run (a never-walked mapping is pending or awaiting a sync,
+    // above), nothing is queued or running, and it found nothing: Tracearr
+    // returned no plays at all for the linked server — which is also what a
+    // mapping to the wrong server looks like, so point at that.
     return (
       <p className={rowClass}>
         <AlertCircle className="mt-0.5 h-3 w-3 shrink-0" />
@@ -494,7 +513,9 @@ function TracearrImportStatusLine({ status }: { status: TracearrImportStatus | u
   // the percentage is a percentage OF, which is the only way a bare "63%" over
   // a multi-year archive means anything.
   if (status.backfillFraction !== null) {
-    const percent = Math.round(status.backfillFraction * 100);
+    // Floored and capped at 99: this branch is only reached while the walk is
+    // unfinished, and "100%" beside "Importing history" is a contradiction.
+    const percent = backfillPercent(status.backfillFraction, status.backfillComplete);
     return (
       <div className="mt-2 space-y-1.5">
         <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">

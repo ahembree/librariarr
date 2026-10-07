@@ -23,15 +23,28 @@ export function isImportPending(status: TracearrImportStatus): boolean {
 }
 
 /**
+ * A backfill fraction (0..1) as the whole percentage shown beside an import
+ * readout. Every readout — the History page's note and the Settings bar and
+ * live line — goes through this one rule.
+ *
+ * Floored, and capped at 99 until the backfill is complete: a server that is
+ * still importing must never read "100%" beside "Importing history".
+ * `Math.round` did exactly that from 99.5% on — the last stretch of a
+ * multi-hour archive walk. Only `complete` reads 100. The epsilon keeps binary
+ * floating point from flooring an exact percentage one short (0.29 × 100 is
+ * 28.999…).
+ */
+export function backfillPercent(fraction: number, complete: boolean): number {
+  if (complete) return 100;
+  if (!Number.isFinite(fraction)) return 0;
+  return Math.min(99, Math.max(0, Math.floor(fraction * 100 + 1e-9)));
+}
+
+/**
  * The note's percentage: the least-advanced pending server's share of its
  * archive's time span, or null when any pending server is unmeasured (null is
- * "unknown", never 0%) or nothing is pending.
- *
- * Floored and capped at 99: every server counted here is still importing, so
- * the note must never read "100%" beside "Still importing". `Math.round` did
- * exactly that from 99.5% on — the last stretch of a multi-hour archive walk.
- * The epsilon keeps binary floating point from flooring an exact percentage
- * one short (0.29 × 100 is 28.999…).
+ * "unknown", never 0%) or nothing is pending. Every server counted is still
+ * importing, so it is capped at 99 (`backfillPercent`).
  */
 export function importBackfillPercent(statuses: readonly TracearrImportStatus[]): number | null {
   const pending = statuses.filter(isImportPending);
@@ -40,7 +53,7 @@ export function importBackfillPercent(statuses: readonly TracearrImportStatus[])
     .map((s) => s.backfillFraction)
     .filter((fraction): fraction is number => fraction !== null && Number.isFinite(fraction));
   if (known.length !== pending.length) return null;
-  return Math.min(99, Math.max(0, Math.floor(Math.min(...known) * 100 + 1e-9)));
+  return backfillPercent(Math.min(...known), false);
 }
 
 /**

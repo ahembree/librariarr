@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { TracearrClient } from "@/lib/tracearr/tracearr-client";
 import { validateRequest, tracearrInstanceCreateSchema } from "@/lib/validation";
 import { sanitize, sanitizeErrorDetail } from "@/lib/api/sanitize";
+import { enqueueTracearrBackfill } from "@/lib/sync/tracearr-backfill-enqueue";
 
 export async function GET() {
   const session = await getSession();
@@ -46,6 +47,11 @@ export async function POST(request: NextRequest) {
       apiKey,
     },
   });
+
+  // A server already mapped while no instance was enabled has been waiting on
+  // one ("no Tracearr instance is enabled"); start its import now rather than
+  // at the next watch-history sync.
+  await enqueueTracearrBackfill({ userId: session.userId! }, "Tracearr instance added");
 
   return NextResponse.json({ instance: sanitize(instance) }, { status: 201 });
 }

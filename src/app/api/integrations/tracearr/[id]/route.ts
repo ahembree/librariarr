@@ -5,6 +5,7 @@ import { TracearrClient } from "@/lib/tracearr/tracearr-client";
 import { validateRequest, tracearrInstanceUpdateSchema } from "@/lib/validation";
 import { sanitize, sanitizeErrorDetail } from "@/lib/api/sanitize";
 import { refuseStoredKeyToNewUrl } from "@/lib/integrations/stored-key-guard";
+import { enqueueTracearrBackfill } from "@/lib/sync/tracearr-backfill-enqueue";
 
 export async function PUT(
   request: NextRequest,
@@ -62,6 +63,20 @@ export async function PUT(
       ...(enabled !== undefined && { enabled }),
     },
   });
+
+  // Re-enabled, or pointed at a new address or key: whatever stopped the
+  // import — every slice failing against the old address and parked ("History
+  // import failing"), or no enabled instance at all — may be fixed now, so
+  // queue a fresh slice for each mapped server instead of waiting for the next
+  // watch-history sync. The keyed enqueue replaces a parked job with a fresh
+  // one. A rename alone changes nothing the import depends on.
+  const reenabled = enabled === true && !existing.enabled;
+  if (instance.enabled && (reenabled || urlChanged || apiKey)) {
+    await enqueueTracearrBackfill(
+      { userId: session.userId! },
+      reenabled ? "Tracearr instance re-enabled" : "Tracearr instance connection changed",
+    );
+  }
 
   return NextResponse.json({ instance: sanitize(instance) });
 }

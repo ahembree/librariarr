@@ -74,6 +74,7 @@ async function serverRow() {
       tracearrForwardFloorAt: true,
       tracearrBackfillCursorAt: true,
       tracearrBackfillComplete: true,
+      tracearrBackfillLastWalkAt: true,
       watchHistorySyncedAt: true,
     },
   });
@@ -189,7 +190,13 @@ describe("Tracearr import resume state (real DB)", () => {
     const CURSOR = new Date("2022-01-01T00:00:00.000Z");
     await prisma.mediaServer.update({
       where: { id: serverId },
-      data: { tracearrBackfillComplete: false, tracearrBackfillCursorAt: CURSOR },
+      // A cursor a previous WALK left stamps `tracearrBackfillLastWalkAt` in
+      // the same write; one without it is a restart's (held until a re-sync).
+      data: {
+        tracearrBackfillComplete: false,
+        tracearrBackfillCursorAt: CURSOR,
+        tracearrBackfillLastWalkAt: new Date("2026-10-01T00:00:00.000Z"),
+      },
     });
     m.getHistoryPage.mockResolvedValueOnce({
       records: [record("older", "2021-06-01T00:00:00.000Z")],
@@ -203,6 +210,45 @@ describe("Tracearr import resume state (real DB)", () => {
     const after = await serverRow();
     expect(after.tracearrBackfillComplete).toBe(true);
     expect(await prisma.watchHistory.count({ where: { source: "TRACEARR" } })).toBe(1);
+  });
+
+  it("holds a restarted walk until a full sync completes after the restart", async () => {
+    // Real DB: the restart state `restartTracearrBackfill` writes, and the
+    // SyncJob row a completed full sync leaves.
+    const { restartTracearrBackfill } = await import("@/lib/media/watch-evidence");
+    await restartTracearrBackfill([serverId]);
+    m.getHistoryPage.mockResolvedValue({ records: [], nextCursor: null });
+
+    const held = await syncTracearrHistory(serverId, { passes: "backfill" });
+
+    expect(m.getHistoryPage).not.toHaveBeenCalled();
+    expect(held).toMatchObject({ backfillPending: true, backfillOutcome: "exhausted" });
+    expect((await serverRow()).tracearrBackfillLastWalkAt).toBeNull();
+
+    // A sync that completed BEFORE the restart does not count.
+    const restartedAt = (await serverRow()).tracearrBackfillCursorAt as Date;
+    await prisma.syncJob.create({
+      data: {
+        mediaServerId: serverId,
+        status: "COMPLETED",
+        startedAt: new Date(restartedAt.getTime() - 120_000),
+        completedAt: new Date(restartedAt.getTime() - 60_000),
+      },
+    });
+    await syncTracearrHistory(serverId, { passes: "backfill" });
+    expect(m.getHistoryPage).not.toHaveBeenCalled();
+
+    await prisma.syncJob.create({
+      data: {
+        mediaServerId: serverId,
+        status: "COMPLETED",
+        startedAt: new Date(restartedAt.getTime() + 1_000),
+        completedAt: new Date(restartedAt.getTime() + 60_000),
+      },
+    });
+    await syncTracearrHistory(serverId, { passes: "backfill" });
+    expect(m.getHistoryPage).toHaveBeenCalled();
+    expect(m.getHistoryPage.mock.calls[0][1].until).toEqual(restartedAt);
   });
 
   it("does not delete native history once the server has been unlinked", async () => {

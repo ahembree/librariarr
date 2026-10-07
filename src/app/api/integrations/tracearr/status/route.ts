@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { sanitize } from "@/lib/api/sanitize";
 import {
   computeBackfillFraction,
+  importAwaitingSync,
   importPending,
   resolveBackfillReach,
   type ImportPausedReason,
@@ -19,18 +20,20 @@ interface BackfillJobState {
   queued: Set<string>;
   /** Used up its attempts: graphile keeps the row but never runs it again. */
   parked: Set<string>;
+  /** The table was read — without it, "no job" is unknown, not known. */
+  known: boolean;
 }
 
 /**
  * Servers with a backfill slice queued, running or backing off, and those
  * whose slice is parked — read from the job queue's own table, under the jobKey
  * `tracearr-backfill:<serverId>` that both enqueue sites share. Best-effort: on
- * a failed read (no `graphile_worker` schema yet) every server reads as having
- * no job at all, which only ever withholds `pending` from an import with no
- * other evidence and never reports one as failing.
+ * a failed read (no `graphile_worker` schema yet) `known` is false, and every
+ * server is judged on its stored evidence instead — never reported as failing,
+ * nor as waiting for a sync.
  */
 async function backfillJobStates(serverIds: string[]): Promise<BackfillJobState> {
-  const state: BackfillJobState = { queued: new Set(), parked: new Set() };
+  const state: BackfillJobState = { queued: new Set(), parked: new Set(), known: false };
   try {
     const rows = await prisma.$queryRawUnsafe<{ key: string; parked: boolean }[]>(
       // `locked_at IS NULL`: graphile counts an attempt when it takes the job,
@@ -44,6 +47,7 @@ async function backfillJobStates(serverIds: string[]): Promise<BackfillJobState>
       const serverId = row.key.slice("tracearr-backfill:".length);
       (row.parked ? state.parked : state.queued).add(serverId);
     }
+    state.known = true;
   } catch {
     // See above: unknown reads as "no job".
   }
@@ -164,13 +168,25 @@ export async function GET() {
     // Parked AND nothing live: a run in progress (a History-page Refresh, a
     // slice re-queued since the read) is progress, whatever the old row says.
     const failing = backfillJobs.parked.has(server.id) && !running && !queued;
+    const importState = {
+      backfillComplete: server.tracearrBackfillComplete,
+      importedCount,
+      oldestPlayAt: server.tracearrOldestPlayAt,
+      cursorAt,
+      lastWalkAt: server.tracearrBackfillLastWalkAt,
+      running,
+      queued,
+      jobsKnown: backfillJobs.known,
+    };
     const pausedReason: ImportPausedReason | null = !server.enabled
       ? "server-disabled"
       : enabledInstances === 0
         ? "instance-unavailable"
         : failing && !server.tracearrBackfillComplete
           ? "import-failing"
-          : null;
+          : importAwaitingSync({ ...importState, parked: failing })
+            ? "awaiting-sync"
+            : null;
 
     return {
       serverId: server.id,
@@ -203,16 +219,7 @@ export async function GET() {
         liveReached,
       }),
       // Whether anything should wait on this import — see `importPending`.
-      pending: importPending({
-        pausedReason,
-        backfillComplete: server.tracearrBackfillComplete,
-        importedCount,
-        oldestPlayAt: server.tracearrOldestPlayAt,
-        cursorAt,
-        lastWalkAt: server.tracearrBackfillLastWalkAt,
-        running,
-        queued,
-      }),
+      pending: importPending({ ...importState, pausedReason }),
       pausedReason,
       // When a backfill walk last ran for this mapping, or null if none has
       // yet — what separates "waiting for the first import" from "walked and

@@ -18,6 +18,9 @@ vi.mock("@/lib/db", () => ({
   prisma: { mediaServer: { updateMany: m.updateMany, findMany: m.findMany } },
 }));
 
+const { mockEnqueueJob } = vi.hoisted(() => ({ mockEnqueueJob: vi.fn().mockResolvedValue(true) }));
+vi.mock("@/lib/jobs/client", () => ({ enqueueJob: mockEnqueueJob }));
+
 import {
   invalidateWatchHistoryEvidence,
   invalidateServersWithoutWatchHistory,
@@ -123,6 +126,18 @@ describe("restartTracearrBackfill", () => {
     expect(spy).toHaveBeenCalledWith("s2");
     expect(spy.mock.invocationCallOrder[0]).toBeLessThan(m.updateMany.mock.invocationCallOrder[0]);
     spy.mockRestore();
+  });
+
+  it("queues no walk — it has to follow the re-sync that brings the purged items back", async () => {
+    // Every caller has just removed items whose plays the restarted walk exists
+    // to recover. Walked before a sync re-creates them, those plays are skipped
+    // as unresolved and the archive can be marked complete without them.
+    m.updateMany.mockResolvedValue({ count: 2 });
+    m.findMany.mockResolvedValue([{ id: "s1" }, { id: "s2" }]);
+
+    await restartTracearrBackfill(["s1", "s2"]);
+
+    expect(mockEnqueueJob).not.toHaveBeenCalled();
   });
 
   it("issues no UPDATE at all for an empty list", async () => {

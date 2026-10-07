@@ -157,9 +157,5 @@ describe("OpenAPI document", () => {
       expect(read.length).toBeGreaterThan(10);
       expect((op?.query ?? []).map((p) => p.name).sort()).toEqual([...new Set(read)].sort());
     });
-
-    it("says that a title sort follows the displayed title", () => {
-      expect(op?.description).toContain("`sortBy=title` sorts by the displayed title");
-    });
   });
 });

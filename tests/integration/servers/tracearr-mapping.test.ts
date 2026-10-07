@@ -37,8 +37,15 @@ vi.mock("@/lib/media-server/factory", () => ({
   createMediaServerClient: vi.fn(() => ({ testConnection: mockTestConnection })),
 }));
 
+// The enqueue itself is the job queue's business (and is covered against a
+// real graphile schema in tests/integration/sync/tracearr-backfill-enqueue);
+// here it records what the route asked for, and when.
+const { mockEnqueueJob } = vi.hoisted(() => ({ mockEnqueueJob: vi.fn() }));
+vi.mock("@/lib/jobs/client", () => ({ enqueueJob: mockEnqueueJob }));
+
 // Import route handlers AFTER mocks
 import { PUT } from "@/app/api/servers/[id]/route";
+import { restartTracearrBackfill } from "@/lib/media/watch-evidence";
 import {
   beginTracearrImport,
   endTracearrImport,
@@ -57,6 +64,7 @@ describe("PUT /api/servers/[id] — Tracearr mapping", () => {
     clearMockSession();
     vi.clearAllMocks();
     mockTestConnection.mockResolvedValue({ ok: true, name: "Test Server" });
+    mockEnqueueJob.mockResolvedValue(true);
   });
 
   afterAll(async () => {
@@ -659,5 +667,168 @@ describe("PUT /api/servers/[id] — Tracearr mapping", () => {
 
     const stored = await prisma.mediaServer.findUniqueOrThrow({ where: { id: server.id } });
     expect(stored.tracearrBackfillLastWalkAt?.toISOString()).toBe(walkedAt.toISOString());
+  });
+
+  describe("queues the import the save was waiting on", () => {
+    const enableInstance = (userId: string, enabled = true) =>
+      prisma.tracearrInstance.create({
+        data: { userId, name: "Tracearr", url: "http://tracearr.test", apiKey: "key", enabled },
+      });
+    const backfillEnqueues = () =>
+      mockEnqueueJob.mock.calls.filter(([task]) => task === "tracearr-backfill");
+    const expectQueuedFor = (serverId: string) =>
+      expect(backfillEnqueues()).toEqual([
+        [
+          "tracearr-backfill",
+          { serverId },
+          { jobKey: `tracearr-backfill:${serverId}`, queueName: "librariarr:main", maxAttempts: 3 },
+        ],
+      ]);
+
+    it("queues the first slice of a new mapping — after the mapping has committed", async () => {
+      const user = await createTestUser();
+      await enableInstance(user.id);
+      const server = await createTestServer(user.id);
+      await seedWatchHistory(server.id);
+      // The slice reads the mapping from the database, so it must be queued
+      // after the write it depends on, never inside the transaction.
+      let mappingAtEnqueue: string | null | undefined;
+      mockEnqueueJob.mockImplementation(async () => {
+        mappingAtEnqueue = (await prisma.mediaServer.findUnique({ where: { id: server.id } }))?.tracearrServerId;
+        return true;
+      });
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      await expectJson(await putMapping(server.id, { tracearrServerId: TRACEARR_SERVER_A }), 200);
+
+      expectQueuedFor(server.id);
+      expect(mappingAtEnqueue).toBe(TRACEARR_SERVER_A);
+    });
+
+    it("queues it when re-pointing to another Tracearr server", async () => {
+      const user = await createTestUser();
+      await enableInstance(user.id);
+      const server = await createTestServer(user.id, { tracearrServerId: TRACEARR_SERVER_A });
+      await seedWatchHistory(server.id);
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      await expectJson(await putMapping(server.id, { tracearrServerId: TRACEARR_SERVER_B }), 200);
+      expectQueuedFor(server.id);
+    });
+
+    it("queues nothing on an unlink, a re-save of the same mapping, or an unrelated edit", async () => {
+      const user = await createTestUser();
+      await enableInstance(user.id);
+      const kept = await createTestServer(user.id, { tracearrServerId: TRACEARR_SERVER_A });
+      await seedWatchHistory(kept.id);
+      const unlinked = await createTestServer(user.id, { tracearrServerId: TRACEARR_SERVER_B });
+      await seedWatchHistory(unlinked.id);
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      await expectJson(await putMapping(kept.id, { tracearrServerId: TRACEARR_SERVER_A }), 200);
+      await expectJson(await putMapping(kept.id, { url: "http://plex.test:32400" }), 200);
+      await expectJson(await putMapping(unlinked.id, { tracearrServerId: null }), 200);
+
+      expect(backfillEnqueues()).toEqual([]);
+    });
+
+    it("queues nothing without an enabled Tracearr instance, or for a server with no items", async () => {
+      const user = await createTestUser();
+      await enableInstance(user.id, false);
+      const noInstance = await createTestServer(user.id);
+      await seedWatchHistory(noInstance.id);
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      await expectJson(await putMapping(noInstance.id, { tracearrServerId: TRACEARR_SERVER_A }), 200);
+
+      const other = await createTestUser();
+      await enableInstance(other.id);
+      const empty = await createTestServer(other.id);
+      setMockSession({ userId: other.id, plexToken: "tok", isLoggedIn: true });
+      await expectJson(await putMapping(empty.id, { tracearrServerId: TRACEARR_SERVER_B }), 200);
+
+      expect(backfillEnqueues()).toEqual([]);
+    });
+
+    it("queues nothing when the same save also disables the server", async () => {
+      const user = await createTestUser();
+      await enableInstance(user.id);
+      const server = await createTestServer(user.id);
+      await seedWatchHistory(server.id);
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      await expectJson(
+        await putMapping(server.id, { tracearrServerId: TRACEARR_SERVER_A, enabled: false }),
+        200,
+      );
+      expect(backfillEnqueues()).toEqual([]);
+    });
+
+    it("queues a mapped server's slice when it is re-enabled, and nothing on disable", async () => {
+      const user = await createTestUser();
+      await enableInstance(user.id);
+      const server = await createTestServer(user.id, { tracearrServerId: TRACEARR_SERVER_A });
+      await seedWatchHistory(server.id);
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      await expectJson(await putMapping(server.id, { enabled: false }), 200);
+      expect(backfillEnqueues()).toEqual([]);
+
+      await expectJson(await putMapping(server.id, { enabled: true }), 200);
+      expectQueuedFor(server.id);
+
+      // Already enabled: "re-enabled" means a transition, not every save.
+      mockEnqueueJob.mockClear();
+      await expectJson(await putMapping(server.id, { enabled: true }), 200);
+      expect(backfillEnqueues()).toEqual([]);
+    });
+
+    it("queues nothing for an unmapped server re-enabled", async () => {
+      const user = await createTestUser();
+      await enableInstance(user.id);
+      const server = await createTestServer(user.id, { enabled: false });
+      await seedWatchHistory(server.id);
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      await expectJson(await putMapping(server.id, { enabled: true }), 200);
+      expect(backfillEnqueues()).toEqual([]);
+    });
+
+    it("does not start a purged server's walk ahead of the re-sync when it is re-enabled", async () => {
+      // Disable-with-delete restarts the walk and removes the items; walking
+      // before a sync brings them back would skip their plays for good.
+      const user = await createTestUser();
+      await enableInstance(user.id);
+      const server = await createTestServer(user.id, { tracearrServerId: TRACEARR_SERVER_A });
+      await seedWatchHistory(server.id);
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      await expectJson(await putMapping(server.id, { enabled: false, deleteData: true }), 200);
+      await expectJson(await putMapping(server.id, { enabled: true }), 200);
+      expect(backfillEnqueues()).toEqual([]);
+
+      // The same for a partial purge, where other items remain.
+      const partial = await createTestServer(user.id, { tracearrServerId: TRACEARR_SERVER_B });
+      await seedWatchHistory(partial.id);
+      await prisma.mediaServer.update({
+        where: { id: partial.id },
+        data: { enabled: false, tracearrBackfillLastWalkAt: new Date() },
+      });
+      await restartTracearrBackfill([partial.id]);
+      await expectJson(await putMapping(partial.id, { enabled: true }), 200);
+      expect(backfillEnqueues()).toEqual([]);
+    });
+
+    it("still saves when the enqueue fails", async () => {
+      const user = await createTestUser();
+      await enableInstance(user.id);
+      const server = await createTestServer(user.id);
+      await seedWatchHistory(server.id);
+      mockEnqueueJob.mockRejectedValue(new Error("queue down"));
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      await expectJson(await putMapping(server.id, { tracearrServerId: TRACEARR_SERVER_A }), 200);
+      const stored = await prisma.mediaServer.findUniqueOrThrow({ where: { id: server.id } });
+      expect(stored.tracearrServerId).toBe(TRACEARR_SERVER_A);
+    });
   });
 });

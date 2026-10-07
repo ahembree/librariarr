@@ -65,6 +65,8 @@ import {
   RECENT_ADDITION_WINDOW_MS,
   DEFAULT_CANDIDATE_LIMIT,
   MAX_CANDIDATE_LIMIT,
+  MAX_RECOVERY_ASKS,
+  RECOVERY_REASK_MS,
   resetRecoveryAnswers,
 } from "@/lib/sync/tracearr-backfill-additions";
 import { TracearrMappingChangedError } from "@/lib/sync/tracearr-mapping-changed";
@@ -158,19 +160,25 @@ describe("recoverHistoryForNewItems", () => {
   });
 
   describe("candidate selection", () => {
-    it("excludes only items already holding a Tracearr play from BEFORE they were created", async () => {
+    it("excludes only items already holding a Tracearr play from well BEFORE they were created", async () => {
       await recoverHistoryForNewItems(SERVER_ID);
 
       const { sql, params } = candidateQuery();
       // A re-added item's first NEW play (under its new rating key) is usually
       // in before this pass reaches it, so "has any TRACEARR row" must not end
       // candidacy — that dropped exactly the items this pass exists for. A play
-      // from before the row existed can only have come from the walk or an
-      // earlier recovery, so that one does. (The real-database file proves the
-      // two cases against actual rows.)
+      // from well before the row existed can only have come from the walk or
+      // an earlier recovery, so that one does. "Well before" — a window before
+      // `createdAt`, not `createdAt` itself: a re-added item played between
+      // its return to the server and our sync holds a play dated just before
+      // its row, and that one play must not end its candidacy. (The
+      // real-database file proves the cases against actual rows.)
       expect(sql).toContain("NOT EXISTS");
       expect(sql).toContain(`wh."source" = 'TRACEARR'`);
-      expect(sql).toContain('wh."watchedAt" < mi."createdAt"');
+      expect(sql).toContain(
+        `wh."watchedAt" < mi."createdAt" - ($6::integer * interval '1 second')`,
+      );
+      expect(params[5]).toBe(RECENT_ADDITION_WINDOW_MS / 1000);
       expect(sql).toContain('NOT (mi."id" = ANY($4::text[]))');
       expect(sql).toContain('l."mediaServerId" = $1');
       expect(params[0]).toBe(SERVER_ID);
@@ -215,9 +223,12 @@ describe("recoverHistoryForNewItems", () => {
       expect(candidateQuery().params[2]).toBe(MAX_CANDIDATE_LIMIT);
     });
 
-    it("takes the newest arrivals when there are more candidates than the cap", async () => {
+    it("takes never-asked items first, then the newest arrivals, when there are more candidates than the cap", async () => {
       await recoverHistoryForNewItems(SERVER_ID);
-      expect(candidateQuery().sql).toContain('ORDER BY mi."createdAt" DESC');
+      expect(candidateQuery().sql).toContain(
+        'ORDER BY (mi."id" = ANY($5::text[])) ASC, mi."createdAt" DESC, mi."id" ASC',
+      );
+      expect(candidateQuery().params[4]).toEqual([]);
     });
 
     it("does no work at all when nothing has been added", async () => {
@@ -885,27 +896,67 @@ describe("recoverHistoryForNewItems", () => {
       expect(candidateQuery().params[3]).toEqual(["item-1"]);
     });
 
-    it("keeps an item a candidate when every play resolved to a different row", async () => {
+    it("defers an item whose every play resolved to a different row, then re-asks it a day later", async () => {
       // The old copy is still in the library, so its rating key claims the old
       // plays. They land on that row and cascade away when it is purged;
-      // closing the new item here would never ask for them again.
-      m.getHistoryForItem.mockResolvedValue([play("old-1"), play("old-2")]);
-      m.resolveMediaItemId.mockReturnValue({ mediaItemId: "old-copy" });
-      m.importTracearrRecords.mockResolvedValue({ inserted: 2, updated: 0, skipped: 0 });
+      // closing the new item here would never ask for them again. But it is
+      // not asked on every pass either — see the starvation test below.
+      vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-10-01T00:00:00.000Z") });
+      try {
+        m.getHistoryForItem.mockResolvedValue([play("old-1"), play("old-2")]);
+        m.resolveMediaItemId.mockReturnValue({ mediaItemId: "old-copy" });
+        m.importTracearrRecords.mockResolvedValue({ inserted: 2, updated: 0, skipped: 0 });
 
-      await recoverHistoryForNewItems(SERVER_ID);
-      expect(m.resolveMediaItemId).toHaveBeenCalledWith(JOIN_INDEX, expect.objectContaining({ id: "old-1" }));
-      expect(m.logger.info).toHaveBeenCalledWith(
-        "WatchHistory",
-        expect.stringContaining("1 left a candidate (no play resolved to the item itself)"),
-      );
+        await recoverHistoryForNewItems(SERVER_ID);
+        expect(m.resolveMediaItemId).toHaveBeenCalledWith(JOIN_INDEX, expect.objectContaining({ id: "old-1" }));
+        expect(m.logger.info).toHaveBeenCalledWith(
+          "WatchHistory",
+          expect.stringContaining("1 deferred (no play resolved to the item itself)"),
+        );
 
-      m.prisma.$queryRawUnsafe.mockClear();
-      await recoverHistoryForNewItems(SERVER_ID);
-      expect(candidateQuery().params[3]).toEqual([]);
+        // Straight after: left out.
+        m.prisma.$queryRawUnsafe.mockClear();
+        await recoverHistoryForNewItems(SERVER_ID);
+        expect(candidateQuery().params[3]).toEqual(["item-1"]);
+        expect(candidateQuery().params[4]).toEqual([]);
+
+        // A day later: offered again, but behind every never-asked item.
+        vi.setSystemTime(new Date(Date.now() + RECOVERY_REASK_MS));
+        m.prisma.$queryRawUnsafe.mockClear();
+        await recoverHistoryForNewItems(SERVER_ID);
+        expect(candidateQuery().params[3]).toEqual([]);
+        expect(candidateQuery().params[4]).toEqual(["item-1"]);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
-    it("keeps an item a candidate when none of its plays could be resolved at all", async () => {
+    it("stops re-asking a deferred item after MAX_RECOVERY_ASKS answers", async () => {
+      // A legitimate second copy (a 4K beside the 1080p, a Jellyfin item in
+      // two libraries) has plays that resolve to the other copy for ever.
+      vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-10-01T00:00:00.000Z") });
+      try {
+        m.getHistoryForItem.mockResolvedValue([play("other-copy-play")]);
+        m.resolveMediaItemId.mockReturnValue({ mediaItemId: "other-copy" });
+        m.importTracearrRecords.mockResolvedValue({ inserted: 0, updated: 1, skipped: 0 });
+
+        for (let ask = 0; ask < MAX_RECOVERY_ASKS; ask++) {
+          await recoverHistoryForNewItems(SERVER_ID);
+          vi.setSystemTime(new Date(Date.now() + RECOVERY_REASK_MS));
+        }
+        expect(m.getHistoryForItem).toHaveBeenCalledTimes(MAX_RECOVERY_ASKS);
+
+        m.prisma.$queryRawUnsafe.mockClear();
+        await recoverHistoryForNewItems(SERVER_ID);
+        // Settled: excluded, not offered as due.
+        expect(candidateQuery().params[3]).toEqual(["item-1"]);
+        expect(candidateQuery().params[4]).toEqual([]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("defers an item none of whose plays could be resolved at all", async () => {
       m.getHistoryForItem.mockResolvedValue([play("chain-1")]);
       m.resolveMediaItemId.mockReturnValue({ skipped: "ambiguous" });
       m.importTracearrRecords.mockResolvedValue({ inserted: 0, updated: 0, skipped: 1 });
@@ -914,7 +965,7 @@ describe("recoverHistoryForNewItems", () => {
 
       m.prisma.$queryRawUnsafe.mockClear();
       await recoverHistoryForNewItems(SERVER_ID);
-      expect(candidateQuery().params[3]).toEqual([]);
+      expect(candidateQuery().params[3]).toEqual(["item-1"]);
     });
 
     it("records the item once ANY play resolved to it, whatever the others did", async () => {

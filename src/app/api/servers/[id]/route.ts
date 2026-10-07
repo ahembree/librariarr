@@ -15,6 +15,7 @@ import {
 import { hasRecentLogin } from "@/lib/auth/recent-login";
 import { reauthRequired } from "@/lib/auth/reauth";
 import { supersedeTracearrImports } from "@/lib/sync/tracearr-import-activity";
+import { enqueueTracearrBackfill } from "@/lib/sync/tracearr-backfill-enqueue";
 
 const withoutTrailingSlash = (value: string) => value.replace(/\/+$/, "");
 
@@ -328,6 +329,20 @@ export async function PUT(
   if (enabled !== undefined) {
     await recomputeCanonical(session.userId!);
     invalidateMediaCaches();
+  }
+
+  // Start the import now rather than at the next watch-history sync, when this
+  // save is what it was waiting on: a new mapping (nothing is queued for it
+  // yet, and a slice parked by the OLD mapping would read "failing"), or the
+  // server coming back from disabled. After the commit, so the slice reads the
+  // new mapping; the helper skips a server the import cannot or must not run
+  // for yet (unmapped, empty, awaiting a re-sync after a purge).
+  const reenabled = enabled === true && !server.enabled;
+  if ((tracearrMappingChanged && tracearrServerId) || reenabled) {
+    await enqueueTracearrBackfill(
+      { serverIds: [server.id] },
+      tracearrMappingChanged ? `watch-history source set for "${server.name}"` : `"${server.name}" re-enabled`,
+    );
   }
 
   // Reconcile the realtime WebSocket: an enable/disable, url/token, or TLS

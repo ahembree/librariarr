@@ -195,6 +195,10 @@ let existingEventIds: string[];
 let deletedItemIds: Set<string>;
 /** Whether the write-time mapping check still finds the mapping the run read. */
 let mappingHolds: boolean;
+/** Whether the server's enabled libraries hold any item (the empty-library gate). */
+let libraryPopulated: boolean;
+/** Whether a full sync completed after a restart's cursor (`fullSyncCompletedSince`). */
+let resyncedSinceRestart: boolean;
 
 function insertCalls() {
   return mockPrisma.$executeRawUnsafe.mock.calls.filter((args) =>
@@ -295,6 +299,8 @@ describe("syncTracearrHistory", () => {
     existingEventIds = [];
     deletedItemIds = new Set();
     mappingHolds = true;
+    libraryPopulated = true;
+    resyncedSinceRestart = true;
     mockPrisma.$transaction.mockImplementation(
       async (fn: (tx: typeof mockPrisma) => unknown) => fn(mockPrisma),
     );
@@ -332,6 +338,8 @@ describe("syncTracearrHistory", () => {
     mockPrisma.$queryRawUnsafe.mockImplementation(
       async (sql: string, ...params: unknown[]) => {
         if (sql.includes('MAX("watchedAt")')) return [watermark];
+        if (sql.includes('AS "populated"')) return [{ populated: libraryPopulated }];
+        if (sql.includes('AS "done"')) return [{ done: resyncedSinceRestart }];
         if (sql.includes("FOR SHARE")) {
           return mappingHolds ? [{ id: params[0] }] : [];
         }
@@ -2464,6 +2472,74 @@ describe("syncTracearrHistory", () => {
       expect(second).toMatchObject({ backfillPending: false });
     });
 
+    it("holds a restarted walk until a full sync has re-added the purged items", async () => {
+      // `restartTracearrBackfill` runs right after a purge deleted items whose
+      // plays the walk exists to bring back. Walked before the re-sync, those
+      // plays resolve to nothing and are stepped over for good.
+      neverBackfilled({
+        tracearrBackfillCursorAt: new Date("2026-01-01T00:00:00.000Z"),
+        tracearrBackfillLastWalkAt: null,
+      });
+      watermark = {
+        maxWatchedAt: new Date("2026-03-01T00:00:00.000Z"),
+        minWatchedAt: new Date("2026-02-01T00:00:00.000Z"),
+        oldestOpenChain: null,
+      };
+      resyncedSinceRestart = false;
+
+      const result = await syncTracearrHistory("server-1", { passes: "backfill" });
+
+      expect(mockGetHistoryPage).not.toHaveBeenCalled();
+      // "exhausted" + pending: the task stops without re-enqueueing, and the
+      // full sync's own watch-history phase queues the slice afterwards.
+      expect(result).toMatchObject({ count: 0, backfillPending: true, backfillOutcome: "exhausted" });
+      const since = mockPrisma.$queryRawUnsafe.mock.calls.find((c) =>
+        String(c[0]).includes('AS "done"'),
+      );
+      expect(since?.[2]).toEqual(new Date("2026-01-01T00:00:00.000Z"));
+    });
+
+    it("still runs the forward pass while a restarted walk waits for the re-sync", async () => {
+      neverBackfilled({
+        tracearrBackfillCursorAt: new Date("2026-01-01T00:00:00.000Z"),
+        tracearrBackfillLastWalkAt: null,
+      });
+      watermark = {
+        maxWatchedAt: new Date("2026-03-01T00:00:00.000Z"),
+        minWatchedAt: new Date("2026-02-01T00:00:00.000Z"),
+        oldestOpenChain: null,
+      };
+      resyncedSinceRestart = false;
+      mockGetHistoryPage.mockResolvedValueOnce({ records: [], nextCursor: null });
+
+      const result = await syncTracearrHistory("server-1", { passes: "both" });
+
+      // Only the forward window was asked for — never an `until` walk.
+      expect(mockGetHistoryPage).toHaveBeenCalledTimes(1);
+      expect(mockGetHistoryPage.mock.calls[0][1].until).toBeUndefined();
+      expect(mockGetHistoryPage.mock.calls[0][1].since).toBeInstanceOf(Date);
+      expect(result).toMatchObject({ backfillPending: true, backfillOutcome: "exhausted" });
+    });
+
+    it("walks a restarted archive once a full sync completed after the restart", async () => {
+      neverBackfilled({
+        tracearrBackfillCursorAt: new Date("2026-01-01T00:00:00.000Z"),
+        tracearrBackfillLastWalkAt: null,
+      });
+      watermark = {
+        maxWatchedAt: new Date("2026-03-01T00:00:00.000Z"),
+        minWatchedAt: new Date("2026-02-01T00:00:00.000Z"),
+        oldestOpenChain: null,
+      };
+      resyncedSinceRestart = true;
+      mockGetHistoryPage.mockResolvedValueOnce({ records: [], nextCursor: null });
+
+      await syncTracearrHistory("server-1", { passes: "backfill" });
+
+      expect(mockGetHistoryPage).toHaveBeenCalledTimes(1);
+      expect(mockGetHistoryPage.mock.calls[0][1].until).toEqual(new Date("2026-01-01T00:00:00.000Z"));
+    });
+
     it("discards its progress when the walk was restarted while it ran", async () => {
       // A purge moves the cursor to restart the walk (`restartTracearrBackfill`).
       // A slice already running must not overwrite that with its own deep
@@ -2560,6 +2636,68 @@ describe("syncTracearrHistory", () => {
       await expect(
         syncTracearrHistory("server-1", { passes: "backfill" }),
       ).resolves.toMatchObject({ backfillPending: false });
+    });
+  });
+
+  describe("an archive walk into an empty library", () => {
+    // A walk whose records ALL go unresolved because the server's enabled
+    // libraries hold nothing yet (a mapping saved before the first library
+    // sync, a purge or restore followed by a watch-changed) is the same, by
+    // its rows, as an archive of plays of since-deleted media — and completed
+    // like one: the marker established over an empty history, after which the
+    // synced library read as never watched.
+    it("does not walk, complete, move the cursor or establish the marker", async () => {
+      neverBackfilled();
+      libraryPopulated = false;
+      mockGetHistoryPage.mockResolvedValue({
+        records: [historyRecord({ id: "chain-1" })],
+        nextCursor: null,
+      });
+
+      const result = await syncTracearrHistory("server-1", { passes: "backfill" });
+
+      // Reported like an empty mapping: exhausted, still pending — so the
+      // backfill task does not re-queue itself.
+      expect(result).toEqual({ count: 0, backfillPending: true, backfillOutcome: "exhausted" });
+      expect(mockGetHistoryPage).not.toHaveBeenCalled();
+      expect(mockPrisma.mediaServer.updateMany).not.toHaveBeenCalled();
+      expect(mockPrisma.$executeRawUnsafe).not.toHaveBeenCalled();
+      // Nothing slow either: no instance probe, no join index.
+      expect(mockListServers).not.toHaveBeenCalled();
+      expect(mockBuildIndex).not.toHaveBeenCalled();
+    });
+
+    it("does not re-stamp the marker or the forward watermark on a forward run", async () => {
+      storedRows({
+        min: new Date("2021-03-04T08:00:00.000Z"),
+        max: new Date("2025-07-10T12:00:00.000Z"),
+        backfillComplete: true,
+      });
+      libraryPopulated = false;
+
+      const result = await syncTracearrHistory("server-1", { passes: "forward" });
+
+      expect(result).toEqual({ count: 0, backfillPending: false });
+      expect(mockGetHistoryPage).not.toHaveBeenCalled();
+      expect(mockPrisma.mediaServer.updateMany).not.toHaveBeenCalled();
+    });
+
+    it("walks as before once the library holds items", async () => {
+      neverBackfilled();
+      mockGetHistoryPage.mockResolvedValue({
+        records: [historyRecord({ id: "chain-1" })],
+        nextCursor: null,
+      });
+
+      await expect(
+        syncTracearrHistory("server-1", { passes: "backfill" }),
+      ).resolves.toMatchObject({ backfillPending: false, backfillOutcome: "exhausted" });
+      // The gate asks about ENABLED libraries of THIS server.
+      const gate = mockPrisma.$queryRawUnsafe.mock.calls.find((args) =>
+        (args[0] as string).includes('AS "populated"'),
+      );
+      expect(gate?.[0]).toContain('l."enabled" = true');
+      expect(gate?.[1]).toBe("server-1");
     });
   });
 
@@ -3420,6 +3558,8 @@ describe("syncTracearrHistory", () => {
       const order: string[] = [];
       mockPrisma.$queryRawUnsafe.mockImplementation(async (sql: string, ...params: unknown[]) => {
         if (sql.includes('MAX("watchedAt")')) return [watermark];
+        if (sql.includes('AS "populated"')) return [{ populated: true }];
+        if (sql.includes('AS "done"')) return [{ done: true }];
         if (sql.includes("FOR SHARE")) {
           order.push("check");
           return [{ id: params[0] }];

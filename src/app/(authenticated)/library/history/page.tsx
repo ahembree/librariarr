@@ -1282,7 +1282,7 @@ export default function HistoryPage() {
             </DropdownMenu>
           </div>
 
-          <div ref={tableTopRef} aria-hidden />
+          <div ref={tableTopRef} aria-hidden data-testid="history-table-top" />
 
           {/* A failed load keeps whatever was already on screen and says so,
               rather than falling through to the "No watch history" empty

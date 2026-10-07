@@ -1028,7 +1028,7 @@ export function PlayHistory({
   if (card) {
     // Same shell and heading treatment as the other cards in the detail grid.
     return (
-      <div className="rounded-xl border border-white/6 bg-card p-5 shadow-[var(--shadow-card)] space-y-3">
+      <div data-testid="play-history" className="rounded-xl border border-white/6 bg-card p-5 shadow-[var(--shadow-card)] space-y-3">
         <h3 className="flex items-center gap-1.5 font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-faint">
           <History className="h-3.5 w-3.5" />
           {heading}
@@ -1042,7 +1042,7 @@ export function PlayHistory({
   }
 
   return (
-    <section className="mt-6">
+    <section data-testid="play-history" className="mt-6">
       <div className="mb-3 flex items-center gap-2">
         <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
           {heading}

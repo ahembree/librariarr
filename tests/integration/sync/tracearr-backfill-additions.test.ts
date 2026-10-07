@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from "vitest";
 import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import {
   createTestUser,
@@ -51,6 +51,7 @@ vi.mock("@/lib/tracearr/tracearr-client", async (importOriginal) => {
 import {
   recoverHistoryForNewItems,
   resetRecoveryAnswers,
+  RECOVERY_REASK_MS,
 } from "@/lib/sync/tracearr-backfill-additions";
 
 const TRACEARR_SERVER_ID = "3f6f0d1e-0000-4000-8000-0000000000aa";
@@ -144,6 +145,10 @@ describe("recoverHistoryForNewItems (real database)", () => {
     tracearr.getHistoryForItem.mockResolvedValue([]);
     // The instance resolver asks which servers an instance monitors.
     tracearr.listServers.mockResolvedValue([{ id: TRACEARR_SERVER_ID, name: "Plex" }]);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   afterAll(async () => {
@@ -423,11 +428,17 @@ describe("recoverHistoryForNewItems (real database)", () => {
     expect(await prisma.watchHistory.count({ where: { mediaItemId: oldCopy.id } })).toBe(2);
     expect(await prisma.watchHistory.count({ where: { mediaItemId: film.id } })).toBe(0);
 
-    // The old copy is purged, and its plays cascade with it.
-    await prisma.mediaItem.delete({ where: { id: oldCopy.id } });
+    // Deferred, not settled — but not asked again on the very next pass.
     tracearr.getHistoryForItem.mockClear();
+    expect(await recoverHistoryForNewItems(server.id)).toEqual({ checked: 0, imported: 0 });
+    expect(tracearr.getHistoryForItem).not.toHaveBeenCalled();
 
-    // Still a candidate: the same plays now resolve to the film by provider id.
+    // The old copy is purged (the next day's full sync), and its plays
+    // cascade with it.
+    await prisma.mediaItem.delete({ where: { id: oldCopy.id } });
+    vi.useFakeTimers({ toFake: ["Date"], now: Date.now() + RECOVERY_REASK_MS });
+
+    // Re-asked: the same plays now resolve to the film by provider id.
     const second = await recoverHistoryForNewItems(server.id);
     expect(second).toEqual({ checked: 1, imported: 2 });
     const rows = await prisma.watchHistory.findMany({
@@ -442,6 +453,158 @@ describe("recoverHistoryForNewItems (real database)", () => {
     tracearr.getHistoryForItem.mockClear();
     expect(await recoverHistoryForNewItems(server.id)).toEqual({ checked: 0, imported: 0 });
     expect(tracearr.getHistoryForItem).not.toHaveBeenCalled();
+  });
+
+  it("offers a re-added item whose only stored play landed before its row was created", async () => {
+    // The film came back to the server, was played, and only THEN did our
+    // sync create its row — so its one new play is dated before `createdAt`.
+    // Keyed on `createdAt` itself, that play ended its candidacy and the
+    // pre-delete plays were never asked for.
+    const { server, library } = await seedServer();
+    const film = await createTestMediaItem(library.id, { ratingKey: "500", title: "The Matrix", year: 1999 });
+    await prisma.mediaItem.update({
+      where: { id: film.id },
+      data: { createdAt: new Date(Date.now() - 60 * 60 * 1000) },
+    });
+    await createTestExternalId(film.id, "TMDB", "603");
+    const newPlayAt = new Date(Date.now() - 5 * 60 * 60 * 1000);
+    await storedPlay(film.id, server.id, newPlayAt, "new-play");
+
+    tracearr.getHistoryForItem.mockImplementation(
+      async (_server: string, filter: { ratingKey?: string; tmdbId?: string | null }) =>
+        filter.tmdbId === "603"
+          ? [
+              record({ id: "new-play", rating_key: "500", started_at: newPlayAt.toISOString() }),
+              record({ id: "old-1", rating_key: "123", started_at: "2025-01-10T20:00:00.000Z" }),
+            ]
+          : [],
+    );
+
+    const result = await recoverHistoryForNewItems(server.id);
+
+    expect(result).toEqual({ checked: 1, imported: 1 });
+    expect(
+      await prisma.watchHistory.count({ where: { mediaItemId: film.id, sourceEventId: "old-1" } }),
+    ).toBe(1);
+  });
+
+  it("offers an item whose only plays are from the week before its row, once per run of the registry", async () => {
+    // A new install whose library was watched in the days before it: nothing
+    // tells those plays apart from a re-added item's new ones, so the item is
+    // asked about — once, and again only after a restart empties the registry.
+    const { server, library } = await seedServer();
+    const item = await createTestMediaItem(library.id, { ratingKey: "4001" });
+    await storedPlay(item.id, server.id, new Date(Date.now() - 3 * DAY_MS), "recent");
+
+    await recoverHistoryForNewItems(server.id);
+    expect(askedRatingKeys()).toEqual(["4001"]);
+
+    tracearr.getHistoryForItem.mockClear();
+    await recoverHistoryForNewItems(server.id);
+    expect(tracearr.getHistoryForItem).not.toHaveBeenCalled();
+
+    resetRecoveryAnswers();
+    await recoverHistoryForNewItems(server.id);
+    expect(askedRatingKeys()).toEqual(["4001"]);
+  });
+
+  describe("second copies whose plays always resolve to the other copy", () => {
+    /**
+     * `count` second copies (newest), each beside an older copy of the same
+     * film that keeps claiming its plays — a 4K beside a 1080p — plus one
+     * re-added film, older than all of them, whose old plays only a provider
+     * id reaches.
+     */
+    async function seedCopiesAndReadd(count: number) {
+      const { server, library } = await seedServer();
+      for (let n = 0; n < count; n++) {
+        const tmdb = String(1000 + n);
+        const older = await createTestMediaItem(library.id, { ratingKey: `old-${n}`, title: `Film ${n}` });
+        await createdDaysAgo(older.id, 400);
+        await createTestExternalId(older.id, "TMDB", tmdb);
+        const copy = await createTestMediaItem(library.id, { ratingKey: `copy-${n}`, title: `Film ${n}` });
+        await prisma.mediaItem.update({
+          where: { id: copy.id },
+          data: { createdAt: new Date(Date.now() - (n + 1) * 60 * 60 * 1000) },
+        });
+        await createTestExternalId(copy.id, "TMDB", tmdb);
+      }
+      const readded = await createTestMediaItem(library.id, { ratingKey: "readded", title: "The Matrix" });
+      await createdDaysAgo(readded.id, 3);
+      await createTestExternalId(readded.id, "TMDB", "603");
+
+      tracearr.getHistoryForItem.mockImplementation(
+        async (_server: string, filter: { ratingKey?: string; tmdbId?: string | null }) => {
+          if (filter.tmdbId === "603") {
+            return [record({ id: "matrix-old", rating_key: "gone", started_at: "2025-01-10T20:00:00.000Z" })];
+          }
+          const n = Number(filter.tmdbId) - 1000;
+          if (filter.tmdbId && n >= 0 && n < count) {
+            return [
+              record({
+                id: `play-${n}`,
+                rating_key: `old-${n}`,
+                tmdb_id: 1000 + n,
+                media_title: `Film ${n}`,
+                started_at: "2024-05-01T20:00:00.000Z",
+              }),
+            ];
+          }
+          return [];
+        },
+      );
+      return { server, readded };
+    }
+
+    function askedThisPass(): string[] {
+      return tracearr.getHistoryForItem.mock.calls
+        .map((c) => (c[1] as { ratingKey?: string }).ratingKey)
+        .filter((key): key is string => key !== undefined);
+    }
+
+    it("cannot starve a re-added item below more than a cap's worth of them", async () => {
+      vi.useFakeTimers({ toFake: ["Date"], now: Date.now() });
+      const { server, readded } = await seedCopiesAndReadd(4);
+
+      // Pass 1: the cap's three newest copies, deferred.
+      await recoverHistoryForNewItems(server.id, { limit: 3 });
+      expect(askedThisPass()).toEqual(["copy-0", "copy-1", "copy-2"]);
+
+      // A day later all three are due again — and still come after every
+      // item never asked. Re-asked on every pass ahead of it, as before, they
+      // filled the cap for the whole window and the re-added film aged out
+      // reading as never watched.
+      vi.setSystemTime(new Date(Date.now() + RECOVERY_REASK_MS));
+      tracearr.getHistoryForItem.mockClear();
+      const second = await recoverHistoryForNewItems(server.id, { limit: 3 });
+      expect(askedThisPass()).toEqual(["copy-3", "readded", "copy-0"]);
+      // copy-3's play (onto its older copy) and the re-added film's old one.
+      expect(second.imported).toBe(2);
+      // The copies' plays stay on the copy that owns them.
+      expect(
+        await prisma.watchHistory.count({ where: { mediaItem: { ratingKey: { startsWith: "copy-" } } } }),
+      ).toBe(0);
+      expect(
+        await prisma.watchHistory.count({ where: { mediaItemId: readded.id, sourceEventId: "matrix-old" } }),
+      ).toBe(1);
+    });
+
+    it("reaches the re-added item within a pass of a restart emptying the registry", async () => {
+      const { server, readded } = await seedCopiesAndReadd(4);
+      await recoverHistoryForNewItems(server.id, { limit: 3 });
+
+      // Restart: every copy is never-asked again. One pass re-asks the newest
+      // three; their answers are recorded again, so the next pass gets past them.
+      resetRecoveryAnswers();
+      tracearr.getHistoryForItem.mockClear();
+      await recoverHistoryForNewItems(server.id, { limit: 3 });
+      expect(askedThisPass()).toEqual(["copy-0", "copy-1", "copy-2"]);
+
+      tracearr.getHistoryForItem.mockClear();
+      await recoverHistoryForNewItems(server.id, { limit: 3 });
+      expect(askedThisPass()).toEqual(["copy-3", "readded"]);
+      expect(await prisma.watchHistory.count({ where: { mediaItemId: readded.id } })).toBe(1);
+    });
   });
 
   it("reports nothing imported when every record it got back was already stored", async () => {

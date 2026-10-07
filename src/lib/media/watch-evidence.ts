@@ -202,6 +202,15 @@ export async function invalidateServersWithoutWatchHistory(): Promise<number> {
  * end of the archive. It also makes a backfill slice that is running right now
  * discard its own progress write, which expects the cursor it started with.
  * Servers with no Tracearr mapping are untouched.
+ *
+ * Deliberately queues NOTHING. Every caller has just removed items whose plays
+ * the restarted walk exists to bring back, and only a sync re-creates them: a
+ * walk run first skips those plays as unresolved and, on reaching the end,
+ * marks the archive complete without them — for good (a purge of one library
+ * leaves the server's others populated, so the importer's empty-library gate
+ * does not stop it). The next watch-history sync queues the walk; until then
+ * the status route reports `awaiting-sync`, and `enqueueTracearrBackfill`
+ * refuses a server in this state (cursor moved, no walk since).
  */
 export async function restartTracearrBackfill(serverIds: string[]): Promise<number> {
   if (serverIds.length === 0) return 0;

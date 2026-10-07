@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  backfillPercent,
   failedSyncServerNames,
   importBackfillPercent,
   isImportPending,
@@ -60,6 +61,36 @@ describe("importBackfillPercent", () => {
 
   it("treats a non-finite fraction as unmeasured rather than printing NaN%", () => {
     expect(importBackfillPercent([{ backfillComplete: false, backfillFraction: Number.NaN, pending: true }])).toBeNull();
+  });
+});
+
+describe("backfillPercent", () => {
+  // The one rule the History note AND the Settings bar/live line use. Settings
+  // used Math.round, so from 99.5% on it read "100%" beside a spinning
+  // "Importing history".
+  it("never reads 100 while the backfill is unfinished", () => {
+    expect(backfillPercent(0.995, false)).toBe(99);
+    expect(backfillPercent(0.9999, false)).toBe(99);
+    expect(backfillPercent(1, false)).toBe(99);
+  });
+
+  it("reads 100 once the backfill is complete", () => {
+    expect(backfillPercent(1, true)).toBe(100);
+    // `complete` is the authority, not the arithmetic.
+    expect(backfillPercent(0.97, true)).toBe(100);
+  });
+
+  it("floors, without flooring an exact percentage one short", () => {
+    expect(backfillPercent(0.126, false)).toBe(12);
+    expect(backfillPercent(0.29, false)).toBe(29);
+    expect(backfillPercent(0.57, false)).toBe(57);
+    expect(backfillPercent(0, false)).toBe(0);
+  });
+
+  it("clamps out-of-range and non-finite fractions", () => {
+    expect(backfillPercent(-0.2, false)).toBe(0);
+    expect(backfillPercent(1.4, false)).toBe(99);
+    expect(backfillPercent(Number.NaN, false)).toBe(0);
   });
 });
 

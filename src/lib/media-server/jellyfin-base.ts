@@ -49,6 +49,15 @@ export const ITEM_FIELDS = [
   "OriginalTitle",
 ].join(",");
 
+/**
+ * How far a played-items listing may fall short of its reported
+ * `TotalRecordCount` and still be read as an over-reported count rather than
+ * a truncated answer: the larger of 50 items or 2% of the total. See
+ * `forEachPlayedPage`.
+ */
+const PLAYED_SHORTFALL_TOLERANCE_ITEMS = 50;
+const PLAYED_SHORTFALL_TOLERANCE_FRACTION = 0.02;
+
 function mapLibraryType(collectionType?: string): string | null {
   switch (collectionType) {
     case "movies":
@@ -607,13 +616,28 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
       const total = typeof body.TotalRecordCount === "number" ? body.TotalRecordCount : null;
 
       if (items.length === 0) {
-        // An empty page ends the walk even short of the reported total. The
-        // count is computed by a separate query from the page, and servers do
-        // over-report it (items the user cannot see, an item unmarked played
-        // mid-walk shrinking the list); throwing here failed every sync of
-        // such a server forever, so its history never updated again. There
-        // is no offset that would make progress past an empty page anyway.
         if (total != null && startIndex < total) {
+          // An empty page short of the reported total is one of two things,
+          // and the full replace downstream makes guessing wrong expensive in
+          // both directions. Servers do over-report the count a little (it
+          // comes from a separate query: items the user cannot see, an item
+          // unmarked played mid-walk), and throwing on that failed every sync
+          // of such a server forever. But a proxy answering `Items: []`
+          // mid-list looks the same, and ending there committed a truncated
+          // history and deleted every play past it. So only a SMALL shortfall
+          // after this user's list actually delivered something is taken as
+          // over-reporting; an empty first page or a large gap still throws,
+          // and the stored history stays as it was.
+          const shortfall = total - startIndex;
+          const tolerated = Math.max(
+            PLAYED_SHORTFALL_TOLERANCE_ITEMS,
+            Math.ceil(total * PLAYED_SHORTFALL_TOLERANCE_FRACTION),
+          );
+          if (startIndex === 0 || shortfall > tolerated) {
+            throw new Error(
+              `${this.logPrefix} played-items listing ended at ${startIndex} of a reported ${total}`,
+            );
+          }
           logger.warn(
             this.logPrefix,
             `Played-items listing ended at ${startIndex} of a reported ${total}; ` +
