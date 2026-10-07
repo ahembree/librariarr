@@ -128,7 +128,10 @@ describe("tracearr-backfill task", () => {
 
       await runBackfill();
 
-      expect(m.recoverHistoryForNewItems).toHaveBeenCalledWith(SERVER_ID);
+      expect(m.recoverHistoryForNewItems).toHaveBeenCalledWith(
+        SERVER_ID,
+        expect.objectContaining({ deadlineMs: expect.any(Number), yieldTo: expect.any(Function) }),
+      );
       expect(invalidateMediaCaches).not.toHaveBeenCalled();
       expect(m.emitWatchHistoryUpdated).not.toHaveBeenCalled();
       expect(enqueueJob).not.toHaveBeenCalled();
@@ -186,6 +189,32 @@ describe("tracearr-backfill task", () => {
       { serverId: SERVER_ID },
       expect.objectContaining({ jobKey: `tracearr-backfill:${SERVER_ID}` }),
     );
+  });
+
+  it("bounds the recovery pass by the same slice deadline and requested-sync watch", async () => {
+    // The recovery pass runs after the walk inside the same job, so it holds
+    // the serial queue too: one deadline for both, and the watch kept alive
+    // until it is done.
+    syncTracearrHistory.mockResolvedValue({ count: 0, backfillPending: false });
+    let yieldDuring: boolean | undefined;
+    let stoppedDuring: boolean | undefined;
+    m.recoverHistoryForNewItems.mockImplementation(
+      async (_id: string, options: { yieldTo: () => boolean }) => {
+        stoppedDuring = m.waitingWatch.stopped;
+        m.waitingWatch.controller.abort();
+        yieldDuring = options.yieldTo();
+        return { checked: 0, imported: 0 };
+      },
+    );
+
+    await runBackfill();
+
+    const sliceDeadline = (syncTracearrHistory.mock.calls[0][1] as { deadlineMs: number }).deadlineMs;
+    const recovery = m.recoverHistoryForNewItems.mock.calls[0][1] as { deadlineMs: number };
+    expect(recovery.deadlineMs).toBe(sliceDeadline);
+    expect(stoppedDuring).toBe(false);
+    expect(yieldDuring).toBe(true);
+    expect(m.waitingWatch.stopped).toBe(true);
   });
 
   it("counts only a recent PENDING SyncJob row as a waiting sync", async () => {
@@ -340,6 +369,27 @@ describe("tracearr-backfill task", () => {
 
       await expect(runBackfill()).resolves.toBeUndefined();
       expect(enqueueJob).not.toHaveBeenCalled();
+    });
+
+    it("re-enqueues when the walk finished but a concurrent restart refused its completion", async () => {
+      // A purge or restore restarted the walk while this slice ran, so the
+      // importer's compare-and-set dropped its "complete". Pending + exhausted
+      // is then NOT "no history for this mapping" — a fresh walk is owed.
+      syncTracearrHistory.mockResolvedValue({
+        count: 120,
+        backfillPending: true,
+        backfillOutcome: "exhausted",
+        completionLost: true,
+      });
+
+      await runBackfill();
+
+      expect(enqueueJob).toHaveBeenCalledTimes(1);
+      expect(enqueueJob).toHaveBeenCalledWith(
+        TASK_TRACEARR_BACKFILL,
+        { serverId: SERVER_ID },
+        expect.objectContaining({ jobKey: `tracearr-backfill:${SERVER_ID}` }),
+      );
     });
   });
 

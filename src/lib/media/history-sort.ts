@@ -14,10 +14,13 @@
  * missing entry is a type error), and the reverse map is built from a map that
  * a unit test pins as one-to-one.
  *
- * Client-safe: plain data, no imports. The SQL strings are fixed fragments
- * over the route's own aliases (`wh` WatchHistory, `mi` MediaItem, `ms`
- * MediaServer) and are only ever interpolated by the route.
+ * Client-safe: plain data plus one relative import of the dependency-free
+ * `resolution.ts`. The SQL strings are fixed fragments over the route's own
+ * aliases (`wh` WatchHistory, `mi` MediaItem, `ms` MediaServer) and are only
+ * ever interpolated by the route.
  */
+
+import { QUALITY_ORDER, resolutionLabelSql } from "../resolution";
 
 export const HISTORY_SORT_KEYS = [
   "watchedAt",
@@ -61,6 +64,37 @@ const EPISODE_SEASON_SQL = `(CASE WHEN mi."type" = 'SERIES' AND mi."parentTitle"
 const EPISODE_NUMBER_SQL = `(CASE WHEN mi."type" = 'SERIES' AND mi."parentTitle" IS NOT NULL THEN mi."episodeNumber" END)`;
 
 /**
+ * The Resolution columns show the normalized label (`formatResolution` on the
+ * page: "4K", "1080P", …, the raw text only for an unrecognised value), so
+ * they sort by that label's RANK, lowest to highest when ascending. Sorting
+ * the raw column ordered "1080, 2160, 480, 4k, 720, sd" — text order — and put
+ * "2160" and "4k", both shown as 4K, at opposite ends of the list. The label
+ * comes from `resolutionLabelSql`, the SQL twin of the page's
+ * `normalizeResolutionLabel`, so the two cannot disagree about which label a
+ * value gets. "Other" has no rank (NULL — last in both directions, like every
+ * other unknown here); the second expression orders the unrecognised raw
+ * values the page then shows among themselves, an empty string with the
+ * NULLs since the page renders both as "-". The CASE is evaluated per row, so
+ * this sort costs more than a plain column (measured ~120 ms extra over 150k
+ * plays) — only when someone actually sorts by resolution.
+ */
+const RESOLUTION_RANKED_LABELS = QUALITY_ORDER.filter((label) => label !== "Other").reverse();
+
+function resolutionSortSql(expr: string): readonly string[] {
+  const ranks = RESOLUTION_RANKED_LABELS.map((label, i) => `WHEN '${label}' THEN ${i + 1}`).join(" ");
+  return [`(CASE ${resolutionLabelSql(expr)} ${ranks} END)`, `NULLIF(LOWER(${expr}), '')`];
+}
+
+/**
+ * Media types in the order of the label the Type column shows ("Movie",
+ * "Music", "Series" — `MEDIA_TYPE_LABELS`), not the enum's declaration order
+ * (MOVIE, SERIES, MUSIC) that sorting the enum column gives. A unit test pins
+ * this list to the labels.
+ */
+export const HISTORY_TYPE_SORT_ORDER = ["MOVIE", "MUSIC", "SERIES"] as const;
+const TYPE_SORT_SQL = `(CASE mi."type" ${HISTORY_TYPE_SORT_ORDER.map((t, i) => `WHEN '${t}' THEN ${i + 1}`).join(" ")} END)`;
+
+/**
  * ORDER BY expressions per sort key, most significant first; the route applies
  * the requested direction to each and appends `wh."id"` as the total-order
  * tiebreaker. A strict whitelist — the route never interpolates `sortBy` itself.
@@ -74,9 +108,9 @@ export const HISTORY_SORT_SQL: Record<HistorySortKey, readonly string[]> = {
   deviceName: ['wh."deviceName"'],
   platform: ['wh."platform"'],
   title: [DISPLAY_LEAD_SQL, EPISODE_SEASON_SQL, EPISODE_NUMBER_SQL, 'LOWER(mi."title")'],
-  type: ['mi."type"'],
+  type: [TYPE_SORT_SQL],
   year: ['mi."year"'],
-  resolution: ['mi."resolution"'],
+  resolution: resolutionSortSql('mi."resolution"'),
   dynamicRange: ['mi."dynamicRange"'],
   videoCodec: ['mi."videoCodec"'],
   // The Audio column reads "<codec> <n>ch", so channels break a codec tie.
@@ -90,7 +124,7 @@ export const HISTORY_SORT_SQL: Record<HistorySortKey, readonly string[]> = {
   percentComplete: ['wh."percentComplete"'],
   isTranscode: ['wh."isTranscode"'],
   player: ['wh."player"'],
-  streamResolution: ['wh."resolution"'],
+  streamResolution: resolutionSortSql('wh."resolution"'),
 };
 
 /**

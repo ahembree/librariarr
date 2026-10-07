@@ -172,8 +172,19 @@ export interface TracearrImportStatus {
    * instance, and on a mapping Tracearr holds no plays for.
    */
   pending: boolean;
-  /** Why an owed import cannot progress, when that is the reason it is not pending. */
-  pausedReason: "server-disabled" | "instance-unavailable" | null;
+  /**
+   * Why an owed import is not progressing, when that is the reason it is not
+   * pending: the server or every Tracearr instance is disabled, or the import
+   * slice keeps failing (its job used up its retries and nothing is running).
+   */
+  pausedReason: "server-disabled" | "instance-unavailable" | "import-failing" | null;
+  /**
+   * When a backfill walk last ran for this mapping, or null if none has yet.
+   * A never-walked mapping is pending ("waiting for the first import"); a
+   * walked one with no plays, nothing queued and nothing running is what a
+   * mapping Tracearr holds no plays for looks like.
+   */
+  lastWalkAt: string | null;
   /**
    * The import running for this server right now, or null. Live this-run
    * figures the stored rows cannot express — the stored counts above say how

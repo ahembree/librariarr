@@ -293,4 +293,170 @@ describe("recoverHistoryForNewItems (real database)", () => {
       "803",
     ]);
   });
+
+  /** Backdate an item's row creation — the instant the pre-creation filter keys on. */
+  async function createdDaysAgo(itemId: string, days: number) {
+    await prisma.mediaItem.update({
+      where: { id: itemId },
+      data: { createdAt: new Date(Date.now() - days * DAY_MS) },
+    });
+  }
+
+  async function storedPlay(itemId: string, serverId: string, watchedAt: Date, eventId: string, source = "TRACEARR") {
+    await prisma.watchHistory.create({
+      data: {
+        mediaItemId: itemId,
+        mediaServerId: serverId,
+        serverUsername: "bob",
+        watchedAt,
+        source,
+        sourceEventId: source === "TRACEARR" ? eventId : null,
+      },
+    });
+  }
+
+  function askedRatingKeys(): string[] {
+    return tracearr.getHistoryForItem.mock.calls
+      .map((c) => (c[1] as { ratingKey?: string }).ratingKey)
+      .filter((key): key is string => key !== undefined)
+      .sort();
+  }
+
+  it("does not offer an item whose plays from before its creation are already stored", async () => {
+    const { server, library } = await seedServer();
+
+    // Imported by the archive walk: a play older than the row itself.
+    const walked = await createTestMediaItem(library.id, { ratingKey: "1001" });
+    await createdDaysAgo(walked.id, 2);
+    await storedPlay(walked.id, server.id, new Date(Date.now() - 400 * DAY_MS), "walked-old");
+
+    // Re-added: its only stored play is one since it came back.
+    const readded = await createTestMediaItem(library.id, { ratingKey: "1002" });
+    await createdDaysAgo(readded.id, 2);
+    await storedPlay(readded.id, server.id, new Date(Date.now() - DAY_MS), "readded-new");
+
+    // A native row says nothing about what Tracearr was asked.
+    const nativeOnly = await createTestMediaItem(library.id, { ratingKey: "1003" });
+    await createdDaysAgo(nativeOnly.id, 2);
+    await storedPlay(nativeOnly.id, server.id, new Date(Date.now() - 400 * DAY_MS), "n", "NATIVE");
+
+    await recoverHistoryForNewItems(server.id);
+
+    expect(askedRatingKeys()).toEqual(["1002", "1003"]);
+  });
+
+  it("offers a freshly synced library only its items that hold no walked history", async () => {
+    // A new install (or a purge and resync): every item was created minutes
+    // ago, so the window alone admits the whole library. The archive walk has
+    // already stored the plays of everything ever watched — dated before the
+    // rows existed — and none of those items may cost a request again,
+    // including after a restart empties the in-memory registry.
+    const { server, library } = await seedServer();
+    for (let n = 0; n < 6; n++) {
+      const item = await createTestMediaItem(library.id, { ratingKey: `${2000 + n}` });
+      if (n % 2 === 0) {
+        await storedPlay(item.id, server.id, new Date(Date.now() - (30 + n) * DAY_MS), `walk-${n}`);
+      }
+    }
+
+    await recoverHistoryForNewItems(server.id);
+    expect(askedRatingKeys()).toEqual(["2001", "2003", "2005"]);
+
+    // Restart: the registry is gone, the rows are not.
+    resetRecoveryAnswers();
+    tracearr.getHistoryForItem.mockClear();
+    await recoverHistoryForNewItems(server.id);
+    expect(askedRatingKeys()).toEqual(["2001", "2003", "2005"]);
+  });
+
+  it("asks about nothing once the slice's deadline has passed, and stops mid-pass when it does", async () => {
+    const { server, library } = await seedServer();
+    for (const key of ["3001", "3002", "3003"]) {
+      await createTestMediaItem(library.id, { ratingKey: key });
+    }
+
+    expect(await recoverHistoryForNewItems(server.id, { deadlineMs: Date.now() - 1 })).toEqual({
+      checked: 0,
+      imported: 0,
+    });
+    expect(tracearr.getHistoryForItem).not.toHaveBeenCalled();
+    expect(tracearr.listServers).not.toHaveBeenCalled();
+
+    let asked = 0;
+    tracearr.getHistoryForItem.mockImplementation(async () => {
+      asked++;
+      return [];
+    });
+    const result = await recoverHistoryForNewItems(server.id, { yieldTo: () => asked >= 1 });
+    expect(result.checked).toBe(1);
+
+    // The two it never reached are still candidates.
+    tracearr.getHistoryForItem.mockClear();
+    tracearr.getHistoryForItem.mockResolvedValue([]);
+    await recoverHistoryForNewItems(server.id);
+    expect(askedRatingKeys()).toHaveLength(2);
+  });
+
+  it("keeps a re-added film a candidate while its old plays land on the old copy, and recovers them once that copy is gone", async () => {
+    const { server, library } = await seedServer();
+
+    // The old copy has not been purged yet; its rating key still claims the
+    // film's old plays.
+    const oldCopy = await createTestMediaItem(library.id, { ratingKey: "123", title: "The Matrix", year: 1999 });
+    await createdDaysAgo(oldCopy.id, 400);
+    await createTestExternalId(oldCopy.id, "TMDB", "603");
+    const film = await createTestMediaItem(library.id, { ratingKey: "500", title: "The Matrix", year: 1999 });
+    await createdDaysAgo(film.id, 2);
+    await createTestExternalId(film.id, "TMDB", "603");
+
+    const oldPlays = [
+      record({ id: "old-1", rating_key: "123", started_at: "2024-03-01T20:00:00.000Z" }),
+      record({ id: "old-2", rating_key: "123", started_at: "2025-01-10T20:00:00.000Z" }),
+    ];
+    tracearr.getHistoryForItem.mockImplementation(
+      async (_server: string, filter: { ratingKey?: string; tmdbId?: string | null }) =>
+        filter.tmdbId === "603" ? oldPlays : [],
+    );
+
+    const first = await recoverHistoryForNewItems(server.id);
+    expect(first.imported).toBe(2);
+    expect(await prisma.watchHistory.count({ where: { mediaItemId: oldCopy.id } })).toBe(2);
+    expect(await prisma.watchHistory.count({ where: { mediaItemId: film.id } })).toBe(0);
+
+    // The old copy is purged, and its plays cascade with it.
+    await prisma.mediaItem.delete({ where: { id: oldCopy.id } });
+    tracearr.getHistoryForItem.mockClear();
+
+    // Still a candidate: the same plays now resolve to the film by provider id.
+    const second = await recoverHistoryForNewItems(server.id);
+    expect(second).toEqual({ checked: 1, imported: 2 });
+    const rows = await prisma.watchHistory.findMany({
+      where: { mediaItemId: film.id },
+      orderBy: { watchedAt: "asc" },
+      select: { sourceEventId: true },
+    });
+    expect(rows.map((r) => r.sourceEventId)).toEqual(["old-1", "old-2"]);
+
+    // Answered now — and, from the rows, still after a restart.
+    resetRecoveryAnswers();
+    tracearr.getHistoryForItem.mockClear();
+    expect(await recoverHistoryForNewItems(server.id)).toEqual({ checked: 0, imported: 0 });
+    expect(tracearr.getHistoryForItem).not.toHaveBeenCalled();
+  });
+
+  it("reports nothing imported when every record it got back was already stored", async () => {
+    const { server, library } = await seedServer();
+    const film = await createTestMediaItem(library.id, { ratingKey: "500", title: "The Matrix", year: 1999 });
+    await createdDaysAgo(film.id, 2);
+    // Since the re-add, so it does not end candidacy on its own.
+    const playedAt = new Date(Date.now() - DAY_MS);
+    await storedPlay(film.id, server.id, playedAt, "new-play");
+    tracearr.getHistoryForItem.mockResolvedValue([
+      record({ id: "new-play", rating_key: "500", started_at: playedAt.toISOString() }),
+    ]);
+
+    // Merged, not inserted: no reconcile, no cache drop, no event for the caller.
+    expect(await recoverHistoryForNewItems(server.id)).toEqual({ checked: 1, imported: 0 });
+    expect(await prisma.watchHistory.count({ where: { mediaItemId: film.id } })).toBe(1);
+  });
 });

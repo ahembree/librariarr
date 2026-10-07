@@ -108,6 +108,21 @@ describe("restartTracearrBackfill", () => {
     expect(arg.data.tracearrBackfillCursorAt.getTime()).toBeGreaterThanOrEqual(before);
     // The restarted walk covers any gap an interrupted forward walk recorded.
     expect(arg.data.tracearrForwardFloorAt).toBeNull();
+    // A last-walk stamp describes the history that was just destroyed.
+    expect(arg.data.tracearrBackfillLastWalkAt).toBeNull();
+  });
+
+  it("supersedes a running slice's live reach before moving the cursor", async () => {
+    const activity = await import("@/lib/sync/tracearr-import-activity");
+    const spy = vi.spyOn(activity, "supersedeTracearrImports");
+    m.updateMany.mockResolvedValue({ count: 1 });
+
+    await restartTracearrBackfill(["s1", "s2"]);
+
+    expect(spy).toHaveBeenCalledWith("s1");
+    expect(spy).toHaveBeenCalledWith("s2");
+    expect(spy.mock.invocationCallOrder[0]).toBeLessThan(m.updateMany.mock.invocationCallOrder[0]);
+    spy.mockRestore();
   });
 
   it("issues no UPDATE at all for an empty list", async () => {

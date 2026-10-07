@@ -4,12 +4,13 @@ const h = vi.hoisted(() => ({
   appSettings: { findFirst: vi.fn() },
   mediaServer: { findMany: vi.fn() },
   enqueueJob: vi.fn(),
+  isJobRetrying: vi.fn(),
   runEnforcerTick: vi.fn(),
   appEmit: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({ prisma: { appSettings: h.appSettings, mediaServer: h.mediaServer } }));
-vi.mock("@/lib/jobs/client", () => ({ enqueueJob: h.enqueueJob }));
+vi.mock("@/lib/jobs/client", () => ({ enqueueJob: h.enqueueJob, isJobRetrying: h.isJobRetrying }));
 vi.mock("@/lib/maintenance/enforcer", () => ({ runEnforcerTick: h.runEnforcerTick }));
 vi.mock("@/lib/events/event-bus", () => ({ eventBus: { emit: h.appEmit } }));
 vi.mock("@/lib/logger", () => ({
@@ -97,6 +98,7 @@ describe("RealtimeManager", () => {
     vi.useFakeTimers();
     _resetSelfWritesForTesting();
     h.enqueueJob.mockResolvedValue(true);
+    h.isJobRetrying.mockResolvedValue(false);
     h.runEnforcerTick.mockResolvedValue(undefined);
   });
   afterEach(() => vi.useRealTimers());
@@ -251,7 +253,7 @@ describe("RealtimeManager", () => {
   it("enqueues a debounced watch-history refresh on a watch change", async () => {
     const { sockets } = await setup([jfServer]);
     sockets[0].fireMessage({ MessageType: "UserDataChanged" });
-    vi.advanceTimersByTime(30_000);
+    await vi.advanceTimersByTimeAsync(30_000);
     expect(h.enqueueJob).toHaveBeenCalledWith(
       TASK_SYNC_WATCH_HISTORY,
       // One finished playback appends the new plays; it must never be the
@@ -263,6 +265,44 @@ describe("RealtimeManager", () => {
       expect.objectContaining({ jobKey: "watch-history-incremental:j1", queueName: MAIN_QUEUE }),
     );
     expect(h.enqueueJob.mock.calls.some((c) => c[2]?.jobKey === "watch-history:j1")).toBe(false);
+  });
+
+  describe("a watch-history refresh that keeps failing", () => {
+    // The task throws on a failed refresh so graphile retries it, and a keyed
+    // enqueue resets the failed job's attempts. Enqueued on every finished
+    // playback, a persistent failure cost every attempt — on Jellyfin/Emby
+    // each a full history scan — per playback.
+    it("is not re-enqueued while it is backing off or failed within the cooldown", async () => {
+      h.isJobRetrying.mockResolvedValue(true);
+      const { sockets } = await setup([jfServer]);
+      sockets[0].fireMessage({ MessageType: "UserDataChanged" });
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      expect(h.isJobRetrying).toHaveBeenCalledWith(
+        "watch-history-incremental:j1",
+        { failedWithinMs: 10 * 60_000 },
+      );
+      expect(h.enqueueJob.mock.calls.some((c) => c[0] === TASK_SYNC_WATCH_HISTORY)).toBe(false);
+    });
+
+    it("is enqueued again once the failure is past the cooldown", async () => {
+      h.isJobRetrying.mockResolvedValueOnce(true).mockResolvedValue(false);
+      const { sockets } = await setup([jfServer]);
+      sockets[0].fireMessage({ MessageType: "UserDataChanged" });
+      await vi.advanceTimersByTimeAsync(30_000);
+      sockets[0].fireMessage({ MessageType: "UserDataChanged" });
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      const calls = h.enqueueJob.mock.calls.filter((c) => c[0] === TASK_SYNC_WATCH_HISTORY);
+      expect(calls).toHaveLength(1);
+    });
+
+    it("reads only its own key, so a failing realtime refresh never holds back by-type's full replace", async () => {
+      const { sockets } = await setup([jfServer]);
+      sockets[0].fireMessage({ MessageType: "UserDataChanged" });
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(h.isJobRetrying.mock.calls.map((c) => c[0])).toEqual(["watch-history-incremental:j1"]);
+    });
   });
 
   it("coalesces a burst of library changes into a single incremental sync with all ids", async () => {

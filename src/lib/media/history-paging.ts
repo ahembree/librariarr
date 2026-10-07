@@ -98,3 +98,48 @@ export class PageRequestTracker {
     return token === this.token;
   }
 }
+
+/**
+ * What a paged history list renders, from its load state. Rows already on
+ * screen always win: a failed refresh or page click keeps them (with a notice
+ * and a Retry beside them) instead of replacing them with an error card — the
+ * card, which carries its own Retry, is only for a list with nothing to show.
+ * `PlayHistory` used to let any failure replace its rows with "Could not load
+ * watch history" and no pagination or way to try again.
+ */
+export type PagedListView = "loading" | "error" | "empty" | "rows";
+
+export function pagedListView(state: {
+  /** A first load (or a new scope's) with nothing to show yet. */
+  loading: boolean;
+  /** The most recent request failed. */
+  error: boolean;
+  rowCount: number;
+}): PagedListView {
+  if (state.rowCount > 0) return "rows";
+  if (state.loading) return "loading";
+  if (state.error) return "error";
+  return "empty";
+}
+
+/**
+ * Where to scroll a list's scroll container after the user moves to another
+ * page, so the new page is read from its first row. `anchorTop` is the table's
+ * top and `containerTop` the container's, both viewport coordinates
+ * (`getBoundingClientRect().top`); `scrollTop` is the container's.
+ *
+ * Returns `null` — leave the scroll alone — when the table's top is already in
+ * view: on a short table the pagination sits a few rows under the header, and
+ * jumping there would move the page for nothing. Otherwise the scrollTop that
+ * puts the anchor `margin` px below the container's top edge.
+ */
+export function scrollTopForPageChange(
+  anchorTop: number,
+  containerTop: number,
+  scrollTop: number,
+  margin = 16,
+): number | null {
+  const offset = anchorTop - containerTop;
+  if (!Number.isFinite(offset) || offset >= 0) return null;
+  return Math.max(0, scrollTop + offset - margin);
+}

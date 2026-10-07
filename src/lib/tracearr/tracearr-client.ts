@@ -85,8 +85,22 @@ const ITEM_HISTORY_MAX_PAGES = 200;
 /** Bisection stops at one hour — finer resolution buys a progress bar nothing. */
 const OLDEST_PLAY_SEARCH_PRECISION_MS = 60 * 60 * 1000;
 
-/** Users are few relative to plays; this is a runaway guard, not a real bound. */
-const USER_PAGE_CAP = 50;
+/**
+ * Page cap for one `/users` walk — a runaway guard ONLY, never a real bound.
+ *
+ * It was 50 (5,000 identities), and a walk that hits the cap throws, because a
+ * partial map is worse than none (see `getServerAccountNames`). So an instance
+ * with more identities than the cap — a large shared server keeps every
+ * departed account too, since the walk asks for removed ones — never got a map
+ * at all: the archive walk, which requires one, never ran, and every forward
+ * run withdrew the evidence marker, pausing the server's play-activity rules
+ * for good. A cap reachable by legitimate data is a data-loss bug.
+ *
+ * 10,000 pages is a million identities at `MAX_PAGE_SIZE`. A cursor that LOOPS
+ * is caught by the repeated-cursor check below on its first repeat; this only
+ * stops one that keeps changing without ever ending.
+ */
+export const USER_PAGE_CAP = 10_000;
 
 export type TracearrServerType = "plex" | "jellyfin" | "emby";
 export type TracearrMediaType =

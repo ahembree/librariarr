@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
-import { enqueueJob } from "@/lib/jobs/client";
+import { enqueueJob, isJobRetrying } from "@/lib/jobs/client";
 import { MAIN_QUEUE, TASK_SYNC_SERVER, TASK_SYNC_WATCH_HISTORY, TASK_SYNC_INCREMENTAL } from "@/lib/jobs/constants";
 import { runEnforcerTick } from "@/lib/maintenance/enforcer";
 import type { MediaServerType } from "@/generated/prisma/client";
@@ -25,6 +25,11 @@ const LIBRARY_SYNC_MAX_MS = 5 * 60_000;
 const INCREMENTAL_MAX_ITEMS = 100;
 const WATCH_SYNC_QUIET_MS = 30_000;
 const WATCH_SYNC_MAX_MS = 5 * 60_000;
+// After the watch-history refresh has failed, how long further playbacks leave
+// it alone (see `getWatchDebouncer`). Nothing is lost by waiting: the refresh
+// resumes from the newest stored play, so the run after the cooldown — or the
+// scheduled sync — picks up every play made in between.
+const WATCH_SYNC_FAILURE_COOLDOWN_MS = 10 * 60_000;
 // New sessions must be *seen* fast (so their termination delay starts promptly).
 // A leading-edge throttle runs the enforcer immediately on the first change, then
 // floors subsequent runs to once per interval — so a server that keeps pushing
@@ -438,32 +443,50 @@ export class RealtimeManager {
     if (!debouncer) {
       debouncer = new Debouncer(
         () => {
-          void enqueueJob(
-            TASK_SYNC_WATCH_HISTORY,
-            // One finished playback: append the new plays, never re-import
-            // the server's whole history (see `SyncWatchHistoryPayload`).
-            { serverId, incremental: true },
-            // Its own key, never `/api/sync/by-type`'s `watch-history:<id>`.
-            // graphile-worker's keyed enqueue REPLACES the queued payload, so
-            // sharing that key let this `incremental: true` overwrite a queued
-            // full replace — and the plays the server has since deleted, which
-            // only a full replace reconciles, stayed stored. Two keys may mean
-            // both run; the append after a full replace is a one-request no-op.
-            { jobKey: `watch-history-incremental:${serverId}`, queueName: MAIN_QUEUE, maxAttempts: 3 },
-          ).then((ok) => {
-            if (ok) {
-              logger.info(
-                "Realtime",
-                `Enqueued watch-history refresh for server ${this.serverLabel(serverId)} (watch state changed)`,
-              );
-            }
-          });
+          void this.enqueueWatchHistoryRefresh(serverId);
         },
         { quietMs: WATCH_SYNC_QUIET_MS, maxWaitMs: WATCH_SYNC_MAX_MS },
       );
       this.watchDebouncers.set(serverId, debouncer);
     }
     return debouncer;
+  }
+
+  private async enqueueWatchHistoryRefresh(serverId: string): Promise<void> {
+    const jobKey = `watch-history-incremental:${serverId}`;
+    // The task throws when the refresh fails, so graphile retries it — and a
+    // keyed enqueue resets a failed job's attempts and backoff. Enqueued on
+    // every finished playback, a failure that does not go away (an
+    // unreachable server, a disabled Tracearr instance, a Jellyfin user page
+    // that keeps failing mid-scan) therefore cost the whole set of attempts —
+    // on Jellyfin/Emby each a full history scan — per playback. While it is
+    // backing off, or failed within the cooldown, leave it alone.
+    if (await isJobRetrying(jobKey, { failedWithinMs: WATCH_SYNC_FAILURE_COOLDOWN_MS })) {
+      logger.debug(
+        "Realtime",
+        `Not re-enqueueing the watch-history refresh for server ${this.serverLabel(serverId)} — it failed recently`,
+      );
+      return;
+    }
+    const ok = await enqueueJob(
+      TASK_SYNC_WATCH_HISTORY,
+      // One finished playback: append the new plays, never re-import
+      // the server's whole history (see `SyncWatchHistoryPayload`).
+      { serverId, incremental: true },
+      // Its own key, never `/api/sync/by-type`'s `watch-history:<id>`.
+      // graphile-worker's keyed enqueue REPLACES the queued payload, so
+      // sharing that key let this `incremental: true` overwrite a queued
+      // full replace — and the plays the server has since deleted, which
+      // only a full replace reconciles, stayed stored. Two keys may mean
+      // both run; the append after a full replace is a one-request no-op.
+      { jobKey, queueName: MAIN_QUEUE, maxAttempts: 3 },
+    );
+    if (ok) {
+      logger.info(
+        "Realtime",
+        `Enqueued watch-history refresh for server ${this.serverLabel(serverId)} (watch state changed)`,
+      );
+    }
   }
 
   private disposeDebouncers(serverId: string): void {

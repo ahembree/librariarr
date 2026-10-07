@@ -4,6 +4,8 @@ import {
   clampPage,
   lastPageFor,
   pageAfterShrink,
+  pagedListView,
+  scrollTopForPageChange,
 } from "@/lib/media/history-paging";
 
 describe("lastPageFor / clampPage", () => {
@@ -91,5 +93,48 @@ describe("PageRequestTracker", () => {
     const current = t.request(9);
     t.redirect(current, 7);
     expect(t.refresh("scope").page).toBe(7);
+  });
+});
+
+describe("pagedListView", () => {
+  it("keeps rows on screen when a refresh or page click fails", () => {
+    // PlayHistory used to swap its rows for "Could not load watch history",
+    // with no pagination and no Retry, on any failed request.
+    expect(pagedListView({ loading: false, error: true, rowCount: 5 })).toBe("rows");
+  });
+
+  it("shows the error card only when there is nothing to show", () => {
+    expect(pagedListView({ loading: false, error: true, rowCount: 0 })).toBe("error");
+  });
+
+  it("shows the skeleton for a first load and while retrying an empty list", () => {
+    expect(pagedListView({ loading: true, error: false, rowCount: 0 })).toBe("loading");
+    expect(pagedListView({ loading: true, error: true, rowCount: 0 })).toBe("loading");
+  });
+
+  it("distinguishes an empty history from a failed one", () => {
+    expect(pagedListView({ loading: false, error: false, rowCount: 0 })).toBe("empty");
+    expect(pagedListView({ loading: false, error: false, rowCount: 3 })).toBe("rows");
+  });
+});
+
+describe("scrollTopForPageChange", () => {
+  it("scrolls back up to the table when its top has scrolled out of view", () => {
+    // Container's top edge at 64px (below a header); the table's top is 1,800px
+    // above it after reading to the bottom of a 100-row page.
+    expect(scrollTopForPageChange(64 - 1800, 64, 2200)).toBe(2200 - 1800 - 16);
+  });
+
+  it("leaves the scroll alone when the table's top is already in view", () => {
+    expect(scrollTopForPageChange(300, 64, 0)).toBeNull();
+    expect(scrollTopForPageChange(64, 64, 120)).toBeNull();
+  });
+
+  it("never asks for a negative scrollTop", () => {
+    expect(scrollTopForPageChange(-10, 0, 5)).toBe(0);
+  });
+
+  it("ignores a measurement it cannot use", () => {
+    expect(scrollTopForPageChange(Number.NaN, 0, 100)).toBeNull();
   });
 });

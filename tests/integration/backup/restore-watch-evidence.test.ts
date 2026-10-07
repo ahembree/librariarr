@@ -114,25 +114,91 @@ describe("restoring a config-only backup", () => {
   });
 
   it("does not let a restored tracearrBackfillComplete flag vouch for an empty history", async () => {
-    // The `MediaServer` row is restored verbatim, so the flag survives while
-    // the rows it describes do not. The restore withdraws the evidence marker,
-    // so the guard refuses regardless of what the stale flag claims.
+    // The `MediaServer` row is restored verbatim, so the flag would survive
+    // while the rows it describes do not. The restore withdraws the evidence
+    // marker AND restarts the archive walk: the importer no longer infers
+    // "stale" from "no rows" (a walk can legitimately end having stored
+    // nothing), so a restored "complete" would otherwise import nothing again.
     const { userId, serverId } = await seed(true);
     const prisma = getTestPrisma();
+    await prisma.mediaServer.update({
+      where: { id: serverId },
+      data: {
+        tracearrBackfillCursorAt: new Date("2019-01-01T00:00:00Z"),
+        tracearrForwardFloorAt: new Date("2025-01-01T00:00:00Z"),
+        tracearrBackfillLastWalkAt: new Date("2025-06-01T00:00:00Z"),
+      },
+    });
 
     const filename = await createBackup(undefined, true);
+    const before = Date.now();
     await restoreBackup(filename);
 
     const server = await prisma.mediaServer.findUniqueOrThrow({
       where: { id: serverId },
-      select: { tracearrBackfillComplete: true, watchHistorySyncedAt: true },
+      select: {
+        tracearrBackfillComplete: true,
+        tracearrBackfillCursorAt: true,
+        tracearrForwardFloorAt: true,
+        tracearrBackfillLastWalkAt: true,
+        watchHistorySyncedAt: true,
+      },
     });
-    expect(server.tracearrBackfillComplete).toBe(true);
+    expect(server.tracearrBackfillComplete).toBe(false);
+    // Restarted from the newest play, not resumed at the restored 2019 cursor.
+    expect(server.tracearrBackfillCursorAt!.getTime()).toBeGreaterThanOrEqual(before);
+    expect(server.tracearrForwardFloorAt).toBeNull();
+    expect(server.tracearrBackfillLastWalkAt).toBeNull();
     expect(server.watchHistorySyncedAt).toBeNull();
 
     await expect(
       checkWatchHistoryCompleteness(userId, [serverId]),
     ).resolves.toMatchObject({ complete: false });
+  });
+
+  it("keeps the walk state of a server whose Tracearr rows the backup restored", async () => {
+    // A full backup carries the rows the state describes, so the two still
+    // agree after the restore and the walk must not start over.
+    const { serverId } = await seed(true);
+    const prisma = getTestPrisma();
+    const item = await prisma.mediaItem.findFirstOrThrow();
+    await prisma.watchHistory.create({
+      data: {
+        mediaItemId: item.id,
+        mediaServerId: serverId,
+        serverUsername: "roommate",
+        watchedAt: new Date("2024-06-01T00:00:00Z"),
+        source: "TRACEARR",
+        sourceEventId: "chain-1",
+      },
+    });
+    const cursor = new Date("2019-01-01T00:00:00Z");
+    await prisma.mediaServer.update({
+      where: { id: serverId },
+      data: { tracearrBackfillCursorAt: cursor },
+    });
+
+    const filename = await createBackup(undefined, false);
+    await restoreBackup(filename);
+
+    const server = await prisma.mediaServer.findUniqueOrThrow({
+      where: { id: serverId },
+      select: { tracearrBackfillComplete: true, tracearrBackfillCursorAt: true },
+    });
+    expect(server.tracearrBackfillComplete).toBe(true);
+    expect(server.tracearrBackfillCursorAt).toEqual(cursor);
+  });
+
+  it("leaves an unmapped server's (empty) Tracearr state alone", async () => {
+    const { serverId } = await seed(false);
+    const prisma = getTestPrisma();
+    const filename = await createBackup(undefined, true);
+    await restoreBackup(filename);
+    const server = await prisma.mediaServer.findUniqueOrThrow({
+      where: { id: serverId },
+      select: { tracearrBackfillCursorAt: true },
+    });
+    expect(server.tracearrBackfillCursorAt).toBeNull();
   });
 
   it("restores the TracearrInstance rather than destroying it", async () => {

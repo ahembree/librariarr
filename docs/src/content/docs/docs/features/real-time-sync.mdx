@@ -24,6 +24,10 @@ Watch state comes from your server's **server-wide** history, so a play by anyon
 
 On Plex the refresh is **incremental**: it asks the server only for plays recorded since the newest one already stored (with an hour of overlap, so nothing falls through the gap) and appends the new ones. The full import — which re-reads the whole history and is what removes plays the server has since deleted — still runs on the scheduled sync and when you press **Refresh** on the History page. Jellyfin and Emby report a per-user "played" set rather than dated play events, so their refresh always re-reads the full set.
 
+If a refresh fails (the server is unreachable, for example), it is retried a few times and then left alone for 10 minutes rather than started again on every play that finishes. Nothing is lost while it waits: the next refresh — or the scheduled sync — picks up every play made in the meantime.
+
+When two Jellyfin or Emby libraries cover the same folder, Librariarr stores the item once per library and counts each play for both copies, since the server does not say which library it was played from.
+
 Real-time library changes carry the specific items that changed, so Librariarr fetches and updates **only those items** (and deletes the removed ones) instead of re-scanning the whole server. Adding one movie syncs one movie, and deleting one episode removes one row — typically in well under a second.
 
 Only **item-level** events drive a sync. Servers also announce that a scan or metadata refresh *finished*, without saying what (if anything) changed; those announcements are ignored, because the only thing they could ever justify is re-scanning everything, and they fire constantly whether or not any media actually changed. Every real change — additions, updates and deletions alike — is reported at the item level, so nothing is lost. The scheduled full sync remains the periodic backstop for anything a push channel never reports at all.

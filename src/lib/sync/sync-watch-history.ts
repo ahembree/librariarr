@@ -357,7 +357,13 @@ export async function syncWatchHistory(
   );
 
   if (incrementalSince) {
-    const count = await appendNewEntries(serverId, server.name, entries, incrementalSince);
+    const count = await appendNewEntries(
+      serverId,
+      server.name,
+      entries,
+      incrementalSince,
+      server.type === "PLEX",
+    );
     await markHistoryEstablished(evidence, server.name);
     logger.info(
       "WatchHistory",
@@ -400,7 +406,7 @@ export async function syncWatchHistory(
      WHERE l."mediaServerId"=$1`,
     serverId
   );
-  const resolveItem = ratingKeyResolver(mediaItems);
+  const resolveItem = ratingKeyResolver(mediaItems, server.type === "PLEX");
 
   // Dedupe entries in memory before inserting. There is no DB unique constraint
   // on WatchHistory (intentional), so identical play events from the source
@@ -429,6 +435,8 @@ export async function syncWatchHistory(
 
   // Batch insert new records
   let insertedCount = 0;
+  let unmatchedCount = 0;
+  let storedPlays = 0;
 
   // Wrap the full-replace DELETE and all batch INSERTs in a single transaction
   // so a mid-insert failure rolls back instead of leaving the table empty
@@ -456,9 +464,12 @@ export async function syncWatchHistory(
       const batch = dedupedEntries.slice(i, i + BATCH_SIZE);
       const rows: NativeRow[] = [];
       for (const entry of batch) {
-        const mediaItemId = resolveItem.resolve(entry);
-        if (!mediaItemId) continue;
-        rows.push({ mediaItemId, entry });
+        const mediaItemIds = resolveItem.resolve(entry);
+        if (mediaItemIds.length === 0) unmatchedCount++;
+        else storedPlays++;
+        // One row per copy: a play that resolves to the same item stored in
+        // two libraries is a play of each (see `ratingKeyResolver`).
+        for (const mediaItemId of mediaItemIds) rows.push({ mediaItemId, entry });
       }
 
       // No setImmediate yield between batches: the awaited DB round-trip
@@ -478,7 +489,9 @@ export async function syncWatchHistory(
       onProgress?.({
         imported: insertedCount,
         fraction: processed / dedupedEntries.length,
-        detail: `Stored ${insertedCount.toLocaleString()} of ${formatPlayCount(
+        // Plays, not rows: a play filed against two copies of one item is
+        // two rows, and counting those could read "stored 102 of 100".
+        detail: `Stored ${storedPlays.toLocaleString()} of ${formatPlayCount(
           dedupedEntries.length
         )}`,
       });
@@ -491,7 +504,7 @@ export async function syncWatchHistory(
   logger.info(
     "WatchHistory",
     `Synced ${insertedCount} watch history entries for "${server.name}" ` +
-      `(${dedupedEntries.length - insertedCount} unmatched, ` +
+      `(${unmatchedCount} unmatched, ` +
       `${entries.length - dedupedEntries.length} duplicates removed)`
   );
 
@@ -580,7 +593,9 @@ async function appendNewEntries(
   serverId: string,
   serverName: string,
   entries: DetailedWatchHistoryEntry[],
-  since: Date
+  since: Date,
+  /** See `ratingKeyResolver`. */
+  keysServerUnique: boolean
 ): Promise<number> {
   // Fail closed on the server's filter: a play older than `since` in the
   // response means the `viewedAt>=` parameter was not honoured (a proxy that
@@ -601,7 +616,7 @@ async function appendNewEntries(
     serverId,
     ratingKeys
   );
-  const resolveItem = ratingKeyResolver(mediaItems);
+  const resolveItem = ratingKeyResolver(mediaItems, keysServerUnique);
 
   // The read-then-append runs under the same per-server lock as the full
   // replace. That one runs in a request (the History page's Refresh), outside
@@ -628,17 +643,19 @@ async function appendNewEntries(
     }
 
     // Collapse plays the response repeats (same item, instant and name), as
-    // the full replace does.
+    // the full replace does. Keyed per ITEM, so a play filed against two
+    // copies of one item (see `ratingKeyResolver`) is matched and appended
+    // for each copy on its own.
     const incoming: Array<{ key: string; row: NativeRow; matched: boolean }> = [];
     const repeated = new Set<string>();
     for (const entry of dated) {
-      const mediaItemId = resolveItem.resolve(entry);
-      if (!mediaItemId) continue;
-      const key = playInstantKey(mediaItemId, entry.watchedAt!);
-      const exact = `${key}|${entry.username}`;
-      if (repeated.has(exact)) continue;
-      repeated.add(exact);
-      incoming.push({ key, row: { mediaItemId, entry }, matched: false });
+      for (const mediaItemId of resolveItem.resolve(entry)) {
+        const key = playInstantKey(mediaItemId, entry.watchedAt!);
+        const exact = `${key}|${entry.username}`;
+        if (repeated.has(exact)) continue;
+        repeated.add(exact);
+        incoming.push({ key, row: { mediaItemId, entry }, matched: false });
+      }
     }
 
     // Exact names first…
@@ -700,18 +717,30 @@ interface ItemKeyRow {
 }
 
 /**
- * Rating key → MediaItem id for one server, refusing to guess.
+ * Rating key → the MediaItem id(s) a play is filed against, for one server.
  *
  * `@@unique([libraryId, ratingKey])` makes a rating key unique only WITHIN a
- * library, so one server can hold the same key in two libraries (a stale row
- * an item left behind when it moved, until the next full sync purges it). The
- * lookup used to be a Map built from an unordered query, where whichever row
- * came last won — filing plays against an arbitrary item. An ambiguous key is
- * narrowed by the library the play was recorded in when the server says
- * (Plex's `librarySectionID`), and otherwise skipped: a dropped play beats a
- * play on the wrong item, whose `playCount` can never be walked back.
+ * library, so one server can hold the same key in two libraries. What that
+ * means depends on the server, which is why the resolver is told
+ * (`keysServerUnique`):
+ *
+ * - **Plex** numbers items server-wide, so a key in two libraries is a stale
+ *   row an item left behind when it moved (or a reused rowid), until the next
+ *   full sync purges it. Only the play's own `librarySectionID` can say which
+ *   row is live; without it — or when it names neither library — the play is
+ *   skipped. A dropped play beats a play on the wrong item, whose `playCount`
+ *   can never be walked back.
+ * - **Jellyfin/Emby** item ids are server-wide too, but two libraries may
+ *   cover the same folder and then legitimately list the SAME item, which we
+ *   store once per library. They never report a section, and the play is the
+ *   same play of the same media in both — so it is filed against every copy.
+ *   Skipping it (which an earlier version did) let the full replace delete
+ *   both copies' plays, so both read as unwatched and a negative
+ *   `watchedByUser` or `playCount = 0` DELETE rule matched them.
+ *
+ * A section key that is given narrows the candidates on either server.
  */
-function ratingKeyResolver(rows: ItemKeyRow[]) {
+function ratingKeyResolver(rows: ItemKeyRow[], keysServerUnique: boolean) {
   const byKey = new Map<string, ItemKeyRow[]>();
   for (const row of rows) {
     const list = byKey.get(row.ratingKey);
@@ -720,23 +749,33 @@ function ratingKeyResolver(rows: ItemKeyRow[]) {
   }
   let ambiguous = 0;
   return {
-    resolve(entry: Pick<DetailedWatchHistoryEntry, "ratingKey" | "librarySectionKey">): string | null {
+    resolve(entry: Pick<DetailedWatchHistoryEntry, "ratingKey" | "librarySectionKey">): string[] {
       const candidates = byKey.get(entry.ratingKey);
-      if (!candidates) return null;
-      if (candidates.length === 1) return candidates[0].id;
-      const inSection = entry.librarySectionKey
-        ? candidates.filter((c) => c.libraryKey === entry.librarySectionKey)
-        : [];
-      if (inSection.length === 1) return inSection[0].id;
-      ambiguous++;
-      return null;
+      if (!candidates) return [];
+      if (candidates.length === 1) return [candidates[0].id];
+      if (entry.librarySectionKey) {
+        const inSection = candidates.filter((c) => c.libraryKey === entry.librarySectionKey);
+        // `@@unique([libraryId, ratingKey])`: at most one row per library.
+        if (inSection.length > 0) return inSection.map((c) => c.id);
+        // The play names a library none of the rows are in. On Plex every
+        // row is then stale (the item lives in a library we have not synced
+        // yet); on Jellyfin/Emby a section is never sent. Skip either way.
+        ambiguous++;
+        return [];
+      }
+      if (keysServerUnique) {
+        ambiguous++;
+        return [];
+      }
+      return candidates.map((c) => c.id);
     },
     logAmbiguous(serverName: string): void {
       if (ambiguous === 0) return;
       logger.warn(
         "WatchHistory",
         `Skipped ${ambiguous} play(s) on "${serverName}" whose rating key matches items in ` +
-          `more than one library — the next full sync's stale-item purge resolves them`,
+          `more than one library and whose own library does not say which one was played — ` +
+          `the extra rows are stale, and the next full sync's stale-item purge resolves them`,
       );
     },
   };

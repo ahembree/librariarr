@@ -2,76 +2,52 @@ import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { sanitize } from "@/lib/api/sanitize";
-import { computeBackfillFraction, resolveBackfillReach } from "./backfill-fraction";
-import { getTracearrImportActivity } from "@/lib/sync/tracearr-import-activity";
+import {
+  computeBackfillFraction,
+  importPending,
+  resolveBackfillReach,
+  type ImportPausedReason,
+} from "./backfill-fraction";
+import {
+  getTracearrBackfillReach,
+  getTracearrImportActivity,
+} from "@/lib/sync/tracearr-import-activity";
 
-/** Why an owed import cannot progress right now, when that is the case. */
-type ImportPausedReason = "server-disabled" | "instance-unavailable";
-
-/**
- * Whether this server's archive import is genuinely still owed AND will make
- * progress — the signal a spinner or a poll may wait on.
- *
- * Not owed: `backfillComplete`. Cannot progress: the server is disabled (no
- * sync of any kind runs for it) or the user has no enabled Tracearr instance
- * (`syncWatchHistory` then skips a mapped server outright rather than falling
- * back to native). Both are reported with `pausedReason` so Settings can say
- * why instead of spinning. With several instances, which one owns the mapping
- * is only knowable by asking each over the network, which a polled route must
- * not do — "at least one enabled" is the approximation, and an unowned mapping
- * then behaves like the next case.
- *
- * The subtle case is a mapping Tracearr holds no plays for (a wrong mapping, a
- * freshly installed Tracearr). Its walk comes back exhausted with zero records,
- * which deliberately does NOT mark the backfill complete and does not
- * re-enqueue the slice — so it would read "importing" forever. Nothing is
- * persisted for it, so it is recognised by what it leaves: no imported rows,
- * no measured far edge (`findOldestPlayAt` found nothing to store), no walk
- * cursor, no run in progress and no backfill job waiting. Every import that
- * WILL progress has at least one of those: a slice running (`activeImport`) or
- * queued (the job), or evidence from an earlier one that there is history to
- * walk. A brand-new mapping looks the same until its first sync queues a slice
- * — correctly not pending either: nothing is going to happen until that sync,
- * and the moment one queues the slice it reads pending again.
- */
-function importPending(input: {
-  pausedReason: ImportPausedReason | null;
-  backfillComplete: boolean;
-  importedCount: number;
-  oldestPlayAt: Date | null;
-  cursorAt: Date | null;
-  running: boolean;
-  queued: boolean;
-}): boolean {
-  if (input.pausedReason !== null || input.backfillComplete) return false;
-  return (
-    input.running ||
-    input.queued ||
-    input.importedCount > 0 ||
-    input.oldestPlayAt !== null ||
-    input.cursorAt !== null
-  );
+/** The state of each server's `tracearr-backfill:<serverId>` job. */
+interface BackfillJobState {
+  /** Waiting, running or backing off — will run again by itself. */
+  queued: Set<string>;
+  /** Used up its attempts: graphile keeps the row but never runs it again. */
+  parked: Set<string>;
 }
 
 /**
- * Servers with a backfill slice queued, running or backing off — read from the
- * job queue's own table, under the jobKey `tracearr-backfill:<serverId>` that
- * both enqueue sites share. A job that used up its attempts is parked, not
- * waiting, so it does not count. Best-effort: on a failed read (no
- * `graphile_worker` schema yet) every server reads as having nothing queued,
- * which only ever withholds `pending` from an import with no other evidence.
+ * Servers with a backfill slice queued, running or backing off, and those
+ * whose slice is parked — read from the job queue's own table, under the jobKey
+ * `tracearr-backfill:<serverId>` that both enqueue sites share. Best-effort: on
+ * a failed read (no `graphile_worker` schema yet) every server reads as having
+ * no job at all, which only ever withholds `pending` from an import with no
+ * other evidence and never reports one as failing.
  */
-async function serversWithQueuedBackfill(serverIds: string[]): Promise<Set<string>> {
+async function backfillJobStates(serverIds: string[]): Promise<BackfillJobState> {
+  const state: BackfillJobState = { queued: new Set(), parked: new Set() };
   try {
-    const rows = await prisma.$queryRawUnsafe<{ key: string }[]>(
-      `SELECT "key" FROM graphile_worker.jobs
-        WHERE "key" = ANY($1::text[]) AND "attempts" < "max_attempts"`,
+    const rows = await prisma.$queryRawUnsafe<{ key: string; parked: boolean }[]>(
+      // `locked_at IS NULL`: graphile counts an attempt when it takes the job,
+      // so a slice running its LAST attempt already reads attempts = max.
+      `SELECT "key", ("attempts" >= "max_attempts" AND "locked_at" IS NULL) AS "parked"
+         FROM graphile_worker.jobs
+        WHERE "key" = ANY($1::text[])`,
       serverIds.map((id) => `tracearr-backfill:${id}`),
     );
-    return new Set(rows.map((row) => row.key.slice("tracearr-backfill:".length)));
+    for (const row of rows) {
+      const serverId = row.key.slice("tracearr-backfill:".length);
+      (row.parked ? state.parked : state.queued).add(serverId);
+    }
   } catch {
-    return new Set();
+    // See above: unknown reads as "no job".
   }
+  return state;
 }
 
 /**
@@ -95,7 +71,7 @@ async function serversWithQueuedBackfill(serverIds: string[]): Promise<Set<strin
  * importantly, for why it measures time coverage instead of imported records.
  *
  * `pending` is the answer to "should anything wait on this server's import" —
- * see `importPending` above. It is NOT `!backfillComplete`: that flag stays
+ * see `importPending` in `./backfill-fraction`. It is NOT `!backfillComplete`: that flag stays
  * false forever on a disabled server, behind a disabled Tracearr instance, and
  * on a mapping Tracearr holds no plays for, and every reader that waited on it
  * (a spinner, the History page's poll) waited forever.
@@ -123,6 +99,7 @@ export async function GET() {
       // read off the row we already fetch, so progress costs no extra query.
       tracearrOldestPlayAt: true,
       tracearrBackfillCursorAt: true,
+      tracearrBackfillLastWalkAt: true,
     },
     // Total order: the UI polls this repeatedly and re-renders the list, so ties
     // on `name` must not permute between requests.
@@ -137,7 +114,7 @@ export async function GET() {
   // memory below. `source: "TRACEARR"` is load-bearing: a server that was mapped
   // partway through its life still holds NATIVE rows from before the switch, and
   // counting those would report progress the importer never made.
-  const [aggregates, enabledInstances, queuedBackfill] = await Promise.all([
+  const [aggregates, enabledInstances, backfillJobs] = await Promise.all([
     prisma.watchHistory.groupBy({
       by: ["mediaServerId"],
       where: {
@@ -149,7 +126,7 @@ export async function GET() {
       _max: { watchedAt: true },
     }),
     prisma.tracearrInstance.count({ where: { userId: session.userId!, enabled: true } }),
-    serversWithQueuedBackfill(servers.map((server) => server.id)),
+    backfillJobStates(servers.map((server) => server.id)),
   ]);
 
   const byServerId = new Map(
@@ -171,19 +148,29 @@ export async function GET() {
     // The import running for this server right now, if any — live this-run
     // counters the stored rows cannot express. `null` when nothing is running.
     const activeImport = getTracearrImportActivity(server.id);
-    // Only the backfill pass's reach says how far back the archive is covered;
-    // `backfillReached` is never written by the forward pass.
-    const liveReached = activeImport?.backfillReached
-      ? new Date(activeImport.backfillReached)
-      : null;
+    // How far a live BACKFILL walk has reached — never a forward pass's (it
+    // walks the newest hour, which says nothing about how far back the archive
+    // is covered), whichever run is newest, and never a run superseded by a
+    // purge restart or a mapping change: that run is still paging the OLD
+    // archive position, and its deep reach would win "older wins" below over
+    // the cursor the restart just moved to now.
+    const liveReachIso = getTracearrBackfillReach(server.id);
+    const liveReached = liveReachIso ? new Date(liveReachIso) : null;
     const cursorAt = server.tracearrBackfillCursorAt;
     const reachedAt = resolveBackfillReach({ oldestImported, cursorAt, liveReached });
 
+    const running = activeImport !== null;
+    const queued = backfillJobs.queued.has(server.id);
+    // Parked AND nothing live: a run in progress (a History-page Refresh, a
+    // slice re-queued since the read) is progress, whatever the old row says.
+    const failing = backfillJobs.parked.has(server.id) && !running && !queued;
     const pausedReason: ImportPausedReason | null = !server.enabled
       ? "server-disabled"
       : enabledInstances === 0
         ? "instance-unavailable"
-        : null;
+        : failing && !server.tracearrBackfillComplete
+          ? "import-failing"
+          : null;
 
     return {
       serverId: server.id,
@@ -222,10 +209,15 @@ export async function GET() {
         importedCount,
         oldestPlayAt: server.tracearrOldestPlayAt,
         cursorAt,
-        running: activeImport !== null,
-        queued: queuedBackfill.has(server.id),
+        lastWalkAt: server.tracearrBackfillLastWalkAt,
+        running,
+        queued,
       }),
       pausedReason,
+      // When a backfill walk last ran for this mapping, or null if none has
+      // yet — what separates "waiting for the first import" from "walked and
+      // Tracearr had no plays for it".
+      lastWalkAt: server.tracearrBackfillLastWalkAt?.toISOString() ?? null,
       activeImport,
     };
   });

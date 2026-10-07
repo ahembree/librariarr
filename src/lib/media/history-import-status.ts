@@ -26,14 +26,21 @@ export function isImportPending(status: TracearrImportStatus): boolean {
  * The note's percentage: the least-advanced pending server's share of its
  * archive's time span, or null when any pending server is unmeasured (null is
  * "unknown", never 0%) or nothing is pending.
+ *
+ * Floored and capped at 99: every server counted here is still importing, so
+ * the note must never read "100%" beside "Still importing". `Math.round` did
+ * exactly that from 99.5% on — the last stretch of a multi-hour archive walk.
+ * The epsilon keeps binary floating point from flooring an exact percentage
+ * one short (0.29 × 100 is 28.999…).
  */
 export function importBackfillPercent(statuses: readonly TracearrImportStatus[]): number | null {
   const pending = statuses.filter(isImportPending);
   if (pending.length === 0) return null;
   const known = pending
     .map((s) => s.backfillFraction)
-    .filter((fraction): fraction is number => fraction !== null);
-  return known.length === pending.length ? Math.round(Math.min(...known) * 100) : null;
+    .filter((fraction): fraction is number => fraction !== null && Number.isFinite(fraction));
+  if (known.length !== pending.length) return null;
+  return Math.min(99, Math.max(0, Math.floor(Math.min(...known) * 100 + 1e-9)));
 }
 
 /**

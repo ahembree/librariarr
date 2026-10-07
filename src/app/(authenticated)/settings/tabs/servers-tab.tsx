@@ -385,10 +385,11 @@ function TracearrLiveImportLine({
  * Otherwise, distinct renderings, because collapsing any two of them lies:
  *   - complete            → the finished line (a count, no bar)
  *   - paused              → why (server or Tracearr instance disabled), no spinner
- *   - no rows, pending    → "waiting", not "0 plays imported"
- *   - no rows, not pending→ nothing is queued and nothing has ever come back;
- *                           say so without a spinner (a fresh mapping before
- *                           its first sync, or one Tracearr holds no plays for)
+ *   - failing             → the slice used up its retries; say so, no spinner
+ *   - no rows, pending    → "waiting", not "0 plays imported" (this includes a
+ *                           fresh mapping no walk has run for yet)
+ *   - no rows, not pending→ a walk ran, nothing is queued and nothing came
+ *                           back: Tracearr holds no plays for the linked server
  *   - fraction is a number→ a determinate bar at that percentage
  *   - fraction is null    → the original indeterminate line
  * Spinners key off `pending`, never `!backfillComplete`: that flag stays false
@@ -412,6 +413,22 @@ function TracearrImportStatusLine({ status }: { status: TracearrImportStatus | u
 
   // Owed but unable to progress: nothing will run until the cause is fixed, so
   // say what it is rather than spin.
+  // The slice keeps failing — every retry used up, nothing running. Not a
+  // spinner (nothing is happening), not "paused" (nothing the user switched
+  // off): the next watch-history sync re-queues it, and the log says why.
+  if (!status.backfillComplete && status.pausedReason === "import-failing") {
+    return (
+      <p className={rowClass}>
+        <AlertCircle className="mt-0.5 h-3 w-3 shrink-0 text-amber-400" />
+        <span>
+          {"History import failing — the last attempts could not import from Tracearr " +
+            "(see System Logs). It retries with the next watch-history sync."}
+          {status.importedCount > 0 ? ` · ${plays} so far` : ""}
+        </span>
+      </p>
+    );
+  }
+
   if (!status.backfillComplete && status.pausedReason !== null) {
     const reason =
       status.pausedReason === "server-disabled"
@@ -440,16 +457,16 @@ function TracearrImportStatusLine({ status }: { status: TracearrImportStatus | u
         </p>
       );
     }
-    // Nothing queued, nothing running, and no earlier run found anything to
-    // walk. Either the first sync has not happened yet, or it did and Tracearr
-    // returned no plays at all for the linked server — which is also what a
-    // mapping to the wrong server looks like, so point at that.
+    // A walk has run (a never-walked mapping is pending, above), nothing is
+    // queued or running, and it found nothing: Tracearr returned no plays at
+    // all for the linked server — which is also what a mapping to the wrong
+    // server looks like, so point at that.
     return (
       <p className={rowClass}>
         <AlertCircle className="mt-0.5 h-3 w-3 shrink-0" />
         <span>
-          No plays imported yet. The import runs with the next watch-history sync; if this
-          stays empty, Tracearr has no plays for the linked server — check it&apos;s the right one.
+          No plays imported. Tracearr returned no plays for the linked server — check it&apos;s
+          the right one. The import tries again with the next watch-history sync.
         </span>
       </p>
     );

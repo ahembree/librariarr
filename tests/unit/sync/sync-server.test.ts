@@ -82,6 +82,9 @@ vi.mock("@/lib/sync/sync-watch-history", () => ({
   syncWatchHistory: vi.fn().mockResolvedValue({ count: 0 }),
 }));
 
+vi.mock("@/lib/media/watch-evidence", () => ({
+  restartTracearrBackfill: vi.fn().mockResolvedValue(1),
+}));
 vi.mock("@/lib/sync/watch-reconcile", () => ({
   reconcileWatchStateFromHistory: vi.fn().mockResolvedValue(0),
   loadWatchCountsFromHistory: vi.fn().mockResolvedValue(new Map()),
@@ -841,6 +844,7 @@ describe("syncMediaServer library and watchlist reconciliation", () => {
     vanished?: Array<{ id: string; key: string; title: string }>;
     vanishedItems?: Array<{ id: string; thumbUrl: null; parentThumbUrl: null; seasonThumbUrl: null }>;
     exceptionCount?: bigint;
+    tracearrRowCount?: bigint;
     existingRows?: Array<Record<string, unknown>>;
     watchlistChanged?: Array<{ id: string }>;
   }
@@ -855,6 +859,9 @@ describe("syncMediaServer library and watchlist reconciliation", () => {
       // Vanished-library purge: the libraries, their items, their exceptions.
       if (sql.includes('NOT ("key" = ANY')) return opts.vanished ?? [];
       if (sql.includes('FROM "LifecycleException" le')) return [{ count: opts.exceptionCount ?? BigInt(0) }];
+      if (sql.includes('FROM "WatchHistory" wh') && sql.includes("'TRACEARR'")) {
+        return [{ count: opts.tracearrRowCount ?? BigInt(0) }];
+      }
       // Stale-item candidate select must be matched BEFORE the vanished-items
       // select — both read thumb columns from "MediaItem" by libraryId.
       if (sql.includes('"updatedAt"<$2')) return [];
@@ -939,6 +946,32 @@ describe("syncMediaServer library and watchlist reconciliation", () => {
       "Sync",
       expect.stringMatching(/"Old Movies" \(key 9\) is no longer on the server — removed it and its 2 item\(s\), deleting 1 lifecycle exception/),
     );
+  });
+
+  it("restarts the Tracearr archive walk when a vanished library took imported plays with it", async () => {
+    // The cascade deleted those plays; a library re-created under a new key
+    // comes back as fresh items that read as never watched, and a completed
+    // archive walk never looks back on its own.
+    mockDb({ vanished: [{ id: "lib-gone", key: "9", title: "Old Movies" }], tracearrRowCount: BigInt(12) });
+    const { restartTracearrBackfill } = await import("@/lib/media/watch-evidence");
+    vi.mocked(restartTracearrBackfill).mockClear();
+
+    await syncMediaServer("server-1");
+
+    expect(restartTracearrBackfill).toHaveBeenCalledWith(["server-1"]);
+    const counted = findDbCalls('FROM "WatchHistory" wh');
+    expect(counted[0][1]).toBe("lib-gone");
+  });
+
+  it("leaves the Tracearr walk alone when the vanished library held no imported plays", async () => {
+    mockDb({ vanished: [{ id: "lib-gone", key: "9", title: "Old Movies" }] });
+    const { restartTracearrBackfill } = await import("@/lib/media/watch-evidence");
+    vi.mocked(restartTracearrBackfill).mockClear();
+
+    await syncMediaServer("server-1");
+
+    expect(findDbCalls('DELETE FROM "Library" WHERE "id"=$1')).toHaveLength(1);
+    expect(restartTracearrBackfill).not.toHaveBeenCalled();
   });
 
   it("leaves every library alone when the server reports none at all", async () => {

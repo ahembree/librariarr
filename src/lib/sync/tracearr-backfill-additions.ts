@@ -2,7 +2,7 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { invalidateMediaCaches } from "@/lib/cache/invalidate";
 import { reconcileWatchStateFromHistory } from "@/lib/sync/watch-reconcile";
-import { buildTracearrJoinIndex } from "@/lib/sync/tracearr-join";
+import { buildTracearrJoinIndex, resolveMediaItemId } from "@/lib/sync/tracearr-join";
 import {
   importTracearrRecords,
   resolveInstanceForServer,
@@ -60,6 +60,13 @@ import { TracearrMappingChangedError } from "@/lib/sync/tracearr-mapping-changed
  * back catalogue included — and since the answered-items registry lives in
  * memory, every one of those items would be re-queried after every restart, to
  * learn the same answer each time.
+ *
+ * The window alone does not bound a library that was itself just created — a
+ * new install, a purge and resync, a restore — where EVERY item is inside it.
+ * The candidate query therefore also drops an item that already holds a
+ * Tracearr play from before its own row was created: that play can only have
+ * come from the archive walk or an earlier recovery, so the history this pass
+ * exists to bring back is already here (see `findCandidates`).
  */
 export const RECENT_ADDITION_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -100,10 +107,16 @@ export const DEFAULT_CANDIDATE_LIMIT = 200;
  *
  * One answer per item is enough. The plays this pass exists to recover are OLD
  * ones; a play that happens after the item was added is imported by the
- * forward pass like any other. Only an answer is recorded — a lookup that
- * failed leaves the item a candidate. In memory on purpose: a restart merely
- * re-asks (one or two requests per item still inside the window, bounded by
- * the cap, and the upsert makes re-delivered plays a no-op merge), and entries
+ * forward pass like any other. Only an answer ABOUT THIS ITEM is recorded — a
+ * lookup that failed leaves the item a candidate, and so does one whose plays
+ * all resolved to some OTHER row (typically the item's old copy, not yet
+ * purged): those plays land on that row and go with it when its purge
+ * cascades, so closing the candidate there would lose them for good. Asked
+ * again once the old row is gone, the same plays resolve to this item.
+ * In memory on purpose: a restart merely re-asks (one or two requests per
+ * item still inside the window, bounded by the cap and by the pre-creation
+ * filter in `findCandidates`, and a re-delivered play is a merge, not a new
+ * row — see `imported`), and entries
  * expire with the window, so the map holds at most a week's worth of
  * additions. Pinned to `globalThis` like the other registries a job and the
  * rest of the app may both load.
@@ -141,12 +154,33 @@ export interface RecoverNewItemHistoryOptions {
    * the ones this pass did not reach.
    */
   signal?: AbortSignal;
+  /**
+   * Epoch ms past which no further item is asked about. The pass runs inside a
+   * backfill slice on the serial MAIN_QUEUE, after the slice's own walk, and
+   * must end with that slice rather than hold the queue for up to
+   * `MAX_CANDIDATE_LIMIT` × two requests (each with its own retry budget).
+   * Checked between items, like `signal` — an item in flight still finishes.
+   */
+  deadlineMs?: number;
+  /**
+   * Stop between items when this returns true — the slice's "a requested sync
+   * is waiting" check, so a user's sync is not parked behind a recovery pass.
+   * Same resumable stop as the deadline: unasked items stay candidates.
+   */
+  yieldTo?: () => boolean;
 }
 
 export interface RecoverNewItemHistoryResult {
   /** Items actually asked about — i.e. requests issued. */
   checked: number;
-  /** `WatchHistory` rows written (inserted or merged) across those items. */
+  /**
+   * NEW `WatchHistory` rows inserted across those items — what the caller
+   * reconciles, invalidates caches and notifies pages for. A record that was
+   * already stored (the item's own recent plays, or the whole answer again
+   * after a restart cleared `answeredItems`) only merges, and counting those
+   * made every such pass look like a change: a server-wide reconcile, every
+   * media cache dropped and every open page refetching, for nothing.
+   */
   imported: number;
 }
 
@@ -168,8 +202,12 @@ export async function recoverHistoryForNewItems(
   serverId: string,
   options: RecoverNewItemHistoryOptions = {},
 ): Promise<RecoverNewItemHistoryResult> {
-  const { limit = DEFAULT_CANDIDATE_LIMIT, signal } = options;
+  const { limit = DEFAULT_CANDIDATE_LIMIT, signal, deadlineMs, yieldTo } = options;
   const empty: RecoverNewItemHistoryResult = { checked: 0, imported: 0 };
+  const shouldStop = () =>
+    signal?.aborted === true ||
+    (deadlineMs !== undefined && Date.now() >= deadlineMs) ||
+    yieldTo?.() === true;
 
   const server = await prisma.mediaServer.findFirst({
     where: { id: serverId },
@@ -191,6 +229,9 @@ export async function recoverHistoryForNewItems(
   // re-added — and that state must cost one indexed query and nothing else.
   const candidates = await findCandidates(serverId, limit);
   if (candidates.length === 0) return empty;
+  // Out of time before the first item: skip the instance probe, the join index
+  // and the `/users` walk too, all of which would be for nothing.
+  if (shouldStop()) return empty;
 
   const instance = await resolveInstanceForServer(
     server.userId,
@@ -254,7 +295,9 @@ export async function recoverHistoryForNewItems(
 
   let checked = 0;
   let imported = 0;
+  let merged = 0;
   let withoutPlays = 0;
+  let elsewhere = 0;
   let failed = 0;
   let skipped = 0;
   let recoveredByProviderId = 0;
@@ -262,7 +305,7 @@ export async function recoverHistoryForNewItems(
   const queriedProviders = new Set<string>();
 
   for (const candidate of candidates) {
-    if (signal?.aborted) break;
+    if (shouldStop()) break;
     checked++;
 
     try {
@@ -332,9 +375,24 @@ export async function recoverHistoryForNewItems(
         accountNames,
         tracearrServerId,
       );
-      imported += written.inserted + written.updated;
+      imported += written.inserted;
+      merged += written.updated;
       skipped += written.skipped;
-      answeredItems.set(candidate.id, Date.now());
+      // Answered for THIS item only when at least one play resolved to it —
+      // the same shared resolver the importer just used, against the same
+      // index. Plays that all resolved elsewhere (the item's old copy, still
+      // waiting for its purge) were imported onto that row and will cascade
+      // away with it; the item stays a candidate so the next pass, once the
+      // old row is gone, files them here. See `answeredItems`.
+      const resolvedHere = own.some((record) => {
+        const resolved = resolveMediaItemId(joinIndex, record);
+        return "mediaItemId" in resolved && resolved.mediaItemId === candidate.id;
+      });
+      // Plays that resolved to nothing at all (ambiguous, contradicted) keep
+      // it a candidate too: an ambiguity between the old and new copy clears
+      // once the old one is purged.
+      if (resolvedHere) answeredItems.set(candidate.id, Date.now());
+      else elsewhere++;
     } catch (error) {
       // One item's lookup failing must not cost the rest of the pass. It can be
       // transient (a 429 that outlasted the retry budget, a timeout) or
@@ -380,6 +438,10 @@ export async function recoverHistoryForNewItems(
     }
   }
 
+  // Inserted rows only. A merge re-delivers a play already stored — one of the
+  // item's own recent plays, which the forward pass imported and reconciled
+  // itself, or an answer repeated after a restart — so it is not worth a
+  // server-wide reconcile and a cache drop on every pass.
   if (imported > 0) {
     // The whole point of the pass: `playCount`/`lastPlayedAt` are what the
     // lifecycle rules read, and until the reconcile runs the recovered item
@@ -403,8 +465,10 @@ export async function recoverHistoryForNewItems(
   logger.info(
     "WatchHistory",
     `Tracearr recovery for recently added items on "${server.name}": checked ` +
-      `${checked} of ${candidates.length} candidate(s), imported ${imported} play(s) — ` +
-      `${withoutPlays} with no plays, ${skipped} unjoinable, ${failed} failed, ` +
+      `${checked} of ${candidates.length} candidate(s), imported ${imported} new play(s) ` +
+      `(${merged} already stored) — ` +
+      `${withoutPlays} with no plays, ${elsewhere} left a candidate (no play resolved to the item itself), ` +
+      `${skipped} unjoinable, ${failed} failed, ` +
       // Worth its own figure: it counts items with plays only their provider id
       // reached — a rating key that changed, which is the re-add case this pass
       // exists for. Zero here on a Plex server with re-added media means the
@@ -416,12 +480,22 @@ export async function recoverHistoryForNewItems(
 }
 
 /**
- * Recently added items on this server that Tracearr has not answered for yet.
+ * Recently added items on this server that Tracearr has not answered for yet
+ * and whose old history is not already stored.
  *
  * Deliberately NOT "items with no Tracearr rows": a re-added item usually has
  * one — its first new play, under its new rating key — while every older play
- * is still unrecovered (see `answeredItems`, which is what ends candidacy).
- * Bounded instead by the window, the cap and that registry.
+ * is still unrecovered (see `answeredItems`). What it does not have is a play
+ * from BEFORE its row was created: that can only arrive by the archive walk or
+ * by this pass, so its presence means the old history is here. That is the
+ * filter (`watchedAt < mi.createdAt`), and it is what keeps a freshly created
+ * library — a new install, a purge and resync, a restore, where the whole
+ * library sits inside the window — from being offered item by item: every
+ * item that was ever played already holds its pre-creation plays from the
+ * walk. It survives a restart, unlike `answeredItems`. Items never played at
+ * all are still offered (nothing distinguishes them from a re-added item whose
+ * plays only the provider id reaches), bounded by the cap, the window, the
+ * caller's deadline and `answeredItems`.
  */
 async function findCandidates(
   serverId: string,
@@ -443,6 +517,12 @@ async function findCandidates(
       WHERE l."mediaServerId" = $1
         AND mi."createdAt" > $2
         AND NOT (mi."id" = ANY($4::text[]))
+        AND NOT EXISTS (
+          SELECT 1 FROM "WatchHistory" wh
+           WHERE wh."mediaItemId" = mi."id"
+             AND wh."source" = 'TRACEARR'
+             AND wh."watchedAt" < mi."createdAt"
+        )
       -- Newest first: when there are more candidates than the cap allows, the
       -- most recent arrivals are the ones a user is waiting on, and the rest
       -- stay candidates for the next run.

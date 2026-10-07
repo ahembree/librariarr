@@ -31,6 +31,7 @@ vi.mock("axios", () => {
 import {
   TracearrClient,
   MAX_PAGE_SIZE,
+  USER_PAGE_CAP,
   type TracearrHistoryRecord,
   type TracearrUserIdentity,
 } from "@/lib/tracearr/tracearr-client";
@@ -1295,6 +1296,36 @@ describe("TracearrClient", () => {
         await expect(client.getServerAccountNames("srv-1")).rejects.toThrow(
           /did not end within/,
         );
+        expect(mockAxiosInstance.get).toHaveBeenCalledTimes(USER_PAGE_CAP);
+      });
+
+      it("walks a large instance's user list to the end — the cap is a runaway guard", async () => {
+        // The cap was 50 pages (5,000 identities), and hitting it throws — so a
+        // large shared server, which also keeps every departed account, never
+        // got a map: the archive walk never ran and the evidence marker was
+        // withdrawn on every forward run. 120 pages is 12,000 identities.
+        const PAGES = 120;
+        let n = 0;
+        mockAxiosInstance.get.mockImplementation(async () => {
+          const page = ++n;
+          const identities = Array.from({ length: MAX_PAGE_SIZE }, (_, i) => ({
+            ...ACTIVE,
+            id: `identity-${page}-${i}`,
+            accounts: [
+              {
+                ...ACTIVE.accounts[0],
+                server_user_id: `acct-${page}-${i}`,
+                username: `user-${page}-${i}`,
+              },
+            ],
+          }));
+          return usersBody(identities, page < PAGES ? `cursor-${page + 1}` : null);
+        });
+
+        const names = await client.getServerAccountNames("srv-1");
+
+        expect(names.size).toBe(PAGES * MAX_PAGE_SIZE);
+        expect(names.get(`acct-${PAGES}-0`)).toBe(`user-${PAGES}-0`);
       });
 
       it("throws on a cursor that repeats", async () => {

@@ -937,6 +937,14 @@ export default function SettingsPage() {
   // The state reset returns the SAME empty array when it is already empty, or
   // the new reference would re-render every settings page that has no Tracearr.
   const hasTracearrInstance = tracearrInstances.length > 0;
+  // Re-read whenever a server or Tracearr instance is enabled or disabled —
+  // the two pauses the status reports, which the poll below deliberately does
+  // not cover. Re-enabling refetches the server/instance list, which changes
+  // this key, so a stale "paused" line clears even with the event stream down.
+  const tracearrPauseKey = [
+    ...servers.map((s) => `${s.id}:${s.enabled}`),
+    ...tracearrInstances.map((i) => `${i.id}:${i.enabled}`),
+  ].join(",");
   useEffect(() => {
     if (!hasTracearrInstance) return;
     // Async IIFE, not a bare call: the fetch sets its loading state before the
@@ -945,7 +953,7 @@ export default function SettingsPage() {
     void (async () => {
       await fetchTracearrImportStatus();
     })();
-  }, [hasTracearrInstance, fetchTracearrImportStatus]);
+  }, [hasTracearrInstance, tracearrPauseKey, fetchTracearrImportStatus]);
 
   // Derived, never stored. With no Tracearr instance there is nothing to
   // report, and expressing that as a state RESET meant a synchronous setState
@@ -1007,16 +1015,24 @@ export default function SettingsPage() {
   // buffering and idle timeouts, and the readout is the sole indication a
   // multi-hour archive walk is progressing — so it must not depend entirely on a
   // connection staying up. Deliberately slow: the push covers the live case, and
-  // this only has to stop the number going stale for good. Runs while a backfill
-  // is `pending` — owed AND able to progress, which is the case that lasts long
-  // enough for a drop to matter. Not `!backfillComplete`: that stays false
-  // forever on a disabled server, behind a disabled Tracearr instance and on a
-  // mapping Tracearr holds no plays for, and the poll ran forever with them.
-  // Also while any import is live: a catch-up on an already-backfilled server
-  // shows an import card too, and without this a dropped stream would leave
-  // that card up until the next pushed event.
+  // this only has to stop the number going stale for good.
+  //
+  // Runs while any import is live (a catch-up on an already-backfilled server
+  // shows an import card too), and for every mapping whose import is owed and
+  // not switched off — `pending`, but also one that is not pending right now:
+  // the state a first status read lands on can change with no event this page
+  // will ever see (a slice queued by the next sync, a failing slice re-queued,
+  // a walk that found nothing), and with the stream down a readout gated on
+  // `pending` alone stayed on whatever the first read said — for a fresh
+  // mapping, "no plays" for the whole of a multi-hour import. Not for a server
+  // or Tracearr instance the user disabled: those change only when the user
+  // re-enables them, which refetches below rather than polling forever.
   const tracearrBackfillRunning = visibleTracearrImportStatus.some(
-    (s) => s.pending || s.activeImport !== null,
+    (s) =>
+      s.pending ||
+      s.activeImport !== null ||
+      (!s.backfillComplete &&
+        (s.pausedReason === null || s.pausedReason === "import-failing")),
   );
   const pollTracearrImport = hasTracearrInstance && tracearrBackfillRunning;
   useEffect(() => {

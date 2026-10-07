@@ -1246,6 +1246,45 @@ describe("syncWatchHistory — ambiguous rating keys", () => {
     expect(params).toContain("item-b");
     expect(params).not.toContain("item-a");
   });
+
+  it("on Plex, skips a play whose library holds neither row", async () => {
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([row]);
+    mockClient.getDetailedWatchHistory.mockResolvedValueOnce([
+      { ratingKey: "100", username: "bob", watchedAt: "2025-07-01T00:00:00Z", deviceName: null, platform: null, librarySectionKey: "9" },
+    ]);
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([
+      { id: "item-a", ratingKey: "100", libraryKey: "1" },
+      { id: "item-b", ratingKey: "100", libraryKey: "2" },
+    ]);
+
+    await expect(syncWatchHistory("server-1")).resolves.toEqual({ count: 0 });
+    expect(insertCalls()).toHaveLength(0);
+  });
+
+  it.each(["JELLYFIN", "EMBY"])(
+    "on %s, files a play against every library that lists the item",
+    async (type) => {
+      // Two libraries covering the same folder list the same item id; the
+      // server never says which one a play was in, and it was in both.
+      mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([{ ...row, type }]);
+      mockClient.getDetailedWatchHistory.mockResolvedValueOnce([
+        { ratingKey: "100", username: "bob", watchedAt: "2025-07-01T00:00:00Z", deviceName: null, platform: null },
+        { ratingKey: "100", username: "bob", watchedAt: null, deviceName: null, platform: null },
+      ]);
+      mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([
+        { id: "item-a", ratingKey: "100", libraryKey: "1" },
+        { id: "item-b", ratingKey: "100", libraryKey: "2" },
+      ]);
+      const updates: Array<{ detail?: string }> = [];
+
+      await expect(syncWatchHistory("server-1", (u) => updates.push(u))).resolves.toEqual({ count: 4 });
+      const params = insertCalls()[0].slice(1);
+      expect(params.filter((p) => p === "item-a")).toHaveLength(2);
+      expect(params.filter((p) => p === "item-b")).toHaveLength(2);
+      // Progress counts plays, not rows, so it never passes the total.
+      expect(updates.at(-1)?.detail).toBe("Stored 2 of 2 plays");
+    },
+  );
 });
 
 describe("syncWatchHistory — incremental identity across account names", () => {

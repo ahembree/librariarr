@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
+import { Pool } from "pg";
 import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
 import {
@@ -38,6 +39,12 @@ vi.mock("@/lib/media-server/factory", () => ({
 
 // Import route handlers AFTER mocks
 import { PUT } from "@/app/api/servers/[id]/route";
+import {
+  beginTracearrImport,
+  endTracearrImport,
+  getTracearrBackfillReach,
+  recordTracearrImportPage,
+} from "@/lib/sync/tracearr-import-activity";
 
 const TRACEARR_SERVER_A = "3f6f0d1e-0000-4000-8000-00000000000a";
 const TRACEARR_SERVER_B = "3f6f0d1e-0000-4000-8000-00000000000b";
@@ -485,5 +492,172 @@ describe("PUT /api/servers/[id] — Tracearr mapping", () => {
     const untouched = await prisma.mediaServer.findUnique({ where: { id: server.id } });
     expect(untouched!.tracearrServerId).toBeNull();
     expect(await countHistory(server.id)).toBe(2);
+  });
+
+  describe("the wipe commits with the mapping", () => {
+    // A second connection, standing in for another process: a failing DELETE,
+    // or an import page write in flight while the PUT runs.
+    let pool: Pool | undefined;
+    const db = () => (pool ??= new Pool({ connectionString: process.env.DATABASE_URL!, max: 2 }));
+
+    afterAll(async () => {
+      if (pool) {
+        await pool.query(`DROP TRIGGER IF EXISTS refuse_wh_delete ON "WatchHistory"`).catch(() => {});
+        await pool.end().catch(() => {});
+      }
+    });
+
+    it("leaves the mapping, its import state and the rows untouched when the wipe fails", async () => {
+      // Run after the mapping commit, a crash or failed DELETE in between left
+      // the old source's rows under the new mapping — and the importer derives
+      // its resume boundaries from exactly those rows.
+      const user = await createTestUser();
+      const server = await createTestServer(user.id, { tracearrServerId: TRACEARR_SERVER_A });
+      const walkedAt = new Date("2026-02-01T00:00:00Z");
+      await prisma.mediaServer.update({
+        where: { id: server.id },
+        data: { tracearrBackfillComplete: true, tracearrBackfillLastWalkAt: walkedAt },
+      });
+      await seedWatchHistory(server.id, 2);
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      await db().query(`
+        CREATE OR REPLACE FUNCTION refuse_wh_delete() RETURNS trigger AS $$
+        BEGIN RAISE EXCEPTION 'watch history delete refused'; END $$ LANGUAGE plpgsql`);
+      await db().query(`
+        CREATE TRIGGER refuse_wh_delete BEFORE DELETE ON "WatchHistory"
+        FOR EACH ROW EXECUTE FUNCTION refuse_wh_delete()`);
+      try {
+        await expect(
+          putMapping(server.id, { tracearrServerId: TRACEARR_SERVER_B }),
+        ).rejects.toThrow(/watch history delete refused/);
+      } finally {
+        await db().query(`DROP TRIGGER IF EXISTS refuse_wh_delete ON "WatchHistory"`);
+      }
+
+      const stored = await prisma.mediaServer.findUniqueOrThrow({ where: { id: server.id } });
+      expect(stored.tracearrServerId).toBe(TRACEARR_SERVER_A);
+      expect(stored.tracearrBackfillComplete).toBe(true);
+      expect(stored.tracearrBackfillLastWalkAt?.toISOString()).toBe(walkedAt.toISOString());
+      expect(await countHistory(server.id)).toBe(2);
+    });
+
+    it("wipes a Tracearr page that was mid-write when the switch arrived", async () => {
+      // `writeBatch` holds the server row FOR SHARE while it inserts; the PUT's
+      // UPDATE waits for it, and the DELETE after it must see those rows. No
+      // deadlock either way round.
+      const user = await createTestUser();
+      const server = await createTestServer(user.id, { tracearrServerId: TRACEARR_SERVER_A });
+      const item = await seedWatchHistory(server.id, 1);
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      const writer = await db().connect();
+      try {
+        await writer.query("BEGIN");
+        await writer.query(
+          `SELECT "id" FROM "MediaServer" WHERE "id" = $1 AND "tracearrServerId" = $2 FOR SHARE`,
+          [server.id, TRACEARR_SERVER_A],
+        );
+        await writer.query(
+          `INSERT INTO "WatchHistory" ("id","mediaItemId","mediaServerId","serverUsername","watchedAt","source","sourceEventId")
+           VALUES ('in-flight', $1, $2, 'viewer', now(), 'TRACEARR', 'chain-in-flight')`,
+          [item.id, server.id],
+        );
+
+        const put = putMapping(server.id, { tracearrServerId: TRACEARR_SERVER_B });
+        // Let the PUT reach the row lock before the page commits.
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        await writer.query("COMMIT");
+
+        await expectJson(await put, 200);
+      } finally {
+        writer.release();
+      }
+
+      expect(await countHistory(server.id)).toBe(0);
+      const stored = await prisma.mediaServer.findUniqueOrThrow({ where: { id: server.id } });
+      expect(stored.tracearrServerId).toBe(TRACEARR_SERVER_B);
+    });
+
+    it("waits for a native full replace in flight and wipes what it wrote", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const item = await seedWatchHistory(server.id, 1);
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      const writer = await db().connect();
+      try {
+        await writer.query("BEGIN");
+        // `lockServerHistory`, then the replace's own DELETE + INSERT.
+        await writer.query(`SELECT pg_advisory_xact_lock(hashtext('watch-history:' || $1))`, [server.id]);
+        await writer.query(`DELETE FROM "WatchHistory" WHERE "mediaServerId" = $1`, [server.id]);
+        await writer.query(
+          `INSERT INTO "WatchHistory" ("id","mediaItemId","mediaServerId","serverUsername","watchedAt","source")
+           VALUES ('native-new', $1, $2, 'viewer', now(), 'NATIVE')`,
+          [item.id, server.id],
+        );
+
+        const put = putMapping(server.id, { tracearrServerId: TRACEARR_SERVER_A });
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        await writer.query("COMMIT");
+
+        await expectJson(await put, 200);
+      } finally {
+        writer.release();
+      }
+
+      // Inserted by a transaction the DELETE could not have seen without
+      // waiting for it: native rows under a Tracearr mapping otherwise.
+      expect(await countHistory(server.id)).toBe(0);
+    });
+  });
+
+  it("clears the last-walk marker and supersedes the old mapping's live run", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id, { tracearrServerId: TRACEARR_SERVER_A });
+    await prisma.mediaServer.update({
+      where: { id: server.id },
+      data: { tracearrBackfillLastWalkAt: new Date("2026-02-01T00:00:00Z") },
+    });
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+    const run = beginTracearrImport(server.id, user.id);
+    try {
+      recordTracearrImportPage(run, {
+        pass: "backfill",
+        pages: 3,
+        imported: 10,
+        oldestReached: new Date("2021-01-01T00:00:00Z"),
+      });
+      expect(getTracearrBackfillReach(server.id)).not.toBeNull();
+
+      await expectJson(await putMapping(server.id, { tracearrServerId: TRACEARR_SERVER_B }), 200);
+
+      // The old archive's reach must not be reported against the new mapping.
+      expect(getTracearrBackfillReach(server.id)).toBeNull();
+    } finally {
+      endTracearrImport(run);
+    }
+
+    // "Walked and found nothing" was about the old Tracearr server: the new
+    // mapping is waiting for its first walk.
+    const stored = await prisma.mediaServer.findUniqueOrThrow({ where: { id: server.id } });
+    expect(stored.tracearrBackfillLastWalkAt).toBeNull();
+  });
+
+  it("re-saving the same mapping keeps the last-walk marker", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id, { tracearrServerId: TRACEARR_SERVER_A });
+    const walkedAt = new Date("2026-02-01T00:00:00Z");
+    await prisma.mediaServer.update({
+      where: { id: server.id },
+      data: { tracearrBackfillLastWalkAt: walkedAt },
+    });
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+    await expectJson(await putMapping(server.id, { tracearrServerId: TRACEARR_SERVER_A }), 200);
+
+    const stored = await prisma.mediaServer.findUniqueOrThrow({ where: { id: server.id } });
+    expect(stored.tracearrBackfillLastWalkAt?.toISOString()).toBe(walkedAt.toISOString());
   });
 });

@@ -1289,5 +1289,68 @@ describe("PlexClient", () => {
 
       await expect(client.getDetailedWatchHistory()).rejects.toThrow(/malformed/);
     });
+
+    describe("a server that ignores X-Plex-Container-Start", () => {
+      // The server caps pages at 2 entries and answers every offset with the
+      // newest page. The dedup used to filter the repeats silently.
+      const newest = [
+        { historyKey: "/h/4", ratingKey: "4", viewedAt: 1700000004, accountID: 1 },
+        { historyKey: "/h/3", ratingKey: "3", viewedAt: 1700000003, accountID: 1 },
+      ];
+
+      it("fails the fetch when it reports a total, instead of returning only the newest page", async () => {
+        // With `totalSize: 4` the walk ended after two identical pages holding
+        // two of the four plays, and the full replace deleted the other two.
+        mockAxiosInstance.get
+          .mockResolvedValueOnce(accounts)
+          .mockResolvedValueOnce(emptyContainer)
+          .mockResolvedValue({ data: { MediaContainer: { totalSize: 4, Metadata: newest } } });
+
+        await expect(client.getDetailedWatchHistory()).rejects.toThrow(/already-delivered/);
+      });
+
+      it("fails the fetch when it reports no total, instead of paging forever", async () => {
+        const fullPage = Array.from({ length: 5000 }, (_, i) => ({
+          historyKey: `/h/${i}`, ratingKey: String(i), viewedAt: 1700000000 + i, accountID: 1,
+        }));
+        mockAxiosInstance.get
+          .mockResolvedValueOnce(accounts)
+          .mockResolvedValueOnce(emptyContainer)
+          .mockResolvedValue({ data: { MediaContainer: { Metadata: fullPage } } });
+
+        await expect(client.getDetailedWatchHistory()).rejects.toThrow(/already-delivered/);
+        // accounts + devices + page 1 + the repeated page 2.
+        expect(mockAxiosInstance.get).toHaveBeenCalledTimes(4);
+      });
+
+      it("gives up after the page backstop when nothing identifies the entries", async () => {
+        // Entries with no historyKey, ratingKey or viewedAt cannot be told
+        // apart, so only the page count can end this walk.
+        mockAxiosInstance.get
+          .mockResolvedValueOnce(accounts)
+          .mockResolvedValueOnce(emptyContainer)
+          .mockResolvedValue({ data: { MediaContainer: { totalSize: 1e9, Metadata: [{ accountID: 1 }] } } });
+
+        await expect(client.getDetailedWatchHistory()).rejects.toThrow(/did not end after 20000 pages/);
+      });
+    });
+
+    it("passes over a short last page that only repeats entries a new play pushed down", async () => {
+      // Not an ignored offset: a play recorded between requests pushed the
+      // first page's last entry onto the next page, which holds nothing else.
+      const page1 = [
+        { historyKey: "/h/3", ratingKey: "3", viewedAt: 1700000003, accountID: 1 },
+        { historyKey: "/h/2", ratingKey: "2", viewedAt: 1700000002, accountID: 2 },
+      ];
+      mockAxiosInstance.get
+        .mockResolvedValueOnce(accounts)
+        .mockResolvedValueOnce(emptyContainer)
+        .mockResolvedValueOnce({ data: { MediaContainer: { totalSize: 4, Metadata: page1 } } })
+        .mockResolvedValueOnce({ data: { MediaContainer: { totalSize: 4, Metadata: [page1[1]] } } })
+        .mockResolvedValueOnce({ data: { MediaContainer: { totalSize: 4, Metadata: [] } } });
+
+      const entries = await client.getDetailedWatchHistory();
+      expect(entries.map((e) => e.ratingKey)).toEqual(["3", "2"]);
+    });
   });
 });

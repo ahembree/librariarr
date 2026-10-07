@@ -191,4 +191,97 @@ describe("GET /api/media/history — sorting", () => {
     expect(titles(await list(HISTORY_COLUMN_SORT_KEY.audioCodec, "asc"))).toEqual(["three", "two", "one", "four"]);
     expect(titles(await list(HISTORY_COLUMN_SORT_KEY.audioCodec, "desc"))).toEqual(["four", "one", "two", "three"]);
   });
+
+  // The Resolution columns show the normalized label, so their sort follows
+  // the label's rank. Sorting the raw text ordered "1080, 2160, 480, 4k, 720,
+  // sd" and split "2160" and "4k" — both shown as 4K — to opposite ends.
+  const RAW_RESOLUTIONS: Array<[string, string | null]> = [
+    ["r720", "720"],
+    ["rNull", null],
+    ["r4k", "4k"],
+    ["r1080", "1080"],
+    ["rSd", "sd"],
+    ["r2160", "2160"],
+    ["r480", "480"],
+    ["rOdd", "weird"],
+  ];
+  const LABEL_RANK: Record<string, number> = { SD: 1, "480P": 2, "720P": 3, "1080P": 4, "4K": 5 };
+  const RAW_LABEL: Record<string, string> = { sd: "SD", "480": "480P", "720": "720P", "1080": "1080P", "2160": "4K", "4k": "4K" };
+
+  /** Each row's resolution label rank, or null for an unknown/absent value. */
+  function ranks(raws: Array<string | null>): Array<number | null> {
+    return raws.map((raw) => (raw != null && RAW_LABEL[raw] ? LABEL_RANK[RAW_LABEL[raw]] : null));
+  }
+
+  it("sorts the file Resolution column by the displayed label, lowest first", async () => {
+    const server = await createTestServer(userId);
+    const lib = await createTestLibrary(server.id);
+    const prisma = getTestPrisma();
+    for (const [title, resolution] of RAW_RESOLUTIONS) {
+      const item = await createTestMediaItem(lib.id, { title });
+      await prisma.mediaItem.update({ where: { id: item.id }, data: { resolution } });
+      await play(item.id, server.id);
+    }
+
+    const resolutionsOf = (rows: Row[]) => rows.map((r) => (r as unknown as { mediaItem: { resolution: string | null } }).mediaItem.resolution);
+    const asc = resolutionsOf(await list(HISTORY_COLUMN_SORT_KEY.resolution, "asc"));
+    const desc = resolutionsOf(await list(HISTORY_COLUMN_SORT_KEY.resolution, "desc"));
+
+    // Lowest to highest, the two 4K spellings adjacent; unknown values last.
+    expect(ranks(asc)).toEqual([1, 2, 3, 4, 5, 5, null, null]);
+    expect(asc.slice(4, 6).sort()).toEqual(["2160", "4k"]);
+    // An unrecognised value (shown raw) before an absent one (shown "-").
+    expect(asc.slice(6)).toEqual(["weird", null]);
+
+    // Highest to lowest; unknowns stay last in this direction too.
+    expect(ranks(desc)).toEqual([5, 5, 4, 3, 2, 1, null, null]);
+    expect(desc.slice(0, 2).sort()).toEqual(["2160", "4k"]);
+    expect(desc.slice(6)).toEqual(["weird", null]);
+  });
+
+  it("sorts the Stream Resolution column by the delivered stream's label, not the file's", async () => {
+    const server = await createTestServer(userId);
+    const lib = await createTestLibrary(server.id);
+    const prisma = getTestPrisma();
+    // Every file is 4K, so a sort that read the file's column would leave the
+    // plays in an arbitrary (id) order rather than the stream order asserted.
+    for (const [title, resolution] of RAW_RESOLUTIONS) {
+      const item = await createTestMediaItem(lib.id, { title, resolution: "4k" });
+      clock += 60_000;
+      await prisma.watchHistory.create({
+        data: {
+          mediaItemId: item.id,
+          mediaServerId: server.id,
+          serverUsername: "alice",
+          watchedAt: new Date(clock),
+          source: "TRACEARR",
+          sourceEventId: `evt-${title}`,
+          resolution,
+        },
+      });
+    }
+
+    const streamOf = (rows: Row[]) => rows.map((r) => (r as unknown as { resolution: string | null }).resolution);
+    const asc = streamOf(await list(HISTORY_COLUMN_SORT_KEY.streamResolution, "asc"));
+    const desc = streamOf(await list(HISTORY_COLUMN_SORT_KEY.streamResolution, "desc"));
+    expect(ranks(asc)).toEqual([1, 2, 3, 4, 5, 5, null, null]);
+    expect(asc.slice(6)).toEqual(["weird", null]);
+    expect(ranks(desc)).toEqual([5, 5, 4, 3, 2, 1, null, null]);
+  });
+
+  it("sorts Type by the label shown (Movie, Music, Series), not the enum order", async () => {
+    const server = await createTestServer(userId);
+    const movies = await createTestLibrary(server.id, { type: "MOVIE" });
+    const tv = await createTestLibrary(server.id, { type: "SERIES" });
+    const music = await createTestLibrary(server.id, { type: "MUSIC" });
+    // Played in enum declaration order, so a fallback to either the enum
+    // order or Watched At would pass for MOVIE/SERIES/MUSIC — not for this.
+    await play((await createTestMediaItem(movies.id, { type: "MOVIE", title: "m" })).id, server.id);
+    await play((await createTestMediaItem(tv.id, { type: "SERIES", title: "s", parentTitle: "Show", seasonNumber: 1, episodeNumber: 1 })).id, server.id);
+    await play((await createTestMediaItem(music.id, { type: "MUSIC", title: "t", parentTitle: "Artist" })).id, server.id);
+
+    const types = (rows: Row[]) => rows.map((r) => r.mediaItem.type);
+    expect(types(await list(HISTORY_COLUMN_SORT_KEY.type, "asc"))).toEqual(["MOVIE", "MUSIC", "SERIES"]);
+    expect(types(await list(HISTORY_COLUMN_SORT_KEY.type, "desc"))).toEqual(["SERIES", "MUSIC", "MOVIE"]);
+  });
 });

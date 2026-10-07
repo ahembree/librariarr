@@ -30,18 +30,30 @@ export interface TracearrImportActivity {
   /** Oldest play the current pass has committed, when it has one. */
   oldestReached: string | null;
   /**
-   * Oldest instant this run's BACKFILL pass has walked past and committed the
-   * page of — stored or not, the same measure as `tracearrBackfillCursorAt`,
-   * which the run only persists when its slice ends. Null until the backfill
-   * pass commits a page, and never written by the forward pass: that pass
-   * walks the newest plays, so its oldest is near "now" and read as archive
-   * progress it would show the walk as having barely started.
+   * Oldest instant the server's live BACKFILL run has walked past and committed
+   * the page of — stored or not, the same measure as `tracearrBackfillCursorAt`,
+   * which the run only persists when its slice ends. Null until a backfill pass
+   * commits a page, and never written by the forward pass: that pass walks the
+   * newest plays, so its oldest is near "now" and read as archive progress it
+   * would show the walk as having barely started.
+   *
+   * Taken from the live backfill run whichever run is newest — every other
+   * field describes the newest run. A Refresh's forward pass overlapping a
+   * backfill slice is the newest run, and reporting its (empty) reach froze the
+   * archive progress bar for as long as the two overlapped. A run whose walk
+   * was restarted or re-pointed underneath it (`supersedeTracearrImports`)
+   * reports none: it is still walking the OLD archive position, and its deep
+   * reach would win the status route's "older wins" over the restarted cursor.
    */
   backfillReached: string | null;
 }
 
-interface Entry extends TracearrImportActivity {
+interface Entry extends Omit<TracearrImportActivity, "backfillReached"> {
   userId: string;
+  /** This run's own backfill reach — see `TracearrImportActivity.backfillReached`. */
+  ownBackfillReached: string | null;
+  /** Set by `supersedeTracearrImports`; the run's reach no longer describes the walk. */
+  superseded: boolean;
 }
 
 /**
@@ -75,7 +87,8 @@ export function beginTracearrImport(serverId: string, userId: string): TracearrI
     pages: 0,
     imported: 0,
     oldestReached: null,
-    backfillReached: null,
+    ownBackfillReached: null,
+    superseded: false,
   };
   registry.set(serverId, [...(registry.get(serverId) ?? []), entry]);
   return { serverId, entry };
@@ -92,7 +105,26 @@ export function recordTracearrImportPage(
   entry.imported = update.imported;
   entry.oldestReached = update.oldestReached?.toISOString() ?? null;
   if (update.pass === "backfill" && update.oldestReached) {
-    entry.backfillReached = entry.oldestReached;
+    entry.ownBackfillReached = entry.oldestReached;
+  }
+}
+
+/**
+ * Mark every run live for this server as no longer describing its archive walk.
+ *
+ * For the paths that restart or re-point the walk while a slice may be running
+ * — `restartTracearrBackfill` (a purge, disable-with-delete, a restore) and a
+ * mapping change in the server PUT. The running slice keeps walking from the
+ * position it started at, deep in the archive, and its live reach would then
+ * beat the cursor the restart just moved to "now" (the status route takes the
+ * older of the two), showing a restarted walk as nearly finished. Its persisted
+ * progress is already discarded by the compare-and-set on the cursor; this does
+ * the same for the in-memory readout. Runs that begin afterwards are unaffected.
+ */
+export function supersedeTracearrImports(serverId: string): void {
+  for (const entry of registry.get(serverId) ?? []) {
+    entry.superseded = true;
+    entry.ownBackfillReached = null;
   }
 }
 
@@ -110,11 +142,36 @@ export function endTracearrImport(handle: TracearrImportHandle): { userId: strin
   return { userId: handle.entry.userId };
 }
 
-/** The newest live run for the server, or null when none is running. */
+/**
+ * The live backfill reach for the server: the furthest-back reach of any run
+ * that is not superseded, or null. Normally one run — the backfill job is
+ * keyed per server — so "furthest back" only decides between a slice and a
+ * foreground run that also walked the archive.
+ */
+export function getTracearrBackfillReach(serverId: string): string | null {
+  let reach: string | null = null;
+  for (const entry of registry.get(serverId) ?? []) {
+    if (entry.superseded || !entry.ownBackfillReached) continue;
+    if (reach === null || entry.ownBackfillReached < reach) reach = entry.ownBackfillReached;
+  }
+  return reach;
+}
+
+/**
+ * The newest live run for the server, or null when none is running — except
+ * `backfillReached`, which is the live backfill run's (see the field).
+ */
 export function getTracearrImportActivity(serverId: string): TracearrImportActivity | null {
   const runs = registry.get(serverId);
   const entry = runs?.[runs.length - 1];
   if (!entry) return null;
-  const { pass, startedAt, pages, imported, oldestReached, backfillReached } = entry;
-  return { pass, startedAt, pages, imported, oldestReached, backfillReached };
+  const { pass, startedAt, pages, imported, oldestReached } = entry;
+  return {
+    pass,
+    startedAt,
+    pages,
+    imported,
+    oldestReached,
+    backfillReached: getTracearrBackfillReach(serverId),
+  };
 }

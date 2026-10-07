@@ -249,10 +249,20 @@ model MediaServer {
   /// and the oldest play it reached unread, and the next run's `since`, derived
   /// from the new MAX, starts above them. The backfill never reaches them either
   /// (it walks below `MIN`). Set to the walk's original `since` (only ever moved
-  /// earlier) when a forward walk stops after a page; cleared when one exhausts
-  /// its window. While set, the importer does not re-establish
-  /// `watchHistorySyncedAt`, since there is a known gap.
+  /// earlier) before a forward walk's first page that moves the watermark, and
+  /// before EVERY page a forward walk writes without the account-name map (its
+  /// rows carry identity labels until a healthy walk re-delivers them); cleared
+  /// only when a walk WITH the map exhausts its window. While set, the importer
+  /// does not re-establish `watchHistorySyncedAt`, since there is a known gap.
   tracearrForwardFloorAt DateTime?
+  /// When a BACKFILL walk last actually ran for the current mapping — set by
+  /// every backfill pass that fetched from Tracearr, whether it exhausted the
+  /// archive or stopped at its slice; null until the first one runs, and reset
+  /// to null whenever the walk is restarted (purge, disable-with-delete, a
+  /// restore that emptied the rows) or the mapping changes. Lets the status
+  /// readout tell "never attempted yet" (a fresh mapping waiting for its first
+  /// import) apart from "walked and found nothing to import".
+  tracearrBackfillLastWalkAt DateTime?
   /// Whether the one-time backfill of this server's Tracearr history has walked
   /// all the way to the oldest play.
   ///

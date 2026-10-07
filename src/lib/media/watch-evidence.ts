@@ -189,7 +189,9 @@ export async function invalidateServersWithoutWatchHistory(): Promise<number> {
  * Restart the Tracearr archive walk for these servers from the newest play.
  *
  * The companion to `invalidateWatchHistoryEvidence` for a Tracearr-mapped
- * server, called from the same bulk-destruction paths. Destroying a server's
+ * server, called from the paths that destroy its rows in bulk: purge,
+ * disable-with-delete, a restore whose file lacked the server's Tracearr rows,
+ * and a full sync that removed a vanished library holding imported plays. Destroying a server's
  * rows does not touch `tracearrBackfillComplete`, and once that is true only the
  * one-hour forward pass runs — so the purged items' plays, which Tracearr still
  * holds, were never imported again and the items read as never watched.
@@ -203,14 +205,25 @@ export async function invalidateServersWithoutWatchHistory(): Promise<number> {
  */
 export async function restartTracearrBackfill(serverIds: string[]): Promise<number> {
   if (serverIds.length === 0) return 0;
+  // A slice running right now keeps walking from its old, deep position, and
+  // its live reach would beat the cursor moved to "now" below in the status
+  // readout. Marked first: the mark is sticky, so no page it commits after
+  // this can bring the stale reach back. Imported lazily — the registry is a
+  // leaf module pinned to `globalThis`, so this is the same instance the
+  // importer writes.
+  const { supersedeTracearrImports } = await import("@/lib/sync/tracearr-import-activity");
+  for (const id of serverIds) supersedeTracearrImports(id);
   const { count } = await prisma.mediaServer.updateMany({
     where: { id: { in: serverIds }, tracearrServerId: { not: null } },
     // The forward floor goes too: the restarted walk starts at the newest play
-    // and covers whatever gap it recorded on its way down.
+    // and covers whatever gap it recorded on its way down. The last-walk stamp
+    // goes because it describes a walk of the history that was just destroyed:
+    // until the restarted walk runs, "walked and found nothing" is not true.
     data: {
       tracearrBackfillComplete: false,
       tracearrBackfillCursorAt: new Date(),
       tracearrForwardFloorAt: null,
+      tracearrBackfillLastWalkAt: null,
     },
   });
   return count;

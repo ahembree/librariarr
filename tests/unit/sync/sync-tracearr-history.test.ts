@@ -51,7 +51,10 @@ vi.mock("@/lib/db", () => ({
 
 vi.mock("@/lib/events/event-bus", () => ({ eventBus: mockEventBus }));
 
-vi.mock("@/lib/media/watch-evidence", () => ({
+// Partial: `snapshotWatchEvidence` stays real — it is pure, and the marker
+// writes' compare-and-set reads it. The withdrawal is the one call observed.
+vi.mock("@/lib/media/watch-evidence", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/media/watch-evidence")>()),
   invalidateWatchHistoryEvidence: mockInvalidateWatchHistoryEvidence,
 }));
 
@@ -257,8 +260,7 @@ function storedRows(options: {
 
 /**
  * A server that has never been backfilled and holds no rows — a genuine first
- * import. The default fixture says "complete" with no rows, which is the
- * purged/restored state the importer now repairs (with a state write of its own).
+ * import, like the default fixture, with the cursor stated explicitly.
  */
 function neverBackfilled(extra: Record<string, unknown> = {}) {
   mockPrisma.mediaServer.findFirst.mockResolvedValue({
@@ -297,12 +299,16 @@ describe("syncTracearrHistory", () => {
       async (fn: (tx: typeof mockPrisma) => unknown) => fn(mockPrisma),
     );
 
+    // A genuine first import: no rows, never walked. (This used to say
+    // "complete" with no rows and rely on the importer inferring that state as
+    // stale and resetting it; that inference is gone — the state is taken at
+    // its word, and the paths that destroy rows reset it explicitly.)
     mockPrisma.mediaServer.findFirst.mockResolvedValue({
       id: "server-1",
       name: "Test Plex",
       enabled: true,
       tracearrServerId: TRACEARR_SERVER_ID,
-      tracearrBackfillComplete: true,
+      tracearrBackfillComplete: false,
       // Explicitly null, the shape Prisma actually returns for an unmeasured
       // server — `undefined` would skip the measurement branch for a reason
       // that never occurs in production.
@@ -1564,46 +1570,59 @@ describe("syncTracearrHistory", () => {
       expect(options[1].until).toEqual(MIN);
     });
 
-    it("backfills from scratch when the flag says complete but no rows remain", async () => {
-      // "Complete" with zero stored rows is a contradiction — the rows are what
-      // the flag describes. Something removed them out from under it (a manual
-      // delete, a partial restore), and trusting the flag would mean importing
-      // nothing, forever, on a server whose history is entirely missing.
-      watermark = { maxWatchedAt: null, minWatchedAt: null, oldestOpenChain: null };
-      mockGetHistoryPage.mockResolvedValueOnce({
-        records: [historyRecord({ id: "chain-1" })],
-        nextCursor: null,
+    it("takes 'complete' at its word when no rows are stored — no archive re-walk", async () => {
+      // "Complete" with zero stored rows is a legitimate end state: every play
+      // the archive held can reference media that has left the library. It was
+      // inferred as stale and the whole archive re-walked from the top on every
+      // run — hours of paging, forever. The paths that destroy rows reset the
+      // state explicitly instead (purge, restore, mapping change).
+      const LAST_WALK = new Date("2026-09-01T00:00:00.000Z");
+      mockPrisma.mediaServer.findFirst.mockResolvedValue({
+        ...(await mockPrisma.mediaServer.findFirst()),
+        tracearrBackfillComplete: true,
+        tracearrBackfillLastWalkAt: LAST_WALK,
       });
 
-      // The server row still carries `tracearrBackfillComplete: true` from the
-      // default fixture.
       await expect(syncTracearrHistory("server-1")).resolves.toMatchObject({
-        count: 1,
         backfillPending: false,
       });
 
+      // Only the forward pass runs, and with no MAX(watchedAt) to anchor it,
+      // from the last walk minus the open-chain lookback.
       expect(mockGetHistoryPage).toHaveBeenCalledTimes(1);
+      expect(historyOptions()[0].since).toEqual(
+        new Date(LAST_WALK.getTime() - 7 * DAY_MS),
+      );
       expect(historyOptions()[0].until).toBeUndefined();
-      // The stale state is reset in the DATABASE first, not only for this run.
-      expect(mockPrisma.mediaServer.updateMany.mock.calls[0][0]).toEqual({
-        where: { id: "server-1", tracearrServerId: TRACEARR_SERVER_ID },
-        data: {
-          tracearrBackfillComplete: false,
-          tracearrBackfillCursorAt: null,
-          tracearrForwardFloorAt: null,
-        },
-      });
+      // No reset of the walk state, in the database or otherwise.
+      const writes = mockPrisma.mediaServer.updateMany.mock.calls.map((c) => c[0]);
+      expect(writes.some((w) => w.data.tracearrBackfillComplete === false)).toBe(false);
+      // Having read its window, the forward walk moves the stand-in watermark
+      // up — compare-and-set, so a reset landing meanwhile is not overwritten.
       expect(mockPrisma.mediaServer.updateMany).toHaveBeenCalledWith({
-        // Guarded on the mapping this run walked — see `persistMappedState`.
-        where: expect.objectContaining({
+        where: {
           id: "server-1",
           tracearrServerId: TRACEARR_SERVER_ID,
-        }),
-        // The cursor rides along in the SAME write: how far the walk reached is
-        // recorded whether or not anything was storable, which is what stops a
-        // stretch of unimportable history from being re-walked forever.
-        data: expect.objectContaining({ tracearrBackfillComplete: true }),
+          tracearrBackfillComplete: true,
+          tracearrBackfillLastWalkAt: LAST_WALK,
+        },
+        data: { tracearrBackfillLastWalkAt: expect.any(Date) },
       });
+    });
+
+    it("does not move the stand-in watermark when the forward walk was cut short", async () => {
+      const LAST_WALK = new Date("2026-09-01T00:00:00.000Z");
+      mockPrisma.mediaServer.findFirst.mockResolvedValue({
+        ...(await mockPrisma.mediaServer.findFirst()),
+        tracearrBackfillComplete: true,
+        tracearrBackfillLastWalkAt: LAST_WALK,
+      });
+      mockGetHistoryPage.mockRejectedValue(new Error("ECONNREFUSED"));
+
+      await syncTracearrHistory("server-1", { passes: "forward" });
+
+      const writes = mockPrisma.mediaServer.updateMany.mock.calls.map((c) => c[0]);
+      expect(writes.some((w) => "tracearrBackfillLastWalkAt" in w.data)).toBe(false);
     });
 
     it("counts the rows from both passes as one import", async () => {
@@ -2405,9 +2424,12 @@ describe("syncTracearrHistory", () => {
   });
 
   describe("stored backfill state with no rows behind it", () => {
-    it("resumes the restarted walk on the next slice instead of re-reading 'complete'", async () => {
-      // Slice 1 after a purge or config-only restore: "complete", no rows. It
-      // walks one page and runs out of time.
+    it("resumes below a cursor with no rows behind it instead of restarting every slice", async () => {
+      // An archive whose newest stretch holds nothing storable (the library
+      // not synced yet, or media since deleted). Slice 1 walks from the top,
+      // stores nothing, and records how far it reached.
+      neverBackfilled();
+      mockResolve.mockReturnValue({ skipped: "unresolved" });
       mockGetHistoryPage.mockResolvedValueOnce({
         records: [historyRecord({ id: "chain-1", started_at: "2026-09-30T00:00:00.000Z" })],
         nextCursor: "cursor-2",
@@ -2417,24 +2439,16 @@ describe("syncTracearrHistory", () => {
         deadlineMs: Date.now() - 1,
       });
       expect(first).toMatchObject({ backfillPending: true, backfillOutcome: "stopped" });
-
-      const writes = mockPrisma.mediaServer.updateMany.mock.calls.map((c) => c[0]);
-      expect(writes[0].data).toEqual({
-        tracearrBackfillComplete: false,
-        tracearrBackfillCursorAt: null,
-        tracearrForwardFloorAt: null,
-      });
-      const cursor = writes[1].data.tracearrBackfillCursorAt as Date;
+      expect(insertCalls()).toHaveLength(0);
+      const progress = mockPrisma.mediaServer.updateMany.mock.calls.map((c) => c[0]).at(-1);
+      const cursor = progress.data.tracearrBackfillCursorAt as Date;
       expect(cursor).toEqual(new Date("2026-09-30T00:00:00.000Z"));
 
-      // Slice 2 reads what slice 1 wrote. Before the fix the DB still said
-      // "complete", slice 1's rows made that look true, and the walk stopped.
+      // Slice 2 still has no rows. A cursor with no rows used to be read as
+      // stale and reset — so every slice re-walked the same top stretch and
+      // the archive below it was never reached.
+      vi.mocked(mockPrisma.mediaServer.updateMany).mockClear();
       neverBackfilled({ tracearrBackfillCursorAt: cursor });
-      watermark = {
-        maxWatchedAt: new Date("2026-09-30T00:00:00.000Z"),
-        minWatchedAt: new Date("2026-09-30T00:00:00.000Z"),
-        oldestOpenChain: null,
-      };
       mockGetHistoryPage.mockClear();
       mockGetHistoryPage.mockResolvedValueOnce({
         records: [historyRecord({ id: "chain-2", started_at: "2025-01-01T00:00:00.000Z" })],
@@ -2443,8 +2457,10 @@ describe("syncTracearrHistory", () => {
 
       const second = await syncTracearrHistory("server-1", { passes: "backfill" });
 
-      expect(mockGetHistoryPage).toHaveBeenCalledTimes(1);
       expect(historyOptions()[0].until).toEqual(cursor);
+      const writes = mockPrisma.mediaServer.updateMany.mock.calls.map((c) => c[0]);
+      expect(writes.some((w) => w.data.tracearrBackfillCursorAt === null)).toBe(false);
+      // Records came back, so the walk reached the end: complete, nothing stored.
       expect(second).toMatchObject({ backfillPending: false });
     });
 
@@ -2453,8 +2469,8 @@ describe("syncTracearrHistory", () => {
       // A slice already running must not overwrite that with its own deep
       // cursor, or the newer stretch the purge removed is never re-walked.
       neverBackfilled({ tracearrBackfillCursorAt: new Date("2026-01-01T00:00:00.000Z") });
-      // Rows remain (a partial purge): with none at all the cursor itself is
-      // stale state and the run resets it — see the restored-backup tests.
+      // Rows remain (a partial purge) — the case `restartTracearrBackfill`
+      // handles by moving the cursor rather than clearing it.
       watermark = {
         maxWatchedAt: new Date("2026-03-01T00:00:00.000Z"),
         minWatchedAt: new Date("2026-02-01T00:00:00.000Z"),
@@ -2500,7 +2516,12 @@ describe("syncTracearrHistory", () => {
         syncTracearrHistory("server-1", { passes: "backfill" }),
       ).resolves.toMatchObject({ count: 0, backfillPending: true });
 
-      expect(mockPrisma.mediaServer.updateMany).not.toHaveBeenCalled();
+      // The only write is the walk's own timestamp — what lets the status
+      // readout say "walked, found nothing" rather than "waiting for the first
+      // import". Neither completion nor the marker.
+      const writes = mockPrisma.mediaServer.updateMany.mock.calls.map((c) => c[0]);
+      expect(writes).toHaveLength(1);
+      expect(writes[0].data).toEqual({ tracearrBackfillLastWalkAt: expect.any(Date) });
     });
 
     it("still completes when records came back but none of them were storable", async () => {
@@ -3296,18 +3317,18 @@ describe("syncTracearrHistory", () => {
     });
   });
 
-  describe("a config-only restore taken mid-backfill", () => {
-    // The restore brings back `complete = false` with a cursor deep in the
-    // archive, and no rows. The forward pass is skipped (no watermark), the
-    // backfill walked only below the cursor, exhausted having stored nothing
-    // above it, and the slice stopped re-queueing — the server stalled for good.
-    it("resets the cursor in the database and walks from the newest play", async () => {
+  describe("walk state is never reset on the importer's own inference", () => {
+    // A config-only restore taken mid-backfill brings back a deep cursor with
+    // no rows; `restoreBackup` now resets it explicitly (see
+    // tests/integration/backup/restore-watch-evidence.test.ts). The importer
+    // takes the state as it finds it, because "no rows" is also what a walk
+    // through an unstorable stretch legitimately leaves behind.
+    it("walks below a cursor it finds with no rows, without resetting it", async () => {
       neverBackfilled({
         tracearrBackfillCursorAt: new Date("2022-01-01T00:00:00.000Z"),
-        tracearrForwardFloorAt: new Date("2025-01-01T00:00:00.000Z"),
       });
       mockGetHistoryPage.mockResolvedValueOnce({
-        records: [historyRecord({ id: "newest", started_at: "2026-10-01T00:00:00.000Z" })],
+        records: [historyRecord({ id: "older", started_at: "2021-10-01T00:00:00.000Z" })],
         nextCursor: "c2",
       });
 
@@ -3316,25 +3337,22 @@ describe("syncTracearrHistory", () => {
         deadlineMs: Date.now() - 1,
       });
 
-      expect(mockPrisma.mediaServer.updateMany.mock.calls[0][0]).toEqual({
-        where: { id: "server-1", tracearrServerId: TRACEARR_SERVER_ID },
-        data: {
+      expect(historyOptions()[0].until).toEqual(new Date("2022-01-01T00:00:00.000Z"));
+      expect(result).toMatchObject({ backfillPending: true, backfillOutcome: "stopped" });
+      const writes = mockPrisma.mediaServer.updateMany.mock.calls.map((c) => c[0]);
+      expect(writes).toHaveLength(1);
+      expect(writes[0]).toEqual({
+        where: {
+          id: "server-1",
+          tracearrServerId: TRACEARR_SERVER_ID,
+          tracearrBackfillCursorAt: new Date("2022-01-01T00:00:00.000Z"),
           tracearrBackfillComplete: false,
-          tracearrBackfillCursorAt: null,
-          tracearrForwardFloorAt: null,
+        },
+        data: {
+          tracearrBackfillCursorAt: new Date("2021-10-01T00:00:00.000Z"),
+          tracearrBackfillLastWalkAt: expect.any(Date),
         },
       });
-      // From the top, not below the restored cursor.
-      expect(historyOptions()[0].until).toBeUndefined();
-      expect(insertCalls()).toHaveLength(1);
-      // Still owed, and re-queued (a spent slice, not an exhausted walk).
-      expect(result).toMatchObject({ backfillPending: true, backfillOutcome: "stopped" });
-      // The next slice resumes below what this one reached, not the old cursor.
-      const progress = mockPrisma.mediaServer.updateMany.mock.calls
-        .map((c) => c[0])
-        .find((c) => c.data.tracearrBackfillCursorAt instanceof Date);
-      expect(progress.data.tracearrBackfillCursorAt).toEqual(new Date("2026-10-01T00:00:00.000Z"));
-      expect(progress.where.tracearrBackfillCursorAt).toBeNull();
     });
 
     it("leaves a cursor alone while rows remain", async () => {
@@ -3430,10 +3448,11 @@ describe("syncTracearrHistory", () => {
       expect(result.failed).toMatch(/could not be reached/i);
     });
 
-    it("reports a failed write as a resumable stop, not as Tracearr failing", async () => {
-      // The FK race `rowsWithLiveMediaItems` narrows but cannot close: an item
-      // deleted between its check and the INSERT. The next slice rebuilds the
-      // index and skips it, so the task must re-queue, not back off.
+    it("reports a write failure on the walk's FIRST page as errored, so the task backs off", async () => {
+      // A page that cannot be stored at all fails identically on every
+      // attempt, and the next slice resumes at that same page. Read as a
+      // resumable stop, the task re-queued the identical slice at once,
+      // forever — rebuilding the join index and re-walking /users each time.
       storedRows({ min: new Date("2023-01-01"), max: new Date("2025-01-01"), backfillComplete: false });
       mockGetHistoryPage.mockResolvedValueOnce({
         records: [historyRecord({ id: "c1", started_at: "2022-06-01T00:00:00.000Z" })],
@@ -3441,6 +3460,40 @@ describe("syncTracearrHistory", () => {
       });
       mockPrisma.$executeRawUnsafe.mockImplementation(async (sql: string) => {
         if (sql.includes('INSERT INTO "WatchHistory"')) {
+          throw new Error('value "4000000000" is out of range for type integer');
+        }
+        return 1;
+      });
+
+      const result = await syncTracearrHistory("server-1", { passes: "backfill" });
+
+      expect(result).toMatchObject({ backfillOutcome: "errored", backfillPending: true });
+      // The page never committed, so its position is not kept either, and a
+      // walk that could not write is not recorded as having walked.
+      const writes = mockPrisma.mediaServer.updateMany.mock.calls.filter(
+        (c) => "tracearrBackfillCursorAt" in c[0].data || "tracearrBackfillLastWalkAt" in c[0].data,
+      );
+      expect(writes).toHaveLength(0);
+    });
+
+    it("reports a write failure after a committed page as a resumable stop", async () => {
+      // The FK race `rowsWithLiveMediaItems` narrows but cannot close: an item
+      // deleted between its check and the INSERT. This walk made progress, and
+      // the next slice rebuilds the index and skips the item — re-queue, don't
+      // back off.
+      storedRows({ min: new Date("2023-01-01"), max: new Date("2025-01-01"), backfillComplete: false });
+      mockGetHistoryPage
+        .mockResolvedValueOnce({
+          records: [historyRecord({ id: "c1", started_at: "2022-06-01T00:00:00.000Z" })],
+          nextCursor: "c2",
+        })
+        .mockResolvedValueOnce({
+          records: [historyRecord({ id: "c2", started_at: "2022-05-01T00:00:00.000Z" })],
+          nextCursor: "c3",
+        });
+      let inserts = 0;
+      mockPrisma.$executeRawUnsafe.mockImplementation(async (sql: string) => {
+        if (sql.includes('INSERT INTO "WatchHistory"') && ++inserts === 2) {
           throw new Error('insert or update on table "WatchHistory" violates foreign key constraint');
         }
         return 1;
@@ -3450,11 +3503,29 @@ describe("syncTracearrHistory", () => {
 
       expect(result).toMatchObject({ backfillOutcome: "stopped", backfillPending: true });
       expect(result.failed).toBeUndefined();
-      // The page never committed, so its position is not kept either.
-      const cursorWrites = mockPrisma.mediaServer.updateMany.mock.calls.filter(
+      // Only the committed page's position is kept.
+      const cursorWrite = mockPrisma.mediaServer.updateMany.mock.calls.find(
         (c) => "tracearrBackfillCursorAt" in c[0].data,
       );
-      expect(cursorWrites).toHaveLength(0);
+      expect(cursorWrite?.[0].data.tracearrBackfillCursorAt).toEqual(
+        new Date("2022-06-01T00:00:00.000Z"),
+      );
+    });
+
+    it("reports a forward write failure on its first page as a failure to store, not to reach", async () => {
+      storedRows({ min: new Date("2021-01-01"), max: new Date("2025-07-10T12:00:00.000Z"), backfillComplete: true });
+      mockGetHistoryPage.mockResolvedValueOnce({
+        records: [historyRecord({ id: "c1", started_at: "2025-07-10T11:30:00.000Z" })],
+        nextCursor: null,
+      });
+      mockPrisma.$executeRawUnsafe.mockImplementation(async (sql: string) => {
+        if (sql.includes('INSERT INTO "WatchHistory"')) throw new Error("tx timeout");
+        return 1;
+      });
+
+      const result = await syncTracearrHistory("server-1", { passes: "forward" });
+
+      expect(result.failed).toMatch(/could not be stored/i);
     });
 
     it("keeps a backfill fetch failure as errored, so the task backs off", async () => {

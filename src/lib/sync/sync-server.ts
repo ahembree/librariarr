@@ -24,6 +24,7 @@ import { syncWatchHistory } from "@/lib/sync/sync-watch-history";
 import { reconcileWatchStateFromHistory } from "@/lib/sync/watch-reconcile";
 import { mbidFromGuids, withArtistMbid } from "@/lib/media/musicbrainz";
 import { writeArtistMbids } from "@/lib/sync/artist-mbid";
+import { restartTracearrBackfill } from "@/lib/media/watch-evidence";
 
 // --- Filename-based detection using Trash-Guides naming conventions ---
 // These regex patterns are derived from Trash-Guides custom format definitions:
@@ -907,8 +908,17 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
     // likely a bad answer than "delete everything" — the same fail-toward-
     // keeping stance as the item purge.
     if (!libraryKey && libraries.length > 0) {
-      if (await purgeVanishedLibraries(serverId, libraries.map((l) => l.key)) > 0) {
+      const purged = await purgeVanishedLibraries(serverId, libraries.map((l) => l.key));
+      if (purged.libraries > 0) {
         datasetChanged = true;
+      }
+      // The cascade took those libraries' imported Tracearr plays with it, and
+      // a library re-created under a new key comes back as fresh items that
+      // read as never watched. A completed archive walk never looks back, and
+      // the recovery pass only offers a capped few items a run, so restart the
+      // walk — the same response as a manual purge.
+      if (purged.tracearrRows > 0) {
+        await restartTracearrBackfill([serverId]);
       }
     }
 
@@ -1544,11 +1554,15 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
  * the media reappears under another library. Returns how many it removed, so
  * the caller knows the dataset changed.
  */
-async function purgeVanishedLibraries(serverId: string, serverKeys: string[]): Promise<number> {
+async function purgeVanishedLibraries(
+  serverId: string,
+  serverKeys: string[],
+): Promise<{ libraries: number; tracearrRows: number }> {
   const vanished = await prisma.$queryRawUnsafe<{ id: string; key: string; title: string }[]>(
     `SELECT "id","key","title" FROM "Library" WHERE "mediaServerId"=$1 AND NOT ("key" = ANY($2::text[]))`,
     serverId, serverKeys,
   );
+  let removedTracearrRows = 0;
   for (const lib of vanished) {
     const items = await prisma.$queryRawUnsafe<
       { id: string; thumbUrl: string | null; parentThumbUrl: string | null; seasonThumbUrl: string | null }[]
@@ -1563,6 +1577,13 @@ async function purgeVanishedLibraries(serverId: string, serverKeys: string[]): P
       lib.id,
     );
     const exceptions = Number(exceptionRows[0]?.count ?? 0);
+    const tracearrRows = await prisma.$queryRawUnsafe<{ count: bigint }[]>(
+      `SELECT COUNT(*)::bigint AS count FROM "WatchHistory" wh
+         JOIN "MediaItem" mi ON mi."id" = wh."mediaItemId"
+        WHERE mi."libraryId"=$1 AND wh."source"='TRACEARR'`,
+      lib.id,
+    );
+    removedTracearrRows += Number(tracearrRows[0]?.count ?? 0);
     for (const item of items) {
       await invalidateCachedUrls([item.thumbUrl, item.parentThumbUrl, item.seasonThumbUrl]);
     }
@@ -1573,7 +1594,7 @@ async function purgeVanishedLibraries(serverId: string, serverKeys: string[]): P
         (exceptions > 0 ? `, deleting ${exceptions} lifecycle exception(s) attached to them` : ""),
     );
   }
-  return vanished.length;
+  return { libraries: vanished.length, tracearrRows: removedTracearrRows };
 }
 
 /**

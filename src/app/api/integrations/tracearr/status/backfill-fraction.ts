@@ -1,5 +1,6 @@
 /**
- * Progress arithmetic for the Tracearr history backfill.
+ * Progress arithmetic and the "is it still importing" policy for the Tracearr
+ * history backfill.
  *
  * Lives beside the route rather than inside it because a `route.ts` may only
  * export route handlers and Next's route config fields — a runtime export of
@@ -120,4 +121,66 @@ export function computeBackfillFraction(input: {
   // (it arrived on the forward pass, or Tracearr grew older history after the
   // bisection ran). That is a >1 ratio, not a bug — report a full bar.
   return Math.min(1, Math.max(0, covered / span));
+}
+
+/**
+ * Why an owed import is not progressing, when that is the reason it is not
+ * pending. The first two lift only when the user re-enables something; the
+ * last one lifts by itself the next time a watch-history sync re-queues the
+ * slice (a keyed enqueue gives a parked job a fresh set of attempts).
+ */
+export type ImportPausedReason = "server-disabled" | "instance-unavailable" | "import-failing";
+
+/**
+ * Whether this server's archive import is genuinely still owed AND will make
+ * progress — the signal a spinner or a poll may wait on.
+ *
+ * Not owed: `backfillComplete`. Cannot progress: the server is disabled (no
+ * sync of any kind runs for it), the user has no enabled Tracearr instance
+ * (`syncWatchHistory` then skips a mapped server outright rather than falling
+ * back to native), or the slice keeps failing — its job used up every attempt
+ * and is parked, and nothing is running (an instance that no longer monitors
+ * the mapping, an account list that cannot be read). All three are reported
+ * with `pausedReason` (see the route) so Settings can say why instead of
+ * spinning: imported rows used to be enough to read "pending", so a mapping
+ * that could never progress again showed "importing" and was polled forever.
+ * With several instances, which one owns the mapping is only knowable by
+ * asking each over the network, which a polled route must not do — "at least
+ * one enabled" is the approximation, and an unowned mapping then fails its
+ * slices and lands in the parked case.
+ *
+ * Otherwise pending while a slice is running or queued, and while the
+ * mapping has NEVER been walked (`lastWalkAt` null): a fresh mapping has no
+ * job until its first watch-history sync queues one, and reporting that gap
+ * as "not pending" told the user "Tracearr has no plays for this server —
+ * check the mapping" for the whole of a multi-hour import whenever the pushed
+ * progress events could not reach the page.
+ *
+ * Only a mapping that HAS been walked, has nothing running or queued, and has
+ * nothing to show for it is not pending: the walk came back exhausted with
+ * zero records, which deliberately does not mark the backfill complete and
+ * does not re-enqueue — a wrong mapping, or a Tracearr holding no plays for
+ * it. Earlier evidence that there is history (imported rows, a measured far
+ * edge, a cursor) still reads pending, which only matters when the job table
+ * could not be read.
+ */
+export function importPending(input: {
+  pausedReason: ImportPausedReason | null;
+  backfillComplete: boolean;
+  importedCount: number;
+  oldestPlayAt: Date | null;
+  cursorAt: Date | null;
+  lastWalkAt: Date | null;
+  running: boolean;
+  queued: boolean;
+}): boolean {
+  if (input.pausedReason !== null || input.backfillComplete) return false;
+  return (
+    input.running ||
+    input.queued ||
+    input.lastWalkAt === null ||
+    input.importedCount > 0 ||
+    input.oldestPlayAt !== null ||
+    input.cursorAt !== null
+  );
 }

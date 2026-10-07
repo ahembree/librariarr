@@ -5,11 +5,14 @@ import {
   HISTORY_COLUMN_SORT_KEY,
   HISTORY_SORT_KEYS,
   HISTORY_SORT_SQL,
+  HISTORY_TYPE_SORT_ORDER,
   historyColumnForSortKey,
   historySortKeyForColumn,
   historySortSql,
   isHistorySortableColumn,
 } from "@/lib/media/history-sort";
+import { QUALITY_ORDER, resolutionLabelSql } from "@/lib/resolution";
+import { MEDIA_TYPE_LABELS } from "@/lib/theme/media-type-colors";
 
 /**
  * Column ids the History page declares with a `sortValue` (i.e. a clickable
@@ -78,5 +81,39 @@ describe("history sort map", () => {
     expect(historySortKeyForColumn("constructor")).toBe("watchedAt");
     expect(historyColumnForSortKey("toString")).toBe("watchedAt");
     expect(isHistorySortableColumn("__proto__")).toBe(false);
+  });
+});
+
+describe("history sort SQL for displayed labels", () => {
+  /** `CASE … WHEN '<label>' THEN <n> …` → the labels in rank order. */
+  function rankedLabels(sql: string): string[] {
+    return [...sql.matchAll(/WHEN '([^']+)' THEN (\d+)/g)]
+      .map(([, label, rank]) => ({ label, rank: Number(rank) }))
+      .sort((a, b) => a.rank - b.rank)
+      .map(({ label }) => label);
+  }
+
+  it.each([
+    ["resolution", 'mi."resolution"'],
+    ["streamResolution", 'wh."resolution"'],
+  ] as const)("ranks %s by its normalized label, lowest first", (key, column) => {
+    const [rank, raw] = HISTORY_SORT_SQL[key];
+    // The label comes from the SQL twin of normalizeResolutionLabel, applied
+    // to the right column (the file's vs the stream's).
+    expect(rank).toContain(resolutionLabelSql(column));
+    // Only the outer CASE maps a quoted LABEL to a numeric rank; the inner
+    // CASE maps raw text to labels (`THEN '4K'`), which the pattern skips.
+    expect(rankedLabels(rank)).toEqual(["SD", "480P", "720P", "1080P", "4K"]);
+    // Every label but "Other" is ranked — "Other" is unknown, so NULL, last.
+    expect(rankedLabels(rank).sort()).toEqual(QUALITY_ORDER.filter((l) => l !== "Other").sort());
+    expect(raw).toBe(`NULLIF(LOWER(${column}), '')`);
+  });
+
+  it("sorts Type by the label the column shows, not the enum's declaration order", () => {
+    const shown = Object.keys(MEDIA_TYPE_LABELS).sort((a, b) =>
+      MEDIA_TYPE_LABELS[a].localeCompare(MEDIA_TYPE_LABELS[b]),
+    );
+    expect([...HISTORY_TYPE_SORT_ORDER]).toEqual(shown);
+    expect(rankedLabels(HISTORY_SORT_SQL.type[0])).toEqual(shown);
   });
 });

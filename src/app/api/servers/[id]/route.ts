@@ -14,6 +14,7 @@ import {
 } from "@/lib/media/watch-evidence";
 import { hasRecentLogin } from "@/lib/auth/recent-login";
 import { reauthRequired } from "@/lib/auth/reauth";
+import { supersedeTracearrImports } from "@/lib/sync/tracearr-import-activity";
 
 const withoutTrailingSlash = (value: string) => value.replace(/\/+$/, "");
 
@@ -116,6 +117,15 @@ export async function PUT(
     const mappingChanged =
       tracearrServerId !== undefined && tracearrServerId !== current.tracearrServerId;
 
+    if (mappingChanged) {
+      // Before the UPDATE — see the lock-order note at the wipe below. Same
+      // key as `lockServerHistory` in `sync-watch-history.ts`.
+      await tx.$executeRawUnsafe(
+        `SELECT pg_advisory_xact_lock(hashtext('watch-history:' || $1))`,
+        server.id,
+      );
+    }
+
     if (mappingChanged && tracearrServerId) {
       const taken = await tx.mediaServer.findFirst({
         where: {
@@ -156,6 +166,10 @@ export async function PUT(
           tracearrOldestPlayAt: null,
           tracearrBackfillCursorAt: null,
           tracearrForwardFloorAt: null,
+          // "Walked and found nothing" described the OLD Tracearr server; the
+          // new mapping is waiting for its first walk (the status readout
+          // reports a never-walked mapping as pending, not as empty).
+          tracearrBackfillLastWalkAt: null,
           // The wipe below empties the history, so it is unknown from the same
           // statement that switches the source. Withdrawn only after the wipe,
           // an unlink (native, no Tracearr flag to pause it) read as established
@@ -165,12 +179,54 @@ export async function PUT(
         }),
       },
     });
+
+    // A source switch (native <-> Tracearr, or one Tracearr server to another)
+    // invalidates every WatchHistory row already stored for this server, because
+    // the two sources have incompatible row models: the native sync is a
+    // full-replace that leaves all of the rich Tracearr columns null, while the
+    // Tracearr sync is an incremental append keyed on `sourceEventId`. Neither
+    // path ever revisits the other's rows — the append model never wipes, and
+    // the native full-replace only deletes rows on a *successful* fetch — so
+    // without this one-shot delete the server would keep a permanent stratum of
+    // stale rows from its previous source. The next sync repopulates from the
+    // new one.
+    //
+    // In the SAME transaction as the mapping write, so the two commit or fail
+    // together: run after the commit, a crash (or a failed DELETE) in between
+    // left the old source's rows under the new mapping for good — and the
+    // importer derives its resume boundaries from exactly those rows.
+    //
+    // Lock order, which is what keeps this deadlock-free: the UPDATE above has
+    // already taken this server's row lock, so a Tracearr page write
+    // (`writeBatch`/`deleteNativeStratum` take the row `FOR SHARE` before
+    // touching WatchHistory) either committed before it — its rows are visible
+    // to this DELETE — or waits for this commit and then sees the new mapping
+    // and writes nothing. Neither side ever holds WatchHistory rows while
+    // waiting on the other's server-row lock. The native writers' per-server
+    // advisory lock is taken BEFORE the UPDATE for the same reason: they hold
+    // it across their DELETE + INSERT and only ever take a KEY SHARE on the
+    // server row (which the UPDATE does not conflict with), so waiting for it
+    // first means a native full replace in flight finishes before the wipe
+    // rather than committing rows this DELETE could not see.
+    let wiped = 0;
+    if (mappingChanged) {
+      ({ count: wiped } = await tx.watchHistory.deleteMany({
+        where: { mediaServerId: server.id },
+      }));
+    }
     return {
       kind: "updated" as const,
       updated,
       mappingChanged,
+      wiped,
       previousTracearrServerId: current.tracearrServerId,
     };
+  }, {
+    // The wipe can be a server's whole history (hundreds of thousands of rows)
+    // and may wait for a native full replace to finish; Prisma's 5s default
+    // would abort exactly the switches that have the most to clear.
+    timeout: 5 * 60_000,
+    maxWait: 15_000,
   });
 
   if (outcome.kind === "gone") {
@@ -185,22 +241,19 @@ export async function PUT(
       { status: 409 }
     );
   }
-  const { updated, mappingChanged: tracearrMappingChanged, previousTracearrServerId } = outcome;
+  const {
+    updated,
+    mappingChanged: tracearrMappingChanged,
+    wiped,
+    previousTracearrServerId,
+  } = outcome;
 
-  // A source switch (native <-> Tracearr, or one Tracearr server to another)
-  // invalidates every WatchHistory row already stored for this server, because
-  // the two sources have incompatible row models: the native sync is a
-  // full-replace that leaves all of the rich Tracearr columns null, while the
-  // Tracearr sync is an incremental append keyed on `sourceEventId`. Neither
-  // path ever revisits the other's rows — the append model never wipes, and the
-  // native full-replace only deletes rows on a *successful* fetch — so without
-  // this one-shot delete the server would keep a permanent stratum of stale
-  // rows from its previous source. The next sync repopulates from the new one.
-  // Placed after the update so a failed write can't destroy history.
   if (tracearrMappingChanged) {
-    const wiped = await prisma.watchHistory.deleteMany({
-      where: { mediaServerId: server.id },
-    });
+    // A run of the OLD mapping may still be paging (a slice, a History-page
+    // Refresh): its next write will refuse, but until it ends its live
+    // readout would be reported against the new mapping — counts, and a
+    // backfill reach measured on a different Tracearr server's archive.
+    supersedeTracearrImports(server.id);
 
     // Mark the server as un-evidenced until a sync refills it. An empty
     // `WatchHistory` is indistinguishable from "nobody watched anything", and
@@ -231,7 +284,7 @@ export async function PUT(
       "Auth",
       `Watch-history source for media server "${server.name}" changed ` +
         `(${previousTracearrServerId ?? "native"} -> ${tracearrServerId ?? "native"}); ` +
-        `cleared ${wiped.count} stored watch-history rows`
+        `cleared ${wiped} stored watch-history rows`
     );
   }
 

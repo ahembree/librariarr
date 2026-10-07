@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type { AxiosRequestConfig } from "axios";
 
 const { mockAxiosCreate, requestInterceptors } = vi.hoisted(() => {
@@ -671,18 +671,116 @@ describe("JellyfinClient", () => {
       expect(axiosClient.get.mock.calls.filter((c) => c[0] === "/Users/u1/Items")).toHaveLength(1);
     });
 
-    it("throws on an empty page short of the reported total rather than ending the walk", async () => {
+    it("ends the walk on an empty page short of an over-reported total, with a warning", async () => {
+      // Throwing here (as an earlier version did) failed every sync of a
+      // server whose count over-reports, so its history never updated again.
       const { client } = pagedClient((params) =>
         params.StartIndex === 0
           ? cappedPages(250, 100, true)(params)
           : { data: { Items: [], TotalRecordCount: 250 } },
       );
-      await expect(client.getDetailedWatchHistory()).rejects.toThrow(/empty played-items page at 100 of 250/);
+      const { logger } = await import("@/lib/logger");
+
+      const entries = await client.getDetailedWatchHistory();
+
+      expect(entries).toHaveLength(100);
+      expect(logger.warn).toHaveBeenCalledWith("Jellyfin", expect.stringContaining("ended at 100 of a reported 250"));
     });
 
     it("throws instead of looping when the server ignores StartIndex", async () => {
       const { client } = pagedClient(() => cappedPages(5000, 1000, true)({ StartIndex: 0 }));
       await expect(client.getDetailedWatchHistory()).rejects.toThrow(/ignored StartIndex/);
+    });
+
+    it("throws instead of looping when the server ignores StartIndex and reports no total", async () => {
+      const { client, axiosClient } = pagedClient(() => cappedPages(5000, 1000, false)({ StartIndex: 0 }));
+      await expect(client.getDetailedWatchHistory()).rejects.toThrow(/ignored StartIndex/);
+      expect(axiosClient.get.mock.calls.filter((c) => c[0] === "/Users/u1/Items")).toHaveLength(2);
+    });
+
+    it("hands on an item once when a change mid-walk shifts it onto the next page", async () => {
+      // Offset paging: an item marked played between requests pushes the last
+      // item of page 1 to the top of page 2. Delivered twice, its undated
+      // play entries were stored twice — a permanent playCount inflation.
+      const item = (id: string, plays: number) => ({
+        Id: id,
+        UserData: { PlayCount: plays, LastPlayedDate: "2024-01-02T00:00:00.000Z" },
+      });
+      const { client } = pagedClient((params) =>
+        params.StartIndex === 0
+          ? { data: { Items: [item("a", 1), item("b", 3)], TotalRecordCount: 4 } }
+          : { data: { Items: [item("b", 3), item("c", 1)], TotalRecordCount: 4 } },
+      );
+
+      const entries = await client.getDetailedWatchHistory();
+
+      expect(entries.filter((e) => e.ratingKey === "b")).toHaveLength(3);
+      expect(entries.map((e) => e.ratingKey).sort()).toEqual(["a", "b", "b", "b", "c"]);
+    });
+
+    it("passes over a short last page that only repeats an item pushed down", async () => {
+      const item = (id: string) => ({ Id: id, UserData: { PlayCount: 1 } });
+      const { client, axiosClient } = pagedClient((params) =>
+        params.StartIndex === 0
+          ? { data: { Items: [item("a"), item("b")], TotalRecordCount: 3 } }
+          : { data: { Items: [item("b")], TotalRecordCount: 3 } },
+      );
+
+      const entries = await client.getDetailedWatchHistory();
+
+      expect(entries.map((e) => e.ratingKey)).toEqual(["a", "b"]);
+      expect(axiosClient.get.mock.calls.filter((c) => c[0] === "/Users/u1/Items")).toHaveLength(2);
+    });
+
+    it("asks for a stable order so the pages do not reshuffle between requests", async () => {
+      const { client, axiosClient } = pagedClient(cappedPages(3, 100, true));
+      await client.getDetailedWatchHistory();
+      const params = axiosClient.get.mock.calls.find((c) => c[0] === "/Users/u1/Items")?.[1]?.params;
+      expect(params).toMatchObject({ SortBy: "DateCreated,SortName", SortOrder: "Ascending" });
+    });
+
+    describe("users the key cannot read", () => {
+      const refused = (status: number) => async () => {
+        throw Object.assign(new Error(`HTTP ${status}`), { isAxiosError: true, response: { status } });
+      };
+      beforeEach(async () => {
+        const { default: axios } = await import("axios");
+        vi.mocked(axios.isAxiosError).mockImplementation(
+          (e: unknown) => !!(e as { isAxiosError?: boolean })?.isAxiosError,
+        );
+      });
+      afterEach(async () => {
+        const { default: axios } = await import("axios");
+        vi.mocked(axios.isAxiosError).mockImplementation(() => false);
+      });
+
+      it("fails the fetch when EVERY user is refused, rather than reporting no plays", async () => {
+        // An empty list here let the full replace delete every stored play and
+        // mark the history established.
+        const { client } = newClient({ u1: refused(403), u2: refused(404) });
+        await expect(client.getDetailedWatchHistory()).rejects.toThrow(/all 2 user/);
+      });
+
+      it("still returns the readable users' plays when only some are refused", async () => {
+        const { client } = newClient({ u1: refused(401), u2: async () => played("m2") });
+        const entries = await client.getDetailedWatchHistory();
+        expect(entries.map((e) => e.username)).toEqual(["Bob"]);
+      });
+
+      it("still answers an empty /Users list with no plays (nobody was refused)", async () => {
+        const client = new JellyfinClient("http://jellyfin:8096", "jf-token");
+        const axiosClient = mockAxiosCreate.mock.results[0].value as { get: ReturnType<typeof vi.fn> };
+        axiosClient.get.mockImplementation(async () => ({ data: [] }));
+        await expect(client.getDetailedWatchHistory()).resolves.toEqual([]);
+      });
+
+      it("counts a user with no plays as read", async () => {
+        const { client } = newClient({
+          u1: refused(403),
+          u2: async () => ({ data: { Items: [], TotalRecordCount: 0 } }),
+        });
+        await expect(client.getDetailedWatchHistory()).resolves.toEqual([]);
+      });
     });
   });
 });

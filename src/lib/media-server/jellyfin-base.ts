@@ -479,6 +479,7 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
       throw new Error(`${this.logPrefix} returned a malformed /Users response (not a list)`);
     }
     const users = usersRes.data as Array<{ Id: string; Name: string }>;
+    let usersRead = 0;
 
     for (const user of users) {
       try {
@@ -501,6 +502,7 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
             }
           }
         });
+        usersRead++;
       } catch (error) {
         // A user the key cannot read (401/403) or that no longer exists (404)
         // is skipped: that is a permanent condition, and failing the whole
@@ -521,6 +523,18 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
       }
     }
 
+    // Skipping a user is only safe while somebody's history was read. When
+    // EVERY user answered 401/403/404 the result is not "nobody played
+    // anything" but "nothing could be read" — a key that lost its rights, a
+    // proxy answering 403 to every user route — and returning the empty list
+    // let the full replace delete every stored play and mark the history
+    // established, arming every play-activity rule on an empty relation.
+    if (users.length > 0 && usersRead === 0) {
+      throw new Error(
+        `${this.logPrefix} refused the played-items listing for all ${users.length} user(s)`,
+      );
+    }
+
     return entries;
   }
 
@@ -533,6 +547,15 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
    * honour `Limit`, and a capped page silently truncated the user's history to
    * its first page before the full replace committed it. The offset advances
    * by the items actually returned, for the same reason.
+   *
+   * Each item is handed on at most once per user. The listing is paged by
+   * offset, so an item marked played (or unplayed) while the walk is in
+   * progress shifts every later row by one and the next page repeats the item
+   * the previous one ended on. Delivered twice, its `PlayCount` undated play
+   * entries were stored twice — and `playCount` is monotonic, so the inflation
+   * was permanent. The stable `SortBy` keeps the order itself from changing
+   * between requests: `DateCreated` does not move when somebody plays the
+   * item (unlike the server's default), and a newly added item sorts last.
    */
   private async forEachPlayedPage(
     userId: string,
@@ -548,7 +571,8 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
     // `StartIndex` and reported no total would otherwise page forever.
     const MAX_PAGES = 10_000;
     let startIndex = 0;
-    let previousFirstId: string | undefined;
+    let firstPageLength: number | undefined;
+    const seen = new Set<string>();
 
     for (let page = 0; ; page++) {
       if (page >= MAX_PAGES) {
@@ -563,6 +587,8 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
           // also walked every played Series, Season and BoxSet, which can
           // never map to a MediaItem and were dropped on arrival.
           IncludeItemTypes: "Movie,Episode,Audio",
+          SortBy: "DateCreated,SortName",
+          SortOrder: "Ascending",
           StartIndex: startIndex,
           Limit: PAGE_SIZE,
         },
@@ -581,24 +607,40 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
       const total = typeof body.TotalRecordCount === "number" ? body.TotalRecordCount : null;
 
       if (items.length === 0) {
-        // An empty page short of the reported total cannot be stepped over
-        // (there is no offset that would make progress) and must not end the
-        // walk as if the history were complete.
+        // An empty page ends the walk even short of the reported total. The
+        // count is computed by a separate query from the page, and servers do
+        // over-report it (items the user cannot see, an item unmarked played
+        // mid-walk shrinking the list); throwing here failed every sync of
+        // such a server forever, so its history never updated again. There
+        // is no offset that would make progress past an empty page anyway.
         if (total != null && startIndex < total) {
-          throw new Error(
-            `${this.logPrefix} returned an empty played-items page at ${startIndex} of ${total}`,
+          logger.warn(
+            this.logPrefix,
+            `Played-items listing ended at ${startIndex} of a reported ${total}; ` +
+              `treating the shortfall as an over-reported total`,
           );
         }
         return;
       }
-      // The same page twice means `StartIndex` is being ignored; continuing
-      // would deliver it again and again.
-      if (page > 0 && items[0]?.Id === previousFirstId) {
+
+      const fresh = items.filter((item) => {
+        if (seen.has(item.Id)) return false;
+        seen.add(item.Id);
+        return true;
+      });
+      // A whole page of items already delivered means `StartIndex` is being
+      // ignored (every request answered with the first page); continuing
+      // would deliver it again and again. A mid-walk shift repeats only as
+      // many items as changed meanwhile, so a SHORT all-repeat page is the
+      // end of the list pushed down a place or two, and is passed over.
+      firstPageLength ??= items.length;
+      if (fresh.length === 0 && items.length >= firstPageLength) {
         throw new Error(`${this.logPrefix} ignored StartIndex while paging played items`);
       }
-      previousFirstId = items[0]?.Id;
 
-      onPage(items);
+      if (fresh.length > 0) onPage(fresh);
+      // Advance by what the server returned, repeats included: the offset
+      // addresses its list, not ours.
       startIndex += items.length;
 
       if (total != null) {

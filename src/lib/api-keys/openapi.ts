@@ -67,6 +67,35 @@ const LIBRARY_FILTERS: Param[] = [
 
 const MEDIA_TYPE = { type: "string", enum: ["MOVIE", "SERIES", "MUSIC"] };
 
+/**
+ * `GET /media/history`'s `sortBy` values. A copy of `HISTORY_SORT_KEYS` in
+ * `src/lib/media/history-sort.ts` rather than an import: the docs build runs
+ * this module directly (`scripts/generate-openapi.ts`), so it imports nothing
+ * beyond `scopes`/`limits`, while history-sort carries the route's SQL and the
+ * resolution helpers. `tests/unit/api-keys/openapi.test.ts` holds the two
+ * lists equal.
+ */
+export const OPENAPI_HISTORY_SORT_KEYS = [
+  "watchedAt",
+  "serverUsername",
+  "serverName",
+  "deviceName",
+  "platform",
+  "title",
+  "type",
+  "year",
+  "resolution",
+  "dynamicRange",
+  "videoCodec",
+  "audioCodec",
+  "duration",
+  "fileSize",
+  "percentComplete",
+  "isTranscode",
+  "player",
+  "streamResolution",
+] as const;
+
 export const API_OPERATIONS: readonly Operation[] = [
   {
     method: "get",
@@ -187,15 +216,24 @@ export const API_OPERATIONS: readonly Operation[] = [
     scope: "media:read",
     tag: "Library",
     summary: "Play history",
+    description:
+      "One row per play, newest first by default, with `pagination.totalCount` and the distinct `usernames`, `deviceNames` and `platforms` for filter pickers. `sortBy=title` sorts by the displayed title (the show or artist, then season and episode for episodes, then the title); `resolution`/`streamResolution` by the resolution label from lowest to highest; `type` by its label (Movie, Music, Series). Values without one sort last in either direction.",
     query: [
-      { name: "page", description: "1-based page number.", schema: { type: "integer", minimum: 1 } },
-      { name: "limit", description: "Rows per page, at most 200.", schema: { type: "integer", minimum: 1, maximum: 200 } },
-      { name: "search", description: "Title search." },
-      { name: "username", description: "Pipe-separated media-server usernames." },
-      { name: "type", description: "Pipe-separated library types.", schema: { type: "string" } },
+      { name: "page", description: "1-based page number.", schema: { type: "integer", minimum: 1, default: 1 } },
+      { name: "limit", description: "Rows per page, 1–200.", schema: { type: "integer", minimum: 1, maximum: 200, default: 50 } },
+      { name: "search", description: "Matches the title or the show/artist." },
+      { name: "startsWith", description: "First letter of the sort title, or `#` for titles not starting with a letter." },
       { name: "serverId", description: "Limit to one media server." },
-      { name: "sortBy", description: "Field to sort by." },
-      { name: "sortOrder", description: "Sort direction.", schema: { type: "string", enum: ["asc", "desc"] } },
+      { name: "type", description: "Pipe-separated library types, e.g. `MOVIE|SERIES`.", schema: { type: "string" } },
+      { name: "username", description: "Pipe-separated media-server usernames." },
+      { name: "deviceName", description: "Pipe-separated device names." },
+      { name: "platform", description: "Pipe-separated platforms." },
+      { name: "resolution", description: "Pipe-separated file resolutions: `4K`, `1080P`, `720P`, `480P`, `SD`, or a stored value." },
+      { name: "dynamicRange", description: "Pipe-separated dynamic ranges, e.g. `HDR10|Dolby Vision`." },
+      { name: "videoCodec", description: "Pipe-separated video codecs." },
+      { name: "audioCodec", description: "Pipe-separated audio codecs." },
+      { name: "sortBy", description: "Field to sort by; anything else sorts by `watchedAt`.", schema: { type: "string", enum: [...OPENAPI_HISTORY_SORT_KEYS], default: "watchedAt" } },
+      { name: "sortOrder", description: "Sort direction.", schema: { type: "string", enum: ["asc", "desc"], default: "desc" } },
     ],
   },
   { method: "get", path: "/media/{id}", scope: "media:read", tag: "Library", summary: "One item with streams, external ids and file details (file path and server addresses omitted)" },

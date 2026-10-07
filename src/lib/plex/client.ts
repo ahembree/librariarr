@@ -432,7 +432,12 @@ export class PlexClient implements MediaServerClient {
     since?: Date,
   ): Promise<void> {
     const PAGE_SIZE = 5000;
+    // Runaway backstop only (100M plays at the full page size, 2M at a 100-entry
+    // cap): a server that ignores `X-Plex-Container-Start` and reports no
+    // total, with entries that carry no identity, would otherwise page forever.
+    const MAX_PAGES = 20_000;
     let start = 0;
+    let firstPageLength: number | undefined;
     // Pages are fetched by OFFSET over a newest-first list, so a play recorded
     // while the walk is in progress pushes every later entry down one place
     // and the next page starts with the entry the previous page ended on.
@@ -451,7 +456,10 @@ export class PlexClient implements MediaServerClient {
       ? `/status/sessions/history/all?viewedAt>=${Math.floor(since.getTime() / 1000)}`
       : "/status/sessions/history/all";
 
-    while (true) {
+    for (let page = 0; ; page++) {
+      if (page >= MAX_PAGES) {
+        throw new Error(`Plex history listing did not end after ${MAX_PAGES} pages`);
+      }
       const response = await this.client.get(path, {
         params: {
           sort: "viewedAt:desc",
@@ -472,13 +480,34 @@ export class PlexClient implements MediaServerClient {
       const metadata = rawMetadata as Array<Record<string, unknown>>;
       if (metadata.length === 0) break;
 
+      let identified = 0;
+      let newlySeen = 0;
       const fresh = metadata.filter((entry) => {
         const id = historyEntryIdentity(entry);
         if (id === null) return true;
+        identified++;
         if (seen.has(id)) return false;
         seen.add(id);
+        newlySeen++;
         return true;
       });
+      // A whole page of entries already delivered means the server is not
+      // honouring `X-Plex-Container-Start` (a proxy dropping the parameter, a
+      // build that ignores it) and is answering every request with the newest
+      // page. The dedup above would filter the repeats silently: with a
+      // `totalSize` the walk then ended after a handful of identical pages
+      // holding only the newest plays — committed by the full replace, which
+      // deleted the rest — and without one it never ended. A mid-walk shift
+      // repeats only as many entries as plays landed meanwhile, so a SHORT
+      // all-repeat page is the end of the list pushed down by a new play, not
+      // an ignored offset, and is passed over.
+      firstPageLength ??= metadata.length;
+      if (identified > 0 && newlySeen === 0 && metadata.length >= firstPageLength) {
+        throw new Error(
+          `Plex returned an already-delivered history page at offset ${start} ` +
+            `(X-Plex-Container-Start ignored?)`,
+        );
+      }
       if (fresh.length > 0) onPage(fresh);
       // Advance by what the server returned, duplicates included: the offset
       // addresses its list, not ours.

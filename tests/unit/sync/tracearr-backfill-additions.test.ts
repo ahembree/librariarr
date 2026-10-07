@@ -28,6 +28,7 @@ const m = vi.hoisted(() => ({
   getHistoryForItem: vi.fn(),
   getServerAccountNames: vi.fn(),
   buildTracearrJoinIndex: vi.fn(),
+  resolveMediaItemId: vi.fn(),
   importTracearrRecords: vi.fn(),
   resolveInstanceForServer: vi.fn(),
   reconcileWatchStateFromHistory: vi.fn(),
@@ -44,6 +45,7 @@ vi.mock("@/lib/sync/watch-reconcile", () => ({
 }));
 vi.mock("@/lib/sync/tracearr-join", () => ({
   buildTracearrJoinIndex: m.buildTracearrJoinIndex,
+  resolveMediaItemId: m.resolveMediaItemId,
 }));
 vi.mock("@/lib/sync/sync-tracearr-history", () => ({
   importTracearrRecords: m.importTracearrRecords,
@@ -139,6 +141,10 @@ describe("recoverHistoryForNewItems", () => {
       apiKey: "key",
     });
     m.buildTracearrJoinIndex.mockResolvedValue(JOIN_INDEX);
+    // Every play resolves to the first candidate unless a test says otherwise —
+    // the resolver itself is covered in `tracearr-join.test.ts`; here only
+    // WHICH row a play landed on matters (see "answered" below).
+    m.resolveMediaItemId.mockReturnValue({ mediaItemId: "item-1" });
     m.getHistoryForItem.mockResolvedValue([]);
     // A populated map is the only state in which this pass may write: the rows
     // it creates are old plays nothing re-delivers, so a missing/empty map has
@@ -152,16 +158,19 @@ describe("recoverHistoryForNewItems", () => {
   });
 
   describe("candidate selection", () => {
-    it("keeps an item with Tracearr plays a candidate until Tracearr has answered for it", async () => {
+    it("excludes only items already holding a Tracearr play from BEFORE they were created", async () => {
       await recoverHistoryForNewItems(SERVER_ID);
 
       const { sql, params } = candidateQuery();
       // A re-added item's first NEW play (under its new rating key) is usually
-      // in before this pass reaches it. Excluding items that hold any TRACEARR
-      // row dropped exactly those, leaving every older play — reachable only by
-      // provider id — unrecovered. Candidacy ends on an ANSWER instead.
-      expect(sql).not.toContain("NOT EXISTS");
-      expect(sql).not.toContain("'TRACEARR'");
+      // in before this pass reaches it, so "has any TRACEARR row" must not end
+      // candidacy — that dropped exactly the items this pass exists for. A play
+      // from before the row existed can only have come from the walk or an
+      // earlier recovery, so that one does. (The real-database file proves the
+      // two cases against actual rows.)
+      expect(sql).toContain("NOT EXISTS");
+      expect(sql).toContain(`wh."source" = 'TRACEARR'`);
+      expect(sql).toContain('wh."watchedAt" < mi."createdAt"');
       expect(sql).toContain('NOT (mi."id" = ANY($4::text[]))');
       expect(sql).toContain('l."mediaServerId" = $1');
       expect(params[0]).toBe(SERVER_ID);
@@ -322,7 +331,10 @@ describe("recoverHistoryForNewItems", () => {
       expect(m.buildTracearrJoinIndex).toHaveBeenCalledWith(SERVER_ID);
     });
 
-    it("counts merged rows as imported, not just new ones", async () => {
+    it("counts only NEW rows as imported — a merge of a stored play changes nothing", async () => {
+      // `imported` drives the caller's reconcile, cache drop and page refetch.
+      // Counting merges made every pass that re-delivered an item's own recent
+      // play (or a whole answer again after a restart) look like a change.
       m.getHistoryForItem.mockResolvedValue([play("chain-1")]);
       m.importTracearrRecords.mockResolvedValue({
         inserted: 1,
@@ -332,8 +344,17 @@ describe("recoverHistoryForNewItems", () => {
 
       expect(await recoverHistoryForNewItems(SERVER_ID)).toEqual({
         checked: 1,
-        imported: 4,
+        imported: 1,
       });
+    });
+
+    it("neither reconciles nor drops caches when every row only merged", async () => {
+      m.getHistoryForItem.mockResolvedValue([play("chain-1")]);
+      m.importTracearrRecords.mockResolvedValue({ inserted: 0, updated: 2, skipped: 0 });
+
+      expect(await recoverHistoryForNewItems(SERVER_ID)).toEqual({ checked: 1, imported: 0 });
+      expect(m.reconcileWatchStateFromHistory).not.toHaveBeenCalled();
+      expect(m.invalidateMediaCaches).not.toHaveBeenCalled();
     });
 
     it("handles an item Tracearr has no plays for without writing anything", async () => {
@@ -561,7 +582,7 @@ describe("recoverHistoryForNewItems", () => {
         "WatchHistory",
         // Two candidates, each contributing one imported row and four records
         // the resolver refused to name.
-        expect.stringMatching(/checked 2 .*imported 2 play\(s\).*8 unjoinable/),
+        expect.stringMatching(/checked 2 .*imported 2 new play\(s\).*8 unjoinable/),
       );
     });
   });
@@ -769,6 +790,60 @@ describe("recoverHistoryForNewItems", () => {
     });
   });
 
+  describe("bounded by the slice", () => {
+    it("asks about nothing — not even the instance — once the deadline has passed", async () => {
+      candidates = [candidate(1), candidate(2)];
+
+      const result = await recoverHistoryForNewItems(SERVER_ID, { deadlineMs: Date.now() - 1 });
+
+      expect(result).toEqual({ checked: 0, imported: 0 });
+      expect(m.resolveInstanceForServer).not.toHaveBeenCalled();
+      expect(m.buildTracearrJoinIndex).not.toHaveBeenCalled();
+      expect(m.getServerAccountNames).not.toHaveBeenCalled();
+      expect(m.getHistoryForItem).not.toHaveBeenCalled();
+    });
+
+    it("stops between items when the deadline passes, leaving the rest candidates", async () => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        const start = Date.now();
+        candidates = [candidate(1), candidate(2), candidate(3)];
+        m.getHistoryForItem.mockImplementation(async () => {
+          // Each lookup takes a minute.
+          vi.setSystemTime(Date.now() + 60_000);
+          return [];
+        });
+
+        const result = await recoverHistoryForNewItems(SERVER_ID, { deadlineMs: start + 90_000 });
+
+        expect(result.checked).toBe(2);
+        expect(m.getHistoryForItem).toHaveBeenCalledTimes(2);
+
+        // The third was never asked, so it is not recorded as answered.
+        vi.setSystemTime(start);
+        m.prisma.$queryRawUnsafe.mockClear();
+        await recoverHistoryForNewItems(SERVER_ID, { deadlineMs: Date.now() - 1 });
+        expect(candidateQuery().params[3]).toEqual(["item-1", "item-2"]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("yields between items to a waiting sync", async () => {
+      candidates = [candidate(1), candidate(2), candidate(3)];
+      let waiting = false;
+      m.getHistoryForItem.mockImplementation(async () => {
+        waiting = true;
+        return [];
+      });
+
+      const result = await recoverHistoryForNewItems(SERVER_ID, { yieldTo: () => waiting });
+
+      expect(result.checked).toBe(1);
+      expect(m.getHistoryForItem).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe("items Tracearr has already answered for", () => {
     it("are not asked about again, so the cap cannot starve the window", async () => {
       // The newest unplayed items used to stay candidates for their whole seven
@@ -807,6 +882,52 @@ describe("recoverHistoryForNewItems", () => {
       m.prisma.$queryRawUnsafe.mockClear();
       await recoverHistoryForNewItems(SERVER_ID);
 
+      expect(candidateQuery().params[3]).toEqual(["item-1"]);
+    });
+
+    it("keeps an item a candidate when every play resolved to a different row", async () => {
+      // The old copy is still in the library, so its rating key claims the old
+      // plays. They land on that row and cascade away when it is purged;
+      // closing the new item here would never ask for them again.
+      m.getHistoryForItem.mockResolvedValue([play("old-1"), play("old-2")]);
+      m.resolveMediaItemId.mockReturnValue({ mediaItemId: "old-copy" });
+      m.importTracearrRecords.mockResolvedValue({ inserted: 2, updated: 0, skipped: 0 });
+
+      await recoverHistoryForNewItems(SERVER_ID);
+      expect(m.resolveMediaItemId).toHaveBeenCalledWith(JOIN_INDEX, expect.objectContaining({ id: "old-1" }));
+      expect(m.logger.info).toHaveBeenCalledWith(
+        "WatchHistory",
+        expect.stringContaining("1 left a candidate (no play resolved to the item itself)"),
+      );
+
+      m.prisma.$queryRawUnsafe.mockClear();
+      await recoverHistoryForNewItems(SERVER_ID);
+      expect(candidateQuery().params[3]).toEqual([]);
+    });
+
+    it("keeps an item a candidate when none of its plays could be resolved at all", async () => {
+      m.getHistoryForItem.mockResolvedValue([play("chain-1")]);
+      m.resolveMediaItemId.mockReturnValue({ skipped: "ambiguous" });
+      m.importTracearrRecords.mockResolvedValue({ inserted: 0, updated: 0, skipped: 1 });
+
+      await recoverHistoryForNewItems(SERVER_ID);
+
+      m.prisma.$queryRawUnsafe.mockClear();
+      await recoverHistoryForNewItems(SERVER_ID);
+      expect(candidateQuery().params[3]).toEqual([]);
+    });
+
+    it("records the item once ANY play resolved to it, whatever the others did", async () => {
+      m.getHistoryForItem.mockResolvedValue([play("other"), play("mine")]);
+      m.resolveMediaItemId.mockImplementation((_index: unknown, record: { id: string }) =>
+        record.id === "mine" ? { mediaItemId: "item-1" } : { mediaItemId: "old-copy" },
+      );
+      m.importTracearrRecords.mockResolvedValue({ inserted: 2, updated: 0, skipped: 0 });
+
+      await recoverHistoryForNewItems(SERVER_ID);
+
+      m.prisma.$queryRawUnsafe.mockClear();
+      await recoverHistoryForNewItems(SERVER_ID);
       expect(candidateQuery().params[3]).toEqual(["item-1"]);
     });
   });

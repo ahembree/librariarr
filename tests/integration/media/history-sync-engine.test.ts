@@ -9,7 +9,9 @@
  *  - a withdrawal (purge, source switch) landing while the fetch runs is not
  *    overwritten by the finishing sync;
  *  - a rating key held by two libraries is placed by the play's library, or
- *    skipped — never filed against whichever row a query returned last;
+ *    skipped on Plex (a stale row) — and on Jellyfin/Emby, which report no
+ *    library, filed against every copy — never against whichever row a query
+ *    returned last;
  *  - the incremental append recognises a play stored as "Unknown" that comes
  *    back named, and relabels it instead of storing it twice.
  */
@@ -161,8 +163,10 @@ describe("POST /api/media/history/sync over the real native sync", () => {
     expect(after.watchHistorySyncedAt).toBeNull();
   });
 
-  it("places a play on a rating key two libraries share by the play's library, and skips it otherwise", async () => {
-    const server = await createTestServer(userId);
+  it("on Plex, places a play on a rating key two libraries share by the play's library, and skips it otherwise", async () => {
+    // Plex numbers items server-wide, so one of the two rows is stale and only
+    // the play's own library can say which.
+    const server = await createTestServer(userId, { type: "PLEX" });
     const libA = await createTestLibrary(server.id, { key: "1" });
     const libB = await createTestLibrary(server.id, { key: "2" });
     const inA = await createTestMediaItem(libA.id, { ratingKey: "100" });
@@ -177,6 +181,97 @@ describe("POST /api/media/history/sync over the real native sync", () => {
     const rows = await prisma.watchHistory.findMany({ where: { mediaServerId: server.id } });
     expect(rows.map((r) => [r.mediaItemId, r.serverUsername])).toEqual([[inB.id, "alice"]]);
     expect(rows.some((r) => r.mediaItemId === inA.id)).toBe(false);
+  });
+
+  it("on Plex, skips a play whose library holds neither row with its rating key", async () => {
+    const server = await createTestServer(userId, { type: "PLEX" });
+    const libA = await createTestLibrary(server.id, { key: "1" });
+    const libB = await createTestLibrary(server.id, { key: "2" });
+    await createTestMediaItem(libA.id, { ratingKey: "100" });
+    await createTestMediaItem(libB.id, { ratingKey: "100" });
+    mockClient.getDetailedWatchHistory.mockResolvedValue([play("100", "alice", "2025-02-01T00:00:00.000Z", "9")]);
+
+    await expect(syncWatchHistory(server.id)).resolves.toEqual({ count: 0 });
+  });
+
+  describe("Jellyfin/Emby: one item listed by two libraries", () => {
+    // Two libraries covering the same folder list the SAME item id, which we
+    // store once per library. The server never reports a section, so the play
+    // used to be skipped as ambiguous — and the full replace had already
+    // deleted both copies' rows, so both read as never watched.
+    async function twoCopies(type: "JELLYFIN" | "EMBY") {
+      const server = await createTestServer(userId, { type });
+      const libA = await createTestLibrary(server.id, { key: "lib-a" });
+      const libB = await createTestLibrary(server.id, { key: "lib-b" });
+      const inA = await createTestMediaItem(libA.id, { ratingKey: "jf-item" });
+      const inB = await createTestMediaItem(libB.id, { ratingKey: "jf-item" });
+      const other = await createTestMediaItem(libA.id, { ratingKey: "jf-other" });
+      return { server, inA, inB, other };
+    }
+
+    it.each(["JELLYFIN", "EMBY"] as const)("%s full replace files every play against both copies", async (type) => {
+      const { server, inA, inB, other } = await twoCopies(type);
+      // A stored play from before: the full replace must put it back on both.
+      await prisma.watchHistory.create({
+        data: { mediaItemId: inA.id, mediaServerId: server.id, serverUsername: "alice", watchedAt: new Date("2024-01-01T00:00:00Z") },
+      });
+      mockClient.getDetailedWatchHistory.mockResolvedValue([
+        // PlayCount 2: the dated play plus one undated.
+        play("jf-item", "alice", "2025-02-01T00:00:00.000Z"),
+        { ...play("jf-item", "alice", "2025-02-01T00:00:00.000Z"), watchedAt: null },
+        play("jf-other", "bob", "2025-02-03T00:00:00.000Z"),
+      ]);
+
+      await expect(syncWatchHistory(server.id)).resolves.toEqual({ count: 5 });
+
+      const count = (id: string) => prisma.watchHistory.count({ where: { mediaItemId: id } });
+      expect(await count(inA.id)).toBe(2);
+      expect(await count(inB.id)).toBe(2);
+      expect(await count(other.id)).toBe(1);
+      // And reconciled onto both rows, which is what the rules read.
+      const items = await prisma.mediaItem.findMany({
+        where: { id: { in: [inA.id, inB.id] } },
+        select: { playCount: true, lastPlayedAt: true },
+      });
+      for (const item of items) {
+        expect(item.playCount).toBe(2);
+        expect(item.lastPlayedAt?.toISOString()).toBe("2025-02-01T00:00:00.000Z");
+      }
+    });
+
+    it("an incremental append files a new play against both copies, and a re-delivered one against neither", async () => {
+      // No Jellyfin client asserts `supportsHistorySince` today; forced here
+      // so the append's per-item dedup is exercised with a play that resolves
+      // to two items.
+      mockClient.supportsHistorySince = true;
+      const { server, inA, inB } = await twoCopies("JELLYFIN");
+      const old = new Date("2025-02-01T12:00:00.000Z");
+      for (const id of [inA.id, inB.id]) {
+        await prisma.watchHistory.create({
+          data: { mediaItemId: id, mediaServerId: server.id, serverUsername: "alice", watchedAt: old },
+        });
+      }
+      mockClient.getDetailedWatchHistory.mockResolvedValue([
+        play("jf-item", "alice", old.toISOString()),
+        play("jf-item", "alice", "2025-02-01T12:30:00.000Z"),
+      ]);
+
+      await expect(
+        syncWatchHistory(server.id, undefined, undefined, { incremental: true }),
+      ).resolves.toEqual({ count: 2 });
+      // Run again: everything is already stored, for both copies.
+      await expect(
+        syncWatchHistory(server.id, undefined, undefined, { incremental: true }),
+      ).resolves.toEqual({ count: 0 });
+
+      for (const id of [inA.id, inB.id]) {
+        const rows = await prisma.watchHistory.findMany({ where: { mediaItemId: id }, orderBy: { watchedAt: "asc" } });
+        expect(rows.map((r) => r.watchedAt?.toISOString())).toEqual([
+          "2025-02-01T12:00:00.000Z",
+          "2025-02-01T12:30:00.000Z",
+        ]);
+      }
+    });
   });
 
   it("relabels a stored Unknown play that the incremental window re-delivers named, instead of appending it", async () => {

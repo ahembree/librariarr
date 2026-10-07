@@ -53,7 +53,7 @@ import {
   historySortKeyForColumn,
   isHistorySortableColumn,
 } from "@/lib/media/history-sort";
-import { PageRequestTracker, pageAfterShrink } from "@/lib/media/history-paging";
+import { PageRequestTracker, pageAfterShrink, scrollTopForPageChange } from "@/lib/media/history-paging";
 import {
   importBackfillPercent as computeImportBackfillPercent,
   failedSyncServerNames,
@@ -151,6 +151,19 @@ function saveVisibleColumns(cols: Set<string>) {
   try {
     localStorage.setItem(VISIBLE_KEY, JSON.stringify([...cols]));
   } catch { /* private mode / quota — ignore */ }
+}
+
+/**
+ * The element that scrolls `el` — the same walk `DataTable` uses for its
+ * virtualizer, so a page change scrolls the container the rows render in.
+ * Falls back to `<main>`, the app shell's scroll container.
+ */
+function scrollContainerOf(el: HTMLElement): HTMLElement | null {
+  for (let node = el.parentElement; node; node = node.parentElement) {
+    const { overflowY } = getComputedStyle(node);
+    if (overflowY === "auto" || overflowY === "scroll") return node;
+  }
+  return document.querySelector<HTMLElement>("main");
 }
 
 function formatResolution(res: string | null) {
@@ -718,6 +731,40 @@ export default function HistoryPage() {
     void (async () => { reloadHistory(); })();
   }, [reloadHistory]);
 
+  // The latest `goToPage`, for callbacks that outlive the render they were
+  // created in. `handleSync` awaits a stream that can run for minutes; calling
+  // the `goToPage` it closed over at click time loaded page 1 of the filters
+  // and sort from BEFORE the sync — and, holding the newest request token, that
+  // stale page overwrote the table the user had filtered in the meantime.
+  const goToPageRef = useRef(goToPage);
+  useEffect(() => {
+    goToPageRef.current = goToPage;
+  }, [goToPage]);
+
+  // Top of the table (above the stale-data notice), for page changes.
+  const tableTopRef = useRef<HTMLDivElement>(null);
+
+  /**
+   * A page change the user asked for: back to the top of the table, then load.
+   * The table stays mounted (dimmed) while the next page loads, so paging from
+   * the bottom of a 100-row page used to leave the user at the bottom of the
+   * new one. Background reloads (a backfill slice, a sync finishing) go
+   * through `reloadHistory`/`goToPage` directly and never move the scroll.
+   */
+  const handlePageChange = useCallback((target: number) => {
+    const anchor = tableTopRef.current;
+    const container = anchor ? scrollContainerOf(anchor) : null;
+    if (anchor && container) {
+      const top = scrollTopForPageChange(
+        anchor.getBoundingClientRect().top,
+        container.getBoundingClientRect().top,
+        container.scrollTop,
+      );
+      if (top !== null) container.scrollTo({ top });
+    }
+    goToPage(target);
+  }, [goToPage]);
+
   // ── Tracearr import progress ───────────────────────────────────
 
   /**
@@ -839,6 +886,13 @@ export default function HistoryPage() {
     };
   }, []);
 
+  // The server list as it is when the sync ENDS, for naming failed servers —
+  // one added or renamed during a long run would otherwise show as its id.
+  const serversRef = useRef(servers);
+  useEffect(() => {
+    serversRef.current = servers;
+  }, [servers]);
+
   const handleStopSync = useCallback(() => {
     syncAbortRef.current?.abort();
   }, []);
@@ -882,7 +936,9 @@ export default function HistoryPage() {
         counts: Record<string, number>;
         cancelled: boolean;
       }>(response, onSyncProgress);
-      goToPage(1);
+      // Through the ref: page 1 of the filters and sort on screen NOW (see
+      // goToPageRef), not of the ones the Refresh was clicked under.
+      goToPageRef.current(1);
 
       // The run reached its terminal result but stopped early — the route's
       // 30-minute lifetime cap fired. (A Stop from this page can't land here:
@@ -900,7 +956,7 @@ export default function HistoryPage() {
       // A per-server count of -1 means that server threw; the run as a whole
       // still succeeded for the others, so name the ones that failed instead of
       // silently presenting a history that's missing a server's plays.
-      const failed = failedSyncServerNames(result?.counts, servers);
+      const failed = failedSyncServerNames(result?.counts, serversRef.current);
       if (failed.length > 0) {
         toast.warning(`Couldn't sync ${failed.length === 1 ? "a server" : "some servers"}`, {
           description: `${failed.join(", ")} — check the server's connection and try again.`,
@@ -929,7 +985,7 @@ export default function HistoryPage() {
         });
       }
       // Partial rows are real rows either way, so show them.
-      goToPage(1);
+      goToPageRef.current(1);
     } finally {
       setSyncing(false);
       resetSyncProgress();
@@ -1226,6 +1282,8 @@ export default function HistoryPage() {
             </DropdownMenu>
           </div>
 
+          <div ref={tableTopRef} aria-hidden />
+
           {/* A failed load keeps whatever was already on screen and says so,
               rather than falling through to the "No watch history" empty
               state below — that told the user to sync a history they have. */}
@@ -1327,7 +1385,7 @@ export default function HistoryPage() {
                   page={page}
                   totalCount={totalCount}
                   pageSize={PAGE_SIZE}
-                  onPageChange={goToPage}
+                  onPageChange={handlePageChange}
                   busy={loading}
                 />
               )}

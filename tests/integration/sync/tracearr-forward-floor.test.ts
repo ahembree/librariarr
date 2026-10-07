@@ -9,8 +9,8 @@ import {
 
 /**
  * The importer's resume state against real Postgres: the forward floor's
- * `LEAST` write and compare-and-set clear, the restored-backup reset, and the
- * mapping-guarded native cleanup. The unit tests drive the same paths through
+ * `LEAST` write and compare-and-set clear, a cursor with no rows behind it,
+ * and the mapping-guarded native cleanup. The unit tests drive the same paths through
  * a mocked client; these prove the SQL does what the unit tests assume.
  */
 
@@ -180,28 +180,28 @@ describe("Tracearr import resume state (real DB)", () => {
     expect((await serverRow()).tracearrForwardFloorAt).toEqual(OLDER);
   });
 
-  it("restarts a restored mid-backfill server from the newest play", async () => {
-    // A config-only restore: a deep cursor and a floor, no rows at all.
+  it("walks below a cursor it finds with no rows behind it, rather than resetting it", async () => {
+    // A cursor with no rows is also what an archive whose newest stretch held
+    // nothing storable leaves behind, so the importer no longer reads it as
+    // stale. The paths that destroy rows reset the state themselves — a
+    // config-only restore is covered in
+    // tests/integration/backup/restore-watch-evidence.test.ts.
+    const CURSOR = new Date("2022-01-01T00:00:00.000Z");
     await prisma.mediaServer.update({
       where: { id: serverId },
-      data: {
-        tracearrBackfillComplete: false,
-        tracearrBackfillCursorAt: new Date("2022-01-01T00:00:00.000Z"),
-        tracearrForwardFloorAt: new Date("2025-01-01T00:00:00.000Z"),
-      },
+      data: { tracearrBackfillComplete: false, tracearrBackfillCursorAt: CURSOR },
     });
     m.getHistoryPage.mockResolvedValueOnce({
-      records: [record("newest", "2026-10-01T00:00:00.000Z")],
+      records: [record("older", "2021-06-01T00:00:00.000Z")],
       nextCursor: null,
     });
 
     const result = await syncTracearrHistory(serverId, { passes: "backfill" });
 
-    expect(m.getHistoryPage.mock.calls[0][1].until).toBeUndefined();
+    expect(m.getHistoryPage.mock.calls[0][1].until).toEqual(CURSOR);
     expect(result.backfillPending).toBe(false);
     const after = await serverRow();
     expect(after.tracearrBackfillComplete).toBe(true);
-    expect(after.tracearrForwardFloorAt).toBeNull();
     expect(await prisma.watchHistory.count({ where: { source: "TRACEARR" } })).toBe(1);
   });
 

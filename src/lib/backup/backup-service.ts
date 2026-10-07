@@ -5,7 +5,10 @@ import fs from "fs/promises";
 import path from "path";
 import { gzipSync, gunzipSync } from "zlib";
 import { randomBytes, scryptSync, createCipheriv, createDecipheriv } from "crypto";
-import { invalidateServersWithoutWatchHistory } from "@/lib/media/watch-evidence";
+import {
+  invalidateServersWithoutWatchHistory,
+  restartTracearrBackfill,
+} from "@/lib/media/watch-evidence";
 
 // Runtime data directory: env-resolved and outside the project (under /config in
 // the container), so Turbopack's build-time tracer cannot resolve it statically and
@@ -354,10 +357,8 @@ export async function restoreBackup(
   // `WatchHistory` included — and then re-inserts only what the file actually
   // holds. A config-only backup holds neither, so it empties both and refills
   // neither: the media comes back on the next sync, and so does the history —
-  // native history is re-fetched, and a Tracearr server's row, restored
-  // verbatim with `tracearrBackfillComplete` still true, is recognised by the
-  // importer as "complete with no rows", which resets that state and walks the
-  // archive again.
+  // native history is re-fetched, and a Tracearr server's archive walk is
+  // restarted below.
   //
   // An empty `WatchHistory` reads as "nobody watched anything", so without this
   // the first detection run after a restore-plus-resync matches the WHOLE
@@ -370,6 +371,37 @@ export async function restoreBackup(
       "Backup",
       `Marked ${marked} media server(s) as having no watch history yet — ` +
         `watchedByUser lifecycle rules are paused for them until a sync refills it`,
+    );
+  }
+
+  // A Tracearr-mapped server's row comes back verbatim — `tracearrBackfillComplete`,
+  // the resume cursor and the forward floor all describing an archive walk whose
+  // rows the file did not hold (every config-only backup, and a full one taken
+  // while the walk had stored nothing). Left alone, "complete" imports nothing
+  // ever again, and a restored mid-walk cursor resumes deep in the archive and
+  // never reads the newer stretch. The importer no longer infers this from "no
+  // rows" — a walk can legitimately reach the end having stored nothing, and
+  // that inference re-walked such an archive forever — so the paths that
+  // destroy the rows reset it explicitly, and restore is one of them.
+  const tracearrWithoutRows = await prisma.mediaServer.findMany({
+    where: {
+      tracearrServerId: { not: null },
+      watchHistory: { none: { source: "TRACEARR" } },
+      OR: [
+        { tracearrBackfillComplete: true },
+        { tracearrBackfillCursorAt: { not: null } },
+        { tracearrForwardFloorAt: { not: null } },
+        { tracearrBackfillLastWalkAt: { not: null } },
+      ],
+    },
+    select: { id: true },
+  });
+  if (tracearrWithoutRows.length > 0) {
+    await restartTracearrBackfill(tracearrWithoutRows.map((server) => server.id));
+    logger.info(
+      "Backup",
+      `Restarted the Tracearr history import for ${tracearrWithoutRows.length} media ` +
+        `server(s) whose imported plays the backup did not contain`,
     );
   }
 

@@ -38,6 +38,29 @@ describe("importBackfillPercent", () => {
     ).toBeNull();
     expect(importBackfillPercent([{ backfillComplete: false, backfillFraction: null, pending: false }])).toBeNull();
   });
+
+  it("never reads 100% while a server is still importing", () => {
+    // Math.round turned the last half-percent of a walk into "100%" next to
+    // "Still importing older history".
+    expect(importBackfillPercent([{ backfillComplete: false, backfillFraction: 0.995, pending: true }])).toBe(99);
+    expect(importBackfillPercent([{ backfillComplete: false, backfillFraction: 0.9999, pending: true }])).toBe(99);
+    // A fraction of exactly 1 on a server still reported pending (the route
+    // measured the span complete before the walk confirmed the end).
+    expect(importBackfillPercent([{ backfillComplete: false, backfillFraction: 1, pending: true }])).toBe(99);
+    // Floors rather than rounds below the cap too: 12.6% is not yet 13%.
+    expect(importBackfillPercent([{ backfillComplete: false, backfillFraction: 0.126, pending: true }])).toBe(12);
+  });
+
+  it("does not floor an exact percentage one short", () => {
+    // 0.29 * 100 === 28.999999999999996 and 0.57 * 100 === 56.99999999999999.
+    expect(importBackfillPercent([{ backfillComplete: false, backfillFraction: 0.29, pending: true }])).toBe(29);
+    expect(importBackfillPercent([{ backfillComplete: false, backfillFraction: 0.57, pending: true }])).toBe(57);
+    expect(importBackfillPercent([{ backfillComplete: false, backfillFraction: 0, pending: true }])).toBe(0);
+  });
+
+  it("treats a non-finite fraction as unmeasured rather than printing NaN%", () => {
+    expect(importBackfillPercent([{ backfillComplete: false, backfillFraction: Number.NaN, pending: true }])).toBeNull();
+  });
 });
 
 describe("failedSyncServerNames", () => {
