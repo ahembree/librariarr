@@ -174,13 +174,21 @@ export interface TracearrImportStatus {
   pending: boolean;
   /**
    * Why an owed import is not progressing, when that is the reason it is not
-   * pending: the server or every Tracearr instance is disabled, the import
-   * slice keeps failing (its job used up its retries and nothing is running),
-   * or nothing is queued and the import waits for the next sync
-   * (`awaiting-sync` — after a purge or restore, or before the server's first
-   * sync).
+   * pending: the server or every Tracearr instance is disabled, none of the
+   * server's enabled libraries holds an item (`no-library-items` — no play
+   * could be attributed until a sync adds some, which needs an enabled
+   * library), the import slice keeps failing (its job used up its retries and
+   * nothing is running), or the import waits for a sync (`awaiting-sync` —
+   * held after a purge or restore until the next FULL sync re-adds the items,
+   * or nothing queued before the server's first sync).
    */
-  pausedReason: "server-disabled" | "instance-unavailable" | "import-failing" | "awaiting-sync" | null;
+  pausedReason:
+    | "server-disabled"
+    | "instance-unavailable"
+    | "no-library-items"
+    | "import-failing"
+    | "awaiting-sync"
+    | null;
   /**
    * When a backfill walk last ran for this mapping, or null if none has yet.
    * A walked one with no plays, nothing queued and nothing running is what a

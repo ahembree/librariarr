@@ -387,7 +387,10 @@ function TracearrLiveImportLine({
  *   - complete            → the finished line (a count, no bar)
  *   - paused              → why (server or Tracearr instance disabled), no spinner
  *   - failing             → the slice used up its retries; say so, no spinner
- *   - awaiting sync       → owed, nothing queued; starts with the next sync
+ *   - no library items    → nothing to import into; needs items in an
+ *                           enabled library
+ *   - awaiting sync       → held after a purge/restore, or nothing queued;
+ *                           starts after the next full sync
  *   - no rows, pending    → "waiting", not "0 plays imported" (a fresh
  *                           mapping's first slice is queued by its save)
  *   - no rows, not pending→ a walk ran, nothing is queued and nothing came
@@ -432,16 +435,34 @@ function TracearrImportStatusLine({ status }: { status: TracearrImportStatus | u
     );
   }
 
-  // Owed, but nothing is queued: it starts with the next sync. After a purge or
-  // a restore that is on purpose — the walk has to follow the re-sync that
-  // brings the purged items back, or their plays would be skipped for good.
+  // Nothing to import into: no enabled library holds an item, so every play
+  // would resolve to nothing. Not "starts with the next sync" — with every
+  // library disabled no sync adds any.
+  if (!status.backfillComplete && status.pausedReason === "no-library-items") {
+    return (
+      <p className={rowClass}>
+        <Clock className="mt-0.5 h-3 w-3 shrink-0" />
+        <span>
+          {"History import waiting — none of this server's enabled libraries holds " +
+            "any items, so no play can be matched yet. It starts once a sync adds " +
+            "items to an enabled library."}
+          {status.importedCount > 0 ? ` · ${plays} so far` : ""}
+        </span>
+      </p>
+    );
+  }
+
+  // Waits on a sync. After a purge or a restore that is on purpose — the walk
+  // has to follow the FULL sync that brings the purged items back (a sync of
+  // one library does not), or their plays would be skipped for good. A full
+  // sync also queues the first slice of a mapping with nothing queued.
   // No spinner: nothing is running, and the line says what it waits for.
   if (!status.backfillComplete && status.pausedReason === "awaiting-sync") {
     return (
       <p className={rowClass}>
         <Clock className="mt-0.5 h-3 w-3 shrink-0" />
         <span>
-          History import starts with the next sync of this server
+          History import starts after the next full sync of this server
           {status.importedCount > 0 ? ` · ${plays} so far` : ""}
         </span>
       </p>

@@ -24,7 +24,8 @@ import { syncWatchHistory } from "@/lib/sync/sync-watch-history";
 import { reconcileWatchStateFromHistory } from "@/lib/sync/watch-reconcile";
 import { mbidFromGuids, withArtistMbid } from "@/lib/media/musicbrainz";
 import { writeArtistMbids } from "@/lib/sync/artist-mbid";
-import { restartTracearrBackfill } from "@/lib/media/watch-evidence";
+import { releaseTracearrRestartHold, restartTracearrBackfill } from "@/lib/media/watch-evidence";
+import { enqueueTracearrBackfill } from "@/lib/sync/tracearr-backfill-enqueue";
 
 // --- Filename-based detection using Trash-Guides naming conventions ---
 // These regex patterns are derived from Trash-Guides custom format definitions:
@@ -922,6 +923,14 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
       }
     }
 
+    // When this run's library pass begins — the instant a full run's success
+    // releases a Tracearr restart hold up to (see the end of the run). Taken
+    // AFTER the vanished-library purge so a restart that purge just recorded is
+    // covered: every library this run syncs is synced after it. A restart that
+    // lands later (a purge while this run is mid-pass) is not: this run may have
+    // passed the purged library before its items were deleted.
+    const libraryPassStartedAt = new Date();
+
     // Look up which libraries are disabled in the DB so we can skip them early
     const disabledLibraries = await prisma.$queryRawUnsafe<{ key: string }[]>(
       `SELECT "key" FROM "Library" WHERE "mediaServerId"=$1 AND "enabled"=false`,
@@ -1499,6 +1508,33 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
       `UPDATE "SyncJob" SET "status"=$1,"completedAt"=$2,"itemsProcessed"=$3,"currentLibrary"=NULL WHERE "id"=$4`,
       "COMPLETED", new Date(), processedItems, syncJob.id,
     );
+
+    // A full run re-added every item its enabled libraries hold, so a Tracearr
+    // archive walk held since a restart (`restartTracearrBackfill`) may now
+    // run. Full runs only — see `releaseTracearrRestartHold`. Before this
+    // function returns, so the slice this run's watch-history phase queued on
+    // the serial MAIN_QUEUE (it runs after this job) finds the hold gone; and
+    // queued once more here, since that phase may not have queued one (it is
+    // skipped for a run told to, and while the slice is backing off).
+    // Non-fatal: the next full sync releases it instead.
+    if (!libraryKey) {
+      try {
+        if (await releaseTracearrRestartHold(serverId, libraryPassStartedAt)) {
+          logger.info(
+            "Sync",
+            `Full sync re-added "${server.name}"'s items — releasing its held Tracearr history import`,
+          );
+          await enqueueTracearrBackfill(
+            { serverIds: [serverId] },
+            "a full sync re-added the items a restarted import was waiting for",
+          );
+        }
+      } catch (releaseError) {
+        logger.warn("Sync", "Could not release the held Tracearr history import", {
+          error: String(releaseError),
+        });
+      }
+    }
 
     logger.info("Sync", `Sync completed for server (${processedItems} items processed)`);
     await settleDataset();

@@ -208,9 +208,12 @@ export async function invalidateServersWithoutWatchHistory(): Promise<number> {
  * walk run first skips those plays as unresolved and, on reaching the end,
  * marks the archive complete without them — for good (a purge of one library
  * leaves the server's others populated, so the importer's empty-library gate
- * does not stop it). The next watch-history sync queues the walk; until then
- * the status route reports `awaiting-sync`, and `enqueueTracearrBackfill`
- * refuses a server in this state (cursor moved, no walk since).
+ * does not stop it). So the restart is RECORDED (`tracearrBackfillRestartedAt`)
+ * and the importer holds the archive walk while it is set; only a full,
+ * unscoped library sync that began its library pass after the restart clears
+ * it (`syncMediaServer`), and its watch-history phase queues the walk. Until
+ * then the status route reports `awaiting-sync` and `enqueueTracearrBackfill`
+ * refuses the server.
  */
 export async function restartTracearrBackfill(serverIds: string[]): Promise<number> {
   if (serverIds.length === 0) return 0;
@@ -222,6 +225,7 @@ export async function restartTracearrBackfill(serverIds: string[]): Promise<numb
   // importer writes.
   const { supersedeTracearrImports } = await import("@/lib/sync/tracearr-import-activity");
   for (const id of serverIds) supersedeTracearrImports(id);
+  const now = new Date();
   const { count } = await prisma.mediaServer.updateMany({
     where: { id: { in: serverIds }, tracearrServerId: { not: null } },
     // The forward floor goes too: the restarted walk starts at the newest play
@@ -230,10 +234,43 @@ export async function restartTracearrBackfill(serverIds: string[]): Promise<numb
     // until the restarted walk runs, "walked and found nothing" is not true.
     data: {
       tracearrBackfillComplete: false,
-      tracearrBackfillCursorAt: new Date(),
+      tracearrBackfillCursorAt: now,
       tracearrForwardFloorAt: null,
       tracearrBackfillLastWalkAt: null,
+      // Explicit, not inferred from the columns above: a first walk that
+      // failed after committing a page leaves the same cursor-set,
+      // never-walked shape, and holding THAT waited for a full sync that may
+      // never come (realtime incremental syncs are not full syncs).
+      tracearrBackfillRestartedAt: now,
     },
   });
   return count;
+}
+
+/**
+ * Release the hold `restartTracearrBackfill` put on a server's archive walk,
+ * once a full library sync has re-added the items the restart was for.
+ *
+ * Called by `syncMediaServer` at the successful end of a FULL (unscoped) run
+ * only, with the instant that run began its library pass. A library-scoped
+ * sync (the lifecycle executor's post-delete re-sync, the by-type fan-out's
+ * per-library jobs) re-adds one library and says nothing about another the
+ * purge emptied, and a cancelled or failed run may not have reached every
+ * library — either releasing it let the walk run with purged items still
+ * missing and complete without their plays.
+ *
+ * Compare-and-set on the restart instant: a sync whose library pass began
+ * BEFORE the restart may have passed the purged library before its items were
+ * deleted, so it must not release a restart that landed while it ran. Returns
+ * whether it released one, so the caller can queue the walk.
+ */
+export async function releaseTracearrRestartHold(
+  serverId: string,
+  libraryPassStartedAt: Date,
+): Promise<boolean> {
+  const { count } = await prisma.mediaServer.updateMany({
+    where: { id: serverId, tracearrBackfillRestartedAt: { lte: libraryPassStartedAt } },
+    data: { tracearrBackfillRestartedAt: null },
+  });
+  return count > 0;
 }

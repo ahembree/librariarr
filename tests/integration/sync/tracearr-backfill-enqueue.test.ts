@@ -34,7 +34,7 @@ import {
   enqueueTracearrBackfill,
   tracearrBackfillJobKey,
 } from "@/lib/sync/tracearr-backfill-enqueue";
-import { restartTracearrBackfill } from "@/lib/media/watch-evidence";
+import { releaseTracearrRestartHold, restartTracearrBackfill } from "@/lib/media/watch-evidence";
 import { releaseJobsClient } from "@/lib/jobs/client";
 import { MAIN_QUEUE, TASK_TRACEARR_BACKFILL } from "@/lib/jobs/constants";
 import { prisma as appPrisma } from "@/lib/db";
@@ -234,14 +234,39 @@ describe("enqueueTracearrBackfill (real graphile_worker schema)", () => {
     // ...and nor does a later cause-fixing save.
     await expect(enqueueTracearrBackfill({ userId: user.id }, "instance re-enabled")).resolves.toEqual([]);
     expect(await jobsFor(server.id)).toHaveLength(0);
-
-    // Once a walk has run again (the one the next sync queues), it is an
-    // ordinary mapping and is queued as before.
+    // Nor does a walk merely having run: only the release clears the hold.
     await getTestPrisma().mediaServer.update({
       where: { id: server.id },
       data: { tracearrBackfillLastWalkAt: new Date() },
     });
+    await expect(enqueueTracearrBackfill({ userId: user.id }, "instance re-enabled")).resolves.toEqual([]);
+
+    // Once a full sync has released the hold, it is an ordinary mapping and
+    // is queued as before.
+    await expect(releaseTracearrRestartHold(server.id, new Date())).resolves.toBe(true);
     await expect(enqueueTracearrBackfill({ userId: user.id }, "instance re-enabled")).resolves.toEqual([server.id]);
+  });
+
+  it("queues a first walk that failed after committing a page — it is not a restart", async () => {
+    // A cursor and no walk stamp: the shape the restart hold used to be
+    // inferred from. Refused, the slice sat unqueued waiting on a full sync
+    // that, with the sync schedule off, never came.
+    const user = await createTestUser();
+    await enabledInstance(user.id);
+    const server = await runnableServer(user.id);
+    await getTestPrisma().mediaServer.update({
+      where: { id: server.id },
+      data: {
+        tracearrBackfillCursorAt: new Date(Date.UTC(2026, 8, 1)),
+        tracearrBackfillLastWalkAt: null,
+        tracearrBackfillRestartedAt: null,
+      },
+    });
+
+    await expect(enqueueTracearrBackfill({ serverIds: [server.id] }, "instance re-enabled")).resolves.toEqual([
+      server.id,
+    ]);
+    expect(await jobsFor(server.id)).toHaveLength(1);
   });
 
   it("queues a fresh mapping whose walk state is all reset", async () => {

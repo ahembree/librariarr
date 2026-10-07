@@ -653,6 +653,25 @@ describe("PUT /api/servers/[id] — Tracearr mapping", () => {
     expect(stored.tracearrBackfillLastWalkAt).toBeNull();
   });
 
+  it("keeps a restart hold across a mapping change", async () => {
+    // The hold is about the purged library, not the mapping: the new mapping's
+    // first walk would step over the missing items' plays just the same, so it
+    // waits for the full sync that re-adds them.
+    const user = await createTestUser();
+    const server = await createTestServer(user.id, { tracearrServerId: TRACEARR_SERVER_A });
+    const { restartTracearrBackfill } = await import("@/lib/media/watch-evidence");
+    await restartTracearrBackfill([server.id]);
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+    await expectJson(await putMapping(server.id, { tracearrServerId: TRACEARR_SERVER_A }), 200);
+    const unchanged = await prisma.mediaServer.findUniqueOrThrow({ where: { id: server.id } });
+    expect(unchanged.tracearrBackfillRestartedAt).not.toBeNull();
+
+    await expectJson(await putMapping(server.id, { tracearrServerId: TRACEARR_SERVER_B }), 200);
+    const changed = await prisma.mediaServer.findUniqueOrThrow({ where: { id: server.id } });
+    expect(changed.tracearrBackfillRestartedAt).not.toBeNull();
+  });
+
   it("re-saving the same mapping keeps the last-walk marker", async () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id, { tracearrServerId: TRACEARR_SERVER_A });

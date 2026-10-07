@@ -296,7 +296,12 @@ describe("Tracearr importer robustness (real DB)", () => {
       const first = await syncTracearrHistory(serverId, { passes: "backfill" });
 
       // Like an empty mapping: the task does not re-queue on this.
-      expect(first).toEqual({ count: 0, backfillPending: true, backfillOutcome: "exhausted" });
+      expect(first).toEqual({
+        count: 0,
+        backfillPending: true,
+        backfillOutcome: "exhausted",
+        heldReason: "no-library-items",
+      });
       expect(m.getHistoryPage).not.toHaveBeenCalled();
       const before = await serverRow();
       expect(before.tracearrBackfillComplete).toBe(false);
@@ -325,7 +330,12 @@ describe("Tracearr importer robustness (real DB)", () => {
 
       const result = await syncTracearrHistory(serverId, { passes: "backfill" });
 
-      expect(result).toEqual({ count: 0, backfillPending: true, backfillOutcome: "exhausted" });
+      expect(result).toEqual({
+        count: 0,
+        backfillPending: true,
+        backfillOutcome: "exhausted",
+        heldReason: "no-library-items",
+      });
       expect((await serverRow()).tracearrBackfillComplete).toBe(false);
       expect(await prisma.watchHistory.count()).toBe(0);
     });

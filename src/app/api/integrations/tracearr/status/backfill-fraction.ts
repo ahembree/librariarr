@@ -125,16 +125,19 @@ export function computeBackfillFraction(input: {
 
 /**
  * Why an owed import is not progressing, when that is the reason it is not
- * pending. The first two lift only when the user re-enables something; the
- * other two lift without the user: `import-failing` when the next
- * watch-history sync re-queues the slice (a keyed enqueue gives a parked job a
- * fresh set of attempts — so does saving or re-enabling the Tracearr instance,
- * `enqueueTracearrBackfill`), and `awaiting-sync` when the next watch-history
- * sync queues the first slice.
+ * pending. The first two lift only when the user re-enables something;
+ * `no-library-items` when a library sync adds items to an enabled library
+ * (which may need the user to enable one — the importer will not walk into an
+ * empty library); the last two lift without the user: `import-failing` when
+ * the next watch-history sync re-queues the slice (a keyed enqueue gives a
+ * parked job a fresh set of attempts — so does saving or re-enabling the
+ * Tracearr instance, `enqueueTracearrBackfill`), and `awaiting-sync` when the
+ * next full sync queues the slice (see `importAwaitingSync`).
  */
 export type ImportPausedReason =
   | "server-disabled"
   | "instance-unavailable"
+  | "no-library-items"
   | "import-failing"
   | "awaiting-sync";
 
@@ -145,6 +148,12 @@ export interface ImportStateInput {
   oldestPlayAt: Date | null;
   cursorAt: Date | null;
   lastWalkAt: Date | null;
+  /**
+   * When `restartTracearrBackfill` held the walk, while no full sync has
+   * released it yet (`tracearrBackfillRestartedAt`). Optional so a caller that
+   * does not read it treats the walk as not held.
+   */
+  restartedAt?: Date | null;
   /** An import of this server is running in this process right now. */
   running: boolean;
   /** Its `tracearr-backfill:<id>` job is waiting, running or backing off. */
@@ -173,32 +182,61 @@ function walkedAndEmpty(input: ImportStateInput): boolean {
 }
 
 /**
- * Whether the import is owed but simply has nothing queued: no slice waiting,
- * running or parked, and not the walked-and-empty end state. The next
- * watch-history sync queues one (`syncWatchHistory` enqueues the backfill on
- * every Tracearr run). Every state that can sit here is legitimately waiting
- * on that sync rather than on a job:
- *  - after `restartTracearrBackfill` (a purge, a restore): the walk has to
- *    follow the re-sync that brings the purged items back, so nothing queues
- *    it early (`enqueueTracearrBackfill` refuses);
- *  - a mapping on a server whose libraries hold no items yet;
- *  - a slice the importer turned away for an empty library;
- *  - an enqueue that failed.
- * Reported as `pending` before, these read "Still importing…" beside a spinner
- * and were polled with nothing queued.
+ * Whether the import is owed and waits on a sync rather than on a job.
  *
- * Only when the job table was read: unread, "nothing queued" is not known.
- * Not for a parked job, which is `import-failing`.
+ * Always, while a restart holds the walk (`restartedAt`): after
+ * `restartTracearrBackfill` (a purge, a restore, disable-with-delete) the walk
+ * has to follow the FULL sync that brings the deleted items back, and until
+ * one releases the hold a queued slice only no-ops and nothing queues one
+ * early (`enqueueTracearrBackfill` refuses). Queued or not, it is waiting.
+ *
+ * Otherwise when nothing is queued: no slice waiting, running or parked, and
+ * not the walked-and-empty end state. The next watch-history sync queues one
+ * (`syncWatchHistory` enqueues the backfill on every Tracearr run) — a fresh
+ * mapping before its first sync, a slice the importer turned away for an
+ * empty library, or an enqueue that failed. Reported as `pending` before,
+ * these read "Still importing…" beside a spinner and were polled with nothing
+ * queued. Only when the job table was read (unread, "nothing queued" is not
+ * known), and not for a parked job, which is `import-failing`.
  */
 export function importAwaitingSync(input: ImportStateInput & { parked: boolean }): boolean {
+  if (input.backfillComplete) return false;
+  if (input.restartedAt != null) return true;
   return (
     input.jobsKnown === true &&
-    !input.backfillComplete &&
     !input.running &&
     !input.queued &&
     !input.parked &&
     !walkedAndEmpty(input)
   );
+}
+
+/**
+ * The reason, if any, an owed import is not progressing — see
+ * `ImportPausedReason`. In precedence order: a disabled server or no enabled
+ * Tracearr instance (nothing runs at all); a restart hold (the full sync that
+ * releases it is what comes next, even if the libraries are empty right now —
+ * it is the sync that refills them); no items in any enabled library (every
+ * slice is turned away, so a parked job from before is not the cause); a
+ * parked slice; nothing queued.
+ */
+export function importPausedReason(
+  input: ImportStateInput & {
+    serverEnabled: boolean;
+    instanceEnabled: boolean;
+    /** Whether any of the server's enabled libraries holds an item. */
+    hasLibraryItems: boolean;
+    /** The slice's job is parked and nothing is running or queued. */
+    failing: boolean;
+  },
+): ImportPausedReason | null {
+  if (!input.serverEnabled) return "server-disabled";
+  if (!input.instanceEnabled) return "instance-unavailable";
+  if (input.backfillComplete) return null;
+  if (input.restartedAt != null) return "awaiting-sync";
+  if (!input.hasLibraryItems) return "no-library-items";
+  if (input.failing) return "import-failing";
+  return importAwaitingSync({ ...input, parked: input.failing }) ? "awaiting-sync" : null;
 }
 
 /**

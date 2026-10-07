@@ -32,12 +32,13 @@ import { GET } from "@/app/api/integrations/tracearr/status/route";
 import { PUT as PUT_SERVER } from "@/app/api/servers/[id]/route";
 import { PUT as PUT_INSTANCE } from "@/app/api/integrations/tracearr/[id]/route";
 import { releaseJobsClient } from "@/lib/jobs/client";
-import { restartTracearrBackfill } from "@/lib/media/watch-evidence";
+import { releaseTracearrRestartHold, restartTracearrBackfill } from "@/lib/media/watch-evidence";
 // The fraction arithmetic is a pure helper beside the route, so its edge cases
 // are exercised directly as well as through the response shape.
 import {
   computeBackfillFraction,
   importAwaitingSync,
+  importPausedReason,
   importPending,
   resolveBackfillReach,
 } from "@/app/api/integrations/tracearr/status/backfill-fraction";
@@ -60,7 +61,13 @@ interface StatusRow {
   reachedAt: string | null;
   backfillFraction: number | null;
   pending: boolean;
-  pausedReason: "server-disabled" | "instance-unavailable" | "import-failing" | null;
+  pausedReason:
+    | "server-disabled"
+    | "instance-unavailable"
+    | "no-library-items"
+    | "import-failing"
+    | "awaiting-sync"
+    | null;
   lastWalkAt: string | null;
   activeImport: {
     pass: "forward" | "backfill" | null;
@@ -78,13 +85,24 @@ const STATUS_URL = "/api/integrations/tracearr/status";
  * Map a server to a Tracearr server id. `createTestServer` has no override for
  * the Tracearr columns, so the mapping is applied after creation rather than
  * reaching into the shared factory.
+ *
+ * Also gives the server an item in an enabled library unless it already has
+ * one (or `withoutItems`): the importer walks nothing into an empty server,
+ * and the status reports that as `no-library-items` — a state of its own,
+ * exercised on purpose below, not the default every other case sits in.
  */
 async function mapToTracearr(
   serverId: string,
   tracearrServerId: string,
-  opts: { backfillComplete?: boolean; oldestPlayAt?: Date | null } = {}
+  opts: { backfillComplete?: boolean; oldestPlayAt?: Date | null; withoutItems?: boolean } = {}
 ) {
   const prisma = getTestPrisma();
+  if (!opts.withoutItems) {
+    const populated = await prisma.mediaItem.count({
+      where: { library: { mediaServerId: serverId, enabled: true } },
+    });
+    if (populated === 0) await createItemFor(serverId, `Seed ${tracearrServerId.slice(-4)}`);
+  }
   return prisma.mediaServer.update({
     where: { id: serverId },
     data: {
@@ -887,16 +905,41 @@ describe("GET /api/integrations/tracearr/status — pending and reach", () => {
       await expectJson(await putInstance(instance.id, { enabled: true }), 200);
       expect((await read())[0].pausedReason).toBe("awaiting-sync");
 
-      // The next watch-history sync queues it.
+      // A slice queued meanwhile (a watch-changed's forward sync queues one)
+      // only no-ops against the hold — still waiting, still not pending.
       await queueBackfill(server.id);
-      const [queued] = await read();
-      expect(queued.pausedReason).toBeNull();
-      expect(queued.pending).toBe(true);
+      const [heldQueued] = await read();
+      expect(heldQueued.pausedReason).toBe("awaiting-sync");
+      expect(heldQueued.pending).toBe(false);
+
+      // The full sync that releases the hold leaves the queued slice to run.
+      await releaseTracearrRestartHold(server.id, new Date());
+      const [released] = await read();
+      expect(released.pausedReason).toBeNull();
+      expect(released.pending).toBe(true);
     });
 
-    it("reports a mapping on a server with no items yet as awaiting a sync", async () => {
+    it("does not hold a first walk that errored after a committed page", async () => {
+      // A cursor and no walk stamp — the shape the hold used to be inferred
+      // from — with its retry queued: pending, not awaiting a sync.
+      const user = await createTestUser();
+      await createInstance(user.id);
+      const server = await walkingServer(user.id, "Errored", "a0000000-0000-4000-8000-000000000025");
+      await getTestPrisma().mediaServer.update({
+        where: { id: server.id },
+        data: { tracearrBackfillCursorAt: new Date(Date.UTC(2026, 8, 1)), tracearrBackfillLastWalkAt: null },
+      });
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      await queueBackfill(server.id);
+
+      const [row] = await read();
+      expect(row.pausedReason).toBeNull();
+      expect(row.pending).toBe(true);
+    });
+
+    it("reports a mapping on a server with no items yet as waiting for library items", async () => {
       // The importer refuses to walk into an empty library, so the save queues
-      // nothing; the first sync's watch-history step does.
+      // nothing; the watch-history step of a sync that adds items does.
       const user = await createTestUser();
       await createInstance(user.id);
       const server = await createTestServer(user.id, { name: "Unsynced" });
@@ -904,8 +947,59 @@ describe("GET /api/integrations/tracearr/status — pending and reach", () => {
 
       await expectJson(await putServer(server.id, { tracearrServerId: "a0000000-0000-4000-8000-000000000023" }), 200);
       const [row] = await read();
+      expect(row.pausedReason).toBe("no-library-items");
+      expect(row.pending).toBe(false);
+    });
+
+    it("reports no-library-items when every library holding items is disabled — even with a slice queued", async () => {
+      // No sync adds items to a disabled library, so "starts with the next
+      // sync" would be untrue; a queued slice only no-ops against the gate.
+      const user = await createTestUser();
+      await createInstance(user.id);
+      const server = await createTestServer(user.id, { name: "All disabled" });
+      await mapToTracearr(server.id, "a0000000-0000-4000-8000-000000000026");
+      await getTestPrisma().library.updateMany({ where: { mediaServerId: server.id }, data: { enabled: false } });
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      await queueBackfill(server.id);
+
+      const [row] = await read();
+      expect(row.pausedReason).toBe("no-library-items");
+      expect(row.pending).toBe(false);
+
+      // A parked slice is not the cause while there is nothing to import into.
+      await park(server.id);
+      expect((await read())[0].pausedReason).toBe("no-library-items");
+
+      // Re-enabled, the parked slice is the cause again.
+      await getTestPrisma().library.updateMany({ where: { mediaServerId: server.id }, data: { enabled: true } });
+      expect((await read())[0].pausedReason).toBe("import-failing");
+    });
+
+    it("reports a restart that emptied the libraries as awaiting a sync — the sync refills them", async () => {
+      const user = await createTestUser();
+      await createInstance(user.id);
+      const server = await createTestServer(user.id, { name: "Purged all" });
+      await mapToTracearr(server.id, "a0000000-0000-4000-8000-000000000027", { withoutItems: true });
+      await createTestLibrary(server.id, { title: "Emptied" });
+      await restartTracearrBackfill([server.id]);
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      const [row] = await read();
       expect(row.pausedReason).toBe("awaiting-sync");
       expect(row.pending).toBe(false);
+    });
+
+    it("does not report no-library-items for a completed backfill", async () => {
+      const user = await createTestUser();
+      await createInstance(user.id);
+      const server = await createTestServer(user.id, { name: "Done, emptied" });
+      await mapToTracearr(server.id, "a0000000-0000-4000-8000-000000000028", {
+        backfillComplete: true,
+        withoutItems: true,
+      });
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      expect((await read())[0].pausedReason).toBeNull();
     });
 
     it("keeps a walked-and-empty mapping out of awaiting-sync", async () => {
@@ -1245,7 +1339,7 @@ describe("importPending", () => {
   });
 
   it("is never pending when paused for any reason, or complete", () => {
-    for (const pausedReason of ["server-disabled", "instance-unavailable", "import-failing", "awaiting-sync"] as const) {
+    for (const pausedReason of ["server-disabled", "instance-unavailable", "no-library-items", "import-failing", "awaiting-sync"] as const) {
       expect(importPending({ ...base, pausedReason, importedCount: 5, running: true, lastWalkAt: null })).toBe(false);
     }
     expect(importPending({ ...base, backfillComplete: true, queued: true })).toBe(false);
@@ -1288,5 +1382,63 @@ describe("importAwaitingSync", () => {
     expect(
       importAwaitingSync({ ...owed, importedCount: 0, cursorAt: null, lastWalkAt: new Date() }),
     ).toBe(false);
+  });
+
+  it("is, while a restart holds the walk, whatever is queued or running", () => {
+    // A slice queued against the hold only no-ops; the full sync is next.
+    const held = { ...owed, restartedAt: new Date() };
+    expect(importAwaitingSync({ ...held, queued: true })).toBe(true);
+    expect(importAwaitingSync({ ...held, running: true })).toBe(true);
+    expect(importAwaitingSync({ ...held, jobsKnown: false })).toBe(true);
+    expect(importAwaitingSync({ ...held, backfillComplete: true })).toBe(false);
+  });
+
+  it("does not infer a hold from a cursor with no walk stamp", () => {
+    // A first walk that errored after committing a page looks exactly so.
+    expect(importAwaitingSync({ ...owed, lastWalkAt: null, restartedAt: null, queued: true })).toBe(false);
+  });
+});
+
+describe("importPausedReason", () => {
+  const owed = {
+    backfillComplete: false,
+    importedCount: 5,
+    oldestPlayAt: null,
+    cursorAt: new Date(),
+    lastWalkAt: new Date(),
+    restartedAt: null,
+    running: false,
+    queued: true,
+    jobsKnown: true,
+    serverEnabled: true,
+    instanceEnabled: true,
+    hasLibraryItems: true,
+    failing: false,
+  } as const;
+
+  it("is null for an import with a slice queued", () => {
+    expect(importPausedReason(owed)).toBeNull();
+  });
+
+  it("puts what nothing but the user can lift first", () => {
+    expect(importPausedReason({ ...owed, serverEnabled: false, restartedAt: new Date() })).toBe("server-disabled");
+    expect(importPausedReason({ ...owed, instanceEnabled: false, hasLibraryItems: false })).toBe("instance-unavailable");
+  });
+
+  it("puts a restart hold before empty libraries — the releasing sync refills them", () => {
+    expect(importPausedReason({ ...owed, restartedAt: new Date(), hasLibraryItems: false })).toBe("awaiting-sync");
+  });
+
+  it("puts empty libraries before a parked slice", () => {
+    expect(importPausedReason({ ...owed, hasLibraryItems: false, failing: true, queued: false })).toBe(
+      "no-library-items",
+    );
+    expect(importPausedReason({ ...owed, failing: true, queued: false })).toBe("import-failing");
+  });
+
+  it("reports nothing about a completed backfill but a disabled server or instance", () => {
+    const done = { ...owed, backfillComplete: true };
+    expect(importPausedReason({ ...done, hasLibraryItems: false, restartedAt: new Date(), failing: true })).toBeNull();
+    expect(importPausedReason({ ...done, serverEnabled: false })).toBe("server-disabled");
   });
 });

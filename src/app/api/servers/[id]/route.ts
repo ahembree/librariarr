@@ -171,6 +171,12 @@ export async function PUT(
           // new mapping is waiting for its first walk (the status readout
           // reports a never-walked mapping as pending, not as empty).
           tracearrBackfillLastWalkAt: null,
+          // `tracearrBackfillRestartedAt` is deliberately NOT cleared. The hold
+          // is about the LIBRARY, not the mapping: a purge left items missing
+          // until the next full sync re-adds them, and the new mapping's first
+          // walk would step over their plays exactly as the old one would have.
+          // It waits for that sync (Settings shows "starts after the next full
+          // sync"); the sync's release queues the slice.
           // The wipe below empties the history, so it is unknown from the same
           // statement that switches the source. Withdrawn only after the wipe,
           // an unlink (native, no Tracearr flag to pause it) read as established

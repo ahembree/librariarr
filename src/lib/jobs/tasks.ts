@@ -304,6 +304,28 @@ const tracearrBackfill: Task = async (payload) => {
     return;
   }
 
+  // Held back without walking: reported "exhausted" so it is not re-queued
+  // (the next slice would only be held again), but it is not an empty archive,
+  // and saying so sent anyone reading the log after the wrong cause.
+  if (result.heldReason === "awaiting-resync") {
+    logger.info(
+      "Jobs",
+      `Tracearr backfill for server ${serverId} is held until a full sync re-adds the ` +
+        `items its restart (a purge or restore) removed — not re-queueing; that sync ` +
+        `queues the walk`,
+    );
+    return;
+  }
+  if (result.heldReason === "no-library-items") {
+    logger.info(
+      "Jobs",
+      `Tracearr backfill for server ${serverId} skipped — none of its enabled libraries ` +
+        `holds any items, so no play could be attributed. Not re-queueing; the ` +
+        `watch-history sync after a library sync adds items queues the walk`,
+    );
+    return;
+  }
+
   // Tracearr has no plays at all for this mapping — the walk is "exhausted"
   // having seen nothing, which deliberately does not mark the backfill
   // complete. Re-enqueueing would ask the same empty question again at once,

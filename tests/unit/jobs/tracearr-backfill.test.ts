@@ -110,6 +110,11 @@ function runBackfill(payload: unknown = { serverId: SERVER_ID }): Promise<void> 
   return task(payload, helpers);
 }
 
+/** Every INFO line the task logged, message text only. */
+function infoLogs(): string[] {
+  return logger.info.mock.calls.map((args: unknown[]) => String(args[1]));
+}
+
 describe("tracearr-backfill task", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -369,6 +374,28 @@ describe("tracearr-backfill task", () => {
 
       await expect(runBackfill()).resolves.toBeUndefined();
       expect(enqueueJob).not.toHaveBeenCalled();
+      expect(infoLogs().some((line) => line.includes("found no history to import"))).toBe(true);
+    });
+
+    // A held slice is reported "exhausted" + pending too, so it is not
+    // re-queued (it would only be held again) — but it is not an empty archive,
+    // and logging it as one pointed at the wrong cause.
+    it.each([
+      ["awaiting-resync", "held until a full sync re-adds"],
+      ["no-library-items", "none of its enabled libraries holds any items"],
+    ] as const)("does not re-enqueue a slice held for %s, and says why", async (heldReason, says) => {
+      syncTracearrHistory.mockResolvedValue({
+        count: 0,
+        backfillPending: true,
+        backfillOutcome: "exhausted",
+        heldReason,
+      });
+
+      await expect(runBackfill()).resolves.toBeUndefined();
+      expect(enqueueJob).not.toHaveBeenCalled();
+      const lines = infoLogs();
+      expect(lines.some((line) => line.includes(says))).toBe(true);
+      expect(lines.some((line) => line.includes("found no history to import"))).toBe(false);
     });
 
     it("re-enqueues when the walk finished but a concurrent restart refused its completion", async () => {

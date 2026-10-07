@@ -197,8 +197,6 @@ let deletedItemIds: Set<string>;
 let mappingHolds: boolean;
 /** Whether the server's enabled libraries hold any item (the empty-library gate). */
 let libraryPopulated: boolean;
-/** Whether a full sync completed after a restart's cursor (`fullSyncCompletedSince`). */
-let resyncedSinceRestart: boolean;
 
 function insertCalls() {
   return mockPrisma.$executeRawUnsafe.mock.calls.filter((args) =>
@@ -300,7 +298,6 @@ describe("syncTracearrHistory", () => {
     deletedItemIds = new Set();
     mappingHolds = true;
     libraryPopulated = true;
-    resyncedSinceRestart = true;
     mockPrisma.$transaction.mockImplementation(
       async (fn: (tx: typeof mockPrisma) => unknown) => fn(mockPrisma),
     );
@@ -339,7 +336,6 @@ describe("syncTracearrHistory", () => {
       async (sql: string, ...params: unknown[]) => {
         if (sql.includes('MAX("watchedAt")')) return [watermark];
         if (sql.includes('AS "populated"')) return [{ populated: libraryPopulated }];
-        if (sql.includes('AS "done"')) return [{ done: resyncedSinceRestart }];
         if (sql.includes("FOR SHARE")) {
           return mappingHolds ? [{ id: params[0] }] : [];
         }
@@ -2474,42 +2470,47 @@ describe("syncTracearrHistory", () => {
 
     it("holds a restarted walk until a full sync has re-added the purged items", async () => {
       // `restartTracearrBackfill` runs right after a purge deleted items whose
-      // plays the walk exists to bring back. Walked before the re-sync, those
-      // plays resolve to nothing and are stepped over for good.
+      // plays the walk exists to bring back, and records the restart. Walked
+      // before the re-sync, those plays resolve to nothing and are stepped
+      // over for good.
       neverBackfilled({
         tracearrBackfillCursorAt: new Date("2026-01-01T00:00:00.000Z"),
         tracearrBackfillLastWalkAt: null,
+        tracearrBackfillRestartedAt: new Date("2026-01-01T00:00:00.000Z"),
       });
       watermark = {
         maxWatchedAt: new Date("2026-03-01T00:00:00.000Z"),
         minWatchedAt: new Date("2026-02-01T00:00:00.000Z"),
         oldestOpenChain: null,
       };
-      resyncedSinceRestart = false;
 
       const result = await syncTracearrHistory("server-1", { passes: "backfill" });
 
       expect(mockGetHistoryPage).not.toHaveBeenCalled();
       // "exhausted" + pending: the task stops without re-enqueueing, and the
-      // full sync's own watch-history phase queues the slice afterwards.
-      expect(result).toMatchObject({ count: 0, backfillPending: true, backfillOutcome: "exhausted" });
-      const since = mockPrisma.$queryRawUnsafe.mock.calls.find((c) =>
-        String(c[0]).includes('AS "done"'),
-      );
-      expect(since?.[2]).toEqual(new Date("2026-01-01T00:00:00.000Z"));
+      // full sync that releases the hold queues the slice afterwards. The
+      // reason says it is a hold, not an archive with no plays.
+      expect(result).toMatchObject({
+        count: 0,
+        backfillPending: true,
+        backfillOutcome: "exhausted",
+        heldReason: "awaiting-resync",
+      });
+      // Nothing written: no cursor, no completion, no walk stamp.
+      expect(mockPrisma.mediaServer.updateMany).not.toHaveBeenCalled();
     });
 
     it("still runs the forward pass while a restarted walk waits for the re-sync", async () => {
       neverBackfilled({
         tracearrBackfillCursorAt: new Date("2026-01-01T00:00:00.000Z"),
         tracearrBackfillLastWalkAt: null,
+        tracearrBackfillRestartedAt: new Date("2026-01-01T00:00:00.000Z"),
       });
       watermark = {
         maxWatchedAt: new Date("2026-03-01T00:00:00.000Z"),
         minWatchedAt: new Date("2026-02-01T00:00:00.000Z"),
         oldestOpenChain: null,
       };
-      resyncedSinceRestart = false;
       mockGetHistoryPage.mockResolvedValueOnce({ records: [], nextCursor: null });
 
       const result = await syncTracearrHistory("server-1", { passes: "both" });
@@ -2518,12 +2519,43 @@ describe("syncTracearrHistory", () => {
       expect(mockGetHistoryPage).toHaveBeenCalledTimes(1);
       expect(mockGetHistoryPage.mock.calls[0][1].until).toBeUndefined();
       expect(mockGetHistoryPage.mock.calls[0][1].since).toBeInstanceOf(Date);
-      expect(result).toMatchObject({ backfillPending: true, backfillOutcome: "exhausted" });
+      expect(result).toMatchObject({
+        backfillPending: true,
+        backfillOutcome: "exhausted",
+        heldReason: "awaiting-resync",
+      });
     });
 
-    it("walks a restarted archive once a full sync completed after the restart", async () => {
+    it("walks a restarted archive once a full sync has released the hold", async () => {
+      // The releasing full sync clears `tracearrBackfillRestartedAt`; the
+      // cursor the restart set is where the walk resumes.
       neverBackfilled({
         tracearrBackfillCursorAt: new Date("2026-01-01T00:00:00.000Z"),
+        tracearrBackfillLastWalkAt: null,
+        tracearrBackfillRestartedAt: null,
+      });
+      watermark = {
+        maxWatchedAt: new Date("2026-03-01T00:00:00.000Z"),
+        minWatchedAt: new Date("2026-02-01T00:00:00.000Z"),
+        oldestOpenChain: null,
+      };
+      mockGetHistoryPage.mockResolvedValueOnce({ records: [], nextCursor: null });
+
+      const result = await syncTracearrHistory("server-1", { passes: "backfill" });
+
+      expect(mockGetHistoryPage).toHaveBeenCalledTimes(1);
+      expect(mockGetHistoryPage.mock.calls[0][1].until).toEqual(new Date("2026-01-01T00:00:00.000Z"));
+      expect(result.heldReason).toBeUndefined();
+    });
+
+    it("does not hold a first walk that failed after committing a page", async () => {
+      // A first slice that errors after one committed page leaves a cursor and
+      // no walk stamp — the very shape a restart used to be inferred from. It
+      // is not a restart (`tracearrBackfillRestartedAt` stays null): held, it
+      // reported "exhausted", was never retried, and with the sync schedule
+      // off waited forever for a full sync, play-activity rules paused.
+      neverBackfilled({
+        tracearrBackfillCursorAt: new Date("2026-02-01T00:00:00.000Z"),
         tracearrBackfillLastWalkAt: null,
       });
       watermark = {
@@ -2531,13 +2563,17 @@ describe("syncTracearrHistory", () => {
         minWatchedAt: new Date("2026-02-01T00:00:00.000Z"),
         oldestOpenChain: null,
       };
-      resyncedSinceRestart = true;
-      mockGetHistoryPage.mockResolvedValueOnce({ records: [], nextCursor: null });
+      mockGetHistoryPage.mockResolvedValueOnce({ records: [], nextCursor: "next" });
 
-      await syncTracearrHistory("server-1", { passes: "backfill" });
+      const result = await syncTracearrHistory("server-1", {
+        passes: "backfill",
+        deadlineMs: Date.now() - 1,
+      });
 
       expect(mockGetHistoryPage).toHaveBeenCalledTimes(1);
-      expect(mockGetHistoryPage.mock.calls[0][1].until).toEqual(new Date("2026-01-01T00:00:00.000Z"));
+      expect(mockGetHistoryPage.mock.calls[0][1].until).toEqual(new Date("2026-02-01T00:00:00.000Z"));
+      expect(result.heldReason).toBeUndefined();
+      expect(result.backfillOutcome).toBe("stopped");
     });
 
     it("discards its progress when the walk was restarted while it ran", async () => {
@@ -2658,7 +2694,13 @@ describe("syncTracearrHistory", () => {
 
       // Reported like an empty mapping: exhausted, still pending — so the
       // backfill task does not re-queue itself.
-      expect(result).toEqual({ count: 0, backfillPending: true, backfillOutcome: "exhausted" });
+      // `heldReason` keeps the task from logging it as an empty archive.
+      expect(result).toEqual({
+        count: 0,
+        backfillPending: true,
+        backfillOutcome: "exhausted",
+        heldReason: "no-library-items",
+      });
       expect(mockGetHistoryPage).not.toHaveBeenCalled();
       expect(mockPrisma.mediaServer.updateMany).not.toHaveBeenCalled();
       expect(mockPrisma.$executeRawUnsafe).not.toHaveBeenCalled();

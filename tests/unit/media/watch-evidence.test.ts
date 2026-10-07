@@ -113,6 +113,9 @@ describe("restartTracearrBackfill", () => {
     expect(arg.data.tracearrForwardFloorAt).toBeNull();
     // A last-walk stamp describes the history that was just destroyed.
     expect(arg.data.tracearrBackfillLastWalkAt).toBeNull();
+    // The restart is recorded, so the walk is held until a full sync re-adds
+    // the deleted items (never inferred from the columns above).
+    expect(arg.data.tracearrBackfillRestartedAt).toEqual(arg.data.tracearrBackfillCursorAt);
   });
 
   it("supersedes a running slice's live reach before moving the cursor", async () => {

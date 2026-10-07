@@ -32,11 +32,15 @@ export function tracearrBackfillJobKey(serverId: string): string {
  *  - holding items in an enabled library — the importer refuses to walk into
  *    an empty library (no play could be attributed), and the first sync's
  *    watch-history step queues the slice once there is something to join to;
- *  - NOT waiting on a re-sync after `restartTracearrBackfill` (cursor moved,
- *    no walk since): a purge or a restore removed items the archive's plays
- *    belong to, and a walk run before the re-sync brings them back skips those
- *    plays as unresolved and can mark the archive complete without them — for
- *    good. The next watch-history sync queues that walk, after the items.
+ *  - NOT held after `restartTracearrBackfill` (`tracearrBackfillRestartedAt`
+ *    set): a purge or a restore removed items the archive's plays belong to,
+ *    and a walk run before the re-sync brings them back skips those plays as
+ *    unresolved and can mark the archive complete without them — for good.
+ *    The full sync that releases the hold queues that walk, after the items.
+ *    Read from the recorded restart, never inferred from the walk columns: a
+ *    first walk that failed after committing a page has the same cursor-set,
+ *    never-walked shape, and refusing it left it waiting on a full sync that
+ *    may never come.
  *
  * Best-effort: never throws. A failed read or enqueue is logged and leaves the
  * import to the next watch-history sync, exactly as before. Returns the ids
@@ -56,8 +60,8 @@ export async function enqueueTracearrBackfill(
         tracearrServerId: { not: null },
         user: { tracearrInstances: { some: { enabled: true } } },
         libraries: { some: { enabled: true, mediaItems: { some: {} } } },
-        // The restart state — see above.
-        NOT: { tracearrBackfillLastWalkAt: null, tracearrBackfillCursorAt: { not: null } },
+        // The restart hold — see above.
+        tracearrBackfillRestartedAt: null,
       },
       select: { id: true },
     });

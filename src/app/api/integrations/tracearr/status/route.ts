@@ -4,10 +4,9 @@ import { prisma } from "@/lib/db";
 import { sanitize } from "@/lib/api/sanitize";
 import {
   computeBackfillFraction,
-  importAwaitingSync,
+  importPausedReason,
   importPending,
   resolveBackfillReach,
-  type ImportPausedReason,
 } from "./backfill-fraction";
 import {
   getTracearrBackfillReach,
@@ -104,6 +103,7 @@ export async function GET() {
       tracearrOldestPlayAt: true,
       tracearrBackfillCursorAt: true,
       tracearrBackfillLastWalkAt: true,
+      tracearrBackfillRestartedAt: true,
     },
     // Total order: the UI polls this repeatedly and re-renders the list, so ties
     // on `name` must not permute between requests.
@@ -118,7 +118,7 @@ export async function GET() {
   // memory below. `source: "TRACEARR"` is load-bearing: a server that was mapped
   // partway through its life still holds NATIVE rows from before the switch, and
   // counting those would report progress the importer never made.
-  const [aggregates, enabledInstances, backfillJobs] = await Promise.all([
+  const [aggregates, enabledInstances, backfillJobs, populatedServers] = await Promise.all([
     prisma.watchHistory.groupBy({
       by: ["mediaServerId"],
       where: {
@@ -131,7 +131,19 @@ export async function GET() {
     }),
     prisma.tracearrInstance.count({ where: { userId: session.userId!, enabled: true } }),
     backfillJobStates(servers.map((server) => server.id)),
+    // Servers with an item in an ENABLED library: the importer walks nothing
+    // into a server without one (no play could be attributed), and a server
+    // whose libraries are all disabled gets none from any sync — so "starts
+    // with the next sync" would be untrue there. One semi-join per call.
+    prisma.mediaServer.findMany({
+      where: {
+        id: { in: servers.map((server) => server.id) },
+        libraries: { some: { enabled: true, mediaItems: { some: {} } } },
+      },
+      select: { id: true },
+    }),
   ]);
+  const hasLibraryItems = new Set(populatedServers.map((server) => server.id));
 
   const byServerId = new Map(
     aggregates.map((aggregate) => [aggregate.mediaServerId, aggregate])
@@ -174,19 +186,18 @@ export async function GET() {
       oldestPlayAt: server.tracearrOldestPlayAt,
       cursorAt,
       lastWalkAt: server.tracearrBackfillLastWalkAt,
+      restartedAt: server.tracearrBackfillRestartedAt,
       running,
       queued,
       jobsKnown: backfillJobs.known,
     };
-    const pausedReason: ImportPausedReason | null = !server.enabled
-      ? "server-disabled"
-      : enabledInstances === 0
-        ? "instance-unavailable"
-        : failing && !server.tracearrBackfillComplete
-          ? "import-failing"
-          : importAwaitingSync({ ...importState, parked: failing })
-            ? "awaiting-sync"
-            : null;
+    const pausedReason = importPausedReason({
+      ...importState,
+      serverEnabled: server.enabled,
+      instanceEnabled: enabledInstances > 0,
+      hasLibraryItems: hasLibraryItems.has(server.id),
+      failing,
+    });
 
     return {
       serverId: server.id,

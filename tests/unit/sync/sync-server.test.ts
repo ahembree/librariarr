@@ -84,6 +84,10 @@ vi.mock("@/lib/sync/sync-watch-history", () => ({
 
 vi.mock("@/lib/media/watch-evidence", () => ({
   restartTracearrBackfill: vi.fn().mockResolvedValue(1),
+  releaseTracearrRestartHold: vi.fn().mockResolvedValue(false),
+}));
+vi.mock("@/lib/sync/tracearr-backfill-enqueue", () => ({
+  enqueueTracearrBackfill: vi.fn().mockResolvedValue([]),
 }));
 vi.mock("@/lib/sync/watch-reconcile", () => ({
   reconcileWatchStateFromHistory: vi.fn().mockResolvedValue(0),
@@ -961,6 +965,77 @@ describe("syncMediaServer library and watchlist reconciliation", () => {
     expect(restartTracearrBackfill).toHaveBeenCalledWith(["server-1"]);
     const counted = findDbCalls('FROM "WatchHistory" wh');
     expect(counted[0][1]).toBe("lib-gone");
+  });
+
+  // ── Releasing a held Tracearr walk ────────────────────────────────────
+  // The SQL (compare-and-set on the restart instant) is covered against a real
+  // database in tests/integration/sync/tracearr-restart-hold.test.ts; these pin
+  // WHICH runs ask, and with what instant.
+
+  it("releases a held Tracearr walk at the end of a full sync, from after its own vanished-library restart", async () => {
+    mockDb({ vanished: [{ id: "lib-gone", key: "9", title: "Old Movies" }], tracearrRowCount: BigInt(12) });
+    const evidence = await import("@/lib/media/watch-evidence");
+    const { enqueueTracearrBackfill } = await import("@/lib/sync/tracearr-backfill-enqueue");
+    let restartedAt = 0;
+    vi.mocked(evidence.restartTracearrBackfill).mockImplementationOnce(async () => {
+      restartedAt = Date.now();
+      return 1;
+    });
+    vi.mocked(evidence.releaseTracearrRestartHold).mockResolvedValueOnce(true);
+
+    await syncMediaServer("server-1");
+
+    expect(evidence.releaseTracearrRestartHold).toHaveBeenCalledTimes(1);
+    const [serverId, passStart] = vi.mocked(evidence.releaseTracearrRestartHold).mock.calls[0];
+    expect(serverId).toBe("server-1");
+    // The run covers the restart its own purge recorded: every library it
+    // synced, it synced after that.
+    expect(passStart.getTime()).toBeGreaterThanOrEqual(restartedAt);
+    // Released → the walk is queued now rather than at the next watch-history sync.
+    expect(enqueueTracearrBackfill).toHaveBeenCalledWith({ serverIds: ["server-1"] }, expect.any(String));
+    // Released before the run returns — the slice its watch-history phase
+    // queued runs after this job on the serial MAIN_QUEUE and must find the
+    // hold gone — so before the completion is announced.
+    expect(findDbCalls('"status"=$1,"completedAt"=$2,"itemsProcessed"=$3', "COMPLETED")).toHaveLength(1);
+    const completedEmit = mockEmit.mock.calls.findIndex(
+      (args: unknown[]) => (args[0] as { type: string }).type === "sync:completed",
+    );
+    expect(completedEmit).toBeGreaterThan(-1);
+    expect(vi.mocked(evidence.releaseTracearrRestartHold).mock.invocationCallOrder[0]).toBeLessThan(
+      mockEmit.mock.invocationCallOrder[completedEmit],
+    );
+  });
+
+  it("does not queue the walk when there was no hold to release", async () => {
+    mockDb({});
+    const evidence = await import("@/lib/media/watch-evidence");
+    const { enqueueTracearrBackfill } = await import("@/lib/sync/tracearr-backfill-enqueue");
+
+    await syncMediaServer("server-1");
+
+    expect(evidence.releaseTracearrRestartHold).toHaveBeenCalledTimes(1);
+    expect(enqueueTracearrBackfill).not.toHaveBeenCalled();
+  });
+
+  it("never releases a held walk from a library-scoped sync", async () => {
+    // The lifecycle executor's post-delete re-sync and the by-type fan-out
+    // re-add one library; a purged other one is still empty.
+    mockDb({});
+    const evidence = await import("@/lib/media/watch-evidence");
+
+    await syncMediaServer("server-1", "1");
+
+    expect(evidence.releaseTracearrRestartHold).not.toHaveBeenCalled();
+  });
+
+  it("completes the sync even when releasing the hold fails", async () => {
+    mockDb({});
+    const evidence = await import("@/lib/media/watch-evidence");
+    vi.mocked(evidence.releaseTracearrRestartHold).mockRejectedValueOnce(new Error("db down"));
+
+    await expect(syncMediaServer("server-1")).resolves.toBeUndefined();
+
+    expect(findDbCalls('"status"=$1,"completedAt"=$2,"itemsProcessed"=$3', "COMPLETED")).toHaveLength(1);
   });
 
   it("leaves the Tracearr walk alone when the vanished library held no imported plays", async () => {

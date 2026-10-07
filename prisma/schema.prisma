@@ -263,6 +263,19 @@ model MediaServer {
   /// readout tell "never attempted yet" (a fresh mapping waiting for its first
   /// import) apart from "walked and found nothing to import".
   tracearrBackfillLastWalkAt DateTime?
+  /// When the archive walk was last RESTARTED (`restartTracearrBackfill`: a
+  /// purge, disable-with-delete, a restore, a vanished-library purge) and has
+  /// not yet been released. Each restart follows the deletion of items whose
+  /// plays the restarted walk exists to bring back, and a walk run before a
+  /// sync re-creates them skips those plays as unresolved and can complete
+  /// without them for good — so while this is set the backfill pass is held.
+  /// Cleared only by a FULL (unscoped) library sync that began its library pass
+  /// at or after this instant and completed (compare-and-set on it, so a sync
+  /// already running when the restart landed cannot release it), and by a
+  /// mapping change, which resets the walk anyway. Recorded explicitly rather
+  /// than inferred from the other walk columns: a first walk that failed after
+  /// committing a page leaves exactly the shape a restart does.
+  tracearrBackfillRestartedAt DateTime?
   /// Whether the one-time backfill of this server's Tracearr history has walked
   /// all the way to the oldest play.
   ///

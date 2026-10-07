@@ -484,6 +484,20 @@ export interface TracearrImportResult {
   /** Rows inserted plus rows updated across every pass this run made. */
   count: number;
   /**
+   * Why the backfill pass was held back without walking, when it was. Such a
+   * run reports `"exhausted"` with the backfill still pending (so the task
+   * does not re-enqueue a slice that would only be held again), which on its
+   * own reads as "Tracearr holds no plays for this mapping" — this says it is
+   * not that:
+   *  - `"awaiting-resync"`: the walk was restarted after items were deleted
+   *    (`tracearrBackfillRestartedAt`) and waits for the full library sync
+   *    that re-adds them, which queues the slice itself;
+   *  - `"no-library-items"`: none of the server's enabled libraries holds an
+   *    item, so no play could be attributed; the watch-history sync after a
+   *    library sync that adds some queues the slice.
+   */
+  heldReason?: "awaiting-resync" | "no-library-items";
+  /**
    * The backfill walk exhausted the archive and would have marked it complete,
    * but the completion write was refused — a concurrent restart
    * (`restartTracearrBackfill`) or mapping change moved the state it expected.
@@ -572,6 +586,7 @@ async function runTracearrImport(
       tracearrBackfillCursorAt: true,
       tracearrForwardFloorAt: true,
       tracearrBackfillLastWalkAt: true,
+      tracearrBackfillRestartedAt: true,
       watchHistorySyncedAt: true,
       userId: true,
     },
@@ -682,18 +697,15 @@ async function runTracearrImport(
   // (any playback queues a slice), their plays resolve to nothing and are
   // stepped over, and the walk can complete without them for good: the items
   // come back reading as never watched, which is what "not played in N months"
-  // DELETE rules act on. The state is recognisable — no walk since the restart
-  // (`tracearrBackfillLastWalkAt` null) with the cursor it set — and the cursor
-  // holds the restart instant until a walk moves it, so "a full sync completed
-  // after it" is the condition. Reported as `"exhausted"` with the backfill still
-  // pending, so the task does not re-enqueue; the full sync's own watch-history
-  // phase queues the slice once the items are back.
+  // DELETE rules act on. The restart is recorded explicitly
+  // (`tracearrBackfillRestartedAt`) and released only by a full, unscoped
+  // library sync that began after it (`syncMediaServer`) — never by a
+  // library-scoped one, which re-adds one library and leaves a purged other
+  // one empty. Reported as `"exhausted"` with the backfill still pending and
+  // `heldReason` set, so the task does not re-enqueue; the releasing sync
+  // queues the slice once the items are back.
   const awaitingResync =
-    wantsBackfill &&
-    !backfillComplete &&
-    server.tracearrBackfillLastWalkAt == null &&
-    cursorAtStart != null &&
-    !(await fullSyncCompletedSince(serverId, cursorAtStart));
+    wantsBackfill && !backfillComplete && server.tracearrBackfillRestartedAt != null;
   const backfillDue = wantsBackfill && !backfillComplete && !awaitingResync;
   if (awaitingResync) {
     logger.info(
@@ -713,7 +725,9 @@ async function runTracearrImport(
     return {
       count: 0,
       backfillPending: !backfillComplete,
-      ...(awaitingResync ? { backfillOutcome: "exhausted" as const } : {}),
+      ...(awaitingResync
+        ? { backfillOutcome: "exhausted" as const, heldReason: "awaiting-resync" as const }
+        : {}),
     };
   }
 
@@ -753,7 +767,11 @@ async function runTracearrImport(
     return {
       count: 0,
       backfillPending: !backfillComplete,
-      ...(backfillDue ? { backfillOutcome: "exhausted" as const } : {}),
+      ...(backfillDue
+        ? { backfillOutcome: "exhausted" as const, heldReason: "no-library-items" as const }
+        : awaitingResync
+          ? { backfillOutcome: "exhausted" as const, heldReason: "awaiting-resync" as const }
+          : {}),
     };
   }
 
@@ -1678,6 +1696,7 @@ async function runTracearrImport(
     count: total,
     backfillPending: !backfillComplete,
     backfillOutcome,
+    ...(awaitingResync ? { heldReason: "awaiting-resync" as const } : {}),
     ...(completionLost ? { completionLost } : {}),
     ...(failed ? { failed } : {}),
   };
@@ -1881,26 +1900,6 @@ interface ImportWindow {
   maxWatchedAt: Date | null;
   /** Whether this server has any stored Tracearr rows at all. */
   hasRows: boolean;
-}
-
-/**
- * Whether a full sync of this server COMPLETED at or after `since` — the gate
- * that holds a restarted archive walk until the items its restart was for have
- * been re-synced (see `awaitingResync` in `runTracearrImport`).
- */
-async function fullSyncCompletedSince(serverId: string, since: Date): Promise<boolean> {
-  // Any COMPLETED sync row: `SyncJob` does not record a library scope, and the
-  // by-type fan-out's per-library jobs each re-add their library's items, so a
-  // completed one after the restart is the re-sync the walk waits for.
-  const rows = await prisma.$queryRawUnsafe<{ done: boolean }[]>(
-    `SELECT EXISTS (
-       SELECT 1 FROM "SyncJob"
-        WHERE "mediaServerId" = $1 AND "status" = 'COMPLETED' AND "completedAt" >= $2
-     ) AS "done"`,
-    serverId,
-    since,
-  );
-  return rows[0]?.done === true;
 }
 
 /**

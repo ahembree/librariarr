@@ -9,7 +9,7 @@ import {
   buildOpenApiDocument,
   operationId,
 } from "@/lib/api-keys/openapi";
-import { HISTORY_SORT_KEYS } from "@/lib/media/history-sort";
+import { HISTORY_SORT_KEYS, HISTORY_SORT_SQL } from "@/lib/media/history-sort";
 import { API_SCOPES } from "@/lib/api-keys/scopes";
 
 /**
@@ -156,6 +156,27 @@ describe("OpenAPI document", () => {
       const read = [...source.matchAll(/searchParams\.get\("(\w+)"\)/g)].map((m) => m[1]);
       expect(read.length).toBeGreaterThan(10);
       expect((op?.query ?? []).map((p) => p.name).sort()).toEqual([...new Set(read)].sort());
+    });
+
+    it("documents the title sort's key order, matching the route's ORDER BY", () => {
+      // The sentence a client reads to know where an episode lands under
+      // `sortBy=title`: the show/artist first, then season and episode for
+      // episodes only, then the row's own title — not the item's own title
+      // alone, which scattered a show's episodes by episode name.
+      const description = op?.description ?? "";
+      expect(description).toContain(
+        "`sortBy=title` sorts by the displayed title (the show or artist, then season and " +
+          "episode for episodes, then the title)",
+      );
+      // Pinned to the ORDER BY the route applies, so neither can be reordered
+      // without the other: the display lead (show/artist, else title), season,
+      // episode — both episode-only — then the row's own title.
+      const [lead, season, episode, own, ...rest] = HISTORY_SORT_SQL.title;
+      expect(rest).toEqual([]);
+      expect(lead).toMatch(/"parentTitle".*ELSE mi\."title"/);
+      expect(season).toMatch(/'SERIES'.*"seasonNumber"/);
+      expect(episode).toMatch(/'SERIES'.*"episodeNumber"/);
+      expect(own).toBe('LOWER(mi."title")');
     });
   });
 });
