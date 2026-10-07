@@ -228,7 +228,7 @@ export const API_OPERATIONS: readonly Operation[] = [
       { name: "username", description: "Pipe-separated media-server usernames." },
       { name: "deviceName", description: "Pipe-separated device names." },
       { name: "platform", description: "Pipe-separated platforms." },
-      { name: "resolution", description: "Pipe-separated file resolutions: `4K`, `1080P`, `720P`, `480P`, `SD`, or a stored value." },
+      { name: "resolution", description: "Pipe-separated file resolutions. A label — `4K`, `1080P`, `720P`, `480P`, `SD` or `Other`, in any case — matches every file shown under it (`2160` and `4k` are both `4K`, `1024p` is `1080P`, a missing or unrecognised resolution is `Other`); any other value matches the stored resolution, ignoring case." },
       { name: "dynamicRange", description: "Pipe-separated dynamic ranges, e.g. `HDR10|Dolby Vision`." },
       { name: "videoCodec", description: "Pipe-separated video codecs." },
       { name: "audioCodec", description: "Pipe-separated audio codecs." },
@@ -335,6 +335,7 @@ export const API_OPERATIONS: readonly Operation[] = [
       `At most ${PER_REQUEST} items per request. When the action deletes (Sonarr, Radarr or Lidarr), the items count against the ` +
       `${PER_HOUR}-an-hour deletion budget every key shares. The rule set must be enabled with actions turned on. ` +
       `Refused whole — nothing runs — when an item is excepted, when an item changed identity since it matched (409: run detection again), ` +
+      `when the rule set reads play activity and a server it targets has no established play history (409), ` +
       `or when a limit would be exceeded. One execution runs per rule set at a time: an overlapping call is refused (409) rather than repeating the deletions.`,
     body: {
       description: "",
@@ -348,7 +349,7 @@ export const API_OPERATIONS: readonly Operation[] = [
     },
     responses: {
       "200": "`{ executed, failed, errors }`",
-      "409": "An execution is already running for this rule set, or an item changed identity since it matched (a re-match on the media server); nothing was executed",
+      "409": "An execution is already running for this rule set, an item changed identity since it matched (a re-match on the media server), or the rule set reads play activity while a server it targets has no established play history; nothing was executed",
       "429": BUDGET_429,
     },
   },

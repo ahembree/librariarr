@@ -16,6 +16,7 @@ import {
 import { sendDiscordNotification, buildFailureSummaryEmbed } from "@/lib/discord/client";
 import { eventBus } from "@/lib/events/event-bus";
 import { hasSeerrRules } from "@/lib/rules/lifecycle-engine";
+import { checkPlayActivityExecutable } from "@/lib/lifecycle/evaluability";
 import type { LifecycleRuleGroup } from "@/lib/rules/types";
 import { matchIdentityChange } from "@/lib/lifecycle/match-identity";
 import { memberIdsFromItemData } from "@/lib/lifecycle/group-aggregate";
@@ -157,6 +158,21 @@ async function executeRuleSet(
       { error: "Seerr criteria are not supported on music rule sets — this rule set's matches were invalid and have been cleared" },
       { status: 400 }
     );
+  }
+
+  // Play history (mirrors the scheduled executor's hold and the query page's
+  // refusal): while a server the rule set reads has no established play
+  // history, detection skips a rule set with play-activity criteria and keeps
+  // its matches as they were, so the matches this would act on are frozen from
+  // before — an item watched since still holds one. Refused, nothing executed,
+  // until the history is back and detection has re-evaluated the rule set.
+  const playHistoryRefusal = await checkPlayActivityExecutable(
+    session.userId!,
+    ruleSet.rules as unknown as LifecycleRuleGroup[],
+    ruleSet.serverIds,
+  );
+  if (playHistoryRefusal) {
+    return NextResponse.json({ error: playHistoryRefusal }, { status: 409 });
   }
 
   const hasTagOps = ruleSet.addArrTags.length > 0 || ruleSet.removeArrTags.length > 0;

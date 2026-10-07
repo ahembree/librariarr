@@ -49,6 +49,7 @@ vi.mock("@/lib/media-server/health-cache", () => ({
 }));
 
 import { JellyfinClient } from "@/lib/jellyfin/client";
+import type { DetailedWatchHistoryReport } from "@/lib/media-server/types";
 
 describe("JellyfinClient", () => {
   beforeEach(() => {
@@ -726,6 +727,34 @@ describe("JellyfinClient", () => {
       expect(logger.warn).not.toHaveBeenCalledWith("Jellyfin", expect.stringContaining("over-reported"));
     });
 
+    describe("a later page that omits the total an earlier one reported", () => {
+      // A proxy stripping `TotalRecordCount` from one page used to turn the
+      // rest of the walk into "no total": an empty page then ended it with no
+      // shortfall check, and a short page ended it as "the last page".
+
+      it("judges an empty page by the earlier total, so a truncated listing still throws", async () => {
+        const { client } = pagedClient((params) =>
+          params.StartIndex === 0
+            ? (cappedPages(1000, 100, true)(params) as unknown)
+            : { data: { Items: [] } },
+        );
+        await expect(client.getDetailedWatchHistory()).rejects.toThrow(
+          /ended at 100 of a reported 1000/,
+        );
+      });
+
+      it("keeps paging past a short page that omits the total until the earlier total is reached", async () => {
+        const { client, axiosClient } = pagedClient((params) =>
+          params.StartIndex === 0
+            ? (cappedPages(250, 100, true)(params) as unknown)
+            : (cappedPages(250, 100, false)(params) as unknown),
+        );
+
+        await expect(client.getDetailedWatchHistory()).resolves.toHaveLength(250);
+        expect(axiosClient.get.mock.calls.filter((c) => c[0] === "/Users/u1/Items")).toHaveLength(3);
+      });
+    });
+
     it("still reads an empty first page under a zero total as a user with no plays", async () => {
       const { client } = pagedClient(() => ({ data: { Items: [], TotalRecordCount: 0 } }));
       await expect(client.getDetailedWatchHistory()).resolves.toEqual([]);
@@ -829,6 +858,180 @@ describe("JellyfinClient", () => {
           u2: async () => ({ data: { Items: [], TotalRecordCount: 0 } }),
         });
         await expect(client.getDetailedWatchHistory()).resolves.toEqual([]);
+      });
+    });
+
+    describe("setting aside a user whose listing cannot be read completely", () => {
+      // One user's played items hidden from the key (parental limits, changed
+      // access) while the server still counts them made every sync of the
+      // server fail for good; a refused user was skipped, and the full replace
+      // then deleted their stored plays. With a report the user is set aside
+      // instead — with why — and the caller keeps what it already stored for
+      // them.
+      const newReport = (): DetailedWatchHistoryReport => ({
+        incompleteUsers: new Map(),
+        devicesUnavailable: false,
+      });
+      const item = (id: string) => ({
+        Id: id,
+        UserData: { PlayCount: 1, LastPlayedDate: "2024-01-02T00:00:00.000Z" },
+      });
+      /** Bob's first page delivers 100 of a reported 1,000; the next is empty. */
+      const truncatedMidList = (params: { StartIndex: number }) =>
+        params.StartIndex === 0
+          ? { data: { Items: Array.from({ length: 100 }, (_, i) => item(`b${i}`)), TotalRecordCount: 1000 } }
+          : { data: { Items: [], TotalRecordCount: 1000 } };
+      const SHAPES: Array<[string, (params: { StartIndex: number }) => unknown]> = [
+        ["an empty first page under a non-zero total", () => ({ data: { Items: [], TotalRecordCount: 5 } })],
+        ["an empty page far short of the total mid-list", truncatedMidList],
+      ];
+      /** Every request answered with the same full first page. */
+      const ignoresStartIndex = () => ({
+        data: { Items: Array.from({ length: 100 }, (_, i) => item(`b${i}`)), TotalRecordCount: 5000 },
+      });
+
+      /** Alice reads cleanly; Bob answers with `bob`. */
+      function aliceAndBob(bob: (params: { StartIndex: number }) => unknown) {
+        const client = new JellyfinClient("http://jellyfin:8096", "jf-token");
+        const axiosClient = mockAxiosCreate.mock.results[0].value as { get: ReturnType<typeof vi.fn> };
+        axiosClient.get.mockImplementation(async (url: string, config?: { params: { StartIndex: number } }) => {
+          if (url === "/Users") return { data: USERS };
+          if (url === "/Users/u1/Items") {
+            return { data: { Items: [item("a1"), item("a2")], TotalRecordCount: 2 } };
+          }
+          if (url === "/Users/u2/Items") return bob(config!.params);
+          throw new Error(`unexpected ${url}`);
+        });
+        return client;
+      }
+
+      it.each(SHAPES)("sets aside a user whose listing is %s, with none of their entries", async (_label, bob) => {
+        const client = aliceAndBob(bob);
+        const { logger } = await import("@/lib/logger");
+        const report = newReport();
+
+        const entries = await client.getDetailedWatchHistory({ report });
+
+        // Only Alice's plays — none of the pages Bob did deliver before his
+        // listing proved incomplete, which the caller would otherwise store
+        // on top of the rows it keeps for him.
+        expect(entries.map((e) => [e.username, e.ratingKey])).toEqual([
+          ["Alice", "a1"],
+          ["Alice", "a2"],
+        ]);
+        // Marked as UNRELIABLE: by the server's own count bob has plays this
+        // run did not see, which the caller must not vouch for on a server
+        // whose history it never established.
+        expect([...report.incompleteUsers]).toEqual([["Bob", "unreliable"]]);
+        expect(logger.warn).toHaveBeenCalledWith(
+          "Jellyfin",
+          expect.stringContaining('complete watch history of user "Bob"'),
+        );
+      });
+
+      it("fails the fetch on pages that ignore StartIndex, report or not", async () => {
+        // A server or proxy fault, not one user's: it hits every user with
+        // more than one page, and setting all of those aside handed the caller
+        // the history of only the users with a single page — on a fresh server,
+        // an empty history the caller then vouched for.
+        const report = newReport();
+        await expect(aliceAndBob(ignoresStartIndex).getDetailedWatchHistory({ report })).rejects.toThrow(
+          /ignored StartIndex/,
+        );
+        expect(report.incompleteUsers.size).toBe(0);
+        await expect(aliceAndBob(ignoresStartIndex).getDetailedWatchHistory()).rejects.toThrow(
+          /ignored StartIndex/,
+        );
+      });
+
+      it.each(SHAPES)("still fails the fetch on %s when no report is passed", async (_label, bob) => {
+        // Nothing would keep the user's stored rows from the full replace.
+        const client = aliceAndBob(bob);
+        await expect(client.getDetailedWatchHistory()).rejects.toThrow(/played-items listing ended at/);
+      });
+
+      describe("a user the key cannot read", () => {
+        const refused = (status: number) => () => {
+          throw Object.assign(new Error(`HTTP ${status}`), { isAxiosError: true, response: { status } });
+        };
+        beforeEach(async () => {
+          const { default: axios } = await import("axios");
+          vi.mocked(axios.isAxiosError).mockImplementation(
+            (e: unknown) => !!(e as { isAxiosError?: boolean })?.isAxiosError,
+          );
+        });
+        afterEach(async () => {
+          const { default: axios } = await import("axios");
+          vi.mocked(axios.isAxiosError).mockImplementation(() => false);
+        });
+
+        it.each([401, 403, 404])("sets aside a user refused with HTTP %i", async (status) => {
+          const client = aliceAndBob(refused(status));
+          const report = newReport();
+
+          const entries = await client.getDetailedWatchHistory({ report });
+
+          expect(entries.map((e) => e.username)).toEqual(["Alice", "Alice"]);
+          // REFUSED, which unlike an unreliable listing never holds the
+          // history back: the key cannot read the user and never will.
+          expect([...report.incompleteUsers]).toEqual([["Bob", "refused"]]);
+        });
+
+        it.each([401, 403, 404])("without a report still skips one refused with HTTP %i, as before", async (status) => {
+          const client = aliceAndBob(refused(status));
+          const entries = await client.getDetailedWatchHistory();
+          expect(entries.map((e) => e.username)).toEqual(["Alice", "Alice"]);
+        });
+
+        it("still propagates a transient failure (a 5xx) even with a report", async () => {
+          const client = aliceAndBob(refused(503));
+          await expect(client.getDetailedWatchHistory({ report: newReport() })).rejects.toThrow("HTTP 503");
+        });
+      });
+
+      it("still propagates a dropped connection even with a report", async () => {
+        const client = aliceAndBob(() => {
+          throw new Error("socket hang up");
+        });
+        await expect(client.getDetailedWatchHistory({ report: newReport() })).rejects.toThrow("socket hang up");
+      });
+
+      it("still propagates a malformed page even with a report", async () => {
+        const client = aliceAndBob(() => ({ data: { TotalRecordCount: 5 } }));
+        await expect(client.getDetailedWatchHistory({ report: newReport() })).rejects.toThrow(/no Items list/);
+      });
+
+      it("still propagates the runaway-page backstop even with a report", async () => {
+        // A fresh item on every page under a total that is never reached:
+        // only the page cap ends it, and it is not a property of one user.
+        let n = 0;
+        const client = aliceAndBob(() => ({ data: { Items: [item(`x${n++}`)], TotalRecordCount: 1e9 } }));
+        await expect(client.getDetailedWatchHistory({ report: newReport() })).rejects.toThrow(
+          /did not end after 10000 pages/,
+        );
+      });
+
+      it("still fails the fetch when NO user could be read, report or not", async () => {
+        // An empty answer here would let the full replace delete every play.
+        const client = new JellyfinClient("http://jellyfin:8096", "jf-token");
+        const axiosClient = mockAxiosCreate.mock.results[0].value as { get: ReturnType<typeof vi.fn> };
+        axiosClient.get.mockImplementation(async (url: string) =>
+          url === "/Users" ? { data: USERS } : { data: { Items: [], TotalRecordCount: 9 } },
+        );
+        const report = newReport();
+        await expect(client.getDetailedWatchHistory({ report })).rejects.toThrow(/all 2 user/);
+      });
+
+      it("reports nobody when every listing reads completely", async () => {
+        const client = aliceAndBob(() => ({ data: { Items: [item("b1")], TotalRecordCount: 1 } }));
+        const report = newReport();
+
+        const entries = await client.getDetailedWatchHistory({ report });
+
+        expect(entries.map((e) => e.username)).toEqual(["Alice", "Alice", "Bob"]);
+        expect(report.incompleteUsers.size).toBe(0);
+        // Jellyfin/Emby have no device list to miss.
+        expect(report.devicesUnavailable).toBe(false);
       });
     });
   });

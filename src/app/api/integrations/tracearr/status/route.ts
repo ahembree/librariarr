@@ -103,7 +103,7 @@ export async function GET() {
       tracearrOldestPlayAt: true,
       tracearrBackfillCursorAt: true,
       tracearrBackfillLastWalkAt: true,
-      tracearrBackfillRestartedAt: true,
+      libraryResyncRequiredAt: true,
     },
     // Total order: the UI polls this repeatedly and re-renders the list, so ties
     // on `name` must not permute between requests.
@@ -117,13 +117,17 @@ export async function GET() {
   // One pass over the imported rows for every mapped server, joined back in
   // memory below. `source: "TRACEARR"` is load-bearing: a server that was mapped
   // partway through its life still holds NATIVE rows from before the switch, and
-  // counting those would report progress the importer never made.
+  // counting those would report progress the importer never made. So is
+  // `fanOutOfItemId: null`: a play of a Jellyfin/Emby item two libraries list is
+  // stored once per copy, and the count is of plays (a copy's row shares its
+  // primary's `watchedAt`, so the bounds are unchanged).
   const [aggregates, enabledInstances, backfillJobs, populatedServers] = await Promise.all([
     prisma.watchHistory.groupBy({
       by: ["mediaServerId"],
       where: {
         mediaServerId: { in: servers.map((server) => server.id) },
         source: "TRACEARR",
+        fanOutOfItemId: null,
       },
       _count: { _all: true },
       _min: { watchedAt: true },
@@ -162,7 +166,12 @@ export async function GET() {
     const importedCount = aggregate?._count._all ?? 0;
 
     // The import running for this server right now, if any — live this-run
-    // counters the stored rows cannot express. `null` when nothing is running.
+    // counters the stored rows cannot express. `null` when nothing is running,
+    // and for a run retired by a mapping change: it is still paging an archive
+    // that is no longer this server's source, so it is neither "running" nor a
+    // reason to read the import as pending — the job table says that. A run
+    // whose walk a purge or restore restarted is still reported (its plays are
+    // still this server's), just without its backfill reach.
     const activeImport = getTracearrImportActivity(server.id);
     // How far a live BACKFILL walk has reached — never a forward pass's (it
     // walks the newest hour, which says nothing about how far back the archive
@@ -186,7 +195,7 @@ export async function GET() {
       oldestPlayAt: server.tracearrOldestPlayAt,
       cursorAt,
       lastWalkAt: server.tracearrBackfillLastWalkAt,
-      restartedAt: server.tracearrBackfillRestartedAt,
+      resyncRequiredAt: server.libraryResyncRequiredAt,
       running,
       queued,
       jobsKnown: backfillJobs.known,

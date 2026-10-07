@@ -126,7 +126,12 @@ interface PlayHistoryProps {
    * heading — the row leads with the user instead.
    */
   singleItem?: boolean;
-  /** Bump to refetch — e.g. on a `sync:completed` realtime event. */
+  /**
+   * Bump to refetch. Every detail page bumps it on both `sync:completed` and
+   * `watch-history:updated` — plays imported outside a library sync (a
+   * Tracearr backfill slice, the per-playback refresh) announce only the
+   * latter.
+   */
   refreshKey?: number;
   /**
    * `section` (default): a full-width block under a series/season page.
@@ -908,11 +913,13 @@ export function PlayHistory({
   }
 
   // Runs on a scope change (fetchPage's identity is the scope) and on every
-  // `refreshKey` bump. A scope change starts at page 1; a refresh — fired on
-  // every `sync:completed` / `watch-history:updated`, i.e. every few minutes
-  // while a Tracearr backfill runs — reloads the page the user is on (or
-  // moving to), clamped if the list shrank, instead of throwing them back to
-  // the first page each time.
+  // `refreshKey` bump. A scope change starts at page 1; a refresh — which the
+  // show, season, episode, movie and track pages fire on every
+  // `sync:completed` and `watch-history:updated`, i.e. every few minutes while
+  // a Tracearr backfill runs — reloads the page the user is on (or moving
+  // to), clamped if the list shrank, instead of throwing them back to the
+  // first page each time. (The detail side panel passes no `refreshKey`; its
+  // list is read when the panel opens.)
   useEffect(() => {
     const { page: target, token } = tracker.refresh(fetchPage);
     void (async () => {

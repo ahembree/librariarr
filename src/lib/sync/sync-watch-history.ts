@@ -16,13 +16,39 @@ import {
   type WatchEvidenceSnapshot,
 } from "@/lib/media/watch-evidence";
 import { UNKNOWN_ACCOUNT_NAME } from "@/lib/plex/client";
-import type { DetailedWatchHistoryEntry } from "@/lib/media-server/types";
+import type {
+  DetailedWatchHistoryEntry,
+  DetailedWatchHistoryReport,
+} from "@/lib/media-server/types";
 import { emitWatchHistoryUpdated } from "./watch-history-events";
 
-// 500 rows × 8 params = 4000 bind params per INSERT — well under Postgres's
+// 500 rows × 9 params = 4500 bind params per INSERT — well under Postgres's
 // 65535 limit, but ~5× fewer round-trips than 100, which keeps the full-replace
-// transaction comfortably inside its timeout on large histories.
+// transaction comfortably inside its timeout on large histories. It bounds the
+// plays per write batch AND the rows per INSERT statement separately: a play
+// filed against several library copies is several rows, so a batch of plays
+// can hold more rows than one statement may bind (`insertNativeRows` splits).
 const BATCH_SIZE = 500;
+
+/**
+ * What a native write reports when it finds, under the per-server lock, that
+ * the server is no longer a native-history server — mapped to Tracearr (or
+ * deleted) while this run was fetching. See `assertStillNative`.
+ */
+const SOURCE_CHANGED_FAILURE =
+  "the server's watch-history source changed while this sync ran — nothing was written";
+
+class WatchHistorySourceChangedError extends Error {
+  constructor(readonly serverGone: boolean) {
+    super(SOURCE_CHANGED_FAILURE);
+    this.name = "WatchHistorySourceChangedError";
+  }
+}
+
+// SQLSTATEs a native write may lose to a concurrent writer and retry once —
+// see `withWriteConflictRetry`.
+const FOREIGN_KEY_VIOLATION = "23503";
+const DEADLOCK_DETECTED = "40P01";
 
 /**
  * How far behind the newest stored play an incremental refresh starts. A play
@@ -47,8 +73,9 @@ export interface WatchHistorySyncOptions {
    *
    * Honoured only where it is safe: a client that asserts
    * `supportsHistorySince` (Plex — its history API filters server-side), a
-   * server whose history is already established, and one that holds rows to
-   * resume from. Everything else — Jellyfin/Emby (a
+   * server whose history is already established (or withdrawn only by a
+   * library-resync hold — see `resolveIncrementalSince`), and one that holds
+   * rows to resume from. Everything else — Jellyfin/Emby (a
    * per-user "played" set, not dated events, so there is nothing to filter
    * by), a first import, a server whose history was wiped — falls back to the
    * full replace, which also remains the scheduled and manual path and is
@@ -62,12 +89,13 @@ export interface WatchHistorySyncResult {
   count: number;
   /**
    * Set when the run could not do what was asked — the fetch failed, the
-   * Tracearr instance could not be resolved, or the importer reported its own
-   * failure — with the reason. Absent on success and on a deliberate skip (a
-   * disabled server). Returned rather than thrown so the stored history is
-   * left exactly as it was, but it must not read as a clean sync: before it,
-   * every one of these exits returned `{ count: 0 }` and the History page's
-   * Refresh reported a server it never reached as synced.
+   * Tracearr instance could not be resolved, the importer reported its own
+   * failure, or the server stopped being a native-history server while the
+   * native fetch ran — with the reason. Absent on success and on a deliberate
+   * skip (a disabled server). Returned rather than thrown so the stored
+   * history is left exactly as it was, but it must not read as a clean sync:
+   * before it, every one of these exits returned `{ count: 0 }` and the
+   * History page's Refresh reported a server it never reached as synced.
    */
   failed?: string;
 }
@@ -92,16 +120,20 @@ const TX_OPTIONS = { timeout: 25 * 60_000, maxWait: 15_000 } as const;
  * that lets `checkWatchHistoryCompleteness` answer play-activity criteria for
  * it again.
  *
- * Shared by both native full-replace exits, the normal one and the
- * legitimately-empty one, because "the server reports no plays" is a complete
- * and faithful answer: the fetch throws on a hard failure, so reaching either
- * exit means the question was answered. Leaving the empty case unmarked paused
- * every play-activity rule on that server forever, with nothing in the system
- * able to release it — and a server nobody watches is a real steady state, not
- * an error.
+ * Called after an incremental append and after the native full replace —
+ * including a replace that stored nothing, because "the server reports no
+ * plays" is a complete and faithful answer: the fetch throws on a hard
+ * failure, so reaching the write means the question was answered. Leaving
+ * that case unmarked paused every play-activity rule on the server forever,
+ * with nothing in the system able to release it — and a server nobody watches
+ * is a real steady state, not an error.
  *
- * Never called on a failed fetch, which returns earlier: the history is still
- * unknown there, and the marker must keep saying so.
+ * Not called on a failed fetch, which returns earlier: the history is still
+ * unknown there, and the marker must keep saying so. Nor after a full replace
+ * that set aside a user whose listing was unreliable and who has no stored
+ * rows at all, on a server whose history was not established when the run
+ * began: the answer is then known to be incomplete, with nothing of that
+ * user's to stand in for it (see the call site).
  */
 async function markHistoryEstablished(
   snapshot: WatchEvidenceSnapshot,
@@ -109,14 +141,37 @@ async function markHistoryEstablished(
 ): Promise<void> {
   // Compare-and-set against the marker this run started from: a purge, source
   // switch or disable-with-delete that withdrew it while the run was fetching
-  // must not be overwritten by a run that never saw what it destroyed.
+  // must not be overwritten by a run that never saw what it destroyed. It also
+  // refuses while the server is under a library-resync hold.
   const marked = await markWatchHistoryEstablishedIfUnchanged(snapshot);
-  if (!marked) {
-    logger.info(
-      "WatchHistory",
-      `Not marking "${serverName}"'s watch history established — it was withdrawn or ` +
-        `re-established while this sync ran; the next sync settles it`,
-    );
+  if (marked) return;
+  // Which of the two refused it decides what settles it, so the log says.
+  logger.info(
+    "WatchHistory",
+    (await heldForLibraryResync(snapshot.serverId))
+      ? `Not marking "${serverName}"'s watch history established — some of its media ` +
+          `is known to be missing (a purge, a restore, or a library being populated), ` +
+          `and play history waits for a complete library sync of the server, whose own ` +
+          `watch-history pass settles it`
+      : `Not marking "${serverName}"'s watch history established — it was withdrawn or ` +
+          `re-established while this sync ran; the next sync settles it`,
+  );
+}
+
+/**
+ * Whether the server is under a library-resync hold (`requireLibraryResync`).
+ * Only for the log line above, so a failed read reads as "no hold" rather than
+ * failing a sync whose rows are already committed.
+ */
+async function heldForLibraryResync(serverId: string): Promise<boolean> {
+  try {
+    const row = await prisma.mediaServer.findUnique({
+      where: { id: serverId },
+      select: { libraryResyncRequiredAt: true },
+    });
+    return row?.libraryResyncRequiredAt != null;
+  } catch {
+    return false;
   }
 }
 
@@ -329,17 +384,27 @@ export async function syncWatchHistory(
 
   // A fetch failure must NOT reach the destructive full-replace below: the
   // client throws on a hard failure so we can skip the wipe (an empty array
-  // here therefore means the server genuinely reported no plays).
+  // here therefore means the server genuinely reported no plays, apart from
+  // any users the report below sets aside).
   // Null means "do the full replace" — see `WatchHistorySyncOptions`.
-  const incrementalSince =
+  const incremental =
     options.incremental && client.supportsHistorySince
       ? await resolveIncrementalSince(serverId)
       : null;
+  const incrementalSince = incremental?.since ?? null;
 
-  let entries: Awaited<ReturnType<typeof client.getDetailedWatchHistory>>;
+  // What the client could not read, filled in by the client and acted on by
+  // the full replace below (see `DetailedWatchHistoryReport`). Not passed to an
+  // incremental fetch: an append deletes nothing, so it has nothing to protect.
+  const report: DetailedWatchHistoryReport = {
+    incompleteUsers: new Map(),
+    devicesUnavailable: false,
+  };
+
+  let entries: DetailedWatchHistoryEntry[];
   try {
     entries = await client.getDetailedWatchHistory(
-      incrementalSince ? { since: incrementalSince } : undefined
+      incrementalSince ? { since: incrementalSince } : { report }
     );
   } catch (error) {
     logger.warn(
@@ -356,15 +421,36 @@ export async function syncWatchHistory(
       : `Got ${entries.length} play events from "${server.name}"`
   );
 
-  if (incrementalSince) {
-    const count = await appendNewEntries(
-      serverId,
-      server.name,
-      entries,
-      incrementalSince,
-      server.type === "PLEX",
-    );
-    await markHistoryEstablished(evidence, server.name);
+  if (incremental) {
+    let count: number;
+    try {
+      count = await appendNewEntries(
+        serverId,
+        server.name,
+        entries,
+        incremental.since,
+        server.type === "PLEX",
+      );
+    } catch (error) {
+      if (error instanceof WatchHistorySourceChangedError) {
+        return sourceChangedResult(server.name, error);
+      }
+      throw error;
+    }
+    if (incremental.held) {
+      // Not attempted under a library-resync hold: the hold refuses the
+      // write, and a release while this ran counts a withdrawal that refuses
+      // it too, so it cannot succeed — and this runs per finished playback,
+      // so a log line each time would be noise. The releasing full sync
+      // establishes the history.
+      logger.debug(
+        "WatchHistory",
+        `Not marking "${server.name}"'s watch history established — held until a ` +
+          `complete library sync of the server`,
+      );
+    } else {
+      await markHistoryEstablished(evidence, server.name);
+    }
     logger.info(
       "WatchHistory",
       `Appended ${count} new watch history entries for "${server.name}"`
@@ -378,35 +464,48 @@ export async function syncWatchHistory(
     return { count };
   }
 
-  if (entries.length === 0) {
-    // Still clear old records in case items were removed
-    await prisma.$transaction(async (tx) => {
-      await lockServerHistory(tx, serverId);
-      await tx.$executeRawUnsafe(
-        `DELETE FROM "WatchHistory" WHERE "mediaServerId"=$1`,
-        serverId
-      );
-    }, TX_OPTIONS);
-    // ...and release the marker here too. This is a SUCCESSFUL full replace —
-    // the fetch threw on a hard failure above, so reaching here means the
-    // server genuinely reports no plays, which is a complete and faithful
-    // record of its history. Returning early without clearing left a server
-    // switched Tracearr → native whose native history is legitimately empty
-    // (a fresh Plex, or Jellyfin degrading to a per-user response) marked
-    // un-evidenced FOREVER, silently pausing every `watchedByUser` rule set
-    // scoped to it with nothing that could ever release it.
-    await markHistoryEstablished(evidence, server.name);
-    return { count: 0 };
+  // Users the client could not read completely keep the rows already stored
+  // for them: replacing those with nothing would make every item they watched
+  // read unwatched — and arm a negative `watchedByUser` or "not played" DELETE
+  // rule against it — over a listing that only failed to answer.
+  const keptUsers = [...report.incompleteUsers.keys()];
+  if (keptUsers.length > 0) {
+    logger.warn(
+      "WatchHistory",
+      `Not replacing the stored plays of ` +
+        [...report.incompleteUsers]
+          .map(([name, why]) => `"${name}" (${why === "refused" ? "refused" : "listing incomplete"})`)
+          .join(", ") +
+        ` on "${server.name}": their watch history could not be read completely this sync`,
+    );
   }
-
-  // Build a lookup from ratingKey -> mediaItemId for this server's items
-  const mediaItems = await prisma.$queryRawUnsafe<ItemKeyRow[]>(
-    `SELECT mi."id", mi."ratingKey", l."key" AS "libraryKey" FROM "MediaItem" mi
-     JOIN "Library" l ON mi."libraryId" = l."id"
-     WHERE l."mediaServerId"=$1`,
-    serverId
-  );
-  const resolveItem = ratingKeyResolver(mediaItems, server.type === "PLEX");
+  // Whether this run may vouch for the history with users set aside. A
+  // REFUSED user never stops it: the key cannot read them and never will, so
+  // waiting would block the server for good — they are skipped as they always
+  // were. An UNRELIABLE listing reports plays this run did not see (its count
+  // is not zero), so that user's stored rows are the only evidence of them,
+  // and they stand as the user's last reliable record — the gap being the
+  // plays since, which an established marker already accepts. That holds
+  // whether or not the marker was set as the run began, as long as there ARE
+  // stored rows: a null marker is also what every release of a library-resync
+  // hold leaves (a purge, a vanished library, a library's first sync, a
+  // restore), and refusing there kept a server with one persistently
+  // unreliable user paused for good. Only a user with no stored rows at all
+  // on a server whose marker was null — a first sync, a history wiped by a
+  // source switch or a config-only restore — keeps it unestablished: every
+  // item only they watched would read as never played.
+  const unreadableUsers = [...report.incompleteUsers]
+    .filter(([, why]) => why === "unreliable")
+    .map(([name]) => name);
+  // Whose stored rows decide it; read inside the replace, which keeps them.
+  const storedRowsOf = evidence.marker === null ? unreadableUsers : [];
+  if (report.devicesUnavailable) {
+    logger.warn(
+      "WatchHistory",
+      `"${server.name}" did not answer its device list; keeping the device and ` +
+        `platform already stored for every play this sync re-delivers`,
+    );
+  }
 
   // Dedupe entries in memory before inserting. There is no DB unique constraint
   // on WatchHistory (intentional), so identical play events from the source
@@ -423,89 +522,92 @@ export async function syncWatchHistory(
   // the hover card, and `playCount` lifecycle rules), while the per-item
   // history panel, which queries the server live, still showed five.
   const seen = new Set<string>();
-  const dedupedEntries: typeof entries = [];
+  const plays: DetailedWatchHistoryEntry[] = [];
+  let duplicates = 0;
   for (const entry of entries) {
+    // A user set aside delivers nothing from the client, but anything that
+    // does arrive for one is dropped as well: their stored rows stand, and
+    // these would be stored on top of them.
+    if (report.incompleteUsers.has(entry.username)) continue;
     if (entry.watchedAt) {
       const key = `${entry.ratingKey}|${entry.username}|${entry.watchedAt}`;
-      if (seen.has(key)) continue;
+      if (seen.has(key)) {
+        duplicates++;
+        continue;
+      }
       seen.add(key);
     }
-    dedupedEntries.push(entry);
+    plays.push(entry);
   }
 
-  // Batch insert new records
-  let insertedCount = 0;
-  let unmatchedCount = 0;
-  let storedPlays = 0;
-
-  // Wrap the full-replace DELETE and all batch INSERTs in a single transaction
-  // so a mid-insert failure rolls back instead of leaving the table empty
-  // (the previous out-of-transaction version permanently wiped history on any
-  // insert error until the next successful sync).
-  await prisma.$transaction(async (tx) => {
-    await lockServerHistory(tx, serverId);
-    // Full replace: delete existing watch history for this server
-    await tx.$executeRawUnsafe(
-      `DELETE FROM "WatchHistory" WHERE "mediaServerId"=$1`,
-      serverId
+  let outcome: ReplaceOutcome;
+  try {
+    outcome = await withWriteConflictRetry(server.name, signal, () =>
+      replaceNativeHistory({
+        serverId,
+        serverName: server.name,
+        keysServerUnique: server.type === "PLEX",
+        plays,
+        keptUsers,
+        storedRowsOf,
+        devicesUnavailable: report.devicesUnavailable,
+        onProgress,
+        signal,
+      }),
     );
-
-    for (let i = 0; i < dedupedEntries.length; i += BATCH_SIZE) {
-      // Cancelled mid-write. Throwing (rather than breaking) is deliberate
-      // here and the opposite of the Tracearr path's break: this loop runs
-      // inside the full-replace transaction, which has ALREADY deleted the
-      // server's rows. Breaking would commit a partially-rewritten history and
-      // silently lose plays; throwing rolls the whole transaction back, so a
-      // cancelled native sync leaves the previous history exactly as it was.
-      if (signal?.aborted) {
-        throw new Error("Watch history sync cancelled");
-      }
-
-      const batch = dedupedEntries.slice(i, i + BATCH_SIZE);
-      const rows: NativeRow[] = [];
-      for (const entry of batch) {
-        const mediaItemIds = resolveItem.resolve(entry);
-        if (mediaItemIds.length === 0) unmatchedCount++;
-        else storedPlays++;
-        // One row per copy: a play that resolves to the same item stored in
-        // two libraries is a play of each (see `ratingKeyResolver`).
-        for (const mediaItemId of mediaItemIds) rows.push({ mediaItemId, entry });
-      }
-
-      // No setImmediate yield between batches: the awaited DB round-trip
-      // already yields the event loop, and an extra macrotask only burns the
-      // interactive-transaction timeout budget.
-      insertedCount += await insertNativeRows(tx, serverId, rows);
-
-      // The one place in a watch-history sync where a real percentage is
-      // honest: `getDetailedWatchHistory()` has already returned, so the
-      // denominator is a counted set of play events rather than a guess at how
-      // much history a server holds.
-      //
-      // Measured over entries CONSUMED, not rows written: an entry whose
-      // ratingKey matches no MediaItem is still work done, so counting rows
-      // would stall the bar on a server with unmatched plays and never reach 1.
-      const processed = Math.min(i + BATCH_SIZE, dedupedEntries.length);
-      onProgress?.({
-        imported: insertedCount,
-        fraction: processed / dedupedEntries.length,
-        // Plays, not rows: a play filed against two copies of one item is
-        // two rows, and counting those could read "stored 102 of 100".
-        detail: `Stored ${storedPlays.toLocaleString()} of ${formatPlayCount(
-          dedupedEntries.length
-        )}`,
-      });
+  } catch (error) {
+    if (error instanceof WatchHistorySourceChangedError) {
+      return sourceChangedResult(server.name, error);
     }
-  }, TX_OPTIONS);
+    throw error;
+  }
 
-  await markHistoryEstablished(evidence, server.name);
-  resolveItem.logAmbiguous(server.name);
+  // The replace has committed the readable users' rows either way. Marked
+  // established unless a set-aside unreliable user has nothing stored to
+  // stand in for their plays (see `storedRowsOf` above) — refusing anywhere
+  // else would pause every play-activity rule for as long as one user's items
+  // stay hidden, the stuck state setting them aside exists to end.
+  const unestablishedUsers = storedRowsOf.filter(
+    (name) => !outcome.usersWithStoredRows.has(name),
+  );
+  if (unestablishedUsers.length === 0) {
+    await markHistoryEstablished(evidence, server.name);
+  } else {
+    const product = server.type === "EMBY" ? "Emby" : "Jellyfin";
+    logger.warn(
+      "WatchHistory",
+      `Not marking "${server.name}"'s watch history established: the played-items ` +
+        `listing of ${unestablishedUsers.map((name) => `"${name}"`).join(", ")} could not ` +
+        `be read completely and none of their plays is stored, so play-activity rules ` +
+        `for this server stay paused. Make their played items readable in ${product} ` +
+        `(their library access, parental controls) or remove the user there — ` +
+        `a Refresh alone does not lift this`,
+    );
+  }
 
+  if (plays.length === 0) {
+    // The server reported no plays to store (apart from any users set aside),
+    // and the replace above cleared the rest — in case items were removed.
+    // Marked established all the same (subject to the rule above): this is a
+    // SUCCESSFUL full replace — the fetch threw on a hard failure, so reaching
+    // here means the server genuinely reports no plays, which is a complete
+    // and faithful record of its history. Returning early without marking left
+    // a server switched Tracearr → native whose native history is legitimately
+    // empty (a fresh Plex, or Jellyfin degrading to a per-user response)
+    // marked un-evidenced FOREVER, silently pausing every `watchedByUser` rule
+    // set scoped to it with nothing that could ever release it.
+    return { count: 0 };
+  }
+
+  const insertedCount = outcome.inserted;
   logger.info(
     "WatchHistory",
     `Synced ${insertedCount} watch history entries for "${server.name}" ` +
-      `(${unmatchedCount} unmatched, ` +
-      `${entries.length - dedupedEntries.length} duplicates removed)`
+      `(${outcome.unmatched} unmatched, ${duplicates} duplicates removed` +
+      (outcome.vanished > 0
+        ? `, ${outcome.vanished} whose item was deleted while the sync ran`
+        : "") +
+      `)`
   );
 
   // Push the freshly stored history into `MediaItem.playCount`/`lastPlayedAt`.
@@ -542,27 +644,292 @@ async function reconcileAfterNativeWrite(serverId: string, serverName: string): 
 }
 
 /**
- * Where an incremental refresh should start, or `null` for a full replace.
+ * The result of a native write that found the server's source had changed.
+ * A failure, so the History page names it and the queued job retries (by then
+ * the server takes the Tracearr path) — and the marker is left as it is.
+ */
+function sourceChangedResult(
+  serverName: string,
+  error: WatchHistorySourceChangedError,
+): WatchHistorySyncResult {
+  logger.warn(
+    "WatchHistory",
+    error.serverGone
+      ? `"${serverName}" was deleted while its watch history was being fetched; nothing was written`
+      : `"${serverName}" was mapped to a Tracearr server while its native watch history was ` +
+          `being fetched; nothing was written — its history now comes from Tracearr`,
+  );
+  return { count: 0, failed: SOURCE_CHANGED_FAILURE };
+}
+
+interface ReplaceOutcome {
+  /** Rows written: a play filed against two copies of one item is two rows. */
+  inserted: number;
+  /** Plays whose rating key matched no item. */
+  unmatched: number;
+  /** Plays whose every item was deleted between resolving and writing them. */
+  vanished: number;
+  /** Of `storedRowsOf`, the users who still have stored rows on the server. */
+  usersWithStoredRows: Set<string>;
+}
+
+/**
+ * The native full replace: the server's stored history is dropped and
+ * re-written from `plays` in ONE transaction (DELETE + every INSERT), so a
+ * mid-insert failure rolls back instead of leaving the table empty — the
+ * previous out-of-transaction version permanently wiped history on any insert
+ * error until the next successful sync.
+ *
+ * Everything that can go stale between the fetch and the write is read here,
+ * so the one retry (`withWriteConflictRetry`) re-reads all of it: the rating
+ * key → item map, which items still exist, and the server's source.
+ */
+async function replaceNativeHistory(args: {
+  serverId: string;
+  serverName: string;
+  /** See `ratingKeyResolver`. */
+  keysServerUnique: boolean;
+  /** Deduplicated plays, with every set-aside user's already removed. */
+  plays: DetailedWatchHistoryEntry[];
+  /** Users whose stored rows the replace keeps (`DetailedWatchHistoryReport`). */
+  keptUsers: string[];
+  /**
+   * Set-aside users to report on in `usersWithStoredRows` — which of them the
+   * replace keeps at least one stored row for. Empty when nobody asks.
+   */
+  storedRowsOf: string[];
+  devicesUnavailable: boolean;
+  onProgress?: WatchHistoryProgressReporter;
+  signal?: AbortSignal;
+}): Promise<ReplaceOutcome> {
+  const { serverId, keptUsers, onProgress, signal } = args;
+
+  // Rating key → item(s), for this server's items. Not needed when there is
+  // nothing to write: the replace then only clears the old rows.
+  const mediaItems =
+    args.plays.length > 0
+      ? await prisma.$queryRawUnsafe<ItemKeyRow[]>(
+          `SELECT mi."id", mi."ratingKey", l."key" AS "libraryKey" FROM "MediaItem" mi
+           JOIN "Library" l ON mi."libraryId" = l."id"
+           WHERE l."mediaServerId"=$1`,
+          serverId
+        )
+      : [];
+  const resolveItem = ratingKeyResolver(mediaItems, args.keysServerUnique);
+  const resolved = args.plays.map((entry) => ({ entry, ids: resolveItem.resolve(entry) }));
+
+  const outcome: ReplaceOutcome = {
+    inserted: 0,
+    unmatched: 0,
+    vanished: 0,
+    usersWithStoredRows: new Set(),
+  };
+  let storedPlays = 0;
+
+  await prisma.$transaction(async (tx) => {
+    await lockServerHistory(tx, serverId);
+    await assertStillNative(tx, serverId);
+
+    // The item map was read before the lock, and the lock can wait minutes
+    // behind another writer (a History-page Refresh runs outside the serial
+    // job queue). An item deleted meanwhile — an incremental removal, a purge
+    // — would make its INSERT violate the foreign key and roll back the whole
+    // replace, so its plays are dropped here instead. This narrows the window
+    // rather than closing it (an item can still go between this read and its
+    // INSERT); `withWriteConflictRetry` handles what is left.
+    const live = await liveItemIds(tx, resolved);
+    const storedDevices =
+      args.devicesUnavailable && resolved.length > 0
+        ? await loadStoredDevices(tx, serverId)
+        : null;
+
+    // Full replace: delete existing watch history for this server — all of
+    // it unless some users are set aside, whose rows stand. The plain form is
+    // kept for the common case rather than relying on how an empty array
+    // binds.
+    if (keptUsers.length === 0) {
+      await tx.$executeRawUnsafe(
+        `DELETE FROM "WatchHistory" WHERE "mediaServerId"=$1`,
+        serverId
+      );
+    } else {
+      await tx.$executeRawUnsafe(
+        `DELETE FROM "WatchHistory"
+          WHERE "mediaServerId"=$1 AND NOT ("serverUsername" = ANY($2::text[]))`,
+        serverId,
+        keptUsers
+      );
+    }
+    // Read under the lock and after the DELETE, so it sees exactly the rows
+    // this replace keeps for them (nothing below writes any: their incoming
+    // entries were dropped). One EXISTS per name, not a count of their rows.
+    if (args.storedRowsOf.length > 0) {
+      const withRows = await tx.$queryRawUnsafe<{ name: string }[]>(
+        `SELECT u."name" FROM unnest($2::text[]) AS u("name")
+          WHERE EXISTS (SELECT 1 FROM "WatchHistory" wh
+                         WHERE wh."mediaServerId" = $1 AND wh."serverUsername" = u."name")`,
+        serverId,
+        args.storedRowsOf
+      );
+      outcome.usersWithStoredRows = new Set(withRows.map((row) => row.name));
+    }
+
+    for (let i = 0; i < resolved.length; i += BATCH_SIZE) {
+      // Cancelled mid-write. Throwing (rather than breaking) is deliberate
+      // here and the opposite of the Tracearr path's break: this loop runs
+      // inside the full-replace transaction, which has ALREADY deleted the
+      // server's rows. Breaking would commit a partially-rewritten history and
+      // silently lose plays; throwing rolls the whole transaction back, so a
+      // cancelled native sync leaves the previous history exactly as it was.
+      if (signal?.aborted) {
+        throw new Error("Watch history sync cancelled");
+      }
+
+      const rows: NativeRow[] = [];
+      for (const { entry, ids } of resolved.slice(i, i + BATCH_SIZE)) {
+        if (ids.length === 0) {
+          outcome.unmatched++;
+          continue;
+        }
+        // Narrowed to the items that still exist, which also re-picks the
+        // primary copy when the one it would have been is gone.
+        const playRows = nativeRowsForPlay(ids.filter((id) => live.has(id)), entry);
+        if (playRows.length === 0) {
+          outcome.vanished++;
+          continue;
+        }
+        storedPlays++;
+        for (const row of playRows) {
+          rows.push(storedDevices ? withStoredDevice(row, storedDevices) : row);
+        }
+      }
+
+      // No setImmediate yield between batches: the awaited DB round-trip
+      // already yields the event loop, and an extra macrotask only burns the
+      // interactive-transaction timeout budget.
+      outcome.inserted += await insertNativeRows(tx, serverId, rows);
+
+      // The one place in a watch-history sync where a real percentage is
+      // honest: `getDetailedWatchHistory()` has already returned, so the
+      // denominator is a counted set of play events rather than a guess at how
+      // much history a server holds.
+      //
+      // Measured over entries CONSUMED, not rows written: an entry whose
+      // ratingKey matches no MediaItem is still work done, so counting rows
+      // would stall the bar on a server with unmatched plays and never reach 1.
+      const processed = Math.min(i + BATCH_SIZE, resolved.length);
+      onProgress?.({
+        imported: outcome.inserted,
+        fraction: processed / resolved.length,
+        // Plays, not rows: a play filed against two copies of one item is
+        // two rows, and counting those could read "stored 102 of 100".
+        detail: `Stored ${storedPlays.toLocaleString()} of ${formatPlayCount(
+          resolved.length
+        )}`,
+      });
+    }
+  }, TX_OPTIONS);
+
+  resolveItem.logAmbiguous(args.serverName);
+  return outcome;
+}
+
+/**
+ * Run the full replace, and run it once more if it lost a race with a
+ * concurrent writer that the in-transaction checks cannot rule out:
+ *
+ *  - a foreign-key violation (SQLSTATE 23503) — an item, or a fan-out copy's
+ *    primary, deleted after `liveItemIds` read it but before its INSERT;
+ *  - a deadlock (40P01) — the replace deletes this server's rows and then
+ *    references items, while a purge or item delete locks items and then
+ *    cascades into the same rows, in the opposite order.
+ *
+ * The retry rebuilds everything the first attempt read (the item map
+ * included), so a deleted item is simply no longer resolved. Once only: a
+ * second failure is not a lost race but something wrong, and it propagates
+ * exactly as a failed replace always has — rolled back, history untouched.
+ *
+ * The code is read where Prisma 7 + `@prisma/adapter-pg` puts it, verified
+ * against a real database: a raw statement failing inside an interactive
+ * transaction rejects (and so does the transaction) with a
+ * `PrismaClientKnownRequestError` P2010 whose
+ * `meta.driverAdapterError.cause.originalCode` is the SQLSTATE.
+ */
+async function withWriteConflictRetry<T>(
+  serverName: string,
+  signal: AbortSignal | undefined,
+  run: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    const code = sqlStateOf(error);
+    if ((code !== FOREIGN_KEY_VIOLATION && code !== DEADLOCK_DETECTED) || signal?.aborted) {
+      throw error;
+    }
+    logger.warn(
+      "WatchHistory",
+      `Retrying the watch-history write for "${serverName}" once: ` +
+        (code === FOREIGN_KEY_VIOLATION
+          ? "an item it was writing plays for was deleted meanwhile"
+          : "it deadlocked with a concurrent write") +
+        ` (SQLSTATE ${code}); the first attempt was rolled back`,
+    );
+    return run();
+  }
+}
+
+/** The PostgreSQL SQLSTATE behind a failed raw statement, or null. */
+function sqlStateOf(error: unknown): string | null {
+  if (typeof error !== "object" || error === null) return null;
+  const meta = (error as {
+    meta?: { driverAdapterError?: { cause?: { originalCode?: unknown } } };
+  }).meta;
+  const code = meta?.driverAdapterError?.cause?.originalCode;
+  return typeof code === "string" ? code : null;
+}
+
+/**
+ * Where an incremental refresh should start — and whether the server is under
+ * a library-resync hold — or `null` for a full replace.
  *
  * Derived from the rows rather than a persisted cursor, like the Tracearr
  * importer's boundaries: the record of what was imported and the point that
  * resumes it cannot then disagree. `watchHistorySyncedAt` is checked too —
  * rows can exist on a server whose evidence has been withdrawn, and an
  * append on top of a history nobody vouches for would leave it that way.
+ *
+ * The one withdrawal that does not force the full replace is a library-resync
+ * hold (`requireLibraryResync`: a purge, a restore, a disable-with-delete, a
+ * library being populated). It keeps the marker null and refuses every marker
+ * write until a complete library sync releases it — and that sync's own
+ * watch-history pass is the full replace that attaches the re-added items'
+ * plays. Until then a full replace per finished playback would rewrite the
+ * whole history (≈45 s on a 141k-play server, on the serial queue) and still
+ * leave the marker where it was. The append is safe there: it deletes
+ * nothing, and the hold refuses the marker either way. After the release
+ * both columns are null, so the next refresh is a full replace as before.
  */
-async function resolveIncrementalSince(serverId: string): Promise<Date | null> {
+async function resolveIncrementalSince(
+  serverId: string,
+): Promise<{ since: Date; held: boolean } | null> {
   const rows = await prisma.$queryRawUnsafe<
-    { establishedAt: Date | null; newest: Date | null }[]
+    { establishedAt: Date | null; heldAt: Date | null; newest: Date | null }[]
   >(
     `SELECT ms."watchHistorySyncedAt" AS "establishedAt",
+            ms."libraryResyncRequiredAt" AS "heldAt",
             (SELECT MAX(wh."watchedAt") FROM "WatchHistory" wh WHERE wh."mediaServerId" = ms."id") AS "newest"
        FROM "MediaServer" ms
       WHERE ms."id" = $1`,
     serverId
   );
   const row = rows[0];
-  if (!row?.establishedAt || !row.newest) return null;
-  return new Date(new Date(row.newest).getTime() - INCREMENTAL_OVERLAP_MS);
+  const held = row?.heldAt != null;
+  if (!row?.newest || (!row.establishedAt && !held)) return null;
+  return {
+    since: new Date(new Date(row.newest).getTime() - INCREMENTAL_OVERLAP_MS),
+    held,
+  };
 }
 
 /**
@@ -625,6 +992,13 @@ async function appendNewEntries(
   // twice — inflating `playCount`, which is monotonic and never walked back.
   const inserted = await prisma.$transaction(async (tx) => {
     await lockServerHistory(tx, serverId);
+    await assertStillNative(tx, serverId);
+
+    // As in the full replace: an item deleted since the map was read (the lock
+    // can wait behind a Refresh) loses its plays here rather than failing the
+    // append on its foreign key.
+    const resolved = dated.map((entry) => ({ entry, ids: resolveItem.resolve(entry) }));
+    const live = await liveItemIds(tx, resolved);
 
     const existing = await tx.$queryRawUnsafe<
       { id: string; mediaItemId: string; serverUsername: string; watchedAt: Date }[]
@@ -645,16 +1019,17 @@ async function appendNewEntries(
     // Collapse plays the response repeats (same item, instant and name), as
     // the full replace does. Keyed per ITEM, so a play filed against two
     // copies of one item (see `ratingKeyResolver`) is matched and appended
-    // for each copy on its own.
+    // for each copy on its own — with the copy that holds its primary row
+    // chosen over all of them first, exactly as the full replace chooses it.
     const incoming: Array<{ key: string; row: NativeRow; matched: boolean }> = [];
     const repeated = new Set<string>();
-    for (const entry of dated) {
-      for (const mediaItemId of resolveItem.resolve(entry)) {
-        const key = playInstantKey(mediaItemId, entry.watchedAt!);
+    for (const { entry, ids } of resolved) {
+      for (const row of nativeRowsForPlay(ids.filter((id) => live.has(id)), entry)) {
+        const key = playInstantKey(row.mediaItemId, entry.watchedAt!);
         const exact = `${key}|${entry.username}`;
         if (repeated.has(exact)) continue;
         repeated.add(exact);
-        incoming.push({ key, row: { mediaItemId, entry }, matched: false });
+        incoming.push({ key, row, matched: false });
       }
     }
 
@@ -695,11 +1070,7 @@ async function appendNewEntries(
     }
 
     const fresh = incoming.filter((p) => !p.matched).map((p) => p.row);
-    let count = 0;
-    for (let i = 0; i < fresh.length; i += BATCH_SIZE) {
-      count += await insertNativeRows(tx, serverId, fresh.slice(i, i + BATCH_SIZE));
-    }
-    return count;
+    return insertNativeRows(tx, serverId, fresh);
   }, TX_OPTIONS);
   resolveItem.logAmbiguous(serverName);
   return inserted;
@@ -736,7 +1107,8 @@ interface ItemKeyRow {
  *   same play of the same media in both — so it is filed against every copy.
  *   Skipping it (which an earlier version did) let the full replace delete
  *   both copies' plays, so both read as unwatched and a negative
- *   `watchedByUser` or `playCount = 0` DELETE rule matched them.
+ *   `watchedByUser` or `playCount = 0` DELETE rule matched them. Only one of
+ *   those rows is the play's primary row; see `nativeRowsForPlay`.
  *
  * A section key that is given narrows the candidates on either server.
  */
@@ -781,15 +1153,127 @@ function ratingKeyResolver(rows: ItemKeyRow[], keysServerUnique: boolean) {
   };
 }
 
-type RawWriter = Pick<typeof prisma, "$executeRawUnsafe">;
+type RawClient = Pick<typeof prisma, "$executeRawUnsafe" | "$queryRawUnsafe">;
+
+type NativeEntry = Pick<
+  DetailedWatchHistoryEntry,
+  "username" | "watchedAt" | "deviceName" | "platform"
+>;
 
 interface NativeRow {
   mediaItemId: string;
-  entry: {
-    username: string;
-    watchedAt: string | null;
-    deviceName: string | null;
-    platform: string | null;
+  /**
+   * The copy holding this play's primary row when this row duplicates it
+   * onto another copy (`WatchHistory.fanOutOfItemId`); null on a primary row.
+   */
+  fanOutOfItemId: string | null;
+  entry: NativeEntry;
+}
+
+/**
+ * The rows one play is stored as: one per copy it was filed against (see
+ * `ratingKeyResolver`). The ONE place both writers — the full replace and the
+ * incremental append — build rows, so they cannot disagree about which copy
+ * holds a play's primary row.
+ *
+ * Every copy gets a row, because every copy must read as watched to the
+ * per-item consumers (`watchedByUser`, `playCount`/`lastPlayedAt`, Seerr watch
+ * correlation). But a list of PLAYS must show the play once, so every row but
+ * one names the copy holding the primary row, and the play lists and watch
+ * analytics skip those. The primary is the lowest id by plain string order,
+ * so every run and both writers pick the same copy. Callers pass only the ids
+ * of items that still exist, which re-picks the primary when the copy that
+ * would have held it is gone. A play of one copy — every Plex play, since its
+ * rating keys are server-unique — is just a primary row.
+ *
+ * Stored rows are not re-pointed in between: deleting the primary copy
+ * cascades its row away and `SetNull` clears the pointer on EVERY remaining
+ * copy, so with three or more copies each survivor reads as a primary and
+ * the play lists once per remaining copy until the next full replace (every
+ * Jellyfin/Emby history sync) rebuilds its rows here — for a set-aside
+ * user's rows, which a replace keeps as they are, until that user is read.
+ */
+function nativeRowsForPlay(mediaItemIds: string[], entry: NativeEntry): NativeRow[] {
+  if (mediaItemIds.length <= 1) {
+    return mediaItemIds.map((mediaItemId) => ({ mediaItemId, fanOutOfItemId: null, entry }));
+  }
+  const [primary, ...copies] = [...mediaItemIds].sort();
+  return [
+    { mediaItemId: primary, fanOutOfItemId: null, entry },
+    ...copies.map((mediaItemId) => ({ mediaItemId, fanOutOfItemId: primary, entry })),
+  ];
+}
+
+/**
+ * Which of the items the plays resolved to still exist. Read inside the write
+ * transaction, after the lock (see `replaceNativeHistory`).
+ */
+async function liveItemIds(
+  db: RawClient,
+  plays: Array<{ ids: string[] }>,
+): Promise<Set<string>> {
+  const ids = new Set<string>();
+  for (const play of plays) for (const id of play.ids) ids.add(id);
+  if (ids.size === 0) return ids;
+  const rows = await db.$queryRawUnsafe<{ id: string }[]>(
+    `SELECT "id" FROM "MediaItem" WHERE "id" = ANY($1::text[])`,
+    [...ids],
+  );
+  return new Set(rows.map((row) => row.id));
+}
+
+type StoredDevices = Map<string, { deviceName: string | null; platform: string | null }>;
+
+/** A stored play's identity for carrying its device over: item + second + account. */
+function storedDeviceKey(mediaItemId: string, watchedAt: Date | string, username: string): string {
+  return `${playInstantKey(mediaItemId, watchedAt)}|${username}`;
+}
+
+/**
+ * The device and platform already stored for this server's plays, read before
+ * the full replace deletes them when the server could not say this time
+ * (`DetailedWatchHistoryReport.devicesUnavailable`). Without it a transient
+ * `/devices` failure rewrote every stored play with neither.
+ */
+async function loadStoredDevices(db: RawClient, serverId: string): Promise<StoredDevices> {
+  const rows = await db.$queryRawUnsafe<
+    {
+      mediaItemId: string;
+      serverUsername: string;
+      watchedAt: Date;
+      deviceName: string | null;
+      platform: string | null;
+    }[]
+  >(
+    `SELECT "mediaItemId", "serverUsername", "watchedAt", "deviceName", "platform"
+       FROM "WatchHistory"
+      WHERE "mediaServerId" = $1 AND "watchedAt" IS NOT NULL
+        AND ("deviceName" IS NOT NULL OR "platform" IS NOT NULL)`,
+    serverId,
+  );
+  const stored: StoredDevices = new Map();
+  for (const row of rows) {
+    stored.set(storedDeviceKey(row.mediaItemId, row.watchedAt, row.serverUsername), {
+      deviceName: row.deviceName,
+      platform: row.platform,
+    });
+  }
+  return stored;
+}
+
+/** `row`, with the stored device and platform of the same play filling any gap. */
+function withStoredDevice(row: NativeRow, stored: StoredDevices): NativeRow {
+  const { entry } = row;
+  if (!entry.watchedAt || (entry.deviceName != null && entry.platform != null)) return row;
+  const prior = stored.get(storedDeviceKey(row.mediaItemId, entry.watchedAt, entry.username));
+  if (!prior) return row;
+  return {
+    ...row,
+    entry: {
+      ...entry,
+      deviceName: entry.deviceName ?? prior.deviceName,
+      platform: entry.platform ?? prior.platform,
+    },
   };
 }
 
@@ -797,9 +1281,10 @@ interface NativeRow {
  * Serialises every writer of one server's native history. Transaction-scoped
  * (released on commit or rollback), keyed per server so two servers never
  * wait on each other. Both the full replace and the incremental append take
- * it; see `appendNewEntries` for the race it closes.
+ * it; see `appendNewEntries` for the race it closes. The server PUT takes it
+ * too, before it changes the server's watch-history source.
  */
-async function lockServerHistory(db: RawWriter, serverId: string): Promise<void> {
+async function lockServerHistory(db: RawClient, serverId: string): Promise<void> {
   await db.$executeRawUnsafe(
     `SELECT pg_advisory_xact_lock(hashtext('watch-history:' || $1))`,
     serverId
@@ -807,35 +1292,71 @@ async function lockServerHistory(db: RawWriter, serverId: string): Promise<void>
 }
 
 /**
- * One multi-row INSERT of native play rows. The single column list both the
- * full replace and the incremental append write through, so a column added
- * to one path cannot go missing from the other.
+ * Refuse to write when the server stopped being a native-history server while
+ * this run was fetching. Called by every native write transaction straight
+ * after `lockServerHistory`.
+ *
+ * The run decided "native" from a read made before a fetch that can take tens
+ * of seconds. If the server was mapped to Tracearr meanwhile, the PUT wiped its
+ * history and a backfill slice may already be writing TRACEARR rows — which
+ * the full replace's DELETE (not scoped by source) would destroy, before
+ * writing a NATIVE stratum beside whatever the importer adds next. A reconcile
+ * while both strata exist counts every play twice into `playCount`, which is
+ * monotonic and never walks back.
+ *
+ * Decisive because the PUT takes this same advisory lock before its UPDATE:
+ * either the change committed before the lock was granted (and this read sees
+ * it — a separate statement, so a fresh snapshot under READ COMMITTED, unlike
+ * a read folded into the lock statement), or the PUT is waiting on this
+ * transaction and wipes whatever it writes afterwards. A plain read, not a row
+ * lock: a PUT that changes nothing about the source must not wait out a
+ * full replace.
  */
-async function insertNativeRows(db: RawWriter, serverId: string, rows: NativeRow[]): Promise<number> {
+async function assertStillNative(db: RawClient, serverId: string): Promise<void> {
+  const rows = await db.$queryRawUnsafe<{ tracearrServerId: string | null }[]>(
+    `SELECT "tracearrServerId" FROM "MediaServer" WHERE "id" = $1`,
+    serverId,
+  );
+  if (rows.length === 0) throw new WatchHistorySourceChangedError(true);
+  if (rows[0].tracearrServerId) throw new WatchHistorySourceChangedError(false);
+}
+
+/**
+ * Multi-row INSERTs of native play rows, BATCH_SIZE rows per statement. The
+ * single column list both the full replace and the incremental append write
+ * through, so a column added to one path cannot go missing from the other.
+ * Split here rather than by the callers because rows are not plays: one play
+ * can be several rows (`nativeRowsForPlay`), and the bind limit is per
+ * statement.
+ */
+async function insertNativeRows(db: RawClient, serverId: string, rows: NativeRow[]): Promise<number> {
   if (rows.length === 0) return 0;
   const { randomUUID } = await import("crypto");
-  const values: string[] = [];
-  const params: unknown[] = [];
-  let paramIndex = 1;
-  for (const { mediaItemId, entry } of rows) {
-    values.push(
-      `($${paramIndex++},$${paramIndex++},$${paramIndex++},$${paramIndex++},$${paramIndex++},$${paramIndex++},$${paramIndex++},$${paramIndex++})`
-    );
-    params.push(
-      randomUUID(),
-      mediaItemId,
-      serverId,
-      entry.username,
-      entry.watchedAt ? new Date(entry.watchedAt) : null,
-      entry.deviceName,
-      entry.platform,
-      new Date()
+  for (let start = 0; start < rows.length; start += BATCH_SIZE) {
+    const values: string[] = [];
+    const params: unknown[] = [];
+    let paramIndex = 1;
+    for (const { mediaItemId, fanOutOfItemId, entry } of rows.slice(start, start + BATCH_SIZE)) {
+      values.push(
+        `($${paramIndex++},$${paramIndex++},$${paramIndex++},$${paramIndex++},$${paramIndex++},$${paramIndex++},$${paramIndex++},$${paramIndex++},$${paramIndex++})`
+      );
+      params.push(
+        randomUUID(),
+        mediaItemId,
+        fanOutOfItemId,
+        serverId,
+        entry.username,
+        entry.watchedAt ? new Date(entry.watchedAt) : null,
+        entry.deviceName,
+        entry.platform,
+        new Date()
+      );
+    }
+    await db.$executeRawUnsafe(
+      `INSERT INTO "WatchHistory" ("id","mediaItemId","fanOutOfItemId","mediaServerId","serverUsername","watchedAt","deviceName","platform","createdAt")
+       VALUES ${values.join(",")}`,
+      ...params
     );
   }
-  await db.$executeRawUnsafe(
-    `INSERT INTO "WatchHistory" ("id","mediaItemId","mediaServerId","serverUsername","watchedAt","deviceName","platform","createdAt")
-     VALUES ${values.join(",")}`,
-    ...params
-  );
   return rows.length;
 }

@@ -131,8 +131,10 @@ export function computeBackfillFraction(input: {
  * empty library); the last two lift without the user: `import-failing` when
  * the next watch-history sync re-queues the slice (a keyed enqueue gives a
  * parked job a fresh set of attempts — so does saving or re-enabling the
- * Tracearr instance, `enqueueTracearrBackfill`), and `awaiting-sync` when the
- * next full sync queues the slice (see `importAwaitingSync`).
+ * Tracearr instance, `enqueueTracearrBackfill`), and `awaiting-sync` when a
+ * sync queues the slice — the library sync that releases the library-resync
+ * hold, or with none set the next watch-history sync (see
+ * `importAwaitingSync`).
  */
 export type ImportPausedReason =
   | "server-disabled"
@@ -149,11 +151,16 @@ export interface ImportStateInput {
   cursorAt: Date | null;
   lastWalkAt: Date | null;
   /**
-   * When `restartTracearrBackfill` held the walk, while no full sync has
-   * released it yet (`tracearrBackfillRestartedAt`). Optional so a caller that
-   * does not read it treats the walk as not held.
+   * `libraryResyncRequiredAt`: since when some of the server's items are known
+   * to be missing — a purge, a restore, disable-with-delete, a vanished
+   * library, or a library being populated for the first time
+   * (`requireLibraryResync`) — while no library sync has released it: a full
+   * sync that brought every needed library back, or the library-scoped sync
+   * that took a library's own population hold. The importer holds the archive
+   * walk meanwhile. Optional so a caller that does not read it treats the walk
+   * as not held.
    */
-  restartedAt?: Date | null;
+  resyncRequiredAt?: Date | null;
   /** An import of this server is running in this process right now. */
   running: boolean;
   /** Its `tracearr-backfill:<id>` job is waiting, running or backing off. */
@@ -171,24 +178,34 @@ export interface ImportStateInput {
  * history: the keyset was exhausted with zero records, which deliberately
  * neither marks the backfill complete nor re-enqueues — a wrong mapping, or a
  * Tracearr holding no plays for it.
+ *
+ * Whatever the resume cursor says. A restart (`restartTracearrBackfill`) moves
+ * it to the restart instant and a walk that then finds nothing never moves it
+ * again, so requiring it to be null read every restarted walk of such a
+ * mapping — and every config-only restore of one — as "starts after the next
+ * full sync", for good. A mapping that does have plays shows them here
+ * through its imported rows or its measured far edge (`oldestPlayAt`, taken
+ * before a backfill's first page).
  */
 function walkedAndEmpty(input: ImportStateInput): boolean {
   return (
     input.lastWalkAt !== null &&
     input.importedCount === 0 &&
-    input.oldestPlayAt === null &&
-    input.cursorAt === null
+    input.oldestPlayAt === null
   );
 }
 
 /**
  * Whether the import is owed and waits on a sync rather than on a job.
  *
- * Always, while a restart holds the walk (`restartedAt`): after
- * `restartTracearrBackfill` (a purge, a restore, disable-with-delete) the walk
- * has to follow the FULL sync that brings the deleted items back, and until
- * one releases the hold a queued slice only no-ops and nothing queues one
- * early (`enqueueTracearrBackfill` refuses). Queued or not, it is waiting.
+ * Always, while the library-resync hold is set (`resyncRequiredAt`): some of
+ * the server's items are missing (a purge, a restore, disable-with-delete, a
+ * vanished library, a library populated for the first time), so the walk has
+ * to follow the library sync that brings them back — a full sync that brought
+ * every needed library back, or the library-scoped sync that took a library's
+ * own population hold — and until one releases the hold a queued slice only
+ * no-ops and nothing queues one early (`enqueueTracearrBackfill` refuses).
+ * Queued or not, it is waiting.
  *
  * Otherwise when nothing is queued: no slice waiting, running or parked, and
  * not the walked-and-empty end state. The next watch-history sync queues one
@@ -201,7 +218,7 @@ function walkedAndEmpty(input: ImportStateInput): boolean {
  */
 export function importAwaitingSync(input: ImportStateInput & { parked: boolean }): boolean {
   if (input.backfillComplete) return false;
-  if (input.restartedAt != null) return true;
+  if (input.resyncRequiredAt != null) return true;
   return (
     input.jobsKnown === true &&
     !input.running &&
@@ -214,11 +231,11 @@ export function importAwaitingSync(input: ImportStateInput & { parked: boolean }
 /**
  * The reason, if any, an owed import is not progressing — see
  * `ImportPausedReason`. In precedence order: a disabled server or no enabled
- * Tracearr instance (nothing runs at all); a restart hold (the full sync that
- * releases it is what comes next, even if the libraries are empty right now —
- * it is the sync that refills them); no items in any enabled library (every
- * slice is turned away, so a parked job from before is not the cause); a
- * parked slice; nothing queued.
+ * Tracearr instance (nothing runs at all); the library-resync hold (the
+ * library sync that releases it is what comes next, even if the libraries are
+ * empty right now — it is the sync that refills them); no items in any enabled
+ * library (every slice is turned away, so a parked job from before is not the
+ * cause); a parked slice; nothing queued.
  */
 export function importPausedReason(
   input: ImportStateInput & {
@@ -233,7 +250,7 @@ export function importPausedReason(
   if (!input.serverEnabled) return "server-disabled";
   if (!input.instanceEnabled) return "instance-unavailable";
   if (input.backfillComplete) return null;
-  if (input.restartedAt != null) return "awaiting-sync";
+  if (input.resyncRequiredAt != null) return "awaiting-sync";
   if (!input.hasLibraryItems) return "no-library-items";
   if (input.failing) return "import-failing";
   return importAwaitingSync({ ...input, parked: input.failing }) ? "awaiting-sync" : null;

@@ -310,9 +310,10 @@ const tracearrBackfill: Task = async (payload) => {
   if (result.heldReason === "awaiting-resync") {
     logger.info(
       "Jobs",
-      `Tracearr backfill for server ${serverId} is held until a full sync re-adds the ` +
-        `items its restart (a purge or restore) removed — not re-queueing; that sync ` +
-        `queues the walk`,
+      `Tracearr backfill for server ${serverId} is held until a library sync brings back ` +
+        `the items it is missing — a full sync after a purge or restore, or the sync of a ` +
+        `library being populated for the first time — not re-queueing; that sync queues ` +
+        `the walk`,
     );
     return;
   }
@@ -346,6 +347,25 @@ const tracearrBackfill: Task = async (payload) => {
     return;
   }
 
+  // A slice whose walk failed must NOT re-enqueue immediately — Tracearr
+  // unreachable, its account list unloadable, a page the table refuses, or a
+  // history cursor Tracearr keeps handing back. Nothing about the next run
+  // would differ, so the job would spin as fast as the queue can turn it over —
+  // re-walking the same pages, hammering an instance that is already failing
+  // and burning the rate limit the eventual recovery needs. Let the failure
+  // propagate instead, with its real cause (`backfillError`) as the job's
+  // recorded error: graphile-worker retries it with its own exponential
+  // backoff, and `maxAttempts` eventually parks it. A slice that merely ran out
+  // of time, or gave way to a requested sync, made real progress and continues
+  // straight away (below).
+  if (result.backfillOutcome === "errored") {
+    throw new Error(
+      `Tracearr backfill slice for server ${serverId} failed: ` +
+        `${result.backfillError ?? "its walk of Tracearr's history failed"} — ` +
+        `letting the worker retry with backoff rather than re-queueing immediately`,
+    );
+  }
+
   // More history below. Re-enqueue under the SAME jobKey the foreground path
   // uses, so a user pressing Refresh mid-backfill collapses onto this run
   // rather than stacking a second walk over the same pages.
@@ -354,20 +374,6 @@ const tracearrBackfill: Task = async (payload) => {
     `Tracearr backfill for server ${serverId} imported ${result.count} row(s) this ` +
       `slice — queueing the next one`,
   );
-  // A slice that could not reach Tracearr must NOT re-enqueue immediately.
-  // Nothing about the next run would differ, so the job would spin as fast as
-  // the queue can turn it over — hammering an instance that is already down and
-  // burning the rate limit that the eventual recovery needs. Let the failure
-  // propagate instead: graphile-worker retries it with its own exponential
-  // backoff, and `maxAttempts` eventually parks it. A slice that merely ran out
-  // of time made real progress and should continue straight away.
-  if (result.backfillOutcome === "errored") {
-    throw new Error(
-      `Tracearr backfill slice for server ${serverId} could not reach Tracearr — ` +
-        `letting the worker retry with backoff rather than re-queueing immediately`,
-    );
-  }
-
   await enqueueJob(
     TASK_TRACEARR_BACKFILL,
     { serverId },

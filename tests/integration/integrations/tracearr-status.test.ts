@@ -32,7 +32,7 @@ import { GET } from "@/app/api/integrations/tracearr/status/route";
 import { PUT as PUT_SERVER } from "@/app/api/servers/[id]/route";
 import { PUT as PUT_INSTANCE } from "@/app/api/integrations/tracearr/[id]/route";
 import { releaseJobsClient } from "@/lib/jobs/client";
-import { releaseTracearrRestartHold, restartTracearrBackfill } from "@/lib/media/watch-evidence";
+import { releaseLibraryResyncHold, requireLibraryResync } from "@/lib/media/watch-evidence";
 // The fraction arithmetic is a pure helper beside the route, so its edge cases
 // are exercised directly as well as through the response shape.
 import {
@@ -892,7 +892,8 @@ describe("GET /api/integrations/tracearr/status — pending and reach", () => {
         where: { id: server.id },
         data: { tracearrBackfillLastWalkAt: new Date() },
       });
-      await restartTracearrBackfill([server.id]);
+      // What a purge records before deleting (it also restarts the walk).
+      await requireLibraryResync([server.id]);
       setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
 
       const [row] = await read();
@@ -913,7 +914,7 @@ describe("GET /api/integrations/tracearr/status — pending and reach", () => {
       expect(heldQueued.pending).toBe(false);
 
       // The full sync that releases the hold leaves the queued slice to run.
-      await releaseTracearrRestartHold(server.id, new Date());
+      await releaseLibraryResyncHold(server.id, new Date());
       const [released] = await read();
       expect(released.pausedReason).toBeNull();
       expect(released.pending).toBe(true);
@@ -981,7 +982,7 @@ describe("GET /api/integrations/tracearr/status — pending and reach", () => {
       const server = await createTestServer(user.id, { name: "Purged all" });
       await mapToTracearr(server.id, "a0000000-0000-4000-8000-000000000027", { withoutItems: true });
       await createTestLibrary(server.id, { title: "Emptied" });
-      await restartTracearrBackfill([server.id]);
+      await requireLibraryResync([server.id]);
       setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
 
       const [row] = await read();
@@ -1386,7 +1387,7 @@ describe("importAwaitingSync", () => {
 
   it("is, while a restart holds the walk, whatever is queued or running", () => {
     // A slice queued against the hold only no-ops; the full sync is next.
-    const held = { ...owed, restartedAt: new Date() };
+    const held = { ...owed, resyncRequiredAt: new Date() };
     expect(importAwaitingSync({ ...held, queued: true })).toBe(true);
     expect(importAwaitingSync({ ...held, running: true })).toBe(true);
     expect(importAwaitingSync({ ...held, jobsKnown: false })).toBe(true);
@@ -1395,7 +1396,7 @@ describe("importAwaitingSync", () => {
 
   it("does not infer a hold from a cursor with no walk stamp", () => {
     // A first walk that errored after committing a page looks exactly so.
-    expect(importAwaitingSync({ ...owed, lastWalkAt: null, restartedAt: null, queued: true })).toBe(false);
+    expect(importAwaitingSync({ ...owed, lastWalkAt: null, resyncRequiredAt: null, queued: true })).toBe(false);
   });
 });
 
@@ -1406,7 +1407,7 @@ describe("importPausedReason", () => {
     oldestPlayAt: null,
     cursorAt: new Date(),
     lastWalkAt: new Date(),
-    restartedAt: null,
+    resyncRequiredAt: null,
     running: false,
     queued: true,
     jobsKnown: true,
@@ -1421,12 +1422,12 @@ describe("importPausedReason", () => {
   });
 
   it("puts what nothing but the user can lift first", () => {
-    expect(importPausedReason({ ...owed, serverEnabled: false, restartedAt: new Date() })).toBe("server-disabled");
+    expect(importPausedReason({ ...owed, serverEnabled: false, resyncRequiredAt: new Date() })).toBe("server-disabled");
     expect(importPausedReason({ ...owed, instanceEnabled: false, hasLibraryItems: false })).toBe("instance-unavailable");
   });
 
   it("puts a restart hold before empty libraries — the releasing sync refills them", () => {
-    expect(importPausedReason({ ...owed, restartedAt: new Date(), hasLibraryItems: false })).toBe("awaiting-sync");
+    expect(importPausedReason({ ...owed, resyncRequiredAt: new Date(), hasLibraryItems: false })).toBe("awaiting-sync");
   });
 
   it("puts empty libraries before a parked slice", () => {
@@ -1438,7 +1439,7 @@ describe("importPausedReason", () => {
 
   it("reports nothing about a completed backfill but a disabled server or instance", () => {
     const done = { ...owed, backfillComplete: true };
-    expect(importPausedReason({ ...done, hasLibraryItems: false, restartedAt: new Date(), failing: true })).toBeNull();
+    expect(importPausedReason({ ...done, hasLibraryItems: false, resyncRequiredAt: new Date(), failing: true })).toBeNull();
     expect(importPausedReason({ ...done, serverEnabled: false })).toBe("server-disabled");
   });
 });

@@ -532,6 +532,13 @@ describe("recoverHistoryForNewItems (real database)", () => {
       const readded = await createTestMediaItem(library.id, { ratingKey: "readded", title: "The Matrix" });
       await createdDaysAgo(readded.id, 3);
       await createTestExternalId(readded.id, "TMDB", "603");
+      // A walked archive's newest play is recent — the forward walk keeps it
+      // so. The recovery pass stores only plays at or below it (newer ones are
+      // the forward walk's), so without one the first copy play it stored
+      // (2024) would bound every later pass below the re-added film's (2025).
+      const watched = await createTestMediaItem(library.id, { ratingKey: "anchor", title: "Anchor" });
+      await createdDaysAgo(watched.id, 400);
+      await storedPlay(watched.id, server.id, new Date(Date.now() - 60 * 60 * 1000), "anchor-recent");
 
       tracearr.getHistoryForItem.mockImplementation(
         async (_server: string, filter: { ratingKey?: string; tmdbId?: string | null }) => {

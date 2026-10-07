@@ -27,6 +27,10 @@ interface ItemRow {
   episodeNumber: number | null;
   /** The show's rating key — an episode's only same-granularity identifier. */
   grandparentRatingKey?: string | null;
+  /** Which of the server's libraries lists it — see the library copies below. */
+  libraryId?: string;
+  /** The media server's type, as the index query returns it on every row. */
+  serverType?: string;
 }
 
 interface ExternalIdRow {
@@ -131,8 +135,9 @@ describe("resolveMediaItemId — rating key", () => {
   });
 
   it("skips as ambiguous when two rows share a rating key", async () => {
-    // Nothing enforces uniqueness on (library, ratingKey), so a collision is
-    // possible — and there is no way to pick, so the play is dropped.
+    // A rating key is unique only within a library, so two rows can share
+    // one. Outside the Jellyfin/Emby library-copy case (below) there is no way
+    // to pick, so the play is dropped.
     const index = await buildIndex([movie("item-1", "100"), movie("item-2", "100")]);
 
     expect(resolveMediaItemId(index, record({ rating_key: "100" }))).toEqual({
@@ -501,4 +506,114 @@ describe("resolveMediaItemId — unsupported types", () => {
     });
   });
 
+});
+
+describe("resolveMediaItemId — library copies of one Jellyfin/Emby item", () => {
+  // Two libraries over the same folder list the same Jellyfin/Emby item under
+  // the same id: one rating key, two rows. A play of it is a play of both.
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const on = (serverType: string, libraryId: string, row: ItemRow): ItemRow => ({
+    ...row,
+    libraryId,
+    serverType,
+  });
+
+  it.each(["JELLYFIN", "EMBY"])("files a %s play against every copy, the lowest id first", async (type) => {
+    const index = await buildIndex([
+      on(type, "lib-c", movie("item-c", "jf-1")),
+      on(type, "lib-a", movie("item-a", "jf-1")),
+      on(type, "lib-b", movie("item-b", "jf-1")),
+    ]);
+
+    expect(resolveMediaItemId(index, record({ rating_key: "jf-1" }))).toEqual({
+      mediaItemId: "item-a",
+      copies: ["item-b", "item-c"],
+    });
+  });
+
+  it("files an episode's play against every copy whose show matches", async () => {
+    const index = await buildIndex([
+      on("JELLYFIN", "lib-a", { ...episode("ep-a", "jf-ep", 1, 1), grandparentRatingKey: "show-1" }),
+      on("JELLYFIN", "lib-b", { ...episode("ep-b", "jf-ep", 1, 1), grandparentRatingKey: "show-1" }),
+    ]);
+
+    expect(
+      resolveMediaItemId(
+        index,
+        record({ media_type: "episode", rating_key: "jf-ep", grandparent_rating_key: "show-1" }),
+      ),
+    ).toEqual({ mediaItemId: "ep-a", copies: ["ep-b"] });
+  });
+
+  it("still skips the same rating key in two Plex libraries — a stale row there, not a copy", async () => {
+    const index = await buildIndex([
+      on("PLEX", "lib-a", movie("item-a", "100")),
+      on("PLEX", "lib-b", movie("item-b", "100")),
+    ]);
+
+    expect(resolveMediaItemId(index, record({ rating_key: "100" }))).toEqual({ skipped: "ambiguous" });
+  });
+
+  it("skips two hits in one library — one library cannot list an item twice", async () => {
+    const index = await buildIndex([
+      on("JELLYFIN", "lib-a", movie("item-a", "jf-1")),
+      on("JELLYFIN", "lib-a", movie("item-b", "jf-1")),
+    ]);
+
+    expect(resolveMediaItemId(index, record({ rating_key: "jf-1" }))).toEqual({ skipped: "ambiguous" });
+  });
+
+  it("skips when any copy is not the type the record names", async () => {
+    const index = await buildIndex([
+      on("JELLYFIN", "lib-a", movie("item-a", "jf-1")),
+      on("JELLYFIN", "lib-b", episode("item-b", "jf-1", 1, 1)),
+    ]);
+
+    expect(resolveMediaItemId(index, record({ rating_key: "jf-1" }))).toEqual({ skipped: "ambiguous" });
+  });
+
+  it("skips when any copy contradicts the record's identity", async () => {
+    const index = await buildIndex(
+      [on("JELLYFIN", "lib-a", movie("item-a", "jf-1")), on("JELLYFIN", "lib-b", movie("item-b", "jf-1"))],
+      [
+        { mediaItemId: "item-a", source: "TMDB", externalId: "550" },
+        { mediaItemId: "item-b", source: "TMDB", externalId: "999" },
+      ],
+    );
+
+    expect(resolveMediaItemId(index, record({ rating_key: "jf-1", tmdb_id: 550 }))).toEqual({
+      skipped: "ambiguous",
+    });
+  });
+
+  it("skips when any copy of an episode belongs to another show", async () => {
+    const index = await buildIndex([
+      on("EMBY", "lib-a", { ...episode("ep-a", "jf-ep", 1, 1), grandparentRatingKey: "show-1" }),
+      on("EMBY", "lib-b", { ...episode("ep-b", "jf-ep", 1, 1), grandparentRatingKey: "show-2" }),
+    ]);
+
+    expect(
+      resolveMediaItemId(
+        index,
+        record({ media_type: "episode", rating_key: "jf-ep", grandparent_rating_key: "show-1" }),
+      ),
+    ).toEqual({ skipped: "ambiguous" });
+  });
+
+  it("never fans out a provider-id hit — two rows sharing a TMDB id are two files", async () => {
+    const index = await buildIndex(
+      [on("JELLYFIN", "lib-a", movie("item-uhd", "jf-4k")), on("JELLYFIN", "lib-b", movie("item-hd", "jf-hd"))],
+      [
+        { mediaItemId: "item-uhd", source: "TMDB", externalId: "603" },
+        { mediaItemId: "item-hd", source: "TMDB", externalId: "603" },
+      ],
+    );
+
+    expect(resolveMediaItemId(index, record({ rating_key: "gone", tmdb_id: 603 }))).toEqual({
+      skipped: "ambiguous",
+    });
+  });
 });

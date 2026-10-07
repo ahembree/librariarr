@@ -40,6 +40,10 @@ export const HISTORY_SEED = {
   detailMovieTitle: "Title 01",
   playsPerMovie: PLAYS_PER_MOVIE,
   show: "Show Alpha",
+  /** The show's series identity: it has no external ids, so the title key. */
+  seriesKey: "title:show alpha",
+  /** S01E01, whose id opens the show, season and episode detail pages. */
+  episodeId: "e2e-hist-ep-s01e01",
   /** The episodes' displayed titles in show-then-SxxExx order. */
   episodesInOrder: [
     "Show Alpha - S01E01 - Zulu",
@@ -150,8 +154,8 @@ export async function seedHistory(): Promise<void> {
         `INSERT INTO "MediaItem"
            (id, "libraryId", "ratingKey", title, "parentTitle", "seasonNumber", "episodeNumber",
             type, "seriesKey", "addedAt", "createdAt", "updatedAt")
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'SERIES', 'title:show alpha', NOW(), NOW(), NOW())`,
-        [ep.id, LIB_A_SERIES, `hist-${ep.id}`, ep.title, HISTORY_SEED.show, ep.season, ep.episode],
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'SERIES', $8, NOW(), NOW(), NOW())`,
+        [ep.id, LIB_A_SERIES, `hist-${ep.id}`, ep.title, HISTORY_SEED.show, ep.season, ep.episode, HISTORY_SEED.seriesKey],
       );
       await nextPlay(ep.id, SERVER_A, HISTORY_SEED.userA);
     }

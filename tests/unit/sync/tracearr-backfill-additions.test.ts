@@ -31,6 +31,7 @@ const m = vi.hoisted(() => ({
   resolveMediaItemId: vi.fn(),
   importTracearrRecords: vi.fn(),
   resolveInstanceForServer: vi.fn(),
+  forwardPassBoundary: vi.fn(),
   reconcileWatchStateFromHistory: vi.fn(),
   invalidateMediaCaches: vi.fn(),
 }));
@@ -50,6 +51,7 @@ vi.mock("@/lib/sync/tracearr-join", () => ({
 vi.mock("@/lib/sync/sync-tracearr-history", () => ({
   importTracearrRecords: m.importTracearrRecords,
   resolveInstanceForServer: m.resolveInstanceForServer,
+  forwardPassBoundary: m.forwardPassBoundary,
 }));
 vi.mock("@/lib/tracearr/tracearr-client", () => ({
   // Constructor mock — must be a `function`, not an arrow (Vitest 4).
@@ -73,6 +75,10 @@ import { TracearrMappingChangedError } from "@/lib/sync/tracearr-mapping-changed
 
 const SERVER_ID = "server-1";
 const TRACEARR_SERVER_ID = "11111111-2222-3333-4444-555555555555";
+/** The mapping version the server row carries — what every write re-checks. */
+const MAPPING_VERSION = 6;
+/** The guard the pass hands the shared importer: the mapping AND its version. */
+const GUARD = { tracearrServerId: TRACEARR_SERVER_ID, mappingVersion: MAPPING_VERSION };
 
 /** The join index is opaque here — only that the SAME one is reused matters. */
 const JOIN_INDEX = { serverId: SERVER_ID, itemCount: 3 };
@@ -133,9 +139,14 @@ describe("recoverHistoryForNewItems", () => {
       name: "Test Plex",
       enabled: true,
       tracearrServerId: TRACEARR_SERVER_ID,
+      tracearrMappingVersion: MAPPING_VERSION,
+      // The pass runs only once the archive walk is complete.
+      tracearrBackfillComplete: true,
       userId: "user-1",
     });
     m.prisma.$queryRawUnsafe.mockImplementation(async () => candidates);
+    // Far ahead unless a test says otherwise: these fixtures carry no start.
+    m.forwardPassBoundary.mockResolvedValue(new Date("2100-01-01T00:00:00.000Z"));
     m.resolveInstanceForServer.mockResolvedValue({
       id: "tracearr-1",
       name: "Tracearr",
@@ -156,6 +167,7 @@ describe("recoverHistoryForNewItems", () => {
       inserted: 0,
       updated: 0,
       skipped: 0,
+      rowsInserted: 0,
     });
   });
 
@@ -251,6 +263,8 @@ describe("recoverHistoryForNewItems", () => {
         name: "Test Plex",
         enabled: false,
         tracearrServerId: TRACEARR_SERVER_ID,
+        tracearrMappingVersion: MAPPING_VERSION,
+        tracearrBackfillComplete: true,
         userId: "user-1",
       });
       expect(await recoverHistoryForNewItems(SERVER_ID)).toEqual({
@@ -263,6 +277,8 @@ describe("recoverHistoryForNewItems", () => {
         name: "Test Plex",
         enabled: true,
         tracearrServerId: null,
+        tracearrMappingVersion: MAPPING_VERSION,
+        tracearrBackfillComplete: true,
         userId: "user-1",
       });
       expect(await recoverHistoryForNewItems(SERVER_ID)).toEqual({
@@ -271,6 +287,29 @@ describe("recoverHistoryForNewItems", () => {
       });
 
       expect(m.prisma.$queryRawUnsafe).not.toHaveBeenCalled();
+    });
+
+    it("does nothing for an archive whose walk is not complete, by its own read of the row", async () => {
+      // The task gates on the slice's view of the walk, read at ITS start. A
+      // mapping changed (or a walk restarted) since then has an archive owed a
+      // walk, and plays written into it now would become its resume boundary:
+      // with no cursor recorded, the walk's `until` is the oldest stored row,
+      // so everything newer than an old recovered play would never be walked.
+      m.prisma.mediaServer.findFirst.mockResolvedValue({
+        id: SERVER_ID,
+        name: "Test Plex",
+        enabled: true,
+        tracearrServerId: TRACEARR_SERVER_ID,
+        tracearrMappingVersion: MAPPING_VERSION,
+        tracearrBackfillComplete: false,
+        userId: "user-1",
+      });
+
+      expect(await recoverHistoryForNewItems(SERVER_ID)).toEqual({ checked: 0, imported: 0 });
+      expect(m.prisma.$queryRawUnsafe).not.toHaveBeenCalled();
+      expect(m.resolveInstanceForServer).not.toHaveBeenCalled();
+      expect(m.getHistoryForItem).not.toHaveBeenCalled();
+      expect(m.importTracearrRecords).not.toHaveBeenCalled();
     });
   });
 
@@ -303,6 +342,7 @@ describe("recoverHistoryForNewItems", () => {
         inserted: 2,
         updated: 0,
         skipped: 0,
+        rowsInserted: 2,
       });
 
       const result = await recoverHistoryForNewItems(SERVER_ID);
@@ -319,10 +359,101 @@ describe("recoverHistoryForNewItems", () => {
         // username vocabulary as every other row on the server, or a re-added
         // item's history lands under a different "person".
         expect.anything(),
-        // The Tracearr server they came from, which every write re-checks.
-        TRACEARR_SERVER_ID,
+        // The mapping they came from and its version, which every write
+        // re-checks — the value alone does not see an unlink and re-link.
+        GUARD,
       );
       expect(result).toEqual({ checked: 1, imported: 2 });
+    });
+
+    it("stores only plays at or below the forward boundary, and leaves newer ones to the forward walk", async () => {
+      // A newer play stored here would move MAX(watchedAt) — where the next
+      // forward window starts — past plays no walk has read yet.
+      const boundary = new Date("2026-06-10T12:00:00.000Z");
+      m.forwardPassBoundary.mockResolvedValue(boundary);
+      const older = { ...play("chain-old"), started_at: "2026-05-01T00:00:00.000Z" };
+      const atBoundary = { ...play("chain-edge"), started_at: boundary.toISOString() };
+      const newer = { ...play("chain-new"), started_at: "2026-06-10T13:00:00.000Z" };
+      m.getHistoryForItem.mockResolvedValue([older, atBoundary, newer]);
+      m.importTracearrRecords.mockResolvedValue({ inserted: 2, updated: 0, skipped: 0, rowsInserted: 2 });
+
+      await recoverHistoryForNewItems(SERVER_ID);
+
+      expect(m.importTracearrRecords).toHaveBeenCalledWith(
+        SERVER_ID,
+        [older, atBoundary],
+        JOIN_INDEX,
+        expect.anything(),
+        GUARD,
+      );
+      // Read with the server's walk state, once.
+      expect(m.forwardPassBoundary).toHaveBeenCalledTimes(1);
+      expect(m.forwardPassBoundary).toHaveBeenCalledWith(SERVER_ID, {
+        backfillComplete: true,
+        cursorAt: undefined,
+        forwardFloorAt: undefined,
+        lastWalkAt: undefined,
+        forwardWatermarkAt: undefined,
+      });
+    });
+
+    it("settles an item whose plays are all newer than the boundary, writing nothing", async () => {
+      vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-10-01T00:00:00.000Z") });
+      try {
+        m.forwardPassBoundary.mockResolvedValue(new Date("2026-09-30T12:00:00.000Z"));
+        m.getHistoryForItem.mockResolvedValue([
+          { ...play("chain-new"), started_at: "2026-09-30T13:00:00.000Z" },
+        ]);
+
+        await recoverHistoryForNewItems(SERVER_ID);
+        expect(m.importTracearrRecords).not.toHaveBeenCalled();
+
+        // Answered for good: nothing OLD to recover, and the forward walk
+        // imports the new play — left out now and a day later alike.
+        m.prisma.$queryRawUnsafe.mockClear();
+        await recoverHistoryForNewItems(SERVER_ID);
+        expect(candidateQuery().params[3]).toEqual(["item-1"]);
+        vi.setSystemTime(new Date(Date.now() + RECOVERY_REASK_MS));
+        m.prisma.$queryRawUnsafe.mockClear();
+        await recoverHistoryForNewItems(SERVER_ID);
+        expect(candidateQuery().params[3]).toEqual(["item-1"]);
+        expect(candidateQuery().params[4]).toEqual([]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("defers an item whose only play resolving to it is newer than the boundary", async () => {
+      // Its old play landed on another row (the old copy, not yet purged): the
+      // new play resolving here says nothing about where its OLD ones went.
+      vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-10-01T00:00:00.000Z") });
+      try {
+        m.forwardPassBoundary.mockResolvedValue(new Date("2026-09-30T12:00:00.000Z"));
+        const old = { ...play("chain-old"), started_at: "2026-05-01T00:00:00.000Z" };
+        const recent = { ...play("chain-new"), started_at: "2026-09-30T13:00:00.000Z" };
+        m.getHistoryForItem.mockResolvedValue([old, recent]);
+        m.resolveMediaItemId.mockImplementation((_index: unknown, record: { id: string }) =>
+          record.id === "chain-new" ? { mediaItemId: "item-1" } : { mediaItemId: "old-copy" },
+        );
+
+        await recoverHistoryForNewItems(SERVER_ID);
+        expect(m.importTracearrRecords).toHaveBeenCalledWith(
+          SERVER_ID,
+          [old],
+          JOIN_INDEX,
+          expect.anything(),
+          GUARD,
+        );
+
+        // Deferred: offered again a day later.
+        vi.setSystemTime(new Date(Date.now() + RECOVERY_REASK_MS));
+        m.prisma.$queryRawUnsafe.mockClear();
+        await recoverHistoryForNewItems(SERVER_ID);
+        expect(candidateQuery().params[3]).toEqual([]);
+        expect(candidateQuery().params[4]).toEqual(["item-1"]);
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("builds the join index once for the whole pass", async () => {
@@ -332,6 +463,7 @@ describe("recoverHistoryForNewItems", () => {
         inserted: 1,
         updated: 0,
         skipped: 0,
+        rowsInserted: 1,
       });
 
       await recoverHistoryForNewItems(SERVER_ID);
@@ -351,6 +483,7 @@ describe("recoverHistoryForNewItems", () => {
         inserted: 1,
         updated: 3,
         skipped: 2,
+        rowsInserted: 1,
       });
 
       expect(await recoverHistoryForNewItems(SERVER_ID)).toEqual({
@@ -361,7 +494,7 @@ describe("recoverHistoryForNewItems", () => {
 
     it("neither reconciles nor drops caches when every row only merged", async () => {
       m.getHistoryForItem.mockResolvedValue([play("chain-1")]);
-      m.importTracearrRecords.mockResolvedValue({ inserted: 0, updated: 2, skipped: 0 });
+      m.importTracearrRecords.mockResolvedValue({ inserted: 0, updated: 2, skipped: 0, rowsInserted: 0 });
 
       expect(await recoverHistoryForNewItems(SERVER_ID)).toEqual({ checked: 1, imported: 0 });
       expect(m.reconcileWatchStateFromHistory).not.toHaveBeenCalled();
@@ -401,6 +534,7 @@ describe("recoverHistoryForNewItems", () => {
         inserted: 1,
         updated: 0,
         skipped: 0,
+        rowsInserted: 1,
       });
 
       await recoverHistoryForNewItems(SERVER_ID);
@@ -418,6 +552,7 @@ describe("recoverHistoryForNewItems", () => {
         inserted: 1,
         updated: 0,
         skipped: 0,
+        rowsInserted: 1,
       });
       m.reconcileWatchStateFromHistory.mockRejectedValue(new Error("db down"));
 
@@ -463,6 +598,7 @@ describe("recoverHistoryForNewItems", () => {
         inserted: 1,
         updated: 0,
         skipped: 0,
+        rowsInserted: 1,
       });
 
       const result = await recoverHistoryForNewItems(SERVER_ID);
@@ -510,7 +646,7 @@ describe("recoverHistoryForNewItems", () => {
         response: { status: 500, data: {} },
       } as never);
       m.getHistoryForItem.mockRejectedValueOnce(itemError).mockResolvedValue([play("chain-1")]);
-      m.importTracearrRecords.mockResolvedValue({ inserted: 1, updated: 0, skipped: 0 });
+      m.importTracearrRecords.mockResolvedValue({ inserted: 1, updated: 0, skipped: 0, rowsInserted: 1 });
 
       const result = await recoverHistoryForNewItems(SERVER_ID);
 
@@ -570,7 +706,7 @@ describe("recoverHistoryForNewItems", () => {
       // query and the write rejects its own batch, and only its own.
       m.importTracearrRecords
         .mockRejectedValueOnce(new Error("foreign key violation"))
-        .mockResolvedValue({ inserted: 1, updated: 0, skipped: 0 });
+        .mockResolvedValue({ inserted: 1, updated: 0, skipped: 0, rowsInserted: 1 });
 
       expect(await recoverHistoryForNewItems(SERVER_ID)).toEqual({
         checked: 2,
@@ -585,6 +721,7 @@ describe("recoverHistoryForNewItems", () => {
         inserted: 1,
         updated: 0,
         skipped: 4,
+        rowsInserted: 1,
       });
 
       await recoverHistoryForNewItems(SERVER_ID);
@@ -633,7 +770,7 @@ describe("recoverHistoryForNewItems", () => {
       m.getHistoryForItem
         .mockResolvedValueOnce([play("new-play")])
         .mockResolvedValueOnce([play("new-play"), play("old-1"), play("old-2")]);
-      m.importTracearrRecords.mockResolvedValue({ inserted: 3, updated: 0, skipped: 0 });
+      m.importTracearrRecords.mockResolvedValue({ inserted: 3, updated: 0, skipped: 0, rowsInserted: 3 });
 
       await recoverHistoryForNewItems(SERVER_ID);
 
@@ -655,7 +792,7 @@ describe("recoverHistoryForNewItems", () => {
         { id: "item-1", ratingKey: "1001", title: "Film", tmdbId: "603", imdbId: null },
       ];
       m.getHistoryForItem.mockResolvedValue([play("chain-1")]);
-      m.importTracearrRecords.mockResolvedValue({ inserted: 0, updated: 1, skipped: 0 });
+      m.importTracearrRecords.mockResolvedValue({ inserted: 0, updated: 1, skipped: 0, rowsInserted: 0 });
 
       await recoverHistoryForNewItems(SERVER_ID);
 
@@ -787,7 +924,7 @@ describe("recoverHistoryForNewItems", () => {
       const names = new Map([["srv-user-1", "weingart"]]);
       m.getServerAccountNames.mockResolvedValue(names);
       m.getHistoryForItem.mockResolvedValue([play("chain-1")]);
-      m.importTracearrRecords.mockResolvedValue({ inserted: 1, updated: 0, skipped: 0 });
+      m.importTracearrRecords.mockResolvedValue({ inserted: 1, updated: 0, skipped: 0, rowsInserted: 1 });
 
       await recoverHistoryForNewItems(SERVER_ID);
 
@@ -796,7 +933,7 @@ describe("recoverHistoryForNewItems", () => {
         expect.anything(),
         JOIN_INDEX,
         names,
-        TRACEARR_SERVER_ID,
+        GUARD,
       );
     });
   });
@@ -887,13 +1024,50 @@ describe("recoverHistoryForNewItems", () => {
 
     it("records an item whose plays were imported", async () => {
       m.getHistoryForItem.mockResolvedValue([play("chain-1")]);
-      m.importTracearrRecords.mockResolvedValue({ inserted: 1, updated: 0, skipped: 0 });
+      m.importTracearrRecords.mockResolvedValue({ inserted: 1, updated: 0, skipped: 0, rowsInserted: 1 });
       await recoverHistoryForNewItems(SERVER_ID);
 
       m.prisma.$queryRawUnsafe.mockClear();
       await recoverHistoryForNewItems(SERVER_ID);
 
       expect(candidateQuery().params[3]).toEqual(["item-1"]);
+    });
+
+    it("settles an item a play reaches as one of its library copies", async () => {
+      // A Jellyfin/Emby item two libraries list: the play's primary row is on
+      // the other copy, and this one gets a row of its own — answered here,
+      // not deferred to be asked again.
+      vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-10-01T00:00:00.000Z") });
+      try {
+        m.getHistoryForItem.mockResolvedValue([play("chain-1")]);
+        m.resolveMediaItemId.mockReturnValue({ mediaItemId: "other-copy", copies: ["item-1"] });
+        m.importTracearrRecords.mockResolvedValue({ inserted: 1, updated: 0, skipped: 0, rowsInserted: 2 });
+        await recoverHistoryForNewItems(SERVER_ID);
+
+        vi.setSystemTime(new Date(Date.now() + RECOVERY_REASK_MS));
+        m.prisma.$queryRawUnsafe.mockClear();
+        await recoverHistoryForNewItems(SERVER_ID);
+        expect(candidateQuery().params[3]).toEqual(["item-1"]);
+        expect(candidateQuery().params[4]).toEqual([]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("reports, and reconciles, a stored play that only gains a library copy's row", async () => {
+      // Not a new play — but the copy reads as unwatched until the reconcile,
+      // and the caller notifies pages only for a non-zero `imported`.
+      m.getHistoryForItem.mockResolvedValue([play("chain-1")]);
+      m.resolveMediaItemId.mockReturnValue({ mediaItemId: "other-copy", copies: ["item-1"] });
+      m.importTracearrRecords.mockResolvedValue({ inserted: 0, updated: 1, skipped: 0, rowsInserted: 1 });
+
+      expect(await recoverHistoryForNewItems(SERVER_ID)).toEqual({ checked: 1, imported: 1 });
+      expect(m.reconcileWatchStateFromHistory).toHaveBeenCalledWith(SERVER_ID);
+      expect(m.invalidateMediaCaches).toHaveBeenCalled();
+      expect(m.logger.info).toHaveBeenCalledWith(
+        "WatchHistory",
+        expect.stringContaining("imported 0 new play(s) (1 already stored)"),
+      );
     });
 
     it("defers an item whose every play resolved to a different row, then re-asks it a day later", async () => {
@@ -905,7 +1079,7 @@ describe("recoverHistoryForNewItems", () => {
       try {
         m.getHistoryForItem.mockResolvedValue([play("old-1"), play("old-2")]);
         m.resolveMediaItemId.mockReturnValue({ mediaItemId: "old-copy" });
-        m.importTracearrRecords.mockResolvedValue({ inserted: 2, updated: 0, skipped: 0 });
+        m.importTracearrRecords.mockResolvedValue({ inserted: 2, updated: 0, skipped: 0, rowsInserted: 2 });
 
         await recoverHistoryForNewItems(SERVER_ID);
         expect(m.resolveMediaItemId).toHaveBeenCalledWith(JOIN_INDEX, expect.objectContaining({ id: "old-1" }));
@@ -938,7 +1112,7 @@ describe("recoverHistoryForNewItems", () => {
       try {
         m.getHistoryForItem.mockResolvedValue([play("other-copy-play")]);
         m.resolveMediaItemId.mockReturnValue({ mediaItemId: "other-copy" });
-        m.importTracearrRecords.mockResolvedValue({ inserted: 0, updated: 1, skipped: 0 });
+        m.importTracearrRecords.mockResolvedValue({ inserted: 0, updated: 1, skipped: 0, rowsInserted: 0 });
 
         for (let ask = 0; ask < MAX_RECOVERY_ASKS; ask++) {
           await recoverHistoryForNewItems(SERVER_ID);
@@ -959,7 +1133,7 @@ describe("recoverHistoryForNewItems", () => {
     it("defers an item none of whose plays could be resolved at all", async () => {
       m.getHistoryForItem.mockResolvedValue([play("chain-1")]);
       m.resolveMediaItemId.mockReturnValue({ skipped: "ambiguous" });
-      m.importTracearrRecords.mockResolvedValue({ inserted: 0, updated: 0, skipped: 1 });
+      m.importTracearrRecords.mockResolvedValue({ inserted: 0, updated: 0, skipped: 1, rowsInserted: 0 });
 
       await recoverHistoryForNewItems(SERVER_ID);
 
@@ -973,7 +1147,7 @@ describe("recoverHistoryForNewItems", () => {
       m.resolveMediaItemId.mockImplementation((_index: unknown, record: { id: string }) =>
         record.id === "mine" ? { mediaItemId: "item-1" } : { mediaItemId: "old-copy" },
       );
-      m.importTracearrRecords.mockResolvedValue({ inserted: 2, updated: 0, skipped: 0 });
+      m.importTracearrRecords.mockResolvedValue({ inserted: 2, updated: 0, skipped: 0, rowsInserted: 2 });
 
       await recoverHistoryForNewItems(SERVER_ID);
 

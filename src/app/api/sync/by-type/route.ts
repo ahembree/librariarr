@@ -70,13 +70,28 @@ export async function POST(request: NextRequest) {
     // recent one everywhere those columns are read: the hover card, the Last
     // Played column, and the `Series Last Played` rule/query criterion.
     //
-    // MAIN_QUEUE is serial and ordered by enqueue time, so this runs *after*
-    // every library job for the server has finished — meaning their `SyncJob`
-    // rows are COMPLETED and `syncWatchHistoryTask`'s "a full sync is already
-    // running" guard does not swallow it. The key is NOT the realtime manager's
-    // (`watch-history-incremental:<id>`): a keyed enqueue replaces the queued
-    // payload, and a shared key let a later `watch-changed` event downgrade
-    // this full replace to an incremental append.
+    // MAIN_QUEUE is serial and normally runs this *after* every library job for
+    // the server has finished — their `SyncJob` rows are then COMPLETED and
+    // `syncWatchHistoryTask`'s "a full sync is already running" guard does not
+    // swallow it. Not always, though: the queue orders by run_at, and a library
+    // job that fails is retried with backoff, i.e. after this job. A refresh
+    // that ran before a library was (re)populated cannot have attached that
+    // library's plays, and must not vouch for the server's history: a library
+    // job that populates a library holding no items takes the population hold
+    // (`requirePopulationResync`), and no history pass can establish the
+    // marker while it is set. That job releases the hold itself once its
+    // library is synced, if it wrote it and nothing touched it since — nulling
+    // the marker, which this refresh then establishes when it runs after. A job
+    // that fails after its first insert keeps the hold, and its retry cannot
+    // release it: the library is no longer empty, so the retry is not
+    // populating and holds no receipt for it. That hold, like any other (an
+    // earlier purge or restore), waits for a full sync, and the marker stays
+    // withdrawn until a history sync after that.
+    //
+    // The key is NOT the realtime manager's (`watch-history-incremental:<id>`):
+    // a keyed enqueue replaces the queued payload, and a shared key let a later
+    // `watch-changed` event downgrade this full replace to an incremental
+    // append.
     await enqueueJob(
       TASK_SYNC_WATCH_HISTORY,
       { serverId: server.id },

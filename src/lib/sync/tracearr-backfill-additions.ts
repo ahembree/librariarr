@@ -4,8 +4,10 @@ import { invalidateMediaCaches } from "@/lib/cache/invalidate";
 import { reconcileWatchStateFromHistory } from "@/lib/sync/watch-reconcile";
 import { buildTracearrJoinIndex, resolveMediaItemId } from "@/lib/sync/tracearr-join";
 import {
+  forwardPassBoundary,
   importTracearrRecords,
   resolveInstanceForServer,
+  type TracearrMappingGuard,
 } from "@/lib/sync/sync-tracearr-history";
 import {
   TracearrClient,
@@ -247,7 +249,10 @@ export interface RecoverNewItemHistoryResult {
    * already stored (the item's own recent plays, or the whole answer again
    * after a restart cleared `recoveryAnswers`) only merges, and counting those
    * made every such pass look like a change: a server-wide reconcile, every
-   * media cache dropped and every open page refetching, for nothing.
+   * media cache dropped and every open page refetching, for nothing. Rows, not
+   * plays: a play of a Jellyfin/Emby item two libraries list adds a row per
+   * copy, and a stored play newly reaching a second copy adds that copy's row
+   * alone — a change the copy's pages must see. The log line counts plays.
    */
   imported: number;
 }
@@ -284,6 +289,12 @@ export async function recoverHistoryForNewItems(
       name: true,
       enabled: true,
       tracearrServerId: true,
+      tracearrMappingVersion: true,
+      tracearrBackfillComplete: true,
+      tracearrBackfillCursorAt: true,
+      tracearrForwardFloorAt: true,
+      tracearrBackfillLastWalkAt: true,
+      tracearrForwardWatermarkAt: true,
       userId: true,
     },
   });
@@ -291,6 +302,20 @@ export async function recoverHistoryForNewItems(
   if (!server || !server.enabled) return empty;
   const tracearrServerId = server.tracearrServerId;
   if (!tracearrServerId) return empty;
+  // Only once the archive walk is complete, read here rather than taken from
+  // the caller's earlier view: a mapping changed (or the walk restarted) since
+  // that view has an archive owed a walk, and plays written for it now would
+  // set its resume boundary — the walk's `until` falls back to the oldest
+  // stored row when no cursor is recorded — far below everything it has not
+  // read yet.
+  if (!server.tracearrBackfillComplete) return empty;
+  // Every write re-checks the mapping AND its version as read here, so a pass
+  // that outlives an unlink and re-link of the same Tracearr server writes
+  // nothing — see `TracearrMappingGuard`.
+  const guard: TracearrMappingGuard = {
+    tracearrServerId,
+    mappingVersion: server.tracearrMappingVersion,
+  };
 
   // The candidate query comes FIRST, before instance resolution and before the
   // join index, because the steady state is zero candidates — nothing has been
@@ -300,6 +325,23 @@ export async function recoverHistoryForNewItems(
   // Out of time before the first item: skip the instance probe, the join index
   // and the `/users` walk too, all of which would be for nothing.
   if (shouldStop()) return empty;
+
+  // Plays that started after this belong to the forward walk, and this pass
+  // leaves them to it. Stored here, a re-added item's newest play would move
+  // `MAX(watchedAt)` — where the next forward window starts — up to it, past
+  // every other item's play in between that no walk has read yet: the slice
+  // that runs this pass is queued straight away when a server or instance is
+  // re-enabled, before any catch-up has read what happened while it was off.
+  // What this pass exists for are the item's OLD plays, all of them at or
+  // below the boundary. Read once, at the start: a forward walk moving it up
+  // meanwhile has read what lies between.
+  const boundary = await forwardPassBoundary(serverId, {
+    backfillComplete: server.tracearrBackfillComplete,
+    cursorAt: server.tracearrBackfillCursorAt,
+    forwardFloorAt: server.tracearrForwardFloorAt,
+    lastWalkAt: server.tracearrBackfillLastWalkAt,
+    forwardWatermarkAt: server.tracearrForwardWatermarkAt,
+  });
 
   const instance = await resolveInstanceForServer(
     server.userId,
@@ -362,13 +404,18 @@ export async function recoverHistoryForNewItems(
   }
 
   let checked = 0;
-  let imported = 0;
+  /** New plays, for the log line. */
+  let newPlays = 0;
   let merged = 0;
+  /** New rows of any kind, a library copy's included — see `imported`. */
+  let rowsInserted = 0;
   let withoutPlays = 0;
   let elsewhere = 0;
   let failed = 0;
   let skipped = 0;
   let recoveredByProviderId = 0;
+  /** Plays newer than `boundary`, left to the forward walk. */
+  let leftToForward = 0;
   /** Provider identities already asked about this run — see the fallback below. */
   const queriedProviders = new Set<string>();
 
@@ -435,16 +482,27 @@ export async function recoverHistoryForNewItems(
         recordAnswer(candidate.id, true, Date.now());
         continue;
       }
+      // Only plays at or below the forward boundary — see `boundary`. A record
+      // whose start cannot be read is left in: the importer refuses it anyway.
+      const old = own.filter((record) => !(Date.parse(record.started_at) > boundary.getTime()));
+      leftToForward += own.length - old.length;
+      if (old.length === 0) {
+        // Every play is newer than the boundary: nothing OLD to recover, and
+        // the forward walk imports these. Settled, like an item with no plays.
+        recordAnswer(candidate.id, true, Date.now());
+        continue;
+      }
 
       const written = await importTracearrRecords(
         serverId,
-        own,
+        old,
         joinIndex,
         accountNames,
-        tracearrServerId,
+        guard,
       );
-      imported += written.inserted;
+      newPlays += written.inserted;
       merged += written.updated;
+      rowsInserted += written.rowsInserted;
       skipped += written.skipped;
       // Settled for THIS item only when at least one play resolved to it —
       // the same shared resolver the importer just used, against the same
@@ -453,9 +511,15 @@ export async function recoverHistoryForNewItems(
       // imported onto that row; the answer is deferred, so a later pass, once
       // an old row is gone, can file them here — but not every pass, and not
       // ahead of items never asked about. See `recoveryAnswers`.
-      const resolvedHere = own.some((record) => {
+      // Over the plays stored here only: a new play resolving to the item says
+      // nothing about whether its old ones did. A play filed against several
+      // library copies of one item resolves to this one too when it is a copy.
+      const resolvedHere = old.some((record) => {
         const resolved = resolveMediaItemId(joinIndex, record);
-        return "mediaItemId" in resolved && resolved.mediaItemId === candidate.id;
+        return (
+          "mediaItemId" in resolved &&
+          (resolved.mediaItemId === candidate.id || resolved.copies?.includes(candidate.id) === true)
+        );
       });
       // Plays that resolved to nothing at all (ambiguous, contradicted) defer
       // it too: an ambiguity between the old and new copy clears once the old
@@ -471,8 +535,9 @@ export async function recoverHistoryForNewItems(
       // is recorded in `recoveryAnswers`.
       // Cancelled: not this item's failure, and not the host's either.
       if (signal?.aborted) break;
-      // The server was re-pointed or unlinked mid-pass: nothing more of this
-      // source may be written, and every remaining item would fail the same way.
+      // The server was re-pointed, unlinked or re-linked mid-pass: nothing more
+      // of this source may be written, and every remaining item would fail the
+      // same way.
       if (error instanceof TracearrMappingChangedError) {
         logger.info(
           "WatchHistory",
@@ -510,8 +575,10 @@ export async function recoverHistoryForNewItems(
   // Inserted rows only. A merge re-delivers a play already stored — one of the
   // item's own recent plays, which the forward pass imported and reconciled
   // itself, or an answer repeated after a restart — so it is not worth a
-  // server-wide reconcile and a cache drop on every pass.
-  if (imported > 0) {
+  // server-wide reconcile and a cache drop on every pass. Any new ROW counts,
+  // though: a stored play newly filed against a second library copy adds the
+  // copy's row, and that copy reads as unwatched until the reconcile runs.
+  if (rowsInserted > 0) {
     // The whole point of the pass: `playCount`/`lastPlayedAt` are what the
     // lifecycle rules read, and until the reconcile runs the recovered item
     // still looks never watched. Non-fatal, exactly like the importer's own
@@ -534,10 +601,11 @@ export async function recoverHistoryForNewItems(
   logger.info(
     "WatchHistory",
     `Tracearr recovery for recently added items on "${server.name}": checked ` +
-      `${checked} of ${candidates.length} candidate(s), imported ${imported} new play(s) ` +
+      `${checked} of ${candidates.length} candidate(s), imported ${newPlays} new play(s) ` +
       `(${merged} already stored) — ` +
       `${withoutPlays} with no plays, ${elsewhere} deferred (no play resolved to the item itself), ` +
       `${skipped} unjoinable, ${failed} failed, ` +
+      `${leftToForward} play(s) newer than the catch-up's boundary left to it, ` +
       // Worth its own figure: it counts items with plays only their provider id
       // reached — a rating key that changed, which is the re-add case this pass
       // exists for. Zero here on a Plex server with re-added media means the
@@ -545,7 +613,7 @@ export async function recoverHistoryForNewItems(
       `${recoveredByProviderId} recovered by provider id`,
   );
 
-  return { checked, imported };
+  return { checked, imported: rowsInserted };
 }
 
 /**
@@ -592,6 +660,9 @@ async function findCandidates(
   const cap = Math.max(1, Math.min(Math.floor(limit), MAX_CANDIDATE_LIMIT));
   const { excluded, deferredDue } = answeredIds(now);
 
+  // Any TRACEARR row of the item ends its candidacy, a library copy's row
+  // (`fanOutOfItemId` set — a Jellyfin/Emby item two libraries list) included:
+  // it is this item's own record of a play the walk has read.
   return prisma.$queryRawUnsafe<CandidateItem[]>(
     `SELECT mi."id", mi."ratingKey", mi."title", mi."type"::text AS "type", mi."parentTitle",
             mi."seasonNumber", mi."episodeNumber",

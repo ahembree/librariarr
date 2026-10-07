@@ -272,6 +272,91 @@ describe("POST /api/media/history/sync over the real native sync", () => {
         ]);
       }
     });
+
+    it("an incremental append points a new play's second copy at its primary, as the full replace does", async () => {
+      mockClient.supportsHistorySince = true;
+      const { server, inA, inB } = await twoCopies("JELLYFIN");
+      const [primary, copy] = [inA, inB].sort((x, y) => (x.id < y.id ? -1 : 1));
+      await prisma.watchHistory.create({
+        data: { mediaItemId: primary.id, mediaServerId: server.id, serverUsername: "alice", watchedAt: new Date("2025-02-01T12:00:00.000Z") },
+      });
+      mockClient.getDetailedWatchHistory.mockResolvedValue([play("jf-item", "alice", "2025-02-01T12:30:00.000Z")]);
+
+      await expect(
+        syncWatchHistory(server.id, undefined, undefined, { incremental: true }),
+      ).resolves.toEqual({ count: 2 });
+
+      const appended = await prisma.watchHistory.findMany({
+        where: { mediaServerId: server.id, watchedAt: new Date("2025-02-01T12:30:00.000Z") },
+        select: { mediaItemId: true, fanOutOfItemId: true },
+      });
+      expect(appended.sort((x, y) => (x.mediaItemId < y.mediaItemId ? -1 : 1))).toEqual([
+        { mediaItemId: primary.id, fanOutOfItemId: null },
+        { mediaItemId: copy.id, fanOutOfItemId: primary.id },
+      ]);
+    });
+
+    it("an incremental append relabels a stored Unknown play on both copies, keeping which is primary", async () => {
+      mockClient.supportsHistorySince = true;
+      const { server, inA, inB } = await twoCopies("JELLYFIN");
+      const [primary, copy] = [inA, inB].sort((x, y) => (x.id < y.id ? -1 : 1));
+      const watchedAt = new Date("2025-02-01T12:00:00.000Z");
+      await prisma.watchHistory.create({
+        data: { mediaItemId: primary.id, mediaServerId: server.id, serverUsername: "Unknown", watchedAt },
+      });
+      await prisma.watchHistory.create({
+        data: { mediaItemId: copy.id, fanOutOfItemId: primary.id, mediaServerId: server.id, serverUsername: "Unknown", watchedAt },
+      });
+      mockClient.getDetailedWatchHistory.mockResolvedValue([play("jf-item", "alice", watchedAt.toISOString())]);
+
+      await expect(
+        syncWatchHistory(server.id, undefined, undefined, { incremental: true }),
+      ).resolves.toEqual({ count: 0 });
+
+      const rows = await prisma.watchHistory.findMany({
+        where: { mediaServerId: server.id },
+        select: { mediaItemId: true, fanOutOfItemId: true, serverUsername: true },
+      });
+      expect(rows.sort((x, y) => (x.mediaItemId < y.mediaItemId ? -1 : 1))).toEqual([
+        { mediaItemId: primary.id, fanOutOfItemId: null, serverUsername: "alice" },
+        { mediaItemId: copy.id, fanOutOfItemId: primary.id, serverUsername: "alice" },
+      ]);
+    });
+  });
+
+  it("keeps a set-aside user's stored plays and stores none of what arrives for them", async () => {
+    // The client reports bob incomplete but (unlike the real ones) still hands
+    // over an entry for him: stored on top of the rows kept for him, it would
+    // duplicate a play.
+    const server = await createTestServer(userId, { type: "JELLYFIN" });
+    const library = await createTestLibrary(server.id);
+    const item = await createTestMediaItem(library.id, { ratingKey: "100" });
+    const old = new Date("2024-12-01T00:00:00.000Z");
+    for (const serverUsername of ["alice", "bob"]) {
+      await prisma.watchHistory.create({
+        data: { mediaItemId: item.id, mediaServerId: server.id, serverUsername, watchedAt: old },
+      });
+    }
+    mockClient.getDetailedWatchHistory.mockImplementation(
+      async (options?: { report?: { incompleteUsers: Map<string, string> } }) => {
+        options!.report!.incompleteUsers.set("bob", "unreliable");
+        return [
+          play("100", "alice", "2025-02-01T00:00:00.000Z"),
+          play("100", "bob", "2025-02-02T00:00:00.000Z"),
+        ];
+      },
+    );
+
+    await expect(syncWatchHistory(server.id)).resolves.toEqual({ count: 1 });
+
+    const rows = await prisma.watchHistory.findMany({
+      where: { mediaServerId: server.id },
+      orderBy: { serverUsername: "asc" },
+    });
+    expect(rows.map((r) => [r.serverUsername, r.watchedAt?.toISOString()])).toEqual([
+      ["alice", "2025-02-01T00:00:00.000Z"],
+      ["bob", old.toISOString()],
+    ]);
   });
 
   it("relabels a stored Unknown play that the incremental window re-delivers named, instead of appending it", async () => {

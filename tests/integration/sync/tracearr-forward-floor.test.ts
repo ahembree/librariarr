@@ -192,7 +192,7 @@ describe("Tracearr import resume state (real DB)", () => {
       where: { id: serverId },
       // No walk stamp either — a slice that errored after committing a page
       // leaves exactly this. Only a recorded restart
-      // (`tracearrBackfillRestartedAt`) holds the walk.
+      // (`libraryResyncRequiredAt`) holds the walk.
       data: {
         tracearrBackfillComplete: false,
         tracearrBackfillCursorAt: CURSOR,
@@ -212,7 +212,7 @@ describe("Tracearr import resume state (real DB)", () => {
     expect(await prisma.watchHistory.count({ where: { source: "TRACEARR" } })).toBe(1);
   });
 
-  // The restart hold (`tracearrBackfillRestartedAt`) and what releases it are
+  // The restart hold (`libraryResyncRequiredAt`) and what releases it are
   // covered end to end in tracearr-restart-hold.test.ts.
 
   it("does not delete native history once the server has been unlinked", async () => {

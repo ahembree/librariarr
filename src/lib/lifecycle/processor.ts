@@ -24,7 +24,7 @@ import {
 import { actionConfigSignature } from "@/lib/lifecycle/action-signature";
 import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
 import { fetchSeerrMetadata } from "@/lib/lifecycle/fetch-seerr-metadata";
-import { checkLifecycleRuleEvaluability } from "@/lib/lifecycle/evaluability";
+import { checkLifecycleRuleEvaluability, checkPlayActivityExecutable } from "@/lib/lifecycle/evaluability";
 import { detectAndSaveMatches } from "@/lib/lifecycle/detect-matches";
 import { syncAllCollections } from "@/lib/lifecycle/collections";
 import { syncMediaServer } from "@/lib/sync/sync-server";
@@ -539,6 +539,7 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
           userId: true,
           type: true,
           rules: true,
+          serverIds: true,
         },
       },
     },
@@ -642,6 +643,19 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
     mediaItem: NonNullable<Pending["mediaItem"]>;
     filteredMatchedIds: string[];
   }> = [];
+
+  // PLAY-HISTORY HOLD, per rule set and asked once per run. Detection skips a
+  // rule set whose play-activity criteria cannot be answered (a library-resync
+  // hold, an unfinished Tracearr import, a withdrawn marker, a forward gap) and
+  // KEEPS its matches and PENDING actions, so its RuleMatch rows — what the
+  // stale check below compares against — are frozen from before the history
+  // went unknown: an item watched since keeps its match. Executing would act on
+  // that frozen answer, so such a rule set's actions are left PENDING and
+  // untouched (like the deletion ceiling's hold, never cancelled) until the
+  // history is established and detection has re-evaluated them. Applied after
+  // every cancel-or-narrow check, which are all safe to run on frozen matches.
+  const playHistoryRefusals = new Map<string, string | null>();
+  const heldByRuleSet = new Map<string, { name: string; reason: string; count: number }>();
 
   for (const action of pendingActions) {
     // Delete actions whose media item no longer exists
@@ -797,7 +811,32 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
       continue;
     }
 
+    const ruleSet = action.ruleSet!;
+    let refusal = playHistoryRefusals.get(action.ruleSetId!);
+    if (refusal === undefined) {
+      refusal = await checkPlayActivityExecutable(
+        action.userId,
+        ruleSet.rules as unknown as LifecycleRule[] | LifecycleRuleGroup[],
+        ruleSet.serverIds,
+      );
+      playHistoryRefusals.set(action.ruleSetId!, refusal);
+    }
+    if (refusal) {
+      const held = heldByRuleSet.get(action.ruleSetId!) ?? { name: ruleSet.name, reason: refusal, count: 0 };
+      held.count++;
+      heldByRuleSet.set(action.ruleSetId!, held);
+      continue;
+    }
+
     executable.push({ action, mediaItem, filteredMatchedIds });
+  }
+  for (const held of heldByRuleSet.values()) {
+    logger.warn(
+      "Lifecycle",
+      `Holding ${held.count} due action(s) of rule set "${held.name}" — ${held.reason}. ` +
+        `Its matches were last evaluated before that, so they stay pending until play history ` +
+        `is established again and detection has re-evaluated them.`,
+    );
   }
 
   // BLAST-RADIUS CEILING, counted over the pass-1 survivors.

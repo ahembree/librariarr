@@ -38,12 +38,13 @@ export interface TracearrImportActivity {
    * would show the walk as having barely started.
    *
    * Taken from the live backfill run whichever run is newest — every other
-   * field describes the newest run. A Refresh's forward pass overlapping a
-   * backfill slice is the newest run, and reporting its (empty) reach froze the
-   * archive progress bar for as long as the two overlapped. A run whose walk
-   * was restarted or re-pointed underneath it (`supersedeTracearrImports`)
-   * reports none: it is still walking the OLD archive position, and its deep
-   * reach would win the status route's "older wins" over the restarted cursor.
+   * field describes the newest run whose mapping still stands. A Refresh's
+   * forward pass overlapping a backfill slice is the newest run, and reporting
+   * its (empty) reach froze the archive progress bar for as long as the two
+   * overlapped. A run whose walk was restarted or re-pointed underneath it
+   * (`supersedeTracearrImports`, `retireTracearrImports`) reports none: it is
+   * still walking the OLD archive position, and its deep reach would win the
+   * status route's "older wins" over the restarted cursor.
    */
   backfillReached: string | null;
 }
@@ -52,8 +53,16 @@ interface Entry extends Omit<TracearrImportActivity, "backfillReached"> {
   userId: string;
   /** This run's own backfill reach — see `TracearrImportActivity.backfillReached`. */
   ownBackfillReached: string | null;
-  /** Set by `supersedeTracearrImports`; the run's reach no longer describes the walk. */
+  /**
+   * Set by `supersedeTracearrImports` and `retireTracearrImports`: the run's
+   * reach no longer describes the walk.
+   */
   superseded: boolean;
+  /**
+   * Set by `retireTracearrImports`: the server's mapping changed under the run,
+   * so nothing it does any longer describes this server — not reported at all.
+   */
+  retired: boolean;
 }
 
 /**
@@ -89,6 +98,7 @@ export function beginTracearrImport(serverId: string, userId: string): TracearrI
     oldestReached: null,
     ownBackfillReached: null,
     superseded: false,
+    retired: false,
   };
   registry.set(serverId, [...(registry.get(serverId) ?? []), entry]);
   return { serverId, entry };
@@ -110,20 +120,41 @@ export function recordTracearrImportPage(
 }
 
 /**
- * Mark every run live for this server as no longer describing its archive walk.
+ * Mark every run live for this server as no longer describing its archive walk
+ * — for `restartTracearrBackfill` (a purge, disable-with-delete, a restore, a
+ * library populated for the first time), which restarts the walk while a slice
+ * or a Refresh may be running.
  *
- * For the paths that restart or re-point the walk while a slice may be running
- * — `restartTracearrBackfill` (a purge, disable-with-delete, a restore) and a
- * mapping change in the server PUT. The running slice keeps walking from the
- * position it started at, deep in the archive, and its live reach would then
- * beat the cursor the restart just moved to "now" (the status route takes the
- * older of the two), showing a restarted walk as nearly finished. Its persisted
- * progress is already discarded by the compare-and-set on the cursor; this does
- * the same for the in-memory readout. Runs that begin afterwards are unaffected.
+ * A running slice keeps walking from the position it started at, deep in the
+ * archive, and its live reach would then beat the cursor the restart just moved
+ * to "now" (the status route takes the older of the two), showing a restarted
+ * walk as nearly finished. Its persisted progress is already discarded by the
+ * compare-and-set on the cursor; this does the same for the reach. The run
+ * itself stays reported: the mapping still stands, so the plays it writes are
+ * still this server's, and a Refresh importing through a purge or a restore is
+ * importing — hidden, the server read as idle, or as "failing" beside a parked
+ * job. Runs that begin afterwards are unaffected.
  */
 export function supersedeTracearrImports(serverId: string): void {
   for (const entry of registry.get(serverId) ?? []) {
     entry.superseded = true;
+    entry.ownBackfillReached = null;
+  }
+}
+
+/**
+ * Mark every run live for this server as describing a mapping it no longer has
+ * — for the server PUT, when it re-points, unlinks or re-links the server's
+ * Tracearr source. Like `supersedeTracearrImports`, and the run is no longer
+ * reported at all (`getTracearrImportActivity`): its next write is refused (the
+ * mapping version moved), and until then its pages and play counts would be
+ * shown against the new mapping, the server read as importing an archive that
+ * is not its source any more. It stays registered until it ends.
+ */
+export function retireTracearrImports(serverId: string): void {
+  for (const entry of registry.get(serverId) ?? []) {
+    entry.superseded = true;
+    entry.retired = true;
     entry.ownBackfillReached = null;
   }
 }
@@ -158,12 +189,27 @@ export function getTracearrBackfillReach(serverId: string): string | null {
 }
 
 /**
- * The newest live run for the server, or null when none is running — except
- * `backfillReached`, which is the live backfill run's (see the field).
+ * The newest live run for the server whose mapping still stands, or null when
+ * none is — except `backfillReached`, which is the live backfill run's (see the
+ * field).
+ *
+ * A run retired by a mapping change (`retireTracearrImports`) is skipped, not
+ * reported: it is still paging an archive that is no longer the server's
+ * source, so reporting it showed the server as importing — `pending`, with the
+ * old run's page and play counts — against the new mapping until the run
+ * happened to hit a refused write. Whether anything is owed is then the job
+ * table's to say. A run whose walk was merely restarted
+ * (`supersedeTracearrImports`) is still reported, without its reach.
  */
 export function getTracearrImportActivity(serverId: string): TracearrImportActivity | null {
-  const runs = registry.get(serverId);
-  const entry = runs?.[runs.length - 1];
+  const runs = registry.get(serverId) ?? [];
+  let entry: Entry | undefined;
+  for (let i = runs.length - 1; i >= 0; i--) {
+    if (!runs[i].retired) {
+      entry = runs[i];
+      break;
+    }
+  }
   if (!entry) return null;
   const { pass, startedAt, pages, imported, oldestReached } = entry;
   return {

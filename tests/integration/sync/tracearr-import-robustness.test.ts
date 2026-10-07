@@ -348,6 +348,7 @@ describe("Tracearr importer robustness (real DB)", () => {
         data: {
           tracearrBackfillComplete: true,
           tracearrBackfillLastWalkAt: new Date("2026-01-01T00:00:00.000Z"),
+          tracearrForwardWatermarkAt: new Date("2026-01-02T00:00:00.000Z"),
           watchHistorySyncedAt: null,
         },
       });
@@ -357,8 +358,10 @@ describe("Tracearr importer robustness (real DB)", () => {
       const result = await syncTracearrHistory(serverId, { passes: "forward" });
 
       expect(result).toEqual({ count: 0, backfillPending: false });
-      const after = await serverRow();
+      expect(m.getHistoryPage).not.toHaveBeenCalled();
+      const after = await prisma.mediaServer.findUniqueOrThrow({ where: { id: serverId } });
       expect(after.watchHistorySyncedAt).toBeNull();
+      expect(after.tracearrForwardWatermarkAt).toEqual(new Date("2026-01-02T00:00:00.000Z"));
       expect(after.tracearrBackfillLastWalkAt).toEqual(new Date("2026-01-01T00:00:00.000Z"));
     });
   });

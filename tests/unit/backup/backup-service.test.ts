@@ -15,11 +15,13 @@ const { mockPrismaModels, TABLE_NAMES, mockFs } = vi.hoisted(() => {
     "prerollSchedule", "savedQuery", "logEntry",
   ];
 
-  const mockPrismaModels: Record<string, { findMany: ReturnType<typeof import("vitest")["vi"]["fn"]>; createMany: ReturnType<typeof import("vitest")["vi"]["fn"]> }> = {};
+  const mockPrismaModels: Record<string, { findMany: ReturnType<typeof import("vitest")["vi"]["fn"]>; createMany: ReturnType<typeof import("vitest")["vi"]["fn"]>; updateMany: ReturnType<typeof import("vitest")["vi"]["fn"]> }> = {};
   for (const t of TABLE_NAMES) {
     mockPrismaModels[t] = {
       findMany: vi.fn().mockResolvedValue([]),
       createMany: vi.fn().mockResolvedValue({ count: 0 }),
+      // Restore clears every library's recorded shortfall afterwards.
+      updateMany: vi.fn().mockResolvedValue({ count: 0 }),
     };
   }
 

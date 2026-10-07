@@ -337,14 +337,52 @@ describe("tracearr-backfill task", () => {
       // Nothing about the next run would differ, so re-queueing immediately
       // spins as fast as the queue turns over — hammering an instance that is
       // already down and burning the rate limit its recovery needs. Throwing
-      // hands it to graphile-worker's own backoff instead.
+      // hands it to graphile-worker's own backoff instead, with the importer's
+      // own reason as the job's recorded error.
+      syncTracearrHistory.mockResolvedValue({
+        count: 0,
+        backfillPending: true,
+        backfillOutcome: "errored",
+        backfillError: "Tracearr could not be reached while importing older plays",
+      });
+
+      await expect(runBackfill()).rejects.toThrow(
+        /failed: Tracearr could not be reached while importing older plays/,
+      );
+      expect(enqueueJob).not.toHaveBeenCalled();
+    });
+
+    it("throws — not re-queues — a slice whose history cursor stalled, and says so", async () => {
+      // Tracearr handing back a page position it already gave is not a
+      // resumable stop: the next slice re-walked the same pages (and rebuilt
+      // its join index and /users) forever, never parking. As an error the
+      // worker backs off and, after maxAttempts, parks it — under a message
+      // that names the stall, not an unreachable Tracearr.
+      syncTracearrHistory.mockResolvedValue({
+        count: 120,
+        backfillPending: true,
+        backfillOutcome: "errored",
+        backfillError: "Tracearr's history cursor stopped advancing while importing older plays",
+      });
+
+      const failure = runBackfill();
+      await expect(failure).rejects.toThrow(/history cursor stopped advancing/);
+      await expect(failure).rejects.not.toThrow(/could not reach/);
+      expect(enqueueJob).not.toHaveBeenCalled();
+      // The rows its committed pages imported are still announced.
+      expect(invalidateMediaCaches).toHaveBeenCalledOnce();
+      // ...and the misleading "queueing the next one" line is not logged.
+      expect(infoLogs().some((line) => line.includes("queueing the next one"))).toBe(false);
+    });
+
+    it("still throws a generic reason when the importer gave none", async () => {
       syncTracearrHistory.mockResolvedValue({
         count: 0,
         backfillPending: true,
         backfillOutcome: "errored",
       });
 
-      await expect(runBackfill()).rejects.toThrow(/could not reach Tracearr/);
+      await expect(runBackfill()).rejects.toThrow(/failed: its walk of Tracearr's history failed/);
       expect(enqueueJob).not.toHaveBeenCalled();
     });
 
@@ -381,7 +419,7 @@ describe("tracearr-backfill task", () => {
     // re-queued (it would only be held again) — but it is not an empty archive,
     // and logging it as one pointed at the wrong cause.
     it.each([
-      ["awaiting-resync", "held until a full sync re-adds"],
+      ["awaiting-resync", "held until a library sync brings back the items it is missing"],
       ["no-library-items", "none of its enabled libraries holds any items"],
     ] as const)("does not re-enqueue a slice held for %s, and says why", async (heldReason, says) => {
       syncTracearrHistory.mockResolvedValue({

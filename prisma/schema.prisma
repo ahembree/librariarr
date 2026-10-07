@@ -252,9 +252,18 @@ model MediaServer {
   /// earlier) before a forward walk's first page that moves the watermark, and
   /// before EVERY page a forward walk writes without the account-name map (its
   /// rows carry identity labels until a healthy walk re-delivers them); cleared
-  /// only when a walk WITH the map exhausts its window. While set, the importer
-  /// does not re-establish `watchHistorySyncedAt`, since there is a known gap.
+  /// only when a walk WITH the map exhausts its window. While set there is a
+  /// known gap: the importer does not re-establish `watchHistorySyncedAt`, and
+  /// the evaluability guard refuses play-activity criteria for the server even
+  /// where the marker from before the gap still stands.
   tracearrForwardFloorAt DateTime?
+  /// The START of the newest forward walk that recorded
+  /// `tracearrForwardFloorAt` (`GREATEST`, stamped on every record even when
+  /// the floor keeps its value). A walk may clear the floor only if this is no
+  /// later than its own start: a walk that started later can have left plays
+  /// newer than that start unread. The recorder's start rather than the record
+  /// time, or no walk could ever pay the floor it recorded itself. Null clears.
+  tracearrForwardFloorRecordedAt DateTime?
   /// When a BACKFILL walk last actually ran for the current mapping — set by
   /// every backfill pass that fetched from Tracearr, whether it exhausted the
   /// archive or stopped at its slice; null until the first one runs, and reset
@@ -263,19 +272,43 @@ model MediaServer {
   /// readout tell "never attempted yet" (a fresh mapping waiting for its first
   /// import) apart from "walked and found nothing to import".
   tracearrBackfillLastWalkAt DateTime?
-  /// When the archive walk was last RESTARTED (`restartTracearrBackfill`: a
-  /// purge, disable-with-delete, a restore, a vanished-library purge) and has
-  /// not yet been released. Each restart follows the deletion of items whose
-  /// plays the restarted walk exists to bring back, and a walk run before a
-  /// sync re-creates them skips those plays as unresolved and can complete
-  /// without them for good — so while this is set the backfill pass is held.
-  /// Cleared only by a FULL (unscoped) library sync that began its library pass
-  /// at or after this instant and completed (compare-and-set on it, so a sync
-  /// already running when the restart landed cannot release it), and by a
-  /// mapping change, which resets the walk anyway. Recorded explicitly rather
-  /// than inferred from the other walk columns: a first walk that failed after
-  /// committing a page leaves exactly the shape a restart does.
-  tracearrBackfillRestartedAt DateTime?
+  /// Set while some of this server's media rows are known to be missing and
+  /// only a complete library sync brings them back — after items were deleted
+  /// in bulk (a purge, disable-with-delete, a restore whose file lacked them, a
+  /// vanished-library purge) or while a library that held no items is being
+  /// populated for the first time (`requireLibraryResync`). Those items come
+  /// back as fresh rows with none of their plays, and a history pass that ran
+  /// before they existed could not attach any. So while this is set:
+  /// `watchHistorySyncedAt` cannot be re-established (native or Tracearr), the
+  /// evaluability guard refuses play-activity criteria for the server, and a
+  /// Tracearr archive walk is held. Not inferred from the other columns: a
+  /// first walk that failed after committing a page leaves exactly the shape a
+  /// restart does.
+  ///
+  /// Holds the EARLIEST unreleased request: a later request leaves it as is
+  /// (and is noted in-process, so a sync whose pass began before that request
+  /// cannot release it). Every cause leaves the library it waits on with no
+  /// `MediaItem` created before its own instant, which is how a release tells
+  /// the libraries a hold waits for from those it left alone. Cleared by a
+  /// full, uncancelled library sync that brought every waited-for library back
+  /// (`releaseLibraryResyncHold`), or by the library-scoped sync that took a
+  /// library's own population hold once that library is synced
+  /// (`releaseOwnPopulationHold`). A mapping change does NOT clear it: the hold
+  /// is about the library, not the mapping.
+  libraryResyncRequiredAt DateTime?
+  /// Bumped by every change of `tracearrServerId` (the server PUT), including
+  /// an unlink and a re-link to the same Tracearr server. Every write the
+  /// Tracearr importer makes is conditional on the mapping AND this version, so
+  /// a run that started before an unlink-and-relink cannot write the old walk's
+  /// state over the reset the relink made.
+  tracearrMappingVersion Int @default(0)
+  /// For a mapping with no stored Tracearr rows (so no `MAX(watchedAt)` to
+  /// derive the forward pass's `since` from): the instant every play started
+  /// before is known to have been read by some walk of this archive. Set when a
+  /// backfill walk starts from the newest play, moved to "now" by a restart, and
+  /// advanced by a healthy forward walk that read its whole window. Null for a
+  /// mapping never walked; reset whenever the mapping changes.
+  tracearrForwardWatermarkAt DateTime?
   /// Whether the one-time backfill of this server's Tracearr history has walked
   /// all the way to the oldest play.
   ///
@@ -389,6 +422,14 @@ model Library {
   type          LibraryType
   enabled       Boolean      @default(true)
   lastSyncedAt  DateTime?
+  /// When this library's last pass ended short of the server's reported total
+  /// but within the release tolerance, while a library-resync hold waited for
+  /// it. A hold counts such a library as synced only on the SECOND such pass
+  /// in a row — a server that over-reports is consistently short, a listing
+  /// cut short once is not. Persisted so the two passes may span a restart;
+  /// cleared by any other outcome of a pass, and by a pass that starts on an
+  /// empty library.
+  shortPassSeenAt DateTime?
   mediaItems    MediaItem[]
   createdAt     DateTime     @default(now())
   updatedAt     DateTime     @updatedAt
@@ -488,7 +529,10 @@ model MediaItem {
   lifecycleActions       LifecycleAction[]
   lifecycleExceptions    LifecycleException[]
   ruleMatches            RuleMatch[]
-  watchHistory           WatchHistory[]
+  watchHistory           WatchHistory[]        @relation("WatchHistoryItem")
+  /// Plays filed against another copy whose primary row is filed here — see
+  /// `WatchHistory.fanOutOfItemId`.
+  watchHistoryFanOutCopies WatchHistory[]      @relation("WatchHistoryFanOut")
   createdAt              DateTime              @default(now())
   updatedAt              DateTime              @updatedAt
 
@@ -849,7 +893,19 @@ model SavedQuery {
 model WatchHistory {
   id             String      @id @default(cuid())
   mediaItemId    String
-  mediaItem      MediaItem   @relation(fields: [mediaItemId], references: [id], onDelete: Cascade)
+  mediaItem      MediaItem   @relation("WatchHistoryItem", fields: [mediaItemId], references: [id], onDelete: Cascade)
+  /// Set on a row that duplicates a play also filed against ANOTHER copy of
+  /// the same item: the id of that copy (the primary row's `mediaItemId`).
+  /// Jellyfin/Emby can list one item in two libraries over the same folder,
+  /// and the native sync files the play against each copy so each reads as
+  /// watched to the rules — but a list of PLAYS must show it once, so the
+  /// History page, the series play lists and the watch analytics skip rows
+  /// where this is set. `SetNull`: if the primary copy is deleted, this row is
+  /// shown again — with two copies it is the play's one record; with three or
+  /// more every remaining copy's row is, so the play shows once per remaining
+  /// copy until the next native full replace re-points them.
+  fanOutOfItemId String?
+  fanOutOf       MediaItem?  @relation("WatchHistoryFanOut", fields: [fanOutOfItemId], references: [id], onDelete: SetNull)
   mediaServerId  String
   mediaServer    MediaServer @relation(fields: [mediaServerId], references: [id], onDelete: Cascade)
   serverUsername String
@@ -918,6 +974,9 @@ model WatchHistory {
 
   @@unique([mediaServerId, sourceEventId])
   @@index([mediaItemId])
+  // Backs the `SetNull` above: without it every MediaItem delete scans the
+  // whole table for fan-out copies pointing at it.
+  @@index([fanOutOfItemId])
   @@index([mediaServerId])
   @@index([serverUsername])
   @@index([watchedAt])

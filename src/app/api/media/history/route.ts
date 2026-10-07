@@ -6,6 +6,27 @@ import { appCache } from "@/lib/cache/memory-cache";
 import { jsonResponse } from "@/lib/api/json-response";
 import { clampSkip } from "@/lib/api/pagination";
 import { historySortSql } from "@/lib/media/history-sort";
+import { QUALITY_ORDER, resolutionLabelSql } from "@/lib/resolution";
+
+/**
+ * A play the native sync filed against several library copies of one item
+ * (Jellyfin/Emby can list an item in two libraries over the same folder) is
+ * stored once per copy, every row but the primary's pointing at the primary
+ * copy through `fanOutOfItemId`. Each copy has to read as watched to the
+ * per-item consumers (rules, play counts), but this route lists PLAYS, so it
+ * shows the primary row only. The rows of one play share its server, user,
+ * device and time, and their items are the same file, so every filter here
+ * keeps or drops them together. Deleting the primary's item cascades its row
+ * away and the FK's `SetNull` clears the pointer on EVERY remaining copy: with
+ * two copies the survivor is the play's only record and is listed once, but
+ * with three or more each survivor becomes a primary and the play is listed
+ * (and counted) once per remaining copy until the next native full replace
+ * re-points them — on Jellyfin/Emby every history sync is one — and for a
+ * set-aside user's rows, which a replace keeps as they are, until that user
+ * can be read again. Rare (three libraries over one folder) and self-healing,
+ * so it is documented rather than designed around.
+ */
+const PRIMARY_PLAY = `wh."fanOutOfItemId" IS NULL`;
 
 export async function GET(request: NextRequest) {
   const session = await getSession();
@@ -126,24 +147,43 @@ export async function GET(request: NextRequest) {
   }
 
   if (resolution) {
-    const RESOLUTION_DB_VALUES: Record<string, string[]> = {
-      "4K": ["4k", "2160", "2160p"],
-      "1080P": ["1080", "1080p"],
-      "720P": ["720", "720p"],
-      "480P": ["480", "480p"],
-      "SD": ["sd", "360", "360p"],
-    };
-    const vals = resolution.split("|").filter(Boolean);
-    // Expand display labels to all matching DB values
-    const dbVals = vals.flatMap((v) => RESOLUTION_DB_VALUES[v] ?? [v]);
-    if (dbVals.length === 1) {
-      itemConditions.push(`LOWER(mi."resolution") = LOWER($${paramIdx++})`);
-      params.push(dbVals[0]);
-    } else if (dbVals.length > 1) {
-      const placeholders = dbVals.map(() => `LOWER($${paramIdx++})`).join(",");
-      itemConditions.push(`LOWER(mi."resolution") IN (${placeholders})`);
-      params.push(...dbVals);
+    // A label matches every file the page SHOWS under that label: the same
+    // `resolutionLabelSql` the Resolution sort ranks by, the SQL twin of the
+    // page's `normalizeResolutionLabel`. A hand-kept list of raw values used
+    // to stand in for it and missed every non-standard height — `1024p`,
+    // `576`, `240` display and sort as 1080P / 480P / SD but matched none of
+    // those filters — and could not express `Other` at all. Any other value
+    // is a stored resolution, matched as written, ignoring case.
+    const labels = new Set<string>();
+    const stored: string[] = [];
+    for (const value of resolution.split("|").filter(Boolean)) {
+      const label = QUALITY_ORDER.find((l) => l.toLowerCase() === value.toLowerCase());
+      if (label) labels.add(label);
+      else stored.push(value);
     }
+    const matches: string[] = [];
+    if (labels.size > 0) {
+      const placeholders = [...labels].map(() => `$${paramIdx++}`).join(",");
+      // A label depends on the stored value alone, so it is computed once per
+      // DISTINCT stored resolution — a few dozen — not once per item: per item
+      // the regex CASE cost ~120 ms at 48k items, more than the whole query
+      // before it. `OFFSET 0` stops the planner pushing the CASE back below the
+      // DISTINCT (as it does unfenced). `COALESCE` on both sides lets a NULL
+      // resolution — labelled `Other`, like an empty one — match, which `IN`
+      // never does on its own.
+      matches.push(
+        `COALESCE(mi."resolution", '') IN (
+          SELECT COALESCE(d."resolution", '') FROM (SELECT DISTINCT "resolution" FROM "MediaItem" OFFSET 0) d
+          WHERE (${resolutionLabelSql('d."resolution"')}) IN (${placeholders}))`,
+      );
+      params.push(...labels);
+    }
+    if (stored.length > 0) {
+      const placeholders = stored.map(() => `LOWER($${paramIdx++})`).join(",");
+      matches.push(`LOWER(mi."resolution") IN (${placeholders})`);
+      params.push(...stored);
+    }
+    if (matches.length > 0) itemConditions.push(`(${matches.join(" OR ")})`);
   }
 
   if (dynamicRange) {
@@ -182,7 +222,7 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  const whereClause = [...conditions, ...itemConditions].join(" AND ");
+  const whereClause = [...conditions, PRIMARY_PLAY, ...itemConditions].join(" AND ");
 
   // Build ORDER BY — always sort server-side for paginated results. The
   // key → SQL map is a strict whitelist shared with the page
@@ -239,12 +279,25 @@ export async function GET(request: NextRequest) {
   // the join is one index probe per play, and without it the count is an
   // index-only scan. Measured at 141k plays: 65 ms → 9 ms for the unfiltered
   // page every History visit starts on.
+  //
+  // Without that join the fan-out copies are SUBTRACTED rather than filtered
+  // out (`PRIMARY_PLAY`): `fanOutOfItemId` is in no index that scan can use,
+  // so testing it on every play turned the index-only scan into a read of the
+  // whole heap. At 150k plays carrying Tracearr detail, with parallel query
+  // off: 41 ms before, 85 ms with the predicate, 43 ms as a subtraction — and
+  // a cold cache would read the ~160 MB heap instead of an index. The copies
+  // are found through the `fanOutOfItemId` index, so subtracting them costs
+  // about a millisecond per few thousand. With the join the heap is read
+  // anyway, and there the plain predicate is the cheaper form.
   const needsItemJoin = itemConditions.length > 0;
-  const countP = prisma.$queryRawUnsafe<[{ count: bigint }]>(
-    `SELECT COUNT(*) AS "count" FROM "WatchHistory" wh
-    ${needsItemJoin ? `JOIN "MediaItem" mi ON mi."id" = wh."mediaItemId"` : ""}
+  const playsFrom = `FROM "WatchHistory" wh
     JOIN "MediaServer" ms ON ms."id" = wh."mediaServerId"
-    WHERE ${whereClause}`,
+    WHERE ${conditions.join(" AND ")}`;
+  const countP = prisma.$queryRawUnsafe<[{ count: bigint }]>(
+    needsItemJoin
+      ? `SELECT COUNT(*) AS "count" ${fromClause}`
+      : `SELECT (SELECT COUNT(*) ${playsFrom})
+          - (SELECT COUNT(*) ${playsFrom} AND wh."fanOutOfItemId" IS NOT NULL) AS "count"`,
     ...params,
   );
 

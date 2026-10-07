@@ -10,11 +10,11 @@ import { invalidateMediaCaches } from "@/lib/cache/invalidate";
 import { eventBus } from "@/lib/events/event-bus";
 import {
   invalidateWatchHistoryEvidence,
-  restartTracearrBackfill,
+  requireLibraryResync,
 } from "@/lib/media/watch-evidence";
 import { hasRecentLogin } from "@/lib/auth/recent-login";
 import { reauthRequired } from "@/lib/auth/reauth";
-import { supersedeTracearrImports } from "@/lib/sync/tracearr-import-activity";
+import { retireTracearrImports } from "@/lib/sync/tracearr-import-activity";
 import { enqueueTracearrBackfill } from "@/lib/sync/tracearr-backfill-enqueue";
 
 const withoutTrailingSlash = (value: string) => value.replace(/\/+$/, "");
@@ -167,14 +167,26 @@ export async function PUT(
           tracearrOldestPlayAt: null,
           tracearrBackfillCursorAt: null,
           tracearrForwardFloorAt: null,
+          // ...and the stamp of the walk that recorded that floor.
+          tracearrForwardFloorRecordedAt: null,
           // "Walked and found nothing" described the OLD Tracearr server; the
           // new mapping is waiting for its first walk (the status readout
           // reports a never-walked mapping as pending, not as empty).
           tracearrBackfillLastWalkAt: null,
-          // `tracearrBackfillRestartedAt` is deliberately NOT cleared. The hold
-          // is about the LIBRARY, not the mapping: a purge left items missing
-          // until the next full sync re-adds them, and the new mapping's first
-          // walk would step over their plays exactly as the old one would have.
+          // So did the forward watermark — the instant every older play of the
+          // OLD archive had been read.
+          tracearrForwardWatermarkAt: null,
+          // Every change, an unlink and a re-link to the same Tracearr server
+          // included: the importer guards its writes on the mapping AND this
+          // version, so a run that started before an unlink-and-relink cannot
+          // write the old walk's state over the reset made here, which the
+          // mapping value alone (A again) would let through.
+          tracearrMappingVersion: { increment: 1 },
+          // `libraryResyncRequiredAt` is deliberately NOT cleared. The hold
+          // is about the LIBRARY, not the mapping: a purge (or a restore, or a
+          // library's first population) left items missing until a library
+          // sync adds them back, and the new mapping's first walk would step
+          // over their plays exactly as the old one would have.
           // It waits for that sync (Settings shows "starts after the next full
           // sync"); the sync's release queues the slice.
           // The wipe below empties the history, so it is unknown from the same
@@ -212,9 +224,15 @@ export async function PUT(
     // waiting on the other's server-row lock. The native writers' per-server
     // advisory lock is taken BEFORE the UPDATE for the same reason: they hold
     // it across their DELETE + INSERT and only ever take a KEY SHARE on the
-    // server row (which the UPDATE does not conflict with), so waiting for it
-    // first means a native full replace in flight finishes before the wipe
-    // rather than committing rows this DELETE could not see.
+    // server row (which the UPDATE does not conflict with), so a native write
+    // transaction already holding it commits before the wipe rather than
+    // committing rows this DELETE could not see. That covers the write, not
+    // the run: a native sync FETCHES for tens of seconds before it takes the
+    // lock, so a run that read the server as unmapped can reach its write
+    // after this commit. What keeps it from writing native rows under the new
+    // mapping (or deleting the imported ones) is that the native writers
+    // re-read `tracearrServerId` once they hold the lock and write nothing if
+    // the server has been mapped meanwhile.
     let wiped = 0;
     if (mappingChanged) {
       ({ count: wiped } = await tx.watchHistory.deleteMany({
@@ -259,8 +277,10 @@ export async function PUT(
     // A run of the OLD mapping may still be paging (a slice, a History-page
     // Refresh): its next write will refuse, but until it ends its live
     // readout would be reported against the new mapping — counts, and a
-    // backfill reach measured on a different Tracearr server's archive.
-    supersedeTracearrImports(server.id);
+    // backfill reach measured on a different Tracearr server's archive. So it
+    // is retired: hidden from the status readout, not merely stripped of its
+    // reach as a restart does (that run's writes stay valid; this one's don't).
+    retireTracearrImports(server.id);
 
     // Mark the server as un-evidenced until a sync refills it. An empty
     // `WatchHistory` is indistinguishable from "nobody watched anything", and
@@ -304,21 +324,28 @@ export async function PUT(
     const libraryIds = libraries.map((l) => l.id);
 
     if (libraryIds.length > 0) {
+      // The item delete cascades through `WatchHistory.mediaItem`, so this
+      // server's plays go as well. The server row itself survives a disable,
+      // so it will be re-enabled and re-synced later as fresh items with no
+      // plays — hold its play history until a complete library sync has
+      // re-added them, or `watchedByUser` and play-count rules read that
+      // emptiness as "nobody watched anything". Taken BEFORE the delete, so a
+      // history pass already running cannot vouch for the gap; a
+      // Tracearr-mapped server's archive walk restarts with it, to bring its
+      // plays back once the items exist again.
+      await requireLibraryResync([server.id]);
       await prisma.lifecycleAction.deleteMany({
         where: { mediaItem: { libraryId: { in: libraryIds } } },
       });
       await prisma.mediaItem.deleteMany({
         where: { libraryId: { in: libraryIds } },
       });
-      // The item delete cascades through `WatchHistory.mediaItem`, so this
-      // server's plays are gone as well. The server row itself survives a
-      // disable, so it will be re-enabled and re-synced later with an empty
-      // history — mark it un-evidenced so `watchedByUser` rules do not read
-      // that emptiness as "nobody watched anything".
-      await invalidateWatchHistoryEvidence([server.id]);
-      // A Tracearr-mapped server gets its plays back from Tracearr once it is
-      // re-enabled and re-synced — but only if the archive walk runs again.
-      await restartTracearrBackfill([server.id]);
+      // Shortfalls recorded against the rows just deleted must not count
+      // toward releasing the hold (see `Library.shortPassSeenAt`).
+      await prisma.library.updateMany({
+        where: { id: { in: libraryIds } },
+        data: { shortPassSeenAt: null },
+      });
     }
 
     apiLogger.info(

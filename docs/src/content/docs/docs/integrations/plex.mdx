@@ -76,6 +76,13 @@ Librariarr fetches comprehensive metadata for each media item:
 - **File info**: size, format, and location
 - **External IDs**: TMDB, TVDB, and IMDB (used to match with Sonarr/Radarr)
 
+### Watch History
+
+Watch history is read from Plex's server-wide play history, so a play by any account on the server counts. Two safeguards keep a bad answer from overwriting what is already stored:
+
+- If the history listing ends well short of the number of plays Plex reports (an empty page from a struggling server or a proxy), the sync fails and the stored history is left as it was, rather than replaced with only the plays that arrived. A small shortfall is accepted and logged.
+- If Plex cannot list its devices during a sync, each play keeps the device and platform already stored for it instead of losing them.
+
 ### Dynamic Range Detection
 
 Dynamic range is detected from a combination of stream metadata and filename patterns:

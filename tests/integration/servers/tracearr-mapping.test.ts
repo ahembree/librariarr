@@ -45,11 +45,16 @@ vi.mock("@/lib/jobs/client", () => ({ enqueueJob: mockEnqueueJob }));
 
 // Import route handlers AFTER mocks
 import { PUT } from "@/app/api/servers/[id]/route";
-import { restartTracearrBackfill } from "@/lib/media/watch-evidence";
+import {
+  markWatchHistoryEstablishedIfUnchanged,
+  requireLibraryResync,
+  snapshotWatchEvidence,
+} from "@/lib/media/watch-evidence";
 import {
   beginTracearrImport,
   endTracearrImport,
   getTracearrBackfillReach,
+  getTracearrImportActivity,
   recordTracearrImportPage,
 } from "@/lib/sync/tracearr-import-activity";
 
@@ -302,6 +307,7 @@ describe("PUT /api/servers/[id] — Tracearr mapping", () => {
         tracearrOldestPlayAt: new Date("2019-01-01T00:00:00Z"),
         tracearrBackfillCursorAt: new Date("2020-01-01T00:00:00Z"),
         tracearrForwardFloorAt: new Date("2026-01-01T00:00:00Z"),
+        tracearrForwardFloorRecordedAt: new Date("2026-01-01T01:00:00Z"),
       },
     });
     setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
@@ -315,6 +321,8 @@ describe("PUT /api/servers/[id] — Tracearr mapping", () => {
     expect(stored.tracearrOldestPlayAt).toBeNull();
     expect(stored.tracearrBackfillCursorAt).toBeNull();
     expect(stored.tracearrForwardFloorAt).toBeNull();
+    // ...and the stamp of the walk that recorded that floor, with it.
+    expect(stored.tracearrForwardFloorRecordedAt).toBeNull();
   });
 
   it("withdraws the established marker in the same write that switches the source", async () => {
@@ -641,8 +649,11 @@ describe("PUT /api/servers/[id] — Tracearr mapping", () => {
 
       await expectJson(await putMapping(server.id, { tracearrServerId: TRACEARR_SERVER_B }), 200);
 
-      // The old archive's reach must not be reported against the new mapping.
+      // The old archive's reach must not be reported against the new mapping,
+      // and nor must the run itself: its writes are refused from here on
+      // (a restart, by contrast, keeps its run reported without the reach).
       expect(getTracearrBackfillReach(server.id)).toBeNull();
+      expect(getTracearrImportActivity(server.id)).toBeNull();
     } finally {
       endTracearrImport(run);
     }
@@ -653,23 +664,192 @@ describe("PUT /api/servers/[id] — Tracearr mapping", () => {
     expect(stored.tracearrBackfillLastWalkAt).toBeNull();
   });
 
-  it("keeps a restart hold across a mapping change", async () => {
+  it("keeps a library-resync hold across a mapping change, and an unlink", async () => {
     // The hold is about the purged library, not the mapping: the new mapping's
     // first walk would step over the missing items' plays just the same, so it
     // waits for the full sync that re-adds them.
     const user = await createTestUser();
     const server = await createTestServer(user.id, { tracearrServerId: TRACEARR_SERVER_A });
-    const { restartTracearrBackfill } = await import("@/lib/media/watch-evidence");
-    await restartTracearrBackfill([server.id]);
+    await requireLibraryResync([server.id]);
+    const held = (await prisma.mediaServer.findUniqueOrThrow({ where: { id: server.id } }))
+      .libraryResyncRequiredAt;
+    expect(held).toBeInstanceOf(Date);
     setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
 
     await expectJson(await putMapping(server.id, { tracearrServerId: TRACEARR_SERVER_A }), 200);
     const unchanged = await prisma.mediaServer.findUniqueOrThrow({ where: { id: server.id } });
-    expect(unchanged.tracearrBackfillRestartedAt).not.toBeNull();
+    expect(unchanged.libraryResyncRequiredAt).toEqual(held);
 
     await expectJson(await putMapping(server.id, { tracearrServerId: TRACEARR_SERVER_B }), 200);
     const changed = await prisma.mediaServer.findUniqueOrThrow({ where: { id: server.id } });
-    expect(changed.tracearrBackfillRestartedAt).not.toBeNull();
+    expect(changed.libraryResyncRequiredAt).toEqual(held);
+
+    await expectJson(await putMapping(server.id, { tracearrServerId: null }), 200);
+    const unlinked = await prisma.mediaServer.findUniqueOrThrow({ where: { id: server.id } });
+    expect(unlinked.libraryResyncRequiredAt).toEqual(held);
+  });
+
+  describe("the mapping version and the forward watermark", () => {
+    const readVersion = async (id: string) =>
+      (await prisma.mediaServer.findUniqueOrThrow({ where: { id } })).tracearrMappingVersion;
+
+    it("bumps the version on a link, a re-point and an unlink — and on a re-link to the same server", async () => {
+      // The importer guards every write on the mapping AND this version: an
+      // unlink-and-relink to the same Tracearr server leaves the mapping value
+      // as it was, so only the version tells a slice that started before it
+      // that its walk state was reset underneath it.
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      expect(await readVersion(server.id)).toBe(0);
+
+      await expectJson(await putMapping(server.id, { tracearrServerId: TRACEARR_SERVER_A }), 200);
+      expect(await readVersion(server.id)).toBe(1);
+      await expectJson(await putMapping(server.id, { tracearrServerId: TRACEARR_SERVER_B }), 200);
+      expect(await readVersion(server.id)).toBe(2);
+      await expectJson(await putMapping(server.id, { tracearrServerId: null }), 200);
+      expect(await readVersion(server.id)).toBe(3);
+      await expectJson(await putMapping(server.id, { tracearrServerId: TRACEARR_SERVER_B }), 200);
+      expect(await readVersion(server.id)).toBe(4);
+    });
+
+    it("leaves the version alone on a re-save of the same mapping, an empty string on a native server and unrelated edits", async () => {
+      const user = await createTestUser();
+      const mapped = await createTestServer(user.id, { tracearrServerId: TRACEARR_SERVER_A });
+      const native = await createTestServer(user.id);
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      await expectJson(await putMapping(mapped.id, { tracearrServerId: TRACEARR_SERVER_A }), 200);
+      await expectJson(await putMapping(mapped.id, { externalUrl: "https://plex.example.com" }), 200);
+      await expectJson(await putMapping(mapped.id, { enabled: false }), 200);
+      await expectJson(await putMapping(mapped.id, { enabled: true }), 200);
+      await expectJson(await putMapping(native.id, { tracearrServerId: "" }), 200);
+
+      expect(await readVersion(mapped.id)).toBe(0);
+      expect(await readVersion(native.id)).toBe(0);
+    });
+
+    it("refuses to bump the version when the mapping is refused as taken", async () => {
+      const user = await createTestUser();
+      await createTestServer(user.id, { name: "Owner", tracearrServerId: TRACEARR_SERVER_A });
+      const other = await createTestServer(user.id, { name: "Other" });
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      await expectJson(await putMapping(other.id, { tracearrServerId: TRACEARR_SERVER_A }), 409);
+
+      expect(await readVersion(other.id)).toBe(0);
+    });
+
+    it("resets the forward watermark on every mapping change, unlink included", async () => {
+      // It records how far the OLD archive's plays had been read.
+      const user = await createTestUser();
+      const server = await createTestServer(user.id, { tracearrServerId: TRACEARR_SERVER_A });
+      const watermark = new Date("2026-02-01T00:00:00Z");
+      const setWatermark = () =>
+        prisma.mediaServer.update({
+          where: { id: server.id },
+          data: { tracearrForwardWatermarkAt: watermark },
+        });
+      const readWatermark = async () =>
+        (await prisma.mediaServer.findUniqueOrThrow({ where: { id: server.id } })).tracearrForwardWatermarkAt;
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      await setWatermark();
+      await expectJson(await putMapping(server.id, { tracearrServerId: TRACEARR_SERVER_A }), 200);
+      expect(await readWatermark()).toEqual(watermark);
+
+      await expectJson(await putMapping(server.id, { tracearrServerId: TRACEARR_SERVER_B }), 200);
+      expect(await readWatermark()).toBeNull();
+
+      await setWatermark();
+      await expectJson(await putMapping(server.id, { tracearrServerId: null }), 200);
+      expect(await readWatermark()).toBeNull();
+    });
+  });
+
+  describe("disabling with deleteData", () => {
+    afterAll(async () => {
+      await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS put_record_hold ON "MediaItem"`);
+      await prisma.$executeRawUnsafe(`DROP TABLE IF EXISTS "_put_hold_at_delete"`);
+    });
+
+    it("holds the server before deleting its items, withdraws its marker and restarts a mapped walk", async () => {
+      const user = await createTestUser();
+      const established = new Date("2026-01-01T00:00:00Z");
+      const server = await createTestServer(user.id, {
+        tracearrServerId: TRACEARR_SERVER_A,
+        tracearrBackfillComplete: true,
+        watchHistorySyncedAt: established,
+      });
+      await seedWatchHistory(server.id, 2);
+      // A shortfall recorded against the rows about to be deleted.
+      await prisma.library.updateMany({ where: { mediaServerId: server.id }, data: { shortPassSeenAt: new Date() } });
+      // A history pass that started before the disable, still fetching.
+      const inFlight = snapshotWatchEvidence(server.id, established);
+      // Records the server's hold at the moment each item row is deleted.
+      await prisma.$executeRawUnsafe(
+        `CREATE TABLE IF NOT EXISTS "_put_hold_at_delete" ("mediaItemId" text, "hold" timestamp(3))`,
+      );
+      await prisma.$executeRawUnsafe(`TRUNCATE "_put_hold_at_delete"`);
+      await prisma.$executeRawUnsafe(`
+        CREATE OR REPLACE FUNCTION _put_record_hold() RETURNS trigger AS $$
+        BEGIN
+          INSERT INTO "_put_hold_at_delete"
+            SELECT OLD."id", ms."libraryResyncRequiredAt"
+              FROM "Library" l JOIN "MediaServer" ms ON ms."id" = l."mediaServerId"
+             WHERE l."id" = OLD."libraryId";
+          RETURN OLD;
+        END $$ LANGUAGE plpgsql`);
+      await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS put_record_hold ON "MediaItem"`);
+      await prisma.$executeRawUnsafe(
+        `CREATE TRIGGER put_record_hold BEFORE DELETE ON "MediaItem" FOR EACH ROW EXECUTE FUNCTION _put_record_hold()`,
+      );
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      const before = Date.now();
+
+      try {
+        await expectJson(await putMapping(server.id, { enabled: false, deleteData: true }), 200);
+      } finally {
+        await prisma.$executeRawUnsafe(`DROP TRIGGER IF EXISTS put_record_hold ON "MediaItem"`);
+      }
+
+      const atDelete = await prisma.$queryRawUnsafe<{ hold: Date | null }[]>(
+        `SELECT "hold" FROM "_put_hold_at_delete"`,
+      );
+      expect(atDelete).toHaveLength(1);
+      expect(atDelete[0].hold).toBeInstanceOf(Date);
+      expect(await prisma.mediaItem.count({ where: { library: { mediaServerId: server.id } } })).toBe(0);
+
+      const row = await prisma.mediaServer.findUniqueOrThrow({ where: { id: server.id } });
+      expect(row.libraryResyncRequiredAt).toBeInstanceOf(Date);
+      expect(row.watchHistorySyncedAt).toBeNull();
+      expect(row.tracearrBackfillComplete).toBe(false);
+      expect(row.tracearrBackfillCursorAt!.getTime()).toBeGreaterThanOrEqual(before - 5);
+      expect(row.tracearrForwardWatermarkAt).toEqual(row.tracearrBackfillCursorAt);
+      await expect(markWatchHistoryEstablishedIfUnchanged(inFlight)).resolves.toBe(false);
+      // ...and it must not count toward releasing the hold its refill waits on.
+      expect(
+        (await prisma.library.findMany({ where: { mediaServerId: server.id } })).map((l) => l.shortPassSeenAt),
+      ).toEqual([null]);
+    });
+
+    it("holds nothing when the server has no libraries to purge, or is only disabled", async () => {
+      const user = await createTestUser();
+      const bare = await createTestServer(user.id, { name: "Bare" });
+      const kept = await createTestServer(user.id, { name: "Kept" });
+      await seedWatchHistory(kept.id, 1);
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      await expectJson(await putMapping(bare.id, { enabled: false, deleteData: true }), 200);
+      await expectJson(await putMapping(kept.id, { enabled: false }), 200);
+
+      for (const id of [bare.id, kept.id]) {
+        const row = await prisma.mediaServer.findUniqueOrThrow({ where: { id } });
+        expect(row.libraryResyncRequiredAt).toBeNull();
+        expect(row.watchHistorySyncedAt).not.toBeNull();
+      }
+      expect(await countHistory(kept.id)).toBe(1);
+    });
   });
 
   it("re-saving the same mapping keeps the last-walk marker", async () => {
@@ -832,7 +1012,7 @@ describe("PUT /api/servers/[id] — Tracearr mapping", () => {
         where: { id: partial.id },
         data: { enabled: false, tracearrBackfillLastWalkAt: new Date() },
       });
-      await restartTracearrBackfill([partial.id]);
+      await requireLibraryResync([partial.id]);
       await expectJson(await putMapping(partial.id, { enabled: true }), 200);
       expect(backfillEnqueues()).toEqual([]);
     });

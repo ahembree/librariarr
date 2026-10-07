@@ -29,6 +29,7 @@ import {
   Loader2,
   RefreshCw,
   Search,
+  SearchX,
   Square,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -60,6 +61,8 @@ import {
   isImportPending,
   type TracearrImportStatus,
 } from "@/lib/media/history-import-status";
+import { ResponseOrder } from "@/lib/media/response-order";
+import { historyFilterParams, historyFiltersActive, historyTableView } from "@/lib/media/history-filters";
 
 // ── Types ────────────────────────────────────────────────────────
 
@@ -669,12 +672,18 @@ export default function HistoryPage() {
         sortBy,
         sortOrder,
       });
-      if (debouncedSearch) params.set("search", debouncedSearch);
-      if (selectedServerId !== "all") params.set("serverId", selectedServerId);
-      if (selectedTypes.size > 0) params.set("type", [...selectedTypes].join("|"));
-      if (selectedUsernames.size > 0) params.set("username", [...selectedUsernames].join("|"));
-      if (selectedPlatforms.size > 0) params.set("platform", [...selectedPlatforms].join("|"));
-      if (selectedResolutions.size > 0) params.set("resolution", [...selectedResolutions].join("|"));
+      // The same list the empty state reads to decide whether filters are
+      // narrowing the answer (`filtersActive` below).
+      for (const [key, value] of historyFilterParams({
+        search: debouncedSearch,
+        serverId: selectedServerId,
+        types: selectedTypes,
+        usernames: selectedUsernames,
+        platforms: selectedPlatforms,
+        resolutions: selectedResolutions,
+      })) {
+        params.set(key, value);
+      }
 
       const load = async (target: number) => {
         params.set("page", String(target));
@@ -767,6 +776,9 @@ export default function HistoryPage() {
 
   // ── Tracearr import progress ───────────────────────────────────
 
+  // Orders the overlapping import-status reads (see below).
+  const [importStatusOrder] = useState(() => new ResponseOrder());
+
   /**
    * Asks whether any mapped server is still importing. The endpoint reports
    * only Tracearr-mapped servers, so a setup with no Tracearr answers with an
@@ -782,12 +794,23 @@ export default function HistoryPage() {
    * flag it cleared also gated the poll, so nothing ever asked again even
    * though the backfill was still running. It stays silent either way: this is
    * a background note about someone else's job, never an error toast.
+   *
+   * Four triggers call this independently — the mount read, the poll, the
+   * realtime events and the re-check after a sync — so reads overlap, and only
+   * an answer no newer answer has overtaken may apply (`importStatusOrder`).
+   * Without that, a slow "pending" read landing after a newer "settled" one
+   * brought the note back and re-armed the poll.
    */
   const fetchImportBackfillPending = useCallback(async () => {
+    const seq = importStatusOrder.begin();
     try {
       const res = await fetch("/api/integrations/tracearr/status");
       if (!res.ok) return;
       const data = (await res.json()) as { servers?: TracearrImportStatus[] };
+      // After the last await, right before the answer is applied. A failed
+      // read above never gets here, so it cannot block an older answer that
+      // is still on its way — that one is the newest known state.
+      if (!importStatusOrder.accept(seq)) return;
       const pending = (data.servers ?? []).filter(isImportPending);
       setImportBackfillPending(pending.length > 0);
       // Recomputed from every successful read rather than latched, so a backfill
@@ -805,7 +828,7 @@ export default function HistoryPage() {
       // note (and its percentage) keeps saying whatever the last successful
       // read said, and the poll stays armed to ask again.
     }
-  }, []);
+  }, [importStatusOrder]);
 
   useEffect(() => {
     // Kicked off from an async IIFE (the idiom the initial-load effects use)
@@ -1026,6 +1049,41 @@ export default function HistoryPage() {
       return next;
     });
   };
+
+  /**
+   * The "No plays match these filters" way out. The debounced search is
+   * cleared too, so the list reloads once with every filter gone instead of
+   * once now and again when the debounce catches up; a set that is already
+   * empty keeps its identity so it does not count as a change.
+   */
+  const clearFilters = useCallback(() => {
+    setSearch("");
+    setDebouncedSearch("");
+    setSelectedServerId("all");
+    setSelectedTypes((prev) => (prev.size === 0 ? prev : new Set()));
+    setSelectedUsernames((prev) => (prev.size === 0 ? prev : new Set()));
+    setSelectedPlatforms((prev) => (prev.size === 0 ? prev : new Set()));
+  }, []);
+
+  // The filters the shown answer was fetched under: the debounced search, not
+  // the box, so a search still being typed doesn't relabel an answer that
+  // predates it.
+  const filtersActive = historyFiltersActive({
+    search: debouncedSearch,
+    serverId: selectedServerId,
+    types: selectedTypes,
+    usernames: selectedUsernames,
+    platforms: selectedPlatforms,
+    resolutions: selectedResolutions,
+  });
+  const tableView = historyTableView({
+    loading,
+    loadError,
+    rowCount: items.length,
+    totalCount,
+    filtersActive,
+    historyHasPlays: usernames.length > 0,
+  });
 
   // ── Detail panel ──────────────────────────────────────────────
 
@@ -1302,9 +1360,9 @@ export default function HistoryPage() {
           {/* Table. The skeleton is for a first load only: a refresh (every
               backfill slice) or a filter change dims the rows in place
               instead of blanking the table. */}
-          {loading && items.length === 0 ? (
+          {tableView === "loading" ? (
             <TableRowsSkeleton rows={10} columns={5} />
-          ) : loadError && items.length === 0 ? (
+          ) : tableView === "error" ? (
             <EmptyState
               icon={AlertTriangle}
               title="Couldn't load watch history"
@@ -1316,7 +1374,18 @@ export default function HistoryPage() {
                 </Button>
               }
             />
-          ) : items.length === 0 && totalCount === 0 ? (
+          ) : tableView === "no-matches" ? (
+            <EmptyState
+              icon={SearchX}
+              title="No plays match these filters"
+              description="Nothing in your watch history matches the search and filters above."
+              action={
+                <Button variant="outline" size="sm" onClick={clearFilters}>
+                  Clear filters
+                </Button>
+              }
+            />
+          ) : tableView === "no-history" ? (
             <EmptyState
               icon={History}
               title="No watch history"

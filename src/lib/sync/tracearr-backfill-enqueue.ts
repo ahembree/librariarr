@@ -32,15 +32,18 @@ export function tracearrBackfillJobKey(serverId: string): string {
  *  - holding items in an enabled library — the importer refuses to walk into
  *    an empty library (no play could be attributed), and the first sync's
  *    watch-history step queues the slice once there is something to join to;
- *  - NOT held after `restartTracearrBackfill` (`tracearrBackfillRestartedAt`
- *    set): a purge or a restore removed items the archive's plays belong to,
- *    and a walk run before the re-sync brings them back skips those plays as
- *    unresolved and can mark the archive complete without them — for good.
- *    The full sync that releases the hold queues that walk, after the items.
- *    Read from the recorded restart, never inferred from the walk columns: a
- *    first walk that failed after committing a page has the same cursor-set,
- *    never-walked shape, and refusing it left it waiting on a full sync that
- *    may never come.
+ *  - NOT held by `requireLibraryResync` (`libraryResyncRequiredAt` set): a
+ *    purge, a restore, disable-with-delete or a vanished library removed items
+ *    the archive's plays belong to, or a library that held nothing is being
+ *    populated for the first time, and a walk run before the library sync that
+ *    brings those items in skips their plays as unresolved and can mark the
+ *    archive complete without them — for good. The sync that releases the
+ *    hold — a full sync that brought every needed library back, or the
+ *    library-scoped sync that took a library's own population hold — queues
+ *    that walk, after the items. Read from the recorded hold, never inferred
+ *    from the walk columns: a first walk that failed after committing a page
+ *    has the same cursor-set, never-walked shape as a restart, and refusing it
+ *    left it waiting on a sync that may never come.
  *
  * Best-effort: never throws. A failed read or enqueue is logged and leaves the
  * import to the next watch-history sync, exactly as before. Returns the ids
@@ -60,8 +63,8 @@ export async function enqueueTracearrBackfill(
         tracearrServerId: { not: null },
         user: { tracearrInstances: { some: { enabled: true } } },
         libraries: { some: { enabled: true, mediaItems: { some: {} } } },
-        // The restart hold — see above.
-        tracearrBackfillRestartedAt: null,
+        // The library-resync hold — see above.
+        libraryResyncRequiredAt: null,
       },
       select: { id: true },
     });

@@ -50,23 +50,57 @@ export type RuleEvaluability =
  * all — and they must refuse under identical conditions or the looser one
  * becomes the way around the stricter one.
  *
- * A server is NOT established when either holds:
+ * A server is NOT established when any of these holds — listed in the order a
+ * refusal names them, which is the order their remedies have to happen in:
  *
- *  - `watchHistorySyncedAt` is null. No sync has ever established its history,
- *    or something invalidated it since — a source switch, a library or
- *    type-wide purge, a disable-with-delete-data, or a backup restore. This is
- *    also the state a brand-new server starts in, which is the point: absence
- *    of evidence is not evidence of absence, and the default has to say so.
+ *  - `libraryResyncRequiredAt` is set (`requireLibraryResync`). Some of its
+ *    media rows are known to be missing — a purge, a disable-with-delete-data,
+ *    a backup restore or a vanished library removed them, or a library is being
+ *    populated for the first time — and they come back as fresh rows with none
+ *    of their plays. Checked on its own rather than through the marker: the
+ *    hold says the gap is unclosed whatever the marker reads, and its remedy is
+ *    a complete library sync, which nothing else substitutes for.
  *  - It is Tracearr-mapped with `tracearrBackfillComplete` false. History
  *    exists but is incomplete: the archive walk runs newest-first over minutes
  *    to hours, so an item last played long ago still looks never-watched until
- *    the walk reaches back that far.
+ *    the walk reaches back that far. Every hold restarts it (and its release
+ *    nulls the marker), so this is what a mapped server shows after the
+ *    library sync — and only the walk's completion re-establishes the marker
+ *    there: a History-page Refresh runs just the forward catch-up.
+ *  - `watchHistorySyncedAt` is null. No sync has ever established its history,
+ *    or something invalidated it since — a source switch, a purge of a
+ *    disabled library, a hold just released on a native server, a Tracearr
+ *    sync that could not attribute plays (no account map), or a native full
+ *    replace that began without a marker and had to set aside a Jellyfin/Emby
+ *    user whose played items it could not read (and who has no stored rows):
+ *    that one a Refresh does not lift, so the reason says to look at System
+ *    Logs, which name the user and what to change. This is also the state a
+ *    brand-new server starts in, which is the point: absence of evidence is
+ *    not evidence of absence, and the default has to say so. The next
+ *    successful watch-history sync lifts it.
+ *  - It is Tracearr-mapped with `tracearrForwardFloorAt` set: a stretch of
+ *    RECENT plays is known to be unread. The importer records the floor before
+ *    a forward walk's first page with a new play and clears it when the walk
+ *    finishes, so it is set for the length of every forward import that finds
+ *    something — seconds, or minutes after downtime — and stays set when one
+ *    is interrupted (or wrote plays it could not attribute) until the next
+ *    resumes it. The marker from before that walk still stands, so only this
+ *    clause sees the gap, and refusing while it lasts is deliberate: an item
+ *    played only in that stretch reads as unplayed until the walk reads it.
  *
- * Always transient: it resolves the moment a sync establishes the history (or
- * the backfill finishes), so callers skip/refuse rather than disarming
- * anything. Note that a server nobody has ever watched anything on settles
- * correctly — its sync finds no plays, marks the history established, and
- * `playCount = 0` then legitimately matches everything on it.
+ * Never permanent, but not necessarily short: each fault lifts once its remedy
+ * happens (a library sync releases the hold, the import finishes, a sync
+ * establishes the history, the forward walk reads the gap), and that can take
+ * hours — a Tracearr re-walk — or stay out of reach indefinitely: a library the
+ * hold waits for that no sync can complete (the server lists it as empty while
+ * it holds rows, or far short of its total), an import that is paused. So
+ * callers refuse rather than disarm: detection skips the rule set and KEEPS its
+ * matches and PENDING actions. Those matches are then frozen at their last
+ * evaluation, which is why the executors hold such a rule set's actions too
+ * (`checkPlayActivityExecutable` below) rather than act on them. Note that a
+ * server nobody has ever watched anything on settles correctly — its sync
+ * finds no plays, marks the history established, and `playCount = 0` then
+ * legitimately matches everything on it.
  *
  * @param serverIds The servers the caller actually reads (a rule set's
  *   `serverIds`, a query's `serverIds`). Empty or omitted means "every server",
@@ -81,27 +115,32 @@ export async function checkWatchHistoryCompleteness(
 ): Promise<{ complete: true } | { complete: false; incomplete: number; reason: string }> {
   const scope = serverIds && serverIds.length > 0 ? { id: { in: serverIds } } : {};
 
-  // `findMany`, not `count`: the two clauses below are different faults with
-  // different remedies, and a bare tally could distinguish neither. "N server(s)
-  // ... never synced, recently cleared, or still importing" is unactionable —
-  // it names no server and offers three mutually exclusive explanations, so a
-  // user whose import genuinely finished has no way to tell which one applies,
-  // or that none of them do. Naming the server and its specific fault is what
-  // makes a refusal something the user can act on rather than wait out.
+  // `findMany`, not `count`: the clauses below are different faults with
+  // different remedies, and a bare tally could distinguish none of them. "N
+  // server(s) ... never synced, recently cleared, or still importing" is
+  // unactionable — it names no server and offers mutually exclusive
+  // explanations, so a user whose import genuinely finished has no way to tell
+  // which one applies, or that none of them do. Naming the server and its
+  // specific fault is what makes a refusal something the user can act on
+  // rather than wait out.
   const servers = await prisma.mediaServer.findMany({
     where: {
       userId,
       enabled: true,
       ...scope,
       OR: [
-        { watchHistorySyncedAt: null },
+        { libraryResyncRequiredAt: { not: null } },
         { tracearrServerId: { not: null }, tracearrBackfillComplete: false },
+        { watchHistorySyncedAt: null },
+        { tracearrServerId: { not: null }, tracearrForwardFloorAt: { not: null } },
       ],
     },
     select: {
       name: true,
+      libraryResyncRequiredAt: true,
       watchHistorySyncedAt: true,
       tracearrServerId: true,
+      tracearrForwardFloorAt: true,
       tracearrBackfillComplete: true,
     },
     orderBy: { name: "asc" },
@@ -109,22 +148,51 @@ export async function checkWatchHistoryCompleteness(
 
   if (servers.length === 0) return { complete: true };
 
+  // One fault per server — the first that applies, in the order the remedies
+  // have to happen: a library sync before anything else (nothing else lifts
+  // the hold, and its release restarts a mapped server's import and nulls the
+  // marker); then a mapped server's unfinished archive walk, because its
+  // completion is what re-establishes the marker there, so "run a Refresh"
+  // would send the user to a sync that cannot help; then the marker, which the
+  // next watch-history sync lifts; then a forward gap, which clears when the
+  // import reading it completes.
   const faults = servers.map((server) => {
-    // Checked first because it is the one that is NOT resolved by waiting. A
-    // Tracearr-mapped server whose archive walk has finished but whose marker
-    // was withdrawn (a source switch, a purge, a restore, or a sync that could
-    // not load Tracearr's account map) needs its next successful sync, not
-    // patience with an import that already completed.
+    const mapped = server.tracearrServerId != null;
+    if (server.libraryResyncRequiredAt != null) {
+      return (
+        `"${server.name}" (some of its media was removed in bulk or is being added ` +
+        `for the first time — a purge, a restore, or a library's first sync — and ` +
+        `play history waits for a complete library sync of this server; run Sync on ` +
+        `it under Settings → Servers, and if this stays, System Logs name the library ` +
+        `it is still waiting for` +
+        (mapped
+          ? `; after that sync, the Tracearr history import it restarted has to read back ` +
+            `through the archive before play history counts again)`
+          : `)`)
+      );
+    }
+    if (mapped && !server.tracearrBackfillComplete) {
+      return (
+        `"${server.name}" (its Tracearr history import has not finished walking ` +
+        `back through the archive — it starts over after a purge, a restore or a ` +
+        `library's first sync; this clears when the import completes, and Settings → ` +
+        `Servers shows its progress, or why it is paused)`
+      );
+    }
     if (server.watchHistorySyncedAt === null) {
       return (
         `"${server.name}" (no sync has established what was played there — it has ` +
-        `never synced, or the history was cleared by a watch-history source ` +
-        `change, a purge, or a backup restore)`
+        `never synced, its history was cleared (a watch-history source change, a ` +
+        `purge, a backup restore), or a sync could not attribute every play; the ` +
+        `next successful watch-history sync establishes it — run one from Library → ` +
+        `History → Refresh. If a user's play history could not be read, System Logs ` +
+        `name the user and what to change; a Refresh does not lift that one)`
       );
     }
     return (
-      `"${server.name}" (its Tracearr history import has not finished walking ` +
-      `back through the archive)`
+      `"${server.name}" (a Tracearr import is reading recent plays, or one was ` +
+      `interrupted before it finished; this clears when that import completes — ` +
+      `the next watch-history sync resumes an interrupted one)`
     );
   });
 
@@ -214,4 +282,31 @@ export async function checkLifecycleRuleEvaluability(
   }
 
   return { evaluable: true };
+}
+
+/**
+ * Whether a rule set's ARMED actions may run now, as far as play history goes:
+ * `null` when they may, else the refusal (the guard's reason).
+ *
+ * Detection skips a rule set whose play-activity criteria cannot be answered
+ * (`checkLifecycleRuleEvaluability`) and keeps its matches and PENDING actions
+ * as they were, so while the refusal lasts those matches are frozen at their
+ * last evaluation — and an item watched since, which the next detection would
+ * drop, keeps its match, which is exactly what every execution path checks
+ * before it acts. Executing then acts on an answer the guard refuses to give
+ * now. So the scheduled executor leaves such a rule set's actions PENDING and
+ * the user-initiated paths (Execute on the Pending page and its `/api/v1`
+ * mirror, force-retry) refuse with this reason, as the query page's actions
+ * already do. A rule set that reads no play activity is unaffected.
+ *
+ * @param serverIds The rule set's `serverIds`, exactly as detection scopes it.
+ */
+export async function checkPlayActivityExecutable(
+  userId: string,
+  rules: LifecycleRule[] | LifecycleRuleGroup[],
+  serverIds?: string[],
+): Promise<string | null> {
+  if (!hasPlayActivityRules(rules)) return null;
+  const watch = await checkWatchHistoryCompleteness(userId, serverIds);
+  return watch.complete ? null : `Rules read play activity but ${watch.reason}`;
 }

@@ -50,6 +50,37 @@ async function openHistory(page: Page) {
   await expect(page.locator("tbody tr[data-index]").first()).toBeVisible();
 }
 
+/**
+ * Holds `/api/events/stream` open until `fire()`, then delivers one `event`
+ * (as a real import or sync does) and ends the stream. `retry` keeps the
+ * browser from reconnecting for the rest of the test: a re-open fires every
+ * subscriber's callback once (`fireResync`), which would refetch whatever the
+ * test is waiting for whether or not the page listens for `event`.
+ */
+async function holdEventStream(page: Page, event: string) {
+  let release: (() => void) | null = null;
+  await page.route((url) => url.pathname === "/api/events/stream", async (route) => {
+    if (route.request().method() !== "GET") return route.fulfill({ status: 200 });
+    await new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await route.fulfill({
+      status: 200,
+      headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
+      body:
+        "retry: 600000\n\n" +
+        "event: connected\ndata: {}\n\n" +
+        `event: ${event}\ndata: ${JSON.stringify({ type: event, timestamp: Date.now(), meta: {} })}\n\n`,
+    });
+  });
+  return {
+    fire: async () => {
+      await expect.poll(() => release !== null).toBe(true);
+      release!();
+    },
+  };
+}
+
 test.describe("watch history", () => {
   test.beforeAll(async () => {
     await seedHistory();
@@ -180,6 +211,59 @@ test.describe("watch history", () => {
     await expect.poll(() => rowCount(page)).toBe(4);
     expect(await columnTexts(page, "Type", 4)).toEqual(Array(4).fill("Series"));
   });
+
+  test("a filter that matches nothing offers Clear filters, not Sync Now", async ({ page }) => {
+    await openHistory(page);
+    const search = page.getByPlaceholder("Search titles...");
+    const searched = page.waitForResponse(
+      (r) => isHistoryListing(new URL(r.url())) && new URL(r.url()).searchParams.get("search") === "no such title",
+    );
+    await search.fill("no such title");
+    await searched;
+
+    // The history has plays, so an empty answer is the filters' doing. It used
+    // to read "No watch history … Sync Now", telling the user they had none.
+    await expect(page.getByText("No plays match these filters")).toBeVisible();
+    await expect(page.getByText("No watch history")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Sync Now" })).toHaveCount(0);
+
+    const cleared = page.waitForResponse(
+      (r) => isHistoryListing(new URL(r.url())) && !new URL(r.url()).searchParams.has("search"),
+    );
+    await page.getByRole("button", { name: "Clear filters" }).click();
+    await cleared;
+    await expect(search).toHaveValue("");
+    await expect(page.getByText(`${HISTORY_SEED.totalPlays} plays`)).toBeVisible();
+    await expect.poll(() => rowCount(page)).toBeGreaterThan(0);
+    await expect(page.getByText("No plays match these filters")).toHaveCount(0);
+  });
+
+  // A Tracearr backfill slice and the per-playback history job announce
+  // `watch-history:updated` and never `sync:completed`, which is all the
+  // series pages used to listen for — so their play lists stayed stale until
+  // the next full sync while the movie and track pages refreshed.
+  for (const [kind, scope] of [
+    ["show", {}],
+    ["season", { seasonNumber: "1" }],
+    ["episode", { seasonNumber: "1", episodeNumber: "1" }],
+  ] as const) {
+    test(`the ${kind} page's play list re-reads when plays are imported`, async ({ page }) => {
+      const stream = await holdEventStream(page, "watch-history:updated");
+      const isSeriesPlays = (url: URL) => url.pathname === "/api/media/series/watch-history";
+      const firstRead = page.waitForResponse((r) => isSeriesPlays(new URL(r.url())) && r.ok());
+      await page.goto(`/library/series/${kind}/${HISTORY_SEED.episodeId}`);
+      await firstRead;
+      await expect(page.getByTestId("play-history")).toBeVisible();
+
+      const reread = page.waitForRequest((r) => isSeriesPlays(new URL(r.url())));
+      await stream.fire();
+      // The same list, re-read in place.
+      const params = new URL((await reread).url()).searchParams;
+      expect(params.get("seriesKey")).toBe(HISTORY_SEED.seriesKey);
+      expect(params.get("page")).toBe("1");
+      for (const [key, value] of Object.entries(scope)) expect(params.get(key)).toBe(value);
+    });
+  }
 
   test("a movie's play card keeps its rows and offers Retry when a page fails", async ({ page }) => {
     const playsPath = `/api/media/${HISTORY_SEED.detailMovieId}/plays`;

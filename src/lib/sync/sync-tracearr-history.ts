@@ -100,6 +100,7 @@ const MAX_PAGES = 20_000;
 const INSERT_COLUMNS = [
   "id",
   "mediaItemId",
+  "fanOutOfItemId",
   "mediaServerId",
   "serverUsername",
   "watchedAt",
@@ -152,6 +153,9 @@ const JSON_COLUMNS = new Set<InsertColumn>([
  */
 const MUTABLE_COLUMNS = [
   "mediaItemId",
+  // A library copy's row names the play's current primary row's item
+  // (`mirrorCopyRows`); null on a primary row.
+  "fanOutOfItemId",
   "serverUsername",
   "deviceName",
   "platform",
@@ -299,8 +303,8 @@ function upsertAssignment(
   if (PREFER_NEW_NON_NULL_COLUMNS.has(column)) {
     return `${col} = COALESCE(${incoming}, ${stored})`;
   }
-  // `mediaItemId` — the join result, non-null by construction and re-resolved
-  // every run, so the newest resolution wins outright.
+  // `mediaItemId` and `fanOutOfItemId` — the join result, re-resolved every
+  // run, so the newest resolution wins outright.
   return `${col} = ${incoming}`;
 }
 
@@ -359,6 +363,14 @@ type WatchHistoryRow = Record<InsertColumn, unknown>;
 interface PendingRow {
   row: WatchHistoryRow;
   usernameFromAccountMap: boolean;
+  /**
+   * The other library copies the play is filed against (a Jellyfin/Emby item
+   * two libraries list — see `resolveMediaItemId`), sorted; `row.mediaItemId`
+   * is the lowest. Empty for a play of one item. Expanded into one row per
+   * copy at write time (`writeBatch`), once it is known which of them still
+   * exist.
+   */
+  copyItemIds: string[];
 }
 
 /** Per-run tallies, for the summary log line. */
@@ -476,11 +488,19 @@ export interface TracearrImportOptions {
 
 export interface TracearrImportResult {
   /**
-   * How the backfill pass ended, when one ran. `"errored"` means the run could
-   * not reach Tracearr — the caller must NOT immediately re-enqueue on it, or
-   * an unreachable instance becomes a hot loop.
+   * How the backfill pass ended, when one ran. `"errored"` means the pass
+   * failed in a way the next attempt would repeat — Tracearr unreachable, its
+   * account list unloadable, a page the table refuses, or a history cursor that
+   * stopped advancing — and the caller must NOT immediately re-enqueue on it,
+   * or the failure becomes a hot loop. `backfillError` says which.
    */
   backfillOutcome?: WalkOutcome;
+  /**
+   * Why the backfill pass came back `"errored"`, as a short human reason — the
+   * backfill task throws with it, so graphile-worker records the real cause as
+   * the job's last error rather than a generic "could not reach Tracearr".
+   */
+  backfillError?: string;
   /** Rows inserted plus rows updated across every pass this run made. */
   count: number;
   /**
@@ -489,9 +509,13 @@ export interface TracearrImportResult {
    * does not re-enqueue a slice that would only be held again), which on its
    * own reads as "Tracearr holds no plays for this mapping" — this says it is
    * not that:
-   *  - `"awaiting-resync"`: the walk was restarted after items were deleted
-   *    (`tracearrBackfillRestartedAt`) and waits for the full library sync
-   *    that re-adds them, which queues the slice itself;
+   *  - `"awaiting-resync"`: some of the server's items are known to be missing
+   *    (`libraryResyncRequiredAt` — a purge, a restore, disable-with-delete, a
+   *    vanished library, or a library being populated for the first time) and
+   *    the walk waits for the library sync that brings them back — a full sync
+   *    of every library they were missing from, or, for a library's own
+   *    population hold, the library-scoped sync that took it — which queues
+   *    the slice itself;
    *  - `"no-library-items"`: none of the server's enabled libraries holds an
    *    item, so no play could be attributed; the watch-history sync after a
    *    library sync that adds some queues the slice.
@@ -500,7 +524,8 @@ export interface TracearrImportResult {
   /**
    * The backfill walk exhausted the archive and would have marked it complete,
    * but the completion write was refused — a concurrent restart
-   * (`restartTracearrBackfill`) or mapping change moved the state it expected.
+   * (`restartTracearrBackfill`) or mapping change (including an unlink and
+   * re-link to the same Tracearr server) moved the state it expected.
    * `backfillPending` is then still true with an `"exhausted"` outcome, which
    * otherwise means "Tracearr holds no plays for this mapping"; the backfill
    * task re-queues on this instead of treating it as empty.
@@ -514,9 +539,11 @@ export interface TracearrImportResult {
   /**
    * Set — to a short, human reason — when the run could not do what the caller
    * asked: no enabled instance monitors the mapped server (or the one that
-   * might could not be asked), or a forward walk the caller asked for could not
-   * reach Tracearr. A caller reporting per-server outcomes (the History page's
-   * Refresh) shows the server as failed rather than as a clean zero.
+   * might could not be asked), or a forward walk the caller asked for failed
+   * (Tracearr unreachable, a page that could not be stored, or a history
+   * cursor that stopped advancing). A caller reporting per-server outcomes
+   * (the History page's Refresh) shows the server as failed rather than as a
+   * clean zero.
    *
    * Deliberately NOT set for a backfill refused for want of the account map on
    * a forward run, nor for a walk that stopped resumably (a cancel, a spent
@@ -581,12 +608,14 @@ async function runTracearrImport(
       name: true,
       enabled: true,
       tracearrServerId: true,
+      tracearrMappingVersion: true,
       tracearrBackfillComplete: true,
       tracearrOldestPlayAt: true,
       tracearrBackfillCursorAt: true,
       tracearrForwardFloorAt: true,
+      tracearrForwardWatermarkAt: true,
       tracearrBackfillLastWalkAt: true,
-      tracearrBackfillRestartedAt: true,
+      libraryResyncRequiredAt: true,
       watchHistorySyncedAt: true,
       userId: true,
     },
@@ -638,17 +667,27 @@ async function runTracearrImport(
   //                                                   `tracearrForwardFloorAt`,
   //                                                   when a forward walk was
   //                                                   interrupted).
-  //   BACKFILL  `until = MIN(watchedAt)`            — keeps walking older until
-  //                                                   the history is exhausted.
+  //   BACKFILL  `until = cursor ?? watermark ?? MIN(watchedAt)`
+  //                                                 — keeps walking older until
+  //                                                   the history is exhausted,
+  //                                                   from how far it reached
+  //                                                   (see `resolveImportWindow`).
   //
-  // `tracearrBackfillComplete` and the two cursors are the only things rows
-  // cannot tell us. Everything else is derived from the rows themselves.
+  // `tracearrBackfillComplete`, the backfill cursor, the forward watermark and
+  // the forward floor are the things rows cannot tell us. Everything else is
+  // derived from the rows themselves.
   const serverName = server.name;
   // Captured for the same reason as `serverName`: read inside the `walk`
   // closure, which TypeScript's control-flow analysis cannot see through.
   const ownerUserId = server.userId;
   // Bound once so the paging closure keeps the narrowed, non-null value.
   const mappedServerId = tracearrServerId;
+  // The mapping as this run read it, which every write that describes the
+  // archive requires the row to still hold — see `TracearrMappingGuard`.
+  const guard: TracearrMappingGuard = {
+    tracearrServerId: mappedServerId,
+    mappingVersion: server.tracearrMappingVersion,
+  };
 
   // What the evidence marker was when this run started, for every marker write
   // below — see `establishMarker`.
@@ -656,13 +695,13 @@ async function runTracearrImport(
 
   // The window comes first, before any network call: it decides whether this
   // run has anything to do at all, and it costs one aggregate query.
-  const window = await resolveImportWindow(
-    serverId,
-    server.tracearrBackfillComplete,
-    server.tracearrBackfillCursorAt,
-    server.tracearrForwardFloorAt,
-    server.tracearrBackfillLastWalkAt,
-  );
+  const window = await resolveImportWindow(serverId, {
+    backfillComplete: server.tracearrBackfillComplete,
+    cursorAt: server.tracearrBackfillCursorAt,
+    forwardFloorAt: server.tracearrForwardFloorAt,
+    lastWalkAt: server.tracearrBackfillLastWalkAt,
+    forwardWatermarkAt: server.tracearrForwardWatermarkAt,
+  });
 
   // The resume cursor as this run found it — compared against when the run
   // records how far it reached, and required to still be there when it writes
@@ -690,28 +729,33 @@ async function runTracearrImport(
   // FORWARD is skipped on a first import, where there is no watermark and the
   // backfill covers everything.
   const forwardDue = wantsForward && window.since !== undefined;
-  // A RESTARTED walk waits for the re-sync. `restartTracearrBackfill` runs right
-  // after its callers deleted items (a purge, a restore, disable-with-delete, a
-  // vanished library) whose plays the restarted walk exists to bring back — but
-  // only once those items exist again. Walked before the next full library sync
-  // (any playback queues a slice), their plays resolve to nothing and are
-  // stepped over, and the walk can complete without them for good: the items
-  // come back reading as never watched, which is what "not played in N months"
-  // DELETE rules act on. The restart is recorded explicitly
-  // (`tracearrBackfillRestartedAt`) and released only by a full, unscoped
-  // library sync that began after it (`syncMediaServer`) — never by a
-  // library-scoped one, which re-adds one library and leaves a purged other
-  // one empty. Reported as `"exhausted"` with the backfill still pending and
-  // `heldReason` set, so the task does not re-enqueue; the releasing sync
-  // queues the slice once the items are back.
+  // The archive walk waits while some of the server's items are KNOWN to be
+  // missing (`libraryResyncRequiredAt`, set by `requireLibraryResync`): after a
+  // purge, a restore, disable-with-delete or a vanished library deleted items
+  // whose plays the (restarted) walk exists to bring back, and while a library
+  // that held nothing is being populated for the first time. Walked before
+  // those items exist (any playback queues a slice), their plays resolve to
+  // nothing and are stepped over, and the walk can complete without them for
+  // good: the items read as never watched, which is what "not played in N
+  // months" DELETE rules act on. Recorded explicitly, and released only by a
+  // library sync that brought every missing item back (`syncMediaServer`): a
+  // full, uncancelled sync that began after it was set and traversed every
+  // enabled library, or the library-scoped sync that took a library's own
+  // population hold once that library is synced — never by any other scoped
+  // sync, which re-adds one library and can leave an emptied other one empty.
+  // Reported as `"exhausted"` with the backfill still pending and `heldReason`
+  // set, so the task does not re-enqueue; the releasing sync queues the slice
+  // once the items are there. While it is set no pass may vouch for the
+  // server's history either (`establishMarker`).
   const awaitingResync =
-    wantsBackfill && !backfillComplete && server.tracearrBackfillRestartedAt != null;
+    wantsBackfill && !backfillComplete && server.libraryResyncRequiredAt != null;
   const backfillDue = wantsBackfill && !backfillComplete && !awaitingResync;
   if (awaitingResync) {
     logger.info(
       "WatchHistory",
-      `Holding the Tracearr archive walk for "${server.name}" until the next full ` +
-        `sync re-adds the items its restart was for`,
+      `Holding the Tracearr archive walk for "${server.name}" until a library sync has ` +
+        `brought back the items it is missing — a full sync after a purge or restore, or ` +
+        `the sync of a library being populated for the first time`,
     );
   }
 
@@ -744,7 +788,7 @@ async function runTracearrImport(
   // left to walk the archive again.
   //
   // So the run makes no claim at all: no walk, no cursor, no completion, no
-  // marker, no forward watermark (`tracearrBackfillLastWalkAt`) and no floor
+  // marker, no forward watermark (`tracearrForwardWatermarkAt`) and no floor
   // paid. Reported like a mapping Tracearr holds no plays for — `"exhausted"`
   // with the backfill still pending — so the queued task does not re-enqueue
   // itself; the next watch-history sync, which the full library sync runs at
@@ -787,7 +831,9 @@ async function runTracearrImport(
       // A backfill that cannot even find its instance has made no progress, and
       // the queued task re-enqueues itself at once for any other outcome —
       // `"errored"` makes it back off instead of spinning.
-      ...(backfillDue ? { backfillOutcome: "errored" as const } : {}),
+      ...(backfillDue
+        ? { backfillOutcome: "errored" as const, backfillError: resolution.failed }
+        : {}),
       failed: resolution.failed,
     };
   }
@@ -904,7 +950,9 @@ async function runTracearrImport(
    * lifetime cap, a 429 that outlasted the retries, an error, a crash), the
    * plays between the OLD watermark and the oldest play it reached were never
    * read — and the next run's `since`, derived from the new MAX, starts above
-   * them. The backfill does not reach them either: it walks below `MIN`. Written
+   * them. The backfill does not reach them either: it resumes below where it
+   * has already been (its cursor, else where it began, else the oldest stored
+   * play), and a finished one does not run at all. Written
    * before the rows, not after the walk, so a process killed mid-walk still
    * leaves the floor behind. Only a page that carries a play newer than the
    * stored watermark can open that hole, so a steady-state run — whose window
@@ -925,26 +973,74 @@ async function runTracearrImport(
     await recordForwardFloor(since);
   }
 
-  async function recordForwardFloor(since: Date): Promise<void> {
+  /**
+   * Whether this run began while some of the server's items were known to be
+   * missing (`libraryResyncRequiredAt`) — see the forward pass.
+   */
+  const heldAtStart = server.libraryResyncRequiredAt != null;
+  /**
+   * How far down a forward walk that began during the library-resync hold
+   * needs to keep its floor: an hour below the resume cursor. Everything at or
+   * below the cursor belongs to the archive walk the hold restarted
+   * (`requireLibraryResync` restarts it on every request, so the cursor sits
+   * at the LATEST request), so a floor below that would only make the first
+   * forward walk after the release re-read, in the foreground, a stretch the
+   * background walk reads anyway — years of it, after a purge that left only
+   * old plays stored, or the whole hold when it was requested again days
+   * after it began (the hold keeps its earliest instant). Only the cursor
+   * says where that walk resumes, so it alone bounds the floor, whatever the
+   * hold's instant. Not bounded at all where nothing below is proven to be
+   * walked again: no cursor, or an archive already walked to its end.
+   */
+  const heldFloorBound =
+    server.libraryResyncRequiredAt && cursorAtStart && !server.tracearrBackfillComplete
+      ? new Date(cursorAtStart.getTime() - OVERLAP_MS)
+      : null;
+
+  /**
+   * When this run's forward walk started, captured just before its first
+   * fetch: every play it leaves unread started no later than that. Stamped on
+   * the floor it records, and compared against by `clearForwardFloor`.
+   */
+  let forwardWalkStartedAt: Date | null = null;
+
+  async function recordForwardFloor(walkSince: Date): Promise<void> {
+    const since = heldFloorBound && walkSince < heldFloorBound ? heldFloorBound : walkSince;
     forwardFloorPending = true;
     if (!knownForwardFloor || since < knownForwardFloor) knownForwardFloor = since;
     // `LEAST` (which ignores a NULL): the floor only ever moves earlier, so a
-    // concurrent forward run with an older floor keeps it. Guarded on the
-    // mapping like every other piece of per-archive state.
+    // concurrent forward run with an older floor keeps it. `GREATEST` on the
+    // recorded-at, stamped by EVERY record even when `LEAST` keeps the value:
+    // the start of the newest walk that has recorded this floor, which bounds
+    // every play left unread under it — a walk may clear it only if it started
+    // no earlier than that (`clearForwardFloor`). Guarded on the mapping like
+    // every other piece of per-archive state.
     await prisma.$executeRawUnsafe(
       `UPDATE "MediaServer"
-          SET "tracearrForwardFloorAt" = LEAST("tracearrForwardFloorAt", $3)
-        WHERE "id" = $1 AND "tracearrServerId" = $2`,
+          SET "tracearrForwardFloorAt" = LEAST("tracearrForwardFloorAt", $3),
+              "tracearrForwardFloorRecordedAt" = GREATEST("tracearrForwardFloorRecordedAt", $5)
+        WHERE "id" = $1 AND "tracearrServerId" = $2 AND "tracearrMappingVersion" = $4`,
       serverId,
-      mappedServerId,
+      guard.tracearrServerId,
       since,
+      guard.mappingVersion,
+      forwardWalkStartedAt ?? new Date(),
     );
   }
+
+  // Where the forward walk starts. Only a HEALTHY walk that did not begin
+  // during the library-resync hold reaches back to the forward floor (see the
+  // forward pass); any other keeps to the ordinary window.
+  const forwardSince = forwardDue
+    ? accountMapUsable && !heldAtStart
+      ? window.since
+      : window.baseSince
+    : undefined;
 
   logger.info(
     "WatchHistory",
     `Importing Tracearr history for "${serverName}" from "${instance.name}" ` +
-      `(${describeWindow(window, { forward: forwardDue, backfill: backfillDue })}, ` +
+      `(${describeWindow(forwardSince, window.until, backfillDue)}, ` +
       `${joinIndex.itemCount} candidate items)`,
   );
 
@@ -979,8 +1075,11 @@ async function runTracearrImport(
     sawAnyRecord: false,
   };
 
-  /** Which half of a page the last `"errored"` walk failed in, for `failed`. */
-  let lastWalkFailure: "fetch" | "write" | undefined;
+  /**
+   * What the last walk that came back `"errored"` failed at, for `failed` and
+   * `backfillError` — see `walkFailureReason`. Reset at the start of each walk.
+   */
+  let lastWalkFailure: WalkFailure | undefined;
 
   /**
    * Walk one window to its end, or until something stops us.
@@ -994,11 +1093,13 @@ async function runTracearrImport(
    * The other two outcomes decide whether the caller retries at once or backs
    * off. A fetch that throws returns `"errored"` — the instance is down or
    * refusing us, nothing about an immediate retry would differ, and the
-   * backfill task backs off on it. A cancel, a spent slice, a yield, the page
-   * cap, a stalled cursor and a moved mapping return `"stopped"`.
+   * backfill task backs off on it. So does a cursor Tracearr hands back a
+   * second time (see the check at the end of `walkPages`). A cancel, a spent
+   * slice, a yield, the page cap and a moved mapping return `"stopped"`: each
+   * either made progress or is ended by something outside the walk.
    *
    * A failed WRITE is `"stopped"` only when this walk committed a page before
-   * it. The usual write failure is the FK race `rowsWithLiveMediaItems`
+   * it. The usual write failure is the FK race `playsWithLiveMediaItems`
    * narrows but cannot close (an item deleted between its check and the
    * INSERT); the page's rows roll back with their batch, its position is not
    * kept, and the next run rebuilds the join index, skips the vanished item as
@@ -1017,6 +1118,7 @@ async function runTracearrImport(
   ): Promise<WalkOutcome> {
     /** Which half of a page the walk is in, and how many pages it committed. */
     const progress: WalkProgress = { phase: "fetch", committedPages: 0 };
+    lastWalkFailure = undefined;
     return walkPages(pass, options, progress).catch((error: unknown) => {
       const phase = progress.phase;
       // The mapping moved under this run (the server PUT re-pointed or unlinked
@@ -1067,13 +1169,14 @@ async function runTracearrImport(
     // run-scoped — a forward page answers "does this mapping have history" too.
     walked.oldestSeenAt = null;
     // Per-walk, NOT per-run. The two passes are independent walks whose windows
-    // can overlap — `until = MIN(watchedAt)` sits inside `since = MAX - 1h`
-    // whenever the stored history spans less than an hour, which is exactly the
-    // state an import interrupted after a page or two leaves behind. A shared
+    // can overlap — the backfill's `until` (its cursor, else the watermark,
+    // else MIN(watchedAt)) can sit inside `since = MAX - 1h`, as it does
+    // whenever the stored history spans less than an hour — exactly the state
+    // an import interrupted after a page or two leaves behind. A shared
     // set then lets the backfill collide with a cursor the forward pass already
-    // recorded and bail as "the cursor stopped advancing" — failing safe (it is
-    // never marked complete) but advancing only one page per run, which for a
-    // large library is indistinguishable from being stuck.
+    // recorded and bail as a stalled cursor — failing safe (it is never marked
+    // complete) but erroring after one page every run, which parks a walk that
+    // was never stuck.
     const seenCursors = new Set<string>();
     for (;;) {
       // Cancelled (client disconnected, user hit Stop, or the stream's lifetime
@@ -1212,16 +1315,7 @@ async function runTracearrImport(
         }
 
         seenEventIds.add(record.id);
-        rows.push(
-          buildRow(
-            record,
-            resolved.mediaItemId,
-            serverId,
-            watchedAt,
-            now,
-            accountNames,
-          ),
-        );
+        rows.push(buildRow(record, resolved, serverId, watchedAt, now, accountNames));
       }
 
       // Write this page's rows before fetching the next one. The model is
@@ -1238,8 +1332,9 @@ async function runTracearrImport(
       for (let i = 0; i < rows.length; i += BATCH_SIZE) {
         const written = await writeBatch(
           serverId,
-          mappedServerId,
+          guard,
           rows.slice(i, i + BATCH_SIZE),
+          libraryCopiesPossible(joinIndex),
         );
         counters.inserted += written.inserted;
         counters.updated += written.updated;
@@ -1291,13 +1386,23 @@ async function runTracearrImport(
       if (!next) return "exhausted";
       if (seenCursors.has(next)) {
         // A cursor we have already followed means the keyset is not advancing;
-        // continuing would page forever over the same records.
+        // continuing would page forever over the same records. That is
+        // Tracearr misbehaving, and the next attempt asks the same question:
+        // reported as a resumable stop, the backfill task re-queued the slice
+        // at once and re-walked the same pages — rebuilding the join index and
+        // re-walking `/users` each time — forever, without ever parking.
+        // `"errored"` makes it back off and, after its attempts, park. The
+        // pages committed before the repeat stay committed, and how far they
+        // reached is still recorded (the backfill state write below).
         logger.warn(
           "WatchHistory",
           `Tracearr history import for "${serverName}" stopped after ${pages} page(s) — ` +
-            `the cursor stopped advancing`,
+            `Tracearr's history cursor stopped advancing (it handed back a page ` +
+            `position already followed). Keeping the ` +
+            `${counters.inserted + counters.updated} row(s) already imported`,
         );
-        return "stopped";
+        lastWalkFailure = "stalled";
+        return "errored";
       }
       seenCursors.add(next);
       cursor = next;
@@ -1316,46 +1421,66 @@ async function runTracearrImport(
   let forwardOutcome: WalkOutcome | undefined;
   let failed: string | undefined;
   if (forwardDue) {
+    // While some of the server's items are known to be missing
+    // (`libraryResyncRequiredAt`), this walk skips their plays as unresolved
+    // while storing everyone else's — moving `MAX(watchedAt)`, where the next
+    // window starts, past them. The backfill the hold restarted walks only
+    // below the cursor the restart set, so nothing else would ever read them
+    // again. The floor the walk records before it first moves the watermark
+    // (`recordForwardFloorBeforeWrite`) is what keeps them owed, so a walk
+    // that began during the hold pays nothing off, even if the hold is gone by
+    // the time it finishes — and keeps to the ordinary window (`forwardSince`):
+    // the floor cannot be paid while the items are missing, and every later
+    // walk of the hold would only re-read down to it. The first walk after the
+    // releasing sync reaches back to it, with the items there.
+    const since = forwardSince as Date;
     const forwardStartedAt = new Date();
-    const since = (accountMapUsable ? window.since : window.baseSince) as Date;
+    forwardWalkStartedAt = forwardStartedAt;
     forwardOutcome = await walk("forward", { since });
 
     // Only a HEALTHY walk pays anything off. A degraded one has read its
     // window, but what it stored there is mislabelled, and clearing the floor
     // it just recorded would leave those rows outside every later window.
     if (forwardOutcome === "exhausted" && accountMapUsable) {
-      // The whole window down to `since` has been read, so any floor at or
-      // after it is paid. Compare-and-set on that, so a floor an overlapping
-      // run pushed further back is not erased by a walk that never reached it.
-      if (forwardFloorPending && knownForwardFloor && since <= knownForwardFloor) {
+      // The whole window down to `since` has been read, up to when this walk
+      // started, so a floor at or after `since` that only walks started no
+      // later than this one recorded is paid. Compare-and-set on both, so
+      // neither a floor an overlapping run pushed further back nor one a walk
+      // that started after this one left behind is erased by a walk that never
+      // read what it marks.
+      if (!heldAtStart && forwardFloorPending && knownForwardFloor && since <= knownForwardFloor) {
         forwardFloorPending = !(await clearForwardFloor(
           serverId,
-          mappedServerId,
+          guard,
           since,
+          forwardStartedAt,
         ));
       }
-      // A walked archive with no stored rows has no `MAX(watchedAt)` to carry
-      // the forward watermark, so `tracearrBackfillLastWalkAt` carries it (see
-      // `resolveImportWindow`). Advanced to when THIS walk started, and only if
-      // nothing reset it meanwhile — otherwise the forward window would grow
-      // without bound for as long as nothing is storable.
-      if (!window.hasRows && backfillComplete) {
-        await persistMappedState(
-          serverId,
-          mappedServerId,
-          serverName,
-          { tracearrBackfillLastWalkAt: forwardStartedAt },
-          {
-            tracearrBackfillComplete: true,
-            tracearrBackfillLastWalkAt: server.tracearrBackfillLastWalkAt,
-          },
-        );
+      // An archive with no stored rows has no `MAX(watchedAt)` to carry the
+      // forward watermark, so `tracearrForwardWatermarkAt` carries it (see
+      // `resolveImportWindow`). This walk read every play from `since` up to
+      // when it started, so the watermark moves up to that instant — otherwise
+      // the forward window would grow without bound for as long as nothing is
+      // storable. Compare-and-set on the value this run read, so a restart
+      // (which moves it to "now") or a mapping change landing meanwhile is not
+      // overwritten.
+      //
+      // Not by a walk that began while the server's items were known to be
+      // missing (`libraryResyncRequiredAt`), even if the hold is gone by now,
+      // and not while one is set (in the row): the walk skipped their plays as
+      // unresolved, and the watermark left where it is makes the first forward
+      // walk after the releasing sync read the whole stretch again, with the
+      // items back. With nothing stored there is no floor to keep them owed.
+      const watermarkRead = server.tracearrForwardWatermarkAt ?? null;
+      if (
+        !heldAtStart &&
+        !window.hasRows &&
+        (!watermarkRead || forwardStartedAt > watermarkRead)
+      ) {
+        await advanceForwardWatermark(serverId, guard, watermarkRead, forwardStartedAt);
       }
     } else if (forwardOutcome === "errored") {
-      failed =
-        lastWalkFailure === "write"
-          ? "New plays from Tracearr could not be stored"
-          : "Tracearr could not be reached while importing new plays";
+      failed = walkFailureReason(lastWalkFailure, "forward");
     }
   }
 
@@ -1370,6 +1495,8 @@ async function runTracearrImport(
   let markerWritten = false;
   /** See `TracearrImportResult.completionLost`. */
   let completionLost = false;
+  /** See `TracearrImportResult.backfillError`. */
+  let backfillError: string | undefined;
 
   // The account map is a PRECONDITION of the archive walk, not a nicety.
   //
@@ -1407,12 +1534,14 @@ async function runTracearrImport(
         `permanently store them under Tracearr's identity names. The next run ` +
         `resumes the backfill from where it stands.`,
     );
-    // Reported as a reach-Tracearr failure on purpose: the queued backfill task
+    // Reported as a failed walk on purpose: the queued backfill task
     // re-enqueues itself immediately for any other outcome, and a run that
     // cannot load the map has made no progress — it would spin against an
     // instance that is already failing. `"errored"` is what makes the worker
     // back off instead.
     backfillOutcome = "errored";
+    backfillError =
+      "Tracearr's account list could not be loaded — older plays are not imported without it";
   }
 
   if (backfillDue && accountMapUsable) {
@@ -1428,7 +1557,7 @@ async function runTracearrImport(
         if (oldest) {
           const stored = await persistMappedState(
             serverId,
-            mappedServerId,
+            guard,
             serverName,
             { tracearrOldestPlayAt: oldest },
           );
@@ -1449,8 +1578,22 @@ async function runTracearrImport(
       }
     }
 
+    // A walk from the newest play (no resume point: no cursor and no rows) reads
+    // every play that started before its first fetch, so that instant becomes
+    // the forward watermark of an archive with no stored rows — what the
+    // forward pass resumes from (`resolveImportWindow`) while the walk is still
+    // going and after it ends, however long it takes. Taken immediately before
+    // the walk, so a play starting meanwhile sits above it, inside the forward
+    // window. Only where none is recorded (compare-and-set on null): one that
+    // is set came from an earlier walk, a restart or a forward walk, each of
+    // which already accounts for the plays below it.
+    if (window.until === undefined && !server.tracearrForwardWatermarkAt) {
+      await recordBackfillWatermark(serverId, guard, new Date());
+    }
+
     const outcome = await walk("backfill", { until: window.until });
     backfillOutcome = outcome;
+    if (outcome === "errored") backfillError = walkFailureReason(lastWalkFailure, "backfill");
 
     // Persist how far the walk actually reached, and whether it finished, in ONE
     // write. The cursor matters because the next slice would otherwise resume
@@ -1499,8 +1642,10 @@ async function runTracearrImport(
     if (finished) backfillComplete = true;
 
     // Recorded for every walk that actually ran — exhausted or stopped, not
-    // one that could not reach Tracearr — so the status readout can tell a
-    // mapping never walked yet from one walked that found nothing to import.
+    // one that errored (Tracearr unreachable, its first page refused by the
+    // table, a stalled cursor) — so the status readout can tell a mapping never
+    // walked yet from one walked that found nothing to import. An errored walk
+    // still keeps how far its committed pages reached (`cursorAdvanced`).
     const walkRan = outcome !== "errored";
 
     if (cursorAdvanced || finished || walkRan) {
@@ -1508,7 +1653,10 @@ async function runTracearrImport(
       // restarts it by moving the cursor (`restartTracearrBackfill`), and this
       // slice's progress — or its "finished" — describes rows the purge has
       // since removed; written over the restart, the walk would resume deep in
-      // the archive and never re-import the newer stretch.
+      // the archive and never re-import the newer stretch. A mapping change —
+      // an unlink and re-link to the same Tracearr server included, which
+      // resets the cursor to the null this slice may well have started from —
+      // is refused by the mapping version (`TracearrMappingGuard`).
       const expect = {
         tracearrBackfillCursorAt: cursorAtStart,
         tracearrBackfillComplete: false,
@@ -1525,26 +1673,21 @@ async function runTracearrImport(
       // written with the completion flag in the SAME guarded statement, so it
       // can never land without it — unless a forward walk is still owed plays
       // (`tracearrForwardFloorAt`, a known gap; the release below writes it once
-      // a forward walk pays the floor), or the marker was withdrawn while this
-      // run walked (`establishMarker`). Then the flag is written on its own.
+      // a forward walk pays the floor), the server's items are known to be
+      // missing (`libraryResyncRequiredAt`, set while this slice ran; the
+      // release writes the marker once the sync that clears it has run — a
+      // hold that came with a restart also moved the cursor, which refuses the
+      // completion itself), or the marker was withdrawn while this run walked
+      // (`establishMarker`). Then the flag is written on its own: the walk did
+      // reach the archive's end, so that is not a lost completion — only the
+      // vouching waits.
       if (finished && !forwardFloorPending) {
-        const attempt = await establishMarker(
-          evidence,
-          mappedServerId,
-          expect,
-          state,
-        );
+        const attempt = await establishMarker(evidence, guard, expect, state);
         stored = attempt.written;
         markerWritten = attempt.established;
       }
       if (!stored) {
-        stored = await persistMappedState(
-          serverId,
-          mappedServerId,
-          serverName,
-          state,
-          expect,
-        );
+        stored = await persistMappedState(serverId, guard, serverName, state, expect);
       }
       if (finished && !stored) {
         backfillComplete = false;
@@ -1601,14 +1744,17 @@ async function runTracearrImport(
   // could not load the account map withdraws the marker before each page it
   // writes under identity labels; a healthy job finishing beside it must not
   // put the marker straight back over those rows — `establishMarker` is the
-  // same compare-and-set the native path uses.
+  // same compare-and-set the native path uses. Nor while the server's items are
+  // known to be missing (`libraryResyncRequiredAt`, checked in the row by
+  // `establishMarker`): plays of items that do not exist yet were skipped, and
+  // the first run after the sync that clears it is the one that vouches.
   if (
     !markerWritten &&
     backfillComplete &&
     accountMapUsable &&
     !forwardFloorPending
   ) {
-    await establishMarker(evidence, mappedServerId, { tracearrBackfillComplete: true }, {});
+    await establishMarker(evidence, guard, { tracearrBackfillComplete: true }, {});
   }
 
   const total = counters.inserted + counters.updated;
@@ -1638,7 +1784,7 @@ async function runTracearrImport(
     // unlink's wipe already removed this run's own rows, so nothing of this
     // source is left to justify the DELETE.
     {
-      const purged = await deleteNativeStratum(serverId, mappedServerId);
+      const purged = await deleteNativeStratum(serverId, guard);
       if (purged > 0) {
         logger.info(
           "WatchHistory",
@@ -1696,10 +1842,29 @@ async function runTracearrImport(
     count: total,
     backfillPending: !backfillComplete,
     backfillOutcome,
+    ...(backfillError ? { backfillError } : {}),
     ...(awaitingResync ? { heldReason: "awaiting-resync" as const } : {}),
     ...(completionLost ? { completionLost } : {}),
     ...(failed ? { failed } : {}),
   };
+}
+
+/**
+ * What a walk that came back `"errored"` failed at, in words — the forward
+ * pass's `failed` and the backfill's `backfillError`. Honest about the cause:
+ * a stalled cursor is Tracearr answering wrongly, not Tracearr unreachable,
+ * and the job's recorded error is what someone debugging a parked import reads.
+ */
+function walkFailureReason(failure: WalkFailure | undefined, pass: ImportPass): string {
+  const which = pass === "forward" ? "new" : "older";
+  switch (failure) {
+    case "write":
+      return `${pass === "forward" ? "New" : "Older"} plays from Tracearr could not be stored`;
+    case "stalled":
+      return `Tracearr's history cursor stopped advancing while importing ${which} plays`;
+    default:
+      return `Tracearr could not be reached while importing ${which} plays`;
+  }
 }
 
 /**
@@ -1872,9 +2037,44 @@ type ImportPass = "forward" | "backfill";
  * How a walk ended. Only `"exhausted"` may mark a backfill complete, and only
  * `"errored"` should stop the job re-enqueueing — a slice that merely ran out of
  * time has made progress and should continue immediately, whereas one that
- * could not reach Tracearr would otherwise hot-loop.
+ * could not reach Tracearr, or whose cursor Tracearr keeps handing back, would
+ * otherwise hot-loop: the next attempt asks the same question.
  */
 type WalkOutcome = "exhausted" | "stopped" | "errored";
+
+/**
+ * Why a walk came back `"errored"`: a page that could not be fetched or stored,
+ * or a cursor Tracearr handed back a second time — see `walkFailureReason`.
+ */
+type WalkFailure = "fetch" | "write" | "stalled";
+
+/**
+ * The mapping a run read when it started, which every write that describes the
+ * archive — a page of rows, the walk state, the forward floor and watermark,
+ * the evidence marker, the native-stratum cleanup — requires the row to still
+ * hold, in the same statement as the write.
+ *
+ * The VALUE of `tracearrServerId` alone does not see an unlink followed by a
+ * re-link to the same Tracearr server: the server PUT wipes the rows and resets
+ * the walk state both times, and leaves the value as it was. A slice that
+ * started before the two would pass a value-only check and write its old walk's
+ * deep cursor — or its completion, and the marker with it — over the reset, and
+ * the new mapping's archive would never be walked. The PUT bumps
+ * `tracearrMappingVersion` on every change of the mapping, so a run holding an
+ * older version writes nothing.
+ */
+export interface TracearrMappingGuard {
+  tracearrServerId: string;
+  mappingVersion: number;
+}
+
+/** The `where` fields of `TracearrMappingGuard`, for a Prisma filter. */
+function mappingWhere(guard: TracearrMappingGuard) {
+  return {
+    tracearrServerId: guard.tracearrServerId,
+    tracearrMappingVersion: guard.mappingVersion,
+  };
+}
 
 /** A walk's position, shared with its error handler — see `walk`. */
 interface WalkProgress {
@@ -1884,7 +2084,8 @@ interface WalkProgress {
 }
 
 /**
- * The two independent boundaries a run may walk, derived from the rows we hold.
+ * The two independent boundaries a run may walk, derived from the rows we hold
+ * (and, for an archive with no stored rows, from the forward watermark).
  *
  * `since` (forward) is absent on a first import — there is nothing to catch up
  * to. `until` (backfill) is absent on a first import too, meaning "start at the
@@ -1925,25 +2126,32 @@ async function hasItemsInEnabledLibraries(serverId: string): Promise<boolean> {
 /**
  * Derive both boundaries for this server.
  *
- * The backfill boundary is `MIN(watchedAt)` over the server's TRACEARR rows —
- * the oldest play we have stored — and `until` is inclusive, so the boundary
- * play is re-delivered and merged by the upsert rather than skipped.
+ * The backfill boundary is how far the walk has reached
+ * (`tracearrBackfillCursorAt`); without one, the forward watermark (where a
+ * walk from the newest play began); without that, `MIN(watchedAt)` over the
+ * server's TRACEARR rows — the oldest play we have stored. `until` is
+ * inclusive, so the boundary play is re-delivered and merged by the upsert
+ * rather than skipped.
  *
- * Deriving it from the rows rather than persisting a cursor is deliberate: the
- * rows ARE the record of what was imported, so the two can never disagree. It
- * is conservative in the safe direction — a page whose records were all skipped
- * (unjoinable, wrong server, under Tracearr's 2-minute floor) leaves `MIN`
- * where it was, so the next run re-walks that stretch instead of stepping over
- * unimported history.
+ * Each is conservative in the safe direction: a page whose records were all
+ * skipped (unjoinable, wrong server, under Tracearr's 2-minute floor) leaves
+ * `MIN` where it was, so the next run re-walks that stretch instead of
+ * stepping over unimported history — which is also why the reach is recorded
+ * separately, so such a stretch is not re-walked forever.
  */
 async function resolveImportWindow(
   serverId: string,
-  backfillComplete: boolean,
-  cursorAt: Date | null,
-  forwardFloorAt: Date | null,
-  lastWalkAt: Date | null,
+  /** The walk state as the run read it from the server row. */
+  stored: {
+    backfillComplete: boolean;
+    cursorAt: Date | null;
+    forwardFloorAt: Date | null;
+    lastWalkAt: Date | null;
+    forwardWatermarkAt: Date | null;
+  },
   now: number = Date.now(),
 ): Promise<ImportWindow> {
+  const { backfillComplete, cursorAt, forwardFloorAt, lastWalkAt, forwardWatermarkAt } = stored;
   const rows = await prisma.$queryRawUnsafe<
     {
       maxWatchedAt: Date | null;
@@ -1975,16 +2183,26 @@ async function resolveImportWindow(
   // explicitly rather than leaving it for this function to guess at.
   //
   // With no rows there is no `MAX(watchedAt)` to put the forward watermark on,
-  // and a walked archive with nothing stored still owes the forward pass every
-  // play made since. `tracearrBackfillLastWalkAt` stands in: the last slice of
-  // the walk (or the last forward walk of such an archive) read everything up
-  // to then, and the open-chain lookback below it covers both a chain still
-  // open at that instant and the slices the walk took before its last one.
+  // and an archive with nothing stored still owes the forward pass every play
+  // made since it was walked — DURING the walk as well as after it, since a
+  // walk paced by a parked instance, a failing `/users` or a long hold can take
+  // days. `tracearrForwardWatermarkAt` carries it: the instant the walk from
+  // the newest play began (everything older is the walk's), moved to "now" by a
+  // restart, and up by each forward walk that read its whole window. The usual
+  // hour of overlap covers a play that had not reached Tracearr by then.
+  //
+  // `tracearrBackfillLastWalkAt` minus the open-chain lookback is the fallback
+  // only for a finished archive whose watermark predates the column (left by a
+  // build that carried the forward watermark there) — it guesses that the walk
+  // took under a week. With neither there is no forward pass: a first import,
+  // which the backfill covers whole.
   const baseSince = hasRows
     ? resolveSince(agg.maxWatchedAt, agg.oldestOpenChain, now)
-    : backfillComplete && lastWalkAt
-      ? new Date(Math.min(lastWalkAt.getTime() - OPEN_CHAIN_LOOKBACK_MS, now))
-      : undefined;
+    : forwardWatermarkAt
+      ? new Date(Math.min(forwardWatermarkAt.getTime() - OVERLAP_MS, now))
+      : backfillComplete && lastWalkAt
+        ? new Date(Math.min(lastWalkAt.getTime() - OPEN_CHAIN_LOOKBACK_MS, now))
+        : undefined;
   // The forward floor applies AFTER `resolveSince`'s clamps on purpose. The
   // 7-day `OPEN_CHAIN_LOOKBACK_MS` floor exists so an abandoned chain cannot pin
   // the window; a forward floor is a known hole of unread plays, and clamping
@@ -2004,24 +2222,77 @@ async function resolveImportWindow(
     // Prefer where the walk actually REACHED over where it last managed to
     // store something. They diverge exactly when a stretch of history is
     // unstorable (media since deleted), which is the live-lock case.
-    until: backfillComplete ? undefined : (cursorAt ?? agg.minWatchedAt ?? undefined),
+    //
+    // With no reach recorded, the forward watermark comes before the oldest
+    // stored row: a walk from the newest play recorded it before its first
+    // fetch, so everything at or below it is the backfill's, and above it the
+    // forward pass's (from an hour below it). The oldest row is NOT a safe
+    // stand-in once a forward pass has stored rows — a first slice that failed
+    // before committing a page leaves no cursor — because Tracearr's `since`
+    // also admits a resumed chain whose later session falls inside the window
+    // while its `started_at`, which the row is filed under, lies before it.
+    // That row puts MIN below the forward window, and a backfill resuming
+    // below MIN would leave every play between the two unread by either pass.
+    until: backfillComplete
+      ? undefined
+      : (cursorAt ?? forwardWatermarkAt ?? agg.minWatchedAt ?? undefined),
     hasRows,
   };
 }
 
-/** One-line description of the run's plan, for the log. */
+/**
+ * The newest instant at which a play may START for a pass other than the
+ * forward walk — the recovery pass in `tracearr-backfill-additions.ts` — to
+ * store it. Plays after it belong to the forward walk.
+ *
+ * The forward window is derived from what is stored: an hour below
+ * `MAX(watchedAt)`, or below the forward watermark when nothing is. A play
+ * stored by anything else that started after that boundary moves the next
+ * window up to it, past every play in between that no walk has read yet — a
+ * recovery pass running before the first catch-up after an outage (the slice
+ * queued when a server or Tracearr instance is re-enabled) did exactly that.
+ * Plays at or below it cannot move the window, and the forward walk reads
+ * everything above it. With rows: `MAX(watchedAt)` itself; without: the start
+ * of the forward window plus its hour of overlap (the watermark, or the older
+ * last-walk fallback); with no forward window at all, an hour before now.
+ */
+export async function forwardPassBoundary(
+  serverId: string,
+  /** The walk state as read from the server row — see `resolveImportWindow`. */
+  stored: {
+    backfillComplete: boolean;
+    cursorAt: Date | null;
+    forwardFloorAt: Date | null;
+    lastWalkAt: Date | null;
+    forwardWatermarkAt: Date | null;
+  },
+  now: number = Date.now(),
+): Promise<Date> {
+  const window = await resolveImportWindow(serverId, stored, now);
+  if (window.hasRows && window.maxWatchedAt) return window.maxWatchedAt;
+  if (window.baseSince) return new Date(window.baseSince.getTime() + OVERLAP_MS);
+  return new Date(now - OVERLAP_MS);
+}
+
+/**
+ * One-line description of the run's plan, for the log: the bounds the walks
+ * will actually use — the forward walk's own `since` (the ordinary window for
+ * a held or degraded walk, not the floor it does not reach back to), and the
+ * backfill's `until` when that pass runs.
+ */
 function describeWindow(
-  window: ImportWindow,
-  due: { forward: boolean; backfill: boolean },
+  forwardSince: Date | undefined,
+  until: Date | undefined,
+  backfillDue: boolean,
 ): string {
   const parts: string[] = [];
-  if (due.forward && window.since) {
-    parts.push(`new plays since ${window.since.toISOString()}`);
+  if (forwardSince) {
+    parts.push(`new plays since ${forwardSince.toISOString()}`);
   }
-  if (due.backfill) {
+  if (backfillDue) {
     parts.push(
-      window.until
-        ? `backfilling older than ${window.until.toISOString()}`
+      until
+        ? `backfilling older than ${until.toISOString()}`
         : "full history from the newest play",
     );
   }
@@ -2051,15 +2322,16 @@ interface MappedStateExpect {
  *
  * Every column here describes ONE Tracearr archive: where its history starts,
  * how far back this walk reached, and whether the walk ever hit the far end. A
- * slice reads `tracearrServerId` at the top and finishes minutes later, and in
- * between the admin can re-point the server at a different Tracearr (or unlink
- * it). The server PUT handles that correctly — it wipes the rows and resets
- * these three columns — so an unguarded write here lands AFTER the reset and
- * re-describes the NEW mapping with the OLD one's progress. The next import
- * then reads `tracearrBackfillComplete: true`, fetches only new plays, and the
- * new source's entire archive is never imported: a permanent, silent data loss
- * that no later run corrects, because the flag is the only thing rows cannot
- * re-derive.
+ * slice reads the mapping at the top and finishes minutes later, and in between
+ * the admin can re-point the server at a different Tracearr, unlink it, or
+ * unlink and re-link it. The server PUT handles that correctly — it wipes the
+ * rows and resets these columns — so an unguarded write here lands AFTER the
+ * reset and re-describes the NEW mapping with the OLD one's progress. The next
+ * import then reads `tracearrBackfillComplete: true`, fetches only new plays,
+ * and the new source's entire archive is never imported: a permanent, silent
+ * data loss that no later run corrects, because the flag is the only thing rows
+ * cannot re-derive. Hence the mapping AND its version — see
+ * `TracearrMappingGuard`.
  *
  * `updateMany` rather than `update` so the mapping can sit in the WHERE clause:
  * the check and the write are then one statement and there is no window between
@@ -2067,14 +2339,14 @@ interface MappedStateExpect {
  */
 async function persistMappedState(
   serverId: string,
-  tracearrServerId: string,
+  guard: TracearrMappingGuard,
   serverName: string,
   data: MappedStateData,
   /** Further column values the row must still hold for the write to apply. */
   expect: MappedStateExpect = {},
 ): Promise<boolean> {
   const { count } = await prisma.mediaServer.updateMany({
-    where: { id: serverId, tracearrServerId, ...expect },
+    where: { id: serverId, ...mappingWhere(guard), ...expect },
     data,
   });
 
@@ -2090,6 +2362,48 @@ async function persistMappedState(
   return true;
 }
 
+/**
+ * Record the forward watermark of an archive with no stored rows as a walk from
+ * the newest play starts — see the call site and `resolveImportWindow`. Only
+ * where none is set, and only under this run's mapping.
+ */
+async function recordBackfillWatermark(
+  serverId: string,
+  guard: TracearrMappingGuard,
+  at: Date,
+): Promise<boolean> {
+  const { count } = await prisma.mediaServer.updateMany({
+    where: { id: serverId, ...mappingWhere(guard), tracearrForwardWatermarkAt: null },
+    data: { tracearrForwardWatermarkAt: at },
+  });
+  return count > 0;
+}
+
+/**
+ * Move the forward watermark of an archive with no stored rows up to `to`, once
+ * a healthy forward walk has read everything from its window's start to then —
+ * see the call site. Compare-and-set on the value the run read (`read`), so a
+ * restart that moved it meanwhile stands; never while the server's items are
+ * known to be missing (`libraryResyncRequiredAt`); and only under this run's
+ * mapping.
+ */
+async function advanceForwardWatermark(
+  serverId: string,
+  guard: TracearrMappingGuard,
+  read: Date | null,
+  to: Date,
+): Promise<boolean> {
+  const { count } = await prisma.mediaServer.updateMany({
+    where: {
+      id: serverId,
+      ...mappingWhere(guard),
+      tracearrForwardWatermarkAt: read,
+      libraryResyncRequiredAt: null,
+    },
+    data: { tracearrForwardWatermarkAt: to },
+  });
+  return count > 0;
+}
 
 /**
  * Re-establish `watchHistorySyncedAt` for a Tracearr-sourced server, together
@@ -2098,9 +2412,17 @@ async function persistMappedState(
  * Every Tracearr marker write goes through here, and each is conditional on
  * all of:
  *
- *  - the mapping this run walked (`persistMappedState`'s reason);
+ *  - the mapping and its version this run walked (`persistMappedState`'s
+ *    reason);
  *  - no forward floor IN THE ROW — a known hole, possibly recorded by an
  *    overlapping run after this one read the row;
+ *  - no library resync owed IN THE ROW (`libraryResyncRequiredAt`): some of the
+ *    server's items are known to be missing — purged, restored without them,
+ *    or in a library still being populated for the first time — and their
+ *    plays were skipped as unresolved, so the history this run read is not the
+ *    history the rules will judge once they are back. The library sync that
+ *    clears it brings them back (a full sync, or the scoped sync of a library
+ *    populated for the first time), and the first run after it vouches;
  *  - `expect` (the completion write's cursor compare-and-set, or "complete");
  *  - the marker still holding the value this run started with, and no
  *    withdrawal counted since — the same two checks as the native path's
@@ -2119,7 +2441,7 @@ async function persistMappedState(
  */
 async function establishMarker(
   evidence: WatchEvidenceSnapshot,
-  tracearrServerId: string,
+  guard: TracearrMappingGuard,
   expect: MappedStateExpect,
   state: MappedStateData,
 ): Promise<{ written: boolean; established: boolean }> {
@@ -2128,8 +2450,9 @@ async function establishMarker(
   const { count } = await prisma.mediaServer.updateMany({
     where: {
       id: evidence.serverId,
-      tracearrServerId,
+      ...mappingWhere(guard),
       tracearrForwardFloorAt: null,
+      libraryResyncRequiredAt: null,
       watchHistorySyncedAt: evidence.marker,
       ...expect,
     },
@@ -2160,44 +2483,67 @@ function evidenceWithdrawnSince(evidence: WatchEvidenceSnapshot): boolean {
 
 /**
  * Clear the forward floor once a forward walk has read its whole window down
- * to `since`. Called only while a floor is known to be set. Compare-and-set on
- * the floor being at or after `since`: a floor an overlapping run pushed
- * further back than this walk reached is still owed, and so is everything when
- * the mapping moved. Returns whether this write cleared it.
+ * to `since` — every play from `since` up to when it started (`walkStartedAt`).
+ * Called only while a floor is known to be set. Compare-and-set on:
+ *
+ *  - the floor being at or after `since`: a floor an overlapping run pushed
+ *    further back than this walk reached is still owed;
+ *  - every walk that recorded it having started no later than this one
+ *    (`tracearrForwardFloorRecordedAt`, the newest recorder's start — see
+ *    `recordForwardFloor`): a walk that started after this one and stopped
+ *    having read only plays newer than this one's start left unread plays this
+ *    walk never fetched, and clearing its floor stranded them for good. A
+ *    floor with no recorder stamp (from a build before the column) is paid as
+ *    it always was;
+ *  - the mapping and its version: a floor a run of the NEW mapping recorded is
+ *    not this run's to clear;
+ *  - the server's items not being known to be missing
+ *    (`libraryResyncRequiredAt`, in the row): a walk that began before the
+ *    hold read only what had started by then, and a floor a walk of the hold
+ *    recorded meanwhile marks plays skipped after it.
+ *
+ * Clears the stamp with the floor. Returns whether this write cleared it.
  */
 async function clearForwardFloor(
   serverId: string,
-  tracearrServerId: string,
+  guard: TracearrMappingGuard,
   since: Date,
+  walkStartedAt: Date,
 ): Promise<boolean> {
   const { count } = await prisma.mediaServer.updateMany({
     where: {
       id: serverId,
-      tracearrServerId,
+      ...mappingWhere(guard),
       tracearrForwardFloorAt: { gte: since },
+      libraryResyncRequiredAt: null,
+      OR: [
+        { tracearrForwardFloorRecordedAt: null },
+        { tracearrForwardFloorRecordedAt: { lte: walkStartedAt } },
+      ],
     },
-    data: { tracearrForwardFloorAt: null },
+    data: { tracearrForwardFloorAt: null, tracearrForwardFloorRecordedAt: null },
   });
   return count > 0;
 }
 
 /**
  * Delete the server's NATIVE rows, but only while it is still mapped to the
- * Tracearr server this run imported from — see the caller. `FOR SHARE` makes
- * the check and the DELETE one unit against the server PUT, exactly as in
- * `writeBatch`. Returns how many rows went.
+ * Tracearr server this run imported from, at the version it read — see the
+ * caller. `FOR SHARE` makes the check and the DELETE one unit against the
+ * server PUT, exactly as in `writeBatch`. Returns how many rows went.
  */
 async function deleteNativeStratum(
   serverId: string,
-  tracearrServerId: string,
+  guard: TracearrMappingGuard,
 ): Promise<number> {
   return prisma.$transaction(async (tx) => {
     const mapped = await tx.$queryRawUnsafe<Array<{ id: string }>>(
       `SELECT "id" FROM "MediaServer"
-        WHERE "id" = $1 AND "tracearrServerId" = $2
+        WHERE "id" = $1 AND "tracearrServerId" = $2 AND "tracearrMappingVersion" = $3
         FOR SHARE`,
       serverId,
-      tracearrServerId,
+      guard.tracearrServerId,
+      guard.mappingVersion,
     );
     if (mapped.length === 0) return 0;
     return tx.$executeRawUnsafe(
@@ -2222,7 +2568,10 @@ async function deleteNativeStratum(
  *
  * The caller has already scoped the records to this server (`server_id`), so
  * that filter is not repeated here; everything else — the per-statement chain-id
- * de-dup, the timestamp guard, the join resolution and the batching — is shared.
+ * de-dup, the timestamp guard, the join resolution (library copies included)
+ * and the batching — is shared. `inserted`/`updated` count plays;
+ * `rowsInserted` counts every new row, a copy's included — what a caller
+ * deciding whether play state needs reconciling must read.
  */
 export async function importTracearrRecords(
   serverId: string,
@@ -2231,11 +2580,12 @@ export async function importTracearrRecords(
   /** See `resolveUsername` — without this the pass stores the wrong vocabulary. */
   accountNames: Map<string, string> | undefined,
   /**
-   * The Tracearr server the records were fetched from. Every write checks the
-   * media server is still mapped to it — see `writeBatch`.
+   * The mapping the records were fetched under, as the caller read it with the
+   * server row. Every write checks the media server still holds it — the
+   * Tracearr server AND the mapping version — see `writeBatch`.
    */
-  tracearrServerId: string,
-): Promise<{ inserted: number; updated: number; skipped: number }> {
+  guard: TracearrMappingGuard,
+): Promise<{ inserted: number; updated: number; skipped: number; rowsInserted: number }> {
   const now = new Date();
   const rows: PendingRow[] = [];
   // Statement scope, exactly as in the walk: one INSERT may not touch the same
@@ -2260,77 +2610,120 @@ export async function importTracearrRecords(
     }
 
     seenEventIds.add(record.id);
-    rows.push(
-      buildRow(record, resolved.mediaItemId, serverId, watchedAt, now, accountNames),
-    );
+    rows.push(buildRow(record, resolved, serverId, watchedAt, now, accountNames));
   }
 
   let inserted = 0;
   let updated = 0;
+  let rowsInserted = 0;
   for (let i = 0; i < rows.length; i += BATCH_SIZE) {
     const written = await writeBatch(
       serverId,
-      tracearrServerId,
+      guard,
       rows.slice(i, i + BATCH_SIZE),
+      libraryCopiesPossible(joinIndex),
     );
     inserted += written.inserted;
     updated += written.updated;
+    rowsInserted += written.rowsInserted;
   }
 
-  return { inserted, updated, skipped };
+  return { inserted, updated, skipped, rowsInserted };
 }
 
 /**
- * Upsert one batch, reporting how many rows were new and how many were dropped
- * because their `MediaItem` had gone.
+ * Whether this server's plays can be filed against several library copies of
+ * one item (Jellyfin/Emby — see `resolveMediaItemId`), so a write must keep
+ * each copy's rows straight (`writeBatch`).
+ */
+function libraryCopiesPossible(index: TracearrJoinIndex): boolean {
+  return index.serverType === "JELLYFIN" || index.serverType === "EMBY";
+}
+
+/**
+ * Upsert one batch of PLAYS, reporting how many were new, how many were
+ * already stored and how many were dropped because every `MediaItem` they
+ * resolved to had gone — plus how many rows were newly inserted, copies
+ * included (`rowsInserted`, for a caller deciding whether play state needs
+ * reconciling).
  *
  * The chain-id pre-check is what makes "N new, M updated" honest: an
  * `ON CONFLICT DO UPDATE` rowcount counts inserts and updates alike, and the
  * split is worth knowing — a run that is all updates means resume chains are
  * settling, not that nothing happened. `(mediaServerId, sourceEventId)` is
- * unique, so the lookup is a single index probe per batch.
+ * unique, so the lookup is a single index probe per batch. Counted per play
+ * (its primary row), not per row: a play filed against two library copies is
+ * still one play in every count and progress figure.
+ *
+ * `copiesPossible` (the server is Jellyfin or Emby — see `resolveMediaItemId`)
+ * turns on the step that keeps a play's state on its primary row when which
+ * library copy holds that row changes (`settleLibraryCopyRows`). A play's other
+ * copies get their rows from the merged primary (`mirrorCopyRows`).
  */
 async function writeBatch(
   serverId: string,
-  tracearrServerId: string,
+  guard: TracearrMappingGuard,
   pending: PendingRow[],
-): Promise<{ inserted: number; updated: number; vanished: number }> {
-  if (pending.length === 0) return { inserted: 0, updated: 0, vanished: 0 };
+  copiesPossible = false,
+): Promise<{ inserted: number; updated: number; vanished: number; rowsInserted: number }> {
+  if (pending.length === 0) return { inserted: 0, updated: 0, vanished: 0, rowsInserted: 0 };
 
   return prisma.$transaction(async (tx) => {
-    // Still mapped to the Tracearr server these rows came from? A run reads
-    // the mapping once and writes for minutes; the server PUT re-points or
-    // unlinks it and then wipes the server's rows. `FOR SHARE` makes the check
-    // and the insert one unit against that PUT: its UPDATE of this row waits
-    // for this transaction, so either these rows land before the mapping moves
-    // (and the PUT's wipe removes them), or the check sees the new mapping and
-    // nothing is written. Checked any later and a stale source's plays outlive
-    // the wipe.
+    // Still mapped to the Tracearr server these rows came from, at the version
+    // the run read? A run reads the mapping once and writes for minutes; the
+    // server PUT re-points, unlinks or re-links it and then wipes the server's
+    // rows. `FOR SHARE` makes the check and the insert one unit against that
+    // PUT: its UPDATE of this row waits for this transaction, so either these
+    // rows land before the mapping moves (and the PUT's wipe removes them), or
+    // the check sees the new mapping and nothing is written. Checked any later
+    // and a stale source's plays outlive the wipe. The version is what sees an
+    // unlink and re-link to the same Tracearr server (`TracearrMappingGuard`).
     const mapped = await tx.$queryRawUnsafe<Array<{ id: string }>>(
       `SELECT "id" FROM "MediaServer"
-        WHERE "id" = $1 AND "tracearrServerId" = $2
+        WHERE "id" = $1 AND "tracearrServerId" = $2 AND "tracearrMappingVersion" = $3
         FOR SHARE`,
       serverId,
-      tracearrServerId,
+      guard.tracearrServerId,
+      guard.mappingVersion,
     );
     if (mapped.length === 0) throw new TracearrMappingChangedError(serverId);
 
-    const batch = await rowsWithLiveMediaItems(tx, pending);
-    const vanished = pending.length - batch.length;
+    const plays = await playsWithLiveMediaItems(tx, pending);
+    const vanished = pending.length - plays.length;
     // Nothing survived the check. `INSERT … VALUES` with no tuples is a syntax
     // error, not a no-op, so there is no statement to send at all.
-    if (batch.length === 0) return { inserted: 0, updated: 0, vanished };
+    if (plays.length === 0) return { inserted: 0, updated: 0, vanished, rowsInserted: 0 };
 
-    const eventIds = batch.map((entry) => entry.row.sourceEventId as string);
+    const chains = plays.map((play) => play.pending.row.sourceEventId as string);
+    if (copiesPossible) await settleLibraryCopyRows(tx, serverId, plays, chains);
+
+    // Each play's primary row goes on its lowest live copy...
+    const primaries = plays.map((play) => ({
+      ...play.pending,
+      row: { ...play.pending.row, mediaItemId: play.itemIds[0], fanOutOfItemId: null },
+    }));
+    // ...and every other live copy gets a row of its own, written from the
+    // primary once that has merged (`mirrorCopyRows`).
+    const copies: CopyRow[] = plays.flatMap((play, i) =>
+      play.itemIds.slice(1).map((mediaItemId) => ({
+        id: randomUUID(),
+        chain: chains[i],
+        sourceEventId: copyEventId(chains[i], mediaItemId),
+        mediaItemId,
+      })),
+    );
+
+    const keys = [...chains, ...copies.map((copy) => copy.sourceEventId)];
     const existing = await tx.$queryRawUnsafe<
       Array<{ sourceEventId: string }>
     >(
       `SELECT "sourceEventId" FROM "WatchHistory"
         WHERE "mediaServerId" = $1 AND "sourceEventId" = ANY($2)`,
       serverId,
-      eventIds,
+      keys,
     );
-    const updated = existing.length;
+    const stored = new Set(existing.map((row) => row.sourceEventId));
+    const updated = chains.filter((chain) => stored.has(chain)).length;
 
     // Split by username confidence: the merge rule for that one column differs
     // between the two classes and a statement carries a single `ON CONFLICT`
@@ -2338,8 +2731,8 @@ async function writeBatch(
     // bridges every account the server still has — so this stays one statement
     // in the ordinary case and becomes two only on a page that mixes a bridged
     // account with a departed one.
-    const bridged = batch.filter((entry) => entry.usernameFromAccountMap);
-    const fallback = batch.filter((entry) => !entry.usernameFromAccountMap);
+    const bridged = primaries.filter((entry) => entry.usernameFromAccountMap);
+    const fallback = primaries.filter((entry) => !entry.usernameFromAccountMap);
 
     if (bridged.length > 0) {
       await insertRows(tx, bridged, WATCH_HISTORY_UPSERT_SUFFIX);
@@ -2347,9 +2740,157 @@ async function writeBatch(
     if (fallback.length > 0) {
       await insertRows(tx, fallback, WATCH_HISTORY_UPSERT_SUFFIX_FALLBACK_USERNAME);
     }
+    if (copies.length > 0) await mirrorCopyRows(tx, serverId, copies);
 
-    return { inserted: batch.length - updated, updated, vanished };
+    return {
+      inserted: plays.length - updated,
+      updated,
+      vanished,
+      rowsInserted: keys.length - existing.length,
+    };
   });
+}
+
+/** The `sourceEventId` of a play's row on a library copy other than its primary. */
+function copyEventId(chainId: string, mediaItemId: string): string {
+  return `${chainId}:copy:${mediaItemId}`;
+}
+
+/** One library copy's row of a play, before `mirrorCopyRows` fills it in. */
+interface CopyRow {
+  /** A fresh row id, used only if the row does not exist yet. */
+  id: string;
+  /** The play's chain id — the `sourceEventId` of its primary row. */
+  chain: string;
+  /** `copyEventId(chain, mediaItemId)`. */
+  sourceEventId: string;
+  mediaItemId: string;
+}
+
+/**
+ * Before a batch of plays is written on a server whose items can have library
+ * copies: make sure each play's stored state sits on its primary row.
+ *
+ * A play is stored as one primary row (`sourceEventId` = the chain id) on its
+ * lowest live copy and one row per other copy (`copyEventId`) naming it
+ * through `fanOutOfItemId` — the native path's rule (`nativeRowsForPlay`), so
+ * lists of plays, which skip rows with `fanOutOfItemId` set, show it once
+ * while every copy reads as watched. Every row of a play carries the same
+ * state, merged on the primary row and copied from it (`mirrorCopyRows`).
+ *
+ * Which copy is lowest changes when a copy is deleted (its rows go with it,
+ * and `fanOutOfItemId` is cleared on the others) or a new one is listed, and
+ * the play's state must survive both, because a re-delivered chain can be a
+ * window-truncated view of it (see `MONOTONIC_COLUMNS`): built afresh from
+ * that, a row would read 12% watched and `watched = false` for a play that
+ * was finished, and `watchedByUser` would stop seeing it.
+ *  - The play has no primary row any more (its copy was deleted): the row of
+ *    its lowest live copy that has one BECOMES the primary row, keeping the
+ *    progress, `watched` latch and username it has accumulated for the merge
+ *    to build on.
+ *  - The primary row exists: the upsert moves it onto the lowest live copy
+ *    with its state, and that copy's own copy row, if any, goes — or the item
+ *    would carry the play twice, and play state never goes back down.
+ *
+ * Only a play being written is settled. A deleted primary copy clears
+ * `fanOutOfItemId` on every other copy's row (`SetNull`), so with three or
+ * more copies each survivor reads as a primary and lists of plays show the
+ * play once per remaining copy until its chain is written again — re-delivered
+ * or recovered — exactly as the native path's rows do until its next full
+ * replace. Every copy still reads as watched, so no rule is affected.
+ */
+async function settleLibraryCopyRows(
+  db: RawDb,
+  serverId: string,
+  plays: Array<{ itemIds: string[] }>,
+  chains: string[],
+): Promise<void> {
+  const pairChains: string[] = [];
+  const pairKeys: string[] = [];
+  const pairRanks: number[] = [];
+  plays.forEach((play, i) => {
+    play.itemIds.forEach((mediaItemId, rank) => {
+      pairChains.push(chains[i]);
+      pairKeys.push(copyEventId(chains[i], mediaItemId));
+      pairRanks.push(rank);
+    });
+  });
+
+  await db.$executeRawUnsafe(
+    `UPDATE "WatchHistory" AS wh
+        SET "sourceEventId" = pick."chain", "fanOutOfItemId" = NULL
+       FROM (
+         SELECT DISTINCT ON (v."chain") v."chain", w."id"
+           FROM unnest($2::text[], $3::text[], $4::int[]) AS v("chain", "copyKey", "rank")
+           JOIN "WatchHistory" w
+             ON w."mediaServerId" = $1 AND w."sourceEventId" = v."copyKey"
+          WHERE NOT EXISTS (
+            SELECT 1 FROM "WatchHistory" p
+             WHERE p."mediaServerId" = $1 AND p."sourceEventId" = v."chain"
+          )
+          ORDER BY v."chain", v."rank"
+       ) AS pick
+      WHERE wh."id" = pick."id"`,
+    serverId,
+    pairChains,
+    pairKeys,
+    pairRanks,
+  );
+  await db.$executeRawUnsafe(
+    `DELETE FROM "WatchHistory" WHERE "mediaServerId" = $1 AND "sourceEventId" = ANY($2)`,
+    serverId,
+    plays.map((play, i) => copyEventId(chains[i], play.itemIds[0])),
+  );
+}
+
+/**
+ * Each column of a copy row, read off the play's primary row `p` once it has
+ * merged: the copy's own id, item and key, the primary's item as
+ * `fanOutOfItemId`, and everything else as the primary holds it.
+ */
+const MIRROR_SELECT_LIST = INSERT_COLUMNS.map((column) => {
+  switch (column) {
+    case "id":
+      return `v."id"`;
+    case "mediaItemId":
+      return `v."mediaItemId"`;
+    case "fanOutOfItemId":
+      return `p."mediaItemId"`;
+    case "sourceEventId":
+      return `v."sourceEventId"`;
+    case "createdAt":
+      return `CAST($6 AS TIMESTAMP(3))`;
+    default:
+      return `p."${column}"`;
+  }
+}).join(",");
+
+/**
+ * Write each library copy's row of a play from the play's primary row, after
+ * the primary has merged the incoming record: the copy then carries what the
+ * play has accumulated — not a window-truncated re-delivery, which is all the
+ * incoming record may be (see `settleLibraryCopyRows`). The merge is the
+ * primary's own (monotonic, latched), so a copy row can never read less
+ * watched than it did; its username is the primary's, already merged.
+ */
+async function mirrorCopyRows(db: RawDb, serverId: string, copies: CopyRow[]): Promise<void> {
+  for (let i = 0; i < copies.length; i += BATCH_SIZE) {
+    const chunk = copies.slice(i, i + BATCH_SIZE);
+    await db.$executeRawUnsafe(
+      `INSERT INTO "WatchHistory" (${INSERT_COLUMN_LIST})
+       SELECT ${MIRROR_SELECT_LIST}
+         FROM unnest($2::text[], $3::text[], $4::text[], $5::text[])
+              AS v("id", "chain", "sourceEventId", "mediaItemId")
+         JOIN "WatchHistory" p ON p."mediaServerId" = $1 AND p."sourceEventId" = v."chain"
+       ${WATCH_HISTORY_UPSERT_SUFFIX}`,
+      serverId,
+      chunk.map((copy) => copy.id),
+      chunk.map((copy) => copy.chain),
+      chunk.map((copy) => copy.sourceEventId),
+      chunk.map((copy) => copy.mediaItemId),
+      new Date(),
+    );
+  }
 }
 
 /** The two raw-query methods the write path uses — the global client or a transaction's. */
@@ -2388,8 +2929,10 @@ async function insertRows(
 }
 
 /**
- * Drop the rows whose `MediaItem` has been deleted since this run's join index
- * was built.
+ * Drop the plays whose `MediaItem` has been deleted since this run's join index
+ * was built — and, for a play filed against several library copies, the copies
+ * that have, keeping it on the ones that remain (the lowest of which then holds
+ * its primary row, `settleLibraryCopyRows`).
  *
  * `WatchHistory.mediaItem` is a REQUIRED FK, and the index that resolved these
  * ids is built ONCE per run — on a backfill slice that is minutes before the
@@ -2410,33 +2953,39 @@ async function insertRows(
  * and skips the now-absent item as `unresolved`. The cost that pre-checking
  * avoids is that recovery burning the rest of a five-minute backfill slice.
  *
- * Cheap enough to run per batch: the distinct ids of ~180 rows probed against
+ * Cheap enough to run per batch: the distinct ids of ~180 plays probed against
  * the primary key in one round-trip. The overwhelmingly common answer is "all of
- * them still exist", which hands back the caller's own array untouched.
+ * them still exist".
  */
-async function rowsWithLiveMediaItems(
+async function playsWithLiveMediaItems(
   db: RawDb,
   pending: PendingRow[],
-): Promise<PendingRow[]> {
-  const ids = [
-    ...new Set(pending.map((entry) => entry.row.mediaItemId as string)),
-  ];
+): Promise<Array<{ pending: PendingRow; itemIds: string[] }>> {
+  const itemIdsOf = (entry: PendingRow) => [entry.row.mediaItemId as string, ...entry.copyItemIds];
+  const ids = [...new Set(pending.flatMap(itemIdsOf))];
 
   const live = await db.$queryRawUnsafe<Array<{ id: string }>>(
     `SELECT "id" FROM "MediaItem" WHERE "id" = ANY($1)`,
     ids,
   );
-
-  if (live.length === ids.length) return pending;
-
   const alive = new Set(live.map((row) => row.id));
-  return pending.filter((entry) => alive.has(entry.row.mediaItemId as string));
+
+  const plays: Array<{ pending: PendingRow; itemIds: string[] }> = [];
+  for (const entry of pending) {
+    // Still sorted: the resolver hands the copies over in order.
+    const itemIds = itemIdsOf(entry).filter((id) => alive.has(id));
+    if (itemIds.length > 0) plays.push({ pending: entry, itemIds });
+  }
+  return plays;
 }
 
-/** One record → one row, in the shape `writeBatch` serializes. */
+/**
+ * One record → its primary row, in the shape `writeBatch` serializes, plus the
+ * library copies it fans out to (`writeBatch` expands those).
+ */
 function buildRow(
   record: TracearrHistoryRecord,
-  mediaItemId: string,
+  resolved: { mediaItemId: string; copies?: string[] },
   serverId: string,
   watchedAt: Date,
   now: Date,
@@ -2446,9 +2995,11 @@ function buildRow(
   const username = resolveUsername(record, accountNames);
   return {
     usernameFromAccountMap: username.fromAccountMap,
+    copyItemIds: resolved.copies ?? [],
     row: {
       id: randomUUID(),
-      mediaItemId,
+      mediaItemId: resolved.mediaItemId,
+      fanOutOfItemId: null,
       mediaServerId: serverId,
       serverUsername: username.name,
       watchedAt,

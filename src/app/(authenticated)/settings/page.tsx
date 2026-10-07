@@ -26,6 +26,7 @@ import { cn } from "@/lib/utils";
 import { MASKED_VALUE } from "@/lib/api/sanitize";
 import { SettingsSkeleton } from "@/components/skeletons";
 import { isSyncRequestSettled, type PendingSyncRequest } from "@/lib/sync/sync-request";
+import { ResponseOrder } from "@/lib/media/response-order";
 
 // ─── Tab components ───
 import { GeneralTab } from "./tabs/general-tab";
@@ -618,6 +619,9 @@ export default function SettingsPage() {
     }
   }, []);
 
+  // Orders the overlapping import-status reads (see below).
+  const [tracearrStatusOrder] = useState(() => new ResponseOrder());
+
   /**
    * How far the Tracearr import has got, per mapped server, for the status
    * line under each watch-history-source dropdown.
@@ -626,21 +630,33 @@ export default function SettingsPage() {
    * `fetchTracearrServers` does: this is a progress readout beside a working
    * control, not the control itself, so a transient blip should make the line
    * disappear rather than plant an error next to a setting that is fine.
+   *
+   * Reads overlap — the fallback poll, three realtime events, the pause-key
+   * effect and the re-reads after a save each call this on their own — so an
+   * answer applies only when no newer read's answer already has
+   * (`tracearrStatusOrder`). Unordered, a read started before a mapping change
+   * could land after the re-read that followed it and put the old "fully
+   * imported" line back over a history the change had just wiped — and re-arm
+   * or disarm the poll on that stale answer. A failure hides the line only
+   * while nothing newer has applied, and is not recorded: an older answer
+   * still on its way is then the newest status known, and shows.
    */
   const fetchTracearrImportStatus = useCallback(async () => {
+    const seq = tracearrStatusOrder.begin();
     try {
       const response = await fetch("/api/integrations/tracearr/status");
       if (!response.ok) {
-        setTracearrImportStatus([]);
+        if (!tracearrStatusOrder.isOvertaken(seq)) setTracearrImportStatus([]);
         return;
       }
       const data = (await response.json()) as { servers?: TracearrImportStatus[] };
+      if (!tracearrStatusOrder.accept(seq)) return;
       setTracearrImportStatus(data.servers ?? []);
     } catch (error) {
       console.error("Failed to fetch Tracearr import status:", error);
-      setTracearrImportStatus([]);
+      if (!tracearrStatusOrder.isOvertaken(seq)) setTracearrImportStatus([]);
     }
-  }, []);
+  }, [tracearrStatusOrder]);
 
   const fetchSystemInfo = useCallback(async () => {
     try {

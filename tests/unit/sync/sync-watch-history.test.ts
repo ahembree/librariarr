@@ -13,7 +13,22 @@ const {
   // Route the tx's raw methods to the same fn the tests assert against so the
   // existing call-inspection (DELETE/INSERT string filters) keeps working.
   const queryRawUnsafe = vi.fn();
-  const tx = { $queryRawUnsafe: queryRawUnsafe, $executeRawUnsafe: queryRawUnsafe };
+  // Two reads every native write transaction makes after taking its lock — is
+  // the server still native (`assertStillNative`), and do the resolved items
+  // still exist (`liveItemIds`) — answer from their own arguments here rather
+  // than from the queue above, so each test's queue of lock/DELETE/INSERT
+  // results stays aligned. What those reads decide is exercised against a
+  // real database in tests/integration/media/native-history-writes.test.ts.
+  const txQueryRawUnsafe = vi.fn(async (sql: string, ...params: unknown[]) => {
+    if (sql.includes(`SELECT "tracearrServerId" FROM "MediaServer"`)) {
+      return [{ tracearrServerId: null }];
+    }
+    if (sql.includes(`SELECT "id" FROM "MediaItem" WHERE "id" = ANY`)) {
+      return (params[0] as string[]).map((id) => ({ id }));
+    }
+    return queryRawUnsafe(sql, ...params);
+  });
+  const tx = { $queryRawUnsafe: txQueryRawUnsafe, $executeRawUnsafe: queryRawUnsafe };
   return {
     mockPrisma: {
       tracearrInstance: { findFirst: vi.fn() },
@@ -22,6 +37,8 @@ const {
       $queryRawUnsafe: queryRawUnsafe,
       $executeRawUnsafe: queryRawUnsafe,
       $transaction: vi.fn(async (cb: (t: typeof tx) => Promise<unknown>) => cb(tx)),
+      /** The transaction client's `$queryRawUnsafe` (see above). */
+      txQueryRawUnsafe,
     },
     mockClient: {
       getDetailedWatchHistory: vi.fn(),
@@ -673,7 +690,7 @@ describe("syncWatchHistory", () => {
     function watchTransaction() {
       const state = { rolledBack: false };
       const tx = {
-        $queryRawUnsafe: mockPrisma.$queryRawUnsafe,
+        $queryRawUnsafe: mockPrisma.txQueryRawUnsafe,
         $executeRawUnsafe: mockPrisma.$executeRawUnsafe,
       };
       mockPrisma.$transaction.mockImplementationOnce(
@@ -1010,6 +1027,18 @@ describe("syncWatchHistory — incremental refresh", () => {
     mockPrisma.$queryRawUnsafe.mock.calls.filter((args) =>
       (args[0] as string).includes('INSERT INTO "WatchHistory"'),
     );
+  /**
+   * The fetch a full replace makes: no `since`, and a report for the client to
+   * fill in (`DetailedWatchHistoryReport`) — it used to be called with nothing.
+   */
+  function expectFullHistoryFetch() {
+    expect(mockClient.getDetailedWatchHistory).toHaveBeenCalledTimes(1);
+    const [options] = mockClient.getDetailedWatchHistory.mock.calls[0] as [Record<string, unknown>];
+    expect(options).not.toHaveProperty("since");
+    expect(options).toEqual({
+      report: { incompleteUsers: new Map(), devicesUnavailable: false },
+    });
+  }
 
   it("fetches only plays since the newest stored one (minus overlap) and appends the unseen ones", async () => {
     const newest = new Date("2024-06-01T12:00:00.000Z");
@@ -1078,7 +1107,7 @@ describe("syncWatchHistory — incremental refresh", () => {
     const result = await syncWatchHistory("server-1", undefined, undefined, { incremental: true });
 
     expect(result).toEqual({ count: 1 });
-    expect(mockClient.getDetailedWatchHistory).toHaveBeenCalledWith(undefined);
+    expectFullHistoryFetch();
     expect(deleteCalls()).toHaveLength(1);
   });
 
@@ -1092,7 +1121,7 @@ describe("syncWatchHistory — incremental refresh", () => {
 
     await syncWatchHistory("server-1", undefined, undefined, { incremental: true });
 
-    expect(mockClient.getDetailedWatchHistory).toHaveBeenCalledWith(undefined);
+    expectFullHistoryFetch();
     expect(deleteCalls()).toHaveLength(1);
   });
 
@@ -1105,7 +1134,7 @@ describe("syncWatchHistory — incremental refresh", () => {
     await syncWatchHistory("server-1", undefined, undefined, { incremental: true });
 
     // No boundary query is even made: the second raw call is the DELETE.
-    expect(mockClient.getDetailedWatchHistory).toHaveBeenCalledWith(undefined);
+    expectFullHistoryFetch();
     expect(deleteCalls()).toHaveLength(1);
   });
 
@@ -1278,13 +1307,49 @@ describe("syncWatchHistory — ambiguous rating keys", () => {
       const updates: Array<{ detail?: string }> = [];
 
       await expect(syncWatchHistory("server-1", (u) => updates.push(u))).resolves.toEqual({ count: 4 });
+      // One tuple of 9 params per row: id, mediaItemId, fanOutOfItemId, …
       const params = insertCalls()[0].slice(1);
-      expect(params.filter((p) => p === "item-a")).toHaveLength(2);
-      expect(params.filter((p) => p === "item-b")).toHaveLength(2);
+      const rows = Array.from({ length: params.length / 9 }, (_, i) => params.slice(i * 9, i * 9 + 9));
+      expect(rows.map((r) => [r[1], r[2]])).toEqual([
+        // Each play is filed against both copies; the lower id holds the
+        // play's primary row and the other copy's row points at it, so lists
+        // of plays can show it once.
+        ["item-a", null],
+        ["item-b", "item-a"],
+        ["item-a", null],
+        ["item-b", "item-a"],
+      ]);
       // Progress counts plays, not rows, so it never passes the total.
       expect(updates.at(-1)?.detail).toBe("Stored 2 of 2 plays");
     },
   );
+
+  it("splits the rows of a widely fanned-out play across INSERTs, under the bind limit", async () => {
+    // Rows are not plays: one play filed against 600 copies is 600 rows, and a
+    // batch of 500 plays can hold far more rows than one statement may bind
+    // (9 params a row; Postgres allows 65,535). The INSERT is split by rows.
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([{ ...row, type: "JELLYFIN" }]);
+    mockClient.getDetailedWatchHistory.mockResolvedValueOnce([
+      { ratingKey: "100", username: "bob", watchedAt: "2025-07-01T00:00:00Z", deviceName: null, platform: null },
+    ]);
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce(
+      Array.from({ length: 600 }, (_, i) => ({
+        id: `item-${String(i).padStart(3, "0")}`,
+        ratingKey: "100",
+        libraryKey: `lib-${i}`,
+      })),
+    );
+
+    await expect(syncWatchHistory("server-1")).resolves.toEqual({ count: 600 });
+
+    const inserts = insertCalls();
+    expect(inserts.map((call) => (call.length - 1) / 9)).toEqual([500, 100]);
+    // One primary row; every other copy points at it.
+    const params = inserts.flatMap((call) => call.slice(1));
+    const fanOut = Array.from({ length: params.length / 9 }, (_, i) => params[i * 9 + 2]);
+    expect(fanOut.filter((v) => v === null)).toHaveLength(1);
+    expect(fanOut.filter((v) => v === "item-000")).toHaveLength(599);
+  });
 });
 
 describe("syncWatchHistory — incremental identity across account names", () => {

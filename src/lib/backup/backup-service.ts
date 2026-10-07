@@ -6,7 +6,9 @@ import path from "path";
 import { gzipSync, gunzipSync } from "zlib";
 import { randomBytes, scryptSync, createCipheriv, createDecipheriv } from "crypto";
 import {
+  forgetLibraryResyncHoldRequests,
   invalidateServersWithoutWatchHistory,
+  requireLibraryResync,
   restartTracearrBackfill,
 } from "@/lib/media/watch-evidence";
 
@@ -374,6 +376,42 @@ export async function restoreBackup(
     );
   }
 
+  // A restored server that holds no media at all — every server after a
+  // config-only restore — has its items come back on the next sync as fresh
+  // rows with none of their plays. Until a complete library sync has re-added
+  // them, no history pass may vouch for its play history: one that ran first
+  // (a playback's realtime job, a History-page Refresh) would mark it
+  // established over items that do not exist yet, and they would then read
+  // "nobody watched anything". So it is held (`requireLibraryResync`), which
+  // also restarts a Tracearr-mapped server's archive walk. Asked of the rows,
+  // like the withdrawal above, since the restored ids are not known up front.
+  //
+  // The restore rewrote every server's hold column from the file, so the hold
+  // requests this process noted against the old rows describe nothing now —
+  // forgotten first, or a library enabled afterwards could not get its own
+  // population hold's receipt (`requirePopulationResync` refuses one while a
+  // request is outstanding) and would wait for a full sync. Likewise every
+  // library's recorded shortfall (`Library.shortPassSeenAt`): it described a
+  // pass of rows the restore replaced, so the next pass counts afresh.
+  forgetLibraryResyncHoldRequests();
+  await prisma.library.updateMany({
+    where: { shortPassSeenAt: { not: null } },
+    data: { shortPassSeenAt: null },
+  });
+  const withoutItems = await prisma.mediaServer.findMany({
+    where: { libraries: { none: { mediaItems: { some: {} } } } },
+    select: { id: true },
+  });
+  const heldIds = withoutItems.map((server) => server.id);
+  if (heldIds.length > 0) {
+    await requireLibraryResync(heldIds);
+    logger.info(
+      "Backup",
+      `Holding the play history of ${heldIds.length} media server(s) restored without ` +
+        `their media until a full sync has re-added it`,
+    );
+  }
+
   // A Tracearr-mapped server's row comes back verbatim — `tracearrBackfillComplete`,
   // the resume cursor and the forward floor all describing an archive walk whose
   // rows the file did not hold (every config-only backup, and a full one taken
@@ -382,9 +420,13 @@ export async function restoreBackup(
   // never reads the newer stretch. The importer no longer infers this from "no
   // rows" — a walk can legitimately reach the end having stored nothing, and
   // that inference re-walked such an archive forever — so the paths that
-  // destroy the rows reset it explicitly, and restore is one of them.
+  // destroy the rows reset it explicitly, and restore is one of them. Only for
+  // servers whose media came back: the held ones above were restarted by the
+  // hold, and their items do not exist yet. These need no hold — their items
+  // exist, so the restarted walk can attach the plays as it reads them.
   const tracearrWithoutRows = await prisma.mediaServer.findMany({
     where: {
+      ...(heldIds.length > 0 ? { id: { notIn: heldIds } } : {}),
       tracearrServerId: { not: null },
       watchHistory: { none: { source: "TRACEARR" } },
       OR: [

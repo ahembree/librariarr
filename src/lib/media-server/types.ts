@@ -326,3 +326,54 @@ export interface DetailedWatchHistoryEntry {
    */
   librarySectionKey?: string | null;
 }
+
+/**
+ * Why `getDetailedWatchHistory` could not read one user's plays completely
+ * (`DetailedWatchHistoryReport.incompleteUsers`). The caller acts on the two
+ * differently, so the reason travels with the name.
+ *
+ * - `refused`: the server refused that user's listing (401/403/404). The key
+ *   cannot read the user and will not be able to, so the history is still
+ *   established without them, as it always was — waiting would block the
+ *   server for good.
+ * - `unreliable`: the listing answered, but in a shape that cannot be trusted
+ *   to be complete — an empty first page under a non-zero total, or one far
+ *   short of it — so by the server's own count the user has plays this run
+ *   did not see. Their stored rows are kept and stand as the user's last
+ *   reliable record; only a user with no stored rows on the server, while
+ *   the history was not established when the run began, keeps it
+ *   unestablished.
+ */
+export type IncompleteUserReason = "refused" | "unreliable";
+
+/**
+ * What a `getDetailedWatchHistory` call could not read, for a caller that
+ * commits the result with a full replace. The caller creates it empty and the
+ * client fills it in; a caller that passes none gets the stricter behaviour
+ * described on each field instead.
+ */
+export interface DetailedWatchHistoryReport {
+  /**
+   * Users (by the name their plays are stored under) whose plays could not be
+   * read completely this time, with why (`IncompleteUserReason`) — on
+   * Jellyfin/Emby, a played-items listing the server refused or answered in a
+   * shape that cannot be trusted to be complete. Such a user contributes NO
+   * entries, and the caller must keep that user's stored rows rather than
+   * replace them with nothing. Without a report, an untrustworthy listing
+   * fails the whole fetch and a refused user is skipped.
+   */
+  incompleteUsers: Map<string, IncompleteUserReason>;
+  /**
+   * Plex: `/devices` could not be read, so every entry's `deviceName` and
+   * `platform` are null for want of an answer — not because the play had no
+   * device. The caller should keep the stored values rather than blank them.
+   */
+  devicesUnavailable: boolean;
+}
+
+export interface DetailedWatchHistoryOptions {
+  /** See `MediaServerClient.getDetailedWatchHistory`. */
+  since?: Date;
+  /** See `DetailedWatchHistoryReport`. */
+  report?: DetailedWatchHistoryReport;
+}

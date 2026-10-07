@@ -157,8 +157,18 @@ export async function fetchPlayHistory(options: {
   serverId?: string | null;
   page: number;
   limit: number;
+  /**
+   * Skip the rows that duplicate a play onto another library copy of the same
+   * item (`WatchHistory.fanOutOfItemId` set), so a play the native sync filed
+   * against every copy is listed once (with three or more copies and the
+   * primary's deleted, once per remaining copy until the next full replace;
+   * see `nativeRowsForPlay`). Only for a scope that always holds
+   * every copy together — otherwise the play's primary row may be out of scope
+   * and the play would vanish from the list entirely.
+   */
+  collapseFanOutCopies?: boolean;
 }) {
-  const { userId, mediaItemIds, serverId, page, limit } = options;
+  const { userId, mediaItemIds, serverId, page, limit, collapseFanOutCopies = false } = options;
 
   if (mediaItemIds.length === 0) {
     return { items: [], pagination: { page, limit, hasMore: false, totalCount: 0 } };
@@ -168,6 +178,9 @@ export async function fetchPlayHistory(options: {
     mediaItemId: { in: mediaItemIds },
     // Ownership guard: only history recorded on this user's servers.
     mediaServer: { userId, ...(serverId ? { id: serverId } : {}) },
+    // Shared by the page query and the count below, so `totalCount` counts
+    // the same plays the pages list.
+    ...(collapseFanOutCopies ? { fanOutOfItemId: null } : {}),
   };
 
   const [rows, totalCount] = await Promise.all([

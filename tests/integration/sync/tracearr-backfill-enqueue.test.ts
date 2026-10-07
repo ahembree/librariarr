@@ -34,7 +34,7 @@ import {
   enqueueTracearrBackfill,
   tracearrBackfillJobKey,
 } from "@/lib/sync/tracearr-backfill-enqueue";
-import { releaseTracearrRestartHold, restartTracearrBackfill } from "@/lib/media/watch-evidence";
+import { releaseLibraryResyncHold, requireLibraryResync } from "@/lib/media/watch-evidence";
 import { releaseJobsClient } from "@/lib/jobs/client";
 import { MAIN_QUEUE, TASK_TRACEARR_BACKFILL } from "@/lib/jobs/constants";
 import { prisma as appPrisma } from "@/lib/db";
@@ -228,7 +228,8 @@ describe("enqueueTracearrBackfill (real graphile_worker schema)", () => {
       data: { tracearrBackfillLastWalkAt: new Date(Date.UTC(2026, 0, 1)) },
     });
 
-    await restartTracearrBackfill([server.id]);
+    // What a purge records before deleting (it also restarts the walk).
+    await requireLibraryResync([server.id]);
     // The restart itself queues nothing...
     expect(await jobsFor(server.id)).toHaveLength(0);
     // ...and nor does a later cause-fixing save.
@@ -243,7 +244,7 @@ describe("enqueueTracearrBackfill (real graphile_worker schema)", () => {
 
     // Once a full sync has released the hold, it is an ordinary mapping and
     // is queued as before.
-    await expect(releaseTracearrRestartHold(server.id, new Date())).resolves.toBe(true);
+    await expect(releaseLibraryResyncHold(server.id, new Date())).resolves.toBe(true);
     await expect(enqueueTracearrBackfill({ userId: user.id }, "instance re-enabled")).resolves.toEqual([server.id]);
   });
 
@@ -259,7 +260,7 @@ describe("enqueueTracearrBackfill (real graphile_worker schema)", () => {
       data: {
         tracearrBackfillCursorAt: new Date(Date.UTC(2026, 8, 1)),
         tracearrBackfillLastWalkAt: null,
-        tracearrBackfillRestartedAt: null,
+        libraryResyncRequiredAt: null,
       },
     });
 
