@@ -15,11 +15,13 @@ const { mockPrismaModels, TABLE_NAMES, mockFs } = vi.hoisted(() => {
     "prerollSchedule", "savedQuery", "logEntry",
   ];
 
-  const mockPrismaModels: Record<string, { findMany: ReturnType<typeof import("vitest")["vi"]["fn"]>; createMany: ReturnType<typeof import("vitest")["vi"]["fn"]> }> = {};
+  const mockPrismaModels: Record<string, { findMany: ReturnType<typeof import("vitest")["vi"]["fn"]>; createMany: ReturnType<typeof import("vitest")["vi"]["fn"]>; updateMany: ReturnType<typeof import("vitest")["vi"]["fn"]> }> = {};
   for (const t of TABLE_NAMES) {
     mockPrismaModels[t] = {
       findMany: vi.fn().mockResolvedValue([]),
       createMany: vi.fn().mockResolvedValue({ count: 0 }),
+      // Restore clears every library's recorded shortfall afterwards.
+      updateMany: vi.fn().mockResolvedValue({ count: 0 }),
     };
   }
 
@@ -38,6 +40,11 @@ const { mockPrismaModels, TABLE_NAMES, mockFs } = vi.hoisted(() => {
 vi.mock("@/lib/db", () => ({
   prisma: {
     ...Object.fromEntries(TABLE_NAMES.map((t: string) => [t, mockPrismaModels[t]])),
+    // Restore latches the play-activity rule sets a full backup brought
+    // matches back for (`notePlayHistoryPauseForRestoredMatches`: one read of
+    // the rule sets holding matches, then one raw UPDATE).
+    $queryRawUnsafe: vi.fn().mockResolvedValue([]),
+    $executeRawUnsafe: vi.fn().mockResolvedValue(0),
     $transaction: vi.fn(async (fn: (tx: unknown) => Promise<void>) => {
       const txProxy = new Proxy({}, {
         get(_target, prop: string) {

@@ -14,7 +14,8 @@
  *    path, ABSENT for Tracearr's keyset-paginated import, which has no total
  *    and must render as an honest indeterminate bar.
  *  - The terminal result keeps the pre-streaming payload shape,
- *    `{ success: true, counts }`, with -1 for a server whose sync threw.
+ *    `{ success: true, counts }`, with -1 for a server whose sync threw or
+ *    returned a `failed` reason.
  */
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import { NextRequest } from "next/server";
@@ -253,6 +254,25 @@ describe("POST /api/media/history/sync", () => {
     });
     // The failing server still got its phase, so the bar advanced past it.
     expect(phaseEvents(events).map((p) => p.key)).toContain(bad.id);
+  });
+
+  it("records -1 for a server whose sync returned a failure instead of throwing", async () => {
+    // A failed fetch or import RETURNS `failed` rather than throwing.
+    const good = await createTestServer(userId, { name: "Alpha" });
+    const bad = await createTestServer(userId, { name: "Bravo" });
+    mockSyncWatchHistory.mockImplementation(async (serverId: string) =>
+      serverId === bad.id ? { count: 2, failed: "forward walk errored" } : { count: 7 },
+    );
+    const { result } = await expectStreamResult<SyncResult>(await callRoute(POST, { method: "POST", body: {} }));
+    expect(result.counts).toEqual({ [good.id]: 7, [bad.id]: -1 });
+  });
+
+  it("refuses a disabled server up front instead of reporting a clean zero", async () => {
+    // The page's picker lists disabled servers, which the sync skips untouched.
+    const server = await createTestServer(userId, { name: "Off", enabled: false });
+    const response = await callRoute(POST, { method: "POST", body: { serverId: server.id } });
+    expect((await expectJson<{ error: string }>(response, 409)).error).toMatch(/disabled/);
+    expect(mockSyncWatchHistory).not.toHaveBeenCalled();
   });
 
   it("forwards fraction when the sync reports one and omits it when it does not", async () => {

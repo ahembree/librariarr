@@ -5,6 +5,7 @@ import type {
   MediaCollection,
   WatchHistoryEntry,
   DetailedWatchHistoryEntry,
+  DetailedWatchHistoryOptions,
 } from "./types";
 
 export type LibraryItemType = "movie" | "episode" | "track";
@@ -92,8 +93,11 @@ export interface MediaServerClient {
    * (Plex); an implementation that cannot (Jellyfin/Emby report a per-user
    * "played" set, not dated events) ignores it and returns everything, and the
    * caller must treat the result as the full set.
+   *
+   * `report`, when passed, is filled in with what the client could not read
+   * (`DetailedWatchHistoryReport`); without one it keeps its stricter behaviour.
    */
-  getDetailedWatchHistory(options?: { since?: Date }): Promise<DetailedWatchHistoryEntry[]>;
+  getDetailedWatchHistory(options?: DetailedWatchHistoryOptions): Promise<DetailedWatchHistoryEntry[]>;
   /**
    * True only when `getDetailedWatchHistory({ since })` really filters
    * server-side. The incremental watch-history refresh appends whatever comes

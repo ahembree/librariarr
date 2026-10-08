@@ -23,11 +23,13 @@ import {
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
+  AlertTriangle,
   Columns3,
   History,
   Loader2,
   RefreshCw,
   Search,
+  SearchX,
   Square,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -47,6 +49,20 @@ import { normalizeResolutionLabel } from "@/lib/resolution";
 import { MEDIA_TYPE_BADGE_COLORS, MEDIA_TYPE_LABELS } from "@/lib/theme/media-type-colors";
 import { EmptyState } from "@/components/empty-state";
 import type { MediaItemWithRelations } from "@/lib/types";
+import {
+  historyColumnForSortKey,
+  historySortKeyForColumn,
+  isHistorySortableColumn,
+} from "@/lib/media/history-sort";
+import { PageRequestTracker, pageAfterShrink, scrollTopForPageChange } from "@/lib/media/history-paging";
+import {
+  importBackfillPercent as computeImportBackfillPercent,
+  failedSyncServerNames,
+  isImportPending,
+  type TracearrImportStatus,
+} from "@/lib/media/history-import-status";
+import { ResponseOrder } from "@/lib/media/response-order";
+import { historyFilterParams, historyFiltersActive, historyTableView } from "@/lib/media/history-filters";
 
 // ── Types ────────────────────────────────────────────────────────
 
@@ -120,28 +136,6 @@ const PAGE_SIZE = 100;
  */
 const TRACEARR_IMPORT_POLL_MS = 30_000;
 
-const COLUMN_TO_SORT_FIELD: Record<string, string> = {
-  title: "title",
-  type: "type",
-  serverUsername: "serverUsername",
-  watchedAt: "watchedAt",
-  year: "year",
-  resolution: "resolution",
-  dynamicRange: "dynamicRange",
-  duration: "duration",
-  fileSize: "fileSize",
-  deviceName: "deviceName",
-  platform: "platform",
-  server: "serverUsername",
-  // Tracearr stream facts. `streamResolution` maps to its own API sort key
-  // rather than reusing `resolution`, which sorts the FILE's resolution on the
-  // MediaItem — the two disagree on any transcoded play.
-  transcode: "isTranscode",
-  completion: "percentComplete",
-  player: "player",
-  streamResolution: "streamResolution",
-};
-
 const VISIBLE_KEY = "history-visible-columns";
 
 function loadVisibleColumns(): Set<string> {
@@ -156,6 +150,15 @@ function saveVisibleColumns(cols: Set<string>) {
   try {
     localStorage.setItem(VISIBLE_KEY, JSON.stringify([...cols]));
   } catch { /* private mode / quota — ignore */ }
+}
+
+/** The element that scrolls `el` (the walk `DataTable` uses), else the shell's `<main>`. */
+function scrollContainerOf(el: HTMLElement): HTMLElement | null {
+  for (let node = el.parentElement; node; node = node.parentElement) {
+    const { overflowY } = getComputedStyle(node);
+    if (overflowY === "auto" || overflowY === "scroll") return node;
+  }
+  return document.querySelector<HTMLElement>("main");
 }
 
 function formatResolution(res: string | null) {
@@ -360,7 +363,7 @@ export default function HistoryPage() {
           {getItemTitle(item)}
         </span>
       ),
-      sortValue: (item) => item.mediaItem.titleSort ?? item.mediaItem.title,
+      sortValue: (item) => getItemTitle(item),
     },
     {
       id: "type",
@@ -602,10 +605,11 @@ export default function HistoryPage() {
   // ── Column visibility ──────────────────────────────────────────
 
   const activeColumns = useMemo(() => {
-    if (visibleCols.size === 0) {
-      return allColumns.filter((c) => c.defaultVisible);
-    }
-    return allColumns.filter((c) => visibleCols.has(c.id));
+    const shown = visibleCols.size === 0
+      ? allColumns.filter((c) => c.defaultVisible)
+      : allColumns.filter((c) => visibleCols.has(c.id));
+    // Sorting is server-side: a header is clickable only if the route sorts by it.
+    return shown.map((c) => (isHistorySortableColumn(c.id) ? c : { ...c, sortable: false }));
   }, [allColumns, visibleCols]);
 
   const toggleColumn = useCallback((colId: string) => {
@@ -636,54 +640,115 @@ export default function HistoryPage() {
     return () => clearTimeout(timeout);
   }, [search]);
 
-  // Token guards against a stale slow response landing after a quick
-  // filter/page flip and overwriting the current result set.
-  const reqToken = useRef(0);
+  // Only the newest request applies, and a refresh reloads the page last
+  // REQUESTED, not the page last shown (see PageRequestTracker).
+  const [tracker] = useState(() => new PageRequestTracker());
+  // The last request failed: previous rows stay under a notice, never the
+  // "No watch history" empty state.
+  const [loadError, setLoadError] = useState(false);
   // Separate token for the detail panel so rapidly clicking two rows doesn't
   // let the slower /api/media/:id response win and show the wrong item.
   const detailReqToken = useRef(0);
 
-  const fetchHistory = useCallback(async (fetchPage: number) => {
-    const token = ++reqToken.current;
+  const fetchHistory = useCallback(async (fetchPage: number, token: number) => {
     setLoading(true);
     try {
       const params = new URLSearchParams({
-        page: String(fetchPage),
         limit: String(PAGE_SIZE),
         sortBy,
         sortOrder,
       });
-      if (debouncedSearch) params.set("search", debouncedSearch);
-      if (selectedServerId !== "all") params.set("serverId", selectedServerId);
-      if (selectedTypes.size > 0) params.set("type", [...selectedTypes].join("|"));
-      if (selectedUsernames.size > 0) params.set("username", [...selectedUsernames].join("|"));
-      if (selectedPlatforms.size > 0) params.set("platform", [...selectedPlatforms].join("|"));
-      if (selectedResolutions.size > 0) params.set("resolution", [...selectedResolutions].join("|"));
+      // The same list `filtersActive` below reads.
+      for (const [key, value] of historyFilterParams({
+        search: debouncedSearch,
+        serverId: selectedServerId,
+        types: selectedTypes,
+        usernames: selectedUsernames,
+        platforms: selectedPlatforms,
+        resolutions: selectedResolutions,
+      })) {
+        params.set(key, value);
+      }
 
-      const res = await fetch(`/api/media/history?${params}`);
-      if (!res.ok) throw new Error("Failed to fetch");
-      const data = await res.json();
-      if (token !== reqToken.current) return;
+      const load = async (target: number) => {
+        params.set("page", String(target));
+        const res = await fetch(`/api/media/history?${params}`);
+        if (!res.ok) throw new Error("Failed to fetch");
+        return res.json();
+      };
+
+      let shownPage = fetchPage;
+      let data = await load(fetchPage);
+      if (!tracker.isCurrent(token)) return;
+      // The history shrank under the requested page: show the new last page,
+      // not an empty table past the end.
+      const clamped = pageAfterShrink(fetchPage, data.pagination?.totalCount ?? 0, PAGE_SIZE);
+      if (clamped !== null) {
+        tracker.redirect(token, clamped);
+        shownPage = clamped;
+        data = await load(clamped);
+        if (!tracker.isCurrent(token)) return;
+      }
       setItems(data.items || []);
       setTotalCount(data.pagination?.totalCount ?? 0);
-      setPage(fetchPage);
+      setPage(shownPage);
       setUsernames(data.usernames ?? []);
       setPlatforms(data.platforms ?? []);
+      setLoadError(false);
     } catch {
-      if (token !== reqToken.current) return;
-      setItems([]);
-      setTotalCount(0);
+      if (!tracker.isCurrent(token)) return;
+      // Keep what is on screen; the notice above the table says it is stale.
+      setLoadError(true);
     } finally {
-      if (token === reqToken.current) setLoading(false);
+      if (tracker.isCurrent(token)) setLoading(false);
     }
-  }, [debouncedSearch, selectedServerId, selectedTypes, selectedUsernames, selectedPlatforms, selectedResolutions, sortBy, sortOrder]);
+  }, [tracker, debouncedSearch, selectedServerId, selectedTypes, selectedUsernames, selectedPlatforms, selectedResolutions, sortBy, sortOrder]);
 
-  // Reset to page 1 when filters change
+  /** Fetch a specific page (pagination, or page 1 after a sync). */
+  const goToPage = useCallback((target: number) => {
+    void fetchHistory(target, tracker.request(target));
+  }, [fetchHistory, tracker]);
+
+  /** Reloads page 1 of a new scope (`fetchHistory`'s identity), else the page last requested. */
+  const reloadHistory = useCallback(() => {
+    const { page: target, token } = tracker.refresh(fetchHistory);
+    void fetchHistory(target, token);
+  }, [fetchHistory, tracker]);
+
+  // Back to page 1 when filters or sort change (a new `fetchHistory`).
   useEffect(() => {
-    void (async () => { await fetchHistory(1); })();
-  }, [fetchHistory]);
+    void (async () => { reloadHistory(); })();
+  }, [reloadHistory]);
+
+  // The latest `goToPage`, for `handleSync`: it awaits a stream that can run for
+  // minutes, and the `goToPage` it closed over loads the filters and sort from before.
+  const goToPageRef = useRef(goToPage);
+  useEffect(() => {
+    goToPageRef.current = goToPage;
+  }, [goToPage]);
+
+  // Top of the table (above the stale-data notice), for page changes.
+  const tableTopRef = useRef<HTMLDivElement>(null);
+
+  /** A page change the user asked for: back to the table's top, then load. Background reloads never scroll. */
+  const handlePageChange = useCallback((target: number) => {
+    const anchor = tableTopRef.current;
+    const container = anchor ? scrollContainerOf(anchor) : null;
+    if (anchor && container) {
+      const top = scrollTopForPageChange(
+        anchor.getBoundingClientRect().top,
+        container.getBoundingClientRect().top,
+        container.scrollTop,
+      );
+      if (top !== null) container.scrollTo({ top });
+    }
+    goToPage(target);
+  }, [goToPage]);
 
   // ── Tracearr import progress ───────────────────────────────────
+
+  // Orders the overlapping import-status reads (see below).
+  const [importStatusOrder] = useState(() => new ResponseOrder());
 
   /**
    * Asks whether any mapped server is still importing. The endpoint reports
@@ -700,15 +765,19 @@ export default function HistoryPage() {
    * flag it cleared also gated the poll, so nothing ever asked again even
    * though the backfill was still running. It stays silent either way: this is
    * a background note about someone else's job, never an error toast.
+   *
+   * Its triggers (mount, poll, realtime events, post-sync re-check) overlap, so
+   * only an answer no newer answer has overtaken applies (`importStatusOrder`).
    */
   const fetchImportBackfillPending = useCallback(async () => {
+    const seq = importStatusOrder.begin();
     try {
       const res = await fetch("/api/integrations/tracearr/status");
       if (!res.ok) return;
-      const data = (await res.json()) as {
-        servers?: { backfillComplete: boolean; backfillFraction: number | null }[];
-      };
-      const pending = (data.servers ?? []).filter((s) => !s.backfillComplete);
+      const data = (await res.json()) as { servers?: TracearrImportStatus[] };
+      // After the last await; a failed read never gets here (see `ResponseOrder.accept`).
+      if (!importStatusOrder.accept(seq)) return;
+      const pending = (data.servers ?? []).filter(isImportPending);
       setImportBackfillPending(pending.length > 0);
       // Recomputed from every successful read rather than latched, so a backfill
       // that appears later (a server mapped to Tracearr after this page loaded,
@@ -717,23 +786,15 @@ export default function HistoryPage() {
       // The note clears only once EVERY mapped server is finished, so the
       // number that describes it is the least-advanced server's — an average
       // would keep climbing while the laggard that actually gates the note sat
-      // still. One unmeasured server makes the whole note indeterminate: a
-      // server with no fraction could be anywhere, so there is no floor to
-      // report and null (not 0) is the honest answer.
-      const known = pending
-        .map((s) => s.backfillFraction)
-        .filter((fraction): fraction is number => fraction !== null);
-      setImportBackfillPercent(
-        pending.length > 0 && known.length === pending.length
-          ? Math.round(Math.min(...known) * 100)
-          : null,
-      );
+      // still. One unmeasured server makes the whole note indeterminate (null,
+      // not 0).
+      setImportBackfillPercent(computeImportBackfillPercent(data.servers ?? []));
     } catch {
       // Unknown, not finished — see above. No state change, on purpose: the
       // note (and its percentage) keeps saying whatever the last successful
       // read said, and the poll stays armed to ask again.
     }
-  }, []);
+  }, [importStatusOrder]);
 
   useEffect(() => {
     // Kicked off from an async IIFE (the idiom the initial-load effects use)
@@ -779,14 +840,14 @@ export default function HistoryPage() {
   // minutes — rather than per page, so this cannot become a refetch storm.
   useRealtime("watch-history:updated", () => {
     void fetchImportBackfillPending();
-    void fetchHistory(page);
+    // The page last REQUESTED, not the `page` state, which moves only on success.
+    reloadHistory();
   });
 
   // ── Sort handler (server-side) ─────────────────────────────────
 
   const handleSortChange = useCallback((colId: string, order: "asc" | "desc") => {
-    const apiSortBy = COLUMN_TO_SORT_FIELD[colId] ?? "watchedAt";
-    setSortBy(apiSortBy);
+    setSortBy(historySortKeyForColumn(colId));
     setSortOrder(order);
   }, []);
 
@@ -811,6 +872,12 @@ export default function HistoryPage() {
       syncAbortRef.current?.abort();
     };
   }, []);
+
+  // The server list when the sync ENDS, to name a server added or renamed meanwhile.
+  const serversRef = useRef(servers);
+  useEffect(() => {
+    serversRef.current = servers;
+  }, [servers]);
 
   const handleStopSync = useCallback(() => {
     syncAbortRef.current?.abort();
@@ -855,7 +922,8 @@ export default function HistoryPage() {
         counts: Record<string, number>;
         cancelled: boolean;
       }>(response, onSyncProgress);
-      await fetchHistory(1);
+      // Through the ref: the filters and sort on screen now (see goToPageRef).
+      goToPageRef.current(1);
 
       // The run reached its terminal result but stopped early — the route's
       // 30-minute lifetime cap fired. (A Stop from this page can't land here:
@@ -873,9 +941,7 @@ export default function HistoryPage() {
       // A per-server count of -1 means that server threw; the run as a whole
       // still succeeded for the others, so name the ones that failed instead of
       // silently presenting a history that's missing a server's plays.
-      const failed = Object.entries(result?.counts ?? {})
-        .filter(([, count]) => count < 0)
-        .map(([serverId]) => servers.find((s) => s.id === serverId)?.name ?? serverId);
+      const failed = failedSyncServerNames(result?.counts, serversRef.current);
       if (failed.length > 0) {
         toast.warning(`Couldn't sync ${failed.length === 1 ? "a server" : "some servers"}`, {
           description: `${failed.join(", ")} — check the server's connection and try again.`,
@@ -904,7 +970,7 @@ export default function HistoryPage() {
         });
       }
       // Partial rows are real rows either way, so show them.
-      await fetchHistory(1);
+      goToPageRef.current(1);
     } finally {
       setSyncing(false);
       resetSyncProgress();
@@ -946,6 +1012,37 @@ export default function HistoryPage() {
     });
   };
 
+  /**
+   * "No plays match these filters" → Clear filters. Clears the debounced search too
+   * and keeps an empty set's identity, so the list reloads once.
+   */
+  const clearFilters = useCallback(() => {
+    setSearch("");
+    setDebouncedSearch("");
+    setSelectedServerId("all");
+    setSelectedTypes((prev) => (prev.size === 0 ? prev : new Set()));
+    setSelectedUsernames((prev) => (prev.size === 0 ? prev : new Set()));
+    setSelectedPlatforms((prev) => (prev.size === 0 ? prev : new Set()));
+  }, []);
+
+  // The filters the shown answer was fetched under: the debounced search, not the box.
+  const filtersActive = historyFiltersActive({
+    search: debouncedSearch,
+    serverId: selectedServerId,
+    types: selectedTypes,
+    usernames: selectedUsernames,
+    platforms: selectedPlatforms,
+    resolutions: selectedResolutions,
+  });
+  const tableView = historyTableView({
+    loading,
+    loadError,
+    rowCount: items.length,
+    totalCount,
+    filtersActive,
+    historyHasPlays: usernames.length > 0,
+  });
+
   // ── Detail panel ──────────────────────────────────────────────
 
   const openDetailPanel = useCallback(async (historyItem: WatchHistoryItem) => {
@@ -970,12 +1067,7 @@ export default function HistoryPage() {
   }, []);
 
   // Map current sortBy back to DataTable column ID for sort indicator
-  const activeColumnSortId = useMemo(() => {
-    const reverse = Object.fromEntries(
-      Object.entries(COLUMN_TO_SORT_FIELD).map(([col, field]) => [field, col]),
-    );
-    return reverse[sortBy] ?? "watchedAt";
-  }, [sortBy]);
+  const activeColumnSortId = useMemo(() => historyColumnForSortKey(sortBy), [sortBy]);
 
   // ── Render ─────────────────────────────────────────────────────
 
@@ -1206,10 +1298,48 @@ export default function HistoryPage() {
             </DropdownMenu>
           </div>
 
-          {/* Table */}
-          {loading ? (
+          <div ref={tableTopRef} aria-hidden data-testid="history-table-top" />
+
+          {/* A failed load keeps the rows on screen and says so. */}
+          {loadError && !loading && (
+            items.length > 0 ? (
+              <div className="mb-4 flex items-center gap-2 text-xs text-muted-foreground">
+                <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber" />
+                <span>Couldn&apos;t load watch history — the plays below may be out of date or not match the current filters.</span>
+                <Button variant="ghost" size="sm" className="h-7 px-2" onClick={reloadHistory}>
+                  Retry
+                </Button>
+              </div>
+            ) : null
+          )}
+
+          {/* Table. The skeleton is for a first load; a reload dims the rows in place. */}
+          {tableView === "loading" ? (
             <TableRowsSkeleton rows={10} columns={5} />
-          ) : items.length === 0 && totalCount === 0 ? (
+          ) : tableView === "error" ? (
+            <EmptyState
+              icon={AlertTriangle}
+              title="Couldn't load watch history"
+              description="The request failed. Your history is still there — try again."
+              action={
+                <Button variant="outline" size="sm" onClick={reloadHistory}>
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  Retry
+                </Button>
+              }
+            />
+          ) : tableView === "no-matches" ? (
+            <EmptyState
+              icon={SearchX}
+              title="No plays match these filters"
+              description="Nothing in your watch history matches the search and filters above."
+              action={
+                <Button variant="outline" size="sm" onClick={clearFilters}>
+                  Clear filters
+                </Button>
+              }
+            />
+          ) : tableView === "no-history" ? (
             <EmptyState
               icon={History}
               title="No watch history"
@@ -1232,6 +1362,7 @@ export default function HistoryPage() {
             />
           ) : (
             <>
+              <div className={cn("transition-opacity", loading && "opacity-60")}>
               <DataTable
                 columns={activeColumns}
                 data={items}
@@ -1268,6 +1399,7 @@ export default function HistoryPage() {
                   />
                 )}
               />
+              </div>
 
               {/* Pagination */}
               {totalCount > 0 && (
@@ -1276,7 +1408,7 @@ export default function HistoryPage() {
                   page={page}
                   totalCount={totalCount}
                   pageSize={PAGE_SIZE}
-                  onPageChange={fetchHistory}
+                  onPageChange={handlePageChange}
                   busy={loading}
                 />
               )}

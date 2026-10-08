@@ -1,22 +1,13 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type { TracearrHistoryRecord } from "@/lib/tracearr/tracearr-client";
 
 /**
- * The targeted recovery pass for a re-added item.
- *
- * Deleting a `MediaItem` cascade-deletes its `WatchHistory`, so an item that
- * comes back reads as never watched — `playCount 0`, `lastPlayedAt null` — which
- * is exactly the state a "not played in N months" or `playCount = 0` DELETE rule
- * fires on. The plays still exist in Tracearr; this pass asks for them by rating
- * key.
- *
- * The invariants worth locking down are the ones whose failure is invisible:
- * `rating_key` takes ONE value per request, so an unbounded candidate set is
- * thousands of requests per run against a rolling per-minute rate limit — both
- * the 7-day window and the cap are load-bearing, and a query that quietly lost
- * either would still pass every "it recovers the plays" assertion. Likewise the
- * records must go through the shared importer: a second copy of the row mapping
- * or the ON CONFLICT merge rules would drift silently.
+ * The targeted recovery pass for a re-added item, whose plays the cascade
+ * deleted with its old row. The invariants worth locking down are the ones
+ * whose failure is invisible: `rating_key` takes ONE value per request, so the
+ * 7-day window and the cap are what bound the request count, and the records
+ * must go through the shared importer — a second copy of the row mapping or
+ * the ON CONFLICT merge would drift silently.
  */
 
 const m = vi.hoisted(() => ({
@@ -28,26 +19,26 @@ const m = vi.hoisted(() => ({
   getHistoryForItem: vi.fn(),
   getServerAccountNames: vi.fn(),
   buildTracearrJoinIndex: vi.fn(),
+  resolveMediaItemId: vi.fn(),
   importTracearrRecords: vi.fn(),
   resolveInstanceForServer: vi.fn(),
+  forwardPassBoundary: vi.fn(),
   reconcileWatchStateFromHistory: vi.fn(),
   invalidateMediaCaches: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({ prisma: m.prisma }));
 vi.mock("@/lib/logger", () => ({ logger: m.logger }));
-vi.mock("@/lib/cache/invalidate", () => ({
-  invalidateMediaCaches: m.invalidateMediaCaches,
-}));
-vi.mock("@/lib/sync/watch-reconcile", () => ({
-  reconcileWatchStateFromHistory: m.reconcileWatchStateFromHistory,
-}));
+vi.mock("@/lib/cache/invalidate", () => ({ invalidateMediaCaches: m.invalidateMediaCaches }));
+vi.mock("@/lib/sync/watch-reconcile", () => ({ reconcileWatchStateFromHistory: m.reconcileWatchStateFromHistory }));
 vi.mock("@/lib/sync/tracearr-join", () => ({
   buildTracearrJoinIndex: m.buildTracearrJoinIndex,
+  resolveMediaItemId: m.resolveMediaItemId,
 }));
 vi.mock("@/lib/sync/sync-tracearr-history", () => ({
   importTracearrRecords: m.importTracearrRecords,
   resolveInstanceForServer: m.resolveInstanceForServer,
+  forwardPassBoundary: m.forwardPassBoundary,
 }));
 vi.mock("@/lib/tracearr/tracearr-client", () => ({
   // Constructor mock — must be a `function`, not an arrow (Vitest 4).
@@ -63,43 +54,28 @@ import {
   RECENT_ADDITION_WINDOW_MS,
   DEFAULT_CANDIDATE_LIMIT,
   MAX_CANDIDATE_LIMIT,
+  MAX_RECOVERY_ASKS,
+  RECOVERY_REASK_MS,
   resetRecoveryAnswers,
 } from "@/lib/sync/tracearr-backfill-additions";
 import { TracearrMappingChangedError } from "@/lib/sync/tracearr-mapping-changed";
 
 const SERVER_ID = "server-1";
 const TRACEARR_SERVER_ID = "11111111-2222-3333-4444-555555555555";
-
+const MAPPING_VERSION = 6;
+/** The guard the pass hands the shared importer: the mapping AND its version. */
+const GUARD = { tracearrServerId: TRACEARR_SERVER_ID, mappingVersion: MAPPING_VERSION };
 /** The join index is opaque here — only that the SAME one is reused matters. */
 const JOIN_INDEX = { serverId: SERVER_ID, itemCount: 3 };
+/** The account-name map: the only state in which this pass may write. */
+const NAMES = new Map([["srv-user-1", "weingart"]]);
 
-/**
- * Only `id` and `server_id` are read by this module; everything else about a
- * record is the shared importer's business, and its mapping is covered where it
- * lives (`sync-tracearr-history.test.ts`). Casting keeps that boundary visible
- * rather than pretending this pass inspects the full shape.
- */
-function play(id: string, serverId = TRACEARR_SERVER_ID): TracearrHistoryRecord {
-  return { id, server_id: serverId } as TracearrHistoryRecord;
+/** Only `id`, `server_id` and `started_at` are read here; the mapping is the importer's business. */
+function play(id: string, startedAt?: string, serverId = TRACEARR_SERVER_ID): TracearrHistoryRecord {
+  return { id, server_id: serverId, ...(startedAt ? { started_at: startedAt } : {}) } as TracearrHistoryRecord;
 }
 
-function candidate(n: number) {
-  return {
-    id: `item-${n}`,
-    ratingKey: `${1000 + n}`,
-    title: `Item ${n}`,
-    type: "MOVIE",
-    parentTitle: null as string | null,
-    seasonNumber: null as number | null,
-    episodeNumber: null as number | null,
-    // No provider ids by default: the rating-key path is the common case, and a
-    // candidate that carries ids would silently exercise the fallback too.
-    tmdbId: null,
-    imdbId: null,
-  };
-}
-
-let candidates: Array<{
+type Candidate = {
   id: string;
   ratingKey: string;
   title: string;
@@ -109,7 +85,14 @@ let candidates: Array<{
   episodeNumber?: number | null;
   tmdbId: string | null;
   imdbId: string | null;
-}>;
+};
+
+/** A movie candidate with no provider ids: the rating-key path alone, unless a test adds some. */
+function candidate(n: number, extra: Partial<Candidate> = {}): Candidate {
+  return { id: `item-${n}`, ratingKey: `${1000 + n}`, title: `Item ${n}`, type: "MOVIE", tmdbId: null, imdbId: null, ...extra };
+}
+
+let candidates: Candidate[];
 
 /** The candidate query's SQL and bind params. */
 function candidateQuery(): { sql: string; params: unknown[] } {
@@ -117,52 +100,80 @@ function candidateQuery(): { sql: string; params: unknown[] } {
   return { sql: call[0], params: call.slice(1) };
 }
 
+/** Another pass; which ids its candidate query left out, and which it offered again as due. */
+async function nextPassAnswered() {
+  m.prisma.$queryRawUnsafe.mockClear();
+  await recoverHistoryForNewItems(SERVER_ID);
+  return { excluded: candidateQuery().params[3], due: candidateQuery().params[4] };
+}
+
+function serverRow(extra: Record<string, unknown> = {}) {
+  return {
+    id: SERVER_ID,
+    name: "Test Plex",
+    enabled: true,
+    tracearrServerId: TRACEARR_SERVER_ID,
+    tracearrMappingVersion: MAPPING_VERSION,
+    tracearrBackfillComplete: true,
+    userId: "user-1",
+    ...extra,
+  };
+}
+
+function imports(inserted: number, updated: number, skipped: number, rowsInserted: number) {
+  m.importTracearrRecords.mockResolvedValue({ inserted, updated, skipped, rowsInserted });
+}
+
+function tracearrError(code: string, status?: number) {
+  return new IntegrationError("Tracearr", {
+    config: { url: "/api/v2/public/history", method: "get" },
+    code,
+    response: status === undefined ? undefined : { status, data: {} },
+  } as never);
+}
+
+const askedFilters = () => m.getHistoryForItem.mock.calls.map((c) => c[1]);
+const NONE = { checked: 0, imported: 0 };
+
 describe("recoverHistoryForNewItems", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetRecoveryAnswers();
-
     candidates = [candidate(1)];
-
-    m.prisma.mediaServer.findFirst.mockResolvedValue({
-      id: SERVER_ID,
-      name: "Test Plex",
-      enabled: true,
-      tracearrServerId: TRACEARR_SERVER_ID,
-      userId: "user-1",
-    });
+    m.prisma.mediaServer.findFirst.mockResolvedValue(serverRow());
     m.prisma.$queryRawUnsafe.mockImplementation(async () => candidates);
-    m.resolveInstanceForServer.mockResolvedValue({
-      id: "tracearr-1",
-      name: "Tracearr",
-      url: "http://tracearr:8080",
-      apiKey: "key",
-    });
+    // Far ahead unless a test says otherwise.
+    m.forwardPassBoundary.mockResolvedValue(new Date("2100-01-01T00:00:00.000Z"));
+    m.resolveInstanceForServer.mockResolvedValue({ id: "tracearr-1", name: "Tracearr", url: "http://tracearr:8080", apiKey: "key" });
     m.buildTracearrJoinIndex.mockResolvedValue(JOIN_INDEX);
+    // Every play resolves to the first candidate unless a test says otherwise.
+    m.resolveMediaItemId.mockReturnValue({ mediaItemId: "item-1" });
     m.getHistoryForItem.mockResolvedValue([]);
-    // A populated map is the only state in which this pass may write: the rows
-    // it creates are old plays nothing re-delivers, so a missing/empty map has
-    // to abort rather than fall back to Tracearr's identity labels.
-    m.getServerAccountNames.mockResolvedValue(new Map([["srv-user-1", "weingart"]]));
-    m.importTracearrRecords.mockResolvedValue({
-      inserted: 0,
-      updated: 0,
-      skipped: 0,
-    });
+    m.getServerAccountNames.mockResolvedValue(NAMES);
+    imports(0, 0, 0, 0);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   describe("candidate selection", () => {
-    it("asks only about items with no Tracearr plays of their own", async () => {
+    it("shapes the candidate query: this server, no Tracearr play from well before creation, never-asked first", async () => {
       await recoverHistoryForNewItems(SERVER_ID);
 
       const { sql, params } = candidateQuery();
-      // An item that already has Tracearr rows was never missing its history,
-      // and re-querying it would spend a request to learn nothing.
-      expect(sql).toContain("NOT EXISTS");
-      expect(sql).toContain('"WatchHistory"');
-      expect(sql).toContain("'TRACEARR'");
       expect(sql).toContain('l."mediaServerId" = $1');
       expect(params[0]).toBe(SERVER_ID);
+      // A re-added item's first NEW play usually lands before this pass, so
+      // "has any TRACEARR row" must not end candidacy; a play from a window
+      // before `createdAt` (only the walk or a recovery stores one) does.
+      expect(sql).toContain("NOT EXISTS");
+      expect(sql).toContain(`wh."source" = 'TRACEARR'`);
+      expect(sql).toContain(`wh."watchedAt" < mi."createdAt" - ($6::integer * interval '1 second')`);
+      expect(params[5]).toBe(RECENT_ADDITION_WINDOW_MS / 1000);
+      expect(sql).toContain('NOT (mi."id" = ANY($4::text[]))');
+      expect(sql).toContain('ORDER BY (mi."id" = ANY($5::text[])) ASC, mi."createdAt" DESC, mi."id" ASC');
+      expect(params[4]).toEqual([]);
     });
 
     it("restricts candidates to the recent-addition window", async () => {
@@ -170,234 +181,192 @@ describe("recoverHistoryForNewItems", () => {
       await recoverHistoryForNewItems(SERVER_ID);
       const after = Date.now();
 
+      // Without it the candidates are most of a library, one request each, every run.
       const { sql, params } = candidateQuery();
       expect(sql).toContain('mi."createdAt" > $2');
-
-      // Without this bound the candidate set is "every item that has never been
-      // played" — most of a real library — re-queried on every run, forever,
-      // one request each.
       const addedAfter = params[1] as Date;
-      expect(addedAfter).toBeInstanceOf(Date);
-      expect(addedAfter.getTime()).toBeGreaterThanOrEqual(
-        before - RECENT_ADDITION_WINDOW_MS,
-      );
-      expect(addedAfter.getTime()).toBeLessThanOrEqual(
-        after - RECENT_ADDITION_WINDOW_MS,
-      );
+      expect(addedAfter.getTime()).toBeGreaterThanOrEqual(before - RECENT_ADDITION_WINDOW_MS);
+      expect(addedAfter.getTime()).toBeLessThanOrEqual(after - RECENT_ADDITION_WINDOW_MS);
       expect(RECENT_ADDITION_WINDOW_MS).toBe(7 * 24 * 60 * 60 * 1000);
     });
 
-    it("caps the candidate count, because the cap IS the request budget", async () => {
-      await recoverHistoryForNewItems(SERVER_ID);
-      expect(candidateQuery().sql).toContain("LIMIT $3");
-      expect(candidateQuery().params[2]).toBe(DEFAULT_CANDIDATE_LIMIT);
-
-      vi.clearAllMocks();
-      m.prisma.$queryRawUnsafe.mockImplementation(async () => candidates);
-      await recoverHistoryForNewItems(SERVER_ID, { limit: 5 });
-      expect(candidateQuery().params[2]).toBe(5);
-
+    it.each([
+      [undefined, DEFAULT_CANDIDATE_LIMIT],
+      [5, 5],
       // A caller may ask for less of the budget, never more.
-      vi.clearAllMocks();
-      m.prisma.$queryRawUnsafe.mockImplementation(async () => candidates);
-      await recoverHistoryForNewItems(SERVER_ID, { limit: 50_000 });
-      expect(candidateQuery().params[2]).toBe(MAX_CANDIDATE_LIMIT);
-    });
-
-    it("takes the newest arrivals when there are more candidates than the cap", async () => {
-      await recoverHistoryForNewItems(SERVER_ID);
-      expect(candidateQuery().sql).toContain('ORDER BY mi."createdAt" DESC');
+      [50_000, MAX_CANDIDATE_LIMIT],
+    ])("caps the candidate count (limit %s → %i), because the cap IS the request budget", async (limit, cap) => {
+      await recoverHistoryForNewItems(SERVER_ID, limit === undefined ? {} : { limit });
+      expect(candidateQuery().sql).toContain("LIMIT $3");
+      expect(candidateQuery().params[2]).toBe(cap);
     });
 
     it("does no work at all when nothing has been added", async () => {
       candidates = [];
 
-      const result = await recoverHistoryForNewItems(SERVER_ID);
-
-      expect(result).toEqual({ checked: 0, imported: 0 });
-      // The steady state is zero candidates, so it must cost one indexed query
-      // and nothing else — no instance lookup, no join index over the whole
-      // server's library, no HTTP.
+      expect(await recoverHistoryForNewItems(SERVER_ID)).toEqual(NONE);
+      // The steady state: one indexed query, no instance lookup, join index or HTTP.
       expect(m.resolveInstanceForServer).not.toHaveBeenCalled();
       expect(m.buildTracearrJoinIndex).not.toHaveBeenCalled();
       expect(m.getHistoryForItem).not.toHaveBeenCalled();
     });
 
-    it("skips a disabled or unmapped server before querying anything", async () => {
-      m.prisma.mediaServer.findFirst.mockResolvedValue({
-        id: SERVER_ID,
-        name: "Test Plex",
-        enabled: false,
-        tracearrServerId: TRACEARR_SERVER_ID,
-        userId: "user-1",
-      });
-      expect(await recoverHistoryForNewItems(SERVER_ID)).toEqual({
-        checked: 0,
-        imported: 0,
-      });
+    it.each([
+      ["a disabled server", { enabled: false }],
+      ["an unmapped server", { tracearrServerId: null }],
+      // By its own read of the row: the task's view predates a restart or a
+      // re-link, and plays written into an archive owed a walk would become
+      // its resume boundary.
+      ["an archive whose walk is not complete", { tracearrBackfillComplete: false }],
+    ])("does nothing for %s, querying nothing", async (_label, extra) => {
+      m.prisma.mediaServer.findFirst.mockResolvedValue(serverRow(extra));
 
-      m.prisma.mediaServer.findFirst.mockResolvedValue({
-        id: SERVER_ID,
-        name: "Test Plex",
-        enabled: true,
-        tracearrServerId: null,
-        userId: "user-1",
-      });
-      expect(await recoverHistoryForNewItems(SERVER_ID)).toEqual({
-        checked: 0,
-        imported: 0,
-      });
-
+      expect(await recoverHistoryForNewItems(SERVER_ID)).toEqual(NONE);
       expect(m.prisma.$queryRawUnsafe).not.toHaveBeenCalled();
+      expect(m.resolveInstanceForServer).not.toHaveBeenCalled();
+      expect(m.getHistoryForItem).not.toHaveBeenCalled();
+      expect(m.importTracearrRecords).not.toHaveBeenCalled();
     });
   });
 
   describe("lookup and import", () => {
-    it("issues exactly one request per candidate rating key", async () => {
+    it("issues exactly one request per candidate rating key, on the mapped Tracearr server", async () => {
       candidates = [candidate(1), candidate(2), candidate(3)];
 
       await recoverHistoryForNewItems(SERVER_ID);
 
-      // `rating_key` is a single value, not a list — the cost model the cap and
-      // the window exist to bound.
-      expect(m.getHistoryForItem).toHaveBeenCalledTimes(3);
-      // The filter is now an identity object, so the rating key is asked for by
-      // name rather than positionally.
-      expect(m.getHistoryForItem.mock.calls.map((c) => c[1])).toEqual([
-        { ratingKey: "1001" },
-        { ratingKey: "1002" },
-        { ratingKey: "1003" },
-      ]);
-      for (const call of m.getHistoryForItem.mock.calls) {
-        // Scoped to the mapped Tracearr server: one instance aggregates many.
-        expect(call[0]).toBe(TRACEARR_SERVER_ID);
-      }
+      expect(askedFilters()).toEqual([{ ratingKey: "1001" }, { ratingKey: "1002" }, { ratingKey: "1003" }]);
+      for (const call of m.getHistoryForItem.mock.calls) expect(call[0]).toBe(TRACEARR_SERVER_ID);
     });
 
-    it("upserts found records through the shared importer and join index", async () => {
+    it("upserts found records through the shared importer and join index, then reconciles and drops caches", async () => {
       const records = [play("chain-1"), play("chain-2")];
       m.getHistoryForItem.mockResolvedValue(records);
-      m.importTracearrRecords.mockResolvedValue({
-        inserted: 2,
-        updated: 0,
-        skipped: 0,
-      });
+      imports(2, 0, 0, 2);
 
-      const result = await recoverHistoryForNewItems(SERVER_ID);
-
-      // Through the shared path, never a local copy: the row mapping and the
-      // ON CONFLICT merge rules (monotonic progress columns, the `watched`
-      // latch) are what stop a re-delivered chain overwriting a fully-watched
-      // play with a window-truncated one.
-      expect(m.importTracearrRecords).toHaveBeenCalledWith(
-        SERVER_ID,
-        records,
-        JOIN_INDEX,
-        // The account-name map: recovered plays must be attributed with the same
-        // username vocabulary as every other row on the server, or a re-added
-        // item's history lands under a different "person".
-        expect.anything(),
-        // The Tracearr server they came from, which every write re-checks.
-        TRACEARR_SERVER_ID,
-      );
-      expect(result).toEqual({ checked: 1, imported: 2 });
-    });
-
-    it("builds the join index once for the whole pass", async () => {
-      candidates = [candidate(1), candidate(2), candidate(3)];
-      m.getHistoryForItem.mockResolvedValue([play("chain-1")]);
-      m.importTracearrRecords.mockResolvedValue({
-        inserted: 1,
-        updated: 0,
-        skipped: 0,
-      });
-
-      await recoverHistoryForNewItems(SERVER_ID);
-
-      // It loads every candidate item on the server; per-item would make the
-      // pass quadratic in the library size.
-      expect(m.buildTracearrJoinIndex).toHaveBeenCalledTimes(1);
-      expect(m.buildTracearrJoinIndex).toHaveBeenCalledWith(SERVER_ID);
-    });
-
-    it("counts merged rows as imported, not just new ones", async () => {
-      m.getHistoryForItem.mockResolvedValue([play("chain-1")]);
-      m.importTracearrRecords.mockResolvedValue({
-        inserted: 1,
-        updated: 3,
-        skipped: 2,
-      });
-
-      expect(await recoverHistoryForNewItems(SERVER_ID)).toEqual({
-        checked: 1,
-        imported: 4,
-      });
-    });
-
-    it("handles an item Tracearr has no plays for without writing anything", async () => {
-      m.getHistoryForItem.mockResolvedValue([]);
-
-      const result = await recoverHistoryForNewItems(SERVER_ID);
-
-      // The common answer for a newly added item, and not a failure.
-      expect(m.importTracearrRecords).not.toHaveBeenCalled();
-      expect(m.reconcileWatchStateFromHistory).not.toHaveBeenCalled();
-      expect(m.invalidateMediaCaches).not.toHaveBeenCalled();
-      expect(m.logger.warn).not.toHaveBeenCalled();
-      expect(result).toEqual({ checked: 1, imported: 0 });
-    });
-
-    it("drops records belonging to another media server on the same Tracearr", async () => {
-      m.getHistoryForItem.mockResolvedValue([
-        play("chain-1", "some-other-server"),
-      ]);
-
-      const result = await recoverHistoryForNewItems(SERVER_ID);
-
-      // A rating key is only unique within one server — importing these would
-      // attach a stranger's play to this server's item, and `playCount` is
-      // monotonic, so it could never be walked back.
-      expect(m.importTracearrRecords).not.toHaveBeenCalled();
-      expect(result).toEqual({ checked: 1, imported: 0 });
-    });
-
-    it("reconciles play state and drops caches once something is imported", async () => {
-      m.getHistoryForItem.mockResolvedValue([play("chain-1")]);
-      m.importTracearrRecords.mockResolvedValue({
-        inserted: 1,
-        updated: 0,
-        skipped: 0,
-      });
-
-      await recoverHistoryForNewItems(SERVER_ID);
-
-      // Without the reconcile the recovered item still reports playCount 0 —
-      // the column the lifecycle rules actually read — so the pass would have
-      // achieved nothing the rules can see.
+      expect(await recoverHistoryForNewItems(SERVER_ID)).toEqual({ checked: 1, imported: 2 });
+      // The shared path, with the account map (one username vocabulary per
+      // server) and the mapping AND version every write re-checks.
+      expect(m.importTracearrRecords).toHaveBeenCalledWith(SERVER_ID, records, JOIN_INDEX, NAMES, GUARD);
+      // Without the reconcile the item still reports playCount 0 to the rules.
       expect(m.reconcileWatchStateFromHistory).toHaveBeenCalledWith(SERVER_ID);
       expect(m.invalidateMediaCaches).toHaveBeenCalledTimes(1);
     });
 
+    it("stores only plays at or below the forward boundary, read once with the server's walk state", async () => {
+      // A newer play stored here would move MAX(watchedAt) past plays no walk has read.
+      const boundary = new Date("2026-06-10T12:00:00.000Z");
+      m.forwardPassBoundary.mockResolvedValue(boundary);
+      const older = play("chain-old", "2026-05-01T00:00:00.000Z");
+      const atBoundary = play("chain-edge", boundary.toISOString());
+      m.getHistoryForItem.mockResolvedValue([older, atBoundary, play("chain-new", "2026-06-10T13:00:00.000Z")]);
+      imports(2, 0, 0, 2);
+
+      await recoverHistoryForNewItems(SERVER_ID);
+
+      expect(m.importTracearrRecords).toHaveBeenCalledWith(SERVER_ID, [older, atBoundary], JOIN_INDEX, NAMES, GUARD);
+      expect(m.forwardPassBoundary).toHaveBeenCalledTimes(1);
+      expect(m.forwardPassBoundary).toHaveBeenCalledWith(SERVER_ID, {
+        backfillComplete: true,
+        cursorAt: undefined,
+        forwardFloorAt: undefined,
+        lastWalkAt: undefined,
+        forwardWatermarkAt: undefined,
+      });
+    });
+
+    // A play left to the catch-up keeps the item deferred, however its other
+    // plays resolved: the catch-up can step over it (a Refresh whose join index
+    // predates the item), and a day on it is old enough to store here.
+    it.each([
+      ["its plays are all newer than the boundary", [], null, 0],
+      ["its older plays resolved to it", ["chain-old"], null, 0],
+      // The new play resolving here says nothing about where its OLD ones went.
+      ["only its newer play resolves to it", ["chain-old"], "old-copy", 1],
+    ])("defers an item with a play left to the catch-up when %s", async (_label, stored, oldResolvesTo, elsewhere) => {
+      vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-10-01T00:00:00.000Z") });
+      m.forwardPassBoundary.mockResolvedValue(new Date("2026-09-30T12:00:00.000Z"));
+      const old = play("chain-old", "2026-05-01T00:00:00.000Z");
+      const recent = play("chain-new", "2026-09-30T13:00:00.000Z");
+      m.getHistoryForItem.mockResolvedValue(stored.length > 0 ? [old, recent] : [recent]);
+      if (oldResolvesTo) {
+        m.resolveMediaItemId.mockImplementation((_index: unknown, record: { id: string }) =>
+          record.id === "chain-new" ? { mediaItemId: "item-1" } : { mediaItemId: oldResolvesTo },
+        );
+      }
+
+      await recoverHistoryForNewItems(SERVER_ID);
+
+      if (stored.length > 0) {
+        expect(m.importTracearrRecords).toHaveBeenCalledWith(SERVER_ID, [old], JOIN_INDEX, NAMES, GUARD);
+      } else {
+        expect(m.importTracearrRecords).not.toHaveBeenCalled();
+      }
+      expect(m.logger.info).toHaveBeenCalledWith(
+        "WatchHistory",
+        expect.stringContaining("1 play(s) newer than the catch-up's boundary left to it (their 1 item(s) asked again later)"),
+      );
+      // Resolved here or not is judged by the plays stored here only.
+      expect(m.logger.info).toHaveBeenCalledWith(
+        "WatchHistory",
+        expect.stringContaining(`with no plays, ${elsewhere} deferred (no play resolved to the item itself)`),
+      );
+      // Left out straight after, offered again a day later.
+      expect(await nextPassAnswered()).toEqual({ excluded: ["item-1"], due: [] });
+      vi.setSystemTime(new Date(Date.now() + RECOVERY_REASK_MS));
+      expect(await nextPassAnswered()).toEqual({ excluded: [], due: ["item-1"] });
+    });
+
+    it("builds the join index once for the whole pass", async () => {
+      // It loads every candidate item on the server; per item, the pass is quadratic.
+      candidates = [candidate(1), candidate(2), candidate(3)];
+      m.getHistoryForItem.mockResolvedValue([play("chain-1")]);
+      imports(1, 0, 0, 1);
+
+      await recoverHistoryForNewItems(SERVER_ID);
+
+      expect(m.buildTracearrJoinIndex).toHaveBeenCalledTimes(1);
+      expect(m.buildTracearrJoinIndex).toHaveBeenCalledWith(SERVER_ID);
+    });
+
+    it("counts only NEW rows as imported, and neither reconciles nor drops caches when every row only merged", async () => {
+      // `imported` drives the caller's reconcile, cache drop and page refetch.
+      m.getHistoryForItem.mockResolvedValue([play("chain-1")]);
+      imports(0, 3, 2, 0);
+
+      expect(await recoverHistoryForNewItems(SERVER_ID)).toEqual({ checked: 1, imported: 0 });
+      expect(m.reconcileWatchStateFromHistory).not.toHaveBeenCalled();
+      expect(m.invalidateMediaCaches).not.toHaveBeenCalled();
+    });
+
+    it("handles an item Tracearr has no plays for without writing anything", async () => {
+      expect(await recoverHistoryForNewItems(SERVER_ID)).toEqual({ checked: 1, imported: 0 });
+      expect(m.importTracearrRecords).not.toHaveBeenCalled();
+      expect(m.reconcileWatchStateFromHistory).not.toHaveBeenCalled();
+      expect(m.invalidateMediaCaches).not.toHaveBeenCalled();
+      expect(m.logger.warn).not.toHaveBeenCalled();
+    });
+
+    it("drops records belonging to another media server on the same Tracearr", async () => {
+      // A rating key is unique only within one server: a stranger's play, never walked back.
+      m.getHistoryForItem.mockResolvedValue([play("chain-1", undefined, "some-other-server")]);
+
+      expect(await recoverHistoryForNewItems(SERVER_ID)).toEqual({ checked: 1, imported: 0 });
+      expect(m.importTracearrRecords).not.toHaveBeenCalled();
+    });
+
     it("keeps the imported rows when the reconcile fails", async () => {
       m.getHistoryForItem.mockResolvedValue([play("chain-1")]);
-      m.importTracearrRecords.mockResolvedValue({
-        inserted: 1,
-        updated: 0,
-        skipped: 0,
-      });
+      imports(1, 0, 0, 1);
       m.reconcileWatchStateFromHistory.mockRejectedValue(new Error("db down"));
 
-      // The rows are committed; the next run's reconcile corrects the columns.
-      expect(await recoverHistoryForNewItems(SERVER_ID)).toEqual({
-        checked: 1,
-        imported: 1,
-      });
+      expect(await recoverHistoryForNewItems(SERVER_ID)).toEqual({ checked: 1, imported: 1 });
       expect(m.logger.warn).toHaveBeenCalled();
     });
   });
 
   describe("stopping and failure", () => {
-    it("stops between items when the signal aborts", async () => {
+    it("stops between items when the signal aborts, handing the signal to the client too", async () => {
       candidates = [candidate(1), candidate(2), candidate(3)];
       const controller = new AbortController();
       m.getHistoryForItem.mockImplementation(async () => {
@@ -405,40 +374,31 @@ describe("recoverHistoryForNewItems", () => {
         return [];
       });
 
-      const result = await recoverHistoryForNewItems(SERVER_ID, {
-        signal: controller.signal,
-      });
-
-      // Stopping is a clean outcome, not a failure: candidacy is re-derived
-      // from the rows, so the untouched items are simply candidates next run.
+      expect(await recoverHistoryForNewItems(SERVER_ID, { signal: controller.signal })).toEqual({ checked: 1, imported: 0 });
       expect(m.getHistoryForItem).toHaveBeenCalledTimes(1);
-      expect(result).toEqual({ checked: 1, imported: 0 });
-      // The signal is handed to the client too, so an in-flight request and its
-      // rate-limit backoff are interrupted rather than waited out.
-      expect(m.getHistoryForItem.mock.calls[0][2]).toEqual({
-        signal: controller.signal,
-      });
+      expect(m.getHistoryForItem.mock.calls[0][2]).toEqual({ signal: controller.signal });
     });
 
-    it("does not abort the pass when one item's lookup fails", async () => {
+    it.each([
+      ["a plain error", new Error("tracearr 429"), "429"],
+      // An item-specific 500 says nothing about the host.
+      ["an item-specific 500", tracearrError("ERR_BAD_RESPONSE", 500), "500"],
+    ])("keeps going after one item's lookup fails with %s", async (_label, error, detail) => {
       candidates = [candidate(1), candidate(2), candidate(3)];
-      m.getHistoryForItem
-        .mockRejectedValueOnce(new Error("tracearr 429"))
-        .mockResolvedValue([play("chain-1")]);
-      m.importTracearrRecords.mockResolvedValue({
-        inserted: 1,
-        updated: 0,
-        skipped: 0,
-      });
+      m.getHistoryForItem.mockRejectedValueOnce(error).mockResolvedValue([play("chain-1")]);
+      imports(1, 0, 0, 1);
 
-      const result = await recoverHistoryForNewItems(SERVER_ID);
-
+      expect(await recoverHistoryForNewItems(SERVER_ID)).toEqual({ checked: 3, imported: 2 });
       expect(m.getHistoryForItem).toHaveBeenCalledTimes(3);
-      expect(result).toEqual({ checked: 3, imported: 2 });
       expect(m.logger.warn).toHaveBeenCalledWith(
         "WatchHistory",
         expect.stringContaining("Item 1"),
-        expect.objectContaining({ error: expect.stringContaining("429") }),
+        expect.objectContaining({ error: expect.stringContaining(detail) }),
+      );
+      expect(m.logger.warn).not.toHaveBeenCalledWith(
+        "WatchHistory",
+        expect.stringContaining("Stopping Tracearr play recovery"),
+        expect.anything(),
       );
     });
 
@@ -447,20 +407,14 @@ describe("recoverHistoryForNewItems", () => {
       ["a 5xx", 503],
       ["a 429 that outlasted its budget", 429],
     ])("stops the pass when Tracearr itself fails (%s)", async (_label, status) => {
-      // Every remaining candidate would fail the same way, each paying the
-      // client's whole retry budget on the serial MAIN_QUEUE.
+      // Every remaining candidate would pay the client's whole retry budget on the serial queue.
       candidates = [candidate(1), candidate(2), candidate(3)];
-      const hostError = new IntegrationError("Tracearr", {
-        config: { url: "/api/v2/public/history", method: "get" },
-        code: status === null ? "ECONNABORTED" : "ERR_BAD_RESPONSE",
-        response: status === null ? undefined : { status, data: {} },
-      } as never);
-      m.getHistoryForItem.mockRejectedValue(hostError);
+      m.getHistoryForItem.mockRejectedValue(
+        status === null ? tracearrError("ECONNABORTED") : tracearrError("ERR_BAD_RESPONSE", status),
+      );
 
-      const result = await recoverHistoryForNewItems(SERVER_ID);
-
+      expect(await recoverHistoryForNewItems(SERVER_ID)).toEqual({ checked: 1, imported: 0 });
       expect(m.getHistoryForItem).toHaveBeenCalledTimes(1);
-      expect(result).toEqual({ checked: 1, imported: 0 });
       expect(m.logger.warn).toHaveBeenCalledWith(
         "WatchHistory",
         expect.stringContaining("Stopping Tracearr play recovery"),
@@ -468,36 +422,9 @@ describe("recoverHistoryForNewItems", () => {
       );
     });
 
-    it("keeps going after an item-specific 500 — it says nothing about the host", async () => {
-      candidates = [candidate(1), candidate(2), candidate(3)];
-      const itemError = new IntegrationError("Tracearr", {
-        config: { url: "/api/v2/public/history", method: "get" },
-        code: "ERR_BAD_RESPONSE",
-        response: { status: 500, data: {} },
-      } as never);
-      m.getHistoryForItem.mockRejectedValueOnce(itemError).mockResolvedValue([play("chain-1")]);
-      m.importTracearrRecords.mockResolvedValue({ inserted: 1, updated: 0, skipped: 0 });
-
-      const result = await recoverHistoryForNewItems(SERVER_ID);
-
-      expect(m.getHistoryForItem).toHaveBeenCalledTimes(3);
-      expect(result).toEqual({ checked: 3, imported: 2 });
-      expect(m.logger.warn).not.toHaveBeenCalledWith(
-        "WatchHistory",
-        expect.stringContaining("Stopping Tracearr play recovery"),
-        expect.anything(),
-      );
-    });
-
     it("names an episode it could not recover by its show and SxxExx", async () => {
-      candidates = [{
-        ...candidate(1), type: "SERIES", title: "Pilot", parentTitle: "Breaking Bad", seasonNumber: 1, episodeNumber: 2,
-      }];
-      m.getHistoryForItem.mockRejectedValueOnce(new IntegrationError("Tracearr", {
-        config: { url: "/api/v2/public/history", method: "get" },
-        code: "ERR_BAD_RESPONSE",
-        response: { status: 500, data: {} },
-      } as never));
+      candidates = [candidate(1, { type: "SERIES", title: "Pilot", parentTitle: "Breaking Bad", seasonNumber: 1, episodeNumber: 2 })];
+      m.getHistoryForItem.mockRejectedValueOnce(tracearrError("ERR_BAD_RESPONSE", 500));
 
       await recoverHistoryForNewItems(SERVER_ID);
 
@@ -513,261 +440,261 @@ describe("recoverHistoryForNewItems", () => {
       const controller = new AbortController();
       m.getHistoryForItem.mockImplementation(async () => {
         controller.abort();
-        throw new IntegrationError("Tracearr", {
-          config: { url: "/api/v2/public/history", method: "get" },
-          code: "ERR_CANCELED",
-        } as never);
+        throw tracearrError("ERR_CANCELED");
       });
 
       await recoverHistoryForNewItems(SERVER_ID, { signal: controller.signal });
 
       expect(m.getHistoryForItem).toHaveBeenCalledTimes(1);
-      expect(m.logger.warn).not.toHaveBeenCalledWith(
-        "WatchHistory",
-        expect.stringContaining("not answering"),
-        expect.anything(),
-      );
+      expect(m.logger.warn).not.toHaveBeenCalledWith("WatchHistory", expect.stringContaining("not answering"), expect.anything());
     });
 
     it("does not abort the pass when one item's write fails", async () => {
+      // An item deleted between the candidate query and the write rejects its own batch only.
       candidates = [candidate(1), candidate(2)];
       m.getHistoryForItem.mockResolvedValue([play("chain-1")]);
-      // The FK is required and cascades: an item deleted between the candidate
-      // query and the write rejects its own batch, and only its own.
       m.importTracearrRecords
         .mockRejectedValueOnce(new Error("foreign key violation"))
-        .mockResolvedValue({ inserted: 1, updated: 0, skipped: 0 });
+        .mockResolvedValue({ inserted: 1, updated: 0, skipped: 0, rowsInserted: 1 });
 
-      expect(await recoverHistoryForNewItems(SERVER_ID)).toEqual({
-        checked: 2,
-        imported: 1,
-      });
+      expect(await recoverHistoryForNewItems(SERVER_ID)).toEqual({ checked: 2, imported: 1 });
     });
 
     it("logs a summary of what it checked, imported and skipped", async () => {
       candidates = [candidate(1), candidate(2)];
       m.getHistoryForItem.mockResolvedValue([play("chain-1")]);
-      m.importTracearrRecords.mockResolvedValue({
-        inserted: 1,
-        updated: 0,
-        skipped: 4,
-      });
+      imports(1, 0, 4, 1);
 
       await recoverHistoryForNewItems(SERVER_ID);
 
+      // Two candidates, each one imported play and four records the resolver refused.
       expect(m.logger.info).toHaveBeenCalledWith(
         "WatchHistory",
-        // Two candidates, each contributing one imported row and four records
-        // the resolver refused to name.
-        expect.stringMatching(/checked 2 .*imported 2 play\(s\).*8 unjoinable/),
+        expect.stringMatching(/checked 2 .*imported 2 new play\(s\).*8 unjoinable/),
       );
+    });
+
+    it("stops instead of failing every remaining item when the mapping changes mid-pass", async () => {
+      candidates = [candidate(1), candidate(2), candidate(3)];
+      m.getHistoryForItem.mockResolvedValue([play("chain-1")]);
+      m.importTracearrRecords.mockRejectedValue(new TracearrMappingChangedError(SERVER_ID));
+
+      expect(await recoverHistoryForNewItems(SERVER_ID)).toEqual({ checked: 1, imported: 0 });
+      expect(m.importTracearrRecords).toHaveBeenCalledTimes(1);
     });
   });
 
   describe("recovering an item whose rating key changed", () => {
+    // Plex mints a NEW rating key when an item is removed and added back, so
+    // the old plays are only reachable by provider id.
+    const film = (n = 1) => candidate(n, { ratingKey: `900${n}`, title: "Film", tmdbId: "603" });
+
     it("falls back to the provider id when the rating key has no plays", async () => {
-      // The re-add case: Plex mints a NEW rating key when an item is removed
-      // and added back, so the old plays are unreachable by key. Without this
-      // fallback the whole pass is a no-op for the situation it exists to fix.
-      candidates = [
-        { id: "item-1", ratingKey: "9999", title: "Re-added Film", tmdbId: "603", imdbId: null },
-      ];
+      candidates = [film()];
+      m.getHistoryForItem.mockResolvedValueOnce([]).mockResolvedValueOnce([play("chain-1")]);
+
+      await recoverHistoryForNewItems(SERVER_ID);
+
+      expect(askedFilters()).toEqual([{ ratingKey: "9001" }, { tmdbId: "603", imdbId: null }]);
+      expect(m.importTracearrRecords).toHaveBeenCalled();
+    });
+
+    it("still asks by provider id when the rating key already found plays", async () => {
+      // The item played once since it came back: stopping at that answer
+      // recovered one play and left the item reading as barely watched.
+      candidates = [film()];
       m.getHistoryForItem
-        .mockResolvedValueOnce([])
-        .mockResolvedValueOnce([play("chain-1")]);
+        .mockResolvedValueOnce([play("new-play")])
+        .mockResolvedValueOnce([play("new-play"), play("old-1"), play("old-2")]);
+      imports(3, 0, 0, 3);
+
+      await recoverHistoryForNewItems(SERVER_ID);
+
+      expect(askedFilters()).toEqual([{ ratingKey: "9001" }, { tmdbId: "603", imdbId: null }]);
+      // Both answers in one import, the play both returned only once.
+      expect(m.importTracearrRecords).toHaveBeenCalledTimes(1);
+      const imported = m.importTracearrRecords.mock.calls[0][1] as TracearrHistoryRecord[];
+      expect(imported.map((r) => r.id)).toEqual(["new-play", "old-1", "old-2"]);
+      expect(m.logger.info).toHaveBeenCalledWith("WatchHistory", expect.stringContaining("1 recovered by provider id"));
+    });
+
+    it("does not count a provider answer that only repeats the rating key's as a recovery", async () => {
+      candidates = [film()];
+      m.getHistoryForItem.mockResolvedValue([play("chain-1")]);
+      imports(0, 1, 0, 0);
 
       await recoverHistoryForNewItems(SERVER_ID);
 
       expect(m.getHistoryForItem).toHaveBeenCalledTimes(2);
-      expect(m.getHistoryForItem.mock.calls[0][1]).toEqual({ ratingKey: "9999" });
-      expect(m.getHistoryForItem.mock.calls[1][1]).toEqual({
-        tmdbId: "603",
-        imdbId: null,
-      });
-      expect(m.importTracearrRecords).toHaveBeenCalled();
+      expect((m.importTracearrRecords.mock.calls[0][1] as TracearrHistoryRecord[]).map((r) => r.id)).toEqual(["chain-1"]);
+      expect(m.logger.info).toHaveBeenCalledWith("WatchHistory", expect.stringContaining("0 recovered by provider id"));
     });
 
-    it("does not fall back when the rating key already found plays", async () => {
-      candidates = [
-        { id: "item-1", ratingKey: "1001", title: "Film", tmdbId: "603", imdbId: null },
-      ];
-      m.getHistoryForItem.mockResolvedValueOnce([play("chain-1")]);
+    it("keeps the item a candidate when the provider lookup fails after the rating key answered", async () => {
+      candidates = [film()];
+      m.getHistoryForItem.mockResolvedValueOnce([play("new-play")]).mockRejectedValueOnce(new Error("provider lookup failed"));
 
       await recoverHistoryForNewItems(SERVER_ID);
-
-      expect(m.getHistoryForItem).toHaveBeenCalledTimes(1);
+      // Nothing written from half an answer; the next run asks both again.
+      expect(m.importTracearrRecords).not.toHaveBeenCalled();
+      expect((await nextPassAnswered()).excluded).toEqual([]);
     });
 
     it("asks a shared provider identity only once across a run", async () => {
-      // Two copies of one film (two libraries) carry the same TMDB id: one
-      // request answers both.
-      candidates = [
-        { id: "item-1", ratingKey: "9001", title: "Film", tmdbId: "603", imdbId: null },
-        { id: "item-2", ratingKey: "9002", title: "Film", tmdbId: "603", imdbId: null },
-      ];
-      m.getHistoryForItem.mockResolvedValue([]);
+      // Two copies of one film (two libraries) carry the same TMDB id.
+      candidates = [film(1), film(2)];
 
       await recoverHistoryForNewItems(SERVER_ID);
 
-      const providerCalls = m.getHistoryForItem.mock.calls.filter(
-        (c) => !(c[1] as { ratingKey?: string }).ratingKey,
-      );
-      expect(providerCalls).toHaveLength(1);
-      expect(providerCalls[0][1]).toEqual({ tmdbId: "603", imdbId: null });
+      const byProvider = askedFilters().filter((filter) => !(filter as { ratingKey?: string }).ratingKey);
+      expect(byProvider).toEqual([{ tmdbId: "603", imdbId: null }]);
     });
 
-    it("never asks by provider id for an episode", async () => {
-      // An episode row stores the SERIES-level ids while Tracearr files plays
-      // under EPISODE-level ones, so a lookup by the show's id can only return
-      // plays of whatever else happens to carry that number.
-      candidates = [
-        {
-          id: "item-1",
-          ratingKey: "9001",
-          title: "Pilot",
-          type: "SERIES",
-          parentTitle: "Show",
-          seasonNumber: 1,
-          episodeNumber: 1,
-          tmdbId: "1396",
-          imdbId: "tt0903747",
-        },
-      ];
-      m.getHistoryForItem.mockResolvedValue([]);
+    it.each([
+      // An episode row stores SERIES-level ids, Tracearr files plays under episode-level ones.
+      ["an episode", { type: "SERIES", parentTitle: "Show", seasonNumber: 1, episodeNumber: 1, tmdbId: "1396", imdbId: "tt0903747" }],
+      // An unfiltered request would page the server's ENTIRE history for one item.
+      ["an item carrying no ids", {}],
+    ])("never asks by provider id for %s", async (_label, extra) => {
+      candidates = [candidate(1, { ratingKey: "9001", ...extra })];
 
       await recoverHistoryForNewItems(SERVER_ID);
 
-      expect(m.getHistoryForItem).toHaveBeenCalledTimes(1);
-      expect(m.getHistoryForItem.mock.calls[0][1]).toEqual({ ratingKey: "9001" });
-    });
-
-    it("does not attempt a provider lookup for an item carrying no ids", async () => {
-      // An unfiltered history request would page the server's ENTIRE history
-      // for one item.
-      candidates = [
-        { id: "item-1", ratingKey: "9999", title: "No ids", tmdbId: null, imdbId: null },
-      ];
-      m.getHistoryForItem.mockResolvedValue([]);
-
-      await recoverHistoryForNewItems(SERVER_ID);
-
-      expect(m.getHistoryForItem).toHaveBeenCalledTimes(1);
+      expect(askedFilters()).toEqual([{ ratingKey: "9001" }]);
     });
   });
 
-
   describe("account-name map", () => {
-    // The rows this pass writes are the ONE case where a degraded username is
-    // permanent. `findCandidates` excludes any item that already has a TRACEARR
-    // row, the forward pass reaches back only an hour, and
-    // `tracearrBackfillComplete` is already true by the time recovery runs — so
-    // nothing ever re-delivers these records to correct them. A row stored as
-    // "Nick W" sits beside the rest of the server's history stored as
-    // "weingart", and a `watchedByUser` rule sees one person as two: a
-    // protective "watched by X" exception silently stops matching.
-    it("imports nothing when the account map cannot be loaded", async () => {
+    // The rows this pass writes are old plays nothing re-delivers: stored
+    // under Tracearr's identity labels, one person reads as two to
+    // `watchedByUser` for good.
+    it.each([
+      ["cannot be loaded", () => m.getServerAccountNames.mockRejectedValue(new Error("tracearr 503")), [expect.anything()]],
+      // An empty Map is truthy: a bare falsy check would let the recovery through.
+      ["comes back empty", () => m.getServerAccountNames.mockResolvedValue(new Map()), []],
+    ])("imports nothing when the account map %s", async (_label, fail, errorArgument) => {
       m.getHistoryForItem.mockResolvedValue([play("chain-1")]);
-      m.getServerAccountNames.mockRejectedValue(new Error("tracearr 503"));
+      fail();
 
-      const result = await recoverHistoryForNewItems(SERVER_ID);
-
+      expect(await recoverHistoryForNewItems(SERVER_ID)).toEqual(NONE);
       expect(m.importTracearrRecords).not.toHaveBeenCalled();
-      expect(result).toEqual({ checked: 0, imported: 0 });
-      expect(m.logger.warn).toHaveBeenCalledWith(
-        "WatchHistory",
-        expect.stringContaining("account-name map"),
-        expect.anything(),
-      );
+      expect(m.logger.warn).toHaveBeenCalledWith("WatchHistory", expect.stringContaining("account-name map"), ...errorArgument);
+    });
+  });
+
+  it("stops between items when the slice's deadline passes, leaving the rest candidates", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const start = Date.now();
+    candidates = [candidate(1), candidate(2), candidate(3)];
+    m.getHistoryForItem.mockImplementation(async () => {
+      // Each lookup takes a minute.
+      vi.setSystemTime(Date.now() + 60_000);
+      return [];
     });
 
-    it("treats an empty account map as a failure to load, not as a server with no users", async () => {
-      // `getServerAccountNames` returns `new Map()` rather than throwing when
-      // the response shape is unexpected or its own page cap cuts the user walk
-      // short. Every history record carries a `server_user_id` belonging to
-      // some account, so zero of them cannot be right for a server that has
-      // plays — and an empty Map is truthy, so a bare falsy check would let the
-      // whole recovery through under identity labels.
-      m.getHistoryForItem.mockResolvedValue([play("chain-1")]);
-      m.getServerAccountNames.mockResolvedValue(new Map());
+    expect((await recoverHistoryForNewItems(SERVER_ID, { deadlineMs: start + 90_000 })).checked).toBe(2);
+    expect(m.getHistoryForItem).toHaveBeenCalledTimes(2);
 
-      const result = await recoverHistoryForNewItems(SERVER_ID);
-
-      expect(m.importTracearrRecords).not.toHaveBeenCalled();
-      expect(result).toEqual({ checked: 0, imported: 0 });
-    });
-
-    it("passes the loaded map through to the shared importer", async () => {
-      const names = new Map([["srv-user-1", "weingart"]]);
-      m.getServerAccountNames.mockResolvedValue(names);
-      m.getHistoryForItem.mockResolvedValue([play("chain-1")]);
-      m.importTracearrRecords.mockResolvedValue({ inserted: 1, updated: 0, skipped: 0 });
-
-      await recoverHistoryForNewItems(SERVER_ID);
-
-      expect(m.importTracearrRecords).toHaveBeenCalledWith(
-        SERVER_ID,
-        expect.anything(),
-        JOIN_INDEX,
-        names,
-        TRACEARR_SERVER_ID,
-      );
-    });
+    // The third was never asked, so it is not recorded as answered.
+    vi.setSystemTime(start);
+    m.prisma.$queryRawUnsafe.mockClear();
+    await recoverHistoryForNewItems(SERVER_ID, { deadlineMs: Date.now() - 1 });
+    expect(candidateQuery().params[3]).toEqual(["item-1", "item-2"]);
   });
 
   describe("items Tracearr has already answered for", () => {
     it("are not asked about again, so the cap cannot starve the window", async () => {
-      // The newest unplayed items used to stay candidates for their whole seven
-      // days, and newest-first ordering handed the same ones to every pass.
+      // Newest-first ordering used to hand the same unplayed items to every pass.
       candidates = [candidate(1), candidate(2)];
-      m.getHistoryForItem.mockResolvedValue([]);
       await recoverHistoryForNewItems(SERVER_ID);
       expect(candidateQuery().params[3]).toEqual([]);
 
-      m.prisma.$queryRawUnsafe.mockClear();
-      await recoverHistoryForNewItems(SERVER_ID);
-
-      const { sql, params } = candidateQuery();
-      expect(sql).toContain('NOT (mi."id" = ANY($4::text[]))');
-      expect(params[3]).toEqual(["item-1", "item-2"]);
+      expect((await nextPassAnswered()).excluded).toEqual(["item-1", "item-2"]);
     });
 
     it("keeps an item whose lookup failed a candidate", async () => {
       candidates = [candidate(1), candidate(2)];
-      m.getHistoryForItem
-        .mockRejectedValueOnce(new Error("item-specific failure"))
-        .mockResolvedValueOnce([]);
+      m.getHistoryForItem.mockRejectedValueOnce(new Error("item-specific failure")).mockResolvedValueOnce([]);
       await recoverHistoryForNewItems(SERVER_ID);
 
-      m.prisma.$queryRawUnsafe.mockClear();
-      await recoverHistoryForNewItems(SERVER_ID);
-
-      expect(candidateQuery().params[3]).toEqual(["item-2"]);
+      expect((await nextPassAnswered()).excluded).toEqual(["item-2"]);
     });
 
-    it("records an item whose plays were imported", async () => {
-      m.getHistoryForItem.mockResolvedValue([play("chain-1")]);
-      m.importTracearrRecords.mockResolvedValue({ inserted: 1, updated: 0, skipped: 0 });
+    it("records the item once ANY play resolved to it, whatever the others did", async () => {
+      m.getHistoryForItem.mockResolvedValue([play("other"), play("mine")]);
+      m.resolveMediaItemId.mockImplementation((_index: unknown, record: { id: string }) =>
+        record.id === "mine" ? { mediaItemId: "item-1" } : { mediaItemId: "old-copy" },
+      );
+      imports(2, 0, 0, 2);
       await recoverHistoryForNewItems(SERVER_ID);
 
-      m.prisma.$queryRawUnsafe.mockClear();
-      await recoverHistoryForNewItems(SERVER_ID);
-
-      expect(candidateQuery().params[3]).toEqual(["item-1"]);
+      expect((await nextPassAnswered()).excluded).toEqual(["item-1"]);
     });
-  });
 
-  describe("a mapping changed mid-pass", () => {
-    it("stops instead of failing every remaining item", async () => {
-      candidates = [candidate(1), candidate(2), candidate(3)];
+    it("settles an item a play reaches as one of its library copies", async () => {
+      // A Jellyfin/Emby item two libraries list: this copy gets a row of its own.
+      vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-10-01T00:00:00.000Z") });
       m.getHistoryForItem.mockResolvedValue([play("chain-1")]);
-      m.importTracearrRecords.mockRejectedValue(
-        new TracearrMappingChangedError(SERVER_ID),
+      m.resolveMediaItemId.mockReturnValue({ mediaItemId: "other-copy", copies: ["item-1"] });
+      imports(1, 0, 0, 2);
+      await recoverHistoryForNewItems(SERVER_ID);
+
+      vi.setSystemTime(new Date(Date.now() + RECOVERY_REASK_MS));
+      expect(await nextPassAnswered()).toEqual({ excluded: ["item-1"], due: [] });
+    });
+
+    it("reports, and reconciles, a stored play that only gains a library copy's row", async () => {
+      // Not a new play, but the copy reads as unwatched until the reconcile.
+      m.getHistoryForItem.mockResolvedValue([play("chain-1")]);
+      m.resolveMediaItemId.mockReturnValue({ mediaItemId: "other-copy", copies: ["item-1"] });
+      imports(0, 1, 0, 1);
+
+      expect(await recoverHistoryForNewItems(SERVER_ID)).toEqual({ checked: 1, imported: 1 });
+      expect(m.reconcileWatchStateFromHistory).toHaveBeenCalledWith(SERVER_ID);
+      expect(m.invalidateMediaCaches).toHaveBeenCalled();
+      expect(m.logger.info).toHaveBeenCalledWith("WatchHistory", expect.stringContaining("imported 0 new play(s) (1 already stored)"));
+    });
+
+    // The old copy, not yet purged, claims the plays (they cascade away with
+    // it), or a play resolves nowhere (an ambiguity that clears with the
+    // purge): settled, the item would never be asked again — but it is not
+    // asked every pass either.
+    it.each([
+      ["resolved to a different row", { mediaItemId: "old-copy" }],
+      ["could not be resolved at all", { skipped: "ambiguous" }],
+    ])("defers an item whose every play %s, then re-asks it a day later", async (_label, resolution) => {
+      vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-10-01T00:00:00.000Z") });
+      m.getHistoryForItem.mockResolvedValue([play("old-1"), play("old-2")]);
+      m.resolveMediaItemId.mockReturnValue(resolution);
+      imports(2, 0, 0, 2);
+
+      await recoverHistoryForNewItems(SERVER_ID);
+      expect(m.resolveMediaItemId).toHaveBeenCalledWith(JOIN_INDEX, expect.objectContaining({ id: "old-1" }));
+      expect(m.logger.info).toHaveBeenCalledWith(
+        "WatchHistory",
+        expect.stringContaining("1 deferred (no play resolved to the item itself)"),
       );
 
-      const result = await recoverHistoryForNewItems(SERVER_ID);
+      expect(await nextPassAnswered()).toEqual({ excluded: ["item-1"], due: [] });
+      // A day later: offered again, but behind every never-asked item.
+      vi.setSystemTime(new Date(Date.now() + RECOVERY_REASK_MS));
+      expect(await nextPassAnswered()).toEqual({ excluded: [], due: ["item-1"] });
+    });
 
-      expect(m.importTracearrRecords).toHaveBeenCalledTimes(1);
-      expect(result).toEqual({ checked: 1, imported: 0 });
+    it("stops re-asking a deferred item after MAX_RECOVERY_ASKS answers", async () => {
+      // A legitimate second copy's plays resolve to the other copy for ever.
+      vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-10-01T00:00:00.000Z") });
+      m.getHistoryForItem.mockResolvedValue([play("other-copy-play")]);
+      m.resolveMediaItemId.mockReturnValue({ mediaItemId: "other-copy" });
+      imports(0, 1, 0, 0);
+
+      for (let ask = 0; ask < MAX_RECOVERY_ASKS; ask++) {
+        await recoverHistoryForNewItems(SERVER_ID);
+        vi.setSystemTime(new Date(Date.now() + RECOVERY_REASK_MS));
+      }
+      expect(m.getHistoryForItem).toHaveBeenCalledTimes(MAX_RECOVERY_ASKS);
+      // Settled: excluded, not offered as due.
+      expect(await nextPassAnswered()).toEqual({ excluded: ["item-1"], due: [] });
     });
   });
 });

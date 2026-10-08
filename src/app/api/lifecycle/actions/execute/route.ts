@@ -16,6 +16,7 @@ import {
 import { sendDiscordNotification, buildFailureSummaryEmbed } from "@/lib/discord/client";
 import { eventBus } from "@/lib/events/event-bus";
 import { hasSeerrRules } from "@/lib/rules/lifecycle-engine";
+import { checkPlayActivityExecutable } from "@/lib/lifecycle/evaluability";
 import type { LifecycleRuleGroup } from "@/lib/rules/types";
 import { matchIdentityChange } from "@/lib/lifecycle/match-identity";
 import { memberIdsFromItemData } from "@/lib/lifecycle/group-aggregate";
@@ -157,6 +158,17 @@ async function executeRuleSet(
       { error: "Seerr criteria are not supported on music rule sets — this rule set's matches were invalid and have been cleared" },
       { status: 400 }
     );
+  }
+
+  // Play-history hold, as the scheduled executor (`checkPlayActivityExecutable`):
+  // the matches may be frozen from before an item was watched.
+  const playHistoryRefusal = await checkPlayActivityExecutable(session.userId!, {
+    rules: ruleSet.rules as unknown as LifecycleRuleGroup[],
+    serverIds: ruleSet.serverIds,
+    playHistoryPausedAt: ruleSet.playHistoryPausedAt,
+  });
+  if (playHistoryRefusal) {
+    return NextResponse.json({ error: playHistoryRefusal }, { status: 409 });
   }
 
   const hasTagOps = ruleSet.addArrTags.length > 0 || ruleSet.removeArrTags.length > 0;

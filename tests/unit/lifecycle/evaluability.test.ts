@@ -20,8 +20,10 @@ vi.mock("@/lib/db", () => ({
 function unsyncedServer(name: string) {
   return {
     name,
+    libraryResyncRequiredAt: null,
     watchHistorySyncedAt: null,
     tracearrServerId: null,
+    tracearrForwardFloorAt: null,
     tracearrBackfillComplete: false,
   };
 }
@@ -30,9 +32,30 @@ function unsyncedServer(name: string) {
 function importingServer(name: string) {
   return {
     name,
+    libraryResyncRequiredAt: null,
     watchHistorySyncedAt: new Date("2025-07-10T12:00:00.000Z"),
     tracearrServerId: "trc-1",
+    tracearrForwardFloorAt: null,
     tracearrBackfillComplete: false,
+  };
+}
+
+/** A server held for a library resync (a purge, a restore, a first population). */
+function heldServer(name: string, overrides: Record<string, unknown> = {}) {
+  return {
+    ...importingServer(name),
+    libraryResyncRequiredAt: new Date("2025-07-11T12:00:00.000Z"),
+    ...overrides,
+  };
+}
+
+/** A mapped server whose forward walk stopped part-way, leaving a known gap. */
+function gappedServer(name: string, overrides: Record<string, unknown> = {}) {
+  return {
+    ...importingServer(name),
+    tracearrBackfillComplete: true,
+    tracearrForwardFloorAt: new Date("2025-07-09T12:00:00.000Z"),
+    ...overrides,
   };
 }
 vi.mock("@/lib/lifecycle/fetch-arr-metadata", async (importOriginal) => {
@@ -304,11 +327,155 @@ describe("checkLifecycleRuleEvaluability", () => {
       expect(result.reason).not.toContain('"Server 5"');
     });
 
+    it.each<[string, Record<string, unknown>, string | RegExp, RegExp]>([
+      [
+        "sends a held server to a full library sync, ahead of every other fault it has",
+        heldServer("Purged", { tracearrServerId: null, watchHistorySyncedAt: null, tracearrForwardFloorAt: new Date() }),
+        '"Purged" (some of its media was removed in bulk or is being added for the first time — ' +
+          "a purge, a restore, or a library's first sync — and play history waits for a complete " +
+          "library sync of this server; run Sync on it under Settings → Servers, and if this stays, " +
+          "System Logs name the library it is still waiting for)",
+        /no sync has established|reading recent plays|not finished walking/,
+      ],
+      [
+        // Only the restarted walk's completion establishes the marker again.
+        "tells a held Tracearr-mapped server that the restarted import comes after the library sync",
+        heldServer("Mapped", { watchHistorySyncedAt: null }),
+        "run Sync on it under Settings → Servers, and if this stays, System Logs name the library " +
+          "it is still waiting for; after that sync, the Tracearr history import it restarted has to " +
+          "read back through the archive before play history counts again)",
+        /no sync has established|reading recent plays|not finished walking/,
+      ],
+      [
+        // A Refresh runs only the forward catch-up, so it cannot help there.
+        "names an unfinished import before a withdrawn marker on a mapped server",
+        { ...importingServer("Plex"), watchHistorySyncedAt: null },
+        '"Plex" (its Tracearr history import has not finished walking back through the archive — ' +
+          "it starts over after a purge, a restore or a library's first sync; this clears when the " +
+          "import completes, and Settings → Servers shows its progress, or why it is paused)",
+        /no sync has established|Refresh/,
+      ],
+      [
+        "names a withdrawn marker before a forward gap, with every cause it has",
+        gappedServer("Plex", { watchHistorySyncedAt: null }),
+        '"Plex" (no sync has established what was played there — it has never synced, its ' +
+          "history was cleared (a watch-history source change, a purge, a backup restore), or a " +
+          "sync could not attribute every play; the next successful watch-history sync establishes " +
+          "it — run one from Library → History → Refresh. If a user's play history could not be " +
+          "read, System Logs name the user and what to change; a Refresh does not lift that one)",
+        /reading recent plays/,
+      ],
+      [
+        "names an unfinished import before a forward gap",
+        gappedServer("Plex", { tracearrBackfillComplete: false }),
+        /not finished walking back through the archive/,
+        /reading recent plays/,
+      ],
+      [
+        // Every forward walk with a new play sets the floor while it runs: refusing is right, "interrupted" was not.
+        "describes a forward gap honestly: an import reading recent plays now, or an interrupted one",
+        gappedServer("Plex"),
+        '"Plex" (a Tracearr import is reading recent plays, or one was interrupted before it ' +
+          "finished; this clears when that import completes — the next watch-history sync resumes " +
+          "an interrupted one)",
+        /no sync has established|not finished walking/,
+      ],
+    ])("%s", async (_, server, expected, notExpected) => {
+      mockServerFindMany.mockResolvedValue([server]);
+
+      const result = await checkLifecycleRuleEvaluability("u1", "MOVIE", groupsWith("playCount"));
+
+      if (result.evaluable) throw new Error("expected not evaluable");
+      expect(result.permanent).toBe(false);
+      if (typeof expected === "string") expect(result.reason).toContain(expected);
+      else expect(result.reason).toMatch(expected);
+      expect(result.reason).not.toMatch(notExpected);
+    });
+
     it("does not consult watch history for rules that never read it", async () => {
       // The lookup is a DB round-trip on the hot detection path; a rule set with
       // no watchedByUser rule must not pay for it.
       await checkLifecycleRuleEvaluability("u1", "MOVIE", groupsWith("title"));
 
+      expect(mockServerFindMany).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("an Arr or Seerr refusal of a rule set that reads play activity", () => {
+    // Play Count = 0 AND the criterion: refused for the instance first, but still flagged for the latch.
+    function playCountAnd(field: string): LifecycleRuleGroup[] {
+      return [
+        {
+          id: "g1",
+          condition: "AND",
+          rules: [
+            { id: "r1", field: "playCount", operator: "equals", value: 0, condition: "AND" },
+            { id: "r2", field, operator: "equals", value: "false", condition: "AND" },
+          ],
+          groups: [],
+        },
+      ] as unknown as LifecycleRuleGroup[];
+    }
+
+    it("carries playHistory while a targeted server's play history is not established, keeping its own reason", async () => {
+      mockHasEnabledArrInstances.mockResolvedValue(false);
+      mockServerFindMany.mockResolvedValue([heldServer("Plex")]);
+
+      const result = await checkLifecycleRuleEvaluability("u1", "MOVIE", playCountAnd("foundInArr"), ["s1"]);
+
+      expect(result).toEqual({
+        evaluable: false,
+        permanent: false,
+        playHistory: true,
+        reason: expect.stringMatching(/^Rules use Arr criteria but no enabled Radarr instance exists/),
+      });
+      // Asked of the rule set's own servers, like the play-history refusal.
+      expect(JSON.stringify(mockServerFindMany.mock.calls[0][0].where)).toContain('"s1"');
+    });
+
+    it("so does a Seerr refusal, transient or permanent", async () => {
+      mockHasEnabledSeerrInstances.mockResolvedValue(false);
+      mockServerFindMany.mockResolvedValue([unsyncedServer("Jellyfin")]);
+
+      const movie = await checkLifecycleRuleEvaluability("u1", "MOVIE", playCountAnd("seerrRequested"));
+      expect(movie).toEqual({
+        evaluable: false,
+        permanent: false,
+        playHistory: true,
+        reason: expect.stringMatching(/^Rules use Seerr criteria but no enabled Seerr instance exists/),
+      });
+
+      const music = await checkLifecycleRuleEvaluability("u1", "MUSIC", playCountAnd("seerrRequested"));
+      expect(music).toEqual({
+        evaluable: false,
+        permanent: true,
+        playHistory: true,
+        reason: "Seerr criteria are not supported for music rules",
+      });
+    });
+
+    it("carries no flag while the play history is established", async () => {
+      mockHasEnabledArrInstances.mockResolvedValue(false);
+      mockHasEnabledSeerrInstances.mockResolvedValue(false);
+      mockServerFindMany.mockResolvedValue([]);
+
+      const arr = await checkLifecycleRuleEvaluability("u1", "MOVIE", playCountAnd("foundInArr"));
+      const seerr = await checkLifecycleRuleEvaluability("u1", "MOVIE", playCountAnd("seerrRequested"));
+
+      if (arr.evaluable || seerr.evaluable) throw new Error("expected both refused");
+      expect(arr.reason).toMatch(/^Rules use Arr criteria/);
+      expect(seerr.reason).toMatch(/^Rules use Seerr criteria/);
+      expect(arr).not.toHaveProperty("playHistory");
+      expect(seerr).not.toHaveProperty("playHistory");
+    });
+
+    it("does not ask the play history of a refused rule set that reads no play activity", async () => {
+      mockHasEnabledArrInstances.mockResolvedValue(false);
+      mockServerFindMany.mockResolvedValue([unsyncedServer("Plex")]);
+
+      const result = await checkLifecycleRuleEvaluability("u1", "MOVIE", groupsWith("foundInArr"));
+
+      expect(result).not.toHaveProperty("playHistory");
       expect(mockServerFindMany).not.toHaveBeenCalled();
     });
   });

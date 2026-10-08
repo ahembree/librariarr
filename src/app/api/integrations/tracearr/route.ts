@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { TracearrClient } from "@/lib/tracearr/tracearr-client";
 import { validateRequest, tracearrInstanceCreateSchema } from "@/lib/validation";
 import { sanitize, sanitizeErrorDetail } from "@/lib/api/sanitize";
+import { enqueueTracearrBackfill } from "@/lib/sync/tracearr-backfill-enqueue";
 
 export async function GET() {
   const session = await getSession();
@@ -46,6 +47,9 @@ export async function POST(request: NextRequest) {
       apiKey,
     },
   });
+
+  // A server mapped while no instance was enabled can start its import now.
+  await enqueueTracearrBackfill({ userId: session.userId! }, "Tracearr instance added");
 
   return NextResponse.json({ instance: sanitize(instance) }, { status: 201 });
 }

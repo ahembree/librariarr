@@ -56,6 +56,8 @@ export default function SeriesDetailPage() {
   const [syncTick, setSyncTick] = useState(0);
   // Auto-update on real-time sync (new/removed items) without a manual refresh.
   useRealtime("sync:completed", () => setSyncTick((t) => t + 1));
+  // ...and when plays land without a library sync, which announces only this.
+  useRealtime("watch-history:updated", () => setSyncTick((t) => t + 1));
 
   useEffect(() => {
     const token = ++reqToken.current;

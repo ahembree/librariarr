@@ -319,4 +319,40 @@ export interface DetailedWatchHistoryEntry {
   watchedAt: string | null;
   deviceName: string | null;
   platform: string | null;
+  /** The play's library (`Library.key`), when the server says (Plex); places a duplicate rating key. */
+  librarySectionKey?: string | null;
+}
+
+/**
+ * Why one user's plays could not be read completely; the caller treats the two
+ * differently. `refused` (401/403/404): the key will never read the user, so
+ * the history is established without them. `unreliable` (an empty first page
+ * under a non-zero total, or a gap past the tolerance): the user's stored rows
+ * vouch for the history unless they have none and it was not yet established.
+ * Either way their plays not stored — new ones, and those of media added or
+ * re-added since (a newly enabled, purged or re-created library) — stay
+ * missing, so an item only they watched reads never played: a deliberate
+ * trade, since refusing kept a server with one unreadable user paused for good.
+ */
+export type IncompleteUserReason = "refused" | "unreliable";
+
+/**
+ * What a `getDetailedWatchHistory` call could not read, for a caller that
+ * commits the result with a full replace. The caller creates it empty.
+ */
+export interface DetailedWatchHistoryReport {
+  /**
+   * Users (by stored name) whose plays could not be read completely, and why.
+   * They contribute no entries; the caller must keep their stored rows.
+   */
+  incompleteUsers: Map<string, IncompleteUserReason>;
+  /** Plex: `/devices` failed, so null devices are unknown — keep the stored values. */
+  devicesUnavailable: boolean;
+}
+
+export interface DetailedWatchHistoryOptions {
+  /** See `MediaServerClient.getDetailedWatchHistory`. */
+  since?: Date;
+  /** See `DetailedWatchHistoryReport`. */
+  report?: DetailedWatchHistoryReport;
 }

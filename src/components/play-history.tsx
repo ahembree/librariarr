@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import {
+  AlertTriangle,
   CircleCheck,
   CircleDashed,
   History,
@@ -13,11 +14,13 @@ import {
   User,
 } from "lucide-react";
 import { ColorChip } from "@/components/color-chip";
+import { Button } from "@/components/ui/button";
 import { PaginationControls } from "@/components/pagination-controls";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { formatDurationClock } from "@/lib/format";
 import { SERVER_TYPE_STYLES, DEFAULT_SERVER_STYLE } from "@/lib/server-styles";
 import { cn } from "@/lib/utils";
+import { PageRequestTracker, pageAfterShrink, pagedListView } from "@/lib/media/history-paging";
 
 /** How many plays one page shows; the footer steps between pages. */
 const PAGE_SIZE = 5;
@@ -123,7 +126,10 @@ interface PlayHistoryProps {
    * heading — the row leads with the user instead.
    */
   singleItem?: boolean;
-  /** Bump to refetch — e.g. on a `sync:completed` realtime event. */
+  /**
+   * Bump to refetch. Detail pages bump it on `sync:completed` and on
+   * `watch-history:updated`, all an import outside a library sync announces.
+   */
   refreshKey?: number;
   /**
    * `section` (default): a full-width block under a series/season page.
@@ -809,9 +815,9 @@ export function PlayHistory({
   // page whose five plays happen to share a server must not drop the server
   // names the previous page showed. Cleared with the rest of the scope state.
   const [seenServers, setSeenServers] = useState<string[]>([]);
-  // Guards against a stale slow response landing after the scope changed and
-  // overwriting the current series'/season's rows.
-  const reqToken = useRef(0);
+  // Only the newest request applies, and a refresh reloads the page last asked for
+  // (see PageRequestTracker).
+  const [tracker] = useState(() => new PageRequestTracker());
 
   const fetchPage = useCallback(
     async (target: number): Promise<WatchHistoryResponse> => {
@@ -859,28 +865,30 @@ export function PlayHistory({
 
       try {
         const data = await fetchPage(target);
-        if (token !== reqToken.current) return;
+        if (!tracker.isCurrent(token)) return;
 
         // The list shrank under us — plays purged, or a refresh landed on a
-        // shorter history — so this page no longer exists. Fall back to the
-        // first rather than stranding the user on an empty one.
-        if (data.items.length === 0 && target > 1) {
-          const first = await fetchPage(1);
-          if (token !== reqToken.current) return;
-          apply(first, 1);
+        // shorter history: step back to the new last page, not the first.
+        const clamped = pageAfterShrink(target, data.pagination.totalCount, PAGE_SIZE);
+        if (clamped !== null) {
+          tracker.redirect(token, clamped);
+          const fallback = await fetchPage(clamped);
+          if (!tracker.isCurrent(token)) return;
+          apply(fallback, clamped);
           return;
         }
 
         apply(data, target);
       } catch {
-        if (token === reqToken.current) setError(true);
+        if (tracker.isCurrent(token)) setError(true);
       } finally {
-        if (token !== reqToken.current) return;
-        setLoading(false);
-        setPaging(false);
+        if (tracker.isCurrent(token)) {
+          setLoading(false);
+          setPaging(false);
+        }
       }
     },
-    [fetchPage],
+    [fetchPage, tracker],
   );
 
   // Reset to the loading state when the scope changes, so a new series/season
@@ -899,29 +907,42 @@ export function PlayHistory({
     setLoading(true);
   }
 
+  // Runs on a scope change (fetchPage's identity is the scope), from page 1, and on
+  // every `refreshKey` bump, reloading the page the user is on or moving to.
   useEffect(() => {
-    const token = ++reqToken.current;
+    const { page: target, token } = tracker.refresh(fetchPage);
     void (async () => {
-      await loadPage(1, token);
+      await loadPage(target, token);
     })();
-  }, [loadPage, refreshKey]);
+  }, [tracker, fetchPage, loadPage, refreshKey]);
 
   const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
 
   const goToPage = useCallback(
     (target: number) => {
-      if (paging || target < 1 || target > totalPages) return;
+      if (target < 1 || target > totalPages) return;
       setPaging(true);
-      void loadPage(target, reqToken.current);
+      // A NEW token, so a refresh started before this click cannot land after it.
+      void loadPage(target, tracker.request(target));
     },
-    [loadPage, paging, totalPages],
+    [loadPage, totalPages, tracker],
   );
+
+  // Retries the page last asked for (`refresh` with the unchanged scope). Rows on
+  // screen stay and dim meanwhile; with none, the skeleton replaces the error card.
+  const retry = useCallback(() => {
+    if (rows.length > 0) setPaging(true);
+    else setLoading(true);
+    const { page: target, token } = tracker.refresh(fetchPage);
+    void loadPage(target, token);
+  }, [rows.length, tracker, fetchPage, loadPage]);
 
   const card = variant === "card";
   // Only worth naming the server when the plays actually span more than one.
   const multiServer = seenServers.length > 1;
+  const view = pagedListView({ loading, error, rowCount: rows.length });
 
-  const body = loading ? (
+  const body = view === "loading" ? (
     <div className="space-y-2">
       {(card ? [0, 1] : [0, 1, 2]).map((i) => (
         <div
@@ -936,18 +957,31 @@ export function PlayHistory({
         </div>
       ))}
     </div>
-  ) : error ? (
+  ) : view === "error" ? (
     <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-white/5 bg-muted/30 px-3 py-6 text-center">
       <History className="h-5 w-5 text-muted-foreground/50" />
       <p className="text-xs text-muted-foreground">Could not load watch history</p>
+      <Button variant="ghost" size="sm" className="h-7 px-2 text-xs" onClick={retry}>
+        Retry
+      </Button>
     </div>
-  ) : rows.length === 0 ? (
+  ) : view === "empty" ? (
     <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-white/5 bg-muted/30 px-3 py-6 text-center">
       <History className="h-5 w-5 text-muted-foreground/50" />
       <p className="text-xs text-muted-foreground">No watch history yet</p>
     </div>
   ) : (
     <>
+      {/* A failure keeps the plays already shown; hidden while the retry runs. */}
+      {error && !paging && (
+        <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber" />
+          <span className="min-w-0">Couldn&apos;t load this page — showing the plays loaded before.</span>
+          <Button variant="ghost" size="sm" className="ml-auto h-7 shrink-0 px-2 text-xs" onClick={retry}>
+            Retry
+          </Button>
+        </div>
+      )}
       <ul
         className={cn(
           card ? "space-y-2" : "space-y-1.5",
@@ -985,7 +1019,7 @@ export function PlayHistory({
   if (card) {
     // Same shell and heading treatment as the other cards in the detail grid.
     return (
-      <div className="rounded-xl border border-white/6 bg-card p-5 shadow-[var(--shadow-card)] space-y-3">
+      <div data-testid="play-history" className="rounded-xl border border-white/6 bg-card p-5 shadow-[var(--shadow-card)] space-y-3">
         <h3 className="flex items-center gap-1.5 font-mono text-[11px] font-semibold uppercase tracking-[0.14em] text-faint">
           <History className="h-3.5 w-3.5" />
           {heading}
@@ -999,7 +1033,7 @@ export function PlayHistory({
   }
 
   return (
-    <section className="mt-6">
+    <section data-testid="play-history" className="mt-6">
       <div className="mb-3 flex items-center gap-2">
         <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
           {heading}

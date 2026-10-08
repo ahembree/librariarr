@@ -99,8 +99,13 @@ describe("POST /api/sync/by-type", () => {
     expect(mockEnqueueJob).toHaveBeenCalledWith(
       TASK_SYNC_WATCH_HISTORY,
       { serverId: server.id },
+      // Never the realtime manager's `watch-history-incremental:<id>` key: a
+      // keyed enqueue replaces the queued payload, and a shared key let a
+      // later `watch-changed` event downgrade this full replace to an append.
       expect.objectContaining({ jobKey: `watch-history:${server.id}`, queueName: MAIN_QUEUE }),
     );
+    const watchCall = mockEnqueueJob.mock.calls.find((call) => call[0] === TASK_SYNC_WATCH_HISTORY)!;
+    expect(watchCall[1]).not.toHaveProperty("incremental");
 
     // Exactly one refresh per server, not one per library.
     const tasks = mockEnqueueJob.mock.calls.map((call) => call[0]);

@@ -106,7 +106,8 @@ describe("jobs client", () => {
       // how it gets a fresh start.
       expect(sql).toContain('"attempts" < "max_attempts"');
       expect(sql).toContain('"locked_at" IS NULL');
-      expect(params).toEqual(["tracearr-backfill:s1"]);
+      // No cooldown asked for: a parked job never counts.
+      expect(params).toEqual(["tracearr-backfill:s1", null]);
     });
 
     it("answers false when nothing is backing off", async () => {

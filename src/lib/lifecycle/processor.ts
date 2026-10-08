@@ -24,7 +24,7 @@ import {
 import { actionConfigSignature } from "@/lib/lifecycle/action-signature";
 import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
 import { fetchSeerrMetadata } from "@/lib/lifecycle/fetch-seerr-metadata";
-import { checkLifecycleRuleEvaluability } from "@/lib/lifecycle/evaluability";
+import { checkLifecycleRuleEvaluability, checkPlayActivityExecutable, notePlayHistoryPause } from "@/lib/lifecycle/evaluability";
 import { detectAndSaveMatches } from "@/lib/lifecycle/detect-matches";
 import { syncAllCollections } from "@/lib/lifecycle/collections";
 import { syncMediaServer } from "@/lib/sync/sync-server";
@@ -314,6 +314,8 @@ export async function processLifecycleRules(userId?: string) {
       );
       if (!evaluability.evaluable) {
         logger.warn("Lifecycle", `Skipping rule set "${ruleSet.name}" — ${evaluability.reason}`);
+        // Its kept matches predate this refusal: latch it (`notePlayHistoryPause`).
+        if (evaluability.playHistory) await notePlayHistoryPause(ruleSet.id);
         if (evaluability.permanent) {
           const cancelled = await prisma.lifecycleAction.deleteMany({
             where: { ruleSetId: ruleSet.id, status: "PENDING" },
@@ -539,6 +541,8 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
           userId: true,
           type: true,
           rules: true,
+          serverIds: true,
+          playHistoryPausedAt: true,
         },
       },
     },
@@ -642,6 +646,14 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
     mediaItem: NonNullable<Pending["mediaItem"]>;
     filteredMatchedIds: string[];
   }> = [];
+
+  // PLAY-HISTORY HOLD, asked once per rule set per run
+  // (`checkPlayActivityExecutable`): a skipped rule set's matches are frozen and
+  // pass the stale check, so its actions stay PENDING and untouched (never
+  // cancelled). After every cancel-or-narrow check, which are safe on frozen
+  // matches, so the ceiling does not count held actions.
+  const playHistoryRefusals = new Map<string, string | null>();
+  const heldByRuleSet = new Map<string, { name: string; reason: string; count: number }>();
 
   for (const action of pendingActions) {
     // Delete actions whose media item no longer exists
@@ -797,7 +809,27 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
       continue;
     }
 
+    const ruleSet = action.ruleSet!;
+    let refusal = playHistoryRefusals.get(action.ruleSetId!);
+    if (refusal === undefined) {
+      refusal = await checkPlayActivityExecutable(action.userId, {
+        rules: ruleSet.rules as unknown as LifecycleRule[] | LifecycleRuleGroup[],
+        serverIds: ruleSet.serverIds,
+        playHistoryPausedAt: ruleSet.playHistoryPausedAt,
+      });
+      playHistoryRefusals.set(action.ruleSetId!, refusal);
+    }
+    if (refusal) {
+      const held = heldByRuleSet.get(action.ruleSetId!) ?? { name: ruleSet.name, reason: refusal, count: 0 };
+      held.count++;
+      heldByRuleSet.set(action.ruleSetId!, held);
+      continue;
+    }
+
     executable.push({ action, mediaItem, filteredMatchedIds });
+  }
+  for (const held of heldByRuleSet.values()) {
+    logger.warn("Lifecycle", `Holding ${held.count} due action(s) of rule set "${held.name}" — ${held.reason}.`);
   }
 
   // BLAST-RADIUS CEILING, counted over the pass-1 survivors.

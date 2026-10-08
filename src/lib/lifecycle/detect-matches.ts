@@ -4,7 +4,7 @@ import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
 import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
 import { fetchSeerrMetadata } from "@/lib/lifecycle/fetch-seerr-metadata";
-import { checkLifecycleRuleEvaluability } from "@/lib/lifecycle/evaluability";
+import { checkLifecycleRuleEvaluability, clearPlayHistoryPause, notePlayHistoryPause } from "@/lib/lifecycle/evaluability";
 import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
 import { logger } from "@/lib/logger";
 import { syncCollectionById, syncAllCollections } from "@/lib/lifecycle/collections";
@@ -231,6 +231,8 @@ export async function detectAndSaveMatches(
   seerrData?: SeerrDataMap,
   fullReEval: boolean = false,
 ): Promise<{ items: Record<string, unknown>[]; count: number; episodeIdMap: Map<string, string[]>; currentItems: Record<string, unknown>[] }> {
+  // Before the evaluability check: the latch this run may lift (`clearPlayHistoryPause`).
+  const evaluationStartedAt = new Date();
   const rules = ruleSet.rules as unknown as LifecycleRule[] | LifecycleRuleGroup[];
 
   // SAFETY: Refuse to evaluate if no rules are active — would match everything
@@ -267,6 +269,8 @@ export async function detectAndSaveMatches(
     ruleSet.arrInstanceId,
   );
   if (!evaluability.evaluable) {
+    // The matches kept below predate this refusal: latch it.
+    if (evaluability.playHistory) await notePlayHistoryPause(ruleSet.id);
     const existingMatches = await prisma.ruleMatch.findMany({
       where: { ruleSetId: ruleSet.id },
       select: { itemData: true },
@@ -600,6 +604,7 @@ export async function detectAndSaveMatches(
     });
 
     logger.info("Lifecycle", `Detected ${enrichedItems.length} matches for rule set "${ruleSet.name}" (full re-evaluation)`);
+    await liftPlayHistoryPause(ruleSet, evaluationStartedAt);
     return { items: enrichedItems, count: enrichedItems.length, episodeIdMap, currentItems: enrichedItems };
   }
 
@@ -772,7 +777,26 @@ export async function detectAndSaveMatches(
 
   const removedCount = ruleSet.stickyMatches ? 0 : staleIds.length;
   logger.info("Lifecycle", `Detected ${newItems.length} new matches for rule set "${ruleSet.name}" (${existingMatches.length - removedCount} existing, ${removedCount} removed, ${returnItems.length} total)`);
+  await liftPlayHistoryPause(ruleSet, evaluationStartedAt);
   return { items: returnItems, count: returnItems.length, episodeIdMap: fullEpisodeIdMap, currentItems: enrichedItems };
+}
+
+/** After the matches are written, lift the latch; a failure only keeps the actions held. */
+async function liftPlayHistoryPause(ruleSet: { id: string; name: string }, evaluationStartedAt: Date): Promise<void> {
+  try {
+    if (await clearPlayHistoryPause(ruleSet.id, evaluationStartedAt)) {
+      logger.info(
+        "Lifecycle",
+        `Rule set "${ruleSet.name}" has been evaluated on established play history again — its actions are no longer held`,
+      );
+    }
+  } catch (error) {
+    logger.warn(
+      "Lifecycle",
+      `Could not lift the play-history hold on rule set "${ruleSet.name}"; its actions stay held until the next detection run`,
+      { error: String(error) },
+    );
+  }
 }
 
 /** A rule set a detection run could not evaluate because something threw. */
@@ -882,6 +906,8 @@ export async function runDetection(
       const evaluability = await checkLifecycleRuleEvaluability(userId, rs.type, rules, serverIds, rs.arrInstanceId);
       if (!evaluability.evaluable) {
         logger.warn("Lifecycle", `Skipping rule set "${rs.name}" — ${evaluability.reason}`);
+        // Its kept matches predate this refusal: latch it.
+        if (evaluability.playHistory) await notePlayHistoryPause(rs.id);
         if (evaluability.permanent) {
           const cancelled = await prisma.lifecycleAction.deleteMany({
             where: { ruleSetId: rs.id, status: "PENDING" },

@@ -63,10 +63,15 @@ const movieMeta = (ratingKey: string, over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
+/** An item already in a library: a library's FIRST items are left to a full sync (see "a library's first items"). */
+const anchor = (libraryId: string, type: "MOVIE" | "SERIES" | "MUSIC" = "MOVIE", ratingKey = "anchor") =>
+  createTestMediaItem(libraryId, { ratingKey, type, title: "Already Here" });
+
 async function seed() {
   const user = await createTestUser();
   const server = await createTestServer(user.id);
   const library = await createTestLibrary(server.id, { key: "1", type: "MOVIE" });
+  await anchor(library.id);
   return { user, server, library };
 }
 
@@ -206,6 +211,7 @@ describe("syncMediaServerItems", () => {
     const prisma = getTestPrisma();
     const server = await prisma.mediaServer.findFirstOrThrow({ where: { userId: user.id } });
     const seriesLib = await createTestLibrary(server.id, { key: "2", type: "SERIES" });
+    await anchor(seriesLib.id, "SERIES", "anchor-ep");
 
     mockGetItemMetadata.mockImplementation(async (ratingKey: string) => {
       if (ratingKey === "show-bcs") {
@@ -244,6 +250,7 @@ describe("syncMediaServerItems", () => {
     const prisma = getTestPrisma();
     const server = await prisma.mediaServer.findFirstOrThrow({ where: { userId: user.id } });
     const seriesLib = await createTestLibrary(server.id, { key: "2", type: "SERIES" });
+    await anchor(seriesLib.id, "SERIES", "anchor-ep");
 
     mockGetItemMetadata.mockImplementation(async (ratingKey: string) => {
       if (ratingKey === "show-unmatched") {
@@ -391,7 +398,8 @@ describe("syncMediaServerItems", () => {
     // sync purges anyway.
     const user = await createTestUser();
     const server = await createTestServer(user.id);
-    await createTestLibrary(server.id, { key: "2", type: "SERIES" });
+    const seriesLib = await createTestLibrary(server.id, { key: "2", type: "SERIES" });
+    await anchor(seriesLib.id, "SERIES", "anchor-ep");
 
     mockGetItemMetadata.mockImplementation(async (id: string) =>
       id === "ep-1"
@@ -420,7 +428,7 @@ describe("syncMediaServerItems", () => {
     // Only the episode is real library media.
     expect(result.upserted).toBe(1);
     const rows = await getTestPrisma().mediaItem.findMany({ select: { ratingKey: true } });
-    expect(rows.map((r) => r.ratingKey)).toEqual(["ep-1"]);
+    expect(rows.map((r) => r.ratingKey).sort()).toEqual(["anchor-ep", "ep-1"]);
   });
 
   it("falls back when an item names a library section we have no row for", async () => {
@@ -470,7 +478,7 @@ describe("syncMediaServerItems", () => {
     expect(result.upserted).toBe(1);
     expect(result.unresolved).toBe(2);
     const rows = await getTestPrisma().mediaItem.findMany({ select: { ratingKey: true } });
-    expect(rows.map((r) => r.ratingKey)).toEqual(["m1"]);
+    expect(rows.map((r) => r.ratingKey).sort()).toEqual(["anchor", "m1"]);
   });
 
   it("skips an item in a disabled library without escalating", async () => {
@@ -548,6 +556,7 @@ describe("syncMediaServerItems", () => {
     const server2 = await createTestServer(user.id, { name: "S4" });
     const oldLib = await createTestLibrary(server2.id, { key: "1", type: "MOVIE" });
     const newLib = await createTestLibrary(server2.id, { key: "2", type: "MOVIE" });
+    await anchor(newLib.id);
     await createTestMediaItem(oldLib.id, { ratingKey: "moved-1", title: "Old" });
     // The item now lives in section 2 on the server.
     mockGetItemMetadata.mockResolvedValue(movieMeta("moved-1", { title: "Moved", librarySectionID: 2 }));
@@ -595,6 +604,7 @@ describe("syncMediaServerItems", () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id, { name: "JF", type: "JELLYFIN" });
     const library = await createTestLibrary(server.id, { key: "lib-1", type: "MOVIE" });
+    await anchor(library.id);
     const item = movieMeta("jf-new", { title: "New on Jellyfin" });
     delete (item as { librarySectionID?: number }).librarySectionID;
     mockGetItemMetadata.mockResolvedValue(item);
@@ -716,6 +726,83 @@ describe("syncMediaServerItems", () => {
 
     expect(sideEffects.invalidate).not.toHaveBeenCalled();
     expect(sideEffects.emit).not.toHaveBeenCalled();
+  });
+
+  // ── A library's first items ─────────────────────────────────────────────
+  // They arrive with none of their plays, so they are left to the full sync and its population hold.
+
+  it("leaves the first items of an empty library to a full sync, writing nothing there", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const library = await createTestLibrary(server.id, { key: "1", title: "Kids", type: "MOVIE" });
+    mockGetItemMetadata.mockResolvedValue(movieMeta("first-1"));
+
+    const result = await syncMediaServerItems(server.id, ["first-1"], []);
+
+    expect(result.status).toBe("fell-back");
+    expect(result.upserted).toBe(0);
+    expect(result.reason).toBe(
+      '1 item(s) would be the first in a library holding none ("Kids") — a library\'s first items are ' +
+        "left to the full sync, which holds play-activity rules until it has synced the library",
+    );
+    expect(await getTestPrisma().mediaItem.count({ where: { libraryId: library.id } })).toBe(0);
+    expect(sideEffects.emit).not.toHaveBeenCalled();
+  });
+
+  it("still writes the items of populated libraries, and applies removals, in the same run", async () => {
+    const { server, library } = await seed();
+    const empty = await createTestLibrary(server.id, { key: "2", title: "Kids", type: "MOVIE" });
+    await createTestMediaItem(library.id, { ratingKey: "gone-1" });
+    mockGetItemMetadata.mockImplementation(async (id: string) =>
+      id === "m1" ? movieMeta("m1") : movieMeta(id, { librarySectionID: 2 }),
+    );
+
+    const result = await syncMediaServerItems(server.id, ["m1", "k1", "k2"], ["gone-1"]);
+
+    expect(result.status).toBe("fell-back");
+    expect(result.upserted).toBe(1);
+    expect(result.deleted).toBe(1);
+    expect(result.reason).toMatch(/^2 item\(s\) would be the first in a library holding none \("Kids"\)/);
+    expect(await getTestPrisma().mediaItem.findFirst({ where: { ratingKey: "m1", libraryId: library.id } })).not.toBeNull();
+    expect(await getTestPrisma().mediaItem.count({ where: { libraryId: empty.id } })).toBe(0);
+    expect(sideEffects.emit).toHaveBeenCalledWith(expect.objectContaining({ type: "sync:completed" }));
+  });
+
+  it("is not triggered by an id it would not write into the empty library — so it cannot loop", async () => {
+    // A container, another type, a disabled library: the full sync would not store them either.
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    await createTestLibrary(server.id, { key: "1", type: "MOVIE" });
+    await createTestLibrary(server.id, { key: "2", type: "SERIES" });
+    await createTestLibrary(server.id, { key: "3", type: "MOVIE", enabled: false });
+    mockGetItemMetadata.mockImplementation(async (id: string) => {
+      if (id === "coll") return movieMeta("coll", { type: "collection" });
+      if (id === "show") return { ratingKey: "show", key: "/library/metadata/show", type: "show", title: "A Show", librarySectionID: 2 };
+      return movieMeta(id, { librarySectionID: 3 });
+    });
+
+    const result = await syncMediaServerItems(server.id, ["coll", "show", "disabled-1"], []);
+
+    expect(result.status).toBe("done");
+    expect(result.upserted).toBe(0);
+    expect(await getTestPrisma().mediaItem.count()).toBe(0);
+  });
+
+  it("places a Jellyfin item in an empty library and still leaves it to the full sync", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id, { name: "JF", type: "JELLYFIN" });
+    await createTestLibrary(server.id, { key: "lib-1", title: "Movies", type: "MOVIE" });
+    const item = movieMeta("jf-first");
+    delete (item as { librarySectionID?: number }).librarySectionID;
+    mockGetItemMetadata.mockResolvedValue(item);
+    mockResolveLibraryKey.mockResolvedValue("lib-1");
+
+    const result = await syncMediaServerItems(server.id, ["jf-first"], []);
+
+    expect(result.status).toBe("fell-back");
+    expect(result.unresolved).toBe(0);
+    expect(result.reason).toMatch(/would be the first in a library holding none \("Movies"\)/);
+    expect(await getTestPrisma().mediaItem.count()).toBe(0);
   });
 
   it("carries the watchlist flag forward when a ratingKey exists in two libraries", async () => {

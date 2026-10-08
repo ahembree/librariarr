@@ -29,10 +29,11 @@ export default function EpisodeDetailPage() {
   const [playServers, setPlayServers] = useState<PlayServer[]>([]);
   const [loading, setLoading] = useState(true);
   // The watch-history card below reads the *stored* WatchHistory table, so —
-  // unlike the live per-user card it replaced — it only changes when a sync
-  // lands. Refetch on `sync:completed`, as the show and season pages do.
+  // unlike the live per-user card it replaced — it only changes when a sync or
+  // an import lands (an import announces only `watch-history:updated`).
   const [syncTick, setSyncTick] = useState(0);
   useRealtime("sync:completed", () => setSyncTick((t) => t + 1));
+  useRealtime("watch-history:updated", () => setSyncTick((t) => t + 1));
   // Token guards against a stale slow response landing after a quick id change.
   const reqToken = useRef(0);
   const searchParams = useSearchParams();

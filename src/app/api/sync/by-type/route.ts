@@ -70,11 +70,15 @@ export async function POST(request: NextRequest) {
     // recent one everywhere those columns are read: the hover card, the Last
     // Played column, and the `Series Last Played` rule/query criterion.
     //
-    // MAIN_QUEUE is serial and ordered by enqueue time, so this runs *after*
-    // every library job for the server has finished — meaning their `SyncJob`
-    // rows are COMPLETED and `syncWatchHistoryTask`'s "a full sync is already
-    // running" guard does not swallow it. Sharing the realtime manager's jobKey
-    // dedupes with any refresh a `watch-changed` event already queued.
+    // MAIN_QUEUE is serial, so this normally runs *after* every library job for
+    // the server (their `SyncJob` rows COMPLETED, so `syncWatchHistoryTask`'s
+    // "a full sync is already running" guard does not swallow it). A library job
+    // retried with backoff runs after it instead — safe: a job populating an
+    // empty library takes the population hold, under which no history pass can
+    // mark.
+    //
+    // Not the realtime manager's key (`watch-history-incremental:<id>`): a keyed
+    // enqueue replaces the payload, which would downgrade this full replace.
     await enqueueJob(
       TASK_SYNC_WATCH_HISTORY,
       { serverId: server.id },

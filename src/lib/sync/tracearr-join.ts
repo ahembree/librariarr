@@ -23,11 +23,9 @@ import type {
  * Two-step resolution, in this order:
  *
  *  1. `rating_key` → `MediaItem.ratingKey`, scoped to this media server. That
- *     column IS the server's own primary identity for the item and is exactly
- *     what the sync stored for it, so an exact single hit needs no
- *     corroboration. Zero hits fall through to (2); more than one hit is a skip
- *     (the schema does not enforce uniqueness on `(library, ratingKey)`, so two
- *     rows can collide and there is no way to pick).
+ *     column IS the server's own primary identity for the item; a hit is still
+ *     corroborated (see below). Zero hits fall through to (2); several are a
+ *     skip, except Jellyfin/Emby library copies (`libraryCopies`).
  *
  *  2. Provider-id fallback — `tmdb_id` → `imdb_id`, for movies and tracks
  *     only. This is what rescues a record whose `rating_key` is null (the
@@ -53,7 +51,15 @@ export type TracearrJoinSkipReason =
   | "unsupported-type";
 
 export type TracearrJoinResult =
-  | { mediaItemId: string }
+  | {
+      /** The row the play's primary record goes on — the lowest id. */
+      mediaItemId: string;
+      /**
+       * The item's other Jellyfin/Emby library copies, sorted; each gets a row of
+       * the play, so every copy reads as watched. Absent for a play of one item.
+       */
+      copies?: string[];
+    }
   | { skipped: TracearrJoinSkipReason };
 
 /** The only record fields resolution needs, typed off the client so it can't drift. */
@@ -72,6 +78,8 @@ export type TracearrJoinRecord = Pick<
 /** A candidate row, carrying just enough to apply the narrowing constraints. */
 interface JoinCandidate {
   id: string;
+  /** Which of the server's libraries holds it — see the copies in `resolveMediaItemId`. */
+  libraryId: string;
   type: LibraryType;
   seasonNumber: number | null;
   episodeNumber: number | null;
@@ -88,6 +96,11 @@ interface JoinCandidate {
 
 export interface TracearrJoinIndex {
   serverId: string;
+  /**
+   * Decides whether a rating key on rows in two libraries names one item
+   * (Jellyfin/Emby) or a stale row (Plex). Null when the server holds no items.
+   */
+  serverType: string | null;
   /** `ratingKey` → candidates (an array: collisions must be detectable). */
   byRatingKey: Map<string, JoinCandidate[]>;
   /** `"<SOURCE>:<externalId>"` → candidates sharing that provider id. */
@@ -140,17 +153,20 @@ export async function buildTracearrJoinIndex(
   const items = await prisma.$queryRawUnsafe<
     Array<{
       id: string;
+      libraryId: string;
       ratingKey: string;
       type: LibraryType;
       seasonNumber: number | null;
       episodeNumber: number | null;
       grandparentRatingKey: string | null;
+      serverType: string | null;
     }>
   >(
-    `SELECT mi."id", mi."ratingKey", mi."type", mi."seasonNumber", mi."episodeNumber",
-            mi."grandparentRatingKey"
+    `SELECT mi."id", mi."libraryId", mi."ratingKey", mi."type", mi."seasonNumber",
+            mi."episodeNumber", mi."grandparentRatingKey", ms."type" AS "serverType"
        FROM "MediaItem" mi
        JOIN "Library" l ON mi."libraryId" = l."id"
+       JOIN "MediaServer" ms ON ms."id" = l."mediaServerId"
       WHERE l."mediaServerId" = $1`,
     serverId,
   );
@@ -161,6 +177,7 @@ export async function buildTracearrJoinIndex(
   for (const row of items) {
     const candidate: JoinCandidate = {
       id: row.id,
+      libraryId: row.libraryId,
       type: row.type,
       seasonNumber: row.seasonNumber,
       episodeNumber: row.episodeNumber,
@@ -211,6 +228,7 @@ export async function buildTracearrJoinIndex(
 
   return {
     serverId,
+    serverType: items[0]?.serverType ?? null,
     byRatingKey,
     byExternalId,
     itemCount: items.length,
@@ -307,6 +325,34 @@ function contradictsIdentity(
 }
 
 /**
+ * The copies of one Jellyfin/Emby item a rating key names in several of the
+ * server's libraries, or null for any other shape of hits. A play of it is a
+ * play of every copy (as the native path files it); skipped as ambiguous, both
+ * read as never watched. Only on Jellyfin/Emby (on Plex a second row is
+ * stale), with every hit in a different library and each corroborated on its
+ * own (type, no contradicting identity). The provider-id fallback never fans
+ * out: two rows sharing a TMDB id are two files (a 4K beside a 1080p).
+ */
+function libraryCopies(
+  index: TracearrJoinIndex,
+  hits: JoinCandidate[],
+  record: TracearrJoinRecord,
+  expectedType: LibraryType,
+): { mediaItemId: string; copies: string[] } | null {
+  if (index.serverType !== "JELLYFIN" && index.serverType !== "EMBY") return null;
+  if (new Set(hits.map((hit) => hit.libraryId)).size !== hits.length) return null;
+  for (const hit of hits) {
+    if (!hit.libraryId) return null;
+    if (hit.type !== expectedType) return null;
+    if (contradictsIdentity(hit, record)) return null;
+  }
+  // The lowest id holds the play's primary row — plain string order, the same
+  // rule as the native path's `nativeRowsForPlay`, so every run picks the same.
+  const [mediaItemId, ...copies] = hits.map((hit) => hit.id).sort();
+  return { mediaItemId, copies };
+}
+
+/**
  * Resolve one record against a prebuilt index. Never returns a "best guess" —
  * see the file header for why.
  */
@@ -321,7 +367,9 @@ export function resolveMediaItemId(
   const ratingKey = record.rating_key?.trim();
   if (ratingKey) {
     const hits = index.byRatingKey.get(ratingKey);
-    if (hits && hits.length > 1) return { skipped: "ambiguous" };
+    if (hits && hits.length > 1) {
+      return libraryCopies(index, hits, record, expectedType) ?? { skipped: "ambiguous" };
+    }
     if (hits && hits.length === 1) {
       const hit = hits[0];
       // A rating key is the server's own id for an item, but it is NOT stable

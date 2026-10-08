@@ -31,6 +31,8 @@ const mockPrisma = vi.hoisted(() => ({
     // and why, so it has to read the rows rather than tally them.
     findMany: vi.fn().mockResolvedValue([]),
   },
+  // The play-history pause latch (`RuleSet.playHistoryPausedAt`), written with raw SQL.
+  $executeRawUnsafe: vi.fn().mockResolvedValue(0),
   // Detection runs its match writes inside a transaction in two shapes:
   //   - callback form: $transaction(async (tx) => { ... }) (full re-eval)
   //   - array form:    $transaction([p1, p2])              (incremental)
@@ -1273,6 +1275,38 @@ describe("detectAndSaveMatches evaluability defense-in-depth", () => {
     expect(mockEvaluateRules).not.toHaveBeenCalled();
     expect(mockPrisma.ruleMatch.createMany).not.toHaveBeenCalled();
     expect(mockPrisma.ruleMatch.deleteMany).not.toHaveBeenCalled();
+    // An Arr refusal says nothing about play history: no pause recorded, none lifted.
+    expect(mockPrisma.$executeRawUnsafe).not.toHaveBeenCalled();
+  });
+
+  it("lifts a play-history pause no later than the instant it began evaluating, once its matches are written", async () => {
+    mockHasAnyActiveRules.mockReturnValue(true);
+    mockHasArrRules.mockReturnValue(false);
+    mockHasSeerrRules.mockReturnValue(false);
+    mockHasPlayActivityRules.mockReturnValue(false);
+    mockPrisma.ruleMatch.findMany.mockResolvedValue([]);
+    let evaluatedAt = 0;
+    mockEvaluateRules.mockImplementation(async () => {
+      evaluatedAt = Date.now();
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return [];
+    });
+    const before = Date.now();
+
+    await detectAndSaveMatches(makeRuleSetConfig(), ["s1"], undefined, undefined, true);
+
+    expect(mockPrisma.$executeRawUnsafe).toHaveBeenCalledTimes(1);
+    const [sql, id, startedAt] = mockPrisma.$executeRawUnsafe.mock.calls[0];
+    expect(sql).toContain('SET "playHistoryPausedAt" = NULL WHERE "id" = $1 AND "playHistoryPausedAt" <= $2::timestamp(3)');
+    expect(id).toBe("rs1");
+    // Taken before evaluation began, not when the write finished.
+    expect((startedAt as Date).getTime()).toBeGreaterThanOrEqual(before);
+    expect((startedAt as Date).getTime()).toBeLessThanOrEqual(evaluatedAt);
+    // After the transaction that wrote the matches.
+    expect(mockPrisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(mockPrisma.$executeRawUnsafe.mock.invocationCallOrder[0]).toBeGreaterThan(
+      mockPrisma.$transaction.mock.invocationCallOrder[0],
+    );
   });
 });
 

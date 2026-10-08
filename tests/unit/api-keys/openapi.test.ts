@@ -1,9 +1,15 @@
 import { describe, it, expect } from "vitest";
-import { readdirSync, statSync } from "node:fs";
+import { readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { getApiKeyGuard } from "@/lib/api-keys/guard";
 import { FULL_LISTING_REQUEST_COST } from "@/lib/api-keys/limits";
-import { API_OPERATIONS, buildOpenApiDocument, operationId } from "@/lib/api-keys/openapi";
+import {
+  API_OPERATIONS,
+  OPENAPI_HISTORY_SORT_KEYS,
+  buildOpenApiDocument,
+  operationId,
+} from "@/lib/api-keys/openapi";
+import { HISTORY_SORT_KEYS, HISTORY_SORT_SQL } from "@/lib/media/history-sort";
 import { API_SCOPES } from "@/lib/api-keys/scopes";
 
 /**
@@ -129,5 +135,48 @@ describe("OpenAPI document", () => {
     expect(ids).toContain("getMediaByIdImage");
     expect(operationId("delete", "/lifecycle/exceptions/{id}")).toBe("deleteLifecycleExceptionsById");
     expect(operationId("get", "/openapi.json")).toBe("getOpenapiJson");
+  });
+
+  describe("GET /media/history", () => {
+    const op = API_OPERATIONS.find((o) => o.method === "get" && o.path === "/media/history");
+
+    it("lists exactly the sort keys the route's whitelist accepts", () => {
+      // openapi.ts keeps its own copy (it cannot import history-sort.ts — see
+      // OPENAPI_HISTORY_SORT_KEYS), so this is what keeps the copy current.
+      expect([...OPENAPI_HISTORY_SORT_KEYS]).toEqual([...HISTORY_SORT_KEYS]);
+      const sortBy = op?.query?.find((p) => p.name === "sortBy");
+      expect(sortBy?.schema?.enum).toEqual([...HISTORY_SORT_KEYS]);
+    });
+
+    it("documents every query parameter the route reads, and none it does not", () => {
+      const source = readFileSync(
+        path.resolve(__dirname, "../../../src/app/api/media/history/route.ts"),
+        "utf8",
+      );
+      const read = [...source.matchAll(/searchParams\.get\("(\w+)"\)/g)].map((m) => m[1]);
+      expect(read.length).toBeGreaterThan(10);
+      expect((op?.query ?? []).map((p) => p.name).sort()).toEqual([...new Set(read)].sort());
+    });
+
+    it("documents the title sort's key order, matching the route's ORDER BY", () => {
+      // The sentence a client reads to know where an episode lands under
+      // `sortBy=title`: the show/artist first, then season and episode for
+      // episodes only, then the row's own title — not the item's own title
+      // alone, which scattered a show's episodes by episode name.
+      const description = op?.description ?? "";
+      expect(description).toContain(
+        "`sortBy=title` sorts by the displayed title (the show or artist, then season and " +
+          "episode for episodes, then the title)",
+      );
+      // Pinned to the ORDER BY the route applies, so neither can be reordered
+      // without the other: the display lead (show/artist, else title), season,
+      // episode — both episode-only — then the row's own title.
+      const [lead, season, episode, own, ...rest] = HISTORY_SORT_SQL.title;
+      expect(rest).toEqual([]);
+      expect(lead).toMatch(/"parentTitle".*ELSE mi\."title"/);
+      expect(season).toMatch(/'SERIES'.*"seasonNumber"/);
+      expect(episode).toMatch(/'SERIES'.*"episodeNumber"/);
+      expect(own).toBe('LOWER(mi."title")');
+    });
   });
 });

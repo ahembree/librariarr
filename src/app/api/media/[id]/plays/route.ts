@@ -59,6 +59,9 @@ export async function GET(
   // `dedupKey`. The same film on two servers is two rows the user can see and
   // navigate between, and a play belongs to the copy it happened on; merging
   // here would attribute another server's plays to this page.
+  //
+  // Nor are fan-out copies collapsed (unlike the series route): on this copy's
+  // page its row may be the play's only record.
   return NextResponse.json(
     await fetchPlayHistory({
       userId: session.userId!,

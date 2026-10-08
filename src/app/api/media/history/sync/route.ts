@@ -48,12 +48,20 @@ export async function POST(request: Request) {
     // Validate ownership
     const server = await prisma.mediaServer.findFirst({
       where: { id: data.serverId, userId: session.userId },
-      select: { id: true, name: true },
+      select: { id: true, name: true, enabled: true },
     });
     if (!server) {
       return NextResponse.json({ error: "Server not found" }, { status: 404 });
     }
-    servers = [server];
+    // The page's picker lists disabled servers, which the sync skips untouched:
+    // refuse rather than answer with a clean zero.
+    if (!server.enabled) {
+      return NextResponse.json(
+        { error: "This server is disabled. Enable it to sync its watch history." },
+        { status: 409 },
+      );
+    }
+    servers = [{ id: server.id, name: server.name }];
   } else {
     // Sync all enabled servers for this user. Ordered by name so the phase
     // list the user sees is stable across runs rather than in whatever order
@@ -119,7 +127,9 @@ export async function POST(request: Request) {
             // `signal.aborted` check above only runs between servers.
             signal,
           );
-          counts[server.id] = result.count;
+          // A sync that could not run returns `failed` rather than throwing (the
+          // stored history stays intact); the page names a failure only on -1.
+          counts[server.id] = result.failed ? -1 : result.count;
         } catch {
           // A cancel is not a failure. The native path deliberately THROWS on
           // abort so its full-replace transaction rolls back (breaking would

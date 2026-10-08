@@ -157,8 +157,14 @@ export async function fetchPlayHistory(options: {
   serverId?: string | null;
   page: number;
   limit: number;
+  /**
+   * List a play filed against several library copies once (`fanOutOfItemId`
+   * null; 3+ copies: see `PRIMARY_PLAY` in `/api/media/history`). Only for a
+   * scope that always holds every copy, or the play could vanish from the list.
+   */
+  collapseFanOutCopies?: boolean;
 }) {
-  const { userId, mediaItemIds, serverId, page, limit } = options;
+  const { userId, mediaItemIds, serverId, page, limit, collapseFanOutCopies = false } = options;
 
   if (mediaItemIds.length === 0) {
     return { items: [], pagination: { page, limit, hasMore: false, totalCount: 0 } };
@@ -168,6 +174,8 @@ export async function fetchPlayHistory(options: {
     mediaItemId: { in: mediaItemIds },
     // Ownership guard: only history recorded on this user's servers.
     mediaServer: { userId, ...(serverId ? { id: serverId } : {}) },
+    // Shared with the count, so `totalCount` counts what the pages list.
+    ...(collapseFanOutCopies ? { fanOutOfItemId: null } : {}),
   };
 
   const [rows, totalCount] = await Promise.all([

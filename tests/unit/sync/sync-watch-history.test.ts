@@ -13,7 +13,18 @@ const {
   // Route the tx's raw methods to the same fn the tests assert against so the
   // existing call-inspection (DELETE/INSERT string filters) keeps working.
   const queryRawUnsafe = vi.fn();
-  const tx = { $queryRawUnsafe: queryRawUnsafe, $executeRawUnsafe: queryRawUnsafe };
+  // `assertStillNative` and `liveItemIds` answer from their own arguments, keeping each test's
+  // queue of lock/DELETE/INSERT results aligned (what they decide: native-history-writes.test.ts).
+  const txQueryRawUnsafe = vi.fn(async (sql: string, ...params: unknown[]) => {
+    if (sql.includes(`SELECT "tracearrServerId" FROM "MediaServer"`)) {
+      return [{ tracearrServerId: null }];
+    }
+    if (sql.includes(`SELECT "id" FROM "MediaItem" WHERE "id" = ANY`)) {
+      return (params[0] as string[]).map((id) => ({ id }));
+    }
+    return queryRawUnsafe(sql, ...params);
+  });
+  const tx = { $queryRawUnsafe: txQueryRawUnsafe, $executeRawUnsafe: queryRawUnsafe };
   return {
     mockPrisma: {
       tracearrInstance: { findFirst: vi.fn() },
@@ -22,6 +33,8 @@ const {
       $queryRawUnsafe: queryRawUnsafe,
       $executeRawUnsafe: queryRawUnsafe,
       $transaction: vi.fn(async (cb: (t: typeof tx) => Promise<unknown>) => cb(tx)),
+      /** The transaction client's `$queryRawUnsafe` (see above). */
+      txQueryRawUnsafe,
     },
     mockClient: {
       getDetailedWatchHistory: vi.fn(),
@@ -143,7 +156,11 @@ describe("syncWatchHistory", () => {
       ]);
       mockPrisma.tracearrInstance.findFirst.mockResolvedValueOnce(null);
 
-      await expect(syncWatchHistory("server-1")).resolves.toEqual({ count: 0 });
+      await expect(syncWatchHistory("server-1")).resolves.toEqual({
+        count: 0,
+        // Not a clean zero: the History page must show this server as failed.
+        failed: "no enabled Tracearr instance",
+      });
       expect(mockSyncTracearr).not.toHaveBeenCalled();
       expect(mockClient.getDetailedWatchHistory).not.toHaveBeenCalled();
       // The decisive assertion: nothing was deleted, so the imported rows survive.
@@ -227,7 +244,7 @@ describe("syncWatchHistory", () => {
     mockClient.getDetailedWatchHistory.mockRejectedValueOnce(new Error("ECONNREFUSED"));
 
     const result = await syncWatchHistory("server-1");
-    expect(result).toEqual({ count: 0 });
+    expect(result).toEqual({ count: 0, failed: expect.stringContaining("ECONNREFUSED") });
 
     // CRITICAL: must NOT have wiped existing history on a fetch failure.
     const deleteCalls = mockPrisma.$queryRawUnsafe.mock.calls
@@ -591,6 +608,7 @@ describe("syncWatchHistory", () => {
       // emission the user already saw stands rather than being retracted.
       await expect(syncWatchHistory("server-1", report)).resolves.toEqual({
         count: 0,
+        failed: expect.stringContaining("ECONNREFUSED"),
       });
       expect(updates).toEqual([
         { imported: 0, detail: "Fetching watch history from Test Server…" },
@@ -668,7 +686,7 @@ describe("syncWatchHistory", () => {
     function watchTransaction() {
       const state = { rolledBack: false };
       const tx = {
-        $queryRawUnsafe: mockPrisma.$queryRawUnsafe,
+        $queryRawUnsafe: mockPrisma.txQueryRawUnsafe,
         $executeRawUnsafe: mockPrisma.$executeRawUnsafe,
       };
       mockPrisma.$transaction.mockImplementationOnce(
@@ -959,12 +977,59 @@ describe("syncWatchHistory", () => {
       mockPrisma.$queryRawUnsafe.mockResolvedValueOnce(serverRow());
       mockClient.getDetailedWatchHistory.mockRejectedValueOnce(new Error("plex down"));
 
-      await expect(syncWatchHistory("server-1")).resolves.toEqual({ count: 0 });
+      await expect(syncWatchHistory("server-1")).resolves.toEqual({
+        count: 0,
+        failed: expect.stringContaining("plex down"),
+      });
 
       expect(establishCalls()).toHaveLength(0);
     });
   });
 
+  it("passes the Tracearr importer's failure on, with what it did import", async () => {
+    // The importer returns rather than throws; dropping `failed` reported the server as cleanly synced.
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([serverRow({ tracearrServerId: "srv-uuid" })]);
+    mockPrisma.tracearrInstance.findFirst.mockResolvedValueOnce({ id: "t1" });
+    mockSyncTracearr.mockResolvedValueOnce({
+      count: 4,
+      backfillPending: false,
+      failed: "forward walk errored",
+    } as never);
+
+    await expect(syncWatchHistory("server-1")).resolves.toEqual({
+      count: 4,
+      failed: "forward walk errored",
+    });
+    // The rows it did write are still reconciled.
+    expect(mockReconcile).toHaveBeenCalledWith("server-1");
+  });
+
+  it("splits the rows of a widely fanned-out play across INSERTs, under the bind limit", async () => {
+    // One play filed against 600 copies is 600 rows of 9 params; a statement binds at most 65,535.
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([serverRow({ type: "JELLYFIN" })]);
+    mockClient.getDetailedWatchHistory.mockResolvedValueOnce([
+      { ratingKey: "100", username: "bob", watchedAt: "2025-07-01T00:00:00Z", deviceName: null, platform: null },
+    ]);
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce(
+      Array.from({ length: 600 }, (_, i) => ({
+        id: `item-${String(i).padStart(3, "0")}`,
+        ratingKey: "100",
+        libraryKey: `lib-${i}`,
+      })),
+    );
+
+    await expect(syncWatchHistory("server-1")).resolves.toEqual({ count: 600 });
+
+    const inserts = mockPrisma.$queryRawUnsafe.mock.calls.filter((args) =>
+      (args[0] as string).includes('INSERT INTO "WatchHistory"'),
+    );
+    expect(inserts.map((call) => (call.length - 1) / 9)).toEqual([500, 100]);
+    // One primary row; every other copy points at it.
+    const params = inserts.flatMap((call) => call.slice(1));
+    const fanOut = Array.from({ length: params.length / 9 }, (_, i) => params[i * 9 + 2]);
+    expect(fanOut.filter((v) => v === null)).toHaveLength(1);
+    expect(fanOut.filter((v) => v === "item-000")).toHaveLength(599);
+  });
 });
 
 describe("syncWatchHistory — incremental refresh", () => {
@@ -1002,6 +1067,15 @@ describe("syncWatchHistory — incremental refresh", () => {
     mockPrisma.$queryRawUnsafe.mock.calls.filter((args) =>
       (args[0] as string).includes('INSERT INTO "WatchHistory"'),
     );
+  /** The fetch a full replace makes: no `since`, and a report for the client to fill in. */
+  function expectFullHistoryFetch() {
+    expect(mockClient.getDetailedWatchHistory).toHaveBeenCalledTimes(1);
+    const [options] = mockClient.getDetailedWatchHistory.mock.calls[0] as [Record<string, unknown>];
+    expect(options).not.toHaveProperty("since");
+    expect(options).toEqual({
+      report: { incompleteUsers: new Map(), devicesUnavailable: false },
+    });
+  }
 
   it("fetches only plays since the newest stored one (minus overlap) and appends the unseen ones", async () => {
     const newest = new Date("2024-06-01T12:00:00.000Z");
@@ -1070,7 +1144,7 @@ describe("syncWatchHistory — incremental refresh", () => {
     const result = await syncWatchHistory("server-1", undefined, undefined, { incremental: true });
 
     expect(result).toEqual({ count: 1 });
-    expect(mockClient.getDetailedWatchHistory).toHaveBeenCalledWith(undefined);
+    expectFullHistoryFetch();
     expect(deleteCalls()).toHaveLength(1);
   });
 
@@ -1084,7 +1158,7 @@ describe("syncWatchHistory — incremental refresh", () => {
 
     await syncWatchHistory("server-1", undefined, undefined, { incremental: true });
 
-    expect(mockClient.getDetailedWatchHistory).toHaveBeenCalledWith(undefined);
+    expectFullHistoryFetch();
     expect(deleteCalls()).toHaveLength(1);
   });
 
@@ -1097,7 +1171,7 @@ describe("syncWatchHistory — incremental refresh", () => {
     await syncWatchHistory("server-1", undefined, undefined, { incremental: true });
 
     // No boundary query is even made: the second raw call is the DELETE.
-    expect(mockClient.getDetailedWatchHistory).toHaveBeenCalledWith(undefined);
+    expectFullHistoryFetch();
     expect(deleteCalls()).toHaveLength(1);
   });
 
@@ -1115,5 +1189,60 @@ describe("syncWatchHistory — incremental refresh", () => {
     expect(insertCalls()).toHaveLength(0);
     // Nothing appended: no server-wide reconcile per finished playback.
     expect(mockReconcile).not.toHaveBeenCalled();
+  });
+
+  describe("identity across account names", () => {
+    const newest = new Date("2024-06-01T12:00:00.000Z");
+
+    /** Runs an append over `incoming` plays and the `stored` rows of the overlap window, all at one instant. */
+    function append(incoming: string[], stored: Array<{ id: string; serverUsername: string }>) {
+      mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([plexRow()]);
+      mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([
+        { establishedAt: new Date("2024-05-01T00:00:00Z"), newest },
+      ]);
+      mockClient.getDetailedWatchHistory.mockResolvedValueOnce(
+        incoming.map((username) => ({
+          ratingKey: "100",
+          username,
+          watchedAt: newest.toISOString(),
+          deviceName: null,
+          platform: null,
+        })),
+      );
+      mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([{ id: "item-1", ratingKey: "100" }]);
+      mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // pg_advisory_xact_lock
+      mockPrisma.$queryRawUnsafe.mockResolvedValueOnce(
+        stored.map((r) => ({ ...r, mediaItemId: "item-1", watchedAt: newest })),
+      );
+      return syncWatchHistory("server-1", undefined, undefined, { incremental: true });
+    }
+    const relabels = () =>
+      mockPrisma.$queryRawUnsafe.mock.calls.filter((args) =>
+        (args[0] as string).includes('UPDATE "WatchHistory"'),
+      );
+
+    it("does not append an Unknown play that matches a stored named one", async () => {
+      await expect(append(["Unknown"], [{ id: "wh-1", serverUsername: "alice" }])).resolves.toEqual({ count: 0 });
+      expect(insertCalls()).toHaveLength(0);
+      // Nothing to relabel: the stored row already has the better name.
+      expect(relabels()).toHaveLength(0);
+    });
+
+    it("keeps two DIFFERENT accounts' plays at the same item and second as two plays", async () => {
+      const stored = [{ id: "wh-1", serverUsername: "alice" }];
+      await expect(append(["alice", "bob"], stored)).resolves.toEqual({ count: 1 });
+      expect(insertCalls()).toHaveLength(1);
+      expect(insertCalls()[0].slice(1)).toContain("bob");
+    });
+
+    it("pairs exact names before the Unknown wildcard", async () => {
+      // alice takes the stored alice row, leaving Unknown to pair with (and be relabelled to) bob.
+      const stored = [
+        { id: "wh-unknown", serverUsername: "Unknown" },
+        { id: "wh-alice", serverUsername: "alice" },
+      ];
+      await expect(append(["bob", "alice"], stored)).resolves.toEqual({ count: 0 });
+      expect(relabels()[0].slice(1)).toEqual([["wh-unknown"], ["bob"]]);
+    });
   });
 });

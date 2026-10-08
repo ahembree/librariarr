@@ -49,6 +49,9 @@ async function seed() {
   const user = await createTestUser();
   const server = await createTestServer(user.id);
   const library = await createTestLibrary(server.id, { key: "3", type: "MUSIC" });
+  // Not the library's first track: those are left to a full sync, which
+  // takes the population hold (see sync-incremental.test.ts).
+  await createTestMediaItem(library.id, { ratingKey: "anchor", type: "MUSIC", title: "Already Here" });
   return { user, server, library };
 }
 

@@ -50,6 +50,7 @@ vi.mock("@/lib/media-server/health-cache", () => ({
 }));
 
 import { EmbyClient } from "@/lib/emby/client";
+import type { DetailedWatchHistoryReport } from "@/lib/media-server/types";
 
 describe("EmbyClient", () => {
   beforeEach(() => {
@@ -204,6 +205,27 @@ describe("EmbyClient", () => {
 
       const entries = await client.getWatchHistory("item-1");
       expect(entries).toEqual([]);
+    });
+  });
+
+  describe("getDetailedWatchHistory", () => {
+    // Inherited from the Jellyfin base (covered in full by its tests); pinned for Emby.
+    it("sets aside a user whose played-items listing is unreliable given a report, and fails without one", async () => {
+      const client = new EmbyClient("http://emby:8096", "emby-token");
+      mockFakeClient.get.mockImplementation(async (url: string) => {
+        if (url === "/Users") return { data: [{ Id: "u1", Name: "Alice" }, { Id: "u2", Name: "Bob" }] };
+        if (url === "/Users/u1/Items") {
+          return { data: { Items: [{ Id: "m1", UserData: { PlayCount: 1 } }], TotalRecordCount: 1 } };
+        }
+        return { data: { Items: [], TotalRecordCount: 4 } };
+      });
+      const report: DetailedWatchHistoryReport = { incompleteUsers: new Map(), devicesUnavailable: false };
+
+      const entries = await client.getDetailedWatchHistory({ report });
+
+      expect(entries.map((e) => e.username)).toEqual(["Alice"]);
+      expect([...report.incompleteUsers]).toEqual([["Bob", "unreliable"]]);
+      await expect(client.getDetailedWatchHistory()).rejects.toThrow(/ended at 0 of a reported 4/);
     });
   });
 });

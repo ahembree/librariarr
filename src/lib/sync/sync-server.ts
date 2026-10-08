@@ -24,6 +24,15 @@ import { syncWatchHistory } from "@/lib/sync/sync-watch-history";
 import { reconcileWatchStateFromHistory } from "@/lib/sync/watch-reconcile";
 import { mbidFromGuids, withArtistMbid } from "@/lib/media/musicbrainz";
 import { writeArtistMbids } from "@/lib/sync/artist-mbid";
+import {
+  libraryResyncRequestedSince,
+  releaseLibraryResyncHold,
+  releaseOwnPopulationHold,
+  requireLibraryResync,
+  requirePopulationResync,
+  type PopulationHoldReceipt,
+} from "@/lib/media/watch-evidence";
+import { enqueueTracearrBackfill } from "@/lib/sync/tracearr-backfill-enqueue";
 
 // --- Filename-based detection using Trash-Guides naming conventions ---
 // These regex patterns are derived from Trash-Guides custom format definitions:
@@ -175,6 +184,20 @@ export function detectAudioProfile(
 
 // Chunk size for batched DB transactions
 const UPSERT_BATCH_SIZE = 50;
+
+// How far short of a library's reported total a pass may end and still count
+// as synced for releasing a library-resync hold (see `releaseVerdicts`).
+const RELEASE_SHORTFALL_MIN_ITEMS = 50;
+const RELEASE_SHORTFALL_FRACTION = 0.02;
+
+// How much older than a library-resync hold an item must be for its library to
+// count as untouched by the hold's cause (see the release after the library loop).
+const UNTOUCHED_MARGIN_MS = 60_000;
+
+/** Whether a library pass counts toward releasing a library-resync hold, and if not, why. */
+type ReleaseVerdict =
+  | { synced: true; title: string; shortOf: { seen: number; total: number } | null }
+  | { synced: false; title: string; why: string };
 const PAGE_SIZE = 500;
 const ENRICHMENT_CONCURRENCY = 10;
 
@@ -907,10 +930,27 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
     // likely a bad answer than "delete everything" — the same fail-toward-
     // keeping stance as the item purge.
     if (!libraryKey && libraries.length > 0) {
-      if (await purgeVanishedLibraries(serverId, libraries.map((l) => l.key)) > 0) {
+      const purged = await purgeVanishedLibraries(serverId, libraries.map((l) => l.key));
+      if (purged.libraries > 0) {
         datasetChanged = true;
       }
+      // The cascade took their items' plays too: hold the server's play history
+      // like a manual purge. Taken before `libraryPassStartedAt`, so this run's
+      // own release can cover it.
+      if (purged.items > 0) {
+        await requireLibraryResync([serverId]);
+      }
     }
+
+    // The instant a full run releases a hold up to (`releaseLibraryResyncHold`),
+    // and the population hold's instant. AFTER the vanished-library purge, so a
+    // hold it took is covered; a hold requested mid-pass is not, since this run
+    // may have passed the purged library before its delete.
+    const libraryPassStartedAt = new Date();
+    // Per visited library: whether its pass counts toward releasing a hold, and if not, why.
+    const releaseVerdicts = new Map<string, ReleaseVerdict>();
+    // The population hold this run wrote itself — the one a scoped run may release.
+    let ownPopulationHold: { receipt: PopulationHoldReceipt; libraryId: string; title: string } | null = null;
 
     // Look up which libraries are disabled in the DB so we can skip them early
     const disabledLibraries = await prisma.$queryRawUnsafe<{ key: string }[]>(
@@ -1048,17 +1088,42 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
       );
 
       const libraryNow = new Date();
-      const libraryRows = await prisma.$queryRawUnsafe<{ id: string; enabled: boolean }[]>(
+      const libraryRows = await prisma.$queryRawUnsafe<
+        { id: string; enabled: boolean; shortPassSeenAt?: Date | null }[]
+      >(
         `INSERT INTO "Library" ("id","mediaServerId","key","title","type","createdAt","updatedAt")
          VALUES ($1,$2,$3,$4,$5,$6,$6)
          ON CONFLICT ("mediaServerId","key") DO UPDATE SET "title"=EXCLUDED."title","updatedAt"=$6
-         RETURNING "id","enabled"`,
+         RETURNING "id","enabled","shortPassSeenAt"`,
         randomUUID(), serverId, lib.key, lib.title, libraryType, libraryNow,
       );
       const library = libraryRows[0];
 
       // Skip disabled libraries
       if (!library.enabled) continue;
+
+      // A library holding no item yet is about to be POPULATED; its items arrive
+      // with none of their plays (see the population hold below).
+      const populating =
+        (
+          await prisma.$queryRawUnsafe<{ held: boolean }[]>(
+            `SELECT EXISTS (SELECT 1 FROM "MediaItem" WHERE "libraryId"=$1) AS "held"`,
+            library.id,
+          )
+        )[0]?.held !== true;
+      let populationHoldTaken = false;
+
+      // Whether the previous pass ended short within the release tolerance
+      // (`Library.shortPassSeenAt`). A pass starting on an empty library clears
+      // it: it described rows that are gone.
+      let shortPassSeenAtStart = library.shortPassSeenAt ?? null;
+      if (populating && shortPassSeenAtStart) {
+        await prisma.$queryRawUnsafe(
+          `UPDATE "Library" SET "shortPassSeenAt"=NULL WHERE "id"=$1`,
+          library.id,
+        );
+        shortPassSeenAtStart = null;
+      }
 
       await prisma.$queryRawUnsafe(
         `UPDATE "SyncJob" SET "currentLibrary"=$1 WHERE "id"=$2`,
@@ -1092,7 +1157,12 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
       // rather than exiting early/abnormally. Stale deletion only runs when the
       // full library was actually traversed — otherwise a short/partial fetch
       // would wrongly delete items that still exist on the server.
-      let reachedLibraryEnd = false;
+      //
+      // An empty FIRST page ends the listing like an empty later page, or an
+      // empty library on a server sending no total would never count as
+      // traversed (and keep a hold forever). A library still holding rows
+      // refuses to be wiped by such a listing (`skipPurgeReason`).
+      let reachedLibraryEnd = !pageItems || pageItems.length === 0;
 
       while (pageItems && pageItems.length > 0) {
         // Defence in depth: a library listing can carry non-media containers
@@ -1115,6 +1185,25 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
           pageItems = media;
           processedItems += nonMediaCount;
           librarySeenCount += nonMediaCount;
+        }
+
+        // The population hold, once per pass, right before the first media write
+        // into a library that held none: until a complete library sync has added
+        // every item, no history pass may vouch for the server's play history.
+        // At this run's pass start, so a full run releases it at its end (before
+        // its history phase). A scoped run releases only a hold it wrote itself
+        // and nothing touched since; a run failing after its first insert leaves
+        // a hold its retry (no longer populating) cannot release.
+        if (populating && !populationHoldTaken && pageItems.length > 0) {
+          logger.info(
+            "Sync",
+            `Library "${lib.title}" held no items before this sync — holding "${server.name}"'s ` +
+              `play history until a complete library sync has added them, since no history ` +
+              `pass before then can have attached their plays`,
+          );
+          const receipt = await requirePopulationResync(serverId, libraryPassStartedAt);
+          if (receipt) ownPopulationHold = { receipt, libraryId: library.id, title: lib.title };
+          populationHoldTaken = true;
         }
 
         // Pre-fetch existing thumb URLs for the entire page in a single query
@@ -1396,6 +1485,68 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
         new Date(), library.id,
       );
 
+      // Whether this pass counts as having synced the library, for releasing a
+      // library-resync hold only (the stale-item purge keeps its strict rule):
+      // completely (a refused wipe does not count), or — for a server that
+      // over-reports a total and so never lets a pass reach it — within the
+      // tolerance, when the library's PREVIOUS pass ended short within it too
+      // (`Library.shortPassSeenAt`, persisted across restarts). Over-reporting
+      // repeats every pass; a listing cut short once left items still to come,
+      // which would return through a path that never re-reads history.
+      const releaseTolerance =
+        libraryTotal != null
+          ? Math.max(RELEASE_SHORTFALL_MIN_ITEMS, Math.ceil(libraryTotal * RELEASE_SHORTFALL_FRACTION))
+          : 0;
+      const endedShort =
+        !traversedFullLibrary && reachedLibraryEnd && libraryTotal != null && libraryItemCount > 0;
+      const recordShortPass = async (seenAt: Date | null) => {
+        if (seenAt === null && shortPassSeenAtStart === null) return;
+        await prisma.$queryRawUnsafe(
+          `UPDATE "Library" SET "shortPassSeenAt"=$2 WHERE "id"=$1`,
+          library.id,
+          seenAt,
+        );
+      };
+      if (skipPurgeReason === null) {
+        await recordShortPass(null);
+        releaseVerdicts.set(library.id, { synced: true, title: lib.title, shortOf: null });
+      } else if (endedShort && libraryTotal - librarySeenCount <= releaseTolerance) {
+        // Only recorded while the server is held; with no hold there is nothing to release.
+        const held = await prisma.$queryRawUnsafe<{ libraryResyncRequiredAt: Date | null }[]>(
+          `SELECT "libraryResyncRequiredAt" FROM "MediaServer" WHERE "id"=$1`,
+          serverId,
+        );
+        // Nor by a pass a hold request arrived during: it may have straddled the
+        // delete, and would count as the first of the two passes the tolerance
+        // needs. Whatever emptied the library clears the column itself.
+        if (!libraryResyncRequestedSince(serverId, libraryNow)) {
+          await recordShortPass(held[0]?.libraryResyncRequiredAt ? new Date() : null);
+        }
+        releaseVerdicts.set(
+          library.id,
+          shortPassSeenAtStart !== null
+            ? { synced: true, title: lib.title, shortOf: { seen: librarySeenCount, total: libraryTotal } }
+            : {
+                synced: false,
+                title: lib.title,
+                why:
+                  `the server listed ${librarySeenCount} of the ${libraryTotal} items it reported — within ` +
+                  `the tolerance for an over-reported total, so it counts as synced on the next full ` +
+                  `sync if that one comes up short within it too`,
+              },
+        );
+      } else {
+        await recordShortPass(null);
+        releaseVerdicts.set(library.id, {
+          synced: false,
+          title: lib.title,
+          why: endedShort
+            ? `the server listed ${librarySeenCount} of the ${libraryTotal} items it reported — more ` +
+              `than the ${releaseTolerance}-item tolerance for an over-reported total`
+            : skipPurgeReason,
+        });
+      }
+
       dbLogger.debug("DB", `Upserted ${libraryItemCount} media items for library "${lib.title}"`);
       if (skippedEnrichment > 0) {
         logger.info("Sync", `Library "${lib.title}": skipped enrichment for ${skippedEnrichment}/${libraryItemCount} unchanged items`);
@@ -1420,6 +1571,136 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
       return;
     }
 
+    // Release a library-resync hold: a FULL run, once every enabled library the
+    // hold WAITS FOR (holding no item created a margin before the hold) was
+    // synced above. Every cause leaves its library that way, and the hold keeps
+    // the EARLIEST request, so a library holding an older item was left alone:
+    // whether this run could sync it must not keep the hold forever. An awaited
+    // library this run did not visit (an empty listing is not an error on Plex),
+    // refused to wipe, or fell short blocks the release. A scoped run releases
+    // only a population hold it wrote itself (`releaseOwnPopulationHold`).
+    //
+    // Before the watch-history phase, which attaches the re-added items' plays
+    // and so may establish the marker in this run; if it fails or is skipped the
+    // marker stays null (the release nulled it). Non-fatal.
+    const warnIfTolerated = (libraryIds: string[]) => {
+      const short = libraryIds.flatMap((id) => {
+        const verdict = releaseVerdicts.get(id);
+        return verdict?.synced && verdict.shortOf
+          ? [`"${verdict.title}" (${verdict.shortOf.seen} of ${verdict.shortOf.total})`]
+          : [];
+      });
+      if (short.length === 0) return;
+      logger.warn(
+        "Sync",
+        `Releasing "${server.name}"'s play-history hold although the server listed fewer items ` +
+          `than it reported for ${short.join(", ")} — within the tolerance for an over-reported ` +
+          `total, as it was on the sync before this one`,
+      );
+    };
+    const queueHeldImport = () =>
+      // The held walk (no-op when unmapped); the watch phase skips its own
+      // enqueue while a slice backs off.
+      enqueueTracearrBackfill(
+        { serverIds: [serverId] },
+        "a sync re-added the items its held history import was waiting for",
+      );
+    if (!libraryKey) {
+      try {
+        const held = await prisma.$queryRawUnsafe<{ libraryResyncRequiredAt: Date | null }[]>(
+          `SELECT "libraryResyncRequiredAt" FROM "MediaServer" WHERE "id"=$1`,
+          serverId,
+        );
+        const heldSince = held[0]?.libraryResyncRequiredAt ?? null;
+        if (heldSince) {
+          // A margin before the hold, not merely before it: `processBatch` dates
+          // an item before its INSERT runs, so an upsert racing a purge can
+          // re-insert rows dated just BEFORE that purge's hold. The margin only
+          // ever turns such a library from untouched into awaited.
+          const enabledLibraries = await prisma.$queryRawUnsafe<
+            { id: string; title: string; untouched: boolean }[]
+          >(
+            `SELECT l."id", l."title",
+                    EXISTS (
+                      SELECT 1 FROM "MediaItem" mi
+                       WHERE mi."libraryId" = l."id" AND mi."createdAt" < $2
+                    ) AS "untouched"
+               FROM "Library" l
+              WHERE l."mediaServerId" = $1 AND l."enabled" = true
+              ORDER BY l."title"`,
+            serverId,
+            new Date(heldSince.getTime() - UNTOUCHED_MARGIN_MS),
+          );
+          const awaited = enabledLibraries.filter((l) => !l.untouched);
+          const blocking = awaited.flatMap((l) => {
+            const verdict = releaseVerdicts.get(l.id);
+            if (verdict?.synced) return [];
+            return [
+              `"${l.title}" (${verdict ? verdict.why : "this sync did not visit it — the server did not list it, or it was enabled while the sync ran"})`,
+            ];
+          });
+          if (blocking.length > 0) {
+            logger.warn(
+              "Sync",
+              `Keeping "${server.name}"'s play-history hold — it waits for ${blocking.join("; ")}. ` +
+                `Play-activity lifecycle rules stay paused for this server until a full sync ` +
+                `completely syncs ${blocking.length === 1 ? "that library" : "those libraries"}`,
+            );
+          } else if (await releaseLibraryResyncHold(serverId, libraryPassStartedAt, heldSince)) {
+            warnIfTolerated(awaited.map((l) => l.id));
+            logger.info(
+              "Sync",
+              `Full sync brought back every item "${server.name}"'s play-history hold was ` +
+                `waiting for — releasing it`,
+            );
+            await queueHeldImport();
+          } else {
+            logger.info(
+              "Sync",
+              `Keeping "${server.name}"'s play-history hold — it was requested again after this ` +
+                `sync began its library pass (a purge, a restore, or a library's first sync), ` +
+                `so this sync may have passed what it waits for; the next full sync releases it`,
+            );
+          }
+        }
+      } catch (releaseError) {
+        logger.warn("Sync", "Could not release the server's play-history hold", {
+          error: String(releaseError),
+        });
+      }
+    } else if (ownPopulationHold) {
+      const { receipt, libraryId, title } = ownPopulationHold;
+      try {
+        // This hold waits for exactly the library the run populated.
+        const verdict = releaseVerdicts.get(libraryId);
+        if (!verdict?.synced) {
+          logger.warn(
+            "Sync",
+            `Keeping "${server.name}"'s play-history hold — it waits for "${title}" ` +
+              `(${verdict ? verdict.why : "this sync did not finish it"}). Play-activity lifecycle ` +
+              `rules stay paused for this server until a full sync completely syncs it`,
+          );
+        } else if (await releaseOwnPopulationHold(receipt)) {
+          warnIfTolerated([libraryId]);
+          logger.info(
+            "Sync",
+            `Library "${title}" is synced — releasing the play-history hold this sync took for it on "${server.name}"`,
+          );
+          await queueHeldImport();
+        } else {
+          logger.info(
+            "Sync",
+            `Keeping "${server.name}"'s play-history hold — it changed while this sync ran ` +
+              `(another purge, restore or sync); a full sync of the server releases it`,
+          );
+        }
+      } catch (releaseError) {
+        logger.warn("Sync", "Could not release the server's play-history hold", {
+          error: String(releaseError),
+        });
+      }
+    }
+
     // Sync detailed watch history (per-user, per-play events)
     if (!options?.skipWatchHistory) {
       await prisma.$queryRawUnsafe(
@@ -1435,9 +1716,19 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
       // cannot be interrupted), so the previous history stays intact.
       const cancelWatch = watchForCancel(cancelRequested);
       try {
-        const { count: whCount } = await syncWatchHistory(serverId, undefined, cancelWatch.signal);
-        completedOps.push(`Watch history: ${whCount} plays (${formatDuration(Date.now() - whStart)})`);
-        logger.info("Sync", `Watch history sync completed: ${whCount} play events`);
+        const { count: whCount, failed: whFailed } = await syncWatchHistory(
+          serverId,
+          undefined,
+          cancelWatch.signal,
+        );
+        if (whFailed) {
+          // Non-fatal, but logged as a failure: it returns rather than throws.
+          logger.error("Sync", "Watch history sync failed", { error: whFailed });
+          completedOps.push(`Watch history: failed (${formatDuration(Date.now() - whStart)})`);
+        } else {
+          completedOps.push(`Watch history: ${whCount} plays (${formatDuration(Date.now() - whStart)})`);
+          logger.info("Sync", `Watch history sync completed: ${whCount} play events`);
+        }
       } catch (whError) {
         if (!cancelWatch.signal.aborted) {
           // Non-fatal: don't fail the entire sync if watch history fails
@@ -1529,14 +1820,19 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
  * reports. See the call site in `syncMediaServer` for why leaving them was a
  * lifecycle hazard. Logs each removal at WARN with the cascaded exception
  * count, as the stale-item purge does — that protection does not come back if
- * the media reappears under another library. Returns how many it removed, so
- * the caller knows the dataset changed.
+ * the media reappears under another library. Returns how many libraries it
+ * removed, so the caller knows the dataset changed, and how many items went
+ * with them, so it knows whether their plays did too.
  */
-async function purgeVanishedLibraries(serverId: string, serverKeys: string[]): Promise<number> {
+async function purgeVanishedLibraries(
+  serverId: string,
+  serverKeys: string[],
+): Promise<{ libraries: number; items: number }> {
   const vanished = await prisma.$queryRawUnsafe<{ id: string; key: string; title: string }[]>(
     `SELECT "id","key","title" FROM "Library" WHERE "mediaServerId"=$1 AND NOT ("key" = ANY($2::text[]))`,
     serverId, serverKeys,
   );
+  let removedItems = 0;
   for (const lib of vanished) {
     const items = await prisma.$queryRawUnsafe<
       { id: string; thumbUrl: string | null; parentThumbUrl: string | null; seasonThumbUrl: string | null }[]
@@ -1551,6 +1847,7 @@ async function purgeVanishedLibraries(serverId: string, serverKeys: string[]): P
       lib.id,
     );
     const exceptions = Number(exceptionRows[0]?.count ?? 0);
+    removedItems += items.length;
     for (const item of items) {
       await invalidateCachedUrls([item.thumbUrl, item.parentThumbUrl, item.seasonThumbUrl]);
     }
@@ -1561,7 +1858,7 @@ async function purgeVanishedLibraries(serverId: string, serverKeys: string[]): P
         (exceptions > 0 ? `, deleting ${exceptions} lifecycle exception(s) attached to them` : ""),
     );
   }
-  return vanished.length;
+  return { libraries: vanished.length, items: removedItems };
 }
 
 /**

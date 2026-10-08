@@ -15,6 +15,7 @@ import {
 import { matchIdentityChange } from "@/lib/lifecycle/match-identity";
 import { arrIdSourceFor } from "@/lib/lifecycle/cross-server-copies";
 import { hasSeerrRules } from "@/lib/rules/lifecycle-engine";
+import { checkPlayActivityExecutable } from "@/lib/lifecycle/evaluability";
 import type { LifecycleRuleGroup } from "@/lib/rules/types";
 import type { Prisma } from "@/generated/prisma/client";
 
@@ -126,7 +127,7 @@ async function retryAction(
   // enforce this gate; force-retry needs it too.
   const ruleSet = await prisma.ruleSet.findFirst({
     where: { id: action.ruleSetId, userId: session.userId },
-    select: { enabled: true, type: true, rules: true },
+    select: { enabled: true, type: true, rules: true, serverIds: true, playHistoryPausedAt: true },
   });
   if (!ruleSet?.enabled) {
     return NextResponse.json(
@@ -141,6 +142,16 @@ async function retryAction(
       { error: "Seerr criteria are not supported on music rule sets — this action's match is invalid" },
       { status: 400 }
     );
+  }
+  // Play-history hold, as the executor (`checkPlayActivityExecutable`): the
+  // stale-match guard below would pass on a frozen match.
+  const playHistoryRefusal = await checkPlayActivityExecutable(session.userId!, {
+    rules: ruleSet.rules as unknown as LifecycleRuleGroup[],
+    serverIds: ruleSet.serverIds,
+    playHistoryPausedAt: ruleSet.playHistoryPausedAt,
+  });
+  if (playHistoryRefusal) {
+    return NextResponse.json({ error: playHistoryRefusal }, { status: 409 });
   }
 
   if (!action.mediaItem || !action.mediaItemId) {

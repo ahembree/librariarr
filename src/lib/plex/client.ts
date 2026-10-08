@@ -17,6 +17,10 @@ import type {
 } from "./types";
 import type { MediaServerClient, LibraryItemType } from "@/lib/media-server/client";
 import { MediaItemNotFoundError } from "@/lib/media-server/client";
+import type {
+  DetailedWatchHistoryEntry,
+  DetailedWatchHistoryOptions,
+} from "@/lib/media-server/types";
 import { isMediaItem } from "@/lib/media-server/item-types";
 import { normalizeResolutionFromDimensions } from "@/lib/resolution";
 import { logger } from "@/lib/logger";
@@ -37,6 +41,36 @@ const COLLECTION_ITEM_BATCH_SIZE = 50;
 
 function buildCollectionUri(machineId: string, ratingKeys: string[]): string {
   return `server://${machineId}/com.plexapp.plugins.library/library/metadata/${ratingKeys.join(",")}`;
+}
+
+/**
+ * A play's name when its account is not in `/accounts`. The incremental append
+ * treats it as an unresolved account, not as another person.
+ */
+export const UNKNOWN_ACCOUNT_NAME = "Unknown";
+
+// How far a full history listing may fall short of `totalSize` and still read
+// as an over-reported total: max(50, 2%), as on Jellyfin/Emby.
+const HISTORY_SHORTFALL_TOLERANCE_ENTRIES = 50;
+const HISTORY_SHORTFALL_TOLERANCE_FRACTION = 0.02;
+
+/** The `MediaContainer` of a response, or a throw: a non-Plex 200 must not read as empty. */
+function plexContainer(data: unknown, what: string): Record<string, unknown> {
+  const container =
+    data && typeof data === "object"
+      ? (data as { MediaContainer?: unknown }).MediaContainer
+      : undefined;
+  if (!container || typeof container !== "object" || Array.isArray(container)) {
+    throw new Error(`Plex returned a malformed ${what} response (no MediaContainer)`);
+  }
+  return container as Record<string, unknown>;
+}
+
+/** A history entry's identity: `historyKey`, else account + item + timestamp; null if neither. */
+function historyEntryIdentity(entry: Record<string, unknown>): string | null {
+  if (typeof entry.historyKey === "string" && entry.historyKey) return `h:${entry.historyKey}`;
+  if (entry.ratingKey == null || entry.viewedAt == null) return null;
+  return `a:${String(entry.accountID ?? "")}|${String(entry.ratingKey)}|${String(entry.viewedAt)}`;
 }
 
 export class PlexClient implements MediaServerClient {
@@ -289,19 +323,28 @@ export class PlexClient implements MediaServerClient {
     return map;
   }
 
+  /** Account id → name, best-effort (empty on failure): live displays only, never stored history. */
   async getAccounts(): Promise<Map<number, string>> {
     try {
-      const response = await this.client.get("/accounts");
-      const accounts =
-        response.data.MediaContainer.Account || [];
-      const map = new Map<number, string>();
-      for (const acct of accounts) {
-        map.set(acct.id, acct.name);
-      }
-      return map;
+      return await this.fetchAccountMap();
     } catch {
       return new Map();
     }
+  }
+
+  /** Account id → name, or a throw: committed history must not name every play "Unknown". */
+  private async fetchAccountMap(): Promise<Map<number, string>> {
+    const response = await this.client.get("/accounts");
+    const container = plexContainer(response.data, "/accounts");
+    const accounts = container.Account ?? [];
+    if (!Array.isArray(accounts)) {
+      throw new Error("Plex returned a malformed /accounts response (Account is not a list)");
+    }
+    const map = new Map<number, string>();
+    for (const acct of accounts as Array<{ id: number; name: string }>) {
+      map.set(acct.id, acct.name);
+    }
+    return map;
   }
 
   /**
@@ -369,25 +412,45 @@ export class PlexClient implements MediaServerClient {
    * 5,000-entry page: a server that caps the page lower would have silently
    * truncated the history to its newest few hundred plays — and the native
    * watch-history sync then commits that truncated set with a full replace.
+   *
+   * `strict` (the full replace) checks an EMPTY page short of the reported
+   * total instead of reading it as the end. The other walks stay lenient: under
+   * `since` Plex may report the unfiltered total.
    */
   private async forEachHistoryPage(
     onPage: (metadata: Array<Record<string, unknown>>) => void,
-    since?: Date,
+    options: { since?: Date; strict?: boolean } = {},
   ): Promise<void> {
+    const { since, strict = false } = options;
     const PAGE_SIZE = 5000;
+    // Runaway backstop only: a server ignoring the offset, reporting no total,
+    // with entries that carry no identity, would page forever.
+    const MAX_PAGES = 20_000;
     let start = 0;
+    let firstPageLength: number | undefined;
+    // The strict walk reads a page that omits `totalSize` against this.
+    let reportedTotal: number | null = null;
+    // Offset paging over a newest-first list repeats an entry when a play lands
+    // mid-walk, and `getWatchCounts` feeds a GREATEST upsert, so each entry is
+    // passed on once, by its identity.
+    const seen = new Set<string>();
 
     // `viewedAt>=` is Plex's server-side history filter (epoch seconds; the
     // same parameter python-plexapi's `history(mindate=…)` sends). Verified
     // against a live server: `viewedAt>` is rejected with a 400, and a
     // percent-encoded key (`viewedAt%3E%3D`, which is what axios' params
     // serializer emits) is silently IGNORED — the full history comes back as
-    // if no filter were sent. So it goes into the URL verbatim, not `params`.
+    // if no filter were sent. So it goes into the path string, not `params`,
+    // keeping the `=` a separator (the `>` still goes as `%3E`, which decodes;
+    // were the filter ignored, the append drops entries older than `since`).
     const path = since
       ? `/status/sessions/history/all?viewedAt>=${Math.floor(since.getTime() / 1000)}`
       : "/status/sessions/history/all";
 
-    while (true) {
+    for (let page = 0; ; page++) {
+      if (page >= MAX_PAGES) {
+        throw new Error(`Plex history listing did not end after ${MAX_PAGES} pages`);
+      }
       const response = await this.client.get(path, {
         params: {
           sort: "viewedAt:desc",
@@ -395,14 +458,64 @@ export class PlexClient implements MediaServerClient {
           "X-Plex-Container-Size": PAGE_SIZE,
         },
       });
-      const container = response.data?.MediaContainer ?? {};
-      const metadata: Array<Record<string, unknown>> = container.Metadata || [];
-      if (metadata.length === 0) break;
+      const container = plexContainer(response.data, "history");
+      const rawMetadata = container.Metadata ?? [];
+      if (!Array.isArray(rawMetadata)) {
+        throw new Error("Plex returned a malformed history page (Metadata is not a list)");
+      }
+      const metadata = rawMetadata as Array<Record<string, unknown>>;
+      const pageTotal = typeof container.totalSize === "number" ? container.totalSize : null;
+      if (pageTotal != null) reportedTotal = pageTotal;
+      // The lenient walks read each page's own total.
+      const total = strict ? reportedTotal : pageTotal;
+      if (metadata.length === 0) {
+        if (strict && total != null && start < total) {
+          // Read as the end, it would commit a truncated history; but a total
+          // can run a little ahead of the listing. As on Jellyfin/Emby, only a
+          // small shortfall after the walk delivered something is tolerated.
+          const shortfall = total - start;
+          const tolerated = Math.max(
+            HISTORY_SHORTFALL_TOLERANCE_ENTRIES,
+            Math.ceil(total * HISTORY_SHORTFALL_TOLERANCE_FRACTION),
+          );
+          if (start === 0 || shortfall > tolerated) {
+            throw new Error(`Plex history listing ended at ${start} of a reported ${total}`);
+          }
+          logger.warn(
+            "Plex",
+            `History listing ended at ${start} of a reported ${total}; ` +
+              `treating the shortfall as an over-reported total`,
+          );
+        }
+        break;
+      }
 
-      onPage(metadata);
+      let identified = 0;
+      let newlySeen = 0;
+      const fresh = metadata.filter((entry) => {
+        const id = historyEntryIdentity(entry);
+        if (id === null) return true;
+        identified++;
+        if (seen.has(id)) return false;
+        seen.add(id);
+        newlySeen++;
+        return true;
+      });
+      // A full-length page of nothing but repeats means `X-Plex-Container-Start`
+      // is ignored (the dedup would hide it); a SHORT all-repeat page is the
+      // list's end pushed down by a new play, and is passed over.
+      firstPageLength ??= metadata.length;
+      if (identified > 0 && newlySeen === 0 && metadata.length >= firstPageLength) {
+        throw new Error(
+          `Plex returned an already-delivered history page at offset ${start} ` +
+            `(X-Plex-Container-Start ignored?)`,
+        );
+      }
+      if (fresh.length > 0) onPage(fresh);
+      // Advance by what the server returned, duplicates included: the offset
+      // addresses its list, not ours.
       start += metadata.length;
 
-      const total = typeof container.totalSize === "number" ? container.totalSize : null;
       if (total != null) {
         if (start >= total) break;
       } else if (metadata.length < PAGE_SIZE) {
@@ -457,44 +570,51 @@ export class PlexClient implements MediaServerClient {
     return counts;
   }
 
+  /** Device id → name and platform, best-effort: an empty map on any failure. */
   async getDevices(): Promise<Map<number, { name: string; platform: string }>> {
     try {
-      const response = await this.client.get("/devices");
-      const devices = response.data.MediaContainer.Device || [];
-      const map = new Map<number, { name: string; platform: string }>();
-      for (const device of devices) {
-        map.set(device.id, { name: device.name || "Unknown", platform: device.platform || "" });
-      }
-      return map;
+      return await this.fetchDeviceMap();
     } catch {
       return new Map();
     }
   }
 
+  /** Device id → name and platform, or a throw, so a failure is not read as "no devices". */
+  private async fetchDeviceMap(): Promise<Map<number, { name: string; platform: string }>> {
+    const response = await this.client.get("/devices");
+    const container = plexContainer(response.data, "/devices");
+    const devices = container.Device ?? [];
+    if (!Array.isArray(devices)) {
+      throw new Error("Plex returned a malformed /devices response (Device is not a list)");
+    }
+    const map = new Map<number, { name: string; platform: string }>();
+    for (const device of devices as Array<{ id: number; name?: string; platform?: string }>) {
+      map.set(device.id, { name: device.name || "Unknown", platform: device.platform || "" });
+    }
+    return map;
+  }
+
   /** `getDetailedWatchHistory({ since })` filters server-side via `viewedAt>=`. */
   readonly supportsHistorySince = true;
 
-  async getDetailedWatchHistory(options?: { since?: Date }): Promise<
-    Array<{
-      ratingKey: string;
-      username: string;
-      watchedAt: string | null;
-      deviceName: string | null;
-      platform: string | null;
-    }>
-  > {
-    const entries: Array<{
-      ratingKey: string;
-      username: string;
-      watchedAt: string | null;
-      deviceName: string | null;
-      platform: string | null;
-    }> = [];
+  async getDetailedWatchHistory(
+    options?: DetailedWatchHistoryOptions,
+  ): Promise<DetailedWatchHistoryEntry[]> {
+    const entries: DetailedWatchHistoryEntry[] = [];
+    const report = options?.report;
 
     try {
       const [accountMap, deviceMap] = await Promise.all([
-        this.getAccounts(),
-        this.getDevices(),
+        this.fetchAccountMap(),
+        // Display detail: a failure does not fail the fetch, but is reported
+        // so the full replace keeps the stored values instead of nulls.
+        this.fetchDeviceMap().catch((error: unknown) => {
+          if (report) report.devicesUnavailable = true;
+          logger.debug("Plex", "Failed to fetch /devices for the watch history", {
+            error: String(error),
+          });
+          return new Map<number, { name: string; platform: string }>();
+        }),
       ]);
 
       await this.forEachHistoryPage((metadata) => {
@@ -514,7 +634,7 @@ export class PlexClient implements MediaServerClient {
           const username =
             (entry.accountID != null
               ? accountMap.get(entry.accountID as number)
-              : undefined) ?? "Unknown";
+              : undefined) ?? UNKNOWN_ACCOUNT_NAME;
 
           const device = entry.deviceID != null
             ? deviceMap.get(entry.deviceID as number)
@@ -528,9 +648,18 @@ export class PlexClient implements MediaServerClient {
               : null,
             deviceName: device?.name ?? null,
             platform: device?.platform ?? null,
+            // Places a play whose rating key matches items in two libraries.
+            librarySectionKey:
+              entry.librarySectionID != null ? String(entry.librarySectionID) : null,
           });
         }
-      }, options?.since);
+        // Strict only for the full history, which the native sync replaces with.
+      }, { since: options?.since, strict: !options?.since });
+
+      // Every server has its owner account: an empty map would name every play "Unknown".
+      if (accountMap.size === 0 && entries.length > 0) {
+        throw new Error("Plex /accounts returned no accounts; refusing to store anonymous plays");
+      }
     } catch (error) {
       // Re-throw so the caller can tell a fetch failure apart from a genuinely
       // empty history. The watch-history sync does a destructive full-replace;

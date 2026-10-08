@@ -8,6 +8,11 @@ import { prisma } from "@/lib/db";
  * `WatchHistory.watchedAt`. Read-only; used by the AI analysis tools.
  */
 
+// Every query here counts PLAYS, so it skips the rows that copy a play onto
+// another library copy of one Jellyfin/Emby item (3+ copies with the primary
+// deleted count once per copy until the next sync: `nativeRowsForPlay`).
+const ONE_ROW_PER_PLAY = `wh."fanOutOfItemId" IS NULL`;
+
 // serverUsername is NOT NULL; deviceName / platform are nullable (COALESCE'd).
 const WATCH_GROUP_COLUMNS: Record<string, string> = {
   user: "serverUsername",
@@ -75,6 +80,7 @@ export async function computeWatchTrends(
        JOIN "MediaItem" mi ON wh."mediaItemId" = mi.id
        WHERE wh."mediaServerId" = ANY($1)
          AND wh."watchedAt" IS NOT NULL AND wh."watchedAt" >= $2
+         AND ${ONE_ROW_PER_PLAY}
          AND mi.type::text = $3
          AND ${groupExpr} IS NOT NULL
        GROUP BY ${groupExpr}, mi.type
@@ -99,6 +105,7 @@ export async function computeWatchTrends(
      JOIN "MediaItem" mi ON wh."mediaItemId" = mi.id
      WHERE wh."mediaServerId" = ANY($1)
        AND wh."watchedAt" IS NOT NULL AND wh."watchedAt" >= $2
+       AND ${ONE_ROW_PER_PLAY}
        AND ${groupExpr} IS NOT NULL
      GROUP BY ${groupExpr}, mi.type
      ORDER BY "plays" DESC
@@ -129,6 +136,7 @@ export async function computeWatchLeaderboard(
      FROM "WatchHistory" wh
      WHERE wh."mediaServerId" = ANY($1)
        AND wh."watchedAt" IS NOT NULL AND wh."watchedAt" >= $2
+       AND ${ONE_ROW_PER_PLAY}
      GROUP BY "key"
      ORDER BY "plays" DESC
      LIMIT $3`,

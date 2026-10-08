@@ -29,10 +29,25 @@ export interface TracearrImportActivity {
   imported: number;
   /** Oldest play the current pass has committed, when it has one. */
   oldestReached: string | null;
+  /**
+   * Oldest instant the server's live BACKFILL run has walked past and committed
+   * (the measure `tracearrBackfillCursorAt` persists at slice end), taken from
+   * that run whichever run is newest: a forward pass walks the newest plays, so
+   * its reach would show the archive walk as barely started. Null until a
+   * backfill page commits, and for a superseded or retired run, whose deep reach
+   * would otherwise beat the restarted cursor.
+   */
+  backfillReached: string | null;
 }
 
-interface Entry extends TracearrImportActivity {
+interface Entry extends Omit<TracearrImportActivity, "backfillReached"> {
   userId: string;
+  /** This run's own backfill reach — see `TracearrImportActivity.backfillReached`. */
+  ownBackfillReached: string | null;
+  /** Set by `supersedeTracearrImports`/`retireTracearrImports`: the reach is stale. */
+  superseded: boolean;
+  /** Set by `retireTracearrImports`: the mapping changed; not reported at all. */
+  retired: boolean;
 }
 
 /**
@@ -66,6 +81,9 @@ export function beginTracearrImport(serverId: string, userId: string): TracearrI
     pages: 0,
     imported: 0,
     oldestReached: null,
+    ownBackfillReached: null,
+    superseded: false,
+    retired: false,
   };
   registry.set(serverId, [...(registry.get(serverId) ?? []), entry]);
   return { serverId, entry };
@@ -81,6 +99,38 @@ export function recordTracearrImportPage(
   entry.pages = update.pages;
   entry.imported = update.imported;
   entry.oldestReached = update.oldestReached?.toISOString() ?? null;
+  if (update.pass === "backfill" && update.oldestReached) {
+    entry.ownBackfillReached = entry.oldestReached;
+  }
+}
+
+/**
+ * Mark every live run for this server as no longer describing its archive walk
+ * — for `restartTracearrBackfill`. A running slice keeps walking from its old,
+ * deep position, and its reach would beat the cursor the restart moved to
+ * "now"; so the reach is dropped. The run stays reported: its plays are still
+ * this server's, and a Refresh through a purge is importing. Later runs are
+ * unaffected.
+ */
+export function supersedeTracearrImports(serverId: string): void {
+  for (const entry of registry.get(serverId) ?? []) {
+    entry.superseded = true;
+    entry.ownBackfillReached = null;
+  }
+}
+
+/**
+ * Like `supersedeTracearrImports`, for the server PUT changing the mapping, and
+ * the run is no longer reported at all: its next write is refused, and until
+ * then its counts would be shown against the new mapping. It stays registered
+ * until it ends.
+ */
+export function retireTracearrImports(serverId: string): void {
+  for (const entry of registry.get(serverId) ?? []) {
+    entry.superseded = true;
+    entry.retired = true;
+    entry.ownBackfillReached = null;
+  }
 }
 
 /**
@@ -97,11 +147,43 @@ export function endTracearrImport(handle: TracearrImportHandle): { userId: strin
   return { userId: handle.entry.userId };
 }
 
-/** The newest live run for the server, or null when none is running. */
+/**
+ * The furthest-back reach of any live run not superseded, or null. Normally one
+ * run (the backfill job is keyed per server).
+ */
+export function getTracearrBackfillReach(serverId: string): string | null {
+  let reach: string | null = null;
+  for (const entry of registry.get(serverId) ?? []) {
+    if (entry.superseded || !entry.ownBackfillReached) continue;
+    if (reach === null || entry.ownBackfillReached < reach) reach = entry.ownBackfillReached;
+  }
+  return reach;
+}
+
+/**
+ * The newest live run for the server that is not retired, or null — except
+ * `backfillReached`, which is the live backfill run's (see the field). A
+ * retired run is still paging an archive that is no longer the server's source;
+ * whether anything is owed is then the job table's to say. A superseded run is
+ * still reported, without its reach.
+ */
 export function getTracearrImportActivity(serverId: string): TracearrImportActivity | null {
-  const runs = registry.get(serverId);
-  const entry = runs?.[runs.length - 1];
+  const runs = registry.get(serverId) ?? [];
+  let entry: Entry | undefined;
+  for (let i = runs.length - 1; i >= 0; i--) {
+    if (!runs[i].retired) {
+      entry = runs[i];
+      break;
+    }
+  }
   if (!entry) return null;
   const { pass, startedAt, pages, imported, oldestReached } = entry;
-  return { pass, startedAt, pages, imported, oldestReached };
+  return {
+    pass,
+    startedAt,
+    pages,
+    imported,
+    oldestReached,
+    backfillReached: getTracearrBackfillReach(serverId),
+  };
 }

@@ -21,6 +21,8 @@ import { BuilderWithPseudocode } from "@/components/builder/builder-with-pseudoc
 import { IntegrationUnreachableBanner } from "@/components/integration-unreachable-banner";
 import { useIntegrationsHealth, deriveIntegrationsStatus, arrTypeForMediaType } from "@/hooks/use-integrations-health";
 import { hasArrRules, hasSeerrRules, hasPlayActivityRules } from "@/lib/conditions";
+import { playHistoryFault, type PlayHistoryEvidence, type PlayHistoryFault } from "@/lib/lifecycle/play-history-fault";
+import { ResponseOrder } from "@/lib/media/response-order";
 import { useRealtime } from "@/hooks/use-realtime";
 import { MediaTable } from "@/components/media-table";
 import { MediaDetailSidePanel, type MatchedCriterion } from "@/components/media-detail-side-panel";
@@ -264,17 +266,10 @@ interface MediaServer {
    * triggers one — the server-side guard stays the authority on whether the
    * rule set is actually safe to evaluate.
    *
-   * The two faults are kept apart because their REMEDIES are opposites, and
-   * collapsing them to one boolean gave every refusal the wrong advice half the
-   * time. `"importing"` (`tracearrBackfillComplete` false) is resolved by
-   * waiting — the newest-first archive walk is still running. `"unsynced"`
-   * (`watchHistorySyncedAt` null) is not resolved by waiting at all: the marker
-   * was never set, or was withdrawn by a source change, a purge, a restore, or
-   * a sync that could not load Tracearr's account map — and on a server whose
-   * Tracearr import has long since finished, "watch the import progress" points
-   * the user at a bar that already reads done.
+   * The faults are kept apart because their REMEDIES differ; `playHistoryFault`
+   * (`play-history-fault.ts`) derives them in the guard's precedence.
    */
-  playHistoryFault: "unsynced" | "importing" | null;
+  playHistoryFault: PlayHistoryFault | null;
 }
 
 interface ScopeConfig {
@@ -785,6 +780,8 @@ export function LifecycleRulePage({
   // Server selection
   const [serverIds, setServerIds] = useState<string[]>([]);
   const [servers, setServers] = useState<MediaServer[]>([]);
+  // Orders the overlapping `/api/servers` reads (see `fetchServers`).
+  const [serversOrder] = useState(() => new ResponseOrder());
   const [serverPopoverOpen, setServerPopoverOpen] = useState(false);
 
   // Scoped to the rule set's own targets, exactly as the guard scopes its count
@@ -1004,39 +1001,27 @@ export function LifecycleRulePage({
   };
 
   const fetchServers = async () => {
+    // Re-read every few seconds during an import, so reads overlap: a late older
+    // answer must not bring back a fault a newer one cleared.
+    const seq = serversOrder.begin();
     try {
       const response = await fetch("/api/servers");
+      // A failed read keeps the list on screen and is not recorded in the order.
+      if (!response.ok) return;
       const data = await response.json();
-      setServers((data.servers || []).map((s: {
+      if (!serversOrder.accept(seq)) return;
+      setServers((data.servers || []).map((s: PlayHistoryEvidence & {
         id: string;
         name: string;
         type: string;
         enabled?: boolean;
-        watchHistorySyncedAt?: string | null;
-        tracearrServerId?: string | null;
-        tracearrBackfillComplete?: boolean;
       }) => ({
         id: s.id,
         name: s.name,
         type: s.type,
         enabled: s.enabled !== false,
-        // A field absent from the payload reads as ESTABLISHED. This flag only
-        // decides whether to show a warning, and a false alarm about play
-        // history is worse than no banner: the server-side guard still refuses
-        // and now reports its reason, so the failure mode of guessing wrong
-        // here is a missing hint, not a missed refusal.
-        //
-        // `unsynced` is tested first, matching the server-side guard: a server
-        // can be both, and the marker being absent is the fault that waiting
-        // will not fix.
-        playHistoryFault:
-          s.watchHistorySyncedAt === undefined
-            ? null
-            : s.watchHistorySyncedAt === null
-              ? "unsynced"
-              : s.tracearrServerId != null && s.tracearrBackfillComplete === false
-                ? "importing"
-                : null,
+        // An absent field reads as ESTABLISHED (see the helper).
+        playHistoryFault: playHistoryFault(s),
       })));
     } catch (error) {
       console.error("Failed to fetch servers:", error);
@@ -1080,6 +1065,9 @@ export function LifecycleRulePage({
   // let the list stay the one place the state is read from.
   useRealtime("tracearr:import-progress", () => { void fetchServers(); });
   useRealtime("watch-history:updated", () => { void fetchServers(); });
+  // Library syncs set and release the `resync` fault; one that imports no plays
+  // announces nothing else.
+  useRealtime("sync:completed", () => { void fetchServers(); });
 
   // Fetch arr-specific metadata (tags, quality profiles, languages) when an instance is selected.
   // The "reset when arrInstanceId is cleared" half of this lives in handleArrInstanceChange below
@@ -2908,28 +2896,51 @@ export function LifecycleRulePage({
                   Preview, Test Media, and detection are paused rather than matching
                   your whole library.
                 </p>
-                {/* Per-server rather than one blended sentence: the two faults
-                    have opposite remedies, so a server that is merely still
-                    importing and one whose marker was withdrawn must not be
-                    described the same way. */}
+                {/* Per-server: the faults have different remedies. Each shows the
+                    guard's first fault. */}
                 <ul className="space-y-1">
                   {serversAwaitingPlayHistory.map((s) => (
                     <li key={s.id} className="text-muted-foreground">
                       <span className="text-foreground">{s.name}</span>
-                      {s.playHistoryFault === "importing" ? (
+                      {s.playHistoryFault === "resync" ? (
+                        <>
+                          {" "}&mdash; some of its media was removed in bulk or is being
+                          added for the first time (a purge, a backup restore, or a
+                          library&apos;s first sync), so its play history waits for a
+                          complete library sync. Run Sync on the server under Settings
+                          &rarr; Servers; this clears when that sync finishes &mdash; or,
+                          if the server&apos;s history comes from Tracearr, once the
+                          history import that sync restarts has read back through the
+                          archive. If it stays, System Logs name the library it is still
+                          waiting for.
+                        </>
+                      ) : s.playHistoryFault === "importing" ? (
                         <>
                           {" "}&mdash; its Tracearr history import is still walking back
-                          through the archive, so anything played before that point still
-                          looks never-watched. Watch the progress under Settings &rarr;
-                          Servers; this clears itself when the import completes.
+                          through the archive (it starts over after a purge, a backup
+                          restore, or a library&apos;s first sync), so anything played
+                          before the point it has reached still looks never-watched.
+                          This clears itself when the import completes; Settings &rarr;
+                          Servers shows its progress, or why it is paused.
+                        </>
+                      ) : s.playHistoryFault === "gap" ? (
+                        <>
+                          {" "}&mdash; a Tracearr import is reading its most recent plays,
+                          or one was interrupted before it finished. This clears when
+                          that import completes; the next watch-history sync resumes an
+                          interrupted one &mdash; run one from Library &rarr; History
+                          &rarr; Refresh, or wait for the scheduled sync.
                         </>
                       ) : (
                         <>
                           {" "}&mdash; no sync has established what was played there. It has
-                          never synced, or the history was cleared by a watch-history
-                          source change, a purge, or a backup restore. This clears on the
-                          next successful watch-history sync &mdash; run one from Library
-                          &rarr; History &rarr; Refresh, or wait for the scheduled sync.
+                          never synced, its history was cleared (a watch-history source
+                          change, a purge, or a backup restore), or a sync could not
+                          attribute every play. This clears on the next successful
+                          watch-history sync &mdash; run one from Library &rarr; History
+                          &rarr; Refresh, or wait for the scheduled sync. If a user&apos;s
+                          play history could not be read, System Logs name the user and
+                          what to change; a Refresh does not lift that one.
                         </>
                       )}
                     </li>

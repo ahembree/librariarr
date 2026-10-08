@@ -10,10 +10,12 @@ import { invalidateMediaCaches } from "@/lib/cache/invalidate";
 import { eventBus } from "@/lib/events/event-bus";
 import {
   invalidateWatchHistoryEvidence,
-  restartTracearrBackfill,
+  requireLibraryResync,
 } from "@/lib/media/watch-evidence";
 import { hasRecentLogin } from "@/lib/auth/recent-login";
 import { reauthRequired } from "@/lib/auth/reauth";
+import { retireTracearrImports } from "@/lib/sync/tracearr-import-activity";
+import { enqueueTracearrBackfill } from "@/lib/sync/tracearr-backfill-enqueue";
 
 const withoutTrailingSlash = (value: string) => value.replace(/\/+$/, "");
 
@@ -41,38 +43,6 @@ export async function PUT(
 
   const { url, externalUrl, tlsSkipVerify, accessToken, enabled, deleteData, tracearrServerId } =
     data;
-
-  // Did this server's watch-history source actually change? `undefined` means
-  // the client never sent the field at all (leave the mapping alone), so only a
-  // value that was sent AND differs from what is stored counts — re-saving the
-  // same mapping must not trigger the wipe below.
-  const tracearrMappingChanged =
-    tracearrServerId !== undefined && tracearrServerId !== server.tracearrServerId;
-
-  // One Tracearr server's plays belong to one media server. Mapped to a second
-  // as well, they are joined against that server's rating keys — small per-server
-  // integers on Plex, so the same number names an unrelated item there, and a
-  // provider id is often absent to contradict it. Those plays would land on the
-  // wrong items under real usernames, permanently.
-  if (tracearrMappingChanged && tracearrServerId) {
-    const taken = await prisma.mediaServer.findFirst({
-      where: {
-        userId: session.userId!,
-        tracearrServerId,
-        id: { not: server.id },
-      },
-      select: { name: true },
-    });
-    if (taken) {
-      return NextResponse.json(
-        {
-          error: "Tracearr server already in use",
-          detail: `That Tracearr server is already the watch-history source for "${taken.name}".`,
-        },
-        { status: 409 }
-      );
-    }
-  }
 
   // A new URL with the stored token kept sends that token to the new URL —
   // the connection test below, then every sync and the realtime socket. A
@@ -110,56 +80,168 @@ export async function PUT(
     }
   }
 
-  const updated = await prisma.mediaServer.update({
-    where: { id: server.id },
-    data: {
-      ...(url !== undefined && { url }),
-      ...(externalUrl !== undefined && { externalUrl: externalUrl || null }),
-      ...(tlsSkipVerify !== undefined && { tlsSkipVerify }),
-      ...(accessToken !== undefined && accessToken !== "" && { accessToken }),
-      ...(enabled !== undefined && { enabled }),
-      // `!== undefined`, never a truthy check: `null` is the meaningful
-      // "unlink, go back to native history" value, and a truthy check would
-      // make unlinking impossible to express.
-      ...(tracearrServerId !== undefined && { tracearrServerId }),
-      // A source switch wipes the server's rows below, so the backfill state
-      // those rows represent has to be reset with them. Leaving it true would
-      // tell the next import "the history is already fully walked" and it would
-      // only ever fetch new plays — permanently missing everything before the
-      // switch. Reset on any mapping change, including Tracearr → Tracearr.
-      ...(tracearrMappingChanged && {
-        tracearrBackfillComplete: false,
-        // The other two are measured against the OLD Tracearr server's archive:
-        // its history start (which the progress bar divides by) and how far the
-        // walk had reached. Carried over, the bar would report progress through
-        // a span that no longer applies, and the walk would resume at a point
-        // that means nothing on the new server.
-        tracearrOldestPlayAt: null,
-        tracearrBackfillCursorAt: null,
-        // The wipe below empties the history, so it is unknown from the same
-        // statement that switches the source. Withdrawn only after the wipe,
-        // an unlink (native, no Tracearr flag to pause it) read as established
-        // over an empty history in between — and for good, if the process died
-        // there.
-        watchHistorySyncedAt: null,
-      }),
-    },
+  // The mapping is checked and written under one per-user lock, re-reading
+  // every server's mapping inside it: against a snapshot, two concurrent PUTs
+  // could both map one Tracearr server, or both compare against one server's
+  // old value.
+  //
+  // One Tracearr server's plays belong to one media server. Mapped to a second
+  // as well, they are joined against that server's rating keys — small per-server
+  // integers on Plex, so the same number names an unrelated item there, and a
+  // provider id is often absent to contradict it. Those plays would land on the
+  // wrong items under real usernames, permanently. No unique index enforces it:
+  // one could not migrate an install already holding a duplicate.
+  const outcome = await prisma.$transaction(async (tx) => {
+    if (tracearrServerId !== undefined) {
+      await tx.$executeRawUnsafe(
+        `SELECT pg_advisory_xact_lock(hashtext('tracearr-mapping:' || $1))`,
+        session.userId!,
+      );
+    }
+    const current = await tx.mediaServer.findFirst({
+      where: { id: server.id, userId: session.userId! },
+      select: { tracearrServerId: true },
+    });
+    if (!current) return { kind: "gone" as const };
+
+    // Did this server's watch-history source actually change? `undefined` means
+    // the client never sent the field at all (leave the mapping alone), so only a
+    // value that was sent AND differs from what is stored counts — re-saving the
+    // same mapping must not trigger the wipe below.
+    const mappingChanged =
+      tracearrServerId !== undefined && tracearrServerId !== current.tracearrServerId;
+
+    if (mappingChanged) {
+      // Before the UPDATE — see the lock-order note at the wipe below. Same
+      // key as `lockServerHistory` in `sync-watch-history.ts`.
+      await tx.$executeRawUnsafe(
+        `SELECT pg_advisory_xact_lock(hashtext('watch-history:' || $1))`,
+        server.id,
+      );
+    }
+
+    if (mappingChanged && tracearrServerId) {
+      const taken = await tx.mediaServer.findFirst({
+        where: {
+          userId: session.userId!,
+          tracearrServerId,
+          id: { not: server.id },
+        },
+        select: { name: true },
+      });
+      if (taken) return { kind: "taken" as const, name: taken.name };
+    }
+
+    const updated = await tx.mediaServer.update({
+      where: { id: server.id },
+      data: {
+        ...(url !== undefined && { url }),
+        ...(externalUrl !== undefined && { externalUrl: externalUrl || null }),
+        ...(tlsSkipVerify !== undefined && { tlsSkipVerify }),
+        ...(accessToken !== undefined && accessToken !== "" && { accessToken }),
+        ...(enabled !== undefined && { enabled }),
+        // `!== undefined`, never a truthy check: `null` is the meaningful
+        // "unlink, go back to native history" value, and a truthy check would
+        // make unlinking impossible to express.
+        ...(tracearrServerId !== undefined && { tracearrServerId }),
+        // A source switch wipes the server's rows below, so the backfill state
+        // those rows represent has to be reset with them. Leaving it true would
+        // tell the next import "the history is already fully walked" and it would
+        // only ever fetch new plays — permanently missing everything before the
+        // switch. Reset on any mapping change, including Tracearr → Tracearr.
+        ...(mappingChanged && {
+          tracearrBackfillComplete: false,
+          // These describe the OLD Tracearr server's archive (history start,
+          // walk reach, forward floor and its stamp, last walk — a never-walked
+          // mapping reads as pending — and forward watermark).
+          tracearrOldestPlayAt: null,
+          tracearrBackfillCursorAt: null,
+          tracearrForwardFloorAt: null,
+          tracearrForwardFloorRecordedAt: null,
+          tracearrBackfillLastWalkAt: null,
+          tracearrForwardWatermarkAt: null,
+          // On every change, a re-link to the same server included: importer
+          // writes require this version, so a run from before an
+          // unlink-and-relink cannot overwrite this reset.
+          tracearrMappingVersion: { increment: 1 },
+          // `libraryResyncRequiredAt` is deliberately NOT cleared: the hold is
+          // about the library, and the new mapping's first walk would step over
+          // the missing items' plays just the same.
+          // The wipe below empties the history, so it is unknown from the same
+          // statement that switches the source. Withdrawn only after the wipe,
+          // an unlink (native, no Tracearr flag to pause it) read as established
+          // over an empty history in between — and for good, if the process died
+          // there.
+          watchHistorySyncedAt: null,
+        }),
+      },
+    });
+
+    // A source switch (native <-> Tracearr, or one Tracearr server to another)
+    // invalidates every WatchHistory row already stored for this server, because
+    // the two sources have incompatible row models: the native sync is a
+    // full-replace that leaves all of the rich Tracearr columns null, while the
+    // Tracearr sync is an incremental append keyed on `sourceEventId`. Neither
+    // path ever revisits the other's rows — the append model never wipes, and
+    // the native full-replace only deletes rows on a *successful* fetch — so
+    // without this one-shot delete the server would keep a permanent stratum of
+    // stale rows from its previous source. The next sync repopulates from the
+    // new one.
+    //
+    // In the SAME transaction as the mapping write: the importer derives its
+    // resume boundaries from these rows, so they must never outlive the switch.
+    //
+    // Lock order (deadlock-free): the UPDATE above holds the server row, so a
+    // Tracearr page write (`FOR SHARE` on it before touching WatchHistory)
+    // either committed first or waits and then sees the new mapping. The native
+    // writers' advisory lock is taken BEFORE the UPDATE (they only KEY SHARE the
+    // row), so a native write holding it commits before the wipe; a native run
+    // that fetched before the switch re-reads the mapping under that lock and
+    // writes nothing.
+    let wiped = 0;
+    if (mappingChanged) {
+      ({ count: wiped } = await tx.watchHistory.deleteMany({
+        where: { mediaServerId: server.id },
+      }));
+    }
+    return {
+      kind: "updated" as const,
+      updated,
+      mappingChanged,
+      wiped,
+      previousTracearrServerId: current.tracearrServerId,
+    };
+  }, {
+    // The wipe can be a server's whole history (hundreds of thousands of rows)
+    // and may wait for a native full replace to finish; Prisma's 5s default
+    // would abort exactly the switches that have the most to clear.
+    timeout: 5 * 60_000,
+    maxWait: 15_000,
   });
 
-  // A source switch (native <-> Tracearr, or one Tracearr server to another)
-  // invalidates every WatchHistory row already stored for this server, because
-  // the two sources have incompatible row models: the native sync is a
-  // full-replace that leaves all of the rich Tracearr columns null, while the
-  // Tracearr sync is an incremental append keyed on `sourceEventId`. Neither
-  // path ever revisits the other's rows — the append model never wipes, and the
-  // native full-replace only deletes rows on a *successful* fetch — so without
-  // this one-shot delete the server would keep a permanent stratum of stale
-  // rows from its previous source. The next sync repopulates from the new one.
-  // Placed after the update so a failed write can't destroy history.
+  if (outcome.kind === "gone") {
+    return NextResponse.json({ error: "Server not found" }, { status: 404 });
+  }
+  if (outcome.kind === "taken") {
+    return NextResponse.json(
+      {
+        error: "Tracearr server already in use",
+        detail: `That Tracearr server is already the watch-history source for "${outcome.name}".`,
+      },
+      { status: 409 }
+    );
+  }
+  const {
+    updated,
+    mappingChanged: tracearrMappingChanged,
+    wiped,
+    previousTracearrServerId,
+  } = outcome;
+
   if (tracearrMappingChanged) {
-    const wiped = await prisma.watchHistory.deleteMany({
-      where: { mediaServerId: server.id },
-    });
+    // A run of the OLD mapping may still be paging and its writes will refuse:
+    // hide it from the status readout (a restart only strips its reach).
+    retireTracearrImports(server.id);
 
     // Mark the server as un-evidenced until a sync refills it. An empty
     // `WatchHistory` is indistinguishable from "nobody watched anything", and
@@ -189,8 +271,8 @@ export async function PUT(
     apiLogger.info(
       "Auth",
       `Watch-history source for media server "${server.name}" changed ` +
-        `(${server.tracearrServerId ?? "native"} -> ${tracearrServerId ?? "native"}); ` +
-        `cleared ${wiped.count} stored watch-history rows`
+        `(${previousTracearrServerId ?? "native"} -> ${tracearrServerId ?? "native"}); ` +
+        `cleared ${wiped} stored watch-history rows`
     );
   }
 
@@ -203,21 +285,23 @@ export async function PUT(
     const libraryIds = libraries.map((l) => l.id);
 
     if (libraryIds.length > 0) {
+      // The delete cascades through `WatchHistory.mediaItem`, and a re-enabled
+      // server re-syncs the items with no plays: hold its play history until a
+      // complete library sync, BEFORE the delete so a history pass already
+      // running cannot vouch for the gap.
+      await requireLibraryResync([server.id]);
       await prisma.lifecycleAction.deleteMany({
         where: { mediaItem: { libraryId: { in: libraryIds } } },
       });
       await prisma.mediaItem.deleteMany({
         where: { libraryId: { in: libraryIds } },
       });
-      // The item delete cascades through `WatchHistory.mediaItem`, so this
-      // server's plays are gone as well. The server row itself survives a
-      // disable, so it will be re-enabled and re-synced later with an empty
-      // history — mark it un-evidenced so `watchedByUser` rules do not read
-      // that emptiness as "nobody watched anything".
-      await invalidateWatchHistoryEvidence([server.id]);
-      // A Tracearr-mapped server gets its plays back from Tracearr once it is
-      // re-enabled and re-synced — but only if the archive walk runs again.
-      await restartTracearrBackfill([server.id]);
+      // Shortfalls recorded against the rows just deleted must not count
+      // toward releasing the hold (see `Library.shortPassSeenAt`).
+      await prisma.library.updateMany({
+        where: { id: { in: libraryIds } },
+        data: { shortPassSeenAt: null },
+      });
     }
 
     apiLogger.info(
@@ -234,6 +318,17 @@ export async function PUT(
   if (enabled !== undefined) {
     await recomputeCanonical(session.userId!);
     invalidateMediaCaches();
+  }
+
+  // Start the import now when this save is what it waited on (a new mapping, or
+  // re-enabled). After the commit, so the slice reads the new mapping; the
+  // helper skips servers it must not run for yet.
+  const reenabled = enabled === true && !server.enabled;
+  if ((tracearrMappingChanged && tracearrServerId) || reenabled) {
+    await enqueueTracearrBackfill(
+      { serverIds: [server.id] },
+      tracearrMappingChanged ? `watch-history source set for "${server.name}"` : `"${server.name}" re-enabled`,
+    );
   }
 
   // Reconcile the realtime WebSocket: an enable/disable, url/token, or TLS

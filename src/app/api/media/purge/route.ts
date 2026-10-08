@@ -4,10 +4,7 @@ import { prisma } from "@/lib/db";
 import { apiLogger } from "@/lib/logger";
 import { invalidateMediaCaches } from "@/lib/cache/invalidate";
 import { recomputeCanonical } from "@/lib/dedup/recompute-canonical";
-import {
-  invalidateWatchHistoryEvidence,
-  restartTracearrBackfill,
-} from "@/lib/media/watch-evidence";
+import { invalidateWatchHistoryEvidence, requireLibraryResync } from "@/lib/media/watch-evidence";
 import { eventBus } from "@/lib/events/event-bus";
 
 export async function DELETE(request: NextRequest) {
@@ -27,32 +24,32 @@ export async function DELETE(request: NextRequest) {
         id: libraryId,
         mediaServer: { userId: session.userId },
       },
-      select: { id: true, title: true, type: true },
+      select: { id: true, title: true, type: true, mediaServerId: true, enabled: true },
     });
 
     if (!library) {
       return NextResponse.json({ error: "Library not found" }, { status: 404 });
     }
 
+    // The delete cascades through `WatchHistory.mediaItem`, and the re-sync
+    // brings the items back with no plays: hold the server's play history until
+    // a complete library sync, BEFORE the delete so a history pass already
+    // running cannot vouch for the gap. A DISABLED library is never re-synced,
+    // so it only withdraws the marker (re-enabling it takes the population hold).
+    if (library.mediaServerId) {
+      if (library.enabled) {
+        await requireLibraryResync([library.mediaServerId]);
+      } else {
+        await invalidateWatchHistoryEvidence([library.mediaServerId]);
+      }
+    }
+
     const result = await prisma.mediaItem.deleteMany({
       where: { libraryId: library.id },
     });
-
-    // Deleting the items cascades through `WatchHistory.mediaItem`, so this
-    // server's plays went with them. Mark it un-evidenced until a sync refills
-    // it, or the next detection run reads the empty relation as "nobody
-    // watched anything" and `watchedByUser`'s negative forms match everything
-    // the re-sync brings back.
-    const purgedServer = await prisma.library.findUnique({
-      where: { id: library.id },
-      select: { mediaServerId: true },
-    });
-    if (purgedServer?.mediaServerId) {
-      await invalidateWatchHistoryEvidence([purgedServer.mediaServerId]);
-      // Tracearr still holds those plays; re-walk the archive to bring them
-      // back once the re-sync recreates the items.
-      await restartTracearrBackfill([purgedServer.mediaServerId]);
-    }
+    // A shortfall recorded against the deleted rows must not count toward the
+    // release (`Library.shortPassSeenAt`).
+    await prisma.library.update({ where: { id: library.id }, data: { shortPassSeenAt: null } });
 
     // Recompute canonical so surviving duplicates on other servers don't stay
     // non-canonical (and therefore vanish from multi-server listings) when the
@@ -101,7 +98,7 @@ export async function DELETE(request: NextRequest) {
       mediaServerId: { in: serverIds },
       type: type as "MOVIE" | "SERIES" | "MUSIC",
     },
-    select: { id: true, mediaServerId: true },
+    select: { id: true, mediaServerId: true, enabled: true },
   });
   const libraryIds = libraries.map((l) => l.id);
 
@@ -109,19 +106,28 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ deleted: 0 });
   }
 
+  // As per library, before the delete: hold servers owning an ENABLED purged
+  // library; only withdraw the marker where every purged library is disabled.
+  const serversOf = (enabled: boolean) =>
+    new Set(
+      libraries
+        .filter((l) => l.enabled === enabled)
+        .map((l) => l.mediaServerId)
+        .filter((id): id is string => id !== null),
+    );
+  const heldServerIds = serversOf(true);
+  await requireLibraryResync([...heldServerIds]);
+  await invalidateWatchHistoryEvidence(
+    [...serversOf(false)].filter((id) => !heldServerIds.has(id)),
+  );
+
   const result = await prisma.mediaItem.deleteMany({
     where: { libraryId: { in: libraryIds } },
   });
-
-  // Same cascade, across every enabled server of this media type.
-  await invalidateWatchHistoryEvidence(serverIds);
-  await restartTracearrBackfill([
-    ...new Set(
-      libraries
-        .map((l) => l.mediaServerId)
-        .filter((id): id is string => id !== null),
-    ),
-  ]);
+  await prisma.library.updateMany({
+    where: { id: { in: libraryIds } },
+    data: { shortPassSeenAt: null },
+  });
 
   await recomputeCanonical(session.userId!);
   invalidateMediaCaches();

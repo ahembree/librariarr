@@ -82,6 +82,18 @@ vi.mock("@/lib/sync/sync-watch-history", () => ({
   syncWatchHistory: vi.fn().mockResolvedValue({ count: 0 }),
 }));
 
+vi.mock("@/lib/media/watch-evidence", () => ({
+  requireLibraryResync: vi.fn().mockResolvedValue(undefined),
+  releaseLibraryResyncHold: vi.fn().mockResolvedValue(false),
+  // No receipt by default: a hold was already in place.
+  requirePopulationResync: vi.fn().mockResolvedValue(null),
+  releaseOwnPopulationHold: vi.fn().mockResolvedValue(false),
+  // No hold request arrived during a pass, by default.
+  libraryResyncRequestedSince: vi.fn().mockReturnValue(false),
+}));
+vi.mock("@/lib/sync/tracearr-backfill-enqueue", () => ({
+  enqueueTracearrBackfill: vi.fn().mockResolvedValue([]),
+}));
 vi.mock("@/lib/sync/watch-reconcile", () => ({
   reconcileWatchStateFromHistory: vi.fn().mockResolvedValue(0),
   loadWatchCountsFromHistory: vi.fn().mockResolvedValue(new Map()),
@@ -111,6 +123,10 @@ import {
   processBatch,
 } from "@/lib/sync/sync-server";
 import { createMediaServerClient } from "@/lib/media-server/factory";
+import * as evidence from "@/lib/media/watch-evidence";
+import { enqueueTracearrBackfill } from "@/lib/sync/tracearr-backfill-enqueue";
+import { syncWatchHistory } from "@/lib/sync/sync-watch-history";
+import { logger } from "@/lib/logger";
 import { PlexClient } from "@/lib/plex/client";
 import type { MediaStream, MediaPart } from "@/lib/media-server/types";
 
@@ -290,6 +306,22 @@ describe("syncMediaServer", () => {
     expect(syncWatchHistory).toHaveBeenCalledWith("server-1", undefined, expect.any(AbortSignal));
     // syncWatchHistory reconciles internally, so the sync must not do it twice.
     expect(reconcileWatchStateFromHistory).not.toHaveBeenCalled();
+  });
+
+  it("reports a watch-history sync that returned a failure as failed, not as 0 plays", async () => {
+    const { syncWatchHistory } = await import("@/lib/sync/sync-watch-history");
+    const { logger } = await import("@/lib/logger");
+    vi.mocked(syncWatchHistory).mockResolvedValueOnce({ count: 0, failed: "fetch failed" });
+
+    await syncMediaServer("server-1");
+
+    expect(logger.error).toHaveBeenCalledWith("Sync", "Watch history sync failed", {
+      error: "fetch failed",
+    });
+    expect(logger.info).not.toHaveBeenCalledWith(
+      "Sync",
+      expect.stringContaining("Watch history sync completed"),
+    );
   });
 
   it("reconciles play state from stored history when the watch-history scan is skipped", async () => {
@@ -827,15 +859,35 @@ describe("syncMediaServer library and watchlist reconciliation", () => {
     exceptionCount?: bigint;
     existingRows?: Array<Record<string, unknown>>;
     watchlistChanged?: Array<{ id: string }>;
+    /** Whether the library held any item before the pass (the population check). */
+    libraryHeldItems?: boolean;
+    /** `MediaServer.libraryResyncRequiredAt`, read after the loop. */
+    holdAt?: Date | null;
+    /** `Library.shortPassSeenAt` before the first run; kept across a test's runs. */
+    shortPassSeenAt?: Date | null;
   }
 
   function mockDb(opts: DbOpts = {}) {
-    mockPrisma.$queryRawUnsafe.mockImplementation(async (sql: string) => {
+    // The library row's `shortPassSeenAt`, kept from one run to the next.
+    let shortPassSeenAt: Date | null = opts.shortPassSeenAt ?? null;
+    mockPrisma.$queryRawUnsafe.mockImplementation(async (sql: string, ...params: unknown[]) => {
+      if (sql.includes('UPDATE "Library" SET "shortPassSeenAt"')) {
+        shortPassSeenAt = sql.includes('"shortPassSeenAt"=NULL') ? null : ((params[1] as Date | null) ?? null);
+        return [];
+      }
       if (sql.includes('INSERT INTO "SyncJob"')) return [{ id: "sync-job-id" }];
       if (sql.includes('SELECT "cancelRequested"')) return [{ cancelRequested: false }];
       if (sql.includes('SELECT "id" FROM "SyncJob"')) return [{ id: "sync-job-id" }];
       if (sql.includes('UPDATE "SyncJob"')) return [{ id: "sync-job-id" }];
+      if (sql.includes('SELECT "libraryResyncRequiredAt" FROM "MediaServer"')) {
+        return [{ libraryResyncRequiredAt: opts.holdAt ?? null }];
+      }
       if (sql.includes('SELECT') && sql.includes('"MediaServer"')) return [SERVER_ROW];
+      if (sql.includes("SELECT EXISTS (SELECT 1 FROM \"MediaItem\"")) {
+        return [{ held: opts.libraryHeldItems ?? true }];
+      }
+      // The enabled libraries the release reads: one the hold waits for.
+      if (sql.includes('AS "untouched"')) return [{ id: "lib-1", title: "Movies", untouched: false }];
       // Vanished-library purge: the libraries, their items, their exceptions.
       if (sql.includes('NOT ("key" = ANY')) return opts.vanished ?? [];
       if (sql.includes('FROM "LifecycleException" le')) return [{ count: opts.exceptionCount ?? BigInt(0) }];
@@ -849,7 +901,7 @@ describe("syncMediaServer library and watchlist reconciliation", () => {
       ) {
         return opts.vanishedItems ?? [];
       }
-      if (sql.includes('INSERT INTO "Library"')) return [{ id: "lib-1", enabled: true }];
+      if (sql.includes('INSERT INTO "Library"')) return [{ id: "lib-1", enabled: true, shortPassSeenAt }];
       if (sql.includes('SELECT') && sql.includes('"Library"') && sql.includes('enabled')) return [];
       if (sql.includes('COUNT(*)') && sql.includes('"MediaItem"')) return [{ count: BigInt(0) }];
       if (sql.includes('SET "isWatchlisted" = w."listed"')) return opts.watchlistChanged ?? [];
@@ -895,6 +947,16 @@ describe("syncMediaServer library and watchlist reconciliation", () => {
     vi.mocked(createMediaServerClient).mockImplementation(() => mockClient as never);
   });
 
+  const HELD_AT = new Date("2026-01-01T00:00:00Z");
+  /** One movie per page fetch (fresh objects: a sync releases the page it processed in place). */
+  const listOne = (total = 1) =>
+    mockClient.getLibraryItemsPage.mockImplementation(async () => ({
+      items: [{ ratingKey: "rk1", title: "Movie A", type: "movie" }],
+      total,
+    }));
+  const callOrder = (call: unknown[]) =>
+    mockPrisma.$queryRawUnsafe.mock.invocationCallOrder[mockPrisma.$queryRawUnsafe.mock.calls.indexOf(call)];
+
   // ── Libraries the server no longer lists ─────────────────────────────
 
   it("removes a library the server no longer reports, with its items", async () => {
@@ -923,6 +985,199 @@ describe("syncMediaServer library and watchlist reconciliation", () => {
       "Sync",
       expect.stringMatching(/"Old Movies" \(key 9\) is no longer on the server — removed it and its 2 item\(s\), deleting 1 lifecycle exception/),
     );
+  });
+
+  it("holds the server when a vanished library took items with it, after the purge", async () => {
+    // A library re-created under a new key comes back as fresh items with none of their plays.
+    mockDb({
+      vanished: [{ id: "lib-gone", key: "9", title: "Old Movies" }],
+      vanishedItems: [{ id: "gone-1", thumbUrl: null, parentThumbUrl: null, seasonThumbUrl: null }],
+    });
+
+    await syncMediaServer("server-1");
+
+    expect(evidence.requireLibraryResync).toHaveBeenCalledWith(["server-1"]);
+    const purge = findDbCalls('DELETE FROM "Library" WHERE "id"=$1');
+    expect(purge).toHaveLength(1);
+    expect(vi.mocked(evidence.requireLibraryResync).mock.invocationCallOrder[0]).toBeGreaterThan(callOrder(purge[0]));
+  });
+
+  // ── Releasing a library-resync hold ───────────────────────────────────
+  // Whole runs against a real database: tests/integration/sync/library-resync-hold.
+
+  it("releases the hold before the watch-history phase, from after its own vanished-library hold", async () => {
+    mockDb({
+      vanished: [{ id: "lib-gone", key: "9", title: "Old Movies" }],
+      vanishedItems: [{ id: "gone-1", thumbUrl: null, parentThumbUrl: null, seasonThumbUrl: null }],
+      holdAt: HELD_AT,
+    });
+    let heldAt = 0;
+    vi.mocked(evidence.requireLibraryResync).mockImplementationOnce(async () => {
+      heldAt = Date.now();
+    });
+    vi.mocked(evidence.releaseLibraryResyncHold).mockResolvedValueOnce(true);
+
+    await syncMediaServer("server-1");
+
+    expect(evidence.releaseLibraryResyncHold).toHaveBeenCalledTimes(1);
+    const [serverId, passStart, heldSince] = vi.mocked(evidence.releaseLibraryResyncHold).mock.calls[0];
+    expect(serverId).toBe("server-1");
+    // The instant it judged the libraries by, so a different hold is not released.
+    expect(heldSince).toEqual(HELD_AT);
+    // Every library it synced, it synced after its own purge's hold.
+    expect(passStart.getTime()).toBeGreaterThanOrEqual(heldAt);
+    expect(enqueueTracearrBackfill).toHaveBeenCalledWith({ serverIds: ["server-1"] }, expect.any(String));
+    // The watch-history phase must be able to establish the marker in this run.
+    expect(vi.mocked(evidence.releaseLibraryResyncHold).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(syncWatchHistory).mock.invocationCallOrder[0],
+    );
+  });
+
+  it("does not attempt a release, queue the walk, or warn when there is no hold", async () => {
+    mockDb({ holdAt: null });
+
+    await syncMediaServer("server-1");
+
+    expect(evidence.releaseLibraryResyncHold).not.toHaveBeenCalled();
+    expect(enqueueTracearrBackfill).not.toHaveBeenCalled();
+    expect(findDbCalls('AS "untouched"')).toHaveLength(0);
+    expect(logger.warn).not.toHaveBeenCalledWith("Sync", expect.stringContaining("play-history hold"));
+  });
+
+  it("completes the sync even when releasing the hold fails", async () => {
+    mockDb({ holdAt: HELD_AT });
+    vi.mocked(evidence.releaseLibraryResyncHold).mockRejectedValueOnce(new Error("db down"));
+
+    await expect(syncMediaServer("server-1")).resolves.toBeUndefined();
+
+    expect(findDbCalls('"status"=$1,"completedAt"=$2,"itemsProcessed"=$3', "COMPLETED")).toHaveLength(1);
+  });
+
+  // ── The population hold ───────────────────────────────────────────────
+
+  it("takes the population hold at the pass start before writing the first item into an empty library", async () => {
+    mockDb({ libraryHeldItems: false, holdAt: HELD_AT });
+    listOne();
+
+    await syncMediaServer("server-1");
+
+    expect(evidence.requirePopulationResync).toHaveBeenCalledTimes(1);
+    const [id, at] = vi.mocked(evidence.requirePopulationResync).mock.calls[0];
+    expect(id).toBe("server-1");
+    // The very instant the release compares with, so this run can release its own hold.
+    expect(vi.mocked(evidence.releaseLibraryResyncHold).mock.calls[0][1]).toBe(at);
+    const insert = findDbCalls('INSERT INTO "MediaItem"')[0];
+    expect(vi.mocked(evidence.requirePopulationResync).mock.invocationCallOrder[0]).toBeLessThan(callOrder(insert));
+    expect(logger.info).toHaveBeenCalledWith("Sync", expect.stringContaining('Library "Movies" held no items'));
+  });
+
+  it("takes it once per pass, however many pages the library has", async () => {
+    mockDb({ libraryHeldItems: false });
+    const page = Array.from({ length: 500 }, (_, i) => ({ ratingKey: `rk${i}`, title: `M${i}`, type: "movie" }));
+    mockClient.getLibraryItemsPage
+      .mockResolvedValueOnce({ items: page, total: 501 })
+      .mockResolvedValueOnce({ items: [{ ratingKey: "rk-last", title: "Last", type: "movie" }], total: 501 });
+
+    await syncMediaServer("server-1");
+
+    expect(evidence.requirePopulationResync).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails the run rather than write items without the hold", async () => {
+    mockDb({ libraryHeldItems: false });
+    listOne();
+    vi.mocked(evidence.requirePopulationResync).mockRejectedValueOnce(new Error("db down"));
+
+    await expect(syncMediaServer("server-1")).rejects.toThrow("db down");
+
+    expect(findDbCalls('INSERT INTO "MediaItem"')).toHaveLength(0);
+    expect(findDbCalls('UPDATE "SyncJob"', "FAILED")).toHaveLength(1);
+  });
+
+  // ── A library-scoped run releasing the hold it took itself ───────────
+
+  const RECEIPT = { serverId: "server-1", at: new Date("2026-03-01T10:00:00.000Z"), generation: "0:7" };
+
+  it("keeps it, quietly, when the hold changed under the run", async () => {
+    mockDb({ libraryHeldItems: false });
+    listOne();
+    vi.mocked(evidence.requirePopulationResync).mockResolvedValueOnce(RECEIPT);
+    vi.mocked(evidence.releaseOwnPopulationHold).mockResolvedValueOnce(false);
+
+    await syncMediaServer("server-1", "1", { skipWatchHistory: true });
+
+    expect(evidence.releaseOwnPopulationHold).toHaveBeenCalledTimes(1);
+    expect(enqueueTracearrBackfill).not.toHaveBeenCalled();
+    expect(logger.info).toHaveBeenCalledWith("Sync", expect.stringContaining("it changed while this sync ran"));
+  });
+
+  it("does not use its own-hold release in a full run — the full-run rule decides", async () => {
+    mockDb({ libraryHeldItems: false, holdAt: HELD_AT });
+    listOne();
+    vi.mocked(evidence.requirePopulationResync).mockResolvedValueOnce(RECEIPT);
+
+    await syncMediaServer("server-1");
+
+    expect(evidence.releaseOwnPopulationHold).not.toHaveBeenCalled();
+    expect(evidence.releaseLibraryResyncHold).toHaveBeenCalledTimes(1);
+  });
+
+  // ── Tolerance for an over-reported total (release only) ──────────────
+
+  it("records no sighting from a pass a hold request arrived during, so the next short pass is a first one again", async () => {
+    // A purge mid-pass clears the sighting after its delete; this pass straddled the delete.
+    mockDb({ holdAt: HELD_AT });
+    listOne(30);
+    vi.mocked(evidence.libraryResyncRequestedSince).mockReturnValueOnce(true);
+
+    const before = Date.now();
+    await syncMediaServer("server-1");
+    expect(evidence.libraryResyncRequestedSince).toHaveBeenCalledWith("server-1", expect.any(Date));
+    // Asked of this library's own pass start, taken before it read the sighting.
+    const since = vi.mocked(evidence.libraryResyncRequestedSince).mock.calls[0][1] as Date;
+    expect(since.getTime()).toBeGreaterThanOrEqual(before);
+    expect(findDbCalls('UPDATE "Library" SET "shortPassSeenAt"=$2')).toHaveLength(0);
+
+    await syncMediaServer("server-1");
+    expect(evidence.releaseLibraryResyncHold).not.toHaveBeenCalled();
+    expect(findDbCalls('UPDATE "Library" SET "shortPassSeenAt"=$2')).toHaveLength(1);
+  });
+
+  it.each([
+    ["a far-short pass starts the count again", [30, 3000, 30, 30], [0, 0, 0, 1]],
+    ["a complete pass after a short one is synced at once", [30, 1], [0, 1]],
+    ["a complete pass restarts the count", [30, 1, 30], [0, 1, 1]],
+  ])("%s", async (_, totals, releases) => {
+    mockDb({ holdAt: HELD_AT });
+    for (const [i, total] of totals.entries()) {
+      listOne(total);
+      await syncMediaServer("server-1");
+      expect(evidence.releaseLibraryResyncHold, `pass ${i + 1}`).toHaveBeenCalledTimes(releases[i]);
+    }
+  });
+
+  it("records no sighting while no hold is set, and clears one a pass outside the tolerance finds", async () => {
+    mockDb({ holdAt: null });
+    listOne(30);
+
+    await syncMediaServer("server-1");
+    expect(findDbCalls('UPDATE "Library" SET "shortPassSeenAt"')).toHaveLength(0);
+
+    mockDb({ holdAt: null, shortPassSeenAt: new Date("2026-01-02T00:00:00Z") });
+    listOne(3000);
+    await syncMediaServer("server-1");
+    const cleared = findDbCalls('UPDATE "Library" SET "shortPassSeenAt"=$2');
+    expect(cleared).toHaveLength(1);
+    expect(cleared[0][2]).toBeNull();
+  });
+
+  it("does not warn about the tolerance when nothing relied on it, nor when nothing was released", async () => {
+    mockDb({});
+    listOne(30);
+
+    await syncMediaServer("server-1");
+
+    expect(logger.warn).not.toHaveBeenCalledWith("Sync", expect.stringContaining("within the tolerance"));
   });
 
   it("leaves every library alone when the server reports none at all", async () => {

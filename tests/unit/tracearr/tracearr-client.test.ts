@@ -31,6 +31,7 @@ vi.mock("axios", () => {
 import {
   TracearrClient,
   MAX_PAGE_SIZE,
+  USER_PAGE_CAP,
   type TracearrHistoryRecord,
   type TracearrUserIdentity,
 } from "@/lib/tracearr/tracearr-client";
@@ -1279,6 +1280,71 @@ describe("TracearrClient", () => {
       // mapped onto this server.
       expect(names.get("acct-jesse")).toBeUndefined();
       expect(names.get("acct-jesse-here")).toBe("jesse_pinkman");
+    });
+
+    describe("an incomplete walk throws rather than returning what it reached", () => {
+      // A partial map is non-empty and passed the importer's gate; every caller
+      // treats a throw as "unavailable".
+      it("throws when the page cap cuts the walk short", async () => {
+        let n = 0;
+        mockAxiosInstance.get.mockImplementation(async () =>
+          usersBody([ACTIVE], `cursor-${++n}`),
+        );
+
+        await expect(client.getServerAccountNames("srv-1")).rejects.toThrow(
+          /did not end within/,
+        );
+        expect(mockAxiosInstance.get).toHaveBeenCalledTimes(USER_PAGE_CAP);
+      });
+
+      it("walks a large instance's user list to the end — the cap is a runaway guard", async () => {
+        // 12,000 identities: a cap of 50 pages left a large server with no map.
+        const PAGES = 120;
+        let n = 0;
+        mockAxiosInstance.get.mockImplementation(async () => {
+          const page = ++n;
+          const identities = Array.from({ length: MAX_PAGE_SIZE }, (_, i) => ({
+            ...ACTIVE,
+            id: `identity-${page}-${i}`,
+            accounts: [
+              {
+                ...ACTIVE.accounts[0],
+                server_user_id: `acct-${page}-${i}`,
+                username: `user-${page}-${i}`,
+              },
+            ],
+          }));
+          return usersBody(identities, page < PAGES ? `cursor-${page + 1}` : null);
+        });
+
+        const names = await client.getServerAccountNames("srv-1");
+
+        expect(names.size).toBe(PAGES * MAX_PAGE_SIZE);
+        expect(names.get(`acct-${PAGES}-0`)).toBe(`user-${PAGES}-0`);
+      });
+
+      it.each([
+        ["a cursor that repeats", usersBody([DEPARTED], "cursor-2"), /stopped advancing/],
+        ["a page that is not a users page", { data: "<html>sign in</html>" }, /unexpected response/],
+      ])("throws on %s", async (_, second, error) => {
+        mockAxiosInstance.get
+          .mockResolvedValueOnce(usersBody([ACTIVE], "cursor-2"))
+          .mockResolvedValueOnce(second);
+
+        await expect(client.getServerAccountNames("srv-1")).rejects.toThrow(error);
+      });
+
+      it("throws when cancelled mid-walk", async () => {
+        const controller = new AbortController();
+        mockAxiosInstance.get.mockImplementationOnce(async () => {
+          controller.abort();
+          return usersBody([ACTIVE], "cursor-2");
+        });
+
+        await expect(
+          client.getServerAccountNames("srv-1", { signal: controller.signal }),
+        ).rejects.toThrow(/cancelled/);
+      });
     });
   });
 });

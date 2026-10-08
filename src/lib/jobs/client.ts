@@ -92,7 +92,6 @@ async function keepQueuedPriority(spec: TaskSpec | undefined): Promise<TaskSpec 
   return spec;
 }
 
-/** Release pooled resources. Primarily used by tests. */
 /**
  * Whether the job under `jobKey` failed and is waiting out graphile-worker's
  * retry backoff (attempted, not yet exhausted, not running).
@@ -101,18 +100,26 @@ async function keepQueuedPriority(spec: TaskSpec | undefined): Promise<TaskSpec 
  * enqueue made while a job is backing off silently cancels the backoff and the
  * retry limit. Callers that re-enqueue a job on every routine run check this
  * first. A job that used up its attempts is NOT backing off — enqueueing it is
- * how it gets a fresh start. A failed check answers false, i.e. enqueue as
- * before.
+ * how it gets a fresh start — unless it failed within `failedWithinMs`, for a
+ * caller firing less often than graphile's seconds-long backoff. A failed check
+ * answers false, i.e. enqueue as before.
  */
-export async function isJobRetrying(jobKey: string): Promise<boolean> {
+export async function isJobRetrying(
+  jobKey: string,
+  options: { failedWithinMs?: number } = {},
+): Promise<boolean> {
   try {
+    // A failed attempt moves `run_at` (not `updated_at`), so `run_at` is the only
+    // record of when a parked job last failed.
     const { rows } = await getJobsPool().query<{ retrying: boolean }>(
       `SELECT EXISTS (
          SELECT 1 FROM graphile_worker.jobs
-          WHERE "key" = $1 AND "locked_at" IS NULL
-            AND "attempts" > 0 AND "attempts" < "max_attempts"
+          WHERE "key" = $1 AND "locked_at" IS NULL AND "attempts" > 0
+            AND ("attempts" < "max_attempts"
+                 OR ($2::float8 IS NOT NULL
+                     AND "run_at" > now() - ($2::float8 * interval '1 millisecond')))
        ) AS "retrying"`,
-      [jobKey],
+      [jobKey, options.failedWithinMs ?? null],
     );
     return rows[0]?.retrying === true;
   } catch (error) {
@@ -121,6 +128,7 @@ export async function isJobRetrying(jobKey: string): Promise<boolean> {
   }
 }
 
+/** Release pooled resources. Primarily used by tests. */
 export async function releaseJobsClient(): Promise<void> {
   if (workerUtils) {
     await Promise.resolve(workerUtils.release()).catch(() => {});

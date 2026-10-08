@@ -91,6 +91,10 @@ export async function GET(request: NextRequest) {
       serverId,
       page,
       limit,
+      // One row per play, though a Jellyfin/Emby play is stored once per library
+      // copy: safe because the copies are one item on one server, so this scope
+      // always holds all of them (see `/api/media/history`).
+      collapseFanOutCopies: true,
     }),
   );
 }

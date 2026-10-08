@@ -5,6 +5,18 @@ import { escapeLike } from "@/lib/filters/escape-like";
 import { appCache } from "@/lib/cache/memory-cache";
 import { jsonResponse } from "@/lib/api/json-response";
 import { clampSkip } from "@/lib/api/pagination";
+import { historySortSql } from "@/lib/media/history-sort";
+import { QUALITY_ORDER, resolutionLabelSql } from "@/lib/resolution";
+
+/**
+ * A Jellyfin/Emby play filed against several library copies of one item is stored
+ * once per copy, every row but the primary's setting `fanOutOfItemId`. This route
+ * lists PLAYS, so only the primary row; a play's rows share server, user, device,
+ * time and file, so every filter keeps or drops them together. With three or more
+ * copies and the primary's item deleted, each survivor is listed until the next
+ * watch-history sync re-points them (documented, not designed around).
+ */
+const PRIMARY_PLAY = `wh."fanOutOfItemId" IS NULL`;
 
 export async function GET(request: NextRequest) {
   const session = await getSession();
@@ -125,24 +137,34 @@ export async function GET(request: NextRequest) {
   }
 
   if (resolution) {
-    const RESOLUTION_DB_VALUES: Record<string, string[]> = {
-      "4K": ["4k", "2160", "2160p"],
-      "1080P": ["1080", "1080p"],
-      "720P": ["720", "720p"],
-      "480P": ["480", "480p"],
-      "SD": ["sd", "360", "360p"],
-    };
-    const vals = resolution.split("|").filter(Boolean);
-    // Expand display labels to all matching DB values
-    const dbVals = vals.flatMap((v) => RESOLUTION_DB_VALUES[v] ?? [v]);
-    if (dbVals.length === 1) {
-      itemConditions.push(`LOWER(mi."resolution") = LOWER($${paramIdx++})`);
-      params.push(dbVals[0]);
-    } else if (dbVals.length > 1) {
-      const placeholders = dbVals.map(() => `LOWER($${paramIdx++})`).join(",");
-      itemConditions.push(`LOWER(mi."resolution") IN (${placeholders})`);
-      params.push(...dbVals);
+    // A label matches every file the page shows under it (`resolutionLabelSql`, as the
+    // sort ranks); any other value matches the stored resolution, ignoring case.
+    const labels = new Set<string>();
+    const stored: string[] = [];
+    for (const value of resolution.split("|").filter(Boolean)) {
+      const label = QUALITY_ORDER.find((l) => l.toLowerCase() === value.toLowerCase());
+      if (label) labels.add(label);
+      else stored.push(value);
     }
+    const matches: string[] = [];
+    if (labels.size > 0) {
+      const placeholders = [...labels].map(() => `$${paramIdx++}`).join(",");
+      // Labelled once per DISTINCT stored resolution, not per item, where the regex
+      // CASE cost more than the rest of the query; `OFFSET 0` stops the planner pushing
+      // it below the DISTINCT. `COALESCE` lets a NULL (`Other`) match, which `IN` never does.
+      matches.push(
+        `COALESCE(mi."resolution", '') IN (
+          SELECT COALESCE(d."resolution", '') FROM (SELECT DISTINCT "resolution" FROM "MediaItem" OFFSET 0) d
+          WHERE (${resolutionLabelSql('d."resolution"')}) IN (${placeholders}))`,
+      );
+      params.push(...labels);
+    }
+    if (stored.length > 0) {
+      const placeholders = stored.map(() => `LOWER($${paramIdx++})`).join(",");
+      matches.push(`LOWER(mi."resolution") IN (${placeholders})`);
+      params.push(...stored);
+    }
+    if (matches.length > 0) itemConditions.push(`(${matches.join(" OR ")})`);
   }
 
   if (dynamicRange) {
@@ -181,41 +203,11 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  const whereClause = [...conditions, ...itemConditions].join(" AND ");
+  const whereClause = [...conditions, PRIMARY_PLAY, ...itemConditions].join(" AND ");
 
-  // Build ORDER BY — always sort server-side for paginated results.
-  // This is a strict whitelist: `sortBy` is interpolated into the SQL, so an
-  // unknown value must fall back to the default rather than reach the query.
-  const SORT_MAP: Record<string, string> = {
-    watchedAt: 'wh."watchedAt"',
-    serverUsername: 'wh."serverUsername"',
-    deviceName: 'wh."deviceName"',
-    platform: 'wh."platform"',
-    title: 'mi."titleSort"',
-    type: 'mi."type"',
-    year: 'mi."year"',
-    resolution: 'mi."resolution"',
-    duration: 'mi."duration"',
-    fileSize: 'mi."fileSize"',
-    // Tracearr-sourced play columns. `streamResolution` is deliberately a
-    // separate key from `resolution`: the latter is the FILE's resolution on
-    // the MediaItem, this one is the resolution actually delivered to the
-    // client, and a transcoded 4K file streamed at 1080p differs on the two.
-    percentComplete: 'wh."percentComplete"',
-    isTranscode: 'wh."isTranscode"',
-    player: 'wh."player"',
-    streamResolution: 'wh."resolution"',
-  };
-  // `Object.hasOwn`, not a bare lookup: `SORT_MAP["constructor"]` resolves up
-  // the prototype chain to a function, which is truthy, so `?? default` would
-  // not catch it and the function's source text would be interpolated into the
-  // ORDER BY. Not exploitable (the attacker controls no part of that text, and
-  // Postgres just rejects it) but it turns a bogus `sortBy` into a 500 instead
-  // of the documented fallback. Now that the map is user-extensible via the new
-  // Tracearr columns, pin the lookup to own properties.
-  const orderCol = Object.hasOwn(SORT_MAP, sortBy)
-    ? SORT_MAP[sortBy]
-    : 'wh."watchedAt"';
+  // Build ORDER BY — always sort server-side for paginated results. The whitelist
+  // is shared with the page (`history-sort.ts`); `sortBy` is never interpolated.
+  const orderExprs = historySortSql(sortBy);
   const orderDir = sortOrder === "asc" ? "ASC" : "DESC";
   // The ORDER BY below appends wh."id" as a unique tiebreaker so the sort is a
   // total order. Without one Postgres may return tied rows in any order, and a
@@ -266,12 +258,19 @@ export async function GET(request: NextRequest) {
   // the join is one index probe per play, and without it the count is an
   // index-only scan. Measured at 141k plays: 65 ms → 9 ms for the unfiltered
   // page every History visit starts on.
+  //
+  // Without that join the fan-out copies are SUBTRACTED, not filtered out: no index
+  // the scan uses holds `fanOutOfItemId`, so the predicate would read the whole heap,
+  // while the copies come from their own index. With the join the predicate is cheaper.
   const needsItemJoin = itemConditions.length > 0;
-  const countP = prisma.$queryRawUnsafe<[{ count: bigint }]>(
-    `SELECT COUNT(*) AS "count" FROM "WatchHistory" wh
-    ${needsItemJoin ? `JOIN "MediaItem" mi ON mi."id" = wh."mediaItemId"` : ""}
+  const playsFrom = `FROM "WatchHistory" wh
     JOIN "MediaServer" ms ON ms."id" = wh."mediaServerId"
-    WHERE ${whereClause}`,
+    WHERE ${conditions.join(" AND ")}`;
+  const countP = prisma.$queryRawUnsafe<[{ count: bigint }]>(
+    needsItemJoin
+      ? `SELECT COUNT(*) AS "count" ${fromClause}`
+      : `SELECT (SELECT COUNT(*) ${playsFrom})
+          - (SELECT COUNT(*) ${playsFrom} AND wh."fanOutOfItemId" IS NOT NULL) AS "count"`,
     ...params,
   );
 
@@ -352,7 +351,7 @@ export async function GET(request: NextRequest) {
       mi."genres" AS "mi_genres",
       ms."id" AS "ms_id", ms."name" AS "ms_name", ms."type" AS "ms_type"
     ${fromClause}
-    ORDER BY ${orderCol} ${orderDir} NULLS LAST, wh."id" ASC
+    ORDER BY ${orderExprs.map((expr) => `${expr} ${orderDir} NULLS LAST`).join(", ")}, wh."id" ASC
     LIMIT ${limit + 1} OFFSET ${clampSkip((page - 1) * limit)}`,
     ...params,
   );

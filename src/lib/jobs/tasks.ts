@@ -149,12 +149,20 @@ const syncWatchHistoryTask: Task = async (payload) => {
   // re-importing the server's whole history (see `WatchHistorySyncOptions`).
   // Without the flag — `/api/sync/by-type`'s deferred refresh — it is the full
   // replace, which is what reconciles plays the server has since deleted.
-  const { count } = await syncWatchHistory(serverId, undefined, undefined, { incremental });
+  const { count, failed } = await syncWatchHistory(serverId, undefined, undefined, { incremental });
   // Watch-history-derived caches (filters, stats) must drop so listings reflect
   // the fresh play data instead of waiting out the TTL. An incremental run that
   // appended nothing changed nothing, and it fires per playback, so it keeps
-  // every cached listing; a full replace may have removed rows even at count 0.
-  if (count > 0 || !incremental) invalidateMediaCaches();
+  // every cached listing; a full replace may have removed rows even at count 0
+  // — unless it failed, in which case it never reached its write.
+  if (count > 0 || (!incremental && !failed)) invalidateMediaCaches();
+  // A run that could not sync returned rather than threw, but this job exists to
+  // bring the history up to date: fail it, so graphile retries with backoff. The
+  // realtime manager holds off meanwhile (`isJobRetrying`), so a lasting failure
+  // is not re-armed by every playback.
+  if (failed) {
+    throw new Error(`Watch-history refresh for server ${serverId} failed: ${failed}`);
+  }
   logger.info("Jobs", `Watch-history refresh for server ${serverId} synced ${count} entries`);
 };
 
@@ -206,59 +214,88 @@ const tracearrBackfill: Task = async (payload) => {
   // ends itself at its next page boundary instead — the same resumable stop as
   // a spent deadline, after which the requested sync (higher priority) runs
   // and this re-enqueued slice follows it.
+  //
+  // One deadline and one watch for the slice AND the recovery pass after it.
+  const deadlineMs = Date.now() + TRACEARR_BACKFILL_SLICE_MS;
   const waitingSync = watchForCancel(requestedSyncWaiting);
+  const yieldTo = () => waitingSync.signal.aborted;
   let result: Awaited<ReturnType<typeof syncTracearrHistory>>;
+  let recovered = 0;
   try {
     result = await syncTracearrHistory(serverId, {
       passes: "backfill",
-      deadlineMs: Date.now() + TRACEARR_BACKFILL_SLICE_MS,
-      yieldTo: () => waitingSync.signal.aborted,
+      deadlineMs,
+      yieldTo,
     });
+
+    // Re-import the plays of items that left the library and came back (they read
+    // as never watched), only once the archive walk is finished — the walk has the
+    // deadline, resume boundary and rate-limit budget's priority. Best-effort: a
+    // failure must not fail a slice whose rows are committed.
+    if (!result.backfillPending) {
+      try {
+        // Bounded by the same slice and requested-sync watch as the walk; one indexed
+        // query when there is nothing to recover.
+        ({ imported: recovered } = await recoverHistoryForNewItems(serverId, {
+          deadlineMs,
+          yieldTo,
+        }));
+      } catch (error) {
+        logger.warn(
+          "Jobs",
+          `Tracearr history recovery for recently added items on server ${serverId} failed`,
+          { error: String(error) },
+        );
+      }
+    }
   } finally {
     waitingSync.stop();
   }
 
-  // Re-import the plays of items that left the library and came back — their
-  // `WatchHistory` was cascade-deleted with the old row, so they read as never
-  // watched, which is what arms the destructive "not played in N months" rules.
-  //
-  // Only once the archive walk is finished. The walk is the priority: it is the
-  // pass that has a deadline and a resume boundary, and these are one request
-  // per item against the same rolling rate limit, so running them alongside it
-  // would spend the slice and the limiter's budget on the smaller problem.
-  //
-  // Best-effort by design. A failure here must not fail a slice whose imported
-  // rows are already committed — graphile-worker would retry the whole job, and
-  // the recovery's own candidacy is re-derived from the rows on the next run
-  // anyway, so there is nothing to lose by simply logging it.
-  if (!result.backfillPending) {
-    try {
-      await recoverHistoryForNewItems(serverId);
-    } catch (error) {
-      logger.warn(
-        "Jobs",
-        `Tracearr history recovery for recently added items on server ${serverId} failed`,
-        { error: String(error) },
-      );
-    }
+  // Only when something moved: this job runs after every forward sync and on a
+  // finished archive almost always changes nothing — or when the walk finished
+  // (the backfill state the pages show changed).
+  const finishedWalk = !result.backfillPending && result.backfillOutcome === "exhausted";
+  if (result.count > 0 || recovered > 0 || finishedWalk) {
+    invalidateMediaCaches();
+    // Once per slice: `tracearr:import-progress` only drives the "still importing"
+    // notice; this makes rows, stats and the dashboard reflect the import.
+    await emitWatchHistoryUpdated(serverId, {
+      imported: result.count + recovered,
+      backfillPending: result.backfillPending,
+    });
   }
 
-  // Watch-history-derived caches (filters, stats) must drop so listings reflect
-  // the newly imported plays instead of waiting out the TTL.
-  invalidateMediaCaches();
-  // Once per slice (so ~once every 5 minutes over a multi-hour walk), tell open
-  // pages the play data moved. `tracearr:import-progress` fires per page but
-  // only drives the "still importing" notice; this is what makes the rows,
-  // stats and dashboard actually reflect an import in flight.
-  await emitWatchHistoryUpdated(serverId, {
-    imported: result.count,
-    backfillPending: result.backfillPending,
-  });
-
   if (!result.backfillPending) {
+    // Logged only for a slice that actually walked: a no-op run on a finished
+    // archive happens after every forward sync and is not news.
+    if (result.backfillOutcome !== undefined || result.count > 0) {
+      logger.info(
+        "Jobs",
+        `Tracearr backfill for server ${serverId} is complete (${result.count} row(s) this slice)`,
+      );
+    }
+    return;
+  }
+
+  // Held without walking: reported "exhausted" so it is not re-queued, but it is
+  // not an empty archive, so say why.
+  if (result.heldReason === "awaiting-resync") {
     logger.info(
       "Jobs",
-      `Tracearr backfill for server ${serverId} is complete (${result.count} row(s) this slice)`,
+      `Tracearr backfill for server ${serverId} is held until a library sync brings back ` +
+        `the items it is missing — a full sync after a purge or restore, or the sync of a ` +
+        `library being populated for the first time — not re-queueing; that sync queues ` +
+        `the walk`,
+    );
+    return;
+  }
+  if (result.heldReason === "no-library-items") {
+    logger.info(
+      "Jobs",
+      `Tracearr backfill for server ${serverId} skipped — none of its enabled libraries ` +
+        `holds any items, so no play could be attributed. Not re-queueing; the ` +
+        `watch-history sync after a library sync adds items queues the walk`,
     );
     return;
   }
@@ -269,13 +306,28 @@ const tracearrBackfill: Task = async (payload) => {
   // forever, holding MAIN_QUEUE and refetching every open tab each time. Stop
   // here; the next watch-history sync enqueues another slice, so plays that
   // appear later are still picked up.
-  if (result.backfillOutcome === "exhausted") {
+  //
+  // Not when only the completion write was refused (`completionLost`): the walk
+  // was restarted meanwhile and is owed a fresh one from the top.
+  if (result.backfillOutcome === "exhausted" && !result.completionLost) {
     logger.info(
       "Jobs",
       `Tracearr backfill for server ${serverId} found no history to import — ` +
         `not re-queueing; the next watch-history sync tries again`,
     );
     return;
+  }
+
+  // A failed walk must NOT re-enqueue at once — the next run would fail the same
+  // way, spinning against an instance that is already failing. Throw with the
+  // real cause (`backfillError`): graphile retries with backoff and eventually
+  // parks it. A spent slice or a yield made progress and continues (below).
+  if (result.backfillOutcome === "errored") {
+    throw new Error(
+      `Tracearr backfill slice for server ${serverId} failed: ` +
+        `${result.backfillError ?? "its walk of Tracearr's history failed"} — ` +
+        `letting the worker retry with backoff rather than re-queueing immediately`,
+    );
   }
 
   // More history below. Re-enqueue under the SAME jobKey the foreground path
@@ -286,20 +338,6 @@ const tracearrBackfill: Task = async (payload) => {
     `Tracearr backfill for server ${serverId} imported ${result.count} row(s) this ` +
       `slice — queueing the next one`,
   );
-  // A slice that could not reach Tracearr must NOT re-enqueue immediately.
-  // Nothing about the next run would differ, so the job would spin as fast as
-  // the queue can turn it over — hammering an instance that is already down and
-  // burning the rate limit that the eventual recovery needs. Let the failure
-  // propagate instead: graphile-worker retries it with its own exponential
-  // backoff, and `maxAttempts` eventually parks it. A slice that merely ran out
-  // of time made real progress and should continue straight away.
-  if (result.backfillOutcome === "errored") {
-    throw new Error(
-      `Tracearr backfill slice for server ${serverId} could not reach Tracearr — ` +
-        `letting the worker retry with backoff rather than re-queueing immediately`,
-    );
-  }
-
   await enqueueJob(
     TASK_TRACEARR_BACKFILL,
     { serverId },

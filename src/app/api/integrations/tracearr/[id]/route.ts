@@ -5,6 +5,7 @@ import { TracearrClient } from "@/lib/tracearr/tracearr-client";
 import { validateRequest, tracearrInstanceUpdateSchema } from "@/lib/validation";
 import { sanitize, sanitizeErrorDetail } from "@/lib/api/sanitize";
 import { refuseStoredKeyToNewUrl } from "@/lib/integrations/stored-key-guard";
+import { enqueueTracearrBackfill } from "@/lib/sync/tracearr-backfill-enqueue";
 
 export async function PUT(
   request: NextRequest,
@@ -62,6 +63,17 @@ export async function PUT(
       ...(enabled !== undefined && { enabled }),
     },
   });
+
+  // Re-enabled or re-pointed: whatever stopped the import (no enabled instance,
+  // slices parked against the old address) may be fixed, so queue a fresh slice
+  // now. A rename alone changes nothing the import depends on.
+  const reenabled = enabled === true && !existing.enabled;
+  if (instance.enabled && (reenabled || urlChanged || apiKey)) {
+    await enqueueTracearrBackfill(
+      { userId: session.userId! },
+      reenabled ? "Tracearr instance re-enabled" : "Tracearr instance connection changed",
+    );
+  }
 
   return NextResponse.json({ instance: sanitize(instance) });
 }

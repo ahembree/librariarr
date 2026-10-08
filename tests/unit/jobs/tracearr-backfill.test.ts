@@ -20,6 +20,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const m = vi.hoisted(() => ({
   syncTracearrHistory: vi.fn(),
+  recoverHistoryForNewItems: vi.fn(),
+  emitWatchHistoryUpdated: vi.fn(),
   syncMediaServer: vi.fn().mockResolvedValue(undefined),
   syncWatchHistory: vi.fn().mockResolvedValue({ count: 0 }),
   syncMediaServerItems: vi.fn().mockResolvedValue({ status: "done", upserted: 0, deleted: 0 }),
@@ -48,6 +50,12 @@ const m = vi.hoisted(() => ({
 const { syncTracearrHistory, enqueueJob, invalidateMediaCaches, logger } = m;
 
 vi.mock("@/lib/sync/sync-tracearr-history", () => ({ syncTracearrHistory: m.syncTracearrHistory }));
+vi.mock("@/lib/sync/tracearr-backfill-additions", () => ({
+  recoverHistoryForNewItems: m.recoverHistoryForNewItems,
+}));
+vi.mock("@/lib/sync/watch-history-events", () => ({
+  emitWatchHistoryUpdated: m.emitWatchHistoryUpdated,
+}));
 vi.mock("@/lib/sync/sync-server", () => ({ syncMediaServer: m.syncMediaServer }));
 vi.mock("@/lib/sync/sync-watch-history", () => ({ syncWatchHistory: m.syncWatchHistory }));
 vi.mock("@/lib/sync/sync-incremental", () => ({ syncMediaServerItems: m.syncMediaServerItems }));
@@ -102,11 +110,55 @@ function runBackfill(payload: unknown = { serverId: SERVER_ID }): Promise<void> 
   return task(payload, helpers);
 }
 
+/** Every INFO line the task logged, message text only. */
+function infoLogs(): string[] {
+  return logger.info.mock.calls.map((args: unknown[]) => String(args[1]));
+}
+
 describe("tracearr-backfill task", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     enqueueJob.mockResolvedValue(true);
     syncTracearrHistory.mockResolvedValue({ count: 0, backfillPending: false });
+    m.recoverHistoryForNewItems.mockResolvedValue({ checked: 0, imported: 0 });
+    m.emitWatchHistoryUpdated.mockResolvedValue(undefined);
+  });
+
+  describe("on a finished archive", () => {
+    // Queued after every forward sync, and almost always a no-op there.
+    it("leaves caches and open pages alone when nothing moved", async () => {
+      await runBackfill();
+
+      expect(m.recoverHistoryForNewItems).toHaveBeenCalledWith(
+        SERVER_ID,
+        expect.objectContaining({ deadlineMs: expect.any(Number), yieldTo: expect.any(Function) }),
+      );
+      expect(invalidateMediaCaches).not.toHaveBeenCalled();
+      expect(m.emitWatchHistoryUpdated).not.toHaveBeenCalled();
+      expect(enqueueJob).not.toHaveBeenCalled();
+      // Not news either: no "backfill complete" line per playback.
+      expect(logger.info).not.toHaveBeenCalledWith("Jobs", expect.stringContaining("complete"));
+    });
+
+    it.each([
+      ["recovered plays", { count: 0, backfillPending: false }, 4],
+      [
+        "the slice that finished the walk, even having stored nothing",
+        { count: 0, backfillPending: false, backfillOutcome: "exhausted" },
+        0,
+      ],
+    ])("announces %s", async (_, result, recovered) => {
+      syncTracearrHistory.mockResolvedValue(result);
+      m.recoverHistoryForNewItems.mockResolvedValue({ checked: 3, imported: recovered });
+
+      await runBackfill();
+
+      expect(invalidateMediaCaches).toHaveBeenCalledOnce();
+      expect(m.emitWatchHistoryUpdated).toHaveBeenCalledWith(
+        SERVER_ID,
+        expect.objectContaining({ imported: recovered, backfillPending: false }),
+      );
+    });
   });
 
   it("gives way to a requested sync that is waiting in the queue", async () => {
@@ -133,6 +185,29 @@ describe("tracearr-backfill task", () => {
       { serverId: SERVER_ID },
       expect.objectContaining({ jobKey: `tracearr-backfill:${SERVER_ID}` }),
     );
+  });
+
+  it("bounds the recovery pass by the same slice deadline and requested-sync watch", async () => {
+    // It holds the serial queue too, so the watch stays alive until it is done.
+    let yieldDuring: boolean | undefined;
+    let stoppedDuring: boolean | undefined;
+    m.recoverHistoryForNewItems.mockImplementation(
+      async (_id: string, options: { yieldTo: () => boolean }) => {
+        stoppedDuring = m.waitingWatch.stopped;
+        m.waitingWatch.controller.abort();
+        yieldDuring = options.yieldTo();
+        return { checked: 0, imported: 0 };
+      },
+    );
+
+    await runBackfill();
+
+    const sliceDeadline = (syncTracearrHistory.mock.calls[0][1] as { deadlineMs: number }).deadlineMs;
+    const recovery = m.recoverHistoryForNewItems.mock.calls[0][1] as { deadlineMs: number };
+    expect(recovery.deadlineMs).toBe(sliceDeadline);
+    expect(stoppedDuring).toBe(false);
+    expect(yieldDuring).toBe(true);
+    expect(m.waitingWatch.stopped).toBe(true);
   });
 
   it("counts only a recent PENDING SyncJob row as a waiting sync", async () => {
@@ -255,9 +330,41 @@ describe("tracearr-backfill task", () => {
         count: 0,
         backfillPending: true,
         backfillOutcome: "errored",
+        backfillError: "Tracearr could not be reached while importing older plays",
       });
 
-      await expect(runBackfill()).rejects.toThrow(/could not reach Tracearr/);
+      await expect(runBackfill()).rejects.toThrow(
+        /failed: Tracearr could not be reached while importing older plays/,
+      );
+      expect(enqueueJob).not.toHaveBeenCalled();
+    });
+
+    it("throws — not re-queues — a slice whose history cursor stalled, and says so", async () => {
+      // As a resumable stop it re-walked the same pages forever, never parking.
+      syncTracearrHistory.mockResolvedValue({
+        count: 120,
+        backfillPending: true,
+        backfillOutcome: "errored",
+        backfillError: "Tracearr's history cursor stopped advancing while importing older plays",
+      });
+
+      const failure = runBackfill();
+      await expect(failure).rejects.toThrow(/history cursor stopped advancing/);
+      await expect(failure).rejects.not.toThrow(/could not reach/);
+      expect(enqueueJob).not.toHaveBeenCalled();
+      // Its committed pages are still announced, with no "queueing" line.
+      expect(invalidateMediaCaches).toHaveBeenCalledOnce();
+      expect(infoLogs().some((line) => line.includes("queueing the next one"))).toBe(false);
+    });
+
+    it("still throws a generic reason when the importer gave none", async () => {
+      syncTracearrHistory.mockResolvedValue({
+        count: 0,
+        backfillPending: true,
+        backfillOutcome: "errored",
+      });
+
+      await expect(runBackfill()).rejects.toThrow(/failed: its walk of Tracearr's history failed/);
       expect(enqueueJob).not.toHaveBeenCalled();
     });
 
@@ -287,6 +394,45 @@ describe("tracearr-backfill task", () => {
 
       await expect(runBackfill()).resolves.toBeUndefined();
       expect(enqueueJob).not.toHaveBeenCalled();
+      expect(infoLogs().some((line) => line.includes("found no history to import"))).toBe(true);
+    });
+
+    // Not re-queued (it would only be held again), and not logged as an empty archive.
+    it.each([
+      ["awaiting-resync", "held until a library sync brings back the items it is missing"],
+      ["no-library-items", "none of its enabled libraries holds any items"],
+    ] as const)("does not re-enqueue a slice held for %s, and says why", async (heldReason, says) => {
+      syncTracearrHistory.mockResolvedValue({
+        count: 0,
+        backfillPending: true,
+        backfillOutcome: "exhausted",
+        heldReason,
+      });
+
+      await expect(runBackfill()).resolves.toBeUndefined();
+      expect(enqueueJob).not.toHaveBeenCalled();
+      const lines = infoLogs();
+      expect(lines.some((line) => line.includes(says))).toBe(true);
+      expect(lines.some((line) => line.includes("found no history to import"))).toBe(false);
+    });
+
+    it("re-enqueues when the walk finished but a concurrent restart refused its completion", async () => {
+      // Pending + exhausted is then not "no history": a fresh walk is owed.
+      syncTracearrHistory.mockResolvedValue({
+        count: 120,
+        backfillPending: true,
+        backfillOutcome: "exhausted",
+        completionLost: true,
+      });
+
+      await runBackfill();
+
+      expect(enqueueJob).toHaveBeenCalledTimes(1);
+      expect(enqueueJob).toHaveBeenCalledWith(
+        TASK_TRACEARR_BACKFILL,
+        { serverId: SERVER_ID },
+        expect.objectContaining({ jobKey: `tracearr-backfill:${SERVER_ID}` }),
+      );
     });
   });
 

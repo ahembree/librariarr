@@ -5,7 +5,12 @@ import fs from "fs/promises";
 import path from "path";
 import { gzipSync, gunzipSync } from "zlib";
 import { randomBytes, scryptSync, createCipheriv, createDecipheriv } from "crypto";
-import { invalidateServersWithoutWatchHistory } from "@/lib/media/watch-evidence";
+import {
+  forgetLibraryResyncHoldRequests,
+  invalidateServersWithoutWatchHistory,
+  requireLibraryResync,
+} from "@/lib/media/watch-evidence";
+import { notePlayHistoryPauseForRestoredMatches } from "@/lib/lifecycle/evaluability";
 
 // Runtime data directory: env-resolved and outside the project (under /config in
 // the container), so Turbopack's build-time tracer cannot resolve it statically and
@@ -354,10 +359,8 @@ export async function restoreBackup(
   // `WatchHistory` included — and then re-inserts only what the file actually
   // holds. A config-only backup holds neither, so it empties both and refills
   // neither: the media comes back on the next sync, and so does the history —
-  // native history is re-fetched, and a Tracearr server's row, restored
-  // verbatim with `tracearrBackfillComplete` still true, is recognised by the
-  // importer as "complete with no rows", which resets that state and walks the
-  // archive again.
+  // native history is re-fetched, and a Tracearr server's archive walk is
+  // restarted below.
   //
   // An empty `WatchHistory` reads as "nobody watched anything", so without this
   // the first detection run after a restore-plus-resync matches the WHOLE
@@ -370,6 +373,43 @@ export async function restoreBackup(
       "Backup",
       `Marked ${marked} media server(s) as having no watch history yet — ` +
         `watchedByUser lifecycle rules are paused for them until a sync refills it`,
+    );
+  }
+
+  // EVERY restored server is held until a full sync (`requireLibraryResync`):
+  // even a full backup is a snapshot, and what came after it returns with none
+  // of its plays. The hold also restarts a mapped server's archive walk, whose
+  // restored state describes rows the file may not hold. Requests noted against
+  // the old rows are forgotten first; every `Library.shortPassSeenAt` is
+  // cleared AFTER the holds, so a pass still running from before the restore
+  // sees a newer request and records none (`libraryResyncRequestedSince`).
+  forgetLibraryResyncHoldRequests();
+  const restoredServers = await prisma.mediaServer.findMany({ select: { id: true } });
+  const heldIds = restoredServers.map((server) => server.id);
+  if (heldIds.length > 0) {
+    await requireLibraryResync(heldIds);
+    logger.info(
+      "Backup",
+      `Holding the play history of ${heldIds.length} restored media server(s) until a full sync ` +
+        `has brought back the media the backup did not hold`,
+    );
+  }
+  await prisma.library.updateMany({
+    where: { shortPassSeenAt: { not: null } },
+    data: { shortPassSeenAt: null },
+  });
+
+  // A full backup's matches are as old as the backup, and the hold lifts at the
+  // next full sync, before detection: latch their rule sets so their actions
+  // wait for a detection run. After the holds, so a run that began before them
+  // cannot lift it.
+  const latched = await notePlayHistoryPauseForRestoredMatches();
+  if (latched > 0) {
+    logger.info(
+      "Backup",
+      `The backup brought back the lifecycle matches of ${latched} rule set(s) that read play ` +
+        `activity, as old as the backup — their actions are held until detection has evaluated ` +
+        `each again`,
     );
   }
 

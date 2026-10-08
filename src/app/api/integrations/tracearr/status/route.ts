@@ -2,8 +2,54 @@ import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { sanitize } from "@/lib/api/sanitize";
-import { computeBackfillFraction } from "./backfill-fraction";
-import { getTracearrImportActivity } from "@/lib/sync/tracearr-import-activity";
+import {
+  computeBackfillFraction,
+  importPausedReason,
+  importPending,
+  resolveBackfillReach,
+} from "./backfill-fraction";
+import {
+  getTracearrBackfillReach,
+  getTracearrImportActivity,
+} from "@/lib/sync/tracearr-import-activity";
+
+/** The state of each server's `tracearr-backfill:<serverId>` job. */
+interface BackfillJobState {
+  /** Waiting, running or backing off — will run again by itself. */
+  queued: Set<string>;
+  /** Used up its attempts: graphile keeps the row but never runs it again. */
+  parked: Set<string>;
+  /** The table was read — without it, "no job" is unknown, not known. */
+  known: boolean;
+}
+
+/**
+ * Servers whose backfill slice is queued, running or backing off, and those
+ * whose slice is parked, from graphile's own table under the shared jobKey.
+ * Best-effort: on a failed read `known` is false and every server is judged on
+ * its stored evidence — never reported as failing, nor as waiting for a sync.
+ */
+async function backfillJobStates(serverIds: string[]): Promise<BackfillJobState> {
+  const state: BackfillJobState = { queued: new Set(), parked: new Set(), known: false };
+  try {
+    const rows = await prisma.$queryRawUnsafe<{ key: string; parked: boolean }[]>(
+      // `locked_at IS NULL`: graphile counts an attempt when it takes the job,
+      // so a slice running its LAST attempt already reads attempts = max.
+      `SELECT "key", ("attempts" >= "max_attempts" AND "locked_at" IS NULL) AS "parked"
+         FROM graphile_worker.jobs
+        WHERE "key" = ANY($1::text[])`,
+      serverIds.map((id) => `tracearr-backfill:${id}`),
+    );
+    for (const row of rows) {
+      const serverId = row.key.slice("tracearr-backfill:".length);
+      (row.parked ? state.parked : state.queued).add(serverId);
+    }
+    state.known = true;
+  } catch {
+    // See above: unknown reads as "no job".
+  }
+  return state;
+}
 
 /**
  * GET /api/integrations/tracearr/status
@@ -24,6 +70,10 @@ import { getTracearrImportActivity } from "@/lib/sync/tracearr-import-activity";
  * when progress cannot be known yet, which the UI must render as indeterminate
  * rather than as 0. See `./backfill-fraction` for the arithmetic and, more
  * importantly, for why it measures time coverage instead of imported records.
+ *
+ * `pending` (`importPending`) is what anything waiting on the import reads —
+ * never `!backfillComplete`, which stays false forever on a disabled server or
+ * instance, or a mapping Tracearr holds no plays for.
  */
 export async function GET() {
   const session = await getSession();
@@ -32,12 +82,14 @@ export async function GET() {
   }
 
   // Only mapped servers have an import to report on; an unmapped server uses
-  // its own native watch history and has no Tracearr state at all.
+  // its own native watch history and has no Tracearr state at all. Disabled
+  // servers stay listed (a missing line reads "unmapped") but are never `pending`.
   const servers = await prisma.mediaServer.findMany({
     where: { userId: session.userId!, tracearrServerId: { not: null } },
     select: {
       id: true,
       name: true,
+      enabled: true,
       tracearrServerId: true,
       tracearrBackfillComplete: true,
       // The far edge of Tracearr's archive, measured once per server by
@@ -45,6 +97,8 @@ export async function GET() {
       // read off the row we already fetch, so progress costs no extra query.
       tracearrOldestPlayAt: true,
       tracearrBackfillCursorAt: true,
+      tracearrBackfillLastWalkAt: true,
+      libraryResyncRequiredAt: true,
     },
     // Total order: the UI polls this repeatedly and re-renders the list, so ties
     // on `name` must not permute between requests.
@@ -58,17 +112,33 @@ export async function GET() {
   // One pass over the imported rows for every mapped server, joined back in
   // memory below. `source: "TRACEARR"` is load-bearing: a server that was mapped
   // partway through its life still holds NATIVE rows from before the switch, and
-  // counting those would report progress the importer never made.
-  const aggregates = await prisma.watchHistory.groupBy({
-    by: ["mediaServerId"],
-    where: {
-      mediaServerId: { in: servers.map((server) => server.id) },
-      source: "TRACEARR",
-    },
-    _count: { _all: true },
-    _min: { watchedAt: true },
-    _max: { watchedAt: true },
-  });
+  // counting those would report progress the importer never made. So is
+  // `fanOutOfItemId: null`: the count is of plays, not library-copy rows.
+  const [aggregates, enabledInstances, backfillJobs, populatedServers] = await Promise.all([
+    prisma.watchHistory.groupBy({
+      by: ["mediaServerId"],
+      where: {
+        mediaServerId: { in: servers.map((server) => server.id) },
+        source: "TRACEARR",
+        fanOutOfItemId: null,
+      },
+      _count: { _all: true },
+      _min: { watchedAt: true },
+      _max: { watchedAt: true },
+    }),
+    prisma.tracearrInstance.count({ where: { userId: session.userId!, enabled: true } }),
+    backfillJobStates(servers.map((server) => server.id)),
+    // Servers with an item in an ENABLED library: the importer walks nothing into
+    // one without, and no sync fills a server whose libraries are all disabled.
+    prisma.mediaServer.findMany({
+      where: {
+        id: { in: servers.map((server) => server.id) },
+        libraries: { some: { enabled: true, mediaItems: { some: {} } } },
+      },
+      select: { id: true },
+    }),
+  ]);
+  const hasLibraryItems = new Set(populatedServers.map((server) => server.id));
 
   const byServerId = new Map(
     aggregates.map((aggregate) => [aggregate.mediaServerId, aggregate])
@@ -84,13 +154,49 @@ export async function GET() {
     // `watchedAt` is nullable, so MIN/MAX can be null even with rows present.
     const oldestImported = aggregate?._min.watchedAt ?? null;
     const newestImported = aggregate?._max.watchedAt ?? null;
+    const importedCount = aggregate?._count._all ?? 0;
+
+    // The import running right now, if any (live counters the rows cannot
+    // express); null for a run retired by a mapping change. A run whose walk was
+    // restarted is still reported, without its reach.
+    const activeImport = getTracearrImportActivity(server.id);
+    // How far a live BACKFILL walk has reached — never a forward pass's, and never
+    // a superseded run's, whose deep reach would beat the restarted cursor below.
+    const liveReachIso = getTracearrBackfillReach(server.id);
+    const liveReached = liveReachIso ? new Date(liveReachIso) : null;
+    const cursorAt = server.tracearrBackfillCursorAt;
+    const reachedAt = resolveBackfillReach({ oldestImported, cursorAt, liveReached });
+
+    const running = activeImport !== null;
+    const queued = backfillJobs.queued.has(server.id);
+    // Parked AND nothing live: a run in progress (a History-page Refresh, a
+    // slice re-queued since the read) is progress, whatever the old row says.
+    const failing = backfillJobs.parked.has(server.id) && !running && !queued;
+    const importState = {
+      backfillComplete: server.tracearrBackfillComplete,
+      importedCount,
+      oldestPlayAt: server.tracearrOldestPlayAt,
+      cursorAt,
+      lastWalkAt: server.tracearrBackfillLastWalkAt,
+      resyncRequiredAt: server.libraryResyncRequiredAt,
+      running,
+      queued,
+      jobsKnown: backfillJobs.known,
+    };
+    const pausedReason = importPausedReason({
+      ...importState,
+      serverEnabled: server.enabled,
+      instanceEnabled: enabledInstances > 0,
+      hasLibraryItems: hasLibraryItems.has(server.id),
+      failing,
+    });
 
     return {
       serverId: server.id,
       serverName: server.name,
       tracearrServerId: server.tracearrServerId,
       backfillComplete: server.tracearrBackfillComplete,
-      importedCount: aggregate?._count._all ?? 0,
+      importedCount,
       oldestImported: oldestImported?.toISOString() ?? null,
       newestImported: newestImported?.toISOString() ?? null,
       // Exposed alongside the fraction so the UI can say *where* the walk has
@@ -98,6 +204,9 @@ export async function GET() {
       // so a null fraction is explainable — an unmeasured edge looks the same as
       // an empty import from the fraction alone.
       oldestPlayAt: server.tracearrOldestPlayAt?.toISOString() ?? null,
+      // The point the fraction is measured from — what a "reached <date>" line must
+      // name; not `oldestImported`, which a purge's surviving rows keep deep.
+      reachedAt: reachedAt?.toISOString() ?? null,
       // 0..1, or null when progress is not yet knowable and the bar should be
       // indeterminate. The two are distinct states — see the helper for why the
       // denominator is a time span and not a count of records.
@@ -106,11 +215,16 @@ export async function GET() {
         oldestPlayAt: server.tracearrOldestPlayAt,
         oldestImported,
         newestImported,
-        cursorAt: server.tracearrBackfillCursorAt,
+        cursorAt,
+        liveReached,
       }),
-      // The import running for this server right now, if any — live this-run
-      // counters the stored rows cannot express. `null` when nothing is running.
-      activeImport: getTracearrImportActivity(server.id),
+      // Whether anything should wait on this import — see `importPending`.
+      pending: importPending({ ...importState, pausedReason }),
+      pausedReason,
+      // When a backfill walk last ran (null: none yet) — tells "waiting for the first
+      // import" from "walked, and Tracearr had no plays".
+      lastWalkAt: server.tracearrBackfillLastWalkAt?.toISOString() ?? null,
+      activeImport,
     };
   });
 

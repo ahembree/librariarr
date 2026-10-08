@@ -20,6 +20,8 @@ import type {
   MediaTag,
   MediaRole,
   WatchHistoryEntry,
+  DetailedWatchHistoryEntry,
+  DetailedWatchHistoryOptions,
 } from "./types";
 import type {
   JellyfinItem,
@@ -47,6 +49,26 @@ export const ITEM_FIELDS = [
   "Taglines",
   "OriginalTitle",
 ].join(",");
+
+// How far a played-items listing may fall short of `TotalRecordCount` and still
+// read as an over-reported count: max(50, 2%). See `forEachPlayedPage`.
+const PLAYED_SHORTFALL_TOLERANCE_ITEMS = 50;
+const PLAYED_SHORTFALL_TOLERANCE_FRACTION = 0.02;
+
+/**
+ * One user's played-items listing answered but cannot be trusted to be
+ * complete (an empty first page under a non-zero total, or a gap past the
+ * tolerance) — often a lasting property of that ONE user (items hidden from
+ * the key), so `getDetailedWatchHistory` can set the user aside. Ignored
+ * `StartIndex` is deliberately not this: it is the server's or a proxy's fault
+ * and would set aside every user with more than one page.
+ */
+export class UnreliablePlayedListingError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UnreliablePlayedListingError";
+  }
+}
 
 function mapLibraryType(collectionType?: string): string | null {
   switch (collectionType) {
@@ -464,103 +486,197 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
     }
   }
 
-  async getDetailedWatchHistory(): Promise<
-    Array<{
-      ratingKey: string;
-      username: string;
-      watchedAt: string | null;
-      deviceName: string | null;
-      platform: string | null;
-    }>
-  > {
-    const entries: Array<{
-      ratingKey: string;
-      username: string;
-      watchedAt: string | null;
-      deviceName: string | null;
-      platform: string | null;
-    }> = [];
+  /** `since` is ignored: a played-items listing has no per-play dates to filter by. */
+  async getDetailedWatchHistory(
+    options?: DetailedWatchHistoryOptions,
+  ): Promise<DetailedWatchHistoryEntry[]> {
+    const report = options?.report;
+    const entries: DetailedWatchHistoryEntry[] = [];
 
-    try {
-      const usersRes = await this.client.get<
-        Array<{ Id: string; Name: string }>
-      >("/Users");
-      const users = usersRes.data || [];
+    // Any failure here propagates: the caller commits this result with a
+    // destructive full replace, so a hard failure (e.g. /Users unreachable)
+    // must skip it rather than wipe stored history.
+    const usersRes = await this.client.get<unknown>("/Users");
+    // A 200 that is not a user list must not read as "no users, no plays".
+    if (!Array.isArray(usersRes.data)) {
+      throw new Error(`${this.logPrefix} returned a malformed /Users response (not a list)`);
+    }
+    const users = usersRes.data as Array<{ Id: string; Name: string }>;
+    let usersRead = 0;
 
-      const pageSize = 1000;
-      for (const user of users) {
-        try {
-          let startIndex = 0;
-          // Page through this user's played items — a single Limit:10000 would
-          // hard-truncate users with more than 10k plays.
-          while (true) {
-            const itemsRes = await this.client.get<{
-              Items: Array<{
-                Id: string;
-                UserData?: { PlayCount?: number; LastPlayedDate?: string };
-              }>;
-            }>(`/Users/${user.Id}/Items`, {
-              params: {
-                IsPlayed: true,
-                Recursive: true,
-                Fields: "UserData",
-                // Only the types a library stores. Without the filter the scan
-                // also walked every played Series, Season and BoxSet, which can
-                // never map to a MediaItem and were dropped on arrival.
-                IncludeItemTypes: "Movie,Episode,Audio",
-                StartIndex: startIndex,
-                Limit: pageSize,
-              },
-            });
+    for (const user of users) {
+      // Held back until this user's walk finishes: one that fails partway
+      // contributes nothing (the caller keeps the user's stored rows).
+      const userEntries: DetailedWatchHistoryEntry[] = [];
+      try {
+        await this.forEachPlayedPage(user.Id, (items) => {
+          for (const item of items) {
+            const playCount = item.UserData?.PlayCount ?? 0;
+            if (playCount <= 0) continue;
 
-            const items = itemsRes.data.Items || [];
-            for (const item of items) {
-              const playCount = item.UserData?.PlayCount ?? 0;
-              if (playCount <= 0) continue;
-
-              for (let i = 0; i < playCount; i++) {
-                entries.push({
-                  ratingKey: item.Id,
-                  username: user.Name,
-                  watchedAt:
-                    i === 0 && item.UserData?.LastPlayedDate
-                      ? new Date(item.UserData.LastPlayedDate).toISOString()
-                      : null,
-                  deviceName: null,
-                  platform: null,
-                });
-              }
+            for (let i = 0; i < playCount; i++) {
+              userEntries.push({
+                ratingKey: item.Id,
+                username: user.Name,
+                watchedAt:
+                  i === 0 && item.UserData?.LastPlayedDate
+                    ? new Date(item.UserData.LastPlayedDate).toISOString()
+                    : null,
+                deviceName: null,
+                platform: null,
+              });
             }
-
-            if (items.length < pageSize) break;
-            startIndex += pageSize;
           }
-        } catch (error) {
-          // A user the key cannot read (401/403) or that no longer exists (404)
-          // is skipped: that is a permanent condition, and failing the whole
-          // scan for it would block every history sync on the server. Anything
-          // else — a timeout, a 5xx, a dropped connection mid-page — is
-          // transient and must propagate: swallowing it handed the caller a
-          // PARTIAL history that it then committed with a destructive full
-          // replace, deleting every play this user's pages never delivered.
-          const status = axios.isAxiosError(error) ? error.response?.status : undefined;
-          if (status === 401 || status === 403 || status === 404) {
-            logger.warn(
-              this.logPrefix,
-              `Skipping watch history for user "${user.Name}" (HTTP ${status})`,
-            );
-            continue;
-          }
-          throw error;
+        });
+      } catch (error) {
+        // A refused (401/403/404) or unreliable listing is a lasting property
+        // of this ONE user, so with a report the user is set aside (the caller
+        // keeps their stored rows; `IncompleteUserReason`). Without one a
+        // refused user is skipped and an unreliable listing fails the fetch.
+        // Anything else is a fault of the fetch and must propagate: swallowed,
+        // the full replace would commit a partial history.
+        const status = axios.isAxiosError(error) ? error.response?.status : undefined;
+        const refused = status === 401 || status === 403 || status === 404;
+        if (report && (refused || error instanceof UnreliablePlayedListingError)) {
+          report.incompleteUsers.set(user.Name, refused ? "refused" : "unreliable");
+          logger.warn(
+            this.logPrefix,
+            `Could not read the complete watch history of user "${user.Name}" ` +
+              `(${refused ? `HTTP ${status}` : (error as Error).message}); ` +
+              `their stored plays are not replaced`,
+          );
+          continue;
         }
+        if (refused) {
+          logger.warn(
+            this.logPrefix,
+            `Skipping watch history for user "${user.Name}" (HTTP ${status})`,
+          );
+          continue;
+        }
+        throw error;
       }
-    } catch (error) {
-      // Re-throw a hard failure (e.g. /Users unreachable) so the caller can
-      // skip the destructive full-replace instead of wiping stored history.
-      throw error;
+      usersRead++;
+      // A loop, not `push(...userEntries)`: one user's played set can run to
+      // six figures, past the engine's argument-count limit for a spread call.
+      for (const entry of userEntries) entries.push(entry);
+    }
+
+    // No user read at all is "nothing could be read", not "nobody played".
+    if (users.length > 0 && usersRead === 0) {
+      throw new Error(
+        `${this.logPrefix} could not read the played-items listing for all ${users.length} user(s)`,
+      );
     }
 
     return entries;
+  }
+
+  /**
+   * Page through one user's played items, handing each page to `onPage`. Ends
+   * on `TotalRecordCount` when any page reported it, on a short page only when
+   * none has (a capped `Limit` must not truncate), and advances by the items
+   * returned. Each item is handed on once per user: an item played mid-walk
+   * shifts the offset list and would otherwise be stored twice (`playCount` is
+   * monotonic). `DateCreated` keeps the order stable when items get played.
+   */
+  private async forEachPlayedPage(
+    userId: string,
+    onPage: (
+      items: Array<{
+        Id: string;
+        UserData?: { PlayCount?: number; LastPlayedDate?: string };
+      }>,
+    ) => void,
+  ): Promise<void> {
+    const PAGE_SIZE = 1000;
+    // Runaway backstop only (10M played items per user).
+    const MAX_PAGES = 10_000;
+    let startIndex = 0;
+    let firstPageLength: number | undefined;
+    // The last total any page reported, for a page that omits it.
+    let reportedTotal: number | null = null;
+    const seen = new Set<string>();
+
+    for (let page = 0; ; page++) {
+      if (page >= MAX_PAGES) {
+        throw new Error(`${this.logPrefix} played-items listing did not end after ${MAX_PAGES} pages`);
+      }
+      const res = await this.client.get<unknown>(`/Users/${userId}/Items`, {
+        params: {
+          IsPlayed: true,
+          Recursive: true,
+          Fields: "UserData",
+          // Only the types a library stores. Without the filter the scan
+          // also walked every played Series, Season and BoxSet, which can
+          // never map to a MediaItem and were dropped on arrival.
+          IncludeItemTypes: "Movie,Episode,Audio",
+          SortBy: "DateCreated,SortName",
+          SortOrder: "Ascending",
+          StartIndex: startIndex,
+          Limit: PAGE_SIZE,
+        },
+      });
+
+      const body = res.data as { Items?: unknown; TotalRecordCount?: unknown } | null;
+      // "Played nothing" is `{ Items: [], TotalRecordCount: 0 }`, not a missing list.
+      if (!body || typeof body !== "object" || !Array.isArray(body.Items)) {
+        throw new Error(`${this.logPrefix} returned a malformed played-items page (no Items list)`);
+      }
+      const items = body.Items as Array<{
+        Id: string;
+        UserData?: { PlayCount?: number; LastPlayedDate?: string };
+      }>;
+      if (typeof body.TotalRecordCount === "number") reportedTotal = body.TotalRecordCount;
+      const total = reportedTotal;
+
+      if (items.length === 0) {
+        if (total != null && startIndex < total) {
+          // Servers over-report the count a little, but a proxy answering
+          // `Items: []` mid-list looks the same and would truncate the history:
+          // only a small shortfall after the list delivered something passes.
+          const shortfall = total - startIndex;
+          const tolerated = Math.max(
+            PLAYED_SHORTFALL_TOLERANCE_ITEMS,
+            Math.ceil(total * PLAYED_SHORTFALL_TOLERANCE_FRACTION),
+          );
+          if (startIndex === 0 || shortfall > tolerated) {
+            throw new UnreliablePlayedListingError(
+              `${this.logPrefix} played-items listing ended at ${startIndex} of a reported ${total}`,
+            );
+          }
+          logger.warn(
+            this.logPrefix,
+            `Played-items listing ended at ${startIndex} of a reported ${total}; ` +
+              `treating the shortfall as an over-reported total`,
+          );
+        }
+        return;
+      }
+
+      const fresh = items.filter((item) => {
+        if (seen.has(item.Id)) return false;
+        seen.add(item.Id);
+        return true;
+      });
+      // A full-length page of repeats means `StartIndex` is ignored (a plain
+      // error: it fails the fetch); a SHORT all-repeat page is the list's end
+      // pushed down by a mid-walk change, and is passed over.
+      firstPageLength ??= items.length;
+      if (fresh.length === 0 && items.length >= firstPageLength) {
+        throw new Error(`${this.logPrefix} ignored StartIndex while paging played items`);
+      }
+
+      if (fresh.length > 0) onPage(fresh);
+      // The offset addresses the server's list, repeats included.
+      startIndex += items.length;
+
+      if (total != null) {
+        if (startIndex >= total) return;
+      } else if (items.length < PAGE_SIZE) {
+        return;
+      }
+    }
   }
 
   /**

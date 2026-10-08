@@ -26,6 +26,7 @@ import { cn } from "@/lib/utils";
 import { MASKED_VALUE } from "@/lib/api/sanitize";
 import { SettingsSkeleton } from "@/components/skeletons";
 import { isSyncRequestSettled, type PendingSyncRequest } from "@/lib/sync/sync-request";
+import { ResponseOrder } from "@/lib/media/response-order";
 
 // ─── Tab components ───
 import { GeneralTab } from "./tabs/general-tab";
@@ -618,6 +619,9 @@ export default function SettingsPage() {
     }
   }, []);
 
+  // Orders the overlapping import-status reads (see below).
+  const [tracearrStatusOrder] = useState(() => new ResponseOrder());
+
   /**
    * How far the Tracearr import has got, per mapped server, for the status
    * line under each watch-history-source dropdown.
@@ -626,21 +630,27 @@ export default function SettingsPage() {
    * `fetchTracearrServers` does: this is a progress readout beside a working
    * control, not the control itself, so a transient blip should make the line
    * disappear rather than plant an error next to a setting that is fine.
+   *
+   * Reads overlap (poll, realtime events, pause key, re-reads after a save), so an
+   * answer applies only if no newer read's answer has (`tracearrStatusOrder`); a
+   * failure hides the line only while nothing newer has applied.
    */
   const fetchTracearrImportStatus = useCallback(async () => {
+    const seq = tracearrStatusOrder.begin();
     try {
       const response = await fetch("/api/integrations/tracearr/status");
       if (!response.ok) {
-        setTracearrImportStatus([]);
+        if (!tracearrStatusOrder.isOvertaken(seq)) setTracearrImportStatus([]);
         return;
       }
       const data = (await response.json()) as { servers?: TracearrImportStatus[] };
+      if (!tracearrStatusOrder.accept(seq)) return;
       setTracearrImportStatus(data.servers ?? []);
     } catch (error) {
       console.error("Failed to fetch Tracearr import status:", error);
-      setTracearrImportStatus([]);
+      if (!tracearrStatusOrder.isOvertaken(seq)) setTracearrImportStatus([]);
     }
-  }, []);
+  }, [tracearrStatusOrder]);
 
   const fetchSystemInfo = useCallback(async () => {
     try {
@@ -937,6 +947,12 @@ export default function SettingsPage() {
   // The state reset returns the SAME empty array when it is already empty, or
   // the new reference would re-render every settings page that has no Tracearr.
   const hasTracearrInstance = tracearrInstances.length > 0;
+  // Re-read whenever a server or Tracearr instance is enabled or disabled — the
+  // two pauses the status reports, which the poll below does not cover.
+  const tracearrPauseKey = [
+    ...servers.map((s) => `${s.id}:${s.enabled}`),
+    ...tracearrInstances.map((i) => `${i.id}:${i.enabled}`),
+  ].join(",");
   useEffect(() => {
     if (!hasTracearrInstance) return;
     // Async IIFE, not a bare call: the fetch sets its loading state before the
@@ -945,7 +961,7 @@ export default function SettingsPage() {
     void (async () => {
       await fetchTracearrImportStatus();
     })();
-  }, [hasTracearrInstance, fetchTracearrImportStatus]);
+  }, [hasTracearrInstance, tracearrPauseKey, fetchTracearrImportStatus]);
 
   // Derived, never stored. With no Tracearr instance there is nothing to
   // report, and expressing that as a state RESET meant a synchronous setState
@@ -1002,18 +1018,26 @@ export default function SettingsPage() {
     if (!hasTracearrInstance) return;
     void fetchTracearrImportStatus();
   });
+  // A finished sync or watch-history refresh queues the slice an `awaiting-sync`
+  // or failing import waits on, with no import event of its own.
+  const refetchTracearrImportStatus = () => {
+    if (!hasTracearrInstance) return;
+    void fetchTracearrImportStatus();
+  };
+  useRealtime("sync:completed", refetchTracearrImportStatus);
+  useRealtime("watch-history:updated", refetchTracearrImportStatus);
 
   // Slow poll kept ONLY as the fallback for a dropped stream. SSE dies to proxy
   // buffering and idle timeouts, and the readout is the sole indication a
   // multi-hour archive walk is progressing — so it must not depend entirely on a
   // connection staying up. Deliberately slow: the push covers the live case, and
-  // this only has to stop the number going stale for good. Runs while a backfill
-  // is owed, which is the case that lasts long enough for a drop to matter.
-  // Also while any import is live: a catch-up on an already-backfilled server
-  // shows an import card too, and without this a dropped stream would leave
-  // that card up until the next pushed event.
+  // this only has to stop the number going stale for good.
+  //
+  // Runs while any import is live or `pending`, never on `!backfillComplete`, which
+  // stays false forever for a mapping with no plays or a parked slice. Every save
+  // that fixes what an import waited on queues a slice (`enqueueTracearrBackfill`).
   const tracearrBackfillRunning = visibleTracearrImportStatus.some(
-    (s) => !s.backfillComplete || s.activeImport !== null,
+    (s) => s.pending || s.activeImport !== null,
   );
   const pollTracearrImport = hasTracearrInstance && tracearrBackfillRunning;
   useEffect(() => {
@@ -2520,6 +2544,9 @@ export default function SettingsPage() {
       // list for this instance is stale — the mapping dropdown would otherwise
       // keep offering servers that instance no longer monitors.
       await fetchTracearrServers(savedId);
+      // A new address or key re-queues every mapped server's import, which the
+      // enable-toggle refetch does not see.
+      await fetchTracearrImportStatus();
       toast.success("Tracearr instance updated");
     } catch {
       setEditTracearrError("Failed to update Tracearr instance");

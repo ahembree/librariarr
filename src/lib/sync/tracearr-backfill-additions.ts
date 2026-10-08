@@ -2,12 +2,17 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { invalidateMediaCaches } from "@/lib/cache/invalidate";
 import { reconcileWatchStateFromHistory } from "@/lib/sync/watch-reconcile";
-import { buildTracearrJoinIndex } from "@/lib/sync/tracearr-join";
+import { buildTracearrJoinIndex, resolveMediaItemId } from "@/lib/sync/tracearr-join";
 import {
+  forwardPassBoundary,
   importTracearrRecords,
   resolveInstanceForServer,
+  type TracearrMappingGuard,
 } from "@/lib/sync/sync-tracearr-history";
-import { TracearrClient } from "@/lib/tracearr/tracearr-client";
+import {
+  TracearrClient,
+  type TracearrHistoryRecord,
+} from "@/lib/tracearr/tracearr-client";
 import { IntegrationError } from "@/lib/integration-error";
 import { isHostLevelFailure } from "@/lib/lifecycle/unreachable-instances";
 import { formatMediaItemTitle } from "@/lib/media/display-title";
@@ -53,10 +58,10 @@ import { TracearrMappingChangedError } from "@/lib/sync/tracearr-mapping-changed
  * can be holding recoverable history, and one that arrived long ago has had
  * every run since to be recovered.
  *
- * Without this window the candidate set is "every item with no Tracearr plays",
- * which for a real library is most of it — the untouched back catalogue — and
- * every one of those items would be re-queried on every single run, forever,
- * to learn the same "no plays" answer each time.
+ * Without it, every item would be re-queried after every restart (the answers
+ * registry is in memory). A library created whole — a new install, a purge, a
+ * restore — is bounded by `findCandidates` dropping items that already hold an
+ * old Tracearr play.
  */
 export const RECENT_ADDITION_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -66,50 +71,91 @@ export const RECENT_ADDITION_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
  * budget. 200 is a large re-add (a re-imported season, a library moved between
  * servers) while staying well inside a slice.
  *
- * Anything above the cap is not lost, only deferred: the candidate query orders
- * newest-first, skips the items an earlier pass already got an answer for (see
- * `answeredItems`), and the pass runs every backfill slice, so the remainder is
- * picked up next time — for as long as it stays inside the window above.
+ * Anything above the cap is only deferred: never-asked items come first,
+ * answered ones are skipped (`recoveryAnswers`), and the pass runs every slice.
  */
 export const DEFAULT_CANDIDATE_LIMIT = 200;
 
 /**
- * Items Tracearr has already ANSWERED for — item id → when.
- *
- * Without it the cap starved the window. An item that was never played gets no
- * Tracearr row, so it stays a candidate for its whole seven days, and the
- * candidate query orders newest-first: once more than the cap's worth of
- * recent items had no plays (the normal state after a purge-and-resync, a
- * restore or a library move — exactly when recovery matters), every pass asked
- * about the same newest unplayed items again and never reached the re-added
- * ones further down, which then aged out of the window still reading as never
- * watched.
- *
- * One answer per item is enough. The plays this pass exists to recover are OLD
- * ones; a play that happens after the item was added is imported by the
- * forward pass like any other. Only an answer is recorded — a lookup that
- * failed leaves the item a candidate. In memory on purpose: a restart merely
- * re-asks, and entries expire with the window, so the map holds at most a
- * week's worth of additions. Pinned to `globalThis` like the other registries
- * a job and the rest of the app may both load.
+ * How long an item whose plays all resolved to ANOTHER row waits before it is
+ * asked again: a day covers the usual wait for the old copy's purge.
  */
-const answeredItems: Map<string, number> = ((
-  globalThis as unknown as { __tracearrRecoveryAnswered?: Map<string, number> }
-).__tracearrRecoveryAnswered ??= new Map());
+export const RECOVERY_REASK_MS = 24 * 60 * 60 * 1000;
 
-/** Drop answers older than the candidate window, and return the live ids. */
-function liveAnsweredIds(now: number): string[] {
-  const ids: string[] = [];
-  for (const [id, at] of answeredItems) {
-    if (now - at > RECENT_ADDITION_WINDOW_MS) answeredItems.delete(id);
-    else ids.push(id);
+/**
+ * Asks, in all, before a still-deferred answer is final: covers an old copy
+ * purged within two days, and caps the cost of one that never is.
+ */
+export const MAX_RECOVERY_ASKS = 3;
+
+interface RecoveryAnswer {
+  /** When Tracearr last answered for the item. */
+  at: number;
+  /** How many answers it has given — counts toward `MAX_RECOVERY_ASKS`. */
+  asks: number;
+  /** Final: no plays, or a stored play resolved here with none left to the catch-up. */
+  settled: boolean;
+}
+
+/**
+ * What Tracearr has already ANSWERED for each item — item id → answer. This,
+ * not the presence of Tracearr rows, ends an item's candidacy: a re-added item
+ * usually gets its first NEW play before this pass reaches it, and excluding
+ * items with rows dropped exactly the ones this pass exists for. It also keeps
+ * the newest-first cap from asking about the same unplayed items every pass.
+ *
+ * - SETTLED — no plays, or a play stored here resolved to this item. One answer
+ *   is enough: later plays are the forward pass's.
+ * - DEFERRED — every play resolved to some OTHER row (or none): often the old
+ *   copy not yet purged, whose plays resolve here once it is gone — but as
+ *   often a legitimate second copy (a 4K beside a 1080p) that keeps them. So it
+ *   is re-asked at most once per `RECOVERY_REASK_MS`, `MAX_RECOVERY_ASKS` times
+ *   in all, after every never-asked candidate. An item with a play newer than
+ *   the forward boundary is deferred too (see the call site).
+ *
+ * A failed lookup records nothing. In memory on purpose: a restart only
+ * re-asks, within the window and the cap, and a re-delivered play merges.
+ * Entries expire with the window. Pinned to `globalThis` like the other
+ * registries a job and the rest of the app may both load.
+ */
+const recoveryAnswers: Map<string, RecoveryAnswer> = ((
+  globalThis as unknown as { __tracearrRecoveryAnswers?: Map<string, RecoveryAnswer> }
+).__tracearrRecoveryAnswers ??= new Map());
+
+/** Record Tracearr's answer for an item — see `recoveryAnswers`. */
+function recordAnswer(itemId: string, settled: boolean, now: number): void {
+  const previous = recoveryAnswers.get(itemId);
+  const asks = (previous?.asks ?? 0) + 1;
+  // A deferred item that has used up its asks is as answered as it will get.
+  recoveryAnswers.set(itemId, {
+    at: now,
+    asks,
+    settled: settled || asks >= MAX_RECOVERY_ASKS,
+  });
+}
+
+/**
+ * The ids the candidate query must leave out (settled, or deferred and not due
+ * yet) and the deferred ids due a re-ask; drops entries past the window.
+ */
+function answeredIds(now: number): { excluded: string[]; deferredDue: string[] } {
+  const excluded: string[] = [];
+  const deferredDue: string[] = [];
+  for (const [id, answer] of recoveryAnswers) {
+    if (now - answer.at > RECENT_ADDITION_WINDOW_MS) {
+      recoveryAnswers.delete(id);
+    } else if (answer.settled || now - answer.at < RECOVERY_REASK_MS) {
+      excluded.push(id);
+    } else {
+      deferredDue.push(id);
+    }
   }
-  return ids;
+  return { excluded, deferredDue };
 }
 
 /** Test seam: forget every recorded answer. */
 export function resetRecoveryAnswers(): void {
-  answeredItems.clear();
+  recoveryAnswers.clear();
 }
 
 /** A caller cannot opt out of the request budget, only ask for less of it. */
@@ -120,22 +166,32 @@ export interface RecoverNewItemHistoryOptions {
   limit?: number;
   /**
    * Cancels the pass between items (and interrupts an in-flight request plus
-   * any rate-limit backoff). Stopping early is a normal outcome: every item
-   * imported so far is committed, and the candidate query re-derives what is
-   * left from the rows themselves, so the next run simply picks up the ones
-   * that still have no Tracearr plays.
+   * any rate-limit backoff). Stopping early is a normal outcome: imported items
+   * are committed, and an item stays a candidate until Tracearr has answered.
    */
   signal?: AbortSignal;
+  /**
+   * Epoch ms past which no further item is asked about, so the pass ends with
+   * its slice rather than holding the serial MAIN_QUEUE. Checked between items.
+   */
+  deadlineMs?: number;
+  /** Stop between items when true (a requested sync is waiting); resumable. */
+  yieldTo?: () => boolean;
 }
 
 export interface RecoverNewItemHistoryResult {
   /** Items actually asked about — i.e. requests issued. */
   checked: number;
-  /** `WatchHistory` rows written (inserted or merged) across those items. */
+  /**
+   * NEW `WatchHistory` rows inserted, a library copy's included — what the caller
+   * reconciles, invalidates and notifies for. A record already stored only
+   * merges, and counting it made every pass look like a change. The log line
+   * counts plays.
+   */
   imported: number;
 }
 
-/** One candidate: a recently added item with no Tracearr plays of its own. */
+/** One candidate: a recently added item Tracearr has not yet answered for. */
 interface CandidateItem {
   id: string;
   ratingKey: string;
@@ -153,8 +209,12 @@ export async function recoverHistoryForNewItems(
   serverId: string,
   options: RecoverNewItemHistoryOptions = {},
 ): Promise<RecoverNewItemHistoryResult> {
-  const { limit = DEFAULT_CANDIDATE_LIMIT, signal } = options;
+  const { limit = DEFAULT_CANDIDATE_LIMIT, signal, deadlineMs, yieldTo } = options;
   const empty: RecoverNewItemHistoryResult = { checked: 0, imported: 0 };
+  const shouldStop = () =>
+    signal?.aborted === true ||
+    (deadlineMs !== undefined && Date.now() >= deadlineMs) ||
+    yieldTo?.() === true;
 
   const server = await prisma.mediaServer.findFirst({
     where: { id: serverId },
@@ -163,6 +223,12 @@ export async function recoverHistoryForNewItems(
       name: true,
       enabled: true,
       tracearrServerId: true,
+      tracearrMappingVersion: true,
+      tracearrBackfillComplete: true,
+      tracearrBackfillCursorAt: true,
+      tracearrForwardFloorAt: true,
+      tracearrBackfillLastWalkAt: true,
+      tracearrForwardWatermarkAt: true,
       userId: true,
     },
   });
@@ -170,12 +236,35 @@ export async function recoverHistoryForNewItems(
   if (!server || !server.enabled) return empty;
   const tracearrServerId = server.tracearrServerId;
   if (!tracearrServerId) return empty;
+  // Only once the archive walk is complete, read here rather than from the
+  // caller's earlier view: an archive owed a walk would have its resume boundary
+  // set far below everything unread by plays written now.
+  if (!server.tracearrBackfillComplete) return empty;
+  // Every write re-checks this mapping and version (`TracearrMappingGuard`).
+  const guard: TracearrMappingGuard = {
+    tracearrServerId,
+    mappingVersion: server.tracearrMappingVersion,
+  };
 
   // The candidate query comes FIRST, before instance resolution and before the
   // join index, because the steady state is zero candidates — nothing has been
   // re-added — and that state must cost one indexed query and nothing else.
   const candidates = await findCandidates(serverId, limit);
   if (candidates.length === 0) return empty;
+  // Out of time already: skip the instance probe, join index and `/users` walk.
+  if (shouldStop()) return empty;
+
+  // Plays that started after this belong to the forward walk: stored here, a
+  // re-added item's newest play would move `MAX(watchedAt)` past every other
+  // item's play no walk has read yet (a re-enable queues this slice before any
+  // catch-up). Read once, at the start.
+  const boundary = await forwardPassBoundary(serverId, {
+    backfillComplete: server.tracearrBackfillComplete,
+    cursorAt: server.tracearrBackfillCursorAt,
+    forwardFloorAt: server.tracearrForwardFloorAt,
+    lastWalkAt: server.tracearrBackfillLastWalkAt,
+    forwardWatermarkAt: server.tracearrForwardWatermarkAt,
+  });
 
   const instance = await resolveInstanceForServer(
     server.userId,
@@ -201,8 +290,8 @@ export async function recoverHistoryForNewItems(
   //
   // This pass REFUSES to run without the map, exactly as the archive walk does,
   // and for the same reason: the rows it writes are old plays that nothing will
-  // ever re-deliver. `findCandidates` excludes any item that already has a
-  // TRACEARR row, the forward pass reaches back only `OVERLAP_MS`, and
+  // ever re-deliver. An item is asked about a bounded number of times (see
+  // `recoveryAnswers`), the forward pass reaches back only `OVERLAP_MS`, and
   // `tracearrBackfillComplete` is already true by the time this runs — so a row
   // written under a Tracearr identity label ("Nick W") sits permanently beside
   // rows written under the media server's account name ("weingart"), and a
@@ -238,30 +327,37 @@ export async function recoverHistoryForNewItems(
   }
 
   let checked = 0;
-  let imported = 0;
+  /** New plays, for the log line. */
+  let newPlays = 0;
+  let merged = 0;
+  /** New rows of any kind, a library copy's included — see `imported`. */
+  let rowsInserted = 0;
   let withoutPlays = 0;
+  let elsewhere = 0;
   let failed = 0;
   let skipped = 0;
   let recoveredByProviderId = 0;
+  /** Plays newer than `boundary`, left to the forward walk. */
+  let leftToForward = 0;
+  /** Items with a play newer than `boundary` — deferred, see the call site. */
+  let awaitingCatchUp = 0;
   /** Provider identities already asked about this run — see the fallback below. */
   const queriedProviders = new Set<string>();
 
   for (const candidate of candidates) {
-    if (signal?.aborted) break;
+    if (shouldStop()) break;
     checked++;
 
     try {
-      let records = await client.getHistoryForItem(
+      const byRatingKey = await client.getHistoryForItem(
         tracearrServerId,
         { ratingKey: candidate.ratingKey },
         { signal },
       );
 
-      // Nothing under the rating key. That is the NORMAL answer for the case
-      // this pass exists to serve: Plex mints a new rating key when an item is
-      // removed and added back, so a re-added item's old plays live under a key
-      // that no longer exists anywhere. The provider id is the identity that
-      // survives, and the API filters on it.
+      // ALSO by provider id, whatever the rating key returned: Plex mints a new
+      // rating key on a re-add, so the old plays live under a key that no longer
+      // exists, and plays under the new key prove nothing about them.
       //
       // Only TMDB and IMDB, and never for an episode — the same rule as the
       // resolver's own fallback (`resolveMediaItemId`), which these records go
@@ -270,17 +366,26 @@ export async function recoverHistoryForNewItems(
       // return plays of whatever else happens to carry that number, and the
       // two catalogues disagree about a film's TVDB id. Deduped per run so two
       // copies of one film cost one request.
-      if (records.length === 0) {
-        const providerKey = providerIdentityKey(candidate);
-        if (providerKey && !queriedProviders.has(providerKey)) {
-          queriedProviders.add(providerKey);
-          records = await client.getHistoryForItem(
-            tracearrServerId,
-            { tmdbId: candidate.tmdbId, imdbId: candidate.imdbId },
-            { signal },
-          );
-          if (records.length > 0) recoveredByProviderId++;
-        }
+      let byProviderId: TracearrHistoryRecord[] = [];
+      const providerKey = providerIdentityKey(candidate);
+      if (providerKey && !queriedProviders.has(providerKey)) {
+        queriedProviders.add(providerKey);
+        byProviderId = await client.getHistoryForItem(
+          tracearrServerId,
+          { tmdbId: candidate.tmdbId, imdbId: candidate.imdbId },
+          { signal },
+        );
+      }
+
+      // Merge the two answers by chain id (they overlap whenever the rating key
+      // never changed), so the importer's `skipped` does not count a record twice.
+      const seen = new Set(byRatingKey.map((record) => record.id));
+      const onlyByProvider = byProviderId.filter((record) => !seen.has(record.id));
+      const records = [...byRatingKey, ...onlyByProvider];
+      if (
+        onlyByProvider.some((record) => record.server_id === tracearrServerId)
+      ) {
+        recoveredByProviderId++;
       }
 
       // One Tracearr instance aggregates many media servers, and a rating key
@@ -291,31 +396,58 @@ export async function recoverHistoryForNewItems(
         // The overwhelmingly common answer, and not a failure: most newly added
         // items have simply never been played.
         withoutPlays++;
-        answeredItems.set(candidate.id, Date.now());
+        recordAnswer(candidate.id, true, Date.now());
+        continue;
+      }
+      // Only plays at or below the forward boundary — see `boundary`. A record
+      // whose start cannot be read is left in: the importer refuses it anyway.
+      const old = own.filter((record) => !(Date.parse(record.started_at) > boundary.getTime()));
+      // Plays left to the forward walk keep the answer DEFERRED: a walk whose join
+      // index predates this item moves MAX past them unread, and a day on they are
+      // old enough to store here.
+      const leftHere = own.length - old.length;
+      leftToForward += leftHere;
+      if (leftHere > 0) awaitingCatchUp++;
+      if (old.length === 0) {
+        // Every play is newer than the boundary: nothing OLD to store now.
+        recordAnswer(candidate.id, false, Date.now());
         continue;
       }
 
       const written = await importTracearrRecords(
         serverId,
-        own,
+        old,
         joinIndex,
         accountNames,
-        tracearrServerId,
+        guard,
       );
-      imported += written.inserted + written.updated;
+      newPlays += written.inserted;
+      merged += written.updated;
+      rowsInserted += written.rowsInserted;
       skipped += written.skipped;
-      answeredItems.set(candidate.id, Date.now());
+      // Settled only when a play stored here resolved to this item (directly or as
+      // a library copy). Plays that resolved elsewhere — the old copy awaiting its
+      // purge, or a second copy keeping them — or to nothing defer the answer, as
+      // does a play left to the catch-up. See `recoveryAnswers`.
+      const resolvedHere = old.some((record) => {
+        const resolved = resolveMediaItemId(joinIndex, record);
+        return (
+          "mediaItemId" in resolved &&
+          (resolved.mediaItemId === candidate.id || resolved.copies?.includes(candidate.id) === true)
+        );
+      });
+      recordAnswer(candidate.id, resolvedHere && leftHere === 0, Date.now());
+      if (!resolvedHere) elsewhere++;
     } catch (error) {
       // One item's lookup failing must not cost the rest of the pass. It can be
       // transient (a 429 that outlasted the retry budget, a timeout) or
       // permanent for this item (the row was deleted between the candidate
       // query and the write, so the required media FK rejects it) — either way
-      // the item is still a candidate on the next run, because the query that
-      // found it derives candidacy from the rows, not from a cursor.
+      // the item is still a candidate on the next run, because only an answer
+      // is recorded in `recoveryAnswers`.
       // Cancelled: not this item's failure, and not the host's either.
       if (signal?.aborted) break;
-      // The server was re-pointed or unlinked mid-pass: nothing more of this
-      // source may be written, and every remaining item would fail the same way.
+      // The mapping moved mid-pass: every remaining item would fail the same way.
       if (error instanceof TracearrMappingChangedError) {
         logger.info(
           "WatchHistory",
@@ -350,7 +482,10 @@ export async function recoverHistoryForNewItems(
     }
   }
 
-  if (imported > 0) {
+  // New ROWS only: a merge re-delivers a stored play (not worth a reconcile and
+  // cache drop every pass), but a play newly filed against a second library copy
+  // adds that copy's row, which reads unwatched until the reconcile runs.
+  if (rowsInserted > 0) {
     // The whole point of the pass: `playCount`/`lastPlayedAt` are what the
     // lifecycle rules read, and until the reconcile runs the recovered item
     // still looks never watched. Non-fatal, exactly like the importer's own
@@ -373,26 +508,33 @@ export async function recoverHistoryForNewItems(
   logger.info(
     "WatchHistory",
     `Tracearr recovery for recently added items on "${server.name}": checked ` +
-      `${checked} of ${candidates.length} candidate(s), imported ${imported} play(s) — ` +
-      `${withoutPlays} with no plays, ${skipped} unjoinable, ${failed} failed, ` +
-      // Worth its own figure: it is the count of items whose rating key had
-      // changed, which is the re-add case this pass exists for. Zero here on a
-      // Plex server with re-added media means the fallback is not firing.
+      `${checked} of ${candidates.length} candidate(s), imported ${newPlays} new play(s) ` +
+      `(${merged} already stored) — ` +
+      `${withoutPlays} with no plays, ${elsewhere} deferred (no play resolved to the item itself), ` +
+      `${skipped} unjoinable, ${failed} failed, ` +
+      `${leftToForward} play(s) newer than the catch-up's boundary left to it ` +
+      `(their ${awaitingCatchUp} item(s) asked again later), ` +
+      // Zero on a Plex server with re-added media means the provider lookup is not firing.
       `${recoveredByProviderId} recovered by provider id`,
   );
 
-  return { checked, imported };
+  return { checked, imported: rowsInserted };
 }
 
 /**
- * Recently added items on this server that hold no Tracearr play of their own.
+ * Recently added items on this server that Tracearr has not answered for yet
+ * and whose old history is not already stored.
  *
- * `NOT EXISTS` rather than a join so an item with many plays is not multiplied,
- * and scoped to `source = 'TRACEARR'` on purpose: a leftover NATIVE row is not
- * evidence that the Tracearr import has seen this item (the importer deletes
- * that stratum once it writes, and a server's history is single-source by
- * construction), so an item carrying only native rows is still worth asking
- * about. Items Tracearr already answered for are excluded — see `answeredItems`.
+ * Not "items with no Tracearr rows": a re-added item usually has one (its
+ * first new play) while its old plays are unrecovered. What it lacks is a play
+ * from WELL before its row was created — only the archive walk or this pass
+ * stores one — so such a play ends candidacy, which keeps a freshly created
+ * library (new install, purge, restore) from being offered item by item, and
+ * survives a restart. "Well before" is a window before `createdAt`, because our
+ * sync lags the item's return and a play in that gap predates the row.
+ *
+ * Never-asked items come first, newest first; deferred ones due a re-ask after
+ * all of them, so they can never crowd out an item not yet asked.
  */
 async function findCandidates(
   serverId: string,
@@ -401,8 +543,10 @@ async function findCandidates(
   const now = Date.now();
   const addedAfter = new Date(now - RECENT_ADDITION_WINDOW_MS);
   const cap = Math.max(1, Math.min(Math.floor(limit), MAX_CANDIDATE_LIMIT));
-  const answered = liveAnsweredIds(now);
+  const { excluded, deferredDue } = answeredIds(now);
 
+  // A library copy's row (`fanOutOfItemId` set) ends candidacy as much as a
+  // primary one: it is this item's own record of a play the walk read.
   return prisma.$queryRawUnsafe<CandidateItem[]>(
     `SELECT mi."id", mi."ratingKey", mi."title", mi."type"::text AS "type", mi."parentTitle",
             mi."seasonNumber", mi."episodeNumber",
@@ -413,23 +557,26 @@ async function findCandidates(
        LEFT JOIN "MediaItemExternalId" e ON e."mediaItemId" = mi."id"
       WHERE l."mediaServerId" = $1
         AND mi."createdAt" > $2
-        AND NOT EXISTS (
-              SELECT 1
-                FROM "WatchHistory" wh
-               WHERE wh."mediaItemId" = mi."id"
-                 AND wh."source" = 'TRACEARR'
-            )
         AND NOT (mi."id" = ANY($4::text[]))
-      -- Newest first: when there are more candidates than the cap allows, the
-      -- most recent arrivals are the ones a user is waiting on, and the rest
-      -- stay candidates for the next run.
+        AND NOT EXISTS (
+          SELECT 1 FROM "WatchHistory" wh
+           WHERE wh."mediaItemId" = mi."id"
+             AND wh."source" = 'TRACEARR'
+             AND wh."watchedAt" < mi."createdAt" - ($6::integer * interval '1 second')
+        )
+      -- Never-asked before deferred (false sorts first), then newest first:
+      -- when there are more candidates than the cap allows, the most recent
+      -- arrivals are the ones a user is waiting on, and the rest stay
+      -- candidates for the next run. The id makes the order total.
       GROUP BY mi."id"
-      ORDER BY mi."createdAt" DESC
+      ORDER BY (mi."id" = ANY($5::text[])) ASC, mi."createdAt" DESC, mi."id" ASC
       LIMIT $3`,
     serverId,
     addedAfter,
     cap,
-    answered,
+    excluded,
+    deferredDue,
+    Math.round(RECENT_ADDITION_WINDOW_MS / 1000),
   );
 }
 
