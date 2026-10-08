@@ -525,12 +525,13 @@ async function settleRelease(serverId: string, countBefore: number): Promise<boo
  * forward pass resumes from it, and every play older than it is the restarted
  * walk's to read. Servers with no Tracearr mapping are untouched.
  *
- * Holds nothing and queues nothing, and is called only by
- * `requireLibraryResync`, which also records the hold that keeps the walk from
- * running before a full library sync re-adds the missing items — walked first,
+ * Holds nothing and queues nothing, and is called only by the hold's own write
+ * (`writeLibraryResync`, behind `requireLibraryResync` and
+ * `requirePopulationResync`), which also records the hold that keeps the walk
+ * from running before a library sync adds the missing items — walked first,
  * their plays are skipped as unresolved and the walk can complete without
  * them, for good. A caller that DELETES items, or knows some to be missing,
- * goes through that.
+ * goes through one of those.
  */
 export async function restartTracearrBackfill(serverIds: string[]): Promise<number> {
   if (serverIds.length === 0) return 0;
