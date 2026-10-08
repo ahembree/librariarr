@@ -114,26 +114,27 @@ describe("restoring a config-only backup", () => {
     ).resolves.toMatchObject({ complete: false });
   });
 
-  it("holds a server restored without its media until a full sync re-adds it", async () => {
-    // Its items come back on the next sync as fresh rows with none of their
-    // plays. A history pass that ran before that sync — a playback's realtime
-    // job, a History-page Refresh — would otherwise establish the marker over
-    // items that do not exist yet, and they would then read as never watched.
+  it.each([
+    ["without its media (config-only)", true],
+    ["with its media: whatever came after the backup is missing from it", false],
+  ])("holds a server restored %s until a full sync re-adds it", async (_, configOnly) => {
+    // Re-added items come back with none of their plays; a history pass before that sync must not vouch for them.
     const { userId, serverId } = await seed(false);
     const prisma = getTestPrisma();
     const { markWatchHistoryEstablished } = await import("@/lib/media/watch-evidence");
 
-    const filename = await createBackup(undefined, true);
+    const filename = await createBackup(undefined, configOnly);
     const before = Date.now();
     await restoreBackup(filename);
 
+    expect(await prisma.mediaItem.count()).toBe(configOnly ? 0 : 1);
+    expect(await prisma.watchHistory.count()).toBe(configOnly ? 0 : 1);
     const server = await prisma.mediaServer.findUniqueOrThrow({
       where: { id: serverId },
       select: { libraryResyncRequiredAt: true, watchHistorySyncedAt: true },
     });
     expect(server.libraryResyncRequiredAt!.getTime()).toBeGreaterThanOrEqual(before - 5);
     expect(server.watchHistorySyncedAt).toBeNull();
-    // A history sync that runs now cannot vouch for it...
     await expect(markWatchHistoryEstablished([serverId])).resolves.toBe(0);
     // ...and the refusal says what will lift it.
     const verdict = await checkWatchHistoryCompleteness(userId, [serverId]);
@@ -141,37 +142,9 @@ describe("restoring a config-only backup", () => {
     expect(verdict.reason).toMatch(/run Sync on it under Settings → Servers/);
   });
 
-  it("holds a server whose media the backup brought back too: whatever came after the backup is missing from it", async () => {
-    // A full backup is a snapshot. Items added after it was taken come back on
-    // the next sync as fresh rows with none of their plays, and no restored row
-    // holds those plays either — so no history pass may vouch for the server
-    // before that sync, exactly as after a config-only restore.
-    const { userId, serverId } = await seed(false);
-    const prisma = getTestPrisma();
-    const { markWatchHistoryEstablished } = await import("@/lib/media/watch-evidence");
-
-    const filename = await createBackup(undefined, false);
-    const before = Date.now();
-    await restoreBackup(filename);
-
-    expect(await prisma.mediaItem.count()).toBe(1);
-    expect(await prisma.watchHistory.count()).toBe(1);
-    const server = await prisma.mediaServer.findUniqueOrThrow({
-      where: { id: serverId },
-      select: { libraryResyncRequiredAt: true, watchHistorySyncedAt: true },
-    });
-    expect(server.libraryResyncRequiredAt!.getTime()).toBeGreaterThanOrEqual(before - 5);
-    expect(server.watchHistorySyncedAt).toBeNull();
-    await expect(markWatchHistoryEstablished([serverId])).resolves.toBe(0);
-    await expect(checkWatchHistoryCompleteness(userId, [serverId])).resolves.toMatchObject({ complete: false });
-  });
-
   it("does not let a restored tracearrBackfillComplete flag vouch for an empty history", async () => {
-    // The `MediaServer` row is restored verbatim, so the flag would survive
-    // while the rows it describes do not. The restore withdraws the evidence
-    // marker AND restarts the archive walk: the importer no longer infers
-    // "stale" from "no rows" (a walk can legitimately end having stored
-    // nothing), so a restored "complete" would otherwise import nothing again.
+    // The row is restored verbatim; the restore withdraws the marker AND restarts the walk, since the
+    // importer never infers "stale" from "no rows".
     const { userId, serverId } = await seed(true);
     const prisma = getTestPrisma();
     await prisma.mediaServer.update({
@@ -206,8 +179,7 @@ describe("restoring a config-only backup", () => {
     expect(server.tracearrForwardFloorAt).toBeNull();
     expect(server.tracearrBackfillLastWalkAt).toBeNull();
     expect(server.watchHistorySyncedAt).toBeNull();
-    // Its media did not come back either, so the walk is held until a full
-    // sync re-adds it: walked first, its plays would resolve to nothing.
+    // Walked before a full sync re-adds the media, its plays would resolve to nothing.
     expect(server.libraryResyncRequiredAt).toBeInstanceOf(Date);
 
     await expect(
@@ -215,55 +187,24 @@ describe("restoring a config-only backup", () => {
     ).resolves.toMatchObject({ complete: false });
   });
 
-  it("restarts the walk of a server whose Tracearr rows the backup restored too: they stop where the backup was taken", async () => {
-    // The rows agree with the restored walk state, but both end at the backup:
-    // the plays of whatever came back since are read only by a walk that runs
-    // after the sync that re-adds it, which the hold makes it.
+  it.each([
+    ["restored too: they stop where the backup was taken", true],
+    ["missing from the file (the walk had stored nothing)", false],
+  ])("holds and restarts a server whose media came back and whose Tracearr rows are %s", async (_, withRows) => {
     const { serverId } = await seed(true);
     const prisma = getTestPrisma();
-    const item = await prisma.mediaItem.findFirstOrThrow();
-    await prisma.watchHistory.create({
-      data: {
-        mediaItemId: item.id,
-        mediaServerId: serverId,
-        serverUsername: "roommate",
-        watchedAt: new Date("2024-06-01T00:00:00Z"),
-        source: "TRACEARR",
-        sourceEventId: "chain-1",
-      },
-    });
-    const cursor = new Date("2019-01-01T00:00:00Z");
-    await prisma.mediaServer.update({
-      where: { id: serverId },
-      data: { tracearrBackfillCursorAt: cursor },
-    });
-
-    const filename = await createBackup(undefined, false);
-    const before = Date.now();
-    await restoreBackup(filename);
-
-    const server = await prisma.mediaServer.findUniqueOrThrow({
-      where: { id: serverId },
-      select: {
-        tracearrBackfillComplete: true,
-        tracearrBackfillCursorAt: true,
-        tracearrForwardWatermarkAt: true,
-        libraryResyncRequiredAt: true,
-      },
-    });
-    expect(await prisma.watchHistory.count({ where: { source: "TRACEARR" } })).toBe(1);
-    expect(server.tracearrBackfillComplete).toBe(false);
-    expect(server.tracearrBackfillCursorAt!.getTime()).toBeGreaterThanOrEqual(before);
-    expect(server.tracearrForwardWatermarkAt).toEqual(server.tracearrBackfillCursorAt);
-    // Held, so the restarted walk waits for the sync that re-adds the media.
-    expect(server.libraryResyncRequiredAt).toBeInstanceOf(Date);
-  });
-
-  it("holds and restarts a server whose media came back but whose Tracearr rows did not", async () => {
-    // A full backup taken while the walk had stored nothing: restarted from the
-    // newest play, and held like every restored server until a full sync.
-    const { serverId } = await seed(true);
-    const prisma = getTestPrisma();
+    if (withRows) {
+      await prisma.watchHistory.create({
+        data: {
+          mediaItemId: (await prisma.mediaItem.findFirstOrThrow()).id,
+          mediaServerId: serverId,
+          serverUsername: "roommate",
+          watchedAt: new Date("2024-06-01T00:00:00Z"),
+          source: "TRACEARR",
+          sourceEventId: "chain-1",
+        },
+      });
+    }
     await prisma.mediaServer.update({
       where: { id: serverId },
       data: { tracearrBackfillCursorAt: new Date("2019-01-01T00:00:00Z") },
@@ -282,14 +223,15 @@ describe("restoring a config-only backup", () => {
         libraryResyncRequiredAt: true,
       },
     });
-    expect(server.libraryResyncRequiredAt).toBeInstanceOf(Date);
+    expect(await prisma.watchHistory.count({ where: { source: "TRACEARR" } })).toBe(withRows ? 1 : 0);
     expect(server.tracearrBackfillComplete).toBe(false);
     expect(server.tracearrBackfillCursorAt!.getTime()).toBeGreaterThanOrEqual(before);
     expect(server.tracearrForwardWatermarkAt).toEqual(server.tracearrBackfillCursorAt);
+    // Held, so the restarted walk waits for the sync that re-adds what came after the backup.
+    expect(server.libraryResyncRequiredAt).toBeInstanceOf(Date);
   });
 
   it("holds every restored server, mapped or not, with or without its media", async () => {
-    // One mapped server restored without its media, one unmapped with it.
     const first = await seed(true);
     await seed(false);
     const prisma = getTestPrisma();
@@ -307,19 +249,6 @@ describe("restoring a config-only backup", () => {
     expect(infos).toContain(
       "Holding the play history of 2 restored media server(s) until a full sync has brought back the media the backup did not hold",
     );
-  });
-
-  it("leaves an unmapped server's (empty) Tracearr state alone", async () => {
-    const { serverId } = await seed(false);
-    const prisma = getTestPrisma();
-    const filename = await createBackup(undefined, true);
-    await restoreBackup(filename);
-    const server = await prisma.mediaServer.findUniqueOrThrow({
-      where: { id: serverId },
-      select: { tracearrBackfillCursorAt: true, tracearrForwardWatermarkAt: true },
-    });
-    expect(server.tracearrBackfillCursorAt).toBeNull();
-    expect(server.tracearrForwardWatermarkAt).toBeNull();
   });
 
   it("restores the TracearrInstance rather than destroying it", async () => {
@@ -342,11 +271,7 @@ describe("restoring a config-only backup", () => {
   });
 
   it("holds at the restore's own instant, and clears every library's recorded shortfall", async () => {
-    // A purge's request outlived the restore that undid it; the restore's own
-    // hold takes its place (the file's column was null, so the restore's
-    // instant is the one written). And a shortfall recorded against rows the
-    // restore replaced — the file carries it too — must not count toward a
-    // release.
+    // The restore's hold replaces a purge request it undid; a shortfall recorded against replaced rows must not count.
     const prisma = getTestPrisma();
     const { serverId } = await seed(false);
     await prisma.library.updateMany({ where: { mediaServerId: serverId }, data: { shortPassSeenAt: new Date() } });

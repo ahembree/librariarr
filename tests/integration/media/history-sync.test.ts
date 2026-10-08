@@ -15,8 +15,7 @@
  *    and must render as an honest indeterminate bar.
  *  - The terminal result keeps the pre-streaming payload shape,
  *    `{ success: true, counts }`, with -1 for a server whose sync threw or
- *    returned a `failed` reason. `history-sync-engine.test.ts` drives the
- *    same route over the real sync engine.
+ *    returned a `failed` reason.
  */
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import { NextRequest } from "next/server";
@@ -258,32 +257,21 @@ describe("POST /api/media/history/sync", () => {
   });
 
   it("records -1 for a server whose sync returned a failure instead of throwing", async () => {
-    // syncWatchHistory RETURNS on a failed fetch (so the stored history is not
-    // touched) and on a Tracearr run that could not import. Reading only
-    // `count` showed such a server as cleanly synced with 0 plays.
+    // A failed fetch or import RETURNS `failed` rather than throwing.
     const good = await createTestServer(userId, { name: "Alpha" });
     const bad = await createTestServer(userId, { name: "Bravo" });
-
     mockSyncWatchHistory.mockImplementation(async (serverId: string) =>
       serverId === bad.id ? { count: 2, failed: "forward walk errored" } : { count: 7 },
     );
-
-    const { result } = await expectStreamResult<SyncResult>(
-      await callRoute(POST, { method: "POST", body: {} }),
-    );
-
+    const { result } = await expectStreamResult<SyncResult>(await callRoute(POST, { method: "POST", body: {} }));
     expect(result.counts).toEqual({ [good.id]: 7, [bad.id]: -1 });
   });
 
   it("refuses a disabled server up front instead of reporting a clean zero", async () => {
-    // The History page's picker lists disabled servers too; the sync skips one
-    // without touching it, which used to answer as a successful 0-play sync.
+    // The page's picker lists disabled servers, which the sync skips untouched.
     const server = await createTestServer(userId, { name: "Off", enabled: false });
-
     const response = await callRoute(POST, { method: "POST", body: { serverId: server.id } });
-
-    const data = await expectJson<{ error: string }>(response, 409);
-    expect(data.error).toMatch(/disabled/);
+    expect((await expectJson<{ error: string }>(response, 409)).error).toMatch(/disabled/);
     expect(mockSyncWatchHistory).not.toHaveBeenCalled();
   });
 

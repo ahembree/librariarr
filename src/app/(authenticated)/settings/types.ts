@@ -158,29 +158,19 @@ export interface TracearrImportStatus {
    */
   backfillFraction: number | null;
   /**
-   * The instant the backwards walk has reached — the point `backfillFraction`
-   * is measured from, so a "reached <date>" line must name this and never
-   * `oldestImported` (after a purge restarts the walk, the surviving rows still
-   * reach the far end while the walk starts again from now). Null when nothing
-   * has been reached.
+   * The instant the backwards walk has reached, which `backfillFraction` is measured
+   * from. A "reached <date>" line names this, never `oldestImported` (stale after a purge).
    */
   reachedAt: string | null;
   /**
-   * Whether the archive import is still owed AND will make progress — what a
-   * spinner or a poll may wait on. Never read `!backfillComplete` for that: it
-   * stays false forever on a disabled server, behind a disabled Tracearr
-   * instance, and on a mapping Tracearr holds no plays for.
+   * Whether the import is owed AND will make progress: what a spinner or poll waits
+   * on. Never `!backfillComplete`, false forever when paused or with no plays.
    */
   pending: boolean;
   /**
-   * Why an owed import is not progressing, when that is the reason it is not
-   * pending: the server or every Tracearr instance is disabled, none of the
-   * server's enabled libraries holds an item (`no-library-items` — no play
-   * could be attributed until a sync adds some, which needs an enabled
-   * library), the import slice keeps failing (its job used up its retries and
-   * nothing is running), or the import waits for a sync (`awaiting-sync` —
-   * held after a purge or restore until the next FULL sync re-adds the items,
-   * or nothing queued before the server's first sync).
+   * Why an owed import is not progressing: a disabled server or Tracearr instance, no
+   * items in an enabled library, a slice that used up its retries, or a wait for the
+   * next full sync (after a purge or restore, or before the first sync).
    */
   pausedReason:
     | "server-disabled"
@@ -190,9 +180,8 @@ export interface TracearrImportStatus {
     | "awaiting-sync"
     | null;
   /**
-   * When a backfill walk last ran for this mapping, or null if none has yet.
-   * A walked one with no plays, nothing queued and nothing running is what a
-   * mapping Tracearr holds no plays for looks like.
+   * When a backfill walk last ran for this mapping, or null. Walked, with no plays and
+   * nothing queued, is what a mapping Tracearr holds no plays for looks like.
    */
   lastWalkAt: string | null;
   /**

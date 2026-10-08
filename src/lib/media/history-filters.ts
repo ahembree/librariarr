@@ -1,8 +1,4 @@
-/**
- * The History page's (`/library/history`) list filters: the query parameters
- * they send, and which view the table area shows. Client-safe and pure so it
- * is unit-tested.
- */
+/** The History page's list filters: the parameters they send and the view shown. Client-safe. */
 
 /** The filters as the page holds them. */
 export interface HistoryListFilters {
@@ -17,9 +13,8 @@ export interface HistoryListFilters {
 }
 
 /**
- * The `GET /api/media/history` parameters the filters send, one entry per
- * active filter. `historyFiltersActive` is defined by this list, so a filter
- * can never narrow the list without also counting as active.
+ * The `GET /api/media/history` parameters, one per active filter. `historyFiltersActive`
+ * reads this list, so a filter can never narrow the list without counting as active.
  */
 export function historyFilterParams(filters: HistoryListFilters): Array<[string, string]> {
   const params: Array<[string, string]> = [];
@@ -38,12 +33,8 @@ export function historyFiltersActive(filters: HistoryListFilters): boolean {
 }
 
 /**
- * What the table area shows:
- * - `loading` — the skeleton, for a load with nothing on screen yet;
- * - `error` — the failed-load card, only when there are no rows to keep;
- * - `no-history` — "No watch history … Sync Now": nothing has been played;
- * - `no-matches` — "No plays match these filters" with Clear filters;
- * - `table` — the rows (a failed refresh keeps them under a notice).
+ * What the table area shows. `error` only when there are no rows to keep; `no-history`
+ * is "No watch history … Sync Now", `no-matches` "No plays match these filters".
  */
 export type HistoryTableView = "loading" | "error" | "no-history" | "no-matches" | "table";
 
@@ -54,23 +45,15 @@ export function historyTableView(state: {
   /** `pagination.totalCount` of the last answer: plays matching the filters. */
   totalCount: number;
   filtersActive: boolean;
-  /**
-   * Whether the history holds any play at all, filters aside — the answer's
-   * `usernames`, which the route lists from every stored play regardless of
-   * the filters.
-   */
+  /** Whether the history holds any play, filters aside: the answer's unfiltered `usernames`. */
   historyHasPlays: boolean;
 }): HistoryTableView {
   if (state.rowCount > 0) return "table";
   if (state.loading) return "loading";
   if (state.loadError) return "error";
-  // A page past the end of a non-empty list keeps the table (and its
-  // pagination) rather than claiming there is nothing to show.
+  // A page past the end of a non-empty list keeps the table and its pagination.
   if (state.totalCount > 0) return "table";
-  // An empty answer under filters used to say "No watch history … Sync Now",
-  // which told a user with thousands of plays that they had none and offered
-  // a sync that could not change the answer. It is that only when the
-  // history really is empty; otherwise the filters excluded everything, and
-  // clearing them is the way out.
+  // With plays in the history, an empty answer under filters is the filters' doing:
+  // offer Clear filters, not a sync that cannot change the answer.
   return state.filtersActive && state.historyHasPlays ? "no-matches" : "no-history";
 }

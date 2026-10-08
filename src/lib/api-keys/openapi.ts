@@ -68,12 +68,9 @@ const LIBRARY_FILTERS: Param[] = [
 const MEDIA_TYPE = { type: "string", enum: ["MOVIE", "SERIES", "MUSIC"] };
 
 /**
- * `GET /media/history`'s `sortBy` values. A copy of `HISTORY_SORT_KEYS` in
- * `src/lib/media/history-sort.ts` rather than an import: the docs build runs
- * this module directly (`scripts/generate-openapi.ts`), so it imports nothing
- * beyond `scopes`/`limits`, while history-sort carries the route's SQL and the
- * resolution helpers. `tests/unit/api-keys/openapi.test.ts` holds the two
- * lists equal.
+ * `GET /media/history`'s `sortBy` values: a copy of `HISTORY_SORT_KEYS`, since
+ * the docs build runs this module without path aliases.
+ * `tests/unit/api-keys/openapi.test.ts` holds the two lists equal.
  */
 export const OPENAPI_HISTORY_SORT_KEYS = [
   "watchedAt",

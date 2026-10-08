@@ -160,15 +160,8 @@ async function executeRuleSet(
     );
   }
 
-  // Play history (mirrors the scheduled executor's hold and the query page's
-  // refusal): while a server the rule set reads has no established play
-  // history, detection skips a rule set with play-activity criteria and keeps
-  // its matches as they were, so the matches this would act on are frozen from
-  // before — an item watched since still holds one. Refused, nothing executed,
-  // while the history is not established and — once detection has skipped the
-  // rule set while it was not, or a restore brought its matches back
-  // (`playHistoryPausedAt`) — until detection has evaluated it again, even
-  // after the history is back.
+  // Play-history hold, as the scheduled executor (`checkPlayActivityExecutable`):
+  // the matches may be frozen from before an item was watched.
   const playHistoryRefusal = await checkPlayActivityExecutable(session.userId!, {
     rules: ruleSet.rules as unknown as LifecycleRuleGroup[],
     serverIds: ruleSet.serverIds,

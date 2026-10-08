@@ -355,8 +355,7 @@ function TracearrLiveImportLine({
       </div>
       <p className="text-xs text-muted-foreground">
         {activity.pages === 0 ? "Preparing…" : `${plays} this run · ${pages}`}
-        {/* The same reach the percentage is measured from (the live run's when
-            it is further back than the stored one), so the two never disagree. */}
+        {/* The reach the percentage is measured from, so the two never disagree. */}
         {activity.pass === "backfill" && status.reachedAt
           ? ` · reached ${formatImportBoundaryDate(status.reachedAt)}`
           : ""}
@@ -385,20 +384,12 @@ function TracearrLiveImportLine({
  *
  * Otherwise, distinct renderings, because collapsing any two of them lies:
  *   - complete            → the finished line (a count, no bar)
- *   - paused              → why (server or Tracearr instance disabled), no spinner
- *   - failing             → the slice used up its retries; say so, no spinner
- *   - no library items    → nothing to import into; needs items in an
- *                           enabled library
- *   - awaiting sync       → held after a purge/restore, or nothing queued;
- *                           starts after the next full sync
- *   - no rows, pending    → "waiting", not "0 plays imported" (a fresh
- *                           mapping's first slice is queued by its save)
- *   - no rows, not pending→ a walk ran, nothing is queued and nothing came
- *                           back: Tracearr holds no plays for the linked server
+ *   - paused, failing, no library items, awaiting sync → why, no spinner
+ *   - no rows, pending    → "waiting", not "0 plays imported"
+ *   - no rows, not pending→ Tracearr holds no plays for the linked server
  *   - fraction is a number→ a determinate bar at that percentage
  *   - fraction is null    → the original indeterminate line
- * Spinners key off `pending`, never `!backfillComplete`: that flag stays false
- * forever in the paused and no-plays cases, so a spinner on it never stopped.
+ * Spinners key off `pending`, never `!backfillComplete` (false forever when paused).
  * The last two are the subtle pair: `backfillFraction` null means the far edge
  * of the archive hasn't been measured yet, so no honest percentage exists —
  * drawing an empty bar there would tell the user "0% done" when the truth is
@@ -416,11 +407,8 @@ function TracearrImportStatusLine({ status }: { status: TracearrImportStatus | u
 
   const plays = `${status.importedCount.toLocaleString()} ${status.importedCount === 1 ? "play" : "plays"}`;
 
-  // Owed but unable to progress: nothing will run until the cause is fixed, so
-  // say what it is rather than spin.
-  // The slice keeps failing — every retry used up, nothing running. Not a
-  // spinner (nothing is happening), not "paused" (nothing the user switched
-  // off): the next watch-history sync re-queues it, and the log says why.
+  // Owed but unable to progress: say why rather than spin. Failing: every retry
+  // is used up, and the next watch-history sync re-queues it.
   if (!status.backfillComplete && status.pausedReason === "import-failing") {
     return (
       <p className={rowClass}>
@@ -435,9 +423,8 @@ function TracearrImportStatusLine({ status }: { status: TracearrImportStatus | u
     );
   }
 
-  // Nothing to import into: no enabled library holds an item, so every play
-  // would resolve to nothing. Not "starts with the next sync" — with every
-  // library disabled no sync adds any.
+  // No enabled library holds an item. Not "starts with the next sync": with every
+  // library disabled, no sync adds any.
   if (!status.backfillComplete && status.pausedReason === "no-library-items") {
     return (
       <p className={rowClass}>
@@ -452,11 +439,8 @@ function TracearrImportStatusLine({ status }: { status: TracearrImportStatus | u
     );
   }
 
-  // Waits on a sync. After a purge or a restore that is on purpose — the walk
-  // has to follow the FULL sync that brings the purged items back (a sync of
-  // one library does not), or their plays would be skipped for good. A full
-  // sync also queues the first slice of a mapping with nothing queued.
-  // No spinner: nothing is running, and the line says what it waits for.
+  // After a purge or restore the walk must follow the FULL sync that brings the
+  // items back, or their plays are skipped for good.
   if (!status.backfillComplete && status.pausedReason === "awaiting-sync") {
     return (
       <p className={rowClass}>
@@ -497,10 +481,8 @@ function TracearrImportStatusLine({ status }: { status: TracearrImportStatus | u
         </p>
       );
     }
-    // A walk has run (a never-walked mapping is pending or awaiting a sync,
-    // above), nothing is queued or running, and it found nothing: Tracearr
-    // returned no plays at all for the linked server — which is also what a
-    // mapping to the wrong server looks like, so point at that.
+    // A walk ran and found nothing, and nothing is queued: Tracearr has no plays
+    // for the linked server, which is also what a wrong mapping looks like.
     return (
       <p className={rowClass}>
         <AlertCircle className="mt-0.5 h-3 w-3 shrink-0" />
@@ -534,8 +516,7 @@ function TracearrImportStatusLine({ status }: { status: TracearrImportStatus | u
   // the percentage is a percentage OF, which is the only way a bare "63%" over
   // a multi-year archive means anything.
   if (status.backfillFraction !== null) {
-    // Floored and capped at 99: this branch is only reached while the walk is
-    // unfinished, and "100%" beside "Importing history" is a contradiction.
+    // Capped at 99: this branch is reached only while the walk is unfinished.
     const percent = backfillPercent(status.backfillFraction, status.backfillComplete);
     return (
       <div className="mt-2 space-y-1.5">
@@ -561,9 +542,7 @@ function TracearrImportStatusLine({ status }: { status: TracearrImportStatus | u
         </div>
         <p className="text-xs text-muted-foreground">
           {plays}
-          {/* The point the percentage is measured from — never `oldestImported`,
-              which after a purge still reaches the far end while the walk has
-              started again from now ("0% … reached 2019"). */}
+          {/* The point the percentage is measured from; `oldestImported` is stale after a purge. */}
           {status.reachedAt ? ` · reached ${formatImportBoundaryDate(status.reachedAt)}` : ""}
           {status.oldestPlayAt ? ` · history starts ${formatImportBoundaryDate(status.oldestPlayAt)}` : ""}
         </p>

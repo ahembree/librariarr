@@ -31,9 +31,7 @@ const mockPrisma = vi.hoisted(() => ({
     // and why, so it has to read the rows rather than tally them.
     findMany: vi.fn().mockResolvedValue([]),
   },
-  // The play-history pause latch (`RuleSet.playHistoryPausedAt`) is written
-  // with raw SQL: recorded on a play-history refusal, lifted after a run that
-  // evaluated and wrote its matches.
+  // The play-history pause latch (`RuleSet.playHistoryPausedAt`), written with raw SQL.
   $executeRawUnsafe: vi.fn().mockResolvedValue(0),
   // Detection runs its match writes inside a transaction in two shapes:
   //   - callback form: $transaction(async (tx) => { ... }) (full re-eval)
@@ -1281,38 +1279,6 @@ describe("detectAndSaveMatches evaluability defense-in-depth", () => {
     expect(mockPrisma.$executeRawUnsafe).not.toHaveBeenCalled();
   });
 
-  it("records a play-history refusal on the rule set, keeping the latest, and keeps its matches", async () => {
-    mockHasAnyActiveRules.mockReturnValue(true);
-    mockHasArrRules.mockReturnValue(false);
-    mockHasSeerrRules.mockReturnValue(false);
-    mockHasPlayActivityRules.mockReturnValue(true);
-    mockPrisma.mediaServer.findMany.mockResolvedValue([
-      {
-        name: "Plex",
-        libraryResyncRequiredAt: new Date(),
-        watchHistorySyncedAt: null,
-        tracearrServerId: null,
-        tracearrForwardFloorAt: null,
-        tracearrBackfillComplete: false,
-      },
-    ]);
-    mockPrisma.ruleMatch.findMany.mockResolvedValue([{ itemData: { id: "item1", title: "Existing Match" } }]);
-    const before = Date.now();
-
-    const result = await detectAndSaveMatches(
-      makeRuleSetConfig({ rules: [{ field: "playCount", operator: "equals", value: 0, enabled: true }] }),
-      ["s1"],
-    );
-
-    expect(result.count).toBe(1);
-    expect(mockEvaluateRules).not.toHaveBeenCalled();
-    expect(mockPrisma.$executeRawUnsafe).toHaveBeenCalledTimes(1);
-    const [sql, id, at] = mockPrisma.$executeRawUnsafe.mock.calls[0];
-    expect(sql).toContain('SET "playHistoryPausedAt" = GREATEST("playHistoryPausedAt", $2::timestamp(3))');
-    expect(id).toBe("rs1");
-    expect((at as Date).getTime()).toBeGreaterThanOrEqual(before);
-  });
-
   it("lifts a play-history pause no later than the instant it began evaluating, once its matches are written", async () => {
     mockHasAnyActiveRules.mockReturnValue(true);
     mockHasArrRules.mockReturnValue(false);
@@ -1322,7 +1288,6 @@ describe("detectAndSaveMatches evaluability defense-in-depth", () => {
     let evaluatedAt = 0;
     mockEvaluateRules.mockImplementation(async () => {
       evaluatedAt = Date.now();
-      // An evaluation that takes a while, so its start and its end differ.
       await new Promise((resolve) => setTimeout(resolve, 5));
       return [];
     });

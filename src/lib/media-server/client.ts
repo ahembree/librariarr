@@ -94,14 +94,8 @@ export interface MediaServerClient {
    * "played" set, not dated events) ignores it and returns everything, and the
    * caller must treat the result as the full set.
    *
-   * `report`, when passed, is filled in by the client with what it could not
-   * read (`DetailedWatchHistoryReport`): the users whose plays are missing
-   * from the result and must not be replaced, each with why
-   * (`IncompleteUserReason`), and whether device details are missing for want
-   * of an answer. The caller keeps the stored rows of every incomplete user,
-   * and does not vouch for a history it never established while an
-   * `unreliable` user is missing from it. Without one, the client keeps its
-   * stricter behaviour.
+   * `report`, when passed, is filled in with what the client could not read
+   * (`DetailedWatchHistoryReport`); without one it keeps its stricter behaviour.
    */
   getDetailedWatchHistory(options?: DetailedWatchHistoryOptions): Promise<DetailedWatchHistoryEntry[]>;
   /**

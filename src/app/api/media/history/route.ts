@@ -9,24 +9,12 @@ import { historySortSql } from "@/lib/media/history-sort";
 import { QUALITY_ORDER, resolutionLabelSql } from "@/lib/resolution";
 
 /**
- * A play the native sync filed against several library copies of one item
- * (Jellyfin/Emby can list an item in two libraries over the same folder) is
- * stored once per copy, every row but the primary's pointing at the primary
- * copy through `fanOutOfItemId`. Each copy has to read as watched to the
- * per-item consumers (rules, play counts), but this route lists PLAYS, so it
- * shows the primary row only. The rows of one play share its server, user,
- * device and time, and their items are the same file, so every filter here
- * keeps or drops them together. Deleting the primary's item cascades its row
- * away and the FK's `SetNull` clears the pointer on EVERY remaining copy: with
- * two copies the survivor is the play's only record and is listed once, but
- * with three or more each survivor becomes a primary and the play is listed
- * (and counted) once per remaining copy until the server's next watch-history
- * sync re-points them — a native full replace rewrites the rows (on
- * Jellyfin/Emby every history sync is one; a set-aside user's rows, which a
- * replace keeps as they are, wait until that user can be read again), and a
- * Tracearr import repairs them before it walks (`repairLibraryCopyRows`).
- * Rare (three libraries over one folder) and self-healing, so it is
- * documented rather than designed around.
+ * A Jellyfin/Emby play filed against several library copies of one item is stored
+ * once per copy, every row but the primary's setting `fanOutOfItemId`. This route
+ * lists PLAYS, so only the primary row; a play's rows share server, user, device,
+ * time and file, so every filter keeps or drops them together. With three or more
+ * copies and the primary's item deleted, each survivor is listed until the next
+ * watch-history sync re-points them (documented, not designed around).
  */
 const PRIMARY_PLAY = `wh."fanOutOfItemId" IS NULL`;
 
@@ -149,13 +137,8 @@ export async function GET(request: NextRequest) {
   }
 
   if (resolution) {
-    // A label matches every file the page SHOWS under that label: the same
-    // `resolutionLabelSql` the Resolution sort ranks by, the SQL twin of the
-    // page's `normalizeResolutionLabel`. A hand-kept list of raw values used
-    // to stand in for it and missed every non-standard height — `1024p`,
-    // `576`, `240` display and sort as 1080P / 480P / SD but matched none of
-    // those filters — and could not express `Other` at all. Any other value
-    // is a stored resolution, matched as written, ignoring case.
+    // A label matches every file the page shows under it (`resolutionLabelSql`, as the
+    // sort ranks); any other value matches the stored resolution, ignoring case.
     const labels = new Set<string>();
     const stored: string[] = [];
     for (const value of resolution.split("|").filter(Boolean)) {
@@ -166,13 +149,9 @@ export async function GET(request: NextRequest) {
     const matches: string[] = [];
     if (labels.size > 0) {
       const placeholders = [...labels].map(() => `$${paramIdx++}`).join(",");
-      // A label depends on the stored value alone, so it is computed once per
-      // DISTINCT stored resolution — a few dozen — not once per item: per item
-      // the regex CASE cost ~120 ms at 48k items, more than the whole query
-      // before it. `OFFSET 0` stops the planner pushing the CASE back below the
-      // DISTINCT (as it does unfenced). `COALESCE` on both sides lets a NULL
-      // resolution — labelled `Other`, like an empty one — match, which `IN`
-      // never does on its own.
+      // Labelled once per DISTINCT stored resolution, not per item, where the regex
+      // CASE cost more than the rest of the query; `OFFSET 0` stops the planner pushing
+      // it below the DISTINCT. `COALESCE` lets a NULL (`Other`) match, which `IN` never does.
       matches.push(
         `COALESCE(mi."resolution", '') IN (
           SELECT COALESCE(d."resolution", '') FROM (SELECT DISTINCT "resolution" FROM "MediaItem" OFFSET 0) d
@@ -226,10 +205,8 @@ export async function GET(request: NextRequest) {
 
   const whereClause = [...conditions, PRIMARY_PLAY, ...itemConditions].join(" AND ");
 
-  // Build ORDER BY — always sort server-side for paginated results. The
-  // key → SQL map is a strict whitelist shared with the page
-  // (`src/lib/media/history-sort.ts`): `sortBy` is never interpolated itself,
-  // and an unknown value falls back to Watched At.
+  // Build ORDER BY — always sort server-side for paginated results. The whitelist
+  // is shared with the page (`history-sort.ts`); `sortBy` is never interpolated.
   const orderExprs = historySortSql(sortBy);
   const orderDir = sortOrder === "asc" ? "ASC" : "DESC";
   // The ORDER BY below appends wh."id" as a unique tiebreaker so the sort is a
@@ -282,15 +259,9 @@ export async function GET(request: NextRequest) {
   // index-only scan. Measured at 141k plays: 65 ms → 9 ms for the unfiltered
   // page every History visit starts on.
   //
-  // Without that join the fan-out copies are SUBTRACTED rather than filtered
-  // out (`PRIMARY_PLAY`): `fanOutOfItemId` is in no index that scan can use,
-  // so testing it on every play turned the index-only scan into a read of the
-  // whole heap. At 150k plays carrying Tracearr detail, with parallel query
-  // off: 41 ms before, 85 ms with the predicate, 43 ms as a subtraction — and
-  // a cold cache would read the ~160 MB heap instead of an index. The copies
-  // are found through the `fanOutOfItemId` index, so subtracting them costs
-  // about a millisecond per few thousand. With the join the heap is read
-  // anyway, and there the plain predicate is the cheaper form.
+  // Without that join the fan-out copies are SUBTRACTED, not filtered out: no index
+  // the scan uses holds `fanOutOfItemId`, so the predicate would read the whole heap,
+  // while the copies come from their own index. With the join the predicate is cheaper.
   const needsItemJoin = itemConditions.length > 0;
   const playsFrom = `FROM "WatchHistory" wh
     JOIN "MediaServer" ms ON ms."id" = wh."mediaServerId"

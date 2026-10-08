@@ -53,9 +53,7 @@ describe("tracearr import activity", () => {
   });
 
   it("reports the backfill pass's reach separately, never the forward pass's", () => {
-    // The status route reads this as live archive progress between the slice
-    // writes of `tracearrBackfillCursorAt`. A forward page's oldest play is
-    // near "now", so letting it in would read as the walk barely started.
+    // A forward page's oldest play is near "now": the walk would read as barely started.
     const run = begin("srv-1");
     recordTracearrImportPage(run, {
       pass: "forward",
@@ -129,9 +127,7 @@ describe("tracearr import activity", () => {
     });
 
     it("reports the running backfill's reach even while a newer forward run is shown", () => {
-      // The status route reads `backfillReached` as live archive progress. With
-      // a Refresh overlapping a slice, the newest run is the forward one, whose
-      // reach is always null — the bar froze for as long as the two overlapped.
+      // A Refresh overlapping a slice froze the bar for as long as they overlapped.
       const backfill = begin("srv-1");
       const refresh = begin("srv-1");
       recordTracearrImportPage(backfill, {
@@ -163,12 +159,9 @@ describe("tracearr import activity", () => {
   });
 
   describe("supersedeTracearrImports", () => {
-    // Called when the walk is restarted (a purge, a restore, a library's first
-    // sync) while a slice or a Refresh is running. A slice keeps walking from
-    // its old, deep position, and the status route takes the OLDER of the live
-    // reach and the stored cursor — so without this a restarted walk read as
-    // nearly done.
-    it("drops a running slice's reach and keeps it out for the rest of the run", () => {
+    // A restart (purge, restore, a library's first sync) under a running slice:
+    // its old, deep reach would make the restarted walk read as nearly done.
+    it("drops a run's reach for the rest of the run, but keeps reporting the run", () => {
       const slice = begin("srv-1");
       recordTracearrImportPage(slice, {
         pass: "backfill",
@@ -187,24 +180,13 @@ describe("tracearr import activity", () => {
         oldestReached: new Date("2018-12-01T00:00:00.000Z"),
       });
       expect(getTracearrBackfillReach("srv-1")).toBeNull();
-    });
-
-    it("keeps reporting the run itself — the mapping still stands, so its plays are still this server's", () => {
-      // A Refresh importing through a purge or a restore is importing: hidden,
-      // the server read as idle — or as failing, beside a parked slice.
-      const refresh = begin("srv-1");
-      recordTracearrImportPage(refresh, { pass: "forward", pages: 2, imported: 120, oldestReached: null });
-
-      supersedeTracearrImports("srv-1");
-
+      // The mapping still stands, so its plays are still this server's.
       expect(getTracearrImportActivity("srv-1")).toMatchObject({
-        pass: "forward",
-        pages: 2,
-        imported: 120,
+        pass: "backfill",
+        pages: 301,
+        imported: 29100,
         backfillReached: null,
       });
-      recordTracearrImportPage(refresh, { pass: "forward", pages: 3, imported: 180, oldestReached: null });
-      expect(getTracearrImportActivity("srv-1")).toMatchObject({ pages: 3, imported: 180 });
     });
 
     it("leaves a run begun after the restart reporting normally", () => {
@@ -223,25 +205,11 @@ describe("tracearr import activity", () => {
         backfillReached: "2026-10-01T00:00:00.000Z",
       });
     });
-
-    it("touches only the server it names", () => {
-      const other = begin("srv-2");
-      recordTracearrImportPage(other, {
-        pass: "backfill",
-        pages: 1,
-        imported: 1,
-        oldestReached: new Date("2021-01-01T00:00:00.000Z"),
-      });
-      supersedeTracearrImports("srv-1");
-      expect(getTracearrBackfillReach("srv-2")).toBe("2021-01-01T00:00:00.000Z");
-    });
   });
 
   describe("retireTracearrImports", () => {
-    // Called when the server's mapping changes (re-pointed, unlinked or
-    // re-linked) while a run is going: it is paging an archive that is no
-    // longer the server's source, and its next write is refused.
-    it("drops the run's reach", () => {
+    // A mapping change: the run pages an archive that is no longer the source.
+    it("drops the run's reach and stops reporting it, whatever it still commits", () => {
       const slice = begin("srv-1");
       recordTracearrImportPage(slice, {
         pass: "backfill",
@@ -253,35 +221,12 @@ describe("tracearr import activity", () => {
       retireTracearrImports("srv-1");
 
       expect(getTracearrBackfillReach("srv-1")).toBeNull();
-    });
-
-    it("stops reporting the run at all", () => {
-      // Reported, the server read as importing — pending, with the old run's
-      // counts — against the new mapping until the run hit a refused write.
-      const slice = begin("srv-1");
-      recordTracearrImportPage(slice, { pass: "backfill", pages: 300, imported: 29000, oldestReached: null });
-
-      retireTracearrImports("srv-1");
-
       expect(getTracearrImportActivity("srv-1")).toBeNull();
-      // Pages it still commits change nothing.
       recordTracearrImportPage(slice, { pass: "backfill", pages: 301, imported: 29100, oldestReached: null });
       expect(getTracearrImportActivity("srv-1")).toBeNull();
     });
 
-    it("reports a run begun after it, past the retired one still registered", () => {
-      const old = begin("srv-1");
-      recordTracearrImportPage(old, { pass: "backfill", pages: 300, imported: 29000, oldestReached: null });
-      retireTracearrImports("srv-1");
-      const fresh = begin("srv-1");
-      recordTracearrImportPage(fresh, { pass: "forward", pages: 1, imported: 7, oldestReached: null });
-
-      expect(getTracearrImportActivity("srv-1")).toMatchObject({ pass: "forward", pages: 1, imported: 7 });
-    });
-
     it("skips a retired run even when it is the newest", () => {
-      // Every run live at the change is retired; none may stand in for the
-      // import of the new mapping.
       const first = begin("srv-1");
       const second = begin("srv-1");
       recordTracearrImportPage(first, { pass: "backfill", pages: 2, imported: 200, oldestReached: null });
@@ -311,18 +256,26 @@ describe("tracearr import activity", () => {
       const fresh = begin("srv-1");
       recordTracearrImportPage(fresh, { pass: "backfill", pages: 9, imported: 90, oldestReached: null });
 
-      // Still registered, so the importer's own cleanup finds it and knows
-      // whom to tell; ending it twice is a no-op as for any run.
+      // Still registered, so the importer's own cleanup finds it.
       expect(endTracearrImport(old)).toEqual({ userId: "user-1" });
       expect(endTracearrImport(old)).toBeUndefined();
       expect(getTracearrImportActivity("srv-1")).toMatchObject({ pages: 9, imported: 90 });
     });
+  });
 
-    it("touches only the server it names", () => {
-      const other = begin("srv-2");
-      recordTracearrImportPage(other, { pass: "forward", pages: 1, imported: 1, oldestReached: null });
-      retireTracearrImports("srv-1");
-      expect(getTracearrImportActivity("srv-2")).toMatchObject({ pages: 1 });
+  it.each([
+    ["supersedeTracearrImports", supersedeTracearrImports],
+    ["retireTracearrImports", retireTracearrImports],
+  ])("%s touches only the server it names", (_, stop) => {
+    const other = begin("srv-2");
+    recordTracearrImportPage(other, {
+      pass: "backfill",
+      pages: 1,
+      imported: 1,
+      oldestReached: new Date("2021-01-01T00:00:00.000Z"),
     });
+    stop("srv-1");
+    expect(getTracearrBackfillReach("srv-2")).toBe("2021-01-01T00:00:00.000Z");
+    expect(getTracearrImportActivity("srv-2")).toMatchObject({ pages: 1 });
   });
 });

@@ -40,10 +40,12 @@ import {
   snapshotWatchEvidence,
 } from "@/lib/media/watch-evidence";
 
-// The hold-request registry is per process, like the withdrawal counters; the
-// tests reuse server ids, so each starts as a freshly started process would.
+// Each test starts as a fresh process would: no hold requests noted, no calls counted.
 beforeEach(() => {
   _resetLibraryResyncHoldRequestsForTesting();
+  vi.clearAllMocks();
+  m.updateMany.mockResolvedValue({ count: 1 });
+  m.findMany.mockResolvedValue([]);
 });
 
 describe("invalidateWatchHistoryEvidence", () => {
@@ -126,20 +128,15 @@ describe("restartTracearrBackfill", () => {
     // the archive — so nothing purged would be walked again.
     expect(arg.data.tracearrBackfillCursorAt).toBeInstanceOf(Date);
     expect(arg.data.tracearrBackfillCursorAt.getTime()).toBeGreaterThanOrEqual(before);
-    // The restarted walk covers any gap an interrupted forward walk recorded,
-    // and the stamp of the walk that recorded it goes with it.
+    // The floor, its stamp and the last walk describe the history being re-walked.
     expect(arg.data.tracearrForwardFloorAt).toBeNull();
     expect(arg.data.tracearrForwardFloorRecordedAt).toBeNull();
-    expect(arg.data).toHaveProperty("tracearrForwardFloorRecordedAt");
-    // A last-walk stamp describes the history that was just destroyed.
     expect(arg.data.tracearrBackfillLastWalkAt).toBeNull();
-    // The forward pass of an archive with no stored rows resumes from the
-    // watermark: every play older than the restart is the restarted walk's.
+    // A no-rows archive's forward pass resumes from the restart instant.
     expect(arg.data.tracearrForwardWatermarkAt).toEqual(arg.data.tracearrBackfillCursorAt);
-    // Holds nothing: a caller that deleted items records the hold through
-    // `requireLibraryResync`; restore's "items present, rows missing" case
-    // needs none.
+    // The hold and the marker are `requireLibraryResync`'s.
     expect(arg.data).not.toHaveProperty("libraryResyncRequiredAt");
+    expect(arg.data).not.toHaveProperty("watchHistorySyncedAt");
   });
 
   it("supersedes a running slice's live reach before moving the cursor", async () => {
@@ -156,9 +153,7 @@ describe("restartTracearrBackfill", () => {
   });
 
   it("queues no walk — it has to follow the re-sync that brings the purged items back", async () => {
-    // Every caller has just removed items whose plays the restarted walk exists
-    // to recover. Walked before a sync re-creates them, those plays are skipped
-    // as unresolved and the archive can be marked complete without them.
+    // Walked before a sync re-creates the purged items, their plays are skipped as unresolved.
     m.updateMany.mockResolvedValue({ count: 2 });
     m.findMany.mockResolvedValue([{ id: "s1" }, { id: "s2" }]);
 
@@ -174,16 +169,7 @@ describe("restartTracearrBackfill", () => {
 });
 
 describe("markWatchHistoryEstablishedIfUnchanged", () => {
-  // A sync captures the marker when it starts and may only establish the
-  // history if nothing withdrew it meanwhile. An unconditional write let a
-  // native full replace that was still fetching re-mark a server a purge had
-  // just withdrawn — vouching for rows it never saw.
-  beforeEach(() => {
-    vi.clearAllMocks();
-    m.updateMany.mockResolvedValue({ count: 1 });
-    m.findMany.mockResolvedValue([]);
-  });
-
+  // A run may establish the history only if nothing withdrew it since its snapshot.
   const establishCalls = () =>
     m.updateMany.mock.calls.filter((c) => c[0].data.watchHistorySyncedAt instanceof Date);
 
@@ -196,8 +182,6 @@ describe("markWatchHistoryEstablishedIfUnchanged", () => {
     expect(establishCalls()[0][0].where).toEqual({
       id: "s1",
       watchHistorySyncedAt: marker,
-      // Some of the server's media rows are known to be missing while held: no
-      // pass can have attached their plays, whatever it found.
       libraryResyncRequiredAt: null,
     });
   });
@@ -209,22 +193,18 @@ describe("markWatchHistoryEstablishedIfUnchanged", () => {
     await expect(markWatchHistoryEstablishedIfUnchanged(snapshot)).resolves.toBe(false);
   });
 
-  it("does not write after a null → null withdrawal the column cannot show", async () => {
-    // The run started on an un-established server (marker null); a purge
-    // during it wrote null over null. Only the withdrawal counter can tell.
+  it("does not write after a null → null withdrawal the column cannot show, but ignores another server's", async () => {
+    const other = snapshotWatchEvidence("s1", null);
+    await invalidateWatchHistoryEvidence(["s2"]);
+    await expect(markWatchHistoryEstablishedIfUnchanged(other)).resolves.toBe(true);
+
+    // Only the withdrawal counter can tell a purge wrote null over null.
     const snapshot = snapshotWatchEvidence("s1", null);
     await invalidateWatchHistoryEvidence(["s1"]);
     m.updateMany.mockClear();
 
     await expect(markWatchHistoryEstablishedIfUnchanged(snapshot)).resolves.toBe(false);
     expect(establishCalls()).toHaveLength(0);
-  });
-
-  it("is not affected by a withdrawal on another server", async () => {
-    const snapshot = snapshotWatchEvidence("s1", null);
-    await invalidateWatchHistoryEvidence(["s2"]);
-
-    await expect(markWatchHistoryEstablishedIfUnchanged(snapshot)).resolves.toBe(true);
   });
 
   it("refuses every in-flight run after a restore rewrote the database", async () => {
@@ -238,7 +218,6 @@ describe("markWatchHistoryEstablishedIfUnchanged", () => {
 
   it("puts the marker back to null when a withdrawal lands between its check and its write", async () => {
     const snapshot = snapshotWatchEvidence("s1", null);
-    // The withdrawal is counted while the establishing UPDATE is in flight.
     m.updateMany.mockImplementationOnce(async () => {
       await invalidateWatchHistoryEvidence(["s1"]);
       return { count: 1 };
@@ -247,9 +226,8 @@ describe("markWatchHistoryEstablishedIfUnchanged", () => {
     await expect(markWatchHistoryEstablishedIfUnchanged(snapshot)).resolves.toBe(false);
 
     const written = establishCalls()[0][0].data.watchHistorySyncedAt as Date;
-    const revert = m.updateMany.mock.calls.at(-1)![0];
     // Only undoes its OWN write: a later sync's newer mark is left alone.
-    expect(revert).toEqual({
+    expect(m.updateMany.mock.calls.at(-1)![0]).toEqual({
       where: { id: "s1", watchHistorySyncedAt: written },
       data: { watchHistorySyncedAt: null },
     });
@@ -257,41 +235,16 @@ describe("markWatchHistoryEstablishedIfUnchanged", () => {
 });
 
 describe("markWatchHistoryEstablished", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    m.updateMany.mockResolvedValue({ count: 1 });
-  });
-
-  it("never marks a server under a library-resync hold", async () => {
-    await markWatchHistoryEstablished(["s1", "s2"]);
-
-    expect(m.updateMany.mock.calls[0][0].where).toEqual({
-      id: { in: ["s1", "s2"] },
-      libraryResyncRequiredAt: null,
-    });
-  });
-
   it("issues no UPDATE for an empty list", async () => {
     await expect(markWatchHistoryEstablished([])).resolves.toBe(0);
     expect(m.updateMany).not.toHaveBeenCalled();
   });
 });
 
-// The SQL of both helpers is exercised against Postgres in
-// tests/integration/media/watch-evidence-hold.test.ts; these pin the order of
-// the steps and what each statement is asked to do.
+// The SQL runs against Postgres in tests/integration/media/watch-evidence-hold.test.ts.
 describe("requireLibraryResync", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    m.updateMany.mockResolvedValue({ count: 1 });
-  });
-
-  const holdWrite = () =>
-    m.updateMany.mock.calls.find((c) => "libraryResyncRequiredAt" in c[0].data)![0];
-
   it("counts the withdrawal before it writes anything", async () => {
-    // A sync whose snapshot predates the hold must not be able to establish
-    // the marker afterwards, even though the column it compares stays null.
+    // A sync whose snapshot predates the hold must not establish the marker, though the column stays null.
     const snapshot = snapshotWatchEvidence("s1", null);
     let generationMovedBeforeFirstWrite: boolean | undefined;
     m.updateMany.mockImplementationOnce(async () => {
@@ -308,31 +261,6 @@ describe("requireLibraryResync", () => {
     expect(m.updateMany).not.toHaveBeenCalled();
   });
 
-  it("writes the hold at now by default, and only where none is set — the earliest request stays", async () => {
-    // A library the earlier request is still waiting on (half populated by a
-    // failed sync, say) holds rows created after THAT instant; moving the hold
-    // later would make them read as older than the hold, i.e. untouched.
-    const before = Date.now();
-
-    await requireLibraryResync(["s1", "s2"]);
-
-    const write = holdWrite();
-    const at = write.data.libraryResyncRequiredAt as Date;
-    expect(at.getTime()).toBeGreaterThanOrEqual(before);
-    expect(write.where).toEqual({ id: { in: ["s1", "s2"] }, libraryResyncRequiredAt: null });
-  });
-
-  it("writes a given instant the same way", async () => {
-    const at = new Date("2026-03-01T10:00:00.000Z");
-
-    await requireLibraryResync(["s1"], { at });
-
-    expect(holdWrite()).toEqual({
-      where: { id: { in: ["s1"] }, libraryResyncRequiredAt: null },
-      data: { libraryResyncRequiredAt: at },
-    });
-  });
-
   it("writes the hold before it withdraws the marker, then restarts a mapped walk", async () => {
     await requireLibraryResync(["s1"]);
 
@@ -343,15 +271,11 @@ describe("requireLibraryResync", () => {
       where: { id: { in: ["s1"] }, watchHistorySyncedAt: { not: null } },
       data: { watchHistorySyncedAt: null },
     });
-    // `restartTracearrBackfill`, which touches mapped servers only.
     expect(calls[2].where).toEqual({ id: { in: ["s1"] }, tracearrServerId: { not: null } });
     expect(calls[2].data.tracearrBackfillComplete).toBe(false);
   });
 
   it("notes the request before it writes the hold, so a release already past its own check still sees it", async () => {
-    // Noted after the write instead, a request that found the hold set (and
-    // left it, the column keeping the earliest) would be cleared by a release
-    // whose check came first, with nothing to tell it to put the hold back.
     const passStart = new Date("2026-03-01T10:00:00.000Z");
     let releasedDuringWrite: boolean | undefined;
     m.updateMany.mockImplementationOnce(async () => {
@@ -366,9 +290,7 @@ describe("requireLibraryResync", () => {
   });
 
   it("takes its request back when the hold write throws — no stale request outlives it", async () => {
-    // Left behind, it refused every later population its receipt (one is
-    // only given while no request is outstanding), and a release whose pass
-    // began before its instant.
+    // Left behind, it would refuse later receipts and releases.
     const at = new Date("2026-03-01T10:00:00.000Z");
     m.updateMany.mockRejectedValueOnce(new Error("connection reset"));
 
@@ -387,12 +309,10 @@ describe("requireLibraryResync", () => {
 
     await expect(requireLibraryResync(["s1"], { at: new Date(earlier.getTime() + 60_000) })).rejects.toThrow();
 
-    // The earlier request still stands: no receipt, and a pass begun before it
-    // cannot release.
+    // No receipt, and a pass begun before it cannot release; one begun after it can.
     await expect(requirePopulationResync("s1", earlier)).resolves.toBeNull();
     m.findUnique.mockResolvedValue({ libraryResyncRequiredAt: earlier });
     await expect(releaseLibraryResyncHold("s1", new Date(earlier.getTime() - 1))).resolves.toBe(false);
-    // ...while one begun after it, but before the failed one, can.
     await expect(releaseLibraryResyncHold("s1", new Date(earlier.getTime() + 1_000))).resolves.toBe(true);
   });
 
@@ -406,7 +326,6 @@ describe("requireLibraryResync", () => {
 
     await expect(requireLibraryResync(["s1"], { at })).rejects.toThrow("connection reset");
 
-    // Erring toward refusing: the later request is still known.
     m.findUnique.mockResolvedValue({ libraryResyncRequiredAt: at });
     await expect(releaseLibraryResyncHold("s1", new Date(later.getTime() - 1))).resolves.toBe(false);
   });
@@ -422,13 +341,7 @@ describe("requireLibraryResync", () => {
 });
 
 describe("forgetLibraryResyncHoldRequests", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    m.updateMany.mockResolvedValue({ count: 1 });
-  });
-
   it("forgets every server's requests, or only the ones named", async () => {
-    // For a restore, which rewrites every server's hold column from the file.
     const at = new Date("2026-03-01T10:00:00.000Z");
     await requireLibraryResync(["s1", "s2", "s3"], { at });
 
@@ -442,38 +355,20 @@ describe("forgetLibraryResyncHoldRequests", () => {
 });
 
 describe("libraryResyncRequestedSince", () => {
-  const passStart = new Date("2026-03-01T10:00:00.000Z");
-  beforeEach(() => {
-    vi.clearAllMocks();
-    m.updateMany.mockResolvedValue({ count: 1 });
-  });
-
   it("is true only for a request asking for an instant after the pass start, on that server", async () => {
+    const passStart = new Date("2026-03-01T10:00:00.000Z");
     expect(libraryResyncRequestedSince("s1", passStart)).toBe(false);
     // A population hold the same run took asks for its pass start: not after it.
     await requireLibraryResync(["s1"], { at: passStart });
     expect(libraryResyncRequestedSince("s1", passStart)).toBe(false);
-    // A purge during the pass asks for its own, later instant.
     await requireLibraryResync(["s1"], { at: new Date(passStart.getTime() + 1) });
     expect(libraryResyncRequestedSince("s1", passStart)).toBe(true);
     expect(libraryResyncRequestedSince("s2", passStart)).toBe(false);
-  });
-
-  it("forgets requests a release covered", async () => {
-    m.findUnique.mockResolvedValue({ libraryResyncRequiredAt: passStart });
-    await requireLibraryResync(["s1"], { at: new Date(passStart.getTime() + 1) });
-    await expect(releaseLibraryResyncHold("s1", new Date(passStart.getTime() + 2))).resolves.toBe(true);
-    expect(libraryResyncRequestedSince("s1", passStart)).toBe(false);
   });
 });
 
 describe("releaseLibraryResyncHold", () => {
   const passStart = new Date("2026-03-01T10:00:00.000Z");
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    m.updateMany.mockResolvedValue({ count: 1 });
-  });
 
   it("releases a hold set at or before the pass start, nulling the marker in the same write", async () => {
     m.findUnique.mockResolvedValue({ libraryResyncRequiredAt: passStart });
@@ -489,7 +384,6 @@ describe("releaseLibraryResyncHold", () => {
   });
 
   it("compares with the hold instant it is handed instead of reading one", async () => {
-    // The instant the caller decided which libraries the hold waits for by.
     const heldSince = new Date(passStart.getTime() - 60_000);
 
     await expect(releaseLibraryResyncHold("s1", passStart, heldSince)).resolves.toBe(true);
@@ -499,8 +393,6 @@ describe("releaseLibraryResyncHold", () => {
   });
 
   it("refuses a hold requested after the pass began, though the column still reads older", async () => {
-    // A purge mid-pass on a server already held leaves the column at the
-    // earlier request, and this pass may have passed the purged library.
     m.findUnique.mockResolvedValue({ libraryResyncRequiredAt: new Date(passStart.getTime() - 60_000) });
     await requireLibraryResync(["s1"], { at: new Date(passStart.getTime() + 1) });
     m.updateMany.mockClear();
@@ -522,8 +414,6 @@ describe("releaseLibraryResyncHold", () => {
   });
 
   it("puts back a hold requested while its write was in flight, and reports no release", async () => {
-    // That request found the column set and left it (it keeps the earliest), so
-    // the release's write just cleared it along with the hold it released.
     m.findUnique.mockResolvedValue({ libraryResyncRequiredAt: passStart });
     let raced: Date | undefined;
     m.updateMany.mockImplementationOnce(async () => {
@@ -540,18 +430,17 @@ describe("releaseLibraryResyncHold", () => {
     });
   });
 
-  it("forgets the requests it covered, so a later population of the server gets its receipt again", async () => {
+  it("forgets the requests it covered: no request since, and a later population gets its receipt again", async () => {
     m.findUnique.mockResolvedValue({ libraryResyncRequiredAt: passStart });
-    await requireLibraryResync(["s1"], { at: passStart });
+    await requireLibraryResync(["s1"], { at: new Date(passStart.getTime() + 1) });
 
-    await expect(releaseLibraryResyncHold("s1", passStart)).resolves.toBe(true);
+    await expect(releaseLibraryResyncHold("s1", new Date(passStart.getTime() + 2))).resolves.toBe(true);
 
+    expect(libraryResyncRequestedSince("s1", passStart)).toBe(false);
     await expect(requirePopulationResync("s1", new Date(passStart.getTime() + 60_000))).resolves.not.toBeNull();
   });
 
   it("counts a withdrawal before releasing, so an older history pass cannot vouch afterwards", async () => {
-    // A pass whose snapshot predates the release may have built its item map
-    // before the re-added items existed.
     m.findUnique.mockResolvedValue({ libraryResyncRequiredAt: passStart });
     const older = snapshotWatchEvidence("s1", null);
     let generationMovedBeforeWrite: boolean | undefined;
@@ -563,25 +452,17 @@ describe("releaseLibraryResyncHold", () => {
     await releaseLibraryResyncHold("s1", passStart);
 
     expect(generationMovedBeforeWrite).toBe(true);
-    // ...while one started after the release may establish it.
     const newer = snapshotWatchEvidence("s1", null);
     m.updateMany.mockClear();
     await expect(markWatchHistoryEstablishedIfUnchanged(older)).resolves.toBe(false);
     await expect(markWatchHistoryEstablishedIfUnchanged(newer)).resolves.toBe(true);
   });
 
-  it("does not touch a hold set after the pass started, and counts no withdrawal", async () => {
-    m.findUnique.mockResolvedValue({ libraryResyncRequiredAt: new Date(passStart.getTime() + 1) });
-    const snapshot = snapshotWatchEvidence("s1", null);
-
-    await expect(releaseLibraryResyncHold("s1", passStart)).resolves.toBe(false);
-
-    expect(m.updateMany).not.toHaveBeenCalled();
-    expect(snapshotWatchEvidence("s1", null).generation).toBe(snapshot.generation);
-  });
-
-  it("does nothing for a server with no hold — a normal full sync leaves the marker alone", async () => {
-    m.findUnique.mockResolvedValue({ libraryResyncRequiredAt: null });
+  it.each([
+    ["a hold set after the pass started", new Date(passStart.getTime() + 1)],
+    ["no hold — a normal full sync leaves the marker alone", null],
+  ])("touches nothing and counts no withdrawal for %s", async (_, hold) => {
+    m.findUnique.mockResolvedValue({ libraryResyncRequiredAt: hold });
     const snapshot = snapshotWatchEvidence("s1", null);
 
     await expect(releaseLibraryResyncHold("s1", passStart)).resolves.toBe(false);
@@ -601,39 +482,25 @@ describe("releaseLibraryResyncHold", () => {
 describe("requirePopulationResync", () => {
   const at = new Date("2026-03-01T10:00:00.000Z");
 
-  beforeEach(() => {
-    vi.clearAllMocks();
-    m.updateMany.mockResolvedValue({ count: 1 });
-  });
-
-  it("is requireLibraryResync at the given instant", async () => {
-    await requirePopulationResync("s1", at);
+  it("is requireLibraryResync at the given instant, returning a receipt with the generation after its withdrawal", async () => {
+    const receipt = await requirePopulationResync("s1", at);
 
     const holdWrite = m.updateMany.mock.calls.find((c) => "libraryResyncRequiredAt" in c[0].data)![0];
     expect(holdWrite).toEqual({
       where: { id: { in: ["s1"] }, libraryResyncRequiredAt: null },
       data: { libraryResyncRequiredAt: at },
     });
-  });
-
-  it("returns a receipt carrying the generation right after its own withdrawal", async () => {
-    const receipt = await requirePopulationResync("s1", at);
-
     expect(receipt).toEqual({ serverId: "s1", at, generation: snapshotWatchEvidence("s1", null).generation });
   });
 
   it("returns no receipt when a hold was already in place", async () => {
-    // The hold write matched nothing: an earlier purge or restore holds it, and
-    // its missing items may be anywhere on the server.
     m.updateMany.mockResolvedValueOnce({ count: 0 });
 
     await expect(requirePopulationResync("s1", at)).resolves.toBeNull();
   });
 
   it("returns no receipt while another request is outstanding, though its write has not landed", async () => {
-    // A purge noted its request and is still writing: this call finds the
-    // column empty and writes, but the hold it wrote also stands for that
-    // purge, whose missing items are not this sync's to bring back.
+    // The hold it writes also stands for that purge, whose missing items are not this sync's to bring back.
     let landPurge!: () => void;
     m.updateMany.mockImplementationOnce(
       () => new Promise((resolve) => (landPurge = () => resolve({ count: 0 }))),
@@ -647,8 +514,6 @@ describe("requirePopulationResync", () => {
   });
 
   it("leaves a withdrawal counted while it was writing out of its receipt", async () => {
-    // A purge landing during the call must not be folded into the receipt, or
-    // the release would not see it.
     m.updateMany.mockImplementationOnce(async () => {
       await invalidateWatchHistoryEvidence(["s1"]);
       return { count: 1 };
@@ -663,11 +528,6 @@ describe("requirePopulationResync", () => {
 describe("releaseOwnPopulationHold", () => {
   const at = new Date("2026-03-01T10:00:00.000Z");
 
-  beforeEach(() => {
-    vi.clearAllMocks();
-    m.updateMany.mockResolvedValue({ count: 1 });
-  });
-
   it("releases on the exact instant, nulling the marker in the same write", async () => {
     const receipt = await requirePopulationResync("s1", at);
     m.updateMany.mockClear();
@@ -681,23 +541,16 @@ describe("releaseOwnPopulationHold", () => {
     });
   });
 
-  it("refuses, writing nothing, once any withdrawal was counted for the server since the hold", async () => {
+  it.each([
+    ["a purge at any instant — even this hold's own", () => requireLibraryResync(["s1"], { at })],
+    ["a restore rewrote the database", () => invalidateServersWithoutWatchHistory()],
+  ])("refuses, writing nothing, once a withdrawal was counted since the hold: %s", async (_, withdraw) => {
     const receipt = await requirePopulationResync("s1", at);
-    // A purge after the population (at any instant — even this hold's own).
-    await requireLibraryResync(["s1"], { at });
+    await withdraw();
     m.updateMany.mockClear();
 
     await expect(releaseOwnPopulationHold(receipt!)).resolves.toBe(false);
 
-    expect(m.updateMany).not.toHaveBeenCalled();
-  });
-
-  it("refuses after a restore rewrote the database", async () => {
-    const receipt = await requirePopulationResync("s1", at);
-    await invalidateServersWithoutWatchHistory();
-    m.updateMany.mockClear();
-
-    await expect(releaseOwnPopulationHold(receipt!)).resolves.toBe(false);
     expect(m.updateMany).not.toHaveBeenCalled();
   });
 

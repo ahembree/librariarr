@@ -53,9 +53,8 @@ export async function POST(request: Request) {
     if (!server) {
       return NextResponse.json({ error: "Server not found" }, { status: 404 });
     }
-    // The History page's server picker lists disabled servers too, and the
-    // sync skips one without touching it — which used to answer as a clean
-    // zero-play sync. Say so instead.
+    // The page's picker lists disabled servers, which the sync skips untouched:
+    // refuse rather than answer with a clean zero.
     if (!server.enabled) {
       return NextResponse.json(
         { error: "This server is disabled. Enable it to sync its watch history." },
@@ -128,10 +127,8 @@ export async function POST(request: Request) {
             // `signal.aborted` check above only runs between servers.
             signal,
           );
-          // A sync that could not run (fetch failed, Tracearr instance
-          // unresolvable, the importer's walk errored) returns rather than
-          // throws, so the stored history stays intact — but it is still a
-          // failure, and the History page names it only on -1.
+          // A sync that could not run returns `failed` rather than throwing (the
+          // stored history stays intact); the page names a failure only on -1.
           counts[server.id] = result.failed ? -1 : result.count;
         } catch {
           // A cancel is not a failure. The native path deliberately THROWS on

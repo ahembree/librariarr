@@ -8,79 +8,43 @@ import {
   scrollTopForPageChange,
 } from "@/lib/media/history-paging";
 
-describe("lastPageFor / clampPage", () => {
-  it("never reports a last page below 1", () => {
-    expect(lastPageFor(0, 5)).toBe(1);
-    expect(lastPageFor(5, 5)).toBe(1);
-    expect(lastPageFor(6, 5)).toBe(2);
+describe("page arithmetic", () => {
+  it("never reports a last page below 1, and clamps into range", () => {
+    expect([lastPageFor(0, 5), lastPageFor(5, 5), lastPageFor(6, 5)]).toEqual([1, 1, 2]);
+    expect([clampPage(0, 50, 5), clampPage(4, 50, 5), clampPage(40, 50, 5), clampPage(3, 0, 5)]).toEqual([1, 4, 10, 1]);
   });
 
-  it("clamps into range", () => {
-    expect(clampPage(0, 50, 5)).toBe(1);
-    expect(clampPage(4, 50, 5)).toBe(4);
-    expect(clampPage(40, 50, 5)).toBe(10);
-    expect(clampPage(3, 0, 5)).toBe(1);
-  });
-});
-
-describe("pageAfterShrink", () => {
-  it("keeps a page that still exists", () => {
-    expect(pageAfterShrink(3, 15, 5)).toBeNull();
-    expect(pageAfterShrink(1, 0, 5)).toBeNull();
-  });
-
-  it("steps back to the new last page, not the first", () => {
-    expect(pageAfterShrink(4, 12, 5)).toBe(3);
-    expect(pageAfterShrink(9, 0, 5)).toBe(1);
+  it("pageAfterShrink keeps a page that still exists, else steps back to the new last page", () => {
+    expect([pageAfterShrink(3, 15, 5), pageAfterShrink(1, 0, 5)]).toEqual([null, null]);
+    expect([pageAfterShrink(4, 12, 5), pageAfterShrink(9, 0, 5)]).toEqual([3, 1]);
   });
 });
 
 describe("PageRequestTracker", () => {
-  it("starts a new scope at page 1", () => {
+  it("reloads the requested page within a scope, and page 1 in a new one", () => {
     const t = new PageRequestTracker();
     expect(t.refresh("scope-a").page).toBe(1);
-  });
-
-  it("reloads the page the user is on when the scope is unchanged", () => {
-    const t = new PageRequestTracker();
-    t.refresh("scope-a");
     t.request(4);
     expect(t.refresh("scope-a").page).toBe(4);
-  });
-
-  it("goes back to page 1 when the scope changes", () => {
-    const t = new PageRequestTracker();
-    t.refresh("scope-a");
-    t.request(4);
     expect(t.refresh("scope-b").page).toBe(1);
   });
 
-  it("gives every request a new token so only the newest applies", () => {
+  it("lets only the newest request apply; a refresh mid-click reloads the page being moved to", () => {
     const t = new PageRequestTracker();
-    const refresh = t.refresh("scope").token;
-    const click = t.request(3);
-    expect(click).not.toBe(refresh);
-    expect(t.isCurrent(refresh)).toBe(false);
-    expect(t.isCurrent(click)).toBe(true);
-  });
-
-  it("a refresh during an in-flight page change reloads the page being moved to", () => {
-    const t = new PageRequestTracker();
-    t.refresh("scope");
+    const first = t.refresh("scope").token;
     const click = t.request(5);
-    const { page, token } = t.refresh("scope");
-    expect(page).toBe(5);
-    expect(t.isCurrent(click)).toBe(false);
-    expect(t.isCurrent(token)).toBe(true);
-  });
-
-  it("a click after a refresh started wins over that refresh", () => {
-    const t = new PageRequestTracker();
-    t.refresh("scope");
-    const { token: refresh } = t.refresh("scope");
-    const click = t.request(2);
-    expect(t.isCurrent(refresh)).toBe(false);
+    expect(t.isCurrent(first)).toBe(false);
     expect(t.isCurrent(click)).toBe(true);
+
+    const refresh = t.refresh("scope");
+    expect(refresh.page).toBe(5);
+    expect(t.isCurrent(click)).toBe(false);
+    expect(t.isCurrent(refresh.token)).toBe(true);
+
+    // A click after the refresh started wins over it.
+    const next = t.request(2);
+    expect(t.isCurrent(refresh.token)).toBe(false);
+    expect(t.isCurrent(next)).toBe(true);
   });
 
   it("records a clamp only for the newest request", () => {
@@ -97,44 +61,29 @@ describe("PageRequestTracker", () => {
 });
 
 describe("pagedListView", () => {
-  it("keeps rows on screen when a refresh or page click fails", () => {
-    // PlayHistory used to swap its rows for "Could not load watch history",
-    // with no pagination and no Retry, on any failed request.
-    expect(pagedListView({ loading: false, error: true, rowCount: 5 })).toBe("rows");
-  });
-
-  it("shows the error card only when there is nothing to show", () => {
-    expect(pagedListView({ loading: false, error: true, rowCount: 0 })).toBe("error");
-  });
-
-  it("shows the skeleton for a first load and while retrying an empty list", () => {
-    expect(pagedListView({ loading: true, error: false, rowCount: 0 })).toBe("loading");
-    expect(pagedListView({ loading: true, error: true, rowCount: 0 })).toBe("loading");
-  });
-
-  it("distinguishes an empty history from a failed one", () => {
-    expect(pagedListView({ loading: false, error: false, rowCount: 0 })).toBe("empty");
-    expect(pagedListView({ loading: false, error: false, rowCount: 3 })).toBe("rows");
+  it.each([
+    // Rows on screen win over a failed refresh or page click.
+    [{ loading: false, error: true, rowCount: 5 }, "rows"],
+    [{ loading: false, error: false, rowCount: 3 }, "rows"],
+    [{ loading: false, error: true, rowCount: 0 }, "error"],
+    [{ loading: true, error: false, rowCount: 0 }, "loading"],
+    [{ loading: true, error: true, rowCount: 0 }, "loading"],
+    [{ loading: false, error: false, rowCount: 0 }, "empty"],
+  ] as const)("%o shows %s", (state, view) => {
+    expect(pagedListView(state)).toBe(view);
   });
 });
 
 describe("scrollTopForPageChange", () => {
-  it("scrolls back up to the table when its top has scrolled out of view", () => {
-    // Container's top edge at 64px (below a header); the table's top is 1,800px
-    // above it after reading to the bottom of a 100-row page.
-    expect(scrollTopForPageChange(64 - 1800, 64, 2200)).toBe(2200 - 1800 - 16);
-  });
-
-  it("leaves the scroll alone when the table's top is already in view", () => {
-    expect(scrollTopForPageChange(300, 64, 0)).toBeNull();
-    expect(scrollTopForPageChange(64, 64, 120)).toBeNull();
-  });
-
-  it("never asks for a negative scrollTop", () => {
-    expect(scrollTopForPageChange(-10, 0, 5)).toBe(0);
-  });
-
-  it("ignores a measurement it cannot use", () => {
-    expect(scrollTopForPageChange(Number.NaN, 0, 100)).toBeNull();
+  it.each<[number, number, number, number | null]>([
+    // The table's top 1,800px above the container's (at 64px): scroll back up to it.
+    [64 - 1800, 64, 2200, 2200 - 1800 - 16],
+    // Already in view: leave the scroll alone.
+    [300, 64, 0, null],
+    [64, 64, 120, null],
+    [-10, 0, 5, 0],
+    [Number.NaN, 0, 100, null],
+  ])("(%d, %d, %d) is %s", (anchorTop, containerTop, scrollTop, expected) => {
+    expect(scrollTopForPageChange(anchorTop, containerTop, scrollTop)).toBe(expected);
   });
 });

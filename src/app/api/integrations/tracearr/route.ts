@@ -48,9 +48,7 @@ export async function POST(request: NextRequest) {
     },
   });
 
-  // A server already mapped while no instance was enabled has been waiting on
-  // one ("no Tracearr instance is enabled"); start its import now rather than
-  // at the next watch-history sync.
+  // A server mapped while no instance was enabled can start its import now.
   await enqueueTracearrBackfill({ userId: session.userId! }, "Tracearr instance added");
 
   return NextResponse.json({ instance: sanitize(instance) }, { status: 201 });

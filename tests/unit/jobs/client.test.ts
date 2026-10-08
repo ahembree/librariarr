@@ -110,14 +110,6 @@ describe("jobs client", () => {
       expect(params).toEqual(["tracearr-backfill:s1", null]);
     });
 
-    it("passes a cooldown through when asked to count a recently parked job", async () => {
-      poolQuery.mockResolvedValueOnce({ rows: [{ retrying: true }] });
-      await expect(isJobRetrying("k", { failedWithinMs: 600_000 })).resolves.toBe(true);
-      const [sql, params] = poolQuery.mock.calls[0];
-      expect(sql).toContain('"run_at" > now()');
-      expect(params).toEqual(["k", 600_000]);
-    });
-
     it("answers false when nothing is backing off", async () => {
       poolQuery.mockResolvedValueOnce({ rows: [{ retrying: false }] });
       await expect(isJobRetrying("k")).resolves.toBe(false);

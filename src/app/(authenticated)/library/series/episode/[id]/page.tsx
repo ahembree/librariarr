@@ -30,9 +30,7 @@ export default function EpisodeDetailPage() {
   const [loading, setLoading] = useState(true);
   // The watch-history card below reads the *stored* WatchHistory table, so —
   // unlike the live per-user card it replaced — it only changes when a sync or
-  // an import lands. Refetch on both, as every detail page with a play list
-  // does: a Tracearr backfill slice and the per-playback watch-history job
-  // emit only `watch-history:updated`, never `sync:completed`.
+  // an import lands (an import announces only `watch-history:updated`).
   const [syncTick, setSyncTick] = useState(0);
   useRealtime("sync:completed", () => setSyncTick((t) => t + 1));
   useRealtime("watch-history:updated", () => setSyncTick((t) => t + 1));

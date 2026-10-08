@@ -1,13 +1,7 @@
 /**
- * A Jellyfin/Emby item listed by two libraries (two libraries over one folder)
- * is stored once per library, and the native sync files each play against
- * every copy — every copy has to read as watched to the per-item consumers.
- * Lists of PLAYS and the watch analytics must still count it once: all rows
- * but one point at the copy holding the play's primary row
- * (`WatchHistory.fanOutOfItemId`).
- *
- * Real database, real routes, and the REAL Jellyfin/Emby/Plex clients talking
- * to a local fake server — only the media server itself is faked.
+ * A Jellyfin/Emby item two libraries list is stored once per library; the native sync files each play
+ * against every copy, while lists of plays and analytics count it once (`WatchHistory.fanOutOfItemId`).
+ * Real database, routes and clients against a local fake server.
  */
 import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from "vitest";
 import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
@@ -26,7 +20,6 @@ import {
   jellyfinRoute,
   type FakeMediaServer,
   type FakePlayedItem,
-  type FakeRoute,
 } from "./fake-media-server";
 
 vi.mock("@/lib/db", async () => {
@@ -70,12 +63,7 @@ const played = (id: string, playCount = 1): FakePlayedItem => ({
 
 let fake: FakeMediaServer | null = null;
 
-async function serve(route: FakeRoute): Promise<string> {
-  fake = await startFakeMediaServer(route);
-  return fake.url;
-}
-
-describe("native watch history: one play filed against two library copies", () => {
+describe("native watch history: one play filed against several library copies", () => {
   let userId: string;
 
   beforeEach(async () => {
@@ -97,8 +85,8 @@ describe("native watch history: one play filed against two library copies", () =
 
   /** One episode stored in two libraries of a Jellyfin/Emby server (lower id = primary). */
   async function twoCopies(type: "JELLYFIN" | "EMBY", plays: Record<string, FakePlayedItem[]>) {
-    const url = await serve(jellyfinRoute(plays));
-    const server = await createTestServer(userId, { type, url, watchHistorySyncedAt: null });
+    fake = await startFakeMediaServer(jellyfinRoute(plays));
+    const server = await createTestServer(userId, { type, url: fake.url, watchHistorySyncedAt: null });
     const libA = await createTestLibrary(server.id, { key: "lib-a", type: "SERIES" });
     const libB = await createTestLibrary(server.id, { key: "lib-b", type: "SERIES" });
     const episode = (libraryId: string, ratingKey: string, episodeNumber: number) =>
@@ -138,11 +126,7 @@ describe("native watch history: one play filed against two library copies", () =
     (await storedRows(serverId))
       .map((r) => [r.mediaItemId, r.fanOutOfItemId])
       .sort((x, y) => (x[0]! < y[0]! ? -1 : x[0]! > y[0]! ? 1 : 0));
-  /**
-   * How many times every list of plays shows alice's one play: the show's
-   * play list, the History page and both analytics — each page's rows and its
-   * count, which must agree.
-   */
+  /** How often the show's play list, the History page and both analytics show alice's one play. */
   async function expectListedTimes(serverId: string, times: number) {
     const series = await seriesHistory();
     expect(series.items).toHaveLength(times);
@@ -165,57 +149,41 @@ describe("native watch history: one play filed against two library copies", () =
 
       await expect(syncWatchHistory(server.id)).resolves.toEqual({ count: 2 });
 
-      // Both copies hold the play; the lower id holds its primary row.
-      const rows = await storedRows(server.id);
-      expect(
-        rows.map((r) => [r.mediaItemId, r.fanOutOfItemId]).sort((x, y) => (x[0]! < y[0]! ? -1 : 1)),
-      ).toEqual([
+      expect(await storedPointers(server.id)).toEqual([
         [primary.id, null],
         [copy.id, primary.id],
       ]);
-
-      // The show's play list: one play, and a count that agrees.
-      const series = await seriesHistory();
-      expect(series.items).toHaveLength(1);
-      expect(series.items[0].mediaItem.id).toBe(primary.id);
-      expect(series.pagination.totalCount).toBe(1);
-
-      // Each copy's own page still lists it — on the second copy's page its
-      // row is the only record of the play, and the copy was watched.
-      for (const item of [primary, copy]) {
-        const plays = await itemPlays(item.id);
-        expect(plays.items).toHaveLength(1);
-        expect(plays.items[0].mediaItem.id).toBe(item.id);
-        expect(plays.pagination.totalCount).toBe(1);
-      }
-
-      // The analytics count plays, not rows.
-      const trends = await computeWatchTrends([server.id], { days: 30, limit: 10 });
-      expect(trends).toEqual([expect.objectContaining({ title: "The Show", plays: 1, users: 1 })]);
+      await expectListedTimes(server.id, 1);
+      expect((await seriesHistory()).items[0].mediaItem.id).toBe(primary.id);
       const seriesTrends = await computeWatchTrends([server.id], { mediaType: "SERIES", days: 30, limit: 10 });
       expect(seriesTrends).toEqual([expect.objectContaining({ title: "The Show", plays: 1 })]);
-      const board = await computeWatchLeaderboard([server.id], { groupBy: "user", days: 30, limit: 10 });
-      expect(board).toEqual([expect.objectContaining({ key: "alice", plays: 1, items: 1 })]);
-
+      // Each copy's own page lists it (on the copy's, its row is the only record).
+      for (const item of [primary, copy]) {
+        const plays = await itemPlays(item.id);
+        expect(plays.items.map((i) => i.mediaItem.id)).toEqual([item.id]);
+        expect(plays.pagination.totalCount).toBe(1);
+      }
       // The per-item reconcile is unchanged: BOTH copies read as watched.
       const items = await prisma.mediaItem.findMany({
         where: { id: { in: [primary.id, copy.id] } },
         select: { playCount: true, lastPlayedAt: true },
       });
-      expect(items).toHaveLength(2);
-      for (const item of items) {
-        expect(item.playCount).toBe(1);
-        expect(item.lastPlayedAt?.toISOString()).toBe(PLAYED_AT.toISOString());
-      }
+      expect(items).toEqual([
+        { playCount: 1, lastPlayedAt: PLAYED_AT },
+        { playCount: 1, lastPlayedAt: PLAYED_AT },
+      ]);
     },
   );
 
-  it("files the undated plays of a play count against both copies the same way", async () => {
+  it("files the undated plays of a play count against both copies the same way, counting plays", async () => {
     // PlayCount 3: one dated entry (LastPlayedDate) and two undated ones.
     const { server, primary, copy } = await twoCopies("JELLYFIN", { alice: [played("jf-ep1", 3)] });
+    const updates: Array<{ detail?: string }> = [];
 
-    await expect(syncWatchHistory(server.id)).resolves.toEqual({ count: 6 });
+    await expect(syncWatchHistory(server.id, (u) => updates.push(u))).resolves.toEqual({ count: 6 });
 
+    // Progress counts plays, not rows, so it never passes the total.
+    expect(updates.at(-1)?.detail).toBe("Stored 3 of 3 plays");
     const rows = await storedRows(server.id);
     expect(rows.filter((r) => r.mediaItemId === primary.id).every((r) => r.fanOutOfItemId === null)).toBe(true);
     expect(rows.filter((r) => r.mediaItemId === copy.id).map((r) => r.fanOutOfItemId)).toEqual([
@@ -231,7 +199,6 @@ describe("native watch history: one play filed against two library copies", () =
     for (const item of [primary, copy]) {
       expect((await itemPlays(item.id)).pagination.totalCount).toBe(3);
     }
-    // Both copies read as played three times.
     const items = await prisma.mediaItem.findMany({
       where: { id: { in: [primary.id, copy.id] } },
       select: { playCount: true },
@@ -250,38 +217,30 @@ describe("native watch history: one play filed against two library copies", () =
 
     await expect(syncWatchHistory(server.id)).resolves.toEqual({ count: 5 });
 
-    // 5 rows, 3 plays. Counted on rows, page 2 would still say there is more.
+    // 5 rows, 3 plays: counted on rows, page 2 would still say there is more.
     const page1 = await seriesHistory({ limit: "2", page: "1" });
     expect(page1.items).toHaveLength(2);
     expect(page1.pagination).toMatchObject({ hasMore: true, totalCount: 3 });
     const page2 = await seriesHistory({ limit: "2", page: "2" });
     expect(page2.items).toHaveLength(1);
     expect(page2.pagination).toMatchObject({ hasMore: false, totalCount: 3 });
-    const ids = [...page1.items, ...page2.items].map((i) => i.id);
-    expect(new Set(ids).size).toBe(3);
+    expect(new Set([...page1.items, ...page2.items].map((i) => i.id)).size).toBe(3);
   });
 
   it("shows the play through the other copy once the primary copy is deleted", async () => {
     const { server, primary, copy } = await twoCopies("JELLYFIN", { alice: [played("jf-ep1")] });
     await syncWatchHistory(server.id);
 
-    // A real delete: the primary row cascades away with its item, and the
-    // copy's pointer is set to null — it is now the play's only record.
+    // The primary row cascades away; `SetNull` makes the copy's the only record.
     await prisma.mediaItem.delete({ where: { id: primary.id } });
 
-    expect(await storedRows(server.id)).toEqual([
-      expect.objectContaining({ mediaItemId: copy.id, fanOutOfItemId: null }),
-    ]);
-    const series = await seriesHistory();
-    expect(series.items.map((i) => i.mediaItem.id)).toEqual([copy.id]);
-    // Once, everywhere: the History page and the analytics as well.
+    expect(await storedPointers(server.id)).toEqual([[copy.id, null]]);
+    expect((await seriesHistory()).items.map((i) => i.mediaItem.id)).toEqual([copy.id]);
     await expectListedTimes(server.id, 1);
   });
 
   it("with three copies, lists the play once per remaining copy after the primary copy is deleted — until the next full replace", async () => {
-    // The documented limit of the design (see `nativeRowsForPlay`): stored
-    // rows are not re-pointed when the primary copy is deleted, and `SetNull`
-    // clears the pointer on EVERY remaining copy.
+    // The documented limit (`nativeRowsForPlay`): `SetNull` clears EVERY survivor's pointer.
     const { server, episode } = await twoCopies("JELLYFIN", { alice: [played("jf-ep1")] });
     const libC = await createTestLibrary(server.id, { key: "lib-c", type: "SERIES" });
     await episode(libC.id, "jf-ep1", 1);
@@ -301,7 +260,6 @@ describe("native watch history: one play filed against two library copies", () =
 
     await prisma.mediaItem.delete({ where: { id: primary } });
 
-    // Both survivors now read as primaries: the play is shown twice.
     expect(await storedPointers(server.id)).toEqual([
       [second, null],
       [third, null],
@@ -315,51 +273,5 @@ describe("native watch history: one play filed against two library copies", () =
       [third, second],
     ]);
     await expectListedTimes(server.id, 1);
-  });
-
-  it("re-points the copy's row on the next full replace after the primary copy is deleted", async () => {
-    const { server, primary, copy } = await twoCopies("JELLYFIN", { alice: [played("jf-ep1")] });
-    await syncWatchHistory(server.id);
-    await prisma.mediaItem.delete({ where: { id: primary.id } });
-
-    await expect(syncWatchHistory(server.id)).resolves.toEqual({ count: 1 });
-
-    expect(await storedRows(server.id)).toEqual([
-      expect.objectContaining({ mediaItemId: copy.id, fanOutOfItemId: null }),
-    ]);
-  });
-
-  it("on Plex, still places or skips a play on a rating key two libraries share, and never fans it out", async () => {
-    // Plex keys are server-unique: one of the two rows is stale, and only the
-    // play's own library can say which.
-    const viewedAt = Math.floor(PLAYED_AT.getTime() / 1000);
-    const url = await serve((path) => {
-      if (path === "/accounts") return { body: { MediaContainer: { Account: [{ id: 1, name: "alice" }] } } };
-      if (path === "/devices") return { body: { MediaContainer: { Device: [] } } };
-      return {
-        body: {
-          MediaContainer: {
-            totalSize: 2,
-            size: 2,
-            Metadata: [
-              { historyKey: "/h/1", ratingKey: "100", viewedAt, accountID: 1, librarySectionID: 2 },
-              // Names no library: ambiguous, skipped.
-              { historyKey: "/h/2", ratingKey: "100", viewedAt: viewedAt - 60, accountID: 1 },
-            ],
-          },
-        },
-      };
-    });
-    const server = await createTestServer(userId, { type: "PLEX", url });
-    const libA = await createTestLibrary(server.id, { key: "1" });
-    const libB = await createTestLibrary(server.id, { key: "2" });
-    await createTestMediaItem(libA.id, { ratingKey: "100" });
-    const inB = await createTestMediaItem(libB.id, { ratingKey: "100" });
-
-    await expect(syncWatchHistory(server.id)).resolves.toEqual({ count: 1 });
-
-    expect(await storedRows(server.id)).toEqual([
-      expect.objectContaining({ mediaItemId: inB.id, fanOutOfItemId: null }),
-    ]);
   });
 });

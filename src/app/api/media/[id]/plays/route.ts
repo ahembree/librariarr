@@ -60,11 +60,8 @@ export async function GET(
   // navigate between, and a play belongs to the copy it happened on; merging
   // here would attribute another server's plays to this page.
   //
-  // Nor are fan-out copies collapsed (unlike the series route): when a
-  // Jellyfin/Emby item is listed by two libraries, the play's row on the
-  // second copy points at the first (`fanOutOfItemId`), and on THIS copy's
-  // page that row is the only record of the play — hiding it would show a
-  // watched copy as never played. Each copy's page lists the play once.
+  // Nor are fan-out copies collapsed (unlike the series route): on this copy's
+  // page its row may be the play's only record.
   return NextResponse.json(
     await fetchPlayHistory({
       userId: session.userId!,

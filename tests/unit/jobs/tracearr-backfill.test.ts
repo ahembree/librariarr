@@ -125,12 +125,8 @@ describe("tracearr-backfill task", () => {
   });
 
   describe("on a finished archive", () => {
-    // Queued after EVERY forward sync — per finished playback on a realtime
-    // server — and almost always a no-op there. It used to drop every media
-    // cache and make every open History/stats page refetch regardless.
+    // Queued after every forward sync, and almost always a no-op there.
     it("leaves caches and open pages alone when nothing moved", async () => {
-      syncTracearrHistory.mockResolvedValue({ count: 0, backfillPending: false });
-
       await runBackfill();
 
       expect(m.recoverHistoryForNewItems).toHaveBeenCalledWith(
@@ -144,29 +140,24 @@ describe("tracearr-backfill task", () => {
       expect(logger.info).not.toHaveBeenCalledWith("Jobs", expect.stringContaining("complete"));
     });
 
-    it("announces recovered plays", async () => {
-      syncTracearrHistory.mockResolvedValue({ count: 0, backfillPending: false });
-      m.recoverHistoryForNewItems.mockResolvedValue({ checked: 3, imported: 4 });
+    it.each([
+      ["recovered plays", { count: 0, backfillPending: false }, 4],
+      [
+        "the slice that finished the walk, even having stored nothing",
+        { count: 0, backfillPending: false, backfillOutcome: "exhausted" },
+        0,
+      ],
+    ])("announces %s", async (_, result, recovered) => {
+      syncTracearrHistory.mockResolvedValue(result);
+      m.recoverHistoryForNewItems.mockResolvedValue({ checked: 3, imported: recovered });
 
       await runBackfill();
 
       expect(invalidateMediaCaches).toHaveBeenCalledOnce();
       expect(m.emitWatchHistoryUpdated).toHaveBeenCalledWith(
         SERVER_ID,
-        expect.objectContaining({ imported: 4, backfillPending: false }),
+        expect.objectContaining({ imported: recovered, backfillPending: false }),
       );
-    });
-
-    it("announces the slice that finished the walk even when it stored nothing", async () => {
-      syncTracearrHistory.mockResolvedValue({
-        count: 0,
-        backfillPending: false,
-        backfillOutcome: "exhausted",
-      });
-
-      await runBackfill();
-
-      expect(m.emitWatchHistoryUpdated).toHaveBeenCalledOnce();
     });
   });
 
@@ -197,10 +188,7 @@ describe("tracearr-backfill task", () => {
   });
 
   it("bounds the recovery pass by the same slice deadline and requested-sync watch", async () => {
-    // The recovery pass runs after the walk inside the same job, so it holds
-    // the serial queue too: one deadline for both, and the watch kept alive
-    // until it is done.
-    syncTracearrHistory.mockResolvedValue({ count: 0, backfillPending: false });
+    // It holds the serial queue too, so the watch stays alive until it is done.
     let yieldDuring: boolean | undefined;
     let stoppedDuring: boolean | undefined;
     m.recoverHistoryForNewItems.mockImplementation(
@@ -337,8 +325,7 @@ describe("tracearr-backfill task", () => {
       // Nothing about the next run would differ, so re-queueing immediately
       // spins as fast as the queue turns over — hammering an instance that is
       // already down and burning the rate limit its recovery needs. Throwing
-      // hands it to graphile-worker's own backoff instead, with the importer's
-      // own reason as the job's recorded error.
+      // hands it to graphile-worker's own backoff instead.
       syncTracearrHistory.mockResolvedValue({
         count: 0,
         backfillPending: true,
@@ -353,11 +340,7 @@ describe("tracearr-backfill task", () => {
     });
 
     it("throws — not re-queues — a slice whose history cursor stalled, and says so", async () => {
-      // Tracearr handing back a page position it already gave is not a
-      // resumable stop: the next slice re-walked the same pages (and rebuilt
-      // its join index and /users) forever, never parking. As an error the
-      // worker backs off and, after maxAttempts, parks it — under a message
-      // that names the stall, not an unreachable Tracearr.
+      // As a resumable stop it re-walked the same pages forever, never parking.
       syncTracearrHistory.mockResolvedValue({
         count: 120,
         backfillPending: true,
@@ -369,9 +352,8 @@ describe("tracearr-backfill task", () => {
       await expect(failure).rejects.toThrow(/history cursor stopped advancing/);
       await expect(failure).rejects.not.toThrow(/could not reach/);
       expect(enqueueJob).not.toHaveBeenCalled();
-      // The rows its committed pages imported are still announced.
+      // Its committed pages are still announced, with no "queueing" line.
       expect(invalidateMediaCaches).toHaveBeenCalledOnce();
-      // ...and the misleading "queueing the next one" line is not logged.
       expect(infoLogs().some((line) => line.includes("queueing the next one"))).toBe(false);
     });
 
@@ -415,9 +397,7 @@ describe("tracearr-backfill task", () => {
       expect(infoLogs().some((line) => line.includes("found no history to import"))).toBe(true);
     });
 
-    // A held slice is reported "exhausted" + pending too, so it is not
-    // re-queued (it would only be held again) — but it is not an empty archive,
-    // and logging it as one pointed at the wrong cause.
+    // Not re-queued (it would only be held again), and not logged as an empty archive.
     it.each([
       ["awaiting-resync", "held until a library sync brings back the items it is missing"],
       ["no-library-items", "none of its enabled libraries holds any items"],
@@ -437,9 +417,7 @@ describe("tracearr-backfill task", () => {
     });
 
     it("re-enqueues when the walk finished but a concurrent restart refused its completion", async () => {
-      // A purge or restore restarted the walk while this slice ran, so the
-      // importer's compare-and-set dropped its "complete". Pending + exhausted
-      // is then NOT "no history for this mapping" — a fresh walk is owed.
+      // Pending + exhausted is then not "no history": a fresh walk is owed.
       syncTracearrHistory.mockResolvedValue({
         count: 120,
         backfillPending: true,

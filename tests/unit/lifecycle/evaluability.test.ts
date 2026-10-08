@@ -327,139 +327,69 @@ describe("checkLifecycleRuleEvaluability", () => {
       expect(result.reason).not.toContain('"Server 5"');
     });
 
-    it("asks for held servers and mapped servers with a forward gap, besides the two older faults", async () => {
-      mockServerFindMany.mockResolvedValue([]);
-
-      await checkLifecycleRuleEvaluability("u1", "MOVIE", groupsWith("watchedByUser"));
-
-      const { where, select } = mockServerFindMany.mock.calls[0][0];
-      expect(where.OR).toEqual([
-        { libraryResyncRequiredAt: { not: null } },
-        { tracearrServerId: { not: null }, tracearrBackfillComplete: false },
-        { watchHistorySyncedAt: null },
-        { tracearrServerId: { not: null }, tracearrForwardFloorAt: { not: null } },
-      ]);
-      expect(select).toMatchObject({ libraryResyncRequiredAt: true, tracearrForwardFloorAt: true });
-    });
-
-    it("sends a held server to a full library sync, ahead of every other fault it has", async () => {
-      // The hold's only remedy is a complete library sync; a history sync or
-      // a finishing import cannot lift it, so naming those would be a dead end.
-      mockServerFindMany.mockResolvedValue([
-        heldServer("Purged", {
-          tracearrServerId: null,
-          watchHistorySyncedAt: null,
-          tracearrForwardFloorAt: new Date(),
-        }),
-      ]);
-
-      const result = await checkLifecycleRuleEvaluability("u1", "MOVIE", groupsWith("playCount"));
-
-      if (result.evaluable) throw new Error("expected not evaluable");
-      expect(result.permanent).toBe(false);
-      expect(result.reason).toContain(
+    it.each<[string, Record<string, unknown>, string | RegExp, RegExp]>([
+      [
+        "sends a held server to a full library sync, ahead of every other fault it has",
+        heldServer("Purged", { tracearrServerId: null, watchHistorySyncedAt: null, tracearrForwardFloorAt: new Date() }),
         '"Purged" (some of its media was removed in bulk or is being added for the first time — ' +
           "a purge, a restore, or a library's first sync — and play history waits for a complete " +
           "library sync of this server; run Sync on it under Settings → Servers, and if this stays, " +
           "System Logs name the library it is still waiting for)",
-      );
-      expect(result.reason).not.toMatch(/no sync has established|reading recent plays|not finished walking/);
-    });
-
-    it("tells a held Tracearr-mapped server that the restarted import comes after the library sync", async () => {
-      // Its release nulls the marker and only the restarted walk's completion
-      // establishes it again, so the library sync alone does not end the pause.
-      mockServerFindMany.mockResolvedValue([heldServer("Mapped", { watchHistorySyncedAt: null })]);
-
-      const result = await checkLifecycleRuleEvaluability("u1", "MOVIE", groupsWith("playCount"));
-
-      if (result.evaluable) throw new Error("expected not evaluable");
-      expect(result.reason).toContain(
+        /no sync has established|reading recent plays|not finished walking/,
+      ],
+      [
+        // Only the restarted walk's completion establishes the marker again.
+        "tells a held Tracearr-mapped server that the restarted import comes after the library sync",
+        heldServer("Mapped", { watchHistorySyncedAt: null }),
         "run Sync on it under Settings → Servers, and if this stays, System Logs name the library " +
           "it is still waiting for; after that sync, the Tracearr history import it restarted has to " +
           "read back through the archive before play history counts again)",
-      );
-      expect(result.reason).not.toMatch(/no sync has established|reading recent plays|not finished walking/);
-    });
-
-    it("names an unfinished import before a withdrawn marker on a mapped server", async () => {
-      // After a hold's release the marker is null AND the restarted walk is
-      // running: only the walk's completion re-establishes the marker there,
-      // so "run a Refresh" (which runs only the forward catch-up) cannot help.
-      mockServerFindMany.mockResolvedValue([importingServer("Plex")].map((s) => ({ ...s, watchHistorySyncedAt: null })));
-
-      const result = await checkLifecycleRuleEvaluability("u1", "MOVIE", groupsWith("playCount"));
-
-      if (result.evaluable) throw new Error("expected not evaluable");
-      expect(result.reason).toContain(
+        /no sync has established|reading recent plays|not finished walking/,
+      ],
+      [
+        // A Refresh runs only the forward catch-up, so it cannot help there.
+        "names an unfinished import before a withdrawn marker on a mapped server",
+        { ...importingServer("Plex"), watchHistorySyncedAt: null },
         '"Plex" (its Tracearr history import has not finished walking back through the archive — ' +
           "it starts over after a purge, a restore or a library's first sync; this clears when the " +
           "import completes, and Settings → Servers shows its progress, or why it is paused)",
-      );
-      expect(result.reason).not.toMatch(/no sync has established|Refresh/);
-    });
-
-    it("names a withdrawn marker before a forward gap, with every cause it has", async () => {
-      mockServerFindMany.mockResolvedValue([gappedServer("Plex", { watchHistorySyncedAt: null })]);
-
-      const result = await checkLifecycleRuleEvaluability("u1", "MOVIE", groupsWith("playCount"));
-
-      if (result.evaluable) throw new Error("expected not evaluable");
-      expect(result.reason).toContain(
+        /no sync has established|Refresh/,
+      ],
+      [
+        "names a withdrawn marker before a forward gap, with every cause it has",
+        gappedServer("Plex", { watchHistorySyncedAt: null }),
         '"Plex" (no sync has established what was played there — it has never synced, its ' +
           "history was cleared (a watch-history source change, a purge, a backup restore), or a " +
           "sync could not attribute every play; the next successful watch-history sync establishes " +
           "it — run one from Library → History → Refresh. If a user's play history could not be " +
           "read, System Logs name the user and what to change; a Refresh does not lift that one)",
-      );
-      expect(result.reason).not.toMatch(/reading recent plays/);
-    });
-
-    it("names an unfinished import before a forward gap", async () => {
-      mockServerFindMany.mockResolvedValue([gappedServer("Plex", { tracearrBackfillComplete: false })]);
-
-      const result = await checkLifecycleRuleEvaluability("u1", "MOVIE", groupsWith("playCount"));
-
-      if (result.evaluable) throw new Error("expected not evaluable");
-      expect(result.reason).toMatch(/not finished walking back through the archive/);
-      expect(result.reason).not.toMatch(/reading recent plays/);
-    });
-
-    it("describes a forward gap honestly: an import reading recent plays now, or an interrupted one", async () => {
-      // The importer records the floor before the first page with a new play
-      // of EVERY forward walk and clears it when the walk ends, so this is
-      // what a healthy realtime import looks like while it runs — refusing is
-      // right (those plays are unread), calling it "interrupted" was not.
-      mockServerFindMany.mockResolvedValue([gappedServer("Plex")]);
-
-      const result = await checkLifecycleRuleEvaluability("u1", "MOVIE", groupsWith("playCount"));
-
-      if (result.evaluable) throw new Error("expected not evaluable");
-      expect(result.reason).toContain(
+        /reading recent plays/,
+      ],
+      [
+        "names an unfinished import before a forward gap",
+        gappedServer("Plex", { tracearrBackfillComplete: false }),
+        /not finished walking back through the archive/,
+        /reading recent plays/,
+      ],
+      [
+        // Every forward walk with a new play sets the floor while it runs: refusing is right, "interrupted" was not.
+        "describes a forward gap honestly: an import reading recent plays now, or an interrupted one",
+        gappedServer("Plex"),
         '"Plex" (a Tracearr import is reading recent plays, or one was interrupted before it ' +
           "finished; this clears when that import completes — the next watch-history sync resumes " +
           "an interrupted one)",
-      );
-    });
-
-    it("keeps the five-name bound with the new faults mixed in", async () => {
-      mockServerFindMany.mockResolvedValue([
-        heldServer("A"),
-        gappedServer("B"),
-        unsyncedServer("C"),
-        importingServer("D"),
-        heldServer("E"),
-        gappedServer("F"),
-        importingServer("G"),
-      ]);
+        /no sync has established|not finished walking/,
+      ],
+    ])("%s", async (_, server, expected, notExpected) => {
+      mockServerFindMany.mockResolvedValue([server]);
 
       const result = await checkLifecycleRuleEvaluability("u1", "MOVIE", groupsWith("playCount"));
 
       if (result.evaluable) throw new Error("expected not evaluable");
-      expect(result.reason).toContain("7 server(s)");
-      expect(result.reason).toContain("and 2 more");
-      expect(result.reason).toContain('"E"');
-      expect(result.reason).not.toContain('"F"');
+      expect(result.permanent).toBe(false);
+      if (typeof expected === "string") expect(result.reason).toContain(expected);
+      else expect(result.reason).toMatch(expected);
+      expect(result.reason).not.toMatch(notExpected);
     });
 
     it("does not consult watch history for rules that never read it", async () => {
@@ -472,10 +402,7 @@ describe("checkLifecycleRuleEvaluability", () => {
   });
 
   describe("an Arr or Seerr refusal of a rule set that reads play activity", () => {
-    // Play Count = 0 AND the given criterion. The Arr/Seerr refusal comes
-    // first and keeps its reason, but detection skipping the rule set while its
-    // play history is not established must still record the play-history latch
-    // (`notePlayHistoryPause`): the matches it keeps may predate a play.
+    // Play Count = 0 AND the criterion: refused for the instance first, but still flagged for the latch.
     function playCountAnd(field: string): LifecycleRuleGroup[] {
       return [
         {

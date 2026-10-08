@@ -1,23 +1,11 @@
 import { Client } from "pg";
 
 /**
- * Seed for `history.spec.ts`: two servers, movies and one show's episodes,
- * and enough `WatchHistory` rows to make the History page (100 plays a page)
- * and a movie's per-play card (5 a page) both page.
- *
- * Built so each sort the spec checks gives a different first row:
- *   - every play on "Alpha Server" is by `bob`, every play on "Bravo Server"
- *     by `alice` — so User ascending leads with alice/Bravo while Server
- *     ascending leads with bob/Alpha (a Server header that sorted by user
- *     would show alice first);
- *   - the show's episode titles run AGAINST its episode numbers (Zulu is
- *     S01E01, Whiskey S02E01), and every movie title starts with "Title", so a
- *     title sort by show then SxxExx leads with the episodes in episode order,
- *     where a sort by the raw episode title would reverse them.
- *
- * Same conventions as `seed.ts`: fixed "e2e-hist-*" ids so seeding is
- * idempotent and cleanup exact (deleting the servers' libraries cascades the
- * items and their plays), enum values inlined as SQL literals.
+ * Seed for `history.spec.ts`, with enough plays for the History page (100 a page)
+ * and a movie's play card (5 a page) to page. Every play on "Alpha Server" is
+ * bob's and every one on "Bravo Server" alice's, and the episode titles run
+ * AGAINST their numbers, so each sort the spec checks leads with a different row.
+ * Fixed "e2e-hist-*" ids, as in `seed.ts`: seeding is idempotent, cleanup exact.
  */
 
 const SERVER_A = "e2e-hist-server-a";
@@ -31,16 +19,13 @@ const PLAYS_PER_MOVIE = 12;
 export const HISTORY_SEED = {
   serverA: "Alpha Server",
   serverB: "Bravo Server",
-  /** Plays on server A. */
   userA: "bob",
-  /** Plays on server B. */
   userB: "alice",
   /** The movie whose detail page the per-play card is checked on (server A). */
   detailMovieId: "e2e-hist-movie-01",
-  detailMovieTitle: "Title 01",
   playsPerMovie: PLAYS_PER_MOVIE,
   show: "Show Alpha",
-  /** The show's series identity: it has no external ids, so the title key. */
+  /** The show has no external ids, so its series key is the title key. */
   seriesKey: "title:show alpha",
   /** S01E01, whose id opens the show, season and episode detail pages. */
   episodeId: "e2e-hist-ep-s01e01",
@@ -55,24 +40,19 @@ export const HISTORY_SEED = {
   totalPlays: 10 * PLAYS_PER_MOVIE + 4,
 } as const;
 
+// Out of order on purpose, so the order on screen comes from the sort.
 const EPISODES: Array<{ id: string; season: number; episode: number; title: string }> = [
-  // Inserted out of order on purpose, so row order on screen comes from the
-  // sort and not from insertion order.
   { id: "e2e-hist-ep-s02e01", season: 2, episode: 1, title: "Whiskey" },
   { id: "e2e-hist-ep-s01e10", season: 1, episode: 10, title: "Xray" },
   { id: "e2e-hist-ep-s01e01", season: 1, episode: 1, title: "Zulu" },
   { id: "e2e-hist-ep-s01e02", season: 1, episode: 2, title: "Yankee" },
 ];
 
-function databaseUrl(): string {
-  return (
-    process.env.E2E_DATABASE_URL ??
-    "postgresql://librariarr:librariarr@localhost:5432/librariarr_e2e"
-  );
-}
-
 async function withClient<T>(fn: (c: Client) => Promise<T>): Promise<T> {
-  const client = new Client({ connectionString: databaseUrl() });
+  const client = new Client({
+    connectionString:
+      process.env.E2E_DATABASE_URL ?? "postgresql://librariarr:librariarr@localhost:5432/librariarr_e2e",
+  });
   await client.connect();
   try {
     return await fn(client);
@@ -83,8 +63,8 @@ async function withClient<T>(fn: (c: Client) => Promise<T>): Promise<T> {
 
 export async function cleanupHistorySeed(): Promise<void> {
   await withClient(async (c) => {
-    // Libraries first: the Library → MediaServer FK is SET NULL, so deleting
-    // the servers alone would orphan the libraries rather than remove them.
+    // Libraries first: Library → MediaServer is SET NULL, so deleting the
+    // servers alone would orphan them. The libraries cascade to items and plays.
     await c.query(`DELETE FROM "Library" WHERE id = ANY($1)`, [[LIB_A_MOVIE, LIB_A_SERIES, LIB_B_MOVIE]]);
     await c.query(`DELETE FROM "MediaServer" WHERE id = ANY($1)`, [[SERVER_A, SERVER_B]]);
   });
@@ -93,9 +73,7 @@ export async function cleanupHistorySeed(): Promise<void> {
 export async function seedHistory(): Promise<void> {
   await cleanupHistorySeed();
   await withClient(async (c) => {
-    const { rows } = await c.query<{ id: string }>(
-      `SELECT id FROM "User" ORDER BY "createdAt" ASC LIMIT 1`,
-    );
+    const { rows } = await c.query<{ id: string }>(`SELECT id FROM "User" ORDER BY "createdAt" ASC LIMIT 1`);
     if (rows.length === 0) throw new Error("No admin user found to own seed data");
     const userId = rows[0].id;
 
@@ -119,9 +97,7 @@ export async function seedHistory(): Promise<void> {
       );
     }
 
-    // Play timestamps step back an hour per play from a fixed base, so every
-    // row has a distinct watchedAt and the default (Watched At, newest first)
-    // order is deterministic.
+    // An hour apart, so the default order (Watched At, newest first) is deterministic.
     let playIndex = 0;
     const nextPlay = async (mediaItemId: string, serverId: string, username: string) => {
       playIndex += 1;

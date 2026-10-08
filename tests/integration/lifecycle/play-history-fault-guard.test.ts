@@ -23,12 +23,8 @@ import { GET as listServers } from "@/app/api/servers/route";
 import { checkWatchHistoryCompleteness } from "@/lib/lifecycle/evaluability";
 
 /**
- * The rule editor's play-history banner is a client-side MIRROR of
- * `checkWatchHistoryCompleteness`: it warns before Preview, Test Media or
- * detection is refused, naming the fault the refusal will name. Pinned here
- * to the real guard, over the real `/api/servers` payload the editor reads, so
- * a fault the guard adds (or reorders) cannot leave the banner silent — or
- * giving another fault's remedy — while every refusal says something else.
+ * The rule editor's play-history banner mirrors `checkWatchHistoryCompleteness`, pinned here to the real guard
+ * over the real `/api/servers` payload: the same fault, in the same precedence, or none.
  */
 
 /** A phrase of the guard's reason for each fault the banner reports. */
@@ -55,7 +51,7 @@ const CASES: Array<[string, State, PlayHistoryFault | null]> = [
   ["native, never synced", { watchHistorySyncedAt: null }, "unsynced"],
   ["native, held for a library resync", { libraryResyncRequiredAt: AT, watchHistorySyncedAt: null }, "resync"],
   ["native, held with the marker still set", { libraryResyncRequiredAt: AT, watchHistorySyncedAt: AT }, "resync"],
-  // Stale Tracearr columns on a server that is no longer mapped describe nothing.
+  // Stale Tracearr columns on an unmapped server describe nothing.
   ["native, floor left by an unlink", { watchHistorySyncedAt: AT, tracearrForwardFloorAt: AT }, null],
   ["native, schema-default backfill flag", { watchHistorySyncedAt: AT, tracearrBackfillComplete: false }, null],
   ["mapped, complete", { watchHistorySyncedAt: AT, tracearrServerId: "T", tracearrBackfillComplete: true }, null],
@@ -65,9 +61,7 @@ const CASES: Array<[string, State, PlayHistoryFault | null]> = [
     { watchHistorySyncedAt: AT, tracearrServerId: "T", tracearrBackfillComplete: true, tracearrForwardFloorAt: AT },
     "gap",
   ],
-  // An unfinished archive walk comes before the marker and the gap: on a
-  // mapped server only its completion re-establishes the marker, so
-  // "unsynced" (run a Refresh) would point at a sync that cannot help.
+  // An unfinished walk comes before the marker and the gap: only its completion re-establishes the marker.
   [
     "mapped, gap while importing",
     { watchHistorySyncedAt: AT, tracearrServerId: "T", tracearrBackfillComplete: false, tracearrForwardFloorAt: AT },
@@ -161,8 +155,7 @@ describe("rule editor play-history fault vs checkWatchHistoryCompleteness", () =
   });
 
   it("agrees that a disabled server is outside the guard's scope", async () => {
-    // The editor drops disabled servers before showing the banner
-    // (`serversAwaitingPlayHistory`), because the guard counts enabled ones.
+    // The editor drops disabled servers before showing the banner (`serversAwaitingPlayHistory`).
     const server = await createTestServer(userId, { enabled: false, watchHistorySyncedAt: null });
     await getTestPrisma().mediaServer.update({ where: { id: server.id }, data: { libraryResyncRequiredAt: AT } });
     expect((await checkWatchHistoryCompleteness(userId, [server.id])).complete).toBe(true);

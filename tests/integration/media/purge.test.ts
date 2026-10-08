@@ -27,11 +27,7 @@ vi.mock("@/lib/logger", () => ({
 import { DELETE } from "@/app/api/media/purge/route";
 import { markWatchHistoryEstablishedIfUnchanged, snapshotWatchEvidence } from "@/lib/media/watch-evidence";
 
-/**
- * Records, for every MediaItem row deleted, the owning server's
- * `libraryResyncRequiredAt` AT THE MOMENT of the delete — proof the hold was
- * written before the items went, not after.
- */
+/** Records each deleted MediaItem's server hold AT THE MOMENT of the delete: the hold must come first. */
 async function recordHoldAtDelete() {
   const prisma = getTestPrisma();
   await prisma.$executeRawUnsafe(
@@ -241,13 +237,11 @@ describe("DELETE /api/media/purge", () => {
     // Moved to now so the walk starts from the newest play again.
     expect(after.tracearrBackfillCursorAt?.getTime()).toBeGreaterThanOrEqual(before - 1000);
     expect(after.tracearrForwardWatermarkAt).toEqual(after.tracearrBackfillCursorAt);
-    // Held until a full sync re-adds the items: walked first, it would skip
-    // their plays and could complete without them.
+    // Held until a full sync re-adds the items, or the walk would skip their plays.
     expect(after.libraryResyncRequiredAt).toBeInstanceOf(Date);
 
     const untouched = await prisma.mediaServer.findUniqueOrThrow({ where: { id: native.id } });
     expect(untouched.tracearrBackfillCursorAt).toBeNull();
-    // The native server lost its movies too, so it is held as well.
     expect(untouched.libraryResyncRequiredAt).toBeInstanceOf(Date);
   });
 
@@ -276,142 +270,57 @@ describe("DELETE /api/media/purge", () => {
   });
 
   describe("the library-resync hold", () => {
-    it("holds the purged library's server before its items are deleted, and withdraws its marker", async () => {
-      const prisma = getTestPrisma();
+    const prisma = getTestPrisma();
+    const purge = (searchParams: Record<string, string>) =>
+      callRoute(DELETE, { url: "/api/media/purge", method: "DELETE", searchParams });
+    const server = (id: string) => prisma.mediaServer.findUniqueOrThrow({ where: { id } });
+
+    it("holds the purged library's server before its items are deleted; no history pass can vouch for the gap", async () => {
       const user = await createTestUser();
-      const server = await createTestServer(user.id, { name: "Purged" });
+      const established = new Date("2026-01-01T00:00:00Z");
+      const purged = await createTestServer(user.id, { name: "Purged", watchHistorySyncedAt: established });
       const other = await createTestServer(user.id, { name: "Other" });
-      const lib = await createTestLibrary(server.id, { type: "MOVIE" });
+      const lib = await createTestLibrary(purged.id, { type: "MOVIE" });
       const otherLib = await createTestLibrary(other.id, { type: "MOVIE" });
       await createTestMediaItem(lib.id, { title: "A", type: "MOVIE" });
       await createTestMediaItem(lib.id, { title: "B", type: "MOVIE" });
       await createTestMediaItem(otherLib.id, { title: "C", type: "MOVIE" });
       await recordHoldAtDelete();
+      // A native full replace that started before the purge, still fetching.
+      const inFlight = snapshotWatchEvidence(purged.id, established);
 
       setMockSession({ isLoggedIn: true, userId: user.id });
-      const body = await expectJson<{ deleted: number }>(
-        await callRoute(DELETE, { url: "/api/media/purge", method: "DELETE", searchParams: { libraryId: lib.id } }),
-        200,
-      );
+      const body = await expectJson<{ deleted: number }>(await purge({ libraryId: lib.id }), 200);
       expect(body.deleted).toBe(2);
 
-      // Every row went while the hold was already set: a history pass running
-      // beside the purge could not establish the marker over the gap.
       const atDelete = await holdsAtDelete();
       expect(atDelete).toHaveLength(2);
       for (const row of atDelete) expect(row.hold).toBeInstanceOf(Date);
-
-      const after = await prisma.mediaServer.findUniqueOrThrow({ where: { id: server.id } });
+      const after = await server(purged.id);
       expect(after.libraryResyncRequiredAt).toBeInstanceOf(Date);
       expect(after.watchHistorySyncedAt).toBeNull();
-      const untouched = await prisma.mediaServer.findUniqueOrThrow({ where: { id: other.id } });
+      await expect(markWatchHistoryEstablishedIfUnchanged(inFlight)).resolves.toBe(false);
+      // ...nor one that starts after it, while held.
+      await expect(markWatchHistoryEstablishedIfUnchanged(snapshotWatchEvidence(purged.id, null))).resolves.toBe(false);
+      expect((await server(purged.id)).watchHistorySyncedAt).toBeNull();
+      const untouched = await server(other.id);
       expect(untouched.libraryResyncRequiredAt).toBeNull();
       expect(untouched.watchHistorySyncedAt).not.toBeNull();
     });
 
-    it("refuses the marker of a history pass that was running when the purge landed", async () => {
-      const prisma = getTestPrisma();
-      const user = await createTestUser();
-      const established = new Date("2026-01-01T00:00:00Z");
-      const server = await createTestServer(user.id, { watchHistorySyncedAt: established });
-      const lib = await createTestLibrary(server.id, { type: "MOVIE" });
-      await createTestMediaItem(lib.id, { title: "A", type: "MOVIE" });
-      // A native full replace that started before the purge, still fetching.
-      const inFlight = snapshotWatchEvidence(server.id, established);
-
-      setMockSession({ isLoggedIn: true, userId: user.id });
-      await expectJson(
-        await callRoute(DELETE, { url: "/api/media/purge", method: "DELETE", searchParams: { libraryId: lib.id } }),
-        200,
-      );
-
-      await expect(markWatchHistoryEstablishedIfUnchanged(inFlight)).resolves.toBe(false);
-      // ...and one that starts after it cannot vouch either, while held.
-      const after = snapshotWatchEvidence(server.id, null);
-      await expect(markWatchHistoryEstablishedIfUnchanged(after)).resolves.toBe(false);
-      const row = await prisma.mediaServer.findUniqueOrThrow({ where: { id: server.id } });
-      expect(row.watchHistorySyncedAt).toBeNull();
-    });
-
-    it("type-wide: holds only the servers owning a purged library, before the delete", async () => {
-      const prisma = getTestPrisma();
-      const user = await createTestUser();
-      const withMovies = await createTestServer(user.id, { name: "Movies here" });
-      const seriesOnly = await createTestServer(user.id, { name: "Series only" });
-      const moviesLib = await createTestLibrary(withMovies.id, { type: "MOVIE" });
-      const seriesLib = await createTestLibrary(seriesOnly.id, { type: "SERIES" });
-      await createTestMediaItem(moviesLib.id, { title: "A", type: "MOVIE" });
-      await createTestMediaItem(seriesLib.id, { title: "Pilot", type: "SERIES" });
-      await recordHoldAtDelete();
-
-      setMockSession({ isLoggedIn: true, userId: user.id });
-      const body = await expectJson<{ deleted: number }>(
-        await callRoute(DELETE, { url: "/api/media/purge", method: "DELETE", searchParams: { type: "MOVIE" } }),
-        200,
-      );
-      expect(body.deleted).toBe(1);
-
-      const atDelete = await holdsAtDelete();
-      expect(atDelete).toHaveLength(1);
-      expect(atDelete[0].hold).toBeInstanceOf(Date);
-
-      const held = await prisma.mediaServer.findUniqueOrThrow({ where: { id: withMovies.id } });
-      expect(held.libraryResyncRequiredAt).toBeInstanceOf(Date);
-      expect(held.watchHistorySyncedAt).toBeNull();
-      // Nothing of this server was purged: its play-activity rules keep going.
-      const spared = await prisma.mediaServer.findUniqueOrThrow({ where: { id: seriesOnly.id } });
-      expect(spared.libraryResyncRequiredAt).toBeNull();
-      expect(spared.watchHistorySyncedAt).not.toBeNull();
-    });
-
-    it("holds nothing for a DISABLED library — it only withdraws the marker, and restarts no walk", async () => {
-      // Settings disables a library, then purges it when asked to delete its
-      // data. Nothing re-adds a disabled library's items, so a hold would pause
-      // the server's play-activity rules until some full sync, for nothing; a
-      // later re-enable populates an empty library, which holds by itself.
-      const prisma = getTestPrisma();
-      const user = await createTestUser();
-      const server = await createTestServer(user.id, {
-        tracearrServerId: "11111111-2222-3333-4444-555555555555",
-        tracearrBackfillComplete: true,
-      });
-      const lib = await createTestLibrary(server.id, { type: "MOVIE" });
-      await createTestMediaItem(lib.id, { title: "A", type: "MOVIE" });
-      await prisma.library.update({ where: { id: lib.id }, data: { enabled: false } });
-      const inFlight = snapshotWatchEvidence(server.id, new Date("2026-01-01T00:00:00Z"));
-
-      setMockSession({ isLoggedIn: true, userId: user.id });
-      const body = await expectJson<{ deleted: number }>(
-        await callRoute(DELETE, { url: "/api/media/purge", method: "DELETE", searchParams: { libraryId: lib.id } }),
-        200,
-      );
-      expect(body.deleted).toBe(1);
-
-      const row = await prisma.mediaServer.findUniqueOrThrow({ where: { id: server.id } });
-      expect(row.libraryResyncRequiredAt).toBeNull();
-      expect(row.tracearrBackfillComplete).toBe(true);
-      expect(row.tracearrBackfillCursorAt).toBeNull();
-      // Plays went with the items, so the marker is withdrawn as before — and a
-      // history pass that was running cannot put it back...
-      expect(row.watchHistorySyncedAt).toBeNull();
-      await expect(markWatchHistoryEstablishedIfUnchanged(inFlight)).resolves.toBe(false);
-      // ...while the next one re-establishes it: no hold refuses it.
-      await expect(
-        markWatchHistoryEstablishedIfUnchanged(snapshotWatchEvidence(server.id, null)),
-      ).resolves.toBe(true);
-    });
-
-    it("type-wide: holds the servers owning an ENABLED purged library, and only withdraws for the rest", async () => {
-      const prisma = getTestPrisma();
+    it("type-wide: holds the servers owning an ENABLED purged library before the delete, only withdraws for the rest", async () => {
       const user = await createTestUser();
       const both = await createTestServer(user.id, { name: "Enabled and disabled" });
       const disabledOnly = await createTestServer(user.id, { name: "Disabled only" });
+      const seriesOnly = await createTestServer(user.id, { name: "Series only" });
       const enabledLib = await createTestLibrary(both.id, { type: "MOVIE", key: "1" });
       const disabledLib = await createTestLibrary(both.id, { type: "MOVIE", key: "2" });
       const offLib = await createTestLibrary(disabledOnly.id, { type: "MOVIE" });
+      const seriesLib = await createTestLibrary(seriesOnly.id, { type: "SERIES" });
       for (const lib of [enabledLib, disabledLib, offLib]) {
         await createTestMediaItem(lib.id, { title: `In ${lib.id}`, type: "MOVIE" });
       }
+      await createTestMediaItem(seriesLib.id, { title: "Pilot", type: "SERIES" });
       await prisma.library.updateMany({
         where: { id: { in: [disabledLib.id, offLib.id] } },
         data: { enabled: false },
@@ -419,58 +328,78 @@ describe("DELETE /api/media/purge", () => {
       await recordHoldAtDelete();
 
       setMockSession({ isLoggedIn: true, userId: user.id });
-      const body = await expectJson<{ deleted: number }>(
-        await callRoute(DELETE, { url: "/api/media/purge", method: "DELETE", searchParams: { type: "MOVIE" } }),
-        200,
-      );
+      const body = await expectJson<{ deleted: number }>(await purge({ type: "MOVIE" }), 200);
       expect(body.deleted).toBe(3);
 
-      const held = await prisma.mediaServer.findUniqueOrThrow({ where: { id: both.id } });
+      const held = await server(both.id);
       expect(held.libraryResyncRequiredAt).toBeInstanceOf(Date);
       expect(held.watchHistorySyncedAt).toBeNull();
       // Held before ANY of its rows went, the disabled library's included.
-      for (const row of (await holdsAtDelete()).filter((r) => r.serverId === both.id)) {
-        expect(row.hold).toBeInstanceOf(Date);
-      }
+      const bothAtDelete = (await holdsAtDelete()).filter((r) => r.serverId === both.id);
+      expect(bothAtDelete).toHaveLength(2);
+      for (const row of bothAtDelete) expect(row.hold).toBeInstanceOf(Date);
 
-      const withdrawn = await prisma.mediaServer.findUniqueOrThrow({ where: { id: disabledOnly.id } });
+      const withdrawn = await server(disabledOnly.id);
       expect(withdrawn.libraryResyncRequiredAt).toBeNull();
       expect(withdrawn.watchHistorySyncedAt).toBeNull();
+      // Nothing of this server was purged: its play-activity rules keep going.
+      const spared = await server(seriesOnly.id);
+      expect(spared.libraryResyncRequiredAt).toBeNull();
+      expect(spared.watchHistorySyncedAt).not.toBeNull();
+    });
+
+    it("holds nothing for a DISABLED library — it only withdraws the marker, and restarts no walk", async () => {
+      // Nothing re-adds a disabled library's items; re-enabling it populates an empty library, which holds then.
+      const user = await createTestUser();
+      const mapped = await createTestServer(user.id, {
+        tracearrServerId: "11111111-2222-3333-4444-555555555555",
+        tracearrBackfillComplete: true,
+      });
+      const lib = await createTestLibrary(mapped.id, { type: "MOVIE" });
+      await createTestMediaItem(lib.id, { title: "A", type: "MOVIE" });
+      await prisma.library.update({ where: { id: lib.id }, data: { enabled: false } });
+      const inFlight = snapshotWatchEvidence(mapped.id, new Date("2026-01-01T00:00:00Z"));
+
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const body = await expectJson<{ deleted: number }>(await purge({ libraryId: lib.id }), 200);
+      expect(body.deleted).toBe(1);
+
+      const row = await server(mapped.id);
+      expect(row.libraryResyncRequiredAt).toBeNull();
+      expect(row.tracearrBackfillComplete).toBe(true);
+      expect(row.tracearrBackfillCursorAt).toBeNull();
+      // The plays went with the items: a running pass cannot put the marker back, the next one can.
+      expect(row.watchHistorySyncedAt).toBeNull();
+      await expect(markWatchHistoryEstablishedIfUnchanged(inFlight)).resolves.toBe(false);
+      await expect(
+        markWatchHistoryEstablishedIfUnchanged(snapshotWatchEvidence(mapped.id, null)),
+      ).resolves.toBe(true);
     });
 
     it("holds nothing when there is nothing to purge", async () => {
-      const prisma = getTestPrisma();
       const user = await createTestUser();
-      const server = await createTestServer(user.id);
-      await createTestLibrary(server.id, { type: "SERIES" });
+      const empty = await createTestServer(user.id);
+      await createTestLibrary(empty.id, { type: "SERIES" });
 
       setMockSession({ isLoggedIn: true, userId: user.id });
-      await expectJson(
-        await callRoute(DELETE, { url: "/api/media/purge", method: "DELETE", searchParams: { type: "MOVIE" } }),
-        200,
-      );
+      await expectJson(await purge({ type: "MOVIE" }), 200);
 
-      const row = await prisma.mediaServer.findUniqueOrThrow({ where: { id: server.id } });
+      const row = await server(empty.id);
       expect(row.libraryResyncRequiredAt).toBeNull();
       expect(row.watchHistorySyncedAt).not.toBeNull();
     });
 
     it("holds nothing for a library another user owns (404)", async () => {
-      const prisma = getTestPrisma();
       const owner = await createTestUser({ plexId: "owner" });
       const other = await createTestUser({ plexId: "other" });
-      const server = await createTestServer(owner.id);
-      const lib = await createTestLibrary(server.id, { type: "MOVIE" });
+      const owned = await createTestServer(owner.id);
+      const lib = await createTestLibrary(owned.id, { type: "MOVIE" });
       await createTestMediaItem(lib.id, { title: "A", type: "MOVIE" });
 
       setMockSession({ isLoggedIn: true, userId: other.id });
-      await expectJson(
-        await callRoute(DELETE, { url: "/api/media/purge", method: "DELETE", searchParams: { libraryId: lib.id } }),
-        404,
-      );
+      await expectJson(await purge({ libraryId: lib.id }), 404);
 
-      const row = await prisma.mediaServer.findUniqueOrThrow({ where: { id: server.id } });
-      expect(row.libraryResyncRequiredAt).toBeNull();
+      expect((await server(owned.id)).libraryResyncRequiredAt).toBeNull();
       expect(await prisma.mediaItem.count({ where: { libraryId: lib.id } })).toBe(1);
     });
   });

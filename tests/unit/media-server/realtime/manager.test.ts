@@ -259,20 +259,15 @@ describe("RealtimeManager", () => {
       // One finished playback appends the new plays; it must never be the
       // full re-import the by-type sync's deferred refresh runs.
       { serverId: "j1", incremental: true },
-      // Its own key: graphile's keyed enqueue replaces the queued payload, so
-      // sharing by-type's `watch-history:<id>` let this `incremental: true`
-      // overwrite a queued full replace.
+      // Its own key: a keyed enqueue replaces the payload, so by-type's queued full replace must not share it.
       expect.objectContaining({ jobKey: "watch-history-incremental:j1", queueName: MAIN_QUEUE }),
     );
     expect(h.enqueueJob.mock.calls.some((c) => c[2]?.jobKey === "watch-history:j1")).toBe(false);
   });
 
   describe("a watch-history refresh that keeps failing", () => {
-    // The task throws on a failed refresh so graphile retries it, and a keyed
-    // enqueue resets the failed job's attempts. Enqueued on every finished
-    // playback, a persistent failure cost every attempt — on Jellyfin/Emby
-    // each a full history scan — per playback.
-    it("is not re-enqueued while it is backing off or failed within the cooldown", async () => {
+    // A keyed enqueue resets a failed job's attempts: enqueued per playback, a lasting failure ran every attempt.
+    it("is not re-enqueued while it is backing off or failed within the cooldown, reading only its own key", async () => {
       h.isJobRetrying.mockResolvedValue(true);
       const { sockets } = await setup([jfServer]);
       sockets[0].fireMessage({ MessageType: "UserDataChanged" });
@@ -282,6 +277,8 @@ describe("RealtimeManager", () => {
         "watch-history-incremental:j1",
         { failedWithinMs: 10 * 60_000 },
       );
+      // ...so a failing realtime refresh never holds back by-type's full replace.
+      expect(h.isJobRetrying.mock.calls.map((c) => c[0])).toEqual(["watch-history-incremental:j1"]);
       expect(h.enqueueJob.mock.calls.some((c) => c[0] === TASK_SYNC_WATCH_HISTORY)).toBe(false);
     });
 
@@ -295,13 +292,6 @@ describe("RealtimeManager", () => {
 
       const calls = h.enqueueJob.mock.calls.filter((c) => c[0] === TASK_SYNC_WATCH_HISTORY);
       expect(calls).toHaveLength(1);
-    });
-
-    it("reads only its own key, so a failing realtime refresh never holds back by-type's full replace", async () => {
-      const { sockets } = await setup([jfServer]);
-      sockets[0].fireMessage({ MessageType: "UserDataChanged" });
-      await vi.advanceTimersByTimeAsync(30_000);
-      expect(h.isJobRetrying.mock.calls.map((c) => c[0])).toEqual(["watch-history-incremental:j1"]);
     });
   });
 

@@ -127,10 +127,8 @@ interface PlayHistoryProps {
    */
   singleItem?: boolean;
   /**
-   * Bump to refetch. Every detail page bumps it on both `sync:completed` and
-   * `watch-history:updated` — plays imported outside a library sync (a
-   * Tracearr backfill slice, the per-playback refresh) announce only the
-   * latter.
+   * Bump to refetch. Detail pages bump it on `sync:completed` and on
+   * `watch-history:updated`, all an import outside a library sync announces.
    */
   refreshKey?: number;
   /**
@@ -817,9 +815,8 @@ export function PlayHistory({
   // page whose five plays happen to share a server must not drop the server
   // names the previous page showed. Cleared with the rest of the scope state.
   const [seenServers, setSeenServers] = useState<string[]>([]);
-  // Request sequencing: every request (scope load, page click, refresh) takes a
-  // fresh token so only the newest can apply, and a `refreshKey` bump reloads
-  // the page last asked for rather than page 1 (see PageRequestTracker).
+  // Only the newest request applies, and a refresh reloads the page last asked for
+  // (see PageRequestTracker).
   const [tracker] = useState(() => new PageRequestTracker());
 
   const fetchPage = useCallback(
@@ -871,9 +868,7 @@ export function PlayHistory({
         if (!tracker.isCurrent(token)) return;
 
         // The list shrank under us — plays purged, or a refresh landed on a
-        // shorter history — so this page no longer exists. Step back to the
-        // new last page rather than stranding the user on an empty one or
-        // throwing them back to the first.
+        // shorter history: step back to the new last page, not the first.
         const clamped = pageAfterShrink(target, data.pagination.totalCount, PAGE_SIZE);
         if (clamped !== null) {
           tracker.redirect(token, clamped);
@@ -912,14 +907,8 @@ export function PlayHistory({
     setLoading(true);
   }
 
-  // Runs on a scope change (fetchPage's identity is the scope) and on every
-  // `refreshKey` bump. A scope change starts at page 1; a refresh — which the
-  // show, season, episode, movie and track pages fire on every
-  // `sync:completed` and `watch-history:updated`, i.e. every few minutes while
-  // a Tracearr backfill runs — reloads the page the user is on (or moving
-  // to), clamped if the list shrank, instead of throwing them back to the
-  // first page each time. (The detail side panel passes no `refreshKey`; its
-  // list is read when the panel opens.)
+  // Runs on a scope change (fetchPage's identity is the scope), from page 1, and on
+  // every `refreshKey` bump, reloading the page the user is on or moving to.
   useEffect(() => {
     const { page: target, token } = tracker.refresh(fetchPage);
     void (async () => {
@@ -933,17 +922,14 @@ export function PlayHistory({
     (target: number) => {
       if (target < 1 || target > totalPages) return;
       setPaging(true);
-      // A NEW token: reusing the in-flight one let a refresh started before
-      // this click land after it and put the previous page back on screen.
+      // A NEW token, so a refresh started before this click cannot land after it.
       void loadPage(target, tracker.request(target));
     },
     [loadPage, totalPages, tracker],
   );
 
-  // Retry the page last asked for (a failed page click is retried as that
-  // page, a failed refresh as the page being reloaded) — `refresh` with the
-  // unchanged scope keeps the requested page. Rows on screen stay and dim
-  // while it runs; with none, the skeleton replaces the error card.
+  // Retries the page last asked for (`refresh` with the unchanged scope). Rows on
+  // screen stay and dim meanwhile; with none, the skeleton replaces the error card.
   const retry = useCallback(() => {
     if (rows.length > 0) setPaging(true);
     else setLoading(true);
@@ -986,9 +972,7 @@ export function PlayHistory({
     </div>
   ) : (
     <>
-      {/* A failed refresh or page click keeps the plays already shown — the
-          error card used to replace them, with no pagination and no way to
-          try again. Hidden while the retry itself is in flight. */}
+      {/* A failure keeps the plays already shown; hidden while the retry runs. */}
       {error && !paging && (
         <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
           <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber" />

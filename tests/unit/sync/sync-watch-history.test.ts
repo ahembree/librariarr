@@ -13,12 +13,8 @@ const {
   // Route the tx's raw methods to the same fn the tests assert against so the
   // existing call-inspection (DELETE/INSERT string filters) keeps working.
   const queryRawUnsafe = vi.fn();
-  // Two reads every native write transaction makes after taking its lock — is
-  // the server still native (`assertStillNative`), and do the resolved items
-  // still exist (`liveItemIds`) — answer from their own arguments here rather
-  // than from the queue above, so each test's queue of lock/DELETE/INSERT
-  // results stays aligned. What those reads decide is exercised against a
-  // real database in tests/integration/media/native-history-writes.test.ts.
+  // `assertStillNative` and `liveItemIds` answer from their own arguments, keeping each test's
+  // queue of lock/DELETE/INSERT results aligned (what they decide: native-history-writes.test.ts).
   const txQueryRawUnsafe = vi.fn(async (sql: string, ...params: unknown[]) => {
     if (sql.includes(`SELECT "tracearrServerId" FROM "MediaServer"`)) {
       return [{ tracearrServerId: null }];
@@ -990,6 +986,50 @@ describe("syncWatchHistory", () => {
     });
   });
 
+  it("passes the Tracearr importer's failure on, with what it did import", async () => {
+    // The importer returns rather than throws; dropping `failed` reported the server as cleanly synced.
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([serverRow({ tracearrServerId: "srv-uuid" })]);
+    mockPrisma.tracearrInstance.findFirst.mockResolvedValueOnce({ id: "t1" });
+    mockSyncTracearr.mockResolvedValueOnce({
+      count: 4,
+      backfillPending: false,
+      failed: "forward walk errored",
+    } as never);
+
+    await expect(syncWatchHistory("server-1")).resolves.toEqual({
+      count: 4,
+      failed: "forward walk errored",
+    });
+    // The rows it did write are still reconciled.
+    expect(mockReconcile).toHaveBeenCalledWith("server-1");
+  });
+
+  it("splits the rows of a widely fanned-out play across INSERTs, under the bind limit", async () => {
+    // One play filed against 600 copies is 600 rows of 9 params; a statement binds at most 65,535.
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([serverRow({ type: "JELLYFIN" })]);
+    mockClient.getDetailedWatchHistory.mockResolvedValueOnce([
+      { ratingKey: "100", username: "bob", watchedAt: "2025-07-01T00:00:00Z", deviceName: null, platform: null },
+    ]);
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce(
+      Array.from({ length: 600 }, (_, i) => ({
+        id: `item-${String(i).padStart(3, "0")}`,
+        ratingKey: "100",
+        libraryKey: `lib-${i}`,
+      })),
+    );
+
+    await expect(syncWatchHistory("server-1")).resolves.toEqual({ count: 600 });
+
+    const inserts = mockPrisma.$queryRawUnsafe.mock.calls.filter((args) =>
+      (args[0] as string).includes('INSERT INTO "WatchHistory"'),
+    );
+    expect(inserts.map((call) => (call.length - 1) / 9)).toEqual([500, 100]);
+    // One primary row; every other copy points at it.
+    const params = inserts.flatMap((call) => call.slice(1));
+    const fanOut = Array.from({ length: params.length / 9 }, (_, i) => params[i * 9 + 2]);
+    expect(fanOut.filter((v) => v === null)).toHaveLength(1);
+    expect(fanOut.filter((v) => v === "item-000")).toHaveLength(599);
+  });
 });
 
 describe("syncWatchHistory — incremental refresh", () => {
@@ -1027,10 +1067,7 @@ describe("syncWatchHistory — incremental refresh", () => {
     mockPrisma.$queryRawUnsafe.mock.calls.filter((args) =>
       (args[0] as string).includes('INSERT INTO "WatchHistory"'),
     );
-  /**
-   * The fetch a full replace makes: no `since`, and a report for the client to
-   * fill in (`DetailedWatchHistoryReport`) — it used to be called with nothing.
-   */
+  /** The fetch a full replace makes: no `since`, and a report for the client to fill in. */
   function expectFullHistoryFetch() {
     expect(mockClient.getDetailedWatchHistory).toHaveBeenCalledTimes(1);
     const [options] = mockClient.getDetailedWatchHistory.mock.calls[0] as [Record<string, unknown>];
@@ -1153,378 +1190,59 @@ describe("syncWatchHistory — incremental refresh", () => {
     // Nothing appended: no server-wide reconcile per finished playback.
     expect(mockReconcile).not.toHaveBeenCalled();
   });
-});
 
-describe("syncWatchHistory — failure signal", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockReconcile.mockResolvedValue(0);
-    mockEnqueueJob.mockResolvedValue(true);
-    mockIsJobRetrying.mockResolvedValue(false);
-  });
+  describe("identity across account names", () => {
+    const newest = new Date("2024-06-01T12:00:00.000Z");
 
-  it("passes the Tracearr importer's failure on, with what it did import", async () => {
-    // The importer returns (rather than throws) when its forward walk errored or
-    // the instance could not be resolved. Dropping `failed` here made the
-    // History page report that server as cleanly synced.
-    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([
-      {
-        id: "server-1",
-        name: "Test Server",
-        url: "http://plex:32400",
-        accessToken: "token",
-        type: "PLEX",
-        tlsSkipVerify: false,
-        enabled: true,
-        userId: "user-1",
-        tracearrServerId: "srv-uuid",
-      },
-    ]);
-    mockPrisma.tracearrInstance.findFirst.mockResolvedValueOnce({ id: "t1" });
-    mockSyncTracearr.mockResolvedValueOnce({
-      count: 4,
-      backfillPending: false,
-      failed: "forward walk errored",
-    } as never);
-
-    await expect(syncWatchHistory("server-1")).resolves.toEqual({
-      count: 4,
-      failed: "forward walk errored",
-    });
-    // The rows it did write are still reconciled.
-    expect(mockReconcile).toHaveBeenCalledWith("server-1");
-  });
-
-  it("does not report a disabled server as failed — it is a deliberate skip", async () => {
-    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([
-      {
-        id: "server-1",
-        name: "Test Server",
-        url: "http://plex:32400",
-        accessToken: "token",
-        type: "PLEX",
-        tlsSkipVerify: false,
-        enabled: false,
-      },
-    ]);
-    await expect(syncWatchHistory("server-1")).resolves.toEqual({ count: 0 });
-  });
-});
-
-describe("syncWatchHistory — ambiguous rating keys", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockReconcile.mockResolvedValue(0);
-  });
-
-  const row = {
-    id: "server-1",
-    name: "Test Server",
-    url: "http://plex:32400",
-    accessToken: "token",
-    type: "PLEX",
-    tlsSkipVerify: false,
-    enabled: true,
-  };
-  const insertCalls = () =>
-    mockPrisma.$queryRawUnsafe.mock.calls.filter((args) =>
-      (args[0] as string).includes('INSERT INTO "WatchHistory"'),
-    );
-
-  it("skips a play whose rating key is in two libraries and the play names neither", async () => {
-    // `@@unique([libraryId, ratingKey])` lets one server hold the same key in
-    // two libraries. The lookup used to be a Map over an unordered query, so
-    // whichever row came last took the play.
-    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([row]);
-    mockClient.getDetailedWatchHistory.mockResolvedValueOnce([
-      { ratingKey: "100", username: "bob", watchedAt: "2025-07-01T00:00:00Z", deviceName: null, platform: null },
-      { ratingKey: "200", username: "bob", watchedAt: "2025-07-01T00:00:00Z", deviceName: null, platform: null },
-    ]);
-    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([
-      { id: "item-a", ratingKey: "100", libraryKey: "1" },
-      { id: "item-b", ratingKey: "100", libraryKey: "2" },
-      { id: "item-c", ratingKey: "200", libraryKey: "1" },
-    ]);
-
-    await expect(syncWatchHistory("server-1")).resolves.toEqual({ count: 1 });
-    const params = insertCalls()[0].slice(1);
-    expect(params).toContain("item-c");
-    expect(params).not.toContain("item-a");
-    expect(params).not.toContain("item-b");
-  });
-
-  it("places it by the library the play was recorded in when the server says", async () => {
-    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([row]);
-    mockClient.getDetailedWatchHistory.mockResolvedValueOnce([
-      {
-        ratingKey: "100",
-        username: "bob",
-        watchedAt: "2025-07-01T00:00:00Z",
-        deviceName: null,
-        platform: null,
-        librarySectionKey: "2",
-      },
-    ]);
-    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([
-      { id: "item-a", ratingKey: "100", libraryKey: "1" },
-      { id: "item-b", ratingKey: "100", libraryKey: "2" },
-    ]);
-
-    await expect(syncWatchHistory("server-1")).resolves.toEqual({ count: 1 });
-    const params = insertCalls()[0].slice(1);
-    expect(params).toContain("item-b");
-    expect(params).not.toContain("item-a");
-  });
-
-  it("on Plex, skips a play whose library holds neither row", async () => {
-    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([row]);
-    mockClient.getDetailedWatchHistory.mockResolvedValueOnce([
-      { ratingKey: "100", username: "bob", watchedAt: "2025-07-01T00:00:00Z", deviceName: null, platform: null, librarySectionKey: "9" },
-    ]);
-    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([
-      { id: "item-a", ratingKey: "100", libraryKey: "1" },
-      { id: "item-b", ratingKey: "100", libraryKey: "2" },
-    ]);
-
-    await expect(syncWatchHistory("server-1")).resolves.toEqual({ count: 0 });
-    expect(insertCalls()).toHaveLength(0);
-  });
-
-  it.each(["JELLYFIN", "EMBY"])(
-    "on %s, files a play against every library that lists the item",
-    async (type) => {
-      // Two libraries covering the same folder list the same item id; the
-      // server never says which one a play was in, and it was in both.
-      mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([{ ...row, type }]);
-      mockClient.getDetailedWatchHistory.mockResolvedValueOnce([
-        { ratingKey: "100", username: "bob", watchedAt: "2025-07-01T00:00:00Z", deviceName: null, platform: null },
-        { ratingKey: "100", username: "bob", watchedAt: null, deviceName: null, platform: null },
-      ]);
+    /** Runs an append over `incoming` plays and the `stored` rows of the overlap window, all at one instant. */
+    function append(incoming: string[], stored: Array<{ id: string; serverUsername: string }>) {
+      mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([plexRow()]);
       mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([
-        { id: "item-a", ratingKey: "100", libraryKey: "1" },
-        { id: "item-b", ratingKey: "100", libraryKey: "2" },
+        { establishedAt: new Date("2024-05-01T00:00:00Z"), newest },
       ]);
-      const updates: Array<{ detail?: string }> = [];
+      mockClient.getDetailedWatchHistory.mockResolvedValueOnce(
+        incoming.map((username) => ({
+          ratingKey: "100",
+          username,
+          watchedAt: newest.toISOString(),
+          deviceName: null,
+          platform: null,
+        })),
+      );
+      mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([{ id: "item-1", ratingKey: "100" }]);
+      mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // pg_advisory_xact_lock
+      mockPrisma.$queryRawUnsafe.mockResolvedValueOnce(
+        stored.map((r) => ({ ...r, mediaItemId: "item-1", watchedAt: newest })),
+      );
+      return syncWatchHistory("server-1", undefined, undefined, { incremental: true });
+    }
+    const relabels = () =>
+      mockPrisma.$queryRawUnsafe.mock.calls.filter((args) =>
+        (args[0] as string).includes('UPDATE "WatchHistory"'),
+      );
 
-      await expect(syncWatchHistory("server-1", (u) => updates.push(u))).resolves.toEqual({ count: 4 });
-      // One tuple of 9 params per row: id, mediaItemId, fanOutOfItemId, …
-      const params = insertCalls()[0].slice(1);
-      const rows = Array.from({ length: params.length / 9 }, (_, i) => params.slice(i * 9, i * 9 + 9));
-      expect(rows.map((r) => [r[1], r[2]])).toEqual([
-        // Each play is filed against both copies; the lower id holds the
-        // play's primary row and the other copy's row points at it, so lists
-        // of plays can show it once.
-        ["item-a", null],
-        ["item-b", "item-a"],
-        ["item-a", null],
-        ["item-b", "item-a"],
-      ]);
-      // Progress counts plays, not rows, so it never passes the total.
-      expect(updates.at(-1)?.detail).toBe("Stored 2 of 2 plays");
-    },
-  );
+    it("does not append an Unknown play that matches a stored named one", async () => {
+      await expect(append(["Unknown"], [{ id: "wh-1", serverUsername: "alice" }])).resolves.toEqual({ count: 0 });
+      expect(insertCalls()).toHaveLength(0);
+      // Nothing to relabel: the stored row already has the better name.
+      expect(relabels()).toHaveLength(0);
+    });
 
-  it("splits the rows of a widely fanned-out play across INSERTs, under the bind limit", async () => {
-    // Rows are not plays: one play filed against 600 copies is 600 rows, and a
-    // batch of 500 plays can hold far more rows than one statement may bind
-    // (9 params a row; Postgres allows 65,535). The INSERT is split by rows.
-    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([{ ...row, type: "JELLYFIN" }]);
-    mockClient.getDetailedWatchHistory.mockResolvedValueOnce([
-      { ratingKey: "100", username: "bob", watchedAt: "2025-07-01T00:00:00Z", deviceName: null, platform: null },
-    ]);
-    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce(
-      Array.from({ length: 600 }, (_, i) => ({
-        id: `item-${String(i).padStart(3, "0")}`,
-        ratingKey: "100",
-        libraryKey: `lib-${i}`,
-      })),
-    );
+    it("keeps two DIFFERENT accounts' plays at the same item and second as two plays", async () => {
+      const stored = [{ id: "wh-1", serverUsername: "alice" }];
+      await expect(append(["alice", "bob"], stored)).resolves.toEqual({ count: 1 });
+      expect(insertCalls()).toHaveLength(1);
+      expect(insertCalls()[0].slice(1)).toContain("bob");
+    });
 
-    await expect(syncWatchHistory("server-1")).resolves.toEqual({ count: 600 });
-
-    const inserts = insertCalls();
-    expect(inserts.map((call) => (call.length - 1) / 9)).toEqual([500, 100]);
-    // One primary row; every other copy points at it.
-    const params = inserts.flatMap((call) => call.slice(1));
-    const fanOut = Array.from({ length: params.length / 9 }, (_, i) => params[i * 9 + 2]);
-    expect(fanOut.filter((v) => v === null)).toHaveLength(1);
-    expect(fanOut.filter((v) => v === "item-000")).toHaveLength(599);
-  });
-});
-
-describe("syncWatchHistory — incremental identity across account names", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockReconcile.mockResolvedValue(0);
-    mockClient.supportsHistorySince = true;
-  });
-  afterEach(() => {
-    mockClient.supportsHistorySince = false;
-  });
-
-  const newest = new Date("2024-06-01T12:00:00.000Z");
-  const instant = "2024-06-01T12:00:00.000Z";
-
-  /** Arms the server row, boundary, item lookup and lock; returns nothing. */
-  function arm(
-    incoming: Array<{ username: string }>,
-    stored: Array<{ id: string; serverUsername: string }>,
-  ) {
-    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([
-      {
-        id: "server-1",
-        name: "Test Server",
-        url: "http://plex:32400",
-        accessToken: "token",
-        type: "PLEX",
-        tlsSkipVerify: false,
-        enabled: true,
-        userId: "user-1",
-        tracearrServerId: null,
-      },
-    ]);
-    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([
-      { establishedAt: new Date("2024-05-01T00:00:00Z"), newest },
-    ]);
-    mockClient.getDetailedWatchHistory.mockResolvedValueOnce(
-      incoming.map((e) => ({
-        ratingKey: "100",
-        username: e.username,
-        watchedAt: instant,
-        deviceName: null,
-        platform: null,
-      })),
-    );
-    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([{ id: "item-1", ratingKey: "100" }]);
-    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // pg_advisory_xact_lock
-    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce(
-      stored.map((r) => ({ ...r, mediaItemId: "item-1", watchedAt: newest })),
-    );
-  }
-
-  const calls = (needle: string) =>
-    mockPrisma.$queryRawUnsafe.mock.calls.filter((args) => (args[0] as string).includes(needle));
-
-  it("does not append again a play stored as Unknown that now carries its name — it relabels it", async () => {
-    // The play was stored while its account could not be named; the overlap
-    // re-delivers it named. An exact `item|user|watchedAt` key read it as a
-    // second play and appended it — a permanent +1 on the monotonic playCount.
-    arm([{ username: "alice" }], [{ id: "wh-1", serverUsername: "Unknown" }]);
-
-    const result = await syncWatchHistory("server-1", undefined, undefined, { incremental: true });
-
-    expect(result).toEqual({ count: 0 });
-    expect(calls('INSERT INTO "WatchHistory"')).toHaveLength(0);
-    const relabel = calls('UPDATE "WatchHistory"');
-    expect(relabel).toHaveLength(1);
-    expect(relabel[0].slice(1)).toEqual([["wh-1"], ["alice"]]);
-  });
-
-  it("does not append an Unknown play that matches a stored named one", async () => {
-    arm([{ username: "Unknown" }], [{ id: "wh-1", serverUsername: "alice" }]);
-
-    await expect(
-      syncWatchHistory("server-1", undefined, undefined, { incremental: true }),
-    ).resolves.toEqual({ count: 0 });
-    expect(calls('INSERT INTO "WatchHistory"')).toHaveLength(0);
-    // Nothing to relabel: the stored row already has the better name.
-    expect(calls('UPDATE "WatchHistory"')).toHaveLength(0);
-  });
-
-  it("keeps two DIFFERENT accounts' plays at the same item and second as two plays", async () => {
-    arm([{ username: "alice" }, { username: "bob" }], [{ id: "wh-1", serverUsername: "alice" }]);
-
-    await expect(
-      syncWatchHistory("server-1", undefined, undefined, { incremental: true }),
-    ).resolves.toEqual({ count: 1 });
-    const insert = calls('INSERT INTO "WatchHistory"');
-    expect(insert).toHaveLength(1);
-    expect(insert[0].slice(1)).toContain("bob");
-  });
-
-  it("pairs exact names before the Unknown wildcard", async () => {
-    // Stored alice and Unknown; delivered alice and bob. alice must take the
-    // stored alice row (not the Unknown one), leaving Unknown to pair with bob.
-    arm(
-      [{ username: "bob" }, { username: "alice" }],
-      [
+    it("pairs exact names before the Unknown wildcard", async () => {
+      // alice takes the stored alice row, leaving Unknown to pair with (and be relabelled to) bob.
+      const stored = [
         { id: "wh-unknown", serverUsername: "Unknown" },
         { id: "wh-alice", serverUsername: "alice" },
-      ],
-    );
-
-    await expect(
-      syncWatchHistory("server-1", undefined, undefined, { incremental: true }),
-    ).resolves.toEqual({ count: 0 });
-    expect(calls('UPDATE "WatchHistory"')[0].slice(1)).toEqual([["wh-unknown"], ["bob"]]);
-  });
-});
-
-describe("syncWatchHistory — establishing only what the run saw", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockReconcile.mockResolvedValue(0);
-    mockPrisma.mediaServer.updateMany.mockResolvedValue({ count: 1 });
-  });
-  afterEach(() => {
-    mockPrisma.mediaServer.updateMany.mockResolvedValue({ count: 0 });
-  });
-
-  const establishCalls = () =>
-    mockPrisma.mediaServer.updateMany.mock.calls.filter(
-      (args) =>
-        (args[0] as { data?: Record<string, unknown> }).data?.watchHistorySyncedAt instanceof Date,
-    );
-
-  it("compares against the marker the run started with", async () => {
-    const marker = new Date("2025-01-01T00:00:00Z");
-    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([
-      {
-        id: "server-1",
-        name: "Test Server",
-        url: "http://plex:32400",
-        accessToken: "token",
-        type: "PLEX",
-        tlsSkipVerify: false,
-        enabled: true,
-        watchHistorySyncedAt: marker,
-      },
-    ]);
-    mockClient.getDetailedWatchHistory.mockResolvedValueOnce([]);
-
-    await syncWatchHistory("server-1");
-
-    expect(establishCalls()).toHaveLength(1);
-    expect(establishCalls()[0][0]).toMatchObject({
-      where: { id: "server-1", watchHistorySyncedAt: marker },
+      ];
+      await expect(append(["bob", "alice"], stored)).resolves.toEqual({ count: 0 });
+      expect(relabels()[0].slice(1)).toEqual([["wh-unknown"], ["bob"]]);
     });
-  });
-
-  it("does not re-mark a server whose evidence was withdrawn while the fetch ran", async () => {
-    // A purge (or source switch, or disable-with-delete) during the fetch
-    // destroyed rows and withdrew the marker. Marking afterwards vouched for a
-    // history this run never saw. The marker was already null here, so only
-    // the withdrawal counter can tell.
-    const { invalidateWatchHistoryEvidence } = await import("@/lib/media/watch-evidence");
-    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([
-      {
-        id: "server-1",
-        name: "Test Server",
-        url: "http://plex:32400",
-        accessToken: "token",
-        type: "PLEX",
-        tlsSkipVerify: false,
-        enabled: true,
-        watchHistorySyncedAt: null,
-      },
-    ]);
-    mockClient.getDetailedWatchHistory.mockImplementationOnce(async () => {
-      await invalidateWatchHistoryEvidence(["server-1"]);
-      return [];
-    });
-
-    await syncWatchHistory("server-1");
-
-    expect(establishCalls()).toHaveLength(0);
   });
 });

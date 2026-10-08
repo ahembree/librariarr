@@ -143,12 +143,8 @@ async function retryAction(
       { status: 400 }
     );
   }
-  // Play history (mirrors the scheduled executor and the manual execute
-  // route): while it is not established — and, once detection has skipped the
-  // rule set while it was not or a restore brought its matches back, until
-  // detection has evaluated it again — this rule set's matches are frozen, and
-  // the stale-match guard below would pass on a match the next detection could
-  // drop.
+  // Play-history hold, as the executor (`checkPlayActivityExecutable`): the
+  // stale-match guard below would pass on a frozen match.
   const playHistoryRefusal = await checkPlayActivityExecutable(session.userId!, {
     rules: ruleSet.rules as unknown as LifecycleRuleGroup[],
     serverIds: ruleSet.serverIds,

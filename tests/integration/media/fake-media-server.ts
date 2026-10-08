@@ -1,10 +1,6 @@
 /**
- * A local HTTP server standing in for a Plex, Jellyfin or Emby server, so a
- * test can drive the REAL client — its paging loops, axios instance and
- * interceptors — and the real watch-history sync against a real database,
- * with only the media server itself faked.
- *
- * Not a test file (no `.test.ts`), so vitest never runs it on its own.
+ * A local HTTP server standing in for a Plex, Jellyfin or Emby server, so a test drives the REAL
+ * client (paging, axios instance, interceptors) and sync. Not a `.test.ts`: vitest never runs it.
  */
 import http from "node:http";
 import type { AddressInfo } from "node:net";
@@ -47,8 +43,7 @@ export async function startFakeMediaServer(route: FakeRoute): Promise<FakeMediaS
           res.end(typeof body === "string" ? body : JSON.stringify(body));
         },
         (error: unknown) => {
-          // A failing route is a bug in the test, not a server answer: make it
-          // loud (a 418 is never retried) rather than a hang.
+          // A failing route is a test bug: answer a loud 418 (never retried) rather than hang.
           res.writeHead(418, { "Content-Type": "application/json" });
           res.end(JSON.stringify({ error: String(error) }));
         },
@@ -74,11 +69,7 @@ export interface FakePlayedItem {
   UserData: { PlayCount: number; LastPlayedDate?: string };
 }
 
-/**
- * A Jellyfin/Emby route: `/Users`, and each user's played items. A user's
- * value is either a complete list (served in one page with its total) or a
- * function answering one page.
- */
+/** A Jellyfin/Emby route: `/Users`, and each user's played items (one full page, or a page function). */
 export function jellyfinRoute(
   users: Record<
     string,

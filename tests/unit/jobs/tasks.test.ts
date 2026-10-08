@@ -158,30 +158,19 @@ describe("taskList", () => {
     expect(invalidateMediaCaches).toHaveBeenCalledOnce();
   });
 
-  it("watch-history task fails the job when the sync could not run, so it is retried", async () => {
-    // syncWatchHistory returns (rather than throws) on a failed fetch to keep
-    // the stored history intact; the job used to log that as "synced 0
-    // entries" and finish clean.
-    syncWatchHistory.mockResolvedValue({ count: 0, failed: "fetch failed: ECONNREFUSED" });
+  it.each([
+    ["having stored nothing, dropping no cache", { count: 0, failed: "fetch failed: ECONNREFUSED" }, false, 0],
+    ["having stored plays, dropping caches", { count: 5, failed: "forward walk errored" }, true, 1],
+  ])("watch-history task fails the job, so it is retried, when the sync failed %s", async (_, result, incremental, drops) => {
+    // syncWatchHistory returns, rather than throws, on a failed sync.
+    syncWatchHistory.mockResolvedValue(result);
     await expect(
       (taskList[TASK_SYNC_WATCH_HISTORY] as (p: unknown, h: unknown) => Promise<void>)(
-        { serverId: "server-1" },
+        { serverId: "server-1", incremental },
         helpers,
       ),
-    ).rejects.toThrow("fetch failed: ECONNREFUSED");
-    // Nothing was rewritten, so nothing cached is stale.
-    expect(invalidateMediaCaches).not.toHaveBeenCalled();
-  });
-
-  it("watch-history task still drops caches for the plays a failed Tracearr run did import", async () => {
-    syncWatchHistory.mockResolvedValue({ count: 5, failed: "forward walk errored" });
-    await expect(
-      (taskList[TASK_SYNC_WATCH_HISTORY] as (p: unknown, h: unknown) => Promise<void>)(
-        { serverId: "server-1", incremental: true },
-        helpers,
-      ),
-    ).rejects.toThrow("forward walk errored");
-    expect(invalidateMediaCaches).toHaveBeenCalledOnce();
+    ).rejects.toThrow(result.failed);
+    expect(invalidateMediaCaches).toHaveBeenCalledTimes(drops);
   });
 
   it("watch-history task skips when a full sync is already running", async () => {

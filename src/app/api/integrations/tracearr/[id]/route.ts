@@ -64,12 +64,9 @@ export async function PUT(
     },
   });
 
-  // Re-enabled, or pointed at a new address or key: whatever stopped the
-  // import — every slice failing against the old address and parked ("History
-  // import failing"), or no enabled instance at all — may be fixed now, so
-  // queue a fresh slice for each mapped server instead of waiting for the next
-  // watch-history sync. The keyed enqueue replaces a parked job with a fresh
-  // one. A rename alone changes nothing the import depends on.
+  // Re-enabled or re-pointed: whatever stopped the import (no enabled instance,
+  // slices parked against the old address) may be fixed, so queue a fresh slice
+  // now. A rename alone changes nothing the import depends on.
   const reenabled = enabled === true && !existing.enabled;
   if (instance.enabled && (reenabled || urlChanged || apiKey)) {
     await enqueueTracearrBackfill(

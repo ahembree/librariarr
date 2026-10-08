@@ -266,12 +266,8 @@ interface MediaServer {
    * triggers one — the server-side guard stays the authority on whether the
    * rule set is actually safe to evaluate.
    *
-   * The faults are kept apart because their REMEDIES differ, and collapsing
-   * them to one boolean gave every refusal the wrong advice much of the time:
-   * a complete library sync, waiting for the Tracearr archive walk, the next
-   * watch-history sync, or letting a forward import finish
-   * (`playHistoryFault` in `play-history-fault.ts` derives them, in the
-   * guard's precedence).
+   * The faults are kept apart because their REMEDIES differ; `playHistoryFault`
+   * (`play-history-fault.ts`) derives them in the guard's precedence.
    */
   playHistoryFault: PlayHistoryFault | null;
 }
@@ -1005,15 +1001,12 @@ export function LifecycleRulePage({
   };
 
   const fetchServers = async () => {
-    // Re-read on every import-progress event (every couple of seconds during
-    // an import) and after every sync, so reads overlap; an older answer
-    // landing late must not bring back a fault a newer one cleared.
+    // Re-read every few seconds during an import, so reads overlap: a late older
+    // answer must not bring back a fault a newer one cleared.
     const seq = serversOrder.begin();
     try {
       const response = await fetch("/api/servers");
-      // A failed read carries no server list: keep the one on screen rather
-      // than emptying the picker and the banner, and leave the order alone so
-      // an older answer still on its way can apply.
+      // A failed read keeps the list on screen and is not recorded in the order.
       if (!response.ok) return;
       const data = await response.json();
       if (!serversOrder.accept(seq)) return;
@@ -1027,8 +1020,7 @@ export function LifecycleRulePage({
         name: s.name,
         type: s.type,
         enabled: s.enabled !== false,
-        // A field absent from the payload reads as ESTABLISHED, and a server
-        // with several faults shows the guard's first (see the helper).
+        // An absent field reads as ESTABLISHED (see the helper).
         playHistoryFault: playHistoryFault(s),
       })));
     } catch (error) {
@@ -1073,9 +1065,8 @@ export function LifecycleRulePage({
   // let the list stay the one place the state is read from.
   useRealtime("tracearr:import-progress", () => { void fetchServers(); });
   useRealtime("watch-history:updated", () => { void fetchServers(); });
-  // The `resync` fault is set and released by library syncs — a library's first
-  // sync takes the hold, and only a complete sync of the server releases it —
-  // and a sync that imported no plays announces nothing else.
+  // Library syncs set and release the `resync` fault; one that imports no plays
+  // announces nothing else.
   useRealtime("sync:completed", () => { void fetchServers(); });
 
   // Fetch arr-specific metadata (tags, quality profiles, languages) when an instance is selected.
@@ -2905,12 +2896,8 @@ export function LifecycleRulePage({
                   Preview, Test Media, and detection are paused rather than matching
                   your whole library.
                 </p>
-                {/* Per-server rather than one blended sentence: the faults have
-                    different remedies, so a server waiting on a library sync,
-                    one whose history import is still running (or restarted),
-                    one whose marker was withdrawn and one whose import is
-                    reading recent plays must not be described the same way.
-                    Each shows the guard's first fault, in its precedence. */}
+                {/* Per-server: the faults have different remedies. Each shows the
+                    guard's first fault. */}
                 <ul className="space-y-1">
                   {serversAwaitingPlayHistory.map((s) => (
                     <li key={s.id} className="text-muted-foreground">

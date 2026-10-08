@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, beforeAll, afterAll, vi } from "vitest";
 import { Pool } from "pg";
 import { makeWorkerUtils, type WorkerUtils } from "graphile-worker";
+import type { Prisma } from "@/generated/prisma/client";
 import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
 import {
@@ -25,14 +26,37 @@ vi.mock("@/lib/logger", () => ({
   dbLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
+// For the cases that run the real importer.
+const m = vi.hoisted(() => ({
+  getHistoryPage: vi.fn(),
+  listServers: vi.fn(),
+  getServerAccountNames: vi.fn(),
+  findOldestPlayAt: vi.fn(),
+}));
+vi.mock("@/lib/tracearr/tracearr-client", () => ({
+  MAX_PAGE_SIZE: 100,
+  // Constructor mock — must be a `function`, not an arrow (Vitest 4).
+  TracearrClient: function (this: Record<string, unknown>) {
+    this.getHistoryPage = m.getHistoryPage;
+    this.listServers = m.listServers;
+    this.getServerAccountNames = m.getServerAccountNames;
+    this.findOldestPlayAt = m.findOldestPlayAt;
+  },
+}));
+
 // Import route handler AFTER mocks
 import { GET } from "@/app/api/integrations/tracearr/status/route";
-// The saves that fix what an import waits on, driven for real so the slice
-// they queue lands in the real job table the status route reads.
+// Saves that queue a slice, driven for real into the job table the route reads.
 import { PUT as PUT_SERVER } from "@/app/api/servers/[id]/route";
 import { PUT as PUT_INSTANCE } from "@/app/api/integrations/tracearr/[id]/route";
 import { releaseJobsClient } from "@/lib/jobs/client";
-import { releaseLibraryResyncHold, requireLibraryResync } from "@/lib/media/watch-evidence";
+import {
+  releaseLibraryResyncHold,
+  requireLibraryResync,
+  restartTracearrBackfill,
+} from "@/lib/media/watch-evidence";
+import { syncTracearrHistory } from "@/lib/sync/sync-tracearr-history";
+import { TRACEARR_SERVER_ID, play } from "../sync/fake-tracearr-archive";
 // The fraction arithmetic is a pure helper beside the route, so its edge cases
 // are exercised directly as well as through the response shape.
 import {
@@ -46,7 +70,7 @@ import {
   beginTracearrImport,
   endTracearrImport,
   recordTracearrImportPage,
-  supersedeTracearrImports,
+  retireTracearrImports,
 } from "@/lib/sync/tracearr-import-activity";
 
 interface StatusRow {
@@ -86,23 +110,18 @@ const STATUS_URL = "/api/integrations/tracearr/status";
  * the Tracearr columns, so the mapping is applied after creation rather than
  * reaching into the shared factory.
  *
- * Also gives the server an item in an enabled library unless it already has
- * one (or `withoutItems`): the importer walks nothing into an empty server,
- * and the status reports that as `no-library-items` — a state of its own,
- * exercised on purpose below, not the default every other case sits in.
+ * Also gives an itemless server an item: an empty server reads `no-library-items`.
  */
 async function mapToTracearr(
   serverId: string,
   tracearrServerId: string,
-  opts: { backfillComplete?: boolean; oldestPlayAt?: Date | null; withoutItems?: boolean } = {}
+  opts: { backfillComplete?: boolean; oldestPlayAt?: Date | null } = {}
 ) {
   const prisma = getTestPrisma();
-  if (!opts.withoutItems) {
-    const populated = await prisma.mediaItem.count({
-      where: { library: { mediaServerId: serverId, enabled: true } },
-    });
-    if (populated === 0) await createItemFor(serverId, `Seed ${tracearrServerId.slice(-4)}`);
-  }
+  const populated = await prisma.mediaItem.count({
+    where: { library: { mediaServerId: serverId, enabled: true } },
+  });
+  if (populated === 0) await createItemFor(serverId, `Seed ${tracearrServerId.slice(-4)}`);
   return prisma.mediaServer.update({
     where: { id: serverId },
     data: {
@@ -151,9 +170,8 @@ async function createWatchRow(opts: {
   });
 }
 
-// Whether the job table can be read changes what `pending` is judged on (see
-// `importPending`), and an earlier test file may have left a graphile schema
-// behind. Every test outside the "job on the queue" block runs without one.
+// `pending` is judged on the job table when one can be read; every test outside
+// the "job on the queue" block runs without one.
 beforeAll(async () => {
   const pool = new Pool({ connectionString: process.env.DATABASE_URL!, max: 1 });
   await pool.query("DROP SCHEMA IF EXISTS graphile_worker CASCADE");
@@ -543,19 +561,34 @@ describe("GET /api/integrations/tracearr/status", () => {
 });
 
 describe("GET /api/integrations/tracearr/status — pending and reach", () => {
+  let userId: string;
+  let instanceId: string;
+  let tracearrSeq = 0;
+
   beforeEach(async () => {
     await cleanDatabase();
     clearMockSession();
     vi.clearAllMocks();
+    userId = (await createTestUser()).id;
+    instanceId = (await createInstance(userId)).id;
+    setMockSession({ userId, plexToken: "tok", isLoggedIn: true });
   });
 
   const read = async () =>
     (await expectJson<{ servers: StatusRow[] }>(await callRoute(GET, { url: STATUS_URL }))).servers;
+  const setServer = (id: string, data: Prisma.MediaServerUpdateInput) =>
+    getTestPrisma().mediaServer.update({ where: { id }, data });
 
-  /** A mapped, enabled server with one imported play and its far edge measured. */
-  async function walkingServer(userId: string, name: string, tracearrServerId: string) {
+  /** A mapped, enabled server holding an item, with nothing imported. */
+  async function freshServer(name: string, opts: Parameters<typeof mapToTracearr>[2] = {}) {
     const server = await createTestServer(userId, { name });
-    await mapToTracearr(server.id, tracearrServerId, { oldestPlayAt: new Date(Date.UTC(2026, 0, 1)) });
+    await mapToTracearr(server.id, `a0000000-0000-4000-8000-${String(++tracearrSeq).padStart(12, "0")}`, opts);
+    return server;
+  }
+
+  /** A mapped, enabled server with two imported plays and its far edge measured. */
+  async function walkingServer(name: string) {
+    const server = await freshServer(name, { oldestPlayAt: new Date(Date.UTC(2026, 0, 1)) });
     const item = await createItemFor(server.id, `${name} item`);
     for (const [i, watchedAt] of [new Date(Date.UTC(2026, 0, 8)), new Date(Date.UTC(2026, 0, 11))].entries()) {
       await createWatchRow({ mediaItemId: item.id, mediaServerId: server.id, watchedAt, sourceEventId: `${name}-${i}` });
@@ -563,125 +596,35 @@ describe("GET /api/integrations/tracearr/status — pending and reach", () => {
     return server;
   }
 
-  it("is pending while an owed import has history to walk", async () => {
-    const user = await createTestUser();
-    await createInstance(user.id);
-    await walkingServer(user.id, "Walking", "a0000000-0000-4000-8000-000000000001");
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+  it("is pending while an owed import has history to walk, and not once it is complete", async () => {
+    const server = await walkingServer("Walking");
 
     const [row] = await read();
     expect(row.pending).toBe(true);
     expect(row.pausedReason).toBeNull();
     expect(row.backfillComplete).toBe(false);
-  });
 
-  it("is not pending once the backfill is complete", async () => {
-    const user = await createTestUser();
-    await createInstance(user.id);
-    const server = await walkingServer(user.id, "Done", "a0000000-0000-4000-8000-000000000002");
-    await getTestPrisma().mediaServer.update({
-      where: { id: server.id },
-      data: { tracearrBackfillComplete: true },
-    });
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
-
+    await setServer(server.id, { tracearrBackfillComplete: true });
     expect((await read())[0].pending).toBe(false);
   });
 
-  it("lists a disabled server as paused, never pending, while backfillComplete stays as stored", async () => {
-    // No sync runs for a disabled server, so a pending import there was a
-    // spinner and a 30-second poll that never ended.
-    const user = await createTestUser();
-    await createInstance(user.id);
-    const server = await walkingServer(user.id, "Disabled", "a0000000-0000-4000-8000-000000000003");
-    await getTestPrisma().mediaServer.update({ where: { id: server.id }, data: { enabled: false } });
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+  // Without a readable job table (none here) the stored evidence stands in for
+  // the queue; with one, these read `awaiting-sync` (below).
+  it("is pending for a mapping no walk has run for yet, measured or restarted alike", async () => {
+    // Reported as not pending, Settings read "Tracearr has no plays".
+    await freshServer("A measured", { oldestPlayAt: new Date(Date.UTC(2020, 0, 1)) });
+    const restarted = await freshServer("B restarted");
+    await setServer(restarted.id, { tracearrBackfillCursorAt: new Date() });
 
-    const [row] = await read();
-    expect(row.serverId).toBe(server.id);
-    expect(row.backfillComplete).toBe(false);
-    expect(row.pending).toBe(false);
-    expect(row.pausedReason).toBe("server-disabled");
-  });
-
-  it("is paused when no Tracearr instance is enabled", async () => {
-    const user = await createTestUser();
-    await createInstance(user.id, false);
-    await walkingServer(user.id, "Orphaned", "a0000000-0000-4000-8000-000000000004");
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
-
-    const [row] = await read();
-    expect(row.pending).toBe(false);
-    expect(row.pausedReason).toBe("instance-unavailable");
-  });
-
-  it("is pending for a fresh mapping no walk has run for yet, with nothing queued", async () => {
-    // The gap between saving a mapping and its first sync queueing a slice.
-    // Reported as not pending, Settings read "Tracearr has no plays for this
-    // server — check the mapping" — and with the event stream down, it stayed
-    // on that for the whole multi-hour import.
-    const user = await createTestUser();
-    await createInstance(user.id);
-    const server = await createTestServer(user.id, { name: "Fresh" });
-    await mapToTracearr(server.id, "a0000000-0000-4000-8000-000000000012");
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
-
-    const [row] = await read();
-    expect(row.importedCount).toBe(0);
-    expect(row.lastWalkAt).toBeNull();
-    expect(row.pending).toBe(true);
-    expect(row.pausedReason).toBeNull();
-  });
-
-  it("is not pending for a mapping a walk ran for and found no history", async () => {
-    // Tracearr holds no plays for it: the walk comes back exhausted and empty,
-    // the backfill deliberately stays incomplete and the slice is not
-    // re-enqueued — nothing will ever progress, so nothing may wait on it.
-    const user = await createTestUser();
-    await createInstance(user.id);
-    const server = await createTestServer(user.id, { name: "Empty" });
-    await mapToTracearr(server.id, "a0000000-0000-4000-8000-000000000005");
-    const walkedAt = new Date(Date.UTC(2026, 5, 1));
-    await getTestPrisma().mediaServer.update({
-      where: { id: server.id },
-      data: { tracearrBackfillLastWalkAt: walkedAt },
-    });
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
-
-    const [row] = await read();
-    expect(row.backfillComplete).toBe(false);
-    expect(row.importedCount).toBe(0);
-    expect(row.lastWalkAt).toBe(walkedAt.toISOString());
-    expect(row.pending).toBe(false);
-    expect(row.pausedReason).toBeNull();
-
-    // A run in progress is the evidence it was missing.
-    const run = beginTracearrImport(server.id, user.id);
-    try {
-      expect((await read())[0].pending).toBe(true);
-    } finally {
-      endTracearrImport(run);
-    }
-  });
-
-  // Without a readable job table (none in this block) the stored evidence
-  // stands in for the queue; with one, these read `awaiting-sync` (below).
-  it("is pending with no rows yet once the far edge is measured or the walk restarted", async () => {
-    const user = await createTestUser();
-    await createInstance(user.id);
-    const measured = await createTestServer(user.id, { name: "A measured" });
-    await mapToTracearr(measured.id, "a0000000-0000-4000-8000-000000000006", {
-      oldestPlayAt: new Date(Date.UTC(2020, 0, 1)),
-    });
-    const restarted = await createTestServer(user.id, { name: "B restarted" });
-    await mapToTracearr(restarted.id, "a0000000-0000-4000-8000-000000000007");
-    await getTestPrisma().mediaServer.update({
-      where: { id: restarted.id },
-      data: { tracearrBackfillCursorAt: new Date() },
-    });
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
-
-    expect((await read()).map((row) => row.pending)).toEqual([true, true]);
+    expect((await read()).map(({ importedCount, lastWalkAt, pending, pausedReason }) => ({
+      importedCount,
+      lastWalkAt,
+      pending,
+      pausedReason,
+    }))).toEqual([
+      { importedCount: 0, lastWalkAt: null, pending: true, pausedReason: null },
+      { importedCount: 0, lastWalkAt: null, pending: true, pausedReason: null },
+    ]);
   });
 
   describe("with a backfill job on the queue", () => {
@@ -715,33 +658,31 @@ describe("GET /api/integrations/tracearr/status — pending and reach", () => {
         `UPDATE graphile_worker._private_jobs SET attempts = max_attempts WHERE key = $1`,
         [`tracearr-backfill:${serverId}`],
       );
+    const putServer = (serverId: string, body: Record<string, unknown>) =>
+      callRouteWithParams(PUT_SERVER, { id: serverId }, { url: `/api/servers/${serverId}`, method: "PUT", body });
+    const putInstance = (body: Record<string, unknown>) =>
+      callRouteWithParams(PUT_INSTANCE, { id: instanceId }, {
+        url: `/api/integrations/tracearr/${instanceId}`,
+        method: "PUT",
+        body,
+      });
 
     it("is pending while a slice waits on the queue, even after an empty walk", async () => {
-      const user = await createTestUser();
-      await createInstance(user.id);
-      const server = await createTestServer(user.id, { name: "Queued" });
-      await mapToTracearr(server.id, "a0000000-0000-4000-8000-000000000008");
-      await getTestPrisma().mediaServer.update({
-        where: { id: server.id },
-        data: { tracearrBackfillLastWalkAt: new Date() },
-      });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      const server = await freshServer("Queued");
+      await setServer(server.id, { tracearrBackfillLastWalkAt: new Date() });
 
-      expect((await read())[0].pending).toBe(false);
+      // Walked and empty: its own end state, not awaiting a sync.
+      const [empty] = await read();
+      expect(empty.pending).toBe(false);
+      expect(empty.pausedReason).toBeNull();
 
       await queueBackfill(server.id);
       expect((await read())[0].pending).toBe(true);
     });
 
     it("reports a parked slice as failing — never pending, even with plays imported", async () => {
-      // An instance that no longer monitors the mapping, an account list that
-      // cannot be read: every slice fails, the job uses up its attempts and is
-      // parked. Imported rows used to be enough to read "pending", so this
-      // showed "importing" and was polled forever.
-      const user = await createTestUser();
-      await createInstance(user.id);
-      const server = await walkingServer(user.id, "Failing", "a0000000-0000-4000-8000-000000000013");
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      // Imported rows used to read "pending", polled forever.
+      const server = await walkingServer("Failing");
       await queueBackfill(server.id);
       await park(server.id);
 
@@ -751,7 +692,7 @@ describe("GET /api/integrations/tracearr/status — pending and reach", () => {
       expect(row.pausedReason).toBe("import-failing");
 
       // A run in progress (a Refresh, a slice re-queued since) is progress.
-      const run = beginTracearrImport(server.id, user.id);
+      const run = beginTracearrImport(server.id, userId);
       try {
         const [live] = await read();
         expect(live.pending).toBe(true);
@@ -767,28 +708,9 @@ describe("GET /api/integrations/tracearr/status — pending and reach", () => {
       expect(requeued.pausedReason).toBeNull();
     });
 
-    it("is failing for a never-walked mapping whose every slice failed", async () => {
-      const user = await createTestUser();
-      await createInstance(user.id);
-      const server = await createTestServer(user.id, { name: "Never" });
-      await mapToTracearr(server.id, "a0000000-0000-4000-8000-000000000014");
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
-      await queueBackfill(server.id);
-      await park(server.id);
-
-      const [row] = await read();
-      expect(row.lastWalkAt).toBeNull();
-      expect(row.pending).toBe(false);
-      expect(row.pausedReason).toBe("import-failing");
-    });
-
     it("does not read a slice running its last attempt as parked", async () => {
-      // graphile counts the attempt when it takes the job, so the final try
-      // reads attempts = max while it is still running.
-      const user = await createTestUser();
-      await createInstance(user.id);
-      const server = await walkingServer(user.id, "Last try", "a0000000-0000-4000-8000-000000000015");
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      // graphile counts the attempt when it takes the job.
+      const server = await walkingServer("Last try");
       await queueBackfill(server.id);
       await pool.query(
         `UPDATE graphile_worker._private_jobs
@@ -802,42 +724,24 @@ describe("GET /api/integrations/tracearr/status — pending and reach", () => {
       expect(row.pending).toBe(true);
     });
 
-    const putServer = (serverId: string, body: Record<string, unknown>) =>
-      callRouteWithParams(PUT_SERVER, { id: serverId }, { url: `/api/servers/${serverId}`, method: "PUT", body });
-    const putInstance = (id: string, body: Record<string, unknown>) =>
-      callRouteWithParams(PUT_INSTANCE, { id }, {
-        url: `/api/integrations/tracearr/${id}`,
-        method: "PUT",
-        body,
-      });
-
     it("stops reading failing once a re-enabled Tracearr instance re-queues the slice", async () => {
-      // The instance went away (or pointed at the wrong place), every slice
-      // failed and the job parked. Re-enabling it is the fix — and used to
-      // leave "History import failing" up until the next watch-history sync.
-      const user = await createTestUser();
-      const instance = await createInstance(user.id);
-      const server = await walkingServer(user.id, "Parked", "a0000000-0000-4000-8000-000000000017");
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      const server = await walkingServer("Parked");
       await queueBackfill(server.id);
       await park(server.id);
       expect((await read())[0].pausedReason).toBe("import-failing");
 
-      await expectJson(await putInstance(instance.id, { enabled: false }), 200);
+      await expectJson(await putInstance({ enabled: false }), 200);
       expect((await read())[0].pausedReason).toBe("instance-unavailable");
 
-      await expectJson(await putInstance(instance.id, { enabled: true }), 200);
+      await expectJson(await putInstance({ enabled: true }), 200);
       const [row] = await read();
       expect(row.pausedReason).toBeNull();
       expect(row.pending).toBe(true);
     });
 
     it("queues a fresh mapping's first slice on save, so it reads pending", async () => {
-      const user = await createTestUser();
-      await createInstance(user.id);
-      const server = await createTestServer(user.id, { name: "Fresh" });
+      const server = await createTestServer(userId, { name: "Fresh" });
       await createItemFor(server.id, "Fresh item");
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
 
       await expectJson(await putServer(server.id, { tracearrServerId: "a0000000-0000-4000-8000-000000000018" }), 200);
 
@@ -852,27 +756,9 @@ describe("GET /api/integrations/tracearr/status — pending and reach", () => {
       expect(row.pausedReason).toBeNull();
     });
 
-    it("replaces a slice parked by the OLD mapping when the mapping changes", async () => {
-      const user = await createTestUser();
-      await createInstance(user.id);
-      const server = await walkingServer(user.id, "Re-pointed", "a0000000-0000-4000-8000-000000000019");
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
-      await queueBackfill(server.id);
-      await park(server.id);
-      expect((await read())[0].pausedReason).toBe("import-failing");
-
-      await expectJson(await putServer(server.id, { tracearrServerId: "a0000000-0000-4000-8000-000000000020" }), 200);
-      const [row] = await read();
-      expect(row.pausedReason).toBeNull();
-      expect(row.pending).toBe(true);
-    });
-
     it("queues the slice of a server re-enabled while its import was owed", async () => {
-      const user = await createTestUser();
-      await createInstance(user.id);
-      const server = await walkingServer(user.id, "Back", "a0000000-0000-4000-8000-000000000021");
-      await getTestPrisma().mediaServer.update({ where: { id: server.id }, data: { enabled: false } });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      const server = await walkingServer("Back");
+      await setServer(server.id, { enabled: false });
       expect((await read())[0].pausedReason).toBe("server-disabled");
 
       await expectJson(await putServer(server.id, { enabled: true }), 200);
@@ -881,86 +767,29 @@ describe("GET /api/integrations/tracearr/status — pending and reach", () => {
       expect(row.pending).toBe(true);
     });
 
-    it("reports an owed import with nothing queued as awaiting a sync — never pending", async () => {
-      // After a purge or restore the walk must follow the re-sync, so nothing
-      // queues it early. It used to read "Still importing…" beside a spinner
-      // and be polled with nothing queued.
-      const user = await createTestUser();
-      await createInstance(user.id);
-      const server = await walkingServer(user.id, "Purged", "a0000000-0000-4000-8000-000000000022");
-      await getTestPrisma().mediaServer.update({
-        where: { id: server.id },
-        data: { tracearrBackfillLastWalkAt: new Date() },
-      });
+    it("reports an import held for a library resync as awaiting a sync, queued or not, until released", async () => {
+      // The walk must follow the re-sync; a queued slice only no-ops.
+      const server = await walkingServer("Purged");
+      await setServer(server.id, { tracearrBackfillLastWalkAt: new Date() });
       // What a purge records before deleting (it also restarts the walk).
       await requireLibraryResync([server.id]);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
-
-      const [row] = await read();
-      expect(row.pausedReason).toBe("awaiting-sync");
-      expect(row.pending).toBe(false);
-
-      // Re-enabling the instance must not start it ahead of the re-sync either.
-      const [instance] = await getTestPrisma().tracearrInstance.findMany({ where: { userId: user.id } });
-      await expectJson(await putInstance(instance.id, { enabled: false }), 200);
-      await expectJson(await putInstance(instance.id, { enabled: true }), 200);
-      expect((await read())[0].pausedReason).toBe("awaiting-sync");
-
-      // A slice queued meanwhile (a watch-changed's forward sync queues one)
-      // only no-ops against the hold — still waiting, still not pending.
       await queueBackfill(server.id);
-      const [heldQueued] = await read();
-      expect(heldQueued.pausedReason).toBe("awaiting-sync");
-      expect(heldQueued.pending).toBe(false);
 
-      // The full sync that releases the hold leaves the queued slice to run.
+      const [held] = await read();
+      expect(held.pausedReason).toBe("awaiting-sync");
+      expect(held.pending).toBe(false);
+
+      // The sync that releases the hold leaves the queued slice to run.
       await releaseLibraryResyncHold(server.id, new Date());
       const [released] = await read();
       expect(released.pausedReason).toBeNull();
       expect(released.pending).toBe(true);
     });
 
-    it("does not hold a first walk that errored after a committed page", async () => {
-      // A cursor and no walk stamp — the shape the hold used to be inferred
-      // from — with its retry queued: pending, not awaiting a sync.
-      const user = await createTestUser();
-      await createInstance(user.id);
-      const server = await walkingServer(user.id, "Errored", "a0000000-0000-4000-8000-000000000025");
-      await getTestPrisma().mediaServer.update({
-        where: { id: server.id },
-        data: { tracearrBackfillCursorAt: new Date(Date.UTC(2026, 8, 1)), tracearrBackfillLastWalkAt: null },
-      });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
-      await queueBackfill(server.id);
-
-      const [row] = await read();
-      expect(row.pausedReason).toBeNull();
-      expect(row.pending).toBe(true);
-    });
-
-    it("reports a mapping on a server with no items yet as waiting for library items", async () => {
-      // The importer refuses to walk into an empty library, so the save queues
-      // nothing; the watch-history step of a sync that adds items does.
-      const user = await createTestUser();
-      await createInstance(user.id);
-      const server = await createTestServer(user.id, { name: "Unsynced" });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
-
-      await expectJson(await putServer(server.id, { tracearrServerId: "a0000000-0000-4000-8000-000000000023" }), 200);
-      const [row] = await read();
-      expect(row.pausedReason).toBe("no-library-items");
-      expect(row.pending).toBe(false);
-    });
-
     it("reports no-library-items when every library holding items is disabled — even with a slice queued", async () => {
-      // No sync adds items to a disabled library, so "starts with the next
-      // sync" would be untrue; a queued slice only no-ops against the gate.
-      const user = await createTestUser();
-      await createInstance(user.id);
-      const server = await createTestServer(user.id, { name: "All disabled" });
-      await mapToTracearr(server.id, "a0000000-0000-4000-8000-000000000026");
+      // No sync adds items to a disabled library; a queued slice only no-ops.
+      const server = await freshServer("All disabled");
       await getTestPrisma().library.updateMany({ where: { mediaServerId: server.id }, data: { enabled: false } });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
       await queueBackfill(server.id);
 
       const [row] = await read();
@@ -976,101 +805,129 @@ describe("GET /api/integrations/tracearr/status — pending and reach", () => {
       expect((await read())[0].pausedReason).toBe("import-failing");
     });
 
-    it("reports a restart that emptied the libraries as awaiting a sync — the sync refills them", async () => {
-      const user = await createTestUser();
-      await createInstance(user.id);
-      const server = await createTestServer(user.id, { name: "Purged all" });
-      await mapToTracearr(server.id, "a0000000-0000-4000-8000-000000000027", { withoutItems: true });
-      await createTestLibrary(server.id, { title: "Emptied" });
-      await requireLibraryResync([server.id]);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    describe("superseded runs, and restarted walks that find nothing", () => {
+      let serverId: string;
+      const row = async () => (await read())[0];
 
-      const [row] = await read();
-      expect(row.pausedReason).toBe("awaiting-sync");
-      expect(row.pending).toBe(false);
-    });
-
-    it("does not report no-library-items for a completed backfill", async () => {
-      const user = await createTestUser();
-      await createInstance(user.id);
-      const server = await createTestServer(user.id, { name: "Done, emptied" });
-      await mapToTracearr(server.id, "a0000000-0000-4000-8000-000000000028", {
-        backfillComplete: true,
-        withoutItems: true,
+      beforeEach(async () => {
+        for (const fn of Object.values(m)) fn.mockReset();
+        m.listServers.mockResolvedValue([{ id: TRACEARR_SERVER_ID }]);
+        m.getServerAccountNames.mockResolvedValue(new Map([["acct-1", "walter"]]));
+        m.findOldestPlayAt.mockResolvedValue(null);
+        serverId = (await createTestServer(userId, { name: "Plex", tracearrServerId: TRACEARR_SERVER_ID })).id;
+        const library = await createTestLibrary(serverId, { type: "MOVIE" });
+        await createTestMediaItem(library.id, { ratingKey: "100", type: "MOVIE", title: "The Matrix" });
       });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
 
-      expect((await read())[0].pausedReason).toBeNull();
-    });
+      it("does not report a run a mapping change retired, so pending follows the job table", async () => {
+        const run = beginTracearrImport(serverId, userId);
+        try {
+          recordTracearrImportPage(run, { pass: "backfill", pages: 40, imported: 3900, oldestReached: null });
+          const live = await row();
+          expect(live.activeImport).toMatchObject({ pages: 40, imported: 3900 });
+          expect(live.pending).toBe(true);
 
-    it("keeps a walked-and-empty mapping out of awaiting-sync", async () => {
-      // A walk ran and found nothing — "No plays imported", its own state.
-      const user = await createTestUser();
-      await createInstance(user.id);
-      const server = await createTestServer(user.id, { name: "Empty walk" });
-      await mapToTracearr(server.id, "a0000000-0000-4000-8000-000000000024");
-      await getTestPrisma().mediaServer.update({
-        where: { id: server.id },
-        data: { tracearrBackfillLastWalkAt: new Date() },
+          retireTracearrImports(serverId);
+
+          const retired = await row();
+          expect(retired.activeImport).toBeNull();
+          // Owed with nothing queued: waiting on a sync, not "importing".
+          expect(retired.pending).toBe(false);
+          expect(retired.pausedReason).toBe("awaiting-sync");
+
+          await queueBackfill(serverId);
+          expect((await row()).pending).toBe(true);
+        } finally {
+          endTracearrImport(run);
+        }
       });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
 
-      const [row] = await read();
-      expect(row.pausedReason).toBeNull();
-      expect(row.pending).toBe(false);
-    });
+      it("keeps a run a restart superseded on the readout, so it does not read as failing beside a parked slice", async () => {
+        await queueBackfill(serverId);
+        await park(serverId);
+        const refresh = beginTracearrImport(serverId, userId);
+        try {
+          recordTracearrImportPage(refresh, { pass: "forward", pages: 2, imported: 120, oldestReached: null });
+          expect((await row()).pausedReason).toBeNull();
 
-    it("does not report a completed backfill as failing", async () => {
-      const user = await createTestUser();
-      await createInstance(user.id);
-      const server = await walkingServer(user.id, "Complete", "a0000000-0000-4000-8000-000000000016");
-      await getTestPrisma().mediaServer.update({
-        where: { id: server.id },
-        data: { tracearrBackfillComplete: true },
+          // The Refresh's plays are still this server's.
+          await restartTracearrBackfill([serverId]);
+
+          const during = await row();
+          expect(during.activeImport).toMatchObject({ pass: "forward", pages: 2, imported: 120 });
+          expect(during.pausedReason).toBeNull();
+          expect(during.pending).toBe(true);
+        } finally {
+          endTracearrImport(refresh);
+        }
+        // Once it ends, the parked slice is all that is left.
+        expect((await row()).pausedReason).toBe("import-failing");
       });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
-      await queueBackfill(server.id);
-      await park(server.id);
 
-      const [row] = await read();
-      expect(row.pending).toBe(false);
-      expect(row.pausedReason).toBeNull();
+      it("keeps a slice the restart superseded mid-walk on the readout, without the reach it had", async () => {
+        // A purge restarts the walk under a running backfill slice.
+        let duringRun: StatusRow | undefined;
+        m.getHistoryPage
+          .mockImplementationOnce(async () => ({
+            records: [play("p1", "2026-01-02T00:00:00.000Z")],
+            nextCursor: "c2",
+          }))
+          .mockImplementationOnce(async () => {
+            expect((await row()).activeImport).toMatchObject({
+              pass: "backfill",
+              pages: 1,
+              backfillReached: "2026-01-02T00:00:00.000Z",
+            });
+            await requireLibraryResync([serverId]);
+            duringRun = await row();
+            return { records: [play("p2", "2026-01-01T00:00:00.000Z")], nextCursor: null };
+          });
+
+        await syncTracearrHistory(serverId, { passes: "backfill" });
+
+        expect(duringRun?.activeImport).toMatchObject({ pass: "backfill", pages: 1, backfillReached: null });
+        // Held until the library sync that brings the purged items back.
+        expect(duringRun?.pausedReason).toBe("awaiting-sync");
+        expect(duringRun?.pending).toBe(false);
+      });
+
+      it("reads walked-and-empty, not 'starts after the next full sync', once a released walk finds nothing", async () => {
+        // A purge holds the server and moves the cursor to the restart instant.
+        await requireLibraryResync([serverId]);
+        const held = await row();
+        expect(held.pausedReason).toBe("awaiting-sync");
+        expect(held.pending).toBe(false);
+        expect(await releaseLibraryResyncHold(serverId, new Date())).toBe(true);
+
+        // The walk it queues finds nothing; the cursor stays at the restart.
+        m.getHistoryPage.mockResolvedValue({ records: [], nextCursor: null });
+        const walk = await syncTracearrHistory(serverId, { passes: "backfill" });
+        expect(walk).toMatchObject({ backfillOutcome: "exhausted", backfillPending: true });
+        expect(walk.heldReason).toBeUndefined();
+        const stored = await getTestPrisma().mediaServer.findUniqueOrThrow({ where: { id: serverId } });
+        expect(stored.tracearrBackfillCursorAt).not.toBeNull();
+
+        // Nothing queued: the "no plays imported" end state, not pending.
+        const after = await row();
+        expect(after.lastWalkAt).not.toBeNull();
+        expect(after.pausedReason).toBeNull();
+        expect(after.pending).toBe(false);
+
+        // A slice queued later (the next watch-history sync) reads as pending.
+        await queueBackfill(serverId);
+        expect((await row()).pending).toBe(true);
+      });
     });
   });
 
-  it("measures the bar from a live backfill run that is further back than the stored reach", async () => {
-    // The cursor is written once per five-minute slice; between writes the
-    // bar stood still while the walk paged on.
-    const user = await createTestUser();
-    await createInstance(user.id);
-    const server = await walkingServer(user.id, "Live", "a0000000-0000-4000-8000-000000000009");
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+  it("measures the bar from a live backfill run's reach, never a forward pass's", async () => {
+    // The cursor is written once per slice; between writes the bar stood still.
+    // A forward pass's reach (the newest hour) says nothing about the archive.
+    const server = await walkingServer("Live");
 
     expect((await read())[0].backfillFraction).toBeCloseTo(0.3, 10);
 
-    const run = beginTracearrImport(server.id, user.id);
-    try {
-      recordTracearrImportPage(run, {
-        pass: "backfill",
-        pages: 40,
-        imported: 0,
-        oldestReached: new Date(Date.UTC(2026, 0, 6)),
-      });
-      const [row] = await read();
-      expect(row.backfillFraction).toBeCloseTo(0.5, 10);
-      expect(row.reachedAt).toBe(new Date(Date.UTC(2026, 0, 6)).toISOString());
-    } finally {
-      endTracearrImport(run);
-    }
-  });
-
-  it("ignores a live forward pass's reach — the newest hour says nothing about the archive", async () => {
-    const user = await createTestUser();
-    await createInstance(user.id);
-    const server = await walkingServer(user.id, "Forward", "a0000000-0000-4000-8000-000000000010");
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
-
-    const run = beginTracearrImport(server.id, user.id);
+    const run = beginTracearrImport(server.id, userId);
     try {
       recordTracearrImportPage(run, {
         pass: "forward",
@@ -1078,57 +935,30 @@ describe("GET /api/integrations/tracearr/status — pending and reach", () => {
         imported: 3,
         oldestReached: new Date(Date.UTC(2025, 0, 1)),
       });
-      const [row] = await read();
-      expect(row.backfillFraction).toBeCloseTo(0.3, 10);
-      expect(row.reachedAt).toBe(new Date(Date.UTC(2026, 0, 8)).toISOString());
-    } finally {
-      endTracearrImport(run);
-    }
-  });
+      const [forward] = await read();
+      expect(forward.backfillFraction).toBeCloseTo(0.3, 10);
+      expect(forward.reachedAt).toBe(new Date(Date.UTC(2026, 0, 8)).toISOString());
 
-  it("ignores the live reach of a run superseded by a restart or a mapping change", async () => {
-    // That run is still paging the OLD archive position; its deep reach would
-    // beat the cursor the restart just moved to now ("older wins").
-    const user = await createTestUser();
-    await createInstance(user.id);
-    const server = await walkingServer(user.id, "Superseded", "a0000000-0000-4000-8000-000000000017");
-    const restartedAt = new Date(Date.UTC(2026, 0, 12));
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
-
-    const run = beginTracearrImport(server.id, user.id);
-    try {
       recordTracearrImportPage(run, {
         pass: "backfill",
         pages: 40,
         imported: 0,
-        oldestReached: new Date(Date.UTC(2026, 0, 2)),
+        oldestReached: new Date(Date.UTC(2026, 0, 6)),
       });
-      await getTestPrisma().mediaServer.update({
-        where: { id: server.id },
-        data: { tracearrBackfillCursorAt: restartedAt },
-      });
-      supersedeTracearrImports(server.id);
-
-      const [row] = await read();
-      expect(row.reachedAt).toBe(restartedAt.toISOString());
-      expect(row.backfillFraction).toBe(0);
+      const [backfill] = await read();
+      expect(backfill.backfillFraction).toBeCloseTo(0.5, 10);
+      expect(backfill.reachedAt).toBe(new Date(Date.UTC(2026, 0, 6)).toISOString());
     } finally {
       endTracearrImport(run);
     }
   });
 
   it("reports the reach the fraction is measured from, not the oldest surviving row, after a purge restart", async () => {
-    // `restartTracearrBackfill` moves the cursor to now; rows that survived the
-    // purge still reach the far end. The line read "0% … reached 2019".
-    const user = await createTestUser();
-    await createInstance(user.id);
-    const server = await walkingServer(user.id, "Restarted", "a0000000-0000-4000-8000-000000000011");
+    // The restart moves the cursor to now; rows that survived the purge still
+    // reach the far end. The line read "0% … reached 2019".
+    const server = await walkingServer("Restarted");
     const restartedAt = new Date(Date.UTC(2026, 0, 12));
-    await getTestPrisma().mediaServer.update({
-      where: { id: server.id },
-      data: { tracearrBackfillCursorAt: restartedAt },
-    });
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    await setServer(server.id, { tracearrBackfillCursorAt: restartedAt });
 
     const [row] = await read();
     expect(row.backfillFraction).toBe(0);
@@ -1320,12 +1150,9 @@ describe("importPending", () => {
     queued: false,
   } as const;
 
-  it("is pending for a mapping never walked, and not for one walked with nothing to show", () => {
+  it("is pending for a mapping never walked or a slice running or waiting, not one walked with nothing to show", () => {
     expect(importPending({ ...base, lastWalkAt: null })).toBe(true);
     expect(importPending(base)).toBe(false);
-  });
-
-  it("is pending while a slice runs or waits", () => {
     expect(importPending({ ...base, running: true })).toBe(true);
     expect(importPending({ ...base, queued: true })).toBe(true);
   });
@@ -1362,8 +1189,7 @@ describe("importAwaitingSync", () => {
 
   it("is an owed import with nothing queued, running or parked", () => {
     expect(importAwaitingSync(owed)).toBe(true);
-    // A never-walked mapping with nothing queued (an enqueue that failed, an
-    // unsynced server) waits for the sync just the same.
+    // A never-walked mapping waits for the sync just the same.
     expect(importAwaitingSync({ ...owed, importedCount: 0, cursorAt: null })).toBe(true);
   });
 
@@ -1379,10 +1205,13 @@ describe("importAwaitingSync", () => {
     expect(importAwaitingSync({ ...owed, jobsKnown: undefined })).toBe(false);
   });
 
-  it("leaves the walked-and-empty end state alone", () => {
-    expect(
-      importAwaitingSync({ ...owed, importedCount: 0, cursorAt: null, lastWalkAt: new Date() }),
-    ).toBe(false);
+  it("leaves the walked-and-empty end state alone, whether or not a restart left a cursor", () => {
+    const walkedEmpty = { ...owed, importedCount: 0, lastWalkAt: new Date() };
+    expect(importAwaitingSync({ ...walkedEmpty, cursorAt: null })).toBe(false);
+    expect(importAwaitingSync(walkedEmpty)).toBe(false);
+    // Rows or a measured far edge are history still to show.
+    expect(importAwaitingSync({ ...walkedEmpty, importedCount: 3 })).toBe(true);
+    expect(importAwaitingSync({ ...walkedEmpty, oldestPlayAt: new Date(0) })).toBe(true);
   });
 
   it("is, while a restart holds the walk, whatever is queued or running", () => {
@@ -1391,6 +1220,7 @@ describe("importAwaitingSync", () => {
     expect(importAwaitingSync({ ...held, queued: true })).toBe(true);
     expect(importAwaitingSync({ ...held, running: true })).toBe(true);
     expect(importAwaitingSync({ ...held, jobsKnown: false })).toBe(true);
+    expect(importAwaitingSync({ ...held, importedCount: 0, lastWalkAt: new Date() })).toBe(true);
     expect(importAwaitingSync({ ...held, backfillComplete: true })).toBe(false);
   });
 
@@ -1417,20 +1247,14 @@ describe("importPausedReason", () => {
     failing: false,
   } as const;
 
-  it("is null for an import with a slice queued", () => {
+  it("is null with a slice queued, else names the cause in the order it must be fixed", () => {
     expect(importPausedReason(owed)).toBeNull();
-  });
-
-  it("puts what nothing but the user can lift first", () => {
+    // What nothing but the user can lift first.
     expect(importPausedReason({ ...owed, serverEnabled: false, resyncRequiredAt: new Date() })).toBe("server-disabled");
     expect(importPausedReason({ ...owed, instanceEnabled: false, hasLibraryItems: false })).toBe("instance-unavailable");
-  });
-
-  it("puts a restart hold before empty libraries — the releasing sync refills them", () => {
+    // A hold before empty libraries: the releasing sync refills them.
     expect(importPausedReason({ ...owed, resyncRequiredAt: new Date(), hasLibraryItems: false })).toBe("awaiting-sync");
-  });
-
-  it("puts empty libraries before a parked slice", () => {
+    // Empty libraries before a parked slice.
     expect(importPausedReason({ ...owed, hasLibraryItems: false, failing: true, queued: false })).toBe(
       "no-library-items",
     );

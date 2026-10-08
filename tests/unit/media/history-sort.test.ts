@@ -15,9 +15,8 @@ import { QUALITY_ORDER, resolutionLabelSql } from "@/lib/resolution";
 import { MEDIA_TYPE_LABELS } from "@/lib/theme/media-type-colors";
 
 /**
- * Column ids the History page declares with a `sortValue` (i.e. a clickable
- * header), read from the page source — the column list lives inside the
- * component, so this is the only way to hold the page to the shared map.
+ * Column ids the History page declares with a `sortValue` (a clickable header),
+ * read from the page source: the column list lives inside the component.
  */
 function pageSortableColumnIds(): string[] {
   const source = readFileSync(
@@ -32,42 +31,33 @@ function pageSortableColumnIds(): string[] {
 }
 
 describe("history sort map", () => {
-  it("maps every column to a key the route can sort by", () => {
-    for (const key of Object.values(HISTORY_COLUMN_SORT_KEY)) {
-      expect(Object.hasOwn(HISTORY_SORT_SQL, key)).toBe(true);
-      expect(HISTORY_SORT_SQL[key].length).toBeGreaterThan(0);
-    }
-  });
-
-  it("covers every sort key in the SQL whitelist", () => {
+  it("maps every column one-to-one onto the route's SQL whitelist", () => {
     expect(Object.keys(HISTORY_SORT_SQL).sort()).toEqual([...HISTORY_SORT_KEYS].sort());
-  });
-
-  it("is one-to-one, so the sort arrow lands on the column that was clicked", () => {
     const keys = Object.values(HISTORY_COLUMN_SORT_KEY);
     expect(new Set(keys).size).toBe(keys.length);
     for (const [column, key] of Object.entries(HISTORY_COLUMN_SORT_KEY)) {
+      expect(Object.hasOwn(HISTORY_SORT_SQL, key)).toBe(true);
+      expect(HISTORY_SORT_SQL[key].length).toBeGreaterThan(0);
       expect(historyColumnForSortKey(key)).toBe(column);
       expect(historySortKeyForColumn(column)).toBe(key);
     }
   });
 
-  it("sorts the Server column by server name and the User column by username", () => {
-    expect(historySortKeyForColumn("server")).toBe("serverName");
-    expect(historySortKeyForColumn("serverUsername")).toBe("serverUsername");
-    expect(historyColumnForSortKey("serverUsername")).toBe("serverUsername");
-    expect(historyColumnForSortKey("serverName")).toBe("server");
-  });
-
-  it("has real sort keys for HDR, video codec and audio", () => {
-    expect(historySortKeyForColumn("dynamicRange")).toBe("dynamicRange");
-    expect(historySortKeyForColumn("videoCodec")).toBe("videoCodec");
-    expect(historySortKeyForColumn("audioCodec")).toBe("audioCodec");
+  it.each([
+    // Server by server name, User by username.
+    ["server", "serverName"],
+    ["serverUsername", "serverUsername"],
+    ["dynamicRange", "dynamicRange"],
+    ["videoCodec", "videoCodec"],
+    ["audioCodec", "audioCodec"],
+  ])("sorts the %s column by %s", (column, key) => {
+    expect(historySortKeyForColumn(column)).toBe(key);
+    expect(historyColumnForSortKey(key)).toBe(column);
   });
 
   it("gives every sortable column on the page a route sort key", () => {
     const ids = pageSortableColumnIds();
-    // Guard the parser itself: the page has well over a dozen sortable columns.
+    // Guards the parser: the page has well over a dozen sortable columns.
     expect(ids.length).toBeGreaterThan(10);
     expect(ids).toContain("server");
     for (const id of ids) {
@@ -98,13 +88,10 @@ describe("history sort SQL for displayed labels", () => {
     ["streamResolution", 'wh."resolution"'],
   ] as const)("ranks %s by its normalized label, lowest first", (key, column) => {
     const [rank, raw] = HISTORY_SORT_SQL[key];
-    // The label comes from the SQL twin of normalizeResolutionLabel, applied
-    // to the right column (the file's vs the stream's).
+    // The label is the SQL twin of normalizeResolutionLabel, over the right column.
     expect(rank).toContain(resolutionLabelSql(column));
-    // Only the outer CASE maps a quoted LABEL to a numeric rank; the inner
-    // CASE maps raw text to labels (`THEN '4K'`), which the pattern skips.
+    // Only the outer CASE maps a label to a numeric rank; "Other" is unranked (NULL, last).
     expect(rankedLabels(rank)).toEqual(["SD", "480P", "720P", "1080P", "4K"]);
-    // Every label but "Other" is ranked — "Other" is unknown, so NULL, last.
     expect(rankedLabels(rank).sort()).toEqual(QUALITY_ORDER.filter((l) => l !== "Other").sort());
     expect(raw).toBe(`NULLIF(LOWER(${column}), '')`);
   });

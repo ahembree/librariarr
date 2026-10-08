@@ -23,14 +23,9 @@ import type {
  * Two-step resolution, in this order:
  *
  *  1. `rating_key` → `MediaItem.ratingKey`, scoped to this media server. That
- *     column IS the server's own primary identity for the item and is exactly
- *     what the sync stored for it; a hit is still corroborated (see below).
- *     Zero hits fall through to (2). More than one hit is a skip — a rating key
- *     is unique only within a library, so the same key can name rows in two —
- *     with ONE exception: on Jellyfin/Emby, two libraries over the same folder
- *     list the same item under the same id, and a play of it is filed against
- *     every copy (`copies`), exactly as the native path does. On Plex a key is
- *     server-unique, so a second row under it is a stale one and stays a skip.
+ *     column IS the server's own primary identity for the item; a hit is still
+ *     corroborated (see below). Zero hits fall through to (2); several are a
+ *     skip, except Jellyfin/Emby library copies (`libraryCopies`).
  *
  *  2. Provider-id fallback — `tmdb_id` → `imdb_id`, for movies and tracks
  *     only. This is what rescues a record whose `rating_key` is null (the
@@ -60,10 +55,8 @@ export type TracearrJoinResult =
       /** The row the play's primary record goes on — the lowest id. */
       mediaItemId: string;
       /**
-       * The other library copies of the same Jellyfin/Emby item, sorted, each
-       * of which gets a row of the play too (`WatchHistory.fanOutOfItemId`
-       * names the primary): every copy has to read as watched to the per-item
-       * consumers. Absent for a play of one item.
+       * The item's other Jellyfin/Emby library copies, sorted; each gets a row of
+       * the play, so every copy reads as watched. Absent for a play of one item.
        */
       copies?: string[];
     }
@@ -104,9 +97,8 @@ interface JoinCandidate {
 export interface TracearrJoinIndex {
   serverId: string;
   /**
-   * The media server's type, which decides whether a rating key shared by rows
-   * in two libraries names one item (Jellyfin/Emby) or a stale row (Plex).
-   * Null when the server holds no items.
+   * Decides whether a rating key on rows in two libraries names one item
+   * (Jellyfin/Emby) or a stale row (Plex). Null when the server holds no items.
    */
   serverType: string | null;
   /** `ratingKey` → candidates (an array: collisions must be detectable). */
@@ -333,23 +325,13 @@ function contradictsIdentity(
 }
 
 /**
- * The copies of one Jellyfin/Emby item that a rating key names in several of
- * the server's libraries, or null when the hits are anything else.
- *
- * Jellyfin and Emby give an item one id however many libraries list it, so
- * two libraries over the same folder hold two rows under one rating key. A
- * play of it is a play of every copy, and skipping it as ambiguous left BOTH
- * reading as never watched — what negative `watchedByUser` and `playCount = 0`
- * DELETE rules act on, vouched for once the archive walk completed. The native
- * path files such a play against every copy; so does this, on exactly that
- * shape and nothing looser:
- *  - a Jellyfin or Emby server — on Plex a rating key is server-unique, so a
- *    second row under it is a stale one, and the skip stands;
- *  - every hit in a different library (one library cannot hold a key twice);
- *  - every hit corroborated on its own, exactly like a single hit: the type the
- *    record names, and no contradicting identity.
- * The provider-id fallback never fans out: two rows sharing a TMDB id are two
- * files (a 4K beside a 1080p), not one item listed twice.
+ * The copies of one Jellyfin/Emby item a rating key names in several of the
+ * server's libraries, or null for any other shape of hits. A play of it is a
+ * play of every copy (as the native path files it); skipped as ambiguous, both
+ * read as never watched. Only on Jellyfin/Emby (on Plex a second row is
+ * stale), with every hit in a different library and each corroborated on its
+ * own (type, no contradicting identity). The provider-id fallback never fans
+ * out: two rows sharing a TMDB id are two files (a 4K beside a 1080p).
  */
 function libraryCopies(
   index: TracearrJoinIndex,

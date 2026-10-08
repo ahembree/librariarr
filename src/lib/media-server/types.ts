@@ -319,62 +319,34 @@ export interface DetailedWatchHistoryEntry {
   watchedAt: string | null;
   deviceName: string | null;
   platform: string | null;
-  /**
-   * The library (`Library.key`) the play was recorded in, when the server
-   * says (Plex `librarySectionID`). Only used to place a play whose rating key
-   * matches items in more than one library of the server.
-   */
+  /** The play's library (`Library.key`), when the server says (Plex); places a duplicate rating key. */
   librarySectionKey?: string | null;
 }
 
 /**
- * Why `getDetailedWatchHistory` could not read one user's plays completely
- * (`DetailedWatchHistoryReport.incompleteUsers`). The caller acts on the two
- * differently, so the reason travels with the name.
- *
- * - `refused`: the server refused that user's listing (401/403/404). The key
- *   cannot read the user and will not be able to, so the history is still
- *   established without them, as it always was — waiting would block the
- *   server for good. Their stored rows are kept, and every play of theirs
- *   that is not stored is missing from it, as for `unreliable`.
- * - `unreliable`: the listing answered, but in a shape that cannot be trusted
- *   to be complete — an empty first page under a non-zero total, or one far
- *   short of it — so by the server's own count the user has plays this run
- *   did not see. Their stored rows are kept, and they are all that is known
- *   of the user: until the listing can be read, their new plays and every
- *   play of media added or re-added since (a newly enabled library, a purged
- *   or re-created one, whose old rows the deletion took) stay missing, and an
- *   item they alone watched reads as never played unless one of its plays is
- *   stored. Only a user with no stored rows on the server, while the history
- *   was not established when the run began, keeps it unestablished;
- *   otherwise it is established with those plays missing — a deliberate
- *   trade, since refusing kept a server with one persistently unreadable user
- *   paused for good.
+ * Why one user's plays could not be read completely; the caller treats the two
+ * differently. `refused` (401/403/404): the key will never read the user, so
+ * the history is established without them. `unreliable` (an empty first page
+ * under a non-zero total, or a gap past the tolerance): the user's stored rows
+ * vouch for the history unless they have none and it was not yet established.
+ * Either way their plays not stored — new ones, and those of media added or
+ * re-added since (a newly enabled, purged or re-created library) — stay
+ * missing, so an item only they watched reads never played: a deliberate
+ * trade, since refusing kept a server with one unreadable user paused for good.
  */
 export type IncompleteUserReason = "refused" | "unreliable";
 
 /**
  * What a `getDetailedWatchHistory` call could not read, for a caller that
- * commits the result with a full replace. The caller creates it empty and the
- * client fills it in; a caller that passes none gets the stricter behaviour
- * described on each field instead.
+ * commits the result with a full replace. The caller creates it empty.
  */
 export interface DetailedWatchHistoryReport {
   /**
-   * Users (by the name their plays are stored under) whose plays could not be
-   * read completely this time, with why (`IncompleteUserReason`) — on
-   * Jellyfin/Emby, a played-items listing the server refused or answered in a
-   * shape that cannot be trusted to be complete. Such a user contributes NO
-   * entries, and the caller must keep that user's stored rows rather than
-   * replace them with nothing. Without a report, an untrustworthy listing
-   * fails the whole fetch and a refused user is skipped.
+   * Users (by stored name) whose plays could not be read completely, and why.
+   * They contribute no entries; the caller must keep their stored rows.
    */
   incompleteUsers: Map<string, IncompleteUserReason>;
-  /**
-   * Plex: `/devices` could not be read, so every entry's `deviceName` and
-   * `platform` are null for want of an answer — not because the play had no
-   * device. The caller should keep the stored values rather than blank them.
-   */
+  /** Plex: `/devices` failed, so null devices are unknown — keep the stored values. */
   devicesUnavailable: boolean;
 }
 

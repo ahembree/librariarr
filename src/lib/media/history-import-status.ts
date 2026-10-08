@@ -1,18 +1,12 @@
-/**
- * How the History page reads `GET /api/integrations/tracearr/status` to decide
- * whether to show "Still importing older history" and keep polling. Client-safe
- * and pure so it is unit-tested.
- */
+/** How the History page reads the Tracearr import status for its import note. Client-safe. */
 
 /** The slice of a status row the History page reads. */
 export interface TracearrImportStatus {
   backfillComplete: boolean;
   backfillFraction: number | null;
   /**
-   * Whether an import is actually still owed. `backfillComplete` alone stays
-   * false for a disabled server or a mapping Tracearr holds no plays for, so
-   * the note never cleared and the 30s poll ran for the life of the page.
-   * Optional: an older response does not carry it.
+   * Whether an import is still owed: `backfillComplete` stays false forever for a
+   * disabled server or a mapping with no plays. Absent from an older response.
    */
   pending?: boolean;
 }
@@ -23,16 +17,9 @@ export function isImportPending(status: TracearrImportStatus): boolean {
 }
 
 /**
- * A backfill fraction (0..1) as the whole percentage shown beside an import
- * readout. Every readout — the History page's note and the Settings bar and
- * live line — goes through this one rule.
- *
- * Floored, and capped at 99 until the backfill is complete: a server that is
- * still importing must never read "100%" beside "Importing history".
- * `Math.round` did exactly that from 99.5% on — the last stretch of a
- * multi-hour archive walk. Only `complete` reads 100. The epsilon keeps binary
- * floating point from flooring an exact percentage one short (0.29 × 100 is
- * 28.999…).
+ * A backfill fraction as the percentage every import readout shows: floored and
+ * capped at 99 until `complete`, so an import never reads "100%" while still running.
+ * The epsilon keeps an exact percentage from flooring one short (0.29 × 100 is 28.999…).
  */
 export function backfillPercent(fraction: number, complete: boolean): number {
   if (complete) return 100;
@@ -41,10 +28,8 @@ export function backfillPercent(fraction: number, complete: boolean): number {
 }
 
 /**
- * The note's percentage: the least-advanced pending server's share of its
- * archive's time span, or null when any pending server is unmeasured (null is
- * "unknown", never 0%) or nothing is pending. Every server counted is still
- * importing, so it is capped at 99 (`backfillPercent`).
+ * The note's percentage: the least-advanced pending server's, or null when one is
+ * unmeasured (unknown, never 0%) or nothing is pending.
  */
 export function importBackfillPercent(statuses: readonly TracearrImportStatus[]): number | null {
   const pending = statuses.filter(isImportPending);
@@ -57,10 +42,8 @@ export function importBackfillPercent(statuses: readonly TracearrImportStatus[])
 }
 
 /**
- * Names of the servers a `POST /api/media/history/sync` result reports as
- * failed: the route records `-1` against a server whose sync threw (and leaves
- * a cancelled one out entirely). An unknown id is shown as-is rather than
- * dropped, so a failure is never silently hidden.
+ * Servers a `POST /api/media/history/sync` result reports as failed (`-1`). An
+ * unknown id is shown as-is, so a failure is never hidden.
  */
 export function failedSyncServerNames(
   counts: Readonly<Record<string, number>> | undefined,

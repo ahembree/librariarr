@@ -136,10 +136,6 @@ const PAGE_SIZE = 100;
  */
 const TRACEARR_IMPORT_POLL_MS = 30_000;
 
-// Column → API sort key lives in `src/lib/media/history-sort.ts`, shared with
-// the route's ORDER BY whitelist, so a header can only be sortable when the
-// route really sorts by it (see that module for the bugs this replaced).
-
 const VISIBLE_KEY = "history-visible-columns";
 
 function loadVisibleColumns(): Set<string> {
@@ -156,11 +152,7 @@ function saveVisibleColumns(cols: Set<string>) {
   } catch { /* private mode / quota — ignore */ }
 }
 
-/**
- * The element that scrolls `el` — the same walk `DataTable` uses for its
- * virtualizer, so a page change scrolls the container the rows render in.
- * Falls back to `<main>`, the app shell's scroll container.
- */
+/** The element that scrolls `el` (the walk `DataTable` uses), else the shell's `<main>`. */
 function scrollContainerOf(el: HTMLElement): HTMLElement | null {
   for (let node = el.parentElement; node; node = node.parentElement) {
     const { overflowY } = getComputedStyle(node);
@@ -616,9 +608,7 @@ export default function HistoryPage() {
     const shown = visibleCols.size === 0
       ? allColumns.filter((c) => c.defaultVisible)
       : allColumns.filter((c) => visibleCols.has(c.id));
-    // Sorting is server-side, so a header is clickable only when the route has
-    // a sort key for it — otherwise the arrow would move while the route
-    // silently sorted by Watched At.
+    // Sorting is server-side: a header is clickable only if the route sorts by it.
     return shown.map((c) => (isHistorySortableColumn(c.id) ? c : { ...c, sortable: false }));
   }, [allColumns, visibleCols]);
 
@@ -650,15 +640,11 @@ export default function HistoryPage() {
     return () => clearTimeout(timeout);
   }, [search]);
 
-  // Request sequencing: every request takes a fresh token so only the newest
-  // applies, and a refresh reloads the page last REQUESTED — which a pending
-  // filter change has already reset to 1 and a pending page click has already
-  // moved — rather than the page last shown (see PageRequestTracker).
+  // Only the newest request applies, and a refresh reloads the page last
+  // REQUESTED, not the page last shown (see PageRequestTracker).
   const [tracker] = useState(() => new PageRequestTracker());
-  // The last request failed. Previous rows stay on screen under an error
-  // notice instead of being replaced by the "No watch history … Sync Now"
-  // empty state, which told the user they had no history when the server
-  // merely failed to answer.
+  // The last request failed: previous rows stay under a notice, never the
+  // "No watch history" empty state.
   const [loadError, setLoadError] = useState(false);
   // Separate token for the detail panel so rapidly clicking two rows doesn't
   // let the slower /api/media/:id response win and show the wrong item.
@@ -672,8 +658,7 @@ export default function HistoryPage() {
         sortBy,
         sortOrder,
       });
-      // The same list the empty state reads to decide whether filters are
-      // narrowing the answer (`filtersActive` below).
+      // The same list `filtersActive` below reads.
       for (const [key, value] of historyFilterParams({
         search: debouncedSearch,
         serverId: selectedServerId,
@@ -695,9 +680,8 @@ export default function HistoryPage() {
       let shownPage = fetchPage;
       let data = await load(fetchPage);
       if (!tracker.isCurrent(token)) return;
-      // The history shrank under the requested page (filters narrowed it, or
-      // plays were removed between the click and the answer): show the new
-      // last page rather than an empty table past the end.
+      // The history shrank under the requested page: show the new last page,
+      // not an empty table past the end.
       const clamped = pageAfterShrink(fetchPage, data.pagination?.totalCount ?? 0, PAGE_SIZE);
       if (clamped !== null) {
         tracker.redirect(token, clamped);
@@ -725,11 +709,7 @@ export default function HistoryPage() {
     void fetchHistory(target, tracker.request(target));
   }, [fetchHistory, tracker]);
 
-  /**
-   * Reload what the user is looking at. `fetchHistory`'s identity is the
-   * filter/sort scope: a new scope starts at page 1, the same scope reloads
-   * the page last requested.
-   */
+  /** Reloads page 1 of a new scope (`fetchHistory`'s identity), else the page last requested. */
   const reloadHistory = useCallback(() => {
     const { page: target, token } = tracker.refresh(fetchHistory);
     void fetchHistory(target, token);
@@ -740,11 +720,8 @@ export default function HistoryPage() {
     void (async () => { reloadHistory(); })();
   }, [reloadHistory]);
 
-  // The latest `goToPage`, for callbacks that outlive the render they were
-  // created in. `handleSync` awaits a stream that can run for minutes; calling
-  // the `goToPage` it closed over at click time loaded page 1 of the filters
-  // and sort from BEFORE the sync — and, holding the newest request token, that
-  // stale page overwrote the table the user had filtered in the meantime.
+  // The latest `goToPage`, for `handleSync`: it awaits a stream that can run for
+  // minutes, and the `goToPage` it closed over loads the filters and sort from before.
   const goToPageRef = useRef(goToPage);
   useEffect(() => {
     goToPageRef.current = goToPage;
@@ -753,13 +730,7 @@ export default function HistoryPage() {
   // Top of the table (above the stale-data notice), for page changes.
   const tableTopRef = useRef<HTMLDivElement>(null);
 
-  /**
-   * A page change the user asked for: back to the top of the table, then load.
-   * The table stays mounted (dimmed) while the next page loads, so paging from
-   * the bottom of a 100-row page used to leave the user at the bottom of the
-   * new one. Background reloads (a backfill slice, a sync finishing) go
-   * through `reloadHistory`/`goToPage` directly and never move the scroll.
-   */
+  /** A page change the user asked for: back to the table's top, then load. Background reloads never scroll. */
   const handlePageChange = useCallback((target: number) => {
     const anchor = tableTopRef.current;
     const container = anchor ? scrollContainerOf(anchor) : null;
@@ -795,11 +766,8 @@ export default function HistoryPage() {
    * though the backfill was still running. It stays silent either way: this is
    * a background note about someone else's job, never an error toast.
    *
-   * Four triggers call this independently — the mount read, the poll, the
-   * realtime events and the re-check after a sync — so reads overlap, and only
-   * an answer no newer answer has overtaken may apply (`importStatusOrder`).
-   * Without that, a slow "pending" read landing after a newer "settled" one
-   * brought the note back and re-armed the poll.
+   * Its triggers (mount, poll, realtime events, post-sync re-check) overlap, so
+   * only an answer no newer answer has overtaken applies (`importStatusOrder`).
    */
   const fetchImportBackfillPending = useCallback(async () => {
     const seq = importStatusOrder.begin();
@@ -807,9 +775,7 @@ export default function HistoryPage() {
       const res = await fetch("/api/integrations/tracearr/status");
       if (!res.ok) return;
       const data = (await res.json()) as { servers?: TracearrImportStatus[] };
-      // After the last await, right before the answer is applied. A failed
-      // read above never gets here, so it cannot block an older answer that
-      // is still on its way — that one is the newest known state.
+      // After the last await; a failed read never gets here (see `ResponseOrder.accept`).
       if (!importStatusOrder.accept(seq)) return;
       const pending = (data.servers ?? []).filter(isImportPending);
       setImportBackfillPending(pending.length > 0);
@@ -874,9 +840,7 @@ export default function HistoryPage() {
   // minutes — rather than per page, so this cannot become a refetch storm.
   useRealtime("watch-history:updated", () => {
     void fetchImportBackfillPending();
-    // The page last REQUESTED, not the `page` state: that only moves after a
-    // successful fetch, so mid filter change it reloaded the old page under the
-    // new filters, and mid page click it put the previous page back.
+    // The page last REQUESTED, not the `page` state, which moves only on success.
     reloadHistory();
   });
 
@@ -909,8 +873,7 @@ export default function HistoryPage() {
     };
   }, []);
 
-  // The server list as it is when the sync ENDS, for naming failed servers —
-  // one added or renamed during a long run would otherwise show as its id.
+  // The server list when the sync ENDS, to name a server added or renamed meanwhile.
   const serversRef = useRef(servers);
   useEffect(() => {
     serversRef.current = servers;
@@ -959,8 +922,7 @@ export default function HistoryPage() {
         counts: Record<string, number>;
         cancelled: boolean;
       }>(response, onSyncProgress);
-      // Through the ref: page 1 of the filters and sort on screen NOW (see
-      // goToPageRef), not of the ones the Refresh was clicked under.
+      // Through the ref: the filters and sort on screen now (see goToPageRef).
       goToPageRef.current(1);
 
       // The run reached its terminal result but stopped early — the route's
@@ -1051,10 +1013,8 @@ export default function HistoryPage() {
   };
 
   /**
-   * The "No plays match these filters" way out. The debounced search is
-   * cleared too, so the list reloads once with every filter gone instead of
-   * once now and again when the debounce catches up; a set that is already
-   * empty keeps its identity so it does not count as a change.
+   * "No plays match these filters" → Clear filters. Clears the debounced search too
+   * and keeps an empty set's identity, so the list reloads once.
    */
   const clearFilters = useCallback(() => {
     setSearch("");
@@ -1065,9 +1025,7 @@ export default function HistoryPage() {
     setSelectedPlatforms((prev) => (prev.size === 0 ? prev : new Set()));
   }, []);
 
-  // The filters the shown answer was fetched under: the debounced search, not
-  // the box, so a search still being typed doesn't relabel an answer that
-  // predates it.
+  // The filters the shown answer was fetched under: the debounced search, not the box.
   const filtersActive = historyFiltersActive({
     search: debouncedSearch,
     serverId: selectedServerId,
@@ -1342,9 +1300,7 @@ export default function HistoryPage() {
 
           <div ref={tableTopRef} aria-hidden data-testid="history-table-top" />
 
-          {/* A failed load keeps whatever was already on screen and says so,
-              rather than falling through to the "No watch history" empty
-              state below — that told the user to sync a history they have. */}
+          {/* A failed load keeps the rows on screen and says so. */}
           {loadError && !loading && (
             items.length > 0 ? (
               <div className="mb-4 flex items-center gap-2 text-xs text-muted-foreground">
@@ -1357,9 +1313,7 @@ export default function HistoryPage() {
             ) : null
           )}
 
-          {/* Table. The skeleton is for a first load only: a refresh (every
-              backfill slice) or a filter change dims the rows in place
-              instead of blanking the table. */}
+          {/* Table. The skeleton is for a first load; a reload dims the rows in place. */}
           {tableView === "loading" ? (
             <TableRowsSkeleton rows={10} columns={5} />
           ) : tableView === "error" ? (

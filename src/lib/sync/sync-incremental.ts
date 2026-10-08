@@ -322,18 +322,10 @@ export async function syncMediaServerItems(
     groups.set(libraryId, bucket);
   }
 
-  // A library's FIRST items are left to the full sync. A library holding none
-  // is being populated, and its items arrive with none of their plays: the
-  // full sync takes the population hold before its first insert
-  // (`requirePopulationResync`), so no history pass vouches for the server's
-  // play history until that library is synced, and releases it in the same run
-  // once it is. Written here they would arrive with no hold at all — a
-  // playback's history pass could mark the history established over the plays
-  // they are missing, and a Tracearr walk that has completed never looks back
-  // for them. Only items this run would really write count (placed in an
-  // enabled library of their own type — the groups above), so an id the full
-  // sync could not store either never triggers it, and once the full sync has
-  // written a library's first items nothing here does again.
+  // A library's FIRST items are left to the full sync, which takes the
+  // population hold (`requirePopulationResync`); written here they would arrive
+  // with no hold, and a history pass could mark the history established over
+  // their missing plays. Only items this run would really write count.
   const firstItemLibraries: string[] = [];
   let leftForPopulation = 0;
   if (groups.size > 0) {
@@ -539,8 +531,7 @@ export async function syncMediaServerItems(
   //
   //  - A section key we hold no `Library` row for: a library was added on the
   //    server, and only `syncMediaServer` creates `Library` rows.
-  //  - Items that would be the first in a library holding none (see above):
-  //    the full sync populates it under the population hold.
+  //  - Items that would be the first in a library holding none (see above).
   //  - ANY unresolved id on Jellyfin/Emby. Their `normalizeItem` never populates
   //    `librarySectionID`; a new item there is placed through
   //    `client.resolveLibraryKey` (`/Items/{id}/Ancestors`) above, so this now

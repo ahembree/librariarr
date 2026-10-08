@@ -63,11 +63,7 @@ const movieMeta = (ratingKey: string, over: Record<string, unknown> = {}) => ({
   ...over,
 });
 
-/**
- * An item already in a library, so the run's writes there are not the
- * library's FIRST items — those are left to a full sync, which takes the
- * population hold (see "a library's first items" below).
- */
+/** An item already in a library: a library's FIRST items are left to a full sync (see "a library's first items"). */
 const anchor = (libraryId: string, type: "MOVIE" | "SERIES" | "MUSIC" = "MOVIE", ratingKey = "anchor") =>
   createTestMediaItem(libraryId, { ratingKey, type, title: "Already Here" });
 
@@ -733,10 +729,7 @@ describe("syncMediaServerItems", () => {
   });
 
   // ── A library's first items ─────────────────────────────────────────────
-  // A library holding no item is being populated, and its items arrive with
-  // none of their plays: the full sync takes the population hold before its
-  // first insert, and releases it once the library is synced. Written here
-  // they would arrive with no hold at all.
+  // They arrive with none of their plays, so they are left to the full sync and its population hold.
 
   it("leaves the first items of an empty library to a full sync, writing nothing there", async () => {
     const user = await createTestUser();
@@ -776,10 +769,7 @@ describe("syncMediaServerItems", () => {
   });
 
   it("is not triggered by an id it would not write into the empty library — so it cannot loop", async () => {
-    // A container, an item of another type, and an item in a disabled library:
-    // the full sync would not store any of them either, so a fallback for them
-    // would buy a full sync that leaves the library empty, and the next such id
-    // would do it again.
+    // A container, another type, a disabled library: the full sync would not store them either.
     const user = await createTestUser();
     const server = await createTestServer(user.id);
     await createTestLibrary(server.id, { key: "1", type: "MOVIE" });

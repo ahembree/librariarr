@@ -31,20 +31,11 @@ export interface TracearrImportActivity {
   oldestReached: string | null;
   /**
    * Oldest instant the server's live BACKFILL run has walked past and committed
-   * the page of — stored or not, the same measure as `tracearrBackfillCursorAt`,
-   * which the run only persists when its slice ends. Null until a backfill pass
-   * commits a page, and never written by the forward pass: that pass walks the
-   * newest plays, so its oldest is near "now" and read as archive progress it
-   * would show the walk as having barely started.
-   *
-   * Taken from the live backfill run whichever run is newest — every other
-   * field describes the newest run whose mapping still stands. A Refresh's
-   * forward pass overlapping a backfill slice is the newest run, and reporting
-   * its (empty) reach froze the archive progress bar for as long as the two
-   * overlapped. A run whose walk was restarted or re-pointed underneath it
-   * (`supersedeTracearrImports`, `retireTracearrImports`) reports none: it is
-   * still walking the OLD archive position, and its deep reach would win the
-   * status route's "older wins" over the restarted cursor.
+   * (the measure `tracearrBackfillCursorAt` persists at slice end), taken from
+   * that run whichever run is newest: a forward pass walks the newest plays, so
+   * its reach would show the archive walk as barely started. Null until a
+   * backfill page commits, and for a superseded or retired run, whose deep reach
+   * would otherwise beat the restarted cursor.
    */
   backfillReached: string | null;
 }
@@ -53,15 +44,9 @@ interface Entry extends Omit<TracearrImportActivity, "backfillReached"> {
   userId: string;
   /** This run's own backfill reach — see `TracearrImportActivity.backfillReached`. */
   ownBackfillReached: string | null;
-  /**
-   * Set by `supersedeTracearrImports` and `retireTracearrImports`: the run's
-   * reach no longer describes the walk.
-   */
+  /** Set by `supersedeTracearrImports`/`retireTracearrImports`: the reach is stale. */
   superseded: boolean;
-  /**
-   * Set by `retireTracearrImports`: the server's mapping changed under the run,
-   * so nothing it does any longer describes this server — not reported at all.
-   */
+  /** Set by `retireTracearrImports`: the mapping changed; not reported at all. */
   retired: boolean;
 }
 
@@ -120,20 +105,12 @@ export function recordTracearrImportPage(
 }
 
 /**
- * Mark every run live for this server as no longer describing its archive walk
- * — for `restartTracearrBackfill` (a purge, disable-with-delete, a restore, a
- * library populated for the first time), which restarts the walk while a slice
- * or a Refresh may be running.
- *
- * A running slice keeps walking from the position it started at, deep in the
- * archive, and its live reach would then beat the cursor the restart just moved
- * to "now" (the status route takes the older of the two), showing a restarted
- * walk as nearly finished. Its persisted progress is already discarded by the
- * compare-and-set on the cursor; this does the same for the reach. The run
- * itself stays reported: the mapping still stands, so the plays it writes are
- * still this server's, and a Refresh importing through a purge or a restore is
- * importing — hidden, the server read as idle, or as "failing" beside a parked
- * job. Runs that begin afterwards are unaffected.
+ * Mark every live run for this server as no longer describing its archive walk
+ * — for `restartTracearrBackfill`. A running slice keeps walking from its old,
+ * deep position, and its reach would beat the cursor the restart moved to
+ * "now"; so the reach is dropped. The run stays reported: its plays are still
+ * this server's, and a Refresh through a purge is importing. Later runs are
+ * unaffected.
  */
 export function supersedeTracearrImports(serverId: string): void {
   for (const entry of registry.get(serverId) ?? []) {
@@ -143,13 +120,10 @@ export function supersedeTracearrImports(serverId: string): void {
 }
 
 /**
- * Mark every run live for this server as describing a mapping it no longer has
- * — for the server PUT, when it re-points, unlinks or re-links the server's
- * Tracearr source. Like `supersedeTracearrImports`, and the run is no longer
- * reported at all (`getTracearrImportActivity`): its next write is refused (the
- * mapping version moved), and until then its pages and play counts would be
- * shown against the new mapping, the server read as importing an archive that
- * is not its source any more. It stays registered until it ends.
+ * Like `supersedeTracearrImports`, for the server PUT changing the mapping, and
+ * the run is no longer reported at all: its next write is refused, and until
+ * then its counts would be shown against the new mapping. It stays registered
+ * until it ends.
  */
 export function retireTracearrImports(serverId: string): void {
   for (const entry of registry.get(serverId) ?? []) {
@@ -174,10 +148,8 @@ export function endTracearrImport(handle: TracearrImportHandle): { userId: strin
 }
 
 /**
- * The live backfill reach for the server: the furthest-back reach of any run
- * that is not superseded, or null. Normally one run — the backfill job is
- * keyed per server — so "furthest back" only decides between a slice and a
- * foreground run that also walked the archive.
+ * The furthest-back reach of any live run not superseded, or null. Normally one
+ * run (the backfill job is keyed per server).
  */
 export function getTracearrBackfillReach(serverId: string): string | null {
   let reach: string | null = null;
@@ -189,17 +161,11 @@ export function getTracearrBackfillReach(serverId: string): string | null {
 }
 
 /**
- * The newest live run for the server whose mapping still stands, or null when
- * none is — except `backfillReached`, which is the live backfill run's (see the
- * field).
- *
- * A run retired by a mapping change (`retireTracearrImports`) is skipped, not
- * reported: it is still paging an archive that is no longer the server's
- * source, so reporting it showed the server as importing — `pending`, with the
- * old run's page and play counts — against the new mapping until the run
- * happened to hit a refused write. Whether anything is owed is then the job
- * table's to say. A run whose walk was merely restarted
- * (`supersedeTracearrImports`) is still reported, without its reach.
+ * The newest live run for the server that is not retired, or null — except
+ * `backfillReached`, which is the live backfill run's (see the field). A
+ * retired run is still paging an archive that is no longer the server's source;
+ * whether anything is owed is then the job table's to say. A superseded run is
+ * still reported, without its reach.
  */
 export function getTracearrImportActivity(serverId: string): TracearrImportActivity | null {
   const runs = registry.get(serverId) ?? [];

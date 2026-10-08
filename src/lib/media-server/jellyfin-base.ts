@@ -50,30 +50,18 @@ export const ITEM_FIELDS = [
   "OriginalTitle",
 ].join(",");
 
-/**
- * How far a played-items listing may fall short of its reported
- * `TotalRecordCount` and still be read as an over-reported count rather than
- * a truncated answer: the larger of 50 items or 2% of the total. See
- * `forEachPlayedPage`.
- */
+// How far a played-items listing may fall short of `TotalRecordCount` and still
+// read as an over-reported count: max(50, 2%). See `forEachPlayedPage`.
 const PLAYED_SHORTFALL_TOLERANCE_ITEMS = 50;
 const PLAYED_SHORTFALL_TOLERANCE_FRACTION = 0.02;
 
 /**
- * One user's played-items listing answered without an error but cannot be
- * trusted to be complete: an empty first page under a non-zero
- * `TotalRecordCount`, or an empty page further short of it than an
- * over-reported count explains. Distinct from a transport failure because it
- * can be a lasting property of that ONE user's listing — a user whose played
- * items are all hidden from the key (parental limits, changed library access)
- * while the server still counts them — which no retry fixes.
- * `getDetailedWatchHistory` can therefore set that user aside when its caller
- * asks it to, instead of failing every sync of the server for good.
- *
- * Pages that ignore `StartIndex` are deliberately NOT this: that is the server
- * or a proxy in front of it, so it hits every user with more than one page,
- * and setting all of those aside handed the caller the history of only the
- * users with a single page. It fails the fetch like any other server fault.
+ * One user's played-items listing answered but cannot be trusted to be
+ * complete (an empty first page under a non-zero total, or a gap past the
+ * tolerance) — often a lasting property of that ONE user (items hidden from
+ * the key), so `getDetailedWatchHistory` can set the user aside. Ignored
+ * `StartIndex` is deliberately not this: it is the server's or a proxy's fault
+ * and would set aside every user with more than one page.
  */
 export class UnreliablePlayedListingError extends Error {
   constructor(message: string) {
@@ -498,10 +486,7 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
     }
   }
 
-  /**
-   * `since` is ignored — a played-items listing has no per-play dates to
-   * filter by (see `MediaServerClient.getDetailedWatchHistory`).
-   */
+  /** `since` is ignored: a played-items listing has no per-play dates to filter by. */
   async getDetailedWatchHistory(
     options?: DetailedWatchHistoryOptions,
   ): Promise<DetailedWatchHistoryEntry[]> {
@@ -512,9 +497,7 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
     // destructive full replace, so a hard failure (e.g. /Users unreachable)
     // must skip it rather than wipe stored history.
     const usersRes = await this.client.get<unknown>("/Users");
-    // A 200 whose body is not a user list — an HTML page from a proxy, an
-    // empty body — used to read as "no users, no plays", and the full replace
-    // then deleted every stored play and marked the history established.
+    // A 200 that is not a user list must not read as "no users, no plays".
     if (!Array.isArray(usersRes.data)) {
       throw new Error(`${this.logPrefix} returned a malformed /Users response (not a list)`);
     }
@@ -522,10 +505,8 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
     let usersRead = 0;
 
     for (const user of users) {
-      // Held back until this user's walk has finished: a walk that fails
-      // partway must contribute nothing. A caller told the user is incomplete
-      // keeps the user's stored rows, and the pages that did arrive would be
-      // stored on top of them.
+      // Held back until this user's walk finishes: one that fails partway
+      // contributes nothing (the caller keeps the user's stored rows).
       const userEntries: DetailedWatchHistoryEntry[] = [];
       try {
         await this.forEachPlayedPage(user.Id, (items) => {
@@ -548,25 +529,12 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
           }
         });
       } catch (error) {
-        // Two failures are a property of this ONE user rather than of the
-        // fetch: the key cannot read the user (401/403) or the user no longer
-        // exists (404), or the listing answered in a shape that cannot be
-        // trusted to be complete (`UnreliablePlayedListingError`). Either can
-        // last indefinitely, so failing the whole scan for it blocks every
-        // history sync of the server for good. A caller that passes a report
-        // is told which users are incomplete, and why — it keeps their stored
-        // rows, and treats the two differently when deciding whether it may
-        // vouch for the history (`IncompleteUserReason`). Without one, a
-        // refused user is skipped as before and an unreliable listing fails
-        // the fetch — nothing would protect the user's stored rows from the
-        // full replace.
-        //
-        // Anything else — a timeout, a 5xx, a dropped connection mid-page, a
-        // malformed page, pages that ignore `StartIndex` — is a fault of the
-        // fetch, not of this user, and must propagate: swallowing it handed
-        // the caller a PARTIAL history that it then committed with a
-        // destructive full replace, deleting every play this user's pages
-        // never delivered.
+        // A refused (401/403/404) or unreliable listing is a lasting property
+        // of this ONE user, so with a report the user is set aside (the caller
+        // keeps their stored rows; `IncompleteUserReason`). Without one a
+        // refused user is skipped and an unreliable listing fails the fetch.
+        // Anything else is a fault of the fetch and must propagate: swallowed,
+        // the full replace would commit a partial history.
         const status = axios.isAxiosError(error) ? error.response?.status : undefined;
         const refused = status === 401 || status === 403 || status === 404;
         if (report && (refused || error instanceof UnreliablePlayedListingError)) {
@@ -594,12 +562,7 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
       for (const entry of userEntries) entries.push(entry);
     }
 
-    // Setting a user aside is only safe while somebody's history was read.
-    // When NO user could be read the result is not "nobody played anything"
-    // but "nothing could be read" — a key that lost its rights, a proxy
-    // answering 403 to every user route — and returning the empty list let the
-    // full replace delete every stored play and mark the history established,
-    // arming every play-activity rule on an empty relation.
+    // No user read at all is "nothing could be read", not "nobody played".
     if (users.length > 0 && usersRead === 0) {
       throw new Error(
         `${this.logPrefix} could not read the played-items listing for all ${users.length} user(s)`,
@@ -610,24 +573,12 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
   }
 
   /**
-   * Page through one user's played items, handing each page to `onPage`.
-   *
-   * Ends on `TotalRecordCount` when the server reports it (on this page or,
-   * when this one omits it, an earlier one), and on a short page only when it
-   * never has — the previous loop stopped on ANY page shorter than
-   * the size asked for, which trusts the server (or a proxy in front of it) to
-   * honour `Limit`, and a capped page silently truncated the user's history to
-   * its first page before the full replace committed it. The offset advances
-   * by the items actually returned, for the same reason.
-   *
-   * Each item is handed on at most once per user. The listing is paged by
-   * offset, so an item marked played (or unplayed) while the walk is in
-   * progress shifts every later row by one and the next page repeats the item
-   * the previous one ended on. Delivered twice, its `PlayCount` undated play
-   * entries were stored twice — and `playCount` is monotonic, so the inflation
-   * was permanent. The stable `SortBy` keeps the order itself from changing
-   * between requests: `DateCreated` does not move when somebody plays the
-   * item (unlike the server's default), and a newly added item sorts last.
+   * Page through one user's played items, handing each page to `onPage`. Ends
+   * on `TotalRecordCount` when any page reported it, on a short page only when
+   * none has (a capped `Limit` must not truncate), and advances by the items
+   * returned. Each item is handed on once per user: an item played mid-walk
+   * shifts the offset list and would otherwise be stored twice (`playCount` is
+   * monotonic). `DateCreated` keeps the order stable when items get played.
    */
   private async forEachPlayedPage(
     userId: string,
@@ -639,15 +590,11 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
     ) => void,
   ): Promise<void> {
     const PAGE_SIZE = 1000;
-    // Runaway backstop only (10M played items per user): a server that ignored
-    // `StartIndex` and reported no total would otherwise page forever.
+    // Runaway backstop only (10M played items per user).
     const MAX_PAGES = 10_000;
     let startIndex = 0;
     let firstPageLength: number | undefined;
-    // The total an earlier page reported, for a page that omits it: a proxy
-    // that strips it from one page must not turn the rest of the walk back
-    // into "a short page is the end" (which truncated it) or let an empty page
-    // end it without the shortfall check.
+    // The last total any page reported, for a page that omits it.
     let reportedTotal: number | null = null;
     const seen = new Set<string>();
 
@@ -672,8 +619,7 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
       });
 
       const body = res.data as { Items?: unknown; TotalRecordCount?: unknown } | null;
-      // A body with no `Items` list is not "this user played nothing" — that
-      // answer is `{ Items: [], TotalRecordCount: 0 }`.
+      // "Played nothing" is `{ Items: [], TotalRecordCount: 0 }`, not a missing list.
       if (!body || typeof body !== "object" || !Array.isArray(body.Items)) {
         throw new Error(`${this.logPrefix} returned a malformed played-items page (no Items list)`);
       }
@@ -686,18 +632,9 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
 
       if (items.length === 0) {
         if (total != null && startIndex < total) {
-          // An empty page short of the reported total is one of two things,
-          // and the full replace downstream makes guessing wrong expensive in
-          // both directions. Servers do over-report the count a little (it
-          // comes from a separate query: items the user cannot see, an item
-          // unmarked played mid-walk), and throwing on that failed every sync
-          // of such a server forever. But a proxy answering `Items: []`
-          // mid-list looks the same, and ending there committed a truncated
-          // history and deleted every play past it. So only a SMALL shortfall
-          // after this user's list actually delivered something is taken as
-          // over-reporting; an empty first page or a large gap still throws,
-          // and the stored history stays as it was (for this user, when the
-          // caller takes a report — see `UnreliablePlayedListingError`).
+          // Servers over-report the count a little, but a proxy answering
+          // `Items: []` mid-list looks the same and would truncate the history:
+          // only a small shortfall after the list delivered something passes.
           const shortfall = total - startIndex;
           const tolerated = Math.max(
             PLAYED_SHORTFALL_TOLERANCE_ITEMS,
@@ -722,22 +659,16 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
         seen.add(item.Id);
         return true;
       });
-      // A whole page of items already delivered means `StartIndex` is being
-      // ignored (every request answered with the first page); continuing
-      // would deliver it again and again. A mid-walk shift repeats only as
-      // many items as changed meanwhile, so a SHORT all-repeat page is the
-      // end of the list pushed down a place or two, and is passed over. A
-      // plain error, not `UnreliablePlayedListingError`: an ignored offset is
-      // the server's or a proxy's, so it fails the fetch rather than setting
-      // aside every user with more than one page.
+      // A full-length page of repeats means `StartIndex` is ignored (a plain
+      // error: it fails the fetch); a SHORT all-repeat page is the list's end
+      // pushed down by a mid-walk change, and is passed over.
       firstPageLength ??= items.length;
       if (fresh.length === 0 && items.length >= firstPageLength) {
         throw new Error(`${this.logPrefix} ignored StartIndex while paging played items`);
       }
 
       if (fresh.length > 0) onPage(fresh);
-      // Advance by what the server returned, repeats included: the offset
-      // addresses its list, not ours.
+      // The offset addresses the server's list, repeats included.
       startIndex += items.length;
 
       if (total != null) {

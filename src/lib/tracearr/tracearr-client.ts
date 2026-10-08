@@ -86,19 +86,10 @@ const ITEM_HISTORY_MAX_PAGES = 200;
 const OLDEST_PLAY_SEARCH_PRECISION_MS = 60 * 60 * 1000;
 
 /**
- * Page cap for one `/users` walk — a runaway guard ONLY, never a real bound.
- *
- * It was 50 (5,000 identities), and a walk that hits the cap throws, because a
- * partial map is worse than none (see `getServerAccountNames`). So an instance
- * with more identities than the cap — a large shared server keeps every
- * departed account too, since the walk asks for removed ones — never got a map
- * at all: the archive walk, which requires one, never ran, and every forward
- * run withdrew the evidence marker, pausing the server's play-activity rules
- * for good. A cap reachable by legitimate data is a data-loss bug.
- *
- * 10,000 pages is a million identities at `MAX_PAGE_SIZE`. A cursor that LOOPS
- * is caught by the repeated-cursor check below on its first repeat; this only
- * stops one that keeps changing without ever ending.
+ * Page cap for one `/users` walk — a runaway guard ONLY, never a real bound: a
+ * capped walk throws (a partial map is worse than none), so a cap legitimate
+ * data can reach leaves the server with no map and its rules paused for good.
+ * A looping cursor is caught by the repeated-cursor check on its first repeat.
  */
 export const USER_PAGE_CAP = 10_000;
 
@@ -781,14 +772,10 @@ export class TracearrClient {
    * hardest on the oldest rows. A removed account's name is still the name the
    * native path stored for them, so it is the right answer, not a stale one.
    *
-   * **All or nothing.** A walk that cannot be finished — cancelled, cut short
-   * by `USER_PAGE_CAP` or by a cursor that repeats, or handed a page that is
-   * not a users page — THROWS rather than returning the accounts it happened to
-   * reach. A partial map is non-empty, so the importer's "is the map usable"
-   * gate let it through, and every play of an account it missed was stored
-   * under Tracearr's identity label for good (archive rows are never
-   * re-delivered). Every caller already treats a throw as "the map is
-   * unavailable".
+   * **All or nothing.** A walk that cannot be finished (cancelled, capped, a
+   * repeated cursor, a page that is not a users page) THROWS: a partial map is
+   * non-empty, would pass the importer's gate, and store every play of a missed
+   * account under its identity label for good.
    */
   async getServerAccountNames(
     serverId: string,

@@ -78,10 +78,7 @@ export default function SeasonDetailPage() {
   const [syncTick, setSyncTick] = useState(0);
   // Auto-update on real-time sync (new/removed items) without a manual refresh.
   useRealtime("sync:completed", () => setSyncTick((t) => t + 1));
-  // ...and when plays land without a library sync: a Tracearr backfill slice
-  // and the per-playback watch-history job emit only this, so the play list
-  // below — and the episodes' play counts, reconciled from those plays — went
-  // stale until the next full sync.
+  // ...and when plays land without a library sync, which announces only this.
   useRealtime("watch-history:updated", () => setSyncTick((t) => t + 1));
 
   useEffect(() => {

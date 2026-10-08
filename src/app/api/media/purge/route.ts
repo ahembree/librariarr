@@ -31,24 +31,11 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: "Library not found" }, { status: 404 });
     }
 
-    // Deleting the items cascades through `WatchHistory.mediaItem`, so the
-    // server's plays of them go too, and the re-sync brings the items back as
-    // fresh rows with none. Until a complete library sync has re-added them,
-    // no history pass may vouch for the server's play history — the next
-    // detection run would read the missing plays as "nobody watched anything",
-    // and `watchedByUser`'s negative forms, `playCount = 0` and "not played in
-    // N months" would match everything the re-sync brings back. Taken BEFORE
-    // the delete, so a history pass already running cannot establish the
-    // marker over the gap; a Tracearr-mapped server's archive walk restarts
-    // with it, since Tracearr still holds those plays.
-    //
-    // Not for a DISABLED library (Settings disables a library, then purges it
-    // when asked to delete its data): no sync re-adds its items, so a hold
-    // would pause the server's play-activity rules for nothing, until some
-    // full sync released it. Re-enabling it later populates an empty library,
-    // which takes the population hold then. The marker is still withdrawn, as
-    // for any bulk loss of plays, until the next history sync re-establishes
-    // it.
+    // The delete cascades through `WatchHistory.mediaItem`, and the re-sync
+    // brings the items back with no plays: hold the server's play history until
+    // a complete library sync, BEFORE the delete so a history pass already
+    // running cannot vouch for the gap. A DISABLED library is never re-synced,
+    // so it only withdraws the marker (re-enabling it takes the population hold).
     if (library.mediaServerId) {
       if (library.enabled) {
         await requireLibraryResync([library.mediaServerId]);
@@ -60,9 +47,8 @@ export async function DELETE(request: NextRequest) {
     const result = await prisma.mediaItem.deleteMany({
       where: { libraryId: library.id },
     });
-    // A shortfall the library's last pass recorded described the rows just
-    // deleted; it must not count toward releasing the hold its refill is
-    // waited on with (see `Library.shortPassSeenAt` in `sync-server.ts`).
+    // A shortfall recorded against the deleted rows must not count toward the
+    // release (`Library.shortPassSeenAt`).
     await prisma.library.update({ where: { id: library.id }, data: { shortPassSeenAt: null } });
 
     // Recompute canonical so surviving duplicates on other servers don't stay
@@ -120,9 +106,8 @@ export async function DELETE(request: NextRequest) {
     return NextResponse.json({ deleted: 0 });
   }
 
-  // Same cascade and the same rule as the per-library purge, before the
-  // delete: hold every server owning an ENABLED purged library, and only
-  // withdraw the marker of a server whose purged libraries are all disabled.
+  // As per library, before the delete: hold servers owning an ENABLED purged
+  // library; only withdraw the marker where every purged library is disabled.
   const serversOf = (enabled: boolean) =>
     new Set(
       libraries

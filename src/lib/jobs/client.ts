@@ -100,22 +100,17 @@ async function keepQueuedPriority(spec: TaskSpec | undefined): Promise<TaskSpec 
  * enqueue made while a job is backing off silently cancels the backoff and the
  * retry limit. Callers that re-enqueue a job on every routine run check this
  * first. A job that used up its attempts is NOT backing off — enqueueing it is
- * how it gets a fresh start — unless `failedWithinMs` is given, in which case
- * one whose last attempt failed within that window also counts: graphile's
- * backoff is only e^attempts seconds (~10s for three attempts), so for a
- * caller that fires less often than that the backoff alone never applies, and
- * every call re-armed the full set of attempts against a failure that has not
- * gone away. A failed check answers false, i.e. enqueue as before.
+ * how it gets a fresh start — unless it failed within `failedWithinMs`, for a
+ * caller firing less often than graphile's seconds-long backoff. A failed check
+ * answers false, i.e. enqueue as before.
  */
 export async function isJobRetrying(
   jobKey: string,
   options: { failedWithinMs?: number } = {},
 ): Promise<boolean> {
   try {
-    // A failed attempt sets `run_at = max(now, run_at) + e^attempts seconds`
-    // and does not touch `updated_at`, so `run_at` is the only record of when
-    // a parked job last failed — within e^max_attempts seconds of it, which
-    // for the attempt counts used here is well inside any cooldown.
+    // A failed attempt moves `run_at` (not `updated_at`), so `run_at` is the only
+    // record of when a parked job last failed.
     const { rows } = await getJobsPool().query<{ retrying: boolean }>(
       `SELECT EXISTS (
          SELECT 1 FROM graphile_worker.jobs

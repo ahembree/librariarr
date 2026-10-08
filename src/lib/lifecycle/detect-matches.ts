@@ -231,9 +231,7 @@ export async function detectAndSaveMatches(
   seerrData?: SeerrDataMap,
   fullReEval: boolean = false,
 ): Promise<{ items: Record<string, unknown>[]; count: number; episodeIdMap: Map<string, string[]>; currentItems: Record<string, unknown>[] }> {
-  // The instant this run began evaluating the rule set, taken before its
-  // evaluability check: a play-history refusal recorded no later than this is
-  // one this run's evaluation supersedes (`clearPlayHistoryPause`, below).
+  // Before the evaluability check: the latch this run may lift (`clearPlayHistoryPause`).
   const evaluationStartedAt = new Date();
   const rules = ruleSet.rules as unknown as LifecycleRule[] | LifecycleRuleGroup[];
 
@@ -271,8 +269,7 @@ export async function detectAndSaveMatches(
     ruleSet.arrInstanceId,
   );
   if (!evaluability.evaluable) {
-    // The matches kept below are from before this refusal; recorded so the
-    // executors keep the rule set's actions held until a run evaluates it.
+    // The matches kept below predate this refusal: latch it.
     if (evaluability.playHistory) await notePlayHistoryPause(ruleSet.id);
     const existingMatches = await prisma.ruleMatch.findMany({
       where: { ruleSetId: ruleSet.id },
@@ -784,12 +781,7 @@ export async function detectAndSaveMatches(
   return { items: returnItems, count: returnItems.length, episodeIdMap: fullEpisodeIdMap, currentItems: enrichedItems };
 }
 
-/**
- * After a run evaluated a rule set and wrote its matches: lift a play-history
- * refusal recorded no later than the run began evaluating it, so the rule
- * set's actions may run on the matches it just wrote. Not fatal — the matches
- * are written; a failure only leaves the actions held until the next run.
- */
+/** After the matches are written, lift the latch; a failure only keeps the actions held. */
 async function liftPlayHistoryPause(ruleSet: { id: string; name: string }, evaluationStartedAt: Date): Promise<void> {
   try {
     if (await clearPlayHistoryPause(ruleSet.id, evaluationStartedAt)) {
@@ -914,8 +906,7 @@ export async function runDetection(
       const evaluability = await checkLifecycleRuleEvaluability(userId, rs.type, rules, serverIds, rs.arrInstanceId);
       if (!evaluability.evaluable) {
         logger.warn("Lifecycle", `Skipping rule set "${rs.name}" — ${evaluability.reason}`);
-        // Its matches stay as they are, from before this refusal: recorded so
-        // the executors keep its actions held until a run evaluates it.
+        // Its kept matches predate this refusal: latch it.
         if (evaluability.playHistory) await notePlayHistoryPause(rs.id);
         if (evaluability.permanent) {
           const cancelled = await prisma.lifecycleAction.deleteMany({

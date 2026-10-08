@@ -631,15 +631,9 @@ export default function SettingsPage() {
    * control, not the control itself, so a transient blip should make the line
    * disappear rather than plant an error next to a setting that is fine.
    *
-   * Reads overlap — the fallback poll, three realtime events, the pause-key
-   * effect and the re-reads after a save each call this on their own — so an
-   * answer applies only when no newer read's answer already has
-   * (`tracearrStatusOrder`). Unordered, a read started before a mapping change
-   * could land after the re-read that followed it and put the old "fully
-   * imported" line back over a history the change had just wiped — and re-arm
-   * or disarm the poll on that stale answer. A failure hides the line only
-   * while nothing newer has applied, and is not recorded: an older answer
-   * still on its way is then the newest status known, and shows.
+   * Reads overlap (poll, realtime events, pause key, re-reads after a save), so an
+   * answer applies only if no newer read's answer has (`tracearrStatusOrder`); a
+   * failure hides the line only while nothing newer has applied.
    */
   const fetchTracearrImportStatus = useCallback(async () => {
     const seq = tracearrStatusOrder.begin();
@@ -953,10 +947,8 @@ export default function SettingsPage() {
   // The state reset returns the SAME empty array when it is already empty, or
   // the new reference would re-render every settings page that has no Tracearr.
   const hasTracearrInstance = tracearrInstances.length > 0;
-  // Re-read whenever a server or Tracearr instance is enabled or disabled —
-  // the two pauses the status reports, which the poll below deliberately does
-  // not cover. Re-enabling refetches the server/instance list, which changes
-  // this key, so a stale "paused" line clears even with the event stream down.
+  // Re-read whenever a server or Tracearr instance is enabled or disabled — the
+  // two pauses the status reports, which the poll below does not cover.
   const tracearrPauseKey = [
     ...servers.map((s) => `${s.id}:${s.enabled}`),
     ...tracearrInstances.map((i) => `${i.id}:${i.enabled}`),
@@ -1026,9 +1018,8 @@ export default function SettingsPage() {
     if (!hasTracearrInstance) return;
     void fetchTracearrImportStatus();
   });
-  // A finished sync (or a watch-history refresh outside one) is what queues
-  // the slice an `awaiting-sync` or failing import waits on, and that queueing
-  // emits no import event of its own.
+  // A finished sync or watch-history refresh queues the slice an `awaiting-sync`
+  // or failing import waits on, with no import event of its own.
   const refetchTracearrImportStatus = () => {
     if (!hasTracearrInstance) return;
     void fetchTracearrImportStatus();
@@ -1042,17 +1033,9 @@ export default function SettingsPage() {
   // connection staying up. Deliberately slow: the push covers the live case, and
   // this only has to stop the number going stale for good.
   //
-  // Runs while any import is live (a catch-up on an already-backfilled server
-  // shows an import card too) or `pending` — a slice queued or running. Never
-  // on `!backfillComplete`: that stays false forever for a mapping Tracearr
-  // holds no plays for and for a parked, failing slice, so a poll keyed on it
-  // never stopped. `pending` is trustworthy for this because every save that
-  // fixes what an import was waiting on queues a slice at once (a new mapping,
-  // a re-enabled server, a Tracearr instance added, re-enabled or re-pointed —
-  // `enqueueTracearrBackfill`), and the states left with nothing queued are
-  // reported as such (`import-failing`, `awaiting-sync`) instead of as pending.
-  // Those change when a sync runs or the user re-enables something, which the
-  // refetches above cover.
+  // Runs while any import is live or `pending`, never on `!backfillComplete`, which
+  // stays false forever for a mapping with no plays or a parked slice. Every save
+  // that fixes what an import waited on queues a slice (`enqueueTracearrBackfill`).
   const tracearrBackfillRunning = visibleTracearrImportStatus.some(
     (s) => s.pending || s.activeImport !== null,
   );
@@ -2561,9 +2544,8 @@ export default function SettingsPage() {
       // list for this instance is stale — the mapping dropdown would otherwise
       // keep offering servers that instance no longer monitors.
       await fetchTracearrServers(savedId);
-      // A new address or key re-queues every mapped server's import (a slice
-      // parked against the old one stops reading "failing"), and that is not a
-      // change the enable-toggle refetch sees.
+      // A new address or key re-queues every mapped server's import, which the
+      // enable-toggle refetch does not see.
       await fetchTracearrImportStatus();
       toast.success("Tracearr instance updated");
     } catch {

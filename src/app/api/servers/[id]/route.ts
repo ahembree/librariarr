@@ -81,23 +81,16 @@ export async function PUT(
   }
 
   // The mapping is checked and written under one per-user lock, re-reading
-  // both the server's own mapping and every other server's inside it.
+  // every server's mapping inside it: against a snapshot, two concurrent PUTs
+  // could both map one Tracearr server, or both compare against one server's
+  // old value.
   //
   // One Tracearr server's plays belong to one media server. Mapped to a second
   // as well, they are joined against that server's rating keys — small per-server
   // integers on Plex, so the same number names an unrelated item there, and a
   // provider id is often absent to contradict it. Those plays would land on the
-  // wrong items under real usernames, permanently. Nothing in the schema
-  // enforces it (a unique index added now would fail to migrate on an install
-  // already holding a duplicate — which this very race could have created), so
-  // the route does: checked against a snapshot read outside the lock, two PUTs
-  // mapping two servers to the same id each saw the other still unmapped and
-  // both succeeded.
-  //
-  // `tracearrMappingChanged` is computed from the in-lock read for the same
-  // reason: decided on the snapshot, two PUTs re-pointing ONE server could each
-  // compare against the old value — the second then skipped the wipe and the
-  // backfill reset its own change needs, or wiped a mapping that had not moved.
+  // wrong items under real usernames, permanently. No unique index enforces it:
+  // one could not migrate an install already holding a duplicate.
   const outcome = await prisma.$transaction(async (tx) => {
     if (tracearrServerId !== undefined) {
       await tx.$executeRawUnsafe(
@@ -158,37 +151,22 @@ export async function PUT(
         // switch. Reset on any mapping change, including Tracearr → Tracearr.
         ...(mappingChanged && {
           tracearrBackfillComplete: false,
-          // The rest are measured against the OLD Tracearr server's archive:
-          // its history start (which the progress bar divides by), how far the
-          // walk had reached, and the floor below which the forward pass had
-          // already looked. Carried over, the bar would report progress through
-          // a span that no longer applies, and the walks would resume at points
-          // that mean nothing on the new server.
+          // These describe the OLD Tracearr server's archive (history start,
+          // walk reach, forward floor and its stamp, last walk — a never-walked
+          // mapping reads as pending — and forward watermark).
           tracearrOldestPlayAt: null,
           tracearrBackfillCursorAt: null,
           tracearrForwardFloorAt: null,
-          // ...and the stamp of the walk that recorded that floor.
           tracearrForwardFloorRecordedAt: null,
-          // "Walked and found nothing" described the OLD Tracearr server; the
-          // new mapping is waiting for its first walk (the status readout
-          // reports a never-walked mapping as pending, not as empty).
           tracearrBackfillLastWalkAt: null,
-          // So did the forward watermark — the instant every older play of the
-          // OLD archive had been read.
           tracearrForwardWatermarkAt: null,
-          // Every change, an unlink and a re-link to the same Tracearr server
-          // included: the importer guards its writes on the mapping AND this
-          // version, so a run that started before an unlink-and-relink cannot
-          // write the old walk's state over the reset made here, which the
-          // mapping value alone (A again) would let through.
+          // On every change, a re-link to the same server included: importer
+          // writes require this version, so a run from before an
+          // unlink-and-relink cannot overwrite this reset.
           tracearrMappingVersion: { increment: 1 },
-          // `libraryResyncRequiredAt` is deliberately NOT cleared. The hold
-          // is about the LIBRARY, not the mapping: a purge (or a restore, or a
-          // library's first population) left items missing until a library
-          // sync adds them back, and the new mapping's first walk would step
-          // over their plays exactly as the old one would have.
-          // It waits for that sync (Settings shows "starts after the next full
-          // sync"); the sync's release queues the slice.
+          // `libraryResyncRequiredAt` is deliberately NOT cleared: the hold is
+          // about the library, and the new mapping's first walk would step over
+          // the missing items' plays just the same.
           // The wipe below empties the history, so it is unknown from the same
           // statement that switches the source. Withdrawn only after the wipe,
           // an unlink (native, no Tracearr flag to pause it) read as established
@@ -210,29 +188,16 @@ export async function PUT(
     // stale rows from its previous source. The next sync repopulates from the
     // new one.
     //
-    // In the SAME transaction as the mapping write, so the two commit or fail
-    // together: run after the commit, a crash (or a failed DELETE) in between
-    // left the old source's rows under the new mapping for good — and the
-    // importer derives its resume boundaries from exactly those rows.
+    // In the SAME transaction as the mapping write: the importer derives its
+    // resume boundaries from these rows, so they must never outlive the switch.
     //
-    // Lock order, which is what keeps this deadlock-free: the UPDATE above has
-    // already taken this server's row lock, so a Tracearr page write
-    // (`writeBatch`/`deleteNativeStratum` take the row `FOR SHARE` before
-    // touching WatchHistory) either committed before it — its rows are visible
-    // to this DELETE — or waits for this commit and then sees the new mapping
-    // and writes nothing. Neither side ever holds WatchHistory rows while
-    // waiting on the other's server-row lock. The native writers' per-server
-    // advisory lock is taken BEFORE the UPDATE for the same reason: they hold
-    // it across their DELETE + INSERT and only ever take a KEY SHARE on the
-    // server row (which the UPDATE does not conflict with), so a native write
-    // transaction already holding it commits before the wipe rather than
-    // committing rows this DELETE could not see. That covers the write, not
-    // the run: a native sync FETCHES for tens of seconds before it takes the
-    // lock, so a run that read the server as unmapped can reach its write
-    // after this commit. What keeps it from writing native rows under the new
-    // mapping (or deleting the imported ones) is that the native writers
-    // re-read `tracearrServerId` once they hold the lock and write nothing if
-    // the server has been mapped meanwhile.
+    // Lock order (deadlock-free): the UPDATE above holds the server row, so a
+    // Tracearr page write (`FOR SHARE` on it before touching WatchHistory)
+    // either committed first or waits and then sees the new mapping. The native
+    // writers' advisory lock is taken BEFORE the UPDATE (they only KEY SHARE the
+    // row), so a native write holding it commits before the wipe; a native run
+    // that fetched before the switch re-reads the mapping under that lock and
+    // writes nothing.
     let wiped = 0;
     if (mappingChanged) {
       ({ count: wiped } = await tx.watchHistory.deleteMany({
@@ -274,12 +239,8 @@ export async function PUT(
   } = outcome;
 
   if (tracearrMappingChanged) {
-    // A run of the OLD mapping may still be paging (a slice, a History-page
-    // Refresh): its next write will refuse, but until it ends its live
-    // readout would be reported against the new mapping — counts, and a
-    // backfill reach measured on a different Tracearr server's archive. So it
-    // is retired: hidden from the status readout, not merely stripped of its
-    // reach as a restart does (that run's writes stay valid; this one's don't).
+    // A run of the OLD mapping may still be paging and its writes will refuse:
+    // hide it from the status readout (a restart only strips its reach).
     retireTracearrImports(server.id);
 
     // Mark the server as un-evidenced until a sync refills it. An empty
@@ -324,15 +285,10 @@ export async function PUT(
     const libraryIds = libraries.map((l) => l.id);
 
     if (libraryIds.length > 0) {
-      // The item delete cascades through `WatchHistory.mediaItem`, so this
-      // server's plays go as well. The server row itself survives a disable,
-      // so it will be re-enabled and re-synced later as fresh items with no
-      // plays — hold its play history until a complete library sync has
-      // re-added them, or `watchedByUser` and play-count rules read that
-      // emptiness as "nobody watched anything". Taken BEFORE the delete, so a
-      // history pass already running cannot vouch for the gap; a
-      // Tracearr-mapped server's archive walk restarts with it, to bring its
-      // plays back once the items exist again.
+      // The delete cascades through `WatchHistory.mediaItem`, and a re-enabled
+      // server re-syncs the items with no plays: hold its play history until a
+      // complete library sync, BEFORE the delete so a history pass already
+      // running cannot vouch for the gap.
       await requireLibraryResync([server.id]);
       await prisma.lifecycleAction.deleteMany({
         where: { mediaItem: { libraryId: { in: libraryIds } } },
@@ -364,12 +320,9 @@ export async function PUT(
     invalidateMediaCaches();
   }
 
-  // Start the import now rather than at the next watch-history sync, when this
-  // save is what it was waiting on: a new mapping (nothing is queued for it
-  // yet, and a slice parked by the OLD mapping would read "failing"), or the
-  // server coming back from disabled. After the commit, so the slice reads the
-  // new mapping; the helper skips a server the import cannot or must not run
-  // for yet (unmapped, empty, awaiting a re-sync after a purge).
+  // Start the import now when this save is what it waited on (a new mapping, or
+  // re-enabled). After the commit, so the slice reads the new mapping; the
+  // helper skips servers it must not run for yet.
   const reenabled = enabled === true && !server.enabled;
   if ((tracearrMappingChanged && tracearrServerId) || reenabled) {
     await enqueueTracearrBackfill(

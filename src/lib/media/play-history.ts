@@ -158,14 +158,9 @@ export async function fetchPlayHistory(options: {
   page: number;
   limit: number;
   /**
-   * Skip the rows that duplicate a play onto another library copy of the same
-   * item (`WatchHistory.fanOutOfItemId` set), so a play the native sync or the
-   * Tracearr import filed against every copy is listed once (with three or
-   * more copies and the primary's deleted, once per remaining copy until the
-   * server's next watch-history sync; see `PRIMARY_PLAY` in
-   * `/api/media/history`). Only for a scope that always holds
-   * every copy together — otherwise the play's primary row may be out of scope
-   * and the play would vanish from the list entirely.
+   * List a play filed against several library copies once (`fanOutOfItemId`
+   * null; 3+ copies: see `PRIMARY_PLAY` in `/api/media/history`). Only for a
+   * scope that always holds every copy, or the play could vanish from the list.
    */
   collapseFanOutCopies?: boolean;
 }) {
@@ -179,8 +174,7 @@ export async function fetchPlayHistory(options: {
     mediaItemId: { in: mediaItemIds },
     // Ownership guard: only history recorded on this user's servers.
     mediaServer: { userId, ...(serverId ? { id: serverId } : {}) },
-    // Shared by the page query and the count below, so `totalCount` counts
-    // the same plays the pages list.
+    // Shared with the count, so `totalCount` counts what the pages list.
     ...(collapseFanOutCopies ? { fanOutOfItemId: null } : {}),
   };
 

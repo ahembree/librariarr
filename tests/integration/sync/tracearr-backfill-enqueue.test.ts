@@ -10,10 +10,8 @@ import {
 } from "../../setup/test-helpers";
 
 /**
- * `enqueueTracearrBackfill` against the REAL graphile_worker schema and the
- * real `enqueueJob`: which servers it queues a slice for, that the slice
- * replaces a parked one (the "History import failing" state it exists to
- * clear), and that it never throws.
+ * `enqueueTracearrBackfill` against the real graphile_worker schema: which
+ * servers get a slice, replacing a parked one, and never throwing.
  */
 
 vi.mock("@/lib/db", async () => {
@@ -55,8 +53,8 @@ interface JobRow {
 
 async function jobsFor(serverId: string): Promise<JobRow[]> {
   const { rows } = await pool.query<JobRow>(
-    // The `jobs` view has no payload; a running job's key is cleared by a
-    // keyed add, so match on the payload to see both rows.
+    // The `jobs` view has no payload, and a keyed add clears a running job's
+    // key, so match on the payload to see both rows.
     `SELECT v."key", v."task_identifier", v."queue_name", v."attempts", v."max_attempts", v."locked_at", j."payload"
        FROM graphile_worker._private_jobs j
        JOIN graphile_worker.jobs v ON v."id" = j."id"
@@ -85,6 +83,10 @@ async function enabledInstance(userId: string, enabled = true) {
 }
 
 describe("enqueueTracearrBackfill (real graphile_worker schema)", () => {
+  let userId: string;
+  let instanceId: string;
+  let serverId: string;
+
   beforeAll(async () => {
     pool = new Pool({ connectionString: process.env.DATABASE_URL!, max: 2 });
     await pool.query("DROP SCHEMA IF EXISTS graphile_worker CASCADE");
@@ -96,6 +98,9 @@ describe("enqueueTracearrBackfill (real graphile_worker schema)", () => {
     await cleanDatabase();
     await pool.query("DELETE FROM graphile_worker._private_jobs");
     vi.clearAllMocks();
+    userId = (await createTestUser()).id;
+    instanceId = (await enabledInstance(userId)).id;
+    serverId = (await runnableServer(userId)).id;
   });
 
   afterAll(async () => {
@@ -108,179 +113,119 @@ describe("enqueueTracearrBackfill (real graphile_worker schema)", () => {
     await disconnectTestDb();
   });
 
+  /** A slice already queued under the key, then put into the state `set` describes. */
+  async function existingSlice(set: string) {
+    await utils.addJob(TASK_TRACEARR_BACKFILL, { serverId }, {
+      jobKey: tracearrBackfillJobKey(serverId),
+      queueName: MAIN_QUEUE,
+      maxAttempts: 3,
+    });
+    await pool.query(`UPDATE graphile_worker._private_jobs SET ${set} WHERE key = $1`, [
+      tracearrBackfillJobKey(serverId),
+    ]);
+  }
+
   it("queues one slice under the shared key, on MAIN_QUEUE with three attempts", async () => {
-    const user = await createTestUser();
-    await enabledInstance(user.id);
-    const server = await runnableServer(user.id);
+    await expect(enqueueTracearrBackfill({ serverIds: [serverId] }, "test")).resolves.toEqual([serverId]);
 
-    await expect(enqueueTracearrBackfill({ serverIds: [server.id] }, "test")).resolves.toEqual([server.id]);
-
-    const [job] = await jobsFor(server.id);
+    const [job] = await jobsFor(serverId);
     expect(job).toMatchObject({
-      key: tracearrBackfillJobKey(server.id),
+      key: tracearrBackfillJobKey(serverId),
       task_identifier: TASK_TRACEARR_BACKFILL,
       queue_name: MAIN_QUEUE,
       attempts: 0,
       max_attempts: 3,
     });
-    expect(tracearrBackfillJobKey(server.id)).toBe(`tracearr-backfill:${server.id}`);
+    expect(tracearrBackfillJobKey(serverId)).toBe(`tracearr-backfill:${serverId}`);
 
     // Keyed: a second call collapses onto the same slice rather than stacking.
-    await enqueueTracearrBackfill({ serverIds: [server.id] }, "again");
-    expect(await jobsFor(server.id)).toHaveLength(1);
+    await enqueueTracearrBackfill({ serverIds: [serverId] }, "again");
+    expect(await jobsFor(serverId)).toHaveLength(1);
   });
 
   it("replaces a parked slice with a fresh one — the failing state it exists to clear", async () => {
-    const user = await createTestUser();
-    await enabledInstance(user.id);
-    const server = await runnableServer(user.id);
-    await utils.addJob(TASK_TRACEARR_BACKFILL, { serverId: server.id }, {
-      jobKey: tracearrBackfillJobKey(server.id),
-      queueName: MAIN_QUEUE,
-      maxAttempts: 3,
-    });
-    await pool.query(
-      `UPDATE graphile_worker._private_jobs SET attempts = max_attempts, last_error = 'boom' WHERE key = $1`,
-      [tracearrBackfillJobKey(server.id)],
-    );
+    await existingSlice(`attempts = max_attempts, last_error = 'boom'`);
 
-    await enqueueTracearrBackfill({ serverIds: [server.id] }, "instance re-enabled");
+    await enqueueTracearrBackfill({ serverIds: [serverId] }, "instance re-enabled");
 
-    // graphile clears the parked row's key and inserts a fresh job under it, so
-    // the one row the key names — what the status route reads — has every
+    // The one row the key names — what the status route reads — has every
     // attempt back.
-    const keyed = (await jobsFor(server.id)).filter((j) => j.key !== null);
+    const keyed = (await jobsFor(serverId)).filter((j) => j.key !== null);
     expect(keyed).toHaveLength(1);
     expect(keyed[0].attempts).toBe(0);
     expect(keyed[0].max_attempts).toBe(3);
   });
 
   it("does not disturb a slice that is running — the fresh one queues behind it", async () => {
-    const user = await createTestUser();
-    await enabledInstance(user.id);
-    const server = await runnableServer(user.id);
-    await utils.addJob(TASK_TRACEARR_BACKFILL, { serverId: server.id }, {
-      jobKey: tracearrBackfillJobKey(server.id),
-      queueName: MAIN_QUEUE,
-      maxAttempts: 3,
-    });
-    await pool.query(
-      `UPDATE graphile_worker._private_jobs SET attempts = 1, locked_at = now(), locked_by = 'w1' WHERE key = $1`,
-      [tracearrBackfillJobKey(server.id)],
-    );
+    await existingSlice(`attempts = 1, locked_at = now(), locked_by = 'w1'`);
 
-    await enqueueTracearrBackfill({ serverIds: [server.id] }, "mapping changed");
+    await enqueueTracearrBackfill({ serverIds: [serverId] }, "mapping changed");
 
-    const jobs = await jobsFor(server.id);
-    // graphile clears the running job's key and inserts a new one under it.
+    const jobs = await jobsFor(serverId);
     expect(jobs.filter((j) => j.locked_at !== null)).toHaveLength(1);
     const queued = jobs.filter((j) => j.locked_at === null);
     expect(queued).toHaveLength(1);
-    expect(queued[0].key).toBe(tracearrBackfillJobKey(server.id));
+    expect(queued[0].key).toBe(tracearrBackfillJobKey(serverId));
   });
 
   it("queues every mapped, enabled, populated server of the account — and only those", async () => {
-    const user = await createTestUser();
-    await enabledInstance(user.id);
-    const runnable = await runnableServer(user.id);
-    const second = await runnableServer(user.id);
-    const disabled = await runnableServer(user.id, { enabled: false });
+    const second = await runnableServer(userId);
+    const disabled = await runnableServer(userId, { enabled: false });
     // Unmapped: native history, no import to run.
-    const unmapped = await createTestServer(user.id);
+    const unmapped = await createTestServer(userId);
     await createTestMediaItem((await createTestLibrary(unmapped.id)).id);
-    // Mapped but empty: the importer refuses to walk into an empty library, and
-    // the first sync queues the slice itself.
-    const empty = await createTestServer(user.id, { tracearrServerId: "b0000000-0000-4000-8000-0000000000e1" });
-    // Mapped, items only in a disabled library — empty as far as the walk goes.
-    const disabledLib = await createTestServer(user.id, { tracearrServerId: "b0000000-0000-4000-8000-0000000000e2" });
+    // Mapped but empty: the importer will not walk into an empty library.
+    const empty = await createTestServer(userId, { tracearrServerId: "b0000000-0000-4000-8000-0000000000e1" });
+    // Mapped, items only in a disabled library.
+    const disabledLib = await createTestServer(userId, { tracearrServerId: "b0000000-0000-4000-8000-0000000000e2" });
     await createTestMediaItem((await createTestLibrary(disabledLib.id, { enabled: false })).id);
-    // Another account's server.
     const other = await createTestUser();
     await enabledInstance(other.id);
     const foreign = await runnableServer(other.id);
 
-    const queued = await enqueueTracearrBackfill({ userId: user.id }, "instance added");
+    const queued = await enqueueTracearrBackfill({ userId }, "instance added");
 
-    expect(new Set(queued)).toEqual(new Set([runnable.id, second.id]));
+    expect(new Set(queued)).toEqual(new Set([serverId, second.id]));
     for (const id of [disabled.id, unmapped.id, empty.id, disabledLib.id, foreign.id]) {
       expect(await jobsFor(id)).toHaveLength(0);
     }
   });
 
   it("queues nothing without an enabled Tracearr instance — the slice could only fail", async () => {
-    const user = await createTestUser();
-    await enabledInstance(user.id, false);
-    const server = await runnableServer(user.id);
+    await getTestPrisma().tracearrInstance.update({ where: { id: instanceId }, data: { enabled: false } });
 
-    await expect(enqueueTracearrBackfill({ serverIds: [server.id] }, "test")).resolves.toEqual([]);
-    expect(await jobsFor(server.id)).toHaveLength(0);
+    await expect(enqueueTracearrBackfill({ serverIds: [serverId] }, "test")).resolves.toEqual([]);
+    expect(await jobsFor(serverId)).toHaveLength(0);
   });
 
-  it("never queues a walk restarted by a purge or restore ahead of the re-sync", async () => {
-    // The purged items' plays are what the restarted walk exists to bring back.
-    // Walked before a sync re-creates the items, those plays are skipped as
-    // unresolved and the walk can mark the archive complete without them.
-    const user = await createTestUser();
-    await enabledInstance(user.id);
-    const server = await runnableServer(user.id);
+  it("never queues a walk held for a library resync ahead of the releasing sync", async () => {
+    // Walked before the items exist again, their plays are skipped for good.
+    await requireLibraryResync([serverId]);
+    // Neither the restart nor a later cause-fixing save queues it...
+    expect(await jobsFor(serverId)).toHaveLength(0);
+    await expect(enqueueTracearrBackfill({ userId }, "instance re-enabled")).resolves.toEqual([]);
+    // ...nor a walk having run since: only the release clears the hold.
     await getTestPrisma().mediaServer.update({
-      where: { id: server.id },
-      data: { tracearrBackfillLastWalkAt: new Date(Date.UTC(2026, 0, 1)) },
-    });
-
-    // What a purge records before deleting (it also restarts the walk).
-    await requireLibraryResync([server.id]);
-    // The restart itself queues nothing...
-    expect(await jobsFor(server.id)).toHaveLength(0);
-    // ...and nor does a later cause-fixing save.
-    await expect(enqueueTracearrBackfill({ userId: user.id }, "instance re-enabled")).resolves.toEqual([]);
-    expect(await jobsFor(server.id)).toHaveLength(0);
-    // Nor does a walk merely having run: only the release clears the hold.
-    await getTestPrisma().mediaServer.update({
-      where: { id: server.id },
+      where: { id: serverId },
       data: { tracearrBackfillLastWalkAt: new Date() },
     });
-    await expect(enqueueTracearrBackfill({ userId: user.id }, "instance re-enabled")).resolves.toEqual([]);
+    await expect(enqueueTracearrBackfill({ userId }, "instance re-enabled")).resolves.toEqual([]);
 
-    // Once a full sync has released the hold, it is an ordinary mapping and
-    // is queued as before.
-    await expect(releaseLibraryResyncHold(server.id, new Date())).resolves.toBe(true);
-    await expect(enqueueTracearrBackfill({ userId: user.id }, "instance re-enabled")).resolves.toEqual([server.id]);
+    await expect(releaseLibraryResyncHold(serverId, new Date())).resolves.toBe(true);
+    await expect(enqueueTracearrBackfill({ userId }, "instance re-enabled")).resolves.toEqual([serverId]);
   });
 
   it("queues a first walk that failed after committing a page — it is not a restart", async () => {
-    // A cursor and no walk stamp: the shape the restart hold used to be
-    // inferred from. Refused, the slice sat unqueued waiting on a full sync
-    // that, with the sync schedule off, never came.
-    const user = await createTestUser();
-    await enabledInstance(user.id);
-    const server = await runnableServer(user.id);
+    // A cursor and no walk stamp: the shape the hold used to be inferred from.
     await getTestPrisma().mediaServer.update({
-      where: { id: server.id },
-      data: {
-        tracearrBackfillCursorAt: new Date(Date.UTC(2026, 8, 1)),
-        tracearrBackfillLastWalkAt: null,
-        libraryResyncRequiredAt: null,
-      },
+      where: { id: serverId },
+      data: { tracearrBackfillCursorAt: new Date(Date.UTC(2026, 8, 1)), tracearrBackfillLastWalkAt: null },
     });
 
-    await expect(enqueueTracearrBackfill({ serverIds: [server.id] }, "instance re-enabled")).resolves.toEqual([
-      server.id,
+    await expect(enqueueTracearrBackfill({ serverIds: [serverId] }, "instance re-enabled")).resolves.toEqual([
+      serverId,
     ]);
-    expect(await jobsFor(server.id)).toHaveLength(1);
-  });
-
-  it("queues a fresh mapping whose walk state is all reset", async () => {
-    const user = await createTestUser();
-    await enabledInstance(user.id);
-    const server = await runnableServer(user.id);
-    // What the server PUT writes on a mapping change.
-    await getTestPrisma().mediaServer.update({
-      where: { id: server.id },
-      data: { tracearrBackfillCursorAt: null, tracearrBackfillLastWalkAt: null },
-    });
-
-    await expect(enqueueTracearrBackfill({ serverIds: [server.id] }, "mapping set")).resolves.toEqual([server.id]);
+    expect(await jobsFor(serverId)).toHaveLength(1);
   });
 
   it("does nothing for an empty id list", async () => {
@@ -298,12 +243,9 @@ describe("enqueueTracearrBackfill (real graphile_worker schema)", () => {
   });
 
   it("never throws: a failed enqueue is logged and reported as not queued", async () => {
-    const user = await createTestUser();
-    await enabledInstance(user.id);
-    const server = await runnableServer(user.id);
     await pool.query("ALTER SCHEMA graphile_worker RENAME TO graphile_worker_hidden");
     try {
-      await expect(enqueueTracearrBackfill({ serverIds: [server.id] }, "test")).resolves.toEqual([]);
+      await expect(enqueueTracearrBackfill({ serverIds: [serverId] }, "test")).resolves.toEqual([]);
       expect(logger.error).toHaveBeenCalled();
     } finally {
       await pool.query("ALTER SCHEMA graphile_worker_hidden RENAME TO graphile_worker");

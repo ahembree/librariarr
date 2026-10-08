@@ -27,34 +27,28 @@ interface ItemRow {
   episodeNumber: number | null;
   /** The show's rating key — an episode's only same-granularity identifier. */
   grandparentRatingKey?: string | null;
-  /** Which of the server's libraries lists it — see the library copies below. */
+  /** Which of the server's libraries lists it. */
   libraryId?: string;
   /** The media server's type, as the index query returns it on every row. */
   serverType?: string;
 }
 
-interface ExternalIdRow {
-  mediaItemId: string;
-  source: string;
-  externalId: string;
-}
+/** `[mediaItemId, source, externalId]` */
+type ExternalIdRow = [string, string, string];
 
 /** Serve the two index queries by matching on their SQL. */
-async function buildIndex(
-  items: ItemRow[],
-  externalIds: ExternalIdRow[] = [],
-): Promise<TracearrJoinIndex> {
+async function buildIndex(items: ItemRow[], externalIds: ExternalIdRow[] = []): Promise<TracearrJoinIndex> {
   mockPrisma.$queryRawUnsafe.mockImplementation(async (sql: string) => {
-    if (sql.includes('FROM "MediaItemExternalId"')) return externalIds;
+    if (sql.includes('FROM "MediaItemExternalId"')) {
+      return externalIds.map(([mediaItemId, source, externalId]) => ({ mediaItemId, source, externalId }));
+    }
     if (sql.includes('FROM "MediaItem" mi')) return items;
     return [];
   });
   return buildTracearrJoinIndex("server-1");
 }
 
-function record(
-  overrides: Partial<TracearrJoinRecord> = {},
-): TracearrJoinRecord {
+function record(overrides: Partial<TracearrJoinRecord> = {}): TracearrJoinRecord {
   return {
     media_type: "movie",
     rating_key: null,
@@ -66,6 +60,11 @@ function record(
     imdb_id: null,
     ...overrides,
   };
+}
+
+/** Index `items` and `externalIds`, then resolve one record. */
+async function resolve(items: ItemRow[], externalIds: ExternalIdRow[], overrides: Partial<TracearrJoinRecord>) {
+  return resolveMediaItemId(await buildIndex(items, externalIds), record(overrides));
 }
 
 const movie = (id: string, ratingKey: string): ItemRow => ({
@@ -82,538 +81,232 @@ const episode = (
   ratingKey: string,
   seasonNumber: number,
   episodeNumber: number,
+  show: string | null = null,
 ): ItemRow => ({
   id,
   ratingKey,
   type: "SERIES",
   seasonNumber,
   episodeNumber,
-  grandparentRatingKey: null,
+  grandparentRatingKey: show,
+});
+
+const episodeRecord = (ratingKey: string, show: string, extra: Partial<TracearrJoinRecord> = {}) => ({
+  media_type: "episode" as const,
+  rating_key: ratingKey,
+  grandparent_rating_key: show,
+  season_number: 1,
+  episode_number: 1,
+  ...extra,
+});
+
+const UNRESOLVED = { skipped: "unresolved" };
+const AMBIGUOUS = { skipped: "ambiguous" };
+
+beforeEach(() => {
+  vi.clearAllMocks();
 });
 
 describe("buildTracearrJoinIndex", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
   it("indexes a server's items in a single query pass", async () => {
-    const index = await buildIndex(
-      [movie("item-1", "100"), movie("item-2", "200")],
-      [{ mediaItemId: "item-1", source: "TMDB", externalId: "550" }],
-    );
+    const index = await buildIndex([movie("item-1", "100"), movie("item-2", "200")], [["item-1", "TMDB", "550"]]);
 
     expect(index.itemCount).toBe(2);
     expect(index.externalIdCount).toBe(1);
-    // Two queries for the whole sync, not one per record: a first Tracearr
-    // import is tens of thousands of records.
+    // Two queries for the whole sync, not one per record: a first import is tens of thousands.
     expect(mockPrisma.$queryRawUnsafe).toHaveBeenCalledTimes(2);
   });
 
   it("ignores an external id whose media item is not on this server", async () => {
-    const index = await buildIndex(
-      [movie("item-1", "100")],
-      [{ mediaItemId: "item-elsewhere", source: "TMDB", externalId: "550" }],
-    );
-
-    expect(
-      resolveMediaItemId(index, record({ tmdb_id: 550 })),
-    ).toEqual({ skipped: "unresolved" });
+    expect(await resolve([movie("item-1", "100")], [["item-elsewhere", "TMDB", "550"]], { tmdb_id: 550 })).toEqual(UNRESOLVED);
   });
 });
 
-describe("resolveMediaItemId — rating key", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
+describe("resolveMediaItemId", () => {
+  type Case = [string, ItemRow[], ExternalIdRow[], Partial<TracearrJoinRecord>, object];
 
-  it("resolves a record by its server-scoped rating key", async () => {
-    const index = await buildIndex([movie("item-1", "100"), movie("item-2", "200")]);
+  it.each<Case>([
+    // ── rating key
+    [
+      "resolves a record by its server-scoped rating key",
+      [movie("item-1", "100"), movie("item-2", "200")], [], { rating_key: "200" }, { mediaItemId: "item-2" },
+    ],
+    // Unique only within a library; outside the library-copy case there is no way to pick.
+    [
+      "skips as ambiguous when two rows share a rating key",
+      [movie("item-1", "100"), movie("item-2", "100")], [], { rating_key: "100" }, AMBIGUOUS,
+    ],
+    // A stale rating key (removed and re-added) must not cost a play the provider id still identifies.
+    [
+      "falls through to the provider ids when the rating key is unknown",
+      [movie("item-1", "100")], [["item-1", "TMDB", "77"]], { rating_key: "999", tmdb_id: 77 }, { mediaItemId: "item-1" },
+    ],
 
-    expect(resolveMediaItemId(index, record({ rating_key: "200" }))).toEqual({
-      mediaItemId: "item-2",
-    });
-  });
-
-  it("skips as ambiguous when two rows share a rating key", async () => {
-    // A rating key is unique only within a library, so two rows can share
-    // one. Outside the Jellyfin/Emby library-copy case (below) there is no way
-    // to pick, so the play is dropped.
-    const index = await buildIndex([movie("item-1", "100"), movie("item-2", "100")]);
-
-    expect(resolveMediaItemId(index, record({ rating_key: "100" }))).toEqual({
-      skipped: "ambiguous",
-    });
-  });
-
-  it("falls through to the provider ids when the rating key is unknown", async () => {
-    const index = await buildIndex(
-      [movie("item-1", "100")],
-      [{ mediaItemId: "item-1", source: "TMDB", externalId: "77" }],
-    );
-
-    // A stale rating key (the item was removed and re-added) must not cost the
-    // play when the provider id still identifies it.
-    expect(
-      resolveMediaItemId(index, record({ rating_key: "999", tmdb_id: 77 })),
-    ).toEqual({ mediaItemId: "item-1" });
-  });
-});
-
-describe("resolveMediaItemId — provider fallback", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  /**
-   * Tracearr sends an episode's OWN provider ids; every episode row here
-   * carries the SERIES-level ids. The two only meet when an episode id equals
-   * some show's id by numeric coincidence — a different show — and narrowing by
-   * season/episode then picked one of its episodes.
-   */
-  it("never resolves an episode by provider id", async () => {
-    const index = await buildIndex(
-      [{ ...episode("other-show-s1e1", "2001", 1, 1), grandparentRatingKey: "77" }],
-      [
-        { mediaItemId: "other-show-s1e1", source: "TVDB", externalId: "305288" },
-        { mediaItemId: "other-show-s1e1", source: "TMDB", externalId: "66732" },
-      ],
-    );
-
-    expect(
-      resolveMediaItemId(
-        index,
-        record({
-          media_type: "episode",
-          rating_key: "deleted-key",
-          grandparent_rating_key: "12",
-          season_number: 1,
-          episode_number: 1,
-          tvdb_id: 305288,
-          tmdb_id: 66732,
-        }),
-      ),
-    ).toEqual({ skipped: "unresolved" });
-  });
-
-  it("never resolves a film by TVDB, which the two catalogues disagree about", async () => {
-    const index = await buildIndex(
-      [movie("other-film", "100")],
-      [{ mediaItemId: "other-film", source: "TVDB", externalId: "2113" }],
-    );
-
-    expect(
-      resolveMediaItemId(index, record({ rating_key: "555", tvdb_id: 2113 })),
-    ).toEqual({ skipped: "unresolved" });
-  });
-
-  it("refuses a provider-id hit whose other id contradicts the record", async () => {
-    // Corroborated exactly like a rating-key hit: same IMDB-namespace,
-    // different value, so the row is a different work sharing the TMDB id.
-    const index = await buildIndex(
-      [movie("item-1", "100")],
-      [
-        { mediaItemId: "item-1", source: "TMDB", externalId: "22" },
-        { mediaItemId: "item-1", source: "IMDB", externalId: "tt0000001" },
-      ],
-    );
-
-    expect(
-      resolveMediaItemId(
-        index,
-        record({ tmdb_id: 22, imdb_id: "tt0133093" }),
-      ),
-    ).toEqual({ skipped: "ambiguous" });
-  });
-
-  it("prefers TMDB over IMDB", async () => {
-    const index = await buildIndex(
-      [movie("item-tmdb", "100"), movie("item-imdb", "200")],
-      [
-        { mediaItemId: "item-tmdb", source: "TMDB", externalId: "22" },
-        { mediaItemId: "item-imdb", source: "IMDB", externalId: "tt0133093" },
-      ],
-    );
-
-    expect(
-      resolveMediaItemId(index, record({ tmdb_id: 22, imdb_id: "tt0133093" })),
-    ).toEqual({ mediaItemId: "item-tmdb" });
-  });
-
-  it("falls back to TMDB when no row carries the TVDB id", async () => {
-    const index = await buildIndex(
-      [movie("item-tmdb", "200")],
-      [{ mediaItemId: "item-tmdb", source: "TMDB", externalId: "22" }],
-    );
-
-    expect(
-      resolveMediaItemId(index, record({ tvdb_id: 11, tmdb_id: 22 })),
-    ).toEqual({ mediaItemId: "item-tmdb" });
-  });
-
-  it("falls back to IMDB last", async () => {
-    const index = await buildIndex(
-      [movie("item-imdb", "300")],
-      [{ mediaItemId: "item-imdb", source: "IMDB", externalId: "tt0133093" }],
-    );
-
-    expect(
-      resolveMediaItemId(
-        index,
-        record({ tvdb_id: 11, tmdb_id: 22, imdb_id: "tt0133093" }),
-      ),
-    ).toEqual({ mediaItemId: "item-imdb" });
-  });
-
-  it("matches the external-id source case-insensitively", async () => {
-    // `MediaItemExternalId.source` is conventionally "TMDB" but nothing
-    // enforces the casing — `series-key.ts` compares with UPPER() for the same
-    // reason, and the index query normalizes the same way.
-    const index = await buildIndex(
-      [movie("item-1", "100")],
-      [{ mediaItemId: "item-1", source: "tmdb", externalId: "550" }],
-    );
-
-    expect(resolveMediaItemId(index, record({ tmdb_id: 550 }))).toEqual({
-      mediaItemId: "item-1",
-    });
-  });
-
-  it("does not join a movie record to a series row sharing the id", async () => {
+    // ── provider fallback
+    // Tracearr sends an episode's OWN ids, every episode row the SERIES-level
+    // ones: they only meet by numeric coincidence — a different show.
+    [
+      "never resolves an episode by provider id",
+      [episode("other-show-s1e1", "2001", 1, 1, "77")],
+      [["other-show-s1e1", "TVDB", "305288"], ["other-show-s1e1", "TMDB", "66732"]],
+      episodeRecord("deleted-key", "12", { tvdb_id: 305288, tmdb_id: 66732 }),
+      UNRESOLVED,
+    ],
+    [
+      "never resolves a film by TVDB, which the two catalogues disagree about",
+      [movie("other-film", "100")], [["other-film", "TVDB", "2113"]], { rating_key: "555", tvdb_id: 2113 }, UNRESOLVED,
+    ],
+    // Corroborated like a rating-key hit: another IMDB id means another work sharing the TMDB id.
+    [
+      "refuses a provider-id hit whose other id contradicts the record",
+      [movie("item-1", "100")], [["item-1", "TMDB", "22"], ["item-1", "IMDB", "tt0000001"]],
+      { tmdb_id: 22, imdb_id: "tt0133093" }, AMBIGUOUS,
+    ],
+    [
+      "prefers TMDB over IMDB",
+      [movie("item-tmdb", "100"), movie("item-imdb", "200")], [["item-tmdb", "TMDB", "22"], ["item-imdb", "IMDB", "tt0133093"]],
+      { tmdb_id: 22, imdb_id: "tt0133093" }, { mediaItemId: "item-tmdb" },
+    ],
+    [
+      "falls back to TMDB when no row carries the TVDB id",
+      [movie("item-tmdb", "200")], [["item-tmdb", "TMDB", "22"]], { tvdb_id: 11, tmdb_id: 22 }, { mediaItemId: "item-tmdb" },
+    ],
+    [
+      "falls back to IMDB last",
+      [movie("item-imdb", "300")], [["item-imdb", "IMDB", "tt0133093"]],
+      { tvdb_id: 11, tmdb_id: 22, imdb_id: "tt0133093" }, { mediaItemId: "item-imdb" },
+    ],
+    // Nothing enforces the casing; the index query normalizes like `series-key.ts`.
+    [
+      "matches the external-id source case-insensitively",
+      [movie("item-1", "100")], [["item-1", "tmdb", "550"]], { tmdb_id: 550 }, { mediaItemId: "item-1" },
+    ],
     // TMDB movie and TV ids share one numeric space.
-    const index = await buildIndex(
-      [episode("ep-1", "1001", 1, 1)],
-      [{ mediaItemId: "ep-1", source: "TMDB", externalId: "42" }],
-    );
+    [
+      "does not join a movie record to a series row sharing the id",
+      [episode("ep-1", "1001", 1, 1)], [["ep-1", "TMDB", "42"]], { tmdb_id: 42 }, UNRESOLVED,
+    ],
+    [
+      "does not join a track record to a movie row sharing the id",
+      [movie("item-1", "100")], [["item-1", "TMDB", "550"]], { media_type: "track", tmdb_id: 550 }, UNRESOLVED,
+    ],
+    ["skips a record with no rating key and no provider ids", [movie("item-1", "100")], [], {}, UNRESOLVED],
+    [
+      "skips as ambiguous when two rows share a provider id",
+      [movie("item-1", "100"), movie("item-2", "200")], [["item-1", "TMDB", "550"], ["item-2", "TMDB", "550"]],
+      { tmdb_id: 550 }, AMBIGUOUS,
+    ],
+  ])("%s", async (_name, items, externalIds, overrides, expected) => {
+    expect(await resolve(items, externalIds, overrides)).toEqual(expected);
+  });
 
-    expect(resolveMediaItemId(index, record({ tmdb_id: 42 }))).toEqual({
-      skipped: "unresolved",
+  // None of these is a library item: even an exact rating-key hit is a namespace collision.
+  it.each(["live", "photo", "trailer", "unknown"] as const)("refuses a %s record before any lookup", async (mediaType) => {
+    expect(await resolve([movie("item-1", "100")], [], { media_type: mediaType, rating_key: "100" })).toEqual({
+      skipped: "unsupported-type",
     });
   });
 
-  it("does not join a track record to a movie row sharing the id", async () => {
-    const index = await buildIndex(
-      [movie("item-1", "100")],
-      [{ mediaItemId: "item-1", source: "TMDB", externalId: "550" }],
-    );
-
-    expect(
-      resolveMediaItemId(index, record({ media_type: "track", tmdb_id: 550 })),
-    ).toEqual({ skipped: "unresolved" });
+  // Plex reuses rating keys (they are rowids), so a key that named a deleted
+  // film can later name a different one: an un-corroborated hit files the old
+  // item's plays under REAL usernames — the direction that ARMS a positive
+  // `watchedByUser` DELETE — and nothing revisits an upserted row.
+  it.each<Case>([
+    ["skips a hit whose type disagrees with the record", [episode("ep-1", "900", 1, 2)], [], { rating_key: "900" }, AMBIGUOUS],
+    [
+      "skips a hit whose TMDB id contradicts the record's",
+      [movie("movie-new", "900")], [["movie-new", "TMDB", "111"]], { rating_key: "900", tmdb_id: 222 }, AMBIGUOUS,
+    ],
+    // The same film is tvdb 2113 in the library and 292129 in Tracearr: a TVDB mismatch proves nothing.
+    [
+      "does not contradict on TVDB",
+      [movie("movie-1", "900")], [["movie-1", "TVDB", "2113"]], { rating_key: "900", tvdb_id: 292129 }, { mediaItemId: "movie-1" },
+    ],
+    [
+      "still resolves when the ids agree",
+      [movie("movie-1", "900")], [["movie-1", "TMDB", "111"]], { rating_key: "900", tmdb_id: 111 }, { mediaItemId: "movie-1" },
+    ],
+    // Provider ids are far from universal: refusing on absence would drop most plays.
+    [
+      "accepts silence on the item's side",
+      [movie("movie-1", "900")], [], { rating_key: "900", tmdb_id: 222 }, { mediaItemId: "movie-1" },
+    ],
+    [
+      "accepts silence on the record's side",
+      [movie("movie-1", "900")], [["movie-1", "TMDB", "111"]], { rating_key: "900", imdb_id: "tt999" }, { mediaItemId: "movie-1" },
+    ],
+    // Episodes are corroborated on the show's rating key: Tracearr's provider
+    // ids are the EPISODE's, ours the SERIES', and comparing them rejected
+    // every episode of every show whose records carry ids.
+    [
+      "resolves an episode whose record carries episode-level provider ids",
+      [episode("ep-1", "157667", 1, 1, "58337")], [["ep-1", "TVDB", "248741"]],
+      episodeRecord("157667", "58337", { tvdb_id: 4099506 }), { mediaItemId: "ep-1" },
+    ],
+    [
+      "skips an episode whose rating key now belongs to a different show",
+      [episode("ep-1", "157667", 1, 1, "99999")], [], episodeRecord("157667", "58337"), AMBIGUOUS,
+    ],
+    [
+      "accepts an episode when either side has no show rating key",
+      [episode("ep-1", "157667", 1, 1)], [], episodeRecord("157667", "58337"), { mediaItemId: "ep-1" },
+    ],
+  ])("a rating key that may now point somewhere else: %s", async (_name, items, externalIds, overrides, expected) => {
+    expect(await resolve(items, externalIds, overrides)).toEqual(expected);
   });
-
-  it("skips a record with no rating key and no provider ids", async () => {
-    const index = await buildIndex([movie("item-1", "100")]);
-
-    expect(resolveMediaItemId(index, record())).toEqual({
-      skipped: "unresolved",
-    });
-  });
-
-  it("skips as ambiguous when two rows share a provider id", async () => {
-    const index = await buildIndex(
-      [movie("item-1", "100"), movie("item-2", "200")],
-      [
-        { mediaItemId: "item-1", source: "TMDB", externalId: "550" },
-        { mediaItemId: "item-2", source: "TMDB", externalId: "550" },
-      ],
-    );
-
-    expect(resolveMediaItemId(index, record({ tmdb_id: 550 }))).toEqual({
-      skipped: "ambiguous",
-    });
-  });
-});
-
-describe("resolveMediaItemId — unsupported types", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it.each(["live", "photo", "trailer", "unknown"] as const)(
-    "refuses a %s record before any lookup",
-    async (mediaType) => {
-      // None of these is a library item, so even an exact rating-key hit would
-      // be a namespace collision rather than a match.
-      const index = await buildIndex([movie("item-1", "100")]);
-
-      expect(
-        resolveMediaItemId(
-          index,
-          record({ media_type: mediaType, rating_key: "100" }),
-        ),
-      ).toEqual({ skipped: "unsupported-type" });
-    },
-  );
-
-  describe("a rating key that now points somewhere else", () => {
-    // Rating keys are the server's own ids, and Plex reuses them — they are
-    // rowids, so a key that identified a deleted film can later identify a
-    // different one. An un-corroborated hit files the old item's plays against
-    // the new item under REAL usernames, which is the direction that ARMS a
-    // positive `watchedByUser` DELETE (inflated play state only ever disarms).
-    // Nothing revisits an upserted row, so it is permanent.
-    it("skips a hit whose type disagrees with the record", async () => {
-      const index = await buildIndex([episode("ep-1", "900", 1, 2)]);
-
-      // Tracearr says this play was a movie; the key now belongs to an episode.
-      expect(
-        resolveMediaItemId(index, record({ media_type: "movie", rating_key: "900" })),
-      ).toEqual({ skipped: "ambiguous" });
-    });
-
-    it("skips a hit whose TMDB id contradicts the record's", async () => {
-      const index = await buildIndex(
-        [movie("movie-new", "900")],
-        [{ mediaItemId: "movie-new", source: "TMDB", externalId: "111" }],
-      );
-
-      expect(
-        resolveMediaItemId(
-          index,
-          record({ media_type: "movie", rating_key: "900", tmdb_id: 222 }),
-        ),
-      ).toEqual({ skipped: "ambiguous" });
-    });
-
-    it("does not contradict on TVDB, which the two catalogues disagree about", async () => {
-      // Observed on a live instance for films that are unambiguously the same:
-      // "Batman: The Dark Knight Returns, Part 2" is tvdb 2113 in the library
-      // and 292129 in Tracearr; "Demon Slayer: Infinity Castle" is 357928 vs
-      // 357931. TVDB carries more than one namespace and the two systems
-      // populate it from different ones, so a mismatch there proves nothing —
-      // only TMDB and IMDB are worth contradicting on.
-      const index = await buildIndex(
-        [movie("movie-1", "900")],
-        [{ mediaItemId: "movie-1", source: "TVDB", externalId: "2113" }],
-      );
-
-      expect(
-        resolveMediaItemId(
-          index,
-          record({ media_type: "movie", rating_key: "900", tvdb_id: 292129 }),
-        ),
-      ).toEqual({ mediaItemId: "movie-1" });
-    });
-
-    it("still resolves when the ids agree", async () => {
-      const index = await buildIndex(
-        [movie("movie-1", "900")],
-        [{ mediaItemId: "movie-1", source: "TMDB", externalId: "111" }],
-      );
-
-      expect(
-        resolveMediaItemId(
-          index,
-          record({ media_type: "movie", rating_key: "900", tmdb_id: 111 }),
-        ),
-      ).toEqual({ mediaItemId: "movie-1" });
-    });
-
-    it("accepts silence on either side rather than treating it as disagreement", async () => {
-      // Provider ids are far from universally populated; refusing on absence
-      // would drop most legitimate plays to catch a rare reuse.
-      const bare = await buildIndex([movie("movie-1", "900")]);
-      expect(
-        resolveMediaItemId(
-          bare,
-          record({ media_type: "movie", rating_key: "900", tmdb_id: 222 }),
-        ),
-      ).toEqual({ mediaItemId: "movie-1" });
-
-      const withId = await buildIndex(
-        [movie("movie-1", "900")],
-        [{ mediaItemId: "movie-1", source: "TMDB", externalId: "111" }],
-      );
-      // The record carries an IMDB id the item has nothing to compare against.
-      expect(
-        resolveMediaItemId(
-          withId,
-          record({ media_type: "movie", rating_key: "900", imdb_id: "tt999" }),
-        ),
-      ).toEqual({ mediaItemId: "movie-1" });
-    });
-  });
-
-
-  describe("episodes are corroborated on the show, not on provider ids", () => {
-    // The granularity trap, found in production. Tracearr sends the EPISODE's
-    // tvdb/tmdb/imdb — a different value per episode — while Librariarr stores
-    // the SERIES-level ids on every episode row. Comparing them finds a
-    // mismatch for every episode of every show whose records carry ids, which
-    // is most of them: measured against a live instance this rejected all 138
-    // episodes of one show whose plays Tracearr held under our own rating keys,
-    // while shows whose records happened to carry no ids imported fine.
-    it("resolves an episode whose record carries episode-level provider ids", async () => {
-      const index = await buildIndex(
-        [{ ...episode("ep-1", "157667", 1, 1), grandparentRatingKey: "58337" }],
-        // Series-level ids, as the sync stores them on every episode.
-        [{ mediaItemId: "ep-1", source: "TVDB", externalId: "248741" }],
-      );
-
-      expect(
-        resolveMediaItemId(
-          index,
-          record({
-            media_type: "episode",
-            rating_key: "157667",
-            grandparent_rating_key: "58337",
-            season_number: 1,
-            episode_number: 1,
-            tvdb_id: 4099506, // the EPISODE's id — not comparable to ours
-          }),
-        ),
-      ).toEqual({ mediaItemId: "ep-1" });
-    });
-
-    it("still skips an episode whose rating key now belongs to a different show", async () => {
-      // The reuse hazard the corroboration exists for, checked on the one id
-      // that IS comparable: the show's own rating key on the same server.
-      const index = await buildIndex([
-        { ...episode("ep-1", "157667", 1, 1), grandparentRatingKey: "99999" },
-      ]);
-
-      expect(
-        resolveMediaItemId(
-          index,
-          record({
-            media_type: "episode",
-            rating_key: "157667",
-            grandparent_rating_key: "58337",
-            season_number: 1,
-            episode_number: 1,
-          }),
-        ),
-      ).toEqual({ skipped: "ambiguous" });
-    });
-
-    it("accepts when either side has no show rating key", async () => {
-      const index = await buildIndex([
-        { ...episode("ep-1", "157667", 1, 1), grandparentRatingKey: null },
-      ]);
-
-      expect(
-        resolveMediaItemId(
-          index,
-          record({
-            media_type: "episode",
-            rating_key: "157667",
-            grandparent_rating_key: "58337",
-            season_number: 1,
-            episode_number: 1,
-          }),
-        ),
-      ).toEqual({ mediaItemId: "ep-1" });
-    });
-  });
-
 });
 
 describe("resolveMediaItemId — library copies of one Jellyfin/Emby item", () => {
-  // Two libraries over the same folder list the same Jellyfin/Emby item under
-  // the same id: one rating key, two rows. A play of it is a play of both.
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  const on = (serverType: string, libraryId: string, row: ItemRow): ItemRow => ({
-    ...row,
-    libraryId,
-    serverType,
-  });
+  // Two libraries over one folder list the same item under the same id: a play of it is a play of both.
+  const on = (serverType: string, libraryId: string, row: ItemRow): ItemRow => ({ ...row, libraryId, serverType });
+  const jellyfin = (libraryId: string, row: ItemRow) => on("JELLYFIN", libraryId, row);
+  const episodeOfShow1 = { media_type: "episode" as const, rating_key: "jf-ep", grandparent_rating_key: "show-1" };
 
   it.each(["JELLYFIN", "EMBY"])("files a %s play against every copy, the lowest id first", async (type) => {
-    const index = await buildIndex([
-      on(type, "lib-c", movie("item-c", "jf-1")),
-      on(type, "lib-a", movie("item-a", "jf-1")),
-      on(type, "lib-b", movie("item-b", "jf-1")),
-    ]);
+    const items = ["c", "a", "b"].map((x) => on(type, `lib-${x}`, movie(`item-${x}`, "jf-1")));
 
-    expect(resolveMediaItemId(index, record({ rating_key: "jf-1" }))).toEqual({
-      mediaItemId: "item-a",
-      copies: ["item-b", "item-c"],
-    });
+    expect(await resolve(items, [], { rating_key: "jf-1" })).toEqual({ mediaItemId: "item-a", copies: ["item-b", "item-c"] });
   });
 
   it("files an episode's play against every copy whose show matches", async () => {
-    const index = await buildIndex([
-      on("JELLYFIN", "lib-a", { ...episode("ep-a", "jf-ep", 1, 1), grandparentRatingKey: "show-1" }),
-      on("JELLYFIN", "lib-b", { ...episode("ep-b", "jf-ep", 1, 1), grandparentRatingKey: "show-1" }),
-    ]);
+    const items = [jellyfin("lib-a", episode("ep-a", "jf-ep", 1, 1, "show-1")), jellyfin("lib-b", episode("ep-b", "jf-ep", 1, 1, "show-1"))];
 
-    expect(
-      resolveMediaItemId(
-        index,
-        record({ media_type: "episode", rating_key: "jf-ep", grandparent_rating_key: "show-1" }),
-      ),
-    ).toEqual({ mediaItemId: "ep-a", copies: ["ep-b"] });
+    expect(await resolve(items, [], episodeOfShow1)).toEqual({ mediaItemId: "ep-a", copies: ["ep-b"] });
   });
 
-  it("still skips the same rating key in two Plex libraries — a stale row there, not a copy", async () => {
-    const index = await buildIndex([
-      on("PLEX", "lib-a", movie("item-a", "100")),
-      on("PLEX", "lib-b", movie("item-b", "100")),
-    ]);
-
-    expect(resolveMediaItemId(index, record({ rating_key: "100" }))).toEqual({ skipped: "ambiguous" });
-  });
-
-  it("skips two hits in one library — one library cannot list an item twice", async () => {
-    const index = await buildIndex([
-      on("JELLYFIN", "lib-a", movie("item-a", "jf-1")),
-      on("JELLYFIN", "lib-a", movie("item-b", "jf-1")),
-    ]);
-
-    expect(resolveMediaItemId(index, record({ rating_key: "jf-1" }))).toEqual({ skipped: "ambiguous" });
-  });
-
-  it("skips when any copy is not the type the record names", async () => {
-    const index = await buildIndex([
-      on("JELLYFIN", "lib-a", movie("item-a", "jf-1")),
-      on("JELLYFIN", "lib-b", episode("item-b", "jf-1", 1, 1)),
-    ]);
-
-    expect(resolveMediaItemId(index, record({ rating_key: "jf-1" }))).toEqual({ skipped: "ambiguous" });
-  });
-
-  it("skips when any copy contradicts the record's identity", async () => {
-    const index = await buildIndex(
-      [on("JELLYFIN", "lib-a", movie("item-a", "jf-1")), on("JELLYFIN", "lib-b", movie("item-b", "jf-1"))],
-      [
-        { mediaItemId: "item-a", source: "TMDB", externalId: "550" },
-        { mediaItemId: "item-b", source: "TMDB", externalId: "999" },
-      ],
-    );
-
-    expect(resolveMediaItemId(index, record({ rating_key: "jf-1", tmdb_id: 550 }))).toEqual({
-      skipped: "ambiguous",
-    });
-  });
-
-  it("skips when any copy of an episode belongs to another show", async () => {
-    const index = await buildIndex([
-      on("EMBY", "lib-a", { ...episode("ep-a", "jf-ep", 1, 1), grandparentRatingKey: "show-1" }),
-      on("EMBY", "lib-b", { ...episode("ep-b", "jf-ep", 1, 1), grandparentRatingKey: "show-2" }),
-    ]);
-
-    expect(
-      resolveMediaItemId(
-        index,
-        record({ media_type: "episode", rating_key: "jf-ep", grandparent_rating_key: "show-1" }),
-      ),
-    ).toEqual({ skipped: "ambiguous" });
-  });
-
-  it("never fans out a provider-id hit — two rows sharing a TMDB id are two files", async () => {
-    const index = await buildIndex(
-      [on("JELLYFIN", "lib-a", movie("item-uhd", "jf-4k")), on("JELLYFIN", "lib-b", movie("item-hd", "jf-hd"))],
-      [
-        { mediaItemId: "item-uhd", source: "TMDB", externalId: "603" },
-        { mediaItemId: "item-hd", source: "TMDB", externalId: "603" },
-      ],
-    );
-
-    expect(resolveMediaItemId(index, record({ rating_key: "gone", tmdb_id: 603 }))).toEqual({
-      skipped: "ambiguous",
-    });
+  it.each<[string, ItemRow[], ExternalIdRow[], Partial<TracearrJoinRecord>]>([
+    [
+      "the same rating key in two Plex libraries — a stale row there, not a copy",
+      [on("PLEX", "lib-a", movie("item-a", "100")), on("PLEX", "lib-b", movie("item-b", "100"))], [], { rating_key: "100" },
+    ],
+    [
+      "two hits in one library — one library cannot list an item twice",
+      [jellyfin("lib-a", movie("item-a", "jf-1")), jellyfin("lib-a", movie("item-b", "jf-1"))], [], { rating_key: "jf-1" },
+    ],
+    [
+      "a copy that is not the type the record names",
+      [jellyfin("lib-a", movie("item-a", "jf-1")), jellyfin("lib-b", episode("item-b", "jf-1", 1, 1))], [], { rating_key: "jf-1" },
+    ],
+    [
+      "a copy that contradicts the record's identity",
+      [jellyfin("lib-a", movie("item-a", "jf-1")), jellyfin("lib-b", movie("item-b", "jf-1"))],
+      [["item-a", "TMDB", "550"], ["item-b", "TMDB", "999"]],
+      { rating_key: "jf-1", tmdb_id: 550 },
+    ],
+    [
+      "a copy of an episode that belongs to another show",
+      [on("EMBY", "lib-a", episode("ep-a", "jf-ep", 1, 1, "show-1")), on("EMBY", "lib-b", episode("ep-b", "jf-ep", 1, 1, "show-2"))],
+      [],
+      episodeOfShow1,
+    ],
+    // Two rows sharing a TMDB id are two files (a 4K beside a 1080p), never a fan-out.
+    [
+      "a provider-id hit on two rows",
+      [jellyfin("lib-a", movie("item-uhd", "jf-4k")), jellyfin("lib-b", movie("item-hd", "jf-hd"))],
+      [["item-uhd", "TMDB", "603"], ["item-hd", "TMDB", "603"]],
+      { rating_key: "gone", tmdb_id: 603 },
+    ],
+  ])("skips %s", async (_name, items, externalIds, overrides) => {
+    expect(await resolve(items, externalIds, overrides)).toEqual(AMBIGUOUS);
   });
 });

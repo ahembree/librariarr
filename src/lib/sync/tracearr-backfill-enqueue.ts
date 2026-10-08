@@ -4,50 +4,28 @@ import { MAIN_QUEUE, TASK_TRACEARR_BACKFILL } from "@/lib/jobs/constants";
 import { logger } from "@/lib/logger";
 
 /**
- * The one jobKey every `TASK_TRACEARR_BACKFILL` enqueue uses — the task's own
- * re-enqueue, `syncWatchHistory`'s, and the ones below — so all of them
- * collapse onto one queued slice per server, and the status route reads the
- * job's state under it.
+ * The one jobKey for every `TASK_TRACEARR_BACKFILL` enqueue, so they collapse
+ * onto one queued slice per server; the status route reads the job under it.
  */
 export function tracearrBackfillJobKey(serverId: string): string {
   return `tracearr-backfill:${serverId}`;
 }
 
 /**
- * Queue a Tracearr backfill slice right away, after something that was
- * stopping the import has been put right: a mapping set or changed, a server
- * re-enabled, a Tracearr instance created, re-enabled, or re-pointed.
+ * Queue a Tracearr backfill slice right away, after something that stopped the
+ * import was put right (a mapping set or changed, a server re-enabled, an
+ * instance created, re-enabled or re-pointed) — otherwise nothing ran until the
+ * next watch-history sync. A keyed add REPLACES a parked job with a fresh one,
+ * which is what clears "failing"; deliberately no `isJobRetrying` check, since
+ * the cause the backoff waited out was just fixed.
  *
- * Without it, nothing ran until the next watch-history sync — hours with
- * realtime off — while Settings went on reporting the state the fix had just
- * changed: a job parked by the old cause read "History import failing", and a
- * fresh mapping waited with nothing queued. A keyed add REPLACES a parked row
- * with a fresh one (attempts reset), which is what clears the failing state —
- * deliberately without `isJobRetrying`'s backoff check, since the cause the
- * backoff was waiting out is the one just fixed.
+ * Only servers the import can run for: mapped and enabled with an enabled
+ * instance; holding items in an enabled library (the importer refuses an empty
+ * one); and NOT under the library-resync hold, read from the recorded hold —
+ * a walk before the releasing sync would skip the missing items' plays and can
+ * complete without them for good, and that sync queues the walk itself.
  *
- * Only servers the import can actually run for, and safely:
- *  - mapped and enabled, with an enabled Tracearr instance on the account (a
- *    slice for anything else fails or no-ops, and would only burn attempts);
- *  - holding items in an enabled library — the importer refuses to walk into
- *    an empty library (no play could be attributed), and the first sync's
- *    watch-history step queues the slice once there is something to join to;
- *  - NOT held by `requireLibraryResync` (`libraryResyncRequiredAt` set): a
- *    purge, a restore, disable-with-delete or a vanished library removed items
- *    the archive's plays belong to, or a library that held nothing is being
- *    populated for the first time, and a walk run before the library sync that
- *    brings those items in skips their plays as unresolved and can mark the
- *    archive complete without them — for good. The sync that releases the
- *    hold — a full sync that brought every needed library back, or the
- *    library-scoped sync that took a library's own population hold — queues
- *    that walk, after the items. Read from the recorded hold, never inferred
- *    from the walk columns: a first walk that failed after committing a page
- *    has the same cursor-set, never-walked shape as a restart, and refusing it
- *    left it waiting on a sync that may never come.
- *
- * Best-effort: never throws. A failed read or enqueue is logged and leaves the
- * import to the next watch-history sync, exactly as before. Returns the ids
- * queued.
+ * Best-effort: never throws (failures are logged). Returns the ids queued.
  */
 export async function enqueueTracearrBackfill(
   scope: { serverIds: string[] } | { userId: string },

@@ -3,11 +3,8 @@ import { Pool } from "pg";
 import { Logger, makeWorkerUtils, runOnce, type WorkerUtils } from "graphile-worker";
 
 /**
- * The REAL {@link isJobRetrying} SQL against a REAL graphile_worker schema, with
- * jobs failed by graphile-worker itself (`runOnce` over a task that throws), so
- * the test reads exactly the `attempts`/`max_attempts`/`run_at` a production
- * failure leaves behind. The unit test mocks the pool and can only check the
- * query text.
+ * The real {@link isJobRetrying} SQL, over jobs failed by graphile-worker
+ * itself, so it reads exactly what a production failure leaves behind.
  */
 vi.mock("@/lib/logger", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -61,19 +58,19 @@ describe("isJobRetrying (real graphile_worker schema)", () => {
     await utils.addJob(TASK, {}, { jobKey: "k", maxAttempts: 3 });
     await failOnce();
     await expect(isJobRetrying("k")).resolves.toBe(true);
+    // Why callers check first: a keyed enqueue resets the failed job's attempts.
+    await utils.addJob(TASK, {}, { jobKey: "k", maxAttempts: 3 });
+    await expect(isJobRetrying("k")).resolves.toBe(false);
   });
 
   it("treats a parked job as failed only within the cooldown it is asked about", async () => {
     await utils.addJob(TASK, {}, { jobKey: "k", maxAttempts: 1 });
     await failOnce();
-    // Attempts used up: not backing off, so the Tracearr backfill's plain
-    // check still lets the next enqueue give it a fresh start…
+    // Parked: a plain check lets the next enqueue give it a fresh start, a
+    // cooldown holds off until the failure is that old.
     await expect(isJobRetrying("k")).resolves.toBe(false);
-    // …while the realtime refresh, which fires far less often than the
-    // seconds-long backoff, holds off for its cooldown.
     await expect(isJobRetrying("k", { failedWithinMs: 600_000 })).resolves.toBe(true);
 
-    // The failure is long past: the cooldown is over.
     await pool.query(
       `UPDATE graphile_worker._private_jobs SET run_at = now() - interval '1 hour'`,
     );
@@ -86,10 +83,9 @@ describe("isJobRetrying (real graphile_worker schema)", () => {
     await expect(isJobRetrying("k", { failedWithinMs: 600_000 })).resolves.toBe(false);
   });
 
-  it("documents why callers check: a keyed enqueue resets the failed job's attempts", async () => {
-    await utils.addJob(TASK, {}, { jobKey: "k", maxAttempts: 3 });
-    await failOnce();
-    await utils.addJob(TASK, {}, { jobKey: "k", maxAttempts: 3 });
+  it("survives a release, idempotent or not, by opening a fresh pool", async () => {
+    await releaseJobsClient();
+    await releaseJobsClient();
     await expect(isJobRetrying("k")).resolves.toBe(false);
   });
 });

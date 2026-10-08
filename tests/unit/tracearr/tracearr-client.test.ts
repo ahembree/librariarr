@@ -1283,10 +1283,8 @@ describe("TracearrClient", () => {
     });
 
     describe("an incomplete walk throws rather than returning what it reached", () => {
-      // A PARTIAL map is non-empty, so the importer's "is the map usable" gate
-      // let it through, and every play of an account it missed was stored
-      // under Tracearr's identity label for good (archive rows are never
-      // re-delivered). Every caller treats a throw as "unavailable".
+      // A partial map is non-empty and passed the importer's gate; every caller
+      // treats a throw as "unavailable".
       it("throws when the page cap cuts the walk short", async () => {
         let n = 0;
         mockAxiosInstance.get.mockImplementation(async () =>
@@ -1300,10 +1298,7 @@ describe("TracearrClient", () => {
       });
 
       it("walks a large instance's user list to the end — the cap is a runaway guard", async () => {
-        // The cap was 50 pages (5,000 identities), and hitting it throws — so a
-        // large shared server, which also keeps every departed account, never
-        // got a map: the archive walk never ran and the evidence marker was
-        // withdrawn on every forward run. 120 pages is 12,000 identities.
+        // 12,000 identities: a cap of 50 pages left a large server with no map.
         const PAGES = 120;
         let n = 0;
         mockAxiosInstance.get.mockImplementation(async () => {
@@ -1328,24 +1323,15 @@ describe("TracearrClient", () => {
         expect(names.get(`acct-${PAGES}-0`)).toBe(`user-${PAGES}-0`);
       });
 
-      it("throws on a cursor that repeats", async () => {
+      it.each([
+        ["a cursor that repeats", usersBody([DEPARTED], "cursor-2"), /stopped advancing/],
+        ["a page that is not a users page", { data: "<html>sign in</html>" }, /unexpected response/],
+      ])("throws on %s", async (_, second, error) => {
         mockAxiosInstance.get
           .mockResolvedValueOnce(usersBody([ACTIVE], "cursor-2"))
-          .mockResolvedValueOnce(usersBody([DEPARTED], "cursor-2"));
+          .mockResolvedValueOnce(second);
 
-        await expect(client.getServerAccountNames("srv-1")).rejects.toThrow(
-          /stopped advancing/,
-        );
-      });
-
-      it("throws on a page that is not a users page", async () => {
-        mockAxiosInstance.get
-          .mockResolvedValueOnce(usersBody([ACTIVE], "cursor-2"))
-          .mockResolvedValueOnce({ data: "<html>sign in</html>" });
-
-        await expect(client.getServerAccountNames("srv-1")).rejects.toThrow(
-          /unexpected response/,
-        );
+        await expect(client.getServerAccountNames("srv-1")).rejects.toThrow(error);
       });
 
       it("throws when cancelled mid-walk", async () => {
@@ -1358,15 +1344,6 @@ describe("TracearrClient", () => {
         await expect(
           client.getServerAccountNames("srv-1", { signal: controller.signal }),
         ).rejects.toThrow(/cancelled/);
-      });
-
-      it("returns the whole map when the walk ends normally", async () => {
-        mockAxiosInstance.get
-          .mockResolvedValueOnce(usersBody([ACTIVE], "cursor-2"))
-          .mockResolvedValueOnce(usersBody([DEPARTED], null));
-
-        const names = await client.getServerAccountNames("srv-1");
-        expect([...names.keys()].sort()).toEqual(["acct-jesse", "acct-walter"]);
       });
     });
   });

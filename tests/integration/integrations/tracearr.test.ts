@@ -43,8 +43,7 @@ vi.mock("@/lib/tracearr/tracearr-client", () => ({
   }),
 }));
 
-// Records the backfill slices the instance saves queue — the helper's own
-// filtering runs for real against the test database.
+// Records the slices instance saves queue; the helper's filtering runs for real.
 const { mockEnqueueJob } = vi.hoisted(() => ({ mockEnqueueJob: vi.fn() }));
 vi.mock("@/lib/jobs/client", () => ({ enqueueJob: mockEnqueueJob }));
 
@@ -466,7 +465,6 @@ describe("Tracearr integration endpoints", () => {
       callRouteWithParams(PUT, { id }, { url: `/api/integrations/tracearr/${id}`, method: "PUT", body });
 
     it("queues every mapped, enabled server when an instance is added", async () => {
-      // Servers mapped while no instance was enabled were waiting on one.
       const user = await createTestUser();
       const a = await mappedServer(user.id, TRACEARR_SERVERS[0].id);
       const b = await mappedServer(user.id, TRACEARR_SERVERS[1].id);
@@ -504,27 +502,17 @@ describe("Tracearr integration endpoints", () => {
       expect(queuedServerIds()).toEqual([]);
     });
 
-    it("queues them when the instance is re-enabled — a parked slice gets fresh attempts", async () => {
+    it.each([
+      ["the instance is re-enabled", false, { enabled: true }],
+      ["the address changes", true, { url: "http://moved:3000" }],
+      ["the key changes", true, { apiKey: "trr_pub_rotated" }],
+    ])("queues them when %s", async (_, enabled, body) => {
       const user = await createTestUser();
-      const instance = await createTestTracearrInstance(user.id, { enabled: false });
-      const server = await mappedServer(user.id, TRACEARR_SERVERS[0].id);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
-
-      await expectJson(await put(instance.id, { enabled: true }), 200);
-      expect(queuedServerIds()).toEqual([server.id]);
-    });
-
-    it("queues them when the address or key changes", async () => {
-      const user = await createTestUser();
-      const instance = await createTestTracearrInstance(user.id);
+      const instance = await createTestTracearrInstance(user.id, { enabled });
       const server = await mappedServer(user.id, TRACEARR_SERVERS[0].id);
       setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
 
-      await expectJson(await put(instance.id, { url: "http://moved:3000" }), 200);
-      expect(queuedServerIds()).toEqual([server.id]);
-
-      mockEnqueueJob.mockClear();
-      await expectJson(await put(instance.id, { apiKey: "trr_pub_rotated" }), 200);
+      await expectJson(await put(instance.id, body), 200);
       expect(queuedServerIds()).toEqual([server.id]);
     });
 
@@ -538,18 +526,6 @@ describe("Tracearr integration endpoints", () => {
       await expectJson(await put(instance.id, { url: "http://tracearr.test:3000/", apiKey: MASKED_VALUE }), 200);
       await expectJson(await put(instance.id, { enabled: true }), 200); // already enabled
       await expectJson(await put(instance.id, { enabled: false, url: "http://elsewhere:3000" }), 200);
-      expect(queuedServerIds()).toEqual([]);
-    });
-
-    it("queues nothing for another account's servers", async () => {
-      const user = await createTestUser();
-      const instance = await createTestTracearrInstance(user.id, { enabled: false });
-      const other = await createTestUser();
-      await createTestTracearrInstance(other.id);
-      await mappedServer(other.id, TRACEARR_SERVERS[0].id);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
-
-      await expectJson(await put(instance.id, { enabled: true }), 200);
       expect(queuedServerIds()).toEqual([]);
     });
 

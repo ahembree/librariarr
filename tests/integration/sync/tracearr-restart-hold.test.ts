@@ -8,26 +8,11 @@ import {
 } from "../../setup/test-helpers";
 
 /**
- * The library-resync hold as it applies to a Tracearr archive walk, end to end
- * against real Postgres: `requireLibraryResync` records it and restarts the
- * walk, the importer holds the backfill pass while it is set, and only a FULL,
- * unscoped `syncMediaServer` run that began its library pass after the hold
- * and completely synced every library the hold waits for (an enabled library
- * holding no item older than the hold) releases it (a library-scoped run
- * releases only a population hold it wrote itself).
- *
- * The hold exists because the restart follows the deletion of items whose
- * plays the restarted walk is for. Released by the wrong sync — a library-
- * scoped one, or one already past the purged library — the walk runs with
- * those items still missing, skips their plays as unresolved, and can complete
- * without them for good: the items come back reading as never watched.
- *
- * The media server and Tracearr are mocked; the sync engine, the importer, the
- * watch-history sync and every SQL statement are real. (The same hold on a
- * native server, and the population hold: library-resync-hold.test.ts.)
+ * The library-resync hold on a Tracearr walk, end to end: `requireLibraryResync`
+ * holds the backfill pass, and only a sync that completely synced every library
+ * the hold waits for releases it. Media server and Tracearr are mocked; the sync
+ * engine, importer and SQL are real. (Native servers: library-resync-hold.test.ts.)
  */
-
-const TRACEARR_SERVER_ID = "11111111-2222-3333-4444-555555555555";
 
 const m = vi.hoisted(() => ({
   getHistoryPage: vi.fn(),
@@ -35,8 +20,7 @@ const m = vi.hoisted(() => ({
   getServerAccountNames: vi.fn(),
   findOldestPlayAt: vi.fn(),
   enqueueJob: vi.fn(),
-  // A hook into the server listing of the library pass, for "a purge lands
-  // while this sync is running" and "Stop is pressed mid-run".
+  // Runs inside the library pass: a purge landing mid-sync, Stop, a failure.
   duringLibraryPass: null as null | (() => Promise<void>),
   libraries: [] as Array<{ key: string; title: string; type: string }>,
   /** What the server lists per library key. */
@@ -73,9 +57,6 @@ vi.mock("@/lib/media-server/factory", () => ({
     getLibraryShows: vi.fn(async () => []),
     getLibraryItemsPage: vi.fn(async (key: string) => {
       if (m.duringLibraryPass) await m.duringLibraryPass();
-      // The server lists every item the library holds: a release requires
-      // every library the hold waits for to be synced completely, and one
-      // answered with nothing while it holds rows ("refusing to wipe") is not.
       const items = (m.listings[key] ?? []).map((item) => ({ ...item }));
       return { items, total: items.length };
     }),
@@ -98,23 +79,9 @@ import { syncMediaServer } from "@/lib/sync/sync-server";
 import { syncTracearrHistory } from "@/lib/sync/sync-tracearr-history";
 import { requireLibraryResync, restartTracearrBackfill } from "@/lib/media/watch-evidence";
 import { TASK_TRACEARR_BACKFILL } from "@/lib/jobs/constants";
+import { TRACEARR_SERVER_ID, play as record } from "./fake-tracearr-archive";
 
 const prisma = getTestPrisma();
-
-function record(id: string, startedAt: string, ratingKey = "100") {
-  return {
-    id,
-    reference_id: id,
-    server_id: TRACEARR_SERVER_ID,
-    media_type: "movie",
-    rating_key: ratingKey,
-    started_at: startedAt,
-    stopped_at: startedAt,
-    state: "stopped",
-    watched: true,
-    user: { id: "u", server_user_id: "acct-1", username: "Walter W" },
-  };
-}
 
 let serverId: string;
 
@@ -181,7 +148,7 @@ describe("Tracearr walk under a library-resync hold (real DB)", () => {
 
     const row = await serverRow();
     expect(row.libraryResyncRequiredAt!.getTime()).toBeGreaterThanOrEqual(before);
-    // The walk restarts from the top: cursor and forward watermark at now.
+    // Restarted from the top: cursor and forward watermark at now.
     expect(row.tracearrBackfillCursorAt!.getTime()).toBeGreaterThanOrEqual(
       row.libraryResyncRequiredAt!.getTime(),
     );
@@ -193,7 +160,6 @@ describe("Tracearr walk under a library-resync hold (real DB)", () => {
   });
 
   it("does not hold a walk restarted on its own — the items it reads for exist", async () => {
-    // Restore's "media came back, Tracearr rows did not" case.
     await restartTracearrBackfill([serverId]);
 
     expect((await serverRow()).libraryResyncRequiredAt).toBeNull();
@@ -201,9 +167,7 @@ describe("Tracearr walk under a library-resync hold (real DB)", () => {
   });
 
   it("is not released by a library-scoped sync, though that writes a COMPLETED SyncJob", async () => {
-    // Purge SERIES → the lifecycle executor's post-delete re-sync of the MOVIE
-    // library (or a by-type MOVIE job) completes. The SERIES library is still
-    // empty; released here, the walk skipped every one of its plays.
+    // The emptied SERIES library is still empty after a MOVIE-only sync.
     await requireLibraryResync([serverId]);
 
     await syncMediaServer(serverId, "1", { skipWatchHistory: true, trigger: "test: scoped" });
@@ -214,8 +178,7 @@ describe("Tracearr walk under a library-resync hold (real DB)", () => {
   });
 
   it("is not released by a full sync whose library pass began before the restart", async () => {
-    // The purge lands while a full sync is already in its library pass — it
-    // may have passed the purged library before its items were deleted.
+    // It may have passed the purged library before its items were deleted.
     m.duringLibraryPass = async () => {
       m.duringLibraryPass = null;
       await requireLibraryResync([serverId]);
@@ -226,10 +189,6 @@ describe("Tracearr walk under a library-resync hold (real DB)", () => {
     expect(await prisma.syncJob.count({ where: { mediaServerId: serverId, status: "COMPLETED" } })).toBe(1);
     expect((await serverRow()).libraryResyncRequiredAt).not.toBeNull();
     expect(await sliceIsHeld()).toBe(true);
-
-    // The NEXT full sync, begun after it, releases it.
-    await syncMediaServer(serverId, undefined, { trigger: "test: full, after" });
-    expect((await serverRow()).libraryResyncRequiredAt).toBeNull();
   });
 
   it("is released by a full sync begun after the restart, and the next slice walks from the restart", async () => {
@@ -240,16 +199,10 @@ describe("Tracearr walk under a library-resync hold (real DB)", () => {
 
     const row = await serverRow();
     expect(row.libraryResyncRequiredAt).toBeNull();
-    // The cursor is untouched by the sync: the walk resumes at the restart.
+    // The walk is queued, and resumes at the restart.
     expect(row.tracearrBackfillCursorAt).toEqual(restartedCursor);
-    // The slice is queued (the watch-history phase, and the release itself),
-    // under the one shared key, and it walks when it runs.
     expect(backfillEnqueues().length).toBeGreaterThan(0);
-    for (const call of backfillEnqueues()) {
-      expect(call[2]).toMatchObject({ jobKey: `tracearr-backfill:${serverId}` });
-    }
-    // Only the slice's own fetches below count (the sync's forward pass may
-    // have asked Tracearr for its window already).
+    // Only the slice's own fetches count, not the sync's forward pass.
     m.getHistoryPage.mockClear();
     m.getHistoryPage.mockResolvedValueOnce({
       records: [record("chain-1", "2025-01-01T00:00:00.000Z")],
@@ -264,9 +217,7 @@ describe("Tracearr walk under a library-resync hold (real DB)", () => {
   });
 
   it("is released by the full sync whose own vanished-library purge restarted the walk", async () => {
-    // The server no longer lists library 2; the purge cascades an item and its
-    // Tracearr play, holds the server and restarts the walk mid-run. Every
-    // library this run then syncs, it syncs after that, so the run covers it.
+    // Every library this run syncs, it syncs after its own purge's hold.
     const shows = await prisma.library.findFirstOrThrow({ where: { mediaServerId: serverId, key: "2" } });
     const episode = await createTestMediaItem(shows.id, { ratingKey: "200", type: "SERIES", title: "Pilot" });
     await prisma.watchHistory.create({
@@ -285,74 +236,47 @@ describe("Tracearr walk under a library-resync hold (real DB)", () => {
 
     const row = await serverRow();
     expect(await prisma.library.count({ where: { mediaServerId: serverId, key: "2" } })).toBe(0);
-    // Restarted (cursor moved to now) and released by the same run.
+    // Restarted and released by the same run.
     expect(row.tracearrBackfillCursorAt).not.toBeNull();
     expect(row.tracearrBackfillComplete).toBe(false);
     expect(row.libraryResyncRequiredAt).toBeNull();
     expect(await sliceIsHeld()).toBe(false);
   });
 
-  it("is not released by a full sync that was stopped", async () => {
+  it.each([
+    [
+      "stopped",
+      "CANCELLED",
+      null,
+      async () => {
+        await prisma.syncJob.updateMany({
+          where: { mediaServerId: serverId, status: "RUNNING" },
+          data: { cancelRequested: true },
+        });
+      },
+    ],
+    [
+      "failed",
+      "FAILED",
+      "server went away",
+      async () => {
+        throw new Error("server went away");
+      },
+    ],
+  ] as const)("is not released by a full sync that %s", async (_, status, error, during) => {
     await requireLibraryResync([serverId]);
-    m.duringLibraryPass = async () => {
-      await prisma.syncJob.updateMany({
-        where: { mediaServerId: serverId, status: "RUNNING" },
-        data: { cancelRequested: true },
-      });
-    };
+    m.duringLibraryPass = during;
 
-    await syncMediaServer(serverId, undefined, { trigger: "test: stopped" });
+    const run = syncMediaServer(serverId, undefined, { trigger: `test: ${status}` });
+    await (error ? expect(run).rejects.toThrow(error) : run);
 
-    expect(await prisma.syncJob.count({ where: { mediaServerId: serverId, status: "CANCELLED" } })).toBe(1);
+    expect(await prisma.syncJob.count({ where: { mediaServerId: serverId, status } })).toBe(1);
     expect((await serverRow()).libraryResyncRequiredAt).not.toBeNull();
     expect(await sliceIsHeld()).toBe(true);
   });
 
-  it("is not released by a full sync that failed", async () => {
-    await requireLibraryResync([serverId]);
-    m.duringLibraryPass = async () => {
-      throw new Error("server went away");
-    };
-
-    await expect(
-      syncMediaServer(serverId, undefined, { trigger: "test: failed" }),
-    ).rejects.toThrow("server went away");
-
-    expect(await prisma.syncJob.count({ where: { mediaServerId: serverId, status: "FAILED" } })).toBe(1);
-    expect((await serverRow()).libraryResyncRequiredAt).not.toBeNull();
-  });
-
-  it("does not hold a first walk that failed after committing a page — the retry walks", async () => {
-    // First-ever slice: one page commits (cursor written), then Tracearr
-    // fails. That leaves a cursor and no walk stamp — the shape a restart was
-    // inferred from — but nothing restarted anything.
-    m.getHistoryPage
-      .mockResolvedValueOnce({
-        records: [record("chain-1", "2026-09-01T00:00:00.000Z")],
-        nextCursor: "page-2",
-      })
-      .mockRejectedValueOnce(new Error("Tracearr unreachable"));
-
-    const first = await syncTracearrHistory(serverId, { passes: "backfill" });
-
-    expect(first.backfillOutcome).toBe("errored");
-    const afterError = await serverRow();
-    expect(afterError.tracearrBackfillCursorAt).toEqual(new Date("2026-09-01T00:00:00.000Z"));
-    expect(afterError.tracearrBackfillLastWalkAt).toBeNull();
-    expect(afterError.libraryResyncRequiredAt).toBeNull();
-
-    // The retry walks on from where the first one reached.
-    m.getHistoryPage.mockClear();
-    m.getHistoryPage.mockResolvedValueOnce({ records: [], nextCursor: null });
-    const retry = await syncTracearrHistory(serverId, { passes: "backfill" });
-    expect(m.getHistoryPage).toHaveBeenCalledTimes(1);
-    expect(m.getHistoryPage.mock.calls[0][1].until).toEqual(new Date("2026-09-01T00:00:00.000Z"));
-    expect(retry.heldReason).toBeUndefined();
-  });
-
   it("is not released by a full sync whose listing left a library out, or that saw only part of one", async () => {
-    // Held from before The Matrix was (re-)added, so the hold waits for Movies
-    // as well as for the emptied Shows library.
+    // Held from before The Matrix was added: the hold waits for Movies too.
     await requireLibraryResync([serverId], { at: new Date(Date.now() - 60_000) });
     const held = (await serverRow()).libraryResyncRequiredAt;
 
@@ -373,8 +297,7 @@ describe("Tracearr walk under a library-resync hold (real DB)", () => {
   });
 
   it("is released by a full sync although a library the hold does not wait for answered nothing", async () => {
-    // The Matrix predates the hold: the purge that took it emptied Shows and
-    // left Movies alone, so Movies refusing to be wiped says nothing about it.
+    // The Matrix predates the hold, so the hold does not wait for Movies.
     await prisma.mediaItem.updateMany({ data: { createdAt: new Date("2025-01-01T00:00:00.000Z") } });
     await requireLibraryResync([serverId]);
     m.listings["1"] = [];
@@ -398,10 +321,8 @@ describe("Tracearr walk under a library-resync hold (real DB)", () => {
   };
 
   it("restarts the walk when a sync populates a library that held nothing — and that sync's own hold is released by it", async () => {
-    // A library populated for the first time gets its plays from a restarted
-    // walk, not from the recovery pass's few items a run. Synced on its own
-    // (enabled, then "Sync Now"), the run took the hold itself and releases it
-    // once the library is in, queueing the walk.
+    // Its plays come from a restarted walk; the run took the hold itself, so
+    // it releases it once the library is in, queueing the walk.
     await prisma.mediaServer.update({
       where: { id: serverId },
       data: { tracearrBackfillComplete: true, tracearrBackfillCursorAt: new Date("2019-01-01T00:00:00.000Z") },

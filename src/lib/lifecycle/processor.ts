@@ -314,8 +314,7 @@ export async function processLifecycleRules(userId?: string) {
       );
       if (!evaluability.evaluable) {
         logger.warn("Lifecycle", `Skipping rule set "${ruleSet.name}" — ${evaluability.reason}`);
-        // Its matches stay as they are, from before this refusal: recorded so
-        // the executor keeps its actions held until a run evaluates it.
+        // Its kept matches predate this refusal: latch it (`notePlayHistoryPause`).
         if (evaluability.playHistory) await notePlayHistoryPause(ruleSet.id);
         if (evaluability.permanent) {
           const cancelled = await prisma.lifecycleAction.deleteMany({
@@ -648,20 +647,11 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
     filteredMatchedIds: string[];
   }> = [];
 
-  // PLAY-HISTORY HOLD, per rule set and asked once per run. Detection skips a
-  // rule set whose play-activity criteria cannot be answered (a library-resync
-  // hold, an unfinished Tracearr import, a withdrawn marker, a forward gap) and
-  // KEEPS its matches and PENDING actions, so its RuleMatch rows — what the
-  // stale check below compares against — are frozen from before the history
-  // went unknown: an item watched since keeps its match. Executing would act on
-  // that frozen answer, so such a rule set's actions are left PENDING and
-  // untouched (like the deletion ceiling's hold, never cancelled) while its
-  // servers' play history is not established — and, once a detection run has
-  // skipped the rule set while it was not (`RuleSet.playHistoryPausedAt`; a
-  // restore that brings the backup's matches back sets it too), until a
-  // detection run has evaluated it again, however soon the history is back
-  // (`checkPlayActivityExecutable`). Applied after every cancel-or-narrow
-  // check, which are all safe to run on frozen matches.
+  // PLAY-HISTORY HOLD, asked once per rule set per run
+  // (`checkPlayActivityExecutable`): a skipped rule set's matches are frozen and
+  // pass the stale check, so its actions stay PENDING and untouched (never
+  // cancelled). After every cancel-or-narrow check, which are safe on frozen
+  // matches, so the ceiling does not count held actions.
   const playHistoryRefusals = new Map<string, string | null>();
   const heldByRuleSet = new Map<string, { name: string; reason: string; count: number }>();
 

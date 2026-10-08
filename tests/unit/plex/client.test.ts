@@ -447,41 +447,26 @@ describe("PlexClient", () => {
       expect(mockAxiosInstance.get).toHaveBeenCalledTimes(1);
     });
 
-    it("counts a play once when a new play shifts it onto the next page", async () => {
-      // Offset paging over a newest-first list: a play recorded mid-walk pushes
-      // the last entry of page 1 to the top of page 2. Counted twice, it was a
-      // permanent +1 — the sync writes playCount with GREATEST.
+    it("counts a play once when a new play shifts it onto the next page, by historyKey or account+item+time", async () => {
+      // Offset paging over a newest-first list repeats an entry when a play
+      // lands mid-walk; counted twice it was a permanent +1 (GREATEST upsert).
       const page1 = Array.from({ length: 5000 }, (_, i) => ({
         historyKey: `/status/sessions/history/${10_000 - i}`,
         ratingKey: String(i),
         viewedAt: 1700010000 - i,
       }));
-      const shifted = page1[4999];
+      // No historyKey: identified by account, item and time.
+      const keyless = { accountID: 1, ratingKey: "k", viewedAt: 1700000000 };
       mockAxiosInstance.get
-        .mockResolvedValueOnce({ data: { MediaContainer: { totalSize: 5002, Metadata: page1 } } })
+        .mockResolvedValueOnce({ data: { MediaContainer: { totalSize: 5004, Metadata: page1 } } })
         .mockResolvedValueOnce({
-          data: {
-            MediaContainer: {
-              totalSize: 5002,
-              Metadata: [shifted, { historyKey: "/status/sessions/history/1", ratingKey: "x", viewedAt: 1 }],
-            },
-          },
+          data: { MediaContainer: { totalSize: 5004, Metadata: [page1[4999], keyless, { ...keyless, accountID: 2 }, keyless] } },
         });
 
       const result = await client.getWatchCounts();
       expect(result.get("4999")?.count).toBe(1);
-      expect(result.get("x")?.count).toBe(1);
-    });
-
-    it("dedups by account, item and time when entries carry no historyKey", async () => {
-      const entry = { accountID: 1, ratingKey: "7", viewedAt: 1700000000 };
-      mockAxiosInstance.get
-        .mockResolvedValueOnce({ data: { MediaContainer: { totalSize: 3, Metadata: [entry, { ...entry, accountID: 2 }] } } })
-        .mockResolvedValueOnce({ data: { MediaContainer: { totalSize: 3, Metadata: [entry] } } });
-
-      const result = await client.getWatchCounts();
       // Two accounts' plays stay two; the repeated one counts once.
-      expect(result.get("7")?.count).toBe(2);
+      expect(result.get("k")?.count).toBe(2);
     });
 
     it("paginates when metadata length equals PAGE_SIZE", async () => {
@@ -1217,17 +1202,24 @@ describe("PlexClient", () => {
       expect(historyCall[1].params).toMatchObject({ sort: "viewedAt:desc" });
     });
 
-    it("names plays from /accounts and reports the library each was recorded in", async () => {
+    /** /accounts and /devices answer as given (the defaults: two accounts, no devices), then each history page. */
+    const answer = (pages: unknown[], first: { accounts?: unknown; devices?: unknown } = {}) => {
       mockAxiosInstance.get
-        .mockResolvedValueOnce(accounts)
-        .mockResolvedValueOnce(emptyContainer)
-        .mockResolvedValueOnce(
-          page([
-            { ratingKey: "1", viewedAt: 1700000000, accountID: 2, librarySectionID: 4 },
-            // An account the server no longer lists keeps the placeholder.
-            { ratingKey: "2", viewedAt: 1700000001, accountID: 99 },
-          ]),
-        );
+        .mockResolvedValueOnce(first.accounts ?? accounts)
+        .mockResolvedValueOnce(first.devices ?? emptyContainer);
+      for (const p of pages) mockAxiosInstance.get.mockResolvedValueOnce(p);
+    };
+    const historyCalls = () =>
+      mockAxiosInstance.get.mock.calls.filter((c) => String(c[0]).startsWith("/status/sessions/history/all")).length;
+
+    it("names plays from /accounts and reports the library each was recorded in", async () => {
+      answer([
+        page([
+          { ratingKey: "1", viewedAt: 1700000000, accountID: 2, librarySectionID: 4 },
+          // An account the server no longer lists keeps the placeholder.
+          { ratingKey: "2", viewedAt: 1700000001, accountID: 99 },
+        ]),
+      ]);
 
       const entries = await client.getDetailedWatchHistory();
 
@@ -1237,76 +1229,43 @@ describe("PlexClient", () => {
       ]);
     });
 
-    it("fails the fetch when /accounts fails, rather than naming every play Unknown", async () => {
-      // An empty account map used to come back from any /accounts failure; the
-      // native full replace then rewrote the server's whole history under
-      // "Unknown" and marked it established.
-      mockAxiosInstance.get
-        .mockRejectedValueOnce(new Error("ECONNRESET")) // /accounts
-        .mockResolvedValueOnce(emptyContainer)
-        .mockResolvedValueOnce(page([{ ratingKey: "1", viewedAt: 1700000000, accountID: 1 }]));
+    it.each([
+      ["fails", () => mockAxiosInstance.get.mockRejectedValueOnce(new Error("ECONNRESET")), "ECONNRESET"],
+      [
+        "answers with something that is not an account list",
+        () => mockAxiosInstance.get.mockResolvedValueOnce({ data: "<html>Sign in</html>" }),
+        /malformed/,
+      ],
+      ["lists no accounts at all", () => mockAxiosInstance.get.mockResolvedValueOnce(emptyContainer), /no accounts/],
+    ])("fails the fetch when /accounts %s, rather than naming every play Unknown", async (_label, answerAccounts, error) => {
+      // An outage used to read as an empty map: every play stored as "Unknown". /devices fails too.
+      answerAccounts();
+      mockAxiosInstance.get.mockRejectedValueOnce(new Error("devices down"));
+      mockAxiosInstance.get.mockResolvedValueOnce(page([{ ratingKey: "1", viewedAt: 1700000000, accountID: 1 }]));
 
-      await expect(client.getDetailedWatchHistory()).rejects.toThrow("ECONNRESET");
-    });
-
-    it("fails the fetch when /accounts answers with something that is not an account list", async () => {
-      mockAxiosInstance.get
-        .mockResolvedValueOnce({ data: "<html>Sign in</html>" }) // /accounts via a proxy
-        .mockResolvedValueOnce(emptyContainer)
-        .mockResolvedValueOnce(page([{ ratingKey: "1", viewedAt: 1700000000, accountID: 1 }]));
-
-      await expect(client.getDetailedWatchHistory()).rejects.toThrow(/malformed/);
-    });
-
-    it("refuses a history it cannot name anybody in (no accounts at all)", async () => {
-      mockAxiosInstance.get
-        .mockResolvedValueOnce(emptyContainer) // /accounts: no Account list
-        .mockResolvedValueOnce(emptyContainer)
-        .mockResolvedValueOnce(page([{ ratingKey: "1", viewedAt: 1700000000, accountID: 1 }]));
-
-      await expect(client.getDetailedWatchHistory()).rejects.toThrow(/no accounts/);
-    });
-
-    it("still returns an empty history when the server has no plays and no accounts", async () => {
-      mockAxiosInstance.get
-        .mockResolvedValueOnce(emptyContainer)
-        .mockResolvedValueOnce(emptyContainer)
-        .mockResolvedValueOnce(page([]));
-
-      await expect(client.getDetailedWatchHistory()).resolves.toEqual([]);
+      await expect(client.getDetailedWatchHistory()).rejects.toThrow(error);
     });
 
     it.each([
       ["an HTML body", { data: "<html>502 Bad Gateway</html>" }],
       ["a body with no MediaContainer", { data: {} }],
+      ["a MediaContainer that is not an object", { data: { MediaContainer: [] } }],
       ["a Metadata that is not a list", { data: { MediaContainer: { Metadata: { ratingKey: "1" } } } }],
     ])("throws on a 200 history page that is %s instead of reading it as no plays", async (_label, body) => {
-      // Read as "no plays", the full replace deleted every stored play and
-      // marked the history established.
-      mockAxiosInstance.get
-        .mockResolvedValueOnce(accounts)
-        .mockResolvedValueOnce(emptyContainer)
-        .mockResolvedValueOnce(body);
-
+      answer([body]);
       await expect(client.getDetailedWatchHistory()).rejects.toThrow(/malformed/);
     });
 
     describe("a server that ignores X-Plex-Container-Start", () => {
-      // The server caps pages at 2 entries and answers every offset with the
-      // newest page. The dedup used to filter the repeats silently.
+      // Every offset answered with the newest page; the dedup would hide it.
       const newest = [
         { historyKey: "/h/4", ratingKey: "4", viewedAt: 1700000004, accountID: 1 },
         { historyKey: "/h/3", ratingKey: "3", viewedAt: 1700000003, accountID: 1 },
       ];
 
       it("fails the fetch when it reports a total, instead of returning only the newest page", async () => {
-        // With `totalSize: 4` the walk ended after two identical pages holding
-        // two of the four plays, and the full replace deleted the other two.
-        mockAxiosInstance.get
-          .mockResolvedValueOnce(accounts)
-          .mockResolvedValueOnce(emptyContainer)
-          .mockResolvedValue({ data: { MediaContainer: { totalSize: 4, Metadata: newest } } });
-
+        answer([]);
+        mockAxiosInstance.get.mockResolvedValue({ data: { MediaContainer: { totalSize: 4, Metadata: newest } } });
         await expect(client.getDetailedWatchHistory()).rejects.toThrow(/already-delivered/);
       });
 
@@ -1314,61 +1273,45 @@ describe("PlexClient", () => {
         const fullPage = Array.from({ length: 5000 }, (_, i) => ({
           historyKey: `/h/${i}`, ratingKey: String(i), viewedAt: 1700000000 + i, accountID: 1,
         }));
-        mockAxiosInstance.get
-          .mockResolvedValueOnce(accounts)
-          .mockResolvedValueOnce(emptyContainer)
-          .mockResolvedValue({ data: { MediaContainer: { Metadata: fullPage } } });
+        answer([]);
+        mockAxiosInstance.get.mockResolvedValue({ data: { MediaContainer: { Metadata: fullPage } } });
 
         await expect(client.getDetailedWatchHistory()).rejects.toThrow(/already-delivered/);
-        // accounts + devices + page 1 + the repeated page 2.
-        expect(mockAxiosInstance.get).toHaveBeenCalledTimes(4);
+        expect(historyCalls()).toBe(2);
       });
 
       it("gives up after the page backstop when nothing identifies the entries", async () => {
-        // Entries with no historyKey, ratingKey or viewedAt cannot be told
-        // apart, so only the page count can end this walk.
-        mockAxiosInstance.get
-          .mockResolvedValueOnce(accounts)
-          .mockResolvedValueOnce(emptyContainer)
-          .mockResolvedValue({ data: { MediaContainer: { totalSize: 1e9, Metadata: [{ accountID: 1 }] } } });
-
+        answer([]);
+        mockAxiosInstance.get.mockResolvedValue({ data: { MediaContainer: { totalSize: 1e9, Metadata: [{ accountID: 1 }] } } });
         await expect(client.getDetailedWatchHistory()).rejects.toThrow(/did not end after 20000 pages/);
       });
     });
 
-    it("passes over a short last page that only repeats entries a new play pushed down", async () => {
-      // Not an ignored offset: a play recorded between requests pushed the
-      // first page's last entry onto the next page, which holds nothing else.
+    it("passes over a short last page that only repeats an entry a new play pushed down", async () => {
       const page1 = [
         { historyKey: "/h/3", ratingKey: "3", viewedAt: 1700000003, accountID: 1 },
         { historyKey: "/h/2", ratingKey: "2", viewedAt: 1700000002, accountID: 2 },
       ];
-      mockAxiosInstance.get
-        .mockResolvedValueOnce(accounts)
-        .mockResolvedValueOnce(emptyContainer)
-        .mockResolvedValueOnce({ data: { MediaContainer: { totalSize: 4, Metadata: page1 } } })
-        .mockResolvedValueOnce({ data: { MediaContainer: { totalSize: 4, Metadata: [page1[1]] } } })
-        .mockResolvedValueOnce({ data: { MediaContainer: { totalSize: 4, Metadata: [] } } });
+      answer([
+        { data: { MediaContainer: { totalSize: 4, Metadata: page1 } } },
+        { data: { MediaContainer: { totalSize: 4, Metadata: [page1[1]] } } },
+        { data: { MediaContainer: { totalSize: 4, Metadata: [] } } },
+      ]);
       const { logger } = await import("@/lib/logger");
 
       const entries = await client.getDetailedWatchHistory();
+
       expect(entries.map((e) => e.ratingKey)).toEqual(["3", "2"]);
-      // The walk ends on an empty page one short of the reported total. That
-      // used to end it silently whatever the shortfall; the full walk now
-      // accepts it only as a small over-report, and says so.
-      expect(logger.warn).toHaveBeenCalledWith(
-        "Plex",
-        expect.stringContaining("ended at 3 of a reported 4"),
-      );
+      // One short of the total: a small over-report, said so.
+      expect(logger.warn).toHaveBeenCalledWith("Plex", expect.stringContaining("ended at 3 of a reported 4"));
     });
 
     describe("an empty page short of the reported total", () => {
-      // `{ totalSize: 141000, size: 0 }` used to end the walk wherever it
-      // appeared, and the native full replace then deleted every play the walk
-      // never reached and marked the history established.
+      // `{ totalSize: 141000, size: 0 }` used to end the walk and commit a truncated history.
       const entry = (n: number) => ({
         historyKey: `/h/${n}`, ratingKey: String(n), viewedAt: 1700000000 + n, accountID: 1,
       });
+      const since = new Date(1700000000 * 1000);
       /** `delivered` entries, two per page (a server capping the page), then empty pages. */
       function cappedHistory(delivered: number, total: number) {
         mockAxiosInstance.get.mockImplementation(async (url: string, config?: { params: Record<string, number> }) => {
@@ -1383,111 +1326,53 @@ describe("PlexClient", () => {
         });
       }
 
-      it("fails the full walk on an empty FIRST page under a non-zero total", async () => {
-        mockAxiosInstance.get
-          .mockResolvedValueOnce(accounts)
-          .mockResolvedValueOnce(emptyContainer)
-          .mockResolvedValueOnce({ data: { MediaContainer: { totalSize: 141000, size: 0 } } });
-
-        await expect(client.getDetailedWatchHistory()).rejects.toThrow(
-          "Plex history listing ended at 0 of a reported 141000",
-        );
-      });
-
-      it("fails it even under a total small enough to be within the tolerance", async () => {
-        // Nothing was read, so there is nothing to tell an over-reported count
-        // from a proxy answering an empty list.
-        mockAxiosInstance.get
-          .mockResolvedValueOnce(accounts)
-          .mockResolvedValueOnce(emptyContainer)
-          .mockResolvedValueOnce({ data: { MediaContainer: { totalSize: 3, size: 0 } } });
-
-        await expect(client.getDetailedWatchHistory()).rejects.toThrow(/ended at 0 of a reported 3/);
-      });
-
-      it("fails the full walk on an empty page far short of the total mid-walk", async () => {
-        cappedHistory(10, 1000);
-        await expect(client.getDetailedWatchHistory()).rejects.toThrow(
-          /ended at 10 of a reported 1000/,
-        );
-      });
-
-      it("ends the full walk on a shortfall within the 50-entry floor, with a warning", async () => {
-        cappedHistory(10, 60);
+      it.each([
+        // An empty FIRST page fails even under a small total: nothing was read.
+        [0, 141000, false],
+        [0, 3, false],
+        [10, 1000, false],
+        // Within the 50-entry floor, then one past it.
+        [10, 60, true],
+        [10, 61, false],
+        // 2% of a large total, then just past it.
+        [9_800, 10_000, true],
+        [9_798, 10_000, false],
+      ])("ends the full walk after %i of a reported %i only within the tolerance (%s)", async (delivered, total, tolerated) => {
+        cappedHistory(delivered, total);
         const { logger } = await import("@/lib/logger");
+        const message = `ended at ${delivered} of a reported ${total}`;
 
-        const entries = await client.getDetailedWatchHistory();
-
-        expect(entries).toHaveLength(10);
-        expect(logger.warn).toHaveBeenCalledWith(
-          "Plex",
-          expect.stringContaining("ended at 10 of a reported 60"),
-        );
+        if (tolerated) {
+          await expect(client.getDetailedWatchHistory()).resolves.toHaveLength(delivered);
+          expect(logger.warn).toHaveBeenCalledWith("Plex", expect.stringContaining(message));
+        } else {
+          await expect(client.getDetailedWatchHistory()).rejects.toThrow(message);
+        }
       });
 
-      it("throws one entry past the 50-entry floor", async () => {
-        cappedHistory(10, 61);
-        await expect(client.getDetailedWatchHistory()).rejects.toThrow(/ended at 10 of a reported 61/);
-      });
-
-      it("tolerates up to 2% of a large total, and no more", async () => {
-        // 10,000 reported: 2% (200) is above the floor. Paged two at a time,
-        // so delivered + shortfall is exact.
-        cappedHistory(9_800, 10_000);
-        await expect(client.getDetailedWatchHistory()).resolves.toHaveLength(9_800);
-        cappedHistory(9_798, 10_000);
-        await expect(client.getDetailedWatchHistory()).rejects.toThrow(
-          /ended at 9798 of a reported 10000/,
-        );
-      });
-
-      it("still ends a genuinely empty history (a zero total, or none) without complaint", async () => {
+      it("still ends a genuinely empty history (a zero total, or none) without complaint, with or without accounts", async () => {
         for (const container of [{ totalSize: 0, size: 0 }, { size: 0 }, {}]) {
           mockAxiosInstance.get.mockReset();
-          mockAxiosInstance.get
-            .mockResolvedValueOnce(accounts)
-            .mockResolvedValueOnce(emptyContainer)
-            .mockResolvedValueOnce({ data: { MediaContainer: container } });
+          answer([{ data: { MediaContainer: container } }], { accounts: emptyContainer });
           await expect(client.getDetailedWatchHistory()).resolves.toEqual([]);
         }
       });
 
-      it("leaves the incremental `since` walk ending there, as before", async () => {
-        // Appended rather than replaced, and under the filter Plex may report
-        // the unfiltered history's total, so a filtered walk always ends short.
-        mockAxiosInstance.get
-          .mockResolvedValueOnce(accounts)
-          .mockResolvedValueOnce(emptyContainer)
-          .mockResolvedValueOnce({ data: { MediaContainer: { totalSize: 141000, size: 0 } } });
-        await expect(
-          client.getDetailedWatchHistory({ since: new Date(1700000000 * 1000) }),
-        ).resolves.toEqual([]);
-
+      it("leaves the incremental `since` walk and getWatchCounts ending there, as before", async () => {
+        // Appended, not replaced, and under the filter the total may be the unfiltered one.
+        answer([{ data: { MediaContainer: { totalSize: 141000, size: 0 } } }]);
+        await expect(client.getDetailedWatchHistory({ since })).resolves.toEqual([]);
         cappedHistory(10, 1000);
-        await expect(
-          client.getDetailedWatchHistory({ since: new Date(1700000000 * 1000) }),
-        ).resolves.toHaveLength(10);
-      });
+        await expect(client.getDetailedWatchHistory({ since })).resolves.toHaveLength(10);
 
-      it("leaves getWatchCounts lenient: it keeps what the walk delivered, with no failure", async () => {
-        cappedHistory(10, 1000);
         const { logger } = await import("@/lib/logger");
-
-        const counts = await client.getWatchCounts();
-
-        expect(counts.size).toBe(10);
+        await expect(client.getWatchCounts()).resolves.toHaveProperty("size", 10);
         // Not a swallowed throw: getWatchCounts logs one when the walk fails.
-        expect(logger.debug).not.toHaveBeenCalledWith(
-          "Plex",
-          expect.stringContaining("Failed to fetch watch history counts"),
-        );
+        expect(logger.debug).not.toHaveBeenCalledWith("Plex", expect.stringContaining("Failed to fetch watch history counts"));
         expect(logger.warn).not.toHaveBeenCalled();
       });
 
       describe("a later page that omits the total an earlier one reported", () => {
-        // `{ size: 0 }` after pages that said 141000 used to end the strict walk
-        // as if the history were complete: the check only read the empty
-        // page's own total.
         const withTotal = (total: number, metadata: unknown[]) => ({
           data: { MediaContainer: { totalSize: total, size: metadata.length, Metadata: metadata } },
         });
@@ -1496,90 +1381,56 @@ describe("PlexClient", () => {
         });
 
         it("judges the full walk's empty page by the last total reported", async () => {
-          mockAxiosInstance.get
-            .mockResolvedValueOnce(accounts)
-            .mockResolvedValueOnce(emptyContainer)
-            .mockResolvedValueOnce(withTotal(141000, [entry(2), entry(1)]))
-            .mockResolvedValueOnce(withoutTotal([]));
-
-          await expect(client.getDetailedWatchHistory()).rejects.toThrow(
-            /ended at 2 of a reported 141000/,
-          );
+          answer([withTotal(141000, [entry(2), entry(1)]), withoutTotal([])]);
+          await expect(client.getDetailedWatchHistory()).rejects.toThrow(/ended at 2 of a reported 141000/);
         });
 
         it("keeps the full walk paging past a short page that omits the total", async () => {
-          // Without the earlier total, the second (short, total-less) page read
-          // as the last one and the walk kept 4 of 6 plays.
-          mockAxiosInstance.get
-            .mockResolvedValueOnce(accounts)
-            .mockResolvedValueOnce(emptyContainer)
-            .mockResolvedValueOnce(withTotal(6, [entry(6), entry(5)]))
-            .mockResolvedValueOnce(withoutTotal([entry(4), entry(3)]))
-            .mockResolvedValueOnce(withoutTotal([entry(2), entry(1)]));
-
+          answer([
+            withTotal(6, [entry(6), entry(5)]),
+            withoutTotal([entry(4), entry(3)]),
+            withoutTotal([entry(2), entry(1)]),
+          ]);
           const entries = await client.getDetailedWatchHistory();
           expect(entries.map((e) => e.ratingKey)).toEqual(["6", "5", "4", "3", "2", "1"]);
         });
 
         it("leaves the lenient walks reading each page on its own, as before", async () => {
-          // Under `since` the first page's total can be the UNFILTERED
-          // history's; carried over, a short last page without one would not
-          // end the walk, and it would page on through the whole history.
+          // Carried over, a `since` walk's unfiltered total would page on through the whole history.
           const { logger } = await import("@/lib/logger");
-          const historyCalls = () =>
-            mockAxiosInstance.get.mock.calls.filter((c) =>
-              String(c[0]).startsWith("/status/sessions/history/all"),
-            ).length;
-          mockAxiosInstance.get
-            .mockResolvedValueOnce(accounts)
-            .mockResolvedValueOnce(emptyContainer)
-            .mockResolvedValueOnce(withTotal(141000, [entry(4), entry(3)]))
-            .mockResolvedValueOnce(withoutTotal([entry(2), entry(1)]));
-          await expect(
-            client.getDetailedWatchHistory({ since: new Date(1700000000 * 1000) }),
-          ).resolves.toHaveLength(4);
+          answer([withTotal(141000, [entry(4), entry(3)]), withoutTotal([entry(2), entry(1)])]);
+          await expect(client.getDetailedWatchHistory({ since })).resolves.toHaveLength(4);
           expect(historyCalls()).toBe(2);
 
           mockAxiosInstance.get.mockClear();
           mockAxiosInstance.get
             .mockResolvedValueOnce(withTotal(141000, [entry(4), entry(3)]))
             .mockResolvedValueOnce(withoutTotal([entry(2), entry(1)]));
-          const counts = await client.getWatchCounts();
-          expect(counts.size).toBe(4);
+          await expect(client.getWatchCounts()).resolves.toHaveProperty("size", 4);
           expect(historyCalls()).toBe(2);
-          expect(logger.debug).not.toHaveBeenCalledWith(
-            "Plex",
-            expect.stringContaining("Failed to fetch watch history counts"),
-          );
+          expect(logger.debug).not.toHaveBeenCalledWith("Plex", expect.stringContaining("Failed to fetch watch history counts"));
         });
       });
 
       it("leaves a walk with no reported total ending on its short page", async () => {
-        mockAxiosInstance.get
-          .mockResolvedValueOnce(accounts)
-          .mockResolvedValueOnce(emptyContainer)
-          .mockResolvedValueOnce({ data: { MediaContainer: { Metadata: [entry(1), entry(2)] } } });
+        answer([{ data: { MediaContainer: { Metadata: [entry(1), entry(2)] } } }]);
         await expect(client.getDetailedWatchHistory()).resolves.toHaveLength(2);
-        // accounts + devices + the one history page
-        expect(mockAxiosInstance.get).toHaveBeenCalledTimes(3);
+        expect(historyCalls()).toBe(1);
       });
     });
 
     describe("device names when /devices fails", () => {
-      // A failed /devices used to come back as an empty map, indistinguishable
-      // from "no devices": every play then carried no device or platform and
-      // the full replace blanked both on every stored row.
-      const devices = {
-        data: { MediaContainer: { Device: [{ id: 7, name: "Living Room", platform: "Roku" }] } },
-      };
+      // Read as "no devices", a failure blanked every stored device in the replace.
       const played = page([{ ratingKey: "1", viewedAt: 1700000000, accountID: 1, deviceID: 7 }]);
       const newReport = (): DetailedWatchHistoryReport => ({ incompleteUsers: new Map(), devicesUnavailable: false });
 
-      it("reports it to a caller that passes a report, and still returns the plays", async () => {
-        mockAxiosInstance.get
-          .mockResolvedValueOnce(accounts)
-          .mockRejectedValueOnce(new Error("ECONNRESET")) // /devices
-          .mockResolvedValueOnce(played);
+      it.each([
+        ["fails", () => mockAxiosInstance.get.mockRejectedValueOnce(new Error("ECONNRESET"))],
+        ["answers with something that is not a device list", () => mockAxiosInstance.get.mockResolvedValueOnce({ data: "<html>Sign in</html>" })],
+      ])("reports it when /devices %s, and still returns the plays", async (_label, devices) => {
+        mockAxiosInstance.get.mockResolvedValueOnce(accounts);
+        devices();
+        mockAxiosInstance.get.mockResolvedValueOnce(played);
         const report = newReport();
 
         const entries = await client.getDetailedWatchHistory({ report });
@@ -1590,42 +1441,18 @@ describe("PlexClient", () => {
         ]);
       });
 
-      it("reports a /devices answer that is not a device list the same way", async () => {
-        mockAxiosInstance.get
-          .mockResolvedValueOnce(accounts)
-          .mockResolvedValueOnce({ data: "<html>Sign in</html>" }) // /devices via a proxy
-          .mockResolvedValueOnce(played);
-        const report = newReport();
-
-        await client.getDetailedWatchHistory({ report });
-
-        expect(report.devicesUnavailable).toBe(true);
-      });
-
-      it("does not report a /devices that answered, and names the device", async () => {
-        mockAxiosInstance.get
-          .mockResolvedValueOnce(accounts)
-          .mockResolvedValueOnce(devices)
-          .mockResolvedValueOnce(played);
+      it.each([
+        ["names the device", { data: { MediaContainer: { Device: [{ id: 7, name: "Living Room", platform: "Roku" }] } } }, "Living Room", "Roku"],
+        // A real answer, not a failure: the play simply has no known device.
+        ["has no devices at all", emptyContainer, null, null],
+      ])("does not report a /devices that answered and %s", async (_label, devices, deviceName, platform) => {
+        answer([played], { devices });
         const report = newReport();
 
         const entries = await client.getDetailedWatchHistory({ report });
 
         expect(report.devicesUnavailable).toBe(false);
-        expect(entries[0]).toMatchObject({ deviceName: "Living Room", platform: "Roku" });
-      });
-
-      it("does not report a /devices that answered with no devices at all", async () => {
-        // A real answer, not a failure: the plays simply have no known device.
-        mockAxiosInstance.get
-          .mockResolvedValueOnce(accounts)
-          .mockResolvedValueOnce(emptyContainer)
-          .mockResolvedValueOnce(played);
-        const report = newReport();
-
-        await client.getDetailedWatchHistory({ report });
-
-        expect(report.devicesUnavailable).toBe(false);
+        expect(entries[0]).toMatchObject({ deviceName, platform });
       });
 
       it("still returns the plays without device names when no report is passed", async () => {
@@ -1637,17 +1464,6 @@ describe("PlexClient", () => {
         const entries = await client.getDetailedWatchHistory();
 
         expect(entries).toEqual([expect.objectContaining({ deviceName: null, platform: null })]);
-      });
-
-      it("still fails the fetch on an /accounts failure when /devices fails too", async () => {
-        mockAxiosInstance.get
-          .mockRejectedValueOnce(new Error("accounts down"))
-          .mockRejectedValueOnce(new Error("devices down"))
-          .mockResolvedValueOnce(played);
-
-        await expect(client.getDetailedWatchHistory({ report: newReport() })).rejects.toThrow(
-          "accounts down",
-        );
       });
     });
   });

@@ -376,41 +376,13 @@ export async function restoreBackup(
     );
   }
 
-  // EVERY restored server is held until a full sync (`requireLibraryResync`),
-  // not only one restored without its media (every server after a config-only
-  // restore). A full backup is a snapshot too: whatever was added after it was
-  // taken comes back on the next sync as fresh rows with none of their plays,
-  // and no restored row holds those plays either. Until a full sync has
-  // re-added them, no history pass may vouch for the server's play history:
-  // one that ran first (a playback's realtime job, a History-page Refresh)
-  // would mark it established over items that do not exist yet, and they would
-  // then read "nobody watched anything". Asked of the rows, like the withdrawal
-  // above, since the restored ids are not known up front.
-  //
-  // The hold also restarts a Tracearr-mapped server's archive walk from the
-  // newest play (`restartTracearrBackfill`) and keeps it from running until
-  // that sync: the row comes back verbatim, its walk state describing an
-  // archive whose rows the file may not hold (every config-only backup, a full
-  // one taken while the walk had stored nothing — "complete" would then import
-  // nothing ever again, and a restored mid-walk cursor would resume deep in the
-  // archive and never read the newer stretch), and even the rows it does hold
-  // stop at the backup. The plays of what came back since are read only by a
-  // walk that runs after the sync has re-added it.
-  //
-  // Releasing it takes one full sync. A hold waits only for the libraries
-  // holding no item created (a minute or more) before it, so after a full
-  // restore — its libraries hold the file's items, created before it — the
-  // next full sync releases it whatever it can list, and after a config-only
-  // restore the first full sync that brings every library's media back.
-  //
-  // The restore rewrote every server's hold column from the file, so the hold
-  // requests this process noted against the old rows describe nothing now:
-  // forgotten first, leaving the restore's own the outstanding one. Likewise
-  // every library's recorded shortfall (`Library.shortPassSeenAt`): it
-  // described a pass of rows the restore replaced, so the next pass counts
-  // afresh. Cleared AFTER the holds are noted, so a library pass still running
-  // from before the restore records none after the clear: it now sees a
-  // request newer than its start (`libraryResyncRequestedSince`).
+  // EVERY restored server is held until a full sync (`requireLibraryResync`):
+  // even a full backup is a snapshot, and what came after it returns with none
+  // of its plays. The hold also restarts a mapped server's archive walk, whose
+  // restored state describes rows the file may not hold. Requests noted against
+  // the old rows are forgotten first; every `Library.shortPassSeenAt` is
+  // cleared AFTER the holds, so a pass still running from before the restore
+  // sees a newer request and records none (`libraryResyncRequestedSince`).
   forgetLibraryResyncHoldRequests();
   const restoredServers = await prisma.mediaServer.findMany({ select: { id: true } });
   const heldIds = restoredServers.map((server) => server.id);
@@ -427,16 +399,10 @@ export async function restoreBackup(
     data: { shortPassSeenAt: null },
   });
 
-  // A FULL backup also brings back its lifecycle matches and actions, and they
-  // are as old as the backup: an item watched since it was taken still holds
-  // its match. The hold above keeps play-activity rule sets from being
-  // evaluated until the next full sync, but it lifts there — and an execution
-  // that ran after that sync and before detection would act on the backup's
-  // matches. So every rule set the file brought matches back for is latched
-  // like one detection skipped (`notePlayHistoryPauseForRestoredMatches`): its
-  // actions wait until a detection run has evaluated it. A config-only backup
-  // holds no matches, so this latches nothing. Taken after the holds, so a
-  // detection run that began before them cannot lift it.
+  // A full backup's matches are as old as the backup, and the hold lifts at the
+  // next full sync, before detection: latch their rule sets so their actions
+  // wait for a detection run. After the holds, so a run that began before them
+  // cannot lift it.
   const latched = await notePlayHistoryPauseForRestoredMatches();
   if (latched > 0) {
     logger.info(
