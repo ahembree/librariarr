@@ -8,8 +8,9 @@
  * detection (execution scheduled more often than detection, Settings "Run
  * now", `POST /api/v1/jobs/execution`, Execute on the Pending page) acted on
  * the backup's match of a movie watched since. The restore now latches every
- * rule set it brought matches back for (`RuleSet.playHistoryPausedAt`), so its
- * actions wait until detection has evaluated it.
+ * rule set that reads play activity and that it brought matches back for
+ * (`RuleSet.playHistoryPausedAt`), so its actions wait until detection has
+ * evaluated it.
  *
  * Real Postgres, a real backup file, and the real sync engine, native history
  * sync, detection, executor and Execute route; only the media server is faked,
@@ -237,7 +238,7 @@ describe("restoring a full backup brings back its matches and actions, held unti
     expect(executeAction).toHaveBeenCalledTimes(1);
   });
 
-  it("latches only the rule sets it brought matches back for; one reading no play activity runs", async () => {
+  it("latches only the play-activity rule sets it brought matches back for; one reading no play activity runs", async () => {
     // A second rule set reading no play activity, with its own matches and
     // actions, and a third with neither.
     const byTitle = await createTestRuleSet(userId, {
@@ -262,9 +263,10 @@ describe("restoring a full backup brings back its matches and actions, held unti
     await restoreThenSync();
 
     expect(await pausedAt(ruleSetId)).toBeInstanceOf(Date);
-    expect(await pausedAt(byTitle.id)).toBeInstanceOf(Date);
+    // Not latched: the latch would hold nothing there, and detection lifting
+    // it would announce a hold that never was.
+    expect(await pausedAt(byTitle.id)).toBeNull();
     expect(await pausedAt(empty.id)).toBeNull();
-    // The latch holds only rule sets that read play activity.
     await executeLifecycleActions(userId);
     expect(await statusOf("m1", byTitle.id)).toBe("COMPLETED");
     expect(await statusOf("m1")).toBe("PENDING");

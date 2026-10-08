@@ -441,9 +441,9 @@ export async function restoreBackup(
   if (latched > 0) {
     logger.info(
       "Backup",
-      `The backup brought back the lifecycle matches of ${latched} rule set(s), as old as the ` +
-        `backup — the actions of those that read play activity are held until detection has ` +
-        `evaluated each again`,
+      `The backup brought back the lifecycle matches of ${latched} rule set(s) that read play ` +
+        `activity, as old as the backup — their actions are held until detection has evaluated ` +
+        `each again`,
     );
   }
 

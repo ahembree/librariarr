@@ -328,21 +328,32 @@ export async function notePlayHistoryPause(ruleSetId: string): Promise<void> {
 }
 
 /**
- * `notePlayHistoryPause` for every rule set holding a match — what a FULL
- * backup's restore brings back (a config-only backup holds none, so there is
- * nothing to hold). Those matches, and the PENDING actions with them, are from
- * when the backup was taken: an item watched since still holds its match, and
- * the restore's own hold on every server (`requireLibraryResync`) lifts after
- * the next full sync, so without this an execution that ran before detection
- * would act on them. Matches are what to ask for: every execution path acts
- * only on an item that is a current match of its rule set. Set-based, asked of
- * the rows the restore re-inserted; a rule set reading no play activity
- * ignores it, like any latch. Returns how many rule sets it held.
+ * `notePlayHistoryPause` for every rule set that reads play activity and holds
+ * a match — what a FULL backup's restore brings back (a config-only backup
+ * holds none, so there is nothing to hold). Those matches, and the PENDING
+ * actions with them, are from when the backup was taken: an item watched since
+ * still holds its match, and the restore's own hold on every server
+ * (`requireLibraryResync`) lifts after the next full sync, so without this an
+ * execution that ran before detection would act on them. Matches are what to
+ * ask for: every execution path acts only on an item that is a current match
+ * of its rule set. A rule set reading no play activity is left alone: the latch
+ * would hold nothing there (`checkPlayActivityExecutable` ignores it), and
+ * detection lifting it would announce a hold that never was. Asked of the rows
+ * the restore re-inserted. Returns how many rule sets it held.
  */
 export async function notePlayHistoryPauseForRestoredMatches(): Promise<number> {
-  return prisma.$executeRawUnsafe(
-    `UPDATE "RuleSet" rs SET "playHistoryPausedAt" = GREATEST(rs."playHistoryPausedAt", $1::timestamp(3))
+  const withMatches = await prisma.$queryRawUnsafe<Array<{ id: string; rules: unknown }>>(
+    `SELECT rs."id", rs."rules" FROM "RuleSet" rs
       WHERE EXISTS (SELECT 1 FROM "RuleMatch" m WHERE m."ruleSetId" = rs."id")`,
+  );
+  const ids = withMatches
+    .filter((ruleSet) => hasPlayActivityRules(ruleSet.rules as LifecycleRule[] | LifecycleRuleGroup[]))
+    .map((ruleSet) => ruleSet.id);
+  if (ids.length === 0) return 0;
+  return prisma.$executeRawUnsafe(
+    `UPDATE "RuleSet" SET "playHistoryPausedAt" = GREATEST("playHistoryPausedAt", $2::timestamp(3))
+      WHERE "id" = ANY($1)`,
+    ids,
     new Date(),
   );
 }
@@ -418,7 +429,9 @@ export async function checkPlayActivityExecutable(
       `play history was last unknown (detection skipped the rule set while it was not ` +
       `established, or a backup restore brought the matches back), so an item watched since may ` +
       `still match. Its actions wait until detection evaluates the rule set again: re-evaluate ` +
-      `it under Lifecycle → Matches, or wait for the next scheduled detection run`
+      `it under Lifecycle → Matches, or wait for the next scheduled detection run. Detection ` +
+      `has to be able to evaluate it first — if Re-evaluate reports the rule set skipped (a ` +
+      `disabled or missing *arr or Seerr instance), fix that and re-evaluate`
     );
   }
   return null;

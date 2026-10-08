@@ -306,6 +306,9 @@ describe("held actions once the history is established again, before detection h
     expect(warnings[0]).toMatch(/^Holding 2 due action\(s\) of rule set "Never played" — Rules read play activity, and /);
     expect(warnings[0]).toMatch(LATCH_REASON);
     expect(warnings[0]).toMatch(/re-evaluate it under Lifecycle → Matches, or wait for the next scheduled detection run/);
+    // Re-evaluating lifts it only once detection can evaluate the rule set, so
+    // the reason says what to fix when Re-evaluate reports it skipped.
+    expect(warnings[0]).toMatch(/Detection has to be able to evaluate it first/);
 
     // Detection evaluates it: m1 drops out, and m2 runs.
     await processLifecycleRules(userId);
