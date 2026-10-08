@@ -88,6 +88,8 @@ vi.mock("@/lib/media/watch-evidence", () => ({
   // No receipt by default: a hold was already in place.
   requirePopulationResync: vi.fn().mockResolvedValue(null),
   releaseOwnPopulationHold: vi.fn().mockResolvedValue(false),
+  // No hold request arrived during a pass, by default.
+  libraryResyncRequestedSince: vi.fn().mockReturnValue(false),
 }));
 vi.mock("@/lib/sync/tracearr-backfill-enqueue", () => ({
   enqueueTracearrBackfill: vi.fn().mockResolvedValue([]),
@@ -1397,6 +1399,32 @@ describe("syncMediaServer library and watchlist reconciliation", () => {
     // The stale-item purge keeps its strict rule: it never ran.
     expect(findDbCalls('"updatedAt"<$2')).toHaveLength(0);
     expect(findDbCalls('DELETE FROM "MediaItem" WHERE "id" = ANY')).toHaveLength(0);
+  });
+
+  it("records no sighting from a pass a hold request arrived during, so the next short pass is a first one again", async () => {
+    // A purge of the library while its pass ran clears the sighting after its
+    // delete; one recorded at the end of this pass, which straddled the
+    // delete, would leave a single short pass after the purge to release.
+    mockDb({ holdAt: HELD_AT });
+    mockClient.getLibraryItemsPage.mockImplementation(async () => ({
+      items: [{ ratingKey: "rk1", title: "Movie A", type: "movie" }],
+      total: 30,
+    }));
+    const evidence = await import("@/lib/media/watch-evidence");
+    vi.mocked(evidence.libraryResyncRequestedSince).mockReturnValueOnce(true);
+
+    const before = Date.now();
+    await syncMediaServer("server-1");
+    expect(evidence.libraryResyncRequestedSince).toHaveBeenCalledWith("server-1", expect.any(Date));
+    // Asked of this library's own pass start, taken before it read the sighting.
+    const since = vi.mocked(evidence.libraryResyncRequestedSince).mock.calls[0][1] as Date;
+    expect(since.getTime()).toBeGreaterThanOrEqual(before);
+    expect(findDbCalls('UPDATE "Library" SET "shortPassSeenAt"=$2')).toHaveLength(0);
+
+    // Nothing was recorded, so this pass is a first sighting again.
+    await syncMediaServer("server-1");
+    expect(evidence.releaseLibraryResyncHold).not.toHaveBeenCalled();
+    expect(findDbCalls('UPDATE "Library" SET "shortPassSeenAt"=$2')).toHaveLength(1);
   });
 
   it("starts the count again after a pass the tolerance does not cover", async () => {

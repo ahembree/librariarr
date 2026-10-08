@@ -28,7 +28,18 @@ import { hasEnabledSeerrInstances } from "@/lib/lifecycle/fetch-seerr-metadata";
  */
 export type RuleEvaluability =
   | { evaluable: true }
-  | { evaluable: false; reason: string; permanent: boolean };
+  | {
+      evaluable: false;
+      reason: string;
+      permanent: boolean;
+      /**
+       * The refusal is the play-history one: its servers' play history is not
+       * established. A detection path that skips the rule set for it records
+       * the refusal on the rule set (`notePlayHistoryPause`), since the
+       * matches it keeps are from before then.
+       */
+      playHistory?: boolean;
+    };
 
 /**
  * Whether every in-scope server has ESTABLISHED play history — i.e. a sync has
@@ -276,6 +287,7 @@ export async function checkLifecycleRuleEvaluability(
       return {
         evaluable: false,
         permanent: false,
+        playHistory: true,
         reason: `Rules read play activity but ${watch.reason}`,
       };
     }
@@ -285,28 +297,96 @@ export async function checkLifecycleRuleEvaluability(
 }
 
 /**
+ * Record that a detection run skipped this rule set because its servers' play
+ * history was not established: `RuleSet.playHistoryPausedAt`, keeping the
+ * LATEST such refusal. Detection keeps the rule set's matches and PENDING
+ * actions as they were, so they are from before the refusal — an item watched
+ * while the history was unknown still holds its match — and they stay held
+ * (`checkPlayActivityExecutable`) until a detection run has evaluated the rule
+ * set again (`clearPlayHistoryPause`), even once the history is established.
+ *
+ * Raw SQL: `GREATEST` ignores the NULL of a rule set never refused, and the
+ * write is not an edit, so it leaves `updatedAt` alone.
+ */
+export async function notePlayHistoryPause(ruleSetId: string): Promise<void> {
+  await prisma.$executeRawUnsafe(
+    `UPDATE "RuleSet" SET "playHistoryPausedAt" = GREATEST("playHistoryPausedAt", $2::timestamp(3)) WHERE "id" = $1`,
+    ruleSetId,
+    new Date(),
+  );
+}
+
+/**
+ * Lift `notePlayHistoryPause` once a detection run has evaluated the rule set
+ * and written its matches — but only a refusal recorded no later than
+ * `evaluationStartedAt`, the instant that run began evaluating it (before its
+ * own evaluability check). A refusal recorded after that was made by a run that
+ * found the history unestablished while this one was evaluating, so this run's
+ * matches may be from before it too; it stands until a run that began after it
+ * evaluates the rule set. Compare-and-set, because the manual run route runs
+ * detection in a request, outside the serial `MAIN_QUEUE`, beside the scheduled
+ * runs. Returns whether it lifted one.
+ */
+export async function clearPlayHistoryPause(ruleSetId: string, evaluationStartedAt: Date): Promise<boolean> {
+  const lifted = await prisma.$executeRawUnsafe(
+    `UPDATE "RuleSet" SET "playHistoryPausedAt" = NULL WHERE "id" = $1 AND "playHistoryPausedAt" <= $2::timestamp(3)`,
+    ruleSetId,
+    evaluationStartedAt,
+  );
+  return lifted > 0;
+}
+
+/**
  * Whether a rule set's ARMED actions may run now, as far as play history goes:
- * `null` when they may, else the refusal (the guard's reason).
+ * `null` when they may, else the refusal.
  *
  * Detection skips a rule set whose play-activity criteria cannot be answered
  * (`checkLifecycleRuleEvaluability`) and keeps its matches and PENDING actions
- * as they were, so while the refusal lasts those matches are frozen at their
- * last evaluation — and an item watched since, which the next detection would
- * drop, keeps its match, which is exactly what every execution path checks
- * before it acts. Executing then acts on an answer the guard refuses to give
- * now. So the scheduled executor leaves such a rule set's actions PENDING and
- * the user-initiated paths (Execute on the Pending page and its `/api/v1`
- * mirror, force-retry) refuse with this reason, as the query page's actions
- * already do. A rule set that reads no play activity is unaffected.
+ * as they were, so those matches are frozen at their last evaluation — and an
+ * item watched since, which the next detection would drop, keeps its match,
+ * which is exactly what every execution path checks before it acts. So the
+ * scheduled executor leaves such a rule set's actions PENDING and the
+ * user-initiated paths (Execute on the Pending page and its `/api/v1` mirror,
+ * force-retry) refuse, as the query page's actions already do:
+ *  - while the history is not established now — the guard's own reason;
+ *  - and, once a detection run has skipped the rule set for that
+ *    (`RuleSet.playHistoryPausedAt`, `notePlayHistoryPause`), until a detection
+ *    run has evaluated it again, even after the history is established: its
+ *    matches are still the ones from before.
+ * A rule set that reads no play activity is unaffected. One whose history
+ * became unknown and known again between two detection runs, with neither
+ * skipping it, runs on its last evaluation as usual — no older than it would
+ * have been without the outage.
  *
- * @param serverIds The rule set's `serverIds`, exactly as detection scopes it.
+ * @param ruleSet `serverIds` exactly as detection scopes it, and the stored
+ *   `playHistoryPausedAt`.
  */
 export async function checkPlayActivityExecutable(
   userId: string,
-  rules: LifecycleRule[] | LifecycleRuleGroup[],
-  serverIds?: string[],
+  ruleSet: {
+    rules: LifecycleRule[] | LifecycleRuleGroup[];
+    serverIds?: string[];
+    playHistoryPausedAt: Date | null;
+  },
 ): Promise<string | null> {
-  if (!hasPlayActivityRules(rules)) return null;
-  const watch = await checkWatchHistoryCompleteness(userId, serverIds);
-  return watch.complete ? null : `Rules read play activity but ${watch.reason}`;
+  if (!hasPlayActivityRules(ruleSet.rules)) return null;
+  const watch = await checkWatchHistoryCompleteness(userId, ruleSet.serverIds);
+  if (!watch.complete) {
+    return (
+      `Rules read play activity but ${watch.reason}. The rule set's matches were evaluated ` +
+      `before that, so its actions wait until play history is established again` +
+      (ruleSet.playHistoryPausedAt
+        ? ` and detection has evaluated the rule set since it skipped it`
+        : ` (and, should detection skip the rule set meanwhile, until detection has evaluated it again)`)
+    );
+  }
+  if (ruleSet.playHistoryPausedAt) {
+    return (
+      `Rules read play activity, and detection skipped this rule set while its play history ` +
+      `was not established, so its matches are from before then — an item watched since may ` +
+      `still match. Its actions wait until detection evaluates the rule set again: re-evaluate ` +
+      `it under Lifecycle → Matches, or wait for the next scheduled detection run`
+    );
+  }
+  return null;
 }

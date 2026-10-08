@@ -234,10 +234,8 @@ function noteHoldRequest(serverIds: string[], at: Date): void {
  * Forget the hold requests this process noted — for every server, or for the
  * ones given. For a caller that rewrote the hold column wholesale: a restore
  * re-inserts every server, hold included, from the backup file, so a request
- * noted against the old rows describes nothing now. Left behind, it kept a
- * library enabled afterwards from getting its own population hold's receipt
- * (`requirePopulationResync` refuses one while a request is outstanding), so
- * that hold waited for a full sync.
+ * noted against the old rows describes nothing now, and the restore then notes
+ * its own (it holds every restored server).
  */
 export function forgetLibraryResyncHoldRequests(serverIds?: string[]): void {
   if (!serverIds) {
@@ -245,6 +243,18 @@ export function forgetLibraryResyncHoldRequests(serverIds?: string[]): void {
     return;
   }
   for (const id of serverIds) holdRequests.delete(id);
+}
+
+/**
+ * Whether this process has noted a library-resync hold request for the server,
+ * asking for an instant after `since` (`holdRequests`), since the server's hold
+ * was last released. A library pass that began at `since` ran beside it — a
+ * purge's or a disable-with-delete's delete, a restore — so it cannot vouch for
+ * the library as it stands now, and records no `Library.shortPassSeenAt`.
+ */
+export function libraryResyncRequestedSince(serverId: string, since: Date): boolean {
+  const requests = holdRequests.get(serverId);
+  return requests !== undefined && requests.latestAt > since.getTime();
 }
 
 /** Forget every hold request — a process restart, for tests. */
@@ -258,10 +268,11 @@ export function _resetLibraryResyncHoldRequestsForTesting(): void {
  * no pass may vouch for the servers' play history.
  *
  * Called BEFORE items are deleted in bulk (a purge of an enabled library or a
- * type-wide purge, disable-with-delete), after a restore re-inserted servers
- * without their items, by a full sync that removed a vanished library holding
- * items, and by any sync about to populate a library that held no items yet
- * (its first sync, or one enabled later). In every case the items come (back)
+ * type-wide purge, disable-with-delete), after a restore re-inserted the
+ * servers (every one: what came after the backup is missing from it), by a full
+ * sync that removed a vanished library holding items, and by any sync about to
+ * populate a library that held no items yet (its first sync, or one enabled
+ * later). In every case the items come (back)
  * as fresh rows with none of their plays, and a history pass that ran before
  * they existed could not attach any — a marker it wrote would vouch for a hole,
  * and negative `watchedByUser`, `playCount = 0` and "not played in N months"
@@ -278,10 +289,12 @@ export function _resetLibraryResyncHoldRequestsForTesting(): void {
  *     the column keeps the EARLIEST request still unreleased. Every cause
  *     leaves the library it waits on with no item created before its own
  *     instant (a purge or disable-with-delete takes it before deleting, a
- *     restore after re-inserting no items, the population hold at the sync's
- *     pass start before its first insert), which is how a release tells the
- *     libraries it waits for from the rest: a library holding an item older
- *     than the hold was left alone. Moving the hold to a later request would
+ *     restore after re-inserting the file's items, the population hold at the
+ *     sync's pass start before its first insert), which is how a release tells
+ *     the libraries it waits for from the rest: a library holding an item older
+ *     than the hold was left alone — after a full restore, every library that
+ *     came back with items, so the next full sync releases that hold whatever
+ *     it lists. Moving the hold to a later request would
  *     break that for an earlier one still waiting — a library a failed sync
  *     had half populated would read as one nothing touched. Written before the
  *     marker is nulled, so a crash between the two leaves the hold, which
@@ -512,13 +525,12 @@ async function settleRelease(serverId: string, countBefore: number): Promise<boo
  * forward pass resumes from it, and every play older than it is the restarted
  * walk's to read. Servers with no Tracearr mapping are untouched.
  *
- * Holds nothing and queues nothing. A caller that DELETED items must go
- * through `requireLibraryResync`, which calls this and also records the hold
- * that keeps the walk from running before a full library sync re-adds those
- * items — walked first, their plays are skipped as unresolved and the walk can
- * complete without them, for good. The one direct caller is a restore whose
- * items came back but whose Tracearr rows did not: the items exist, so the
- * walk may run as soon as the next watch-history sync queues it.
+ * Holds nothing and queues nothing, and is called only by
+ * `requireLibraryResync`, which also records the hold that keeps the walk from
+ * running before a full library sync re-adds the missing items — walked first,
+ * their plays are skipped as unresolved and the walk can complete without
+ * them, for good. A caller that DELETES items, or knows some to be missing,
+ * goes through that.
  */
 export async function restartTracearrBackfill(serverIds: string[]): Promise<number> {
   if (serverIds.length === 0) return 0;

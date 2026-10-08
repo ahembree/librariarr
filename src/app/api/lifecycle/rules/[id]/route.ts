@@ -166,6 +166,11 @@ export async function PUT(
   // wants to keep matches intact after a config-only change). Defaults to true for
   // backwards compatibility and safety.
   const clearMatches = request.nextUrl.searchParams.get("clearMatches") !== "false";
+  // With its matches and PENDING actions gone there is nothing left that
+  // predates a play-history refusal, so the hold it recorded goes too (the next
+  // detection run records another if the history is still not established).
+  // Kept when the matches are kept: they are still the ones from before.
+  if (clearMatches) updateData.playHistoryPausedAt = null;
 
   // Wrap update + cleanup + read in a single transaction so the returned
   // record reflects exactly the values we just wrote and isn't clobbered

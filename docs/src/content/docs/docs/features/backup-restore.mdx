@@ -36,7 +36,7 @@ Enable full backups by checking **Include media data** when creating a manual ba
 :::caution[Restoring clears watch history]
 A restore replaces the whole database, and a **config-only** backup (the default) contains no watch history — so restoring one leaves every server with none. Your media returns on the next sync; your play history returns when the next watch-history sync refills it, which for a [Tracearr](/docs/integrations/tracearr/)-linked server means re-walking the archive.
 
-In between, items come back with no record of ever being played. Librariarr handles this rather than letting it arm your rules: restored servers are marked as having no watch history yet, which **pauses lifecycle rules that read play activity** — Watched By User, Play Count, Last Played and the series aggregates. A server restored without its media stays paused until a **full** sync of it has brought every library back (the scheduled sync, or **Sync** under **Settings → Servers** — syncing only some of its libraries does not count), because a watch-history refresh that runs before then cannot attach plays to media that is not back yet. That full sync then refills the history and lifts the pause — for a Tracearr-linked server it starts the re-walk, and the pause lifts when the walk finishes. A server whose media came back with a full backup only waits for its next watch-history sync.
+In between, items come back with no record of ever being played. Librariarr handles this rather than letting it arm your rules: every restored server is held, which **pauses lifecycle rules that read play activity** — Watched By User, Play Count, Last Played and the series aggregates — until a **full** sync of it (the scheduled sync, or **Sync** under **Settings → Servers** — syncing only some of its libraries does not count), because a watch-history refresh that runs before then cannot attach plays to media that is not back yet. That includes a server whose media came back with a full backup: whatever was added after the backup was taken returns only with that sync. A server restored without its media waits for the full sync that brings every library back; one whose media came back is released by its next full sync, whatever that sync can list. That sync then refills the history and lifts the pause — for a Tracearr-linked server it starts a re-walk of the archive (every restore re-walks it, since even a full backup's imported plays stop where the backup was taken), and the pause lifts when the walk finishes.
 
 Take a **full** backup (tick *Include media data*) if you want history to come back with the restore.
 :::
@@ -139,7 +139,7 @@ If no account exists (fresh install or after data loss):
 </Steps>
 
 <Aside>
-  After restoring a config-only backup, you should trigger a full sync from **Settings → Servers** to repopulate media metadata.
+  After restoring a backup, trigger a full sync from **Settings → Servers**: it repopulates the media metadata a config-only backup leaves out, and it is what lifts the pause on lifecycle rules that read play activity.
 </Aside>
 
 ## Restore Process

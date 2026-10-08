@@ -24,7 +24,7 @@ import {
 import { actionConfigSignature } from "@/lib/lifecycle/action-signature";
 import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
 import { fetchSeerrMetadata } from "@/lib/lifecycle/fetch-seerr-metadata";
-import { checkLifecycleRuleEvaluability, checkPlayActivityExecutable } from "@/lib/lifecycle/evaluability";
+import { checkLifecycleRuleEvaluability, checkPlayActivityExecutable, notePlayHistoryPause } from "@/lib/lifecycle/evaluability";
 import { detectAndSaveMatches } from "@/lib/lifecycle/detect-matches";
 import { syncAllCollections } from "@/lib/lifecycle/collections";
 import { syncMediaServer } from "@/lib/sync/sync-server";
@@ -314,6 +314,9 @@ export async function processLifecycleRules(userId?: string) {
       );
       if (!evaluability.evaluable) {
         logger.warn("Lifecycle", `Skipping rule set "${ruleSet.name}" — ${evaluability.reason}`);
+        // Its matches stay as they are, from before this refusal: recorded so
+        // the executor keeps its actions held until a run evaluates it.
+        if (evaluability.playHistory) await notePlayHistoryPause(ruleSet.id);
         if (evaluability.permanent) {
           const cancelled = await prisma.lifecycleAction.deleteMany({
             where: { ruleSetId: ruleSet.id, status: "PENDING" },
@@ -540,6 +543,7 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
           type: true,
           rules: true,
           serverIds: true,
+          playHistoryPausedAt: true,
         },
       },
     },
@@ -651,9 +655,12 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
   // stale check below compares against — are frozen from before the history
   // went unknown: an item watched since keeps its match. Executing would act on
   // that frozen answer, so such a rule set's actions are left PENDING and
-  // untouched (like the deletion ceiling's hold, never cancelled) until the
-  // history is established and detection has re-evaluated them. Applied after
-  // every cancel-or-narrow check, which are all safe to run on frozen matches.
+  // untouched (like the deletion ceiling's hold, never cancelled) while its
+  // servers' play history is not established — and, once a detection run has
+  // skipped the rule set for that (`RuleSet.playHistoryPausedAt`), until a
+  // detection run has evaluated it again, however soon the history is back
+  // (`checkPlayActivityExecutable`). Applied after every cancel-or-narrow
+  // check, which are all safe to run on frozen matches.
   const playHistoryRefusals = new Map<string, string | null>();
   const heldByRuleSet = new Map<string, { name: string; reason: string; count: number }>();
 
@@ -814,11 +821,11 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
     const ruleSet = action.ruleSet!;
     let refusal = playHistoryRefusals.get(action.ruleSetId!);
     if (refusal === undefined) {
-      refusal = await checkPlayActivityExecutable(
-        action.userId,
-        ruleSet.rules as unknown as LifecycleRule[] | LifecycleRuleGroup[],
-        ruleSet.serverIds,
-      );
+      refusal = await checkPlayActivityExecutable(action.userId, {
+        rules: ruleSet.rules as unknown as LifecycleRule[] | LifecycleRuleGroup[],
+        serverIds: ruleSet.serverIds,
+        playHistoryPausedAt: ruleSet.playHistoryPausedAt,
+      });
       playHistoryRefusals.set(action.ruleSetId!, refusal);
     }
     if (refusal) {
@@ -831,12 +838,7 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
     executable.push({ action, mediaItem, filteredMatchedIds });
   }
   for (const held of heldByRuleSet.values()) {
-    logger.warn(
-      "Lifecycle",
-      `Holding ${held.count} due action(s) of rule set "${held.name}" — ${held.reason}. ` +
-        `Its matches were last evaluated before that, so they stay pending until play history ` +
-        `is established again and detection has re-evaluated them.`,
-    );
+    logger.warn("Lifecycle", `Holding ${held.count} due action(s) of rule set "${held.name}" — ${held.reason}.`);
   }
 
   // BLAST-RADIUS CEILING, counted over the pass-1 survivors.

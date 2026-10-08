@@ -127,7 +127,7 @@ async function retryAction(
   // enforce this gate; force-retry needs it too.
   const ruleSet = await prisma.ruleSet.findFirst({
     where: { id: action.ruleSetId, userId: session.userId },
-    select: { enabled: true, type: true, rules: true, serverIds: true },
+    select: { enabled: true, type: true, rules: true, serverIds: true, playHistoryPausedAt: true },
   });
   if (!ruleSet?.enabled) {
     return NextResponse.json(
@@ -144,14 +144,15 @@ async function retryAction(
     );
   }
   // Play history (mirrors the scheduled executor and the manual execute
-  // route): while it is not established, detection keeps this rule set's
-  // matches frozen, and the stale-match guard below would pass on a match the
-  // next detection could drop.
-  const playHistoryRefusal = await checkPlayActivityExecutable(
-    session.userId!,
-    ruleSet.rules as unknown as LifecycleRuleGroup[],
-    ruleSet.serverIds,
-  );
+  // route): while it is not established — and, once detection has skipped the
+  // rule set for that, until detection has evaluated it again — this rule
+  // set's matches are frozen, and the stale-match guard below would pass on a
+  // match the next detection could drop.
+  const playHistoryRefusal = await checkPlayActivityExecutable(session.userId!, {
+    rules: ruleSet.rules as unknown as LifecycleRuleGroup[],
+    serverIds: ruleSet.serverIds,
+    playHistoryPausedAt: ruleSet.playHistoryPausedAt,
+  });
   if (playHistoryRefusal) {
     return NextResponse.json({ error: playHistoryRefusal }, { status: 409 });
   }

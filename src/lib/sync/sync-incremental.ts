@@ -82,6 +82,7 @@ interface ServerRow {
 interface LibraryRow {
   id: string;
   key: string;
+  title: string;
   type: "MOVIE" | "SERIES" | "MUSIC";
   enabled: boolean;
 }
@@ -144,7 +145,7 @@ export async function syncMediaServerItems(
   // out here made such an item look like it belonged to an unknown library,
   // which escalated to a whole-server sync that then skipped the library anyway.
   const libraryRows = await prisma.$queryRawUnsafe<LibraryRow[]>(
-    `SELECT "id","key","type"::text AS "type","enabled" FROM "Library" WHERE "mediaServerId"=$1`,
+    `SELECT "id","key","title","type"::text AS "type","enabled" FROM "Library" WHERE "mediaServerId"=$1`,
     serverId,
   );
   const libById = new Map(libraryRows.map((l) => [l.id, l]));
@@ -321,6 +322,34 @@ export async function syncMediaServerItems(
     groups.set(libraryId, bucket);
   }
 
+  // A library's FIRST items are left to the full sync. A library holding none
+  // is being populated, and its items arrive with none of their plays: the
+  // full sync takes the population hold before its first insert
+  // (`requirePopulationResync`), so no history pass vouches for the server's
+  // play history until that library is synced, and releases it in the same run
+  // once it is. Written here they would arrive with no hold at all — a
+  // playback's history pass could mark the history established over the plays
+  // they are missing, and a Tracearr walk that has completed never looks back
+  // for them. Only items this run would really write count (placed in an
+  // enabled library of their own type — the groups above), so an id the full
+  // sync could not store either never triggers it, and once the full sync has
+  // written a library's first items nothing here does again.
+  const firstItemLibraries: string[] = [];
+  let leftForPopulation = 0;
+  if (groups.size > 0) {
+    const emptyLibraries = await prisma.$queryRawUnsafe<{ id: string }[]>(
+      `SELECT l."id" FROM "Library" l
+        WHERE l."id" = ANY($1)
+          AND NOT EXISTS (SELECT 1 FROM "MediaItem" mi WHERE mi."libraryId" = l."id")`,
+      [...groups.keys()],
+    );
+    for (const { id } of emptyLibraries) {
+      leftForPopulation += groups.get(id)!.length;
+      groups.delete(id);
+      firstItemLibraries.push(libById.get(id)!.title);
+    }
+  }
+
   // Plex reports watchlist membership only through the account-level plex.tv
   // watchlist API (`getWatchlistGuids`), which the full sync calls and this path
   // deliberately does not — one library change must not trigger a plex.tv round
@@ -493,7 +522,8 @@ export async function syncMediaServerItems(
     `upserted ${upserted}, deleted ${deleted}` +
     (skippedNonMedia > 0 ? `, skipped ${skippedNonMedia} non-media` : "") +
     (skippedDisabled > 0 ? `, skipped ${skippedDisabled} in disabled librar${skippedDisabled === 1 ? "y" : "ies"}` : "") +
-    (unresolvedIds.length > 0 ? `, ${unresolvedIds.length} unresolved` : "");
+    (unresolvedIds.length > 0 ? `, ${unresolvedIds.length} unresolved` : "") +
+    (leftForPopulation > 0 ? `, left ${leftForPopulation} for a full sync (the first items of an empty library)` : "");
   logger.info("SyncIncremental", `Server "${server.name}": ${counters} (incremental)`);
 
   if (unresolvedIds.length > 0) {
@@ -505,10 +535,12 @@ export async function syncMediaServerItems(
     );
   }
 
-  // Two mapping failures still warrant a full reconcile:
+  // Three cases still warrant a full reconcile:
   //
   //  - A section key we hold no `Library` row for: a library was added on the
   //    server, and only `syncMediaServer` creates `Library` rows.
+  //  - Items that would be the first in a library holding none (see above):
+  //    the full sync populates it under the population hold.
   //  - ANY unresolved id on Jellyfin/Emby. Their `normalizeItem` never populates
   //    `librarySectionID`; a new item there is placed through
   //    `client.resolveLibraryKey` (`/Items/{id}/Ancestors`) above, so this now
@@ -531,7 +563,8 @@ export async function syncMediaServerItems(
     eventBus.emit({ type: "sync:completed", userId: server.userId, meta: { serverId, incremental: true } });
   }
 
-  const needsFullSync = newLibrarySeen || (server.type !== "PLEX" && unresolvedIds.length > 0);
+  const needsFullSync =
+    newLibrarySeen || leftForPopulation > 0 || (server.type !== "PLEX" && unresolvedIds.length > 0);
   if (needsFullSync) {
     return {
       status: "fell-back",
@@ -539,7 +572,11 @@ export async function syncMediaServerItems(
       unresolved: unresolvedIds.length,
       reason: newLibrarySeen
         ? "item reported a library section with no matching Library row (new library?)"
-        : `${unresolvedIds.length} item(s) carry no library section (${server.type} reports none)`,
+        : leftForPopulation > 0
+          ? `${leftForPopulation} item(s) would be the first in a library holding none ` +
+            `(${firstItemLibraries.map((t) => `"${t}"`).join(", ")}) — a library's first items are ` +
+            `left to the full sync, which holds play-activity rules until it has synced the library`
+          : `${unresolvedIds.length} item(s) carry no library section (${server.type} reports none)`,
     };
   }
 

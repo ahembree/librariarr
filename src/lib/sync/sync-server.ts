@@ -25,6 +25,7 @@ import { reconcileWatchStateFromHistory } from "@/lib/sync/watch-reconcile";
 import { mbidFromGuids, withArtistMbid } from "@/lib/media/musicbrainz";
 import { writeArtistMbids } from "@/lib/sync/artist-mbid";
 import {
+  libraryResyncRequestedSince,
   releaseLibraryResyncHold,
   releaseOwnPopulationHold,
   requireLibraryResync,
@@ -1565,7 +1566,15 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
           `SELECT "libraryResyncRequiredAt" FROM "MediaServer" WHERE "id"=$1`,
           serverId,
         );
-        await recordShortPass(held[0]?.libraryResyncRequiredAt ? new Date() : null);
+        // Nor a pass a hold request arrived during: a purge (or disable-with-
+        // delete, or restore) may have emptied this library under it and cleared
+        // its sighting, and one recorded now would count this pass — which
+        // straddled the delete — as the first of the two the tolerance needs,
+        // leaving a single short pass after the purge to release the hold.
+        // Left as it is: whatever emptied the library clears it itself.
+        if (!libraryResyncRequestedSince(serverId, libraryNow)) {
+          await recordShortPass(held[0]?.libraryResyncRequiredAt ? new Date() : null);
+        }
         releaseVerdicts.set(
           library.id,
           shortPassSeenAtStart !== null

@@ -335,7 +335,8 @@ export const API_OPERATIONS: readonly Operation[] = [
       `At most ${PER_REQUEST} items per request. When the action deletes (Sonarr, Radarr or Lidarr), the items count against the ` +
       `${PER_HOUR}-an-hour deletion budget every key shares. The rule set must be enabled with actions turned on. ` +
       `Refused whole — nothing runs — when an item is excepted, when an item changed identity since it matched (409: run detection again), ` +
-      `when the rule set reads play activity and a server it targets has no established play history (409), ` +
+      `when the rule set reads play activity and a server it targets has no established play history, or detection skipped the rule set ` +
+      `for that and has not evaluated it since (409: its matches are from before then; it runs once detection has evaluated it again), ` +
       `or when a limit would be exceeded. One execution runs per rule set at a time: an overlapping call is refused (409) rather than repeating the deletions.`,
     body: {
       description: "",
@@ -349,7 +350,7 @@ export const API_OPERATIONS: readonly Operation[] = [
     },
     responses: {
       "200": "`{ executed, failed, errors }`",
-      "409": "An execution is already running for this rule set, an item changed identity since it matched (a re-match on the media server), or the rule set reads play activity while a server it targets has no established play history; nothing was executed",
+      "409": "An execution is already running for this rule set, an item changed identity since it matched (a re-match on the media server), or the rule set reads play activity while a server it targets has no established play history — or detection skipped the rule set for that and has not evaluated it since; nothing was executed",
       "429": BUDGET_429,
     },
   },

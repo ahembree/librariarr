@@ -29,6 +29,7 @@ import {
   forgetLibraryResyncHoldRequests,
   invalidateWatchHistoryEvidence,
   invalidateServersWithoutWatchHistory,
+  libraryResyncRequestedSince,
   markWatchHistoryEstablished,
   markWatchHistoryEstablishedIfUnchanged,
   releaseLibraryResyncHold,
@@ -437,6 +438,32 @@ describe("forgetLibraryResyncHoldRequests", () => {
 
     forgetLibraryResyncHoldRequests();
     await expect(requirePopulationResync("s3", at)).resolves.not.toBeNull();
+  });
+});
+
+describe("libraryResyncRequestedSince", () => {
+  const passStart = new Date("2026-03-01T10:00:00.000Z");
+  beforeEach(() => {
+    vi.clearAllMocks();
+    m.updateMany.mockResolvedValue({ count: 1 });
+  });
+
+  it("is true only for a request asking for an instant after the pass start, on that server", async () => {
+    expect(libraryResyncRequestedSince("s1", passStart)).toBe(false);
+    // A population hold the same run took asks for its pass start: not after it.
+    await requireLibraryResync(["s1"], { at: passStart });
+    expect(libraryResyncRequestedSince("s1", passStart)).toBe(false);
+    // A purge during the pass asks for its own, later instant.
+    await requireLibraryResync(["s1"], { at: new Date(passStart.getTime() + 1) });
+    expect(libraryResyncRequestedSince("s1", passStart)).toBe(true);
+    expect(libraryResyncRequestedSince("s2", passStart)).toBe(false);
+  });
+
+  it("forgets requests a release covered", async () => {
+    m.findUnique.mockResolvedValue({ libraryResyncRequiredAt: passStart });
+    await requireLibraryResync(["s1"], { at: new Date(passStart.getTime() + 1) });
+    await expect(releaseLibraryResyncHold("s1", new Date(passStart.getTime() + 2))).resolves.toBe(true);
+    expect(libraryResyncRequestedSince("s1", passStart)).toBe(false);
   });
 });
 

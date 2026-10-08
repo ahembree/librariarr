@@ -165,12 +165,14 @@ async function executeRuleSet(
   // history, detection skips a rule set with play-activity criteria and keeps
   // its matches as they were, so the matches this would act on are frozen from
   // before — an item watched since still holds one. Refused, nothing executed,
-  // until the history is back and detection has re-evaluated the rule set.
-  const playHistoryRefusal = await checkPlayActivityExecutable(
-    session.userId!,
-    ruleSet.rules as unknown as LifecycleRuleGroup[],
-    ruleSet.serverIds,
-  );
+  // while the history is not established and — once detection has skipped the
+  // rule set for that (`playHistoryPausedAt`) — until detection has evaluated
+  // it again, even after the history is back.
+  const playHistoryRefusal = await checkPlayActivityExecutable(session.userId!, {
+    rules: ruleSet.rules as unknown as LifecycleRuleGroup[],
+    serverIds: ruleSet.serverIds,
+    playHistoryPausedAt: ruleSet.playHistoryPausedAt,
+  });
   if (playHistoryRefusal) {
     return NextResponse.json({ error: playHistoryRefusal }, { status: 409 });
   }

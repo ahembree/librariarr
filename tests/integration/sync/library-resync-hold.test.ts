@@ -1127,6 +1127,83 @@ describe("library-resync hold across sync runs (real DB)", () => {
       expect((await serverRow()).libraryResyncRequiredAt).toBeNull();
     });
 
+    it("a pass a purge of its library lands during records no sighting, so one short pass after the purge cannot release", async () => {
+      // The straddling race: a sync mid-pass of Movies when Movies is purged.
+      // The purge clears Movies' sighting after its delete, and the pass —
+      // whose first batch the purge then deleted — used to record a fresh one
+      // at its end; the next full sync, its listing cut short just this once
+      // but within the tolerance, then released the hold with items missing.
+      const all = Array.from({ length: 60 }, (_, i) => movie(`m${i + 1}`));
+      m.listings = { "1": { items: all, total: 61 }, "2": { items: [] } };
+      m.bulkListingIncomplete = true;
+      await ageItems(moviesLibraryId);
+      await syncMediaServer(serverId, undefined, { trigger: "test: steady state" });
+      expect(await prisma.mediaItem.count({ where: { libraryId: moviesLibraryId } })).toBe(60);
+      await ageItems(moviesLibraryId);
+
+      setMockSession({ isLoggedIn: true, userId });
+      const purgeMovies = async () =>
+        expectJson(
+          await callRoute(purge, { url: "/api/media/purge", method: "DELETE", searchParams: { libraryId: moviesLibraryId } }),
+          200,
+        );
+      await purgeMovies();
+      const hold = (await serverRow()).libraryResyncRequiredAt;
+      expect(hold).toBeInstanceOf(Date);
+      const sighting = async () =>
+        (await prisma.library.findUniqueOrThrow({ where: { id: moviesLibraryId } })).shortPassSeenAt;
+
+      // The first re-sync after the purge: 60 of 61, a first sighting.
+      await syncMediaServer(serverId, undefined, { trigger: "test: re-sync" });
+      expect((await serverRow()).libraryResyncRequiredAt).toEqual(hold);
+      expect(await sighting()).toBeInstanceOf(Date);
+
+      // The next one: Movies is purged again after its first batch (50 items)
+      // was written, so that batch is deleted under the pass.
+      m.beforeEnrich = async (ratingKey) => {
+        if (ratingKey !== "m51") return;
+        m.beforeEnrich = null;
+        await purgeMovies();
+      };
+      await syncMediaServer(serverId, undefined, { trigger: "test: re-sync across a purge" });
+      expect(await prisma.mediaItem.count({ where: { libraryId: moviesLibraryId } })).toBe(10);
+      expect((await serverRow()).libraryResyncRequiredAt).toEqual(hold);
+      expect(await sighting()).toBeNull();
+
+      // Then a listing cut short just this once, within the tolerance (15 of 61).
+      m.listings["1"] = { items: all.slice(0, 15), total: 61 };
+      await syncMediaServer(serverId, undefined, { trigger: "test: truncated re-sync" });
+      expect(await prisma.mediaItem.count({ where: { libraryId: moviesLibraryId } })).toBe(25);
+      expect((await serverRow()).libraryResyncRequiredAt).toEqual(hold);
+      expect(await refusalReason()).toMatch(/waits for a complete library sync/);
+    });
+
+    it("a newly enabled library whose listing comes up short of its total needs a full sync: Sync Now cannot release its own hold", async () => {
+      // The second Sync Now's pass counts as synced (the first one's sighting
+      // is on the row), but only a pass that populated the library holds the
+      // hold's receipt, so a library-scoped run can no longer release it.
+      await ageItems(moviesLibraryId);
+      m.listings["2"] = { items: [] };
+      await syncMediaServer(serverId, undefined, { trigger: "test: steady state" });
+      expect((await serverRow()).libraryResyncRequiredAt).toBeNull();
+      const fresh = await createTestLibrary(serverId, { key: "3", title: "New", type: "MOVIE" });
+      m.libraries.push({ key: "3", title: "New", type: "movie" });
+      m.listings["3"] = { items: Array.from({ length: 59 }, (_, i) => movie(`n${i}`)), total: 60 };
+
+      await syncMediaServer(serverId, "3", { trigger: "test: Sync Now #1" });
+      const hold = (await serverRow()).libraryResyncRequiredAt;
+      expect(hold).toBeInstanceOf(Date);
+      expect(await prisma.mediaItem.count({ where: { libraryId: fresh.id } })).toBe(59);
+      await syncMediaServer(serverId, "3", { trigger: "test: Sync Now #2" });
+      expect((await serverRow()).libraryResyncRequiredAt).toEqual(hold);
+      await syncMediaServer(serverId, "3", { trigger: "test: Sync Now #3" });
+      expect((await serverRow()).libraryResyncRequiredAt).toEqual(hold);
+
+      await syncMediaServer(serverId, undefined, { trigger: "test: full" });
+      expect((await serverRow()).libraryResyncRequiredAt).toBeNull();
+      expect((await serverRow()).watchHistorySyncedAt).toBeInstanceOf(Date);
+    });
+
     it("the reviewers' gap: a purged library re-synced 10 of 60 keeps the hold, and the 50 brought back later still wait for a full sync", async () => {
       // Within max(50, 2%) on the first sight: released, the 50 missing items
       // then came back through the lifecycle executor's scoped re-sync (no full
@@ -1249,11 +1326,11 @@ describe("library-resync hold across sync runs (real DB)", () => {
       expect((await serverRow()).watchHistorySyncedAt).toBeInstanceOf(Date);
     });
 
-    it("a restore that undoes a purge leaves no stale hold request behind: enabling a library and Sync Now still releases its own hold", async () => {
-      // The reviewer's repro: the purge noted a hold request; the restore put
-      // the hold column back to the file's (null) without forgetting it, so
-      // the population hold Sync Now then took got no receipt and waited for
-      // a full sync.
+    it("a restore that undoes a purge holds the server until a full sync, which leaves no request behind: enabling a library and Sync Now then releases its own hold", async () => {
+      // The purge noted a hold request; the restore forgets it and takes its
+      // own hold on every restored server. The full sync that releases that
+      // one leaves nothing noted, so a library enabled afterwards gets its
+      // population hold's receipt, and Sync Now releases it.
       const backupDir = await fs.mkdtemp(path.join(os.tmpdir(), "librariarr-hold-restore-"));
       process.env.BACKUP_DIR = backupDir;
       try {
@@ -1267,14 +1344,64 @@ describe("library-resync hold across sync runs (real DB)", () => {
         );
         expect((await serverRow()).libraryResyncRequiredAt).toBeInstanceOf(Date);
 
+        const restoredAt = Date.now();
         await restoreBackup(file);
-        expect((await serverRow()).libraryResyncRequiredAt).toBeNull();
+        const held = await serverRow();
+        expect(held.libraryResyncRequiredAt!.getTime()).toBeGreaterThanOrEqual(restoredAt - 5);
+        expect(held.watchHistorySyncedAt).toBeNull();
         expect(await prisma.mediaItem.count({ where: { libraryId: moviesLibraryId } })).toBe(1);
 
-        await syncMediaServer(serverId, "2", { trigger: "test: Sync Now after enabling" });
+        await syncMediaServer(serverId, undefined, { trigger: "test: full sync after the restore" });
+        expect((await serverRow()).libraryResyncRequiredAt).toBeNull();
+        expect((await serverRow()).watchHistorySyncedAt).toBeInstanceOf(Date);
+
+        const kids = await createTestLibrary(serverId, { key: "3", title: "Kids", type: "MOVIE" });
+        m.libraries.push({ key: "3", title: "Kids", type: "movie" });
+        m.listings["3"] = { items: [movie("k1")] };
+        await syncMediaServer(serverId, "3", { trigger: "test: Sync Now after enabling" });
+        expect(await prisma.mediaItem.count({ where: { libraryId: kids.id } })).toBe(1);
         const row = await serverRow();
         expect(row.libraryResyncRequiredAt).toBeNull();
         expect(row.watchHistorySyncedAt).toBeInstanceOf(Date);
+      } finally {
+        await fs.rm(backupDir, { recursive: true, force: true });
+      }
+    });
+
+    it("a FULL backup's restore holds the server too, and the next full sync releases it whatever it can list: every library holds the file's items", async () => {
+      // Whatever was added after the backup was taken is missing from it; a
+      // history pass before the full sync that brings it back would vouch for
+      // its plays. Every restored library holds items created before the
+      // hold, so it waits for no library in particular — here the server even
+      // lists Shows as empty while it holds rows, a pass that counts for
+      // nothing — and the next full sync releases it.
+      const backupDir = await fs.mkdtemp(path.join(os.tmpdir(), "librariarr-hold-full-restore-"));
+      process.env.BACKUP_DIR = backupDir;
+      try {
+        const { createBackup, restoreBackup } = await import("@/lib/backup/backup-service");
+        await seed();
+        await syncMediaServer(serverId, undefined, { trigger: "test: steady state" });
+        expect(await prisma.mediaItem.count({ where: { libraryId: showsLibraryId } })).toBe(2);
+        await ageItems(moviesLibraryId);
+        await ageItems(showsLibraryId);
+        const file = await createBackup(undefined, false);
+
+        await restoreBackup(file);
+        const held = await serverRow();
+        expect(held.libraryResyncRequiredAt).toBeInstanceOf(Date);
+        expect(held.watchHistorySyncedAt).toBeNull();
+        // No history pass vouches for it before that sync.
+        await syncWatchHistory(serverId);
+        expect((await serverRow()).watchHistorySyncedAt).toBeNull();
+        expect(await refusalReason()).toMatch(/waits for a complete library sync/);
+
+        m.listings["2"] = { items: [], total: 0 };
+        await syncMediaServer(serverId, undefined, { trigger: "test: full sync after the restore" });
+        expect(await prisma.mediaItem.count({ where: { libraryId: showsLibraryId } })).toBe(2);
+        const row = await serverRow();
+        expect(row.libraryResyncRequiredAt).toBeNull();
+        expect(row.watchHistorySyncedAt).toBeInstanceOf(Date);
+        await expect(checkWatchHistoryCompleteness(userId, [serverId])).resolves.toEqual({ complete: true });
       } finally {
         await fs.rm(backupDir, { recursive: true, force: true });
       }
