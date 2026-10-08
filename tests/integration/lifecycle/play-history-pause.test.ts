@@ -11,6 +11,8 @@ import {
   createTestMediaItem,
   createTestRuleSet,
   createTestApiKey,
+  createTestRadarrInstance,
+  createTestSeerrInstance,
 } from "../../setup/test-helpers";
 
 /**
@@ -24,9 +26,10 @@ import {
  * execution acted on the frozen matches if it ran before the next detection
  * (execution scheduled more often than detection, Settings "Run now",
  * `POST /api/v1/jobs/execution`, or Execute right after the hold lifted).
- * A detection run that skips the rule set for its play history now records it
- * on the rule set, and its actions stay held until a detection run has
- * evaluated it again.
+ * A detection run that skips the rule set while its play history is not
+ * established now records it on the rule set — also when it names a missing
+ * Arr or Seerr instance as the reason, since that refusal comes first — and
+ * its actions stay held until a detection run has evaluated it again.
  *
  * Real Postgres; the sync engine, the purge route, the native history sync,
  * detection, the executor and the routes are real. Only the media server is
@@ -98,6 +101,16 @@ vi.mock("@/lib/lifecycle/collections", () => ({
   removePlexCollection: vi.fn().mockResolvedValue(undefined),
   renameCollectionInPlex: vi.fn().mockResolvedValue(undefined),
 }));
+// Arr and Seerr criteria read their instances' metadata once one is enabled;
+// an empty answer (nothing requested, nothing in Radarr) is all these need.
+vi.mock("@/lib/lifecycle/fetch-seerr-metadata", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/lifecycle/fetch-seerr-metadata")>();
+  return { ...actual, fetchSeerrMetadata: vi.fn(async () => ({})) };
+});
+vi.mock("@/lib/lifecycle/fetch-arr-metadata", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/lifecycle/fetch-arr-metadata")>();
+  return { ...actual, fetchArrMetadata: vi.fn(async () => ({})) };
+});
 // The Arr call itself is beside the point; what matters is whether it is made.
 vi.mock("@/lib/lifecycle/actions", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/lifecycle/actions")>();
@@ -169,7 +182,7 @@ const heldWarnings = () =>
     .mocked(logger.warn)
     .mock.calls.map((c) => String(c[1]))
     .filter((line) => line.startsWith("Holding ") && line.includes("due action(s)"));
-const LATCH_REASON = /detection skipped this rule set while its play history was not established/;
+const LATCH_REASON = /this rule set's matches have not been evaluated since its play history was last unknown/;
 
 let userId: string;
 let serverId: string;
@@ -368,9 +381,10 @@ describe("the play-history pause latch", () => {
    * rule set matching never-played movies with an armed DO_NOTHING action;
    * detection has run, so both are PENDING.
    */
-  async function armed(rules: unknown = NEVER_PLAYED) {
+  async function armed(rules: unknown = NEVER_PLAYED, setup?: (userId: string) => Promise<unknown>) {
     const user = await createTestUser();
     userId = user.id;
+    await setup?.(user.id);
     const server = await createTestServer(user.id, { watchHistorySyncedAt: new Date() });
     serverId = server.id;
     const library = await createTestLibrary(server.id, { type: "MOVIE" });
@@ -619,5 +633,120 @@ describe("the play-history pause latch", () => {
       expect.stringMatching(/^Skipping rule set "Unwatched, not in Radarr" — Rules use Arr criteria/),
     );
     expect(await pausedAt(rs.id)).toBeNull();
+  });
+
+  describe("when an Arr or Seerr refusal comes ahead of the play-history one", () => {
+    // Play Count = 0 AND an Arr/Seerr criterion: refused for the missing
+    // instance first, whatever the play history says.
+    const withCriterion = (field: string) => [
+      {
+        id: "g1",
+        condition: "AND",
+        rules: [
+          { id: "r1", field: "playCount", operator: "equals", value: 0, condition: "AND" },
+          { id: "r2", field, operator: "equals", value: "false", condition: "AND" },
+        ],
+        groups: [],
+      },
+    ];
+    const watch = (ratingKey: string) =>
+      prisma.mediaItem.updateMany({ where: { ratingKey }, data: { playCount: 1, lastPlayedAt: new Date() } });
+    const skips = () =>
+      vi
+        .mocked(logger.warn)
+        .mock.calls.map((c) => String(c[1]))
+        .filter((line) => line.startsWith("Skipping rule set ") || line.startsWith("Refusing to evaluate rule set "));
+
+    it("records the latch for a Seerr refusal during a hold, so the frozen matches stay held once the history is back", async () => {
+      let seerrId = "";
+      await armed(withCriterion("seerrRequested"), async (uid) => {
+        seerrId = (await createTestSeerrInstance(uid)).id;
+      });
+      // During a library-resync hold the Seerr instance is turned off, and m1 is watched.
+      await requireLibraryResync([serverId]);
+      await prisma.seerrInstance.update({ where: { id: seerrId }, data: { enabled: false } });
+      await watch("m1");
+
+      await processLifecycleRules(userId);
+      expect(skips()).toContainEqual(expect.stringMatching(/^Skipping rule set "Unwatched" — Rules use Seerr criteria/));
+      expect(await pausedAt(ruleSetId)).toBeInstanceOf(Date);
+
+      // The history is established again: the matches from before m1's play stay held.
+      await release();
+      await comeDue();
+      await executeLifecycleActions(userId);
+      expect(executeAction).not.toHaveBeenCalled();
+      expect(heldWarnings()[0]).toMatch(LATCH_REASON);
+
+      // Seerr back, and the rule set evaluated: m1 drops out, m2 runs.
+      await prisma.seerrInstance.update({ where: { id: seerrId }, data: { enabled: true } });
+      await processLifecycleRules(userId);
+      expect(await pausedAt(ruleSetId)).toBeNull();
+      await comeDue();
+      await executeLifecycleActions(userId);
+      expect(await statusOf("m1")).toBe("none");
+      expect(await statusOf("m2")).toBe("COMPLETED");
+    });
+
+    it("records it for an Arr refusal in the manual run route (runDetection), and lifts it once the rule set is evaluated", async () => {
+      let radarrId = "";
+      await armed(withCriterion("foundInArr"), async (uid) => {
+        radarrId = (await createTestRadarrInstance(uid)).id;
+      });
+      await requireLibraryResync([serverId]);
+      await prisma.radarrInstance.update({ where: { id: radarrId }, data: { enabled: false } });
+      setMockSession({ isLoggedIn: true, userId });
+      const run = () =>
+        callRoute(runPost, {
+          url: "/api/lifecycle/rules/run",
+          method: "POST",
+          body: { ruleSetId, fullReEval: true, processActions: true },
+        });
+
+      const skipped = await expectJson<{ skipped: Array<{ ruleSetId: string; reason: string }> }>(await run(), 200);
+      expect(skipped.skipped).toEqual([expect.objectContaining({ ruleSetId, reason: expect.stringMatching(/^Rules use Arr criteria/) })]);
+      expect(await pausedAt(ruleSetId)).toBeInstanceOf(Date);
+
+      await release();
+      await prisma.radarrInstance.update({ where: { id: radarrId }, data: { enabled: true } });
+      await expectJson(await run(), 200);
+      expect(await pausedAt(ruleSetId)).toBeNull();
+    });
+
+    it("records it for detectAndSaveMatches' own Seerr refusal, which keeps the matches", async () => {
+      let seerrId = "";
+      await armed(withCriterion("seerrRequested"), async (uid) => {
+        seerrId = (await createTestSeerrInstance(uid)).id;
+      });
+      const rs = await prisma.ruleSet.findUniqueOrThrow({ where: { id: ruleSetId } });
+      await requireLibraryResync([serverId]);
+      await prisma.seerrInstance.update({ where: { id: seerrId }, data: { enabled: false } });
+
+      const result = await detectAndSaveMatches(
+        {
+          id: rs.id,
+          name: rs.name,
+          userId: rs.userId,
+          type: rs.type,
+          rules: rs.rules,
+          seriesScope: rs.seriesScope,
+          serverIds: [serverId],
+          actionEnabled: rs.actionEnabled,
+          actionType: rs.actionType,
+          actionDelayDays: rs.actionDelayDays,
+          arrInstanceId: rs.arrInstanceId,
+          addImportExclusion: rs.addImportExclusion,
+          addArrTags: rs.addArrTags,
+          removeArrTags: rs.removeArrTags,
+          stickyMatches: rs.stickyMatches,
+        },
+        [serverId],
+      );
+
+      expect(skips()).toContainEqual(expect.stringMatching(/^Refusing to evaluate rule set "Unwatched" — Rules use Seerr criteria/));
+      expect(result.count).toBe(2);
+      expect(await prisma.ruleMatch.count({ where: { ruleSetId } })).toBe(2);
+      expect(await pausedAt(ruleSetId)).toBeInstanceOf(Date);
+    });
   });
 });

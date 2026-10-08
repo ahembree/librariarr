@@ -38,6 +38,8 @@ A restore replaces the whole database, and a **config-only** backup (the default
 
 In between, items come back with no record of ever being played. Librariarr handles this rather than letting it arm your rules: every restored server is held, which **pauses lifecycle rules that read play activity** — Watched By User, Play Count, Last Played and the series aggregates — until a **full** sync of it (the scheduled sync, or **Sync** under **Settings → Servers** — syncing only some of its libraries does not count), because a watch-history refresh that runs before then cannot attach plays to media that is not back yet. That includes a server whose media came back with a full backup: whatever was added after the backup was taken returns only with that sync. A server restored without its media waits for the full sync that brings every library back; one whose media came back is released by its next full sync, whatever that sync can list. That sync then refills the history and lifts the pause — for a Tracearr-linked server it starts a re-walk of the archive (every restore re-walks it, since even a full backup's imported plays stop where the backup was taken), and the pause lifts when the walk finishes.
 
+A full backup also brings back the lifecycle matches and pending actions it held, and they are as old as the backup: an item watched since it was taken may still hold a match. So the actions of every rule set that reads play activity stay held after that sync too, until detection has evaluated the rule set again — the next scheduled detection run, or **Re-evaluate All** on the Lifecycle → Matches page — and an item watched in the meantime drops out first.
+
 Take a **full** backup (tick *Include media data*) if you want history to come back with the restore.
 :::
 
@@ -139,7 +141,7 @@ If no account exists (fresh install or after data loss):
 </Steps>
 
 <Aside>
-  After restoring a backup, trigger a full sync from **Settings → Servers**: it repopulates the media metadata a config-only backup leaves out, and it is what lifts the pause on lifecycle rules that read play activity.
+  After restoring a backup, trigger a full sync from **Settings → Servers**: it repopulates the media metadata a config-only backup leaves out, and it is what lifts the pause on lifecycle rules that read play activity. After a full backup's restore, the actions it brought back for those rules then wait for detection to evaluate them again: run **Re-evaluate All** on the Lifecycle → Matches page, or let the scheduled detection run do it.
 </Aside>
 
 ## Restore Process

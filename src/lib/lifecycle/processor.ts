@@ -657,7 +657,8 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
   // that frozen answer, so such a rule set's actions are left PENDING and
   // untouched (like the deletion ceiling's hold, never cancelled) while its
   // servers' play history is not established — and, once a detection run has
-  // skipped the rule set for that (`RuleSet.playHistoryPausedAt`), until a
+  // skipped the rule set while it was not (`RuleSet.playHistoryPausedAt`; a
+  // restore that brings the backup's matches back sets it too), until a
   // detection run has evaluated it again, however soon the history is back
   // (`checkPlayActivityExecutable`). Applied after every cancel-or-narrow
   // check, which are all safe to run on frozen matches.

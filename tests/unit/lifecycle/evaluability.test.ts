@@ -471,4 +471,86 @@ describe("checkLifecycleRuleEvaluability", () => {
     });
   });
 
+  describe("an Arr or Seerr refusal of a rule set that reads play activity", () => {
+    // Play Count = 0 AND the given criterion. The Arr/Seerr refusal comes
+    // first and keeps its reason, but detection skipping the rule set while its
+    // play history is not established must still record the play-history latch
+    // (`notePlayHistoryPause`): the matches it keeps may predate a play.
+    function playCountAnd(field: string): LifecycleRuleGroup[] {
+      return [
+        {
+          id: "g1",
+          condition: "AND",
+          rules: [
+            { id: "r1", field: "playCount", operator: "equals", value: 0, condition: "AND" },
+            { id: "r2", field, operator: "equals", value: "false", condition: "AND" },
+          ],
+          groups: [],
+        },
+      ] as unknown as LifecycleRuleGroup[];
+    }
+
+    it("carries playHistory while a targeted server's play history is not established, keeping its own reason", async () => {
+      mockHasEnabledArrInstances.mockResolvedValue(false);
+      mockServerFindMany.mockResolvedValue([heldServer("Plex")]);
+
+      const result = await checkLifecycleRuleEvaluability("u1", "MOVIE", playCountAnd("foundInArr"), ["s1"]);
+
+      expect(result).toEqual({
+        evaluable: false,
+        permanent: false,
+        playHistory: true,
+        reason: expect.stringMatching(/^Rules use Arr criteria but no enabled Radarr instance exists/),
+      });
+      // Asked of the rule set's own servers, like the play-history refusal.
+      expect(JSON.stringify(mockServerFindMany.mock.calls[0][0].where)).toContain('"s1"');
+    });
+
+    it("so does a Seerr refusal, transient or permanent", async () => {
+      mockHasEnabledSeerrInstances.mockResolvedValue(false);
+      mockServerFindMany.mockResolvedValue([unsyncedServer("Jellyfin")]);
+
+      const movie = await checkLifecycleRuleEvaluability("u1", "MOVIE", playCountAnd("seerrRequested"));
+      expect(movie).toEqual({
+        evaluable: false,
+        permanent: false,
+        playHistory: true,
+        reason: expect.stringMatching(/^Rules use Seerr criteria but no enabled Seerr instance exists/),
+      });
+
+      const music = await checkLifecycleRuleEvaluability("u1", "MUSIC", playCountAnd("seerrRequested"));
+      expect(music).toEqual({
+        evaluable: false,
+        permanent: true,
+        playHistory: true,
+        reason: "Seerr criteria are not supported for music rules",
+      });
+    });
+
+    it("carries no flag while the play history is established", async () => {
+      mockHasEnabledArrInstances.mockResolvedValue(false);
+      mockHasEnabledSeerrInstances.mockResolvedValue(false);
+      mockServerFindMany.mockResolvedValue([]);
+
+      const arr = await checkLifecycleRuleEvaluability("u1", "MOVIE", playCountAnd("foundInArr"));
+      const seerr = await checkLifecycleRuleEvaluability("u1", "MOVIE", playCountAnd("seerrRequested"));
+
+      if (arr.evaluable || seerr.evaluable) throw new Error("expected both refused");
+      expect(arr.reason).toMatch(/^Rules use Arr criteria/);
+      expect(seerr.reason).toMatch(/^Rules use Seerr criteria/);
+      expect(arr).not.toHaveProperty("playHistory");
+      expect(seerr).not.toHaveProperty("playHistory");
+    });
+
+    it("does not ask the play history of a refused rule set that reads no play activity", async () => {
+      mockHasEnabledArrInstances.mockResolvedValue(false);
+      mockServerFindMany.mockResolvedValue([unsyncedServer("Plex")]);
+
+      const result = await checkLifecycleRuleEvaluability("u1", "MOVIE", groupsWith("foundInArr"));
+
+      expect(result).not.toHaveProperty("playHistory");
+      expect(mockServerFindMany).not.toHaveBeenCalled();
+    });
+  });
+
 });

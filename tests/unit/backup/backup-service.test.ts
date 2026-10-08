@@ -40,6 +40,9 @@ const { mockPrismaModels, TABLE_NAMES, mockFs } = vi.hoisted(() => {
 vi.mock("@/lib/db", () => ({
   prisma: {
     ...Object.fromEntries(TABLE_NAMES.map((t: string) => [t, mockPrismaModels[t]])),
+    // Restore latches the rule sets a full backup brought matches back for
+    // (`notePlayHistoryPauseForRestoredMatches`, set-based raw SQL).
+    $executeRawUnsafe: vi.fn().mockResolvedValue(0),
     $transaction: vi.fn(async (fn: (tx: unknown) => Promise<void>) => {
       const txProxy = new Proxy({}, {
         get(_target, prop: string) {

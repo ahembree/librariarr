@@ -10,6 +10,7 @@ import {
   invalidateServersWithoutWatchHistory,
   requireLibraryResync,
 } from "@/lib/media/watch-evidence";
+import { notePlayHistoryPauseForRestoredMatches } from "@/lib/lifecycle/evaluability";
 
 // Runtime data directory: env-resolved and outside the project (under /config in
 // the container), so Turbopack's build-time tracer cannot resolve it statically and
@@ -425,6 +426,26 @@ export async function restoreBackup(
     where: { shortPassSeenAt: { not: null } },
     data: { shortPassSeenAt: null },
   });
+
+  // A FULL backup also brings back its lifecycle matches and actions, and they
+  // are as old as the backup: an item watched since it was taken still holds
+  // its match. The hold above keeps play-activity rule sets from being
+  // evaluated until the next full sync, but it lifts there — and an execution
+  // that ran after that sync and before detection would act on the backup's
+  // matches. So every rule set the file brought matches back for is latched
+  // like one detection skipped (`notePlayHistoryPauseForRestoredMatches`): its
+  // actions wait until a detection run has evaluated it. A config-only backup
+  // holds no matches, so this latches nothing. Taken after the holds, so a
+  // detection run that began before them cannot lift it.
+  const latched = await notePlayHistoryPauseForRestoredMatches();
+  if (latched > 0) {
+    logger.info(
+      "Backup",
+      `The backup brought back the lifecycle matches of ${latched} rule set(s), as old as the ` +
+        `backup — the actions of those that read play activity are held until detection has ` +
+        `evaluated each again`,
+    );
+  }
 
   onProgress?.({ phase: "complete", message: "Restore completed" });
   logger.info("Backup", `Restore completed from ${filename}`);
