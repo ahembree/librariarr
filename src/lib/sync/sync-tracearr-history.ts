@@ -2974,14 +2974,27 @@ const ORPHAN_COPY_ROWS_SQL = `
  * anything else — judged against the item holding the primary row, which the
  * join corroborated against the play itself.
  *
- * Read only through `readMissingCopyRows`, with nested loops disabled, and
- * written to leave the planner nothing else to get wrong: no LATERAL join and
- * no correlated subquery, so every join is a hash or merge join and no table
- * is read once per row of another. A nested loop is cheap only on good
- * statistics, and they are missing exactly when this has the most to do —
- * after a restore or a large sync, before autovacuum has analysed the new
- * rows, the planner reads the server's plays as one row. Planned that way,
- * this statement ran past five minutes on 20,000 copy pairs.
+ * Read only through `readMissingCopyRows`, with nested loops disabled and a
+ * statement timeout, and shaped so that no plan can multiply rows:
+ *  - No nested loop, LATERAL join or correlated subquery, so no table is read
+ *    once per row of another. A nested loop is cheap only on good statistics,
+ *    and they are missing exactly when this has the most to do: after a
+ *    restore or a large sync the planner reads the server's plays as one row,
+ *    and planned that way this statement ran past five minutes on 20,000 copy
+ *    pairs.
+ *  - No level inner-joins more than two relations, and every join is on an
+ *    identifier — an item, a library, a rating key or a play — so no join
+ *    ORDER can pair rows that do not belong together (a NOT EXISTS only ever
+ *    removes rows). With statistics a join order did: none describe
+ *    `UPPER(e."source")`, so the planner read `ids` as a hundredth of its size
+ *    and, before matching either list to its pairs, joined the primaries' ids
+ *    to the copies' on `source` alone — every item with a TMDB id against
+ *    every other. For 5,000 items listed twice that was a hundred million
+ *    rows, 45 seconds and 6 GB of temporary files; for 20,000 it was still
+ *    running when cancelled after two and a half minutes, whether filling the
+ *    copies or finding every row in place. Fenced, `pair_ids` takes each
+ *    pair's primary ids by item before `contradicted` compares the copy's by
+ *    item and source: a third of a second for 20,000, either way.
  */
 const MISSING_COPY_ROWS_SQL = `
   WITH copies AS MATERIALIZED (
@@ -3016,15 +3029,21 @@ const MISSING_COPY_ROWS_SQL = `
      WHERE c."type" <> 'SERIES'
        AND UPPER(e."source") IN ('TMDB', 'IMDB')
   ),
+  -- Each pair with its primary item's ids, joined by item and fenced before
+  -- the copy's are, so no plan can join the two id lists on source alone.
+  pair_ids AS MATERIALIZED (
+    SELECT x."primaryId", x."copyId", ia."source", ia."value"
+      FROM pairs x
+      JOIN ids ia ON ia."itemId" = x."primaryId"
+  ),
   -- A copy holding an id of a source the primary's item holds one of too, and
   -- none of them equal to it.
   contradicted AS MATERIALIZED (
-    SELECT x."primaryId", x."copyId"
-      FROM pairs x
-      JOIN ids ia ON ia."itemId" = x."primaryId"
-      JOIN ids ib ON ib."itemId" = x."copyId" AND ib."source" = ia."source"
-     GROUP BY x."primaryId", x."copyId", ia."source", ia."value"
-    HAVING bool_and(ib."value" <> ia."value")
+    SELECT pi."primaryId", pi."copyId"
+      FROM pair_ids pi
+      JOIN ids ib ON ib."itemId" = pi."copyId" AND ib."source" = pi."source"
+     GROUP BY pi."primaryId", pi."copyId", pi."source", pi."value"
+    HAVING bool_and(ib."value" <> pi."value")
   )
   SELECT p."sourceEventId" AS "chain", x."copyId"
     FROM pairs x
@@ -3044,20 +3063,38 @@ const MISSING_COPY_ROWS_SQL = `
      )`;
 
 /**
- * `MISSING_COPY_ROWS_SQL` with nested loops disabled — `SET LOCAL`, so for
- * this transaction only, and put back before anything is written: the writes
- * reach each row by index, which only a nested loop does, and with hash joins
- * every chunk of `mirrorCopyRows` would read the whole table.
+ * How long `MISSING_COPY_ROWS_SQL` may run before Postgres cancels it. A
+ * backstop, not a budget: the search measured a third of a second for 20,000
+ * items listed twice, whether every copy row was missing or in place, and
+ * grows about linearly. It runs at the start of every import run on a server
+ * with copies — most of them jobs on the serial MAIN_QUEUE — and nothing else
+ * stops a statement once it runs (a transaction's timeout only refuses the
+ * statements after it), so a plan gone wrong would otherwise hold the queue,
+ * and fill the disk with temporary files, for as long as it took. Cancelled,
+ * the repair is a WARN and the import goes on (`applyLibraryCopyRepair`).
+ */
+const REPAIR_SEARCH_TIMEOUT_MS = 60_000;
+
+/**
+ * `MISSING_COPY_ROWS_SQL` with nested loops disabled and its statement
+ * timeout — `SET LOCAL`, so for this transaction only, and both put back
+ * before it returns, in case the transaction goes on to write: writes reach
+ * each row by index, which only a nested loop does (with hash joins every
+ * chunk of `mirrorCopyRows` would read the whole table), and are not this
+ * search's to time out. A cancelled search aborts the transaction, which
+ * drops both settings with it.
  */
 async function readMissingCopyRows(
   db: RawDb,
   serverId: string,
 ): Promise<Array<{ chain: string; copyId: string }>> {
   await db.$executeRawUnsafe(`SET LOCAL enable_nestloop = off`);
+  await db.$executeRawUnsafe(`SET LOCAL statement_timeout = ${REPAIR_SEARCH_TIMEOUT_MS}`);
   const rows = await db.$queryRawUnsafe<Array<{ chain: string; copyId: string }>>(
     MISSING_COPY_ROWS_SQL,
     serverId,
   );
+  await db.$executeRawUnsafe(`SET LOCAL statement_timeout = DEFAULT`);
   await db.$executeRawUnsafe(`SET LOCAL enable_nestloop = DEFAULT`);
   return rows;
 }
@@ -3172,9 +3209,11 @@ function chainOfCopyRow(sourceEventId: string): string {
  *    rows as it would have left them.
  *
  * Neither moves a play's time or state, so the import's boundaries, derived
- * from these rows, stay where they were. Cheap with nothing to do: one query
- * when no item is in two libraries, and two reads, taking no lock, when every
- * row is in place.
+ * from these rows, stay where they were. On a server with no item listed in
+ * two libraries this is one aggregate per run. With copies it is three reads
+ * on EVERY run, however little is left to do — the aggregate, the orphan read
+ * and the search for missing copy rows — taking no lock; together a few
+ * hundred milliseconds for 20,000 items listed twice.
  *
  * What the reads find is written `REPAIR_ROWS_PER_TRANSACTION` rows at a time,
  * each transaction under the mapping guard with the server row taken

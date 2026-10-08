@@ -528,17 +528,37 @@ describe("Tracearr plays of an item two Jellyfin/Emby libraries list (real DB)",
     /** A statement that writes rows. */
     const WRITE = /^\s*(INSERT|UPDATE|DELETE)\b/i;
 
+    /** The search for missing copy rows (`MISSING_COPY_ROWS_SQL`). */
+    const isSearch = (sql: string) => sql.includes("WITH copies AS");
+
+    /** The nested-loop and statement-timeout settings a statement ran under. */
+    type Settings = { sql: string; nestloop: string; timeout: string };
+
     type RawTx = Pick<typeof prisma, "$queryRawUnsafe" | "$executeRawUnsafe">;
 
     /**
      * Records what each interactive `prisma.$transaction` runs while it is on:
-     * every raw statement, the plan of each one `explain` picks, and the
-     * nested-loop setting in force when each one `setting` picks ran.
+     * every raw statement (after `rewrite`, if given), and, for each statement
+     * `explain` picks, its plan and what is wrong with it — checked BEFORE it
+     * runs (`planProblems`; a plan found wrong is refused, never run: the one
+     * this guards against took minutes and gigabytes), then by row counts
+     * once it has run (`growthProblems`, through EXPLAIN ANALYZE). For each
+     * statement `setting` picks, the nested-loop and statement-timeout
+     * settings in force when it ran (`settingsOf`).
      */
     function recordTransactions(
-      pick: { explain?: (sql: string) => boolean; setting?: (sql: string) => boolean } = {},
+      pick: {
+        explain?: (sql: string) => boolean;
+        setting?: (sql: string) => boolean;
+        rewrite?: (sql: string) => string;
+      } = {},
     ) {
-      const runs: Array<{ statements: string[]; plans: unknown[]; nestloop: string[] }> = [];
+      const runs: Array<{
+        statements: string[];
+        plans: unknown[];
+        problems: string[];
+        settings: Settings[];
+      }> = [];
       const original = prisma.$transaction.bind(prisma) as unknown as (
         fn: unknown,
         options?: unknown,
@@ -548,27 +568,44 @@ describe("Tracearr plays of an item two Jellyfin/Emby libraries list (real DB)",
         options?: unknown,
       ) => {
         if (typeof fn !== "function") return original(fn, options);
-        const run = { statements: [] as string[], plans: [] as unknown[], nestloop: [] as string[] };
+        const run = {
+          statements: [] as string[],
+          plans: [] as unknown[],
+          problems: [] as string[],
+          settings: [] as Settings[],
+        };
         runs.push(run);
         return original(async (tx: RawTx) => {
           const recorded =
             (method: keyof RawTx) =>
             async (sql: string, ...args: unknown[]) => {
-              run.statements.push(sql);
-              if (pick.explain?.(sql)) {
-                const [row] = await tx.$queryRawUnsafe<Array<{ "QUERY PLAN": unknown }>>(
-                  `EXPLAIN (FORMAT JSON) ${sql}`,
+              const text = pick.rewrite ? pick.rewrite(sql) : sql;
+              run.statements.push(text);
+              if (pick.explain?.(text)) {
+                const [plan] = await tx.$queryRawUnsafe<Array<{ "QUERY PLAN": unknown }>>(
+                  `EXPLAIN (FORMAT JSON) ${text}`,
                   ...args,
                 );
-                run.plans.push(row["QUERY PLAN"]);
-              }
-              if (pick.setting?.(sql)) {
-                const [row] = await tx.$queryRawUnsafe<Array<{ value: string }>>(
-                  `SELECT current_setting('enable_nestloop') AS "value"`,
+                run.plans.push(plan["QUERY PLAN"]);
+                const problems = planProblems(plan["QUERY PLAN"]);
+                if (problems.length > 0) {
+                  run.problems.push(...problems);
+                  throw new Error(`refused to run the plan: ${problems.join("; ")}`);
+                }
+                const [analyzed] = await tx.$queryRawUnsafe<Array<{ "QUERY PLAN": unknown }>>(
+                  `EXPLAIN (ANALYZE, FORMAT JSON) ${text}`,
+                  ...args,
                 );
-                run.nestloop.push(row.value);
+                run.problems.push(...growthProblems(analyzed["QUERY PLAN"]));
               }
-              return tx[method](sql, ...args);
+              if (pick.setting?.(text)) {
+                const [row] = await tx.$queryRawUnsafe<Array<{ nestloop: string; timeout: string }>>(
+                  `SELECT current_setting('enable_nestloop') AS "nestloop",
+                          current_setting('statement_timeout') AS "timeout"`,
+                );
+                run.settings.push({ sql: text, ...row });
+              }
+              return tx[method](text, ...args);
             };
           const wrapped = new Proxy(tx, {
             get: (target, prop) =>
@@ -582,6 +619,14 @@ describe("Tracearr plays of an item two Jellyfin/Emby libraries list (real DB)",
       return { runs, restore: () => spy.mockRestore() };
     }
 
+    /** The settings the recorded statements `match` picks ran under, in order. */
+    function settingsOf(runs: Array<{ settings: Settings[] }>, match: (sql: string) => boolean) {
+      return runs
+        .flatMap((run) => run.settings)
+        .filter((settings) => match(settings.sql))
+        .map(({ nestloop, timeout }) => ({ nestloop, timeout }));
+    }
+
     /** Every node of an `EXPLAIN (FORMAT JSON)` plan. */
     function planNodes(plan: unknown): Array<Record<string, unknown>> {
       const nodes: Array<Record<string, unknown>> = [];
@@ -593,6 +638,53 @@ describe("Tracearr plays of an item two Jellyfin/Emby libraries list (real DB)",
       };
       for (const entry of plan as Array<{ Plan: Record<string, unknown> }>) visit(entry.Plan);
       return nodes;
+    }
+
+    /** A join condition keyed on an item, library, rating key or play. */
+    const IDENTIFIER = /"(itemId|primaryId|copyId|mediaItemId|libraryId|ratingKey|sourceEventId)"|\.id\b/;
+
+    /**
+     * What is wrong with a plan before it runs: a nested loop or a correlated
+     * subquery (each reads a table once per row of another — cheap only on
+     * statistics, which are missing exactly when the search has the most to
+     * do), or a join keyed on no identifier (it pairs rows that do not belong
+     * together: on `source` alone, every item's id with every other's).
+     */
+    function planProblems(plan: unknown): string[] {
+      return planNodes(plan).flatMap((node) => {
+        if (node["Node Type"] === "Nested Loop") return ["a nested loop"];
+        if (node["Parent Relationship"] === "SubPlan") {
+          return [`a correlated subquery (${node["Subplan Name"]})`];
+        }
+        const condition = node["Hash Cond"] ?? node["Merge Cond"];
+        if (typeof condition === "string" && !IDENTIFIER.test(condition)) {
+          return [`a ${node["Node Type"]} keyed on ${condition}`];
+        }
+        return [];
+      });
+    }
+
+    /** Rows a node produced, over every loop. */
+    const produced = (node: Record<string, unknown>) =>
+      Number(node["Actual Rows"] ?? 0) * Number(node["Actual Loops"] ?? 0);
+
+    /**
+     * What is wrong with a plan once it has run: a join that produced many
+     * times more rows than the larger of its inputs. Every join here pairs a
+     * row with at most a handful of others (an item's copies, its ids, its
+     * plays), so four times its larger input, with a little slack for tiny
+     * ones, is a generous bound — and a hundred-fold blowup is far past it.
+     */
+    function growthProblems(plan: unknown): string[] {
+      return planNodes(plan).flatMap((node) => {
+        if (!/Join|Nested Loop/.test(String(node["Node Type"]))) return [];
+        const inputs = ((node.Plans as Array<Record<string, unknown>> | undefined) ?? []).map(produced);
+        const largest = Math.max(0, ...inputs);
+        const out = produced(node);
+        return out > 4 * largest + 1_000
+          ? [`a ${node["Node Type"]} produced ${out} rows from inputs of ${inputs.join(" and ")}`]
+          : [];
+      });
     }
 
     /** A server whose archived play of jf-1 is stored on item-b alone, walked to the end. */
@@ -1042,19 +1134,19 @@ describe("Tracearr plays of an item two Jellyfin/Emby libraries list (real DB)",
       }
     });
 
-    it("plans its search for missing copy rows without a nested loop, and writes with the planner's own settings", async () => {
+    it("plans its search without a nested loop where one would be cheapest, and writes with the planner's own settings", async () => {
       // A nested loop is only as cheap as the statistics behind it, and they
       // are missing right after a restore or a large sync — exactly when the
       // search has the most to find. Planned as one, it ran past five minutes
-      // on 20,000 copy pairs. With no nested loop and no correlated subquery,
-      // no table is read once per row of another, whatever the statistics.
+      // on 20,000 copy pairs. Over a handful of rows a nested loop IS the
+      // cheapest plan, so this is where one shows up unless they are off.
       // The writes reach each row by index, which only a nested loop does.
       const serverId = await walkedServer("JELLYFIN");
       const more = await createTestLibrary(serverId, { type: "MOVIE" });
       await movie(more.id, "item-c", "jf-1");
       const recorder = recordTransactions({
-        explain: (sql) => sql.includes("WITH copies AS"),
-        setting: (sql) => WRITE.test(sql),
+        explain: isSearch,
+        setting: (sql) => isSearch(sql) || WRITE.test(sql),
       });
       try {
         await syncTracearrHistory(serverId, { passes: "forward" });
@@ -1062,16 +1154,146 @@ describe("Tracearr plays of an item two Jellyfin/Emby libraries list (real DB)",
         recorder.restore();
       }
 
-      const plans = recorder.runs.flatMap((run) => run.plans);
-      expect(plans).toHaveLength(1);
-      for (const plan of plans) {
-        const nodes = planNodes(plan);
-        expect(nodes.filter((node) => node["Node Type"] === "Nested Loop")).toEqual([]);
-        expect(nodes.filter((node) => node["Parent Relationship"] === "SubPlan")).toEqual([]);
+      expect(recorder.runs.flatMap((run) => run.problems)).toEqual([]);
+      expect(recorder.runs.flatMap((run) => run.plans)).toHaveLength(1);
+      expect(settingsOf(recorder.runs, isSearch)).toEqual([{ nestloop: "off", timeout: "1min" }]);
+      const writes = settingsOf(recorder.runs, (sql) => WRITE.test(sql));
+      expect(writes.length).toBeGreaterThan(0);
+      expect(writes).toEqual(writes.map(() => ({ nestloop: "on", timeout: "0" })));
+      expect(await prisma.watchHistory.count({ where: { mediaItemId: "item-c" } })).toBe(1);
+    });
+
+    /**
+     * A walked Jellyfin server whose second library lists every one of its
+     * `items` films — each with a TMDB id and one stored play, filed against
+     * the first library's copy — and holds none of their plays yet. Analysed,
+     * as an established install's tables are.
+     */
+    async function listedTwice(items: number) {
+      const serverId = await mappedServer("JELLYFIN");
+      await prisma.mediaServer.update({
+        where: { id: serverId },
+        data: { tracearrBackfillComplete: true, watchHistorySyncedAt: at(-DAY) },
+      });
+      const first = await createTestLibrary(serverId, { type: "MOVIE", title: "Movies" });
+      const second = await createTestLibrary(serverId, { type: "MOVIE", title: "Movies (all)" });
+      for (const [libraryId, prefix] of [
+        [first.id, "a"],
+        [second.id, "b"],
+      ] as const) {
+        await prisma.$executeRawUnsafe(
+          `INSERT INTO "MediaItem" ("id","libraryId","ratingKey","title","type","createdAt","updatedAt")
+           SELECT '${prefix}-' || g, $1, 'jf-' || g, 'Film ' || g, 'MOVIE', $3::timestamp, $3::timestamp
+             FROM generate_series(1, $2::int) g`,
+          libraryId,
+          items,
+          at(-60 * DAY),
+        );
       }
-      const settings = recorder.runs.flatMap((run) => run.nestloop);
-      expect(settings.length).toBeGreaterThan(0);
-      expect(new Set(settings)).toEqual(new Set(["on"]));
+      await prisma.$executeRawUnsafe(
+        `INSERT INTO "MediaItemExternalId" ("id","mediaItemId","source","externalId")
+         SELECT 'e-' || mi."id", mi."id", 'TMDB', split_part(mi."id", '-', 2) FROM "MediaItem" mi`,
+      );
+      await prisma.$executeRawUnsafe(
+        `INSERT INTO "WatchHistory" ("id","mediaItemId","mediaServerId","serverUsername","watchedAt","source","sourceEventId","watched","state")
+         SELECT 'w-' || g, 'a-' || g, $1, 'walter', $3::timestamp - (g || ' minutes')::interval,
+                'TRACEARR', 'chain-' || g, true, 'stopped'
+           FROM generate_series(1, $2::int) g`,
+        serverId,
+        items,
+        at(-30 * DAY),
+      );
+      await prisma.$executeRawUnsafe(`ANALYZE`);
+      return serverId;
+    }
+
+    it("searches 5,000 films listed twice joining only on identifiers, no join outgrowing its inputs", async () => {
+      // With statistics, the planner joined the primaries' ids to the copies'
+      // on `source` alone — every film with a TMDB id against every other, a
+      // hundred million rows here — before matching them to pairs: 45 seconds
+      // and 6 GB of temporary files. On these analysed tables no join may be
+      // keyed on anything but an identifier, produce many times the rows it
+      // was given, or be a nested loop or a correlated subquery — in the
+      // search that fills the copies, and in the one that then finds every
+      // row in place. The writes run with the planner's own settings and no
+      // timeout.
+      const serverId = await listedTwice(5_000);
+      const recorder = recordTransactions({
+        explain: isSearch,
+        setting: (sql) => isSearch(sql) || WRITE.test(sql),
+      });
+      let filled = 0;
+      try {
+        await syncTracearrHistory(serverId, { passes: "forward" });
+        filled = await prisma.watchHistory.count({ where: { fanOutOfItemId: { not: null } } });
+        await prisma.$executeRawUnsafe(`ANALYZE`);
+        await syncTracearrHistory(serverId, { passes: "forward" });
+      } finally {
+        recorder.restore();
+      }
+
+      expect(recorder.runs.flatMap((run) => run.problems)).toEqual([]);
+      expect(filled).toBe(5_000);
+      expect(recorder.runs.flatMap((run) => run.plans)).toHaveLength(2);
+      expect(settingsOf(recorder.runs, isSearch)).toEqual([
+        { nestloop: "off", timeout: "1min" },
+        { nestloop: "off", timeout: "1min" },
+      ]);
+      const writes = settingsOf(recorder.runs, (sql) => WRITE.test(sql));
+      expect(writes.length).toBeGreaterThan(0);
+      expect(writes).toEqual(writes.map(() => ({ nestloop: "on", timeout: "0" })));
+      expect(vi.mocked(logger.warn)).not.toHaveBeenCalled();
+    }, 60_000);
+
+    it("gives up with a WARN when its search runs past the timeout, and the import goes on", async () => {
+      // Nothing else stops a statement once it runs, and the search runs at
+      // the start of every import run, most of them jobs on the serial queue.
+      // Here it waits on a lock, under a timeout shortened from a minute so
+      // the test is quick.
+      const serverId = await walkedServer("JELLYFIN");
+      const more = await createTestLibrary(serverId, { type: "MOVIE" });
+      await movie(more.id, "item-c", "jf-1");
+      let held!: () => void;
+      const isHeld = new Promise<void>((resolve) => (held = resolve));
+      let release!: () => void;
+      const released = new Promise<void>((resolve) => (release = resolve));
+      const locker = prisma.$transaction(
+        async (tx) => {
+          await tx.$executeRawUnsafe(`LOCK TABLE "MediaItemExternalId" IN ACCESS EXCLUSIVE MODE`);
+          held();
+          await released;
+        },
+        { timeout: 30_000 },
+      );
+      await isHeld;
+
+      const recorder = recordTransactions({
+        rewrite: (sql) => sql.replace(/statement_timeout = \d+/, "statement_timeout = 200"),
+      });
+      const gaveUp = () =>
+        vi.mocked(logger.warn).mock.calls.some(([, message]) => String(message).includes("Could not repair"));
+      let run: ReturnType<typeof syncTracearrHistory>;
+      try {
+        run = syncTracearrHistory(serverId, { passes: "forward" });
+        for (let waited = 0; waited < 5_000 && !gaveUp(); waited += 50) {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+      } finally {
+        release();
+        await locker;
+        recorder.restore();
+      }
+      const result = await run;
+
+      expect(vi.mocked(logger.warn)).toHaveBeenCalledWith(
+        "WatchHistory",
+        expect.stringContaining("Could not repair the library-copy rows"),
+        { error: expect.stringContaining("statement timeout") },
+      );
+      expect(result.failed).toBeUndefined();
+      expect(await prisma.watchHistory.count({ where: { mediaItemId: "item-c" } })).toBe(0);
+
+      await syncTracearrHistory(serverId, { passes: "forward" });
       expect(await prisma.watchHistory.count({ where: { mediaItemId: "item-c" } })).toBe(1);
     });
   });
