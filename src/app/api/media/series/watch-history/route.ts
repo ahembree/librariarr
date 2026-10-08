@@ -92,14 +92,15 @@ export async function GET(request: NextRequest) {
       page,
       limit,
       // A Jellyfin/Emby item listed by two libraries is stored once per
-      // library, and the native sync files each play against every copy — so
+      // library, and both the native sync and the Tracearr import file each
+      // play against every copy — so
       // without this a series page listed that play once per copy. Safe here
       // because the scope always holds every copy of a play together: the
       // copies are one item on one server, so they share the seriesKey (or
       // title), season and episode numbers and server this scope selects by.
       // One row per play remains — the primary copy's (with three or more
       // copies and the primary's deleted, one per remaining copy until the
-      // next full replace; see `/api/media/history`).
+      // server's next watch-history sync; see `/api/media/history`).
       collapseFanOutCopies: true,
     }),
   );

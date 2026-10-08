@@ -397,7 +397,10 @@ describe("recoverHistoryForNewItems", () => {
       });
     });
 
-    it("settles an item whose plays are all newer than the boundary, writing nothing", async () => {
+    it("defers an item whose plays are all newer than the boundary, writing nothing", async () => {
+      // Left to the catch-up — which can step over them (a Refresh whose join
+      // index predates the item) — so asked once more a day on, when they are
+      // old enough to store here.
       vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-10-01T00:00:00.000Z") });
       try {
         m.forwardPassBoundary.mockResolvedValue(new Date("2026-09-30T12:00:00.000Z"));
@@ -407,17 +410,50 @@ describe("recoverHistoryForNewItems", () => {
 
         await recoverHistoryForNewItems(SERVER_ID);
         expect(m.importTracearrRecords).not.toHaveBeenCalled();
+        expect(m.logger.info).toHaveBeenCalledWith(
+          "WatchHistory",
+          expect.stringContaining("1 play(s) newer than the catch-up's boundary left to it (their 1 item(s) asked again later)"),
+        );
 
-        // Answered for good: nothing OLD to recover, and the forward walk
-        // imports the new play — left out now and a day later alike.
+        // Left out straight after, offered again a day later.
         m.prisma.$queryRawUnsafe.mockClear();
         await recoverHistoryForNewItems(SERVER_ID);
         expect(candidateQuery().params[3]).toEqual(["item-1"]);
         vi.setSystemTime(new Date(Date.now() + RECOVERY_REASK_MS));
         m.prisma.$queryRawUnsafe.mockClear();
         await recoverHistoryForNewItems(SERVER_ID);
-        expect(candidateQuery().params[3]).toEqual(["item-1"]);
-        expect(candidateQuery().params[4]).toEqual([]);
+        expect(candidateQuery().params[3]).toEqual([]);
+        expect(candidateQuery().params[4]).toEqual(["item-1"]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("defers an item with a play left to the catch-up even when its older plays resolved to it", async () => {
+      // The older plays are stored, but the newer one is the catch-up's, which
+      // can step over it: settled, the item would never be asked again.
+      vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-10-01T00:00:00.000Z") });
+      try {
+        m.forwardPassBoundary.mockResolvedValue(new Date("2026-09-30T12:00:00.000Z"));
+        const old = { ...play("chain-old"), started_at: "2026-05-01T00:00:00.000Z" };
+        const recent = { ...play("chain-new"), started_at: "2026-09-30T13:00:00.000Z" };
+        m.getHistoryForItem.mockResolvedValue([old, recent]);
+        m.resolveMediaItemId.mockReturnValue({ mediaItemId: "item-1" });
+
+        await recoverHistoryForNewItems(SERVER_ID);
+        expect(m.importTracearrRecords).toHaveBeenCalledWith(
+          SERVER_ID,
+          [old],
+          JOIN_INDEX,
+          expect.anything(),
+          GUARD,
+        );
+
+        vi.setSystemTime(new Date(Date.now() + RECOVERY_REASK_MS));
+        m.prisma.$queryRawUnsafe.mockClear();
+        await recoverHistoryForNewItems(SERVER_ID);
+        expect(candidateQuery().params[3]).toEqual([]);
+        expect(candidateQuery().params[4]).toEqual(["item-1"]);
       } finally {
         vi.useRealTimers();
       }

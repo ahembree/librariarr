@@ -159,10 +159,11 @@ export async function fetchPlayHistory(options: {
   limit: number;
   /**
    * Skip the rows that duplicate a play onto another library copy of the same
-   * item (`WatchHistory.fanOutOfItemId` set), so a play the native sync filed
-   * against every copy is listed once (with three or more copies and the
-   * primary's deleted, once per remaining copy until the next full replace;
-   * see `nativeRowsForPlay`). Only for a scope that always holds
+   * item (`WatchHistory.fanOutOfItemId` set), so a play the native sync or the
+   * Tracearr import filed against every copy is listed once (with three or
+   * more copies and the primary's deleted, once per remaining copy until the
+   * server's next watch-history sync; see `PRIMARY_PLAY` in
+   * `/api/media/history`). Only for a scope that always holds
    * every copy together — otherwise the play's primary row may be out of scope
    * and the play would vanish from the list entirely.
    */

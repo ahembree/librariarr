@@ -71,7 +71,11 @@ vi.mock("@/lib/sync/cancel-watch", async (importOriginal) => {
 });
 
 import { syncTracearrHistory } from "@/lib/sync/sync-tracearr-history";
-import { recoverHistoryForNewItems, resetRecoveryAnswers } from "@/lib/sync/tracearr-backfill-additions";
+import {
+  RECOVERY_REASK_MS,
+  recoverHistoryForNewItems,
+  resetRecoveryAnswers,
+} from "@/lib/sync/tracearr-backfill-additions";
 import { syncWatchHistory } from "@/lib/sync/sync-watch-history";
 import { taskList } from "@/lib/jobs/tasks";
 import { TASK_TRACEARR_BACKFILL } from "@/lib/jobs/constants";
@@ -234,5 +238,106 @@ describe("the recovery pass leaves plays newer than the forward boundary to the 
     vi.setSystemTime(at(3 * HOUR));
     await syncTracearrHistory(serverId, { passes: "forward" });
     expect(await storedIds()).toEqual(["q-unread", "x-new", "x-old"]);
+  });
+});
+
+describe("an item whose plays the pass left to the catch-up (real DB)", () => {
+  // The catch-up can step over a play it cannot place: a History-page Refresh
+  // runs outside the serial queue, and one whose join index was built before
+  // the item existed reads the play as unresolved while moving MAX past it.
+  // Settled, the item was never asked about again and the play was lost.
+  const MIN = 60 * 1000;
+
+  beforeEach(async () => {
+    await cleanDatabase();
+    resetRecoveryAnswers();
+    vi.clearAllMocks();
+    for (const fn of Object.values(m)) fn.mockReset();
+    archive = new FakeTracearrArchive();
+    m.findOldestPlayAt.mockImplementation(async (id: string) => archive.oldest(id));
+    m.listServers.mockResolvedValue([{ id: TRACEARR_SERVER_ID }]);
+    m.getServerAccountNames.mockResolvedValue(new Map([["acct-1", "walter"]]));
+    m.enqueueJob.mockResolvedValue(true);
+    m.getHistoryForItem.mockImplementation(async (id: string, filter: { ratingKey?: string }) =>
+      filter.ratingKey
+        ? archive.page(id, { pageSize: 1000 }).records.filter((record) => record.rating_key === filter.ratingKey)
+        : [],
+    );
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(at(0));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("asks again a day later, and stores the play a stale-index Refresh stepped over", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id, {
+      tracearrServerId: TRACEARR_SERVER_ID,
+      tracearrBackfillComplete: true,
+      watchHistorySyncedAt: at(-DAY),
+    });
+    const library = await createTestLibrary(server.id, { type: "MOVIE" });
+    await createTestMediaItem(library.id, { ratingKey: "rk-y", type: "MOVIE", title: "Y" });
+    const z = await createTestMediaItem(library.id, { ratingKey: "rk-z", type: "MOVIE", title: "Z" });
+    await prisma.tracearrInstance.create({
+      data: { userId: user.id, name: "Tracearr", url: "http://tracearr:8080", apiKey: "k" },
+    });
+    // A walked archive whose newest stored play is three hours old.
+    await prisma.watchHistory.create({
+      data: {
+        mediaItemId: z.id,
+        mediaServerId: server.id,
+        serverUsername: "walter",
+        watchedAt: at(-180 * MIN),
+        source: "TRACEARR",
+        sourceEventId: "z0",
+        watched: true,
+        state: "stopped",
+      },
+    });
+    // X — not in the library yet — played two hours ago, Y ten minutes ago.
+    archive.add(
+      play("z0", at(-180 * MIN), { rating_key: "rk-z" }),
+      play("p-x", at(-120 * MIN), { rating_key: "rk-x" }),
+      play("n-y", at(-10 * MIN), { rating_key: "rk-y" }),
+    );
+
+    // The Refresh's first page is held (a slow or rate-limited answer).
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    let entered!: () => void;
+    const inPage = new Promise<void>((resolve) => (entered = resolve));
+    let first = true;
+    m.getHistoryPage.mockImplementation(async (id: string, options: object) => {
+      if (first) {
+        first = false;
+        entered();
+        await gate;
+      }
+      return archive.page(id, options);
+    });
+    const refresh = syncTracearrHistory(server.id, { passes: "forward" });
+    await inPage; // its join index is built, without X
+
+    // The incremental sync adds X, and the backfill job's recovery pass runs.
+    await createTestMediaItem(library.id, { ratingKey: "rk-x", type: "MOVIE", title: "X" });
+    await recoverHistoryForNewItems(server.id);
+    release();
+    await refresh;
+    // The Refresh stored Y's play and stepped over X's; MAX is past it now.
+    expect(await storedIds()).toEqual(["n-y", "z0"]);
+
+    // Every later catch-up starts above it.
+    m.getHistoryPage.mockImplementation(async (id: string, options: object) => archive.page(id, options));
+    await syncTracearrHistory(server.id, { passes: "forward" });
+    await recoverHistoryForNewItems(server.id);
+    expect(await storedIds()).toEqual(["n-y", "z0"]);
+
+    // A day on, X is asked about again, and its play is old enough to store.
+    vi.setSystemTime(new Date(Date.now() + RECOVERY_REASK_MS));
+    await recoverHistoryForNewItems(server.id);
+    expect(await storedIds()).toEqual(["n-y", "p-x", "z0"]);
   });
 });

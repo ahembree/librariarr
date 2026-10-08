@@ -904,13 +904,15 @@ model WatchHistory {
   /// Set on a row that duplicates a play also filed against ANOTHER copy of
   /// the same item: the id of that copy (the primary row's `mediaItemId`).
   /// Jellyfin/Emby can list one item in two libraries over the same folder,
-  /// and the native sync files the play against each copy so each reads as
-  /// watched to the rules — but a list of PLAYS must show it once, so the
-  /// History page, the series play lists and the watch analytics skip rows
-  /// where this is set. `SetNull`: if the primary copy is deleted, this row is
-  /// shown again — with two copies it is the play's one record; with three or
-  /// more every remaining copy's row is, so the play shows once per remaining
-  /// copy until the next native full replace re-points them.
+  /// and the native sync and the Tracearr import file the play against each
+  /// copy so each reads as watched to the rules — but a list of PLAYS must
+  /// show it once, so the History page, the series play lists, the watch
+  /// analytics and the Tracearr import count skip rows where this is set.
+  /// `SetNull`: if the primary copy is deleted, this row is shown again —
+  /// with two copies it is the play's one record; with three or more every
+  /// remaining copy's row is, so the play shows once per remaining copy until
+  /// the server's next watch-history sync re-points them (a native full
+  /// replace, or the repair a Tracearr import runs before it walks).
   fanOutOfItemId String?
   fanOutOf       MediaItem?  @relation("WatchHistoryFanOut", fields: [fanOutOfItemId], references: [id], onDelete: SetNull)
   mediaServerId  String

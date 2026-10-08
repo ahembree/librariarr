@@ -14,8 +14,10 @@ import { prisma } from "@/lib/db";
 // counting every copy doubled the play. The primary row stands for it. If the
 // primary copy is deleted, `SetNull` makes every remaining copy's row a
 // primary: with two copies that is the play's one row again, with three or
-// more the play counts once per remaining copy until the next native full
-// replace re-points them (see `nativeRowsForPlay` in sync-watch-history.ts).
+// more the play counts once per remaining copy until the server's next
+// watch-history sync re-points them — a native full replace
+// (`nativeRowsForPlay` in sync-watch-history.ts) or, for Tracearr rows, the
+// repair an import runs before it walks (`repairLibraryCopyRows`).
 const ONE_ROW_PER_PLAY = `wh."fanOutOfItemId" IS NULL`;
 
 // serverUsername is NOT NULL; deviceName / platform are nullable (COALESCE'd).

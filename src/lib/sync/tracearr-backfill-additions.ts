@@ -108,8 +108,10 @@ interface RecoveryAnswer {
   /** How many answers it has given — counts toward `MAX_RECOVERY_ASKS`. */
   asks: number;
   /**
-   * Final: the item had no plays, or a play resolved to it. Otherwise the
-   * answer is deferred (every play resolved to some other row, or to none).
+   * Final: the item had no plays, or a play stored by the pass resolved to it
+   * and none was left to the catch-up. Otherwise the answer is deferred (every
+   * play stored resolved to some other row, or to none — or a play was newer
+   * than the forward boundary).
    */
   settled: boolean;
 }
@@ -148,13 +150,15 @@ interface RecoveryAnswer {
  *   with it when its purge cascades, so closing the candidate there would lose
  *   them for good — asked again once the old row is gone, the same plays
  *   resolve to this item. But it is just as often a legitimate second copy (a
- *   new 4K copy beside the 1080p one, a Jellyfin item in two libraries) whose
- *   plays will resolve to the other copy forever. Re-asked every pass, a few
- *   hundred of those filled the newest-first cap on every run and the re-added
- *   items below them were never asked. So a deferred item is re-asked at most
- *   once per `RECOVERY_REASK_MS`, at most `MAX_RECOVERY_ASKS` times in all,
- *   and only AFTER every never-asked candidate (`findCandidates` orders them
- *   last).
+ *   new 4K copy beside the 1080p one) whose plays will resolve to the other
+ *   copy forever. Re-asked every pass, a few hundred of those filled the
+ *   newest-first cap on every run and the re-added items below them were
+ *   never asked. So a deferred item is re-asked at most once per
+ *   `RECOVERY_REASK_MS`, at most `MAX_RECOVERY_ASKS` times in all, and only
+ *   AFTER every never-asked candidate (`findCandidates` orders them last).
+ *   Deferred too: an item with a play newer than the forward boundary. The
+ *   pass leaves those to the catch-up, which can step over them — see the
+ *   call site — and a day on they are old enough to store here.
  *
  * A lookup that FAILED records nothing: the item is simply asked again.
  *
@@ -334,7 +338,9 @@ export async function recoverHistoryForNewItems(
   // re-enabled, before any catch-up has read what happened while it was off.
   // What this pass exists for are the item's OLD plays, all of them at or
   // below the boundary. Read once, at the start: a forward walk moving it up
-  // meanwhile has read what lies between.
+  // meanwhile has read what lies between — though one whose join index was
+  // built before an item existed could not place that item's plays, which is
+  // why an item with such a play is deferred rather than settled (below).
   const boundary = await forwardPassBoundary(serverId, {
     backfillComplete: server.tracearrBackfillComplete,
     cursorAt: server.tracearrBackfillCursorAt,
@@ -416,6 +422,8 @@ export async function recoverHistoryForNewItems(
   let recoveredByProviderId = 0;
   /** Plays newer than `boundary`, left to the forward walk. */
   let leftToForward = 0;
+  /** Items with a play newer than `boundary` — deferred, see the call site. */
+  let awaitingCatchUp = 0;
   /** Provider identities already asked about this run — see the fallback below. */
   const queriedProviders = new Set<string>();
 
@@ -485,11 +493,18 @@ export async function recoverHistoryForNewItems(
       // Only plays at or below the forward boundary — see `boundary`. A record
       // whose start cannot be read is left in: the importer refuses it anyway.
       const old = own.filter((record) => !(Date.parse(record.started_at) > boundary.getTime()));
-      leftToForward += own.length - old.length;
+      // Plays left to the forward walk keep the item's answer DEFERRED, never
+      // settled: a walk that cannot place them — a History-page Refresh whose
+      // join index was built before this item existed — still moves MAX past
+      // them, after which no catch-up reads them again. Asked once more a day
+      // on, they are at or below the boundary: stored here, or merged if the
+      // walk did store them.
+      const leftHere = own.length - old.length;
+      leftToForward += leftHere;
+      if (leftHere > 0) awaitingCatchUp++;
       if (old.length === 0) {
-        // Every play is newer than the boundary: nothing OLD to recover, and
-        // the forward walk imports these. Settled, like an item with no plays.
-        recordAnswer(candidate.id, true, Date.now());
+        // Every play is newer than the boundary: nothing OLD to store now.
+        recordAnswer(candidate.id, false, Date.now());
         continue;
       }
 
@@ -523,8 +538,8 @@ export async function recoverHistoryForNewItems(
       });
       // Plays that resolved to nothing at all (ambiguous, contradicted) defer
       // it too: an ambiguity between the old and new copy clears once the old
-      // one is purged.
-      recordAnswer(candidate.id, resolvedHere, Date.now());
+      // one is purged. So does a play left to the catch-up (above).
+      recordAnswer(candidate.id, resolvedHere && leftHere === 0, Date.now());
       if (!resolvedHere) elsewhere++;
     } catch (error) {
       // One item's lookup failing must not cost the rest of the pass. It can be
@@ -605,7 +620,8 @@ export async function recoverHistoryForNewItems(
       `(${merged} already stored) — ` +
       `${withoutPlays} with no plays, ${elsewhere} deferred (no play resolved to the item itself), ` +
       `${skipped} unjoinable, ${failed} failed, ` +
-      `${leftToForward} play(s) newer than the catch-up's boundary left to it, ` +
+      `${leftToForward} play(s) newer than the catch-up's boundary left to it ` +
+      `(their ${awaitingCatchUp} item(s) asked again later), ` +
       // Worth its own figure: it counts items with plays only their provider id
       // reached — a rating key that changed, which is the re-add case this pass
       // exists for. Zero here on a Plex server with re-added media means the
@@ -660,9 +676,10 @@ async function findCandidates(
   const cap = Math.max(1, Math.min(Math.floor(limit), MAX_CANDIDATE_LIMIT));
   const { excluded, deferredDue } = answeredIds(now);
 
-  // Any TRACEARR row of the item ends its candidacy, a library copy's row
-  // (`fanOutOfItemId` set — a Jellyfin/Emby item two libraries list) included:
-  // it is this item's own record of a play the walk has read.
+  // A TRACEARR row of the item dated well before the item was created ends its
+  // candidacy — a library copy's row (`fanOutOfItemId` set: a Jellyfin/Emby
+  // item two libraries list) as much as a primary one: it is this item's own
+  // record of a play the walk read before the item arrived.
   return prisma.$queryRawUnsafe<CandidateItem[]>(
     `SELECT mi."id", mi."ratingKey", mi."title", mi."type"::text AS "type", mi."parentTitle",
             mi."seasonNumber", mi."episodeNumber",

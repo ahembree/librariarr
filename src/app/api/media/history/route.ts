@@ -20,11 +20,13 @@ import { QUALITY_ORDER, resolutionLabelSql } from "@/lib/resolution";
  * away and the FK's `SetNull` clears the pointer on EVERY remaining copy: with
  * two copies the survivor is the play's only record and is listed once, but
  * with three or more each survivor becomes a primary and the play is listed
- * (and counted) once per remaining copy until the next native full replace
- * re-points them — on Jellyfin/Emby every history sync is one — and for a
- * set-aside user's rows, which a replace keeps as they are, until that user
- * can be read again. Rare (three libraries over one folder) and self-healing,
- * so it is documented rather than designed around.
+ * (and counted) once per remaining copy until the server's next watch-history
+ * sync re-points them — a native full replace rewrites the rows (on
+ * Jellyfin/Emby every history sync is one; a set-aside user's rows, which a
+ * replace keeps as they are, wait until that user can be read again), and a
+ * Tracearr import repairs them before it walks (`repairLibraryCopyRows`).
+ * Rare (three libraries over one folder) and self-healing, so it is
+ * documented rather than designed around.
  */
 const PRIMARY_PLAY = `wh."fanOutOfItemId" IS NULL`;
 

@@ -107,7 +107,9 @@ UPDATE "MediaServer" ms
 -- Before this release the import skipped such a play as ambiguous, or stored
 -- it on the one copy that existed then, and a walk already past those plays
 -- never reads them again. So every mapped Jellyfin/Emby server holding such
--- copies whose walk has started walks its archive again from the newest play
+-- copies whose walk has started (complete, holding a resume cursor, or holding
+-- Tracearr rows: a first slice that died after committing pages left no
+-- cursor) walks its archive again from the newest play
 -- (the state a walk restart writes), with play-activity rules paused until it
 -- finishes. After the restart-shaped fix above, so it does not read this
 -- restart as one of those and hold the server.
@@ -120,7 +122,11 @@ UPDATE "MediaServer" ms
        "tracearrBackfillLastWalkAt" = NULL
  WHERE ms."tracearrServerId" IS NOT NULL
    AND ms."type" IN ('JELLYFIN', 'EMBY')
-   AND (ms."tracearrBackfillComplete" OR ms."tracearrBackfillCursorAt" IS NOT NULL)
+   AND (ms."tracearrBackfillComplete" OR ms."tracearrBackfillCursorAt" IS NOT NULL
+        OR EXISTS (
+          SELECT 1 FROM "WatchHistory" wh
+           WHERE wh."mediaServerId" = ms."id" AND wh."source" = 'TRACEARR'
+        ))
    AND EXISTS (
      SELECT 1
        FROM "MediaItem" a

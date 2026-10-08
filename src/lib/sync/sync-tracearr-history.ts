@@ -24,6 +24,7 @@ import {
   type WatchEvidenceSnapshot,
 } from "@/lib/media/watch-evidence";
 import { eventBus } from "@/lib/events/event-bus";
+import { emitWatchHistoryUpdated } from "@/lib/sync/watch-history-events";
 import {
   beginTracearrImport,
   endTracearrImport,
@@ -606,6 +607,7 @@ async function runTracearrImport(
     select: {
       id: true,
       name: true,
+      type: true,
       enabled: true,
       tracearrServerId: true,
       tracearrMappingVersion: true,
@@ -723,8 +725,9 @@ async function runTracearrImport(
   // storable). Inferring "stale" from the absence of rows instead re-walked
   // such an archive from the top on every run, forever. The paths that DO
   // destroy the rows reset the state explicitly: a purge and disable-with-
-  // delete (`restartTracearrBackfill`), a restore that did not bring the rows
-  // back (`restoreBackup`), and a mapping change (the server PUT).
+  // delete (`restartTracearrBackfill`), every restore (`restoreBackup`, through
+  // the hold it takes on every restored server), and a mapping change (the
+  // server PUT).
   let backfillComplete = server.tracearrBackfillComplete;
   // FORWARD is skipped on a first import, where there is no watermark and the
   // backfill covers everything.
@@ -817,6 +820,14 @@ async function runTracearrImport(
           ? { backfillOutcome: "exhausted" as const, heldReason: "awaiting-resync" as const }
           : {}),
     };
+  }
+
+  // The plays already stored, before anything is walked: a copy listed since
+  // they were imported, or a deleted copy that held their primary rows, is
+  // put right here — no write of an archived play ever comes to do it. Local
+  // only, so it runs when Tracearr cannot be reached as well.
+  if (server.type === "JELLYFIN" || server.type === "EMBY") {
+    await applyLibraryCopyRepair(serverId, guard, serverName, { signal, deadlineMs, yieldTo });
   }
 
   const resolution = await resolveTracearrInstance(
@@ -2792,12 +2803,9 @@ interface CopyRow {
  *    with its state, and that copy's own copy row, if any, goes — or the item
  *    would carry the play twice, and play state never goes back down.
  *
- * Only a play being written is settled. A deleted primary copy clears
- * `fanOutOfItemId` on every other copy's row (`SetNull`), so with three or
- * more copies each survivor reads as a primary and lists of plays show the
- * play once per remaining copy until its chain is written again — re-delivered
- * or recovered — exactly as the native path's rows do until its next full
- * replace. Every copy still reads as watched, so no rule is affected.
+ * Only a play being written is settled here. The plays nothing writes again —
+ * an archived chain is never re-delivered — are brought up to date by
+ * `repairLibraryCopyRows` before every import run walks.
  */
 async function settleLibraryCopyRows(
   db: RawDb,
@@ -2805,18 +2813,44 @@ async function settleLibraryCopyRows(
   plays: Array<{ itemIds: string[] }>,
   chains: string[],
 ): Promise<void> {
-  const pairChains: string[] = [];
-  const pairKeys: string[] = [];
-  const pairRanks: number[] = [];
+  const candidates: CopyRowCandidate[] = [];
   plays.forEach((play, i) => {
     play.itemIds.forEach((mediaItemId, rank) => {
-      pairChains.push(chains[i]);
-      pairKeys.push(copyEventId(chains[i], mediaItemId));
-      pairRanks.push(rank);
+      candidates.push({ chain: chains[i], sourceEventId: copyEventId(chains[i], mediaItemId), rank });
     });
   });
 
-  await db.$executeRawUnsafe(
+  await promoteLowestCopyRows(db, serverId, candidates);
+  await deleteCopyRows(
+    db,
+    serverId,
+    plays.map((play, i) => copyEventId(chains[i], play.itemIds[0])),
+  );
+}
+
+/** A play's copy row that may become its primary row — see `promoteLowestCopyRows`. */
+interface CopyRowCandidate {
+  chain: string;
+  sourceEventId: string;
+  /** Lower wins: the copy's place among the play's copies, by item id. */
+  rank: number;
+}
+
+/**
+ * For each play with no primary row, turn the lowest-ranked of its listed copy
+ * rows that exists into it: renamed to the chain id, its pointer cleared, its
+ * accumulated state kept. A play that has a primary row is left alone. Shared
+ * by the write path (`settleLibraryCopyRows`) and the repair
+ * (`repairLibraryCopyRows`), so both promote the same row. Returns how many
+ * were promoted.
+ */
+async function promoteLowestCopyRows(
+  db: RawDb,
+  serverId: string,
+  candidates: CopyRowCandidate[],
+): Promise<number> {
+  if (candidates.length === 0) return 0;
+  return db.$executeRawUnsafe(
     `UPDATE "WatchHistory" AS wh
         SET "sourceEventId" = pick."chain", "fanOutOfItemId" = NULL
        FROM (
@@ -2832,14 +2866,19 @@ async function settleLibraryCopyRows(
        ) AS pick
       WHERE wh."id" = pick."id"`,
     serverId,
-    pairChains,
-    pairKeys,
-    pairRanks,
+    candidates.map((candidate) => candidate.chain),
+    candidates.map((candidate) => candidate.sourceEventId),
+    candidates.map((candidate) => candidate.rank),
   );
-  await db.$executeRawUnsafe(
+}
+
+/** Delete this server's rows with these `sourceEventId`s. */
+async function deleteCopyRows(db: RawDb, serverId: string, keys: string[]): Promise<number> {
+  if (keys.length === 0) return 0;
+  return db.$executeRawUnsafe(
     `DELETE FROM "WatchHistory" WHERE "mediaServerId" = $1 AND "sourceEventId" = ANY($2)`,
     serverId,
-    plays.map((play, i) => copyEventId(chains[i], play.itemIds[0])),
+    keys,
   );
 }
 
@@ -2872,16 +2911,22 @@ const MIRROR_SELECT_LIST = INSERT_COLUMNS.map((column) => {
  * incoming record may be (see `settleLibraryCopyRows`). The merge is the
  * primary's own (monotonic, latched), so a copy row can never read less
  * watched than it did; its username is the primary's, already merged.
+ * Returns how many rows it wrote.
  */
-async function mirrorCopyRows(db: RawDb, serverId: string, copies: CopyRow[]): Promise<void> {
+async function mirrorCopyRows(db: RawDb, serverId: string, copies: CopyRow[]): Promise<number> {
+  let written = 0;
   for (let i = 0; i < copies.length; i += BATCH_SIZE) {
     const chunk = copies.slice(i, i + BATCH_SIZE);
-    await db.$executeRawUnsafe(
+    // Only onto a copy that still exists and is not the item holding the
+    // primary row: a copy row there would count the play twice for that item.
+    written += await db.$executeRawUnsafe(
       `INSERT INTO "WatchHistory" (${INSERT_COLUMN_LIST})
        SELECT ${MIRROR_SELECT_LIST}
          FROM unnest($2::text[], $3::text[], $4::text[], $5::text[])
               AS v("id", "chain", "sourceEventId", "mediaItemId")
          JOIN "WatchHistory" p ON p."mediaServerId" = $1 AND p."sourceEventId" = v."chain"
+         JOIN "MediaItem" ci ON ci."id" = v."mediaItemId"
+        WHERE p."mediaItemId" <> v."mediaItemId"
        ${WATCH_HISTORY_UPSERT_SUFFIX}`,
       serverId,
       chunk.map((copy) => copy.id),
@@ -2890,6 +2935,404 @@ async function mirrorCopyRows(db: RawDb, serverId: string, copies: CopyRow[]): P
       chunk.map((copy) => copy.mediaItemId),
       new Date(),
     );
+  }
+  return written;
+}
+
+/** Whether the server lists any item in two of its libraries. */
+const HAS_COPY_GROUPS_SQL = `
+  SELECT EXISTS (
+    SELECT 1
+      FROM "MediaItem" mi
+      JOIN "Library" l ON l."id" = mi."libraryId"
+     WHERE l."mediaServerId" = $1
+     GROUP BY mi."ratingKey"
+    HAVING COUNT(*) > 1
+  ) AS "found"`;
+
+/**
+ * Copy rows that point at nothing: the item holding their play's primary row
+ * was deleted (`SetNull`). One table and no join, so nothing for a plan to get
+ * wrong. A copy row that outlived every other copy is among them: it already
+ * is the play's only row, and becoming its primary row changes only its key.
+ */
+const ORPHAN_COPY_ROWS_SQL = `
+  SELECT "sourceEventId", "mediaItemId"
+    FROM "WatchHistory"
+   WHERE "mediaServerId" = $1
+     AND "source" = 'TRACEARR'
+     AND "fanOutOfItemId" IS NULL
+     AND "sourceEventId" LIKE '%:copy:%'`;
+
+/**
+ * Each primary row of an item the server lists in two of its libraries, paired
+ * with every other copy of the item that holds no row of its play. A copy is
+ * what the join would file the play against (`libraryCopies` in
+ * tracearr-join.ts): the same rating key in another library of the server
+ * (`@@unique([libraryId, ratingKey])`), the same type, and no contradicting
+ * identity — the show's rating key for an episode, a TMDB or IMDB id for
+ * anything else — judged against the item holding the primary row, which the
+ * join corroborated against the play itself.
+ *
+ * Read only through `readMissingCopyRows`, with nested loops disabled, and
+ * written to leave the planner nothing else to get wrong: no LATERAL join and
+ * no correlated subquery, so every join is a hash or merge join and no table
+ * is read once per row of another. A nested loop is cheap only on good
+ * statistics, and they are missing exactly when this has the most to do —
+ * after a restore or a large sync, before autovacuum has analysed the new
+ * rows, the planner reads the server's plays as one row. Planned that way,
+ * this statement ran past five minutes on 20,000 copy pairs.
+ */
+const MISSING_COPY_ROWS_SQL = `
+  WITH copies AS MATERIALIZED (
+    SELECT c."id", c."ratingKey", c."type", c."grandparentRatingKey"
+      FROM (
+        SELECT mi."id", mi."ratingKey", mi."type", mi."grandparentRatingKey",
+               COUNT(*) OVER (PARTITION BY mi."ratingKey") AS "listed"
+          FROM "MediaItem" mi
+          JOIN "Library" l ON l."id" = mi."libraryId"
+         WHERE l."mediaServerId" = $1
+      ) c
+     WHERE c."listed" > 1
+  ),
+  pairs AS MATERIALIZED (
+    SELECT a."id" AS "primaryId", b."id" AS "copyId"
+      FROM copies a
+      JOIN copies b ON b."ratingKey" = a."ratingKey" AND b."id" <> a."id"
+     WHERE b."type" = a."type"
+       AND NOT (
+         a."type" = 'SERIES'
+         AND a."grandparentRatingKey" IS NOT NULL
+         AND b."grandparentRatingKey" IS NOT NULL
+         AND a."grandparentRatingKey" <> b."grandparentRatingKey"
+       )
+  ),
+  ids AS MATERIALIZED (
+    SELECT e."mediaItemId" AS "itemId",
+           UPPER(e."source") AS "source",
+           TRIM(e."externalId") AS "value"
+      FROM "MediaItemExternalId" e
+      JOIN copies c ON c."id" = e."mediaItemId"
+     WHERE c."type" <> 'SERIES'
+       AND UPPER(e."source") IN ('TMDB', 'IMDB')
+  ),
+  -- A copy holding an id of a source the primary's item holds one of too, and
+  -- none of them equal to it.
+  contradicted AS MATERIALIZED (
+    SELECT x."primaryId", x."copyId"
+      FROM pairs x
+      JOIN ids ia ON ia."itemId" = x."primaryId"
+      JOIN ids ib ON ib."itemId" = x."copyId" AND ib."source" = ia."source"
+     GROUP BY x."primaryId", x."copyId", ia."source", ia."value"
+    HAVING bool_and(ib."value" <> ia."value")
+  )
+  SELECT p."sourceEventId" AS "chain", x."copyId"
+    FROM pairs x
+    JOIN "WatchHistory" p ON p."mediaItemId" = x."primaryId"
+   WHERE p."mediaServerId" = $1
+     AND p."source" = 'TRACEARR'
+     AND p."fanOutOfItemId" IS NULL
+     AND p."sourceEventId" NOT LIKE '%:copy:%'
+     AND NOT EXISTS (
+       SELECT 1 FROM contradicted k
+        WHERE k."primaryId" = x."primaryId" AND k."copyId" = x."copyId"
+     )
+     AND NOT EXISTS (
+       SELECT 1 FROM "WatchHistory" w
+        WHERE w."mediaServerId" = $1
+          AND w."sourceEventId" = p."sourceEventId" || ':copy:' || x."copyId"
+     )`;
+
+/**
+ * `MISSING_COPY_ROWS_SQL` with nested loops disabled — `SET LOCAL`, so for
+ * this transaction only, and put back before anything is written: the writes
+ * reach each row by index, which only a nested loop does, and with hash joins
+ * every chunk of `mirrorCopyRows` would read the whole table.
+ */
+async function readMissingCopyRows(
+  db: RawDb,
+  serverId: string,
+): Promise<Array<{ chain: string; copyId: string }>> {
+  await db.$executeRawUnsafe(`SET LOCAL enable_nestloop = off`);
+  const rows = await db.$queryRawUnsafe<Array<{ chain: string; copyId: string }>>(
+    MISSING_COPY_ROWS_SQL,
+    serverId,
+  );
+  await db.$executeRawUnsafe(`SET LOCAL enable_nestloop = DEFAULT`);
+  return rows;
+}
+
+/** What `repairLibraryCopyRows` changed, counted as each transaction commits. */
+interface LibraryCopyRepair {
+  /** Plays whose primary row had gone, given one from a surviving copy's row. */
+  promoted: number;
+  /** Copy rows pointed at their play's primary row again. */
+  repointed: number;
+  /** Copy rows added on copies that held none of a play's rows. */
+  filled: number;
+  /** Stopped between transactions with work left — the next import run finishes it. */
+  stopped: boolean;
+}
+
+/** When a repair stops between transactions — the import run's own limits. */
+interface LibraryCopyRepairLimits {
+  signal?: AbortSignal;
+  deadlineMs?: number;
+  yieldTo?: () => boolean;
+}
+
+/**
+ * Rows `repairLibraryCopyRows` writes per transaction. Each one holds the
+ * server row against page writes (`FOR NO KEY UPDATE`) for as long as it
+ * runs, and a large repair — a library added over a folder with years of
+ * plays — costs a fifth of a millisecond or more per row: written in one
+ * transaction, 100,000 rows held every other writer of the server back for
+ * 21 seconds (36 for 100,000 re-pointed rows), and a repair large enough to
+ * outlive the transaction's timeout would fail the same way on every run.
+ */
+const REPAIR_ROWS_PER_TRANSACTION = 10_000;
+
+/**
+ * `repairLibraryCopyRows`, then what a change to the stored plays needs: the
+ * added copies' play counts reconciled, caches dropped and pages told — for
+ * whatever was committed, even if a later transaction failed. Never fails the
+ * import run: what it misses, the next run's repair finds again.
+ */
+async function applyLibraryCopyRepair(
+  serverId: string,
+  guard: TracearrMappingGuard,
+  serverName: string,
+  limits: LibraryCopyRepairLimits,
+): Promise<void> {
+  const repair: LibraryCopyRepair = { promoted: 0, repointed: 0, filled: 0, stopped: false };
+  try {
+    await repairLibraryCopyRows(serverId, guard, limits, repair);
+  } catch (error) {
+    logger.warn(
+      "WatchHistory",
+      `Could not repair the library-copy rows of "${serverName}"'s Tracearr plays — ` +
+        `the next import tries again`,
+      { error: String(error) },
+    );
+  }
+  if (repair.promoted + repair.repointed + repair.filled === 0) return;
+
+  logger.info(
+    "WatchHistory",
+    `Repaired the library-copy rows of "${serverName}"'s Tracearr plays: ` +
+      `${repair.filled} copy row(s) added for copies listed since their plays were imported, ` +
+      `${repair.promoted} play(s) whose primary copy was deleted given a new primary row, ` +
+      `${repair.repointed} copy row(s) pointed at it` +
+      (repair.stopped ? ` — stopped early, the next import does the rest` : ""),
+  );
+  // An added copy reads as unwatched until its play state is reconciled.
+  if (repair.filled > 0) {
+    try {
+      await reconcileWatchStateFromHistory(serverId);
+    } catch (error) {
+      logger.warn(
+        "WatchHistory",
+        `Failed to reconcile play state after repairing library-copy rows for "${serverName}"`,
+        { error: String(error) },
+      );
+    }
+  }
+  invalidateMediaCaches();
+  await emitWatchHistoryUpdated(serverId, { repaired: true });
+}
+
+/** The chain id a copy row's `sourceEventId` carries — see `copyEventId`. */
+function chainOfCopyRow(sourceEventId: string): string {
+  return sourceEventId.slice(0, sourceEventId.indexOf(":copy:"));
+}
+
+/**
+ * Bring the library-copy rows of the plays ALREADY stored on a Jellyfin/Emby
+ * server up to date with the copies that exist now. Runs before every import
+ * run walks anything, so every watch-history sync applies it.
+ *
+ * `writeBatch` keeps a play's rows straight only while it writes that play,
+ * and nothing writes an archived play again — the catch-up re-reads an hour,
+ * the archive walk runs once, recovery asks about a capped number of items
+ * added in the last week. Two states outlived the write:
+ *
+ *  - A copy listed after the play was imported (a library added over the
+ *    folder, a folder added to a library) held none of its rows, so it read as
+ *    never watched — what `playCount = 0`, "not played in N months" and
+ *    negative `watchedByUser` DELETE rules act on. It now gets a copy row of
+ *    every play the item's primary row holds, built from that row
+ *    (`mirrorCopyRows`), wherever the join would file the play against it
+ *    (`MISSING_COPY_ROWS_SQL`).
+ *  - With three or more copies, deleting the one holding a play's primary row
+ *    clears the pointer on every other copy's row (`SetNull`), and the play
+ *    was listed and counted once per remaining copy. The lowest surviving
+ *    copy's row becomes the primary row and the others point at it, through
+ *    the statements the write path uses (`promoteLowestCopyRows`,
+ *    `deleteCopyRows`, `mirrorCopyRows`), so a later re-delivery finds the
+ *    rows as it would have left them.
+ *
+ * Neither moves a play's time or state, so the import's boundaries, derived
+ * from these rows, stay where they were. Cheap with nothing to do: one query
+ * when no item is in two libraries, and two reads, taking no lock, when every
+ * row is in place.
+ *
+ * What the reads find is written `REPAIR_ROWS_PER_TRANSACTION` rows at a time,
+ * each transaction under the mapping guard with the server row taken
+ * `FOR NO KEY UPDATE`, not `writeBatch`'s `FOR SHARE`: a page write of the
+ * same play racing it could otherwise move the primary row onto an item this
+ * repair is giving a copy row, which then counts the play twice — and play
+ * counts never go back down. A page write may still land BETWEEN two of them,
+ * so every statement takes the rows as they are when it runs, not as the
+ * reads found them: a play that has a primary row again is not promoted, the
+ * primary rows are looked up afresh, and `mirrorCopyRows` writes only onto a
+ * copy that still exists and does not hold the play's primary row. Between
+ * transactions the run's own limits apply (a cancel at once; the deadline and
+ * a waiting sync once one transaction has committed, so every run gets
+ * somewhere), and the next import run picks up whatever is left. `repair`
+ * counts what each committed transaction wrote.
+ */
+async function repairLibraryCopyRows(
+  serverId: string,
+  guard: TracearrMappingGuard,
+  limits: LibraryCopyRepairLimits,
+  repair: LibraryCopyRepair,
+): Promise<void> {
+  const [gate] = await prisma.$queryRawUnsafe<Array<{ found: boolean }>>(
+    HAS_COPY_GROUPS_SQL,
+    serverId,
+  );
+  if (!gate?.found) return;
+
+  let committed = 0;
+  const stopNow = (): boolean => {
+    if (limits.signal?.aborted) return true;
+    if (committed === 0) return false;
+    if (limits.deadlineMs !== undefined && Date.now() >= limits.deadlineMs) return true;
+    return limits.yieldTo?.() ?? false;
+  };
+  /** One transaction under the mapping guard; false when the mapping has moved. */
+  const underGuard = (write: (tx: RawDb) => Promise<void>): Promise<boolean> =>
+    prisma.$transaction(
+      async (tx) => {
+        const mapped = await tx.$queryRawUnsafe<Array<{ id: string }>>(
+          `SELECT "id" FROM "MediaServer"
+            WHERE "id" = $1 AND "tracearrServerId" = $2 AND "tracearrMappingVersion" = $3
+            FOR NO KEY UPDATE`,
+          serverId,
+          guard.tracearrServerId,
+          guard.mappingVersion,
+        );
+        // Re-pointed, unlinked or re-linked since the run read it: these rows
+        // are about to be wiped, or already were.
+        if (mapped.length === 0) return false;
+        await write(tx);
+        return true;
+      },
+      { timeout: 60_000, maxWait: 15_000 },
+    );
+
+  // Orphans first, so the primary rows they become get their copies below.
+  const orphans = await prisma.$queryRawUnsafe<Array<{ sourceEventId: string; mediaItemId: string }>>(
+    ORPHAN_COPY_ROWS_SQL,
+    serverId,
+  );
+  const byChain = new Map<string, Array<{ sourceEventId: string; mediaItemId: string }>>();
+  for (const row of orphans) {
+    const chain = chainOfCopyRow(row.sourceEventId);
+    const rows = byChain.get(chain);
+    if (rows) rows.push(row);
+    else byChain.set(chain, [row]);
+  }
+  const orphanChains = [...byChain.keys()];
+  for (let start = 0; start < orphanChains.length; ) {
+    if (stopNow()) {
+      repair.stopped = true;
+      return;
+    }
+    const chains: string[] = [];
+    let rowCount = 0;
+    while (start < orphanChains.length && (chains.length === 0 || rowCount < REPAIR_ROWS_PER_TRANSACTION)) {
+      const chain = orphanChains[start++];
+      chains.push(chain);
+      rowCount += byChain.get(chain)!.length;
+    }
+    let promoted = 0;
+    let repointed = 0;
+    const mapped = await underGuard(async (tx) => {
+      // Lowest item id first, the order `writeBatch` ranks a play's copies in
+      // (plain string order), so both promote the same row.
+      const candidates: CopyRowCandidate[] = [];
+      for (const chain of chains) {
+        const rows = byChain.get(chain)!;
+        rows.sort((x, y) => (x.mediaItemId < y.mediaItemId ? -1 : x.mediaItemId > y.mediaItemId ? 1 : 0));
+        rows.forEach((row, rank) => candidates.push({ chain, sourceEventId: row.sourceEventId, rank }));
+      }
+      promoted = await promoteLowestCopyRows(tx, serverId, candidates);
+
+      const primaries = await tx.$queryRawUnsafe<Array<{ sourceEventId: string; mediaItemId: string }>>(
+        `SELECT "sourceEventId", "mediaItemId" FROM "WatchHistory"
+          WHERE "mediaServerId" = $1 AND "sourceEventId" = ANY($2)`,
+        serverId,
+        chains,
+      );
+      const primaryItem = new Map(primaries.map((row) => [row.sourceEventId, row.mediaItemId]));
+      // A pointer-less copy row on the very item that holds its play's
+      // primary row would count the play twice there.
+      await deleteCopyRows(
+        tx,
+        serverId,
+        chains.flatMap((chain) => {
+          const item = primaryItem.get(chain);
+          return item ? [copyEventId(chain, item)] : [];
+        }),
+      );
+      const repoint: CopyRow[] = [];
+      for (const chain of chains) {
+        const item = primaryItem.get(chain);
+        if (!item) continue;
+        for (const row of byChain.get(chain)!) {
+          if (row.mediaItemId === item) continue;
+          repoint.push({
+            id: randomUUID(),
+            chain,
+            sourceEventId: row.sourceEventId,
+            mediaItemId: row.mediaItemId,
+          });
+        }
+      }
+      repointed = await mirrorCopyRows(tx, serverId, repoint);
+    });
+    if (!mapped) return;
+    committed++;
+    repair.promoted += promoted;
+    repair.repointed += repointed;
+  }
+
+  const missing = await prisma.$transaction((tx) => readMissingCopyRows(tx, serverId), {
+    timeout: 5 * 60_000,
+    maxWait: 15_000,
+  });
+  for (let start = 0; start < missing.length; start += REPAIR_ROWS_PER_TRANSACTION) {
+    if (stopNow()) {
+      repair.stopped = true;
+      return;
+    }
+    let filled = 0;
+    const mapped = await underGuard(async (tx) => {
+      filled = await mirrorCopyRows(
+        tx,
+        serverId,
+        missing.slice(start, start + REPAIR_ROWS_PER_TRANSACTION).map(({ chain, copyId }) => ({
+          id: randomUUID(),
+          chain,
+          sourceEventId: copyEventId(chain, copyId),
+          mediaItemId: copyId,
+        })),
+      );
+    });
+    if (!mapped) return;
+    committed++;
+    repair.filled += filled;
   }
 }
 
