@@ -2855,9 +2855,13 @@ interface CopyRowCandidate {
  * page re-delivering 100 plays spent 0.4 seconds on it, every page, on one
  * holding 400,000 (now 0.07). The repair holds the server row against page
  * writes, so between the two statements its rows can only vanish with their
- * item, which the update then skips; page writes share their lock with each
- * other, and two promoting the same play race as they did over the one
- * statement.
+ * item, which the update then skips. Page writes share their lock with each
+ * other: two promoting the same play pick the same row and the second update
+ * waits for the first. Only two whose join indexes disagree about the play's
+ * copies can pick different rows, and then the second fails on the unique
+ * `(mediaServerId, sourceEventId)` where the one statement promoted nothing —
+ * its page is fetched again next run and merges into the primary row the
+ * first wrote, so nothing is lost or counted twice.
  */
 async function promoteLowestCopyRows(
   db: RawDb,
