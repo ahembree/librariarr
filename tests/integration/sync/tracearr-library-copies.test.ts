@@ -377,35 +377,59 @@ describe("Tracearr plays of an item two Jellyfin/Emby libraries list (real DB)",
     ]);
   });
 
-  it("promotes a surviving copy's row when the primary goes and a lower-id copy arrives", async () => {
-    const serverId = await mappedServer("JELLYFIN");
-    const libraries = await Promise.all(
-      ["A", "B", "C", "D"].map((title) => createTestLibrary(serverId, { type: "MOVIE", title })),
-    );
-    await movie(libraries[0].id, "item-b", "jf-1");
-    await movie(libraries[1].id, "item-c", "jf-1");
-    await movie(libraries[2].id, "item-d", "jf-1");
-    archive.add(play("chain-1", at(-2 * DAY), { rating_key: "jf-1", watched: true, percent_complete: 95 }));
-    await syncTracearrHistory(serverId, { passes: "backfill" });
+  // The repair promotes such a row before the walk; when it could not run
+  // (it failed, or stopped early), the page write re-delivering the play does,
+  // picking the lowest copy row that exists — not the new copy's, which holds
+  // none, and would leave the play rebuilt from the truncated record.
+  for (const repaired of [true, false]) {
+    it(`promotes a surviving copy's row when the primary goes and a lower-id copy arrives${repaired ? "" : ", in the page write if the repair could not run"}`, async () => {
+      const serverId = await mappedServer("JELLYFIN");
+      const libraries = await Promise.all(
+        ["A", "B", "C", "D"].map((title) => createTestLibrary(serverId, { type: "MOVIE", title })),
+      );
+      await movie(libraries[0].id, "item-b", "jf-1");
+      await movie(libraries[1].id, "item-c", "jf-1");
+      await movie(libraries[2].id, "item-d", "jf-1");
+      archive.add(play("chain-1", at(-2 * DAY), { rating_key: "jf-1", watched: true, percent_complete: 95 }));
+      await syncTracearrHistory(serverId, { passes: "backfill" });
 
-    // The primary's copy goes, and a library listing it under a lower id comes.
-    await prisma.mediaItem.delete({ where: { id: "item-b" } });
-    await movie(libraries[3].id, "item-a", "jf-1");
-    archive = new FakeTracearrArchive();
-    archive.add(truncated());
-    await syncTracearrHistory(serverId, { passes: "forward" });
+      // The primary's copy goes, and a library listing it under a lower id comes.
+      await prisma.mediaItem.delete({ where: { id: "item-b" } });
+      await movie(libraries[3].id, "item-a", "jf-1");
+      archive = new FakeTracearrArchive();
+      archive.add(truncated());
+      const original = prisma.$queryRawUnsafe.bind(prisma);
+      const refused = repaired
+        ? undefined
+        : vi.spyOn(prisma, "$queryRawUnsafe").mockImplementation((async (sql: string, ...args: unknown[]) => {
+            if (sql.includes(`"sourceEventId" LIKE '%:copy:%'`)) throw new Error("orphan read refused");
+            return original(sql, ...args);
+          }) as typeof prisma.$queryRawUnsafe);
+      try {
+        await syncTracearrHistory(serverId, { passes: "forward" });
+      } finally {
+        refused?.mockRestore();
+      }
+      if (!repaired) {
+        expect(vi.mocked(logger.warn)).toHaveBeenCalledWith(
+          "WatchHistory",
+          expect.stringContaining("Could not repair the library-copy rows"),
+          { error: expect.stringContaining("orphan read refused") },
+        );
+      }
 
-    expect(await rowsOf(serverId)).toEqual([
-      { mediaItemId: "item-a", sourceEventId: "chain-1", fanOutOfItemId: null, ...finished },
-      { mediaItemId: "item-c", sourceEventId: "chain-1:copy:item-c", fanOutOfItemId: "item-a", ...finished },
-      { mediaItemId: "item-d", sourceEventId: "chain-1:copy:item-d", fanOutOfItemId: "item-a", ...finished },
-    ]);
-    const history = await expectJson<{ items: unknown[] }>(
-      await callRoute(listHistory, { url: "/api/media/history" }),
-      200,
-    );
-    expect(history.items).toHaveLength(1);
-  });
+      expect(await rowsOf(serverId)).toEqual([
+        { mediaItemId: "item-a", sourceEventId: "chain-1", fanOutOfItemId: null, ...finished },
+        { mediaItemId: "item-c", sourceEventId: "chain-1:copy:item-c", fanOutOfItemId: "item-a", ...finished },
+        { mediaItemId: "item-d", sourceEventId: "chain-1:copy:item-d", fanOutOfItemId: "item-a", ...finished },
+      ]);
+      const history = await expectJson<{ items: unknown[] }>(
+        await callRoute(listHistory, { url: "/api/media/history" }),
+        200,
+      );
+      expect(history.items).toHaveLength(1);
+    });
+  }
 
   it("drops the copy row a copy holds when the play's primary row moves onto it", async () => {
     // The primary's copy stops listing the item under the play's key while it
@@ -547,12 +571,16 @@ describe("Tracearr plays of an item two Jellyfin/Emby libraries list (real DB)",
      * this guards against took minutes and gigabytes), then by row counts
      * once it has run (`growthProblems`, through EXPLAIN ANALYZE). For each
      * statement `setting` picks, the nested-loop, statement-timeout and
-     * lock-timeout settings in force when it ran (`settingsOf`).
+     * lock-timeout settings in force when it ran (`settingsOf`). For each
+     * statement `visits` picks, the most rows any one node of its plan read
+     * (`mostRowsRead`), from an EXPLAIN ANALYZE inside a savepoint rolled
+     * back before the statement itself runs, so a write is not applied twice.
      */
     function recordTransactions(
       pick: {
         explain?: (sql: string) => boolean;
         setting?: (sql: string) => boolean;
+        visits?: (sql: string) => boolean;
         rewrite?: (sql: string) => string;
       } = {},
     ) {
@@ -561,6 +589,7 @@ describe("Tracearr plays of an item two Jellyfin/Emby libraries list (real DB)",
         plans: unknown[];
         problems: string[];
         settings: Settings[];
+        visits: Array<{ sql: string; rows: number }>;
       }> = [];
       const original = prisma.$transaction.bind(prisma) as unknown as (
         fn: unknown,
@@ -576,6 +605,7 @@ describe("Tracearr plays of an item two Jellyfin/Emby libraries list (real DB)",
           plans: [] as unknown[],
           problems: [] as string[],
           settings: [] as Settings[],
+          visits: [] as Array<{ sql: string; rows: number }>,
         };
         runs.push(run);
         return original(async (tx: RawTx) => {
@@ -610,6 +640,18 @@ describe("Tracearr plays of an item two Jellyfin/Emby libraries list (real DB)",
                           current_setting('lock_timeout') AS "lockTimeout"`,
                 );
                 run.settings.push({ sql: text, ...row });
+              }
+              if (pick.visits?.(text)) {
+                await tx.$executeRawUnsafe(`SAVEPOINT visits`);
+                try {
+                  const [analyzed] = await tx.$queryRawUnsafe<Array<{ "QUERY PLAN": unknown }>>(
+                    `EXPLAIN (ANALYZE, FORMAT JSON) ${text}`,
+                    ...args,
+                  );
+                  run.visits.push({ sql: text, rows: mostRowsRead(analyzed["QUERY PLAN"]) });
+                } finally {
+                  await tx.$executeRawUnsafe(`ROLLBACK TO SAVEPOINT visits`);
+                }
               }
               return tx[method](text, ...args);
             };
@@ -689,6 +731,27 @@ describe("Tracearr plays of an item two Jellyfin/Emby libraries list (real DB)",
         }
         return [];
       });
+    }
+
+    /**
+     * The most rows any one node of an analysed plan read, over every loop:
+     * those it passed on and those its filters dropped. A nested loop probing
+     * a whole server's plays once per outer row shows here as rows times
+     * loops; a statement that reads each row at most once stays near the
+     * table's size.
+     */
+    function mostRowsRead(plan: unknown): number {
+      return Math.max(
+        0,
+        ...planNodes(plan).map(
+          (node) =>
+            (Number(node["Actual Rows"] ?? 0) +
+              Number(node["Rows Removed by Filter"] ?? 0) +
+              Number(node["Rows Removed by Join Filter"] ?? 0) +
+              Number(node["Rows Removed by Index Recheck"] ?? 0)) *
+            Number(node["Actual Loops"] ?? 0),
+        ),
+      );
     }
 
     /** Rows a node produced, over every loop. */
@@ -1392,12 +1455,18 @@ describe("Tracearr plays of an item two Jellyfin/Emby libraries list (real DB)",
       return serverId;
     }
 
-    // Under the same statistics, repairing orphaned rows reads all of the
-    // server's plays once per row, in one statement — 200 took seconds, 10,000
-    // minutes — so any orphan refreshes them.
-    for (const items of [10, 1_000]) {
-      const [orphans, filled] = [2 * items, items].map((count) => count.toLocaleString("en-US"));
-      it(`analyses WatchHistory once, before repairing ${orphans} orphaned copy rows, not again before filling ${filled}`, async () => {
+    // Repairing orphaned rows writes like a fill — a pass over the server's
+    // plays per statement at worst, re-pointing 176 rows a statement — so it
+    // refreshes the statistics past the same 1,000 rows, and once a run.
+    for (const [items, expected, name] of [
+      [10, ["write", "search", "write", "search"], "repairs 20 orphaned copy rows and fills 10 without analysing"],
+      [
+        1_000,
+        ["analyse", "write", "search", "write", "search"],
+        "analyses WatchHistory once, before repairing 2,000 orphaned copy rows, not again before filling 1,000",
+      ],
+    ] as const) {
+      it(name, async () => {
         const serverId = await orphaned(items);
         const recorder = recordTransactions();
         try {
@@ -1407,7 +1476,7 @@ describe("Tracearr plays of an item two Jellyfin/Emby libraries list (real DB)",
           recorder.restore();
         }
 
-        expect(phases(recorder.runs)).toEqual(["analyse", "write", "search", "write", "search"]);
+        expect(phases(recorder.runs)).toEqual(expected);
         // Each play's primary row on its b- copy, with both other copies' rows
         // pointing at it.
         expect(await prisma.watchHistory.count({ where: { fanOutOfItemId: null } })).toBe(items);
@@ -1459,6 +1528,94 @@ describe("Tracearr plays of an item two Jellyfin/Emby libraries list (real DB)",
       );
       expect(result.failed).toBeUndefined();
       expect(await prisma.watchHistory.count({ where: { fanOutOfItemId: { not: null } } })).toBe(1_000);
+    });
+
+    it("promotes re-delivered plays' copy rows reading the server's plays at most once a statement, whatever the statistics", async () => {
+      // A page write promotes the copy row of a play whose primary row went
+      // with its copy (`settleLibraryCopyRows`). When that was one UPDATE,
+      // statistics taken while WatchHistory held only another server's plays
+      // made the planner take this server's plays for one row and read all of
+      // them once per promoted row: 190,100 rows here, for 100 plays among
+      // 1,900. Autovacuum is held off so the statistics stay that stale.
+      await prisma.$executeRawUnsafe(`ALTER TABLE "WatchHistory" SET (autovacuum_enabled = false)`);
+      try {
+        const other = await createTestServer(userId, { type: "PLEX" });
+        const elsewhere = await createTestLibrary(other.id, { type: "MOVIE" });
+        await prisma.$executeRawUnsafe(
+          `INSERT INTO "MediaItem" ("id","libraryId","ratingKey","title","type","updatedAt")
+           SELECT 'o-' || g, $1, 'o-' || g, 'Other ' || g, 'MOVIE', now() FROM generate_series(1, 1000) g`,
+          elsewhere.id,
+        );
+        await prisma.$executeRawUnsafe(
+          `INSERT INTO "WatchHistory" ("id","mediaItemId","mediaServerId","serverUsername","watchedAt","source","sourceEventId","watched","state")
+           SELECT 'o-' || g, 'o-' || (1 + g % 1000), $1, 'x', $2::timestamp - (g || ' minutes')::interval,
+                  'TRACEARR', 'other-' || g, true, 'stopped'
+             FROM generate_series(1, 20000) g`,
+          other.id,
+          at(-60 * DAY),
+        );
+        await prisma.$executeRawUnsafe(`ANALYZE "WatchHistory"`);
+
+        // One library, so the repair finds no copies and leaves the page write
+        // to do the promoting: 100 plays each kept on a copy row of the copy
+        // that is left, among 1,800 other plays of the server.
+        const serverId = await mappedServer("JELLYFIN");
+        const movies = await createTestLibrary(serverId, { type: "MOVIE" });
+        await prisma.$executeRawUnsafe(
+          `INSERT INTO "MediaItem" ("id","libraryId","ratingKey","title","type","createdAt","updatedAt")
+           SELECT 'b-' || g, $1, 'jf-' || g, 'Film ' || g, 'MOVIE', $2::timestamp, $2::timestamp
+             FROM generate_series(1, 100) g`,
+          movies.id,
+          at(-60 * DAY),
+        );
+        await prisma.$executeRawUnsafe(
+          `INSERT INTO "WatchHistory" ("id","mediaItemId","mediaServerId","serverUsername","watchedAt","source","sourceEventId","watched","state")
+           SELECT 'x-' || g || '-' || n, 'b-' || g, $1, 'walter', $2::timestamp - (n || ' hours')::interval,
+                  'TRACEARR', 'x-' || g || '-' || n, true, 'stopped'
+             FROM generate_series(1, 100) g, generate_series(1, 18) n`,
+          serverId,
+          at(-30 * DAY),
+        );
+        await prisma.$executeRawUnsafe(
+          `INSERT INTO "WatchHistory" ("id","mediaItemId","mediaServerId","serverUsername","watchedAt","source","sourceEventId","watched","state","percentComplete")
+           SELECT 'w-' || g, 'b-' || g, $1, 'walter', $2::timestamp + (g || ' seconds')::interval,
+                  'TRACEARR', 'chain-' || g || ':copy:b-' || g, true, 'stopped', 95
+             FROM generate_series(1, 100) g`,
+          serverId,
+          at(-2 * DAY),
+        );
+        for (let g = 1; g <= 100; g++) {
+          archive.add(
+            play(`chain-${g}`, new Date(at(-2 * DAY).getTime() + g * 1000), {
+              rating_key: `jf-${g}`,
+              watched: true,
+              percent_complete: 95,
+            }),
+          );
+        }
+
+        const recorder = recordTransactions({
+          visits: (sql) => /^\s*(SELECT|INSERT|UPDATE|DELETE)\b/i.test(sql) && sql.includes(`"WatchHistory"`),
+        });
+        try {
+          await syncTracearrHistory(serverId, { passes: "forward" });
+        } finally {
+          recorder.restore();
+        }
+
+        const tableRows = await prisma.watchHistory.count();
+        const visits = recorder.runs.flatMap((run) => run.visits);
+        expect(visits.length).toBeGreaterThan(0);
+        expect(visits.filter((visit) => visit.rows > 2 * tableRows + 1_000)).toEqual([]);
+        expect(
+          await prisma.watchHistory.count({
+            where: { mediaServerId: serverId, sourceEventId: { startsWith: "chain-" }, fanOutOfItemId: null },
+          }),
+        ).toBe(100);
+        expect(await prisma.watchHistory.count({ where: { sourceEventId: { contains: ":copy:" } } })).toBe(0);
+      } finally {
+        await prisma.$executeRawUnsafe(`ALTER TABLE "WatchHistory" RESET (autovacuum_enabled)`);
+      }
     });
   });
 });

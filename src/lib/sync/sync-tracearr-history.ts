@@ -2843,6 +2843,21 @@ interface CopyRowCandidate {
  * by the write path (`settleLibraryCopyRows`) and the repair
  * (`repairLibraryCopyRows`), so both promote the same row. Returns how many
  * were promoted.
+ *
+ * Two statements, in the caller's transaction: one read of the plays' rows as
+ * they are now — each play's primary row, if it has one, and every candidate's
+ * — and an update of the picked rows by id. Neither reads the server's plays
+ * more than once, whatever the statistics. It was one UPDATE asking, per
+ * candidate, whether the play had a primary row, and on statistics that
+ * undercount the server's plays (`REPAIR_ANALYZE_MIN_ROWS`) the planner
+ * answered with a scan of all of them per candidate: 10,000 orphaned rows ran
+ * for four minutes on a server holding 200,000 rows (now 0.2 seconds), and a
+ * page re-delivering 100 plays spent 0.4 seconds on it, every page, on one
+ * holding 400,000 (now 0.07). The repair holds the server row against page
+ * writes, so between the two statements its rows can only vanish with their
+ * item, which the update then skips; page writes share their lock with each
+ * other, and two promoting the same play race as they did over the one
+ * statement.
  */
 async function promoteLowestCopyRows(
   db: RawDb,
@@ -2850,25 +2865,29 @@ async function promoteLowestCopyRows(
   candidates: CopyRowCandidate[],
 ): Promise<number> {
   if (candidates.length === 0) return 0;
+  const keys = new Set<string>();
+  for (const candidate of candidates) keys.add(candidate.chain).add(candidate.sourceEventId);
+  const rows = await db.$queryRawUnsafe<Array<{ id: string; sourceEventId: string }>>(
+    `SELECT "id", "sourceEventId" FROM "WatchHistory"
+      WHERE "mediaServerId" = $1 AND "sourceEventId" = ANY($2)`,
+    serverId,
+    [...keys],
+  );
+  const stored = new Map(rows.map((row) => [row.sourceEventId, row.id]));
+  const picked = new Map<string, CopyRowCandidate>();
+  for (const candidate of candidates) {
+    if (stored.has(candidate.chain) || !stored.has(candidate.sourceEventId)) continue;
+    const best = picked.get(candidate.chain);
+    if (!best || candidate.rank < best.rank) picked.set(candidate.chain, candidate);
+  }
+  if (picked.size === 0) return 0;
   return db.$executeRawUnsafe(
     `UPDATE "WatchHistory" AS wh
-        SET "sourceEventId" = pick."chain", "fanOutOfItemId" = NULL
-       FROM (
-         SELECT DISTINCT ON (v."chain") v."chain", w."id"
-           FROM unnest($2::text[], $3::text[], $4::int[]) AS v("chain", "copyKey", "rank")
-           JOIN "WatchHistory" w
-             ON w."mediaServerId" = $1 AND w."sourceEventId" = v."copyKey"
-          WHERE NOT EXISTS (
-            SELECT 1 FROM "WatchHistory" p
-             WHERE p."mediaServerId" = $1 AND p."sourceEventId" = v."chain"
-          )
-          ORDER BY v."chain", v."rank"
-       ) AS pick
-      WHERE wh."id" = pick."id"`,
-    serverId,
-    candidates.map((candidate) => candidate.chain),
-    candidates.map((candidate) => candidate.sourceEventId),
-    candidates.map((candidate) => candidate.rank),
+        SET "sourceEventId" = v."chain", "fanOutOfItemId" = NULL
+       FROM unnest($1::text[], $2::text[]) AS v("id", "chain")
+      WHERE wh."id" = v."id"`,
+    [...picked.values()].map((candidate) => stored.get(candidate.sourceEventId)),
+    [...picked.keys()],
   );
 }
 
@@ -3132,31 +3151,24 @@ interface LibraryCopyRepairLimits {
 const REPAIR_ROWS_PER_TRANSACTION = 10_000;
 
 /**
- * Missing copy rows a repair must have found before it refreshes
- * WatchHistory's statistics ahead of filling them (`analyseWatchHistory`).
- * Orphaned copy rows refresh them whatever their number.
+ * Rows a phase of a repair must be about to write — orphaned copy rows to
+ * repair, then missing ones to fill — before WatchHistory's statistics are
+ * refreshed ahead of it (`analyseWatchHistory`), at most once a run.
  *
  * Every write reaches a play's rows through `(mediaServerId, sourceEventId)`,
  * and how depends on how many rows the planner believes the server has. With
  * statistics taken before this server's plays were stored — a small server in
  * a large table, which autovacuum rarely re-analyses — or with none at all, it
- * takes them for a handful:
- *  - `mirrorCopyRows` hashes all of them in every statement, one per
- *    `BATCH_SIZE` rows. Filling 100,000 copy rows took 71 seconds and 8.7 GB
- *    of temporary files, each transaction holding the server row for 7
- *    seconds; analysed first, 8 seconds. Below this many rows the fill is at
- *    most six statements, so at most six passes over the server's plays
- *    whatever the statistics.
- *  - `promoteLowestCopyRows` scans all of them once per orphaned row, in a
- *    single statement. On a server of 200,000 plays, 10,000 orphaned rows ran
- *    for four minutes, past the transaction's timeout, so the repair failed on
- *    every run while holding the server row; 200 took 4.8 seconds, against
- *    8 ms analysed. No count of orphaned rows is safe on a large enough
- *    server, so any refreshes them.
- * ANALYZE reads a fixed-size sample — 163 ms on 1.2 million rows — and a
- * repair finds orphans, or this many missing rows, once: after a copy holding
- * plays' primary rows is deleted or a library is added over a folder. A run
- * that finds every row in place never analyses.
+ * takes them for a handful, and `mirrorCopyRows` hashes all of them in every
+ * statement, one per `BATCH_SIZE` rows: filling 100,000 copy rows took 71
+ * seconds and 8.7 GB of temporary files, each transaction holding the server
+ * row for 7 seconds; analysed first, 8 seconds. No statement of a phase reads
+ * them more than once — `promoteLowestCopyRows` did, once per orphaned row,
+ * until it was split in two — so below this many rows a phase is a handful of
+ * passes over them whatever the statistics. ANALYZE reads a fixed-size sample
+ * — 163 ms on 1.2 million rows — and a repair finds this much once, after a
+ * library is added over a folder or a copy holding many plays' primary rows is
+ * deleted. A run that finds every row in place never analyses.
  */
 const REPAIR_ANALYZE_MIN_ROWS = 1_000;
 
@@ -3292,8 +3304,8 @@ function chainOfCopyRow(sourceEventId: string): string {
  *
  * What the reads find is written `REPAIR_ROWS_PER_TRANSACTION` rows at a time —
  * after WatchHistory's statistics are refreshed, once, in a transaction of
- * their own, when the reads found orphans or `REPAIR_ANALYZE_MIN_ROWS` missing
- * rows — each transaction under the mapping guard with the server row taken
+ * their own, when a phase has `REPAIR_ANALYZE_MIN_ROWS` rows to write — each
+ * transaction under the mapping guard with the server row taken
  * `FOR NO KEY UPDATE`, not `writeBatch`'s `FOR SHARE`: a page write of the
  * same play racing it could otherwise move the primary row onto an item this
  * repair is giving a copy row, which then counts the play twice — and play
@@ -3374,7 +3386,7 @@ async function repairLibraryCopyRows(
       repair.stopped = true;
       return;
     }
-    await analyseOnce(orphans.length);
+    if (orphans.length >= REPAIR_ANALYZE_MIN_ROWS) await analyseOnce(orphans.length);
     const chains: string[] = [];
     let rowCount = 0;
     while (start < orphanChains.length && (chains.length === 0 || rowCount < REPAIR_ROWS_PER_TRANSACTION)) {
