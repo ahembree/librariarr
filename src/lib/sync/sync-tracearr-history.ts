@@ -3078,11 +3078,12 @@ const REPAIR_SEARCH_TIMEOUT_MS = 60_000;
 /**
  * `MISSING_COPY_ROWS_SQL` with nested loops disabled and its statement
  * timeout — `SET LOCAL`, so for this transaction only, and both put back
- * before it returns, in case the transaction goes on to write: writes reach
- * each row by index, which only a nested loop does (with hash joins every
- * chunk of `mirrorCopyRows` would read the whole table), and are not this
- * search's to time out. A cancelled search aborts the transaction, which
- * drops both settings with it.
+ * before it returns, in case the transaction goes on to write. A write is not
+ * this search's to time out, and reaches each of its rows by index only
+ * through a nested loop: without one, every chunk of `mirrorCopyRows` would
+ * read all of the server's plays — as it can anyway when WatchHistory's
+ * statistics undercount them (`REPAIR_ANALYZE_MIN_ROWS`). A cancelled search
+ * aborts the transaction, which drops both settings with it.
  */
 async function readMissingCopyRows(
   db: RawDb,
@@ -3122,12 +3123,86 @@ interface LibraryCopyRepairLimits {
  * Rows `repairLibraryCopyRows` writes per transaction. Each one holds the
  * server row against page writes (`FOR NO KEY UPDATE`) for as long as it
  * runs, and a large repair — a library added over a folder with years of
- * plays — costs a fifth of a millisecond or more per row: written in one
- * transaction, 100,000 rows held every other writer of the server back for
- * 21 seconds (36 for 100,000 re-pointed rows), and a repair large enough to
- * outlive the transaction's timeout would fail the same way on every run.
+ * plays — costs a fifth of a millisecond or more per row even with current
+ * statistics (`REPAIR_ANALYZE_MIN_ROWS`): written in one transaction, 100,000
+ * rows held every other writer of the server back for 21 seconds (36 for
+ * 100,000 re-pointed rows), and a repair large enough to outlive the
+ * transaction's timeout would fail the same way on every run.
  */
 const REPAIR_ROWS_PER_TRANSACTION = 10_000;
+
+/**
+ * Missing copy rows a repair must have found before it refreshes
+ * WatchHistory's statistics ahead of filling them (`analyseWatchHistory`).
+ * Orphaned copy rows refresh them whatever their number.
+ *
+ * Every write reaches a play's rows through `(mediaServerId, sourceEventId)`,
+ * and how depends on how many rows the planner believes the server has. With
+ * statistics taken before this server's plays were stored — a small server in
+ * a large table, which autovacuum rarely re-analyses — or with none at all, it
+ * takes them for a handful:
+ *  - `mirrorCopyRows` hashes all of them in every statement, one per
+ *    `BATCH_SIZE` rows. Filling 100,000 copy rows took 71 seconds and 8.7 GB
+ *    of temporary files, each transaction holding the server row for 7
+ *    seconds; analysed first, 8 seconds. Below this many rows the fill is at
+ *    most six statements, so at most six passes over the server's plays
+ *    whatever the statistics.
+ *  - `promoteLowestCopyRows` scans all of them once per orphaned row, in a
+ *    single statement. On a server of 200,000 plays, 10,000 orphaned rows ran
+ *    for four minutes, past the transaction's timeout, so the repair failed on
+ *    every run while holding the server row; 200 took 4.8 seconds, against
+ *    8 ms analysed. No count of orphaned rows is safe on a large enough
+ *    server, so any refreshes them.
+ * ANALYZE reads a fixed-size sample — 163 ms on 1.2 million rows — and a
+ * repair finds orphans, or this many missing rows, once: after a copy holding
+ * plays' primary rows is deleted or a library is added over a folder. A run
+ * that finds every row in place never analyses.
+ */
+const REPAIR_ANALYZE_MIN_ROWS = 1_000;
+
+/**
+ * How long `analyseWatchHistory` waits for its lock before the repair writes
+ * without it. ANALYZE cannot run beside a VACUUM or another ANALYZE of the
+ * table: Postgres interrupts an autovacuum in its way, but not one preventing
+ * transaction-ID wraparound, which can hold a large table for hours.
+ */
+const REPAIR_ANALYZE_LOCK_TIMEOUT_MS = 5_000;
+
+/**
+ * `ANALYZE "WatchHistory"`, ahead of a repair's writes (when:
+ * `REPAIR_ANALYZE_MIN_ROWS`). In a transaction of its own — never one holding
+ * the server row, which page writes wait on — with its lock wait
+ * (`REPAIR_ANALYZE_LOCK_TIMEOUT_MS`) and its run (`REPAIR_SEARCH_TIMEOUT_MS`,
+ * the search's minute) bounded by `SET LOCAL`. It never stops the repair:
+ * without fresh statistics the writes are slower, not wrong, so a failure is a
+ * WARN and they go ahead. A role that may not analyse the table is answered
+ * with a warning, not an error, and simply goes without.
+ */
+async function analyseWatchHistory(serverName: string, rows: number): Promise<void> {
+  const started = Date.now();
+  try {
+    await prisma.$transaction(
+      async (tx) => {
+        await tx.$executeRawUnsafe(`SET LOCAL lock_timeout = ${REPAIR_ANALYZE_LOCK_TIMEOUT_MS}`);
+        await tx.$executeRawUnsafe(`SET LOCAL statement_timeout = ${REPAIR_SEARCH_TIMEOUT_MS}`);
+        await tx.$executeRawUnsafe(`ANALYZE "WatchHistory"`);
+      },
+      { timeout: REPAIR_SEARCH_TIMEOUT_MS + 15_000, maxWait: 15_000 },
+    );
+    logger.debug(
+      "WatchHistory",
+      `Analysed WatchHistory in ${Date.now() - started} ms before writing ` +
+        `${rows} library-copy row(s) of "${serverName}"'s Tracearr plays`,
+    );
+  } catch (error) {
+    logger.warn(
+      "WatchHistory",
+      `Could not refresh WatchHistory's statistics before writing ${rows} library-copy row(s) ` +
+        `of "${serverName}"'s Tracearr plays — writing them anyway, which can take much longer`,
+      { error: String(error) },
+    );
+  }
+}
 
 /**
  * `repairLibraryCopyRows`, then what a change to the stored plays needs: the
@@ -3143,7 +3218,7 @@ async function applyLibraryCopyRepair(
 ): Promise<void> {
   const repair: LibraryCopyRepair = { promoted: 0, repointed: 0, filled: 0, stopped: false };
   try {
-    await repairLibraryCopyRows(serverId, guard, limits, repair);
+    await repairLibraryCopyRows(serverId, guard, serverName, limits, repair);
   } catch (error) {
     logger.warn(
       "WatchHistory",
@@ -3215,8 +3290,10 @@ function chainOfCopyRow(sourceEventId: string): string {
  * and the search for missing copy rows — taking no lock; together a few
  * hundred milliseconds for 20,000 items listed twice.
  *
- * What the reads find is written `REPAIR_ROWS_PER_TRANSACTION` rows at a time,
- * each transaction under the mapping guard with the server row taken
+ * What the reads find is written `REPAIR_ROWS_PER_TRANSACTION` rows at a time —
+ * after WatchHistory's statistics are refreshed, once, in a transaction of
+ * their own, when the reads found orphans or `REPAIR_ANALYZE_MIN_ROWS` missing
+ * rows — each transaction under the mapping guard with the server row taken
  * `FOR NO KEY UPDATE`, not `writeBatch`'s `FOR SHARE`: a page write of the
  * same play racing it could otherwise move the primary row onto an item this
  * repair is giving a copy row, which then counts the play twice — and play
@@ -3233,6 +3310,7 @@ function chainOfCopyRow(sourceEventId: string): string {
 async function repairLibraryCopyRows(
   serverId: string,
   guard: TracearrMappingGuard,
+  serverName: string,
   limits: LibraryCopyRepairLimits,
   repair: LibraryCopyRepair,
 ): Promise<void> {
@@ -3270,6 +3348,14 @@ async function repairLibraryCopyRows(
       { timeout: 60_000, maxWait: 15_000 },
     );
 
+  /** WatchHistory's statistics, refreshed at most once a run (`REPAIR_ANALYZE_MIN_ROWS`). */
+  let analysed = false;
+  const analyseOnce = async (rows: number): Promise<void> => {
+    if (analysed) return;
+    analysed = true;
+    await analyseWatchHistory(serverName, rows);
+  };
+
   // Orphans first, so the primary rows they become get their copies below.
   const orphans = await prisma.$queryRawUnsafe<Array<{ sourceEventId: string; mediaItemId: string }>>(
     ORPHAN_COPY_ROWS_SQL,
@@ -3288,6 +3374,7 @@ async function repairLibraryCopyRows(
       repair.stopped = true;
       return;
     }
+    await analyseOnce(orphans.length);
     const chains: string[] = [];
     let rowCount = 0;
     while (start < orphanChains.length && (chains.length === 0 || rowCount < REPAIR_ROWS_PER_TRANSACTION)) {
@@ -3356,6 +3443,7 @@ async function repairLibraryCopyRows(
       repair.stopped = true;
       return;
     }
+    if (missing.length >= REPAIR_ANALYZE_MIN_ROWS) await analyseOnce(missing.length);
     let filled = 0;
     const mapped = await underGuard(async (tx) => {
       filled = await mirrorCopyRows(

@@ -531,8 +531,11 @@ describe("Tracearr plays of an item two Jellyfin/Emby libraries list (real DB)",
     /** The search for missing copy rows (`MISSING_COPY_ROWS_SQL`). */
     const isSearch = (sql: string) => sql.includes("WITH copies AS");
 
-    /** The nested-loop and statement-timeout settings a statement ran under. */
-    type Settings = { sql: string; nestloop: string; timeout: string };
+    /** The refresh of WatchHistory's statistics ahead of a large repair's writes. */
+    const isAnalyse = (sql: string) => /^\s*ANALYZE\b/i.test(sql);
+
+    /** The nested-loop, statement-timeout and lock-timeout settings a statement ran under. */
+    type Settings = { sql: string; nestloop: string; timeout: string; lockTimeout: string };
 
     type RawTx = Pick<typeof prisma, "$queryRawUnsafe" | "$executeRawUnsafe">;
 
@@ -543,8 +546,8 @@ describe("Tracearr plays of an item two Jellyfin/Emby libraries list (real DB)",
      * runs (`planProblems`; a plan found wrong is refused, never run: the one
      * this guards against took minutes and gigabytes), then by row counts
      * once it has run (`growthProblems`, through EXPLAIN ANALYZE). For each
-     * statement `setting` picks, the nested-loop and statement-timeout
-     * settings in force when it ran (`settingsOf`).
+     * statement `setting` picks, the nested-loop, statement-timeout and
+     * lock-timeout settings in force when it ran (`settingsOf`).
      */
     function recordTransactions(
       pick: {
@@ -599,9 +602,12 @@ describe("Tracearr plays of an item two Jellyfin/Emby libraries list (real DB)",
                 run.problems.push(...growthProblems(analyzed["QUERY PLAN"]));
               }
               if (pick.setting?.(text)) {
-                const [row] = await tx.$queryRawUnsafe<Array<{ nestloop: string; timeout: string }>>(
+                const [row] = await tx.$queryRawUnsafe<
+                  Array<{ nestloop: string; timeout: string; lockTimeout: string }>
+                >(
                   `SELECT current_setting('enable_nestloop') AS "nestloop",
-                          current_setting('statement_timeout') AS "timeout"`,
+                          current_setting('statement_timeout') AS "timeout",
+                          current_setting('lock_timeout') AS "lockTimeout"`,
                 );
                 run.settings.push({ sql: text, ...row });
               }
@@ -624,7 +630,28 @@ describe("Tracearr plays of an item two Jellyfin/Emby libraries list (real DB)",
       return runs
         .flatMap((run) => run.settings)
         .filter((settings) => match(settings.sql))
-        .map(({ nestloop, timeout }) => ({ nestloop, timeout }));
+        .map(({ nestloop, timeout, lockTimeout }) => ({ nestloop, timeout, lockTimeout }));
+    }
+
+    /**
+     * What each recorded transaction was, in order, leaving out the import's
+     * own: the search for missing copy rows, the refresh of WatchHistory's
+     * statistics, or a write under the server row — joined with "+" if one
+     * transaction was more than one of them.
+     */
+    function phases(runs: Array<{ statements: string[] }>): string[] {
+      return runs
+        .map((run) => {
+          const has = (match: (sql: string) => boolean) => run.statements.some(match);
+          return [
+            has(isSearch) && "search",
+            has(isAnalyse) && "analyse",
+            has((sql) => sql.includes("FOR NO KEY UPDATE")) && "write",
+          ]
+            .filter(Boolean)
+            .join("+");
+        })
+        .filter((phase) => phase !== "");
     }
 
     /** Every node of an `EXPLAIN (FORMAT JSON)` plan. */
@@ -1073,20 +1100,16 @@ describe("Tracearr plays of an item two Jellyfin/Emby libraries list (real DB)",
       // The rows of the first transaction stand; the copy must read as watched
       // now, not after whatever reconciles next.
       const serverId = await largeRepair();
-      const original = prisma.$transaction.bind(prisma) as unknown as (
-        fn: unknown,
-        options?: unknown,
-      ) => Promise<unknown>;
-      let calls = 0;
-      const spy = vi.spyOn(prisma, "$transaction").mockImplementation(((fn: unknown, options?: unknown) => {
-        // The search, the first 10,000 rows, then this one.
-        if (++calls === 3) return Promise.reject(new Error("connection lost"));
-        return original(fn, options);
-      }) as unknown as typeof prisma.$transaction);
+      // The first 10,000 rows commit; the transaction writing the rest fails
+      // at its first statement.
+      let writes = 0;
+      const recorder = recordTransactions({
+        rewrite: (sql) => (sql.includes("FOR NO KEY UPDATE") && ++writes === 2 ? "SELECT connection_lost()" : sql),
+      });
       try {
         await syncTracearrHistory(serverId, { passes: "forward" });
       } finally {
-        spy.mockRestore();
+        recorder.restore();
       }
 
       expect(await onCopy()).toBe(10_000);
@@ -1156,10 +1179,10 @@ describe("Tracearr plays of an item two Jellyfin/Emby libraries list (real DB)",
 
       expect(recorder.runs.flatMap((run) => run.problems)).toEqual([]);
       expect(recorder.runs.flatMap((run) => run.plans)).toHaveLength(1);
-      expect(settingsOf(recorder.runs, isSearch)).toEqual([{ nestloop: "off", timeout: "1min" }]);
+      expect(settingsOf(recorder.runs, isSearch)).toEqual([{ nestloop: "off", timeout: "1min", lockTimeout: "0" }]);
       const writes = settingsOf(recorder.runs, (sql) => WRITE.test(sql));
       expect(writes.length).toBeGreaterThan(0);
-      expect(writes).toEqual(writes.map(() => ({ nestloop: "on", timeout: "0" })));
+      expect(writes).toEqual(writes.map(() => ({ nestloop: "on", timeout: "0", lockTimeout: "0" })));
       expect(await prisma.watchHistory.count({ where: { mediaItemId: "item-c" } })).toBe(1);
     });
 
@@ -1236,12 +1259,12 @@ describe("Tracearr plays of an item two Jellyfin/Emby libraries list (real DB)",
       expect(filled).toBe(5_000);
       expect(recorder.runs.flatMap((run) => run.plans)).toHaveLength(2);
       expect(settingsOf(recorder.runs, isSearch)).toEqual([
-        { nestloop: "off", timeout: "1min" },
-        { nestloop: "off", timeout: "1min" },
+        { nestloop: "off", timeout: "1min", lockTimeout: "0" },
+        { nestloop: "off", timeout: "1min", lockTimeout: "0" },
       ]);
       const writes = settingsOf(recorder.runs, (sql) => WRITE.test(sql));
       expect(writes.length).toBeGreaterThan(0);
-      expect(writes).toEqual(writes.map(() => ({ nestloop: "on", timeout: "0" })));
+      expect(writes).toEqual(writes.map(() => ({ nestloop: "on", timeout: "0", lockTimeout: "0" })));
       expect(vi.mocked(logger.warn)).not.toHaveBeenCalled();
     }, 60_000);
 
@@ -1295,6 +1318,147 @@ describe("Tracearr plays of an item two Jellyfin/Emby libraries list (real DB)",
 
       await syncTracearrHistory(serverId, { passes: "forward" });
       expect(await prisma.watchHistory.count({ where: { mediaItemId: "item-c" } })).toBe(1);
+    });
+
+    // With WatchHistory's statistics missing or taken before this server's
+    // plays were stored, every write statement reads all of the server's
+    // plays, one statement per 176 rows: filling 100,000 copy rows took over a
+    // minute and 9 GB of temporary files. A repair that has found 1,000
+    // missing rows refreshes them first, once, in a transaction of its own.
+    it("analyses WatchHistory once before filling 1,000 copy rows, between the search and the writes", async () => {
+      const serverId = await listedTwice(1_000);
+      const recorder = recordTransactions({ setting: isAnalyse });
+      try {
+        await syncTracearrHistory(serverId, { passes: "forward" });
+        await syncTracearrHistory(serverId, { passes: "forward" });
+      } finally {
+        recorder.restore();
+      }
+
+      expect(phases(recorder.runs)).toEqual(["search", "analyse", "write", "search"]);
+      expect(settingsOf(recorder.runs, isAnalyse)).toEqual([{ nestloop: "on", timeout: "1min", lockTimeout: "5s" }]);
+      expect(await prisma.watchHistory.count({ where: { fanOutOfItemId: { not: null } } })).toBe(1_000);
+      expect(vi.mocked(logger.warn)).not.toHaveBeenCalled();
+    });
+
+    it("fills 999 copy rows without analysing", async () => {
+      const serverId = await listedTwice(999);
+      const recorder = recordTransactions();
+      try {
+        await syncTracearrHistory(serverId, { passes: "forward" });
+      } finally {
+        recorder.restore();
+      }
+
+      expect(phases(recorder.runs)).toEqual(["search", "write"]);
+      expect(await prisma.watchHistory.count({ where: { fanOutOfItemId: { not: null } } })).toBe(999);
+    });
+
+    /**
+     * A walked Jellyfin server with three libraries over one folder, each
+     * listing `items` films, whose plays lost their primary rows with the copy
+     * that held them: each play keeps a pointer-less copy row on the second
+     * and third libraries' copies (`b-…`, `c-…`), and the first library's copy
+     * (`a-…`), listed since, holds none.
+     */
+    async function orphaned(items: number) {
+      const serverId = await mappedServer("JELLYFIN");
+      await prisma.mediaServer.update({
+        where: { id: serverId },
+        data: { tracearrBackfillComplete: true, watchHistorySyncedAt: at(-DAY) },
+      });
+      for (const prefix of ["a", "b", "c"]) {
+        const library = await createTestLibrary(serverId, { type: "MOVIE", title: `Movies ${prefix}` });
+        await prisma.$executeRawUnsafe(
+          `INSERT INTO "MediaItem" ("id","libraryId","ratingKey","title","type","createdAt","updatedAt")
+           SELECT '${prefix}-' || g, $1, 'jf-' || g, 'Film ' || g, 'MOVIE', $3::timestamp, $3::timestamp
+             FROM generate_series(1, $2::int) g`,
+          library.id,
+          items,
+          at(-60 * DAY),
+        );
+      }
+      for (const prefix of ["b", "c"]) {
+        await prisma.$executeRawUnsafe(
+          `INSERT INTO "WatchHistory" ("id","mediaItemId","mediaServerId","serverUsername","watchedAt","source","sourceEventId","watched","state")
+           SELECT 'w-${prefix}-' || g, '${prefix}-' || g, $1, 'walter', $3::timestamp - (g || ' minutes')::interval,
+                  'TRACEARR', 'chain-' || g || ':copy:${prefix}-' || g, true, 'stopped'
+             FROM generate_series(1, $2::int) g`,
+          serverId,
+          items,
+          at(-30 * DAY),
+        );
+      }
+      return serverId;
+    }
+
+    // Under the same statistics, repairing orphaned rows reads all of the
+    // server's plays once per row, in one statement — 200 took seconds, 10,000
+    // minutes — so any orphan refreshes them.
+    for (const items of [10, 1_000]) {
+      const [orphans, filled] = [2 * items, items].map((count) => count.toLocaleString("en-US"));
+      it(`analyses WatchHistory once, before repairing ${orphans} orphaned copy rows, not again before filling ${filled}`, async () => {
+        const serverId = await orphaned(items);
+        const recorder = recordTransactions();
+        try {
+          await syncTracearrHistory(serverId, { passes: "forward" });
+          await syncTracearrHistory(serverId, { passes: "forward" });
+        } finally {
+          recorder.restore();
+        }
+
+        expect(phases(recorder.runs)).toEqual(["analyse", "write", "search", "write", "search"]);
+        // Each play's primary row on its b- copy, with both other copies' rows
+        // pointing at it.
+        expect(await prisma.watchHistory.count({ where: { fanOutOfItemId: null } })).toBe(items);
+        expect(await prisma.watchHistory.count({ where: { fanOutOfItemId: { startsWith: "b-" } } })).toBe(2 * items);
+      });
+    }
+
+    it("writes anyway, with a WARN, when WatchHistory cannot be analysed", async () => {
+      // A VACUUM holds the lock ANALYZE needs; the writes do not need it. The
+      // wait is shortened from five seconds so the test is quick.
+      const serverId = await listedTwice(1_000);
+      let held!: () => void;
+      const isHeld = new Promise<void>((resolve) => (held = resolve));
+      let release!: () => void;
+      const released = new Promise<void>((resolve) => (release = resolve));
+      const vacuum = prisma.$transaction(
+        async (tx) => {
+          await tx.$executeRawUnsafe(`LOCK TABLE "WatchHistory" IN SHARE UPDATE EXCLUSIVE MODE`);
+          held();
+          await released;
+        },
+        { timeout: 30_000 },
+      );
+      await isHeld;
+
+      const recorder = recordTransactions({
+        rewrite: (sql) => sql.replace(/lock_timeout = \d+/, "lock_timeout = 100"),
+      });
+      const warned = () =>
+        vi.mocked(logger.warn).mock.calls.some(([, message]) => String(message).includes("Could not refresh"));
+      let run: ReturnType<typeof syncTracearrHistory>;
+      try {
+        run = syncTracearrHistory(serverId, { passes: "forward" });
+        for (let waited = 0; waited < 5_000 && !warned(); waited += 50) {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+      } finally {
+        release();
+        await vacuum;
+        recorder.restore();
+      }
+      const result = await run;
+
+      expect(vi.mocked(logger.warn)).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(logger.warn)).toHaveBeenCalledWith(
+        "WatchHistory",
+        expect.stringContaining("Could not refresh WatchHistory's statistics"),
+        { error: expect.stringContaining("lock timeout") },
+      );
+      expect(result.failed).toBeUndefined();
+      expect(await prisma.watchHistory.count({ where: { fanOutOfItemId: { not: null } } })).toBe(1_000);
     });
   });
 });
