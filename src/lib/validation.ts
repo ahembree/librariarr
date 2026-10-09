@@ -1,6 +1,6 @@
 import { z } from "zod/v4";
 import { NextResponse } from "next/server";
-import { MAX_QUERY_ACTION_ITEMS } from "@/lib/query/constants";
+import { MAX_COLUMN_VALUE_ITEMS, MAX_QUERY_ACTION_ITEMS } from "@/lib/query/constants";
 import { MASKED_VALUE } from "@/lib/api/sanitize";
 import { API_SCOPES } from "@/lib/api-keys/scopes";
 import { API_DESTRUCTIVE_PER_REQUEST } from "@/lib/api-keys/limits";
@@ -914,7 +914,7 @@ export const executeQuerySchema = z.object({
 export const queryColumnValuesSchema = z.object({
   items: z
     .array(z.object({ id: z.string().min(1).max(200), grouped: z.boolean().optional() }))
-    .max(100_000),
+    .max(MAX_COLUMN_VALUE_ITEMS),
   fields: z.array(z.string().min(1).max(100)).min(1).max(200),
   serverIds: z.array(z.string().max(200)).max(100).optional().default([]),
   arrServerIds: z

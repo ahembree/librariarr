@@ -25,6 +25,7 @@ vi.mock("@/lib/logger", () => ({
 
 import { POST } from "@/app/api/query/column-values/route";
 import { appCache } from "@/lib/cache/memory-cache";
+import { MAX_COLUMN_VALUE_ITEMS } from "@/lib/query/constants";
 
 type Body = { values: Record<string, Record<string, unknown>>; warnings: string[] };
 
@@ -110,6 +111,70 @@ describe("POST /api/query/column-values", () => {
     expect(body.values[ids[0]]).toEqual({ availableEpisodeCount: 4, watchedEpisodePercentage: 25, videoBitrate: null });
     // An episode row is not a show: no aggregate, but its own detail.
     expect(body.values[ids[1]]).toEqual({ availableEpisodeCount: null, watchedEpisodePercentage: null, videoBitrate: 5000 });
+  });
+
+  it("shows no stream counts on a grouped show row, only on an episode row", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const server = await createTestServer(user.id);
+    const lib = await createTestLibrary(server.id, { type: "SERIES" });
+    const ids: string[] = [];
+    for (let e = 1; e <= 3; e++) {
+      const ep = await createTestMediaItem(lib.id, {
+        type: "SERIES", title: `E${e}`, parentTitle: "Show", seriesKey: "title:show", seasonNumber: 1, episodeNumber: e,
+      });
+      await createTestMediaStream(ep.id, { streamType: 2, language: "English", codec: "aac" });
+      await createTestMediaStream(ep.id, { streamType: 2, language: e === 3 ? "German" : "English", codec: "aac", index: 1 });
+      ids.push(ep.id);
+    }
+
+    const res = await callRoute(POST, {
+      url: "/api/query/column-values",
+      method: "POST",
+      body: { items: [{ id: ids[0], grouped: true }, { id: ids[1] }], fields: ["audioStreamCount", "audioLanguage"] },
+    });
+    const body = await expectJson<Body>(res, 200);
+    expect(body.values[ids[0]]).toEqual({ audioStreamCount: null, audioLanguage: ["English", "German"] });
+    expect(body.values[ids[1]]).toEqual({ audioStreamCount: 2, audioLanguage: ["English"] });
+  });
+
+  it("does not read Seerr for music rows, which Seerr never holds", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const server = await createTestServer(user.id);
+    const track = await createTestMediaItem((await createTestLibrary(server.id, { type: "MUSIC" })).id, { type: "MUSIC" });
+
+    // No Seerr instance exists: reading Seerr would answer with a warning.
+    const res = await callRoute(POST, {
+      url: "/api/query/column-values",
+      method: "POST",
+      body: { items: [{ id: track.id }], fields: ["seerrRequested"] },
+    });
+    const body = await expectJson<Body>(res, 200);
+    expect(body.values[track.id]).toEqual({ seerrRequested: null });
+    expect(body.warnings).toEqual([]);
+  });
+
+  it("answers rows out of scope without reaching Arr or Seerr", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    await createTestServer(user.id);
+
+    const res = await callRoute(POST, {
+      url: "/api/query/column-values",
+      method: "POST",
+      body: { items: [{ id: "missing" }], fields: ["arrTag", "seerrRequested"] },
+    });
+    const body = await expectJson<Body>(res, 200);
+    expect(body).toEqual({ values: {}, warnings: [] });
+  });
+
+  it("refuses more rows than one request may name", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const items = Array.from({ length: MAX_COLUMN_VALUE_ITEMS + 1 }, (_, i) => ({ id: `i${i}` }));
+    const res = await callRoute(POST, { url: "/api/query/column-values", method: "POST", body: { items, fields: ["studio"] } });
+    await expectJson(res, 400);
   });
 
   it("returns nothing for another server than the query's selection, or for a disabled server", async () => {

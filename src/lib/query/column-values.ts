@@ -44,10 +44,14 @@ const CHUNK = 1000;
 
 /**
  * Episode-level detail a grouped series row has no single answer for. The
- * table's own video/audio/file columns already show "-" on a show row.
+ * table's own video/audio/file columns already show "-" on a show row. The
+ * stream counts would otherwise total every episode's tracks ("80 audio
+ * tracks" for a 40-episode show); the language lists stay, as a union.
  */
 const EPISODE_ONLY_SECTIONS = new Set(["video", "audio", "file"]);
-const EPISODE_ONLY_FIELDS = new Set(["parentTitle", "albumTitle", "originallyAvailableAt"]);
+const EPISODE_ONLY_FIELDS = new Set([
+  "parentTitle", "albumTitle", "originallyAvailableAt", "audioStreamCount", "subtitleStreamCount",
+]);
 
 const ARR_PROPERTY: Record<string, keyof ArrMetadata> = {
   arrMonitored: "monitored",
@@ -252,6 +256,9 @@ export async function computeQueryColumnValues(
   const ids = [...new Set(opts.items.map((i) => i.id))];
   const groupedIds = new Set(opts.items.filter((i) => i.grouped).map((i) => i.id));
   const rows = await findInChunks(ids, scope, withHistory);
+  // Nothing in scope: return before the Arr/Seerr fetches, which read an empty
+  // type list as "every type".
+  if (rows.length === 0) return { values, warnings };
   const byId = new Map(rows.map((r) => [r.id as string, r]));
 
   // Grouped series rows: answer from the show's aggregate over every one of
@@ -307,9 +314,11 @@ export async function computeQueryColumnValues(
 
   let seerrByType: Record<string, SeerrDataMap> = {};
   let seerrLoaded = false;
-  if (fieldDefs.some((f) => f.requiresSeerr)) {
+  // Seerr holds only movies and shows; music rows read null either way.
+  const seerrTypes = types.filter((t) => t !== "MUSIC");
+  if (fieldDefs.some((f) => f.requiresSeerr) && seerrTypes.length > 0) {
     try {
-      seerrByType = await fetchSeerrDataForQuery(userId, types.filter((t) => t !== "MUSIC"));
+      seerrByType = await fetchSeerrDataForQuery(userId, seerrTypes);
       seerrLoaded = true;
     } catch (error) {
       logger.warn("Query", "Seerr data for query columns could not be fetched", { error: String(error) });
