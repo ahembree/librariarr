@@ -327,6 +327,10 @@ An episode row's own `title` is the **episode's** name ("Pilot"); the show is `p
 - Dynamic range detection: normalizes to "Dolby Vision", "HDR10+", "HDR10", "HLG", or "SDR"
 - Audio profile detection: normalizes to "Dolby Atmos", "Dolby TrueHD", "DTS-HD MA", "DTS:X", etc.
 
+### Query table criterion columns
+
+Every condition field can be a column in the Query page's table. `src/lib/query/column-fields.ts` (client-safe) derives the column list from `CONDITION_FIELDS` minus the fields the table already has a fixed column for (`BUILTIN_COLUMN_FIELDS`), and holds the cell formatting/sort helpers. Values are fetched on demand by `POST /api/query/column-values` (`computeQueryColumnValues` in `src/lib/query/column-values.ts`) for the rows on screen and only the visible columns (`useQueryColumnValues`), so turning a column on never re-runs the query. Scoped to the caller's enabled servers and the run's server selection; a grouped series row is answered from its per-library series aggregate (episode-only sections read null); Arr reads the run's selected instance, Seerr every enabled one, and an unavailable source yields null plus a `warnings` entry rather than a guessed value. `tests/unit/query/column-values.test.ts` asserts every condition field is either a fixed column or handled by `columnValueOf`, so a new field must be handled there.
+
 ### Rule Engine
 
 - Rules are recursive `RuleGroup` structures with AND/OR operators, stored as JSON in `RuleSet`. Rules and groups support `negate`; group-level negation is normalized away before evaluation by `pushDownGroupNegation` (`src/lib/conditions/negation.ts`, De Morgan push-down into per-rule negation) so both evaluation phases share NULL semantics

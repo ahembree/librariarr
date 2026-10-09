@@ -88,6 +88,15 @@ import { MAX_QUERY_ACTION_ITEMS } from "@/lib/query/constants";
 import { actionHonorsMemberIds } from "@/lib/lifecycle/action-types";
 import { QueryActionBar, type ArrFamily, type ArrFamilyMeta, type QueryActionConfig } from "@/components/query-action-bar";
 import { toast } from "sonner";
+import {
+  QUERY_COLUMN_FIELD_DEFS,
+  columnHeader,
+  columnSectionLabel,
+  columnSortValue,
+  criterionColumnId,
+  formatColumnValue,
+} from "@/lib/query/column-fields";
+import { useQueryColumnValues, type ColumnValueScope } from "@/hooks/use-query-column-values";
 
 interface SavedQuery {
   id: string;
@@ -361,6 +370,10 @@ export default function QueryPage() {
 
   // Results state
   const [results, setResults] = useState<QueryResultItem[]>([]);
+  // Server and Arr scope of the run that produced `results` — what the
+  // criterion columns are computed against.
+  const [runScope, setRunScope] = useState<ColumnValueScope | null>(null);
+  const [columnSearch, setColumnSearch] = useState("");
   const [loading, setLoading] = useState(false);
   const [hasRun, setHasRun] = useState(false);
   const { state: queryProgress, handleUpdate: onQueryProgress, reset: resetQueryProgress } = useStreamProgress();
@@ -542,7 +555,7 @@ export default function QueryPage() {
 
   // ── All column definitions (with chip styles) ──
 
-  const allColumns: QueryColumn[] = useMemo(() => [
+  const baseColumns: QueryColumn[] = useMemo(() => [
     {
       id: "type",
       header: "Type",
@@ -727,6 +740,55 @@ export default function QueryPage() {
     },
   ], [getBadgeStyle]);
 
+  // Criterion columns: every field a query can filter on (beyond the fixed
+  // columns above) can be shown, its values loaded on demand for the rows on
+  // screen. Arr and Seerr columns are offered only where such an instance exists.
+  const columnFieldDefs = useMemo(() => {
+    const arrAvailable = arrInstances.radarr.length > 0 || arrInstances.sonarr.length > 0 || arrInstances.lidarr.length > 0;
+    return QUERY_COLUMN_FIELD_DEFS.filter((f) => (!f.requiresArr || arrAvailable) && (!f.requiresSeerr || seerrConnected));
+  }, [arrInstances, seerrConnected]);
+
+  const visibleCriterionFields = useMemo(
+    () => columnFieldDefs.map((f) => f.value).filter((f) => visibleCols.has(criterionColumnId(f))),
+    [columnFieldDefs, visibleCols],
+  );
+  const {
+    values: columnValues,
+    isPending: isColumnPending,
+    warnings: columnWarnings,
+  } = useQueryColumnValues(results, visibleCriterionFields, hasRun && !loading ? runScope : null);
+
+  const criterionColumns: QueryColumn[] = useMemo(() => columnFieldDefs.map((def) => {
+    const numeric = def.type === "number";
+    return {
+      id: criterionColumnId(def.value),
+      header: columnHeader(def),
+      defaultWidth: def.type === "text" ? 140 : 110,
+      group: `section:${def.section}`,
+      defaultVisible: false,
+      className: cn("text-muted-foreground", numeric && "text-right"),
+      headerClassName: numeric ? "text-right" : undefined,
+      accessor: (item: QueryResultItem) => {
+        const value = columnValues[item.id]?.[def.value];
+        if (value === undefined && isColumnPending(def.value)) {
+          return <span className="opacity-50">…</span>;
+        }
+        const text = formatColumnValue(def, value);
+        return <span className="truncate" title={text}>{text}</span>;
+      },
+      sortValue: (item: QueryResultItem) => columnSortValue(def, columnValues[item.id]?.[def.value]),
+    };
+  }), [columnFieldDefs, columnValues, isColumnPending]);
+
+  const allColumns = useMemo(() => [...baseColumns, ...criterionColumns], [baseColumns, criterionColumns]);
+
+  const columnGroups = useMemo(() => {
+    const groups: Array<[string, string]> = Object.entries(COLUMN_GROUPS);
+    const sections = [...new Set(columnFieldDefs.map((f) => f.section))];
+    for (const section of sections) groups.push([`section:${section}`, columnSectionLabel(section)]);
+    return groups;
+  }, [columnFieldDefs]);
+
   // Resolve which columns are visible
   const activeColumns = useMemo(() => {
     if (visibleCols.size === 0) {
@@ -829,6 +891,10 @@ export default function QueryPage() {
         // of it. Throwing a generic "Query failed" here would discard that.
         const data = await consumeProgressStream<{ items?: QueryResultItem[] }>(resp, onQueryProgress);
         setResults(data.items ?? []);
+        setRunScope({
+          serverIds: definition.serverIds,
+          ...(definition.arrServerIds && { arrServerIds: definition.arrServerIds }),
+        });
       } catch (error) {
         // A failed query is not an empty one. The results header asserts
         // "N results found", so leaving `hasRun` set rendered "0 results found"
@@ -1694,9 +1760,20 @@ export default function QueryPage() {
                 Columns
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-52 max-w-[calc(100vw-2rem)] max-h-80 overflow-y-auto p-2">
-              {Object.entries(COLUMN_GROUPS).map(([groupKey, groupLabel]) => {
-                const groupCols = allColumns.filter((c) => c.group === groupKey);
+            <DropdownMenuContent align="end" className="w-64 max-w-[calc(100vw-2rem)] max-h-96 overflow-y-auto p-2">
+              <Input
+                value={columnSearch}
+                onChange={(e) => setColumnSearch(e.target.value)}
+                onKeyDown={(e) => e.stopPropagation()}
+                placeholder="Search columns..."
+                className="mb-2 h-8 text-sm"
+              />
+              {columnGroups.map(([groupKey, groupLabel]) => {
+                const needle = columnSearch.trim().toLowerCase();
+                const groupCols = allColumns.filter((c) =>
+                  c.group === groupKey &&
+                  (!needle || String(c.header).toLowerCase().includes(needle) || groupLabel.toLowerCase().includes(needle)),
+                );
                 if (groupCols.length === 0) return null;
                 return (
                   <div key={groupKey} className="mb-2 last:mb-0">
@@ -1773,6 +1850,15 @@ export default function QueryPage() {
                 </div>
               )}
             </>
+          )}
+
+          {viewMode === "table" && results.length > 0 && columnWarnings.length > 0 && (
+            <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-sm text-muted-foreground">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+              <div className="space-y-0.5">
+                {columnWarnings.map((w) => <p key={w}>{w}</p>)}
+              </div>
+            </div>
           )}
 
           {results.length > 0 ? (
