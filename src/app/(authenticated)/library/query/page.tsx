@@ -1439,47 +1439,6 @@ export default function QueryPage() {
           Query Scope
         </p>
         <div className="space-y-3">
-          {/* Media types — segmented pills */}
-          <ScopeRow label="Media types">
-            <div className="space-y-2">
-              <div className="flex flex-wrap items-center gap-2">
-                {(["MOVIE", "SERIES", "MUSIC"] as const).map((type) => {
-                  const selected = mediaTypes.includes(type);
-                  return (
-                    <button
-                      key={type}
-                      type="button"
-                      onClick={() => toggleMediaType(type)}
-                      aria-pressed={selected}
-                      className={cn(
-                        "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-sm transition-colors",
-                        selected
-                          ? "border-primary bg-primary/15 text-foreground"
-                          : "border-border text-muted-foreground hover:bg-muted hover:text-foreground",
-                      )}
-                    >
-                      {selected ? <Check className="h-3.5 w-3.5 text-primary" /> : null}
-                      {MEDIA_TYPE_PLURAL_LABELS[type]}
-                    </button>
-                  );
-                })}
-                <span className="ml-1 text-xs text-muted-foreground">
-                  {mediaTypes.length === 0 ? "All types" : "None selected = all types"}
-                </span>
-              </div>
-
-              {(mediaTypes.length === 0 || mediaTypes.includes("SERIES")) && (
-                <label className="flex w-fit cursor-pointer items-center gap-1.5">
-                  <Checkbox checked={includeEpisodes} onCheckedChange={(checked) => setIncludeEpisodes(checked === true)} />
-                  <span className="text-sm">Include individual episodes</span>
-                  <span className="text-xs text-muted-foreground">
-                    — {includeEpisodes ? "showing individual episodes" : "grouping series by show"}
-                  </span>
-                </label>
-              )}
-            </div>
-          </ScopeRow>
-
           {queryServers.length > 0 && (
             <ScopeRow label="Servers">
               <Popover>
@@ -1529,6 +1488,47 @@ export default function QueryPage() {
               </Popover>
             </ScopeRow>
           )}
+
+          {/* Media types — segmented pills */}
+          <ScopeRow label="Media types">
+            <div className="space-y-2">
+              <div className="flex flex-wrap items-center gap-2">
+                {(["MOVIE", "SERIES", "MUSIC"] as const).map((type) => {
+                  const selected = mediaTypes.includes(type);
+                  return (
+                    <button
+                      key={type}
+                      type="button"
+                      onClick={() => toggleMediaType(type)}
+                      aria-pressed={selected}
+                      className={cn(
+                        "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-sm transition-colors",
+                        selected
+                          ? "border-primary bg-primary/15 text-foreground"
+                          : "border-border text-muted-foreground hover:bg-muted hover:text-foreground",
+                      )}
+                    >
+                      {selected ? <Check className="h-3.5 w-3.5 text-primary" /> : null}
+                      {MEDIA_TYPE_PLURAL_LABELS[type]}
+                    </button>
+                  );
+                })}
+                <span className="ml-1 text-xs text-muted-foreground">
+                  {mediaTypes.length === 0 ? "All types" : "None selected = all types"}
+                </span>
+              </div>
+
+              {(mediaTypes.length === 0 || mediaTypes.includes("SERIES")) && (
+                <label className="flex w-fit cursor-pointer items-center gap-1.5">
+                  <Checkbox checked={includeEpisodes} onCheckedChange={(checked) => setIncludeEpisodes(checked === true)} />
+                  <span className="text-sm">Include individual episodes</span>
+                  <span className="text-xs text-muted-foreground">
+                    — {includeEpisodes ? "showing individual episodes" : "grouping series by show"}
+                  </span>
+                </label>
+              )}
+            </div>
+          </ScopeRow>
 
           {/* Arr server selectors — shown when any Arr type has instances */}
           {(arrInstances.radarr.length > 0 || arrInstances.sonarr.length > 0 || arrInstances.lidarr.length > 0) && (() => {
