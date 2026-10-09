@@ -284,6 +284,9 @@ const QUALITY_BAR_HEIGHT = 12; // h-1 quality bar (4px) + py-1 padding (8px)
 
 export default function QueryPage() {
   const { servers } = useServers();
+  // Disabled servers are never queried (the engine scopes to enabled ones), so
+  // offering them in the picker would only ever return nothing.
+  const queryServers = useMemo(() => servers.filter((s) => s.enabled), [servers]);
   const { getHex, getBadgeStyle } = useChipColors();
   const { width: panelWidth, resizeHandleProps } = usePanelResize({
     storageKey: "library-query-panel-width",
@@ -307,6 +310,15 @@ export default function QueryPage() {
   // Query state
   const [mediaTypes, setMediaTypes] = useState<string[]>([]);
   const [selectedServerIds, setSelectedServerIds] = useState<string[]>([]);
+  const serverSelectionLabel = useMemo(() => {
+    if (selectedServerIds.length === 0) return "All servers";
+    const names = selectedServerIds
+      .map((id) => servers.find((s) => s.id === id)?.name)
+      .filter((n): n is string => !!n);
+    if (names.length === 0) return "Unavailable server";
+    if (selectedServerIds.length === 1) return names[0];
+    return `${selectedServerIds.length} servers`;
+  }, [selectedServerIds, servers]);
   const [groups, setGroups] = useState<QueryGroup[]>([makeDefaultGroup()]);
   const [sortBy, setSortBy] = useState("title");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
@@ -1225,9 +1237,13 @@ export default function QueryPage() {
   };
 
   const toggleServer = (serverId: string) => {
-    setSelectedServerIds((prev) =>
-      prev.includes(serverId) ? prev.filter((s) => s !== serverId) : [...prev, serverId],
-    );
+    setSelectedServerIds((prev) => {
+      if (prev.includes(serverId)) return prev.filter((s) => s !== serverId);
+      const next = [...prev, serverId];
+      // Ticking every server is the same as "All servers" — store it as the
+      // empty selection so a server added later is included too.
+      return queryServers.every((s) => next.includes(s.id)) ? [] : next;
+    });
   };
 
   const navigateToItem = useCallback((item: QueryResultItem) => {
@@ -1464,50 +1480,50 @@ export default function QueryPage() {
             </div>
           </ScopeRow>
 
-          {servers.length > 1 && (
+          {queryServers.length > 0 && (
             <ScopeRow label="Servers">
               <Popover>
                 <PopoverTrigger asChild>
                   <Button variant="outline" size="sm" className="w-full justify-between sm:w-56">
-                    <span className="truncate">
-                      {selectedServerIds.length === 0 ? "All servers" : `${selectedServerIds.length} selected`}
-                    </span>
+                    <span className="truncate">{serverSelectionLabel}</span>
                     <ChevronDown className="ml-1.5 h-3.5 w-3.5 opacity-50" />
                   </Button>
                 </PopoverTrigger>
-                <PopoverContent className="w-56 max-w-[calc(100vw-2rem)] p-0" align="start">
+                <PopoverContent className="w-64 max-w-[calc(100vw-2rem)] p-0" align="start">
                   <Command>
-                    <CommandInput placeholder="Search servers..." />
+                    {queryServers.length > 5 && <CommandInput placeholder="Search servers..." />}
                     <CommandList>
                       <CommandEmpty>No servers found.</CommandEmpty>
                       <CommandGroup>
-                        {servers.map((s) => {
+                        <CommandItem value="__all_servers__" onSelect={() => setSelectedServerIds([])}>
+                          <Checkbox
+                            checked={selectedServerIds.length === 0}
+                            onCheckedChange={() => setSelectedServerIds([])}
+                            onClick={(e) => e.stopPropagation()}
+                            className="mr-2"
+                          />
+                          All servers
+                        </CommandItem>
+                      </CommandGroup>
+                      <Separator />
+                      <CommandGroup>
+                        {queryServers.map((s) => {
                           const isSelected = selectedServerIds.includes(s.id);
                           return (
-                            <CommandItem key={s.id} onSelect={() => toggleServer(s.id)}>
+                            <CommandItem key={s.id} value={`${s.name} ${s.id}`} onSelect={() => toggleServer(s.id)}>
                               <Checkbox
                                 checked={isSelected}
                                 onCheckedChange={() => toggleServer(s.id)}
                                 onClick={(e) => e.stopPropagation()}
                                 className="mr-2"
                               />
-                              {s.name}
+                              <span className="truncate">{s.name}</span>
                               {s.type && <ServerTypeChip type={s.type} className="ml-1.5" />}
                             </CommandItem>
                           );
                         })}
                       </CommandGroup>
                     </CommandList>
-                    {selectedServerIds.length > 0 && (
-                      <>
-                        <Separator />
-                        <div className="p-1">
-                          <Button variant="ghost" size="sm" className="w-full text-xs" onClick={() => setSelectedServerIds([])}>
-                            Clear all
-                          </Button>
-                        </div>
-                      </>
-                    )}
                   </Command>
                 </PopoverContent>
               </Popover>
