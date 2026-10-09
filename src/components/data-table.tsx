@@ -37,6 +37,9 @@ interface DataTableProps<T> {
   renderHoverContent?: (item: T) => React.ReactNode;
 }
 
+/** Header cell width around its title: `px-3` both sides plus the 4px resize handle. */
+const HEADER_CELL_CHROME = 12 * 2 + 4;
+
 export function DataTable<T>({
   columns,
   data,
@@ -61,9 +64,38 @@ export function DataTable<T>({
   const sortId = onSortChange ? (defaultSortId ?? "") : internalSortId;
   const sortOrder = onSortChange ? (defaultSortOrder ?? "asc") : internalSortOrder;
 
+  // Each header's natural width, measured from its rendered title. A column is
+  // never narrower than its title: with `table-fixed` and nowrap headers, a
+  // title wider than the column's default ran over the next column's title.
+  const headerRefs = useRef(new Map<string, HTMLSpanElement>());
+  const [headerMinWidths, setHeaderMinWidths] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    if (typeof ResizeObserver === "undefined") return;
+    const measure = () => {
+      setHeaderMinWidths((prev) => {
+        const next: Record<string, number> = {};
+        for (const [id, el] of headerRefs.current) {
+          next[id] = Math.ceil(el.getBoundingClientRect().width) + HEADER_CELL_CHROME;
+        }
+        const same = Object.keys(next).length === Object.keys(prev).length &&
+          Object.entries(next).every(([id, w]) => prev[id] === w);
+        return same ? prev : next;
+      });
+    };
+    // Fires once per span on observe, and again when a web font swaps in.
+    const observer = new ResizeObserver(measure);
+    for (const el of headerRefs.current.values()) observer.observe(el);
+    return () => observer.disconnect();
+  }, [columns]);
+
   const resizeColumns = useMemo(
-    () => columns.map((c) => ({ id: c.id, defaultWidth: c.defaultWidth ?? 150 })),
-    [columns],
+    () => columns.map((c) => ({
+      id: c.id,
+      defaultWidth: c.defaultWidth ?? 150,
+      minWidth: headerMinWidths[c.id],
+    })),
+    [columns, headerMinWidths],
   );
 
   const { columnWidths, totalWidth, getResizeProps } = useColumnResize({
@@ -187,7 +219,13 @@ export function DataTable<T>({
                     if (col.sortable !== false && col.sortValue) handleSort(col.id);
                   }}
                 >
-                  <span className="inline-flex items-center gap-1">
+                  <span
+                    ref={(el) => {
+                      if (el) headerRefs.current.set(col.id, el);
+                      else headerRefs.current.delete(col.id);
+                    }}
+                    className="inline-flex items-center gap-1"
+                  >
                     {col.header}
                     {col.sortable !== false && col.sortValue && (
                       sortId === col.id ? (
