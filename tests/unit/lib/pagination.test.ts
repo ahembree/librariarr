@@ -33,6 +33,13 @@ describe("parseListPagination", () => {
     expect(parseListPagination(params({ limit: "5000" })).limit).toBe(100);
   });
 
+  it("takes a route's own maximum (the grouped listings allow 200)", () => {
+    expect(parseListPagination(params({ limit: "5000" }), { maxLimit: 200 }).limit).toBe(200);
+    expect(parseListPagination(params({ limit: "150", offset: "10" }), { maxLimit: 200 })).toEqual({
+      page: 1, limit: 150, skip: 10,
+    });
+  });
+
   it("rejects a negative limit rather than reverse-taking", () => {
     expect(parseListPagination(params({ limit: "-10" })).limit).toBe(1);
   });

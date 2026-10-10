@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { enqueueJob } from "@/lib/jobs/client";
 import { eventBus } from "@/lib/events/event-bus";
 import { MAIN_QUEUE, REQUESTED_SYNC_PRIORITY, TASK_SYNC_SERVER } from "@/lib/jobs/constants";
+import { serverSyncSchema } from "@/lib/validation";
 
 export async function POST(
   request: NextRequest,
@@ -31,20 +32,30 @@ export async function POST(
     );
   }
 
-  // Optional: scope sync to a specific library
+  // Optional: scope sync to a specific library. No body syncs every enabled
+  // library; a body that is not valid JSON or names no valid library key is
+  // refused — it used to be ignored, so a client's malformed request to sync
+  // ONE library synced all of them.
   let libraryKey: string | undefined;
-  try {
-    const body = await request.json();
-    if (body?.libraryKey && typeof body.libraryKey === "string") {
-      libraryKey = body.libraryKey;
+  const rawBody = await request.text();
+  if (rawBody.trim() !== "") {
+    let body: unknown;
+    try {
+      body = JSON.parse(rawBody);
+    } catch {
+      return NextResponse.json({ error: "Invalid JSON in request body" }, { status: 400 });
     }
-  } catch {
-    // No body or invalid JSON — sync all enabled libraries
-  }
-  // A library key is a short server-side id; anything longer is not one, and
-  // this route is reachable by API key.
-  if (libraryKey && libraryKey.length > 200) {
-    return NextResponse.json({ error: "Invalid libraryKey" }, { status: 400 });
+    const parsed = serverSyncSchema.safeParse(body);
+    if (!parsed.success) {
+      return NextResponse.json(
+        {
+          error: "Validation failed",
+          details: parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`),
+        },
+        { status: 400 },
+      );
+    }
+    libraryKey = parsed.data.libraryKey;
   }
 
   if (libraryKey) {

@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { DELETE as appDelete } from "@/app/api/lifecycle/exceptions/[id]/route";
 import { withApiKey } from "@/lib/api-keys/guard";
-import { reserveExceptionRemoval } from "@/lib/api-keys/exception-removal";
+import { removeExceptionsCharged } from "@/lib/api-keys/exception-removal";
 
 type Context = { params: Promise<{ id: string }> };
 
@@ -11,7 +11,9 @@ type Context = { params: Promise<{ id: string }> };
 // (see ../route.ts).
 export const DELETE = withApiKey("lifecycle:execute", async (request: NextRequest, context: Context) => {
   const { id } = await context.params;
-  const refusal = await reserveExceptionRemoval([id]);
-  if (refusal) return refusal;
-  return appDelete(request, context);
+  return removeExceptionsCharged(
+    [id],
+    () => appDelete(request, context),
+    async () => 1,
+  );
 });

@@ -856,6 +856,16 @@ export const arrActionSchema = z.object({
   type: z.enum(["radarr", "sonarr", "lidarr"]),
 });
 
+/**
+ * `POST /api/servers/[id]/sync` (also `/api/v1/servers/{id}/sync`): the body
+ * is optional, and names at most one library. A malformed body is refused
+ * rather than read as "no library" — that turned `{ "libraryKey": 123 }` into
+ * a sync of every library on the server.
+ */
+export const serverSyncSchema = z.object({
+  libraryKey: z.string().min(1, "libraryKey must not be empty").max(200, "Invalid libraryKey").optional(),
+});
+
 export const syncCancelSchema = z.object({
   serverId: z.string().min(1, "Server ID is required").max(200),
 });

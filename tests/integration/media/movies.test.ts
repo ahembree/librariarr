@@ -529,6 +529,62 @@ describe("GET /api/media/movies", () => {
     });
   });
 
+  describe("filter values outside the column's range", () => {
+    // Each of these failed the whole listing with a 500: Prisma refuses an Int
+    // past 2^31 or a BigInt past 2^63, and Postgres a date before year 1 or
+    // past 9999. A bound past the range must match everything or nothing, as
+    // the database would have answered if it could compare it.
+    async function seed() {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const lib = await createTestLibrary(server.id);
+      const item = await createTestMediaItem(lib.id, {
+        title: "Film",
+        year: 2001,
+        playCount: 2,
+        duration: 5_400_000,
+        fileSize: BigInt(1_000_000),
+        addedAt: new Date("2024-03-01T00:00:00Z"),
+        lastPlayedAt: new Date("2024-04-01T00:00:00Z"),
+      });
+      await getTestPrisma().mediaItem.update({ where: { id: item.id }, data: { videoBitDepth: 10, rating: 7.5 } });
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    }
+
+    async function count(searchParams: Record<string, string>): Promise<number> {
+      const body = await expectJson<{ items: unknown[] }>(
+        await callRoute(GET, { url: "/api/media/movies", searchParams }),
+        200,
+      );
+      return body.items.length;
+    }
+
+    it.each([
+      [{ yearConditions: "gt:3000000000" }, 0],
+      [{ yearConditions: "lt:3000000000" }, 1],
+      [{ yearConditions: "3000000000" }, 0],
+      [{ yearConditions: "gte:-3000000000" }, 1],
+      [{ yearConditions: "gt:2000|lt:3000000000", yearLogic: "and" }, 1],
+      [{ playCountConditions: "gte:3000000000" }, 0],
+      [{ ratingConditions: "lt:1e400" }, 1],
+      [{ ratingConditions: "gt:1e400" }, 0],
+      [{ durationMin: "3000000000" }, 0],
+      [{ durationMax: "3000000000" }, 1],
+      [{ videoBitDepth: "3000000000" }, 0],
+      [{ videoBitDepth: "10|3000000000" }, 1],
+      [{ fileSizeMin: "99999999999999999999" }, 0],
+      [{ fileSizeMax: "99999999999999999999" }, 1],
+      [{ lastPlayedAtDays: "3000000" }, 1],
+      [{ lastPlayedAtDays: "200000000" }, 1],
+      [{ addedAtMin: "-200000-01-01" }, 1],
+      [{ addedAtMax: "+275760-09-13" }, 1],
+      [{ addedAtMin: "+275760-09-13" }, 0],
+    ] as const)("%o → %i item(s), not a 500", async (params, expected) => {
+      await seed();
+      expect(await count({ ...params })).toBe(expected);
+    });
+  });
+
   describe("stable ordering", () => {
     // Needs real volume: the defect only appears once the two passes are planned
     // differently (bounded top-N heapsort vs full quicksort), which a handful of

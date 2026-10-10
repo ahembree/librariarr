@@ -138,5 +138,20 @@ describe("/api/v1 route guards", () => {
       "GET /api/v1/lifecycle/rules/matches",
     ]);
   });
+
+  // `limit=0` is a full listing only where the handler reads it as one. These
+  // floor the limit at 1 (or 10) instead, so their `limit=0` is not charged
+  // twenty requests. Pinned so a route is opted out on purpose.
+  it("charges limit=0 as a full listing everywhere but the routes that floor it", async () => {
+    const optedOut = (await loadRoutes())
+      .filter(({ handler }) => getApiKeyGuard(handler)?.limitZeroMeansAll === false)
+      .map(({ route, method }) => `${method} ${route}`)
+      .sort();
+    expect(optedOut).toEqual([
+      "GET /api/v1/media/[id]/plays",
+      "GET /api/v1/media/history",
+      "GET /api/v1/media/recently-added",
+    ]);
+  });
 });
 

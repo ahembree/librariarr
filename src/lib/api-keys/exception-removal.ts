@@ -4,19 +4,25 @@ import { getApiKeyPrincipal } from "./principal";
 import { destructiveRefusalResponse, reserveApiDestructive } from "./destructive-budget";
 
 /**
- * Charge removing these exceptions to the API's destructive budget, or refuse.
+ * Remove exceptions through `remove`, charged to the API's destructive budget,
+ * or refuse without removing anything.
  *
  * Removing an exception deletes nothing by itself, but it is what lets the
  * rules match the item again, and the item's deletion then runs on the rule
  * set's own schedule, where no API budget applies. Unprotecting 1,000 items in
  * one call would be a mass deletion one detection cycle later, so each removal
  * counts as one destructive item. Only exceptions that exist and belong to the
- * key's owner are counted: an id that matches nothing costs nothing.
- *
- * Returns the response to send when refused, `null` when the removal may go
- * ahead.
+ * key's owner are charged — an id that matches nothing costs nothing — and the
+ * charge is settled on what `remove` actually removed (`removedCount`, read off
+ * its response): an exception that was gone by the time the delete ran (a
+ * concurrent request removed it) is given back, so two overlapping calls with
+ * the same ids are charged once, not twice.
  */
-export async function reserveExceptionRemoval(ids: string[]): Promise<NextResponse | null> {
+export async function removeExceptionsCharged(
+  ids: string[],
+  remove: () => Promise<Response>,
+  removedCount: (response: Response) => Promise<number>,
+): Promise<Response> {
   const principal = getApiKeyPrincipal();
   // Only reachable if a route forgot `withApiKey` — fail closed.
   if (!principal) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -25,5 +31,14 @@ export async function reserveExceptionRemoval(ids: string[]): Promise<NextRespon
     where: { id: { in: ids }, userId: principal.userId },
   });
   const reservation = reserveApiDestructive(count);
-  return reservation.ok ? null : destructiveRefusalResponse(reservation);
+  if (!reservation.ok) return destructiveRefusalResponse(reservation);
+
+  let removed = 0;
+  try {
+    const response = await remove();
+    if (response.ok) removed = Math.min(count, Math.max(0, await removedCount(response.clone())));
+    return response;
+  } finally {
+    reservation.release(count - removed);
+  }
 }

@@ -59,6 +59,12 @@ export interface RunActionsResult {
   failed: number;
   errors: string[];
   failures: { title: string; error: string }[];
+  /**
+   * Of `failed`, the items failed without contacting the Arr app at all — its
+   * instance had already failed at the host level this run — so nothing was
+   * sent for them. The public API gives these back to its destructive budget.
+   */
+  notAttempted: number;
 }
 
 /** Live progress for a bounded action run, suitable for a streaming UI. */
@@ -108,6 +114,7 @@ export async function executeActionsForItems(
 
   let executed = 0;
   let failed = 0;
+  let notAttempted = 0;
   const errors: string[] = [];
   const failures: { title: string; error: string }[] = [];
 
@@ -133,7 +140,10 @@ export async function executeActionsForItems(
     reportStep?.("Starting");
     try {
       const hostDown = unreachable.get(config.arrInstanceId);
-      if (hostDown) throw hostDown;
+      if (hostDown) {
+        notAttempted++;
+        throw hostDown;
+      }
       const outcome = await executeAction({
         id: "immediate",
         actionType,
@@ -228,5 +238,5 @@ export async function executeActionsForItems(
     }
   }
 
-  return { executed, failed, errors, failures };
+  return { executed, failed, errors, failures, notAttempted };
 }

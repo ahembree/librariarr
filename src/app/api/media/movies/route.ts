@@ -5,7 +5,7 @@ import { prisma } from "@/lib/db";
 import { escapeLike } from "@/lib/filters/escape-like";
 import type { Prisma } from "@/generated/prisma/client";
 import { applyCommonFilters, applyStartsWithFilter } from "@/lib/filters/build-where";
-import { applyStreamCountFilters } from "@/lib/filters/stream-count";
+import { filterIdsByStreamCounts, parseStreamCountFilters } from "@/lib/filters/stream-count";
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
 import { parseListPagination } from "@/lib/api/pagination";
 import { getServerPresenceByDedupKey } from "@/lib/dedup/server-presence";
@@ -26,6 +26,21 @@ const SORT_COLUMNS = new Set([
   "audienceRating",
   "contentRating",
 ]);
+
+/** How many ids one `findInOrder` query names, well under the bind-parameter limit. */
+const ID_CHUNK = 5000;
+
+/** The rows for `ids`, in the order given, a chunk of ids per query. */
+async function findInOrder<T extends { id: string }>(
+  ids: string[],
+  fetchChunk: (chunk: string[]) => Promise<T[]>,
+): Promise<T[]> {
+  const byId = new Map<string, T>();
+  for (let i = 0; i < ids.length; i += ID_CHUNK) {
+    for (const row of await fetchChunk(ids.slice(i, i + ID_CHUNK))) byId.set(row.id, row);
+  }
+  return ids.map((id) => byId.get(id)).filter((row): row is T => row !== undefined);
+}
 
 export async function GET(request: NextRequest) {
   const session = await getSession();
@@ -59,8 +74,8 @@ export async function GET(request: NextRequest) {
   if (startsWith) applyStartsWithFilter(where, "title", startsWith);
   applyCommonFilters(where, searchParams);
 
-  // Stream count filters (audio track count, subtitle count)
-  await applyStreamCountFilters(where, searchParams, prisma);
+  // Stream count filters (audio track count, subtitle count), applied below.
+  const streamCounts = parseStreamCountFilters(searchParams);
 
   // Select only fields needed for card/table rendering.
   // Full item data is fetched on demand by the detail panel via /api/media/{id}.
@@ -112,21 +127,42 @@ export async function GET(request: NextRequest) {
     where.dedupCanonical = true;
   }
 
-  const items = await prisma.mediaItem.findMany({
-    where,
-    ...(limit > 0 ? { skip, take: limit + 1 } : { skip }),
-    // `id` is the tiebreaker, not decoration: without a total order Postgres is
-    // free to return tied rows in any order, and the two passes of a progressive
-    // load are planned differently (bounded top-N heapsort vs full quicksort or
-    // external merge). The tie block straddling the page boundary then permutes
-    // between the passes, so the stitched list shows some rows twice and drops
-    // others entirely. Reproduced at 80 duplicated / 80 missing out of 20k rows.
-    orderBy:
-      sortBy === "title"
-        ? [{ titleSort: { sort: sortOrder, nulls: "last" } }, { title: sortOrder }, { id: "asc" as const }]
-        : [{ [sortBy]: sortOrder }, { id: "asc" as const }],
-    select: selectBase,
-  });
+  // `id` is the tiebreaker, not decoration: without a total order Postgres is
+  // free to return tied rows in any order, and the two passes of a progressive
+  // load are planned differently (bounded top-N heapsort vs full quicksort or
+  // external merge). The tie block straddling the page boundary then permutes
+  // between the passes, so the stitched list shows some rows twice and drops
+  // others entirely. Reproduced at 80 duplicated / 80 missing out of 20k rows.
+  const orderBy: Prisma.MediaItemOrderByWithRelationInput[] =
+    sortBy === "title"
+      ? [{ titleSort: { sort: sortOrder, nulls: "last" } }, { title: sortOrder }, { id: "asc" }]
+      : [{ [sortBy]: sortOrder }, { id: "asc" }];
+
+  let items;
+  if (streamCounts) {
+    // A track count is not something a Prisma filter can express, so the
+    // candidates are listed in order, the counts checked in one SQL statement
+    // over them, and the page cut from what is left — never as an `id IN (…)`
+    // over every match, which runs out of bind parameters on a large library.
+    const candidates = await prisma.mediaItem.findMany({ where, orderBy, select: { id: true } });
+    const matching = await filterIdsByStreamCounts(
+      prisma,
+      candidates.map((c) => c.id),
+      streamCounts,
+    );
+    const ordered = candidates.map((c) => c.id).filter((id) => matching.has(id));
+    const pageIds = limit > 0 ? ordered.slice(skip, skip + limit + 1) : ordered.slice(skip);
+    items = await findInOrder(pageIds, (chunk) =>
+      prisma.mediaItem.findMany({ where: { id: { in: chunk } }, select: selectBase }),
+    );
+  } else {
+    items = await prisma.mediaItem.findMany({
+      where,
+      ...(limit > 0 ? { skip, take: limit + 1 } : { skip }),
+      orderBy,
+      select: selectBase,
+    });
+  }
 
   const hasMore = limit > 0 && items.length > limit;
   if (hasMore) items.pop();

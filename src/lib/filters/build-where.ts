@@ -29,24 +29,77 @@ export function parseMulti(value: string | null): string[] | null {
 function safeBigInt(value: string | null): bigint | null {
   if (value == null || value.trim() === "") return null;
   try {
-    return BigInt(value);
+    const n = BigInt(value);
+    return n < BIGINT_MIN ? BIGINT_MIN : n > BIGINT_MAX ? BIGINT_MAX : n;
   } catch {
     return null;
   }
 }
 
-/** Parse a query param into a finite integer, or null if not parseable. */
+/**
+ * The ranges the filtered columns hold. A value outside its column's range is
+ * not something Prisma or Postgres will compare against — `yearConditions=
+ * gt:3000000000`, `fileSizeMin=99999999999999999999` or `addedAtMin=
+ * -200000-01-01` each failed the whole listing with a 500 — so every number
+ * and date is brought into range first, in a way that keeps its meaning: a
+ * bound past the end of the range matches everything or nothing, exactly as
+ * it would have if the database could have compared it.
+ */
+const INT_MIN = -(2 ** 31);
+const INT_MAX = 2 ** 31 - 1;
+const BIGINT_MIN = -(2n ** 63n);
+const BIGINT_MAX = 2n ** 63n - 1n;
+/** What a Prisma DateTime round-trips as an ISO string and Postgres accepts. */
+const DATE_MIN_MS = Date.parse("0001-01-01T00:00:00.000Z");
+const DATE_MAX_MS = Date.UTC(9999, 11, 31, 23, 59, 59, 999);
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function clampInt(n: number): number {
+  return Math.min(INT_MAX, Math.max(INT_MIN, n));
+}
+
+function clampDate(d: Date): Date {
+  return new Date(Math.min(DATE_MAX_MS, Math.max(DATE_MIN_MS, d.getTime())));
+}
+
+interface ColumnRange {
+  min: number;
+  max: number;
+}
+
+const INT_RANGE: ColumnRange = { min: INT_MIN, max: INT_MAX };
+// Not ±Number.MAX_VALUE: Prisma sends a float as decimal text, and the rounded
+// text of MAX_VALUE is past what `double precision` accepts.
+const FLOAT_RANGE: ColumnRange = { min: -1e308, max: 1e308 };
+
+/** Parse a query param into a finite integer in the column's range, or null if not parseable. */
 function safeInt(value: string | null): number | null {
   if (value == null || value.trim() === "") return null;
   const n = parseInt(value, 10);
-  return Number.isFinite(n) ? n : null;
+  return Number.isFinite(n) ? clampInt(n) : null;
 }
 
-/** Parse a query param into a valid Date, or null for an Invalid Date. */
+/** Parse a query param into a valid Date in the column's range, or null for an Invalid Date. */
 function safeDate(value: string | null): Date | null {
   if (value == null || value.trim() === "") return null;
   const d = new Date(value);
-  return isNaN(d.getTime()) ? null : d;
+  return isNaN(d.getTime()) ? null : clampDate(d);
+}
+
+/** Midnight UTC `days` days ago, never before the earliest storable date. */
+function daysAgo(days: number): Date {
+  const since = new Date(Math.max(DATE_MIN_MS, Date.now() - days * DAY_MS));
+  since.setUTCHours(0, 0, 0, 0);
+  return clampDate(since);
+}
+
+/**
+ * An integer column equal to `n`: the plain value when it is in range, and a
+ * filter that matches nothing when it is not — no row holds 3,000,000,000 in
+ * an `integer` column.
+ */
+export function intEqualsFilter(n: number): number | { in: number[] } {
+  return n >= INT_MIN && n <= INT_MAX ? n : { in: [] };
 }
 
 /**
@@ -143,17 +196,19 @@ export function applyCommonFilters(
   for (const [param, field] of multiInt) {
     const values = parseMulti(params.get(param));
     if (values) {
-      const nums = values.map((v) => parseInt(v)).filter((n) => !isNaN(n));
+      const parsed = values.map((v) => parseInt(v)).filter((n) => !isNaN(n));
+      // An exact value no `integer` column can hold matches nothing.
+      const nums = parsed.filter((n) => n >= INT_MIN && n <= INT_MAX);
       if (nums.length === 1) {
         (where as Record<string, unknown>)[field] = nums[0];
-      } else if (nums.length > 1) {
+      } else if (nums.length > 1 || parsed.length > 0) {
         (where as Record<string, unknown>)[field] = { in: nums };
       }
     }
   }
 
   // Year — multi-condition with AND/OR logic
-  applyConditionFilter(where, andClauses, params, "yearConditions", "yearLogic", "year", parseInt);
+  applyConditionFilter(where, andClauses, params, "yearConditions", "yearLogic", "year", parseInt, INT_RANGE);
 
   // Genre (case-insensitive match in JSON array)
   const genreValues = parseMulti(params.get("genre"));
@@ -183,19 +238,19 @@ export function applyCommonFilters(
   }
 
   // Play count — multi-condition with AND/OR logic
-  applyConditionFilter(where, andClauses, params, "playCountConditions", "playCountLogic", "playCount", parseInt);
+  applyConditionFilter(where, andClauses, params, "playCountConditions", "playCountLogic", "playCount", parseInt, INT_RANGE);
 
   // Rating — multi-condition with AND/OR logic
-  applyConditionFilter(where, andClauses, params, "ratingConditions", "ratingLogic", "rating", parseFloat);
+  applyConditionFilter(where, andClauses, params, "ratingConditions", "ratingLogic", "rating", parseFloat, FLOAT_RANGE);
 
   // Audience Rating — multi-condition with AND/OR logic
-  applyConditionFilter(where, andClauses, params, "audienceRatingConditions", "audienceRatingLogic", "audienceRating", parseFloat);
+  applyConditionFilter(where, andClauses, params, "audienceRatingConditions", "audienceRatingLogic", "audienceRating", parseFloat, FLOAT_RANGE);
 
   // Video Bitrate — multi-condition with AND/OR logic
-  applyConditionFilter(where, andClauses, params, "videoBitrateConditions", "videoBitrateLogic", "videoBitrate", parseInt);
+  applyConditionFilter(where, andClauses, params, "videoBitrateConditions", "videoBitrateLogic", "videoBitrate", parseInt, INT_RANGE);
 
   // Audio Bitrate — multi-condition with AND/OR logic
-  applyConditionFilter(where, andClauses, params, "audioBitrateConditions", "audioBitrateLogic", "audioBitrate", parseInt);
+  applyConditionFilter(where, andClauses, params, "audioBitrateConditions", "audioBitrateLogic", "audioBitrate", parseInt, INT_RANGE);
 
   // Last played date — supports date range or "days ago"
   const lastPlayedAtDays = params.get("lastPlayedAtDays");
@@ -204,10 +259,7 @@ export function applyCommonFilters(
   if (lastPlayedAtDays) {
     const days = parseInt(lastPlayedAtDays);
     if (!isNaN(days) && days > 0) {
-      const since = new Date();
-      since.setUTCDate(since.getUTCDate() - days);
-      since.setUTCHours(0, 0, 0, 0);
-      where.lastPlayedAt = { gte: since };
+      where.lastPlayedAt = { gte: daysAgo(days) };
     }
   } else {
     const minDate = safeDate(lastPlayedAtMin);
@@ -229,10 +281,7 @@ export function applyCommonFilters(
   if (addedAtDays) {
     const days = parseInt(addedAtDays);
     if (!isNaN(days) && days > 0) {
-      const since = new Date();
-      since.setUTCDate(since.getUTCDate() - days);
-      since.setUTCHours(0, 0, 0, 0);
-      where.addedAt = { gte: since };
+      where.addedAt = { gte: daysAgo(days) };
     }
   } else {
     const minDate = safeDate(addedAtMin);
@@ -254,10 +303,7 @@ export function applyCommonFilters(
   if (originallyAvailableAtDays) {
     const days = parseInt(originallyAvailableAtDays);
     if (!isNaN(days) && days > 0) {
-      const since = new Date();
-      since.setUTCDate(since.getUTCDate() - days);
-      since.setUTCHours(0, 0, 0, 0);
-      where.originallyAvailableAt = { gte: since };
+      where.originallyAvailableAt = { gte: daysAgo(days) };
     }
   } else {
     const minDate = safeDate(originallyAvailableAtMin);
@@ -366,7 +412,22 @@ export function applyCommonFilters(
 /**
  * Convert a comparison operator string to a Prisma filter object.
  */
-function comparisonOpToFilter(value: number, op: string): number | Record<string, number> {
+/** Matches no row: what an impossible comparison (`year = 3000000000`) is. */
+const MATCH_NOTHING = { in: [] as number[] };
+
+function comparisonOpToFilter(
+  value: number,
+  op: string,
+  range: ColumnRange,
+): number | Record<string, number | number[]> {
+  // A bound past the column's range: everything on one side, nothing on the
+  // other (see INT_MIN) — never a value the database refuses to compare.
+  if (value > range.max) {
+    return op === "lt" || op === "lte" ? { lte: range.max } : MATCH_NOTHING;
+  }
+  if (value < range.min) {
+    return op === "gt" || op === "gte" ? { gte: range.min } : MATCH_NOTHING;
+  }
   switch (op) {
     case "gt": return { gt: value };
     case "lt": return { lt: value };
@@ -388,7 +449,8 @@ function applyConditionFilter(
   conditionsKey: string,
   logicKey: string,
   field: keyof Prisma.MediaItemWhereInput,
-  parse: (v: string) => number
+  parse: (v: string) => number,
+  range: ColumnRange,
 ): void {
   const raw = params.get(conditionsKey);
   if (!raw) return;
@@ -412,13 +474,13 @@ function applyConditionFilter(
   if (conditions.length === 0) return;
 
   if (conditions.length === 1) {
-    (where as Record<string, unknown>)[field] = comparisonOpToFilter(conditions[0].value, conditions[0].op);
+    (where as Record<string, unknown>)[field] = comparisonOpToFilter(conditions[0].value, conditions[0].op, range);
     return;
   }
 
   // Multiple conditions: combine with AND or OR
   const clauseList = conditions.map((c) => ({
-    [field]: comparisonOpToFilter(c.value, c.op),
+    [field]: comparisonOpToFilter(c.value, c.op, range),
   }));
 
   if (logic === "or") {

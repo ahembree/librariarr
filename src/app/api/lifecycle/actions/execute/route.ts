@@ -20,7 +20,11 @@ import type { LifecycleRuleGroup } from "@/lib/rules/types";
 import { matchIdentityChange } from "@/lib/lifecycle/match-identity";
 import { memberIdsFromItemData } from "@/lib/lifecycle/group-aggregate";
 import { getApiKeyPrincipal } from "@/lib/api-keys/principal";
-import { destructiveRefusalResponse, reserveApiDestructive } from "@/lib/api-keys/destructive-budget";
+import {
+  destructiveRefusalResponse,
+  reserveApiDestructive,
+  type ApiDestructiveReservation,
+} from "@/lib/api-keys/destructive-budget";
 
 /**
  * The episode / track ids each stored match acts on, keyed by its item — for
@@ -375,17 +379,19 @@ async function executeRuleSet(
   // budget every key shares (at most 25 per request, 100 per hour). Refused
   // whole, like the ceiling: nothing runs and nothing is charged.
   const apiKey = getApiKeyPrincipal();
+  let apiReservation: ApiDestructiveReservation | null = null;
   if (apiKey && isDestructiveActionType(ruleSet.actionType ?? "")) {
     const reservation = reserveApiDestructive(items.length);
     if (!reservation.ok) {
       logger.warn("Lifecycle", `Refused API execute for rule set "${ruleSet.id}" by key "${apiKey.name}" — ${reservation.error}`);
       return destructiveRefusalResponse(reservation);
     }
+    apiReservation = reservation;
   }
 
   logger.info("Lifecycle", `Executing ${ruleSet.actionType ?? "DO_NOTHING"} on ${items.length} items for rule set "${ruleSet.id}" (${itemIds.length} match IDs, ${items.length} ownership-verified)`);
 
-  const { executed, failed, errors, failures } = await executeActionsForItems(
+  const { executed, failed, errors, failures, notAttempted } = await executeActionsForItems(
     session.userId!,
     items,
     {
@@ -405,6 +411,11 @@ async function executeRuleSet(
       cleanupMatches: true,
     },
   );
+
+  // Items failed without anything being sent (their Arr instance was already
+  // down) deleted nothing, so they go back to the budget. A failure that did
+  // reach the Arr app stays charged: a timed-out write may have landed.
+  apiReservation?.release(notAttempted);
 
   // Send Discord notification for failures if the rule set has notifications enabled
   if (failed > 0 && ruleSet.discordNotifyOnAction) {

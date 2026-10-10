@@ -4,7 +4,7 @@ import { jsonResponse } from "@/lib/api/json-response";
 import { prisma } from "@/lib/db";
 import { escapeLike } from "@/lib/filters/escape-like";
 import type { Prisma } from "@/generated/prisma/client";
-import { applyCommonFilters } from "@/lib/filters/build-where";
+import { applyCommonFilters, intEqualsFilter } from "@/lib/filters/build-where";
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
 import { parseListPagination } from "@/lib/api/pagination";
 import { getServerPresenceByDedupKey } from "@/lib/dedup/server-presence";
@@ -65,7 +65,8 @@ export async function GET(request: NextRequest) {
     if (Number.isNaN(n)) {
       return NextResponse.json({ error: "seasonNumber must be an integer" }, { status: 400 });
     }
-    where.seasonNumber = n;
+    // Out of the column's range it matches nothing, rather than failing the query.
+    where.seasonNumber = intEqualsFilter(n);
   }
   // `escapeLike`: `search` becomes a LIKE pattern, and nothing else escapes
   // `%` / `_` / `\` — live, `?search=1_ Things` matched "10 Things I Hate

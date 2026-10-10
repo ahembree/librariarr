@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db";
 import { escapeLike } from "@/lib/filters/escape-like";
 import { appCache } from "@/lib/cache/memory-cache";
 import { jsonResponse } from "@/lib/api/json-response";
-import { clampSkip } from "@/lib/api/pagination";
+import { MAX_SKIP, clampSkip } from "@/lib/api/pagination";
 
 export async function GET(request: NextRequest) {
   const session = await getSession();
@@ -13,7 +13,9 @@ export async function GET(request: NextRequest) {
   }
 
   const { searchParams } = new URL(request.url);
-  const page = Math.max(1, parseInt(searchParams.get("page") ?? "1") || 1);
+  // Bounded like `parseListPagination`'s, so the echoed `pagination.page` is a
+  // sane integer rather than the 1e20 the caller typed.
+  const page = Math.min(Math.max(1, parseInt(searchParams.get("page") ?? "1") || 1), MAX_SKIP);
   const rawLimit = parseInt(searchParams.get("limit") ?? "50");
   // Floor at 1 and cap at 200 — a negative/zero limit produced LIMIT 0 or a
   // negative OFFSET (Postgres rejects negative OFFSET → 500). The OFFSET below

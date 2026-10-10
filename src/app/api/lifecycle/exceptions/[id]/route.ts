@@ -14,15 +14,16 @@ export async function DELETE(
 
   const { id } = await params;
 
-  const exception = await prisma.lifecycleException.findFirst({
+  // deleteMany, not findFirst + delete: a concurrent removal of the same
+  // exception (a second tab, or two API calls) must answer 404 here rather
+  // than throw P2025 into a 500.
+  const { count } = await prisma.lifecycleException.deleteMany({
     where: { id, userId: session.userId! },
   });
 
-  if (!exception) {
+  if (count === 0) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
-
-  await prisma.lifecycleException.delete({ where: { id } });
 
   return NextResponse.json({ success: true });
 }

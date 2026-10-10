@@ -110,11 +110,19 @@ describe("withApiKey", () => {
     expect(getApiKeyGuard(withApiKey("lifecycle:read", async () => new Response()))).toEqual({
       scope: "lifecycle:read",
       fullListing: false,
+      limitZeroMeansAll: true,
     });
-    expect(getApiKeyGuard(withApiKey(null, async () => new Response()))).toEqual({ scope: null, fullListing: false });
+    expect(getApiKeyGuard(withApiKey(null, async () => new Response()))).toEqual({
+      scope: null,
+      fullListing: false,
+      limitZeroMeansAll: true,
+    });
     expect(
       getApiKeyGuard(withApiKey("lifecycle:read", async () => new Response(), { fullListing: true })),
-    ).toEqual({ scope: "lifecycle:read", fullListing: true });
+    ).toEqual({ scope: "lifecycle:read", fullListing: true, limitZeroMeansAll: true });
+    expect(
+      getApiKeyGuard(withApiKey("media:read", async () => new Response(), { limitZeroMeansAll: false })),
+    ).toEqual({ scope: "media:read", fullListing: false, limitZeroMeansAll: false });
     expect(getApiKeyGuard(async () => new Response())).toBeUndefined();
     expect(getApiKeyGuard("GET")).toBeUndefined();
   });
@@ -549,6 +557,31 @@ describe("authenticateApiKey — request cost", () => {
         { fullListing: true },
       );
       expect(spy).toHaveBeenLastCalledWith("key-1", 1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  // Play history, an item's plays and recently added floor `limit` at 1: a
+  // `limit=0` read there returns a page or less and must not be charged as
+  // the whole-library listing it never returns.
+  it("charges limit=0 as one request on a route where 0 does not mean everything", async () => {
+    const key = await storedKey();
+    const spy = vi.spyOn(apiKeyRequestLimiter, "check");
+    try {
+      await authenticateApiKey(
+        request({ "x-api-key": key }, "http://localhost/api/v1/media/history?limit=0"),
+        "media:read",
+        { limitZeroMeansAll: false },
+      );
+      expect(spy).toHaveBeenLastCalledWith("key-1", 1);
+      // An unpaged listing is still a full listing whatever this says.
+      await authenticateApiKey(
+        request({ "x-api-key": key }, "http://localhost/api/v1/lifecycle/actions"),
+        "lifecycle:read",
+        { fullListing: true, limitZeroMeansAll: false },
+      );
+      expect(spy).toHaveBeenLastCalledWith("key-1", FULL_LISTING_REQUEST_COST);
     } finally {
       spy.mockRestore();
     }

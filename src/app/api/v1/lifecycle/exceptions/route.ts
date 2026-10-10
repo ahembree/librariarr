@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server";
 import { GET as appGet, POST as appPost, DELETE as appDelete } from "@/app/api/lifecycle/exceptions/route";
 import { withApiKey } from "@/lib/api-keys/guard";
-import { reserveExceptionRemoval } from "@/lib/api-keys/exception-removal";
+import { removeExceptionsCharged } from "@/lib/api-keys/exception-removal";
 import { validateRequest, apiExceptionDeleteSchema } from "@/lib/validation";
 
 // Public API mirror of /api/lifecycle/exceptions — same parameters and response.
@@ -18,13 +18,16 @@ export const DELETE = withApiKey("lifecycle:execute", async (request: NextReques
   const { data, error } = await validateRequest(request, apiExceptionDeleteSchema);
   if (error) return error;
   const ids = [...new Set(data.ids)];
-  const refusal = await reserveExceptionRemoval(ids);
-  if (refusal) return refusal;
-  return appDelete(
-    new NextRequest(request.url, {
-      method: "DELETE",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ ids }),
-    }),
+  return removeExceptionsCharged(
+    ids,
+    () =>
+      appDelete(
+        new NextRequest(request.url, {
+          method: "DELETE",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ ids }),
+        }),
+      ),
+    async (response) => ((await response.json()) as { deleted: number }).deleted,
   );
 });

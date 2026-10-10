@@ -125,6 +125,8 @@ interface ApiKeyGuardInfo {
   scope: ApiScope | null;
   /** Every GET returns a whole listing, charged `FULL_LISTING_REQUEST_COST`. */
   fullListing: boolean;
+  /** A `limit=0` read returns the whole listing, and is charged as one. */
+  limitZeroMeansAll: boolean;
 }
 
 interface ApiKeyGuardOptions {
@@ -136,6 +138,14 @@ interface ApiKeyGuardOptions {
    * `FULL_LISTING_REQUEST_COST` exists to price.
    */
   fullListing?: boolean;
+  /**
+   * Whether `limit=0` asks this route for everything (the default, as on every
+   * list built on `parseListPagination`). `false` for a route that floors the
+   * limit at 1 instead — play history, an item's plays, recently added — so a
+   * `limit=0` read there, which returns a page or less, is not charged twenty
+   * requests for a whole listing it never returns.
+   */
+  limitZeroMeansAll?: boolean;
 }
 
 type RouteHandler<C> = (request: NextRequest, context: C) => Response | Promise<Response>;
@@ -161,9 +171,10 @@ export function withApiKey<C>(
     throw new Error(`Unknown API scope "${String(scope)}"`);
   }
   const fullListing = options.fullListing === true;
+  const limitZeroMeansAll = options.limitZeroMeansAll !== false;
 
   const guarded = async (request: NextRequest, context: C): Promise<Response> => {
-    const auth = await authenticateApiKey(request, scope, { fullListing });
+    const auth = await authenticateApiKey(request, scope, { fullListing, limitZeroMeansAll });
     if (!auth.ok) return auth.response;
 
     let status: number | "error" = "error";
@@ -177,7 +188,7 @@ export function withApiKey<C>(
   };
 
   Object.defineProperty(guarded, API_KEY_GUARD, {
-    value: Object.freeze({ scope, fullListing } satisfies ApiKeyGuardInfo),
+    value: Object.freeze({ scope, fullListing, limitZeroMeansAll } satisfies ApiKeyGuardInfo),
   });
   return guarded;
 }
@@ -280,7 +291,10 @@ export async function authenticateApiKey(
   }
   rememberVerified(presented, row.id);
 
-  const rate = apiKeyRequestLimiter.check(row.id, requestCost(request, options.fullListing === true));
+  const rate = apiKeyRequestLimiter.check(
+    row.id,
+    requestCost(request, options.fullListing === true, options.limitZeroMeansAll !== false),
+  );
   if (rate.limited) {
     warnOnce(
       `rate:${row.id}`,
@@ -379,15 +393,17 @@ function rememberVerified(presented: string, id: string): void {
 /**
  * Charged against the per-key budget: 1, or `FULL_LISTING_REQUEST_COST` for a
  * full-listing read — any GET of a route without paging (`fullListing`), or a
- * paged route asked for `limit=0`. The latter is decided by
+ * paged route asked for `limit=0` where that means everything
+ * (`limitZeroMeansAll`). The latter is decided by
  * `isFullListingLimit`, the same rule the handlers apply, never by comparing
  * the raw string to `"0"`: the handlers `parseInt` the value, so `limit=00`,
  * `+0`, `0.0`, `0e0` and `0abc` all returned the whole library — verified
  * live — while a string comparison charged each as one ordinary request.
  */
-function requestCost(request: NextRequest, fullListing: boolean): number {
+function requestCost(request: NextRequest, fullListing: boolean, limitZeroMeansAll: boolean): number {
   if (request.method !== "GET" && request.method !== "HEAD") return 1;
   if (fullListing) return FULL_LISTING_REQUEST_COST;
+  if (!limitZeroMeansAll) return 1;
   return isFullListingLimit(request.nextUrl.searchParams.get("limit")) ? FULL_LISTING_REQUEST_COST : 1;
 }
 

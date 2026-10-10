@@ -1,6 +1,11 @@
 import { API_SCOPE_INFO, API_SCOPES, type ApiScope } from "./scopes";
 import { API_DESTRUCTIVE_PER_HOUR, API_DESTRUCTIVE_PER_REQUEST, FULL_LISTING_REQUEST_COST } from "./limits";
 
+// The list routes' limits (`src/lib/api/pagination.ts`), repeated rather than
+// imported: this module is read by the docs build and must stay free of path
+// aliases. `tests/unit/api-keys/openapi.test.ts` pins them to the source.
+export const DOCUMENTED_LIST_LIMIT = { default: 50, flat: 100, grouped: 200 } as const;
+
 const PER_REQUEST = API_DESTRUCTIVE_PER_REQUEST;
 const PER_HOUR = API_DESTRUCTIVE_PER_HOUR;
 const BUDGET_429 = `Every API key together has deleted or unprotected ${PER_HOUR} items in the last hour; wait \`Retry-After\` seconds`;
@@ -42,23 +47,34 @@ interface Operation {
   binary?: string;
 }
 
-const LIST_PAGING: Param[] = [
-  { name: "page", description: "1-based page number.", schema: { type: "integer", minimum: 1, default: 1 } },
-  {
-    name: "limit",
-    description:
-      `Rows per page (0 = everything, which counts as ${FULL_LISTING_REQUEST_COST} requests against the key's budget).`,
-    schema: { type: "integer", minimum: 0 },
-  },
-  { name: "offset", description: "Skip this many rows; overrides `page`.", schema: { type: "integer", minimum: 0 } },
-  { name: "sortBy", description: "Field to sort by." },
-  { name: "sortOrder", description: "Sort direction.", schema: { type: "string", enum: ["asc", "desc"] } },
-];
+/** `page`/`limit`/`offset`/sorting, for a listing whose `limit` is capped at `maxLimit`. */
+function listPaging(maxLimit: number): Param[] {
+  return [
+    { name: "page", description: "1-based page number.", schema: { type: "integer", minimum: 1, default: 1 } },
+    {
+      name: "limit",
+      description:
+        `Rows per page, at most ${maxLimit} (a larger value is capped). 0 = everything, which counts as ` +
+        `${FULL_LISTING_REQUEST_COST} requests against the key's budget.`,
+      schema: { type: "integer", minimum: 0, maximum: maxLimit, default: DOCUMENTED_LIST_LIMIT.default },
+    },
+    { name: "offset", description: "Skip this many rows; overrides `page`.", schema: { type: "integer", minimum: 0 } },
+    { name: "sortBy", description: "Field to sort by." },
+    { name: "sortOrder", description: "Sort direction.", schema: { type: "string", enum: ["asc", "desc"] } },
+  ];
+}
 
+const LIST_PAGING = listPaging(DOCUMENTED_LIST_LIMIT.flat);
+const GROUPED_PAGING = listPaging(DOCUMENTED_LIST_LIMIT.grouped);
+
+const STARTS_WITH: Param = { name: "startsWith", description: "First letter, or `#` for titles not starting with a letter." };
+const SERVER_ID: Param = { name: "serverId", description: "Limit to one media server." };
+
+// Read by the movies, episodes and tracks lists. Only movies take
+// `startsWith`; the episode and track lists ignore it.
 const LIBRARY_FILTERS: Param[] = [
   { name: "search", description: "Title search." },
-  { name: "startsWith", description: "First letter, or `#` for titles not starting with a letter." },
-  { name: "serverId", description: "Limit to one media server." },
+  SERVER_ID,
   { name: "resolution", description: "Pipe-separated values, e.g. `4K|1080P`." },
   { name: "genre", description: "Pipe-separated values." },
   { name: "yearConditions", description: "Pipe-separated `op:value` pairs, e.g. `gte:2020|lte:2024`." },
@@ -112,6 +128,7 @@ export const API_OPERATIONS: readonly Operation[] = [
     tag: "Servers and syncs",
     summary: "Stop a server's running or queued sync",
     body: { description: "", required: true, schema: { type: "object", required: ["serverId"], properties: { serverId: { type: "string" } } } },
+    responses: { "404": "No such server, or it has no running or queued sync" },
   },
   {
     method: "post",
@@ -122,7 +139,7 @@ export const API_OPERATIONS: readonly Operation[] = [
     description: "The Settings “Run now” job. Servers already syncing are skipped.",
     responses: { "202": "Queued: `{ queued: true, jobs }`, `jobs` being how many servers were queued", "500": "A sync could not be queued" },
   },
-  { method: "get", path: "/media/movies", scope: "media:read", tag: "Library", summary: "Movies", query: [...LIST_PAGING, ...LIBRARY_FILTERS] },
+  { method: "get", path: "/media/movies", scope: "media:read", tag: "Library", summary: "Movies", query: [...LIST_PAGING, ...LIBRARY_FILTERS, STARTS_WITH] },
   {
     method: "get",
     path: "/media/series",
@@ -137,7 +154,7 @@ export const API_OPERATIONS: readonly Operation[] = [
     scope: "media:read",
     tag: "Library",
     summary: "Shows, with episode and watched counts",
-    query: [...LIST_PAGING, { name: "search", description: "Title search." }, { name: "startsWith", description: "First letter, or `#`." }, { name: "serverId", description: "Limit to one media server." }],
+    query: [...GROUPED_PAGING, { name: "search", description: "Title search." }, STARTS_WITH, SERVER_ID],
   },
   {
     method: "get",
@@ -145,7 +162,7 @@ export const API_OPERATIONS: readonly Operation[] = [
     scope: "media:read",
     tag: "Library",
     summary: "Seasons of one show",
-    query: [{ name: "seriesKey", description: "From the grouped listing.", required: true }],
+    query: [{ name: "seriesKey", description: "From the grouped listing.", required: true }, SERVER_ID],
   },
   {
     method: "get",
@@ -155,14 +172,21 @@ export const API_OPERATIONS: readonly Operation[] = [
     summary: "Tracks",
     query: [...LIST_PAGING, ...LIBRARY_FILTERS, { name: "parentTitle", description: "Artist." }, { name: "albumTitle", description: "Album." }],
   },
-  { method: "get", path: "/media/music/grouped", scope: "media:read", tag: "Library", summary: "Artists" },
+  {
+    method: "get",
+    path: "/media/music/grouped",
+    scope: "media:read",
+    tag: "Library",
+    summary: "Artists, with track and album counts",
+    query: [...GROUPED_PAGING, { name: "search", description: "Artist search." }, STARTS_WITH, SERVER_ID],
+  },
   {
     method: "get",
     path: "/media/music/albums",
     scope: "media:read",
     tag: "Library",
     summary: "Albums of one artist",
-    query: [{ name: "parentTitle", description: "Artist.", required: true }],
+    query: [{ name: "parentTitle", description: "Artist.", required: true }, SERVER_ID],
   },
   {
     method: "get",
@@ -170,7 +194,12 @@ export const API_OPERATIONS: readonly Operation[] = [
     scope: "media:read",
     tag: "Library",
     summary: "Search by title",
-    query: [{ name: "q", description: "Search text.", required: true }, { name: "type", description: "Library type.", schema: MEDIA_TYPE, required: true }],
+    query: [
+      { name: "q", description: "Search text.", required: true },
+      { name: "type", description: "Library type.", schema: MEDIA_TYPE, required: true },
+      { name: "seriesScope", description: "With `type=SERIES`, return shows rather than episodes.", schema: { type: "boolean", default: false } },
+      { name: "musicScope", description: "With `type=MUSIC`, return artists and albums rather than tracks.", schema: { type: "boolean", default: false } },
+    ],
   },
   {
     method: "get",
@@ -178,9 +207,10 @@ export const API_OPERATIONS: readonly Operation[] = [
     scope: "media:read",
     tag: "Library",
     summary: "Newest additions",
-    query: [{ name: "limit", description: "1–50.", schema: { type: "integer", minimum: 1, maximum: 50, default: 10 } }, { name: "type", description: "Library type.", schema: MEDIA_TYPE }, { name: "serverId", description: "Limit to one media server." }],
+    query: [{ name: "limit", description: "1–50.", schema: { type: "integer", minimum: 1, maximum: 50, default: 10 } }, { name: "type", description: "Library type.", schema: MEDIA_TYPE }, SERVER_ID],
+    responses: { "404": "`serverId` names no server of yours" },
   },
-  { method: "get", path: "/media/stats", scope: "media:read", tag: "Library", summary: "Library totals and breakdowns", query: [{ name: "serverId", description: "Limit to one media server." }] },
+  { method: "get", path: "/media/stats", scope: "media:read", tag: "Library", summary: "Library totals and breakdowns", query: [SERVER_ID], responses: { "404": "`serverId` names no server of yours" } },
   {
     method: "get",
     path: "/media/history",
@@ -214,7 +244,11 @@ export const API_OPERATIONS: readonly Operation[] = [
     tag: "Library",
     summary: "Artwork",
     binary: "image/webp",
-    query: [{ name: "type", description: "Which artwork; poster by default.", schema: { type: "string", enum: ["art", "parent", "season"] } }, { name: "w", description: "Width.", schema: { type: "integer", enum: [400, 640, 800] } }],
+    query: [
+      { name: "type", description: "Which artwork; poster by default. `role` is a cast member's photo, picked by `index`.", schema: { type: "string", enum: ["art", "parent", "season", "role"] } },
+      { name: "index", description: "With `type=role`, the cast member's position in the item's roles.", schema: { type: "integer", minimum: 0 } },
+      { name: "w", description: "Width.", schema: { type: "integer", enum: [400, 640, 800] } },
+    ],
   },
   { method: "get", path: "/lifecycle/rules", scope: "lifecycle:read", tag: "Lifecycle", summary: "Rule sets" },
   { method: "get", path: "/lifecycle/rules/matches", scope: "lifecycle:read", tag: "Lifecycle", summary: "Current matches per rule set", description: `Each match carries the item snapshot detection stored, without its file path. Not paged: every read counts as ${FULL_LISTING_REQUEST_COST} requests.` },
@@ -256,6 +290,10 @@ export const API_OPERATIONS: readonly Operation[] = [
         },
       },
     },
+    responses: {
+      "201": "Created: `{ exception }`, or `{ count, scope }` for a series, artist or album",
+      "404": "No such media item, or nothing related to it for that scope",
+    },
   },
   {
     method: "post",
@@ -263,7 +301,7 @@ export const API_OPERATIONS: readonly Operation[] = [
     scope: "lifecycle:write",
     tag: "Lifecycle",
     summary: "Queue lifecycle detection for every enabled rule set",
-    responses: { "202": "Queued: `{ queued: true, jobs: 1 }`" },
+    responses: { "202": "Queued: `{ queued: true, jobs: 1 }`", "500": "The job could not be queued" },
   },
   {
     method: "delete",
@@ -296,8 +334,11 @@ export const API_OPERATIONS: readonly Operation[] = [
       `Acts only on the listed items that are current matches of the rule set; name every item (there is no "every match"). ` +
       `At most ${PER_REQUEST} items per request. When the action deletes (Sonarr, Radarr or Lidarr), the items count against the ` +
       `${PER_HOUR}-an-hour deletion budget every key shares. The rule set must be enabled with actions turned on. ` +
-      `Refused whole — nothing runs — when an item is excepted, when an item changed identity since it matched (409: run detection again), ` +
-      `or when a limit would be exceeded. One execution runs per rule set at a time: an overlapping call is refused (409) rather than repeating the deletions.`,
+      `Listed items that are not current matches, or are protected by an exception, are skipped and the rest run — compare ` +
+      `\`executed\` + \`failed\` with what you sent (400 when nothing is left). Refused whole — nothing runs — when an item changed ` +
+      `identity since it matched (409: run detection again), or when a limit would be exceeded. A call naming an item that ` +
+      `another execution of the same rule set is acting on right now is refused (409) rather than repeating the deletion; ` +
+      `calls naming different items run side by side.`,
     body: {
       description: "",
       required: true,
@@ -310,7 +351,8 @@ export const API_OPERATIONS: readonly Operation[] = [
     },
     responses: {
       "200": "`{ executed, failed, errors }`",
-      "409": "An execution is already running for this rule set, or an item changed identity since it matched (a re-match on the media server); nothing was executed",
+      "404": "No such rule set",
+      "409": "Another execution of this rule set is acting on one of the named items, or an item changed identity since it matched (a re-match on the media server); nothing was executed",
       "429": BUDGET_429,
     },
   },
@@ -323,7 +365,7 @@ export const API_OPERATIONS: readonly Operation[] = [
     description:
       `A run queued here is held — nothing deleted, every action left pending for the schedule or the Pending page — ` +
       `when it would delete more than ${PER_REQUEST} items or exceed the ${PER_HOUR}-an-hour deletion budget.`,
-    responses: { "202": "Queued: `{ queued: true, jobs: 1 }`" },
+    responses: { "202": "Queued: `{ queued: true, jobs: 1 }`", "500": "The job could not be queued" },
   },
   { method: "get", path: "/tools/sessions", scope: "streams:read", tag: "Streams", summary: "Active playback sessions on every enabled server", description: "Who is watching what, on which player and from which address. The path of the file being played is omitted." },
   { method: "get", path: "/tools/maintenance", scope: "streams:read", tag: "Streams", summary: "Maintenance mode status" },
@@ -369,6 +411,7 @@ const ERROR_RESPONSES: Record<string, string> = {
   "401": "No key, an unknown or deleted key, or an expired key (`WWW-Authenticate: Bearer`)",
   "403": "The key lacks the required scope; `requiredScope` names it",
   "429": "Rate limited; wait `Retry-After` seconds",
+  "503": "Authentication is temporarily unavailable (the database could not be reached); retry later",
 };
 
 function errorResponse(description: string) {

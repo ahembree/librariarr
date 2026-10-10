@@ -9,9 +9,14 @@
  * only way to express "everything after the first N" is to refetch all of it.
  */
 
-/** Upper bound on `limit`. `limit=0` bypasses it entirely. */
-const MAX_LIMIT = 100;
-const DEFAULT_LIMIT = 50;
+/** Upper bound on `limit` for the flat lists. `limit=0` bypasses it entirely. */
+export const MAX_LIST_LIMIT = 100;
+/**
+ * Upper bound on `limit` for the grouped listings (shows, artists), whose rows
+ * are aggregates and which the library views page through in larger steps.
+ */
+export const MAX_GROUPED_LIST_LIMIT = 200;
+export const DEFAULT_LIST_LIMIT = 50;
 
 /**
  * The largest row offset any list route will ask the database for — the
@@ -64,18 +69,21 @@ export interface ListPagination {
   skip: number;
 }
 
-export function parseListPagination(searchParams: URLSearchParams): ListPagination {
+export function parseListPagination(
+  searchParams: URLSearchParams,
+  { maxLimit = MAX_LIST_LIMIT }: { maxLimit?: number } = {},
+): ListPagination {
   // The page is bounded too, so the echoed `pagination.page` is a sane
   // integer rather than the 1e20 the caller typed.
   const page = Math.min(Math.max(1, parseInt(searchParams.get("page") ?? "1") || 1), MAX_SKIP);
 
   const rawLimitParam = searchParams.get("limit");
-  const rawLimit = parseInt(rawLimitParam ?? String(DEFAULT_LIMIT));
+  const rawLimit = parseInt(rawLimitParam ?? String(DEFAULT_LIST_LIMIT));
   // A negative limit previously produced a Prisma reverse-take and an
-  // always-true hasMore, so clamp to [1, MAX_LIMIT] with 0 reserved for "all".
+  // always-true hasMore, so clamp to [1, maxLimit] with 0 reserved for "all".
   const limit = isFullListingLimit(rawLimitParam)
     ? 0
-    : Math.max(1, Math.min(Number.isNaN(rawLimit) ? DEFAULT_LIMIT : rawLimit, MAX_LIMIT));
+    : Math.max(1, Math.min(Number.isNaN(rawLimit) ? DEFAULT_LIST_LIMIT : rawLimit, maxLimit));
 
   const rawOffset = parseInt(searchParams.get("offset") ?? "");
   const offset = Number.isNaN(rawOffset) ? null : clampSkip(rawOffset);
