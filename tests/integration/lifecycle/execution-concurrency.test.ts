@@ -161,10 +161,10 @@ describe("scheduled execution while the actions change under it", () => {
     expect(rows[0]).toMatchObject({ mediaItemId: first, status: "COMPLETED" });
   });
 
-  it("finishes the run when an action's row vanishes while its Arr call fails", async () => {
+  it("finishes the run when an action's row vanishes while its Arr call fails, and records the failure", async () => {
     const { user, items, actionFor } = await dueDeletes();
-    // A manual Execute deleted the movie and removed this PENDING row while
-    // the executor's own request was in flight; Radarr then answers "not found".
+    // The action is cancelled while its request is in flight, and the request
+    // then fails (a timeout after the delete may have landed).
     let first: string | undefined;
     mockExecuteAction.mockImplementationOnce(async (a: ActionArg) => {
       first = a.mediaItem.id;
@@ -178,8 +178,13 @@ describe("scheduled execution while the actions change under it", () => {
     const second = otherThan(items, first!).id;
     expect(actedOn()).toEqual([first, second]);
     const rows = await prisma.lifecycleAction.findMany();
-    // No FAILED row for the action that was done elsewhere.
-    expect(rows.map((r) => [r.mediaItemId, r.status])).toEqual([[second, "COMPLETED"]]);
+    // The attempt is in History all the same: no one else recorded it.
+    expect(rows.map((r) => [r.mediaItemId, r.status, r.error]).sort()).toEqual(
+      [
+        [first, "FAILED", "Movie not found in Radarr"],
+        [second, "COMPLETED", null],
+      ].sort(),
+    );
     // The post-delete re-sync still ran for what this run deleted.
     expect(mockSyncMediaServer).toHaveBeenCalled();
   });
@@ -206,6 +211,107 @@ describe("scheduled execution while the actions change under it", () => {
     expect(rows[0].executedAt).not.toBeNull();
     // The match goes with it, as for any completed action.
     expect(await prisma.ruleMatch.count({ where: { mediaItemId: only.id } })).toBe(0);
+  });
+
+  it("records a completed action even when its item's row was purged while it ran", async () => {
+    const { user, items, actionFor } = await dueDeletes(1);
+    const [only] = items;
+    mockExecuteAction.mockImplementationOnce(async () => {
+      await prisma.lifecycleAction.deleteMany({ where: { id: actionFor(only.id).id } });
+      await prisma.mediaItem.delete({ where: { id: only.id } });
+      return {};
+    });
+
+    await expect(executeLifecycleActions(user.id)).resolves.not.toThrow();
+
+    const rows = await prisma.lifecycleAction.findMany();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ mediaItemId: null, status: "COMPLETED", mediaItemTitle: only.title });
+  });
+
+  it.each([
+    ["rescheduled", { scheduledFor: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000) }],
+    ["given a new action config", { actionType: "UNMONITOR_RADARR" }],
+  ])("leaves an action %s after the run loaded it for the next run", async (_label, change) => {
+    const { user, items, actionFor } = await dueDeletes();
+    let first: string | undefined;
+    mockExecuteAction.mockImplementationOnce(async (a: ActionArg) => {
+      first = a.mediaItem.id;
+      await prisma.lifecycleAction.updateMany({ where: { id: actionFor(otherThan(items, first).id).id }, data: change });
+      return {};
+    });
+
+    await executeLifecycleActions(user.id);
+
+    // Only the first ran; the other is still pending, as changed.
+    expect(actedOn()).toEqual([first]);
+    const other = await prisma.lifecycleAction.findUnique({ where: { id: actionFor(otherThan(items, first!).id).id } });
+    expect(other).toMatchObject({ status: "PENDING", ...change });
+  });
+
+  it("leaves an action whose item was excluded after the run loaded it", async () => {
+    const { user, items, actionFor } = await dueDeletes();
+    let first: string | undefined;
+    mockExecuteAction.mockImplementationOnce(async (a: ActionArg) => {
+      first = a.mediaItem.id;
+      // The exception row alone — what the exceptions POST writes before (or
+      // without) disarming the action.
+      await prisma.lifecycleException.create({ data: { userId: user.id, mediaItemId: otherThan(items, first).id } });
+      return {};
+    });
+
+    await executeLifecycleActions(user.id);
+
+    expect(actedOn()).toEqual([first]);
+    expect((await prisma.lifecycleAction.findUnique({ where: { id: actionFor(otherThan(items, first!).id).id } }))?.status).toBe("PENDING");
+  });
+
+  it("does not delete a whole series once another episode of it is excluded mid-run", async () => {
+    // A per-episode DELETE_SONARR destroys the whole show. An exception filed
+    // on a sibling episode while the run works through other actions does not
+    // disarm this action (it names another item), so the run must see it.
+    const user = await createTestUser();
+    await prisma.appSettings.create({ data: { userId: user.id } });
+    const server = await createTestServer(user.id);
+    const library = await createTestLibrary(server.id, { type: "SERIES" });
+    const ruleSet = await createTestRuleSet(user.id, {
+      type: "SERIES",
+      actionEnabled: true,
+      actionType: "DELETE_SONARR",
+      arrInstanceId: "sonarr-1",
+    });
+    const shows: Array<{ first: { id: string }; sibling: { id: string } }> = [];
+    for (const [n, show] of ["Show One", "Show Two"].entries()) {
+      const tvdb = String(30_000 + n);
+      const first = await createTestMediaItem(library.id, { type: "SERIES", title: "Pilot", parentTitle: show, seasonNumber: 1, episodeNumber: 1 });
+      const sibling = await createTestMediaItem(library.id, { type: "SERIES", title: "Second", parentTitle: show, seasonNumber: 1, episodeNumber: 2 });
+      for (const ep of [first, sibling]) await createTestExternalId(ep.id, "TVDB", tvdb);
+      await createTestRuleMatch(ruleSet.id, first.id, { id: first.id, title: show, parentTitle: null, externalIds: [{ source: "TVDB", externalId: tvdb }] });
+      await prisma.lifecycleAction.create({
+        data: {
+          userId: user.id,
+          mediaItemId: first.id,
+          mediaItemTitle: show,
+          ruleSetId: ruleSet.id,
+          ruleSetName: ruleSet.name,
+          ruleSetType: "SERIES",
+          actionType: "DELETE_SONARR",
+          arrInstanceId: "sonarr-1",
+          scheduledFor: new Date(Date.now() - 60_000),
+        },
+      });
+      shows.push({ first, sibling });
+    }
+    mockExecuteAction.mockImplementationOnce(async (a: ActionArg) => {
+      const other = shows.find((sh) => sh.first.id !== a.mediaItem.id)!;
+      await prisma.lifecycleException.create({ data: { userId: user.id, mediaItemId: other.sibling.id } });
+      return {};
+    });
+
+    await executeLifecycleActions(user.id);
+
+    expect(mockExecuteAction).toHaveBeenCalledTimes(1);
+    expect(await prisma.lifecycleAction.count({ where: { status: "PENDING" } })).toBe(1);
   });
 
   it("leaves an item pending while a manual Execute of it is running", async () => {

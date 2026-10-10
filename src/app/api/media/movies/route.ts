@@ -30,15 +30,15 @@ const SORT_COLUMNS = new Set([
 /** How many ids one `findInOrder` query names, well under the bind-parameter limit. */
 const ID_CHUNK = 5000;
 
-/** The rows for `ids`, in the order given, a chunk of ids per query. */
+/** The rows for `ids`, in the order given, a chunk of ids per query (run together). */
 async function findInOrder<T extends { id: string }>(
   ids: string[],
   fetchChunk: (chunk: string[]) => Promise<T[]>,
 ): Promise<T[]> {
+  const chunks: string[][] = [];
+  for (let i = 0; i < ids.length; i += ID_CHUNK) chunks.push(ids.slice(i, i + ID_CHUNK));
   const byId = new Map<string, T>();
-  for (let i = 0; i < ids.length; i += ID_CHUNK) {
-    for (const row of await fetchChunk(ids.slice(i, i + ID_CHUNK))) byId.set(row.id, row);
-  }
+  for (const rows of await Promise.all(chunks.map(fetchChunk))) for (const row of rows) byId.set(row.id, row);
   return ids.map((id) => byId.get(id)).filter((row): row is T => row !== undefined);
 }
 

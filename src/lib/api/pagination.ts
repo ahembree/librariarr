@@ -2,7 +2,8 @@
  * Query-param parsing for the paginated media list endpoints.
  *
  * The list routes share one contract: `page` is 1-based, `limit` is clamped to
- * MAX_LIMIT, and `limit=0` means "return everything". `offset` is the escape
+ * `MAX_LIST_LIMIT` (`MAX_GROUPED_LIST_LIMIT` on the grouped listings), and
+ * `limit=0` means "return everything". `offset` is the escape
  * hatch that makes progressive loading possible — the library views ask for a
  * first screenful, render it, then ask for `limit=0&offset=<first chunk>` to
  * fill in the rest without refetching what they already have. Without it the
@@ -60,6 +61,16 @@ export function isFullListingLimit(raw: string | null): boolean {
   return parseInt(raw) === 0;
 }
 
+/**
+ * The 1-based `page` query parameter, bounded to `[1, MAX_SKIP]`: a malformed
+ * page is the first, and an absurd one (`1e20`) is echoed back as a sane
+ * integer and reads as past the end once its skip goes through `clampSkip`.
+ * Every paged route reads its page through this, so none can drift.
+ */
+export function parsePage(searchParams: URLSearchParams): number {
+  return Math.min(Math.max(1, parseInt(searchParams.get("page") ?? "1") || 1), MAX_SKIP);
+}
+
 export interface ListPagination {
   /** 1-based page number. */
   page: number;
@@ -73,9 +84,7 @@ export function parseListPagination(
   searchParams: URLSearchParams,
   { maxLimit = MAX_LIST_LIMIT }: { maxLimit?: number } = {},
 ): ListPagination {
-  // The page is bounded too, so the echoed `pagination.page` is a sane
-  // integer rather than the 1e20 the caller typed.
-  const page = Math.min(Math.max(1, parseInt(searchParams.get("page") ?? "1") || 1), MAX_SKIP);
+  const page = parsePage(searchParams);
 
   const rawLimitParam = searchParams.get("limit");
   const rawLimit = parseInt(rawLimitParam ?? String(DEFAULT_LIST_LIMIT));

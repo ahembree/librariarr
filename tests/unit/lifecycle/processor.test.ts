@@ -12,10 +12,11 @@ const mockPrisma = vi.hoisted(() => ({
     createMany: vi.fn(),
     create: vi.fn(),
     // Pass 1 cancels and pass 2 records with the *Many forms, so a row removed
-    // mid-run cannot abort the run; pass 2 re-reads each action before acting
-    // (`count`), which reads as still pending unless a test says otherwise.
+    // mid-run cannot abort the run.
     updateMany: vi.fn().mockResolvedValue({ count: 1 }),
-    count: vi.fn().mockResolvedValue(1),
+    // Pass 2 re-reads each action before acting; found = still pending,
+    // unchanged and due, unless a test says otherwise.
+    findFirst: vi.fn().mockResolvedValue({ id: "found" }),
   },
   ruleMatch: {
     findMany: vi.fn(),
@@ -23,6 +24,8 @@ const mockPrisma = vi.hoisted(() => ({
   },
   lifecycleException: {
     findMany: vi.fn(),
+    // Pass 2 asks whether an exception was filed during the run: none.
+    count: vi.fn().mockResolvedValue(0),
   },
   appSettings: {
     findUnique: vi.fn(),

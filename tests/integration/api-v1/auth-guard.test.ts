@@ -26,6 +26,7 @@ vi.mock("@/lib/logger", () => ({
 
 import { GET as meGET } from "@/app/api/v1/me/route";
 import { GET as serversGET } from "@/app/api/v1/servers/route";
+import { GET as moviesGET } from "@/app/api/v1/media/movies/route";
 import { POST as cancelPOST } from "@/app/api/v1/sync/cancel/route";
 import { withApiKey } from "@/lib/api-keys/guard";
 import { getSession } from "@/lib/auth/session";
@@ -430,25 +431,35 @@ describe("/api/v1 authentication guard", () => {
 
     it("counts a limit=0 listing as twenty requests against the key's budget", async () => {
       const user = await createTestUser();
-      const { key } = await createTestApiKey(user.id, { scopes: ["servers:read"] });
+      const { key } = await createTestApiKey(user.id, { scopes: ["media:read"] });
       // 600 a minute at 20 apiece: thirty full listings, then nothing.
       for (let i = 0; i < 30; i++) {
-        await expectJson(await callRoute(serversGET, { url: "/api/v1/servers?limit=0", headers: withKey(key) }), 200);
+        await expectJson(await callRoute(moviesGET, { url: "/api/v1/media/movies?limit=0", headers: withKey(key) }), 200);
       }
-      await expectJson(await callRoute(serversGET, { url: "/api/v1/servers?limit=0", headers: withKey(key) }), 429);
-      await expectJson(await callRoute(serversGET, { headers: withKey(key) }), 429);
+      await expectJson(await callRoute(moviesGET, { url: "/api/v1/media/movies?limit=0", headers: withKey(key) }), 429);
+      await expectJson(await callRoute(moviesGET, { headers: withKey(key) }), 429);
     });
 
     it("counts limit=00 the same — the handlers parseInt it, so it IS a full listing", async () => {
       // Live: `limit=00` (and `+0`, `0.0`, `0e0`, `0abc`) returned the whole
       // library charged as one request while `limit=0` cost twenty.
       const user = await createTestUser();
-      const { key } = await createTestApiKey(user.id, { scopes: ["servers:read"] });
+      const { key } = await createTestApiKey(user.id, { scopes: ["media:read"] });
       for (let i = 0; i < 30; i++) {
-        await expectJson(await callRoute(serversGET, { url: "/api/v1/servers?limit=00", headers: withKey(key) }), 200);
+        await expectJson(await callRoute(moviesGET, { url: "/api/v1/media/movies?limit=00", headers: withKey(key) }), 200);
       }
-      await expectJson(await callRoute(serversGET, { url: "/api/v1/servers?limit=00", headers: withKey(key) }), 429);
-      await expectJson(await callRoute(serversGET, { headers: withKey(key) }), 429);
+      await expectJson(await callRoute(moviesGET, { url: "/api/v1/media/movies?limit=00", headers: withKey(key) }), 429);
+      await expectJson(await callRoute(moviesGET, { headers: withKey(key) }), 429);
+    });
+
+    it("counts limit=0 as one request on a route that never returns everything for it", async () => {
+      // The server list has no `limit`; charging `?limit=0` there as a whole
+      // library spent a key's budget twenty times faster for the same answer.
+      const user = await createTestUser();
+      const { key } = await createTestApiKey(user.id, { scopes: ["servers:read"] });
+      for (let i = 0; i < 31; i++) {
+        await expectJson(await callRoute(serversGET, { url: "/api/v1/servers?limit=0", headers: withKey(key) }), 200);
+      }
     });
 
     it("never logs the presented key", async () => {

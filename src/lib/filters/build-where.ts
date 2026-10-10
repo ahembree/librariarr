@@ -45,8 +45,8 @@ function safeBigInt(value: string | null): bigint | null {
  * bound past the end of the range matches everything or nothing, exactly as
  * it would have if the database could have compared it.
  */
-const INT_MIN = -(2 ** 31);
-const INT_MAX = 2 ** 31 - 1;
+export const INT_MIN = -(2 ** 31);
+export const INT_MAX = 2 ** 31 - 1;
 const BIGINT_MIN = -(2n ** 63n);
 const BIGINT_MAX = 2n ** 63n - 1n;
 /** What a Prisma DateTime round-trips as an ISO string and Postgres accepts. */

@@ -1,23 +1,26 @@
 import type { PrismaClient } from "@/generated/prisma/client";
+import { INT_MAX, INT_MIN } from "./build-where";
 
 interface CountCondition {
   op: string;
   value: number;
 }
 
-/** Audio and subtitle track-count conditions from a list route's query string. */
-export interface StreamCountFilters {
-  audio: CountCondition[];
-  subtitle: CountCondition[];
+/** One stream type's conditions and how they combine (`…StreamCountLogic`). */
+interface CountFilter {
+  conditions: CountCondition[];
+  logic: "and" | "or";
 }
 
 /**
- * A count is compared as a Postgres `integer`. A value past that range
- * (`gt:99999999999999999999`) failed the query with a 500; clamped, it still
- * answers the same question — nothing has more than 2^31 tracks.
+ * Audio and subtitle track-count conditions from a list route's query string.
+ * Within a type they combine by its logic parameter, as every other condition
+ * filter does; the two types are always ANDed.
  */
-const INT_MIN = -(2 ** 31);
-const INT_MAX = 2 ** 31 - 1;
+export interface StreamCountFilters {
+  audio: CountFilter;
+  subtitle: CountFilter;
+}
 
 function parseCountConditions(raw: string | null): CountCondition[] {
   if (!raw) return [];
@@ -28,6 +31,9 @@ function parseCountConditions(raw: string | null): CountCondition[] {
       const idx = part.indexOf(":");
       const op = idx === -1 ? "eq" : part.slice(0, idx);
       const num = parseInt(idx === -1 ? part : part.slice(idx + 1));
+      // A count is compared as a Postgres `integer`. A value past that range
+      // (`gt:99999999999999999999`) failed the query with a 500; clamped, it
+      // answers the same question — nothing has more than 2^31 tracks.
       return Number.isNaN(num) ? null : { op, value: Math.min(INT_MAX, Math.max(INT_MIN, num)) };
     })
     .filter((c): c is CountCondition => c !== null);
@@ -46,9 +52,13 @@ function opToSql(op: string): string {
 
 /** The stream-count conditions in `params`, or `null` when there are none. */
 export function parseStreamCountFilters(params: URLSearchParams): StreamCountFilters | null {
-  const audio = parseCountConditions(params.get("audioStreamCountConditions"));
-  const subtitle = parseCountConditions(params.get("subtitleStreamCountConditions"));
-  return audio.length === 0 && subtitle.length === 0 ? null : { audio, subtitle };
+  const filter = (key: "audio" | "subtitle"): CountFilter => ({
+    conditions: parseCountConditions(params.get(`${key}StreamCountConditions`)),
+    logic: params.get(`${key}StreamCountLogic`) === "or" ? "or" : "and",
+  });
+  const audio = filter("audio");
+  const subtitle = filter("subtitle");
+  return audio.conditions.length === 0 && subtitle.conditions.length === 0 ? null : { audio, subtitle };
 }
 
 /**
@@ -71,12 +81,16 @@ export async function filterIdsByStreamCounts(
   if (ids.length === 0) return new Set();
   const having: string[] = [];
   const values: number[] = [];
-  const add = (streamType: number, c: CountCondition) => {
-    values.push(c.value);
-    having.push(`COUNT(ms."id") FILTER (WHERE ms."streamType" = ${streamType}) ${opToSql(c.op)} $${values.length + 1}::int`);
+  const add = (streamType: number, { conditions, logic }: CountFilter) => {
+    if (conditions.length === 0) return;
+    const clauses = conditions.map((c) => {
+      values.push(c.value);
+      return `COUNT(ms."id") FILTER (WHERE ms."streamType" = ${streamType}) ${opToSql(c.op)} $${values.length + 1}::int`;
+    });
+    having.push(`(${clauses.join(logic === "or" ? " OR " : " AND ")})`);
   };
-  for (const c of filters.audio) add(2, c);
-  for (const c of filters.subtitle) add(3, c);
+  add(2, filters.audio);
+  add(3, filters.subtitle);
 
   const rows = await db.$queryRawUnsafe<{ id: string }[]>(
     `SELECT item.id FROM unnest($1::text[]) AS item(id)

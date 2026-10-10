@@ -35,6 +35,7 @@ function sharedReaders(): Record<string, Set<string>> {
   }
   return {
     parseListPagination: new Set(["page", "limit", "offset"]),
+    parsePage: new Set(["page"]),
     parsePlayHistoryPaging: new Set(["page", "limit", "serverId"]),
     applyCommonFilters: filters,
   };

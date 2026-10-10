@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db";
 import { enqueueJob } from "@/lib/jobs/client";
 import { eventBus } from "@/lib/events/event-bus";
 import { MAIN_QUEUE, REQUESTED_SYNC_PRIORITY, TASK_SYNC_SERVER } from "@/lib/jobs/constants";
-import { serverSyncSchema } from "@/lib/validation";
+import { serverSyncSchema, validateOptionalRequest } from "@/lib/validation";
 
 export async function POST(
   request: NextRequest,
@@ -36,27 +36,9 @@ export async function POST(
   // library; a body that is not valid JSON or names no valid library key is
   // refused — it used to be ignored, so a client's malformed request to sync
   // ONE library synced all of them.
-  let libraryKey: string | undefined;
-  const rawBody = await request.text();
-  if (rawBody.trim() !== "") {
-    let body: unknown;
-    try {
-      body = JSON.parse(rawBody);
-    } catch {
-      return NextResponse.json({ error: "Invalid JSON in request body" }, { status: 400 });
-    }
-    const parsed = serverSyncSchema.safeParse(body);
-    if (!parsed.success) {
-      return NextResponse.json(
-        {
-          error: "Validation failed",
-          details: parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`),
-        },
-        { status: 400 },
-      );
-    }
-    libraryKey = parsed.data.libraryKey;
-  }
+  const { data: body, error } = await validateOptionalRequest(request, serverSyncSchema);
+  if (error) return error;
+  const libraryKey = body.libraryKey;
 
   if (libraryKey) {
     const library = await prisma.library.findFirst({

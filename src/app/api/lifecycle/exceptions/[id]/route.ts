@@ -42,18 +42,17 @@ export async function PATCH(
   const { data, error } = await validateRequest(request, exceptionUpdateSchema);
   if (error) return error;
 
-  const exception = await prisma.lifecycleException.findFirst({
+  // updateMany, like DELETE: an exception removed between a lookup and the
+  // update must answer 404, not throw P2025 into a 500.
+  const { count } = await prisma.lifecycleException.updateMany({
     where: { id, userId: session.userId! },
-  });
-
-  if (!exception) {
-    return NextResponse.json({ error: "Not found" }, { status: 404 });
-  }
-
-  const updated = await prisma.lifecycleException.update({
-    where: { id },
     data: { reason: data.reason },
   });
+  const updated = count > 0 ? await prisma.lifecycleException.findFirst({ where: { id, userId: session.userId! } }) : null;
+
+  if (!updated) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
 
   return NextResponse.json({ exception: updated });
 }

@@ -36,7 +36,16 @@ export async function removeExceptionsCharged(
   let removed = 0;
   try {
     const response = await remove();
-    if (response.ok) removed = Math.min(count, Math.max(0, await removedCount(response.clone())));
+    if (response.ok) {
+      // The removal has happened; a response it cannot be read off keeps the
+      // whole charge rather than turning a success into a refunded 500.
+      removed = count;
+      try {
+        removed = Math.min(count, Math.max(0, await removedCount(response.clone())));
+      } catch {
+        // Keep the whole charge.
+      }
+    }
     return response;
   } finally {
     reservation.release(count - removed);

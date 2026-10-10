@@ -139,11 +139,13 @@ interface ApiKeyGuardOptions {
    */
   fullListing?: boolean;
   /**
-   * Whether `limit=0` asks this route for everything (the default, as on every
-   * list built on `parseListPagination`). `false` for a route that floors the
-   * limit at 1 instead — play history, an item's plays, recently added — so a
-   * `limit=0` read there, which returns a page or less, is not charged twenty
-   * requests for a whole listing it never returns.
+   * `limit=0` asks this route for its whole listing — true of every list built
+   * on `parseListPagination` — so such a read is charged like one. Opt-in: a
+   * route that floors the limit (play history, an item's plays, recently
+   * added) or never reads it (search, stats, …) returns a page or less for
+   * `limit=0`, and charging it twenty requests overcharged every one of them.
+   * `tests/unit/api-keys/v1-routes.test.ts` holds the flag to exactly the
+   * routes whose handler parses a limit that way.
    */
   limitZeroMeansAll?: boolean;
 }
@@ -171,7 +173,7 @@ export function withApiKey<C>(
     throw new Error(`Unknown API scope "${String(scope)}"`);
   }
   const fullListing = options.fullListing === true;
-  const limitZeroMeansAll = options.limitZeroMeansAll !== false;
+  const limitZeroMeansAll = options.limitZeroMeansAll === true;
 
   const guarded = async (request: NextRequest, context: C): Promise<Response> => {
     const auth = await authenticateApiKey(request, scope, { fullListing, limitZeroMeansAll });
@@ -293,7 +295,7 @@ export async function authenticateApiKey(
 
   const rate = apiKeyRequestLimiter.check(
     row.id,
-    requestCost(request, options.fullListing === true, options.limitZeroMeansAll !== false),
+    requestCost(request, options.fullListing === true, options.limitZeroMeansAll === true),
   );
   if (rate.limited) {
     warnOnce(

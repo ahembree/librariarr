@@ -61,6 +61,17 @@ describe("removeExceptionsCharged", () => {
     expect(reserveApiDestructive(0)).toMatchObject({ ok: true, remaining: 99 });
   });
 
+  it("keeps the whole charge, and the success, when the removed count cannot be read", async () => {
+    m.count.mockResolvedValue(2);
+    const res = await runAsApiKey(PRINCIPAL, () =>
+      removeExceptionsCharged(["e1", "e2"], remover(2), async () => {
+        throw new Error("unexpected body");
+      }),
+    );
+    expect(res.status).toBe(200);
+    expect(reserveApiDestructive(0)).toMatchObject({ ok: true, remaining: 98 });
+  });
+
   it("gives everything back when the removal fails or throws", async () => {
     m.count.mockResolvedValue(1);
     await runAsApiKey(PRINCIPAL, () => removeExceptionsCharged(["e1"], remover(0, 404), deletedOf));

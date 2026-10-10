@@ -28,14 +28,44 @@ export async function validateRequest<T extends z.ZodType>(
   try {
     body = await request.json();
   } catch {
-    return {
-      error: NextResponse.json(
-        { error: "Invalid JSON in request body" },
-        { status: 400 }
-      ),
-    };
+    return { error: invalidJsonResponse() };
   }
+  return validateBody(body, schema);
+}
 
+/**
+ * `validateRequest` for a route whose body is optional: no body at all is
+ * validated as `{}`, while a body that is present must be valid JSON matching
+ * the schema — it is never quietly read as absent.
+ */
+export async function validateOptionalRequest<T extends z.ZodType>(
+  request: Request,
+  schema: T
+): Promise<
+  | { data: z.infer<T>; error?: never }
+  | { data?: never; error: NextResponse }
+> {
+  const text = await request.text();
+  if (text.trim() === "") return validateBody({}, schema);
+  let body: unknown;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    return { error: invalidJsonResponse() };
+  }
+  return validateBody(body, schema);
+}
+
+function invalidJsonResponse(): NextResponse {
+  return NextResponse.json({ error: "Invalid JSON in request body" }, { status: 400 });
+}
+
+function validateBody<T extends z.ZodType>(
+  body: unknown,
+  schema: T
+):
+  | { data: z.infer<T>; error?: never }
+  | { data?: never; error: NextResponse } {
   const result = schema.safeParse(body);
   if (!result.success) {
     const issues = result.error.issues.map(
@@ -860,9 +890,10 @@ export const arrActionSchema = z.object({
  * `POST /api/servers/[id]/sync` (also `/api/v1/servers/{id}/sync`): the body
  * is optional, and names at most one library. A malformed body is refused
  * rather than read as "no library" — that turned `{ "libraryKey": 123 }` into
- * a sync of every library on the server.
+ * a sync of every library on the server. Strict, so a misspelt key
+ * (`librarykey`) is refused for the same reason rather than stripped.
  */
-export const serverSyncSchema = z.object({
+export const serverSyncSchema = z.strictObject({
   libraryKey: z.string().min(1, "libraryKey must not be empty").max(200, "Invalid libraryKey").optional(),
 });
 

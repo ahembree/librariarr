@@ -107,6 +107,26 @@ describe("stream count filters", () => {
     expect(await matching(ids, { audioStreamCountConditions: "eq:100" })).toEqual([]);
   });
 
+  it("combines one type's conditions with its logic parameter, as the filter panel sends it", async () => {
+    // The panel offers AND/OR per condition set; OR was ignored and
+    // `eq:1|gte:3` matched nothing.
+    const { itemA, itemB, itemC, ids } = await setupMediaWithStreams();
+    expect(await matching(ids, { audioStreamCountConditions: "eq:1|gte:3", audioStreamCountLogic: "or" })).toEqual(
+      [itemA.id, itemB.id].sort(),
+    );
+    expect(await matching(ids, { audioStreamCountConditions: "eq:1|gte:3" })).toEqual([]);
+    // Across types the sets are ANDed, each with its own logic.
+    expect(
+      await matching(ids, {
+        audioStreamCountConditions: "eq:1|gte:3",
+        audioStreamCountLogic: "or",
+        subtitleStreamCountConditions: "eq:2|eq:5",
+        subtitleStreamCountLogic: "or",
+      }),
+    ).toEqual([itemA.id]);
+    expect(itemC.id).toBeTruthy();
+  });
+
   it("counts an item with no stream rows at all as 0 tracks", async () => {
     // The old GROUP BY over MediaStream never saw such an item, so "eq:0"
     // missed it.

@@ -500,9 +500,11 @@ export function resetApiHoldNotices(): void {
 }
 
 /**
- * Record an action that ran after its PENDING row was removed (cancelled while
- * the Arr call was in flight), so the deletion is not missing from History and
- * the deletion stats. Best effort: the run carries on whatever happens here.
+ * Record the result of an action whose PENDING row was removed while its Arr
+ * call was in flight (cancelled, disarmed by an exception, the rule set
+ * edited), so the attempt — and a deletion's bytes — are not missing from
+ * History and the deletion stats. Best effort: the run carries on whatever
+ * happens here.
  */
 async function recordVanishedAction(
   action: Prisma.LifecycleActionGetPayload<object> & { mediaItem?: unknown; ruleSet?: unknown },
@@ -514,10 +516,11 @@ async function recordVanishedAction(
   try {
     await prisma.lifecycleAction.create({ data });
   } catch {
-    // The rule set may have been deleted along with the row; keep the history
-    // under its recorded name.
+    // The rule set, or the item's row, may have been deleted meanwhile (both
+    // links are SET NULL on delete, so a create naming a gone one fails its
+    // foreign key). Keep the history under the names it already records.
     try {
-      await prisma.lifecycleAction.create({ data: { ...data, ruleSetId: null } });
+      await prisma.lifecycleAction.create({ data: { ...data, ruleSetId: null, mediaItemId: null } });
     } catch (error) {
       logger.error("Lifecycle", `Could not record the result of action ${id}`, { error: String(error) });
     }
@@ -535,6 +538,10 @@ interface ExecuteLifecycleOptions {
 }
 
 export async function executeLifecycleActions(userId?: string, options: ExecuteLifecycleOptions = {}) {
+  // Exceptions filed after this are re-checked in pass 2 (see `newlyProtected`).
+  // A minute early, so a clock difference between the app and the database —
+  // `createdAt` is the database's — can only make pass 2 check more, never less.
+  const exceptionsCheckedBefore = new Date(Date.now() - 60_000);
   const pendingActions = await prisma.lifecycleAction.findMany({
     where: {
       status: "PENDING",
@@ -930,33 +937,78 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
     // minutes on a slow Arr app. Meanwhile the Pending page or the public API
     // can run the same match inline (`POST /api/lifecycle/actions/execute`,
     // which deletes this PENDING row when it finishes), the user can cancel
-    // the action, file an exception (which disarms it) or edit the rule set
-    // (which cancels it). Acting on the loaded copy anyway sent the delete a
-    // second time — or sent one the user had just cancelled — and the write
-    // below then threw P2025 on the vanished row from inside the catch,
-    // aborting the run: every later action, the Discord summaries and the
-    // post-delete re-sync were skipped. So the item is claimed in the same
-    // registry the inline routes use (a manual Execute of it now answers 409,
-    // and one already running makes this run leave it pending), and the row
-    // is re-read under that claim.
+    // the action, push it back (reschedule), change the rule set's action
+    // (re-snapshotted onto the row), file an exception or edit the rule set.
+    // Acting on the loaded copy anyway sent the delete a second time — or one
+    // the user had just cancelled, postponed or protected — and the write
+    // below then threw P2025 on a vanished row from inside the catch, aborting
+    // the run. So the item is claimed in the registry the rule-set Execute
+    // and force-retry routes use (one of them on this item now answers 409,
+    // and one already running makes this run leave it pending), and under
+    // that claim the row is re-read: an action that is gone, no longer due,
+    // or changed in any way since the load (`updatedAt`), or whose item or
+    // members gained an exception, is left for the next run, whose pass 1
+    // judges it as it is now. The ad-hoc query route claims its own scope and
+    // is not serialised against this, as it never was against the others.
+    const title = actionTargetTitle({ ...action, matchedMediaItemIds: filteredMatchedIds, mediaItem, memberEpisodes: runningEpisodes });
     const lockScope = action.ruleSetId!;
     const lockItems = [mediaItem.id];
-    if (!tryBeginExecute(lockScope, lockItems)) {
-      logger.info("Lifecycle", `Left action ${action.id} pending — a manual execution of "${formatMediaItemTitle(mediaItem)}" is running for rule set "${action.ruleSet?.name ?? action.ruleSetId}"`);
+    const skip = (why: string) => {
+      logger.info("Lifecycle", `Left action ${action.id} on "${title}" for the next run — ${why}`);
       if (apiReservation && isDestructiveActionType(action.actionType)) apiReservation.release(1);
+    };
+    if (!tryBeginExecute(lockScope, lockItems)) {
+      skip(`a manual execution of it is running for rule set "${action.ruleSet?.name ?? action.ruleSetId}"`);
       continue;
     }
     try {
-      const stillPending = await prisma.lifecycleAction.count({ where: { id: action.id, status: "PENDING" } });
-      if (stillPending === 0) {
-        logger.info("Lifecycle", `Skipped action ${action.id} — it was cancelled or executed elsewhere after this run started`);
-        if (apiReservation && isDestructiveActionType(action.actionType)) apiReservation.release(1);
+      // `updatedAt` as loaded: any write to the row since (a reschedule, a
+      // re-snapshotted action config, detection moving it) makes it a
+      // different action than the one pass 1 judged.
+      const current = await prisma.lifecycleAction.findFirst({
+        where: {
+          id: action.id,
+          status: "PENDING",
+          updatedAt: action.updatedAt,
+          scheduledFor: { lte: new Date() },
+          ruleSet: { is: { enabled: true } },
+        },
+        select: { id: true },
+      });
+      if (!current) {
+        skip("it was cancelled, rescheduled, changed or executed elsewhere after this run started");
+        continue;
+      }
+      if (await newlyProtected(action.userId, action.actionType, mediaItem, filteredMatchedIds)) {
+        skip("it or one of its episodes/tracks was excluded after this run started");
         continue;
       }
       await runAction(action, mediaItem, filteredMatchedIds);
     } finally {
       endExecute(lockScope, lockItems);
     }
+  }
+
+  /**
+   * Whether an exception filed since the run's own exception checks protects
+   * this action's item, one of its members, or — for a whole-record delete —
+   * anything in its series or artist. Costs one count query unless the user
+   * has filed an exception since then.
+   */
+  async function newlyProtected(
+    uid: string,
+    actionType: string,
+    mediaItem: (typeof executable)[number]["mediaItem"],
+    memberIds: string[],
+  ): Promise<boolean> {
+    const filed = await prisma.lifecycleException.count({
+      where: { userId: uid, createdAt: { gte: exceptionsCheckedBefore } },
+    });
+    if (filed === 0) return false;
+    if ((await findExceptedItemIds(uid, [mediaItem.id, ...memberIds])).size > 0) return true;
+    if (!isWholeRecordDestructiveAction(actionType)) return false;
+    const key = protectionKey(mediaItem);
+    return !!key && (await findExceptionProtectedGroups(uid, [mediaItem])).has(key);
   }
 
   async function runAction(
@@ -1028,22 +1080,21 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
       unreachable.record(action.arrInstanceId, error);
       const msg = extractActionError(error);
       logger.error("Lifecycle", `Failed to execute action ${action.id}`, { error: describeActionError(error) });
-      const failedWrite = await prisma.lifecycleAction.updateMany({
-        where: { id: action.id },
-        data: {
-          status: "FAILED",
-          error: msg,
-          executedAt: new Date(),
-          matchedMediaItemIds: filteredMatchedIds,
-          ...actionTitleSnapshot(running),
-        },
-      });
+      const failedResult = {
+        status: "FAILED" as const,
+        error: msg,
+        executedAt: new Date(),
+        matchedMediaItemIds: filteredMatchedIds,
+        ...actionTitleSnapshot(running),
+      };
+      const failedWrite = await prisma.lifecycleAction.updateMany({ where: { id: action.id }, data: failedResult });
       if (failedWrite.count === 0) {
-        // Removed while it ran: cancelled, or acted on by a manual Execute —
-        // whose own history row already says what happened, and whose delete
-        // is the likely cause of this failure. Nothing to record or report.
-        logger.warn("Lifecycle", `Action ${action.id} on "${executedTitle(running)}" failed after it was removed while running — not recording the failure`);
-        return;
+        // Removed while it ran (cancelled, disarmed by an exception, or the
+        // rule set edited — a manual Execute cannot have run it, the claim
+        // above keeps it off this item). The attempt still happened, and a
+        // failed destructive write can have landed: record it like any other.
+        logger.warn("Lifecycle", `Action ${action.id} on "${executedTitle(running)}" failed, and was removed while it ran — recording its result as a new history entry`);
+        await recordVanishedAction(action, failedResult);
       }
 
       // Collect failure for batched Discord notification

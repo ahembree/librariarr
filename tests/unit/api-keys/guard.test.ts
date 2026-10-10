@@ -110,19 +110,19 @@ describe("withApiKey", () => {
     expect(getApiKeyGuard(withApiKey("lifecycle:read", async () => new Response()))).toEqual({
       scope: "lifecycle:read",
       fullListing: false,
-      limitZeroMeansAll: true,
+      limitZeroMeansAll: false,
     });
     expect(getApiKeyGuard(withApiKey(null, async () => new Response()))).toEqual({
       scope: null,
       fullListing: false,
-      limitZeroMeansAll: true,
+      limitZeroMeansAll: false,
     });
     expect(
       getApiKeyGuard(withApiKey("lifecycle:read", async () => new Response(), { fullListing: true })),
-    ).toEqual({ scope: "lifecycle:read", fullListing: true, limitZeroMeansAll: true });
+    ).toEqual({ scope: "lifecycle:read", fullListing: true, limitZeroMeansAll: false });
     expect(
-      getApiKeyGuard(withApiKey("media:read", async () => new Response(), { limitZeroMeansAll: false })),
-    ).toEqual({ scope: "media:read", fullListing: false, limitZeroMeansAll: false });
+      getApiKeyGuard(withApiKey("media:read", async () => new Response(), { limitZeroMeansAll: true })),
+    ).toEqual({ scope: "media:read", fullListing: false, limitZeroMeansAll: true });
     expect(getApiKeyGuard(async () => new Response())).toBeUndefined();
     expect(getApiKeyGuard("GET")).toBeUndefined();
   });
@@ -515,16 +515,18 @@ describe("authenticateApiKey — request cost", () => {
     const key = await storedKey();
     const spy = vi.spyOn(apiKeyRequestLimiter, "check");
     try {
-      await authenticateApiKey(request({ "x-api-key": key }, "http://localhost/api/v1/media/movies?limit=0"), "media:read");
+      const paged = { limitZeroMeansAll: true };
+      await authenticateApiKey(request({ "x-api-key": key }, "http://localhost/api/v1/media/movies?limit=0"), "media:read", paged);
       expect(spy).toHaveBeenLastCalledWith("key-1", FULL_LISTING_REQUEST_COST);
-      await authenticateApiKey(request({ "x-api-key": key }, "http://localhost/api/v1/media/movies?limit=50"), "media:read");
+      await authenticateApiKey(request({ "x-api-key": key }, "http://localhost/api/v1/media/movies?limit=50"), "media:read", paged);
       expect(spy).toHaveBeenLastCalledWith("key-1", 1);
-      await authenticateApiKey(request({ "x-api-key": key }, "http://localhost/api/v1/media/movies"), "media:read");
+      await authenticateApiKey(request({ "x-api-key": key }, "http://localhost/api/v1/media/movies"), "media:read", paged);
       expect(spy).toHaveBeenLastCalledWith("key-1", 1);
       // Only reads page; a write carrying the parameter is still one request.
       await authenticateApiKey(
         request({ "x-api-key": key }, "http://localhost/api/v1/sync/cancel?limit=0", "POST"),
         "media:read",
+        paged,
       );
       expect(spy).toHaveBeenLastCalledWith("key-1", 1);
     } finally {
@@ -562,24 +564,22 @@ describe("authenticateApiKey — request cost", () => {
     }
   });
 
-  // Play history, an item's plays and recently added floor `limit` at 1: a
-  // `limit=0` read there returns a page or less and must not be charged as
-  // the whole-library listing it never returns.
+  // Play history and recently added floor `limit`; search, stats and the
+  // rest never read it. A `limit=0` read there returns a page or less and must
+  // not be charged as the whole-library listing it never returns.
   it("charges limit=0 as one request on a route where 0 does not mean everything", async () => {
     const key = await storedKey();
     const spy = vi.spyOn(apiKeyRequestLimiter, "check");
     try {
-      await authenticateApiKey(
-        request({ "x-api-key": key }, "http://localhost/api/v1/media/history?limit=0"),
-        "media:read",
-        { limitZeroMeansAll: false },
-      );
-      expect(spy).toHaveBeenLastCalledWith("key-1", 1);
+      for (const path of ["/api/v1/media/history?limit=0", "/api/v1/media/search?q=x&type=MOVIE&limit=0", "/api/v1/system/info?limit=0"]) {
+        await authenticateApiKey(request({ "x-api-key": key }, `http://localhost${path}`), "media:read");
+        expect(spy, path).toHaveBeenLastCalledWith("key-1", 1);
+      }
       // An unpaged listing is still a full listing whatever this says.
       await authenticateApiKey(
         request({ "x-api-key": key }, "http://localhost/api/v1/lifecycle/actions"),
         "lifecycle:read",
-        { fullListing: true, limitZeroMeansAll: false },
+        { fullListing: true },
       );
       expect(spy).toHaveBeenLastCalledWith("key-1", FULL_LISTING_REQUEST_COST);
     } finally {
@@ -609,7 +609,7 @@ describe("authenticateApiKey — request cost", () => {
     const spy = vi.spyOn(apiKeyRequestLimiter, "check");
     try {
       const url = `http://localhost/api/v1/media/movies?limit=${encodeURIComponent(raw)}`;
-      await authenticateApiKey(request({ "x-api-key": key }, url), "media:read");
+      await authenticateApiKey(request({ "x-api-key": key }, url), "media:read", { limitZeroMeansAll: true });
       expect(spy).toHaveBeenLastCalledWith("key-1", cost);
     } finally {
       spy.mockRestore();

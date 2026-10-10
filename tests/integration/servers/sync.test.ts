@@ -250,7 +250,15 @@ describe("POST /api/servers/[id]/sync", () => {
     await createTestLibrary(server.id, { key: "lib-key", title: "Movies" });
     setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
 
-    for (const body of [{ libraryKey: 123 }, { libraryKey: "" }, { libraryKey: "x".repeat(201) }, "lib-key"]) {
+    for (const body of [
+      { libraryKey: 123 },
+      { libraryKey: "" },
+      { libraryKey: "x".repeat(201) },
+      "lib-key",
+      // A misspelt key is refused, not stripped into "no library".
+      { librarykey: "lib-key" },
+      { libraryKey: "lib-key", all: true },
+    ]) {
       const response = await callRouteWithParams(POST, { id: server.id }, {
         url: `/api/servers/${server.id}/sync`,
         method: "POST",
