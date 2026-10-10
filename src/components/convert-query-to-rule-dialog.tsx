@@ -455,8 +455,8 @@ function ConvertDialogBody({
             <div className="flex items-start gap-2">
               <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber" />
               <p>
-                Lifecycle rule sets require at least one server. The query has
-                no servers selected.
+                The query searches all servers, but a lifecycle rule set needs
+                its servers listed.
               </p>
             </div>
             {availableServerIds.length === 0 ? (

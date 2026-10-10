@@ -758,11 +758,17 @@ export default function QueryPage() {
     () => columnFieldDefs.map((f) => f.value).filter((f) => visibleCols.has(criterionColumnId(f))),
     [columnFieldDefs, visibleCols],
   );
+  // Only the table shows these columns, so the card view loads none of them
+  // (an Arr or Seerr column reads every instance); switching back loads them.
   const {
     values: columnValues,
     isPending: isColumnPending,
     warnings: columnWarnings,
-  } = useQueryColumnValues(results, visibleCriterionFields, hasRun && !loading ? runScope : null);
+  } = useQueryColumnValues(
+    results,
+    visibleCriterionFields,
+    viewMode === "table" && hasRun && !loading ? runScope : null,
+  );
 
   const criterionColumns: QueryColumn[] = useMemo(() => columnFieldDefs.map((def) => {
     const numeric = def.type === "number";

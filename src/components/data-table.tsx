@@ -382,7 +382,9 @@ export function DataTable<T>({
                   className={cn(
                     "group/th relative px-3 py-2.5 text-left font-mono text-[11px] font-medium tracking-[0.08em] whitespace-nowrap text-faint uppercase",
                     col.sortable !== false && col.sortValue && "cursor-pointer select-none hover:text-foreground transition-colors",
-                    pinned && "data-table-pinned-head z-[1]",
+                    // Above the z-10 resize handles of the headers that scroll
+                    // under it, which otherwise sat on top of the pinned title.
+                    pinned && "data-table-pinned-head z-20",
                     col.id === lastPinnedId && "data-table-pinned-edge",
                     col.headerClassName,
                   )}
