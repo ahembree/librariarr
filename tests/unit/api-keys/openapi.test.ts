@@ -128,6 +128,7 @@ describe("OpenAPI document", () => {
     expect(Object.keys(doc.paths["/lifecycle/exceptions"].post.responses)).toEqual(expect.arrayContaining(["201", "404"]));
     expect(doc.paths["/lifecycle/exceptions"].post.responses).not.toHaveProperty("200");
     expect(doc.paths["/sync/cancel"].post.responses).toHaveProperty("404");
+    expect(doc.paths["/tools/sessions/terminate"].post.responses).toHaveProperty("404");
     expect(doc.paths["/lifecycle/actions/execute"].post.responses).toHaveProperty("404");
     for (const job of ["/jobs/sync", "/jobs/detection", "/jobs/execution"]) expect(doc.paths[job].post.responses, job).toHaveProperty("500");
   });

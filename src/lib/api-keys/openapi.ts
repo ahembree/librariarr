@@ -385,6 +385,7 @@ export const API_OPERATIONS: readonly Operation[] = [
         properties: { serverId: { type: "string" }, sessionIds: { type: "array", items: { type: "string", pattern: "^[A-Za-z0-9_-]{1,128}$" }, maxItems: 200 }, message: { type: "string", minLength: 1, maxLength: 500 } },
       },
     },
+    responses: { "404": "`serverId` names no enabled server of yours" },
   },
   {
     method: "put",

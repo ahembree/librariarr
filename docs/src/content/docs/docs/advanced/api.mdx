@@ -145,7 +145,7 @@ Most endpoints are the same routes the web app uses, served under `/api/v1`: the
 |--------|------|-------|-------------|
 | `GET` | `/api/v1/tools/sessions` | `streams:read` | Active playback sessions on every enabled server, without the path of the file being played |
 | `GET` | `/api/v1/tools/maintenance` | `streams:read` | Maintenance mode status |
-| `POST` | `/api/v1/tools/sessions/terminate` | `streams:write` | Stop playback: `{ "serverId": "…" or "all", "sessionIds": ["…"], "message": "…" }` (omit `sessionIds` to stop every stream on the server). Session ids are the `sessionId` values `/api/v1/tools/sessions` returns; anything but letters, digits, `-` and `_` is refused with `400` |
+| `POST` | `/api/v1/tools/sessions/terminate` | `streams:write` | Stop playback: `{ "serverId": "…" or "all", "sessionIds": ["…"], "message": "…" }` (omit `sessionIds` to stop every stream on the server). Session ids are the `sessionId` values `/api/v1/tools/sessions` returns; anything but letters, digits, `-` and `_` is refused with `400`, and a `serverId` that is not one of your enabled servers with `404` |
 | `PUT` | `/api/v1/tools/maintenance` | `streams:write` | Turn maintenance mode on or off: `{ "enabled": true, "message": "Back soon", "delay": 30 }`. `message` (up to 500 characters) and `delay` (0–3600 seconds) are optional and keep their current values when left out. Who is exempt from maintenance mode and whether Discord is notified can only be changed in Librariarr; sending those fields is a `400` |
 
 ### System

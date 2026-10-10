@@ -37,6 +37,13 @@ export async function POST(request: NextRequest) {
     select: { id: true, name: true, url: true, accessToken: true, tlsSkipVerify: true, type: true },
   });
 
+  // A named server that is unknown, disabled or another user's would
+  // otherwise answer `{ terminated: 0, errors: [] }` — the same answer as a
+  // server with nothing playing, so a mistyped id read as success.
+  if (serverId !== "all" && servers.length === 0) {
+    return NextResponse.json({ error: "Server not found" }, { status: 404 });
+  }
+
   let terminated = 0;
   const errors: string[] = [];
 
