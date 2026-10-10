@@ -92,7 +92,7 @@
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "recharts": "^3.10.1",
-    "sharp": "^0.35.4",
+    "sharp": "^0.35.5",
     "sonner": "^2.0.8",
     "swagger-ui-dist": "^5.33.0",
     "tailwind-merge": "^3.6.0",
