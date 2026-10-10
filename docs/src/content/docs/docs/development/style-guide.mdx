@@ -112,7 +112,7 @@ Users can choose from 7 accent colors in Settings. Each overrides `--primary`, `
 
 ## Typography
 
-Three font families from Google Fonts, each serving a distinct role:
+Three variable font families, self-hosted through the `@fontsource-variable/*` packages imported in `src/app/layout.tsx`, each serving a distinct role:
 
 ### Sora (Display)
 
@@ -133,7 +133,7 @@ Sora is a geometric sans-serif with clean letterforms and wide weight range. App
 A geometric humanist sans-serif — warm, readable at small sizes, and well-suited for UI text.
 
 <Aside type="caution">
-`font-sans` must stay applied on `body` in `globals.css`. The `next/font` CSS variables are defined on `<body>`, so Tailwind preflight's `html` font rule cannot see them — without the body rule the UI silently falls back to the system font stack.
+Don't switch back to `next/font/google`: it downloads the fonts from Google during `next build`, so a slow or blocked request fails the build (and the Docker image build with it).
 </Aside>
 
 ### JetBrains Mono (Monospace)

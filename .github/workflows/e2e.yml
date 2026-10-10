@@ -21,6 +21,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      # docker-compose.e2e.yml takes the Playwright image tag from this, so it
+      # always matches the @playwright/test version in the lockfile.
+      - name: Resolve Playwright version
+        run: echo "PLAYWRIGHT_VERSION=$(node scripts/playwright-version.mjs)" >> "$GITHUB_ENV"
+
       - name: Run E2E stack
         run: >-
           docker compose -f docker-compose.e2e.yml up --build
