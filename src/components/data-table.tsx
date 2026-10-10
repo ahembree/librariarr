@@ -57,6 +57,12 @@ function loadPins(pinning: { storageKey: string; defaultPinned: string[] } | und
   }
 }
 
+/** "A", "A and B", "A, B and C". */
+function formatList(items: string[]): string {
+  if (items.length <= 1) return items[0] ?? "";
+  return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+}
+
 /** Header cell width around its title: `px-3` both sides plus the 4px resize handle. */
 const HEADER_CELL_CHROME = 12 * 2 + 4;
 
@@ -337,8 +343,24 @@ export function DataTable<T>({
     ? virtualizer.getTotalSize() - virtualRows[virtualRows.length - 1].end
     : 0;
 
+  // Named in a visible note, not a tooltip: a touch screen cannot hover, and
+  // paused pins happen mostly on phones.
+  const pausedLabels = orderedColumns
+    .filter((c) => layout.suspended.has(c.id))
+    .map((c) => (typeof c.header === "string" ? c.header : c.id));
+
   return (
     <div className="relative w-full">
+    {pausedLabels.length > 0 && (
+      <p className="mb-2 flex items-start gap-1.5 text-xs text-muted-foreground">
+        <Pin className="mt-0.5 h-3 w-3 shrink-0 fill-current text-primary/50" />
+        <span>
+          Not enough room to keep {formatList(pausedLabels)} pinned on this screen, so{" "}
+          {pausedLabels.length === 1 ? "it scrolls" : "they scroll"} with the other columns. Pins
+          apply again on a wider screen.
+        </span>
+      </p>
+    )}
     <div
       ref={tableContainerRef}
       onScroll={updateThumb}
@@ -402,11 +424,7 @@ export function DataTable<T>({
                         type="button"
                         aria-label={pinned || paused ? `Unpin ${label}` : `Pin ${label}`}
                         aria-pressed={pinned || paused}
-                        title={
-                          paused
-                            ? "Pinned, but not enough room to keep it in place on this screen. Click to unpin."
-                            : pinned ? "Unpin column" : "Pin column to the left"
-                        }
+                        title={pinned || paused ? "Unpin column" : "Pin column to the left"}
                         onClick={(e) => {
                           e.stopPropagation();
                           togglePin(col.id);
