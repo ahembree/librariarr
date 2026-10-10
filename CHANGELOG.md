@@ -1,5 +1,48 @@
 # Changelog
 
+## [0.30.0](https://github.com/ahembree/librariarr/compare/v0.29.0...v0.30.0) (2026-10-10)
+
+
+### Features
+
+* add criterion columns to query table with on-demand loading ([#444](https://github.com/ahembree/librariarr/issues/444)) ([66b6602](https://github.com/ahembree/librariarr/commit/66b6602ae94a03def70d490f2395bf57517d736f))
+* **api:** add public REST API with scoped, expiring API keys ([#408](https://github.com/ahembree/librariarr/issues/408)) ([f6e8ece](https://github.com/ahembree/librariarr/commit/f6e8ecef4ab693bde99848c5cf8c9b01575b5a5f))
+* **library:** add per-play watch history for series, seasons, and episodes ([#369](https://github.com/ahembree/librariarr/issues/369)) ([7110506](https://github.com/ahembree/librariarr/commit/711050602547358c6ccd7296142724dc3b3f5616))
+* **library:** key series identity on seriesKey, not parentTitle ([#370](https://github.com/ahembree/librariarr/issues/370)) ([5853c8e](https://github.com/ahembree/librariarr/commit/5853c8e255f24e44461540de9fe82514abb028f0))
+* **lifecycle:** add an optional ceiling on how much one run may delete ([#386](https://github.com/ahembree/librariarr/issues/386)) ([840993b](https://github.com/ahembree/librariarr/commit/840993b0bd4f3d138147107ef136a9ce92d80c45))
+* **lifecycle:** report why detection skips rule sets instead of silently preserving matches ([#390](https://github.com/ahembree/librariarr/issues/390)) ([a1b3094](https://github.com/ahembree/librariarr/commit/a1b3094ed69a864fc54c0d949a3a6abe11a1534f))
+* **realtime:** add sync-progress, watch-history and media-server push events ([#387](https://github.com/ahembree/librariarr/issues/387)) ([07b3681](https://github.com/ahembree/librariarr/commit/07b368135040cee1c7da7505fb2c11bb5d05961c))
+* **streams:** log user, media and reason on session termination ([#405](https://github.com/ahembree/librariarr/issues/405)) ([78d098c](https://github.com/ahembree/librariarr/commit/78d098c59b4683af719cfd95bf40372848abe10c))
+* **tracearr:** use Tracearr as a per-server watch-history source ([#385](https://github.com/ahembree/librariarr/issues/385)) ([f4aad82](https://github.com/ahembree/librariarr/commit/f4aad8265bf7dc36a038f64882519664ec41a6ee))
+
+
+### Bug Fixes
+
+* **api:** close public API bugs found in a bug hunt ([#445](https://github.com/ahembree/librariarr/issues/445)) ([93c19d4](https://github.com/ahembree/librariarr/commit/93c19d4c0b186237dcf0ce3b22c938dc500d696f))
+* **arr:** scope rule sets to their own Arr instance and fix Radarr client bugs ([#431](https://github.com/ahembree/librariarr/issues/431)) ([4938dcb](https://github.com/ahembree/librariarr/commit/4938dcb315fb4d056e280e013bcfec6c09113cab))
+* **auth:** confirm identity in place instead of requiring sign-out ([#411](https://github.com/ahembree/librariarr/issues/411)) ([afe2222](https://github.com/ahembree/librariarr/commit/afe2222d56c309aeacaa12f7b110d9f1d1cc7c2a))
+* **auth:** enforce session revocation on the API and harden auth surface ([#392](https://github.com/ahembree/librariarr/issues/392)) ([5f8835a](https://github.com/ahembree/librariarr/commit/5f8835a4c5219e4729f9f7342d418f1084ba90a1))
+* **auth:** keep Plex tokens out of a stale session's reach ([#412](https://github.com/ahembree/librariarr/issues/412)) ([6fd56e2](https://github.com/ahembree/librariarr/commit/6fd56e20dbebd974272d258b56cc9ca808d643f7))
+* **build:** stop tracing the whole project into standalone output ([#388](https://github.com/ahembree/librariarr/issues/388)) ([b3428a4](https://github.com/ahembree/librariarr/commit/b3428a4a28e4fa03f3fd2d50a3bca7ddb91c5339))
+* correct watch state reconciliation and rule operator evaluation ([#366](https://github.com/ahembree/librariarr/issues/366)) ([aac62ce](https://github.com/ahembree/librariarr/commit/aac62cedcf706ca9afa816a30c52aad8eb6f800d))
+* **dashboard:** correct refresh, insight cards, custom charts and status tiles ([#425](https://github.com/ahembree/librariarr/issues/425)) ([5c90276](https://github.com/ahembree/librariarr/commit/5c90276eeee08995b0422c55aea5201865e8ce08))
+* improve text wrapping and layout in settings pages ([#426](https://github.com/ahembree/librariarr/issues/426)) ([679de4b](https://github.com/ahembree/librariarr/commit/679de4bdd8f7a89dc11adeda5211db9d1d63e768))
+* **library:** show an episode's watch history once, as the per-play card ([#381](https://github.com/ahembree/librariarr/issues/381)) ([9f8fabf](https://github.com/ahembree/librariarr/commit/9f8fabf7524797092fa44761920a5cba5e395b57))
+* **lifecycle:** release the play-history pause and correct the destructive-action guards ([#404](https://github.com/ahembree/librariarr/issues/404)) ([12f6072](https://github.com/ahembree/librariarr/commit/12f60727e0fc130a0c78730599aca194da440e87))
+* name series actions by show, episodes by show and SxxExx ([#410](https://github.com/ahembree/librariarr/issues/410)) ([c6e34f6](https://github.com/ahembree/librariarr/commit/c6e34f6d5a8b32ac7c413ca37c54c991931b1a9d))
+* **realtime:** ignore echoes of own Plex collection writes, log sync triggers ([#391](https://github.com/ahembree/librariarr/issues/391)) ([6f9e989](https://github.com/ahembree/librariarr/commit/6f9e98987528e18ce301bdd5cf0f4105dcf3c1be))
+* rule-engine phase disagreements, series preview shape, and all-user play state ([#368](https://github.com/ahembree/librariarr/issues/368)) ([e2e6866](https://github.com/ahembree/librariarr/commit/e2e6866f7eb1cab8007c09f8b38961a01285f042))
+* **seerr:** harden the Seerr integration, integration retries and cross-server lifecycle matching ([#407](https://github.com/ahembree/librariarr/issues/407)) ([75ebffa](https://github.com/ahembree/librariarr/commit/75ebffa3100d0ba4ce2ae7f2aa76d152c236b433))
+* **sync:** apply Plex library changes incrementally instead of resyncing everything ([#384](https://github.com/ahembree/librariarr/issues/384)) ([d787eb4](https://github.com/ahembree/librariarr/commit/d787eb436a27d7a97dd896e8d5cb848a88574549))
+* **sync:** restore live updates on the Media Servers settings page ([#406](https://github.com/ahembree/librariarr/issues/406)) ([5c97908](https://github.com/ahembree/librariarr/commit/5c979084a05b42da66ba3fd70c831cf5427651b6))
+* **tracearr:** stop mis-joins, resume purged imports, guard writes on mapping ([#430](https://github.com/ahembree/librariarr/issues/430)) ([edc7efb](https://github.com/ahembree/librariarr/commit/edc7efb6337824391e725c3c2d6deab4f9cd0f1a))
+* **trash:** stop duplicate-on-rename, score wipes, and false success in guide sync ([#432](https://github.com/ahembree/librariarr/issues/432)) ([871a26e](https://github.com/ahembree/librariarr/commit/871a26e9a7da0524db95b8d26438008552c18af8))
+
+
+### Performance Improvements
+
+* gzip list responses, SQL series aggregation, incremental Plex watch-history refresh ([#393](https://github.com/ahembree/librariarr/issues/393)) ([c04cc4e](https://github.com/ahembree/librariarr/commit/c04cc4ee743e64a0e194ce914187bc421cac97d4))
+
 ## [0.29.0](https://github.com/ahembree/librariarr/compare/v0.28.0...v0.29.0) (2026-08-29)
 
 
