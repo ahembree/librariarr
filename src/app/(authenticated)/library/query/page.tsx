@@ -273,6 +273,12 @@ const COLUMN_GROUPS: Record<string, string> = {
 
 const VISIBLE_KEY = "query-visible-columns";
 
+/** Columns pinned to the table's left edge until the user changes them. */
+const QUERY_TABLE_PINNING = {
+  storageKey: "query-pinned-columns",
+  defaultPinned: ["type", "title", "year"],
+};
+
 function loadVisibleColumns(): Set<string> {
   try {
     const stored = localStorage.getItem(VISIBLE_KEY);
@@ -1195,6 +1201,7 @@ export default function QueryPage() {
       id: "__select",
       group: "core",
       defaultVisible: true,
+      alwaysPinned: true,
       sortable: false,
       defaultWidth: 44,
       className: "text-center",
@@ -1871,6 +1878,7 @@ export default function QueryPage() {
                 defaultSortId="title"
                 defaultSortOrder="asc"
                 resizeStorageKey="query-results-col-widths"
+                pinning={QUERY_TABLE_PINNING}
                 renderHoverContent={(item) => (
                   <MediaHoverPopover
                     imageUrl={`/api/media/${item.id}/image${item.type === "SERIES" || item.parentTitle ? "?type=parent" : ""}`}

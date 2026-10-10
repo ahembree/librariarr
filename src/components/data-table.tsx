@@ -1,10 +1,12 @@
 "use client";
 
-import React, { useState, useMemo, useRef, useEffect, useLayoutEffect } from "react";
+import React, { useState, useMemo, useRef, useEffect, useLayoutEffect, useCallback } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { ChevronUp, ChevronDown, ChevronsUpDown } from "lucide-react";
+import { ChevronUp, ChevronDown, ChevronsUpDown, Pin } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useColumnResize } from "@/hooks/use-column-resize";
+import { arrangePinnedColumns, parseStoredPins, togglePinnedId } from "@/lib/table-pinning";
+import { horizontalThumb, scrollPerThumbPixel } from "@/lib/scroll-thumb";
 import { HoverCard, HoverCardTrigger, HoverCardContent } from "@/components/ui/hover-card";
 
 export interface DataTableColumn<T> {
@@ -18,6 +20,8 @@ export interface DataTableColumn<T> {
   headerClassName?: string;
   /** When true, hovering this column's cell does not open the row hover popover. */
   suppressRowHover?: boolean;
+  /** Always pinned to the left edge, with no unpin button (needs `pinning`). */
+  alwaysPinned?: boolean;
 }
 
 interface DataTableProps<T> {
@@ -35,6 +39,22 @@ interface DataTableProps<T> {
   scrollToIndexRef?: React.RefObject<((index: number) => void) | null>;
   /** Optional render function for hover popover content on each row */
   renderHoverContent?: (item: T) => React.ReactNode;
+  /**
+   * Lets the user pin columns to the left edge from a button in each header.
+   * Pins persist in localStorage under `storageKey`; `defaultPinned` applies
+   * until the user changes them.
+   */
+  pinning?: { storageKey: string; defaultPinned: string[] };
+}
+
+function loadPins(pinning: { storageKey: string; defaultPinned: string[] } | undefined): string[] {
+  if (!pinning) return [];
+  if (typeof window === "undefined") return [...pinning.defaultPinned];
+  try {
+    return parseStoredPins(localStorage.getItem(pinning.storageKey), pinning.defaultPinned);
+  } catch {
+    return [...pinning.defaultPinned];
+  }
 }
 
 /** Header cell width around its title: `px-3` both sides plus the 4px resize handle. */
@@ -51,6 +71,7 @@ export function DataTable<T>({
   resizeStorageKey,
   scrollToIndexRef,
   renderHoverContent,
+  pinning,
 }: DataTableProps<T>) {
   const [internalSortId, setInternalSortId] = useState(defaultSortId ?? "");
   const [internalSortOrder, setInternalSortOrder] = useState<"asc" | "desc">(defaultSortOrder);
@@ -102,6 +123,37 @@ export function DataTable<T>({
     columns: resizeColumns,
     storageKey: resizeStorageKey ?? "data-table-widths",
   });
+
+  // --- Column pinning ---
+  const [pinnedIds, setPinnedIds] = useState<string[]>(() => loadPins(pinning));
+  const pinnedSet = useMemo(
+    () => new Set(pinning ? pinnedIds : []),
+    [pinning, pinnedIds],
+  );
+  const pinnable = !!pinning;
+  const layout = useMemo(
+    () => pinnable
+      ? arrangePinnedColumns(columns, pinnedSet, columnWidths)
+      : { ordered: columns, pinnedCount: 0, offsets: {} as Record<string, number> },
+    [columns, pinnable, pinnedSet, columnWidths],
+  );
+  const orderedColumns = layout.ordered;
+  const lastPinnedId = layout.pinnedCount > 0 ? orderedColumns[layout.pinnedCount - 1].id : null;
+  const togglePin = (id: string) => {
+    setPinnedIds((prev) => {
+      const next = togglePinnedId(prev, id);
+      if (pinning) {
+        try {
+          localStorage.setItem(pinning.storageKey, JSON.stringify(next));
+        } catch {
+          /* pins still apply for this visit */
+        }
+      }
+      return next;
+    });
+  };
+  const pinnedStyle = (id: string): React.CSSProperties | undefined =>
+    id in layout.offsets ? { position: "sticky", left: layout.offsets[id] } : undefined;
 
   const sortedData = useMemo(() => {
     // When controlled (server-side sorting), data is already in correct order
@@ -166,6 +218,98 @@ export function DataTable<T>({
     }
   }, [data.length]);
 
+  // --- Sticky horizontal scrollbar ---
+  // The table's own scrollbar sits below its last row, out of reach on a long
+  // list without a trackpad. This bar sticks to the bottom of the viewport
+  // while the table is on screen. It is drawn rather than native so it shows
+  // the same everywhere (macOS overlay scrollbars hide until you scroll), and
+  // it can be dragged, clicked to page, or scrolled with a mouse wheel.
+  const tableRef = useRef<HTMLTableElement>(null);
+  const trackRef = useRef<HTMLDivElement>(null);
+  const thumbRef = useRef<HTMLDivElement>(null);
+  const [overflowing, setOverflowing] = useState(false);
+
+  // Positions the thumb by hand: the table scrolls on every frame of a drag,
+  // and re-rendering every virtualized row for that would be wasted work.
+  const updateThumb = useCallback(() => {
+    const container = tableContainerRef.current;
+    const track = trackRef.current;
+    const thumb = thumbRef.current;
+    if (!container || !track || !thumb) return;
+    const geometry = horizontalThumb(container.scrollLeft, container.scrollWidth, container.clientWidth, track.clientWidth);
+    thumb.style.width = `${geometry.width}px`;
+    thumb.style.transform = `translateX(${geometry.left}px)`;
+  }, []);
+
+  useEffect(() => {
+    const container = tableContainerRef.current;
+    const table = tableRef.current;
+    if (!container || !table || typeof ResizeObserver === "undefined") return;
+    const update = () => {
+      setOverflowing(container.scrollWidth > container.clientWidth + 1);
+      updateThumb();
+    };
+    const observer = new ResizeObserver(update);
+    observer.observe(container);
+    observer.observe(table);
+    return () => observer.disconnect();
+  }, [updateThumb]);
+
+  useLayoutEffect(() => {
+    if (overflowing) updateThumb();
+  }, [overflowing, updateThumb]);
+
+  // A wheel over the bar scrolls sideways. Registered by hand because React's
+  // wheel listener is passive and could not stop the page scrolling as well.
+  useEffect(() => {
+    const track = trackRef.current;
+    const container = tableContainerRef.current;
+    if (!overflowing || !track || !container) return;
+    const onWheel = (e: WheelEvent) => {
+      const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+      if (delta === 0) return;
+      e.preventDefault();
+      container.scrollLeft += e.deltaMode === 1 ? delta * 40 : delta;
+    };
+    track.addEventListener("wheel", onWheel, { passive: false });
+    return () => track.removeEventListener("wheel", onWheel);
+  }, [overflowing]);
+
+  const onThumbPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    const container = tableContainerRef.current;
+    const track = trackRef.current;
+    const thumb = thumbRef.current;
+    if (!container || !track || !thumb) return;
+    e.preventDefault();
+    e.stopPropagation();
+    thumb.setPointerCapture(e.pointerId);
+    const startX = e.clientX;
+    const startScroll = container.scrollLeft;
+    const ratio = scrollPerThumbPixel(container.scrollWidth, container.clientWidth, track.clientWidth, thumb.offsetWidth);
+    const onMove = (ev: PointerEvent) => {
+      container.scrollLeft = startScroll + (ev.clientX - startX) * ratio;
+    };
+    const onUp = () => {
+      thumb.removeEventListener("pointermove", onMove);
+      thumb.removeEventListener("pointerup", onUp);
+      thumb.removeEventListener("pointercancel", onUp);
+    };
+    thumb.addEventListener("pointermove", onMove);
+    thumb.addEventListener("pointerup", onUp);
+    thumb.addEventListener("pointercancel", onUp);
+  };
+
+  // A click on the track beside the thumb pages one view towards the click.
+  const onTrackPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    const container = tableContainerRef.current;
+    const thumb = thumbRef.current;
+    if (!container || !thumb) return;
+    const thumbRect = thumb.getBoundingClientRect();
+    const page = container.clientWidth * 0.9;
+    if (e.clientX < thumbRect.left) container.scrollBy({ left: -page, behavior: "smooth" });
+    else if (e.clientX > thumbRect.right) container.scrollBy({ left: page, behavior: "smooth" });
+  };
+
   const virtualizer = useVirtualizer({
     count: sortedData.length,
     getScrollElement: () => scrollElementRef.current,
@@ -191,21 +335,32 @@ export function DataTable<T>({
     : 0;
 
   return (
-    <div ref={tableContainerRef} className="relative w-full overflow-x-auto rounded-lg border">
-      <table className="w-full text-sm table-fixed" style={{ minWidth: totalWidth }}>
+    <div className="relative w-full">
+    <div
+      ref={tableContainerRef}
+      onScroll={updateThumb}
+      // The native scrollbar sits below the last row, out of reach on a long
+      // list; the sticky bar under the table replaces it.
+      className="relative w-full overflow-x-auto rounded-lg border [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+    >
+      <table ref={tableRef} className="w-full text-sm table-fixed" style={{ minWidth: totalWidth }}>
         <thead className="sticky top-0 z-10">
           <tr className="border-b bg-muted/50">
-            {columns.map((col) => {
+            {orderedColumns.map((col) => {
               const resizeProps = getResizeProps(col.id);
+              const pinned = col.id in layout.offsets;
+              const label = typeof col.header === "string" ? col.header : col.id;
               return (
                 <th
                   key={col.id}
                   className={cn(
-                    "relative px-3 py-2.5 text-left font-mono text-[11px] font-medium tracking-[0.08em] whitespace-nowrap text-faint uppercase",
+                    "group/th relative px-3 py-2.5 text-left font-mono text-[11px] font-medium tracking-[0.08em] whitespace-nowrap text-faint uppercase",
                     col.sortable !== false && col.sortValue && "cursor-pointer select-none hover:text-foreground transition-colors",
+                    pinned && "data-table-pinned-head z-[1]",
+                    col.id === lastPinnedId && "data-table-pinned-edge",
                     col.headerClassName,
                   )}
-                  style={{ width: columnWidths[col.id] }}
+                  style={{ width: columnWidths[col.id], ...pinnedStyle(col.id) }}
                   aria-sort={
                     col.sortable !== false && col.sortValue
                       ? sortId === col.id
@@ -238,6 +393,24 @@ export function DataTable<T>({
                         <ChevronsUpDown className="h-3 w-3 opacity-30" />
                       )
                     )}
+                    {pinnable && !col.alwaysPinned && (
+                      <button
+                        type="button"
+                        aria-label={pinned ? `Unpin ${label}` : `Pin ${label}`}
+                        aria-pressed={pinned}
+                        title={pinned ? "Unpin column" : "Pin column to the left"}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          togglePin(col.id);
+                        }}
+                        className={cn(
+                          "-my-1 rounded p-1 transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100",
+                          pinned ? "text-primary opacity-100" : "opacity-0 group-hover/th:opacity-70",
+                        )}
+                      >
+                        <Pin className={cn("h-3 w-3", pinned && "fill-current")} />
+                      </button>
+                    )}
                   </span>
                   <div
                     className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-primary/50 active:bg-primary z-10 touch-none"
@@ -254,7 +427,7 @@ export function DataTable<T>({
         <tbody>
           {paddingTop > 0 && (
             <tr aria-hidden="true">
-              <td colSpan={columns.length} style={{ height: paddingTop, padding: 0, border: "none" }} />
+              <td colSpan={orderedColumns.length} style={{ height: paddingTop, padding: 0, border: "none" }} />
             </tr>
           )}
           {virtualRows.map((virtualRow) => {
@@ -266,16 +439,23 @@ export function DataTable<T>({
               <tr
                 key={key}
                 data-index={virtualRow.index}
+                data-clickable={onRowClick ? "" : undefined}
                 className={cn(
                   "transition-colors duration-200 even:bg-white/1.5",
                   onRowClick && "cursor-pointer hover:bg-white/3 hover:ring-1 hover:ring-primary/20"
                 )}
                 onClick={() => onRowClick?.(item)}
               >
-                {columns.map((col) => (
+                {orderedColumns.map((col) => (
                   <td
                     key={col.id}
-                    className={cn("px-3 py-2 whitespace-nowrap overflow-hidden text-ellipsis", col.className)}
+                    className={cn(
+                      "px-3 py-2 whitespace-nowrap overflow-hidden text-ellipsis",
+                      col.id in layout.offsets && "data-table-pinned z-[1]",
+                      col.id === lastPinnedId && "data-table-pinned-edge",
+                      col.className,
+                    )}
+                    style={pinnedStyle(col.id)}
                     onPointerEnter={
                       col.suppressRowHover
                         ? () => { hoverSuppressedRef.current = true; setOpenHoverKey(null); }
@@ -323,11 +503,27 @@ export function DataTable<T>({
           })}
           {paddingBottom > 0 && (
             <tr aria-hidden="true">
-              <td colSpan={columns.length} style={{ height: paddingBottom, padding: 0, border: "none" }} />
+              <td colSpan={orderedColumns.length} style={{ height: paddingBottom, padding: 0, border: "none" }} />
             </tr>
           )}
         </tbody>
       </table>
+    </div>
+    {overflowing && (
+      <div className="sticky bottom-0 z-20 bg-background/90 px-px py-1 backdrop-blur-sm" aria-hidden="true">
+        <div
+          ref={trackRef}
+          onPointerDown={onTrackPointerDown}
+          className="data-table-scrollbar relative h-2.5 cursor-pointer rounded-full bg-white/5"
+        >
+          <div
+            ref={thumbRef}
+            onPointerDown={onThumbPointerDown}
+            className="absolute inset-y-0 left-0 cursor-grab touch-none rounded-full bg-white/25 transition-colors hover:bg-white/40 active:cursor-grabbing active:bg-white/50"
+          />
+        </div>
+      </div>
+    )}
     </div>
   );
 }
