@@ -321,6 +321,24 @@ What the conversion does:
 
 After conversion, you're redirected to the new rule set's editor so you can pick an action type, set the delay, configure tags, and re-evaluate.
 
+### Choosing which servers a query searches
+
+The **Servers** dropdown in the query's scope picks the media servers it searches: **All servers** (the default), one server, or any combination of them. Ticking every server is the same as **All servers**, so a server you add later is included too. Disabled servers are not offered and are never searched. The selection is saved with the query, carried into **Convert to Lifecycle Rule**, and used by actions run from the Query page.
+
+### Showing any criterion as a table column
+
+Every criterion a query can filter on can also be shown as a column in the results table. Open **Columns** and pick from the sections the query builder uses (Content, Activity, Streams, Arr, Seerr, Series and so on); the search box at the top finds a column by name. Turning a column on loads its values for the rows already on screen — the query is not run again. Only the table view shows these columns, so the card view loads none of them until you switch back to the table.
+
+- **Arr columns** read the *arr instance selected in the query scope. With none selected they stay empty and a note above the table says why.
+- **Seerr columns** read every enabled Seerr instance. If none can be reached, the columns stay empty and the note gives the reason.
+- **Series columns** (episode counts, watched %, last played) apply to a grouped show row. A show row has no single value for per-episode detail such as bitrate, so those cells show "-".
+
+Columns sort like the fixed ones: numbers and dates in order, empty cells last.
+
+**Pinning columns.** Click or tap the pin icon in a column header to keep that column at the left edge while the rest scroll sideways, and again to unpin it. With a mouse, the pin on an unpinned column appears when you point at its header; on a touch screen every pin is always shown. **Type**, **Title** and **Year** are pinned by default, and your choice is remembered in this browser. Pinned columns never take more than about 60% of the table's width: on a phone or a narrow window, the pins that don't fit are paused (their pin icon is dimmed and a note above the table names them) so there is still room to scroll, and they come back when the screen is wide enough.
+
+**Scrolling sideways.** When the table is wider than the page, a scrollbar stays at the bottom of the window while the table is on screen, so you never have to scroll to the last row to reach it. Drag its handle (with a mouse or a finger), click or tap beside the handle to move one screen's width, or point at it and turn the mouse wheel. Shift + mouse wheel over the rows also scrolls sideways, and on a touch screen you can swipe the table itself.
+
 ### Unsaved query drafts
 
 An in-progress query is kept for the current browser tab, so navigating away and back doesn't lose it. This is separate from **Save**, which stores a named query — the draft lives only in that tab and is cleared when you close it. **Discard** appears when a draft is restored; **New** clears the builder at any time.

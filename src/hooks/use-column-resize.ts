@@ -5,6 +5,8 @@ import { useState, useCallback, useRef, useMemo } from "react";
 interface ColumnWidthConfig {
   id: string;
   defaultWidth: number;
+  /** Narrowest this column may be, e.g. the width its header title needs. */
+  minWidth?: number;
 }
 
 interface UseColumnResizeOptions {
@@ -44,6 +46,19 @@ function saveStoredWidths(key: string, widths: Record<string, number>) {
   }
 }
 
+/**
+ * A column's rendered width: the user's stored width, else its default, never
+ * below its own minimum (so a stored width saved before the minimum grew, or a
+ * default narrower than the header title, cannot squeeze the title over the
+ * next column).
+ */
+export function resolveColumnWidth(
+  col: ColumnWidthConfig,
+  stored: number | undefined,
+): number {
+  return Math.max(stored ?? col.defaultWidth, col.minWidth ?? 0);
+}
+
 export function useColumnResize({
   columns,
   storageKey,
@@ -58,12 +73,13 @@ export function useColumnResize({
     columnId: string;
     startX: number;
     startWidth: number;
+    minWidth: number;
   } | null>(null);
 
   const columnWidths = useMemo(() => {
     const widths: Record<string, number> = {};
     for (const col of columns) {
-      widths[col.id] = storedWidths[col.id] ?? col.defaultWidth;
+      widths[col.id] = resolveColumnWidth(col, storedWidths[col.id]);
     }
     return widths;
   }, [columns, storedWidths]);
@@ -78,7 +94,7 @@ export function useColumnResize({
       const drag = dragRef.current;
       if (!drag) return;
       const delta = clientX - drag.startX;
-      const newWidth = Math.max(minWidth, drag.startWidth + delta);
+      const newWidth = Math.max(minWidth, drag.minWidth, drag.startWidth + delta);
       setStoredWidths((prev) => ({ ...prev, [drag.columnId]: newWidth }));
     },
     [minWidth],
@@ -101,7 +117,8 @@ export function useColumnResize({
   const startDrag = useCallback(
     (columnId: string, startX: number) => {
       const startWidth = columnWidths[columnId] ?? 120;
-      dragRef.current = { columnId, startX, startWidth };
+      const colMin = columns.find((c) => c.id === columnId)?.minWidth ?? 0;
+      dragRef.current = { columnId, startX, startWidth, minWidth: colMin };
       setResizingColumnId(columnId);
       document.body.style.userSelect = "none";
       document.body.style.cursor = "col-resize";
@@ -125,7 +142,7 @@ export function useColumnResize({
       document.addEventListener("touchend", onEnd);
       document.addEventListener("touchcancel", onEnd);
     },
-    [columnWidths, handleDragMove, handleDragEnd],
+    [columns, columnWidths, handleDragMove, handleDragEnd],
   );
 
   const resetColumnWidth = useCallback(

@@ -1,6 +1,6 @@
 import { z } from "zod/v4";
 import { NextResponse } from "next/server";
-import { MAX_QUERY_ACTION_ITEMS } from "@/lib/query/constants";
+import { MAX_COLUMN_VALUE_ITEMS, MAX_QUERY_ACTION_ITEMS } from "@/lib/query/constants";
 import { MASKED_VALUE } from "@/lib/api/sanitize";
 import { API_SCOPES } from "@/lib/api-keys/scopes";
 import { API_DESTRUCTIVE_PER_REQUEST } from "@/lib/api-keys/limits";
@@ -908,6 +908,22 @@ export const executeQuerySchema = z.object({
   query: queryDefinitionSchema,
   page: z.number().int().min(1).optional().default(1),
   limit: z.number().int().min(0).max(200).optional().default(50),
+});
+
+// Values for the Query page's criterion columns, computed for rows on screen.
+export const queryColumnValuesSchema = z.object({
+  items: z
+    .array(z.object({ id: z.string().min(1).max(200), grouped: z.boolean().optional() }))
+    .max(MAX_COLUMN_VALUE_ITEMS),
+  fields: z.array(z.string().min(1).max(100)).min(1).max(200),
+  serverIds: z.array(z.string().max(200)).max(100).optional().default([]),
+  arrServerIds: z
+    .object({
+      radarr: z.string().max(200).optional(),
+      sonarr: z.string().max(200).optional(),
+      lidarr: z.string().max(200).optional(),
+    })
+    .optional(),
 });
 
 // Ad-hoc lifecycle action triggered on selected query results (no rule set).
