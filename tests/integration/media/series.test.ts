@@ -154,6 +154,22 @@ describe("Series endpoints", () => {
       expect(body.items[0].seasonNumber).toBe(1);
     });
 
+    it("answers a seasonNumber past the integer range with no episodes, not a 500", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const lib = await createTestLibrary(server.id, { type: "SERIES" });
+      await createTestMediaItem(lib.id, { title: "S01E01", type: "SERIES", parentTitle: "Show", seasonNumber: 1, episodeNumber: 1 });
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      for (const seasonNumber of ["3000000000", "-3000000000"]) {
+        const body = await expectJson<{ items: unknown[] }>(
+          await callRoute(GET, { url: "/api/media/series", searchParams: { seasonNumber } }),
+          200,
+        );
+        expect(body.items).toEqual([]);
+      }
+    });
+
     it("searches across title and parentTitle", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id);

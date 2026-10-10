@@ -1,7 +1,17 @@
 import { describe, it, expect } from "vitest";
-import { MAX_SKIP, clampSkip, isFullListingLimit, parseListPagination } from "@/lib/api/pagination";
+import { MAX_SKIP, clampSkip, isFullListingLimit, parseListPagination, parsePage } from "@/lib/api/pagination";
 
 const params = (q: Record<string, string>) => new URLSearchParams(q);
+
+describe("parsePage", () => {
+  it("is 1-based, reads a malformed page as the first, and bounds an absurd one", () => {
+    expect(parsePage(params({}))).toBe(1);
+    expect(parsePage(params({ page: "3" }))).toBe(3);
+    expect(parsePage(params({ page: "abc" }))).toBe(1);
+    expect(parsePage(params({ page: "-4" }))).toBe(1);
+    expect(parsePage(params({ page: "99999999999999999999" }))).toBe(MAX_SKIP);
+  });
+});
 
 describe("parseListPagination", () => {
   it("defaults to page 1 with a 50-item limit", () => {
@@ -31,6 +41,13 @@ describe("parseListPagination", () => {
 
   it("clamps the limit to the maximum", () => {
     expect(parseListPagination(params({ limit: "5000" })).limit).toBe(100);
+  });
+
+  it("takes a route's own maximum (the grouped listings allow 200)", () => {
+    expect(parseListPagination(params({ limit: "5000" }), { maxLimit: 200 }).limit).toBe(200);
+    expect(parseListPagination(params({ limit: "150", offset: "10" }), { maxLimit: 200 })).toEqual({
+      page: 1, limit: 150, skip: 10,
+    });
   });
 
   it("rejects a negative limit rather than reverse-taking", () => {

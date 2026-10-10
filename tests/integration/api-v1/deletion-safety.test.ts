@@ -246,6 +246,27 @@ describe("deletion safety of the public API", () => {
       expect(await prisma.ruleMatch.count({ where: { ruleSetId: ruleSet.id } })).toBe(3);
     });
 
+    it("gives back the budget of items never sent because their Arr instance was already down", async () => {
+      const { user, library } = await setup();
+      const { ruleSet, items } = await matchedMovies(user.id, library.id, 5);
+      const key = await executeKey(user.id);
+      const { IntegrationError } = await import("@/lib/integration-error");
+      // The first delete cannot reach Radarr at all; the other four are then
+      // failed without a request (see UnreachableInstances).
+      mockExecuteAction.mockRejectedValueOnce(
+        new IntegrationError("Radarr", { config: { url: "/api/v3/movie", method: "get" }, code: "ECONNREFUSED" } as never),
+      );
+
+      const body = await expectJson<{ executed: number; failed: number }>(
+        await execute(key, { ruleSetId: ruleSet.id, mediaItemIds: items.map((i) => i.id) }),
+        200,
+      );
+      expect(body).toMatchObject({ executed: 0, failed: 5 });
+      expect(mockExecuteAction).toHaveBeenCalledTimes(1);
+      // Only the one attempt stays charged.
+      expect(reserveApiDestructive(0)).toMatchObject({ ok: true, remaining: 99 });
+    });
+
     it("refuses more than 25 items in one request, whatever the action", async () => {
       const { user, library } = await setup();
       const { ruleSet, items } = await matchedMovies(user.id, library.id, 26);
@@ -395,7 +416,7 @@ describe("deletion safety of the public API", () => {
       expect((await expectJson<{ executed: number }>(await first, 200)).executed).toBe(2);
       expect(mockExecuteAction).toHaveBeenCalledTimes(2);
       // Only the request that ran was charged.
-      expect(reserveApiDestructive(0)).toEqual({ ok: true, remaining: 98 });
+      expect(reserveApiDestructive(0)).toMatchObject({ ok: true, remaining: 98 });
     });
 
     it("does not charge actions that delete nothing", async () => {
@@ -419,7 +440,7 @@ describe("deletion safety of the public API", () => {
 
       await expectJson(await execute(key, { ruleSetId: ruleSet.id, mediaItemIds: items.map((i) => i.id) }), 400);
       expect(mockExecuteAction).not.toHaveBeenCalled();
-      expect(reserveApiDestructive(0)).toEqual({ ok: true, remaining: 100 });
+      expect(reserveApiDestructive(0)).toMatchObject({ ok: true, remaining: 100 });
     });
 
     it("leaves the Pending page's Execute All for a signed-in user unchanged", async () => {
@@ -433,7 +454,7 @@ describe("deletion safety of the public API", () => {
       );
       expect(body.executed).toBe(30);
       // ...and a person's run is not charged to the API's budget.
-      expect(reserveApiDestructive(0)).toEqual({ ok: true, remaining: 100 });
+      expect(reserveApiDestructive(0)).toMatchObject({ ok: true, remaining: 100 });
     });
   });
 
@@ -464,6 +485,28 @@ describe("deletion safety of the public API", () => {
       });
     }
 
+    it("answers an overlapping removal of the same exception with 404, not a 500, and charges it once", async () => {
+      const { user, library } = await setup();
+      const [row] = await exceptions(user.id, library.id, 1);
+      const key = await executeKey(user.id);
+
+      const statuses = (await Promise.all([removeOne(key, row.id), removeOne(key, row.id)])).map((r) => r.status).sort();
+      expect(statuses).toEqual([200, 404]);
+      expect(await prisma.lifecycleException.count()).toBe(0);
+      expect(reserveApiDestructive(0)).toMatchObject({ ok: true, remaining: 99 });
+    });
+
+    it("charges overlapping bulk removals of the same exceptions once", async () => {
+      const { user, library } = await setup();
+      const rows = await exceptions(user.id, library.id, 3);
+      const key = await executeKey(user.id);
+      const ids = rows.map((r) => r.id);
+
+      const bodies = await Promise.all([removeMany(key, ids), removeMany(key, ids)].map(async (r) => expectJson<{ deleted: number }>(await r, 200)));
+      expect(bodies.reduce((sum, b) => sum + b.deleted, 0)).toBe(3);
+      expect(reserveApiDestructive(0)).toMatchObject({ ok: true, remaining: 97 });
+    });
+
     it("removes at most 25 per request", async () => {
       const { user, library } = await setup();
       const rows = await exceptions(user.id, library.id, 26);
@@ -475,7 +518,7 @@ describe("deletion safety of the public API", () => {
       const body = await expectJson<{ deleted: number }>(await removeMany(key, rows.slice(0, 25).map((r) => r.id)), 200);
       expect(body.deleted).toBe(25);
       // Each removal counted against the hour.
-      expect(reserveApiDestructive(0)).toEqual({ ok: true, remaining: 75 });
+      expect(reserveApiDestructive(0)).toMatchObject({ ok: true, remaining: 75 });
     });
 
     it("counts every removal against the same hourly budget as deletions", async () => {
@@ -545,7 +588,7 @@ describe("deletion safety of the public API", () => {
           embeds: [expect.objectContaining({ title: "Lifecycle deletion held for review" })],
         }),
       );
-      expect(reserveApiDestructive(0)).toEqual({ ok: true, remaining: 100 });
+      expect(reserveApiDestructive(0)).toMatchObject({ ok: true, remaining: 100 });
 
       // Queued again straight away and held again: logged, but Discord is not
       // posted to on every call of a client stuck in a loop.
@@ -559,7 +602,7 @@ describe("deletion safety of the public API", () => {
       await dueDeletes(user.id, library.id, 3);
       await queueAndRun(user.id);
       expect(mockExecuteAction).toHaveBeenCalledTimes(3);
-      expect(reserveApiDestructive(0)).toEqual({ ok: true, remaining: 97 });
+      expect(reserveApiDestructive(0)).toMatchObject({ ok: true, remaining: 97 });
 
       mockExecuteAction.mockClear();
       await dueDeletes(user.id, library.id, 30);

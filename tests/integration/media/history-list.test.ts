@@ -41,6 +41,7 @@ vi.mock("@/lib/cache/memory-cache", () => {
 
 // Import route handler AFTER mocks
 import { GET } from "@/app/api/media/history/route";
+import { MAX_SKIP } from "@/lib/api/pagination";
 
 type HistoryResponse = {
   items: Array<{ mediaItem: { title: string; parentTitle: string | null } }>;
@@ -91,13 +92,15 @@ describe("GET /api/media/history", () => {
     // raw `OFFSET`) where a page past the end is just empty.
     const item = await createTestMediaItem(libraryId, { title: "Pilot", type: "SERIES" });
     await addWatch(item.id);
-    const body = await expectJson<{ items: unknown[]; pagination: { hasMore: boolean; totalCount: number } }>(
+    const body = await expectJson<{ items: unknown[]; pagination: { page: number; hasMore: boolean; totalCount: number } }>(
       await callRoute(GET, { url: "/api/media/history", searchParams: { page: "99999999999999999999" } }),
       200,
     );
     expect(body.items).toEqual([]);
     expect(body.pagination.hasMore).toBe(false);
     expect(body.pagination.totalCount).toBe(1);
+    // Echoed as a sane integer, not the 1e20 that was typed.
+    expect(body.pagination.page).toBe(MAX_SKIP);
   });
 
   it("rejects an unknown type with 400 instead of failing the query", async () => {

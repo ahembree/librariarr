@@ -357,6 +357,34 @@ describe("GET /api/media/music/grouped", () => {
       expect(body3.pagination.hasMore).toBe(false);
     });
 
+    it("honours offset, which overrides page, as the shared paging contract documents", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const lib = await createTestLibrary(server.id, { type: "MUSIC" });
+      for (const name of ["Abba", "Blur", "Cream", "Doors"]) {
+        await createTestMediaItem(lib.id, {
+          title: "Track 1",
+          type: "MUSIC",
+          parentTitle: name,
+          audioCodec: "flac",
+          ratingKey: `rk-${name}`,
+        });
+      }
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      const artists = async (searchParams: Record<string, string>) => {
+        const body = await expectJson<{ artists: { parentTitle: string }[]; pagination: { hasMore: boolean } }>(
+          await callRoute(GET, { url: "/api/media/music/grouped", searchParams }),
+          200,
+        );
+        return { names: body.artists.map((a) => a.parentTitle), hasMore: body.pagination.hasMore };
+      };
+
+      expect(await artists({ limit: "2", offset: "2" })).toEqual({ names: ["Cream", "Doors"], hasMore: false });
+      expect(await artists({ limit: "1", offset: "1" })).toEqual({ names: ["Blur"], hasMore: true });
+      expect(await artists({ limit: "0", offset: "3" })).toEqual({ names: ["Doors"], hasMore: false });
+    });
+
     it("caps limit at 200", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id);

@@ -2,4 +2,5 @@ import { GET as appGet } from "@/app/api/media/music/grouped/route";
 import { withApiKey } from "@/lib/api-keys/guard";
 
 // Public API mirror of /api/media/music/grouped — same parameters and response.
-export const GET = withApiKey("media:read", appGet);
+// `limit=0` returns the whole listing, so it is charged as one.
+export const GET = withApiKey("media:read", appGet, { limitZeroMeansAll: true });

@@ -10,8 +10,13 @@ const mockPrisma = vi.hoisted(() => ({
     findMany: vi.fn(),
     deleteMany: vi.fn(),
     createMany: vi.fn(),
-    delete: vi.fn(),
-    update: vi.fn(),
+    create: vi.fn(),
+    // Pass 1 cancels and pass 2 records with the *Many forms, so a row removed
+    // mid-run cannot abort the run.
+    updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+    // Pass 2 re-reads each action before acting; found = still pending,
+    // unchanged and due, unless a test says otherwise.
+    findFirst: vi.fn().mockResolvedValue({ id: "found" }),
   },
   ruleMatch: {
     findMany: vi.fn(),
@@ -19,6 +24,8 @@ const mockPrisma = vi.hoisted(() => ({
   },
   lifecycleException: {
     findMany: vi.fn(),
+    // Pass 2 asks whether an exception was filed during the run: none.
+    count: vi.fn().mockResolvedValue(0),
   },
   appSettings: {
     findUnique: vi.fn(),
@@ -1205,11 +1212,11 @@ describe("executeLifecycleActions", () => {
     ]);
     mockPrisma.ruleMatch.findMany.mockResolvedValue([]);
     mockPrisma.lifecycleException.findMany.mockResolvedValue([]);
-    mockPrisma.lifecycleAction.delete.mockResolvedValue({});
+    mockPrisma.lifecycleAction.deleteMany.mockResolvedValue({});
 
     await executeLifecycleActions("u1");
 
-    expect(mockPrisma.lifecycleAction.delete).toHaveBeenCalledWith({
+    expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledWith({
       where: { id: "a1" },
     });
     expect(mockExecuteAction).not.toHaveBeenCalled();
@@ -1233,11 +1240,11 @@ describe("executeLifecycleActions", () => {
     mockPrisma.lifecycleException.findMany.mockResolvedValue([
       { userId: "u1", mediaItemId: "item1" },
     ]);
-    mockPrisma.lifecycleAction.delete.mockResolvedValue({});
+    mockPrisma.lifecycleAction.deleteMany.mockResolvedValue({});
 
     await executeLifecycleActions("u1");
 
-    expect(mockPrisma.lifecycleAction.delete).toHaveBeenCalledWith({
+    expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledWith({
       where: { id: "a1" },
     });
     expect(mockExecuteAction).not.toHaveBeenCalled();
@@ -1259,11 +1266,11 @@ describe("executeLifecycleActions", () => {
     ]);
     mockPrisma.ruleMatch.findMany.mockResolvedValue([{ ruleSetId: "rs1", mediaItemId: "item1" }]);
     mockPrisma.lifecycleException.findMany.mockResolvedValue([]);
-    mockPrisma.lifecycleAction.delete.mockResolvedValue({});
+    mockPrisma.lifecycleAction.deleteMany.mockResolvedValue({});
 
     await executeLifecycleActions("u1");
 
-    expect(mockPrisma.lifecycleAction.delete).toHaveBeenCalledWith({ where: { id: "a1" } });
+    expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledWith({ where: { id: "a1" } });
     // The match went stale with it: the next detection evaluates the new title.
     expect(mockPrisma.ruleMatch.deleteMany).toHaveBeenCalledWith({ where: { ruleSetId: "rs1", mediaItemId: "item1" } });
     expect(mockExecuteAction).not.toHaveBeenCalled();
@@ -1285,8 +1292,8 @@ describe("executeLifecycleActions", () => {
     ]);
     mockPrisma.ruleMatch.findMany.mockResolvedValue([{ ruleSetId: "rs1", mediaItemId: "item1" }]);
     mockPrisma.lifecycleException.findMany.mockResolvedValue([]);
-    mockPrisma.lifecycleAction.update.mockResolvedValue({});
-    mockPrisma.$transaction.mockResolvedValue([{}, {}]);
+    mockPrisma.lifecycleAction.updateMany.mockResolvedValue({});
+    mockPrisma.$transaction.mockResolvedValue([{ count: 1 }, { count: 1 }]);
 
     await executeLifecycleActions("u1");
 
@@ -1327,8 +1334,8 @@ describe("executeLifecycleActions", () => {
     beforeEach(() => {
       mockPrisma.ruleMatch.findMany.mockResolvedValue([{ ruleSetId: "rs1", mediaItemId: "rep1" }]);
       mockPrisma.lifecycleException.findMany.mockResolvedValue([]);
-      mockPrisma.lifecycleAction.delete.mockResolvedValue({});
-      mockPrisma.$transaction.mockResolvedValue([{}, {}]);
+      mockPrisma.lifecycleAction.deleteMany.mockResolvedValue({});
+      mockPrisma.$transaction.mockResolvedValue([{ count: 1 }, { count: 1 }]);
     });
 
     it("executes a series action whose group title is the representative episode's show", async () => {
@@ -1342,7 +1349,7 @@ describe("executeLifecycleActions", () => {
 
       await executeLifecycleActions("u1");
 
-      expect(mockPrisma.lifecycleAction.delete).not.toHaveBeenCalled();
+      expect(mockPrisma.lifecycleAction.deleteMany).not.toHaveBeenCalled();
       expect(mockExecuteAction).toHaveBeenCalledTimes(1);
     });
 
@@ -1353,7 +1360,7 @@ describe("executeLifecycleActions", () => {
 
       await executeLifecycleActions("u1");
 
-      expect(mockPrisma.lifecycleAction.delete).not.toHaveBeenCalled();
+      expect(mockPrisma.lifecycleAction.deleteMany).not.toHaveBeenCalled();
       expect(mockExecuteAction).toHaveBeenCalledTimes(1);
     });
 
@@ -1364,7 +1371,7 @@ describe("executeLifecycleActions", () => {
 
       await executeLifecycleActions("u1");
 
-      expect(mockPrisma.lifecycleAction.delete).toHaveBeenCalledWith({ where: { id: "a1" } });
+      expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledWith({ where: { id: "a1" } });
       expect(mockExecuteAction).not.toHaveBeenCalled();
     });
 
@@ -1379,7 +1386,7 @@ describe("executeLifecycleActions", () => {
 
       await executeLifecycleActions("u1");
 
-      expect(mockPrisma.lifecycleAction.delete).toHaveBeenCalledWith({ where: { id: "a1" } });
+      expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledWith({ where: { id: "a1" } });
       expect(mockExecuteAction).not.toHaveBeenCalled();
     });
   });
@@ -1407,11 +1414,11 @@ describe("executeLifecycleActions", () => {
     ]);
     mockPrisma.ruleMatch.findMany.mockResolvedValue([{ ruleSetId: "rs1", mediaItemId: "item1" }]);
     mockPrisma.lifecycleException.findMany.mockResolvedValue([]);
-    mockPrisma.lifecycleAction.delete.mockResolvedValue({});
+    mockPrisma.lifecycleAction.deleteMany.mockResolvedValue({});
 
     await executeLifecycleActions("u1");
 
-    expect(mockPrisma.lifecycleAction.delete).toHaveBeenCalledWith({ where: { id: "a1" } });
+    expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledWith({ where: { id: "a1" } });
     expect(mockExecuteAction).not.toHaveBeenCalled();
   });
 
@@ -1434,11 +1441,11 @@ describe("executeLifecycleActions", () => {
     ]);
     mockPrisma.ruleMatch.findMany.mockResolvedValue([{ ruleSetId: "rs1", mediaItemId: "item1" }]);
     mockPrisma.lifecycleException.findMany.mockResolvedValue([]);
-    mockPrisma.lifecycleAction.delete.mockResolvedValue({});
+    mockPrisma.lifecycleAction.deleteMany.mockResolvedValue({});
 
     await executeLifecycleActions("u1");
 
-    expect(mockPrisma.lifecycleAction.delete).toHaveBeenCalledWith({ where: { id: "a1" } });
+    expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledWith({ where: { id: "a1" } });
     expect(mockExecuteAction).not.toHaveBeenCalled();
   });
 
@@ -1458,11 +1465,11 @@ describe("executeLifecycleActions", () => {
     ]);
     mockPrisma.ruleMatch.findMany.mockResolvedValue([{ ruleSetId: "rs1", mediaItemId: "show1" }]);
     mockPrisma.lifecycleException.findMany.mockResolvedValue([{ userId: "u1", mediaItemId: "e2" }]); // one episode protected
-    mockPrisma.lifecycleAction.delete.mockResolvedValue({});
+    mockPrisma.lifecycleAction.deleteMany.mockResolvedValue({});
 
     await executeLifecycleActions("u1");
 
-    expect(mockPrisma.lifecycleAction.delete).toHaveBeenCalledWith({ where: { id: "a1" } });
+    expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledWith({ where: { id: "a1" } });
     expect(mockExecuteAction).not.toHaveBeenCalled();  // whole series NOT deleted
   });
 
@@ -1483,8 +1490,8 @@ describe("executeLifecycleActions", () => {
     mockPrisma.ruleMatch.findMany.mockResolvedValue([{ ruleSetId: "rs1", mediaItemId: "show1" }]);
     mockPrisma.lifecycleException.findMany.mockResolvedValue([{ userId: "u1", mediaItemId: "e2" }]);
     mockPrisma.mediaItem.findMany.mockResolvedValue([]);
-    mockPrisma.lifecycleAction.update.mockResolvedValue({});
-    mockPrisma.$transaction.mockResolvedValue([{}, {}]);
+    mockPrisma.lifecycleAction.updateMany.mockResolvedValue({});
+    mockPrisma.$transaction.mockResolvedValue([{ count: 1 }, { count: 1 }]);
 
     await executeLifecycleActions("u1");
 
@@ -1527,11 +1534,11 @@ describe("executeLifecycleActions", () => {
     ]);
     mockPrisma.ruleMatch.findMany.mockResolvedValue([{ ruleSetId: "rs1", mediaItemId: "track1" }]);
     mockPrisma.lifecycleException.findMany.mockResolvedValue([]);
-    mockPrisma.lifecycleAction.delete.mockResolvedValue({});
+    mockPrisma.lifecycleAction.deleteMany.mockResolvedValue({});
 
     await executeLifecycleActions("u1");
 
-    expect(mockPrisma.lifecycleAction.delete).toHaveBeenCalledWith({ where: { id: "a1" } });
+    expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledWith({ where: { id: "a1" } });
     expect(mockExecuteAction).not.toHaveBeenCalled();
   });
 
@@ -1574,11 +1581,11 @@ describe("executeLifecycleActions", () => {
           ? [{ mediaItem: { parentTitle: "Show", seriesKey: "tvdb:1", type: "SERIES" } }]
           : [{ userId: "u1", mediaItemId: "e9" }],
     );
-    mockPrisma.lifecycleAction.delete.mockResolvedValue({});
+    mockPrisma.lifecycleAction.deleteMany.mockResolvedValue({});
 
     await executeLifecycleActions("u1");
 
-    expect(mockPrisma.lifecycleAction.delete).toHaveBeenCalledWith({ where: { id: "a1" } });
+    expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledWith({ where: { id: "a1" } });
     expect(mockExecuteAction).not.toHaveBeenCalled();
   });
 
@@ -1617,7 +1624,7 @@ describe("executeLifecycleActions", () => {
     );
     mockExecuteAction.mockResolvedValue(undefined);
     mockPrisma.mediaItem.findMany.mockResolvedValue([]);
-    mockPrisma.lifecycleAction.update.mockResolvedValue({});
+    mockPrisma.lifecycleAction.updateMany.mockResolvedValue({});
     mockPrisma.ruleMatch.deleteMany.mockResolvedValue({ count: 1 });
 
     await executeLifecycleActions("u1");
@@ -1640,11 +1647,11 @@ describe("executeLifecycleActions", () => {
     ]);
     mockPrisma.ruleMatch.findMany.mockResolvedValue([]); // No current matches
     mockPrisma.lifecycleException.findMany.mockResolvedValue([]);
-    mockPrisma.lifecycleAction.delete.mockResolvedValue({});
+    mockPrisma.lifecycleAction.deleteMany.mockResolvedValue({});
 
     await executeLifecycleActions("u1");
 
-    expect(mockPrisma.lifecycleAction.delete).toHaveBeenCalledWith({
+    expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledWith({
       where: { id: "a1" },
     });
     expect(mockExecuteAction).not.toHaveBeenCalled();
@@ -1675,7 +1682,7 @@ describe("executeLifecycleActions", () => {
     ]);
     mockPrisma.lifecycleException.findMany.mockResolvedValue([]);
     mockExecuteAction.mockResolvedValue(undefined);
-    mockPrisma.lifecycleAction.update.mockResolvedValue({});
+    mockPrisma.lifecycleAction.updateMany.mockResolvedValue({});
     mockPrisma.ruleMatch.deleteMany.mockResolvedValue({ count: 1 });
 
     await executeLifecycleActions("u1");
@@ -1683,7 +1690,7 @@ describe("executeLifecycleActions", () => {
     expect(mockExecuteAction).toHaveBeenCalledWith(
       expect.objectContaining({ id: "a1", mediaItem }),
     );
-    expect(mockPrisma.lifecycleAction.update).toHaveBeenCalledWith(
+    expect(mockPrisma.lifecycleAction.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: "a1" },
         data: expect.objectContaining({ status: "COMPLETED" }),
@@ -1717,11 +1724,11 @@ describe("executeLifecycleActions", () => {
     mockPrisma.lifecycleException.findMany.mockResolvedValue([]);
     mockExecuteAction.mockRejectedValue(new Error("Radarr failed"));
     mockExtractActionError.mockReturnValue("Radarr failed");
-    mockPrisma.lifecycleAction.update.mockResolvedValue({});
+    mockPrisma.lifecycleAction.updateMany.mockResolvedValue({});
 
     await executeLifecycleActions("u1");
 
-    expect(mockPrisma.lifecycleAction.update).toHaveBeenCalledWith(
+    expect(mockPrisma.lifecycleAction.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: "a1" },
         data: expect.objectContaining({ status: "FAILED", error: "Radarr failed" }),
@@ -1764,15 +1771,15 @@ describe("executeLifecycleActions", () => {
       }
     });
     mockExtractActionError.mockReturnValue("Radarr unreachable");
-    mockPrisma.lifecycleAction.update.mockResolvedValue({});
-    mockPrisma.$transaction.mockResolvedValue([]);
+    mockPrisma.lifecycleAction.updateMany.mockResolvedValue({});
+    mockPrisma.$transaction.mockResolvedValue([{ count: 1 }, { count: 1 }]);
 
     await executeLifecycleActions("u1");
 
     const executedIds = mockExecuteAction.mock.calls.map((c) => (c[0] as { id: string }).id);
     expect(executedIds).toEqual(["a1", "a3"]);
     // a1 failed; a2 was neither executed nor touched — it stays PENDING.
-    const updatedIds = mockPrisma.lifecycleAction.update.mock.calls.map((c) => (c[0] as { where: { id: string } }).where.id);
+    const updatedIds = mockPrisma.lifecycleAction.updateMany.mock.calls.map((c) => (c[0] as { where: { id: string } }).where.id);
     expect(updatedIds).toContain("a1");
     expect(updatedIds).not.toContain("a2");
   });
@@ -1802,7 +1809,7 @@ describe("executeLifecycleActions", () => {
     ]);
     mockPrisma.lifecycleException.findMany.mockResolvedValue([]);
     mockExecuteAction.mockResolvedValue(undefined);
-    mockPrisma.lifecycleAction.update.mockResolvedValue({});
+    mockPrisma.lifecycleAction.updateMany.mockResolvedValue({});
     mockPrisma.ruleMatch.deleteMany.mockResolvedValue({ count: 1 });
     mockPrisma.appSettings.findMany.mockResolvedValue([]);
     mockSyncMediaServer.mockResolvedValue(undefined);
@@ -1844,7 +1851,7 @@ describe("executeLifecycleActions", () => {
     ]);
     mockPrisma.lifecycleException.findMany.mockResolvedValue([]);
     mockExecuteAction.mockResolvedValue(undefined);
-    mockPrisma.lifecycleAction.update.mockResolvedValue({});
+    mockPrisma.lifecycleAction.updateMany.mockResolvedValue({});
     mockPrisma.ruleMatch.deleteMany.mockResolvedValue({ count: 1 });
     mockPrisma.appSettings.findMany.mockResolvedValue([
       {
@@ -1902,7 +1909,7 @@ describe("executeLifecycleActions", () => {
     beforeEach(() => {
       mockPrisma.ruleMatch.findMany.mockResolvedValue([{ ruleSetId: "rs1", mediaItemId: "rep1" }]);
       mockPrisma.lifecycleException.findMany.mockResolvedValue([]);
-      mockPrisma.lifecycleAction.update.mockResolvedValue({});
+      mockPrisma.lifecycleAction.updateMany.mockResolvedValue({});
       mockPrisma.ruleMatch.deleteMany.mockResolvedValue({ count: 1 });
       mockPrisma.appSettings.findMany.mockResolvedValue([
         { userId: "u1", discordWebhookUrl: "https://discord.com/webhook/123", discordWebhookUsername: null, discordWebhookAvatarUrl: null },
@@ -1922,7 +1929,7 @@ describe("executeLifecycleActions", () => {
         where: { type: "SERIES", libraryId: "lib1", seriesKey: "tvdb:73545" },
         _sum: { fileSize: true },
       });
-      expect(mockPrisma.lifecycleAction.update).toHaveBeenCalledWith(
+      expect(mockPrisma.lifecycleAction.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({ data: expect.objectContaining({ status: "COMPLETED", deletedBytes: BigInt(300) }) }),
       );
     });
@@ -1940,7 +1947,7 @@ describe("executeLifecycleActions", () => {
         "Lifecycle",
         'Executed UNMONITOR_SONARR for "Battlestar Galactica" in rule set "Shows"',
       );
-      expect(mockPrisma.lifecycleAction.update).toHaveBeenCalledWith(expect.objectContaining({
+      expect(mockPrisma.lifecycleAction.updateMany).toHaveBeenCalledWith(expect.objectContaining({
         data: expect.objectContaining({ mediaItemTitle: "Battlestar Galactica", mediaItemParentTitle: null }),
       }));
     });
@@ -1962,7 +1969,7 @@ describe("executeLifecycleActions", () => {
         'Executed DELETE_FILES_SONARR for "Battlestar Galactica S01E01" in rule set "Shows"',
       );
       expect(mockBuildSuccessSummaryEmbed).toHaveBeenCalledWith("Shows", "DELETE_FILES_SONARR", ["Battlestar Galactica S01E01"]);
-      expect(mockPrisma.lifecycleAction.update).toHaveBeenCalledWith(expect.objectContaining({
+      expect(mockPrisma.lifecycleAction.updateMany).toHaveBeenCalledWith(expect.objectContaining({
         data: expect.objectContaining({
           mediaItemTitle: "Battlestar Galactica",
           mediaItemSeasonNumber: 1,
@@ -1994,7 +2001,7 @@ describe("executeLifecycleActions", () => {
         'Executed DELETE_FILES_SONARR for "Battlestar Galactica S03E10" in rule set "Shows"',
       );
       expect(mockBuildSuccessSummaryEmbed).toHaveBeenCalledWith("Shows", "DELETE_FILES_SONARR", ["Battlestar Galactica S03E10"]);
-      expect(mockPrisma.lifecycleAction.update).toHaveBeenCalledWith(expect.objectContaining({
+      expect(mockPrisma.lifecycleAction.updateMany).toHaveBeenCalledWith(expect.objectContaining({
         data: expect.objectContaining({ mediaItemSeasonNumber: 3, mediaItemEpisodeNumber: 10 }),
       }));
       mockPrisma.mediaItem.findMany.mockReset();
@@ -2019,7 +2026,7 @@ describe("executeLifecycleActions", () => {
       await executeLifecycleActions("u1");
 
       expect(mockExecuteAction).toHaveBeenCalledWith(expect.objectContaining({ matchedMediaItemIds: ["ep2"] }));
-      expect(mockPrisma.lifecycleAction.update).toHaveBeenCalledWith(expect.objectContaining({
+      expect(mockPrisma.lifecycleAction.updateMany).toHaveBeenCalledWith(expect.objectContaining({
         data: expect.objectContaining({
           status: "COMPLETED",
           matchedMediaItemIds: ["ep2"],
@@ -2036,7 +2043,7 @@ describe("executeLifecycleActions", () => {
       mockPrisma.lifecycleAction.findMany.mockResolvedValue([
         { ...showAction("DELETE_SONARR"), mediaItem: { ...episode, type: "SERIES", seasonNumber: 1, episodeNumber: 1 } },
       ]);
-      mockPrisma.lifecycleAction.delete.mockResolvedValue({});
+      mockPrisma.lifecycleAction.deleteMany.mockResolvedValue({});
 
       await executeLifecycleActions("u1");
 
@@ -2090,7 +2097,7 @@ describe("executeLifecycleActions", () => {
     ]);
     mockPrisma.lifecycleException.findMany.mockResolvedValue([]);
     mockExecuteAction.mockResolvedValue(undefined);
-    mockPrisma.lifecycleAction.update.mockResolvedValue({});
+    mockPrisma.lifecycleAction.updateMany.mockResolvedValue({});
     mockPrisma.ruleMatch.deleteMany.mockResolvedValue({ count: 1 });
     mockPrisma.appSettings.findMany.mockResolvedValue([]);
 
@@ -2128,7 +2135,7 @@ describe("executeLifecycleActions", () => {
       );
       mockPrisma.lifecycleException.findMany.mockResolvedValue([]);
       mockExecuteAction.mockResolvedValue(undefined);
-      mockPrisma.lifecycleAction.update.mockResolvedValue({});
+      mockPrisma.lifecycleAction.updateMany.mockResolvedValue({});
       mockPrisma.ruleMatch.deleteMany.mockResolvedValue({ count: 1 });
     }
 
@@ -2144,8 +2151,8 @@ describe("executeLifecycleActions", () => {
 
       expect(mockExecuteAction).not.toHaveBeenCalled();
       // Untouched, not cancelled: the user still needs to find and run them.
-      expect(mockPrisma.lifecycleAction.update).not.toHaveBeenCalled();
-      expect(mockPrisma.lifecycleAction.delete).not.toHaveBeenCalled();
+      expect(mockPrisma.lifecycleAction.updateMany).not.toHaveBeenCalled();
+      expect(mockPrisma.lifecycleAction.deleteMany).not.toHaveBeenCalled();
     });
 
     it("runs normally when the ceiling is not configured", async () => {
@@ -2172,7 +2179,7 @@ describe("executeLifecycleActions", () => {
       mockPrisma.ruleMatch.findMany.mockResolvedValue([
         { ruleSetId: "rs1", mediaItemId: "item1" },
       ]);
-      mockPrisma.lifecycleAction.delete.mockResolvedValue({});
+      mockPrisma.lifecycleAction.deleteMany.mockResolvedValue({});
 
       await executeLifecycleActions();
 
@@ -2180,7 +2187,7 @@ describe("executeLifecycleActions", () => {
       expect(mockExecuteAction).toHaveBeenCalledTimes(1);
       // ...and the stale one is cleaned up rather than left to inflate the
       // next run's count too.
-      expect(mockPrisma.lifecycleAction.delete).toHaveBeenCalledWith({ where: { id: "a2" } });
+      expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledWith({ where: { id: "a2" } });
     });
 
     it("cancels doomed actions even when the ceiling holds the run", async () => {
@@ -2212,8 +2219,8 @@ describe("executeLifecycleActions", () => {
       ]);
       mockPrisma.lifecycleException.findMany.mockResolvedValue([]);
       mockExecuteAction.mockResolvedValue(undefined);
-      mockPrisma.lifecycleAction.update.mockResolvedValue({});
-      mockPrisma.lifecycleAction.delete.mockResolvedValue({});
+      mockPrisma.lifecycleAction.updateMany.mockResolvedValue({});
+      mockPrisma.lifecycleAction.deleteMany.mockResolvedValue({});
 
       await executeLifecycleActions();
 
@@ -2221,10 +2228,10 @@ describe("executeLifecycleActions", () => {
       expect(mockExecuteAction).not.toHaveBeenCalled();
       // ...but the filtering still ran, so the stale action is gone and the
       // hold cannot feed on its own leftovers.
-      expect(mockPrisma.lifecycleAction.delete).toHaveBeenCalledWith({ where: { id: "a3" } });
+      expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledWith({ where: { id: "a3" } });
       // The surviving actions are untouched, waiting for the Pending page.
-      expect(mockPrisma.lifecycleAction.delete).not.toHaveBeenCalledWith({ where: { id: "a1" } });
-      expect(mockPrisma.lifecycleAction.delete).not.toHaveBeenCalledWith({ where: { id: "a2" } });
+      expect(mockPrisma.lifecycleAction.deleteMany).not.toHaveBeenCalledWith({ where: { id: "a1" } });
+      expect(mockPrisma.lifecycleAction.deleteMany).not.toHaveBeenCalledWith({ where: { id: "a2" } });
     });
 
     it("runs normally at exactly the ceiling", async () => {
@@ -2266,7 +2273,7 @@ describe("executeLifecycleActions", () => {
       mockPrisma.lifecycleException.findMany.mockResolvedValue([]);
       mockPrisma.appSettings.findFirst.mockResolvedValue(null);
       mockExecuteAction.mockResolvedValue(undefined);
-      mockPrisma.lifecycleAction.update.mockResolvedValue({});
+      mockPrisma.lifecycleAction.updateMany.mockResolvedValue({});
       mockPrisma.ruleMatch.deleteMany.mockResolvedValue({ count: 1 });
     }
 
@@ -2280,8 +2287,8 @@ describe("executeLifecycleActions", () => {
       await executeLifecycleActions("u1", { viaApiKey: "n8n" });
       expect(mockExecuteAction).not.toHaveBeenCalled();
       // Left pending for the schedule or the Pending page — not cancelled.
-      expect(mockPrisma.lifecycleAction.update).not.toHaveBeenCalled();
-      expect(mockPrisma.lifecycleAction.delete).not.toHaveBeenCalled();
+      expect(mockPrisma.lifecycleAction.updateMany).not.toHaveBeenCalled();
+      expect(mockPrisma.lifecycleAction.deleteMany).not.toHaveBeenCalled();
     });
 
     it("runs up to 25, charging them to the hourly budget, then holds once it is spent", async () => {

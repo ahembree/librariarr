@@ -325,6 +325,38 @@ describe("GET /api/media/series/grouped", () => {
       expect(body3.pagination.hasMore).toBe(false);
     });
 
+    it("honours offset, which overrides page, as the shared paging contract documents", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const lib = await createTestLibrary(server.id, { type: "SERIES" });
+      for (const name of ["Alpha", "Bravo", "Charlie", "Delta", "Echo"]) {
+        await createTestMediaItem(lib.id, {
+          title: "S01E01",
+          type: "SERIES",
+          parentTitle: name,
+          seasonNumber: 1,
+          episodeNumber: 1,
+          ratingKey: `rk-${name}`,
+        });
+      }
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      const titles = async (searchParams: Record<string, string>) => {
+        const body = await expectJson<{ series: { parentTitle: string }[]; pagination: { hasMore: boolean } }>(
+          await callRoute(GET, { url: "/api/media/series/grouped", searchParams }),
+          200,
+        );
+        return { titles: body.series.map((s) => s.parentTitle), hasMore: body.pagination.hasMore };
+      };
+
+      // Before the fix every one of these answered page 1 ("Alpha", "Bravo").
+      expect(await titles({ limit: "2", offset: "2" })).toEqual({ titles: ["Charlie", "Delta"], hasMore: true });
+      expect(await titles({ limit: "2", offset: "4" })).toEqual({ titles: ["Echo"], hasMore: false });
+      expect(await titles({ page: "1", limit: "2", offset: "1" })).toEqual({ titles: ["Bravo", "Charlie"], hasMore: true });
+      // limit=0 with an offset is "everything after the first N", as on the flat lists.
+      expect(await titles({ limit: "0", offset: "3" })).toEqual({ titles: ["Delta", "Echo"], hasMore: false });
+    });
+
     it("caps limit at 200", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id);

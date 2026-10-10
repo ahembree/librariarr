@@ -95,7 +95,10 @@ export async function PUT(request: NextRequest) {
     sendDiscordNotification(settings.discordWebhookUrl, {
       username: settings.discordWebhookUsername || "Librariarr",
       avatar_url: settings.discordWebhookAvatarUrl || undefined,
-      embeds: [buildMaintenanceEmbed(enabled, message)],
+      // The STORED message: a request may leave `message` out to keep the
+      // current one (the public API's PUT documents exactly that), and the
+      // notice then went out with no message at all.
+      embeds: [buildMaintenanceEmbed(enabled, settings.maintenanceMessage)],
     }).catch(() => {});
   }
 

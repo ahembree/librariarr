@@ -19,10 +19,13 @@ vi.mock("@/lib/logger", () => ({
   dbLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-const sendDiscordNotification = vi.fn().mockResolvedValue(undefined);
+const { sendDiscordNotification, buildMaintenanceEmbed } = vi.hoisted(() => ({
+  sendDiscordNotification: vi.fn().mockResolvedValue(undefined),
+  buildMaintenanceEmbed: vi.fn(() => ({})),
+}));
 vi.mock("@/lib/discord/client", () => ({
   sendDiscordNotification: (...args: unknown[]) => sendDiscordNotification(...args),
-  buildMaintenanceEmbed: vi.fn(() => ({})),
+  buildMaintenanceEmbed,
 }));
 
 // Import route handlers AFTER mocks
@@ -65,6 +68,26 @@ describe("Tools maintenance endpoints", () => {
       // Disable -> transition -> 1 more
       await callRoute(PUT, { url: "/api/tools/maintenance", method: "PUT", body: { enabled: false, message: "Down for a while" } });
       expect(sendDiscordNotification).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe("Discord maintenance notification message", () => {
+    it("carries the stored message when the request leaves it out (the public API's PUT keeps it)", async () => {
+      const user = await createTestUser();
+      await getTestPrisma().appSettings.create({
+        data: {
+          userId: user.id,
+          discordWebhookUrl: "https://discord/webhook",
+          discordNotifyMaintenance: true,
+          maintenanceMessage: "Back at 6pm",
+        },
+      });
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      await callRoute(PUT, { url: "/api/tools/maintenance", method: "PUT", body: { enabled: true } });
+
+      expect(buildMaintenanceEmbed).toHaveBeenCalledWith(true, "Back at 6pm");
+      expect(sendDiscordNotification).toHaveBeenCalledTimes(1);
     });
   });
 

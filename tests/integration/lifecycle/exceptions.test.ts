@@ -33,7 +33,7 @@ vi.mock("@/lib/lifecycle/collections", () => ({
 
 // Route imports — MUST come AFTER vi.mock() calls
 import { GET, POST, DELETE as BULK_DELETE, PATCH as BULK_PATCH } from "@/app/api/lifecycle/exceptions/route";
-import { DELETE } from "@/app/api/lifecycle/exceptions/[id]/route";
+import { DELETE, PATCH } from "@/app/api/lifecycle/exceptions/[id]/route";
 
 const prisma = getTestPrisma();
 
@@ -524,6 +524,32 @@ describe("Lifecycle Exceptions API", () => {
         where: { id: exception.id },
       });
       expect(dbException).toBeNull();
+    });
+  });
+
+  describe("PATCH /api/lifecycle/exceptions/[id]", () => {
+    it("updates the reason, and answers 404 — not a 500 — for one that is gone or not the user's", async () => {
+      const { user, mediaItem } = await createUserWithMediaItem();
+      const { user: other, mediaItem: otherItem } = await createUserWithMediaItem();
+      const exception = await prisma.lifecycleException.create({ data: { userId: user.id, mediaItemId: mediaItem.id } });
+      const foreign = await prisma.lifecycleException.create({ data: { userId: other.id, mediaItemId: otherItem.id } });
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      const patch = (id: string) =>
+        callRouteWithParams(PATCH, { id }, { method: "PATCH", body: { reason: "keep" } });
+      const body = await expectJson<{ exception: { reason: string } }>(await patch(exception.id), 200);
+      expect(body.exception.reason).toBe("keep");
+      await expectJson(await patch(foreign.id), 404);
+
+      // Removed by another tab, or the API, between the two writes.
+      const [removed, edited] = await Promise.all([
+        callRouteWithParams(DELETE, { id: exception.id }),
+        patch(exception.id),
+      ]);
+      expect(removed.status).toBe(200);
+      expect([200, 404]).toContain(edited.status);
+      await expectJson(await patch(exception.id), 404);
+      expect((await prisma.lifecycleException.findUnique({ where: { id: foreign.id } }))?.reason).toBeNull();
     });
   });
 

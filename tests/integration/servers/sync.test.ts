@@ -1,3 +1,4 @@
+import { NextRequest } from "next/server";
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import { cleanDatabase, disconnectTestDb } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
@@ -238,6 +239,51 @@ describe("POST /api/servers/[id]/sync", () => {
         syncJobId: expect.any(String),
       },
       expect.objectContaining({ jobKey: `sync:${server.id}:lib-key`, queueName: MAIN_QUEUE }),
+    );
+  });
+
+  it("refuses a malformed body instead of syncing every library", async () => {
+    // `{ "libraryKey": 123 }` was read as "no library" and queued a sync of
+    // the whole server.
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    await createTestLibrary(server.id, { key: "lib-key", title: "Movies" });
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+    for (const body of [
+      { libraryKey: 123 },
+      { libraryKey: "" },
+      { libraryKey: "x".repeat(201) },
+      "lib-key",
+      // A misspelt key is refused, not stripped into "no library".
+      { librarykey: "lib-key" },
+      { libraryKey: "lib-key", all: true },
+    ]) {
+      const response = await callRouteWithParams(POST, { id: server.id }, {
+        url: `/api/servers/${server.id}/sync`,
+        method: "POST",
+        body,
+      });
+      await expectJson<{ error: string }>(response, 400);
+    }
+    const invalidJson = await POST(
+      new NextRequest(`http://localhost:3000/api/servers/${server.id}/sync`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "{libraryKey:",
+      }),
+      { params: Promise.resolve({ id: server.id }) },
+    );
+    expect(invalidJson.status).toBe(400);
+    expect(mockEnqueueJob).not.toHaveBeenCalled();
+    expect(await getTestPrisma().syncJob.count()).toBe(0);
+
+    // No body, and an empty object, still sync every enabled library.
+    await expectJson(await callRouteWithParams(POST, { id: server.id }, { url: `/api/servers/${server.id}/sync`, method: "POST", body: {} }), 200);
+    expect(mockEnqueueJob).toHaveBeenCalledWith(
+      TASK_SYNC_SERVER,
+      expect.objectContaining({ serverId: server.id, libraryKey: undefined }),
+      expect.anything(),
     );
   });
 

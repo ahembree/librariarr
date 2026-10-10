@@ -1,9 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { readdirSync, statSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { getApiKeyGuard } from "@/lib/api-keys/guard";
 import { FULL_LISTING_REQUEST_COST } from "@/lib/api-keys/limits";
-import { API_OPERATIONS, buildOpenApiDocument, operationId } from "@/lib/api-keys/openapi";
+import { API_OPERATIONS, DOCUMENTED_LIST_LIMIT, buildOpenApiDocument, operationId } from "@/lib/api-keys/openapi";
+import { DEFAULT_LIST_LIMIT, MAX_GROUPED_LIST_LIMIT, MAX_LIST_LIMIT } from "@/lib/api/pagination";
 import { API_SCOPES } from "@/lib/api-keys/scopes";
 
 /**
@@ -13,6 +14,32 @@ import { API_SCOPES } from "@/lib/api-keys/scopes";
  */
 
 const V1_ROOT = path.resolve(__dirname, "../../../src/app/api/v1");
+const API_ROOT = path.resolve(__dirname, "../../../src/app/api");
+const SRC_ROOT = path.resolve(__dirname, "../../../src");
+
+/** Every `x.get("name")` a source file makes — the query parameters it reads. */
+function namesRead(source: string): Set<string> {
+  return new Set([...source.matchAll(/\.get\(\s*"(\w+)"\s*\)/g)].map((m) => m[1]));
+}
+
+/**
+ * Parameters a route reads through a shared parser rather than by name: when
+ * its source calls the parser, it reads everything the parser reads.
+ */
+function sharedReaders(): Record<string, Set<string>> {
+  const buildWhere = readFileSync(path.join(SRC_ROOT, "lib/filters/build-where.ts"), "utf8");
+  const filters = namesRead(buildWhere);
+  for (const m of buildWhere.matchAll(/applyConditionFilter\([^)]*?"(\w+Conditions)",\s*"(\w+Logic)"/g)) {
+    filters.add(m[1]);
+    filters.add(m[2]);
+  }
+  return {
+    parseListPagination: new Set(["page", "limit", "offset"]),
+    parsePage: new Set(["page"]),
+    parsePlayHistoryPaging: new Set(["page", "limit", "serverId"]),
+    applyCommonFilters: filters,
+  };
+}
 
 function routeFiles(dir: string): string[] {
   return readdirSync(dir).flatMap((entry) => {
@@ -57,6 +84,62 @@ describe("OpenAPI document", () => {
       const op = API_OPERATIONS.find((o) => `${o.method} ${o.path}` === entry);
       expect(op?.description, entry).toContain(`every read counts as ${FULL_LISTING_REQUEST_COST} requests`);
     }
+  });
+
+  // The spec promised `offset` on the grouped shows listing and `startsWith`
+  // on the episode and track lists, none of which those handlers read: a
+  // client paging by offset got page 1 forever, and a letter filter returned
+  // the whole library. Every documented query parameter must be one the
+  // handler behind the route actually reads.
+  it("documents only query parameters the handler reads", () => {
+    const shared = sharedReaders();
+    for (const op of API_OPERATIONS) {
+      if (!op.query?.length) continue;
+      const file = path.join(API_ROOT, op.path.replace(/\{(\w+)\}/g, "[$1]"), "route.ts");
+      const source = readFileSync(file, "utf8");
+      const read = namesRead(source);
+      for (const [parser, names] of Object.entries(shared)) {
+        if (new RegExp(`\\b${parser}\\(`).test(source)) for (const n of names) read.add(n);
+      }
+      for (const param of op.query) {
+        expect(read.has(param.name), `${op.method} ${op.path} documents "${param.name}", which ${path.relative(SRC_ROOT, file)} never reads`).toBe(true);
+      }
+    }
+  });
+
+  it("documents the list limits the routes enforce", () => {
+    expect(DOCUMENTED_LIST_LIMIT).toEqual({ default: DEFAULT_LIST_LIMIT, flat: MAX_LIST_LIMIT, grouped: MAX_GROUPED_LIST_LIMIT });
+    const limitOf = (p: string) => API_OPERATIONS.find((o) => o.path === p && o.method === "get")!.query!.find((q) => q.name === "limit")!.schema;
+    for (const p of ["/media/movies", "/media/series", "/media/music"]) {
+      expect(limitOf(p), p).toMatchObject({ maximum: MAX_LIST_LIMIT, default: DEFAULT_LIST_LIMIT });
+    }
+    for (const p of ["/media/series/grouped", "/media/music/grouped"]) {
+      expect(limitOf(p), p).toMatchObject({ maximum: MAX_GROUPED_LIST_LIMIT, default: DEFAULT_LIST_LIMIT });
+    }
+  });
+
+  it("documents the status codes the routes answer with", () => {
+    const doc = buildOpenApiDocument("http://localhost:3000", "0") as {
+      paths: Record<string, Record<string, { description: string; responses: Record<string, unknown> }>>;
+    };
+    // Every operation passes the guard, which answers 503 when the database is down.
+    for (const ops of Object.values(doc.paths)) for (const op of Object.values(ops)) expect(op.responses).toHaveProperty("503");
+    // Adding an exception creates it: 201, never documented as 200.
+    expect(Object.keys(doc.paths["/lifecycle/exceptions"].post.responses)).toEqual(expect.arrayContaining(["201", "404"]));
+    expect(doc.paths["/lifecycle/exceptions"].post.responses).not.toHaveProperty("200");
+    expect(doc.paths["/sync/cancel"].post.responses).toHaveProperty("404");
+    expect(doc.paths["/tools/sessions/terminate"].post.responses).toHaveProperty("404");
+    expect(doc.paths["/lifecycle/actions/execute"].post.responses).toHaveProperty("404");
+    for (const job of ["/jobs/sync", "/jobs/detection", "/jobs/execution"]) expect(doc.paths[job].post.responses, job).toHaveProperty("500");
+  });
+
+  it("does not tell a client an excepted item refuses the whole execute request", () => {
+    // Excepted items and non-matches are skipped and the rest run; only an
+    // identity change or a limit refuses the request whole.
+    const execute = API_OPERATIONS.find((o) => o.path === "/lifecycle/actions/execute")!;
+    expect(execute.description).toMatch(/protected by an exception, are skipped and the rest run/);
+    expect(execute.description).not.toMatch(/nothing runs — when an item is excepted/);
+    expect(execute.description).toMatch(/calls naming different items run side by side/);
   });
 
   it("names only registry scopes", () => {
