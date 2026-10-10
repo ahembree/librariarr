@@ -49,3 +49,21 @@ describe("parseStoredPins", () => {
     expect(parseStoredPins('["year"]', ["type"])).toEqual(["year"]);
   });
 });
+
+describe("arrangePinnedColumns on a narrow screen", () => {
+  it("pauses the pins that do not fit in 60% of the visible width, keeping always-pinned columns", () => {
+    // 355px phone table: 60% is 213px. select (44) + type (80) fit; title (300) does not.
+    const layout = arrangePinnedColumns(cols, new Set(["type", "title", "year"]), widths, 355);
+    expect(layout.ordered.map((c) => c.id)).toEqual(["select", "type", "title", "year", "size", "plays"]);
+    expect(layout.pinnedCount).toBe(2);
+    expect(layout.offsets).toEqual({ select: 0, type: 44 });
+    // Year would fit on its own, but pins stay contiguous: once one pauses, later ones do.
+    expect([...layout.suspended]).toEqual(["title", "year"]);
+  });
+
+  it("applies every pin again once there is room", () => {
+    const layout = arrangePinnedColumns(cols, new Set(["type", "title", "year"]), widths, 1200);
+    expect(layout.pinnedCount).toBe(4);
+    expect(layout.suspended.size).toBe(0);
+  });
+});

@@ -131,11 +131,13 @@ export function DataTable<T>({
     [pinning, pinnedIds],
   );
   const pinnable = !!pinning;
+  // The table's visible width, which caps how much of it pinned columns take.
+  const [viewportWidth, setViewportWidth] = useState(0);
   const layout = useMemo(
     () => pinnable
-      ? arrangePinnedColumns(columns, pinnedSet, columnWidths)
-      : { ordered: columns, pinnedCount: 0, offsets: {} as Record<string, number> },
-    [columns, pinnable, pinnedSet, columnWidths],
+      ? arrangePinnedColumns(columns, pinnedSet, columnWidths, viewportWidth)
+      : { ordered: columns, pinnedCount: 0, offsets: {} as Record<string, number>, suspended: new Set<string>() },
+    [columns, pinnable, pinnedSet, columnWidths, viewportWidth],
   );
   const orderedColumns = layout.ordered;
   const lastPinnedId = layout.pinnedCount > 0 ? orderedColumns[layout.pinnedCount - 1].id : null;
@@ -247,6 +249,7 @@ export function DataTable<T>({
     if (!container || !table || typeof ResizeObserver === "undefined") return;
     const update = () => {
       setOverflowing(container.scrollWidth > container.clientWidth + 1);
+      setViewportWidth(container.clientWidth);
       updateThumb();
     };
     const observer = new ResizeObserver(update);
@@ -349,6 +352,7 @@ export function DataTable<T>({
             {orderedColumns.map((col) => {
               const resizeProps = getResizeProps(col.id);
               const pinned = col.id in layout.offsets;
+              const paused = layout.suspended.has(col.id);
               const label = typeof col.header === "string" ? col.header : col.id;
               return (
                 <th
@@ -396,19 +400,29 @@ export function DataTable<T>({
                     {pinnable && !col.alwaysPinned && (
                       <button
                         type="button"
-                        aria-label={pinned ? `Unpin ${label}` : `Pin ${label}`}
-                        aria-pressed={pinned}
-                        title={pinned ? "Unpin column" : "Pin column to the left"}
+                        aria-label={pinned || paused ? `Unpin ${label}` : `Pin ${label}`}
+                        aria-pressed={pinned || paused}
+                        title={
+                          paused
+                            ? "Pinned, but not enough room to keep it in place on this screen. Click to unpin."
+                            : pinned ? "Unpin column" : "Pin column to the left"
+                        }
                         onClick={(e) => {
                           e.stopPropagation();
                           togglePin(col.id);
                         }}
                         className={cn(
                           "-my-1 rounded p-1 transition-opacity hover:bg-muted hover:text-foreground focus-visible:opacity-100",
-                          pinned ? "text-primary opacity-100" : "opacity-0 group-hover/th:opacity-70",
+                          pinned
+                            ? "text-primary opacity-100"
+                            : paused
+                              ? "text-primary opacity-50"
+                              // Hidden until hover only where hovering exists: on a
+                              // touch screen it would be an invisible tap target.
+                              : "opacity-40 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/th:opacity-70",
                         )}
                       >
-                        <Pin className={cn("h-3 w-3", pinned && "fill-current")} />
+                        <Pin className={cn("h-3 w-3", (pinned || paused) && "fill-current")} />
                       </button>
                     )}
                   </span>

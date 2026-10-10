@@ -17,26 +17,54 @@ export interface PinnedLayout<C> {
   pinnedCount: number;
   /** Sticky `left` offset (px) of each pinned column. */
   offsets: Record<string, number>;
+  /** Pinned by the user but not applied: there was no room for it. */
+  suspended: Set<string>;
 }
+
+/** Share of the table's visible width pinned columns may take before further pins pause. */
+export const MAX_PINNED_SHARE = 0.6;
 
 export function isColumnPinned(col: PinnableColumn, pinned: ReadonlySet<string>): boolean {
   return !!col.alwaysPinned || pinned.has(col.id);
 }
 
+/**
+ * `viewportWidth` is the table's visible width. Pins that would take more than
+ * `MAX_PINNED_SHARE` of it are paused, from the first one that does not fit:
+ * on a phone, Type + Title + Year alone are wider than the screen, and pinning
+ * them all left nothing on screen that scrolled. A paused pin stays in the
+ * user's list and applies again once there is room. Unknown width (0) pauses
+ * nothing.
+ */
 export function arrangePinnedColumns<C extends PinnableColumn>(
   columns: readonly C[],
   pinned: ReadonlySet<string>,
   widths: Record<string, number>,
+  viewportWidth = 0,
 ): PinnedLayout<C> {
-  const pinnedCols = columns.filter((c) => isColumnPinned(c, pinned));
-  const rest = columns.filter((c) => !isColumnPinned(c, pinned));
+  const budget = viewportWidth > 0 ? viewportWidth * MAX_PINNED_SHARE : Infinity;
+  const pinnedCols: C[] = [];
+  const suspended = new Set<string>();
+  let used = 0;
+  for (const col of columns) {
+    if (!isColumnPinned(col, pinned)) continue;
+    const width = widths[col.id] ?? 0;
+    if (!col.alwaysPinned && (suspended.size > 0 || used + width > budget)) {
+      suspended.add(col.id);
+      continue;
+    }
+    pinnedCols.push(col);
+    used += width;
+  }
+  const kept = new Set(pinnedCols.map((c) => c.id));
+  const rest = columns.filter((c) => !kept.has(c.id));
   const offsets: Record<string, number> = {};
   let left = 0;
   for (const col of pinnedCols) {
     offsets[col.id] = left;
     left += widths[col.id] ?? 0;
   }
-  return { ordered: [...pinnedCols, ...rest], pinnedCount: pinnedCols.length, offsets };
+  return { ordered: [...pinnedCols, ...rest], pinnedCount: pinnedCols.length, offsets, suspended };
 }
 
 export function togglePinnedId(current: readonly string[], id: string): string[] {
