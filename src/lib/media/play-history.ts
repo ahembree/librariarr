@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { clampSkip } from "@/lib/api/pagination";
+import { clampSkip, parsePage } from "@/lib/api/pagination";
 import type { Prisma } from "@/generated/prisma/client";
 
 /**
@@ -194,7 +194,7 @@ export async function fetchPlayHistory(options: {
 
 /** Parse and clamp the shared `page`/`limit`/`serverId` query params. */
 export function parsePlayHistoryPaging(searchParams: URLSearchParams) {
-  const page = Math.max(1, parseInt(searchParams.get("page") ?? "1") || 1);
+  const page = parsePage(searchParams);
   const rawLimit = parseInt(searchParams.get("limit") ?? String(DEFAULT_PLAY_LIMIT));
   // Floor at 1 and cap — a negative/zero limit produced LIMIT 0 or a negative
   // OFFSET (Postgres rejects a negative OFFSET → 500).

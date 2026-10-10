@@ -15,6 +15,7 @@ const mockRadarrClient = vi.hoisted(() => ({
 
 const mockSonarrClient = vi.hoisted(() => ({
   getSeries: vi.fn(),
+  getSeriesIdsWithUpcomingEpisodes: vi.fn().mockResolvedValue(new Set()),
   getQualityProfiles: vi.fn(),
   getTags: vi.fn(),
 }));

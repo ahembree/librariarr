@@ -43,6 +43,7 @@ vi.mock("@/lib/arr/sonarr-client", () => ({
   SonarrClient: vi.fn().mockImplementation(function () {
     return {
       getSeries: vi.fn().mockResolvedValue([]),
+      getSeriesIdsWithUpcomingEpisodes: vi.fn().mockResolvedValue(new Set()),
       getQualityProfiles: vi.fn().mockResolvedValue([]),
       getTags: vi.fn().mockResolvedValue([]),
     };
@@ -1463,7 +1464,7 @@ describe("Lifecycle Actions", () => {
       const gate = new Promise<void>((resolve) => { release = resolve; });
       runner.mockImplementationOnce(async () => {
         await gate;
-        return { executed: 1, failed: 0, errors: [], failures: [] };
+        return { executed: 1, failed: 0, errors: [], failures: [], notAttempted: 0 };
       });
       return { runner, release };
     }

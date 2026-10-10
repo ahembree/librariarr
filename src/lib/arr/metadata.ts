@@ -63,8 +63,25 @@ export function mapSonarrSeries(
   s: SonarrSeries,
   profileMap: Map<number, string>,
   tagMap: Map<number, string>,
+  // Series with a regular episode airing after now, monitored or not
+  // (`SonarrClient.getSeriesIdsWithUpcomingEpisodes`). Without it only the
+  // series' own `nextAiring` — monitored episodes only — can say.
+  seriesWithUpcomingEpisodes?: Set<number>,
 ): ArrMetadata {
-  const monitoredSeasons = s.seasons?.filter((sn) => sn.monitored) ?? [];
+  // Specials (season 0) are left out of every count, as Sonarr's own
+  // `seasonCount` leaves them out: otherwise a monitored specials season read
+  // as one of a show's monitored seasons.
+  const regularSeasons = s.seasons?.filter((sn) => sn.seasonNumber > 0);
+  const monitoredSeasons = regularSeasons?.filter((sn) => sn.monitored) ?? [];
+  const seasonTotal = (sn: NonNullable<SonarrSeries["seasons"]>[number]) =>
+    sn.statistics?.totalEpisodeCount ?? sn.statistics?.episodeCount ?? 0;
+  // Sonarr's `statistics.episodeCount` counts only episodes that are
+  // (monitored AND aired) OR have a file, so an unmonitored show without files
+  // read as having none. The total is every regular episode Sonarr knows of.
+  const episodeCount =
+    regularSeasons && regularSeasons.some((sn) => sn.statistics)
+      ? regularSeasons.reduce((sum, sn) => sum + seasonTotal(sn), 0)
+      : s.statistics?.totalEpisodeCount ?? s.statistics?.episodeCount ?? null;
   return {
     arrId: s.id,
     tags: s.tags.map((tid) => tagMap.get(tid) ?? String(tid)),
@@ -88,16 +105,19 @@ export function mapSonarrSeries(
     downloadDate: null,
     firstAired: s.firstAired ?? null,
     seasonCount: s.statistics?.seasonCount ?? null,
-    episodeCount: s.statistics?.episodeCount ?? null,
+    episodeCount,
     status: s.status ?? null,
     ended: s.ended ?? null,
     seriesType: s.seriesType ?? null,
-    hasUnaired: s.nextAiring != null ? true : false,
+    hasUnaired:
+      s.nextAiring != null ||
+      s.status === "upcoming" ||
+      (seriesWithUpcomingEpisodes?.has(s.id) ?? false),
     monitoredSeasonCount: monitoredSeasons.length,
-    monitoredEpisodeCount: monitoredSeasons.reduce(
-      (sum, sn) => sum + (sn.statistics?.episodeCount ?? 0),
-      0,
-    ),
+    // Every episode of the monitored seasons. Sonarr's series resource carries
+    // no per-episode monitored count; this is exact for the usual whole-season
+    // monitoring and counts an episode unmonitored inside a monitored season.
+    monitoredEpisodeCount: monitoredSeasons.reduce((sum, sn) => sum + seasonTotal(sn), 0),
   };
 }
 

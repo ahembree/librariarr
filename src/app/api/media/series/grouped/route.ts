@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { jsonResponse } from "@/lib/api/json-response";
-import { clampSkip, isFullListingLimit } from "@/lib/api/pagination";
+import { MAX_GROUPED_LIST_LIMIT, parseListPagination } from "@/lib/api/pagination";
 import { prisma } from "@/lib/db";
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
 import { getServerPresenceByGroup } from "@/lib/dedup/server-presence";
@@ -184,18 +184,13 @@ export async function GET(request: NextRequest) {
   }
 
   const { searchParams } = new URL(request.url);
-  const page = Math.max(1, parseInt(searchParams.get("page") ?? "1") || 1);
-  const rawLimitParam = searchParams.get("limit");
-  const rawLimit = parseInt(rawLimitParam ?? "50");
-  // Clamped to [1, 200] with 0 reserved for "all", matching `parseListPagination`.
-  // Without the lower bound a negative `limit` fell through the `limit > 0`
-  // branch below and returned the WHOLE grouped list with `hasMore: false` — an
-  // unpaginated full-library response reachable from a query string. "All" is
-  // decided by `isFullListingLimit` so the API-key guard, which charges a full
-  // listing twenty times an ordinary page, cannot drift from this route.
-  const limit = isFullListingLimit(rawLimitParam)
-    ? 0
-    : Math.max(1, Math.min(Number.isNaN(rawLimit) ? 50 : rawLimit, 200));
+  // The shared parser, so `offset` (documented for every paged listing, and
+  // what an offset-based client pages with) is honoured here too: these routes
+  // used to read only `page`, and `?limit=50&offset=50` answered page 1 again
+  // with `hasMore: true` — a client paging by offset looped forever. "All" is
+  // `isFullListingLimit` inside it, so the API-key guard's charge for a full
+  // listing cannot drift from this route.
+  const { page, limit, skip } = parseListPagination(searchParams, { maxLimit: MAX_GROUPED_LIST_LIMIT });
   const search = searchParams.get("search");
   const sortBy = searchParams.get("sortBy") || "parentTitle";
   const sortOrder = searchParams.get("sortOrder") || "asc";
@@ -388,11 +383,11 @@ export async function GET(request: NextRequest) {
 
   const sorted = sortSeriesList(seriesList, sortBy, sortOrder);
   if (limit > 0) {
-    const offset = clampSkip((page - 1) * limit);
-    const paged = sorted.slice(offset, offset + limit + 1);
+    const paged = sorted.slice(skip, skip + limit + 1);
     const hasMore = paged.length > limit;
     if (hasMore) paged.pop();
     return jsonResponse(request, { series: paged, pagination: { page, limit, hasMore } });
   }
-  return jsonResponse(request, { series: sorted, pagination: { page, limit, hasMore: false } });
+  // `limit=0` is everything — after an explicit `offset`, as on the flat lists.
+  return jsonResponse(request, { series: sorted.slice(skip), pagination: { page, limit, hasMore: false } });
 }

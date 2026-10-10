@@ -3,7 +3,8 @@ import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { TracearrClient } from "@/lib/tracearr/tracearr-client";
 import { validateRequest, arrTestConnectionSchema } from "@/lib/validation";
-import { MASKED_VALUE } from "@/lib/api/sanitize";
+import { MASKED_VALUE, sanitizeErrorDetail } from "@/lib/api/sanitize";
+import { refuseStoredKeyToNewUrl } from "@/lib/integrations/stored-key-guard";
 
 export async function POST(
   request: NextRequest,
@@ -25,6 +26,9 @@ export async function POST(
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
+  const refused = await refuseStoredKeyToNewUrl(session, existing.url, data.url, data.apiKey, "Tracearr");
+  if (refused) return refused;
+
   const testUrl = data.url ?? existing.url;
   // The settings form renders the stored key masked and echoes whatever it holds
   // back, so a re-test of an untouched instance arrives carrying `MASKED_VALUE`.
@@ -34,5 +38,7 @@ export async function POST(
     data.apiKey === undefined || data.apiKey === MASKED_VALUE ? existing.apiKey : data.apiKey;
   const client = new TracearrClient(testUrl, testKey);
   const result = await client.testConnection();
-  return NextResponse.json(result);
+  return NextResponse.json(
+    result.ok ? result : { ...result, error: sanitizeErrorDetail(result.error) },
+  );
 }

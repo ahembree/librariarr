@@ -22,7 +22,9 @@ Radarr integration enables lifecycle actions on movies managed by Radarr.
 
 </Steps>
 
-You can add multiple Radarr instances.
+You can add multiple Radarr instances. A rule set reads its Radarr criteria from the instance its action is linked to (see [lifecycle rules](/docs/features/lifecycle-rules/)).
+
+Deleting an instance cancels the pending lifecycle actions bound to it and detaches it from every rule set that used it; those rule sets' actions are turned off until you pick another instance.
 
 ## How Matching Works
 
@@ -43,7 +45,7 @@ Once connected, these operations are available via [lifecycle rules](/docs/featu
 | Operation | Description |
 |-----------|-------------|
 | **Delete** | Remove the movie from Radarr (optionally delete files from disk) |
-| **Unmonitor** | Stop Radarr from monitoring for upgrades |
+| **Unmonitor** | Stop Radarr from monitoring for upgrades (optionally adding an import list exclusion — one that already exists counts as added) |
 | **Tag** | Add a custom tag to the movie in Radarr |
 
 ## Data from Radarr

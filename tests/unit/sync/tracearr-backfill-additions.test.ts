@@ -63,7 +63,9 @@ import {
   RECENT_ADDITION_WINDOW_MS,
   DEFAULT_CANDIDATE_LIMIT,
   MAX_CANDIDATE_LIMIT,
+  resetRecoveryAnswers,
 } from "@/lib/sync/tracearr-backfill-additions";
+import { TracearrMappingChangedError } from "@/lib/sync/tracearr-mapping-changed";
 
 const SERVER_ID = "server-1";
 const TRACEARR_SERVER_ID = "11111111-2222-3333-4444-555555555555";
@@ -92,7 +94,6 @@ function candidate(n: number) {
     episodeNumber: null as number | null,
     // No provider ids by default: the rating-key path is the common case, and a
     // candidate that carries ids would silently exercise the fallback too.
-    tvdbId: null,
     tmdbId: null,
     imdbId: null,
   };
@@ -106,7 +107,6 @@ let candidates: Array<{
   parentTitle?: string | null;
   seasonNumber?: number | null;
   episodeNumber?: number | null;
-  tvdbId: string | null;
   tmdbId: string | null;
   imdbId: string | null;
 }>;
@@ -120,6 +120,7 @@ function candidateQuery(): { sql: string; params: unknown[] } {
 describe("recoverHistoryForNewItems", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetRecoveryAnswers();
 
     candidates = [candidate(1)];
 
@@ -296,6 +297,8 @@ describe("recoverHistoryForNewItems", () => {
         // username vocabulary as every other row on the server, or a re-added
         // item's history lands under a different "person".
         expect.anything(),
+        // The Tracearr server they came from, which every write re-checks.
+        TRACEARR_SERVER_ID,
       );
       expect(result).toEqual({ checked: 1, imported: 2 });
     });
@@ -567,7 +570,7 @@ describe("recoverHistoryForNewItems", () => {
       // and added back, so the old plays are unreachable by key. Without this
       // fallback the whole pass is a no-op for the situation it exists to fix.
       candidates = [
-        { id: "item-1", ratingKey: "9999", title: "Re-added Film", tvdbId: null, tmdbId: "603", imdbId: null },
+        { id: "item-1", ratingKey: "9999", title: "Re-added Film", tmdbId: "603", imdbId: null },
       ];
       m.getHistoryForItem
         .mockResolvedValueOnce([])
@@ -578,7 +581,6 @@ describe("recoverHistoryForNewItems", () => {
       expect(m.getHistoryForItem).toHaveBeenCalledTimes(2);
       expect(m.getHistoryForItem.mock.calls[0][1]).toEqual({ ratingKey: "9999" });
       expect(m.getHistoryForItem.mock.calls[1][1]).toEqual({
-        tvdbId: null,
         tmdbId: "603",
         imdbId: null,
       });
@@ -587,7 +589,7 @@ describe("recoverHistoryForNewItems", () => {
 
     it("does not fall back when the rating key already found plays", async () => {
       candidates = [
-        { id: "item-1", ratingKey: "1001", title: "Film", tvdbId: null, tmdbId: "603", imdbId: null },
+        { id: "item-1", ratingKey: "1001", title: "Film", tmdbId: "603", imdbId: null },
       ];
       m.getHistoryForItem.mockResolvedValueOnce([play("chain-1")]);
 
@@ -597,13 +599,11 @@ describe("recoverHistoryForNewItems", () => {
     });
 
     it("asks a shared provider identity only once across a run", async () => {
-      // Episodes store SERIES-level ids, so a re-added season would otherwise
-      // issue one identical show-wide query per episode — against an API whose
-      // per-request single-value filter is exactly why the budget is tight.
+      // Two copies of one film (two libraries) carry the same TMDB id: one
+      // request answers both.
       candidates = [
-        { id: "item-1", ratingKey: "9001", title: "S01E01", tvdbId: "121361", tmdbId: null, imdbId: null },
-        { id: "item-2", ratingKey: "9002", title: "S01E02", tvdbId: "121361", tmdbId: null, imdbId: null },
-        { id: "item-3", ratingKey: "9003", title: "S01E03", tvdbId: "121361", tmdbId: null, imdbId: null },
+        { id: "item-1", ratingKey: "9001", title: "Film", tmdbId: "603", imdbId: null },
+        { id: "item-2", ratingKey: "9002", title: "Film", tmdbId: "603", imdbId: null },
       ];
       m.getHistoryForItem.mockResolvedValue([]);
 
@@ -613,14 +613,39 @@ describe("recoverHistoryForNewItems", () => {
         (c) => !(c[1] as { ratingKey?: string }).ratingKey,
       );
       expect(providerCalls).toHaveLength(1);
-      expect(providerCalls[0][1]).toEqual({ tvdbId: "121361", tmdbId: null, imdbId: null });
+      expect(providerCalls[0][1]).toEqual({ tmdbId: "603", imdbId: null });
+    });
+
+    it("never asks by provider id for an episode", async () => {
+      // An episode row stores the SERIES-level ids while Tracearr files plays
+      // under EPISODE-level ones, so a lookup by the show's id can only return
+      // plays of whatever else happens to carry that number.
+      candidates = [
+        {
+          id: "item-1",
+          ratingKey: "9001",
+          title: "Pilot",
+          type: "SERIES",
+          parentTitle: "Show",
+          seasonNumber: 1,
+          episodeNumber: 1,
+          tmdbId: "1396",
+          imdbId: "tt0903747",
+        },
+      ];
+      m.getHistoryForItem.mockResolvedValue([]);
+
+      await recoverHistoryForNewItems(SERVER_ID);
+
+      expect(m.getHistoryForItem).toHaveBeenCalledTimes(1);
+      expect(m.getHistoryForItem.mock.calls[0][1]).toEqual({ ratingKey: "9001" });
     });
 
     it("does not attempt a provider lookup for an item carrying no ids", async () => {
       // An unfiltered history request would page the server's ENTIRE history
       // for one item.
       candidates = [
-        { id: "item-1", ratingKey: "9999", title: "No ids", tvdbId: null, tmdbId: null, imdbId: null },
+        { id: "item-1", ratingKey: "9999", title: "No ids", tmdbId: null, imdbId: null },
       ];
       m.getHistoryForItem.mockResolvedValue([]);
 
@@ -684,8 +709,65 @@ describe("recoverHistoryForNewItems", () => {
         expect.anything(),
         JOIN_INDEX,
         names,
+        TRACEARR_SERVER_ID,
       );
     });
   });
 
+  describe("items Tracearr has already answered for", () => {
+    it("are not asked about again, so the cap cannot starve the window", async () => {
+      // The newest unplayed items used to stay candidates for their whole seven
+      // days, and newest-first ordering handed the same ones to every pass.
+      candidates = [candidate(1), candidate(2)];
+      m.getHistoryForItem.mockResolvedValue([]);
+      await recoverHistoryForNewItems(SERVER_ID);
+      expect(candidateQuery().params[3]).toEqual([]);
+
+      m.prisma.$queryRawUnsafe.mockClear();
+      await recoverHistoryForNewItems(SERVER_ID);
+
+      const { sql, params } = candidateQuery();
+      expect(sql).toContain('NOT (mi."id" = ANY($4::text[]))');
+      expect(params[3]).toEqual(["item-1", "item-2"]);
+    });
+
+    it("keeps an item whose lookup failed a candidate", async () => {
+      candidates = [candidate(1), candidate(2)];
+      m.getHistoryForItem
+        .mockRejectedValueOnce(new Error("item-specific failure"))
+        .mockResolvedValueOnce([]);
+      await recoverHistoryForNewItems(SERVER_ID);
+
+      m.prisma.$queryRawUnsafe.mockClear();
+      await recoverHistoryForNewItems(SERVER_ID);
+
+      expect(candidateQuery().params[3]).toEqual(["item-2"]);
+    });
+
+    it("records an item whose plays were imported", async () => {
+      m.getHistoryForItem.mockResolvedValue([play("chain-1")]);
+      m.importTracearrRecords.mockResolvedValue({ inserted: 1, updated: 0, skipped: 0 });
+      await recoverHistoryForNewItems(SERVER_ID);
+
+      m.prisma.$queryRawUnsafe.mockClear();
+      await recoverHistoryForNewItems(SERVER_ID);
+
+      expect(candidateQuery().params[3]).toEqual(["item-1"]);
+    });
+  });
+
+  describe("a mapping changed mid-pass", () => {
+    it("stops instead of failing every remaining item", async () => {
+      candidates = [candidate(1), candidate(2), candidate(3)];
+      m.getHistoryForItem.mockResolvedValue([play("chain-1")]);
+      m.importTracearrRecords.mockRejectedValue(
+        new TracearrMappingChangedError(SERVER_ID),
+      );
+
+      const result = await recoverHistoryForNewItems(SERVER_ID);
+
+      expect(m.importTracearrRecords).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({ checked: 1, imported: 0 });
+    });
+  });
 });

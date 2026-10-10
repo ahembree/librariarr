@@ -263,6 +263,21 @@ const tracearrBackfill: Task = async (payload) => {
     return;
   }
 
+  // Tracearr has no plays at all for this mapping — the walk is "exhausted"
+  // having seen nothing, which deliberately does not mark the backfill
+  // complete. Re-enqueueing would ask the same empty question again at once,
+  // forever, holding MAIN_QUEUE and refetching every open tab each time. Stop
+  // here; the next watch-history sync enqueues another slice, so plays that
+  // appear later are still picked up.
+  if (result.backfillOutcome === "exhausted") {
+    logger.info(
+      "Jobs",
+      `Tracearr backfill for server ${serverId} found no history to import — ` +
+        `not re-queueing; the next watch-history sync tries again`,
+    );
+    return;
+  }
+
   // More history below. Re-enqueue under the SAME jobKey the foreground path
   // uses, so a user pressing Refresh mid-backfill collapses onto this run
   // rather than stacking a second walk over the same pages.

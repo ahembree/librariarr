@@ -4,6 +4,8 @@ import { prisma } from "@/lib/db";
 import { RadarrClient } from "@/lib/arr/radarr-client";
 import { validateRequest, arrInstanceUpdateSchema } from "@/lib/validation";
 import { sanitize, sanitizeErrorDetail } from "@/lib/api/sanitize";
+import { detachDeletedArrInstance } from "@/lib/arr/detach-instance";
+import { refuseStoredKeyToNewUrl } from "@/lib/integrations/stored-key-guard";
 
 export async function PUT(
   request: NextRequest,
@@ -26,6 +28,9 @@ export async function PUT(
   if (!existing) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
+
+  const refused = await refuseStoredKeyToNewUrl(session, existing.url, url, apiKey, "Radarr");
+  if (refused) return refused;
 
   // Test the connection only when it changes — a new URL or API key (skip if
   // just toggling enabled). The edit form sends its URL on every save, so
@@ -79,7 +84,10 @@ export async function DELETE(
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  await prisma.radarrInstance.delete({ where: { id } });
+  await prisma.$transaction(async (tx) => {
+    await detachDeletedArrInstance(tx, session.userId!, id, "Radarr");
+    await tx.radarrInstance.delete({ where: { id } });
+  });
 
   return NextResponse.json({ success: true });
 }

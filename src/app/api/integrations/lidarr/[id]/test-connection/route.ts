@@ -3,6 +3,8 @@ import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { LidarrClient } from "@/lib/arr/lidarr-client";
 import { validateRequest, arrTestConnectionSchema } from "@/lib/validation";
+import { sanitizeErrorDetail } from "@/lib/api/sanitize";
+import { refuseStoredKeyToNewUrl } from "@/lib/integrations/stored-key-guard";
 
 export async function POST(
   request: NextRequest,
@@ -24,9 +26,14 @@ export async function POST(
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
+  const refused = await refuseStoredKeyToNewUrl(session, existing.url, data.url, data.apiKey, "Lidarr");
+  if (refused) return refused;
+
   const testUrl = data.url ?? existing.url;
   const testKey = data.apiKey ?? existing.apiKey;
   const client = new LidarrClient(testUrl, testKey);
   const result = await client.testConnection();
-  return NextResponse.json(result);
+  return NextResponse.json(
+    result.ok ? result : { ...result, error: sanitizeErrorDetail(result.error) },
+  );
 }

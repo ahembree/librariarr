@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildActionBatches, actionMediaType, type BatchableItem } from "@/lib/query/batch";
+import { buildActionBatches, actionMediaType, countActionUnits, type BatchableItem } from "@/lib/query/batch";
 import { MAX_QUERY_ACTION_ITEMS } from "@/lib/query/constants";
 
 /** N movies as distinct items. */
@@ -147,5 +147,30 @@ describe("buildActionBatches", () => {
     const batches = buildActionBatches(items, "SERIES", 1000);
     expect(batches).toHaveLength(1);
     expect(batches[0].sort()).toEqual(["e1", "e2"]);
+  });
+});
+
+describe("music batching and run size", () => {
+  it("keeps an artist's tracks in one batch", () => {
+    const items = [
+      { id: "t1", type: "MUSIC", parentTitle: "Artist" },
+      { id: "m1", type: "MUSIC", parentTitle: "Other" },
+      { id: "t2", type: "MUSIC", parentTitle: "artist " },
+    ];
+    expect(buildActionBatches(items, "MUSIC", 2)).toEqual([["t1", "t2"], ["m1"]]);
+  });
+
+  it("counts one action per show or artist and one per movie", () => {
+    expect(countActionUnits([
+      { id: "e1", type: "SERIES", seriesKey: "tvdb:1" },
+      { id: "e2", type: "SERIES", seriesKey: "tvdb:1" },
+      { id: "e3", type: "SERIES", seriesKey: "tvdb:2" },
+    ], "SERIES")).toBe(2);
+    expect(countActionUnits([
+      { id: "t1", type: "MUSIC", parentTitle: "A" },
+      { id: "t2", type: "MUSIC", parentTitle: "A" },
+      { id: "m1", type: "MOVIE" },
+    ], "MUSIC")).toBe(1);
+    expect(countActionUnits([{ id: "m1", type: "MOVIE" }, { id: "m2", type: "MOVIE" }], "MOVIE")).toBe(2);
   });
 });

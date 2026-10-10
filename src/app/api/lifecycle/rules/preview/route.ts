@@ -24,7 +24,7 @@ export async function POST(request: NextRequest) {
   const { data, error } = await validateRequest(request, rulePreviewSchema);
   if (error) return error;
 
-  const { rules, type, seriesScope, serverIds } = data;
+  const { rules, type, seriesScope, serverIds, arrInstanceId } = data;
   const typedRules = rules as unknown as LifecycleRule[] | LifecycleRuleGroup[];
 
   // SAFETY: Refuse to evaluate if no rules are active — would match everything
@@ -37,7 +37,7 @@ export async function POST(request: NextRequest) {
   // ("foundInArr = false" / "seerrRequested = false" go vacuously true).
   // Detection skips such rule sets, so error here instead of previewing a
   // result detection would never produce.
-  const evaluability = await checkLifecycleRuleEvaluability(session.userId!, type, typedRules, serverIds);
+  const evaluability = await checkLifecycleRuleEvaluability(session.userId!, type, typedRules, serverIds, arrInstanceId);
   if (!evaluability.evaluable) {
     return NextResponse.json({ error: evaluability.reason }, { status: 400 });
   }
@@ -58,8 +58,11 @@ export async function POST(request: NextRequest) {
     let arrData: ArrDataMap | undefined;
     if (willFetchArr) {
       emit({ type: "phase", key: "arr", fraction: 0 });
-      arrData = await fetchArrMetadata(session.userId!, type, (f) =>
-        emit({ type: "phase", key: "arr", fraction: f }),
+      arrData = await fetchArrMetadata(
+        session.userId!,
+        type,
+        (f) => emit({ type: "phase", key: "arr", fraction: f }),
+        arrInstanceId,
       );
     }
 

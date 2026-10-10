@@ -28,7 +28,7 @@ vi.mock("@/lib/logger", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: m.warn, error: m.error },
 }));
 
-import { enqueueJob, getJobsPool, releaseJobsClient } from "@/lib/jobs/client";
+import { enqueueJob, getJobsPool, isJobRetrying, releaseJobsClient } from "@/lib/jobs/client";
 
 describe("jobs client", () => {
   beforeEach(() => {
@@ -92,6 +92,31 @@ describe("jobs client", () => {
       poolQuery.mockRejectedValueOnce(new Error("no such relation"));
       await expect(enqueueJob("sync-server", {}, { jobKey: "sync:s1" })).resolves.toBe(true);
       expect(addJob).toHaveBeenCalledWith("sync-server", {}, { jobKey: "sync:s1" });
+      expect(warn).toHaveBeenCalled();
+    });
+  });
+
+  describe("isJobRetrying", () => {
+    it("asks for a job that failed and still has attempts left", async () => {
+      poolQuery.mockResolvedValueOnce({ rows: [{ retrying: true }] });
+      await expect(isJobRetrying("tracearr-backfill:s1")).resolves.toBe(true);
+      const [sql, params] = poolQuery.mock.calls[0];
+      expect(sql).toContain('"attempts" > 0');
+      // A parked job (attempts used up) is not backing off — enqueueing it is
+      // how it gets a fresh start.
+      expect(sql).toContain('"attempts" < "max_attempts"');
+      expect(sql).toContain('"locked_at" IS NULL');
+      expect(params).toEqual(["tracearr-backfill:s1"]);
+    });
+
+    it("answers false when nothing is backing off", async () => {
+      poolQuery.mockResolvedValueOnce({ rows: [{ retrying: false }] });
+      await expect(isJobRetrying("k")).resolves.toBe(false);
+    });
+
+    it("answers false when the lookup fails, so the caller enqueues as before", async () => {
+      poolQuery.mockRejectedValueOnce(new Error("no such relation"));
+      await expect(isJobRetrying("k")).resolves.toBe(false);
       expect(warn).toHaveBeenCalled();
     });
   });

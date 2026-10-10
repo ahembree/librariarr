@@ -7,6 +7,7 @@ const {
   mockReconcile,
   mockSyncTracearr,
   mockEnqueueJob,
+  mockIsJobRetrying,
 } = vi.hoisted(() => {
   // The DELETE + INSERTs run inside prisma.$transaction(cb) via tx.$executeRawUnsafe.
   // Route the tx's raw methods to the same fn the tests assert against so the
@@ -41,6 +42,7 @@ const {
         },
       ) => ({ count: 7, backfillPending: false }),
     ),
+    mockIsJobRetrying: vi.fn(async () => false),
     mockEnqueueJob: vi.fn(
       async (_identifier: string, _payload: unknown, _spec?: unknown) => true,
     ),
@@ -73,6 +75,7 @@ vi.mock("@/lib/sync/sync-tracearr-history", () => ({
 
 vi.mock("@/lib/jobs/client", () => ({
   enqueueJob: mockEnqueueJob,
+  isJobRetrying: mockIsJobRetrying,
 }));
 
 import { syncWatchHistory } from "@/lib/sync/sync-watch-history";
@@ -87,6 +90,7 @@ describe("syncWatchHistory", () => {
     mockReconcile.mockResolvedValue(0);
     mockSyncTracearr.mockResolvedValue({ count: 7, backfillPending: false });
     mockEnqueueJob.mockResolvedValue(true);
+    mockIsJobRetrying.mockResolvedValue(false);
     mockPrisma.tracearrInstance.findFirst.mockResolvedValue(null);
   });
 
@@ -838,6 +842,20 @@ describe("syncWatchHistory", () => {
         { serverId: "server-1" },
         expect.objectContaining({ jobKey: "tracearr-backfill:server-1" }),
       );
+    });
+
+    it("leaves a backfill that is backing off after a failure alone", async () => {
+      // A keyed enqueue resets graphile-worker's attempts and run_at, so
+      // enqueueing on every forward sync cancelled the failed slice's backoff
+      // and retry limit — it re-ran on every play.
+      armTracearrServer();
+      mockSyncTracearr.mockResolvedValueOnce({ count: 1, backfillPending: true });
+      mockIsJobRetrying.mockResolvedValueOnce(true);
+
+      await syncWatchHistory("server-1");
+
+      expect(mockIsJobRetrying).toHaveBeenCalledWith("tracearr-backfill:server-1");
+      expect(mockEnqueueJob).not.toHaveBeenCalled();
     });
 
     it("returns the unchanged { count } shape whatever the backfill state", async () => {

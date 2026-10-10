@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import { getApiKeyGuard } from "@/lib/api-keys/guard";
 import { API_SCOPE_INFO, isApiScope } from "@/lib/api-keys/scopes";
@@ -138,5 +138,19 @@ describe("/api/v1 route guards", () => {
       "GET /api/v1/lifecycle/rules/matches",
     ]);
   });
-});
 
+  // `limit=0` is a full listing only where the handler reads it as one — a
+  // handler built on `parseListPagination` (or asking `isFullListingLimit`
+  // itself). Derived from each mirrored handler's source, so a route that
+  // starts or stops parsing a limit that way cannot keep the wrong charge.
+  it("charges limit=0 as a full listing exactly where the handler returns everything for it", async () => {
+    const API_ROOT = path.resolve(__dirname, "../../../src/app/api");
+    for (const { route, method, handler } of await loadRoutes()) {
+      if (method !== "GET") continue;
+      const internal = path.join(API_ROOT, route.replace(/^\/api\/v1/, ""), "route.ts");
+      const source = existsSync(internal) ? readFileSync(internal, "utf8") : "";
+      const returnsEverything = /\b(parseListPagination|isFullListingLimit)\(/.test(source);
+      expect(getApiKeyGuard(handler)?.limitZeroMeansAll, route).toBe(returnsEverything);
+    }
+  });
+});

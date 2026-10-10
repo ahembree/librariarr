@@ -295,6 +295,27 @@ body::before {
   scrollbar-color: oklch(1 0 0 / 10%) transparent;
 }
 
+/* DataTable pinned columns: opaque, so the columns scrolling under them are
+   hidden, while still carrying the row's even/hover tint. */
+.data-table-pinned,
+.data-table-pinned-head {
+  background-color: var(--background);
+  background-image: linear-gradient(var(--row-tint, transparent), var(--row-tint, transparent));
+}
+.data-table-pinned-head {
+  --row-tint: color-mix(in oklab, var(--muted) 50%, transparent);
+}
+tr:nth-child(even) > .data-table-pinned {
+  --row-tint: color-mix(in oklab, white 1.5%, transparent);
+}
+tr[data-clickable]:hover > .data-table-pinned {
+  --row-tint: color-mix(in oklab, white 3%, transparent);
+}
+/* An inset line on the last pinned column marks where scrolling starts. */
+.data-table-pinned-edge {
+  box-shadow: inset -1px 0 0 var(--border);
+}
+
 /* Selection color */
 ::selection {
   background: oklch(0.50 0.15 270 / 30%);

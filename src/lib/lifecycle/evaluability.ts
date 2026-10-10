@@ -1,7 +1,7 @@
 import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
 import { hasArrRules, hasSeerrRules, hasPlayActivityRules } from "@/lib/rules/lifecycle-engine";
 import { prisma } from "@/lib/db";
-import { hasEnabledArrInstances, arrFamilyLabel } from "@/lib/lifecycle/fetch-arr-metadata";
+import { hasEnabledArrInstances, arrFamilyLabel, resolveArrInstanceScope } from "@/lib/lifecycle/fetch-arr-metadata";
 import { hasEnabledSeerrInstances } from "@/lib/lifecycle/fetch-seerr-metadata";
 
 /**
@@ -159,12 +159,21 @@ export async function checkLifecycleRuleEvaluability(
    * native servers whose history is complete and correct.
    */
   serverIds?: string[],
+  /**
+   * The rule set's `arrInstanceId`. When it names an instance of this type's
+   * Arr family, Arr criteria are read from that instance alone
+   * (`resolveArrInstanceScope`), so that instance has to be enabled.
+   */
+  arrInstanceId?: string | null,
 ): Promise<RuleEvaluability> {
-  if (hasArrRules(rules) && !(await hasEnabledArrInstances(userId, type))) {
+  if (hasArrRules(rules) && !(await hasEnabledArrInstances(userId, type, arrInstanceId))) {
+    const scoped = arrInstanceId ? await resolveArrInstanceScope(userId, type, arrInstanceId) : null;
     return {
       evaluable: false,
       permanent: false,
-      reason: `Rules use Arr criteria but no enabled ${arrFamilyLabel(type)} instance exists — evaluating them without one would match the entire library`,
+      reason: scoped
+        ? `Rules use Arr criteria but the rule set's ${arrFamilyLabel(type)} instance "${scoped.name}" is disabled — evaluating them without it would match the entire library`
+        : `Rules use Arr criteria but no enabled ${arrFamilyLabel(type)} instance exists — evaluating them without one would match the entire library`,
     };
   }
   if (hasSeerrRules(rules)) {

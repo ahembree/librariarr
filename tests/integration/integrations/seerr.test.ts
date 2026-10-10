@@ -262,7 +262,7 @@ describe("Seerr integration endpoints", () => {
     it("updates instance successfully", async () => {
       const user = await createTestUser();
       const instance = await createTestSeerrInstance(user.id, { name: "Old Name" });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
 
       const response = await callRouteWithParams(
         PUT,
@@ -336,7 +336,7 @@ describe("Seerr integration endpoints", () => {
 
       const user = await createTestUser();
       const instance = await createTestSeerrInstance(user.id);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
 
       const response = await callRouteWithParams(
         PUT,

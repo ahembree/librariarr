@@ -44,6 +44,7 @@ export async function GET() {
       // `findOldestPlayAt`. It is the denominator of the progress fraction —
       // read off the row we already fetch, so progress costs no extra query.
       tracearrOldestPlayAt: true,
+      tracearrBackfillCursorAt: true,
     },
     // Total order: the UI polls this repeatedly and re-renders the list, so ties
     // on `name` must not permute between requests.
@@ -105,6 +106,7 @@ export async function GET() {
         oldestPlayAt: server.tracearrOldestPlayAt,
         oldestImported,
         newestImported,
+        cursorAt: server.tracearrBackfillCursorAt,
       }),
       // The import running for this server right now, if any — live this-run
       // counters the stored rows cannot express. `null` when nothing is running.

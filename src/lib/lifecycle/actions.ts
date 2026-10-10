@@ -2,7 +2,7 @@ import axios from "axios";
 import { prisma } from "@/lib/db";
 import { RadarrClient } from "@/lib/arr/radarr-client";
 import { SonarrClient } from "@/lib/arr/sonarr-client";
-import { LidarrClient } from "@/lib/arr/lidarr-client";
+import { LidarrClient, type LidarrTrack } from "@/lib/arr/lidarr-client";
 import { logger } from "@/lib/logger";
 import { sanitizeErrorDetail } from "@/lib/api/sanitize";
 import { actionHonorsMemberIds, formatActionLabel, supportsSearchAfter } from "@/lib/lifecycle/action-types";
@@ -51,6 +51,17 @@ export function describeActionError(error: unknown): string {
       : `HTTP ${status}: ${error.message}`;
   }
   return error instanceof Error ? error.message : "Unknown error";
+}
+
+/**
+ * What an executed action reports back. `deletedMemberIds` is set by the
+ * member-scoped file deletes (Sonarr episodes, Lidarr tracks) to the members
+ * whose files were actually deleted — a member whose file was shared with an
+ * unmatched one, or that could not be found in the Arr app, is left out — so
+ * `deletedBytes` counts what went, not what was asked for.
+ */
+export interface ActionOutcome {
+  deletedMemberIds?: string[];
 }
 
 // Type for the action record shape used by executors
@@ -463,7 +474,7 @@ async function executeUnmonitorRadarr(action: ActionRecord) {
   const { client, movie } = await resolveRadarrMovie(action);
   await client.updateMovie(movie.id, { monitored: false });
   if (action.addImportExclusion) {
-    await client.addExclusion(movie.tmdbId, movie.title, action.mediaItem.year ?? 0);
+    await client.addExclusion(movie.tmdbId, movie.title, movie.year ?? action.mediaItem.year ?? 0);
   }
 }
 
@@ -482,23 +493,26 @@ async function executeUnmonitorDeleteFilesRadarr(action: ActionRecord) {
     await client.deleteMovieFile(movie.movieFileId);
   }
   if (action.addImportExclusion) {
-    await client.addExclusion(movie.tmdbId, movie.title, action.mediaItem.year ?? 0);
+    await client.addExclusion(movie.tmdbId, movie.title, movie.year ?? action.mediaItem.year ?? 0);
   }
   if (action.searchAfterAction) {
     await client.triggerMovieSearch(movie.id);
   }
 }
 
-async function executeUnmonitorDeleteFilesSonarr(action: ActionRecord) {
+async function executeUnmonitorDeleteFilesSonarr(action: ActionRecord): Promise<ActionOutcome> {
   const { client, series } = await resolveSonarrSeries(action);
   await client.updateSeries(series.id, { monitored: false });
-  await deleteEpisodeFilesForAction(client, series.id, action);
+  const deleted = await deleteEpisodeFilesForAction(client, series.id, action);
   if (action.addImportExclusion) {
     await client.addExclusion(series.tvdbId, series.title);
   }
   if (action.searchAfterAction) {
-    await client.triggerSeriesSearch(series.id);
+    // A series search skips unmonitored seasons and episodes, and this action
+    // just unmonitored the series — search the episodes acted on by id.
+    await client.triggerEpisodeSearch(deleted.arrItemIds);
   }
+  return { deletedMemberIds: deleted.deletedMemberIds };
 }
 
 async function executeDeleteLidarr(action: ActionRecord) {
@@ -514,16 +528,17 @@ async function executeUnmonitorLidarr(action: ActionRecord) {
   }
 }
 
-async function executeUnmonitorDeleteFilesLidarr(action: ActionRecord) {
+async function executeUnmonitorDeleteFilesLidarr(action: ActionRecord): Promise<ActionOutcome> {
   const { client, artist } = await resolveLidarrArtist(action);
   await client.updateArtist(artist.id, { monitored: false });
-  await deleteTrackFilesForAction(client, artist, action);
+  const deleted = await deleteTrackFilesForAction(client, artist, action);
   if (action.addImportExclusion) {
     await client.addExclusion(artist.foreignArtistId, artist.artistName);
   }
   if (action.searchAfterAction) {
     await client.triggerArtistSearch(artist.id);
   }
+  return { deletedMemberIds: deleted.deletedMemberIds };
 }
 
 // --- Episode-level file deletion helper ---
@@ -540,14 +555,23 @@ async function executeUnmonitorDeleteFilesLidarr(action: ActionRecord) {
  * stale "delete all episode files" fallback here could wipe an entire series
  * because a few member ids went missing.
  */
+/** What a member-scoped file delete actually removed. */
+interface MemberFileDeletion {
+  /** Our member ids whose files were deleted — what `deletedBytes` counts. */
+  deletedMemberIds: string[];
+  /** The Arr-side ids of the same members, for a follow-up monitor/search. */
+  arrItemIds: number[];
+}
+
+const NOTHING_DELETED: MemberFileDeletion = { deletedMemberIds: [], arrItemIds: [] };
+
 async function deleteEpisodeFilesForAction(
   client: SonarrClient,
   seriesId: number,
   action: ActionRecord,
-): Promise<void> {
+): Promise<MemberFileDeletion> {
   if (action.matchedMediaItemIds.length > 0) {
-    await deleteMatchedEpisodeFiles(client, seriesId, action.matchedMediaItemIds);
-    return;
+    return deleteMatchedEpisodeFiles(client, seriesId, action.matchedMediaItemIds);
   }
   // Member-scoped action with no targeted episodes — skip rather than delete
   // the entire series' files. Conservative by design (media deletion pipeline).
@@ -556,7 +580,7 @@ async function deleteEpisodeFilesForAction(
       "Lifecycle",
       `Skipping ${action.actionType} file deletion for series "${seriesTitleOf(action.mediaItem)}" — no matched episodes resolved (refusing to delete all episode files without a whole-series signal)`,
     );
-    return;
+    return NOTHING_DELETED;
   }
   // Non-member-scoped action types should never reach here, but if they do,
   // there is nothing scoped to act on — skip.
@@ -564,17 +588,37 @@ async function deleteEpisodeFilesForAction(
     "Lifecycle",
     `Skipping ${action.actionType} file deletion for series "${seriesTitleOf(action.mediaItem)}" — no episodes to act on`,
   );
+  return NOTHING_DELETED;
 }
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Whether our episode's air date rules out the Sonarr episode sharing its
+ * season/episode numbers. The numbers alone are not an identity: a show the
+ * media server orders differently from Sonarr (absolute or DVD order, common
+ * for anime) puts a different episode at the same S/E. Two days of slack covers
+ * a local date against a UTC one. Silence on either side proves nothing.
+ */
+function airDatesContradict(ours: Date | null, sonarrAirDate: string | undefined): boolean {
+  if (!ours || !sonarrAirDate) return false;
+  const theirs = Date.parse(`${sonarrAirDate}T00:00:00Z`);
+  if (Number.isNaN(theirs)) return false;
+  return Math.abs(ours.getTime() - theirs) > 2 * DAY_MS;
+}
+
+const formatSE = (season: number, episode: number) =>
+  `S${String(season).padStart(2, "0")}E${String(episode).padStart(2, "0")}`;
 
 async function deleteMatchedEpisodeFiles(
   client: SonarrClient,
   seriesId: number,
   matchedMediaItemIds: string[],
-): Promise<void> {
+): Promise<MemberFileDeletion> {
   // Look up matched episodes from DB to get season/episode numbers
   const episodes = await prisma.mediaItem.findMany({
     where: { id: { in: matchedMediaItemIds } },
-    select: { seasonNumber: true, episodeNumber: true },
+    select: { id: true, seasonNumber: true, episodeNumber: true, originallyAvailableAt: true },
   });
 
   if (episodes.length !== matchedMediaItemIds.length) {
@@ -587,42 +631,112 @@ async function deleteMatchedEpisodeFiles(
     );
   }
 
-  // Build keys only from episodes that have both season and episode numbers.
-  // A null season/episode would produce "null:null" and either match nothing
-  // or accidentally match unrelated Sonarr episodes that happen to also have
-  // nulls — both are unsafe. Skip and warn rather than guess.
-  const matchSet = new Set<string>();
+  const sonarrEpisodes = await client.getEpisodes(seriesId);
+  const sonarrBySE = new Map(sonarrEpisodes.map((ep) => [`${ep.seasonNumber}:${ep.episodeNumber}`, ep]));
+
+  // Our member for each Sonarr episode it resolved to. Only episodes with both
+  // numbers are keyed: a null season/episode would produce "null:null" and
+  // either match nothing or match unrelated Sonarr episodes — skip and warn
+  // rather than guess.
+  const memberBySonarrId = new Map<number, string>();
+  let unresolved = 0;
   for (const e of episodes) {
     if (e.seasonNumber === null || e.episodeNumber === null) {
       logger.warn(
         "Lifecycle",
         `Skipping episode with null seasonNumber or episodeNumber in matched set for Sonarr series ${seriesId}`
       );
+      unresolved++;
       continue;
     }
-    matchSet.add(`${e.seasonNumber}:${e.episodeNumber}`);
+    const sonarrEp = sonarrBySE.get(`${e.seasonNumber}:${e.episodeNumber}`);
+    if (!sonarrEp) {
+      unresolved++;
+      continue;
+    }
+    if (airDatesContradict(e.originallyAvailableAt, sonarrEp.airDate)) {
+      logger.warn(
+        "Lifecycle",
+        `Skipping ${formatSE(e.seasonNumber, e.episodeNumber)} of Sonarr series ${seriesId}: the media server's air date (${e.originallyAvailableAt!.toISOString().slice(0, 10)}) does not match Sonarr's (${sonarrEp.airDate}) — the two number the show differently`,
+      );
+      unresolved++;
+      continue;
+    }
+    memberBySonarrId.set(sonarrEp.id, e.id);
   }
 
-  // Get all Sonarr episodes for the series
-  const sonarrEpisodes = await client.getEpisodes(seriesId);
+  if (episodes.length > 0 && memberBySonarrId.size === 0) {
+    // Recording this as done would report a delete that never happened.
+    throw new Error(
+      `None of the ${episodes.length} matched episode(s) could be matched to an episode in Sonarr series ${seriesId} — nothing was deleted`,
+    );
+  }
 
-  const fileIds = [
-    ...new Set(
-      sonarrEpisodes
-        .filter((ep) => matchSet.has(`${ep.seasonNumber}:${ep.episodeNumber}`) && ep.episodeFileId > 0)
-        .map((ep) => ep.episodeFileId)
-    ),
-  ];
+  // One Sonarr file can hold several episodes (S01E01-E02). Delete a file only
+  // when EVERY episode it holds is one we matched: deleting it for one member
+  // deletes the others too, including an episode that did not match the rule
+  // or is protected by an exception (excepted members never reach here).
+  const episodesByFile = new Map<number, typeof sonarrEpisodes>();
+  for (const ep of sonarrEpisodes) {
+    if (!(ep.episodeFileId > 0)) continue;
+    const list = episodesByFile.get(ep.episodeFileId) ?? [];
+    list.push(ep);
+    episodesByFile.set(ep.episodeFileId, list);
+  }
+  const fileIds: number[] = [];
+  const deletedMemberIds: string[] = [];
+  const arrItemIds: number[] = [];
+  for (const [fileId, holders] of episodesByFile) {
+    if (!holders.some((ep) => memberBySonarrId.has(ep.id))) continue;
+    const unmatched = holders.filter((ep) => !memberBySonarrId.has(ep.id));
+    if (unmatched.length > 0) {
+      logger.warn(
+        "Lifecycle",
+        `Skipping episode file ${fileId} of Sonarr series ${seriesId}: it also holds ${unmatched.map((ep) => formatSE(ep.seasonNumber, ep.episodeNumber)).join(", ")}, which did not match`,
+      );
+      continue;
+    }
+    fileIds.push(fileId);
+    for (const ep of holders) {
+      deletedMemberIds.push(memberBySonarrId.get(ep.id)!);
+      arrItemIds.push(ep.id);
+    }
+  }
+  // Matched episodes whose file is already gone are re-searched like the rest.
+  for (const [sonarrId] of memberBySonarrId) {
+    const ep = sonarrEpisodes.find((x) => x.id === sonarrId)!;
+    if (!(ep.episodeFileId > 0)) arrItemIds.push(sonarrId);
+  }
 
   if (fileIds.length > 0) {
-    logger.info("Lifecycle", `Deleting ${fileIds.length} matched episode files (${episodes.length} episodes matched) for Sonarr series ${seriesId}`);
+    logger.info("Lifecycle", `Deleting ${fileIds.length} matched episode files (${episodes.length} episodes matched${unresolved > 0 ? `, ${unresolved} not found in Sonarr` : ""}) for Sonarr series ${seriesId}`);
     await client.deleteEpisodeFiles(fileIds);
   } else {
-    logger.info("Lifecycle", `No episode files to delete for Sonarr series ${seriesId} (${episodes.length} episodes matched but no files found)`);
+    logger.warn("Lifecycle", `No episode files deleted for Sonarr series ${seriesId} (${episodes.length} episodes matched${unresolved > 0 ? `, ${unresolved} not found in Sonarr` : ""}; none had a file it could delete on its own)`);
   }
+  return { deletedMemberIds, arrItemIds };
 }
 
 // --- Track-level file deletion helper (Lidarr) ---
+
+/**
+ * A track title compared as written: lower-cased, accents and punctuation
+ * dropped, but nothing removed. `normalizeTitle` drops anything in brackets,
+ * which is right for matching a movie or show to its Arr record and wrong for
+ * telling tracks apart — "Song" and "Song (Demo)" on one deluxe album are two
+ * files.
+ */
+function trackTitleKey(title: string | null | undefined): string {
+  return (title ?? "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+/** Our track's own MusicBrainz id (recording or release-track), if the sync stored one. */
+const TRACK_MBID_SOURCES = new Set(["MBID", "MUSICBRAINZ_TRACK"]);
 
 /**
  * Resolve and delete only the Lidarr track files for the matched tracks.
@@ -632,24 +746,35 @@ async function deleteMatchedEpisodeFiles(
  * they must NOT delete the entire artist. The matched member set is
  * `matchedMediaItemIds` (artist-scope rules), or the action's own
  * `mediaItem.id` when empty (track-scope rules schedule one action per track).
- * Correlation to Lidarr is by normalized (album, track title); if no track
- * file can be confidently resolved we SKIP rather than fall back to deleting
- * the whole artist — under-deletion is the safe direction for a deletion path.
+ *
+ * Each track resolves to exactly one Lidarr track or to none, by, in order:
+ * its MusicBrainz track/recording id; its disc and track number on the one
+ * Lidarr album its album title names (with a title that agrees); its exact
+ * title on that album. Any ambiguity — two Lidarr albums under one title, two
+ * tracks under one key — leaves the track unresolved. There is no title-only
+ * fallback across albums: the same song on a live album or a compilation is a
+ * different file. Under-deletion is the safe direction for a deletion path.
  */
 async function deleteTrackFilesForAction(
   client: LidarrClient,
   artist: { id: number; artistName: string },
   action: ActionRecord,
-): Promise<void> {
+): Promise<MemberFileDeletion> {
   const memberIds =
     action.matchedMediaItemIds.length > 0
       ? action.matchedMediaItemIds
       : [action.mediaItem.id];
 
-  // Load the matched tracks' album + title for correlation.
   const tracks = await prisma.mediaItem.findMany({
     where: { id: { in: memberIds }, type: "MUSIC" },
-    select: { albumTitle: true, title: true },
+    select: {
+      id: true,
+      albumTitle: true,
+      title: true,
+      seasonNumber: true,
+      episodeNumber: true,
+      externalIds: { select: { source: true, externalId: true } },
+    },
   });
 
   if (tracks.length === 0) {
@@ -657,59 +782,97 @@ async function deleteTrackFilesForAction(
       "Lifecycle",
       `Skipping ${action.actionType} for artist "${artist.artistName}" — no matched tracks resolved (refusing to delete the whole artist)`,
     );
-    return;
+    return NOTHING_DELETED;
   }
 
-  // Build correlation maps from Lidarr's own tracks/albums.
   const [lidarrTracks, lidarrAlbums] = await Promise.all([
     client.getTracks(artist.id),
     client.getAlbums(artist.id),
   ]);
-  const albumTitleById = new Map(lidarrAlbums.map((a) => [a.id, a.title]));
-
-  // Composite (album|title) is the primary key; title-only is a fallback used
-  // only when it is unambiguous, to avoid deleting a same-named track on
-  // another album.
-  const byComposite = new Map<string, number>();
-  const byTitle = new Map<string, Set<number>>();
+  const albumsByTitle = new Map<string, number[]>();
+  for (const album of lidarrAlbums) {
+    const key = normalizeTitle(album.title);
+    albumsByTitle.set(key, [...(albumsByTitle.get(key) ?? []), album.id]);
+  }
+  const tracksByAlbum = new Map<number, LidarrTrack[]>();
   for (const t of lidarrTracks) {
-    if (!t.hasFile || !t.trackFileId || t.trackFileId <= 0) continue;
-    const titleKey = normalizeTitle(t.title);
-    const albumKey = normalizeTitle(albumTitleById.get(t.albumId) ?? "");
-    byComposite.set(`${albumKey}|${titleKey}`, t.trackFileId);
-    if (!byTitle.has(titleKey)) byTitle.set(titleKey, new Set());
-    byTitle.get(titleKey)!.add(t.trackFileId);
+    tracksByAlbum.set(t.albumId, [...(tracksByAlbum.get(t.albumId) ?? []), t]);
   }
+  const only = <T,>(list: T[]): T | null => (list.length === 1 ? list[0] : null);
 
-  const fileIds = new Set<number>();
+  const resolve = (track: (typeof tracks)[number]): LidarrTrack | null => {
+    const mbids = track.externalIds
+      .filter((e) => TRACK_MBID_SOURCES.has(e.source))
+      .map((e) => e.externalId.toLowerCase());
+    if (mbids.length > 0) {
+      const byMbid = lidarrTracks.filter((t) =>
+        [t.foreignTrackId, t.foreignRecordingId].some((id) => id && mbids.includes(id.toLowerCase())),
+      );
+      if (byMbid.length > 0) return only(byMbid);
+    }
+    const albumId = only(albumsByTitle.get(normalizeTitle(track.albumTitle ?? "")) ?? []);
+    if (albumId === null) return null;
+    const onAlbum = tracksByAlbum.get(albumId) ?? [];
+    const title = trackTitleKey(track.title);
+    if (track.episodeNumber !== null) {
+      const atPosition = onAlbum.filter(
+        (t) =>
+          Number.parseInt(t.trackNumber ?? "", 10) === track.episodeNumber &&
+          (track.seasonNumber === null || t.mediumNumber === undefined || t.mediumNumber === track.seasonNumber),
+      );
+      const hit = only(atPosition);
+      // The position must not contradict the title: a re-ordered edition puts
+      // another song at the same number.
+      if (hit && normalizeTitle(hit.title) === normalizeTitle(track.title ?? "")) return hit;
+    }
+    return only(onAlbum.filter((t) => trackTitleKey(t.title) === title));
+  };
+
+  const memberByLidarrId = new Map<number, string>();
   for (const track of tracks) {
-    const titleKey = normalizeTitle(track.title);
-    const albumKey = normalizeTitle(track.albumTitle ?? "");
-    const composite = byComposite.get(`${albumKey}|${titleKey}`);
-    if (composite) {
-      fileIds.add(composite);
-      continue;
-    }
-    // Fallback: title-only, but only when exactly one Lidarr track file matches.
-    const candidates = byTitle.get(titleKey);
-    if (candidates && candidates.size === 1) {
-      fileIds.add([...candidates][0]);
+    const hit = resolve(track);
+    if (hit) memberByLidarrId.set(hit.id, track.id);
+  }
+
+  // One file per track is the norm, but never delete a file that also backs a
+  // track we did not match.
+  const holdersByFile = new Map<number, LidarrTrack[]>();
+  for (const t of lidarrTracks) {
+    if (!t.hasFile || !(t.trackFileId > 0)) continue;
+    holdersByFile.set(t.trackFileId, [...(holdersByFile.get(t.trackFileId) ?? []), t]);
+  }
+  const fileIds: number[] = [];
+  const deletedMemberIds: string[] = [];
+  const arrItemIds: number[] = [];
+  for (const [fileId, holders] of holdersByFile) {
+    if (!holders.some((t) => memberByLidarrId.has(t.id))) continue;
+    if (holders.some((t) => !memberByLidarrId.has(t.id))) continue;
+    fileIds.push(fileId);
+    for (const t of holders) {
+      deletedMemberIds.push(memberByLidarrId.get(t.id)!);
+      arrItemIds.push(t.id);
     }
   }
 
-  if (fileIds.size === 0) {
+  if (fileIds.length === 0) {
     logger.warn(
       "Lifecycle",
       `Skipping ${action.actionType} for artist "${artist.artistName}" — could not correlate any matched track to a Lidarr track file (refusing to delete the whole artist)`,
     );
-    return;
+    if (memberByLidarrId.size === 0) {
+      throw new Error(
+        `None of the ${tracks.length} matched track(s) could be matched to a track of Lidarr artist "${artist.artistName}" — nothing was deleted`,
+      );
+    }
+    return NOTHING_DELETED;
   }
 
   logger.info(
     "Lifecycle",
-    `Deleting ${fileIds.size} matched track file(s) (${tracks.length} tracks matched) for Lidarr artist "${artist.artistName}"`,
+    `Deleting ${fileIds.length} matched track file(s) (${tracks.length} tracks matched, ${tracks.length - memberByLidarrId.size} not found in Lidarr) for Lidarr artist "${artist.artistName}"`,
   );
-  await client.deleteTrackFiles([...fileIds]);
+  await client.deleteTrackFiles(fileIds);
+  return { deletedMemberIds, arrItemIds };
 }
 
 // --- Monitor & Delete Files executors ---
@@ -723,39 +886,45 @@ async function executeMonitorDeleteFilesRadarr(action: ActionRecord) {
     await client.deleteMovieFile(movie.movieFileId);
   }
   if (action.addImportExclusion) {
-    await client.addExclusion(movie.tmdbId, movie.title, action.mediaItem.year ?? 0);
+    await client.addExclusion(movie.tmdbId, movie.title, movie.year ?? action.mediaItem.year ?? 0);
   }
   if (action.searchAfterAction) {
     await client.triggerMovieSearch(movie.id);
   }
 }
 
-async function executeMonitorDeleteFilesSonarr(action: ActionRecord) {
+async function executeMonitorDeleteFilesSonarr(action: ActionRecord): Promise<ActionOutcome> {
   const { client, series } = await resolveSonarrSeries(action);
   if (!series.monitored) {
     await client.updateSeries(series.id, { monitored: true });
   }
-  await deleteEpisodeFilesForAction(client, series.id, action);
+  const deleted = await deleteEpisodeFilesForAction(client, series.id, action);
+  // Monitoring the series alone leaves the episodes as they were — and Sonarr's
+  // "Unmonitor Deleted Episodes" setting unmonitors the ones just deleted — so
+  // monitor the episodes acted on, after the delete.
+  await client.setEpisodesMonitored(deleted.arrItemIds, true);
   if (action.addImportExclusion) {
     await client.addExclusion(series.tvdbId, series.title);
   }
   if (action.searchAfterAction) {
-    await client.triggerSeriesSearch(series.id);
+    await client.triggerEpisodeSearch(deleted.arrItemIds);
   }
+  return { deletedMemberIds: deleted.deletedMemberIds };
 }
 
-async function executeMonitorDeleteFilesLidarr(action: ActionRecord) {
+async function executeMonitorDeleteFilesLidarr(action: ActionRecord): Promise<ActionOutcome> {
   const { client, artist } = await resolveLidarrArtist(action);
   if (!artist.monitored) {
     await client.updateArtist(artist.id, { monitored: true });
   }
-  await deleteTrackFilesForAction(client, artist, action);
+  const deleted = await deleteTrackFilesForAction(client, artist, action);
   if (action.addImportExclusion) {
     await client.addExclusion(artist.foreignArtistId, artist.artistName);
   }
   if (action.searchAfterAction) {
     await client.triggerArtistSearch(artist.id);
   }
+  return { deletedMemberIds: deleted.deletedMemberIds };
 }
 
 // --- Delete Files Only executors (no monitor change) ---
@@ -766,33 +935,37 @@ async function executeDeleteFilesRadarr(action: ActionRecord) {
     await client.deleteMovieFile(movie.movieFileId);
   }
   if (action.addImportExclusion) {
-    await client.addExclusion(movie.tmdbId, movie.title, action.mediaItem.year ?? 0);
+    await client.addExclusion(movie.tmdbId, movie.title, movie.year ?? action.mediaItem.year ?? 0);
   }
   if (action.searchAfterAction) {
     await client.triggerMovieSearch(movie.id);
   }
 }
 
-async function executeDeleteFilesSonarr(action: ActionRecord) {
+async function executeDeleteFilesSonarr(action: ActionRecord): Promise<ActionOutcome> {
   const { client, series } = await resolveSonarrSeries(action);
-  await deleteEpisodeFilesForAction(client, series.id, action);
+  const deleted = await deleteEpisodeFilesForAction(client, series.id, action);
   if (action.addImportExclusion) {
     await client.addExclusion(series.tvdbId, series.title);
   }
   if (action.searchAfterAction) {
-    await client.triggerSeriesSearch(series.id);
+    // By id: a series search skips unmonitored seasons and episodes, and
+    // Sonarr may have unmonitored the episodes it just deleted.
+    await client.triggerEpisodeSearch(deleted.arrItemIds);
   }
+  return { deletedMemberIds: deleted.deletedMemberIds };
 }
 
-async function executeDeleteFilesLidarr(action: ActionRecord) {
+async function executeDeleteFilesLidarr(action: ActionRecord): Promise<ActionOutcome> {
   const { client, artist } = await resolveLidarrArtist(action);
-  await deleteTrackFilesForAction(client, artist, action);
+  const deleted = await deleteTrackFilesForAction(client, artist, action);
   if (action.addImportExclusion) {
     await client.addExclusion(artist.foreignArtistId, artist.artistName);
   }
   if (action.searchAfterAction) {
     await client.triggerArtistSearch(artist.id);
   }
+  return { deletedMemberIds: deleted.deletedMemberIds };
 }
 
 // --- Change Quality Profile executors ---
@@ -878,7 +1051,8 @@ export async function executeAction(
    * nature of an action (e.g. "Updating tags" then "Change Quality Profile").
    */
   onStep?: (label: string) => void,
-): Promise<void> {
+): Promise<ActionOutcome> {
+  let outcome: ActionOutcome = {};
   logger.info("Lifecycle", `Starting ${action.actionType} for "${action.targetTitle}" (item: ${action.mediaItem.id}, arr: ${action.arrInstanceId ?? "none"}${action.matchedMediaItemIds.length > 0 ? `, ${action.matchedMediaItemIds.length} matched episodes` : ""})`);
 
   // Execute tag operations before the main action
@@ -919,7 +1093,7 @@ export async function executeAction(
       await executeUnmonitorDeleteFilesRadarr(action);
       break;
     case "UNMONITOR_DELETE_FILES_SONARR":
-      await executeUnmonitorDeleteFilesSonarr(action);
+      outcome = await executeUnmonitorDeleteFilesSonarr(action);
       break;
     case "DELETE_LIDARR":
       await executeDeleteLidarr(action);
@@ -928,25 +1102,25 @@ export async function executeAction(
       await executeUnmonitorLidarr(action);
       break;
     case "UNMONITOR_DELETE_FILES_LIDARR":
-      await executeUnmonitorDeleteFilesLidarr(action);
+      outcome = await executeUnmonitorDeleteFilesLidarr(action);
       break;
     case "MONITOR_DELETE_FILES_RADARR":
       await executeMonitorDeleteFilesRadarr(action);
       break;
     case "MONITOR_DELETE_FILES_SONARR":
-      await executeMonitorDeleteFilesSonarr(action);
+      outcome = await executeMonitorDeleteFilesSonarr(action);
       break;
     case "MONITOR_DELETE_FILES_LIDARR":
-      await executeMonitorDeleteFilesLidarr(action);
+      outcome = await executeMonitorDeleteFilesLidarr(action);
       break;
     case "DELETE_FILES_RADARR":
       await executeDeleteFilesRadarr(action);
       break;
     case "DELETE_FILES_SONARR":
-      await executeDeleteFilesSonarr(action);
+      outcome = await executeDeleteFilesSonarr(action);
       break;
     case "DELETE_FILES_LIDARR":
-      await executeDeleteFilesLidarr(action);
+      outcome = await executeDeleteFilesLidarr(action);
       break;
     case "CHANGE_QUALITY_PROFILE_RADARR":
       await executeChangeQualityProfileRadarr(action);
@@ -974,4 +1148,5 @@ export async function executeAction(
     "Lifecycle",
     `Executed ${action.actionType} for "${action.targetTitle}"${action.addImportExclusion ? " (with import exclusion)" : ""}`
   );
+  return outcome;
 }

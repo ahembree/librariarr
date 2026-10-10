@@ -21,6 +21,7 @@ vi.mock("@/lib/db", () => ({
 import {
   invalidateWatchHistoryEvidence,
   invalidateServersWithoutWatchHistory,
+  restartTracearrBackfill,
 } from "@/lib/media/watch-evidence";
 
 describe("invalidateWatchHistoryEvidence", () => {
@@ -76,6 +77,37 @@ describe("invalidateServersWithoutWatchHistory", () => {
     m.findMany.mockResolvedValue([]);
 
     await expect(invalidateServersWithoutWatchHistory()).resolves.toBe(0);
+    expect(m.updateMany).not.toHaveBeenCalled();
+  });
+});
+
+describe("restartTracearrBackfill", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    m.updateMany.mockResolvedValue({ count: 0 });
+  });
+
+  it("reopens the archive walk from now, for Tracearr-mapped servers only", async () => {
+    m.updateMany.mockResolvedValue({ count: 1 });
+    const before = Date.now();
+
+    await expect(restartTracearrBackfill(["s1", "s2"])).resolves.toBe(1);
+
+    const arg = m.updateMany.mock.calls[0][0];
+    expect(arg.where).toEqual({
+      id: { in: ["s1", "s2"] },
+      tracearrServerId: { not: null },
+    });
+    expect(arg.data.tracearrBackfillComplete).toBe(false);
+    // The cursor is moved to NOW, not cleared: with no cursor the walk resumes
+    // below the oldest stored row, which after a partial purge is the far end of
+    // the archive — so nothing purged would be walked again.
+    expect(arg.data.tracearrBackfillCursorAt).toBeInstanceOf(Date);
+    expect(arg.data.tracearrBackfillCursorAt.getTime()).toBeGreaterThanOrEqual(before);
+  });
+
+  it("issues no UPDATE at all for an empty list", async () => {
+    await expect(restartTracearrBackfill([])).resolves.toBe(0);
     expect(m.updateMany).not.toHaveBeenCalled();
   });
 });

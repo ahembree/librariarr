@@ -4,6 +4,7 @@ import { executeAction, extractActionError, describeActionError } from "@/lib/li
 import { UnreachableInstances } from "@/lib/lifecycle/unreachable-instances";
 import { actionTargetTitle, actionTitleSnapshot } from "@/lib/lifecycle/action-target";
 import { loadMemberEpisodes } from "@/lib/lifecycle/member-episodes";
+import { computeDeletedBytes } from "@/lib/lifecycle/deleted-bytes";
 
 /**
  * Action configuration shared by rule-based and ad-hoc (query page) execution.
@@ -58,6 +59,12 @@ export interface RunActionsResult {
   failed: number;
   errors: string[];
   failures: { title: string; error: string }[];
+  /**
+   * Of `failed`, the items failed without contacting the Arr app at all — its
+   * instance had already failed at the host level this run — so nothing was
+   * sent for them. The public API gives these back to its destructive budget.
+   */
+  notAttempted: number;
 }
 
 /** Live progress for a bounded action run, suitable for a streaming UI. */
@@ -107,6 +114,7 @@ export async function executeActionsForItems(
 
   let executed = 0;
   let failed = 0;
+  let notAttempted = 0;
   const errors: string[] = [];
   const failures: { title: string; error: string }[] = [];
 
@@ -132,8 +140,11 @@ export async function executeActionsForItems(
     reportStep?.("Starting");
     try {
       const hostDown = unreachable.get(config.arrInstanceId);
-      if (hostDown) throw hostDown;
-      await executeAction({
+      if (hostDown) {
+        notAttempted++;
+        throw hostDown;
+      }
+      const outcome = await executeAction({
         id: "immediate",
         actionType,
         arrInstanceId: config.arrInstanceId,
@@ -148,32 +159,7 @@ export async function executeActionsForItems(
       }, reportStep);
 
       // Compute deleted bytes for stats tracking (only for delete actions)
-      let deletedBytes: bigint | null = null;
-      if (actionType.includes("DELETE")) {
-        if (actionType === "DELETE_SONARR" && item.parentTitle) {
-          // Whole-series delete removes EVERY episode, so count the whole
-          // series' file size rather than just the matched/selected members —
-          // the series by its `seriesKey` (the title only for a row without one).
-          const agg = await prisma.mediaItem.aggregate({
-            where: {
-              type: "SERIES",
-              libraryId: item.libraryId,
-              ...(item.seriesKey ? { seriesKey: item.seriesKey } : { parentTitle: item.parentTitle }),
-            },
-            _sum: { fileSize: true },
-          });
-          deletedBytes = agg._sum.fileSize ?? null;
-        } else if (matchedMediaItemIds.length > 0) {
-          const memberSizes = await prisma.mediaItem.findMany({
-            where: { id: { in: matchedMediaItemIds } },
-            select: { fileSize: true },
-          });
-          const total = memberSizes.reduce((sum, m) => sum + (m.fileSize ?? BigInt(0)), BigInt(0));
-          if (total > BigInt(0)) deletedBytes = total;
-        } else if (item.fileSize) {
-          deletedBytes = item.fileSize;
-        }
-      }
+      const deletedBytes = await computeDeletedBytes(actionType, item, matchedMediaItemIds, outcome);
 
       // Atomically swap the PENDING/match records for the COMPLETED record so an
       // interrupted process can't lose the audit trail. Match/pending cleanup
@@ -252,5 +238,5 @@ export async function executeActionsForItems(
     }
   }
 
-  return { executed, failed, errors, failures };
+  return { executed, failed, errors, failures, notAttempted };
 }

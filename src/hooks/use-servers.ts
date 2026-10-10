@@ -7,6 +7,7 @@ interface ServerInfo {
   id: string;
   name: string;
   type: string;
+  enabled: boolean;
 }
 
 export function useServers() {
@@ -20,10 +21,11 @@ export function useServers() {
         if (!data) return;
         setServers(
           (data.servers ?? []).map(
-            (s: { id: string; name: string; type: string }) => ({
+            (s: { id: string; name: string; type: string; enabled?: boolean }) => ({
               id: s.id,
               name: s.name,
               type: s.type,
+              enabled: s.enabled !== false,
             })
           )
         );

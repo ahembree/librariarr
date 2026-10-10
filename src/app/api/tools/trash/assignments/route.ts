@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { validateRequest, trashAssignSchema } from "@/lib/validation";
 import { resolveInstance, managedInstanceWhere } from "@/lib/trash/status";
 import { fetchTrashCatalog, catalogHasResource } from "@/lib/trash/catalog";
+import { selectionError } from "@/lib/trash/selection";
 import { sanitizeErrorDetail } from "@/lib/api/sanitize";
 import type { ServiceType } from "@/lib/trash/types";
 
@@ -84,6 +85,13 @@ export async function POST(request: NextRequest) {
       },
       { status: 400 },
     );
+  }
+
+  for (const item of data.items) {
+    const reason = selectionError(item.resourceType, data.serviceType, item.selection, catalog);
+    if (reason) {
+      return NextResponse.json({ error: `${item.name}: ${reason}` }, { status: 400 });
+    }
   }
 
   const instanceKey = managedInstanceWhere(data.serviceType, data.instanceId);

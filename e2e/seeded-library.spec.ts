@@ -74,6 +74,59 @@ test.describe("populated library", () => {
     await expect(page.getByText(/narrow down your library/i)).toBeVisible();
   });
 
+  test("a query column scrolled under the pinned ones cannot be grabbed through them", async ({ page }) => {
+    await page.goto("/library/query");
+    await page.getByPlaceholder("Value").first().fill(SEED.movieTitle);
+    await page.getByRole("button", { name: /Run Query/ }).click();
+    await expect(page.locator("table tbody").getByText(SEED.movieTitle)).toBeVisible();
+    await page.locator("table thead").scrollIntoViewIfNeeded();
+
+    // Scroll the first unpinned column until its right edge, and the resize
+    // handle on it, sits 12px inside the last pinned header.
+    const probe = await page.evaluate(() => {
+      const container = document.querySelector("table")!.parentElement!;
+      const heads = [...document.querySelectorAll<HTMLElement>("table thead th")];
+      const pinned = heads.filter((th) => getComputedStyle(th).position === "sticky");
+      const firstUnpinned = heads[pinned.length];
+      container.scrollLeft = firstUnpinned.getBoundingClientRect().width + 12;
+      const lastPinned = pinned[pinned.length - 1].getBoundingClientRect();
+      return {
+        x: lastPinned.right - 14,
+        y: lastPinned.top + lastPinned.height / 2,
+        lastPinned: pinned[pinned.length - 1].textContent,
+      };
+    });
+    const hit = await page.evaluate(
+      ({ x, y }) => document.elementFromPoint(x, y)?.closest("th")?.textContent ?? null,
+      probe,
+    );
+    expect(hit).toBe(probe.lastPinned);
+  });
+
+  test("query criterion columns load only once the table view shows them", async ({ page }) => {
+    await page.goto("/library/query");
+    await page.evaluate(() => {
+      localStorage.setItem("query-visible-columns", JSON.stringify(["type", "title", "year", "field:studio"]));
+      localStorage.setItem("query-view-mode", "cards");
+    });
+    await page.reload();
+    const requests: string[] = [];
+    page.on("request", (r) => {
+      if (r.url().includes("/api/query/column-values")) requests.push(r.url());
+    });
+
+    await page.getByPlaceholder("Value").first().fill(SEED.movieTitle);
+    await page.getByRole("button", { name: /Run Query/ }).click();
+    await expect(page.getByText(SEED.movieTitle).first()).toBeVisible();
+    await page.waitForTimeout(1000);
+    expect(requests).toHaveLength(0);
+
+    const loaded = page.waitForResponse((r) => r.url().includes("/api/query/column-values"));
+    await page.getByRole("button", { name: "Table view" }).click();
+    await loaded;
+    expect(requests).toHaveLength(1);
+  });
+
   test("settings lists the seeded media server", async ({ page }) => {
     await page.goto("/settings");
     await page.getByRole("tab", { name: /^Media Servers$/i }).click();

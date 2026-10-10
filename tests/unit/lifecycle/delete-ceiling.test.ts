@@ -13,7 +13,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const m = vi.hoisted(() => ({ findFirst: vi.fn() }));
 vi.mock("@/lib/db", () => ({ prisma: { appSettings: { findFirst: m.findFirst } } }));
 
-import { checkDeleteCeiling, getDeleteCeiling } from "@/lib/lifecycle/delete-ceiling";
+import { checkDeleteCeiling, checkDeleteCeilingForRun, getDeleteCeiling } from "@/lib/lifecycle/delete-ceiling";
 
 const DESTRUCTIVE = "DELETE_RADARR";
 const HARMLESS = "UNMONITOR_SONARR";
@@ -87,5 +87,22 @@ describe("checkDeleteCeiling", () => {
     expect(verdict.allowed).toBe(false);
     expect(verdict).not.toHaveProperty("allowedCount");
     expect(verdict.reason).toMatch(/Nothing was deleted/i);
+  });
+});
+
+describe("checkDeleteCeilingForRun", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("counts a destructive run by its size", async () => {
+    m.findFirst.mockResolvedValue({ maxAutoDeleteItems: 1000 });
+    const verdict = await checkDeleteCeilingForRun("u1", "DELETE_RADARR", 10_000);
+    expect(verdict).toMatchObject({ allowed: false, count: 10_000, limit: 1000 });
+  });
+
+  it("never counts a non-destructive run", async () => {
+    m.findFirst.mockResolvedValue({ maxAutoDeleteItems: 1 });
+    expect((await checkDeleteCeilingForRun("u1", "UNMONITOR_RADARR", 50)).allowed).toBe(true);
   });
 });

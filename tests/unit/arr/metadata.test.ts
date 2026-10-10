@@ -94,8 +94,9 @@ describe("mapSonarrSeries", () => {
       originalLanguage: { id: 1, name: "English" }, firstAired: "2020-01-01", status: "continuing",
       ended: false, seriesType: "standard", nextAiring: "2025-01-01",
       seasons: [
-        { monitored: true, statistics: { episodeCount: 10 } },
-        { monitored: false, statistics: { episodeCount: 8 } },
+        { seasonNumber: 1, monitored: true, statistics: { episodeCount: 10, totalEpisodeCount: 10 } },
+        { seasonNumber: 2, monitored: false, statistics: { episodeCount: 8, totalEpisodeCount: 8 } },
+        { seasonNumber: 3, monitored: false, statistics: { episodeCount: 12, totalEpisodeCount: 12 } },
       ],
     } as unknown as SonarrSeries;
 
@@ -114,6 +115,48 @@ describe("mapSonarrSeries", () => {
       tmdbRating: null,
       rtCriticRating: null,
     });
+  });
+});
+
+describe("mapSonarrSeries counts", () => {
+  const base = {
+    id: 7, tvdbId: 200, qualityProfileId: 1, monitored: false, tags: [],
+    status: "continuing",
+  };
+
+  it("counts every regular episode, not Sonarr's monitored-and-aired-or-on-disk count", () => {
+    const series = {
+      ...base,
+      // An unmonitored 100-episode show with no files: Sonarr's episodeCount is 0.
+      statistics: { seasonCount: 2, episodeCount: 0, totalEpisodeCount: 103 },
+      seasons: [
+        { seasonNumber: 0, monitored: true, statistics: { episodeCount: 0, totalEpisodeCount: 3 } },
+        { seasonNumber: 1, monitored: false, statistics: { episodeCount: 0, totalEpisodeCount: 50 } },
+        { seasonNumber: 2, monitored: false, statistics: { episodeCount: 0, totalEpisodeCount: 50 } },
+      ],
+    } as unknown as SonarrSeries;
+
+    const meta = mapSonarrSeries(series, profileMap, tagMap);
+    expect(meta.episodeCount).toBe(100);
+    // A monitored specials season is not one of the show's monitored seasons.
+    expect(meta.monitoredSeasonCount).toBe(0);
+    expect(meta.monitoredEpisodeCount).toBe(0);
+  });
+
+  it("counts unaired episodes of monitored seasons as monitored episodes", () => {
+    const series = {
+      ...base,
+      statistics: { seasonCount: 1, episodeCount: 4, totalEpisodeCount: 10 },
+      seasons: [{ seasonNumber: 1, monitored: true, statistics: { episodeCount: 4, totalEpisodeCount: 10 } }],
+    } as unknown as SonarrSeries;
+    expect(mapSonarrSeries(series, profileMap, tagMap).monitoredEpisodeCount).toBe(10);
+  });
+
+  it("sees unaired episodes that are unmonitored, through the calendar", () => {
+    const series = { ...base, nextAiring: undefined } as unknown as SonarrSeries;
+    expect(mapSonarrSeries(series, profileMap, tagMap, new Set()).hasUnaired).toBe(false);
+    expect(mapSonarrSeries(series, profileMap, tagMap, new Set([7])).hasUnaired).toBe(true);
+    expect(mapSonarrSeries({ ...series, status: "upcoming" } as SonarrSeries, profileMap, tagMap).hasUnaired).toBe(true);
   });
 });
 

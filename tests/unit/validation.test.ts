@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
   validateRequest,
+  validateOptionalRequest,
+  serverSyncSchema,
   authLoginSchema,
   authSettingsSchema,
   serverAddSchema,
@@ -43,6 +45,33 @@ function makeBadRequest(body: string): Request {
     headers: { "Content-Type": "application/json" },
   });
 }
+
+describe("validateOptionalRequest", () => {
+  it("validates no body at all as an empty object", async () => {
+    const result = await validateOptionalRequest(new Request("http://localhost/test", { method: "POST" }), serverSyncSchema);
+    expect(result).toEqual({ data: {} });
+    expect((await validateOptionalRequest(makeBadRequest("  \n"), serverSyncSchema)).data).toEqual({});
+  });
+
+  it("validates a body that is present like validateRequest does", async () => {
+    expect((await validateOptionalRequest(makeRequest({ libraryKey: "1" }), serverSyncSchema)).data).toEqual({ libraryKey: "1" });
+
+    const bad = await validateOptionalRequest(makeBadRequest("{libraryKey:"), serverSyncSchema);
+    expect(bad.error!.status).toBe(400);
+    expect((await bad.error!.json()).error).toBe("Invalid JSON in request body");
+
+    const wrong = await validateOptionalRequest(makeRequest({ libraryKey: 1 }), serverSyncSchema);
+    expect(wrong.error!.status).toBe(400);
+    expect((await wrong.error!.json()).error).toBe("Validation failed");
+  });
+});
+
+describe("serverSyncSchema", () => {
+  it("refuses an unknown key rather than syncing every library", () => {
+    expect(serverSyncSchema.safeParse({ librarykey: "1" }).success).toBe(false);
+    expect(serverSyncSchema.safeParse({}).success).toBe(true);
+  });
+});
 
 describe("validateRequest", () => {
   describe("with valid input", () => {

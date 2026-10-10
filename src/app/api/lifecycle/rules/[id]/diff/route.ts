@@ -91,7 +91,7 @@ export async function POST(
   // Verify ownership
   const ruleSet = await prisma.ruleSet.findFirst({
     where: { id, userId: session.userId },
-    select: { id: true, actionEnabled: true, actionType: true },
+    select: { id: true, actionEnabled: true, actionType: true, arrInstanceId: true },
   });
   if (!ruleSet) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -145,7 +145,8 @@ export async function POST(
 
   // MATCH-ALL SAFETY: mirror detection — Arr/Seerr rules with no enabled
   // instance behind them would diff against a vacuous whole-library match set.
-  const evaluability = await checkLifecycleRuleEvaluability(session.userId!, type, typedRules, serverIds);
+  const arrInstanceId = data.arrInstanceId !== undefined ? data.arrInstanceId : ruleSet.arrInstanceId;
+  const evaluability = await checkLifecycleRuleEvaluability(session.userId!, type, typedRules, serverIds, arrInstanceId);
   if (!evaluability.evaluable) {
     return NextResponse.json({ error: evaluability.reason }, { status: 400 });
   }
@@ -153,7 +154,7 @@ export async function POST(
   // Evaluate the new rules to get candidate matches
   let arrData: ArrDataMap | undefined;
   if (hasArrRules(typedRules)) {
-    arrData = await fetchArrMetadata(session.userId!, type);
+    arrData = await fetchArrMetadata(session.userId!, type, undefined, arrInstanceId);
   }
 
   let seerrData: SeerrDataMap | undefined;

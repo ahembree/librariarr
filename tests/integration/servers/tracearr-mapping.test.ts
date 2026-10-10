@@ -232,6 +232,44 @@ describe("PUT /api/servers/[id] — Tracearr mapping", () => {
     expect(await countHistory(untouched.id)).toBe(3);
   });
 
+  it("refuses a Tracearr server another media server already uses, and wipes nothing", async () => {
+    // One Tracearr server's plays joined against a second server's rating keys
+    // land on unrelated items there.
+    const user = await createTestUser();
+    const first = await createTestServer(user.id, { name: "First" });
+    const second = await createTestServer(user.id, { name: "Second" });
+    await prisma.mediaServer.update({
+      where: { id: first.id },
+      data: { tracearrServerId: TRACEARR_SERVER_A },
+    });
+    await seedWatchHistory(second.id, 2);
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+    const response = await putMapping(second.id, { tracearrServerId: TRACEARR_SERVER_A });
+    const body = await expectJson<{ error: string; detail: string }>(response, 409);
+    expect(body.detail).toContain("First");
+
+    const stored = await prisma.mediaServer.findUnique({ where: { id: second.id } });
+    expect(stored!.tracearrServerId).toBeNull();
+    expect(await countHistory(second.id)).toBe(2);
+  });
+
+  it("withdraws the established marker in the same write that switches the source", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id, {
+      tracearrServerId: TRACEARR_SERVER_A,
+      watchHistorySyncedAt: new Date("2026-01-01T00:00:00Z"),
+    });
+    await seedWatchHistory(server.id, 2);
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+    const response = await putMapping(server.id, { tracearrServerId: null });
+    await expectJson(response, 200);
+
+    const stored = await prisma.mediaServer.findUnique({ where: { id: server.id } });
+    expect(stored!.watchHistorySyncedAt).toBeNull();
+  });
+
   // `tracearrBackfillComplete` is the one piece of import state the WatchHistory
   // rows cannot re-derive: Tracearr returns plays newest-first, so the forward
   // watermark MAX(watchedAt) is set by the FIRST page imported and says nothing

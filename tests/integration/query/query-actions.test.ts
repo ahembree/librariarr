@@ -12,6 +12,7 @@ import {
   createTestExternalId,
   createTestRadarrInstance,
   createTestSonarrInstance,
+  createTestLidarrInstance,
 } from "../../setup/test-helpers";
 import type { QueryResult } from "@/lib/query/query-engine";
 import { MAX_QUERY_ACTION_ITEMS } from "@/lib/query/constants";
@@ -726,12 +727,10 @@ describe("POST /api/query/actions", () => {
       },
     });
     const { result: body } = await expectStreamResult<{ executed: number }>(response);
-    expect(body.executed).toBe(2);
-    expect(mockedExecuteAction).toHaveBeenCalledTimes(2);
-    // Each call targets only its own episode's file.
-    const passedMembers = mockedExecuteAction.mock.calls.map((c) => c[0].matchedMediaItemIds);
-    expect(new Set(passedMembers.flat())).toEqual(new Set([ep1.id, ep2.id]));
-    for (const members of passedMembers) expect(members).toHaveLength(1);
+    // One Sonarr record, so one action — naming exactly the selected episodes.
+    expect(body.executed).toBe(1);
+    expect(mockedExecuteAction).toHaveBeenCalledTimes(1);
+    expect(new Set(mockedExecuteAction.mock.calls[0][0].matchedMediaItemIds)).toEqual(new Set([ep1.id, ep2.id]));
   });
 
   it("records a FAILED action and surfaces the error when execution throws", async () => {
@@ -864,6 +863,48 @@ describe("POST /api/query/actions", () => {
       expect(body.executed).toBe(1);
     });
 
+    it("refuses an action on a different instance than the one the query's Arr criteria were read from", async () => {
+      const user = await createTestUser();
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const hd = await createTestRadarrInstance(user.id, { name: "Radarr 1080p" });
+      const uhd = await createTestRadarrInstance(user.id, { name: "Radarr 4K" });
+
+      const response = await callRoute(POST, {
+        method: "POST",
+        body: {
+          query: { ...BASE_QUERY, groups: arrRuleGroups, arrServerIds: { radarr: hd.id } },
+          mediaItemIds: ["m1"],
+          actionType: "DELETE_RADARR",
+          arrInstanceId: uhd.id,
+        },
+      });
+
+      const body = await expectJson<{ error: string }>(response, 400);
+      expect(body.error).toMatch(/read from Radarr instance "Radarr 1080p"/);
+      expect(mockedExecuteQuery).not.toHaveBeenCalled();
+      expect(mockedExecuteAction).not.toHaveBeenCalled();
+    });
+
+    it("refuses when the query's Arr instance is disabled", async () => {
+      const user = await createTestUser();
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const radarr = await createTestRadarrInstance(user.id, { name: "Off", enabled: false });
+
+      const response = await callRoute(POST, {
+        method: "POST",
+        body: {
+          query: { ...BASE_QUERY, groups: arrRuleGroups, arrServerIds: { radarr: radarr.id } },
+          mediaItemIds: ["m1"],
+          actionType: "UNMONITOR_RADARR",
+          arrInstanceId: radarr.id,
+        },
+      });
+
+      const body = await expectJson<{ error: string }>(response, 400);
+      expect(body.error).toMatch(/"Off", which is disabled/);
+      expect(mockedExecuteAction).not.toHaveBeenCalled();
+    });
+
     it("returns 400 for Seerr criteria when no Seerr instance is enabled", async () => {
       const user = await createTestUser();
       setMockSession({ isLoggedIn: true, userId: user.id });
@@ -952,6 +993,55 @@ describe("POST /api/query/actions", () => {
     });
   });
 
+  describe("one action per Arr record", () => {
+    it("acts once on a movie the query returned from two servers", async () => {
+      const user = await createTestUser();
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const libA = await createTestLibrary((await createTestServer(user.id, { name: "A" })).id, { type: "MOVIE" });
+      const libB = await createTestLibrary((await createTestServer(user.id, { name: "B" })).id, { type: "MOVIE" });
+      const a = await createTestMediaItem(libA.id, { type: "MOVIE", title: "Copy" });
+      const b = await createTestMediaItem(libB.id, { type: "MOVIE", title: "Copy" });
+      await createTestExternalId(a.id, "TMDB", "603");
+      await createTestExternalId(b.id, "TMDB", "603");
+      const radarr = await createTestRadarrInstance(user.id);
+      mockedExecuteQuery.mockResolvedValue(queryResult([
+        { id: a.id, type: "MOVIE", title: "Copy", parentTitle: null },
+        { id: b.id, type: "MOVIE", title: "Copy", parentTitle: null },
+      ]));
+
+      const response = await callRoute(POST, {
+        method: "POST",
+        body: { query: BASE_QUERY, mediaItemIds: [a.id, b.id], actionType: "DELETE_RADARR", arrInstanceId: radarr.id },
+      });
+
+      const { result: body } = await expectStreamResult<{ executed: number }>(response);
+      expect(body.executed).toBe(1);
+      expect(mockedExecuteAction).toHaveBeenCalledTimes(1);
+    });
+
+    it("acts once per artist on an artist's tracks, naming every track", async () => {
+      const user = await createTestUser();
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const library = await createTestLibrary((await createTestServer(user.id)).id, { type: "MUSIC" });
+      const t1 = await createTestMediaItem(library.id, { type: "MUSIC", title: "One", parentTitle: "Artist" });
+      const t2 = await createTestMediaItem(library.id, { type: "MUSIC", title: "Two", parentTitle: "Artist" });
+      const lidarr = await createTestLidarrInstance(user.id);
+      mockedExecuteQuery.mockResolvedValue(queryResult([
+        { id: t1.id, type: "MUSIC", title: "One", parentTitle: "Artist" },
+        { id: t2.id, type: "MUSIC", title: "Two", parentTitle: "Artist" },
+      ]));
+
+      const response = await callRoute(POST, {
+        method: "POST",
+        body: { query: BASE_QUERY, mediaItemIds: [t1.id, t2.id], actionType: "DELETE_FILES_LIDARR", arrInstanceId: lidarr.id },
+      });
+
+      const { result: body } = await expectStreamResult<{ executed: number }>(response);
+      expect(body.executed).toBe(1);
+      expect(new Set(mockedExecuteAction.mock.calls[0][0].matchedMediaItemIds)).toEqual(new Set([t1.id, t2.id]));
+    });
+  });
+
   describe("deletion ceiling", () => {
     // The Query page batches: the client chunks a large selection into
     // sequential requests, so `MAX_QUERY_ACTION_ITEMS` is a per-REQUEST cap and
@@ -989,6 +1079,83 @@ describe("POST /api/query/actions", () => {
       // Nothing ran: the refusal is before the query, not a partial batch.
       expect(mockedExecuteQuery).not.toHaveBeenCalled();
       expect(mockedExecuteAction).not.toHaveBeenCalled();
+    });
+
+    it("refuses a batched run by its whole size on the first batch", async () => {
+      const user = await createTestUser();
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      await withCeiling(user.id, 1000);
+      const radarr = await createTestRadarrInstance(user.id);
+
+      const response = await callRoute(POST, {
+        method: "POST",
+        body: {
+          query: BASE_QUERY,
+          mediaItemIds: ["m1", "m2"],
+          runId: "run-1",
+          runUnits: 10_000,
+          actionType: "DELETE_RADARR",
+          arrInstanceId: radarr.id,
+        },
+      });
+
+      const body = await expectJson<{ error: string }>(response, 400);
+      expect(body.error).toMatch(/10000 item\(s\)/);
+      expect(mockedExecuteAction).not.toHaveBeenCalled();
+    });
+
+    it("stops a run whose batches add up past the limit, even without runUnits", async () => {
+      const user = await createTestUser();
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      await withCeiling(user.id, 1);
+      const library = await createTestLibrary((await createTestServer(user.id)).id, { type: "MOVIE" });
+      const m1 = await createTestMediaItem(library.id, { type: "MOVIE", title: "First" });
+      const m2 = await createTestMediaItem(library.id, { type: "MOVIE", title: "Second" });
+      const radarr = await createTestRadarrInstance(user.id);
+      mockedExecuteQuery.mockResolvedValue(queryResult([
+        { id: m1.id, type: "MOVIE", title: "First", parentTitle: null },
+        { id: m2.id, type: "MOVIE", title: "Second", parentTitle: null },
+      ]));
+      const batch = (id: string) => callRoute(POST, {
+        method: "POST",
+        body: { query: BASE_QUERY, mediaItemIds: [id], runId: "run-2", actionType: "DELETE_RADARR", arrInstanceId: radarr.id },
+      });
+
+      const first = await expectStreamResult<{ executed: number }>(await batch(m1.id));
+      expect(first.result.executed).toBe(1);
+      const second = await expectStreamResult<{ executed: number; stopped?: boolean; errors: string[] }>(await batch(m2.id));
+      expect(second.result.executed).toBe(0);
+      expect(second.result.stopped).toBe(true);
+      expect(second.result.errors[0]).toMatch(/limit of 1/);
+      expect(mockedExecuteAction).toHaveBeenCalledTimes(1);
+    });
+
+    it("counts an episode-view series delete once per show, not per episode", async () => {
+      const user = await createTestUser();
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      await withCeiling(user.id, 1);
+      const library = await createTestLibrary((await createTestServer(user.id)).id, { type: "SERIES" });
+      const ep1 = await createTestMediaItem(library.id, { type: "SERIES", title: "E1", parentTitle: "Show", seasonNumber: 1, episodeNumber: 1 });
+      const ep2 = await createTestMediaItem(library.id, { type: "SERIES", title: "E2", parentTitle: "Show", seasonNumber: 1, episodeNumber: 2 });
+      const sonarr = await createTestSonarrInstance(user.id);
+      mockedExecuteQuery.mockResolvedValue(queryResult([
+        { id: ep1.id, type: "SERIES", title: "E1", parentTitle: "Show" },
+        { id: ep2.id, type: "SERIES", title: "E2", parentTitle: "Show" },
+      ]));
+
+      const response = await callRoute(POST, {
+        method: "POST",
+        body: {
+          query: { ...BASE_QUERY, includeEpisodes: true },
+          mediaItemIds: [ep1.id, ep2.id],
+          runUnits: 1,
+          actionType: "DELETE_SONARR",
+          arrInstanceId: sonarr.id,
+        },
+      });
+
+      const { result: body } = await expectStreamResult<{ executed: number }>(response);
+      expect(body.executed).toBe(1);
     });
 
     it("allows a run exactly at the limit", async () => {

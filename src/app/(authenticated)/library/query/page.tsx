@@ -83,11 +83,20 @@ import { ConvertQueryToRuleDialog } from "@/components/convert-query-to-rule-dia
 import { QueryProgress, useStreamProgress } from "@/components/query-progress";
 import { consumeProgressStream } from "@/lib/progress/client";
 import type { ProgressUpdate } from "@/lib/progress/types";
-import { buildActionBatches, actionMediaType } from "@/lib/query/batch";
+import { buildActionBatches, actionMediaType, countActionUnits } from "@/lib/query/batch";
 import { MAX_QUERY_ACTION_ITEMS } from "@/lib/query/constants";
 import { actionHonorsMemberIds } from "@/lib/lifecycle/action-types";
 import { QueryActionBar, type ArrFamily, type ArrFamilyMeta, type QueryActionConfig } from "@/components/query-action-bar";
 import { toast } from "sonner";
+import {
+  QUERY_COLUMN_FIELD_DEFS,
+  columnHeader,
+  columnSectionLabel,
+  columnSortValue,
+  criterionColumnId,
+  formatColumnValue,
+} from "@/lib/query/column-fields";
+import { useQueryColumnValues, type ColumnValueScope } from "@/hooks/use-query-column-values";
 
 interface SavedQuery {
   id: string;
@@ -264,6 +273,12 @@ const COLUMN_GROUPS: Record<string, string> = {
 
 const VISIBLE_KEY = "query-visible-columns";
 
+/** Columns pinned to the table's left edge until the user changes them. */
+const QUERY_TABLE_PINNING = {
+  storageKey: "query-pinned-columns",
+  defaultPinned: ["type", "title", "year"],
+};
+
 function loadVisibleColumns(): Set<string> {
   try {
     const stored = localStorage.getItem(VISIBLE_KEY);
@@ -284,6 +299,9 @@ const QUALITY_BAR_HEIGHT = 12; // h-1 quality bar (4px) + py-1 padding (8px)
 
 export default function QueryPage() {
   const { servers } = useServers();
+  // Disabled servers are never queried (the engine scopes to enabled ones), so
+  // offering them in the picker would only ever return nothing.
+  const queryServers = useMemo(() => servers.filter((s) => s.enabled), [servers]);
   const { getHex, getBadgeStyle } = useChipColors();
   const { width: panelWidth, resizeHandleProps } = usePanelResize({
     storageKey: "library-query-panel-width",
@@ -307,6 +325,15 @@ export default function QueryPage() {
   // Query state
   const [mediaTypes, setMediaTypes] = useState<string[]>([]);
   const [selectedServerIds, setSelectedServerIds] = useState<string[]>([]);
+  const serverSelectionLabel = useMemo(() => {
+    if (selectedServerIds.length === 0) return "All servers";
+    const names = selectedServerIds
+      .map((id) => servers.find((s) => s.id === id)?.name)
+      .filter((n): n is string => !!n);
+    if (names.length === 0) return "Unavailable server";
+    if (selectedServerIds.length === 1) return names[0];
+    return `${selectedServerIds.length} servers`;
+  }, [selectedServerIds, servers]);
   const [groups, setGroups] = useState<QueryGroup[]>([makeDefaultGroup()]);
   const [sortBy, setSortBy] = useState("title");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
@@ -349,6 +376,10 @@ export default function QueryPage() {
 
   // Results state
   const [results, setResults] = useState<QueryResultItem[]>([]);
+  // Server and Arr scope of the run that produced `results` — what the
+  // criterion columns are computed against.
+  const [runScope, setRunScope] = useState<ColumnValueScope | null>(null);
+  const [columnSearch, setColumnSearch] = useState("");
   const [loading, setLoading] = useState(false);
   const [hasRun, setHasRun] = useState(false);
   const { state: queryProgress, handleUpdate: onQueryProgress, reset: resetQueryProgress } = useStreamProgress();
@@ -530,7 +561,7 @@ export default function QueryPage() {
 
   // ── All column definitions (with chip styles) ──
 
-  const allColumns: QueryColumn[] = useMemo(() => [
+  const baseColumns: QueryColumn[] = useMemo(() => [
     {
       id: "type",
       header: "Type",
@@ -715,6 +746,61 @@ export default function QueryPage() {
     },
   ], [getBadgeStyle]);
 
+  // Criterion columns: every field a query can filter on (beyond the fixed
+  // columns above) can be shown, its values loaded on demand for the rows on
+  // screen. Arr and Seerr columns are offered only where such an instance exists.
+  const columnFieldDefs = useMemo(() => {
+    const arrAvailable = arrInstances.radarr.length > 0 || arrInstances.sonarr.length > 0 || arrInstances.lidarr.length > 0;
+    return QUERY_COLUMN_FIELD_DEFS.filter((f) => (!f.requiresArr || arrAvailable) && (!f.requiresSeerr || seerrConnected));
+  }, [arrInstances, seerrConnected]);
+
+  const visibleCriterionFields = useMemo(
+    () => columnFieldDefs.map((f) => f.value).filter((f) => visibleCols.has(criterionColumnId(f))),
+    [columnFieldDefs, visibleCols],
+  );
+  // Only the table shows these columns, so the card view loads none of them
+  // (an Arr or Seerr column reads every instance); switching back loads them.
+  const {
+    values: columnValues,
+    isPending: isColumnPending,
+    warnings: columnWarnings,
+  } = useQueryColumnValues(
+    results,
+    visibleCriterionFields,
+    viewMode === "table" && hasRun && !loading ? runScope : null,
+  );
+
+  const criterionColumns: QueryColumn[] = useMemo(() => columnFieldDefs.map((def) => {
+    const numeric = def.type === "number";
+    return {
+      id: criterionColumnId(def.value),
+      header: columnHeader(def),
+      defaultWidth: def.type === "text" ? 140 : 110,
+      group: `section:${def.section}`,
+      defaultVisible: false,
+      className: cn("text-muted-foreground", numeric && "text-right"),
+      headerClassName: numeric ? "text-right" : undefined,
+      accessor: (item: QueryResultItem) => {
+        const value = columnValues[item.id]?.[def.value];
+        if (value === undefined && isColumnPending(def.value)) {
+          return <span className="opacity-50">…</span>;
+        }
+        const text = formatColumnValue(def, value);
+        return <span className="truncate" title={text}>{text}</span>;
+      },
+      sortValue: (item: QueryResultItem) => columnSortValue(def, columnValues[item.id]?.[def.value]),
+    };
+  }), [columnFieldDefs, columnValues, isColumnPending]);
+
+  const allColumns = useMemo(() => [...baseColumns, ...criterionColumns], [baseColumns, criterionColumns]);
+
+  const columnGroups = useMemo(() => {
+    const groups: Array<[string, string]> = Object.entries(COLUMN_GROUPS);
+    const sections = [...new Set(columnFieldDefs.map((f) => f.section))];
+    for (const section of sections) groups.push([`section:${section}`, columnSectionLabel(section)]);
+    return groups;
+  }, [columnFieldDefs]);
+
   // Resolve which columns are visible
   const activeColumns = useMemo(() => {
     if (visibleCols.size === 0) {
@@ -817,6 +903,10 @@ export default function QueryPage() {
         // of it. Throwing a generic "Query failed" here would discard that.
         const data = await consumeProgressStream<{ items?: QueryResultItem[] }>(resp, onQueryProgress);
         setResults(data.items ?? []);
+        setRunScope({
+          serverIds: definition.serverIds,
+          ...(definition.arrServerIds && { arrServerIds: definition.arrServerIds }),
+        });
       } catch (error) {
         // A failed query is not an empty one. The results header asserts
         // "N results found", so leaving `hasRun` set rendered "0 results found"
@@ -981,6 +1071,9 @@ export default function QueryPage() {
       const runId = multi
         ? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
         : undefined;
+      // The whole run's size in actions, so the deletion ceiling is checked
+      // against the run rather than against each batch on its own.
+      const runUnits = countActionUnits(selectedItems, targetType);
 
       // "Did real work happen?" — skips don't count (an all-skipped batch changed
       // nothing), so they must not tip the partial-vs-total-failure decisions.
@@ -1016,7 +1109,7 @@ export default function QueryPage() {
           const resp = await fetch("/api/query/actions", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ query: definition, mediaItemIds: batches[b], runId, ...config }),
+            body: JSON.stringify({ query: definition, mediaItemIds: batches[b], runId, runUnits, ...config }),
           });
           if (!resp.ok) {
             // Auth/validation failures come back as plain JSON (before streaming).
@@ -1043,11 +1136,21 @@ export default function QueryPage() {
             failed: number;
             skipped: number;
             errors: string[];
+            /** The server refused the rest of the run (the deletion ceiling). */
+            stopped?: boolean;
           }>(resp, forward);
           totals.executed += data.executed;
           totals.failed += data.failed;
           totals.skipped += data.skipped;
           if (data.errors?.length) totals.errors.push(...data.errors);
+
+          if (data.stopped) {
+            toast.error(didWork() ? "Action stopped part-way" : "Action refused", {
+              description: `${data.errors?.[0] ?? "The server refused the run."}${didWork() ? ` Completed so far: ${summarize()}.` : ""}`,
+            });
+            if (didWork()) refresh();
+            return;
+          }
 
           // Circuit-breaker: a batch where failures DOMINATE and nothing executed
           // signals a systemic downstream failure (e.g. the Arr instance is down).
@@ -1104,6 +1207,7 @@ export default function QueryPage() {
       id: "__select",
       group: "core",
       defaultVisible: true,
+      alwaysPinned: true,
       sortable: false,
       defaultWidth: 44,
       className: "text-center",
@@ -1212,9 +1316,13 @@ export default function QueryPage() {
   };
 
   const toggleServer = (serverId: string) => {
-    setSelectedServerIds((prev) =>
-      prev.includes(serverId) ? prev.filter((s) => s !== serverId) : [...prev, serverId],
-    );
+    setSelectedServerIds((prev) => {
+      if (prev.includes(serverId)) return prev.filter((s) => s !== serverId);
+      const next = [...prev, serverId];
+      // Ticking every server is the same as "All servers" — store it as the
+      // empty selection so a server added later is included too.
+      return queryServers.every((s) => next.includes(s.id)) ? [] : next;
+    });
   };
 
   const navigateToItem = useCallback((item: QueryResultItem) => {
@@ -1410,6 +1518,56 @@ export default function QueryPage() {
           Query Scope
         </p>
         <div className="space-y-3">
+          {queryServers.length > 0 && (
+            <ScopeRow label="Servers">
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button variant="outline" size="sm" className="w-full justify-between sm:w-56">
+                    <span className="truncate">{serverSelectionLabel}</span>
+                    <ChevronDown className="ml-1.5 h-3.5 w-3.5 opacity-50" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-64 max-w-[calc(100vw-2rem)] p-0" align="start">
+                  <Command>
+                    {queryServers.length > 5 && <CommandInput placeholder="Search servers..." />}
+                    <CommandList>
+                      <CommandEmpty>No servers found.</CommandEmpty>
+                      <CommandGroup>
+                        <CommandItem value="__all_servers__" onSelect={() => setSelectedServerIds([])}>
+                          <Checkbox
+                            checked={selectedServerIds.length === 0}
+                            onCheckedChange={() => setSelectedServerIds([])}
+                            onClick={(e) => e.stopPropagation()}
+                            className="mr-2"
+                          />
+                          All servers
+                        </CommandItem>
+                      </CommandGroup>
+                      <Separator />
+                      <CommandGroup>
+                        {queryServers.map((s) => {
+                          const isSelected = selectedServerIds.includes(s.id);
+                          return (
+                            <CommandItem key={s.id} value={`${s.name} ${s.id}`} onSelect={() => toggleServer(s.id)}>
+                              <Checkbox
+                                checked={isSelected}
+                                onCheckedChange={() => toggleServer(s.id)}
+                                onClick={(e) => e.stopPropagation()}
+                                className="mr-2"
+                              />
+                              <span className="truncate">{s.name}</span>
+                              {s.type && <ServerTypeChip type={s.type} className="ml-1.5" />}
+                            </CommandItem>
+                          );
+                        })}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
+            </ScopeRow>
+          )}
+
           {/* Media types — segmented pills */}
           <ScopeRow label="Media types">
             <div className="space-y-2">
@@ -1450,56 +1608,6 @@ export default function QueryPage() {
               )}
             </div>
           </ScopeRow>
-
-          {servers.length > 1 && (
-            <ScopeRow label="Servers">
-              <Popover>
-                <PopoverTrigger asChild>
-                  <Button variant="outline" size="sm" className="w-full justify-between sm:w-56">
-                    <span className="truncate">
-                      {selectedServerIds.length === 0 ? "All servers" : `${selectedServerIds.length} selected`}
-                    </span>
-                    <ChevronDown className="ml-1.5 h-3.5 w-3.5 opacity-50" />
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-56 max-w-[calc(100vw-2rem)] p-0" align="start">
-                  <Command>
-                    <CommandInput placeholder="Search servers..." />
-                    <CommandList>
-                      <CommandEmpty>No servers found.</CommandEmpty>
-                      <CommandGroup>
-                        {servers.map((s) => {
-                          const isSelected = selectedServerIds.includes(s.id);
-                          return (
-                            <CommandItem key={s.id} onSelect={() => toggleServer(s.id)}>
-                              <Checkbox
-                                checked={isSelected}
-                                onCheckedChange={() => toggleServer(s.id)}
-                                onClick={(e) => e.stopPropagation()}
-                                className="mr-2"
-                              />
-                              {s.name}
-                              {s.type && <ServerTypeChip type={s.type} className="ml-1.5" />}
-                            </CommandItem>
-                          );
-                        })}
-                      </CommandGroup>
-                    </CommandList>
-                    {selectedServerIds.length > 0 && (
-                      <>
-                        <Separator />
-                        <div className="p-1">
-                          <Button variant="ghost" size="sm" className="w-full text-xs" onClick={() => setSelectedServerIds([])}>
-                            Clear all
-                          </Button>
-                        </div>
-                      </>
-                    )}
-                  </Command>
-                </PopoverContent>
-              </Popover>
-            </ScopeRow>
-          )}
 
           {/* Arr server selectors — shown when any Arr type has instances */}
           {(arrInstances.radarr.length > 0 || arrInstances.sonarr.length > 0 || arrInstances.lidarr.length > 0) && (() => {
@@ -1665,9 +1773,20 @@ export default function QueryPage() {
                 Columns
               </Button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-52 max-w-[calc(100vw-2rem)] max-h-80 overflow-y-auto p-2">
-              {Object.entries(COLUMN_GROUPS).map(([groupKey, groupLabel]) => {
-                const groupCols = allColumns.filter((c) => c.group === groupKey);
+            <DropdownMenuContent align="end" className="w-64 max-w-[calc(100vw-2rem)] max-h-96 overflow-y-auto p-2">
+              <Input
+                value={columnSearch}
+                onChange={(e) => setColumnSearch(e.target.value)}
+                onKeyDown={(e) => e.stopPropagation()}
+                placeholder="Search columns..."
+                className="mb-2 h-8 text-sm"
+              />
+              {columnGroups.map(([groupKey, groupLabel]) => {
+                const needle = columnSearch.trim().toLowerCase();
+                const groupCols = allColumns.filter((c) =>
+                  c.group === groupKey &&
+                  (!needle || String(c.header).toLowerCase().includes(needle) || groupLabel.toLowerCase().includes(needle)),
+                );
                 if (groupCols.length === 0) return null;
                 return (
                   <div key={groupKey} className="mb-2 last:mb-0">
@@ -1746,6 +1865,15 @@ export default function QueryPage() {
             </>
           )}
 
+          {viewMode === "table" && results.length > 0 && columnWarnings.length > 0 && (
+            <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-sm text-muted-foreground">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+              <div className="space-y-0.5">
+                {columnWarnings.map((w) => <p key={w}>{w}</p>)}
+              </div>
+            </div>
+          )}
+
           {results.length > 0 ? (
             viewMode === "table" ? (
               <DataTable
@@ -1756,6 +1884,7 @@ export default function QueryPage() {
                 defaultSortId="title"
                 defaultSortOrder="asc"
                 resizeStorageKey="query-results-col-widths"
+                pinning={QUERY_TABLE_PINNING}
                 renderHoverContent={(item) => (
                   <MediaHoverPopover
                     imageUrl={`/api/media/${item.id}/image${item.type === "SERIES" || item.parentTitle ? "?type=parent" : ""}`}

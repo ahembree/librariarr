@@ -2,6 +2,7 @@ import axios, { AxiosInstance } from "axios";
 import { logger } from "@/lib/logger";
 import { IntegrationError } from "@/lib/integration-error";
 import { configureRetry, NO_RETRY } from "@/lib/http-retry";
+import { isExistingExclusionError } from "@/lib/arr/exclusion";
 
 // Tracked-download states that mean the item is NOT actively downloading.
 // Anything else (downloading, queued, warning, etc.) counts as an active download.
@@ -170,7 +171,10 @@ export class RadarrClient {
     const { data } = await this.client.get<RadarrMovie[]>("/api/v3/movie", {
       params: { tmdbId },
     });
-    return data.length > 0 ? data[0] : null;
+    // Only a record carrying the requested id: a Radarr that ignored or
+    // dropped the filter answers with its whole library, and `data[0]` would
+    // then be an arbitrary movie for every action to resolve against.
+    return data.find((m) => m.tmdbId === tmdbId) ?? null;
   }
 
   async deleteMovie(
@@ -257,10 +261,16 @@ export class RadarrClient {
 
   async getQueue(movieId: number): Promise<{ downloading: boolean; status: string | null }> {
     try {
+      // `indexes: null` sends `movieIds=1`. axios' default `movieIds[]=1` is
+      // not bound by Radarr, which then skips the filter and returns the head
+      // of the whole queue — so any download made every movie read as
+      // downloading. Records are re-checked by id for the same reason.
       const { data } = await this.client.get("/api/v3/queue", {
-        params: { movieIds: [movieId], pageSize: 10 },
+        params: { movieIds: [movieId], pageSize: 50 },
+        paramsSerializer: { indexes: null },
       });
-      const records = data.records || [];
+      const records = ((data.records || []) as Array<{ movieId?: number; status?: string; trackedDownloadStatus?: string; trackedDownloadState?: string }>)
+        .filter((r) => r.movieId === movieId);
       if (records.length === 0) return { downloading: false, status: null };
       const active = records.find(isActiveDownloadRecord);
       if (!active) {
@@ -286,16 +296,22 @@ export class RadarrClient {
     await this.client.delete(`/api/v3/tag/${id}`);
   }
 
+  /** Idempotent: an exclusion that already exists counts as added. */
   async addExclusion(
     tmdbId: number,
     movieTitle: string,
     movieYear: number
   ): Promise<void> {
-    await this.client.post("/api/v3/exclusions", {
-      tmdbId,
-      movieTitle,
-      movieYear,
-    });
+    try {
+      await this.client.post("/api/v3/exclusions", {
+        tmdbId,
+        movieTitle,
+        movieYear,
+      });
+    } catch (error) {
+      if (isExistingExclusionError(error)) return;
+      throw error;
+    }
   }
 
   async getLanguages(): Promise<{ id: number; name: string }[]> {

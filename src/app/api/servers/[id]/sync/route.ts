@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { enqueueJob } from "@/lib/jobs/client";
 import { eventBus } from "@/lib/events/event-bus";
 import { MAIN_QUEUE, REQUESTED_SYNC_PRIORITY, TASK_SYNC_SERVER } from "@/lib/jobs/constants";
+import { serverSyncSchema, validateOptionalRequest } from "@/lib/validation";
 
 export async function POST(
   request: NextRequest,
@@ -31,21 +32,13 @@ export async function POST(
     );
   }
 
-  // Optional: scope sync to a specific library
-  let libraryKey: string | undefined;
-  try {
-    const body = await request.json();
-    if (body?.libraryKey && typeof body.libraryKey === "string") {
-      libraryKey = body.libraryKey;
-    }
-  } catch {
-    // No body or invalid JSON — sync all enabled libraries
-  }
-  // A library key is a short server-side id; anything longer is not one, and
-  // this route is reachable by API key.
-  if (libraryKey && libraryKey.length > 200) {
-    return NextResponse.json({ error: "Invalid libraryKey" }, { status: 400 });
-  }
+  // Optional: scope sync to a specific library. No body syncs every enabled
+  // library; a body that is not valid JSON or names no valid library key is
+  // refused — it used to be ignored, so a client's malformed request to sync
+  // ONE library synced all of them.
+  const { data: body, error } = await validateOptionalRequest(request, serverSyncSchema);
+  if (error) return error;
+  const libraryKey = body.libraryKey;
 
   if (libraryKey) {
     const library = await prisma.library.findFirst({

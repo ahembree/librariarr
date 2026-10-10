@@ -16,6 +16,11 @@ import {
  * synchronous, so concurrent requests cannot both fit into the same remainder.
  * An attempt that then fails in the Arr app is not refunded: a write that timed
  * out may still have been applied, so the budget counts what was attempted.
+ * What provably never happened IS given back (`release`): an item the run
+ * skipped without contacting the Arr app (its instance was down, or it was
+ * cancelled meanwhile), or an exception that was already gone when the delete
+ * ran. Otherwise four requests against a Radarr that is down spend every key's
+ * hourly budget on deletions none of which were sent.
  *
  * Pinned to `globalThis`: the execute and exception routes reserve from a route
  * bundle, and an execution run queued through the API reserves from the job
@@ -40,7 +45,16 @@ type DestructiveRefusal =
   | { ok: false; status: 400; error: string }
   | { ok: false; status: 429; error: string; retryAfterSeconds: number };
 
-type DestructiveReservation = { ok: true; remaining: number } | DestructiveRefusal;
+/** A granted reservation. `release(n)` gives back `n` of it that was never acted on. */
+export interface ApiDestructiveReservation {
+  ok: true;
+  remaining: number;
+  release: (count: number) => void;
+}
+
+type DestructiveReservation = ApiDestructiveReservation | DestructiveRefusal;
+
+const NOTHING_TO_RELEASE = (): void => {};
 
 /**
  * Reserve `count` destructive items for one request, or refuse the whole
@@ -53,7 +67,9 @@ export function reserveApiDestructive(count: number, now = Date.now()): Destruct
   while (list.length > 0 && now - list[0].at >= API_DESTRUCTIVE_WINDOW_MS) list.shift();
   const used = list.reduce((sum, s) => sum + s.count, 0);
 
-  if (count <= 0) return { ok: true, remaining: Math.max(0, API_DESTRUCTIVE_PER_HOUR - used) };
+  if (count <= 0) {
+    return { ok: true, remaining: Math.max(0, API_DESTRUCTIVE_PER_HOUR - used), release: NOTHING_TO_RELEASE };
+  }
 
   if (count > API_DESTRUCTIVE_PER_REQUEST) {
     return {
@@ -90,8 +106,17 @@ export function reserveApiDestructive(count: number, now = Date.now()): Destruct
     };
   }
 
-  list.push({ at: now, count });
-  return { ok: true, remaining: API_DESTRUCTIVE_PER_HOUR - used - count };
+  const spend: Spend = { at: now, count };
+  list.push(spend);
+  return {
+    ok: true,
+    remaining: API_DESTRUCTIVE_PER_HOUR - used - count,
+    // Only ever out of this reservation, and never below zero: a spend that
+    // has already aged out of the window is no longer counted anyway.
+    release: (n: number) => {
+      if (n > 0) spend.count = Math.max(0, spend.count - n);
+    },
+  };
 }
 
 /** The HTTP answer for a refused reservation (429s carry `Retry-After`). */

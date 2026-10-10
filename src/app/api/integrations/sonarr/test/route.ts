@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { SonarrClient } from "@/lib/arr/sonarr-client";
 import { validateRequest, arrTestSchema } from "@/lib/validation";
+import { sanitizeErrorDetail } from "@/lib/api/sanitize";
 
 export async function POST(request: NextRequest) {
   const session = await getSession();
@@ -15,5 +16,7 @@ export async function POST(request: NextRequest) {
 
   const client = new SonarrClient(url, apiKey);
   const result = await client.testConnection();
-  return NextResponse.json(result);
+  return NextResponse.json(
+    result.ok ? result : { ...result, error: sanitizeErrorDetail(result.error) },
+  );
 }

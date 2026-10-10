@@ -50,6 +50,14 @@ vi.mock("@/lib/sync/sync-watch-history", () => ({
   syncWatchHistory: mockSyncWatchHistory,
 }));
 
+const { mockInvalidateMediaCaches } = vi.hoisted(() => ({
+  mockInvalidateMediaCaches: vi.fn(),
+}));
+
+vi.mock("@/lib/cache/invalidate", () => ({
+  invalidateMediaCaches: mockInvalidateMediaCaches,
+}));
+
 import { POST } from "@/app/api/media/history/sync/route";
 
 /** Progress event as it arrives on the wire (a missing `fraction` stays missing). */
@@ -100,6 +108,7 @@ describe("POST /api/media/history/sync", () => {
     await cleanDatabase();
     clearMockSession();
     mockSyncWatchHistory.mockReset();
+    mockInvalidateMediaCaches.mockClear();
     // Default: a silent sync that reports no progress at all.
     mockSyncWatchHistory.mockResolvedValue({ count: 0 });
 
@@ -179,6 +188,21 @@ describe("POST /api/media/history/sync", () => {
       counts: { [server.id]: 120 },
       cancelled: false,
     });
+  });
+
+  it("drops every media-derived cache, not only the filter dropdowns", async () => {
+    // The sync rewrites plays and reconciles playCount/lastPlayedAt, which the
+    // stats and query-action caches read.
+    const server = await createTestServer(userId, { name: "Plex Main" });
+    mockSyncWatchHistory.mockResolvedValue({ count: 3 });
+
+    const response = await callRoute(POST, {
+      method: "POST",
+      body: { serverId: server.id },
+    });
+    await expectStreamResult<SyncResult>(response);
+
+    expect(mockInvalidateMediaCaches).toHaveBeenCalled();
   });
 
   it("emits one phase per enabled server when no serverId is given", async () => {

@@ -468,29 +468,40 @@ describe("TracearrClient", () => {
       expect(page.nextCursor).toBeNull();
     });
 
-    it("returns no records when data is absent", async () => {
+    // A body that is not a history response must FAIL, never read as an
+    // exhausted keyset: `{ records: [], nextCursor: null }` is what lets the
+    // archive walk mark the backfill complete, so a proxy's HTML page or an
+    // error document mid-archive used to abandon every older play.
+    it("throws when data is absent", async () => {
       mockAxiosInstance.get.mockResolvedValueOnce({
         data: { meta: { nextCursor: null, pageSize: 25 } },
       });
-      await expect(client.getHistoryPage("srv-1")).resolves.toEqual({
-        records: [],
-        nextCursor: null,
-      });
+      await expect(client.getHistoryPage("srv-1")).rejects.toThrow(
+        /unexpected response/,
+      );
     });
 
-    it("returns no records when data is not an array", async () => {
+    it("throws when data is not an array", async () => {
       mockAxiosInstance.get.mockResolvedValueOnce(historyBody({ oops: true }, "c1"));
-      const page = await client.getHistoryPage("srv-1");
-      expect(page.records).toEqual([]);
-      expect(page.nextCursor).toBe("c1");
+      await expect(client.getHistoryPage("srv-1")).rejects.toThrow(
+        /unexpected response/,
+      );
     });
 
-    it("survives an empty body", async () => {
+    it("throws on an empty body", async () => {
       mockAxiosInstance.get.mockResolvedValueOnce({ data: null });
-      await expect(client.getHistoryPage("srv-1")).resolves.toEqual({
-        records: [],
-        nextCursor: null,
+      await expect(client.getHistoryPage("srv-1")).rejects.toThrow(
+        /unexpected response/,
+      );
+    });
+
+    it("throws on an HTML page served with a 200", async () => {
+      mockAxiosInstance.get.mockResolvedValueOnce({
+        data: "<!doctype html><title>Sign in</title>",
       });
+      await expect(client.getHistoryPage("srv-1")).rejects.toThrow(
+        /unexpected response/,
+      );
     });
 
     it("round-trips a full HistoryRecord with every field readable", async () => {

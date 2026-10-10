@@ -63,7 +63,7 @@ curl -H "X-Api-Key: lbr_YOUR_KEY" https://librariarr.example.com/api/v1/me
 
 | Scope | Allows |
 |-------|--------|
-| `media:read` | Browse and search movies, series and music; item details, artwork, library stats and watch history. Item details include each file's path on disk and the address of the media server holding it |
+| `media:read` | Browse and search movies, series and music; item details, artwork, library stats and watch history. File paths and media server addresses are never returned |
 | `servers:read` | List media servers and their libraries, and read sync status. Server tokens are never returned |
 | `sync:write` | Start and cancel library syncs (includes `servers:read`) |
 | `lifecycle:read` | Rule sets, matches, pending and completed actions, exceptions and deletion stats |
@@ -98,20 +98,20 @@ Most endpoints are the same routes the web app uses, served under `/api/v1`: the
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/v1/media/movies` | Movies. Pagination: `page`, `limit` (≤ 100, `0` = all), `offset`; sorting: `sortBy`, `sortOrder`; `search`, `startsWith` (a letter or `#`), `serverId`, plus the library filters (`resolution=4K\|1080P`, `genre`, `yearConditions=gte:2020`, …) |
-| `GET` | `/api/v1/media/series` | Episodes, with the same parameters as movies plus `seriesKey` and `seasonNumber` |
-| `GET` | `/api/v1/media/series/grouped` | Shows, with episode and watched counts. `page`, `limit`, `search`, `startsWith`, `sortBy`, `sortOrder`, `serverId` |
-| `GET` | `/api/v1/media/series/seasons` | Seasons of one show: `seriesKey` (from the grouped listing) |
-| `GET` | `/api/v1/media/music` | Tracks; `parentTitle` (artist) and `albumTitle` narrow the list |
-| `GET` | `/api/v1/media/music/grouped` | Artists |
-| `GET` | `/api/v1/media/music/albums` | Albums of one artist: `parentTitle` |
-| `GET` | `/api/v1/media/search` | Search by title: `q`, `type` (`MOVIE`, `SERIES` or `MUSIC`) |
+| `GET` | `/api/v1/media/movies` | Movies. Pagination: `page`, `limit` (default 50, at most 100, `0` = all), `offset` (overrides `page`); sorting: `sortBy`, `sortOrder`; `search`, `startsWith` (a letter or `#`), `serverId`, plus the library filters (`resolution=4K\|1080P`, `genre`, `yearConditions=gte:2020`, …) |
+| `GET` | `/api/v1/media/series` | Episodes, with the same parameters as movies except `startsWith`, plus `seriesKey` and `seasonNumber` |
+| `GET` | `/api/v1/media/series/grouped` | Shows, with episode and watched counts. `page`, `limit` (default 50, at most 200, `0` = all), `offset`, `search`, `startsWith`, `sortBy`, `sortOrder`, `serverId` |
+| `GET` | `/api/v1/media/series/seasons` | Seasons of one show: `seriesKey` (from the grouped listing); `serverId` optional |
+| `GET` | `/api/v1/media/music` | Tracks, with the same parameters as movies except `startsWith`; `parentTitle` (artist) and `albumTitle` narrow the list |
+| `GET` | `/api/v1/media/music/grouped` | Artists, with track and album counts. `page`, `limit` (default 50, at most 200, `0` = all), `offset`, `search`, `startsWith`, `sortBy`, `sortOrder`, `serverId` |
+| `GET` | `/api/v1/media/music/albums` | Albums of one artist: `parentTitle`; `serverId` optional |
+| `GET` | `/api/v1/media/search` | Search by title: `q`, `type` (`MOVIE`, `SERIES` or `MUSIC`). `seriesScope=true` returns shows instead of episodes, `musicScope=true` artists and albums instead of tracks |
 | `GET` | `/api/v1/media/recently-added` | Newest additions: `limit` (1–50, default 10), `type`, `serverId` |
 | `GET` | `/api/v1/media/stats` | Library totals: counts, size, and resolution, codec and other breakdowns. `serverId` optional |
 | `GET` | `/api/v1/media/history` | Play history: `page`, `limit` (≤ 200), `search`, `username`, `type` (`MOVIE`, `SERIES` or `MUSIC`; several separated by `\|`), `serverId`, `sortBy`, `sortOrder` |
 | `GET` | `/api/v1/media/{id}` | One item with its streams, external ids and file details. Unlike the app's own view, it omits the file path and its servers' addresses and machine ids |
 | `GET` | `/api/v1/media/{id}/plays` | That item's plays (user, date and time, device): `page`, `limit` (≤ 200, default 50), `serverId` |
-| `GET` | `/api/v1/media/{id}/image` | Artwork (an image, not JSON). `type` (`art`, `parent`, `season`; poster by default) and `w` (`400`, `640` or `800`) |
+| `GET` | `/api/v1/media/{id}/image` | Artwork (an image, not JSON). `type` (`art`, `parent`, `season`, or `role` with `index` for a cast member's photo; poster by default) and `w` (`400`, `640` or `800`) |
 
 ### Servers and syncs
 
@@ -120,7 +120,7 @@ Most endpoints are the same routes the web app uses, served under `/api/v1`: the
 | `GET` | `/api/v1/servers` | `servers:read` | Media servers with their libraries and latest sync. Tokens, the servers' addresses, machine ids and owner are omitted |
 | `GET` | `/api/v1/sync/status` | `servers:read` | Running and recent sync jobs. Server addresses and machine ids are omitted, and a failed job's error has internal paths and addresses redacted |
 | `POST` | `/api/v1/servers/{id}/sync` | `sync:write` | Sync one server. Optional body `{ "libraryKey": "…" }` to sync one library. `409` if a sync is already running |
-| `POST` | `/api/v1/sync/cancel` | `sync:write` | Stop a server's running or queued sync: `{ "serverId": "…" }` |
+| `POST` | `/api/v1/sync/cancel` | `sync:write` | Stop a server's running or queued sync: `{ "serverId": "…" }`. `404` if the server has no running or queued sync |
 | `POST` | `/api/v1/jobs/sync` | `sync:write` | Queue a sync of every enabled server, the same as **Run now** under Settings → Scheduling. Answers `202` with `{ "queued": true, "jobs": 2 }`, `jobs` being the number of servers queued (a server already syncing is skipped, so `0` is possible). `500` if a sync could not be queued |
 
 ### Lifecycle
@@ -132,11 +132,11 @@ Most endpoints are the same routes the web app uses, served under `/api/v1`: the
 | `GET` | `/api/v1/lifecycle/actions` | `lifecycle:read` | Actions by `status`: `PENDING` (default), `COMPLETED`, `FAILED` or `ALL`. A series action's `mediaItem.title` is the show, or `<Show> SxxExx` (for example `Breaking Bad S03E10`) when the action acts on a single episode; its `parentTitle` is `null`. A failed action's error has internal paths and addresses redacted. Not paged: each call counts as 20 requests |
 | `GET` | `/api/v1/lifecycle/exceptions` | `lifecycle:read` | Exceptions; `type` = `MOVIE`, `SERIES`, `MUSIC` or `ALL`. Not paged: each call counts as 20 requests |
 | `GET` | `/api/v1/lifecycle/stats` | `lifecycle:read` | Deletion statistics |
-| `POST` | `/api/v1/lifecycle/exceptions` | `lifecycle:write` | Exclude an item from every rule: `{ "mediaItemId": "…", "reason": "…", "scope": "individual" }` (`scope` can also be `series`, `artist` or `album`) |
+| `POST` | `/api/v1/lifecycle/exceptions` | `lifecycle:write` | Exclude an item from every rule: `{ "mediaItemId": "…", "reason": "…", "scope": "individual" }` (`scope` can also be `series`, `artist` or `album`). Answers `201` |
 | `POST` | `/api/v1/jobs/detection` | `lifecycle:write` | Queue lifecycle detection for every enabled rule set, like **Run now**. Answers `202` with `{ "queued": true, "jobs": 1 }`; read the result from `/api/v1/lifecycle/rules/matches` once the job has run |
 | `DELETE` | `/api/v1/lifecycle/exceptions` | `lifecycle:execute` | Remove exceptions: `{ "ids": ["…"] }`, at most 25. Counts against the [deletion limits](#deletion-limits) |
 | `DELETE` | `/api/v1/lifecycle/exceptions/{id}` | `lifecycle:execute` | Remove one exception. Counts against the [deletion limits](#deletion-limits) |
-| `POST` | `/api/v1/lifecycle/actions/execute` | `lifecycle:execute` | Run a rule set's action now on named matches: `{ "ruleSetId": "…", "mediaItemIds": ["…"] }`. `mediaItemIds` is required (1 to 25 ids); there is no "every match". Only ids that are current matches of the rule set are acted on. The rule set must be enabled, with actions turned on (`400` otherwise). `409` if an item changed since it matched, or while another execution of the same rule set covers one of the named items (so an overlapping call never repeats its deletions; calls naming different items run side by side). A deleting action counts against the [deletion limits](#deletion-limits) |
+| `POST` | `/api/v1/lifecycle/actions/execute` | `lifecycle:execute` | Run a rule set's action now on named matches: `{ "ruleSetId": "…", "mediaItemIds": ["…"] }`. `mediaItemIds` is required (1 to 25 ids); there is no "every match". Only ids that are current matches of the rule set are acted on: an id that is not a match, or an item protected by an exception, is skipped and the rest run, so compare `executed` + `failed` with what you sent (`400` when nothing is left). The rule set must be enabled, with actions turned on (`400` otherwise). `409` if an item changed since it matched, or while another execution of the same rule set covers one of the named items (so an overlapping call never repeats its deletions; calls naming different items run side by side). A deleting action counts against the [deletion limits](#deletion-limits) |
 | `POST` | `/api/v1/jobs/execution` | `lifecycle:execute` | Queue lifecycle execution (every due pending action), like **Run now**. Answers `202` with `{ "queued": true, "jobs": 1 }`. The run is held, deleting nothing, if it would exceed the [deletion limits](#deletion-limits) |
 
 ### Streams
@@ -145,7 +145,7 @@ Most endpoints are the same routes the web app uses, served under `/api/v1`: the
 |--------|------|-------|-------------|
 | `GET` | `/api/v1/tools/sessions` | `streams:read` | Active playback sessions on every enabled server, without the path of the file being played |
 | `GET` | `/api/v1/tools/maintenance` | `streams:read` | Maintenance mode status |
-| `POST` | `/api/v1/tools/sessions/terminate` | `streams:write` | Stop playback: `{ "serverId": "…" or "all", "sessionIds": ["…"], "message": "…" }` (omit `sessionIds` to stop every stream on the server). Session ids are the `sessionId` values `/api/v1/tools/sessions` returns; anything but letters, digits, `-` and `_` is refused with `400` |
+| `POST` | `/api/v1/tools/sessions/terminate` | `streams:write` | Stop playback: `{ "serverId": "…" or "all", "sessionIds": ["…"], "message": "…" }` (omit `sessionIds` to stop every stream on the server). Session ids are the `sessionId` values `/api/v1/tools/sessions` returns; anything but letters, digits, `-` and `_` is refused with `400`, and a `serverId` that is not one of your enabled servers with `404` |
 | `PUT` | `/api/v1/tools/maintenance` | `streams:write` | Turn maintenance mode on or off: `{ "enabled": true, "message": "Back soon", "delay": 30 }`. `message` (up to 500 characters) and `delay` (0–3600 seconds) are optional and keep their current values when left out. Who is exempt from maintenance mode and whether Discord is notified can only be changed in Librariarr; sending those fields is a `400` |
 
 ### System
@@ -197,7 +197,7 @@ Errors are JSON: `{ "error": "…" }`, sometimes with a `details` array (validat
 
 ## Rate limits
 
-- **Per key:** 600 requests per minute. Past that, the key's requests are answered `429` until the minute is up. A request with `limit=0` returns a whole library rather than a page, so it counts as 20 requests — thirty full listings a minute. `limit` is read as a number, so every spelling of zero (`00`, `+0`, `0.0`) is a full listing and costs the same. The listings with no paging — rule matches, actions and exceptions — always return everything, so every call to them counts as 20 too.
+- **Per key:** 600 requests per minute. Past that, the key's requests are answered `429` until the minute is up. A request with `limit=0` to a listing that returns everything for it — movies, episodes, tracks, shows and artists — returns a whole library rather than a page, so it counts as 20 requests: thirty full listings a minute. Elsewhere `limit=0` is an ordinary request. `limit` is read as a number, so every spelling of zero (`00`, `+0`, `0.0`) is a full listing and costs the same. The listings with no paging — rule matches, actions and exceptions — always return everything, so every call to them counts as 20 too.
 - **Unrecognised keys:** at most 1,000 keys that turn out not to exist are looked up per minute, across every client. Past that, until the minute is up, a key that has not been used successfully in the last 15 minutes is answered `429` without being looked up; keys in use are unaffected. This bounds what a flood of random keys can cost, at the price of an idle integration waiting out the minute while such a flood lasts.
 - **Failing keys:** a key that fails 20 times within 15 minutes (deleted, expired, mistyped) is answered `429` for the rest of that window without being looked up, so an application still using a deleted key stops costing anything. Failures are counted per key, not per address, so they never lock out a key that works, even when every client reaches Librariarr from the same address (containers on one Docker host, or `TRUST_PROXY_HEADERS=false`).
 
@@ -208,7 +208,7 @@ An API key can never delete in bulk. Bulk deletion stays with Librariarr itself:
 - **Every item is named.** `POST /lifecycle/actions/execute` requires `mediaItemIds`. Leaving it out, sending an empty list, or sending any field it does not know is a `400`. There is no way to say "every match".
 - **25 per request.** One request can act on at most 25 items, and remove at most 25 exceptions.
 - **100 per hour, across every key.** Items deleted through the API and exceptions removed through the API share one budget of 100 in any rolling hour. A request that would go over it is answered `429` with `Retry-After`, and nothing in it runs. Actions that delete nothing (unmonitor, tags, search, quality profile) are not counted.
-- **Whole requests only.** A request is either run in full or not at all, never the first few items of it. A refused request is not charged.
+- **Whole requests only.** A request is either run in full or not at all, never the first few items of it. A refused request is not charged. Neither is anything that provably did not happen: items never sent because their Sonarr, Radarr or Lidarr was not answering, and exceptions that were already gone when the removal ran, are given back to the budget. A deletion that reached the Arr app and failed still counts, because it may have been applied.
 - **Queued runs too.** An execution queued with `POST /jobs/execution` is held when it would delete more than 25 items or go over the hourly budget. Nothing is deleted, the actions stay pending, and a Discord message says so when a webhook is set (at most once every 15 minutes, however often the run is queued). They then run on the rule set's schedule, or from the Pending page. A held API run does not postpone the scheduled one.
 - **The app's own checks still apply.** The item must be a current match of an enabled rule set with actions turned on, lifecycle exceptions are honoured (on every server's copy), and the deletion limit under Settings applies first.
 - **The right item.** An item re-matched on the media server after the rules matched it (a Plex "Fix Match" or a Jellyfin "Identify") is refused with `409`, because acting on it would reach the new title. Run detection again, and review the matches: detection refreshes every match it keeps, so an item that still matches the rules under its new title can then be executed, and one that no longer matches drops out.

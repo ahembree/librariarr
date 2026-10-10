@@ -21,6 +21,7 @@ vi.mock("@/lib/logger", () => ({
 }));
 
 import { GET } from "@/app/api/media/[id]/plays/route";
+import { MAX_SKIP } from "@/lib/api/pagination";
 
 /**
  * `GET /api/media/[id]/plays` — the per-play watch history for ONE item, which
@@ -230,6 +231,18 @@ describe("GET /api/media/[id]/plays", () => {
 
     const huge = await expectJson<PlaysResponse>(await get(movie.id, "?limit=99999"), 200);
     expect(huge.pagination.limit).toBeLessThanOrEqual(200);
+  });
+
+  it("answers an absurd page with an empty page and echoes a bounded page number", async () => {
+    const { user, movie } = await fixture();
+    setMockSession({ isLoggedIn: true, userId: user.id });
+
+    const body = await expectJson<PlaysResponse & { pagination: { page: number } }>(
+      await get(movie.id, "?page=99999999999999999999"),
+      200,
+    );
+    expect(body.items).toEqual([]);
+    expect(body.pagination.page).toBe(MAX_SKIP);
   });
 
   it("scopes to one server when asked", async () => {

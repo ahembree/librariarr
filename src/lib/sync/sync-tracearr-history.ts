@@ -26,6 +26,7 @@ import {
   recordTracearrImportPage,
   type TracearrImportHandle,
 } from "@/lib/sync/tracearr-import-activity";
+import { TracearrMappingChangedError } from "@/lib/sync/tracearr-mapping-changed";
 
 /**
  * Incremental import of Tracearr play history into `WatchHistory`.
@@ -625,6 +626,31 @@ async function runTracearrImport(
   );
   const client = new TracearrClient(instance.url, instance.apiKey);
 
+  // The resume cursor as this run found it — compared against when the run
+  // records how far it reached, and required to still be there when it writes
+  // (see the backfill write below).
+  let cursorAtStart = server.tracearrBackfillCursorAt;
+
+  // Stored backfill state with no rows behind it: a purge or a config-only
+  // restore removed them, and neither resets the state. Reset it here, in the
+  // database and not only for this run. Only clearing it locally restarted the
+  // walk for ONE slice: that slice's rows made the next slice read the stale
+  // "complete" flag as true again, so the archive walk stopped after five
+  // minutes, reported itself finished, and re-established the evidence marker
+  // over a history that was mostly missing.
+  if (window.staleBackfillState) {
+    logger.warn(
+      "WatchHistory",
+      `"${serverName}" is marked fully backfilled but holds no Tracearr plays — ` +
+        `restarting the archive walk from the newest play`,
+    );
+    await persistMappedState(serverId, mappedServerId, serverName, {
+      tracearrBackfillComplete: false,
+      tracearrBackfillCursorAt: null,
+    });
+    cursorAtStart = null;
+  }
+
   // One index for the whole run: a first import is tens of thousands of
   // records, so resolution must not cost a query per record.
   const joinIndex = await buildTracearrJoinIndex(serverId);
@@ -901,7 +927,11 @@ async function runTracearrImport(
         // append/upsert-only, so a failure on a later page leaves these durably
         // imported rather than rolling back the run.
         for (let i = 0; i < rows.length; i += BATCH_SIZE) {
-          const written = await writeBatch(serverId, rows.slice(i, i + BATCH_SIZE));
+          const written = await writeBatch(
+            serverId,
+            mappedServerId,
+            rows.slice(i, i + BATCH_SIZE),
+          );
           counters.inserted += written.inserted;
           counters.updated += written.updated;
           counters.vanished += written.vanished;
@@ -963,6 +993,18 @@ async function runTracearrImport(
         cursor = next;
       }
     } catch (error) {
+      // The mapping moved under this run (the server PUT re-pointed or unlinked
+      // it and wiped the rows). Nothing of this source may be written any more;
+      // the next run reads the new mapping. A clean stop, not a failure to reach
+      // Tracearr, so the backfill task re-queues instead of backing off.
+      if (error instanceof TracearrMappingChangedError) {
+        logger.info(
+          "WatchHistory",
+          `Tracearr history import for "${serverName}" stopped after ${pages} page(s) — ` +
+            `the server's watch-history source changed while it ran`,
+        );
+        return "stopped";
+      }
       // A fetch or write failure must never reach the job runner as a failed
       // sync: everything already written is committed and correct, and the next
       // run resumes from the boundary those rows establish.
@@ -1096,9 +1138,7 @@ async function runTracearrImport(
     // Null-ish rather than `=== null`: an unmeasured cursor is the common case
     // and must count as "anything is further back than nothing".
     const cursorAdvanced =
-      reached !== null &&
-      (!server.tracearrBackfillCursorAt ||
-        reached < server.tracearrBackfillCursorAt);
+      reached !== null && (!cursorAtStart || reached < cursorAtStart);
 
     // "Exhausted" alone is not enough to declare the archive imported: a walk
     // whose very first page comes back `{ records: [], nextCursor: null }` is
@@ -1130,23 +1170,35 @@ async function runTracearrImport(
     if (finished) backfillComplete = true;
 
     if (cursorAdvanced || finished) {
-      markerWritten = finished;
-      await persistMappedState(serverId, mappedServerId, serverName, {
-        ...(cursorAdvanced ? { tracearrBackfillCursorAt: reached } : {}),
-        ...(finished
-          ? {
-              tracearrBackfillComplete: true,
-              // Established: the archive has been walked to its oldest play, so
-              // play-activity criteria can be answered faithfully again.
-              // Written with the completion flag in the SAME guarded statement,
-              // so it can never be missed or land without it.
-              watchHistorySyncedAt: new Date(),
-            }
-          : {}),
-      });
+      // Only if nothing restarted the walk while this slice ran. A purge
+      // restarts it by moving the cursor (`restartTracearrBackfill`), and this
+      // slice's progress — or its "finished" — describes rows the purge has
+      // since removed; written over the restart, the walk would resume deep in
+      // the archive and never re-import the newer stretch.
+      const stored = await persistMappedState(
+        serverId,
+        mappedServerId,
+        serverName,
+        {
+          ...(cursorAdvanced ? { tracearrBackfillCursorAt: reached } : {}),
+          ...(finished
+            ? {
+                tracearrBackfillComplete: true,
+                // Established: the archive has been walked to its oldest play,
+                // so play-activity criteria can be answered faithfully again.
+                // Written with the completion flag in the SAME guarded
+                // statement, so it can never be missed or land without it.
+                watchHistorySyncedAt: new Date(),
+              }
+            : {}),
+        },
+        { tracearrBackfillCursorAt: cursorAtStart, tracearrBackfillComplete: false },
+      );
+      markerWritten = finished && stored;
+      if (!stored) backfillComplete = false;
     }
 
-    if (finished) {
+    if (markerWritten) {
       logger.info(
         "WatchHistory",
         `Tracearr history for "${serverName}" is fully backfilled — later runs ` +
@@ -1412,6 +1464,13 @@ interface ImportWindow {
   until?: Date;
   /** Whether this server has any stored Tracearr rows at all. */
   hasRows: boolean;
+  /**
+   * The stored backfill state says "complete" (and carries a resume cursor)
+   * while the server holds no Tracearr rows — they were removed out from under
+   * it (a purge, a config-only restore). The caller resets that state, and this
+   * window already ignores it.
+   */
+  staleBackfillState: boolean;
 }
 
 /**
@@ -1456,6 +1515,15 @@ async function resolveImportWindow(
     oldestOpenChain: null,
   };
 
+  const hasRows = agg.maxWatchedAt !== null;
+  // "Complete" with no rows is a contradiction: the rows are what the flag and
+  // the cursor describe. Neither may steer this run — trusting the flag walks
+  // nothing, and trusting the cursor (the archive's far end) walks nothing
+  // either — so the walk starts again from the newest play.
+  const staleBackfillState = backfillComplete && !hasRows;
+  const complete = backfillComplete && hasRows;
+  const cursor = staleBackfillState ? null : cursorAt;
+
   return {
     since: resolveSince(agg.maxWatchedAt, agg.oldestOpenChain),
     // Only meaningful while the backfill is unfinished; when it is finished the
@@ -1463,10 +1531,9 @@ async function resolveImportWindow(
     // Prefer where the walk actually REACHED over where it last managed to
     // store something. They diverge exactly when a stretch of history is
     // unstorable (media since deleted), which is the live-lock case.
-    until: backfillComplete
-      ? undefined
-      : (cursorAt ?? agg.minWatchedAt ?? undefined),
-    hasRows: agg.maxWatchedAt !== null,
+    until: complete ? undefined : (cursor ?? agg.minWatchedAt ?? undefined),
+    hasRows,
+    staleBackfillState,
   };
 }
 
@@ -1512,9 +1579,14 @@ async function persistMappedState(
     tracearrBackfillCursorAt?: Date | null;
     tracearrBackfillComplete?: boolean;
   },
+  /** Further column values the row must still hold for the write to apply. */
+  expect: {
+    tracearrBackfillCursorAt?: Date | null;
+    tracearrBackfillComplete?: boolean;
+  } = {},
 ): Promise<boolean> {
   const { count } = await prisma.mediaServer.updateMany({
-    where: { id: serverId, tracearrServerId },
+    where: { id: serverId, tracearrServerId, ...expect },
     data,
   });
 
@@ -1522,8 +1594,8 @@ async function persistMappedState(
     logger.info(
       "WatchHistory",
       `Discarded Tracearr backfill state for "${serverName}" — its watch-history ` +
-        `source changed while this run was walking, so the progress belongs to a ` +
-        `mapping the server no longer has`,
+        `source changed, or its archive walk was restarted, while this run was ` +
+        `walking, so the progress no longer describes the server's history`,
     );
     return false;
   }
@@ -1553,7 +1625,12 @@ export async function importTracearrRecords(
   records: TracearrHistoryRecord[],
   joinIndex: TracearrJoinIndex,
   /** See `resolveUsername` — without this the pass stores the wrong vocabulary. */
-  accountNames?: Map<string, string>,
+  accountNames: Map<string, string> | undefined,
+  /**
+   * The Tracearr server the records were fetched from. Every write checks the
+   * media server is still mapped to it — see `writeBatch`.
+   */
+  tracearrServerId: string,
 ): Promise<{ inserted: number; updated: number; skipped: number }> {
   const now = new Date();
   const rows: PendingRow[] = [];
@@ -1587,7 +1664,11 @@ export async function importTracearrRecords(
   let inserted = 0;
   let updated = 0;
   for (let i = 0; i < rows.length; i += BATCH_SIZE) {
-    const written = await writeBatch(serverId, rows.slice(i, i + BATCH_SIZE));
+    const written = await writeBatch(
+      serverId,
+      tracearrServerId,
+      rows.slice(i, i + BATCH_SIZE),
+    );
     inserted += written.inserted;
     updated += written.updated;
   }
@@ -1607,48 +1688,72 @@ export async function importTracearrRecords(
  */
 async function writeBatch(
   serverId: string,
+  tracearrServerId: string,
   pending: PendingRow[],
 ): Promise<{ inserted: number; updated: number; vanished: number }> {
   if (pending.length === 0) return { inserted: 0, updated: 0, vanished: 0 };
 
-  const batch = await rowsWithLiveMediaItems(pending);
-  const vanished = pending.length - batch.length;
-  // Nothing survived the check. `INSERT … VALUES` with no tuples is a syntax
-  // error, not a no-op, so there is no statement to send at all.
-  if (batch.length === 0) return { inserted: 0, updated: 0, vanished };
+  return prisma.$transaction(async (tx) => {
+    // Still mapped to the Tracearr server these rows came from? A run reads
+    // the mapping once and writes for minutes; the server PUT re-points or
+    // unlinks it and then wipes the server's rows. `FOR SHARE` makes the check
+    // and the insert one unit against that PUT: its UPDATE of this row waits
+    // for this transaction, so either these rows land before the mapping moves
+    // (and the PUT's wipe removes them), or the check sees the new mapping and
+    // nothing is written. Checked any later and a stale source's plays outlive
+    // the wipe.
+    const mapped = await tx.$queryRawUnsafe<Array<{ id: string }>>(
+      `SELECT "id" FROM "MediaServer"
+        WHERE "id" = $1 AND "tracearrServerId" = $2
+        FOR SHARE`,
+      serverId,
+      tracearrServerId,
+    );
+    if (mapped.length === 0) throw new TracearrMappingChangedError(serverId);
 
-  const eventIds = batch.map((entry) => entry.row.sourceEventId as string);
-  const existing = await prisma.$queryRawUnsafe<
-    Array<{ sourceEventId: string }>
-  >(
-    `SELECT "sourceEventId" FROM "WatchHistory"
-      WHERE "mediaServerId" = $1 AND "sourceEventId" = ANY($2)`,
-    serverId,
-    eventIds,
-  );
-  const updated = existing.length;
+    const batch = await rowsWithLiveMediaItems(tx, pending);
+    const vanished = pending.length - batch.length;
+    // Nothing survived the check. `INSERT … VALUES` with no tuples is a syntax
+    // error, not a no-op, so there is no statement to send at all.
+    if (batch.length === 0) return { inserted: 0, updated: 0, vanished };
 
-  // Split by username confidence: the merge rule for that one column differs
-  // between the two classes and a statement carries a single `ON CONFLICT`
-  // clause. One of the groups is normally empty — a run that loaded the map
-  // bridges every account the server still has — so this stays one statement in
-  // the ordinary case and becomes two only on a page that mixes a bridged
-  // account with a departed one.
-  const bridged = batch.filter((entry) => entry.usernameFromAccountMap);
-  const fallback = batch.filter((entry) => !entry.usernameFromAccountMap);
+    const eventIds = batch.map((entry) => entry.row.sourceEventId as string);
+    const existing = await tx.$queryRawUnsafe<
+      Array<{ sourceEventId: string }>
+    >(
+      `SELECT "sourceEventId" FROM "WatchHistory"
+        WHERE "mediaServerId" = $1 AND "sourceEventId" = ANY($2)`,
+      serverId,
+      eventIds,
+    );
+    const updated = existing.length;
 
-  if (bridged.length > 0) {
-    await insertRows(bridged, WATCH_HISTORY_UPSERT_SUFFIX);
-  }
-  if (fallback.length > 0) {
-    await insertRows(fallback, WATCH_HISTORY_UPSERT_SUFFIX_FALLBACK_USERNAME);
-  }
+    // Split by username confidence: the merge rule for that one column differs
+    // between the two classes and a statement carries a single `ON CONFLICT`
+    // clause. One of the groups is normally empty — a run that loaded the map
+    // bridges every account the server still has — so this stays one statement
+    // in the ordinary case and becomes two only on a page that mixes a bridged
+    // account with a departed one.
+    const bridged = batch.filter((entry) => entry.usernameFromAccountMap);
+    const fallback = batch.filter((entry) => !entry.usernameFromAccountMap);
 
-  return { inserted: batch.length - updated, updated, vanished };
+    if (bridged.length > 0) {
+      await insertRows(tx, bridged, WATCH_HISTORY_UPSERT_SUFFIX);
+    }
+    if (fallback.length > 0) {
+      await insertRows(tx, fallback, WATCH_HISTORY_UPSERT_SUFFIX_FALLBACK_USERNAME);
+    }
+
+    return { inserted: batch.length - updated, updated, vanished };
+  });
 }
+
+/** The two raw-query methods the write path uses — the global client or a transaction's. */
+type RawDb = Pick<typeof prisma, "$queryRawUnsafe" | "$executeRawUnsafe">;
 
 /** One `INSERT … VALUES … ON CONFLICT` statement for a set of mapped rows. */
 async function insertRows(
+  db: RawDb,
   entries: PendingRow[],
   upsertSuffix: string,
 ): Promise<void> {
@@ -1667,7 +1772,7 @@ async function insertRows(
     tuples.push(`(${placeholders.join(",")})`);
   }
 
-  await prisma.$executeRawUnsafe(
+  await db.$executeRawUnsafe(
     `INSERT INTO "WatchHistory" (${INSERT_COLUMN_LIST})
      VALUES ${tuples.join(",")}
      ${upsertSuffix}`,
@@ -1703,13 +1808,14 @@ async function insertRows(
  * them still exist", which hands back the caller's own array untouched.
  */
 async function rowsWithLiveMediaItems(
+  db: RawDb,
   pending: PendingRow[],
 ): Promise<PendingRow[]> {
   const ids = [
     ...new Set(pending.map((entry) => entry.row.mediaItemId as string)),
   ];
 
-  const live = await prisma.$queryRawUnsafe<Array<{ id: string }>>(
+  const live = await db.$queryRawUnsafe<Array<{ id: string }>>(
     `SELECT "id" FROM "MediaItem" WHERE "id" = ANY($1)`,
     ids,
   );

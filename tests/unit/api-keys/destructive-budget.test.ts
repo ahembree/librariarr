@@ -24,7 +24,7 @@ describe("the public API's destructive budget", () => {
   it("refuses a request over the per-request cap outright, and charges nothing", () => {
     const r = reserveApiDestructive(API_DESTRUCTIVE_PER_REQUEST + 1, T0);
     expect(r).toMatchObject({ ok: false, status: 400 });
-    expect(reserveApiDestructive(0, T0)).toEqual({ ok: true, remaining: API_DESTRUCTIVE_PER_HOUR });
+    expect(reserveApiDestructive(0, T0)).toMatchObject({ ok: true, remaining: API_DESTRUCTIVE_PER_HOUR });
   });
 
   it("allows exactly the hourly budget, then refuses with the wait until it fits", () => {
@@ -78,7 +78,34 @@ describe("the public API's destructive budget", () => {
     const { vi } = await import("vitest");
     vi.resetModules();
     const fresh = await import("@/lib/api-keys/destructive-budget");
-    expect(fresh.reserveApiDestructive(0, T0)).toEqual({ ok: true, remaining: 75 });
+    expect(fresh.reserveApiDestructive(0, T0)).toMatchObject({ ok: true, remaining: 75 });
+  });
+
+  it("gives back, through release, only what the reservation charged and never below zero", () => {
+    const first = reserveApiDestructive(25, T0);
+    const second = reserveApiDestructive(10, T0);
+    if (!first.ok || !second.ok) throw new Error("expected both to fit");
+    first.release(5);
+    expect(reserveApiDestructive(0, T0)).toMatchObject({ ok: true, remaining: 100 - 20 - 10 });
+    // Releasing more than was reserved frees this reservation, not another's.
+    second.release(50);
+    first.release(50);
+    expect(reserveApiDestructive(0, T0)).toMatchObject({ ok: true, remaining: 100 });
+    // A release of nothing, or of a reservation of nothing, changes nothing.
+    first.release(0);
+    const nothing = reserveApiDestructive(0, T0);
+    if (!nothing.ok) throw new Error("a reservation of nothing always fits");
+    nothing.release(3);
+    expect(reserveApiDestructive(0, T0)).toMatchObject({ ok: true, remaining: 100 });
+  });
+
+  it("lets a released amount be spent again within the same hour", () => {
+    for (let i = 0; i < 3; i++) reserveApiDestructive(25, T0);
+    const last = reserveApiDestructive(25, T0);
+    if (!last.ok) throw new Error("expected it to fit");
+    expect(reserveApiDestructive(1, T0)).toMatchObject({ ok: false, status: 429 });
+    last.release(25);
+    expect(reserveApiDestructive(25, T0 + 1000)).toMatchObject({ ok: true, remaining: 0 });
   });
 
   it("answers a 429 with Retry-After and a 400 without", async () => {

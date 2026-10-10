@@ -389,17 +389,34 @@ describe("Tools sessions endpoints", () => {
       );
     });
 
-    it("returns zero terminated when no servers match", async () => {
+    it("answers 404 for a server that is unknown, disabled or another user's", async () => {
+      // It answered 200 `{ terminated: 0, errors: [] }` — what a server with
+      // nothing playing answers — so a mistyped id read as success.
+      const user = await createTestUser();
+      const other = await createTestUser({ plexId: "other-plex-id", username: "other" });
+      const disabled = await createTestServer(user.id, { name: "Off", enabled: false });
+      const foreign = await createTestServer(other.id, { name: "Theirs" });
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      for (const serverId of ["00000000-0000-0000-0000-000000000000", disabled.id, foreign.id]) {
+        const response = await callRoute(POST, {
+          url: "/api/tools/sessions/terminate",
+          method: "POST",
+          body: { serverId, sessionIds: ["s1"], message: "Test" },
+        });
+        await expectJson(response, 404);
+      }
+      expect(mockTerminateSession).not.toHaveBeenCalled();
+    });
+
+    it("answers 200 with nothing terminated for \"all\" when no server is enabled", async () => {
       const user = await createTestUser();
       setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
 
       const response = await callRoute(POST, {
         url: "/api/tools/sessions/terminate",
         method: "POST",
-        body: {
-          serverId: "00000000-0000-0000-0000-000000000000",
-          message: "Test",
-        },
+        body: { serverId: "all", message: "Test" },
       });
       const body = await expectJson<{ terminated: number; errors: string[] }>(response, 200);
 

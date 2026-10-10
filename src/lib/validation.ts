@@ -1,6 +1,6 @@
 import { z } from "zod/v4";
 import { NextResponse } from "next/server";
-import { MAX_QUERY_ACTION_ITEMS } from "@/lib/query/constants";
+import { MAX_COLUMN_VALUE_ITEMS, MAX_QUERY_ACTION_ITEMS } from "@/lib/query/constants";
 import { MASKED_VALUE } from "@/lib/api/sanitize";
 import { API_SCOPES } from "@/lib/api-keys/scopes";
 import { API_DESTRUCTIVE_PER_REQUEST } from "@/lib/api-keys/limits";
@@ -28,14 +28,44 @@ export async function validateRequest<T extends z.ZodType>(
   try {
     body = await request.json();
   } catch {
-    return {
-      error: NextResponse.json(
-        { error: "Invalid JSON in request body" },
-        { status: 400 }
-      ),
-    };
+    return { error: invalidJsonResponse() };
   }
+  return validateBody(body, schema);
+}
 
+/**
+ * `validateRequest` for a route whose body is optional: no body at all is
+ * validated as `{}`, while a body that is present must be valid JSON matching
+ * the schema — it is never quietly read as absent.
+ */
+export async function validateOptionalRequest<T extends z.ZodType>(
+  request: Request,
+  schema: T
+): Promise<
+  | { data: z.infer<T>; error?: never }
+  | { data?: never; error: NextResponse }
+> {
+  const text = await request.text();
+  if (text.trim() === "") return validateBody({}, schema);
+  let body: unknown;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    return { error: invalidJsonResponse() };
+  }
+  return validateBody(body, schema);
+}
+
+function invalidJsonResponse(): NextResponse {
+  return NextResponse.json({ error: "Invalid JSON in request body" }, { status: 400 });
+}
+
+function validateBody<T extends z.ZodType>(
+  body: unknown,
+  schema: T
+):
+  | { data: z.infer<T>; error?: never }
+  | { data?: never; error: NextResponse } {
   const result = schema.safeParse(body);
   if (!result.success) {
     const issues = result.error.issues.map(
@@ -461,6 +491,11 @@ export const rulePreviewSchema = z.object({
   type: z.enum(["MOVIE", "SERIES", "MUSIC"]),
   seriesScope: z.boolean().optional(),
   serverIds: z.array(z.string()).min(1, "At least one server is required"),
+  /**
+   * The editor's (unsaved) Arr instance. Arr criteria are read from this
+   * instance alone, as detection reads them from the rule set's.
+   */
+  arrInstanceId: z.string().max(200).nullable().optional(),
 });
 
 export const ruleTestItemSchema = z.object({
@@ -469,6 +504,11 @@ export const ruleTestItemSchema = z.object({
   seriesScope: z.boolean().optional(),
   mediaItemId: z.string().min(1, "Media item ID is required"),
   serverIds: z.array(z.string()).min(1, "At least one server is required"),
+  /**
+   * The editor's (unsaved) Arr instance. Arr criteria are read from this
+   * instance alone, as detection reads them from the rule set's.
+   */
+  arrInstanceId: z.string().max(200).nullable().optional(),
 });
 
 export const actionExecuteSchema = z.object({
@@ -491,6 +531,8 @@ export const ruleDiffSchema = z.object({
   /** The editor's unsaved action config; the stored one when absent. */
   actionEnabled: z.boolean().optional(),
   actionType: z.string().nullable().optional(),
+  /** The editor's unsaved Arr instance; the stored one when absent. */
+  arrInstanceId: z.string().max(200).nullable().optional(),
 });
 
 export const ruleRunSchema = z.object({
@@ -844,6 +886,17 @@ export const arrActionSchema = z.object({
   type: z.enum(["radarr", "sonarr", "lidarr"]),
 });
 
+/**
+ * `POST /api/servers/[id]/sync` (also `/api/v1/servers/{id}/sync`): the body
+ * is optional, and names at most one library. A malformed body is refused
+ * rather than read as "no library" — that turned `{ "libraryKey": 123 }` into
+ * a sync of every library on the server. Strict, so a misspelt key
+ * (`librarykey`) is refused for the same reason rather than stripped.
+ */
+export const serverSyncSchema = z.strictObject({
+  libraryKey: z.string().min(1, "libraryKey must not be empty").max(200, "Invalid libraryKey").optional(),
+});
+
 export const syncCancelSchema = z.object({
   serverId: z.string().min(1, "Server ID is required").max(200),
 });
@@ -898,6 +951,22 @@ export const executeQuerySchema = z.object({
   limit: z.number().int().min(0).max(200).optional().default(50),
 });
 
+// Values for the Query page's criterion columns, computed for rows on screen.
+export const queryColumnValuesSchema = z.object({
+  items: z
+    .array(z.object({ id: z.string().min(1).max(200), grouped: z.boolean().optional() }))
+    .max(MAX_COLUMN_VALUE_ITEMS),
+  fields: z.array(z.string().min(1).max(100)).min(1).max(200),
+  serverIds: z.array(z.string().max(200)).max(100).optional().default([]),
+  arrServerIds: z
+    .object({
+      radarr: z.string().max(200).optional(),
+      sonarr: z.string().max(200).optional(),
+      lidarr: z.string().max(200).optional(),
+    })
+    .optional(),
+});
+
 // Ad-hoc lifecycle action triggered on selected query results (no rule set).
 export const queryActionSchema = z.object({
   query: queryDefinitionSchema,
@@ -910,6 +979,10 @@ export const queryActionSchema = z.object({
   // whole-library query (+ Arr/Seerr fetch) per batch. Client-generated; used only
   // as a cache-key component, so it's constrained to a safe, bounded charset.
   runId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/, "invalid runId").optional(),
+  // How many actions the whole run (every batch) takes — one per show or
+  // artist, as the server collapses them — so the deletion ceiling is checked
+  // against the run, not one batch of it.
+  runUnits: z.number().int().min(1).max(10_000_000).optional(),
   actionType: z.string().min(1),
   arrInstanceId: z.string().nullable().optional(),
   targetQualityProfileId: z.number().int().nullable().optional(),
@@ -981,7 +1054,7 @@ const profileCfSelectionSchema = z
 /**
  * Per-profile options for a QUALITY_PROFILE managed resource: which guide score
  * set to use, and whether to reset custom-format scores the profile doesn't
- * manage (with exact-name and regex exceptions). Mirrors Recyclarr's
+ * manage (with exact-name exceptions). Mirrors Recyclarr's
  * `quality_profiles` block (`score_set`, `reset_unmatched_scores`).
  */
 const qualityProfileSelectionSchema = z

@@ -171,4 +171,61 @@ describe("DELETE /api/media/purge", () => {
     expect(survivors).toHaveLength(1);
     expect(survivors[0].dedupCanonical).toBe(true);
   });
+  it("restarts the Tracearr archive walk for a mapped server, leaving others alone", async () => {
+    // The purge cascades the items' plays away, and a "complete" backfill only
+    // ever runs the one-hour forward pass — so those plays, which Tracearr
+    // still holds, were never imported again.
+    const prisma = getTestPrisma();
+    const user = await createTestUser();
+    const mapped = await createTestServer(user.id, {
+      name: "Mapped",
+      tracearrServerId: "11111111-2222-3333-4444-555555555555",
+      tracearrBackfillComplete: true,
+    });
+    const native = await createTestServer(user.id, { name: "Native" });
+    const mappedLib = await createTestLibrary(mapped.id, { type: "MOVIE" });
+    const nativeLib = await createTestLibrary(native.id, { type: "MOVIE" });
+    await createTestMediaItem(mappedLib.id, { title: "A", type: "MOVIE" });
+    await createTestMediaItem(nativeLib.id, { title: "B", type: "MOVIE" });
+
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const before = Date.now();
+    const response = await callRoute(DELETE, {
+      url: "/api/media/purge",
+      method: "DELETE",
+      searchParams: { type: "MOVIE" },
+    });
+    await expectJson<{ deleted: number }>(response, 200);
+
+    const after = await prisma.mediaServer.findUniqueOrThrow({ where: { id: mapped.id } });
+    expect(after.tracearrBackfillComplete).toBe(false);
+    // Moved to now so the walk starts from the newest play again.
+    expect(after.tracearrBackfillCursorAt?.getTime()).toBeGreaterThanOrEqual(before - 1000);
+
+    const untouched = await prisma.mediaServer.findUniqueOrThrow({ where: { id: native.id } });
+    expect(untouched.tracearrBackfillCursorAt).toBeNull();
+  });
+
+  it("restarts the Tracearr archive walk on a per-library purge", async () => {
+    const prisma = getTestPrisma();
+    const user = await createTestUser();
+    const mapped = await createTestServer(user.id, {
+      tracearrServerId: "11111111-2222-3333-4444-555555555555",
+      tracearrBackfillComplete: true,
+    });
+    const lib = await createTestLibrary(mapped.id, { type: "SERIES" });
+    await createTestMediaItem(lib.id, { title: "Pilot", type: "SERIES" });
+
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const response = await callRoute(DELETE, {
+      url: "/api/media/purge",
+      method: "DELETE",
+      searchParams: { libraryId: lib.id },
+    });
+    await expectJson<{ deleted: number }>(response, 200);
+
+    const after = await prisma.mediaServer.findUniqueOrThrow({ where: { id: mapped.id } });
+    expect(after.tracearrBackfillComplete).toBe(false);
+    expect(after.tracearrBackfillCursorAt).toBeInstanceOf(Date);
+  });
 });

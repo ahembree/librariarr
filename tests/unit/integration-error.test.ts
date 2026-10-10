@@ -59,6 +59,26 @@ describe("IntegrationError", () => {
     expect(ie.detail).toBe("Movie not found");
   });
 
+  it("includes the messages of an *arr validation-failure array", () => {
+    const err = makeAxiosError({
+      response: {
+        status: 400,
+        data: [
+          { propertyName: "TmdbId", errorMessage: "This exclusion has already been added." },
+          { propertyName: "MovieTitle", errorMessage: "'Movie Title' must not be empty." },
+        ],
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+    });
+    const ie = new IntegrationError("Radarr", err);
+    expect(ie.validationMessages).toEqual([
+      "This exclusion has already been added.",
+      "'Movie Title' must not be empty.",
+    ]);
+    expect(ie.detail).toBe("This exclusion has already been added.; 'Movie Title' must not be empty.");
+    expect(ie.message).toContain("This exclusion has already been added.");
+  });
+
   it("includes detail from JSON body's `error` field", () => {
     const err = makeAxiosError({
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
