@@ -152,7 +152,7 @@ Most endpoints are the same routes the web app uses, served under `/api/v1`: the
 
 | Method | Path | Scope | Description |
 |--------|------|-------|-------------|
-| `GET` | `/api/v1/system/info` | `system:read` | App version, latest migration, database size, item/library/server counts, update availability |
+| `GET` | `/api/v1/system/info` | `system:read` | App version, latest migration, database size, item/library/server counts, update availability (`updateCheck=false` leaves the last out, so the answer never waits on GitHub) |
 
 ### Examples
 

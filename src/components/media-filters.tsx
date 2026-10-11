@@ -1126,16 +1126,19 @@ export function MediaFilters({ onFilterChange, externalFilters, mediaType, prefi
     if (!needDistinct || distinctRequested.current) return;
     distinctRequested.current = true;
     fetch("/api/media/distinct-values")
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
       .then((data: DistinctData) => {
         setDistinctData(data);
       })
       .catch((e) => {
-        // Let the next open try again.
+        // `filtersOpen` is a dependency so the next open of the panel tries again.
         distinctRequested.current = false;
         console.error("Failed to fetch distinct values", e);
       });
-  }, [needDistinct]);
+  }, [needDistinct, filtersOpen]);
 
   const updateFilter = useCallback(
     (key: string, value: string | undefined) => {

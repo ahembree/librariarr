@@ -109,22 +109,6 @@ export function TableRowsSkeleton({ rows = 10, columns = 6 }: { rows?: number; c
   );
 }
 
-/** Filter bar skeleton matching MediaFilters layout */
-export function FilterBarSkeleton() {
-  return (
-    <div className="mb-6 flex flex-wrap items-center gap-3">
-      <Skeleton className="h-9 w-28 rounded-md" />
-      <div className="flex items-center gap-1 rounded-lg border p-1 h-9">
-        <Skeleton className="h-7 w-7 rounded-md" />
-        <Skeleton className="h-7 w-7 rounded-md" />
-      </div>
-      <Skeleton className="h-9 w-24 rounded-md" />
-      <Skeleton className="h-9 flex-1 max-w-xs rounded-md" />
-      <Skeleton className="h-9 w-32 rounded-md" />
-    </div>
-  );
-}
-
 /** Dashboard chart card skeleton */
 export function ChartCardSkeleton() {
   return (
@@ -171,17 +155,6 @@ export function DashboardSkeleton() {
         {/* Recently added shelf */}
         <Skeleton className="h-64 w-full rounded-[14px]" />
       </div>
-    </div>
-  );
-}
-
-/** Library page skeleton (shared by movies, series, music) */
-export function LibraryPageSkeleton() {
-  return (
-    <div className="p-4 sm:p-6 lg:p-8">
-      <Skeleton className="h-8 w-32 mb-6" />
-      <FilterBarSkeleton />
-      <MediaGridSkeleton />
     </div>
   );
 }

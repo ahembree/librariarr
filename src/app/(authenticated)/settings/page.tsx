@@ -983,6 +983,17 @@ export default function SettingsPage() {
     [tabLoaders, startOnce],
   );
 
+  // Declared before the effect below so that, with the page opened at #system,
+  // the open tab's requests are the first to go out (effects run in order).
+  useEffect(() => {
+    if (activeTab !== "system") return;
+    void (async () => {
+      // Release notes have their own loading state, so the tab does not wait
+      // for them.
+      await Promise.all([loadTab("system"), startOnce(fetchChangelog)]);
+    })();
+  }, [activeTab, loadTab, startOnce, fetchChangelog]);
+
   useEffect(() => {
     const openTab = getInitialSettingsTab();
     const eager = [openTab, ...SETTINGS_TABS.map((t) => t.value).filter((tab) => tab !== openTab)].filter(
@@ -994,15 +1005,6 @@ export default function SettingsPage() {
       await Promise.all([...eager.map(loadTab), fetchUpdateCheck()]);
     })();
   }, [loadTab, fetchUpdateCheck]);
-
-  useEffect(() => {
-    if (activeTab !== "system") return;
-    void (async () => {
-      // Release notes have their own loading state, so the tab does not wait
-      // for them.
-      await Promise.all([loadTab("system"), startOnce(fetchChangelog)]);
-    })();
-  }, [activeTab, loadTab, startOnce, fetchChangelog]);
 
   // Load each enabled Tracearr instance's server list lazily — nothing is
   // requested until an instance exists, so the (common) native-history setup

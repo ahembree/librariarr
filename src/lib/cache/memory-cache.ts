@@ -138,5 +138,11 @@ export class MemoryCache {
   }
 }
 
+// Pinned to globalThis unconditionally: the job worker started from
+// instrumentation gets its own copy of this module, so an unpinned singleton
+// meant a background sync's `invalidateMediaCaches()` cleared the worker's
+// cache and left the one the routes read stale until its TTL ran out.
+const globalForAppCache = globalThis as unknown as { appCache: MemoryCache | undefined };
+
 /** Shared singleton for app-wide caching. 60s default TTL. */
-export const appCache = new MemoryCache(60_000);
+export const appCache = (globalForAppCache.appCache ??= new MemoryCache(60_000));

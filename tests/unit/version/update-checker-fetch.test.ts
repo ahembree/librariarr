@@ -21,6 +21,9 @@ function jsonResponse(body: unknown, ok = true, status = 200): Response {
 
 const ORIGINAL_VERSION = process.env.NEXT_PUBLIC_APP_VERSION;
 
+/** Let a background refresh's callbacks run. */
+const settle = () => new Promise((resolve) => setImmediate(resolve));
+
 describe("update-checker fetch behavior", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -195,12 +198,62 @@ describe("update-checker fetch behavior", () => {
       fetchMock.mockResolvedValueOnce(jsonResponse(null, false, 403));
       await checkForUpdate();
       await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+      await settle();
 
       const after = await checkForUpdate();
       expect(after.latestVersion).toBe("1.3.0");
       expect(after.updateAvailable).toBe(true);
+
       // The failed attempt counts as a lookup: no retry until the next hour.
+      vi.setSystemTime(new Date("2026-01-01T01:59:00Z"));
+      await checkForUpdate();
       expect(fetchMock).toHaveBeenCalledTimes(2);
+      vi.setSystemTime(new Date("2026-01-01T02:00:02Z"));
+      fetchMock.mockResolvedValueOnce(jsonResponse({ tag_name: "v1.3.0", html_url: "u", name: "n" }));
+      await checkForUpdate();
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+    });
+
+    it("retries within minutes while GitHub has never answered", async () => {
+      vi.useFakeTimers({ now: new Date("2026-01-01T00:00:00Z"), toFake: ["Date"] });
+      const fetchMock = vi.mocked(fetch);
+      fetchMock.mockRejectedValueOnce(new Error("getaddrinfo EAI_AGAIN api.github.com"));
+
+      const first = await checkForUpdate();
+      expect(first.latestVersion).toBeNull();
+
+      vi.setSystemTime(new Date("2026-01-01T00:04:00Z"));
+      await checkForUpdate();
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      vi.setSystemTime(new Date("2026-01-01T00:05:01Z"));
+      fetchMock.mockResolvedValueOnce(jsonResponse({ tag_name: "v1.3.0", html_url: "u", name: "n" }));
+      await checkForUpdate();
+      await vi.waitFor(async () => {
+        expect((await checkForUpdate()).latestVersion).toBe("1.3.0");
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("gives up on a response whose body stalls, so later lookups are not stuck behind it", async () => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      vi.mocked(fetch).mockImplementationOnce(async (_url, init) => {
+        const signal = (init as RequestInit).signal!;
+        return {
+          ok: true,
+          status: 200,
+          // Headers arrived; the body never does unless the request is aborted.
+          json: () =>
+            new Promise((_resolve, reject) => {
+              signal.addEventListener("abort", () => reject(new Error("aborted")));
+            }),
+        } as unknown as Response;
+      });
+
+      const pending = checkForUpdate();
+      await vi.advanceTimersByTimeAsync(10_000);
+      const result = await pending;
+      expect(result.latestVersion).toBeNull();
     });
   });
 

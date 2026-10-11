@@ -5,12 +5,21 @@ const CACHE_KEY = "version:latest";
 const CHANGELOG_CACHE_KEY = "version:changelog";
 const CACHE_TTL_MS = 3_600_000; // 1 hour
 const REQUEST_TIMEOUT_MS = 10_000;
+/**
+ * How soon a failed lookup is retried while GitHub has never answered — the
+ * boot warm-up racing the network coming up, or a rate limit. Without it that
+ * one failure stood for the full hour.
+ */
+const FIRST_LOOKUP_RETRY_MS = 5 * 60_000;
 
 /** The last answer one GitHub lookup gave, and the refresh in flight, if any. */
 interface Lookup {
   hasValue: boolean;
   value: unknown;
-  fetchedAt: number;
+  /** Whether GitHub has ever answered, i.e. `value` is not the fallback. */
+  answered: boolean;
+  /** When the next lookup is due. */
+  refreshAt: number;
   refreshing: Promise<unknown> | null;
 }
 
@@ -30,8 +39,9 @@ const lookups = (globalForVersionLookups.versionLookups ??= new Map<string, Look
  * waited on GitHub — up to the 10s timeout where GitHub is slow or blocked.
  *
  * `fetchFresh` returns null when GitHub could not answer; the last good
- * answer is then kept (`fallback` stands in when there has never been one)
- * and the next attempt waits another `CACHE_TTL_MS`.
+ * answer is then kept (`fallback` stands in when there has never been one).
+ * The next attempt waits another `CACHE_TTL_MS`, or `FIRST_LOOKUP_RETRY_MS`
+ * while GitHub has never answered.
  */
 function staleWhileRevalidate<T>(
   key: string,
@@ -40,18 +50,21 @@ function staleWhileRevalidate<T>(
 ): Promise<T> {
   let entry = lookups.get(key);
   if (!entry) {
-    entry = { hasValue: false, value: undefined, fetchedAt: 0, refreshing: null };
+    entry = { hasValue: false, value: undefined, answered: false, refreshAt: 0, refreshing: null };
     lookups.set(key, entry);
   }
-  if (!entry.refreshing && Date.now() - entry.fetchedAt >= CACHE_TTL_MS) {
+  if (!entry.refreshing && Date.now() >= entry.refreshAt) {
     const target = entry;
     target.refreshing = fetchFresh()
       .then((fresh) => {
-        if (fresh !== null || !target.hasValue) {
-          target.value = fresh ?? fallback();
-          target.hasValue = true;
+        if (fresh !== null) {
+          target.value = fresh;
+          target.answered = true;
+        } else if (!target.hasValue) {
+          target.value = fallback();
         }
-        target.fetchedAt = Date.now();
+        target.hasValue = true;
+        target.refreshAt = Date.now() + (target.answered ? CACHE_TTL_MS : FIRST_LOOKUP_RETRY_MS);
         return target.value;
       })
       .finally(() => {
@@ -138,12 +151,12 @@ export async function checkForUpdate(): Promise<UpdateCheckResult> {
   return staleWhileRevalidate<UpdateCheckResult>(
     CACHE_KEY,
     async () => {
+      // The timeout covers reading the body too: headers followed by a stalled
+      // body would otherwise hold this lookup, and every request waiting on
+      // it, forever.
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
       try {
-        const controller = new AbortController();
-        const timeout = setTimeout(
-          () => controller.abort(),
-          REQUEST_TIMEOUT_MS,
-        );
 
         const response = await fetch(
           `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`,
@@ -156,7 +169,6 @@ export async function checkForUpdate(): Promise<UpdateCheckResult> {
           },
         );
 
-        clearTimeout(timeout);
 
         if (!response.ok) {
           logger.debug(
@@ -187,6 +199,8 @@ export async function checkForUpdate(): Promise<UpdateCheckResult> {
           error: String(error),
         });
         return null;
+      } finally {
+        clearTimeout(timeout);
       }
     },
     unknownLatest,
@@ -256,12 +270,12 @@ export async function fetchChangelog(): Promise<ReleaseNote[]> {
   return staleWhileRevalidate<ReleaseNote[]>(
     CHANGELOG_CACHE_KEY,
     async () => {
+      // The timeout covers reading the body too: headers followed by a stalled
+      // body would otherwise hold this lookup, and every request waiting on
+      // it, forever.
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
       try {
-        const controller = new AbortController();
-        const timeout = setTimeout(
-          () => controller.abort(),
-          REQUEST_TIMEOUT_MS,
-        );
 
         const response = await fetch(
           `https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=25`,
@@ -274,7 +288,6 @@ export async function fetchChangelog(): Promise<ReleaseNote[]> {
           },
         );
 
-        clearTimeout(timeout);
 
         if (!response.ok) {
           logger.debug(
@@ -324,6 +337,8 @@ export async function fetchChangelog(): Promise<ReleaseNote[]> {
           error: String(error),
         });
         return null;
+      } finally {
+        clearTimeout(timeout);
       }
     },
     () => [],

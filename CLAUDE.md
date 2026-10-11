@@ -284,7 +284,7 @@ An episode row's own `title` is the **episode's** name ("Pilot"); the show is `p
 
 ### In-Memory Cache
 
-`appCache` from `src/lib/cache/memory-cache.ts` — in-process cache (no Redis), does not persist across restarts:
+`appCache` from `src/lib/cache/memory-cache.ts` — in-process cache (no Redis), does not persist across restarts. **Pinned to `globalThis`**: the job worker started from `instrumentation.ts` loads its own copy of the module, so an unpinned singleton was two caches — a background sync's `invalidateMediaCaches()` cleared the worker's and left the one the routes read stale until its TTL ran out (`tests/unit/cache/memory-cache.test.ts`):
 
 - `appCache.get<T>(key)`, `set(key, data, ttlMs?)`, `getOrSet(key, compute, ttlMs?, { shouldCache? })` (compute-and-cache, **single-flight**: concurrent misses for the same key share one `compute()` call; an `invalidate`/`invalidatePrefix`/`clear` that hits a key mid-compute keeps that compute's result out of the cache and makes later callers start a fresh one — otherwise a slow compute that began before a mutation cached its pre-mutation answer for a full TTL right after the mutation invalidated). `shouldCache(value)` keeps a result that must not be reused (a `partial` Seerr walk) out of the cache while still answering every caller waiting on it — never cache-then-`invalidate` instead: callers in between are served the bad value, and the invalidation marks any fresh compute another caller already started as stale
 - `invalidate(key)`, `invalidatePrefix(prefix)` (bulk invalidation by namespace), `clear()`
