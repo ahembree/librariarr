@@ -22,6 +22,18 @@ vi.mock("@/lib/logger", () => ({
   dbLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
+const { mockCheckForUpdate } = vi.hoisted(() => ({ mockCheckForUpdate: vi.fn() }));
+vi.mock("@/lib/version/update-checker", () => ({ checkForUpdate: mockCheckForUpdate }));
+
+const UPDATE = {
+  currentVersion: "1.0.0",
+  latestVersion: "1.1.0",
+  updateAvailable: true,
+  releaseUrl: "https://github.com/ahembree/librariarr/releases/tag/v1.1.0",
+  releaseName: "v1.1.0",
+  checkedAt: "2026-01-01T00:00:00.000Z",
+};
+
 // Import route handler AFTER mocks
 import { GET } from "@/app/api/system/info/route";
 
@@ -30,6 +42,7 @@ describe("GET /api/system/info", () => {
     await cleanDatabase();
     clearMockSession();
     vi.clearAllMocks();
+    mockCheckForUpdate.mockResolvedValue(UPDATE);
   });
 
   afterAll(async () => {
@@ -91,6 +104,31 @@ describe("GET /api/system/info", () => {
     expect(body.stats.enabledLibraries).toBe(1);
     expect(body.stats.totalLibraries).toBe(2);
     expect(body.stats.servers).toBe(1);
+  });
+
+  it("includes the GitHub release check by default", async () => {
+    const user = await createTestUser();
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+    const response = await callRoute(GET, { url: "/api/system/info" });
+    const body = await expectJson<{ updateInfo?: typeof UPDATE }>(response, 200);
+
+    expect(mockCheckForUpdate).toHaveBeenCalledTimes(1);
+    expect(body.updateInfo).toEqual(UPDATE);
+  });
+
+  it("leaves the GitHub release check out with updateCheck=false", async () => {
+    const user = await createTestUser();
+    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    // A lookup that never answers: the response must not wait for it.
+    mockCheckForUpdate.mockReturnValue(new Promise(() => {}));
+
+    const response = await callRoute(GET, { url: "/api/system/info?updateCheck=false" });
+    const body = await expectJson<{ appVersion: string; updateInfo?: unknown }>(response, 200);
+
+    expect(mockCheckForUpdate).not.toHaveBeenCalled();
+    expect(body.appVersion).toBeDefined();
+    expect(body).not.toHaveProperty("updateInfo");
   });
 
   it("returns database size as a string", async () => {

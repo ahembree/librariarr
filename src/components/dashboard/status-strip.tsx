@@ -148,7 +148,7 @@ export function StatusStrip({ scheduleInfo }: { scheduleInfo: ScheduleInfo | nul
     fetchSessions();
     fetchHealth();
 
-    fetch("/api/system/update-check")
+    fetch("/api/system/update-check", { priority: "low" })
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (data?.updateAvailable && data.latestVersion) {

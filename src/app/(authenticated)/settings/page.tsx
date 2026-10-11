@@ -52,6 +52,7 @@ import type {
   ScheduleInfo,
   AuthInfo,
   SystemInfo,
+  UpdateCheck,
   ImageCacheStats,
   TestResult,
   BackupEntry,
@@ -319,6 +320,9 @@ export default function SettingsPage() {
 
   // System info
   const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null);
+  // Whether a newer release exists, for the System tab's version line and the
+  // dot beside its name. Nothing waits on it.
+  const [updateCheck, setUpdateCheck] = useState<UpdateCheck | null>(null);
 
   // Image cache
   const [imageCacheStats, setImageCacheStats] = useState<ImageCacheStats | null>(null);
@@ -326,7 +330,9 @@ export default function SettingsPage() {
 
   // Changelog
   const [releaseNotes, setReleaseNotes] = useState<ReleaseNote[]>([]);
-  const [loadingChangelog, setLoadingChangelog] = useState(false);
+  // True until the first fetch ends: release notes are requested only once the
+  // System tab is opened, and that tab must not read "unable to load" before.
+  const [loadingChangelog, setLoadingChangelog] = useState(true);
 
   // Server editing
   const [editingServerId, setEditingServerId] = useState<string | null>(null);
@@ -650,13 +656,24 @@ export default function SettingsPage() {
     }
   }, []);
 
+  // Without the update check: that is a GitHub lookup, fetched on its own
+  // (`fetchUpdateCheck`) so the System tab never waits on GitHub.
   const fetchSystemInfo = useCallback(async () => {
     try {
-      const response = await fetch("/api/system/info");
+      const response = await fetch("/api/system/info?updateCheck=false");
       const data = await response.json();
       setSystemInfo(data);
     } catch (error) {
       console.error("Failed to fetch system info:", error);
+    }
+  }, []);
+
+  const fetchUpdateCheck = useCallback(async () => {
+    try {
+      const response = await fetch("/api/system/update-check", { priority: "low" });
+      if (response.ok) setUpdateCheck(await response.json());
+    } catch {
+      // Silent — no update dot and no version status, nothing else
     }
   }, []);
 
@@ -913,10 +930,11 @@ export default function SettingsPage() {
   // behind system info — so the slowest of them decided when anything showed.
   // The open tab's requests go out first (the browser serves a handful of
   // same-origin requests at a time, in the order they were made) and the other
-  // tabs load behind them, so switching tabs afterwards is still instant. A
-  // fetcher two tabs share runs once.
-  useEffect(() => {
-    const loaders: Record<SettingsTab, Array<() => Promise<unknown>>> = {
+  // tabs load behind them, so switching tabs afterwards is still instant —
+  // except System, whose figures (release notes from GitHub, a scan of the
+  // image cache, whole-table counts) are requested only once it is opened.
+  const tabLoaders = useMemo<Record<SettingsTab, Array<() => Promise<unknown>>>>(
+    () => ({
       general: [
         fetchAccentColor,
         fetchChipColors,
@@ -942,28 +960,49 @@ export default function SettingsPage() {
       authentication: [fetchAuthInfo],
       ai: [fetchAiSettings],
       system: [fetchSystemInfo, fetchImageCacheStats],
-    };
-    const started = new Map<() => Promise<unknown>, Promise<unknown>>();
-    const load = (fetcher: () => Promise<unknown>) => {
-      let pending = started.get(fetcher);
-      if (!pending) {
-        pending = fetcher();
-        started.set(fetcher, pending);
-      }
-      return pending;
-    };
+    }),
+    [fetchServers, fetchSettings, fetchSonarrInstances, fetchRadarrInstances, fetchLidarrInstances, fetchSeerrInstances, fetchTracearrInstances, fetchSystemInfo, fetchAccentColor, fetchChipColors, fetchLogRetention, fetchActionRetention, fetchDeleteCeiling, fetchBackupSettings, fetchLifecycleSchedule, fetchScheduleInfo, fetchDiscordSettings, fetchAiSettings, fetchDedupSetting, fetchRealtimeSetting, fetchImageCacheStats, fetchAuthInfo, fetchTitlePreference],
+  );
+
+  // A fetcher two tabs share, or a tab opened twice, runs once.
+  const startedFetches = useRef(new Map<() => Promise<unknown>, Promise<unknown>>());
+  const startOnce = useCallback((fetcher: () => Promise<unknown>) => {
+    let pending = startedFetches.current.get(fetcher);
+    if (!pending) {
+      pending = fetcher();
+      startedFetches.current.set(fetcher, pending);
+    }
+    return pending;
+  }, []);
+
+  const loadTab = useCallback(
+    async (tab: SettingsTab) => {
+      await Promise.allSettled(tabLoaders[tab].map(startOnce));
+      setLoadedTabs((prev) => (prev.has(tab) ? prev : new Set(prev).add(tab)));
+    },
+    [tabLoaders, startOnce],
+  );
+
+  useEffect(() => {
     const openTab = getInitialSettingsTab();
-    const order = [openTab, ...SETTINGS_TABS.map((t) => t.value).filter((tab) => tab !== openTab)];
+    const eager = [openTab, ...SETTINGS_TABS.map((t) => t.value).filter((tab) => tab !== openTab)].filter(
+      (tab) => tab !== "system",
+    );
     void (async () => {
-      const tabs = order.map(async (tab) => {
-        await Promise.allSettled(loaders[tab].map(load));
-        setLoadedTabs((prev) => (prev.has(tab) ? prev : new Set(prev).add(tab)));
-      });
-      // Release notes have their own loading state on the System tab, so no
-      // tab waits for them.
-      await Promise.all([...tabs, fetchChangelog()]);
+      // The update check feeds only the System tab's dot and version line, so
+      // it goes out last and no tab waits for it.
+      await Promise.all([...eager.map(loadTab), fetchUpdateCheck()]);
     })();
-  }, [fetchServers, fetchSettings, fetchSonarrInstances, fetchRadarrInstances, fetchLidarrInstances, fetchSeerrInstances, fetchTracearrInstances, fetchSystemInfo, fetchAccentColor, fetchChipColors, fetchLogRetention, fetchActionRetention, fetchDeleteCeiling, fetchBackupSettings, fetchLifecycleSchedule, fetchScheduleInfo, fetchDiscordSettings, fetchAiSettings, fetchDedupSetting, fetchRealtimeSetting, fetchImageCacheStats, fetchChangelog, fetchAuthInfo, fetchTitlePreference]);
+  }, [loadTab, fetchUpdateCheck]);
+
+  useEffect(() => {
+    if (activeTab !== "system") return;
+    void (async () => {
+      // Release notes have their own loading state, so the tab does not wait
+      // for them.
+      await Promise.all([loadTab("system"), startOnce(fetchChangelog)]);
+    })();
+  }, [activeTab, loadTab, startOnce, fetchChangelog]);
 
   // Load each enabled Tracearr instance's server list lazily — nothing is
   // requested until an instance exists, so the (common) native-history setup
@@ -2949,8 +2988,8 @@ export default function SettingsPage() {
             <SettingsSubNav
               activeTab={activeTab}
               onTabChange={setActiveTab}
-              updateAvailable={systemInfo?.updateInfo?.updateAvailable}
-              latestVersion={systemInfo?.updateInfo?.latestVersion}
+              updateAvailable={updateCheck?.updateAvailable}
+              latestVersion={updateCheck?.latestVersion}
             />
           </aside>
           <div className="min-w-0 flex-1 space-y-6">
@@ -3409,6 +3448,7 @@ export default function SettingsPage() {
           {loadedTabs.has("system") ? (
             <SystemTab
               systemInfo={systemInfo}
+              updateCheck={updateCheck}
               imageCacheStats={imageCacheStats}
               clearingImageCache={clearingImageCache}
               onClearImageCache={handleClearImageCache}

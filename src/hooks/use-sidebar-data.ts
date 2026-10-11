@@ -147,8 +147,11 @@ export function useSidebarData(initialCollapsed = false) {
   useRealtime("server:changed", fetchLibraryTypes);
   useRealtime("sync:completed", fetchLibraryTypes);
 
+  // Low priority, like the session count below: it only feeds a dot, and the
+  // browser serves a handful of same-origin requests at a time, so at default
+  // priority it took a slot from the page's own data on every page load.
   useEffect(() => {
-    fetch("/api/system/update-check")
+    fetch("/api/system/update-check", { priority: "low" })
       .then((res) => res.json())
       .then((data) => {
         if (data.updateAvailable) {
@@ -170,8 +173,11 @@ export function useSidebarData(initialCollapsed = false) {
 
   const previousUnreachableRef = useRef<Map<string, string>>(new Map());
 
+  // Low priority: the badge is not what the page was opened for, and the route
+  // asks every media server for its sessions, so it can be the slowest request
+  // a page load makes.
   const fetchSessionCount = useCallback(() => {
-    fetch("/api/tools/sessions")
+    fetch("/api/tools/sessions", { priority: "low" })
       .then((res) => res.json())
       .then((data: { sessions?: unknown[]; unreachableServers?: { id: string; name: string; type: string }[] }) => {
         if (data.sessions) setActiveSessionCount(data.sessions.length);
