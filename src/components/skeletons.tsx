@@ -216,15 +216,21 @@ export function SettingsSkeleton() {
           <Skeleton key={i} className="h-9 w-24 rounded-t-md" />
         ))}
       </div>
-      {/* Form fields */}
-      <div className="space-y-6 max-w-2xl">
-        {Array.from({ length: 4 }).map((_, i) => (
-          <div key={i} className="space-y-2">
-            <Skeleton className="h-4 w-24" />
-            <Skeleton className="h-10 w-full rounded-md" />
-          </div>
-        ))}
-      </div>
+      <SettingsPanelSkeleton />
+    </div>
+  );
+}
+
+/** One settings tab's form fields, shown while that tab's data loads */
+export function SettingsPanelSkeleton() {
+  return (
+    <div className="space-y-6 max-w-2xl">
+      {Array.from({ length: 4 }).map((_, i) => (
+        <div key={i} className="space-y-2">
+          <Skeleton className="h-4 w-24" />
+          <Skeleton className="h-10 w-full rounded-md" />
+        </div>
+      ))}
     </div>
   );
 }

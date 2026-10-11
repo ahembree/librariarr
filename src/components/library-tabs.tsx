@@ -36,6 +36,8 @@ export function LibraryTabs({ tabs, active }: { tabs: LibraryTab[]; active: stri
         <Link
           key={href}
           href={href}
+          // Full prefetch — see the sidebar's nav links.
+          prefetch
           aria-current={active === href ? "page" : undefined}
           className={cn(
             "flex shrink-0 items-center gap-1.5 rounded-md px-3 py-1 text-[13px] font-medium whitespace-nowrap transition-colors",

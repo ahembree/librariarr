@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, useSyncExternalStore } from "react";
 import { toast } from "sonner";
 import { usePlexOAuth } from "@/hooks/use-plex-oauth";
 import { fetchWithReauth } from "@/lib/auth/reauth-client";
@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { MASKED_VALUE } from "@/lib/api/sanitize";
-import { SettingsSkeleton } from "@/components/skeletons";
+import { SettingsPanelSkeleton, SettingsSkeleton } from "@/components/skeletons";
 import { isSyncRequestSettled, type PendingSyncRequest } from "@/lib/sync/sync-request";
 
 // ─── Tab components ───
@@ -110,6 +110,9 @@ function integrationSaveError(
 }
 
 
+/** `useSyncExternalStore` subscriber for a value that never changes. */
+const subscribeNothing = () => () => {};
+
 function getInitialSettingsTab(): SettingsTab {
   if (typeof window === "undefined") return "general";
   const hash = window.location.hash.slice(1);
@@ -173,8 +176,13 @@ function SettingsSubNav({
 
 export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState<SettingsTab>(getInitialSettingsTab);
+  // False only while server-rendering and hydrating. The open tab comes from
+  // the URL hash, which the server cannot see, so until then the page renders
+  // the skeleton the server did; a client-side navigation skips straight past.
+  const hydrated = useSyncExternalStore(subscribeNothing, () => true, () => false);
   const [servers, setServers] = useState<MediaServer[]>([]);
-  const [loading, setLoading] = useState(true);
+  // Tabs whose data has loaded — each tab renders once its own requests are in.
+  const [loadedTabs, setLoadedTabs] = useState<ReadonlySet<SettingsTab>>(() => new Set());
   // The manual sync this page last requested, until its own run ends — see
   // `isSyncRequestSettled` for how that run is told apart from the previous one.
   const [syncRequest, setSyncRequest] = useState<PendingSyncRequest | null>(null);
@@ -876,41 +884,86 @@ export default function SettingsPage() {
     }
   }, []);
 
+  const fetchAuthInfo = useCallback(async () => {
+    try {
+      const response = await fetch("/api/settings/auth");
+      if (response.ok) setAuthInfo(await response.json());
+    } catch {
+      // Silent
+    }
+  }, []);
+
+  const fetchTitlePreference = useCallback(async () => {
+    try {
+      const response = await fetch("/api/settings/title-preference");
+      if (response.ok) {
+        const data = await response.json();
+        setPreferredTitleServerId(data.preferredTitleServerId ?? null);
+        setPreferredArtworkServerId(data.preferredArtworkServerId ?? null);
+      }
+    } catch {
+      // Silent
+    }
+  }, []);
+
   // ─── Initial data loading ───
 
+  // Each tab renders as soon as its OWN data is in. The page used to wait for
+  // every tab's — two dozen requests, including the GitHub release check
+  // behind system info — so the slowest of them decided when anything showed.
+  // The open tab's requests go out first (the browser serves a handful of
+  // same-origin requests at a time, in the order they were made) and the other
+  // tabs load behind them, so switching tabs afterwards is still instant. A
+  // fetcher two tabs share runs once.
   useEffect(() => {
+    const loaders: Record<SettingsTab, Array<() => Promise<unknown>>> = {
+      general: [
+        fetchAccentColor,
+        fetchChipColors,
+        fetchDedupSetting,
+        fetchRealtimeSetting,
+        fetchLogRetention,
+        fetchActionRetention,
+        fetchDeleteCeiling,
+        fetchBackupSettings,
+        fetchServers,
+        fetchTitlePreference,
+      ],
+      scheduling: [fetchSettings, fetchLifecycleSchedule, fetchScheduleInfo],
+      servers: [fetchServers, fetchTracearrInstances, fetchAuthInfo],
+      integrations: [
+        fetchSonarrInstances,
+        fetchRadarrInstances,
+        fetchLidarrInstances,
+        fetchSeerrInstances,
+        fetchTracearrInstances,
+      ],
+      notifications: [fetchDiscordSettings],
+      authentication: [fetchAuthInfo],
+      ai: [fetchAiSettings],
+      system: [fetchSystemInfo, fetchImageCacheStats],
+    };
+    const started = new Map<() => Promise<unknown>, Promise<unknown>>();
+    const load = (fetcher: () => Promise<unknown>) => {
+      let pending = started.get(fetcher);
+      if (!pending) {
+        pending = fetcher();
+        started.set(fetcher, pending);
+      }
+      return pending;
+    };
+    const openTab = getInitialSettingsTab();
+    const order = [openTab, ...SETTINGS_TABS.map((t) => t.value).filter((tab) => tab !== openTab)];
     void (async () => {
-      await Promise.all([
-        fetchServers(),
-        fetchSettings(),
-        fetchSonarrInstances(),
-        fetchRadarrInstances(),
-        fetchLidarrInstances(),
-        fetchSeerrInstances(),
-        fetchTracearrInstances(),
-        fetchSystemInfo(),
-        fetchAccentColor(),
-        fetchChipColors(),
-        fetchLogRetention(),
-        fetchActionRetention(),
-        fetchDeleteCeiling(),
-        fetchBackupSettings(),
-        fetchLifecycleSchedule(),
-        fetchScheduleInfo(),
-        fetchDiscordSettings(),
-        fetchAiSettings(),
-        fetchDedupSetting(),
-        fetchRealtimeSetting(),
-        fetchImageCacheStats(),
-        fetchChangelog(),
-      ]);
-      setLoading(false);
+      const tabs = order.map(async (tab) => {
+        await Promise.allSettled(loaders[tab].map(load));
+        setLoadedTabs((prev) => (prev.has(tab) ? prev : new Set(prev).add(tab)));
+      });
+      // Release notes have their own loading state on the System tab, so no
+      // tab waits for them.
+      await Promise.all([...tabs, fetchChangelog()]);
     })();
-    // Fetch auth info separately (non-blocking)
-    fetch("/api/settings/auth").then((r) => r.json()).then(setAuthInfo).catch(() => {});
-    // Fetch display preferences separately (non-blocking)
-    fetch("/api/settings/title-preference").then((r) => r.ok ? r.json() : null).then((data) => { if (data) { setPreferredTitleServerId(data.preferredTitleServerId ?? null); setPreferredArtworkServerId(data.preferredArtworkServerId ?? null); } }).catch(() => {});
-  }, [fetchServers, fetchSettings, fetchSonarrInstances, fetchRadarrInstances, fetchLidarrInstances, fetchSeerrInstances, fetchTracearrInstances, fetchSystemInfo, fetchAccentColor, fetchChipColors, fetchLogRetention, fetchActionRetention, fetchBackupSettings, fetchLifecycleSchedule, fetchScheduleInfo, fetchDiscordSettings, fetchAiSettings, fetchDedupSetting, fetchRealtimeSetting, fetchImageCacheStats, fetchChangelog]);
+  }, [fetchServers, fetchSettings, fetchSonarrInstances, fetchRadarrInstances, fetchLidarrInstances, fetchSeerrInstances, fetchTracearrInstances, fetchSystemInfo, fetchAccentColor, fetchChipColors, fetchLogRetention, fetchActionRetention, fetchDeleteCeiling, fetchBackupSettings, fetchLifecycleSchedule, fetchScheduleInfo, fetchDiscordSettings, fetchAiSettings, fetchDedupSetting, fetchRealtimeSetting, fetchImageCacheStats, fetchChangelog, fetchAuthInfo, fetchTitlePreference]);
 
   // Load each enabled Tracearr instance's server list lazily — nothing is
   // requested until an instance exists, so the (common) native-history setup
@@ -2663,13 +2716,8 @@ export default function SettingsPage() {
   // accepted at all (passwordSignInEnabled), and with it whether the forms
   // here ask for the current password.
   const refreshAuthInfo = useCallback(() => {
-    fetch("/api/settings/auth")
-      .then((r) => (r.ok ? r.json() : null))
-      .then((info) => {
-        if (info) setAuthInfo(info);
-      })
-      .catch(() => {});
-  }, []);
+    void fetchAuthInfo();
+  }, [fetchAuthInfo]);
 
   const handleToggleLocalAuth = async (checked: boolean) => {
     setLocalAuthError("");
@@ -2880,7 +2928,7 @@ export default function SettingsPage() {
 
   // ─── Loading gate ───
 
-  if (loading) {
+  if (!hydrated) {
     return <SettingsSkeleton />;
   }
 
@@ -2907,437 +2955,469 @@ export default function SettingsPage() {
           </aside>
           <div className="min-w-0 flex-1 space-y-6">
         <TabsContent value="general" id="settings-panel-general" aria-labelledby="settings-tab-general">
-          <GeneralTab
-            accentColor={accentColor}
-            onSaveAccentColor={saveAccentColor}
-            chipColors={chipColors}
-            onSaveChipColor={saveChipColor}
-            onResetChipColors={resetChipColors}
-            dedupStats={dedupStats}
-            savingDedup={savingDedup}
-            onSaveDedupSetting={saveDedupSetting}
-            realtimeSync={realtimeSync}
-            savingRealtime={savingRealtime}
-            onSaveRealtimeSetting={saveRealtimeSetting}
-            logRetentionDays={logRetentionDays}
-            logRetentionInput={logRetentionInput}
-            savingLogRetention={savingLogRetention}
-            onLogRetentionInputChange={setLogRetentionInput}
-            onSaveLogRetention={saveLogRetention}
-            actionRetentionDays={actionRetentionDays}
-            actionRetentionInput={actionRetentionInput}
-            savingActionRetention={savingActionRetention}
-            onActionRetentionInputChange={setActionRetentionInput}
-            onSaveActionRetention={saveActionRetention}
-          deleteCeilingInput={deleteCeilingInput}
-          savedDeleteCeiling={savedDeleteCeiling}
-          savingDeleteCeiling={savingDeleteCeiling}
-          onDeleteCeilingInputChange={setDeleteCeilingInput}
-          onSaveDeleteCeiling={saveDeleteCeiling}
-            backupSchedule={backupSchedule}
-            backupRetentionCount={backupRetentionCount}
-            backups={backups}
-            backupLoading={backupLoading}
-            backupSaving={backupSaving}
-            creatingBackup={creatingBackup}
-            restoringBackup={restoringBackup}
-            downloadingBackups={downloadingBackups}
-            restoreProgress={restoreProgress}
-            hasBackupPassword={hasBackupPassword}
-            savingBackupPassword={savingBackupPassword}
-            onBackupScheduleChange={handleBackupScheduleChange}
-            onBackupRetentionCountChange={setBackupRetentionCount}
-            onSaveBackupRetention={handleSaveBackupRetention}
-            onSaveBackupPassword={handleSaveBackupPassword}
-            onCreateBackup={handleCreateBackup}
-            onDownloadBackup={handleDownloadBackup}
-            onRestoreBackup={handleRestoreBackup}
-            onDeleteBackup={handleDeleteBackup}
-            servers={servers}
-            preferredTitleServerId={preferredTitleServerId}
-            preferredArtworkServerId={preferredArtworkServerId}
-            onSavePreferredTitleServer={savePreferredTitleServer}
-            onSavePreferredArtworkServer={savePreferredArtworkServer}
-          />
+          {loadedTabs.has("general") ? (
+            <GeneralTab
+              accentColor={accentColor}
+              onSaveAccentColor={saveAccentColor}
+              chipColors={chipColors}
+              onSaveChipColor={saveChipColor}
+              onResetChipColors={resetChipColors}
+              dedupStats={dedupStats}
+              savingDedup={savingDedup}
+              onSaveDedupSetting={saveDedupSetting}
+              realtimeSync={realtimeSync}
+              savingRealtime={savingRealtime}
+              onSaveRealtimeSetting={saveRealtimeSetting}
+              logRetentionDays={logRetentionDays}
+              logRetentionInput={logRetentionInput}
+              savingLogRetention={savingLogRetention}
+              onLogRetentionInputChange={setLogRetentionInput}
+              onSaveLogRetention={saveLogRetention}
+              actionRetentionDays={actionRetentionDays}
+              actionRetentionInput={actionRetentionInput}
+              savingActionRetention={savingActionRetention}
+              onActionRetentionInputChange={setActionRetentionInput}
+              onSaveActionRetention={saveActionRetention}
+            deleteCeilingInput={deleteCeilingInput}
+            savedDeleteCeiling={savedDeleteCeiling}
+            savingDeleteCeiling={savingDeleteCeiling}
+            onDeleteCeilingInputChange={setDeleteCeilingInput}
+            onSaveDeleteCeiling={saveDeleteCeiling}
+              backupSchedule={backupSchedule}
+              backupRetentionCount={backupRetentionCount}
+              backups={backups}
+              backupLoading={backupLoading}
+              backupSaving={backupSaving}
+              creatingBackup={creatingBackup}
+              restoringBackup={restoringBackup}
+              downloadingBackups={downloadingBackups}
+              restoreProgress={restoreProgress}
+              hasBackupPassword={hasBackupPassword}
+              savingBackupPassword={savingBackupPassword}
+              onBackupScheduleChange={handleBackupScheduleChange}
+              onBackupRetentionCountChange={setBackupRetentionCount}
+              onSaveBackupRetention={handleSaveBackupRetention}
+              onSaveBackupPassword={handleSaveBackupPassword}
+              onCreateBackup={handleCreateBackup}
+              onDownloadBackup={handleDownloadBackup}
+              onRestoreBackup={handleRestoreBackup}
+              onDeleteBackup={handleDeleteBackup}
+              servers={servers}
+              preferredTitleServerId={preferredTitleServerId}
+              preferredArtworkServerId={preferredArtworkServerId}
+              onSavePreferredTitleServer={savePreferredTitleServer}
+              onSavePreferredArtworkServer={savePreferredArtworkServer}
+            />
+          ) : (
+            <SettingsPanelSkeleton />
+          )}
         </TabsContent>
 
         <TabsContent value="scheduling" id="settings-panel-scheduling" aria-labelledby="settings-tab-scheduling">
-          <SchedulingTab
-            scheduledJobTime={scheduledJobTime}
-            savingJobTime={savingJobTime}
-            onScheduledJobTimeChange={handleScheduledJobTimeChange}
-            syncSchedule={syncSchedule}
-            isCustomSchedule={isCustomSchedule}
-            customCron={customCron}
-            cronError={cronError}
-            savingSchedule={savingSchedule}
-            lastScheduledSync={lastScheduledSync}
-            onSyncScheduleChange={handleScheduleChange}
-            onCustomCronChange={setCustomCron}
-            onSaveSyncSchedule={saveSyncSchedule}
-            lcDetectSchedule={lcDetectSchedule}
-            isCustomLcDetect={isCustomLcDetect}
-            customLcDetectCron={customLcDetectCron}
-            lcDetectCronError={lcDetectCronError}
-            savingLcDetect={savingLcDetect}
-            lastLcDetect={lastLcDetect}
-            onLcDetectScheduleChange={handleLcDetectScheduleChange}
-            onCustomLcDetectCronChange={setCustomLcDetectCron}
-            onSaveLcDetectSchedule={saveLcDetectSchedule}
-            lcExecSchedule={lcExecSchedule}
-            isCustomLcExec={isCustomLcExec}
-            customLcExecCron={customLcExecCron}
-            lcExecCronError={lcExecCronError}
-            savingLcExec={savingLcExec}
-            lastLcExec={lastLcExec}
-            onLcExecScheduleChange={handleLcExecScheduleChange}
-            onCustomLcExecCronChange={setCustomLcExecCron}
-            onSaveLcExecSchedule={saveLcExecSchedule}
-            timezone={scheduleInfo?.timezone ?? null}
-            scheduleInfo={scheduleInfo}
-            runningJob={runningJob}
-            onRunNow={handleRunNow}
-            formatDate={formatDate}
-            formatNextRun={formatNextRun}
-          />
+          {loadedTabs.has("scheduling") ? (
+            <SchedulingTab
+              scheduledJobTime={scheduledJobTime}
+              savingJobTime={savingJobTime}
+              onScheduledJobTimeChange={handleScheduledJobTimeChange}
+              syncSchedule={syncSchedule}
+              isCustomSchedule={isCustomSchedule}
+              customCron={customCron}
+              cronError={cronError}
+              savingSchedule={savingSchedule}
+              lastScheduledSync={lastScheduledSync}
+              onSyncScheduleChange={handleScheduleChange}
+              onCustomCronChange={setCustomCron}
+              onSaveSyncSchedule={saveSyncSchedule}
+              lcDetectSchedule={lcDetectSchedule}
+              isCustomLcDetect={isCustomLcDetect}
+              customLcDetectCron={customLcDetectCron}
+              lcDetectCronError={lcDetectCronError}
+              savingLcDetect={savingLcDetect}
+              lastLcDetect={lastLcDetect}
+              onLcDetectScheduleChange={handleLcDetectScheduleChange}
+              onCustomLcDetectCronChange={setCustomLcDetectCron}
+              onSaveLcDetectSchedule={saveLcDetectSchedule}
+              lcExecSchedule={lcExecSchedule}
+              isCustomLcExec={isCustomLcExec}
+              customLcExecCron={customLcExecCron}
+              lcExecCronError={lcExecCronError}
+              savingLcExec={savingLcExec}
+              lastLcExec={lastLcExec}
+              onLcExecScheduleChange={handleLcExecScheduleChange}
+              onCustomLcExecCronChange={setCustomLcExecCron}
+              onSaveLcExecSchedule={saveLcExecSchedule}
+              timezone={scheduleInfo?.timezone ?? null}
+              scheduleInfo={scheduleInfo}
+              runningJob={runningJob}
+              onRunNow={handleRunNow}
+              formatDate={formatDate}
+              formatNextRun={formatNextRun}
+            />
+          ) : (
+            <SettingsPanelSkeleton />
+          )}
         </TabsContent>
 
         <TabsContent value="servers" id="settings-panel-servers" aria-labelledby="settings-tab-servers">
-          <ServersTab
-            servers={servers}
-            hasActiveSync={hasActiveSync}
-            syncingServer={activeSyncingServer}
-            testingServer={testingServer}
-            testResult={testResult}
-            refreshingLibraries={refreshingLibraries}
-            addServerDialog={addServerDialog}
-            addServerForm={addServerForm}
-            addServerSaving={addServerSaving}
-            addServerError={addServerError}
-            addServerTesting={addServerTesting}
-            addServerTestResult={addServerTestResult}
-            plexLinking={plexLinking}
-            authInfo={authInfo}
-            editingServerId={editingServerId}
-            editServerUrl={editServerUrl}
-            editServerExternalUrl={editServerExternalUrl}
-            editServerAccessToken={editServerAccessToken}
-            editServerTlsSkip={editServerTlsSkip}
-            editServerSaving={editServerSaving}
-            editServerError={editServerError}
-            plexServers={plexServers}
-            loadingPlexConnections={loadingPlexConnections}
-            purgeDialog={purgeDialog}
-            purging={purging}
-            syncPrompt={syncPrompt}
-            removeServerDialog={removeServerDialog}
-            removingServer={removingServer}
-            tracearrInstances={tracearrInstances}
-            tracearrServerLists={tracearrServerLists}
-            tracearrImportStatus={visibleTracearrImportStatus}
-            watchHistorySourceDialog={watchHistorySourceDialog}
-            savingWatchHistorySource={savingWatchHistorySource}
-            setAddServerDialog={setAddServerDialog}
-            setAddServerForm={setAddServerForm}
-            setAddServerError={setAddServerError}
-            setAddServerTestResult={setAddServerTestResult}
-            onStartPlexOAuth={plexOAuthForOnboarding.startAuth}
-            onCancelPlexOAuth={plexOAuthForOnboarding.cancel}
-            setEditingServerId={setEditingServerId}
-            setEditServerUrl={setEditServerUrl}
-            setEditServerExternalUrl={setEditServerExternalUrl}
-            setEditServerAccessToken={setEditServerAccessToken}
-            setEditServerTlsSkip={setEditServerTlsSkip}
-            setEditServerError={setEditServerError}
-            setPlexServers={setPlexServers}
-            setPurgeDialog={setPurgeDialog}
-            setSyncPrompt={setSyncPrompt}
-            setRemoveServerDialog={setRemoveServerDialog}
-            setWatchHistorySourceDialog={setWatchHistorySourceDialog}
-            onSyncServer={syncServer}
-            onSyncAllServers={syncAllServers}
-            onTestServerConnection={testServerConnection}
-            onRemoveServer={removeServer}
-            onStartEditServer={startEditServer}
-            onSaveServer={saveServer}
-            onToggleLibrary={toggleLibrary}
-            onRefreshLibraries={refreshLibraries}
-            onHandlePurgeConfirm={handlePurgeConfirm}
-            onTestAddServerConnection={testAddServerConnection}
-            onAddJellyfinEmbyServer={addJellyfinEmbyServer}
-            onConfirmAddServerLibraries={confirmAddServerLibraries}
-            onToggleServerEnabled={toggleServerEnabled}
-            onConfirmWatchHistorySource={confirmWatchHistorySource}
-          />
+          {loadedTabs.has("servers") ? (
+            <ServersTab
+              servers={servers}
+              hasActiveSync={hasActiveSync}
+              syncingServer={activeSyncingServer}
+              testingServer={testingServer}
+              testResult={testResult}
+              refreshingLibraries={refreshingLibraries}
+              addServerDialog={addServerDialog}
+              addServerForm={addServerForm}
+              addServerSaving={addServerSaving}
+              addServerError={addServerError}
+              addServerTesting={addServerTesting}
+              addServerTestResult={addServerTestResult}
+              plexLinking={plexLinking}
+              authInfo={authInfo}
+              editingServerId={editingServerId}
+              editServerUrl={editServerUrl}
+              editServerExternalUrl={editServerExternalUrl}
+              editServerAccessToken={editServerAccessToken}
+              editServerTlsSkip={editServerTlsSkip}
+              editServerSaving={editServerSaving}
+              editServerError={editServerError}
+              plexServers={plexServers}
+              loadingPlexConnections={loadingPlexConnections}
+              purgeDialog={purgeDialog}
+              purging={purging}
+              syncPrompt={syncPrompt}
+              removeServerDialog={removeServerDialog}
+              removingServer={removingServer}
+              tracearrInstances={tracearrInstances}
+              tracearrServerLists={tracearrServerLists}
+              tracearrImportStatus={visibleTracearrImportStatus}
+              watchHistorySourceDialog={watchHistorySourceDialog}
+              savingWatchHistorySource={savingWatchHistorySource}
+              setAddServerDialog={setAddServerDialog}
+              setAddServerForm={setAddServerForm}
+              setAddServerError={setAddServerError}
+              setAddServerTestResult={setAddServerTestResult}
+              onStartPlexOAuth={plexOAuthForOnboarding.startAuth}
+              onCancelPlexOAuth={plexOAuthForOnboarding.cancel}
+              setEditingServerId={setEditingServerId}
+              setEditServerUrl={setEditServerUrl}
+              setEditServerExternalUrl={setEditServerExternalUrl}
+              setEditServerAccessToken={setEditServerAccessToken}
+              setEditServerTlsSkip={setEditServerTlsSkip}
+              setEditServerError={setEditServerError}
+              setPlexServers={setPlexServers}
+              setPurgeDialog={setPurgeDialog}
+              setSyncPrompt={setSyncPrompt}
+              setRemoveServerDialog={setRemoveServerDialog}
+              setWatchHistorySourceDialog={setWatchHistorySourceDialog}
+              onSyncServer={syncServer}
+              onSyncAllServers={syncAllServers}
+              onTestServerConnection={testServerConnection}
+              onRemoveServer={removeServer}
+              onStartEditServer={startEditServer}
+              onSaveServer={saveServer}
+              onToggleLibrary={toggleLibrary}
+              onRefreshLibraries={refreshLibraries}
+              onHandlePurgeConfirm={handlePurgeConfirm}
+              onTestAddServerConnection={testAddServerConnection}
+              onAddJellyfinEmbyServer={addJellyfinEmbyServer}
+              onConfirmAddServerLibraries={confirmAddServerLibraries}
+              onToggleServerEnabled={toggleServerEnabled}
+              onConfirmWatchHistorySource={confirmWatchHistorySource}
+            />
+          ) : (
+            <SettingsPanelSkeleton />
+          )}
         </TabsContent>
 
         <TabsContent value="integrations" id="settings-panel-integrations" aria-labelledby="settings-tab-integrations">
-          <IntegrationsTab
-            sonarr={{
-              instances: sonarrInstances,
-              showForm: showSonarrForm,
-              form: sonarrForm,
-              saving: sonarrSaving,
-              error: sonarrError,
-              testing: sonarrTesting,
-              testResult: sonarrTestResult,
-              editing: {
-                id: editingSonarrId,
-                form: editSonarrForm,
-                saving: editSonarrSaving,
-                error: editSonarrError,
-                testing: editSonarrTesting,
-                testResult: editSonarrTestResult,
-              },
-              onShowForm: setShowSonarrForm,
-              onFormChange: (form) => {
-                if (form.url !== sonarrForm.url || form.apiKey !== sonarrForm.apiKey) setSonarrTestResult(null);
-                setSonarrForm(form);
-              },
-              onAdd: addSonarrInstance,
-              onDelete: deleteSonarrInstance,
-              onTest: () => testArrConnection("sonarr", sonarrForm.url, sonarrForm.apiKey, setSonarrTesting, setSonarrTestResult),
-              onStartEdit: startEditSonarr,
-              onSaveEdit: saveEditSonarr,
-              onCancelEdit: () => {
-                invalidateEditTest("sonarr", setEditSonarrTesting);
-                setEditingSonarrId(null);
-              },
-              onEditFormChange: (form) => {
-                if (form.url !== editSonarrForm.url || form.apiKey !== editSonarrForm.apiKey) {
+          {loadedTabs.has("integrations") ? (
+            <IntegrationsTab
+              sonarr={{
+                instances: sonarrInstances,
+                showForm: showSonarrForm,
+                form: sonarrForm,
+                saving: sonarrSaving,
+                error: sonarrError,
+                testing: sonarrTesting,
+                testResult: sonarrTestResult,
+                editing: {
+                  id: editingSonarrId,
+                  form: editSonarrForm,
+                  saving: editSonarrSaving,
+                  error: editSonarrError,
+                  testing: editSonarrTesting,
+                  testResult: editSonarrTestResult,
+                },
+                onShowForm: setShowSonarrForm,
+                onFormChange: (form) => {
+                  if (form.url !== sonarrForm.url || form.apiKey !== sonarrForm.apiKey) setSonarrTestResult(null);
+                  setSonarrForm(form);
+                },
+                onAdd: addSonarrInstance,
+                onDelete: deleteSonarrInstance,
+                onTest: () => testArrConnection("sonarr", sonarrForm.url, sonarrForm.apiKey, setSonarrTesting, setSonarrTestResult),
+                onStartEdit: startEditSonarr,
+                onSaveEdit: saveEditSonarr,
+                onCancelEdit: () => {
                   invalidateEditTest("sonarr", setEditSonarrTesting);
-                  setEditSonarrTestResult(null);
-                }
-                setEditSonarrForm(form);
-              },
-              onEditTest: () => testEditArrConnection("sonarr", editingSonarrId!, { url: editSonarrForm.url, apiKey: editSonarrForm.apiKey }, setEditSonarrTesting, setEditSonarrTestResult),
-              onToggleEnabled: (id: string, enabled: boolean) => toggleArrEnabled("sonarr", id, enabled),
-            }}
-            radarr={{
-              instances: radarrInstances,
-              showForm: showRadarrForm,
-              form: radarrForm,
-              saving: radarrSaving,
-              error: radarrError,
-              testing: radarrTesting,
-              testResult: radarrTestResult,
-              editing: {
-                id: editingRadarrId,
-                form: editRadarrForm,
-                saving: editRadarrSaving,
-                error: editRadarrError,
-                testing: editRadarrTesting,
-                testResult: editRadarrTestResult,
-              },
-              onShowForm: setShowRadarrForm,
-              onFormChange: (form) => {
-                if (form.url !== radarrForm.url || form.apiKey !== radarrForm.apiKey) setRadarrTestResult(null);
-                setRadarrForm(form);
-              },
-              onAdd: addRadarrInstance,
-              onDelete: deleteRadarrInstance,
-              onTest: () => testArrConnection("radarr", radarrForm.url, radarrForm.apiKey, setRadarrTesting, setRadarrTestResult),
-              onStartEdit: startEditRadarr,
-              onSaveEdit: saveEditRadarr,
-              onCancelEdit: () => {
-                invalidateEditTest("radarr", setEditRadarrTesting);
-                setEditingRadarrId(null);
-              },
-              onEditFormChange: (form) => {
-                if (form.url !== editRadarrForm.url || form.apiKey !== editRadarrForm.apiKey) {
+                  setEditingSonarrId(null);
+                },
+                onEditFormChange: (form) => {
+                  if (form.url !== editSonarrForm.url || form.apiKey !== editSonarrForm.apiKey) {
+                    invalidateEditTest("sonarr", setEditSonarrTesting);
+                    setEditSonarrTestResult(null);
+                  }
+                  setEditSonarrForm(form);
+                },
+                onEditTest: () => testEditArrConnection("sonarr", editingSonarrId!, { url: editSonarrForm.url, apiKey: editSonarrForm.apiKey }, setEditSonarrTesting, setEditSonarrTestResult),
+                onToggleEnabled: (id: string, enabled: boolean) => toggleArrEnabled("sonarr", id, enabled),
+              }}
+              radarr={{
+                instances: radarrInstances,
+                showForm: showRadarrForm,
+                form: radarrForm,
+                saving: radarrSaving,
+                error: radarrError,
+                testing: radarrTesting,
+                testResult: radarrTestResult,
+                editing: {
+                  id: editingRadarrId,
+                  form: editRadarrForm,
+                  saving: editRadarrSaving,
+                  error: editRadarrError,
+                  testing: editRadarrTesting,
+                  testResult: editRadarrTestResult,
+                },
+                onShowForm: setShowRadarrForm,
+                onFormChange: (form) => {
+                  if (form.url !== radarrForm.url || form.apiKey !== radarrForm.apiKey) setRadarrTestResult(null);
+                  setRadarrForm(form);
+                },
+                onAdd: addRadarrInstance,
+                onDelete: deleteRadarrInstance,
+                onTest: () => testArrConnection("radarr", radarrForm.url, radarrForm.apiKey, setRadarrTesting, setRadarrTestResult),
+                onStartEdit: startEditRadarr,
+                onSaveEdit: saveEditRadarr,
+                onCancelEdit: () => {
                   invalidateEditTest("radarr", setEditRadarrTesting);
-                  setEditRadarrTestResult(null);
-                }
-                setEditRadarrForm(form);
-              },
-              onEditTest: () => testEditArrConnection("radarr", editingRadarrId!, { url: editRadarrForm.url, apiKey: editRadarrForm.apiKey }, setEditRadarrTesting, setEditRadarrTestResult),
-              onToggleEnabled: (id: string, enabled: boolean) => toggleArrEnabled("radarr", id, enabled),
-            }}
-            lidarr={{
-              instances: lidarrInstances,
-              showForm: showLidarrForm,
-              form: lidarrForm,
-              saving: lidarrSaving,
-              error: lidarrError,
-              testing: lidarrTesting,
-              testResult: lidarrTestResult,
-              editing: {
-                id: editingLidarrId,
-                form: editLidarrForm,
-                saving: editLidarrSaving,
-                error: editLidarrError,
-                testing: editLidarrTesting,
-                testResult: editLidarrTestResult,
-              },
-              onShowForm: setShowLidarrForm,
-              onFormChange: (form) => {
-                if (form.url !== lidarrForm.url || form.apiKey !== lidarrForm.apiKey) setLidarrTestResult(null);
-                setLidarrForm(form);
-              },
-              onAdd: addLidarrInstance,
-              onDelete: deleteLidarrInstance,
-              onTest: () => testArrConnection("lidarr", lidarrForm.url, lidarrForm.apiKey, setLidarrTesting, setLidarrTestResult),
-              onStartEdit: startEditLidarr,
-              onSaveEdit: saveEditLidarr,
-              onCancelEdit: () => {
-                invalidateEditTest("lidarr", setEditLidarrTesting);
-                setEditingLidarrId(null);
-              },
-              onEditFormChange: (form) => {
-                if (form.url !== editLidarrForm.url || form.apiKey !== editLidarrForm.apiKey) {
+                  setEditingRadarrId(null);
+                },
+                onEditFormChange: (form) => {
+                  if (form.url !== editRadarrForm.url || form.apiKey !== editRadarrForm.apiKey) {
+                    invalidateEditTest("radarr", setEditRadarrTesting);
+                    setEditRadarrTestResult(null);
+                  }
+                  setEditRadarrForm(form);
+                },
+                onEditTest: () => testEditArrConnection("radarr", editingRadarrId!, { url: editRadarrForm.url, apiKey: editRadarrForm.apiKey }, setEditRadarrTesting, setEditRadarrTestResult),
+                onToggleEnabled: (id: string, enabled: boolean) => toggleArrEnabled("radarr", id, enabled),
+              }}
+              lidarr={{
+                instances: lidarrInstances,
+                showForm: showLidarrForm,
+                form: lidarrForm,
+                saving: lidarrSaving,
+                error: lidarrError,
+                testing: lidarrTesting,
+                testResult: lidarrTestResult,
+                editing: {
+                  id: editingLidarrId,
+                  form: editLidarrForm,
+                  saving: editLidarrSaving,
+                  error: editLidarrError,
+                  testing: editLidarrTesting,
+                  testResult: editLidarrTestResult,
+                },
+                onShowForm: setShowLidarrForm,
+                onFormChange: (form) => {
+                  if (form.url !== lidarrForm.url || form.apiKey !== lidarrForm.apiKey) setLidarrTestResult(null);
+                  setLidarrForm(form);
+                },
+                onAdd: addLidarrInstance,
+                onDelete: deleteLidarrInstance,
+                onTest: () => testArrConnection("lidarr", lidarrForm.url, lidarrForm.apiKey, setLidarrTesting, setLidarrTestResult),
+                onStartEdit: startEditLidarr,
+                onSaveEdit: saveEditLidarr,
+                onCancelEdit: () => {
                   invalidateEditTest("lidarr", setEditLidarrTesting);
-                  setEditLidarrTestResult(null);
-                }
-                setEditLidarrForm(form);
-              },
-              onEditTest: () => testEditArrConnection("lidarr", editingLidarrId!, { url: editLidarrForm.url, apiKey: editLidarrForm.apiKey }, setEditLidarrTesting, setEditLidarrTestResult),
-              onToggleEnabled: (id: string, enabled: boolean) => toggleArrEnabled("lidarr", id, enabled),
-            }}
-            seerr={{
-              instances: seerrInstances,
-              showForm: showSeerrForm,
-              form: seerrForm,
-              saving: seerrSaving,
-              error: seerrError,
-              testing: seerrTesting,
-              testResult: seerrTestResult,
-              editing: {
-                id: editingSeerrId,
-                form: editSeerrForm,
-                saving: editSeerrSaving,
-                error: editSeerrError,
-                testing: editSeerrTesting,
-                testResult: editSeerrTestResult,
-              },
-              onShowForm: setShowSeerrForm,
-              onFormChange: (form) => {
-                if (form.url !== seerrForm.url || form.apiKey !== seerrForm.apiKey) setSeerrTestResult(null);
-                setSeerrForm(form);
-              },
-              onAdd: addSeerrInstance,
-              onDelete: deleteSeerrInstance,
-              onTest: () => testArrConnection("seerr", seerrForm.url, seerrForm.apiKey, setSeerrTesting, setSeerrTestResult),
-              onStartEdit: startEditSeerr,
-              onSaveEdit: saveEditSeerr,
-              onCancelEdit: () => {
-                invalidateEditTest("seerr", setEditSeerrTesting);
-                setEditingSeerrId(null);
-              },
-              onEditFormChange: (form) => {
-                if (form.url !== editSeerrForm.url || form.apiKey !== editSeerrForm.apiKey) {
+                  setEditingLidarrId(null);
+                },
+                onEditFormChange: (form) => {
+                  if (form.url !== editLidarrForm.url || form.apiKey !== editLidarrForm.apiKey) {
+                    invalidateEditTest("lidarr", setEditLidarrTesting);
+                    setEditLidarrTestResult(null);
+                  }
+                  setEditLidarrForm(form);
+                },
+                onEditTest: () => testEditArrConnection("lidarr", editingLidarrId!, { url: editLidarrForm.url, apiKey: editLidarrForm.apiKey }, setEditLidarrTesting, setEditLidarrTestResult),
+                onToggleEnabled: (id: string, enabled: boolean) => toggleArrEnabled("lidarr", id, enabled),
+              }}
+              seerr={{
+                instances: seerrInstances,
+                showForm: showSeerrForm,
+                form: seerrForm,
+                saving: seerrSaving,
+                error: seerrError,
+                testing: seerrTesting,
+                testResult: seerrTestResult,
+                editing: {
+                  id: editingSeerrId,
+                  form: editSeerrForm,
+                  saving: editSeerrSaving,
+                  error: editSeerrError,
+                  testing: editSeerrTesting,
+                  testResult: editSeerrTestResult,
+                },
+                onShowForm: setShowSeerrForm,
+                onFormChange: (form) => {
+                  if (form.url !== seerrForm.url || form.apiKey !== seerrForm.apiKey) setSeerrTestResult(null);
+                  setSeerrForm(form);
+                },
+                onAdd: addSeerrInstance,
+                onDelete: deleteSeerrInstance,
+                onTest: () => testArrConnection("seerr", seerrForm.url, seerrForm.apiKey, setSeerrTesting, setSeerrTestResult),
+                onStartEdit: startEditSeerr,
+                onSaveEdit: saveEditSeerr,
+                onCancelEdit: () => {
                   invalidateEditTest("seerr", setEditSeerrTesting);
-                  setEditSeerrTestResult(null);
-                }
-                setEditSeerrForm(form);
-              },
-              onEditTest: () => testEditArrConnection("seerr", editingSeerrId!, { url: editSeerrForm.url, apiKey: editSeerrForm.apiKey }, setEditSeerrTesting, setEditSeerrTestResult),
-              onToggleEnabled: (id: string, enabled: boolean) => toggleSeerrEnabled(id, enabled),
-            }}
-            tracearr={{
-              instances: tracearrInstances,
-              showForm: showTracearrForm,
-              form: tracearrForm,
-              saving: tracearrSaving,
-              error: tracearrError,
-              editing: {
-                id: editingTracearrId,
-                form: editTracearrForm,
-                saving: editTracearrSaving,
-                error: editTracearrError,
-                testing: editTracearrTesting,
-                testResult: editTracearrTestResult,
-              },
-              onShowForm: setShowTracearrForm,
-              onFormChange: setTracearrForm,
-              onAdd: addTracearrInstance,
-              onDelete: deleteTracearrInstance,
-              onStartEdit: startEditTracearr,
-              onSaveEdit: saveEditTracearr,
-              onCancelEdit: () => setEditingTracearrId(null),
-              onEditFormChange: (form) => {
-                if (form.url !== editTracearrForm.url || form.apiKey !== editTracearrForm.apiKey) setEditTracearrTestResult(null);
-                setEditTracearrForm(form);
-              },
-              onEditTest: () => testTracearrConnection(editingTracearrId!, { url: editTracearrForm.url, apiKey: editTracearrForm.apiKey }),
-              onToggleEnabled: (id: string, enabled: boolean) => toggleTracearrEnabled(id, enabled),
-            }}
-          />
+                  setEditingSeerrId(null);
+                },
+                onEditFormChange: (form) => {
+                  if (form.url !== editSeerrForm.url || form.apiKey !== editSeerrForm.apiKey) {
+                    invalidateEditTest("seerr", setEditSeerrTesting);
+                    setEditSeerrTestResult(null);
+                  }
+                  setEditSeerrForm(form);
+                },
+                onEditTest: () => testEditArrConnection("seerr", editingSeerrId!, { url: editSeerrForm.url, apiKey: editSeerrForm.apiKey }, setEditSeerrTesting, setEditSeerrTestResult),
+                onToggleEnabled: (id: string, enabled: boolean) => toggleSeerrEnabled(id, enabled),
+              }}
+              tracearr={{
+                instances: tracearrInstances,
+                showForm: showTracearrForm,
+                form: tracearrForm,
+                saving: tracearrSaving,
+                error: tracearrError,
+                editing: {
+                  id: editingTracearrId,
+                  form: editTracearrForm,
+                  saving: editTracearrSaving,
+                  error: editTracearrError,
+                  testing: editTracearrTesting,
+                  testResult: editTracearrTestResult,
+                },
+                onShowForm: setShowTracearrForm,
+                onFormChange: setTracearrForm,
+                onAdd: addTracearrInstance,
+                onDelete: deleteTracearrInstance,
+                onStartEdit: startEditTracearr,
+                onSaveEdit: saveEditTracearr,
+                onCancelEdit: () => setEditingTracearrId(null),
+                onEditFormChange: (form) => {
+                  if (form.url !== editTracearrForm.url || form.apiKey !== editTracearrForm.apiKey) setEditTracearrTestResult(null);
+                  setEditTracearrForm(form);
+                },
+                onEditTest: () => testTracearrConnection(editingTracearrId!, { url: editTracearrForm.url, apiKey: editTracearrForm.apiKey }),
+                onToggleEnabled: (id: string, enabled: boolean) => toggleTracearrEnabled(id, enabled),
+              }}
+            />
+          ) : (
+            <SettingsPanelSkeleton />
+          )}
         </TabsContent>
 
         <TabsContent value="notifications" id="settings-panel-notifications" aria-labelledby="settings-tab-notifications">
-          <NotificationsTab
-            discordWebhookUrl={discordWebhookUrl}
-            discordWebhookUsername={discordWebhookUsername}
-            discordWebhookAvatarUrl={discordWebhookAvatarUrl}
-            discordNotifyApiKeys={discordNotifyApiKeys}
-            discordSaving={discordSaving}
-            discordTesting={discordTesting}
-            discordTestResult={discordTestResult}
-            onDiscordWebhookUrlChange={setDiscordWebhookUrl}
-            onDiscordWebhookUsernameChange={setDiscordWebhookUsername}
-            onDiscordWebhookAvatarUrlChange={setDiscordWebhookAvatarUrl}
-            onDiscordNotifyApiKeysChange={setDiscordNotifyApiKeys}
-            onSaveDiscordSettings={saveDiscordSettings}
-            onTestDiscordWebhook={testDiscordWebhook}
-          />
+          {loadedTabs.has("notifications") ? (
+            <NotificationsTab
+              discordWebhookUrl={discordWebhookUrl}
+              discordWebhookUsername={discordWebhookUsername}
+              discordWebhookAvatarUrl={discordWebhookAvatarUrl}
+              discordNotifyApiKeys={discordNotifyApiKeys}
+              discordSaving={discordSaving}
+              discordTesting={discordTesting}
+              discordTestResult={discordTestResult}
+              onDiscordWebhookUrlChange={setDiscordWebhookUrl}
+              onDiscordWebhookUsernameChange={setDiscordWebhookUsername}
+              onDiscordWebhookAvatarUrlChange={setDiscordWebhookAvatarUrl}
+              onDiscordNotifyApiKeysChange={setDiscordNotifyApiKeys}
+              onSaveDiscordSettings={saveDiscordSettings}
+              onTestDiscordWebhook={testDiscordWebhook}
+            />
+          ) : (
+            <SettingsPanelSkeleton />
+          )}
         </TabsContent>
 
         <TabsContent value="authentication" id="settings-panel-authentication" aria-labelledby="settings-tab-authentication">
-          <AuthenticationTab
-            authInfo={authInfo}
-            authLoading={authLoading}
-            plexLinking={plexLinking}
-            credentialsForm={credentialsForm}
-            credentialsSaving={credentialsSaving}
-            credentialsError={credentialsError}
-            credentialsSuccess={credentialsSuccess}
-            plexLoginError={plexLoginError}
-            localAuthError={localAuthError}
-            showCredentialPrompt={showCredentialPrompt}
-            promptForm={promptForm}
-            promptError={promptError}
-            promptSaving={promptSaving}
-            onSetCredentialsForm={setCredentialsForm}
-            onSetPromptForm={setPromptForm}
-            onSetShowCredentialPrompt={setShowCredentialPrompt}
-            onToggleLocalAuth={handleToggleLocalAuth}
-            onTogglePlexLogin={handleTogglePlexLogin}
-            onChangeCredentials={handleChangeCredentials}
-            onPlexLink={handlePlexLink}
-            onCreateCredentialsAndEnable={handleCreateCredentialsAndEnable}
-            onAuthSettingsChanged={refreshAuthInfo}
-          />
+          {loadedTabs.has("authentication") ? (
+            <AuthenticationTab
+              authInfo={authInfo}
+              authLoading={authLoading}
+              plexLinking={plexLinking}
+              credentialsForm={credentialsForm}
+              credentialsSaving={credentialsSaving}
+              credentialsError={credentialsError}
+              credentialsSuccess={credentialsSuccess}
+              plexLoginError={plexLoginError}
+              localAuthError={localAuthError}
+              showCredentialPrompt={showCredentialPrompt}
+              promptForm={promptForm}
+              promptError={promptError}
+              promptSaving={promptSaving}
+              onSetCredentialsForm={setCredentialsForm}
+              onSetPromptForm={setPromptForm}
+              onSetShowCredentialPrompt={setShowCredentialPrompt}
+              onToggleLocalAuth={handleToggleLocalAuth}
+              onTogglePlexLogin={handleTogglePlexLogin}
+              onChangeCredentials={handleChangeCredentials}
+              onPlexLink={handlePlexLink}
+              onCreateCredentialsAndEnable={handleCreateCredentialsAndEnable}
+              onAuthSettingsChanged={refreshAuthInfo}
+            />
+          ) : (
+            <SettingsPanelSkeleton />
+          )}
         </TabsContent>
 
         <TabsContent value="ai" id="settings-panel-ai" aria-labelledby="settings-tab-ai">
-          <AiTab
-            aiEnabled={aiEnabled}
-            aiProvider={aiProvider}
-            aiBaseUrl={aiBaseUrl}
-            aiApiKey={aiApiKey}
-            aiModel={aiModel}
-            aiSaving={aiSaving}
-            aiTesting={aiTesting}
-            aiTestResult={aiTestResult}
-            onAiEnabledChange={setAiEnabled}
-            onAiProviderChange={setAiProvider}
-            onAiBaseUrlChange={setAiBaseUrl}
-            onAiApiKeyChange={setAiApiKey}
-            onAiModelChange={setAiModel}
-            onSaveAiSettings={saveAiSettings}
-            onTestAiConnection={testAiConnection}
-          />
+          {loadedTabs.has("ai") ? (
+            <AiTab
+              aiEnabled={aiEnabled}
+              aiProvider={aiProvider}
+              aiBaseUrl={aiBaseUrl}
+              aiApiKey={aiApiKey}
+              aiModel={aiModel}
+              aiSaving={aiSaving}
+              aiTesting={aiTesting}
+              aiTestResult={aiTestResult}
+              onAiEnabledChange={setAiEnabled}
+              onAiProviderChange={setAiProvider}
+              onAiBaseUrlChange={setAiBaseUrl}
+              onAiApiKeyChange={setAiApiKey}
+              onAiModelChange={setAiModel}
+              onSaveAiSettings={saveAiSettings}
+              onTestAiConnection={testAiConnection}
+            />
+          ) : (
+            <SettingsPanelSkeleton />
+          )}
         </TabsContent>
 
         <TabsContent value="system" id="settings-panel-system" aria-labelledby="settings-tab-system">
-          <SystemTab
-            systemInfo={systemInfo}
-            imageCacheStats={imageCacheStats}
-            clearingImageCache={clearingImageCache}
-            onClearImageCache={handleClearImageCache}
-            releaseNotes={releaseNotes}
-            loadingChangelog={loadingChangelog}
-          />
+          {loadedTabs.has("system") ? (
+            <SystemTab
+              systemInfo={systemInfo}
+              imageCacheStats={imageCacheStats}
+              clearingImageCache={clearingImageCache}
+              onClearImageCache={handleClearImageCache}
+              releaseNotes={releaseNotes}
+              loadingChangelog={loadingChangelog}
+            />
+          ) : (
+            <SettingsPanelSkeleton />
+          )}
         </TabsContent>
           </div>
         </div>

@@ -549,6 +549,10 @@ model SyncJob {
   currentLibrary  String?
 
   @@index([mediaServerId, status])
+  // `GET /api/servers` reads each server's newest job; one index probe with
+  // this, a sort of every job the server ever ran without it (rows are never
+  // pruned).
+  @@index([mediaServerId, startedAt])
 }
 
 model RuleSet {

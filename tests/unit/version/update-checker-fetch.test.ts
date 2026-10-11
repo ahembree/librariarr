@@ -8,8 +8,8 @@ import {
   checkForUpdate,
   fetchChangelog,
   deduplicateReleaseBody,
+  resetVersionLookups,
 } from "@/lib/version/update-checker";
-import { appCache } from "@/lib/cache/memory-cache";
 
 function jsonResponse(body: unknown, ok = true, status = 200): Response {
   return {
@@ -24,15 +24,16 @@ const ORIGINAL_VERSION = process.env.NEXT_PUBLIC_APP_VERSION;
 describe("update-checker fetch behavior", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // Clear cache so checkForUpdate/fetchChangelog don't bleed between tests.
-    appCache.clear();
+    // Clear stored lookups so checkForUpdate/fetchChangelog don't bleed between tests.
+    resetVersionLookups();
     vi.stubGlobal("fetch", vi.fn());
     process.env.NEXT_PUBLIC_APP_VERSION = "1.2.0";
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
-    appCache.clear();
+    vi.useRealTimers();
+    resetVersionLookups();
     if (ORIGINAL_VERSION === undefined) {
       delete process.env.NEXT_PUBLIC_APP_VERSION;
     } else {
@@ -144,6 +145,63 @@ describe("update-checker fetch behavior", () => {
       expect(fetchMock).toHaveBeenCalledTimes(1);
       expect(second).toEqual(first);
     });
+
+    it("shares one GitHub request between concurrent first lookups", async () => {
+      const fetchMock = vi.mocked(fetch);
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse({ tag_name: "v1.3.0", html_url: "u", name: "n" }),
+      );
+
+      const [a, b] = await Promise.all([checkForUpdate(), checkForUpdate()]);
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(a.latestVersion).toBe("1.3.0");
+      expect(b).toEqual(a);
+    });
+
+    it("answers from the last lookup once it is stale and refreshes in the background", async () => {
+      vi.useFakeTimers({ now: new Date("2026-01-01T00:00:00Z"), toFake: ["Date"] });
+      const fetchMock = vi.mocked(fetch);
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse({ tag_name: "v1.3.0", html_url: "u", name: "n" }),
+      );
+      await checkForUpdate();
+
+      vi.setSystemTime(new Date("2026-01-01T01:00:01Z"));
+      let resolveGitHub!: (r: Response) => void;
+      fetchMock.mockReturnValueOnce(new Promise<Response>((r) => { resolveGitHub = r; }));
+
+      // GitHub has not answered the refresh, yet the caller is not kept waiting.
+      const stale = await checkForUpdate();
+      expect(stale.latestVersion).toBe("1.3.0");
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+
+      resolveGitHub(jsonResponse({ tag_name: "v1.4.0", html_url: "u", name: "n" }));
+      await vi.waitFor(async () => {
+        expect((await checkForUpdate()).latestVersion).toBe("1.4.0");
+      });
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("keeps the last good answer when a refresh fails", async () => {
+      vi.useFakeTimers({ now: new Date("2026-01-01T00:00:00Z"), toFake: ["Date"] });
+      const fetchMock = vi.mocked(fetch);
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse({ tag_name: "v1.3.0", html_url: "u", name: "n" }),
+      );
+      await checkForUpdate();
+
+      vi.setSystemTime(new Date("2026-01-01T01:00:01Z"));
+      fetchMock.mockResolvedValueOnce(jsonResponse(null, false, 403));
+      await checkForUpdate();
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+      const after = await checkForUpdate();
+      expect(after.latestVersion).toBe("1.3.0");
+      expect(after.updateAvailable).toBe(true);
+      // The failed attempt counts as a lookup: no retry until the next hour.
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
   });
 
   describe("fetchChangelog", () => {
@@ -253,6 +311,23 @@ describe("update-checker fetch behavior", () => {
       vi.mocked(fetch).mockRejectedValueOnce(new Error("boom"));
       const notes = await fetchChangelog();
       expect(notes).toEqual([]);
+    });
+
+    it("keeps the last release notes when a refresh fails", async () => {
+      vi.useFakeTimers({ now: new Date("2026-01-01T00:00:00Z"), toFake: ["Date"] });
+      const fetchMock = vi.mocked(fetch);
+      fetchMock.mockResolvedValueOnce(
+        jsonResponse([{ tag_name: "v1.3.0", name: "1.3.0", body: "b", html_url: "u" }]),
+      );
+      await fetchChangelog();
+
+      vi.setSystemTime(new Date("2026-01-01T01:00:01Z"));
+      fetchMock.mockRejectedValueOnce(new Error("boom"));
+      await fetchChangelog();
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+
+      const notes = await fetchChangelog();
+      expect(notes.map((n) => n.version)).toEqual(["1.3.0"]);
     });
 
     it("deduplicates changelog body lines that differ only by commit hash", async () => {
