@@ -2,15 +2,15 @@
 # official Playwright image (Chromium and all system libs pre-baked, so NO
 # browser download is needed at run time — this is the egress-independent path).
 #
-#   docker compose -f docker-compose.e2e.yml up --build \
-#       --abort-on-container-exit --exit-code-from playwright
+#   pnpm e2e:docker
 #
 # The Playwright container drives the app over the compose network
 # (E2E_BASE_URL=http://app:3000), so playwright.config.ts skips its own
 # webServer. Reports are written to ./playwright-report on the host.
 #
-# IMPORTANT: keep the playwright image tag in sync with the @playwright/test
-# version in package.json (currently 1.61.1).
+# The Playwright image tag must match the @playwright/test version exactly, so it
+# is not written here: PLAYWRIGHT_VERSION comes from scripts/playwright-version.mjs
+# (pnpm e2e:docker and .github/workflows/e2e.yml set it).
 
 services:
   postgres:
@@ -51,7 +51,7 @@ services:
       start_period: 120s
 
   playwright:
-    image: mcr.microsoft.com/playwright:v1.63.0-noble
+    image: mcr.microsoft.com/playwright:v${PLAYWRIGHT_VERSION:?set by pnpm e2e:docker from scripts/playwright-version.mjs}-noble
     working_dir: /work
     # Share the app container's network namespace so the browser reaches the app
     # at 127.0.0.1:3000. Chromium auto-upgrades http->https for non-localhost
