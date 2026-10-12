@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useRealtime } from "@/hooks/use-realtime";
+import { fetchSyncStatus } from "@/lib/sync/sync-status-client";
 import { toast } from "sonner";
 import {
   Tooltip,
@@ -118,9 +119,10 @@ export function SyncIndicator({ onSyncComplete }: SyncIndicatorProps) {
 
   const fetchStatus = useCallback(async () => {
     try {
-      const res = await fetch("/api/sync/status");
-      const data = await res.json();
-      const newJobs: SyncJob[] = data.jobs || [];
+      const data = await fetchSyncStatus();
+      // A failed check keeps what is on screen (background polling).
+      if (!data) return;
+      const newJobs = (data.jobs ?? []) as unknown as SyncJob[];
       setJobs(newJobs);
 
       const isActive = newJobs.some(

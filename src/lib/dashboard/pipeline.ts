@@ -20,41 +20,36 @@ export type PipelineState =
   | { status: "failed" }
   | { status: "ready"; data: PipelineData };
 
-interface RulesBody { ruleSets?: { enabled: boolean }[] }
-interface MatchesBody { ruleMatches?: { count?: number }[] }
-interface StatsBody {
+/** `GET /api/lifecycle/summary`. Byte sizes arrive as decimal strings. */
+interface SummaryBody {
+  ruleTotal?: number;
+  ruleEnabled?: number;
+  matchCount?: number;
+  matchRuleSets?: number;
   pendingCount?: number;
   pendingBytes?: string | number;
-  totalBytesDeleted?: string | number;
-  actionCount?: number;
+  reclaimedBytes?: string | number;
+  reclaimedActions?: number;
 }
 
 /**
- * Build the zone's state from the three lifecycle responses (`null` for a
- * request that failed). Rules are the source of truth for "no rules yet": if
- * that request failed, the zone reports the failure rather than showing the
- * create-your-first-rule prompt over an outage. Matches and stats are
- * secondary and read as zero when missing.
+ * Build the zone's state from `/api/lifecycle/summary` (`null` when the request
+ * failed). A failed request reports the failure rather than showing the
+ * create-your-first-rule prompt over an outage.
  */
-export function pipelineStateFrom(
-  rules: RulesBody | null,
-  matches: MatchesBody | null,
-  stats: StatsBody | null,
-): PipelineState {
-  if (rules == null) return { status: "failed" };
-  const ruleSets = rules.ruleSets ?? [];
-  const ruleMatches = matches?.ruleMatches ?? [];
+export function pipelineStateFrom(summary: SummaryBody | null): PipelineState {
+  if (summary == null) return { status: "failed" };
   return {
     status: "ready",
     data: {
-      ruleTotal: ruleSets.length,
-      ruleEnabled: ruleSets.filter((r) => r.enabled).length,
-      matchCount: ruleMatches.reduce((a, g) => a + (g.count ?? 0), 0),
-      matchRuleSets: ruleMatches.filter((g) => (g.count ?? 0) > 0).length,
-      pendingCount: stats?.pendingCount ?? 0,
-      pendingBytes: Number(stats?.pendingBytes ?? 0),
-      reclaimedBytes: Number(stats?.totalBytesDeleted ?? 0),
-      reclaimedActions: stats?.actionCount ?? 0,
+      ruleTotal: summary.ruleTotal ?? 0,
+      ruleEnabled: summary.ruleEnabled ?? 0,
+      matchCount: summary.matchCount ?? 0,
+      matchRuleSets: summary.matchRuleSets ?? 0,
+      pendingCount: summary.pendingCount ?? 0,
+      pendingBytes: Number(summary.pendingBytes ?? 0),
+      reclaimedBytes: Number(summary.reclaimedBytes ?? 0),
+      reclaimedActions: summary.reclaimedActions ?? 0,
     },
   };
 }

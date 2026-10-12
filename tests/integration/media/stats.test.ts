@@ -458,4 +458,134 @@ describe("GET /api/media/stats", () => {
     expect(body.artistCount).toBe(1);
     expect(body.albumCount).toBe(3);
   });
+
+  describe("with dedup across two servers", () => {
+    async function seedTwoServers() {
+      const prisma = getTestPrisma();
+      const user = await createTestUser();
+      const serverA = await createTestServer(user.id, { name: "A" });
+      const serverB = await createTestServer(user.id, { name: "B" });
+      const moviesA = await createTestLibrary(serverA.id, { type: "MOVIE" });
+      const moviesB = await createTestLibrary(serverB.id, { type: "MOVIE" });
+      const showsA = await createTestLibrary(serverA.id, { type: "SERIES" });
+
+      const movie = async (
+        libraryId: string,
+        title: string,
+        canonical: boolean,
+        data: Record<string, unknown>,
+      ) => {
+        const item = await createTestMediaItem(libraryId, { type: "MOVIE", title });
+        // Set after creation: the factory fills a null codec with a default.
+        await prisma.mediaItem.update({ where: { id: item.id }, data: { ...data, dedupCanonical: canonical } });
+        return item;
+      };
+      // "Alien" on both servers, canonical on A. "Heat" only on B.
+      await movie(moviesA.id, "Alien", true, {
+        fileSize: BigInt(1000), duration: 100, resolution: "4K", videoCodec: "hevc", audioCodec: "truehd",
+        contentRating: "R", dynamicRange: "HDR10", audioChannels: 8, genres: ["Horror", "Sci-Fi"],
+      });
+      await movie(moviesB.id, "Alien", false, {
+        fileSize: BigInt(400), duration: 100, resolution: "1080p", videoCodec: "h264", audioCodec: "aac",
+        contentRating: "R", dynamicRange: "SDR", audioChannels: 2, genres: ["Horror", "Sci-Fi"],
+      });
+      await movie(moviesB.id, "Heat", true, {
+        fileSize: BigInt(700), duration: 170, resolution: "1080p", videoCodec: "h264", audioCodec: null,
+        contentRating: null, dynamicRange: "SDR", audioChannels: 6, genres: ["Crime"],
+      });
+      const episode = await createTestMediaItem(showsA.id, {
+        type: "SERIES", title: "Pilot", parentTitle: "Show", seasonNumber: 1, episodeNumber: 1,
+      });
+      await prisma.mediaItem.update({
+        where: { id: episode.id },
+        data: {
+          dedupCanonical: true, seriesKey: "tvdb:1", fileSize: BigInt(50), duration: 30, resolution: "720p",
+          videoCodec: null, audioCodec: null, contentRating: null, dynamicRange: null, audioChannels: null, genres: [],
+        },
+      });
+      return { user, serverA, serverB };
+    }
+
+    it("counts, sizes and breaks down the canonical copies only", async () => {
+      const { user } = await seedTwoServers();
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      const body = await expectJson<Record<string, unknown>>(await callRoute(GET, { url: "/api/media/stats" }), 200);
+
+      expect(body).toMatchObject({
+        movieCount: 2,
+        episodeCount: 1,
+        musicCount: 0,
+        seriesCount: 1,
+        seasonCount: 1,
+        totalSize: "1750",
+        movieSize: "1700",
+        seriesSize: "50",
+        musicSize: "0",
+        movieDuration: 270,
+        seriesDuration: 30,
+        musicDuration: 0,
+      });
+      // Every breakdown is ordered by value (nulls last), then type.
+      expect(body.qualityBreakdown).toEqual([
+        { _count: 1, resolution: "1080p", type: "MOVIE" },
+        { _count: 1, resolution: "4K", type: "MOVIE" },
+        { _count: 1, resolution: "720p", type: "SERIES" },
+      ]);
+      expect(body.videoCodecBreakdown).toEqual([
+        { _count: 1, videoCodec: "h264", type: "MOVIE" },
+        { _count: 1, videoCodec: "hevc", type: "MOVIE" },
+        { _count: 1, videoCodec: null, type: "SERIES" },
+      ]);
+      expect(body.audioCodecBreakdown).toEqual([
+        { _count: 1, audioCodec: "truehd", type: "MOVIE" },
+        { _count: 1, audioCodec: null, type: "MOVIE" },
+        { _count: 1, audioCodec: null, type: "SERIES" },
+      ]);
+      expect(body.contentRatingBreakdown).toEqual([
+        { _count: 1, contentRating: "R", type: "MOVIE" },
+        { _count: 1, contentRating: null, type: "MOVIE" },
+        { _count: 1, contentRating: null, type: "SERIES" },
+      ]);
+      expect(body.dynamicRangeBreakdown).toEqual([
+        { _count: 1, dynamicRange: "HDR10", type: "MOVIE" },
+        { _count: 1, dynamicRange: "SDR", type: "MOVIE" },
+        { _count: 1, dynamicRange: null, type: "SERIES" },
+      ]);
+      expect(body.audioChannelsBreakdown).toEqual([
+        { _count: 1, audioChannels: 6, type: "MOVIE" },
+        { _count: 1, audioChannels: 8, type: "MOVIE" },
+        { _count: 1, audioChannels: null, type: "SERIES" },
+      ]);
+      expect(
+        (body.genreBreakdown as { value: string; type: string; _count: number }[])
+          .map((g) => `${g.value}:${g.type}:${g._count}`)
+          .sort(),
+      ).toEqual(["Crime:MOVIE:1", "Horror:MOVIE:1", "Sci-Fi:MOVIE:1"]);
+    });
+
+    it("counts every copy on one server's view", async () => {
+      const { user, serverB } = await seedTwoServers();
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      const body = await expectJson<Record<string, unknown>>(
+        await callRoute(GET, { url: `/api/media/stats?serverId=${serverB.id}` }),
+        200,
+      );
+
+      // Server B alone: no dedup, so its non-canonical "Alien" counts.
+      expect(body).toMatchObject({ movieCount: 2, totalSize: "1100", movieSize: "1100", movieDuration: 270 });
+      expect(body.qualityBreakdown).toEqual([{ _count: 2, resolution: "1080p", type: "MOVIE" }]);
+    });
+
+    it("falls back to every copy's total size when no copy is canonical", async () => {
+      const { user } = await seedTwoServers();
+      await getTestPrisma().mediaItem.updateMany({ data: { dedupCanonical: false } });
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      const body = await expectJson<Record<string, unknown>>(await callRoute(GET, { url: "/api/media/stats" }), 200);
+
+      expect(body).toMatchObject({ movieCount: 0, totalSize: "2150", movieSize: "0", qualityBreakdown: [] });
+    });
+  });
 });

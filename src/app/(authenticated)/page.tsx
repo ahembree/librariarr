@@ -35,7 +35,7 @@ import { EmptyState } from "@/components/empty-state";
 import { generateId } from "@/lib/utils";
 import { getDuplicateServerNames } from "@/lib/server-styles";
 import { ServerTypeChip } from "@/components/server-type-chip";
-import { DashboardSkeleton } from "@/components/skeletons";
+import { InsightsSkeleton, LibraryTilesSkeleton } from "@/components/skeletons";
 import { useRealtime } from "@/hooks/use-realtime";
 import {
   ALL_SERVERS,
@@ -132,8 +132,13 @@ function SectionHeader({ label, children }: { label: string; children?: React.Re
 export default function DashboardPage() {
   const router = useRouter();
   const [stats, setStats] = useState<Stats | null>(null);
+  // True until the first load has settled, whatever each request returned.
   const [loading, setLoading] = useState(true);
   const [layout, setLayout] = useState<DashboardLayout | null>(null);
+  // Whether the saved layout and the library types have been answered (or
+  // failed). The zones that depend on them wait for them; nothing else does.
+  const [layoutSettled, setLayoutSettled] = useState(false);
+  const [typesSettled, setTypesSettled] = useState(false);
   const [scheduleInfo, setScheduleInfo] = useState<ScheduleInfo | null>(null);
   const [editMode, setEditMode] = useState(false);
   const [servers, setServers] = useState<DashboardServer[]>([]);
@@ -182,47 +187,63 @@ export default function DashboardPage() {
 
   // The saved layout is read once. Re-reading it on every realtime refresh
   // could land a GET issued before an in-flight layout PUT and revert the edit
-  // the user just made on screen.
-  const layoutLoadedRef = useRef(false);
+  // the user just made on screen. Marked when the read is ISSUED: the zones no
+  // longer wait for it, so a refresh can land while it is still in flight.
+  const layoutReadRef = useRef(false);
 
+  // Each response is applied as it lands. The page used to wait for all five
+  // (the stats among them, the slowest by far on a cold cache) before drawing
+  // anything, and only then mounted the zones — which started their own
+  // requests a full round trip late.
   const fetchData = useCallback(async () => {
-    try {
-      const [, layoutRes, serversRes, typesRes, scheduleRes] = await Promise.all([
-        fetchStatsRef.current(),
-        layoutLoadedRef.current ? null : fetch("/api/settings/dashboard-layout"),
-        fetch("/api/servers"),
-        fetch("/api/media/library-types"),
-        fetch("/api/settings/schedule-info"),
-      ]);
+    const settle = (work: Promise<unknown>) =>
+      work.catch((error) => console.error("Failed to fetch dashboard data:", error));
+    const json = async (url: string) => {
+      const res = await fetch(url);
+      return res.ok ? res.json() : null;
+    };
 
-      if (layoutRes?.ok) {
-        const layoutData = await layoutRes.json();
-        layoutLoadedRef.current = true;
-        setLayout(layoutData.layout);
+    const readLayout = async () => {
+      layoutReadRef.current = true;
+      try {
+        const data = await json("/api/settings/dashboard-layout");
+        if (data) {
+          setLayout(data.layout);
+          return;
+        }
+      } catch (error) {
+        console.error("Failed to fetch dashboard layout:", error);
       }
+      // A failed read is retried by the next refresh.
+      layoutReadRef.current = false;
+    };
 
-      if (serversRes.ok) {
-        const serversData = await serversRes.json();
-        const list = selectableServers(serversData.servers ?? []);
-        setServers(list);
-        setSelectedServerId((prev) => reconcileSelectedServer(prev, list));
-      }
-
-      if (typesRes.ok) {
-        const typesData = await typesRes.json();
-        const types: string[] = typesData.types ?? [];
-        setAvailableTypes(types);
-        setSelectedMediaType((prev) => reconcileSelectedType(prev, types));
-      }
-
-      if (scheduleRes.ok) {
-        setScheduleInfo(await scheduleRes.json());
-      }
-    } catch (error) {
-      console.error("Failed to fetch dashboard data:", error);
-    } finally {
-      setLoading(false);
-    }
+    await Promise.all([
+      settle(fetchStatsRef.current()),
+      layoutReadRef.current ? null : readLayout().finally(() => setLayoutSettled(true)),
+      settle(
+        json("/api/servers").then((data) => {
+          if (!data) return;
+          const list = selectableServers(data.servers ?? []);
+          setServers(list);
+          setSelectedServerId((prev) => reconcileSelectedServer(prev, list));
+        }),
+      ),
+      settle(
+        json("/api/media/library-types").then((data) => {
+          if (!data) return;
+          const types: string[] = data.types ?? [];
+          setAvailableTypes(types);
+          setSelectedMediaType((prev) => reconcileSelectedType(prev, types));
+        }),
+      ).finally(() => setTypesSettled(true)),
+      settle(
+        json("/api/settings/schedule-info").then((data) => {
+          if (data) setScheduleInfo(data);
+        }),
+      ),
+    ]);
+    setLoading(false);
   }, []);
 
   // `fetchStats` refreshes only the headline tiles. `fetchData` also reloads the
@@ -243,11 +264,16 @@ export default function DashboardPage() {
     void (async () => { await fetchData(); })();
   }, [fetchData]);
 
-  // Re-fetch stats when server filter changes (skip initial load)
+  // Re-fetch stats when the server filter changes. Keyed on the selection the
+  // last fetch was for, not on the first load having finished: the selector is
+  // on screen while that load runs, and a pick made then must still refetch
+  // (the request token drops the first load's answer).
+  const statsServerRef = useRef(selectedServerId);
   useEffect(() => {
-    if (loading) return;
+    if (statsServerRef.current === selectedServerId) return;
+    statsServerRef.current = selectedServerId;
     void (async () => { await fetchStats(); })();
-  }, [selectedServerId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedServerId, fetchStats]);
 
   const resolvedLayout = resolveLayout(layout) ?? getDefaultLayout();
   // The Insights grid is the customizable remainder of the old "main" tab
@@ -347,11 +373,7 @@ export default function DashboardPage() {
     [editingCustomCard, insightCards, updateInsights]
   );
 
-  if (loading) {
-    return <DashboardSkeleton />;
-  }
-
-  if (!stats) {
+  if (!loading && !stats) {
     return (
       <div className="p-4 sm:p-6 lg:p-8">
         <EmptyState
@@ -369,6 +391,9 @@ export default function DashboardPage() {
   }
 
   const serverId = selectedServerId !== ALL_SERVERS ? selectedServerId : undefined;
+  // The Insights cards read the saved layout and the type filter; mounting
+  // them before either is known would render (and fetch for) the wrong cards.
+  const insightsReady = layoutSettled && typesSettled;
 
   return (
     <div className="p-4 sm:p-6 lg:p-8">
@@ -445,7 +470,13 @@ export default function DashboardPage() {
         {/* ── Zone 2: library overview ── */}
         <section>
           <SectionHeader label="Library" />
-          <LibraryTiles stats={stats} availableTypes={availableTypes} serverId={serverId} />
+          {/* Which tiles show depends on the library types; their figures
+              fill in when the stats arrive. */}
+          {typesSettled ? (
+            <LibraryTiles stats={stats} availableTypes={availableTypes} serverId={serverId} />
+          ) : (
+            <LibraryTilesSkeleton />
+          )}
         </section>
 
         {/* ── Zone 3: lifecycle pipeline ── */}
@@ -471,7 +502,7 @@ export default function DashboardPage() {
         {/* ── Zone 5: customizable insights ── */}
         <section>
           <SectionHeader label="Insights">
-            {(availableTypes.length === 0 || availableTypes.length > 1) && (
+            {insightsReady && (availableTypes.length === 0 || availableTypes.length > 1) && (
               <Select
                 value={selectedMediaType}
                 onValueChange={setSelectedMediaType}
@@ -517,6 +548,7 @@ export default function DashboardPage() {
             <Button
               variant="outline"
               size="sm"
+              disabled={!insightsReady}
               onClick={() => setEditMode(!editMode)}
             >
               {editMode ? (
@@ -527,6 +559,9 @@ export default function DashboardPage() {
               {editMode ? "Done" : "Customize"}
             </Button>
           </SectionHeader>
+          {!stats || !insightsReady ? (
+            <InsightsSkeleton />
+          ) : (
           <DashboardCardGrid
             cards={insightCards}
             stats={stats}
@@ -546,6 +581,7 @@ export default function DashboardPage() {
             onSyncComplete={fetchStats}
             onConfigChange={handleConfigChange}
           />
+          )}
         </section>
       </div>
 

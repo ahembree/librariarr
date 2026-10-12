@@ -123,38 +123,26 @@ export function ChartCardSkeleton() {
   );
 }
 
-/** Dashboard page skeleton matching the zoned layout (status strip,
- *  library tiles, lifecycle pipeline, recently added shelf). */
-export function DashboardSkeleton() {
+/** The dashboard's library tiles while the stats load. */
+export function LibraryTilesSkeleton() {
   return (
-    <div className="p-4 sm:p-6 lg:p-8">
-      {/* Header: eyebrow + greeting */}
-      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4 mb-6">
-        <div>
-          <Skeleton className="h-3 w-44" />
-          <Skeleton className="mt-2.5 h-8 w-64" />
-          <Skeleton className="mt-2.5 h-4 w-80" />
+    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      {Array.from({ length: 4 }).map((_, i) => (
+        <Skeleton key={i} className="h-56 rounded-[14px]" />
+      ))}
+    </div>
+  );
+}
+
+/** The dashboard's Insights grid while the stats and saved layout load. */
+export function InsightsSkeleton() {
+  return (
+    <div className="grid grid-cols-1 md:grid-cols-12 gap-6">
+      {Array.from({ length: 2 }).map((_, i) => (
+        <div key={i} className="md:col-span-6">
+          <ChartCardSkeleton />
         </div>
-        <Skeleton className="h-9 w-28 rounded-md" />
-      </div>
-      <div className="space-y-8">
-        {/* Status strip */}
-        <div className="grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-4">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <Skeleton key={i} className="h-[66px] rounded-[14px]" />
-          ))}
-        </div>
-        {/* Library tiles */}
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <Skeleton key={i} className="h-56 rounded-[14px]" />
-          ))}
-        </div>
-        {/* Lifecycle pipeline */}
-        <Skeleton className="h-[92px] w-full rounded-[14px]" />
-        {/* Recently added shelf */}
-        <Skeleton className="h-64 w-full rounded-[14px]" />
-      </div>
+      ))}
     </div>
   );
 }

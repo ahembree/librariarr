@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatRelativeDate, formatUntil } from "@/lib/format";
 import { useRealtime } from "@/hooks/use-realtime";
+import { fetchSyncStatus } from "@/lib/sync/sync-status-client";
 import type { ScheduleInfo } from "@/components/dashboard/types";
 
 type Tone = "ok" | "warn" | "err" | "idle";
@@ -175,10 +176,9 @@ export function StatusStrip({ scheduleInfo }: { scheduleInfo: ScheduleInfo | nul
   }, [fetchHealth]);
 
   const fetchSync = () => {
-    fetch("/api/sync/status")
-      .then((res) => (res.ok ? res.json() : null))
+    fetchSyncStatus()
       .then((data) => {
-        const jobs: { status: string; completedAt: string | null }[] = data?.jobs ?? [];
+        const jobs = data?.jobs ?? [];
         const active = jobs.some((j) => j.status === "RUNNING" || j.status === "PENDING");
         const lastRun = jobs
           .filter((j) => j.status === "COMPLETED" && j.completedAt)

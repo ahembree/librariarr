@@ -94,7 +94,7 @@ export async function GET(request: NextRequest) {
   }
   const whereSql = conditions.join(" AND ");
 
-  // Every aggregated column reads from the SAME representative row, so the
+  // Every column of a tile reads from the SAME representative row, so the
   // title, season and poster on a collapsed tile can't come from different
   // episodes. Preference order: the artwork-preferred server, then a row that
   // actually carries the art the tile will request, then the newest, then id for
@@ -102,32 +102,25 @@ export async function GET(request: NextRequest) {
   // chain for `?type=season` (season/album art → series/artist art → the item's
   // own), so the representative is the member most likely to render a real
   // poster rather than one whose season art happens to be missing.
-  const pick = `ORDER BY
-    CASE WHEN "mediaServerId" = $2 THEN 0 ELSE 1 END,
-    CASE
-      WHEN "seasonThumbUrl" IS NOT NULL THEN 0
-      WHEN "parentThumbUrl" IS NOT NULL THEN 1
-      ELSE 2
-    END,
-    "addedAt" DESC, id`;
-  const agg = (col: string) => `(array_agg(${col} ${pick}))[1]`;
-
+  //
   // Members are windowed to the group's own most recent addition, so a weekly
   // show reads "1 new episode" and not "8 episodes" — `COUNT(*)` over the whole
   // group would relabel the entire season every time one episode lands, suppress
   // its hover card and redirect its click to the season, every week forever.
-  const baseCte = `
-    WITH items AS (
-      SELECT mi.id, mi.title, mi.year, mi."type"::text AS type,
-             mi."parentTitle", mi."albumTitle", mi."seasonNumber", mi."episodeNumber",
-             mi."addedAt", mi."thumbUrl", mi."parentThumbUrl", mi."seasonThumbUrl", mi."seriesKey",
-             l."mediaServerId"
-        FROM "MediaItem" mi
-        JOIN "Library" l ON mi."libraryId" = l."id"
-       WHERE ${whereSql}
-    ),
-    keyed AS (
-      SELECT *,
+  //
+  // The scan carries only what grouping and ranking need. The newest groups
+  // are picked first and only their members are windowed, counted and given a
+  // representative, whose row is then read by id: carrying every column of
+  // every item through the window and a dozen ordered aggregates cost ~0.9 s on
+  // a 167k-item library to produce 24 tiles (~0.35 s now).
+  const sql = `
+    WITH keyed AS (
+      SELECT mi.id, mi."addedAt", l."mediaServerId",
+        CASE
+          WHEN mi."seasonThumbUrl" IS NOT NULL THEN 0
+          WHEN mi."parentThumbUrl" IS NOT NULL THEN 1
+          ELSE 2
+        END AS art_rank,
         CASE
           -- Only collapse when the resulting tile can actually navigate
           -- somewhere correct. A NULL seasonNumber would render "S00" and open
@@ -135,24 +128,54 @@ export async function GET(request: NextRequest) {
           -- episodes than the tile stood for; a blank artist would open an album
           -- page that refuses to query without one and renders empty. Both stay
           -- one tile per item instead of promising a destination that lies.
-          WHEN type = 'SERIES' AND "seriesKey" IS NOT NULL AND "seasonNumber" IS NOT NULL
-            THEN 'series:' || "seriesKey" || '::' || "seasonNumber"::text
-          WHEN type = 'MUSIC'
-               AND NULLIF(TRIM(COALESCE("albumTitle", '')), '') IS NOT NULL
-               AND NULLIF(TRIM(COALESCE("parentTitle", '')), '') IS NOT NULL
-            THEN 'album:' || LOWER(TRIM("parentTitle")) || '::' || LOWER(TRIM("albumTitle"))
-          ELSE 'item:' || id
+          WHEN mi."type" = 'SERIES' AND mi."seriesKey" IS NOT NULL AND mi."seasonNumber" IS NOT NULL
+            THEN 'series:' || mi."seriesKey" || '::' || mi."seasonNumber"::text
+          WHEN mi."type" = 'MUSIC'
+               AND NULLIF(TRIM(COALESCE(mi."albumTitle", '')), '') IS NOT NULL
+               AND NULLIF(TRIM(COALESCE(mi."parentTitle", '')), '') IS NOT NULL
+            THEN 'album:' || LOWER(TRIM(mi."parentTitle")) || '::' || LOWER(TRIM(mi."albumTitle"))
+          ELSE 'item:' || mi.id
         END AS group_key
-        FROM items
+        FROM "MediaItem" mi
+        JOIN "Library" l ON mi."libraryId" = l."id"
+       WHERE ${whereSql}
     ),
-    windowed AS (
-      SELECT *, MAX("addedAt") OVER (PARTITION BY group_key) AS group_added_at
+    top_groups AS (
+      -- group_key is the unique tiebreak. A bulk import stamps a whole show
+      -- with one addedAt, so without it tied groups permute between the first
+      -- load and the sync-driven refetch, reshuffling the shelf and hiding rows.
+      -- The total is folded into the same scan with COUNT(*) OVER () — a second
+      -- query would repeat it just to render "24 of N".
+      SELECT group_key, MAX("addedAt") AS group_added_at, COUNT(*) OVER () AS group_total
         FROM keyed
+       GROUP BY group_key
+       ORDER BY MAX("addedAt") DESC, group_key
+       LIMIT ${limit}
     ),
-    recent AS (
-      SELECT * FROM windowed
-       WHERE "addedAt" >= group_added_at - INTERVAL '${BATCH_WINDOW_HOURS} hours'
-    )`;
+    members AS (
+      SELECT k.*, t.group_added_at, t.group_total
+        FROM keyed k
+        JOIN top_groups t USING (group_key)
+       WHERE k."addedAt" >= t.group_added_at - INTERVAL '${BATCH_WINDOW_HOURS} hours'
+    ),
+    representatives AS (
+      SELECT DISTINCT ON (group_key) group_key, id, group_added_at, group_total,
+             COUNT(*) OVER (PARTITION BY group_key) AS member_count
+        FROM members
+       ORDER BY group_key,
+                CASE WHEN "mediaServerId" = $2 THEN 0 ELSE 1 END,
+                art_rank, "addedAt" DESC, id
+    )
+    SELECT r.group_key AS "groupKey",
+           r.member_count::int AS "memberCount",
+           r.group_added_at AS "addedAt",
+           mi.id, mi.title, mi.year, mi."type"::text AS type,
+           mi."parentTitle", mi."albumTitle", mi."seasonNumber", mi."episodeNumber",
+           mi."thumbUrl", mi."parentThumbUrl", mi."seasonThumbUrl",
+           r.group_total::int AS "groupTotal"
+      FROM representatives r
+      JOIN "MediaItem" mi ON mi.id = r.id
+     ORDER BY r.group_added_at DESC, r.group_key`;
 
   interface GroupRow {
     id: string;
@@ -173,38 +196,16 @@ export async function GET(request: NextRequest) {
   }
 
   // Cached under a media-cache prefix: the aggregate walks every item on the
-  // server (~120 ms on a 31k-item library) to produce 24 tiles, and the
-  // dashboard refetches it on every visit and on every `sync:completed`. A sync
-  // is also the only thing that changes the answer, and it calls
-  // `invalidateMediaCaches()`, so the entry is dropped exactly when it goes
-  // stale rather than on a timer.
+  // server to produce 24 tiles, and the dashboard refetches it on every visit
+  // and on every `sync:completed`. A sync is also the only thing that changes
+  // the answer, and it calls `invalidateMediaCaches()`, so the entry is dropped
+  // exactly when it goes stale rather than on a timer.
   const cacheKey = `recently-added:${[...sf.serverIds].sort().join(",")}:${dedupEnabled}:${artworkServerId}:${type ?? ""}:${limit}`;
-  const rows = await appCache.getOrSet(cacheKey, () => prisma.$queryRawUnsafe<GroupRow[]>(
-    `${baseCte}
-     SELECT group_key AS "groupKey",
-            COUNT(*)::int AS "memberCount",
-            MAX("addedAt") AS "addedAt",
-            ${agg("id")} AS id,
-            ${agg("title")} AS title,
-            ${agg("year")} AS year,
-            ${agg("type")} AS type,
-            ${agg(`"parentTitle"`)} AS "parentTitle",
-            ${agg(`"albumTitle"`)} AS "albumTitle",
-            ${agg(`"seasonNumber"`)} AS "seasonNumber",
-            ${agg(`"episodeNumber"`)} AS "episodeNumber",
-            ${agg(`"thumbUrl"`)} AS "thumbUrl",
-            ${agg(`"parentThumbUrl"`)} AS "parentThumbUrl",
-            ${agg(`"seasonThumbUrl"`)} AS "seasonThumbUrl",
-            (COUNT(*) OVER ())::int AS "groupTotal"
-       FROM recent
-      GROUP BY group_key
-      -- group_key is the unique tiebreak. A bulk import stamps a whole show
-      -- with one addedAt, so without it tied groups permute between the first
-      -- load and the sync-driven refetch, reshuffling the shelf and hiding rows.
-      ORDER BY MAX("addedAt") DESC, group_key
-      LIMIT ${limit}`,
-    ...params,
-  ), RECENTLY_ADDED_TTL_MS);
+  const rows = await appCache.getOrSet(
+    cacheKey,
+    () => prisma.$queryRawUnsafe<GroupRow[]>(sql, ...params),
+    RECENTLY_ADDED_TTL_MS,
+  );
 
   return NextResponse.json({
     items: rows.map((r) => ({

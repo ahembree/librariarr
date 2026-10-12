@@ -4,6 +4,14 @@ import { appCache } from "@/lib/cache/memory-cache";
 import { resolveStatsScope } from "@/lib/media/stats-scope";
 import { computeLibraryStats } from "@/lib/media/library-stats";
 
+/**
+ * Upper bound only. Every sync, purge and watch-history import that can move
+ * these figures calls `invalidateMediaCaches()`, which drops `stats:` outright;
+ * at 60 s the dashboard recomputed them (~0.5 s on a large library) on nearly
+ * every visit regardless.
+ */
+const STATS_TTL_MS = 10 * 60_000;
+
 export async function GET(request: NextRequest) {
   const session = await getSession();
   if (!session.isLoggedIn) {
@@ -51,7 +59,7 @@ export async function GET(request: NextRequest) {
   const result = await appCache.getOrSet(
     cacheKey,
     () => computeLibraryStats(scope.serverIds, scope.dedupEnabled),
-    60_000,
+    STATS_TTL_MS,
   );
   return NextResponse.json(result);
 }
