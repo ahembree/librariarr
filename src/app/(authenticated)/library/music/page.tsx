@@ -32,6 +32,7 @@ import { useFilterPersistence } from "@/hooks/use-filter-persistence";
 import { sameFilters } from "@/lib/filters/same-filters";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useListFetch } from "@/hooks/use-list-fetch";
+import { useDeferredOverscan } from "@/hooks/use-deferred-overscan";
 
 const GAP = 16;
 const CARD_BORDER = 2; // 1px top + 1px bottom border on Card
@@ -267,11 +268,12 @@ export default function MusicPage() {
     return Math.round(posterHeight + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
   }, [actualColumns]);
 
+  const overscan = useDeferredOverscan(!loading && rowCount > 0);
   const virtualizer = useVirtualizer({
     count: rowCount,
     getScrollElement: () => scrollElementRef.current,
     estimateSize,
-    overscan: 3,
+    overscan,
     scrollMargin,
   });
   useEffect(() => {

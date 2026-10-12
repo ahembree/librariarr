@@ -20,6 +20,7 @@ import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { useServers } from "@/hooks/use-servers";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useListFetch } from "@/hooks/use-list-fetch";
+import { useDeferredOverscan } from "@/hooks/use-deferred-overscan";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { formatFileSize } from "@/lib/format";
 import { EmptyState } from "@/components/empty-state";
@@ -238,11 +239,12 @@ export default function AllSeasonsPage() {
     return Math.round(posterHeight + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
   }, [actualColumns]);
 
+  const overscan = useDeferredOverscan(!loading && rowCount > 0);
   const virtualizer = useVirtualizer({
     count: rowCount,
     getScrollElement: () => scrollElementRef.current,
     estimateSize,
-    overscan: 3,
+    overscan,
     scrollMargin,
   });
 

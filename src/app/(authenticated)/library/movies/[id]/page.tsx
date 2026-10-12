@@ -131,7 +131,7 @@ export default function MovieDetailPage() {
       backLabel="Movies"
       playServers={playServers}
     >
-      <MediaDetailContent item={item} 
+      <MediaDetailContent item={item} detailLoaded 
         // The per-play list *is* this movie's Watch History card. It replaces the
         // per-user aggregate card, which reads the same plays live from the
         // server but without their timestamps, device, or any of the

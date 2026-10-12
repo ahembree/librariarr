@@ -17,6 +17,7 @@ import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { useServers } from "@/hooks/use-servers";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useListFetch } from "@/hooks/use-list-fetch";
+import { useDeferredOverscan } from "@/hooks/use-deferred-overscan";
 import { fetchListProgressively } from "@/lib/media/progressive-load";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { formatFileSize, formatDuration } from "@/lib/format";
@@ -131,11 +132,12 @@ export default function AllEpisodesPage() {
     return Math.round(posterHeight + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
   }, [landscapeColumns]);
 
+  const overscan = useDeferredOverscan(!loading && rowCount > 0);
   const virtualizer = useVirtualizer({
     count: rowCount,
     getScrollElement: () => scrollElementRef.current,
     estimateSize,
-    overscan: 3,
+    overscan,
     scrollMargin,
   });
 
@@ -178,16 +180,22 @@ export default function AllEpisodesPage() {
       });
       // Paint the first screenful, then fill in the rest behind it — the whole
       // library in one response meant nothing rendered until all of it landed.
+      let firstChunk = true;
       await fetchListProgressively<MediaListItem>(
         "/api/media/series",
         params,
         (loaded, done) => {
           if (token !== reqToken.current) return;
-          startTransition(() => {
+          const apply = () => {
             setItems(loaded);
             setLoading(false);
             if (done) setLoadingRest(false);
-          });
+          };
+          // First screenful as a normal update (a transition only delayed it);
+          // the rest of the library stays a transition.
+          if (firstChunk) apply();
+          else startTransition(apply);
+          firstChunk = false;
         },
       );
     } catch (error) {
