@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 
 export type CardLibraryType =
   | "MOVIE"
@@ -197,7 +197,10 @@ export function useCardDisplay(libraryType: CardLibraryType) {
       .catch(() => {});
   }, []);
 
-  const prefs = getPrefs(allPrefs, libraryType);
+  // Memoised: `getPrefs` builds a fresh object whenever preferences are
+  // stored, and `show` below depends on it — unmemoised, `show` changed on
+  // every render and every memoised card that takes it re-rendered anyway.
+  const prefs = useMemo(() => getPrefs(allPrefs, libraryType), [allPrefs, libraryType]);
 
   const show = useCallback(
     (section: "badges" | "metadata", key: string): boolean => {

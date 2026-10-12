@@ -132,8 +132,11 @@ function SectionHeader({ label, children }: { label: string; children?: React.Re
 export default function DashboardPage() {
   const router = useRouter();
   const [stats, setStats] = useState<Stats | null>(null);
-  // True until the first load has settled, whatever each request returned.
-  const [loading, setLoading] = useState(true);
+  // Whether the latest stats request failed. The page-level error is keyed on
+  // this, not on the first load having settled: the server selector is on
+  // screen during that load, and a pick made then drops the first answer, so
+  // "settled with no stats" would read a request still in flight as a failure.
+  const [statsFailed, setStatsFailed] = useState(false);
   const [layout, setLayout] = useState<DashboardLayout | null>(null);
   // Whether the saved layout and the library types have been answered (or
   // failed). The zones that depend on them wait for them; nothing else does.
@@ -167,12 +170,18 @@ export default function DashboardPage() {
       // An error body ({error}) is truthy — setting it as stats would crash
       // the tiles. Leave stats as they were (null on first load, so the retry
       // empty-state renders).
-      if (!res.ok || token !== statsReqToken.current) return;
+      if (token !== statsReqToken.current) return;
+      if (!res.ok) {
+        setStatsFailed(true);
+        return;
+      }
       const data = await res.json();
       if (token !== statsReqToken.current) return;
       setStats(data);
+      setStatsFailed(false);
     } catch (error) {
       console.error("Failed to fetch stats:", error);
+      if (token === statsReqToken.current) setStatsFailed(true);
     }
   }, [selectedServerId]);
 
@@ -243,7 +252,6 @@ export default function DashboardPage() {
         }),
       ),
     ]);
-    setLoading(false);
   }, []);
 
   // `fetchStats` refreshes only the headline tiles. `fetchData` also reloads the
@@ -373,7 +381,7 @@ export default function DashboardPage() {
     [editingCustomCard, insightCards, updateInsights]
   );
 
-  if (!loading && !stats) {
+  if (!stats && statsFailed) {
     return (
       <div className="p-4 sm:p-6 lg:p-8">
         <EmptyState
@@ -381,7 +389,7 @@ export default function DashboardPage() {
           title="Failed to load dashboard"
           description="We couldn't fetch your library statistics. Check the server connection or try again."
           action={
-            <Button variant="outline" size="sm" onClick={() => { setLoading(true); fetchData(); }}>
+            <Button variant="outline" size="sm" onClick={() => { setStatsFailed(false); fetchData(); }}>
               Retry
             </Button>
           }
