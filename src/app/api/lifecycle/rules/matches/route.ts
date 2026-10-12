@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
-import { jsonResponse } from "@/lib/api/json-response";
+import { jsonTextResponse } from "@/lib/api/json-response";
 import { prisma } from "@/lib/db";
+import { matchItemJson } from "@/lib/lifecycle/match-json";
 
 export async function GET(request: NextRequest) {
   const session = await getSession();
@@ -27,37 +28,51 @@ export async function GET(request: NextRequest) {
       addArrTags: true,
       removeArrTags: true,
       collection: { select: { name: true, sort: true } },
-      ruleMatches: {
-        select: { itemData: true, detectedAt: true },
-        orderBy: { detectedAt: "desc" },
-      },
     },
   });
 
-  const ruleMatches = ruleSets
-    .map((rs) => ({
-      ruleSet: {
-        id: rs.id,
-        name: rs.name,
-        type: rs.type,
-        actionEnabled: rs.actionEnabled,
-        actionType: rs.actionType,
-        actionDelayDays: rs.actionDelayDays,
-        arrInstanceId: rs.arrInstanceId,
-        targetQualityProfileId: rs.targetQualityProfileId,
-        addImportExclusion: rs.addImportExclusion,
-        searchAfterAction: rs.searchAfterAction,
-        addArrTags: rs.addArrTags,
-        removeArrTags: rs.removeArrTags,
-        collectionName: rs.collection?.name ?? null,
-        collectionSort: rs.collection?.sort ?? null,
-      },
-      items: rs.ruleMatches.map((m) => ({
-        ...(m.itemData as Record<string, unknown>),
-        detectedAt: m.detectedAt.toISOString(),
-      })),
-      count: rs.ruleMatches.length,
-    }));
+  // Each match's snapshot is read as JSON text and spliced into the response
+  // (see `matchItemJson`), never parsed: the page reads every match, and a
+  // parse-and-reserialise of each ~2 KB row was most of this route's time.
+  const matchRows = ruleSets.length === 0
+    ? []
+    : await prisma.$queryRawUnsafe<{ ruleSetId: string; item: string | null; detectedAt: Date }[]>(
+        `SELECT "ruleSetId", "itemData"::text AS item, "detectedAt"
+         FROM "RuleMatch"
+         WHERE "ruleSetId" = ANY($1::text[])
+         ORDER BY "detectedAt" DESC, "id"`,
+        ruleSets.map((rs) => rs.id),
+      );
+  const itemsByRuleSet = new Map<string, string[]>();
+  for (const row of matchRows) {
+    let items = itemsByRuleSet.get(row.ruleSetId);
+    if (!items) {
+      items = [];
+      itemsByRuleSet.set(row.ruleSetId, items);
+    }
+    items.push(matchItemJson(row.item, row.detectedAt));
+  }
 
-  return jsonResponse(request, { ruleMatches });
+  const groups = ruleSets.map((rs) => {
+    const ruleSet = {
+      id: rs.id,
+      name: rs.name,
+      type: rs.type,
+      actionEnabled: rs.actionEnabled,
+      actionType: rs.actionType,
+      actionDelayDays: rs.actionDelayDays,
+      arrInstanceId: rs.arrInstanceId,
+      targetQualityProfileId: rs.targetQualityProfileId,
+      addImportExclusion: rs.addImportExclusion,
+      searchAfterAction: rs.searchAfterAction,
+      addArrTags: rs.addArrTags,
+      removeArrTags: rs.removeArrTags,
+      collectionName: rs.collection?.name ?? null,
+      collectionSort: rs.collection?.sort ?? null,
+    };
+    const items = itemsByRuleSet.get(rs.id) ?? [];
+    return `{"ruleSet":${JSON.stringify(ruleSet)},"items":[${items.join(",")}],"count":${items.length}}`;
+  });
+
+  return jsonTextResponse(request, `{"ruleMatches":[${groups.join(",")}]}`);
 }

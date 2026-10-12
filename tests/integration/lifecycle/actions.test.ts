@@ -598,6 +598,75 @@ describe("Lifecycle Actions", () => {
 
   // ---- DELETE /api/lifecycle/actions/[id] (remove failed action) ----
 
+  describe("GET /api/lifecycle/actions — scheduled and estimated rows", () => {
+    interface Item {
+      id: string;
+      estimated: boolean;
+      mediaItem: { id: string | null; servers?: { serverId: string; serverName: string; serverType: string }[] };
+    }
+
+    it("lists a match with a PENDING action once, as the action, and estimates the matches without one", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id, { name: "Den" });
+      const library = await createTestLibrary(server.id, { type: "MOVIE" });
+      const scheduled = await createTestMediaItem(library.id, { title: "Scheduled", type: "MOVIE" });
+      const waiting = await createTestMediaItem(library.id, { title: "Waiting", type: "MOVIE" });
+      const ruleSet = await createTestRuleSet(user.id, { enabled: true, actionEnabled: true, actionType: "DO_NOTHING" });
+      const action = await createTestAction(user.id, scheduled.id, ruleSet.id);
+      await createTestRuleMatch(ruleSet.id, scheduled.id);
+      const waitingMatch = await createTestRuleMatch(ruleSet.id, waiting.id);
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      const body = await expectJson<{ groups: { ruleSet: { id: string; name: string }; items: Item[]; count: number }[] }>(
+        await callRoute(GET, { url: "/api/lifecycle/actions" }),
+        200,
+      );
+      expect(body.groups).toHaveLength(1);
+      expect(body.groups[0].ruleSet).toMatchObject({ id: ruleSet.id, name: ruleSet.name });
+      expect(body.groups[0].count).toBe(2);
+      const byId = new Map(body.groups[0].items.map((i) => [i.id, i]));
+      expect(byId.get(action.id)).toMatchObject({ estimated: false, mediaItem: { id: scheduled.id } });
+      expect(byId.get(`rm_${waitingMatch.id}`)).toMatchObject({ estimated: true, mediaItem: { id: waiting.id } });
+      for (const item of body.groups[0].items) {
+        expect(item.mediaItem.servers).toEqual([{ serverId: server.id, serverName: "Den", serverType: server.type }]);
+      }
+    });
+
+    it("estimates nothing for a rule set whose action is off or that is disabled", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "MOVIE" });
+      const item = await createTestMediaItem(library.id, { type: "MOVIE" });
+      const actionOff = await createTestRuleSet(user.id, { enabled: true, actionEnabled: false, actionType: "DO_NOTHING" });
+      const disabled = await createTestRuleSet(user.id, { enabled: false, actionEnabled: true, actionType: "DO_NOTHING" });
+      await createTestRuleMatch(actionOff.id, item.id);
+      await createTestRuleMatch(disabled.id, item.id);
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      const body = await expectJson<{ groups: unknown[] }>(await callRoute(GET, { url: "/api/lifecycle/actions" }), 200);
+      expect(body.groups).toEqual([]);
+    });
+
+    it("groups history under the rule set's current settings, with the server of the item's library", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id, { name: "Attic" });
+      const library = await createTestLibrary(server.id, { type: "MOVIE" });
+      const item = await createTestMediaItem(library.id, { type: "MOVIE" });
+      const ruleSet = await createTestRuleSet(user.id, { name: "Old films", enabled: false, actionEnabled: true, actionType: "DO_NOTHING" });
+      await createTestAction(user.id, item.id, ruleSet.id, { status: "COMPLETED", executedAt: new Date() });
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      const body = await expectJson<{ groups: { ruleSet: { id: string; name: string; deleted?: boolean }; items: Item[] }[] }>(
+        await callRoute(GET, { url: "/api/lifecycle/actions?status=COMPLETED" }),
+        200,
+      );
+      expect(body.groups).toHaveLength(1);
+      expect(body.groups[0].ruleSet).toMatchObject({ id: ruleSet.id, name: "Old films" });
+      expect(body.groups[0].ruleSet.deleted).toBeUndefined();
+      expect(body.groups[0].items[0].mediaItem.servers).toEqual([{ serverId: server.id, serverName: "Attic", serverType: server.type }]);
+    });
+  });
+
   describe("DELETE /api/lifecycle/actions/[id]", () => {
     it("returns 401 without auth", async () => {
       const response = await callRouteWithParams(

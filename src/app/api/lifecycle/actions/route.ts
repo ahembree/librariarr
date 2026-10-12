@@ -83,9 +83,36 @@ const MEDIA_ITEM_SELECT = {
   id: true, title: true, parentTitle: true, type: true, thumbUrl: true, seasonNumber: true, episodeNumber: true,
   year: true, summary: true, parentSummary: true, contentRating: true, rating: true, ratingImage: true, audienceRating: true, audienceRatingImage: true,
   duration: true, resolution: true, dynamicRange: true, audioProfile: true, fileSize: true,
-  genres: true, studio: true, playCount: true, lastPlayedAt: true, addedAt: true,
-  library: { select: { mediaServer: { select: { id: true, name: true, type: true } } } },
+  genres: true, studio: true, playCount: true, lastPlayedAt: true, addedAt: true, libraryId: true,
 } as const;
+
+const RULE_SET_SELECT = {
+  id: true, name: true, type: true, actionType: true, actionDelayDays: true,
+  addImportExclusion: true, searchAfterAction: true, addArrTags: true,
+  removeArrTags: true, arrInstanceId: true, targetQualityProfileId: true,
+} as const;
+
+type LibraryServers = ReadonlyMap<string, { id: string; name: string; type: string }>;
+
+/**
+ * The user's rule sets and each library's server, read once. They used to come
+ * through Prisma's per-row relation includes (`ruleSet`, `library.mediaServer`),
+ * which stitched the same handful of rows onto every action — measured at
+ * ~150 ms of a 10.8k-action listing.
+ */
+async function loadActionLookups(userId: string) {
+  const [ruleSets, libraries] = await Promise.all([
+    prisma.ruleSet.findMany({ where: { userId }, select: RULE_SET_SELECT }),
+    prisma.library.findMany({
+      where: { mediaServer: { userId } },
+      select: { id: true, mediaServer: { select: { id: true, name: true, type: true } } },
+    }),
+  ]);
+  return {
+    ruleSetById: new Map(ruleSets.map((rs) => [rs.id, rs])),
+    servers: new Map(libraries.map((l) => [l.id, l.mediaServer])) as LibraryServers,
+  };
+}
 
 type SelectedMediaItem = {
   id: string; title: string; parentTitle: string | null; type: string; thumbUrl: string | null;
@@ -97,11 +124,11 @@ type SelectedMediaItem = {
   audioProfile: string | null; fileSize: bigint | null;
   genres: unknown; studio: string | null;
   playCount: number; lastPlayedAt: Date | null; addedAt: Date | null;
-  library: { mediaServer: { id: string; name: string; type: string } | null };
+  libraryId: string;
 };
 
-function serializeMediaItem(mi: SelectedMediaItem): ActionItemMediaItem {
-  const ms = mi.library.mediaServer;
+function serializeMediaItem(mi: SelectedMediaItem, servers: LibraryServers): ActionItemMediaItem {
+  const ms = servers.get(mi.libraryId);
   return {
     id: mi.id, title: mi.title, parentTitle: mi.parentTitle, type: mi.type, thumbUrl: mi.thumbUrl,
     year: mi.year, summary: mi.parentTitle ? (mi.parentSummary ?? mi.summary) : mi.summary, contentRating: mi.contentRating,
@@ -133,13 +160,14 @@ function buildActionMediaItem(
   ruleSetType: string,
   /** The members' rows, which name an action on one episode (see actionTargetTitle). */
   memberEpisodes: ReadonlyMap<string, MemberEpisode>,
+  servers: LibraryServers,
 ): ActionItemMediaItem {
   // A series action is named by what it acts on: the show, or "<Show> SxxExx"
   // when it acts on one episode — never by the representative episode's own
   // title (see actionTargetTitle). Once it has run, by the snapshot it recorded
   // then, as the episode it acted on may be gone since.
   if (action.mediaItem) {
-    const mi = serializeMediaItem(action.mediaItem);
+    const mi = serializeMediaItem(action.mediaItem, servers);
     if (ruleSetType !== "SERIES") return mi;
     const title = action.status === "PENDING" || !action.mediaItemTitle
       ? actionTargetTitle({ ...action, mediaItem: action.mediaItem, memberEpisodes })
@@ -214,82 +242,54 @@ export async function GET(request: NextRequest) {
  * upcoming items, grouped by rule set.
  */
 async function handlePendingGrouped(request: NextRequest, userId: string) {
-  // 1. Fetch actual PENDING LifecycleAction records
-  const pendingActions = await prisma.lifecycleAction.findMany({
-    where: { userId, status: "PENDING", ruleSetId: { not: null } },
-    include: {
-      mediaItem: {
-        select: MEDIA_ITEM_SELECT,
-      },
-      ruleSet: {
-        select: {
-          id: true, name: true, type: true, actionType: true, actionDelayDays: true,
-          addImportExclusion: true, searchAfterAction: true, addArrTags: true,
-          removeArrTags: true, arrInstanceId: true, targetQualityProfileId: true,
+  // 1. The PENDING actions, read with everything step 2 needs to tell which
+  // matches still have none — four reads, none depending on another.
+  const [pendingActions, { ruleSetById, servers }, settledActions, matchKeys] = await Promise.all([
+    prisma.lifecycleAction.findMany({
+      where: { userId, status: "PENDING", ruleSetId: { not: null } },
+      include: {
+        mediaItem: {
+          select: MEDIA_ITEM_SELECT,
         },
       },
-    },
-    orderBy: { scheduledFor: "asc" },
-  });
+      orderBy: { scheduledFor: "asc" },
+    }),
+    loadActionLookups(userId),
+    // COMPLETED/FAILED non-destructive actions also suppress an estimated row —
+    // but only when they are the SAME EFFECTIVE ACTION the rule set would
+    // schedule now (matched on the full config signature; see below).
+    // Destructive (DELETE*) actions never suppress: a still-matching item after
+    // a "completed" delete means the delete failed silently on disk.
+    prisma.lifecycleAction.findMany({
+      where: {
+        userId,
+        status: { in: ["COMPLETED", "FAILED"] },
+        actionType: { not: { contains: "DELETE" } },
+      },
+      select: {
+        ruleSetId: true,
+        mediaItemId: true,
+        actionType: true,
+        arrInstanceId: true,
+        targetQualityProfileId: true,
+        addImportExclusion: true,
+        searchAfterAction: true,
+        addArrTags: true,
+        removeArrTags: true,
+      },
+    }),
+    // 2. The matches of action-enabled rule sets — their keys only. Once the
+    // scheduler has run nearly every match already has a PENDING action, and
+    // loading every match's `itemData` snapshot and media row just to drop it
+    // was the slowest part of this route: measured on 10.8k matches, 640–900 ms
+    // against ~35 ms for the keys. The full rows are read for those left.
+    prisma.ruleMatch.findMany({
+      where: { ruleSet: { userId, enabled: true, actionEnabled: true, actionType: { not: null } } },
+      select: { id: true, ruleSetId: true, mediaItemId: true },
+    }),
+  ]);
 
   await backfillTitleSnapshots(pendingActions);
-
-  // Fetch every action that could suppress an estimated row:
-  // - PENDING actions (already scheduled), and
-  // - COMPLETED/FAILED non-destructive actions, which we may suppress against —
-  //   but only when they are the SAME EFFECTIVE ACTION the rule set would
-  //   schedule now (matched on the full config signature; see below).
-  //   Destructive (DELETE*) actions never suppress: a still-matching item after
-  //   a "completed" delete means the delete failed silently on disk.
-  const existingActions = await prisma.lifecycleAction.findMany({
-    where: {
-      userId,
-      OR: [
-        { status: "PENDING" },
-        {
-          status: { in: ["COMPLETED", "FAILED"] },
-          actionType: { not: { contains: "DELETE" } },
-        },
-      ],
-    },
-    select: {
-      ruleSetId: true,
-      mediaItemId: true,
-      status: true,
-      actionType: true,
-      arrInstanceId: true,
-      targetQualityProfileId: true,
-      addImportExclusion: true,
-      searchAfterAction: true,
-      addArrTags: true,
-      removeArrTags: true,
-    },
-  });
-
-  // 2. Fetch RuleMatch records for action-enabled rule sets without any lifecycle action
-  const upcomingMatches = await prisma.ruleMatch.findMany({
-    where: {
-      ruleSet: {
-        userId,
-        enabled: true,
-        actionEnabled: true,
-        actionType: { not: null },
-      },
-    },
-    include: {
-      mediaItem: {
-        select: MEDIA_ITEM_SELECT,
-      },
-      ruleSet: {
-        select: {
-          id: true, name: true, type: true, actionType: true, actionDelayDays: true,
-          addImportExclusion: true, searchAfterAction: true, addArrTags: true,
-          removeArrTags: true, arrInstanceId: true, targetQualityProfileId: true,
-        },
-      },
-    },
-    orderBy: { detectedAt: "asc" },
-  });
 
   // A pair is suppressed when it already has a PENDING action, or a
   // COMPLETED/FAILED action whose config SIGNATURE equals what the rule set
@@ -297,31 +297,49 @@ async function handlePendingGrouped(request: NextRequest, userId: string) {
   // action ("Search for New Copy" → "Delete from Radarr") OR a re-configured
   // one (edited tags / new quality profile) surface again: a prior action with
   // a different signature no longer suppresses it.
-  const pendingPairs = new Set<string>();
+  const pendingPairs = new Set(pendingActions.map((a) => `${a.ruleSetId}:${a.mediaItemId}`));
   const completedSigsByPair = new Map<string, Set<string>>();
-  for (const a of existingActions) {
+  for (const a of settledActions) {
     const pair = `${a.ruleSetId}:${a.mediaItemId}`;
-    if (a.status === "PENDING") {
-      pendingPairs.add(pair);
-    } else {
-      let sigs = completedSigsByPair.get(pair);
-      if (!sigs) {
-        sigs = new Set();
-        completedSigsByPair.set(pair, sigs);
-      }
-      sigs.add(actionConfigSignature(a));
+    let sigs = completedSigsByPair.get(pair);
+    if (!sigs) {
+      sigs = new Set();
+      completedSigsByPair.set(pair, sigs);
     }
+    sigs.add(actionConfigSignature(a));
   }
 
-  const filteredUpcoming = upcomingMatches.filter((m) => {
-    const pair = `${m.ruleSetId}:${m.mediaItemId}`;
-    if (pendingPairs.has(pair)) return false;
-    // DELETE* actions are always eligible to re-surface; non-destructive
-    // actions are suppressed only by a completed action with the same signature.
-    if (m.ruleSet.actionType && !isDestructiveActionType(m.ruleSet.actionType)) {
-      if (completedSigsByPair.get(pair)?.has(actionConfigSignature(m.ruleSet))) return false;
-    }
-    return true;
+  const upcomingIds = matchKeys
+    .filter((m) => {
+      const pair = `${m.ruleSetId}:${m.mediaItemId}`;
+      if (pendingPairs.has(pair)) return false;
+      // DELETE* actions are always eligible to re-surface; non-destructive
+      // actions are suppressed only by a completed action with the same signature.
+      // The lookups are read alongside the matches, so a rule set deleted in
+      // between is simply not there: nothing to estimate for it.
+      const ruleSet = ruleSetById.get(m.ruleSetId);
+      if (!ruleSet) return false;
+      if (ruleSet.actionType && !isDestructiveActionType(ruleSet.actionType)) {
+        if (completedSigsByPair.get(pair)?.has(actionConfigSignature(ruleSet))) return false;
+      }
+      return true;
+    })
+    .map((m) => m.id);
+
+  const filteredUpcoming = (upcomingIds.length === 0
+    ? []
+    : await prisma.ruleMatch.findMany({
+        where: { id: { in: upcomingIds } },
+        include: {
+          mediaItem: {
+            select: MEDIA_ITEM_SELECT,
+          },
+        },
+        orderBy: { detectedAt: "asc" },
+      })
+  ).flatMap((m) => {
+    const ruleSet = ruleSetById.get(m.ruleSetId);
+    return ruleSet ? [{ ...m, ruleSet }] : [];
   });
 
   // Pre-aggregate series/music member data so the response carries series-level
@@ -350,11 +368,14 @@ async function handlePendingGrouped(request: NextRequest, userId: string) {
 
   // Add pending LifecycleAction items
   for (const a of pendingActions) {
+    const ruleSet = ruleSetById.get(a.ruleSetId!);
+    // Deleted between this read and the lookups' (its actions lose the id).
+    if (!ruleSet) continue;
     if (!groupMap.has(a.ruleSetId!)) {
-      groupMap.set(a.ruleSetId!, { ruleSet: a.ruleSet!, items: [], count: 0 });
+      groupMap.set(a.ruleSetId!, { ruleSet, items: [], count: 0 });
     }
     const group = groupMap.get(a.ruleSetId!)!;
-    const mi = buildActionMediaItem(a, a.ruleSet!.type, memberDataMap);
+    const mi = buildActionMediaItem(a, ruleSet.type, memberDataMap, servers);
     group.items.push({
       id: a.id,
       actionType: a.actionType,
@@ -398,7 +419,7 @@ async function handlePendingGrouped(request: NextRequest, userId: string) {
       mediaItemParentTitle: m.mediaItem.parentTitle,
       ruleSetType: m.ruleSet.type,
       mediaItem: m.mediaItem,
-    }, m.ruleSet.type, memberDataMap);
+    }, m.ruleSet.type, memberDataMap, servers);
 
     group.items.push({
       id: `rm_${m.id}`,
@@ -444,22 +465,18 @@ async function handleStatusGrouped(request: NextRequest, userId: string, status:
     where.status = status;
   }
 
-  const actions = await prisma.lifecycleAction.findMany({
-    where,
-    include: {
-      mediaItem: {
-        select: MEDIA_ITEM_SELECT,
-      },
-      ruleSet: {
-        select: {
-          id: true, name: true, type: true, actionType: true, actionDelayDays: true,
-          addImportExclusion: true, searchAfterAction: true, addArrTags: true,
-          removeArrTags: true, arrInstanceId: true, targetQualityProfileId: true,
+  const [actions, { ruleSetById, servers }] = await Promise.all([
+    prisma.lifecycleAction.findMany({
+      where,
+      include: {
+        mediaItem: {
+          select: MEDIA_ITEM_SELECT,
         },
       },
-    },
-    orderBy: { scheduledFor: "desc" },
-  });
+      orderBy: { scheduledFor: "desc" },
+    }),
+    loadActionLookups(userId),
+  ]);
 
   await backfillTitleSnapshots(actions);
 
@@ -484,7 +501,7 @@ async function handleStatusGrouped(request: NextRequest, userId: string, status:
     const groupKey = a.ruleSetId ?? `deleted:${a.ruleSetName ?? "unknown"}`;
 
     // When the rule set has been deleted, build a synthetic object from denormalized fields
-    const ruleSetData = a.ruleSet ?? {
+    const ruleSetData = (a.ruleSetId ? ruleSetById.get(a.ruleSetId) : undefined) ?? {
       id: groupKey,
       name: a.ruleSetName ?? "Deleted Rule Set",
       type: a.ruleSetType ?? a.mediaItem?.type ?? "MOVIE",
@@ -503,7 +520,7 @@ async function handleStatusGrouped(request: NextRequest, userId: string, status:
       groupMap.set(groupKey, { ruleSet: ruleSetData, items: [], count: 0 });
     }
     const group = groupMap.get(groupKey)!;
-    let mi = buildActionMediaItem(a, ruleSetData.type, memberStats);
+    let mi = buildActionMediaItem(a, ruleSetData.type, memberStats, servers);
 
     // Apply series/music aggregation from member items
     const totals = aggregateGroupMembers(a.matchedMediaItemIds, memberStats);

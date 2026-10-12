@@ -21,9 +21,14 @@ const GZIP_LEVEL = 3;
 /** Rows serialised between yields to the event loop. */
 export const STRINGIFY_SLICE_ROWS = 1000;
 
+/** How deep a long list is looked for: `{ groups: [{ items: [...] }] }` is three levels. */
+const MAX_LIST_DEPTH = 3;
+
 /**
- * `JSON.stringify(body)`, but a long top-level list is serialised a slice of
- * rows at a time with the event loop let through between slices.
+ * `JSON.stringify(body)`, but a long list is serialised a slice of rows at a
+ * time with the event loop let through between slices — at the top level or
+ * nested a few levels down, as the lifecycle listings nest theirs
+ * (`{ groups: [{ items }] }`, `{ ruleMatches: [{ items }] }`).
  *
  * Serialising a whole library in one call held the process for hundreds of
  * milliseconds — measured against the production build while a 40k-track list
@@ -32,17 +37,32 @@ export const STRINGIFY_SLICE_ROWS = 1000;
  * `JSON.stringify(body)`: same keys in the same order, same values.
  */
 export async function stringifyYielding(body: unknown): Promise<string> {
-  if (!isPlainObject(body)) return JSON.stringify(body);
-  const entries = Object.entries(body);
-  if (!entries.some(([, value]) => isLongList(value))) return JSON.stringify(body);
+  return (await stringifyNode(body, MAX_LIST_DEPTH)) as string;
+}
 
+async function stringifyNode(value: unknown, depth: number): Promise<string | undefined> {
+  if (isLongList(value)) return stringifyList(value);
+  if (!holdsLongList(value, depth)) return JSON.stringify(value);
+  if (Array.isArray(value)) {
+    const parts: string[] = [];
+    // JSON.stringify writes an element with no JSON form as null.
+    for (const element of value) parts.push((await stringifyNode(element, depth - 1)) ?? "null");
+    return `[${parts.join(",")}]`;
+  }
   const parts: string[] = [];
-  for (const [key, value] of entries) {
-    const text = isLongList(value) ? await stringifyList(value) : JSON.stringify(value);
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    const text = await stringifyNode(child, depth - 1);
     // JSON.stringify leaves out a key whose value has no JSON form.
     if (text !== undefined) parts.push(`${JSON.stringify(key)}:${text}`);
   }
   return `{${parts.join(",")}}`;
+}
+
+/** Does a plain object or short array hold a long list within `depth` levels? */
+function holdsLongList(value: unknown, depth: number): boolean {
+  if (depth <= 0) return false;
+  const children = Array.isArray(value) ? value : isPlainObject(value) ? Object.values(value) : null;
+  return children !== null && children.some((child) => isLongList(child) || holdsLongList(child, depth - 1));
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -125,7 +145,18 @@ export async function jsonResponse(
   body: unknown,
   init?: ResponseInit,
 ): Promise<NextResponse> {
-  const text = await stringifyYielding(body);
+  return jsonTextResponse(request, await stringifyYielding(body), init);
+}
+
+/**
+ * `jsonResponse` for a body that is already JSON text — the rule-match listing
+ * splices each match's stored JSON instead of parsing and re-serialising it.
+ */
+export async function jsonTextResponse(
+  request: Request,
+  text: string,
+  init?: ResponseInit,
+): Promise<NextResponse> {
   const headers = new Headers(init?.headers);
   headers.set("Content-Type", "application/json");
   headers.append("Vary", "Accept-Encoding");

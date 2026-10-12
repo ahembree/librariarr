@@ -118,6 +118,32 @@ describe("stringifyYielding", () => {
     await done;
     expect(order).toEqual(["queued", "done"]);
   });
+
+  it("is JSON.stringify for long lists nested under short ones, as the lifecycle listings send them", async () => {
+    const body = {
+      groups: [
+        { ruleSet: { id: "a", gone: undefined }, items: rows(STRINGIFY_SLICE_ROWS + 3), count: STRINGIFY_SLICE_ROWS + 3 },
+        { ruleSet: { id: "b" }, items: rows(2), count: 2 },
+        undefined,
+        () => "no JSON form",
+      ],
+      total: 7,
+    };
+    expect(await stringifyYielding(body)).toBe(JSON.stringify(body));
+  });
+
+  it("yields inside a nested long list", async () => {
+    const order: string[] = [];
+    setImmediate(() => order.push("queued"));
+    await stringifyYielding({ ruleMatches: [{ items: rows(STRINGIFY_SLICE_ROWS * 2) }] }).then(() => order.push("done"));
+    expect(order).toEqual(["queued", "done"]);
+  });
+
+  it("does not look past three levels", async () => {
+    // Deeper lists are serialised whole — still the same output.
+    const body = { a: [{ b: [{ c: rows(STRINGIFY_SLICE_ROWS + 1) }] }] };
+    expect(await stringifyYielding(body)).toBe(JSON.stringify(body));
+  });
 });
 
 describe("mapInSlices", () => {
