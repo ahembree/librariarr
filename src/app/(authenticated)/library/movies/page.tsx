@@ -26,6 +26,7 @@ import { EmptyState } from "@/components/empty-state";
 import { SyncLibraryButton } from "@/components/sync-library-button";
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
 import { useFilterPersistence } from "@/hooks/use-filter-persistence";
+import { sameFilters } from "@/lib/filters/same-filters";
 import { useRealtime } from "@/hooks/use-realtime";
 import { fetchListProgressively } from "@/lib/media/progressive-load";
 
@@ -52,8 +53,9 @@ const QUALITY_BAR_HEIGHT = 12; // h-1 quality bar between poster and content
 export default function MoviesPage() {
   const router = useRouter();
   const [items, setItems] = useState<MediaListItem[]>([]);
-  const [filters, setFilters] = useState<Record<string, string>>({});
   const { savedFilters, persistFilters } = useFilterPersistence("filters-/library/movies");
+  // Start from the restored filters, so the first fetch is already filtered.
+  const [filters, setFilters] = useState<Record<string, string>>(savedFilters);
   const [sortBy, setSortBy] = useState("title");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
   const [loading, setLoading] = useState(true);
@@ -269,7 +271,7 @@ export default function MoviesPage() {
       </div>
 
       <MediaFilters
-        onFilterChange={(f) => { setFilters(f); persistFilters(f); }}
+        onFilterChange={(f) => { setFilters((prev) => (sameFilters(prev, f) ? prev : f)); persistFilters(f); }}
         externalFilters={Object.keys(savedFilters).length > 0 ? savedFilters : undefined}
         prefix={
           <LibraryToolbar

@@ -11,6 +11,7 @@ import { ColorChip } from "@/components/color-chip";
 import { DataTable } from "@/components/data-table";
 import type { DataTableColumn } from "@/components/data-table";
 import { MediaFilters } from "@/components/media-filters";
+import { sameFilters } from "@/lib/filters/same-filters";
 import { LibraryToolbar } from "@/components/library-toolbar";
 import { Music, Disc3, ListMusic, HardDrive } from "lucide-react";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
@@ -18,6 +19,7 @@ import { useCardSize, estimateContentWidth } from "@/hooks/use-card-size";
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { useServers } from "@/hooks/use-servers";
 import { useRealtime } from "@/hooks/use-realtime";
+import { useListFetch } from "@/hooks/use-list-fetch";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { formatFileSize } from "@/lib/format";
 import { EmptyState } from "@/components/empty-state";
@@ -212,10 +214,7 @@ export default function AllAlbumsPage() {
     }
   }, [filters, sortBy, sortOrder, selectedServerId]);
 
-  useEffect(() => {
-    const timeout = setTimeout(() => fetchAlbums(), 300);
-    return () => clearTimeout(timeout);
-  }, [fetchAlbums]);
+  useListFetch(fetchAlbums);
 
   // Auto-update when real-time sync adds/removes items — no manual refresh.
   useRealtime("sync:completed", fetchAlbums);
@@ -263,7 +262,7 @@ export default function AllAlbumsPage() {
       <LibraryTabs tabs={MUSIC_TABS} active="/library/music/albums" />
 
       <MediaFilters
-        onFilterChange={setFilters}
+        onFilterChange={(f) => setFilters((prev) => (sameFilters(prev, f) ? prev : f))}
         mediaType="MUSIC"
         prefix={
           <LibraryToolbar

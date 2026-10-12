@@ -3,8 +3,42 @@ import { getSession } from "@/lib/auth/session";
 import { jsonResponse } from "@/lib/api/json-response";
 import { prisma } from "@/lib/db";
 import { escapeLike } from "@/lib/filters/escape-like";
-import type { Prisma } from "@/generated/prisma/client";
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
+import { firstNonNullSql } from "@/lib/media/series-sql";
+import { loadMissingSummaries } from "@/lib/media/group-summaries";
+import { audioCodecLabelSql, foldCodecCounts, type CodecCountRow } from "@/lib/media/music-sql";
+
+const UNKNOWN_ALBUM = "Unknown Album";
+const UNKNOWN_ARTIST = "Unknown Artist";
+
+interface AlbumGroupRow {
+  group_key: string;
+  albumTitle: string;
+  artistName: string;
+  trackCount: number;
+  totalSize: string;
+  totalPlayCount: number;
+  lastPlayed: Date | null;
+  addedAt: Date | null;
+  serverIds: string[];
+  genres: unknown;
+  studio: string | null;
+  contentRating: string | null;
+  rating: number | null;
+  ratingImage: string | null;
+  audienceRating: number | null;
+  audienceRatingImage: string | null;
+  year: number | null;
+  summaryItemId: string | null;
+}
+
+interface AlbumRepresentativeRow {
+  group_key: string;
+  mediaItemId: string;
+  albumTitle: string;
+  artistName: string;
+  summary: string | null;
+}
 
 export async function GET(request: NextRequest) {
   const session = await getSession();
@@ -25,167 +59,126 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ albums: [], pagination: { page: 1, limit: 50, hasMore: false } });
   }
 
-  const where: Prisma.MediaItemWhereInput = {
-    type: "MUSIC",
-    library: { mediaServerId: { in: sf.serverIds } },
-    ...(!sf.isSingleServer && { dedupCanonical: true }),
-  };
-
+  // Aggregated in SQL, like the artist and series listings: this loaded every
+  // track — 18 columns and its server through a relation — into Node and
+  // folded them in JS, ~550 ms on a 40k-track library for a listing that keeps
+  // one row per album. The key is the fold's: artist and album, each
+  // lower-cased and trimmed, with the same placeholders for a missing title.
+  const params: unknown[] = [sf.serverIds];
+  const conditions = [`mi.type = 'MUSIC'::"LibraryType"`, `l."mediaServerId" = ANY($1::text[])`];
+  if (!sf.isSingleServer) conditions.push(`mi."dedupCanonical" = true`);
   // `escapeLike`: `search` becomes a LIKE pattern, and nothing else escapes
   // `%` / `_` / `\` — live, `?search=1_ Things` matched "10 Things I Hate
   // About You" and `?search=%` matched everything (see escape-like.ts).
   if (search) {
-    where.OR = [
-      { albumTitle: { contains: escapeLike(search), mode: "insensitive" } },
-      { parentTitle: { contains: escapeLike(search), mode: "insensitive" } },
-    ];
+    params.push(escapeLike(search));
+    conditions.push(`(mi."albumTitle" ILIKE '%' || $${params.length} || '%' OR mi."parentTitle" ILIKE '%' || $${params.length} || '%')`);
   }
+  const scope = `
+      FROM "MediaItem" mi
+      JOIN "Library" l ON mi."libraryId" = l.id
+      WHERE ${conditions.join("\n        AND ")}`;
+  const albumKey = `LOWER(TRIM(COALESCE(mi."parentTitle", '${UNKNOWN_ARTIST}'))) || '::' || LOWER(TRIM(COALESCE(mi."albumTitle", '${UNKNOWN_ALBUM}')))`;
+  // "First" in track order — album-level fields are the same on every track;
+  // the fold took whichever arrived first, from a query with no ORDER BY.
+  const trackOrder = `"seasonNumber", "episodeNumber", id`;
+  const first = (col: string) => firstNonNullSql(col, trackOrder);
 
-  const items = await prisma.mediaItem.findMany({
-    where,
-    select: {
-      id: true,
-      albumTitle: true,
-      parentTitle: true,
-      audioCodec: true,
-      fileSize: true,
-      playCount: true,
-      lastPlayedAt: true,
-      addedAt: true,
-      parentThumbUrl: true,
-      summary: true,
-      genres: true,
-      studio: true,
-      contentRating: true,
-      rating: true,
-      ratingImage: true,
-      audienceRating: true,
-      audienceRatingImage: true,
-      year: true,
-      library: {
-        select: {
-          mediaServer: { select: { id: true, name: true, type: true } },
-        },
-      },
-    },
+  // `ORDER BY group_key`: the sort below is stable, so this orders ties and
+  // keeps page boundaries in the same place on every request.
+  const [groups, representatives, codecRows] = await Promise.all([
+    prisma.$queryRawUnsafe<AlbumGroupRow[]>(
+      `SELECT
+        group_key,
+        MIN("albumTitle") as "albumTitle",
+        MIN("artistName") as "artistName",
+        COUNT(*)::int as "trackCount",
+        COALESCE(SUM("fileSize"), 0)::text as "totalSize",
+        COALESCE(SUM("playCount"), 0)::int as "totalPlayCount",
+        MAX("lastPlayedAt") as "lastPlayed",
+        MAX("addedAt") as "addedAt",
+        array_agg(DISTINCT "mediaServerId") as "serverIds",
+        ${first(`"genres"`)} as "genres",
+        ${first(`NULLIF("studio", '')`)} as "studio",
+        ${first(`NULLIF("contentRating", '')`)} as "contentRating",
+        ${first(`"rating"`)} as "rating",
+        ${first(`NULLIF("ratingImage", '')`)} as "ratingImage",
+        ${first(`"audienceRating"`)} as "audienceRating",
+        ${first(`NULLIF("audienceRatingImage", '')`)} as "audienceRatingImage",
+        ${first(`"year"`)} as "year",
+        (array_agg(id ORDER BY ${trackOrder}) FILTER (WHERE NULLIF("summary", '') IS NOT NULL))[1] as "summaryItemId"
+      FROM (
+        SELECT ${albumKey} as group_key, mi.id,
+          COALESCE(mi."albumTitle", '${UNKNOWN_ALBUM}') as "albumTitle",
+          COALESCE(mi."parentTitle", '${UNKNOWN_ARTIST}') as "artistName",
+          mi."seasonNumber", mi."episodeNumber", mi."fileSize", mi."playCount", mi."lastPlayedAt",
+          mi."addedAt", l."mediaServerId", mi."summary", mi."genres", mi."studio", mi."contentRating",
+          mi."rating", mi."ratingImage", mi."audienceRating", mi."audienceRatingImage", mi."year"
+        ${scope}
+      ) tracks
+      GROUP BY group_key
+      ORDER BY group_key`,
+      ...params,
+    ),
+    // One row per album: a track with album art (the page asks for it with
+    // `?type=parent`), else the first track.
+    prisma.$queryRawUnsafe<AlbumRepresentativeRow[]>(
+      `SELECT DISTINCT ON (${albumKey})
+        ${albumKey} as group_key,
+        mi.id as "mediaItemId",
+        COALESCE(mi."albumTitle", '${UNKNOWN_ALBUM}') as "albumTitle",
+        COALESCE(mi."parentTitle", '${UNKNOWN_ARTIST}') as "artistName",
+        NULLIF(mi."summary", '') as "summary"
+      ${scope}
+      ORDER BY ${albumKey}, (mi."parentThumbUrl" IS NOT NULL) DESC, mi."seasonNumber", mi."episodeNumber", mi.id`,
+      ...params,
+    ),
+    prisma.$queryRawUnsafe<CodecCountRow[]>(
+      `SELECT ${albumKey} as group_key, ${audioCodecLabelSql(`mi."audioCodec"`)} as codec, COUNT(*)::int as n
+      ${scope}
+      GROUP BY 1, 2`,
+      ...params,
+    ),
+  ]);
+
+  const repByKey = new Map(representatives.map((r) => [r.group_key, r]));
+  const codecsByKey = foldCodecCounts(codecRows);
+  const summaryByKey = await loadMissingSummaries(
+    groups
+      .filter((g) => !repByKey.get(g.group_key)?.summary && g.summaryItemId)
+      .map((g) => [g.group_key, g.summaryItemId!] as const),
+    "episode",
+  );
+
+  const albums = groups.map((g) => {
+    const rep = repByKey.get(g.group_key);
+    return {
+      // The spellings of the track the album links to, as the fold showed its
+      // first track's; MIN would pick " Name" over "Name".
+      albumTitle: rep?.albumTitle ?? g.albumTitle,
+      artistName: rep?.artistName ?? g.artistName,
+      trackCount: g.trackCount,
+      totalSize: g.totalSize,
+      audioCodecCounts: codecsByKey.get(g.group_key) ?? {},
+      mediaItemId: rep?.mediaItemId ?? "",
+      totalPlayCount: g.totalPlayCount,
+      lastPlayed: g.lastPlayed,
+      addedAt: g.addedAt,
+      servers: g.serverIds.flatMap((id) => {
+        const server = sf.serverMap.get(id);
+        return server ? [{ serverId: id, serverName: server.name, serverType: server.type }] : [];
+      }),
+      summary: rep?.summary ?? summaryByKey.get(g.group_key) ?? null,
+      genres: g.genres as string[] | null,
+      studio: g.studio,
+      contentRating: g.contentRating,
+      rating: g.rating,
+      ratingImage: g.ratingImage,
+      audienceRating: g.audienceRating,
+      audienceRatingImage: g.audienceRatingImage,
+      year: g.year,
+    };
   });
-
-  // Group by composite key: artistName + albumTitle
-  const albumMap = new Map<
-    string,
-    {
-      albumTitle: string;
-      artistName: string;
-      trackCount: number;
-      totalSize: bigint;
-      audioCodecCounts: Record<string, number>;
-      mediaItemId: string;
-      totalPlayCount: number;
-      lastPlayed: Date | null;
-      addedAt: Date | null;
-      servers: { serverId: string; serverName: string; serverType: string }[];
-      summary: string | null;
-      genres: string[] | null;
-      studio: string | null;
-      contentRating: string | null;
-      rating: number | null;
-      ratingImage: string | null;
-      audienceRating: number | null;
-      audienceRatingImage: string | null;
-      year: number | null;
-    }
-  >();
-
-  for (const item of items) {
-    const album = item.albumTitle ?? "Unknown Album";
-    const artist = item.parentTitle ?? "Unknown Artist";
-    const compositeKey = `${artist.toLowerCase().trim()}::${album.toLowerCase().trim()}`;
-    let albumGroup = albumMap.get(compositeKey);
-    if (!albumGroup) {
-      albumGroup = {
-        albumTitle: album,
-        artistName: artist,
-        trackCount: 0,
-        totalSize: BigInt(0),
-        audioCodecCounts: {},
-        mediaItemId: item.id,
-        totalPlayCount: 0,
-        lastPlayed: null,
-        addedAt: null,
-        servers: [],
-        summary: null,
-        genres: null,
-        studio: null,
-        contentRating: null,
-        rating: null,
-        ratingImage: null,
-        audienceRating: null,
-        audienceRatingImage: null,
-        year: null,
-      };
-      albumMap.set(compositeKey, albumGroup);
-    }
-
-    albumGroup.trackCount++;
-
-    if (item.fileSize) {
-      albumGroup.totalSize += item.fileSize;
-    }
-
-    albumGroup.totalPlayCount += item.playCount;
-    if (item.lastPlayedAt && (!albumGroup.lastPlayed || item.lastPlayedAt > albumGroup.lastPlayed)) {
-      albumGroup.lastPlayed = item.lastPlayedAt;
-    }
-    if (item.addedAt && (!albumGroup.addedAt || item.addedAt > albumGroup.addedAt)) {
-      albumGroup.addedAt = item.addedAt;
-    }
-
-    const codec = item.audioCodec ? item.audioCodec.toUpperCase() : "Unknown";
-    albumGroup.audioCodecCounts[codec] =
-      (albumGroup.audioCodecCounts[codec] || 0) + 1;
-
-    // Prefer items with parent thumb for the representative mediaItemId
-    if (item.parentThumbUrl) {
-      albumGroup.mediaItemId = item.id;
-    }
-
-    if (!albumGroup.summary && item.summary) albumGroup.summary = item.summary;
-    if (!albumGroup.genres && item.genres) albumGroup.genres = item.genres as string[];
-    if (!albumGroup.studio && item.studio) albumGroup.studio = item.studio;
-    if (!albumGroup.contentRating && item.contentRating) albumGroup.contentRating = item.contentRating;
-    if (albumGroup.rating == null && item.rating != null) albumGroup.rating = item.rating;
-    if (!albumGroup.ratingImage && item.ratingImage) albumGroup.ratingImage = item.ratingImage;
-    if (albumGroup.audienceRating == null && item.audienceRating != null) albumGroup.audienceRating = item.audienceRating;
-    if (!albumGroup.audienceRatingImage && item.audienceRatingImage) albumGroup.audienceRatingImage = item.audienceRatingImage;
-    if (albumGroup.year == null && item.year != null) albumGroup.year = item.year;
-
-    const server = item.library.mediaServer;
-    if (server && !albumGroup.servers.some((s) => s.serverId === server.id)) {
-      albumGroup.servers.push({ serverId: server.id, serverName: server.name, serverType: server.type });
-    }
-  }
-
-  const albums = Array.from(albumMap.values()).map((a) => ({
-    albumTitle: a.albumTitle,
-    artistName: a.artistName,
-    trackCount: a.trackCount,
-    totalSize: a.totalSize.toString(),
-    audioCodecCounts: a.audioCodecCounts,
-    mediaItemId: a.mediaItemId,
-    totalPlayCount: a.totalPlayCount,
-    lastPlayed: a.lastPlayed,
-    addedAt: a.addedAt,
-    servers: a.servers,
-    summary: a.summary,
-    genres: a.genres,
-    studio: a.studio,
-    contentRating: a.contentRating,
-    rating: a.rating,
-    ratingImage: a.ratingImage,
-    audienceRating: a.audienceRating,
-    audienceRatingImage: a.audienceRatingImage,
-    year: a.year,
-  }));
 
   // Sort
   const dir = sortOrder === "desc" ? -1 : 1;

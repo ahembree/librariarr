@@ -18,6 +18,72 @@ export const MIN_COMPRESS_BYTES = 4096;
  */
 const GZIP_LEVEL = 3;
 
+/** Rows serialised between yields to the event loop. */
+export const STRINGIFY_SLICE_ROWS = 1000;
+
+/**
+ * `JSON.stringify(body)`, but a long top-level list is serialised a slice of
+ * rows at a time with the event loop let through between slices.
+ *
+ * Serialising a whole library in one call held the process for hundreds of
+ * milliseconds — measured against the production build while a 40k-track list
+ * was built, a request to `/api/health` waited 0.7–1.1 s, and every poster on
+ * the screen that asked for it waited the same. The output is identical to
+ * `JSON.stringify(body)`: same keys in the same order, same values.
+ */
+export async function stringifyYielding(body: unknown): Promise<string> {
+  if (!isPlainObject(body)) return JSON.stringify(body);
+  const entries = Object.entries(body);
+  if (!entries.some(([, value]) => isLongList(value))) return JSON.stringify(body);
+
+  const parts: string[] = [];
+  for (const [key, value] of entries) {
+    const text = isLongList(value) ? await stringifyList(value) : JSON.stringify(value);
+    // JSON.stringify leaves out a key whose value has no JSON form.
+    if (text !== undefined) parts.push(`${JSON.stringify(key)}:${text}`);
+  }
+  return `{${parts.join(",")}}`;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const proto = Object.getPrototypeOf(value);
+  return (proto === Object.prototype || proto === null) && typeof (value as { toJSON?: unknown }).toJSON !== "function";
+}
+
+function isLongList(value: unknown): value is unknown[] {
+  return Array.isArray(value) && value.length > STRINGIFY_SLICE_ROWS;
+}
+
+/** Let queued I/O — other requests, artwork — run before carrying on. */
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+/**
+ * `rows.map(fn)` a slice at a time, letting the event loop through between
+ * slices — for shaping a whole library into its response rows, which on a
+ * large one holds the process as long as serialising it did.
+ */
+export async function mapInSlices<T, U>(rows: readonly T[], fn: (row: T) => U): Promise<U[]> {
+  const out: U[] = new Array(rows.length);
+  for (let i = 0; i < rows.length; i++) {
+    if (i > 0 && i % STRINGIFY_SLICE_ROWS === 0) await yieldToEventLoop();
+    out[i] = fn(rows[i]);
+  }
+  return out;
+}
+
+async function stringifyList(rows: unknown[]): Promise<string> {
+  const slices: string[] = [];
+  for (let i = 0; i < rows.length; i += STRINGIFY_SLICE_ROWS) {
+    if (i > 0) await yieldToEventLoop();
+    // `[a,b]` → `a,b`: a slice is never empty, so this never yields "".
+    slices.push(JSON.stringify(rows.slice(i, i + STRINGIFY_SLICE_ROWS)).slice(1, -1));
+  }
+  return `[${slices.join(",")}]`;
+}
+
 /**
  * Does the client accept gzip? Handles `gzip;q=0` and `*` per RFC 9110.
  */
@@ -59,7 +125,7 @@ export async function jsonResponse(
   body: unknown,
   init?: ResponseInit,
 ): Promise<NextResponse> {
-  const text = JSON.stringify(body);
+  const text = await stringifyYielding(body);
   const headers = new Headers(init?.headers);
   headers.set("Content-Type", "application/json");
   headers.append("Vary", "Accept-Encoding");

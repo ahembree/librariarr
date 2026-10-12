@@ -1,7 +1,14 @@
 import { describe, it, expect } from "vitest";
 import { gunzipSync } from "node:zlib";
 import { NextRequest } from "next/server";
-import { jsonResponse, acceptsGzip, MIN_COMPRESS_BYTES } from "@/lib/api/json-response";
+import {
+  jsonResponse,
+  acceptsGzip,
+  mapInSlices,
+  stringifyYielding,
+  MIN_COMPRESS_BYTES,
+  STRINGIFY_SLICE_ROWS,
+} from "@/lib/api/json-response";
 
 function req(acceptEncoding?: string): NextRequest {
   return new NextRequest("http://localhost/api/test", {
@@ -66,5 +73,64 @@ describe("jsonResponse", () => {
     expect(res.status).toBe(201);
     expect(res.headers.get("x-test")).toBe("1");
     expect(res.headers.get("content-encoding")).toBe("gzip");
+  });
+});
+
+describe("stringifyYielding", () => {
+  const rows = (n: number) =>
+    Array.from({ length: n }, (_, i) => ({
+      id: `item-${i}`,
+      added: new Date(Date.UTC(2024, 0, 1 + (i % 28))),
+      size: i % 3 === 0 ? null : String(i * 1000),
+      skipped: undefined,
+      tags: i % 2 ? ["a", "b"] : [],
+    }));
+
+  it("is byte-for-byte JSON.stringify for a body holding a long list", async () => {
+    for (const n of [STRINGIFY_SLICE_ROWS + 1, STRINGIFY_SLICE_ROWS * 2, STRINGIFY_SLICE_ROWS * 2 + 7]) {
+      const body = { items: rows(n), pagination: { page: 1, limit: 0, hasMore: false }, gone: undefined, after: "x" };
+      expect(await stringifyYielding(body)).toBe(JSON.stringify(body));
+    }
+  });
+
+  it("serialises holes and undefined rows in a long list as null, like JSON.stringify", async () => {
+    const list: unknown[] = rows(STRINGIFY_SLICE_ROWS + 5);
+    list[3] = undefined;
+    list[STRINGIFY_SLICE_ROWS + 1] = undefined;
+    const body = { items: list };
+    expect(await stringifyYielding(body)).toBe(JSON.stringify(body));
+  });
+
+  it("leaves short lists and non-plain bodies to JSON.stringify", async () => {
+    const short = { items: rows(10) };
+    expect(await stringifyYielding(short)).toBe(JSON.stringify(short));
+    const list = rows(STRINGIFY_SLICE_ROWS + 1);
+    expect(await stringifyYielding(list)).toBe(JSON.stringify(list));
+    const withToJSON = { items: list, toJSON: () => ({ replaced: true }) };
+    expect(await stringifyYielding(withToJSON)).toBe('{"replaced":true}');
+    expect(await stringifyYielding(null)).toBe("null");
+  });
+
+  it("lets queued work run between slices", async () => {
+    const order: string[] = [];
+    setImmediate(() => order.push("queued"));
+    const done = stringifyYielding({ items: rows(STRINGIFY_SLICE_ROWS * 3) }).then(() => order.push("done"));
+    await done;
+    expect(order).toEqual(["queued", "done"]);
+  });
+});
+
+describe("mapInSlices", () => {
+  it("maps every row in order", async () => {
+    const input = Array.from({ length: STRINGIFY_SLICE_ROWS * 2 + 3 }, (_, i) => i);
+    expect(await mapInSlices(input, (n) => n * 2)).toEqual(input.map((n) => n * 2));
+    expect(await mapInSlices([], (n: number) => n)).toEqual([]);
+  });
+
+  it("lets queued work run between slices", async () => {
+    const order: string[] = [];
+    setImmediate(() => order.push("queued"));
+    await mapInSlices(Array.from({ length: STRINGIFY_SLICE_ROWS * 2 }, (_, i) => i), (n) => n).then(() => order.push("done"));
+    expect(order).toEqual(["queued", "done"]);
   });
 });

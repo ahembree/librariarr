@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import { cleanDatabase, disconnectTestDb } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
+import { getTestPrisma } from "../../setup/test-db";
 import {
   callRoute,
   expectJson,
@@ -899,6 +900,147 @@ describe("GET /api/media/music/grouped", () => {
 
       expect(body.artists[0].servers).toHaveLength(1);
       expect(body.artists[0].servers[0].serverName).toBe("Home Plex");
+    });
+  });
+
+  // ─── SQL aggregation ───
+  //
+  // The listing is a GROUP BY over the track rows (it used to fold every track
+  // in JS); these pin the fold's semantics the SQL has to keep.
+
+  describe("aggregation", () => {
+    interface Artist {
+      parentTitle: string;
+      mediaItemId: string;
+      trackCount: number;
+      albumCount: number;
+      totalSize: string;
+      lastPlayed: string | null;
+      addedAt: string | null;
+      audioCodecCounts: Record<string, number>;
+      thumbUrl: string | null;
+      servers: { serverId: string; serverName: string; mediaItemId: string }[];
+      summary: string | null;
+      genres: string[] | null;
+      studio: string | null;
+      contentRating: string | null;
+      rating: number | null;
+      year: number | null;
+    }
+
+    async function musicLibrary() {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id, { name: "Home Plex" });
+      const lib = await createTestLibrary(server.id, { type: "MUSIC" });
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      return { user, server, lib };
+    }
+
+    async function artists(query = "") {
+      const response = await callRoute(GET, { url: `/api/media/music/grouped?limit=0${query}` });
+      return (await expectJson<{ artists: Artist[] }>(response, 200)).artists;
+    }
+
+    it("merges spellings that differ only in case or surrounding spaces, named as the linked track", async () => {
+      const { lib } = await musicLibrary();
+      await createTestMediaItem(lib.id, { type: "MUSIC", parentTitle: "Daft Punk", albumTitle: "Discovery" });
+      await createTestMediaItem(lib.id, { type: "MUSIC", parentTitle: "daft punk", albumTitle: "Homework" });
+      const linked = await createTestMediaItem(lib.id, { type: "MUSIC", parentTitle: " Daft Punk ", albumTitle: "Alive" });
+      await getTestPrisma().mediaItem.update({ where: { id: linked.id }, data: { parentThumbUrl: "/art/daft" } });
+
+      const list = await artists();
+      expect(list).toHaveLength(1);
+      expect(list[0].trackCount).toBe(3);
+      expect(list[0].albumCount).toBe(3);
+      expect(list[0].mediaItemId).toBe(linked.id);
+      expect(list[0].parentTitle).toBe(" Daft Punk ");
+      expect(list[0].servers).toEqual([
+        expect.objectContaining({ serverName: "Home Plex", mediaItemId: linked.id }),
+      ]);
+    });
+
+    it("takes each artist-level field from the first track that has it, a blank one counting as missing", async () => {
+      const { lib } = await musicLibrary();
+      const prisma = getTestPrisma();
+      const art = await createTestMediaItem(lib.id, { type: "MUSIC", parentTitle: "Björk", albumTitle: "Post", studio: "", contentRating: "" });
+      await prisma.mediaItem.update({ where: { id: art.id }, data: { parentThumbUrl: "/art/bjork", year: null, summary: "" } });
+      const meta = await createTestMediaItem(lib.id, { type: "MUSIC", parentTitle: "Björk", albumTitle: "Post", studio: "One Little Indian", contentRating: "E", genres: ["Art Pop"], summary: "Icelandic singer." });
+      await prisma.mediaItem.update({ where: { id: meta.id }, data: { rating: 8.5, year: 1995 } });
+
+      const [bjork] = await artists();
+      // Artwork comes from the track with album art; the blurb from the track
+      // that has one.
+      expect(bjork.mediaItemId).toBe(art.id);
+      expect(bjork.thumbUrl).toBe("/art/bjork");
+      expect(bjork.summary).toBe("Icelandic singer.");
+      expect(bjork.studio).toBe("One Little Indian");
+      expect(bjork.contentRating).toBe("E");
+      expect(bjork.genres).toEqual(["Art Pop"]);
+      expect(bjork.rating).toBe(8.5);
+      expect(bjork.year).toBe(1995);
+    });
+
+    it("counts codecs upper-cased, with a missing or blank codec as Unknown", async () => {
+      const { lib } = await musicLibrary();
+      for (const audioCodec of ["flac", "FLAC", "mp3", ""]) {
+        await createTestMediaItem(lib.id, { type: "MUSIC", parentTitle: "Bowie", audioCodec });
+      }
+      const noCodec = await createTestMediaItem(lib.id, { type: "MUSIC", parentTitle: "Bowie" });
+      await getTestPrisma().mediaItem.update({ where: { id: noCodec.id }, data: { audioCodec: null } });
+
+      const [bowie] = await artists();
+      expect(bowie.audioCodecCounts).toEqual({ FLAC: 2, MP3: 1, Unknown: 2 });
+    });
+
+    it("sums sizes, takes the latest dates, and does not count a blank album", async () => {
+      const { lib } = await musicLibrary();
+      await createTestMediaItem(lib.id, { type: "MUSIC", parentTitle: "Low", albumTitle: "Things We Lost", fileSize: BigInt(1000), lastPlayedAt: new Date("2024-01-01"), addedAt: new Date("2023-01-01") });
+      await createTestMediaItem(lib.id, { type: "MUSIC", parentTitle: "Low", albumTitle: "", fileSize: BigInt(500), lastPlayedAt: new Date("2025-06-01"), addedAt: new Date("2022-01-01") });
+
+      const [low] = await artists();
+      expect(low.albumCount).toBe(1);
+      expect(low.totalSize).toBe("1500");
+      expect(low.lastPlayed).toBe(new Date("2025-06-01").toISOString());
+      expect(low.addedAt).toBe(new Date("2023-01-01").toISOString());
+    });
+
+    it("aggregates only the tracks a filter keeps", async () => {
+      const { lib } = await musicLibrary();
+      await createTestMediaItem(lib.id, { type: "MUSIC", parentTitle: "Can", albumTitle: "Tago Mago", fileSize: BigInt(5_000_000) });
+      await createTestMediaItem(lib.id, { type: "MUSIC", parentTitle: "Can", albumTitle: "Ege Bamyasi", fileSize: BigInt(100) });
+      await createTestMediaItem(lib.id, { type: "MUSIC", parentTitle: "Neu!", albumTitle: "Neu!", fileSize: BigInt(100) });
+
+      const list = await artists("&fileSizeMin=1000000");
+      expect(list).toHaveLength(1);
+      expect(list[0]).toMatchObject({ parentTitle: "Can", trackCount: 1, albumCount: 1, totalSize: "5000000" });
+    });
+
+    it("orders artists that tie on the sort by name, so pages do not shuffle", async () => {
+      const { lib } = await musicLibrary();
+      for (const name of ["Cluster", "Air", "Beak"]) {
+        await createTestMediaItem(lib.id, { type: "MUSIC", parentTitle: name });
+      }
+      const response = await callRoute(GET, { url: "/api/media/music/grouped?limit=0&sortBy=trackCount&sortOrder=desc" });
+      const body = await expectJson<{ artists: Artist[] }>(response, 200);
+      expect(body.artists.map((a) => a.parentTitle)).toEqual(["Air", "Beak", "Cluster"]);
+    });
+
+    it("counts only the canonical copy across servers, listing every server that has the artist", async () => {
+      const user = await createTestUser();
+      const a = await createTestServer(user.id, { name: "Alpha" });
+      const b = await createTestServer(user.id, { name: "Beta" });
+      const libA = await createTestLibrary(a.id, { type: "MUSIC" });
+      const libB = await createTestLibrary(b.id, { type: "MUSIC" });
+      const prisma = getTestPrisma();
+      const canonical = await createTestMediaItem(libA.id, { type: "MUSIC", parentTitle: "Sade", albumTitle: "Diamond Life" });
+      const copy = await createTestMediaItem(libB.id, { type: "MUSIC", parentTitle: "Sade", albumTitle: "Diamond Life" });
+      await prisma.mediaItem.update({ where: { id: canonical.id }, data: { dedupKey: "sade-1", dedupCanonical: true } });
+      await prisma.mediaItem.update({ where: { id: copy.id }, data: { dedupKey: "sade-1", dedupCanonical: false } });
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      const [sade] = await artists();
+      expect(sade.trackCount).toBe(1);
+      expect(sade.servers.map((s) => s.serverName).sort()).toEqual(["Alpha", "Beta"]);
     });
   });
 });

@@ -7,6 +7,7 @@ import { useChipColors } from "@/components/chip-color-provider";
 import { normalizeResolutionLabel } from "@/lib/resolution";
 import { MediaTable } from "@/components/media-table";
 import { MediaFilters } from "@/components/media-filters";
+import { sameFilters } from "@/lib/filters/same-filters";
 import { MediaCard, CARD_CONTENT_HEIGHT, PRIORITY_ROWS } from "@/components/media-card";
 import { Tv, Clock, HardDrive } from "lucide-react";
 import { LibraryToolbar } from "@/components/library-toolbar";
@@ -15,6 +16,7 @@ import { useCardSize, BREAKPOINTS, estimateContentWidth } from "@/hooks/use-card
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { useServers } from "@/hooks/use-servers";
 import { useRealtime } from "@/hooks/use-realtime";
+import { useListFetch } from "@/hooks/use-list-fetch";
 import { fetchListProgressively } from "@/lib/media/progressive-load";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { formatFileSize, formatDuration } from "@/lib/format";
@@ -197,10 +199,7 @@ export default function AllEpisodesPage() {
     }
   }, [filters, sortBy, sortOrder]);
 
-  useEffect(() => {
-    const timeout = setTimeout(() => fetchEpisodes(), 300);
-    return () => clearTimeout(timeout);
-  }, [fetchEpisodes]);
+  useListFetch(fetchEpisodes);
 
   // Auto-update when real-time sync adds/removes items — no manual refresh.
   useRealtime("sync:completed", fetchEpisodes);
@@ -214,7 +213,7 @@ export default function AllEpisodesPage() {
       <LibraryTabs tabs={SERIES_TABS} active="/library/series/episodes" />
 
       <MediaFilters
-        onFilterChange={setFilters}
+        onFilterChange={(f) => setFilters((prev) => (sameFilters(prev, f) ? prev : f))}
         mediaType="SERIES"
         prefix={
           <LibraryToolbar

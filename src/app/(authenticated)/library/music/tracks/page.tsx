@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { MediaTable } from "@/components/media-table";
 import { MediaFilters } from "@/components/media-filters";
+import { sameFilters } from "@/lib/filters/same-filters";
 import { MediaCard, CARD_CONTENT_HEIGHT, PRIORITY_ROWS } from "@/components/media-card";
 import { useChipColors } from "@/components/chip-color-provider";
 import { Music, Disc3, ListMusic, Clock, HardDrive } from "lucide-react";
@@ -15,6 +16,7 @@ import { useCardSize, estimateContentWidth } from "@/hooks/use-card-size";
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { useServers } from "@/hooks/use-servers";
 import { useRealtime } from "@/hooks/use-realtime";
+import { useListFetch } from "@/hooks/use-list-fetch";
 import { fetchListProgressively } from "@/lib/media/progressive-load";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { formatFileSize, formatDuration } from "@/lib/format";
@@ -127,10 +129,7 @@ export default function AllTracksPage() {
     }
   }, [sortBy, sortOrder, filters]);
 
-  useEffect(() => {
-    const timeout = setTimeout(fetchTracks, 300);
-    return () => clearTimeout(timeout);
-  }, [fetchTracks]);
+  useListFetch(fetchTracks);
 
   // Auto-update when real-time sync adds/removes items — no manual refresh.
   useRealtime("sync:completed", fetchTracks);
@@ -193,7 +192,7 @@ export default function AllTracksPage() {
       <LibraryTabs tabs={MUSIC_TABS} active="/library/music/tracks" />
 
       <MediaFilters
-        onFilterChange={setFilters}
+        onFilterChange={(f) => setFilters((prev) => (sameFilters(prev, f) ? prev : f))}
         mediaType="MUSIC"
         prefix={
           <LibraryToolbar

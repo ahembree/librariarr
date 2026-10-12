@@ -29,7 +29,9 @@ import { MediaGridSkeleton } from "@/components/skeletons";
 import { LibraryTabs, MUSIC_TABS } from "@/components/library-tabs";
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
 import { useFilterPersistence } from "@/hooks/use-filter-persistence";
+import { sameFilters } from "@/lib/filters/same-filters";
 import { useRealtime } from "@/hooks/use-realtime";
+import { useListFetch } from "@/hooks/use-list-fetch";
 
 const GAP = 16;
 const CARD_BORDER = 2; // 1px top + 1px bottom border on Card
@@ -142,8 +144,9 @@ export default function MusicPage() {
   const router = useRouter();
   const [artistList, setArtistList] = useState<GroupedArtist[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filters, setFilters] = useState<Record<string, string>>({});
   const { savedFilters, persistFilters } = useFilterPersistence("filters-/library/music");
+  // Start from the restored filters, so the first fetch is already filtered.
+  const [filters, setFilters] = useState<Record<string, string>>(savedFilters);
   const [viewMode, setViewMode] = useState<"cards" | "table">("cards");
   const [, startTransition] = useTransition();
   const { show, showServers, setVisible, prefs } = useCardDisplay("MUSIC");
@@ -249,10 +252,7 @@ export default function MusicPage() {
 
   useRealtime("sync:completed", fetchArtists);
 
-  useEffect(() => {
-    const timeout = setTimeout(() => fetchArtists(), 300);
-    return () => clearTimeout(timeout);
-  }, [fetchArtists]);
+  useListFetch(fetchArtists);
 
   const rowCount = useMemo(
     () => (artistList.length > 0 ? Math.ceil(artistList.length / actualColumns) : 0),
@@ -341,7 +341,7 @@ export default function MusicPage() {
       <LibraryTabs tabs={MUSIC_TABS} active="/library/music" />
 
       <MediaFilters
-        onFilterChange={(f) => { setFilters(f); persistFilters(f); }}
+        onFilterChange={(f) => { setFilters((prev) => (sameFilters(prev, f) ? prev : f)); persistFilters(f); }}
         externalFilters={Object.keys(savedFilters).length > 0 ? savedFilters : undefined}
         mediaType="MUSIC"
         prefix={
