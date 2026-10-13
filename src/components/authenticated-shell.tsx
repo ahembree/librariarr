@@ -88,7 +88,10 @@ export function AuthenticatedShell({
   }, [checkMaintenance]);
 
   return (
-    <div className="flex h-screen overflow-hidden">
+    // dvh, not vh (h-screen): a phone browser's 100vh is its height with the
+    // toolbars hidden, so while they show, the bottom of every page sat
+    // behind them and the whole frame scrolled as a second layer.
+    <div className="px-safe flex h-dvh overflow-hidden">
       <Sidebar
         mobileOpen={mobileOpen}
         onMobileOpenChange={setMobileOpen}

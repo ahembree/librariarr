@@ -3208,7 +3208,7 @@ export function LifecycleRulePage({
 
       {/* Test Media Dialog */}
       <Dialog open={showTestMediaDialog} onOpenChange={setShowTestMediaDialog}>
-        <DialogContent className="sm:max-w-2xl max-h-[80vh] overflow-y-auto">
+        <DialogContent className="sm:max-w-2xl max-h-[80dvh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Test Media</DialogTitle>
             <DialogDescription>
@@ -3515,7 +3515,7 @@ export function LifecycleRulePage({
 
       {/* Diff preview dialog */}
       <Dialog open={showDiffDialog} onOpenChange={(open) => { if (!savingWithOption) setShowDiffDialog(open); }}>
-        <DialogContent className="max-w-lg max-h-[80vh] overflow-y-auto">
+        <DialogContent className="max-w-lg max-h-[80dvh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Match Changes Preview</DialogTitle>
             <DialogDescription>

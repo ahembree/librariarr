@@ -1634,7 +1634,7 @@ export function MediaFilters({ onFilterChange, externalFilters, mediaType, prefi
                 </div>
               </div>
               <Separator />
-              <div className={isMobile ? "py-1 flex-1 overflow-y-auto overflow-x-hidden min-w-0" : "py-1 max-h-[70vh] overflow-y-auto"}>
+              <div className={isMobile ? "py-1 flex-1 overflow-y-auto overflow-x-hidden min-w-0" : "py-1 max-h-[70dvh] overflow-y-auto"}>
                 {categories.map((cat, catIdx) => {
                   const catItems = cat.options.filter((opt) => matchesFilterSearch(opt.label));
                   // Extra inline items for this category
@@ -1917,8 +1917,11 @@ export function MediaFilters({ onFilterChange, externalFilters, mediaType, prefi
                 <Sheet open={filtersOpen} onOpenChange={setFiltersOpen}>
                   <SheetContent
                     side="bottom"
-                    className="flex flex-col p-0 rounded-t-xl"
-                    style={{ height: `${sheetHeight}vh` }}
+                    className="pb-safe px-safe flex flex-col p-0 rounded-t-xl"
+                    // dvh: the drag works in window.innerHeight, and 90vh is
+                    // taller than a phone's screen while its toolbars show,
+                    // which put the drag handle off the top.
+                    style={{ height: `${sheetHeight}dvh` }}
                     showCloseButton={false}
                     onOpenAutoFocus={(e) => e.preventDefault()}
                   >

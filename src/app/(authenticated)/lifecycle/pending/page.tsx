@@ -194,7 +194,7 @@ function VirtualizedActionTable({
 
   return (
     <div className="rounded-lg border">
-      <div ref={scrollRef} className="md:max-h-[60vh] overflow-auto">
+      <div ref={scrollRef} className="md:max-h-[60dvh] overflow-auto">
         <table className="w-full caption-bottom text-sm">
           <thead className="sticky top-0 z-10 bg-background">
             <tr className="border-b bg-muted/50">
@@ -505,7 +505,7 @@ function PendingActionCardGrid({
   const virtualRows = virtualizer.getVirtualItems();
 
   return (
-    <div ref={scrollContainerRef} className="md:max-h-[60vh] overflow-y-auto">
+    <div ref={scrollContainerRef} className="md:max-h-[60dvh] overflow-y-auto">
       <div
         style={{
           height: virtualizer.getTotalSize(),

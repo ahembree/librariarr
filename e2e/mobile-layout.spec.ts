@@ -111,6 +111,75 @@ for (const width of WIDTHS) {
   });
 }
 
+/**
+ * A notched phone: viewport-fit=cover extends the page under the notch and
+ * the home indicator, so the page has to pad itself clear of them. Chromium
+ * stands in for the phone through its safe-area override, which makes
+ * `env(safe-area-inset-*)` resolve as on the device.
+ */
+async function emulateSafeArea(
+  page: Page,
+  insets: { top: number; right: number; bottom: number; left: number },
+) {
+  const cdp = await page.context().newCDPSession(page);
+  try {
+    await cdp.send("Emulation.setSafeAreaInsetsOverride" as never, { insets } as never);
+  } catch (error) {
+    test.skip(true, `this Chromium has no safe-area override: ${(error as Error).message}`);
+  }
+}
+
+test.describe("notched phone safe areas", () => {
+  test.use({ hasTouch: true, isMobile: true });
+
+  test.describe("in landscape", () => {
+    test.use({ viewport: { width: 844, height: 390 } });
+
+    test("nothing sits under the notch on either side", async ({ page }) => {
+      await emulateSafeArea(page, { top: 0, right: 47, bottom: 21, left: 47 });
+      await page.goto("/");
+      await expect(page.getByRole("heading", { name: PAGES[0].heading })).toBeVisible();
+      await settle(page);
+      const underNotch = await page.evaluate(() => {
+        const vw = document.documentElement.clientWidth;
+        const out: string[] = [];
+        for (const el of document.querySelectorAll("a[href], button, h1")) {
+          const rect = el.getBoundingClientRect();
+          if (rect.width === 0 || rect.height === 0 || el.closest('[aria-hidden="true"]')) continue;
+          // A row that scrolls sideways (Recently Added) passes under the
+          // edge by design; its own box is what has to stay clear.
+          let inSideScroller = false;
+          for (let p = el.parentElement; p; p = p.parentElement) {
+            if (/(auto|scroll)/.test(getComputedStyle(p).overflowX) && p.scrollWidth > p.clientWidth + 1) {
+              inSideScroller = true;
+              break;
+            }
+          }
+          if (inSideScroller) continue;
+          if (rect.left < 47 - 1 || rect.right > vw - 47 + 1) {
+            out.push(`"${(el.textContent ?? el.getAttribute("aria-label") ?? "").trim().slice(0, 30)}" spans ${Math.round(rect.left)}..${Math.round(rect.right)}px`);
+          }
+        }
+        return out;
+      });
+      expect(underNotch).toEqual([]);
+    });
+  });
+
+  test.describe("in portrait", () => {
+    test.use({ viewport: { width: 390, height: 780 } });
+
+    test("the filter sheet ends above the home indicator", async ({ page }) => {
+      await emulateSafeArea(page, { top: 0, right: 0, bottom: 34, left: 0 });
+      await page.goto("/library/movies");
+      await page.getByRole("button", { name: /^Filters/ }).click();
+      const sheet = page.locator("[data-slot=sheet-content]");
+      await expect(sheet).toBeVisible();
+      expect(await sheet.evaluate((el) => getComputedStyle(el).paddingBottom)).toBe("34px");
+    });
+  });
+});
+
 const RULE_SET = {
   id: "mobile-rs",
   name: "Films nobody has watched in years",

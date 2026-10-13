@@ -426,7 +426,7 @@ function DialogBody({ userKey, onClose }: { userKey: string; onClose: () => void
         </div>
       )}
 
-      <div className="max-h-[65vh] overflow-y-auto px-6 py-4">
+      <div className="max-h-[65dvh] overflow-y-auto px-6 py-4">
         {!loading && !error && data?.partial && data.requests.length > 0 && (
           <p className="mb-3 flex items-center gap-2 rounded-md border border-amber/30 bg-amber/10 px-3 py-2 text-xs text-amber">
             <AlertCircle className="h-3.5 w-3.5 shrink-0" />

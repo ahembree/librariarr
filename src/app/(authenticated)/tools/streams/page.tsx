@@ -1814,7 +1814,7 @@ export default function StreamManagerPage() {
 
       {/* Blackout Create/Edit Dialog */}
       <Dialog open={showBlackoutDialog} onOpenChange={setShowBlackoutDialog}>
-        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+        <DialogContent className="max-w-lg max-h-[85dvh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>
               {editingBlackout ? "Edit Blackout Schedule" : "New Blackout Schedule"}
@@ -2018,7 +2018,7 @@ export default function StreamManagerPage() {
 
       {/* Terminate Dialog */}
       <AlertDialog open={terminateDialogOpen} onOpenChange={setTerminateDialogOpen}>
-        <AlertDialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
+        <AlertDialogContent className="max-w-lg max-h-[85dvh] overflow-y-auto">
           <AlertDialogHeader>
             <AlertDialogTitle>
               {terminateTarget === "all"
@@ -2061,7 +2061,7 @@ export default function StreamManagerPage() {
 
       {/* Media Detail Sheet */}
       <Sheet open={!!sheetSession} onOpenChange={(open) => { if (!open) setSheetSession(null); }}>
-        <SheetContent side="right" className="overflow-y-auto">
+        <SheetContent side="right" className="pb-safe overflow-y-auto">
           {sheetSession && (
             <>
               <SheetHeader>

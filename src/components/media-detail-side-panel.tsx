@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { X, ExternalLink } from "lucide-react";
+import { X, ExternalLink, Film, Tv, Music } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ColorChip } from "@/components/color-chip";
@@ -127,6 +127,15 @@ export function MediaDetailSidePanel({
         : getDetailPageUrl(mediaType, item.id));
   // Aggregated items (series/artist scope) use parentTitle=null but still need the parent image
   const imageUrl = `/api/media/${item.id}/image${item.parentTitle || isAggregate ? "?type=parent" : ""}`;
+  // A missing poster shows the type's icon, as the library cards do, rather
+  // than the browser's broken-image text over the box.
+  const [posterFailed, setPosterFailed] = useState(false);
+  const [posterSrc, setPosterSrc] = useState(imageUrl);
+  if (posterSrc !== imageUrl) {
+    setPosterSrc(imageUrl);
+    setPosterFailed(false);
+  }
+  const PosterFallback = mediaType === "MUSIC" ? Music : mediaType === "SERIES" ? Tv : Film;
   // A series group is its show; one episode is its show and SxxExx — never
   // the episode's own title, which names no show.
   const displayTitle = titleOverride ?? (
@@ -168,11 +177,18 @@ export function MediaDetailSidePanel({
       {/* Poster + Title inline layout */}
       <div className="flex gap-3 px-4 pb-4 relative">
         <div className="w-20 shrink-0 rounded-lg overflow-hidden bg-muted shadow-[0_4px_16px_oklch(0_0_0/0.3)]" style={{ aspectRatio: mediaType === "MUSIC" ? "1/1" : "2/3" }}>
-          <FadeImage
-            src={imageUrl}
-            alt={displayTitle}
-            className="w-full h-full object-cover"
-          />
+          {posterFailed ? (
+            <div className="flex h-full items-center justify-center">
+              <PosterFallback className="h-6 w-6 text-muted-foreground" />
+            </div>
+          ) : (
+            <FadeImage
+              src={imageUrl}
+              alt={displayTitle}
+              className="w-full h-full object-cover"
+              onError={() => setPosterFailed(true)}
+            />
+          )}
         </div>
         <div className="min-w-0 flex-1 space-y-1.5">
           <h3 className="font-display font-semibold text-base leading-tight line-clamp-2">
@@ -298,7 +314,9 @@ export function MediaDetailSidePanel({
     );
 
   const content = (
-    <div className="flex-1 overflow-y-auto p-4">
+    // The bottom padding clears a phone's home indicator in the installed app
+    // (env() is 0 everywhere else).
+    <div className="flex-1 overflow-y-auto p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">
       <MediaDetailContent
         item={item}
         hideVideo={mediaType === "MUSIC"}
@@ -313,7 +331,7 @@ export function MediaDetailSidePanel({
   // Mobile: full-screen overlay
   if (isMobile) {
     return (
-      <div className="fixed inset-0 z-50 bg-background flex flex-col">
+      <div role="dialog" aria-modal="true" aria-label={displayTitle} className="pt-safe px-safe fixed inset-0 z-50 bg-background flex flex-col">
         {header}
         {content}
       </div>

@@ -37,7 +37,7 @@ export function BuilderWithPseudocode<
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2">{children}</div>
         <div className="hidden lg:block">
-          <div className="sticky top-6 max-h-[calc(100vh-8rem)] overflow-y-auto">
+          <div className="sticky top-6 max-h-[calc(100dvh-8rem)] overflow-y-auto">
             <PseudocodePanel
               groups={groups}
               config={config}

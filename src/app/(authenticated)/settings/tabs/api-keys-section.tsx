@@ -712,7 +712,7 @@ function CreateApiKeyDialog({
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
-        className="max-h-[90vh] overflow-y-auto sm:max-w-lg"
+        className="max-h-[90dvh] overflow-y-auto sm:max-w-lg"
         // While the key is on screen, only Done / the close button may dismiss
         // the dialog — a stray click outside would lose it for good.
         onInteractOutside={(e) => {

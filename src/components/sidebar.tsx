@@ -374,7 +374,7 @@ export function Sidebar({ mobileOpen, onMobileOpenChange, initialCollapsed = fal
           >
             <SheetTitle className="sr-only">Navigation</SheetTitle>
             <TooltipProvider>
-              <div className="pt-safe pb-safe relative flex h-full flex-col overflow-hidden bg-sidebar">
+              <div className="pt-safe pb-safe pl-safe relative flex h-full flex-col overflow-hidden bg-sidebar">
                 {sidebarInner(true)}
               </div>
             </TooltipProvider>
@@ -390,7 +390,7 @@ export function Sidebar({ mobileOpen, onMobileOpenChange, initialCollapsed = fal
       <SearchPalette open={searchOpen} onOpenChange={setSearchOpen} />
       <div
         className={cn(
-          "relative flex h-screen flex-col overflow-hidden border-r bg-sidebar transition-[width] duration-300 ease-out",
+          "relative flex h-dvh flex-col overflow-hidden border-r bg-sidebar transition-[width] duration-300 ease-out",
           collapsed ? "w-[72px]" : "w-[248px]"
         )}
       >
