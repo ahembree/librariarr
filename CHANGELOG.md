@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.30.1](https://github.com/ahembree/librariarr/compare/v0.30.0...v0.30.1) (2026-10-13)
+
+
+### Bug Fixes
+
+* **ci:** self-host fonts and derive the Playwright image tag from the lockfile ([#429](https://github.com/ahembree/librariarr/issues/429)) ([006a369](https://github.com/ahembree/librariarr/commit/006a369fb1abb9afceb3f23744c3356843a75325))
+
+
+### Performance Improvements
+
+* load every page faster and fit the UI to phone screens ([#447](https://github.com/ahembree/librariarr/issues/447)) ([49a344a](https://github.com/ahembree/librariarr/commit/49a344a0d5b792f0107705162c5e3b755188df96))
+
 ## [0.30.0](https://github.com/ahembree/librariarr/compare/v0.29.0...v0.30.0) (2026-10-10)
 
 
