@@ -24,14 +24,28 @@ export async function GET() {
       libraries: {
         select: { id: true, key: true, title: true, type: true, enabled: true, lastSyncedAt: true, _count: { select: { mediaItems: true } } },
       },
-      syncJobs: {
-        orderBy: { startedAt: "desc" },
-        take: 1,
-      },
     },
   });
 
-  return NextResponse.json({ servers: sanitize(servers) });
+  // Each server's newest sync job, as a one-element `syncJobs`. Not a nested
+  // `syncJobs: { orderBy, take: 1 }` include: Prisma cannot push a per-parent
+  // `take` into SQL, so that loaded every job the server had ever run and
+  // dropped all but one — and nothing prunes SyncJob, so this route (behind
+  // most pages) got slower for as long as the install ran.
+  const latestJobs = await Promise.all(
+    servers.map((server) =>
+      prisma.syncJob.findFirst({
+        where: { mediaServerId: server.id },
+        orderBy: { startedAt: "desc" },
+      }),
+    ),
+  );
+
+  return NextResponse.json({
+    servers: sanitize(
+      servers.map((server, i) => ({ ...server, syncJobs: latestJobs[i] ? [latestJobs[i]] : [] })),
+    ),
+  });
 }
 
 export async function POST(request: NextRequest) {

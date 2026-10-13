@@ -18,6 +18,92 @@ export const MIN_COMPRESS_BYTES = 4096;
  */
 const GZIP_LEVEL = 3;
 
+/** Rows serialised between yields to the event loop. */
+export const STRINGIFY_SLICE_ROWS = 1000;
+
+/** How deep a long list is looked for: `{ groups: [{ items: [...] }] }` is three levels. */
+const MAX_LIST_DEPTH = 3;
+
+/**
+ * `JSON.stringify(body)`, but a long list is serialised a slice of rows at a
+ * time with the event loop let through between slices — at the top level or
+ * nested a few levels down, as the lifecycle listings nest theirs
+ * (`{ groups: [{ items }] }`, `{ ruleMatches: [{ items }] }`).
+ *
+ * Serialising a whole library in one call held the process for hundreds of
+ * milliseconds — measured against the production build while a 40k-track list
+ * was built, a request to `/api/health` waited 0.7–1.1 s, and every poster on
+ * the screen that asked for it waited the same. The output is identical to
+ * `JSON.stringify(body)`: same keys in the same order, same values.
+ */
+export async function stringifyYielding(body: unknown): Promise<string> {
+  return (await stringifyNode(body, MAX_LIST_DEPTH)) as string;
+}
+
+async function stringifyNode(value: unknown, depth: number): Promise<string | undefined> {
+  if (isLongList(value)) return stringifyList(value);
+  if (!holdsLongList(value, depth)) return JSON.stringify(value);
+  if (Array.isArray(value)) {
+    const parts: string[] = [];
+    // JSON.stringify writes an element with no JSON form as null.
+    for (const element of value) parts.push((await stringifyNode(element, depth - 1)) ?? "null");
+    return `[${parts.join(",")}]`;
+  }
+  const parts: string[] = [];
+  for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
+    const text = await stringifyNode(child, depth - 1);
+    // JSON.stringify leaves out a key whose value has no JSON form.
+    if (text !== undefined) parts.push(`${JSON.stringify(key)}:${text}`);
+  }
+  return `{${parts.join(",")}}`;
+}
+
+/** Does a plain object or short array hold a long list within `depth` levels? */
+function holdsLongList(value: unknown, depth: number): boolean {
+  if (depth <= 0) return false;
+  const children = Array.isArray(value) ? value : isPlainObject(value) ? Object.values(value) : null;
+  return children !== null && children.some((child) => isLongList(child) || holdsLongList(child, depth - 1));
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const proto = Object.getPrototypeOf(value);
+  return (proto === Object.prototype || proto === null) && typeof (value as { toJSON?: unknown }).toJSON !== "function";
+}
+
+function isLongList(value: unknown): value is unknown[] {
+  return Array.isArray(value) && value.length > STRINGIFY_SLICE_ROWS;
+}
+
+/** Let queued I/O — other requests, artwork — run before carrying on. */
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+/**
+ * `rows.map(fn)` a slice at a time, letting the event loop through between
+ * slices — for shaping a whole library into its response rows, which on a
+ * large one holds the process as long as serialising it did.
+ */
+export async function mapInSlices<T, U>(rows: readonly T[], fn: (row: T) => U): Promise<U[]> {
+  const out: U[] = new Array(rows.length);
+  for (let i = 0; i < rows.length; i++) {
+    if (i > 0 && i % STRINGIFY_SLICE_ROWS === 0) await yieldToEventLoop();
+    out[i] = fn(rows[i]);
+  }
+  return out;
+}
+
+async function stringifyList(rows: unknown[]): Promise<string> {
+  const slices: string[] = [];
+  for (let i = 0; i < rows.length; i += STRINGIFY_SLICE_ROWS) {
+    if (i > 0) await yieldToEventLoop();
+    // `[a,b]` → `a,b`: a slice is never empty, so this never yields "".
+    slices.push(JSON.stringify(rows.slice(i, i + STRINGIFY_SLICE_ROWS)).slice(1, -1));
+  }
+  return `[${slices.join(",")}]`;
+}
+
 /**
  * Does the client accept gzip? Handles `gzip;q=0` and `*` per RFC 9110.
  */
@@ -59,7 +145,18 @@ export async function jsonResponse(
   body: unknown,
   init?: ResponseInit,
 ): Promise<NextResponse> {
-  const text = JSON.stringify(body);
+  return jsonTextResponse(request, await stringifyYielding(body), init);
+}
+
+/**
+ * `jsonResponse` for a body that is already JSON text — the rule-match listing
+ * splices each match's stored JSON instead of parsing and re-serialising it.
+ */
+export async function jsonTextResponse(
+  request: Request,
+  text: string,
+  init?: ResponseInit,
+): Promise<NextResponse> {
   const headers = new Headers(init?.headers);
   headers.set("Content-Type", "application/json");
   headers.append("Vary", "Accept-Encoding");

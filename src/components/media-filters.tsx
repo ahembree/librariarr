@@ -1112,14 +1112,33 @@ export function MediaFilters({ onFilterChange, externalFilters, mediaType, prefi
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filters]);
 
+  // The filter options come from `/api/media/distinct-values`, a scan of every
+  // item and stream on the install (cached for five minutes), and only the
+  // filter panel and the active filters' chip labels use them. So they are
+  // fetched once the panel is about to open (pointer or focus on its button),
+  // is open, or a filter is set — not on every library page load, where the
+  // scan competed with the page's own list query.
+  const [distinctWanted, setDistinctWanted] = useState(false);
+  const wantDistinct = useCallback(() => setDistinctWanted(true), []);
+  const needDistinct = distinctWanted || filtersOpen || Object.keys(filters).length > 0;
+  const distinctRequested = useRef(false);
   useEffect(() => {
+    if (!needDistinct || distinctRequested.current) return;
+    distinctRequested.current = true;
     fetch("/api/media/distinct-values")
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
       .then((data: DistinctData) => {
         setDistinctData(data);
       })
-      .catch((e) => console.error("Failed to fetch distinct values", e));
-  }, []);
+      .catch((e) => {
+        // `filtersOpen` is a dependency so the next open of the panel tries again.
+        distinctRequested.current = false;
+        console.error("Failed to fetch distinct values", e);
+      });
+  }, [needDistinct, filtersOpen]);
 
   const updateFilter = useCallback(
     (key: string, value: string | undefined) => {
@@ -1581,6 +1600,8 @@ export function MediaFilters({ onFilterChange, externalFilters, mediaType, prefi
               variant="outline"
               size="default"
               className="gap-2"
+              onPointerEnter={wantDistinct}
+              onFocus={wantDistinct}
               {...(isMobile ? { onClick: () => setFiltersOpen(true) } : {})}
             >
               <SlidersHorizontal className="h-4 w-4" />
@@ -1613,7 +1634,7 @@ export function MediaFilters({ onFilterChange, externalFilters, mediaType, prefi
                 </div>
               </div>
               <Separator />
-              <div className={isMobile ? "py-1 flex-1 overflow-y-auto overflow-x-hidden min-w-0" : "py-1 max-h-[70vh] overflow-y-auto"}>
+              <div className={isMobile ? "py-1 flex-1 overflow-y-auto overflow-x-hidden min-w-0" : "py-1 max-h-[70dvh] overflow-y-auto"}>
                 {categories.map((cat, catIdx) => {
                   const catItems = cat.options.filter((opt) => matchesFilterSearch(opt.label));
                   // Extra inline items for this category
@@ -1896,8 +1917,11 @@ export function MediaFilters({ onFilterChange, externalFilters, mediaType, prefi
                 <Sheet open={filtersOpen} onOpenChange={setFiltersOpen}>
                   <SheetContent
                     side="bottom"
-                    className="flex flex-col p-0 rounded-t-xl"
-                    style={{ height: `${sheetHeight}vh` }}
+                    className="pb-safe px-safe flex flex-col p-0 rounded-t-xl"
+                    // dvh: the drag works in window.innerHeight, and 90vh is
+                    // taller than a phone's screen while its toolbars show,
+                    // which put the drag handle off the top.
+                    style={{ height: `${sheetHeight}dvh` }}
                     showCloseButton={false}
                     onOpenAutoFocus={(e) => e.preventDefault()}
                   >

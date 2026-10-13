@@ -112,7 +112,7 @@ export default function TrackDetailPage() {
       posterAspectRatio="1/1"
       playServers={playServers}
     >
-      <MediaDetailContent item={item} hideVideo 
+      <MediaDetailContent item={item} hideVideo detailLoaded 
         // The per-play list *is* this track's Listen History card. It replaces the
         // per-user aggregate card, which reads the same plays live from the
         // server but without their timestamps, device, or any of the

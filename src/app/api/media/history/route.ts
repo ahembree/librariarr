@@ -6,6 +6,16 @@ import { appCache } from "@/lib/cache/memory-cache";
 import { jsonResponse } from "@/lib/api/json-response";
 import { clampSkip, parsePage } from "@/lib/api/pagination";
 
+/**
+ * How deep a descending page may reach before the index walk below costs more
+ * than sorting every play: ~20k rows at 150k plays, measured. 10,000 is the
+ * first hundred pages of the History table.
+ */
+const SPLIT_MAX_REACH = 10_000;
+
+/** Upper bound for the cached filter dropdown values (see below). */
+const FILTER_VALUES_TTL_MS = 10 * 60_000;
+
 export async function GET(request: NextRequest) {
   const session = await getSession();
   if (!session.isLoggedIn) {
@@ -217,6 +227,18 @@ export async function GET(request: NextRequest) {
     ? SORT_MAP[sortBy]
     : 'wh."watchedAt"';
   const orderDir = sortOrder === "asc" ? "ASC" : "DESC";
+  // The sort keys that are columns of the play itself, and the name each has in
+  // the select list below.
+  const PLAY_SORT_OUTPUT: Record<string, string> = {
+    'wh."watchedAt"': '"watchedAt"',
+    'wh."serverUsername"': '"serverUsername"',
+    'wh."deviceName"': '"deviceName"',
+    'wh."platform"': '"platform"',
+    'wh."percentComplete"': '"percentComplete"',
+    'wh."isTranscode"': '"isTranscode"',
+    'wh."player"': '"player"',
+    'wh."resolution"': '"wh_resolution"',
+  };
   // The ORDER BY below appends wh."id" as a unique tiebreaker so the sort is a
   // total order. Without one Postgres may return tied rows in any order, and a
   // bounded page (top-N heapsort) is planned differently from its neighbour, so
@@ -227,7 +249,10 @@ export async function GET(request: NextRequest) {
   // `resolution` are NULL on every NATIVE row, so one tie block can cover the
   // whole table.
 
-  // Cached filter dropdown values — only change when watch history syncs
+  // Cached filter dropdown values — only change when watch history syncs, and
+  // every write of watch history ends in `invalidateMediaCaches()`, which drops
+  // this prefix; the TTL is only an upper bound. At the 60 s default nearly
+  // every visit re-read every play for them (~35 ms at 150k plays).
   const filterCacheKey = `watch-history-filters:${session.userId}`;
   const filterValuesP = appCache.getOrSet(filterCacheKey, async () => {
     const distinctRows = await prisma.$queryRawUnsafe<Array<{
@@ -254,7 +279,7 @@ export async function GET(request: NextRequest) {
       deviceNames: [...deviceSet].sort(),
       platforms: [...platformSet].sort(),
     };
-  });
+  }, FILTER_VALUES_TTL_MS);
 
   // Count + main query + filter values — all in parallel
   const fromClause = `FROM "WatchHistory" wh
@@ -274,6 +299,63 @@ export async function GET(request: NextRequest) {
     WHERE ${whereClause}`,
     ...params,
   );
+
+  const selectList = `
+      wh."id", wh."serverUsername", wh."watchedAt", wh."deviceName", wh."platform",
+      wh."source", wh."watched", wh."percentComplete", wh."isTranscode",
+      wh."videoDecision", wh."audioDecision", wh."player", wh."product",
+      wh."resolution" AS "wh_resolution", wh."bitrate", wh."segmentCount",
+      wh."durationMs", wh."totalDurationMs", wh."progressMs",
+      mi."id" AS "mi_id", mi."title" AS "mi_title", mi."titleSort" AS "mi_titleSort",
+      mi."parentTitle" AS "mi_parentTitle", mi."seasonNumber" AS "mi_seasonNumber",
+      mi."episodeNumber" AS "mi_episodeNumber", mi."year" AS "mi_year",
+      mi."type" AS "mi_type", mi."resolution" AS "mi_resolution",
+      mi."dynamicRange" AS "mi_dynamicRange", mi."videoCodec" AS "mi_videoCodec",
+      mi."audioCodec" AS "mi_audioCodec", mi."audioChannels" AS "mi_audioChannels",
+      mi."audioProfile" AS "mi_audioProfile",
+      mi."fileSize" AS "mi_fileSize", mi."duration" AS "mi_duration",
+      mi."summary" AS "mi_summary", mi."contentRating" AS "mi_contentRating",
+      mi."rating" AS "mi_rating", mi."ratingImage" AS "mi_ratingImage",
+      mi."audienceRating" AS "mi_audienceRating", mi."audienceRatingImage" AS "mi_audienceRatingImage",
+      mi."studio" AS "mi_studio", mi."playCount" AS "mi_playCount",
+      mi."lastPlayedAt" AS "mi_lastPlayedAt", mi."addedAt" AS "mi_addedAt",
+      mi."genres" AS "mi_genres",
+      ms."id" AS "ms_id", ms."name" AS "ms_name", ms."type" AS "ms_type"`;
+
+  // Newest first — the order every visit opens on — is a walk of the
+  // `watchedAt` index, not a sort of every play. `DESC NULLS LAST` matches no
+  // B-tree index (a backward scan yields NULLS FIRST), so the query used to sort
+  // every play to return 100 of them: ~45 ms at 150k plays, on every page and
+  // every filter change. It is split instead: the non-null rows, which the
+  // index serves in order, then the null ones — read only when the page reaches
+  // past every non-null row, since walking for them is what the planner gets
+  // wrong (on rows whose nulls cluster at the end of the primary key it walked
+  // the whole key). Same rows, same order. The same holds for every other
+  // descending sort on a column of the play itself; ascending sorts (NULLS
+  // LAST is the default there) already match an index. Past `SPLIT_MAX_REACH`
+  // rows the walk costs more than the sort, so deep pages keep the plain query.
+  const offset = clampSkip((page - 1) * limit);
+  const reach = offset + limit + 1;
+  const playSortColumn = orderDir === "DESC" && reach <= SPLIT_MAX_REACH
+    ? PLAY_SORT_OUTPUT[orderCol]
+    : undefined;
+  const pageSql = playSortColumn
+    ? `WITH ranked AS (
+        SELECT ${selectList} ${fromClause} AND ${orderCol} IS NOT NULL
+        ORDER BY ${orderCol} DESC, wh."id" ASC LIMIT ${reach}
+      )
+      SELECT * FROM (
+        SELECT * FROM ranked
+        UNION ALL
+        (SELECT ${selectList} ${fromClause} AND ${orderCol} IS NULL
+          AND (SELECT COUNT(*) FROM ranked) < ${reach}
+          ORDER BY wh."id" ASC LIMIT ${reach})
+      ) candidates
+      ORDER BY candidates.${playSortColumn} DESC NULLS LAST, candidates."id" ASC
+      LIMIT ${limit + 1} OFFSET ${offset}`
+    : `SELECT ${selectList} ${fromClause}
+      ORDER BY ${orderCol} ${orderDir} NULLS LAST, wh."id" ASC
+      LIMIT ${limit + 1} OFFSET ${offset}`;
 
   const mainQueryP = prisma.$queryRawUnsafe<Array<{
     id: string;
@@ -330,30 +412,7 @@ export async function GET(request: NextRequest) {
     ms_name: string;
     ms_type: string;
   }>>(
-    `SELECT
-      wh."id", wh."serverUsername", wh."watchedAt", wh."deviceName", wh."platform",
-      wh."source", wh."watched", wh."percentComplete", wh."isTranscode",
-      wh."videoDecision", wh."audioDecision", wh."player", wh."product",
-      wh."resolution" AS "wh_resolution", wh."bitrate", wh."segmentCount",
-      wh."durationMs", wh."totalDurationMs", wh."progressMs",
-      mi."id" AS "mi_id", mi."title" AS "mi_title", mi."titleSort" AS "mi_titleSort",
-      mi."parentTitle" AS "mi_parentTitle", mi."seasonNumber" AS "mi_seasonNumber",
-      mi."episodeNumber" AS "mi_episodeNumber", mi."year" AS "mi_year",
-      mi."type" AS "mi_type", mi."resolution" AS "mi_resolution",
-      mi."dynamicRange" AS "mi_dynamicRange", mi."videoCodec" AS "mi_videoCodec",
-      mi."audioCodec" AS "mi_audioCodec", mi."audioChannels" AS "mi_audioChannels",
-      mi."audioProfile" AS "mi_audioProfile",
-      mi."fileSize" AS "mi_fileSize", mi."duration" AS "mi_duration",
-      mi."summary" AS "mi_summary", mi."contentRating" AS "mi_contentRating",
-      mi."rating" AS "mi_rating", mi."ratingImage" AS "mi_ratingImage",
-      mi."audienceRating" AS "mi_audienceRating", mi."audienceRatingImage" AS "mi_audienceRatingImage",
-      mi."studio" AS "mi_studio", mi."playCount" AS "mi_playCount",
-      mi."lastPlayedAt" AS "mi_lastPlayedAt", mi."addedAt" AS "mi_addedAt",
-      mi."genres" AS "mi_genres",
-      ms."id" AS "ms_id", ms."name" AS "ms_name", ms."type" AS "ms_type"
-    ${fromClause}
-    ORDER BY ${orderCol} ${orderDir} NULLS LAST, wh."id" ASC
-    LIMIT ${limit + 1} OFFSET ${clampSkip((page - 1) * limit)}`,
+    pageSql,
     ...params,
   );
 

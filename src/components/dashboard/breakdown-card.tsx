@@ -234,7 +234,7 @@ export function BreakdownCard({
       value={localType ?? "all"}
       onValueChange={(v) => setLocalType(v === "all" ? undefined : (v as MediaType))}
     >
-      <SelectTrigger size="sm" className="w-24 text-xs">
+      <SelectTrigger size="sm" className="w-28 text-xs">
         <SelectValue />
       </SelectTrigger>
       <SelectContent>

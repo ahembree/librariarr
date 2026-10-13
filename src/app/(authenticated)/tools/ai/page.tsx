@@ -5,8 +5,20 @@ import Link from "next/link";
 import { Sparkles, Send, Loader2, Square, User, Settings as SettingsIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { MarkdownLite } from "@/components/ai/markdown-lite";
-import { EvidenceCard } from "@/components/ai/evidence-card";
+import { Skeleton } from "@/components/ui/skeleton";
+import { lazyComponent } from "@/components/lazy-component";
 import type { AiEvidence, AiChatResponse } from "@/lib/ai/types";
+
+// Loaded on demand: evidence charts are built on recharts (~500 KB of script),
+// and nothing renders one until an answer arrives.
+const EvidenceCard = lazyComponent(
+  () => import("@/components/ai/evidence-card").then((m) => m.EvidenceCard),
+  EvidenceCardSkeleton,
+);
+
+function EvidenceCardSkeleton() {
+  return <Skeleton className="h-48 w-full rounded-md" />;
+}
 
 interface ChatMessage {
   role: "user" | "assistant";

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, useTransition } from "react";
+import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, useTransition, memo } from "react";
 import { useRouter } from "next/navigation";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useChipColors } from "@/components/chip-color-provider";
@@ -26,7 +26,10 @@ import { EmptyState } from "@/components/empty-state";
 import { SyncLibraryButton } from "@/components/sync-library-button";
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
 import { useFilterPersistence } from "@/hooks/use-filter-persistence";
+import { sameFilters } from "@/lib/filters/same-filters";
 import { useRealtime } from "@/hooks/use-realtime";
+import { useListFetch } from "@/hooks/use-list-fetch";
+import { useDeferredOverscan } from "@/hooks/use-deferred-overscan";
 import { fetchListProgressively } from "@/lib/media/progressive-load";
 
 const SORT_OPTIONS = [
@@ -49,11 +52,89 @@ const GAP = 16; // 1rem grid gap
 const CARD_BORDER = 2; // 1px top + 1px bottom border on Card
 const QUALITY_BAR_HEIGHT = 12; // h-1 quality bar between poster and content
 
+interface MovieGridCardProps {
+  movie: MediaListItem;
+  priority: boolean;
+  show: ReturnType<typeof useCardDisplay>["show"];
+  getHex: ReturnType<typeof useChipColors>["getHex"];
+  serverChips: boolean;
+  onNavigate: () => void;
+}
+
+/**
+ * One movie in the grid, memoised on its row and the page's stable callbacks.
+ * The page re-renders on every virtualizer range change and again when the
+ * rest of the library lands; `MediaCard`'s own memo never held through that,
+ * since its metadata, quality bar and hover content are new elements each
+ * render, so every mounted card re-rendered each time.
+ */
+const MovieGridCard = memo(function MovieGridCard({ movie, priority, show, getHex, serverChips, onNavigate }: MovieGridCardProps) {
+  return (
+    <MediaCard
+      priority={priority}
+      imageUrl={`/api/media/${movie.id}/image`}
+      title={movie.title}
+      fallbackIcon="movie"
+      href={`/library/movies/${movie.id}`}
+      onClick={onNavigate}
+      metadata={
+        <MetadataLine stacked>
+          {show("metadata", "year") && movie.year && <MetadataItem icon={<Calendar />}>{movie.year}</MetadataItem>}
+          {show("metadata", "duration") && formatDuration(movie.duration) && <MetadataItem icon={<Clock />}>{formatDuration(movie.duration)}</MetadataItem>}
+          {show("metadata", "fileSize") && formatFileSize(movie.fileSize) && <MetadataItem icon={<HardDrive />}>{formatFileSize(movie.fileSize)}</MetadataItem>}
+        </MetadataLine>
+      }
+      qualityBar={
+        show("badges", "resolution") || show("badges", "dynamicRange") || show("badges", "audioProfile")
+          ? [
+              ...(show("badges", "resolution") && movie.resolution
+                ? [{ color: getHex("resolution", formatResolution(movie.resolution)), weight: 1, label: formatResolution(movie.resolution) }]
+                : []),
+              ...(show("badges", "dynamicRange") && movie.dynamicRange && movie.dynamicRange !== "SDR"
+                ? [{ color: getHex("dynamicRange", movie.dynamicRange), weight: 1, label: movie.dynamicRange }]
+                : []),
+              ...(show("badges", "audioProfile") && movie.audioProfile
+                ? [{ color: getHex("audioProfile", movie.audioProfile), weight: 1, label: movie.audioProfile }]
+                : []),
+            ]
+          : undefined
+      }
+      servers={serverChips ? movie.servers : undefined}
+      hoverContent={
+        <MediaHoverPopover
+          summaryUrl={`/api/media/${movie.id}`}
+          data={{
+            title: movie.title,
+            year: movie.year,
+            contentRating: movie.contentRating,
+            rating: movie.rating,
+            audienceRating: movie.audienceRating,
+            ratingImage: movie.ratingImage,
+            audienceRatingImage: movie.audienceRatingImage,
+            duration: movie.duration,
+            resolution: movie.resolution,
+            dynamicRange: movie.dynamicRange,
+            audioProfile: movie.audioProfile,
+            fileSize: movie.fileSize,
+            genres: movie.genres,
+            studio: movie.studio,
+            playCount: movie.playCount,
+            lastPlayedAt: movie.lastPlayedAt,
+            addedAt: movie.addedAt,
+            servers: movie.servers,
+          }}
+        />
+      }
+    />
+  );
+});
+
 export default function MoviesPage() {
   const router = useRouter();
   const [items, setItems] = useState<MediaListItem[]>([]);
-  const [filters, setFilters] = useState<Record<string, string>>({});
   const { savedFilters, persistFilters } = useFilterPersistence("filters-/library/movies");
+  // Start from the restored filters, so the first fetch is already filtered.
+  const [filters, setFilters] = useState<Record<string, string>>(savedFilters);
   const [sortBy, setSortBy] = useState("title");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
   const [loading, setLoading] = useState(true);
@@ -136,11 +217,12 @@ export default function MoviesPage() {
     return Math.round(posterHeight + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
   }, [actualColumns]);
 
+  const overscan = useDeferredOverscan(!loading && items.length > 0);
   const virtualizer = useVirtualizer({
     count: rowCount,
     getScrollElement: () => scrollElementRef.current,
     estimateSize,
-    overscan: 3,
+    overscan,
     scrollMargin,
   });
   // Re-measure when columns change
@@ -211,16 +293,23 @@ export default function MoviesPage() {
 
       // Paint the first screenful, then fill in the rest behind it — the whole
       // library in one response meant nothing rendered until all of it landed.
+      let firstChunk = true;
       await fetchListProgressively<MediaListItem>(
         "/api/media/movies",
         params,
         (loaded, done) => {
           if (token !== reqToken.current) return;
-          startTransition(() => {
+          const apply = () => {
             setItems(loaded);
             setLoading(false);
             if (done) setLoadingRest(false);
-          });
+          };
+          // The screenful the user is waiting for renders as a normal update; a
+          // transition renders in interruptible slices and only delayed it. The
+          // rest of the library stays a transition so it never blocks input.
+          if (firstChunk) apply();
+          else startTransition(apply);
+          firstChunk = false;
         },
       );
     } catch (error) {
@@ -234,10 +323,8 @@ export default function MoviesPage() {
 
   useRealtime("sync:completed", fetchMovies);
 
-  useEffect(() => {
-    const timeout = setTimeout(fetchMovies, 0);
-    return () => clearTimeout(timeout);
-  }, [fetchMovies]);
+  // No debounce on changes: this page has always refetched at once.
+  useListFetch(fetchMovies, 0);
 
   const handleLetterClick = useCallback((letter: string) => {
     if (viewMode === "cards") {
@@ -269,7 +356,7 @@ export default function MoviesPage() {
       </div>
 
       <MediaFilters
-        onFilterChange={(f) => { setFilters(f); persistFilters(f); }}
+        onFilterChange={(f) => { setFilters((prev) => (sameFilters(prev, f) ? prev : f)); persistFilters(f); }}
         externalFilters={Object.keys(savedFilters).length > 0 ? savedFilters : undefined}
         prefix={
           <LibraryToolbar
@@ -374,62 +461,14 @@ export default function MoviesPage() {
                         }}
                       >
                         {rowItems.map((movie) => (
-                          <MediaCard
+                          <MovieGridCard
                             key={movie.id}
+                            movie={movie}
                             priority={virtualRow.index < PRIORITY_ROWS}
-                            imageUrl={`/api/media/${movie.id}/image`}
-                            title={movie.title}
-                            fallbackIcon="movie"
-                            href={`/library/movies/${movie.id}`}
-                            onClick={() => { markChildNavigation(); }}
-                            metadata={
-                              <MetadataLine stacked>
-                                {show("metadata", "year") && movie.year && <MetadataItem icon={<Calendar />}>{movie.year}</MetadataItem>}
-                                {show("metadata", "duration") && formatDuration(movie.duration) && <MetadataItem icon={<Clock />}>{formatDuration(movie.duration)}</MetadataItem>}
-                                {show("metadata", "fileSize") && formatFileSize(movie.fileSize) && <MetadataItem icon={<HardDrive />}>{formatFileSize(movie.fileSize)}</MetadataItem>}
-                              </MetadataLine>
-                            }
-                            qualityBar={
-                              show("badges", "resolution") || show("badges", "dynamicRange") || show("badges", "audioProfile")
-                                ? [
-                                    ...(show("badges", "resolution") && movie.resolution
-                                      ? [{ color: getHex("resolution", formatResolution(movie.resolution)), weight: 1, label: formatResolution(movie.resolution) }]
-                                      : []),
-                                    ...(show("badges", "dynamicRange") && movie.dynamicRange && movie.dynamicRange !== "SDR"
-                                      ? [{ color: getHex("dynamicRange", movie.dynamicRange), weight: 1, label: movie.dynamicRange }]
-                                      : []),
-                                    ...(show("badges", "audioProfile") && movie.audioProfile
-                                      ? [{ color: getHex("audioProfile", movie.audioProfile), weight: 1, label: movie.audioProfile }]
-                                      : []),
-                                  ]
-                                : undefined
-                            }
-                            servers={showServers && servers.length > 1 ? movie.servers : undefined}
-                            hoverContent={
-                              <MediaHoverPopover
-                                summaryUrl={`/api/media/${movie.id}`}
-                                data={{
-                                  title: movie.title,
-                                  year: movie.year,
-                                  contentRating: movie.contentRating,
-                                  rating: movie.rating,
-                                  audienceRating: movie.audienceRating,
-                                  ratingImage: movie.ratingImage,
-                                  audienceRatingImage: movie.audienceRatingImage,
-                                  duration: movie.duration,
-                                  resolution: movie.resolution,
-                                  dynamicRange: movie.dynamicRange,
-                                  audioProfile: movie.audioProfile,
-                                  fileSize: movie.fileSize,
-                                  genres: movie.genres,
-                                  studio: movie.studio,
-                                  playCount: movie.playCount,
-                                  lastPlayedAt: movie.lastPlayedAt,
-                                  addedAt: movie.addedAt,
-                                  servers: movie.servers,
-                                }}
-                              />
-                            }
+                            show={show}
+                            getHex={getHex}
+                            serverChips={showServers && servers.length > 1}
+                            onNavigate={markChildNavigation}
                           />
                         ))}
                       </div>

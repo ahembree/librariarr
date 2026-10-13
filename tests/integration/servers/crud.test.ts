@@ -104,6 +104,35 @@ describe("Server CRUD endpoints", () => {
       expect(body.servers[0].libraries).toHaveLength(1);
     });
 
+    it("returns only each server's newest sync job", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id, { name: "My Plex" });
+      const other = await createTestServer(user.id, { name: "No syncs yet" });
+      const prisma = getTestPrisma();
+      await prisma.syncJob.createMany({
+        data: [
+          { mediaServerId: server.id, status: "COMPLETED", startedAt: new Date("2026-01-01T00:00:00Z") },
+          { mediaServerId: server.id, status: "RUNNING", startedAt: new Date("2026-01-03T00:00:00Z") },
+          { mediaServerId: server.id, status: "FAILED", startedAt: new Date("2026-01-02T00:00:00Z") },
+        ],
+      });
+
+      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+
+      const response = await callRoute(GET, { url: "/api/servers" });
+      const body = await expectJson<{
+        servers: { id: string; syncJobs: { status: string; startedAt: string }[] }[];
+      }>(response, 200);
+
+      const byId = new Map(body.servers.map((s) => [s.id, s]));
+      expect(byId.get(server.id)!.syncJobs).toHaveLength(1);
+      expect(byId.get(server.id)!.syncJobs[0]).toMatchObject({
+        status: "RUNNING",
+        startedAt: "2026-01-03T00:00:00.000Z",
+      });
+      expect(byId.get(other.id)!.syncJobs).toEqual([]);
+    });
+
     it("does not return servers belonging to another user", async () => {
       const user1 = await createTestUser({ plexId: "user1" });
       const user2 = await createTestUser({ plexId: "user2" });

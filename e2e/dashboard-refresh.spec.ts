@@ -216,6 +216,44 @@ test.describe("dashboard refresh", () => {
       .toBe(true);
   });
 
+  test("a server picked during the first stats load shows that server, not a failure", async ({ page }) => {
+    await setup(page);
+    // Hold the first (all-servers) stats request and the picked server's one,
+    // so the first can be answered — and dropped as stale — while the second
+    // is still in flight. Registered after setup(), so it takes precedence;
+    // anything else falls through to setup's stub.
+    const held: Record<string, () => void> = {};
+    await page.route(
+      (url) => isStats(url.toString()),
+      async (route) => {
+        const key = new URL(route.request().url()).searchParams.get("serverId") ?? "all";
+        if (key in held || !["all", "srv-a"].includes(key)) return route.fallback();
+        await new Promise<void>((resolve) => {
+          held[key] = resolve;
+        });
+        return route.fallback();
+      },
+    );
+
+    await page.goto("/");
+    await expect.poll(() => "all" in held).toBe(true);
+    await selectServer(page, "Alpha");
+    await expect.poll(() => "srv-a" in held).toBe(true);
+
+    const firstAnswered = page.waitForResponse(
+      (res) => isStats(res.url()) && !new URL(res.url()).searchParams.has("serverId"),
+    );
+    held.all();
+    await firstAnswered;
+    // Every other first-load request is answered by now; the page used to
+    // read "settled with no stats" as a failure and replace the dashboard.
+    await page.waitForTimeout(500);
+    await expect(page.getByText("Failed to load dashboard")).toHaveCount(0);
+
+    held["srv-a"]();
+    await expect(movieTile(page)).toContainText(String(SERVER_A_MOVIES));
+  });
+
   test("a type filter whose type has gone falls back to all types", async ({ page }) => {
     const h = await setup(page);
     h.setTypes(["MOVIE", "SERIES"]);

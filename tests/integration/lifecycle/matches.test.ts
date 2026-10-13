@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
-import { cleanDatabase, disconnectTestDb } from "../../setup/test-db";
+import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
 import {
   callRoute,
@@ -308,5 +308,60 @@ describe("GET /api/lifecycle/rules/matches", () => {
     expect(body.ruleMatches[0].ruleSet.name).toBe("Empty Rule");
     expect(body.ruleMatches[0].count).toBe(0);
     expect(body.ruleMatches[0].items).toEqual([]);
+  });
+
+  describe("items", () => {
+    it("sends each match's stored snapshot with the match's detectedAt, newest first", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "MOVIE" });
+      const older = await createTestMediaItem(library.id, { type: "MOVIE" });
+      const newer = await createTestMediaItem(library.id, { type: "MOVIE" });
+      const ruleSet = await createTestRuleSet(user.id, { enabled: true });
+      const snapshot = {
+        id: newer.id,
+        title: "Rear Window \"1954\", {restored}",
+        year: 1954,
+        parentTitle: null,
+        servers: [{ serverId: server.id, serverName: "Den" }],
+        matchedCriteria: [{ ruleId: "r1", field: "Year", operator: "<", value: "1960" }],
+        // A snapshot that carries its own detectedAt takes the match's.
+        detectedAt: "2000-01-01T00:00:00.000Z",
+      };
+      const a = await createTestRuleMatch(ruleSet.id, older.id, { id: older.id, title: "Older" });
+      const b = await createTestRuleMatch(ruleSet.id, newer.id, snapshot);
+      const prisma = getTestPrisma();
+      const olderAt = new Date("2026-01-01T00:00:00.000Z");
+      const newerAt = new Date("2026-02-01T00:00:00.000Z");
+      await prisma.ruleMatch.update({ where: { id: a.id }, data: { detectedAt: olderAt } });
+      await prisma.ruleMatch.update({ where: { id: b.id }, data: { detectedAt: newerAt } });
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      const body = await expectJson<{ ruleMatches: { items: Record<string, unknown>[]; count: number }[] }>(
+        await callRoute(GET, { url: "/api/lifecycle/rules/matches" }),
+        200,
+      );
+      expect(body.ruleMatches[0].count).toBe(2);
+      expect(body.ruleMatches[0].items).toEqual([
+        { ...snapshot, detectedAt: newerAt.toISOString() },
+        { id: older.id, title: "Older", detectedAt: olderAt.toISOString() },
+      ]);
+    });
+
+    it("sends a match with an empty snapshot as its detectedAt alone", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "MOVIE" });
+      const item = await createTestMediaItem(library.id, { type: "MOVIE" });
+      const ruleSet = await createTestRuleSet(user.id, { enabled: true });
+      const match = await createTestRuleMatch(ruleSet.id, item.id, {});
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      const body = await expectJson<{ ruleMatches: { items: unknown[] }[] }>(
+        await callRoute(GET, { url: "/api/lifecycle/rules/matches" }),
+        200,
+      );
+      expect(body.ruleMatches[0].items).toEqual([{ detectedAt: match.detectedAt.toISOString() }]);
+    });
   });
 });

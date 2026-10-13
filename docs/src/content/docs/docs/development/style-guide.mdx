@@ -285,8 +285,26 @@ The viewport uses `viewport-fit=cover`; utilities pad content clear of notches a
 
 | Class | Padding |
 |-|-|
-| `.pt-safe` | `env(safe-area-inset-top)` — mobile header, drawer |
-| `.pb-safe` | `env(safe-area-inset-bottom)` — main scroll container, drawer |
+| `.pt-safe` | `env(safe-area-inset-top)` — mobile header, drawer, full-screen item panel |
+| `.pb-safe` | `env(safe-area-inset-bottom)` — main scroll container, drawer, filter sheet, session sheet |
+| `.px-safe` | `env(safe-area-inset-left/right)` — the app frame and the full-screen item panel, for the notch in landscape |
+| `.pl-safe` | `env(safe-area-inset-left)` — the navigation drawer |
+
+These are plain (unlayered) classes, so they override a padding utility on the same element; where an element also needs its own padding, add the inset to it instead (`pb-[calc(1rem+env(safe-area-inset-bottom))]`).
+
+### Viewport Heights
+
+Size frames and caps with `dvh`, never `vh`: a phone browser's `100vh` is its height with the toolbars hidden, so a frame sized `h-screen` runs behind the toolbars while they show, and a dialog or sheet capped at `85vh` can be taller than the screen. Use `h-dvh` and `max-h-[85dvh]`. `tests/unit/app/viewport-units.test.ts` refuses `h-screen` and any `max-h-[…vh]`.
+
+### Phone Widths
+
+Every page must fit a 320px screen without scrolling sideways. The shell's `<main>` clips horizontal overflow, so anything too wide is either cut off at the screen edge or, inside a page's own scroll box, makes the whole page slide left and right. `e2e/mobile-layout.spec.ts` checks every page at 375px and 320px.
+
+- **Toolbars wrap.** A row of buttons uses `flex flex-wrap` with a gap, never a single unwrapped `flex` row.
+- **Card headers stack below `sm`.** A header holding a title, chips and action buttons is `flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between`, with `min-w-0` on the title block and `flex-wrap` on its chip row.
+- **Tab strips scroll inside themselves.** A segmented control or tab bar carries `max-w-full overflow-x-auto` so it scrolls within its own box rather than widening the page.
+- **Tables scroll sideways, the page does not.** Wide tables sit in their own `overflow-x-auto` wrapper.
+- **Truncation is for secondary text.** A button's label or a figure that matters wraps (`line-clamp-2`) on a phone rather than ending in "…".
 
 ---
 

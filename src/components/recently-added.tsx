@@ -340,7 +340,7 @@ export function RecentlyAdded({
                 value={localType ?? "all"}
                 onValueChange={(v) => setLocalType(v === "all" ? undefined : v as "MOVIE" | "SERIES" | "MUSIC")}
               >
-                <SelectTrigger className="h-7 w-24 text-xs">
+                <SelectTrigger className="h-7 w-28 text-xs">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>

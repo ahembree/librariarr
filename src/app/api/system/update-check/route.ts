@@ -13,5 +13,6 @@ export async function GET() {
   return NextResponse.json({
     updateAvailable: result.updateAvailable,
     latestVersion: result.latestVersion,
+    releaseUrl: result.releaseUrl,
   });
 }

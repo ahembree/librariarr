@@ -98,6 +98,13 @@ function NavItemLink({
   const link = (
     <Link
       href={item.href}
+      // Full prefetch, not the default: every page under (authenticated) is
+      // dynamic (the layout checks the session), so the default prefetch stops
+      // at the loading boundary and a click still waits on a server round-trip
+      // plus the page's JS before anything of the page renders. The page
+      // segments are client components that fetch their own data, so the full
+      // payload is small and holds nothing that goes stale.
+      prefetch
       className={cn(
         "group relative flex items-center rounded-[9px] text-[13.5px] font-medium transition-[color,background-color,transform] duration-150 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
         isCollapsed ? "h-[38px] w-[38px] justify-center" : "h-[38px] gap-[11px] px-[11px]",
@@ -367,7 +374,7 @@ export function Sidebar({ mobileOpen, onMobileOpenChange, initialCollapsed = fal
           >
             <SheetTitle className="sr-only">Navigation</SheetTitle>
             <TooltipProvider>
-              <div className="pt-safe pb-safe relative flex h-full flex-col overflow-hidden bg-sidebar">
+              <div className="pt-safe pb-safe pl-safe relative flex h-full flex-col overflow-hidden bg-sidebar">
                 {sidebarInner(true)}
               </div>
             </TooltipProvider>
@@ -383,7 +390,7 @@ export function Sidebar({ mobileOpen, onMobileOpenChange, initialCollapsed = fal
       <SearchPalette open={searchOpen} onOpenChange={setSearchOpen} />
       <div
         className={cn(
-          "relative flex h-screen flex-col overflow-hidden border-r bg-sidebar transition-[width] duration-300 ease-out",
+          "relative flex h-dvh flex-col overflow-hidden border-r bg-sidebar transition-[width] duration-300 ease-out",
           collapsed ? "w-[72px]" : "w-[248px]"
         )}
       >

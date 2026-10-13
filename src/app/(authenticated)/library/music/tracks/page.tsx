@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { MediaTable } from "@/components/media-table";
 import { MediaFilters } from "@/components/media-filters";
+import { sameFilters } from "@/lib/filters/same-filters";
 import { MediaCard, CARD_CONTENT_HEIGHT, PRIORITY_ROWS } from "@/components/media-card";
 import { useChipColors } from "@/components/chip-color-provider";
 import { Music, Disc3, ListMusic, Clock, HardDrive } from "lucide-react";
@@ -15,6 +16,8 @@ import { useCardSize, estimateContentWidth } from "@/hooks/use-card-size";
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { useServers } from "@/hooks/use-servers";
 import { useRealtime } from "@/hooks/use-realtime";
+import { useListFetch } from "@/hooks/use-list-fetch";
+import { useDeferredOverscan } from "@/hooks/use-deferred-overscan";
 import { fetchListProgressively } from "@/lib/media/progressive-load";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { formatFileSize, formatDuration } from "@/lib/format";
@@ -106,16 +109,22 @@ export default function AllTracksPage() {
       });
       // Paint the first screenful, then fill in the rest behind it — the whole
       // library in one response meant nothing rendered until all of it landed.
+      let firstChunk = true;
       await fetchListProgressively<MediaListItem>(
         "/api/media/music",
         params,
         (loaded, done) => {
           if (token !== reqToken.current) return;
-          startTransition(() => {
+          const apply = () => {
             setItems(loaded);
             setLoading(false);
             if (done) setLoadingRest(false);
-          });
+          };
+          // First screenful as a normal update (a transition only delayed it);
+          // the rest of the library stays a transition.
+          if (firstChunk) apply();
+          else startTransition(apply);
+          firstChunk = false;
         },
       );
     } catch (error) {
@@ -127,10 +136,7 @@ export default function AllTracksPage() {
     }
   }, [sortBy, sortOrder, filters]);
 
-  useEffect(() => {
-    const timeout = setTimeout(fetchTracks, 300);
-    return () => clearTimeout(timeout);
-  }, [fetchTracks]);
+  useListFetch(fetchTracks);
 
   // Auto-update when real-time sync adds/removes items — no manual refresh.
   useRealtime("sync:completed", fetchTracks);
@@ -160,12 +166,13 @@ export default function AllTracksPage() {
     return Math.round(posterHeight + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
   }, [actualColumns]);
 
+  const overscan = useDeferredOverscan(!loading && rowCount > 0);
   const virtualizer = useVirtualizer({
     count: rowCount,
     getScrollElement: () => scrollElementRef.current,
     estimateSize,
     scrollMargin,
-    overscan: 3,
+    overscan,
   });
 
   useEffect(() => {
@@ -193,7 +200,7 @@ export default function AllTracksPage() {
       <LibraryTabs tabs={MUSIC_TABS} active="/library/music/tracks" />
 
       <MediaFilters
-        onFilterChange={setFilters}
+        onFilterChange={(f) => setFilters((prev) => (sameFilters(prev, f) ? prev : f))}
         mediaType="MUSIC"
         prefix={
           <LibraryToolbar

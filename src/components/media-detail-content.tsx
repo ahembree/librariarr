@@ -193,19 +193,30 @@ interface MediaDetailContentProps {
    * episode has one history section instead of two views of the same plays.
    */
   historySection?: React.ReactNode;
+  /**
+   * `item` is the full record from `/api/media/[id]` (streams included), so
+   * the detail fetch is skipped. The movie, episode and track pages load that
+   * record themselves and used to have it fetched a second time here, one
+   * round trip after the first, before the streams and credits appeared.
+   */
+  detailLoaded?: boolean;
 }
 
-export function MediaDetailContent({ item, children, hideVideo, compact, matchedCriteriaSection, isAggregate, historySection }: MediaDetailContentProps) {
+function audioStreamCount(streams: MediaItemWithRelations["streams"] | undefined): number {
+  return (streams ?? []).filter((s) => s.streamType === 2).length;
+}
+
+export function MediaDetailContent({ item, children, hideVideo, compact, matchedCriteriaSection, isAggregate, historySection, detailLoaded }: MediaDetailContentProps) {
   const { getBadgeStyle } = useChipColors();
 
   // Fetch full detail data (summary, tagline, genres, directors, etc.)
   const [detailData, setDetailData] = useState<Partial<MediaItemWithRelations> | null>(null);
-  const [streams, setStreams] = useState<MediaItemWithRelations["streams"]>([]);
+  const [streams, setStreams] = useState<MediaItemWithRelations["streams"]>(() => (detailLoaded ? item.streams ?? [] : []));
   const [history, setHistory] = useState<WatchHistoryEntry[]>([]);
   const [serverHistories, setServerHistories] = useState<ServerHistoryEntry[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [videoOpen, setVideoOpen] = useState(!compact);
-  const [audioOpen, setAudioOpen] = useState(!compact);
+  const [audioOpen, setAudioOpen] = useState(() => (detailLoaded ? audioStreamCount(item.streams) <= 2 : !compact));
   const [metadataMap, setMetadataMap] = useState<Record<string, Record<string, unknown> | null>>({});
   const [metadataLoadingMap, setMetadataLoadingMap] = useState<Record<string, boolean>>({});
   const [metadataOpenMap, setMetadataOpenMap] = useState<Record<string, boolean>>({});
@@ -237,8 +248,7 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
       if (data.item) {
         const itemStreams = data.item.streams ?? [];
         setStreams(itemStreams);
-        const audioCount = itemStreams.filter((s: { streamType: number }) => s.streamType === 2).length;
-        setAudioOpen(audioCount <= 2);
+        setAudioOpen(audioStreamCount(itemStreams) <= 2);
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         const { streams: _st, library: _l, ...rest } = data.item;
         setDetailData(rest as Partial<MediaItemWithRelations>);
@@ -286,7 +296,8 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
   if (prevItemId !== item.id) {
     setPrevItemId(item.id);
     setDetailData(null);
-    setStreams([]);
+    setStreams(detailLoaded ? item.streams ?? [] : []);
+    if (detailLoaded) setAudioOpen(audioStreamCount(item.streams) <= 2);
     setHistory([]);
     setMetadataMap({});
     setMetadataLoadingMap({});
@@ -302,13 +313,13 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
     const token = ++reqToken.current;
     void (async () => {
       await Promise.all([
-        fetchItemDetail(item.id, token),
+        ...(detailLoaded ? [] : [fetchItemDetail(item.id, token)]),
         // The slot brings its own history; the live aggregate would only be
         // fetched to be thrown away.
         ...(hasHistorySection ? [] : [fetchHistory(item.id, token)]),
       ]);
     })();
-  }, [item.id, isAggregate, hasHistorySection, fetchItemDetail, fetchHistory]);
+  }, [item.id, isAggregate, hasHistorySection, detailLoaded, fetchItemDetail, fetchHistory]);
 
   return (
     <div className="mt-6 space-y-6">

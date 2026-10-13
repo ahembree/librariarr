@@ -7,6 +7,7 @@ import { useChipColors } from "@/components/chip-color-provider";
 import { normalizeResolutionLabel } from "@/lib/resolution";
 import { MediaTable } from "@/components/media-table";
 import { MediaFilters } from "@/components/media-filters";
+import { sameFilters } from "@/lib/filters/same-filters";
 import { MediaCard, CARD_CONTENT_HEIGHT, PRIORITY_ROWS } from "@/components/media-card";
 import { Tv, Clock, HardDrive } from "lucide-react";
 import { LibraryToolbar } from "@/components/library-toolbar";
@@ -15,6 +16,8 @@ import { useCardSize, BREAKPOINTS, estimateContentWidth } from "@/hooks/use-card
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { useServers } from "@/hooks/use-servers";
 import { useRealtime } from "@/hooks/use-realtime";
+import { useListFetch } from "@/hooks/use-list-fetch";
+import { useDeferredOverscan } from "@/hooks/use-deferred-overscan";
 import { fetchListProgressively } from "@/lib/media/progressive-load";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { formatFileSize, formatDuration } from "@/lib/format";
@@ -129,11 +132,12 @@ export default function AllEpisodesPage() {
     return Math.round(posterHeight + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
   }, [landscapeColumns]);
 
+  const overscan = useDeferredOverscan(!loading && rowCount > 0);
   const virtualizer = useVirtualizer({
     count: rowCount,
     getScrollElement: () => scrollElementRef.current,
     estimateSize,
-    overscan: 3,
+    overscan,
     scrollMargin,
   });
 
@@ -176,16 +180,22 @@ export default function AllEpisodesPage() {
       });
       // Paint the first screenful, then fill in the rest behind it — the whole
       // library in one response meant nothing rendered until all of it landed.
+      let firstChunk = true;
       await fetchListProgressively<MediaListItem>(
         "/api/media/series",
         params,
         (loaded, done) => {
           if (token !== reqToken.current) return;
-          startTransition(() => {
+          const apply = () => {
             setItems(loaded);
             setLoading(false);
             if (done) setLoadingRest(false);
-          });
+          };
+          // First screenful as a normal update (a transition only delayed it);
+          // the rest of the library stays a transition.
+          if (firstChunk) apply();
+          else startTransition(apply);
+          firstChunk = false;
         },
       );
     } catch (error) {
@@ -197,10 +207,7 @@ export default function AllEpisodesPage() {
     }
   }, [filters, sortBy, sortOrder]);
 
-  useEffect(() => {
-    const timeout = setTimeout(() => fetchEpisodes(), 300);
-    return () => clearTimeout(timeout);
-  }, [fetchEpisodes]);
+  useListFetch(fetchEpisodes);
 
   // Auto-update when real-time sync adds/removes items — no manual refresh.
   useRealtime("sync:completed", fetchEpisodes);
@@ -214,7 +221,7 @@ export default function AllEpisodesPage() {
       <LibraryTabs tabs={SERIES_TABS} active="/library/series/episodes" />
 
       <MediaFilters
-        onFilterChange={setFilters}
+        onFilterChange={(f) => setFilters((prev) => (sameFilters(prev, f) ? prev : f))}
         mediaType="SERIES"
         prefix={
           <LibraryToolbar

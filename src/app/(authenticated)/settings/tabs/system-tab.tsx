@@ -31,10 +31,12 @@ import {
   Newspaper,
   Trash2,
 } from "lucide-react";
-import type { SystemInfo, ImageCacheStats, ReleaseNote } from "../types";
+import type { SystemInfo, ImageCacheStats, ReleaseNote, UpdateCheck } from "../types";
 
 export interface SystemTabProps {
   systemInfo: SystemInfo | null;
+  /** Loaded separately (it asks GitHub); null until it answers. */
+  updateCheck: UpdateCheck | null;
   imageCacheStats: ImageCacheStats | null;
   clearingImageCache: boolean;
   onClearImageCache: () => void;
@@ -189,6 +191,7 @@ function ReleaseNoteRow({ note }: { note: ReleaseNote }) {
 
 export function SystemTab({
   systemInfo,
+  updateCheck,
   imageCacheStats,
   clearingImageCache,
   onClearImageCache,
@@ -212,18 +215,18 @@ export function SystemTab({
             <div>
               <p className="text-sm text-muted-foreground">Application Version</p>
               <p className="font-medium">{systemInfo?.appVersion ?? "..."}</p>
-              {systemInfo?.updateInfo?.updateAvailable && systemInfo.updateInfo.latestVersion && (
+              {updateCheck?.updateAvailable && updateCheck.latestVersion && (
                 <a
-                  href={systemInfo.updateInfo.releaseUrl ?? "#"}
+                  href={updateCheck.releaseUrl ?? "#"}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="mt-1 inline-flex items-center gap-1.5 rounded-md bg-emerald-500/15 px-2 py-0.5 text-xs font-medium text-emerald-400 hover:bg-emerald-500/25 transition-colors"
                 >
                   <ArrowUpCircle className="h-3 w-3" />
-                  v{systemInfo.updateInfo.latestVersion} available
+                  v{updateCheck.latestVersion} available
                 </a>
               )}
-              {systemInfo?.updateInfo && !systemInfo.updateInfo.updateAvailable && systemInfo.updateInfo.latestVersion && (
+              {updateCheck && !updateCheck.updateAvailable && updateCheck.latestVersion && (
                 <p className="mt-1 inline-flex items-center gap-1.5 text-xs text-muted-foreground">
                   <CheckCircle2 className="h-3 w-3" />
                   Up to date

@@ -1,4 +1,3 @@
-import { appCache } from "@/lib/cache/memory-cache";
 import { logger } from "@/lib/logger";
 
 const GITHUB_REPO = "ahembree/librariarr";
@@ -6,6 +5,79 @@ const CACHE_KEY = "version:latest";
 const CHANGELOG_CACHE_KEY = "version:changelog";
 const CACHE_TTL_MS = 3_600_000; // 1 hour
 const REQUEST_TIMEOUT_MS = 10_000;
+/**
+ * How soon a failed lookup is retried while GitHub has never answered — the
+ * boot warm-up racing the network coming up, or a rate limit. Without it that
+ * one failure stood for the full hour.
+ */
+const FIRST_LOOKUP_RETRY_MS = 5 * 60_000;
+
+/** The last answer one GitHub lookup gave, and the refresh in flight, if any. */
+interface Lookup {
+  hasValue: boolean;
+  value: unknown;
+  /** Whether GitHub has ever answered, i.e. `value` is not the fallback. */
+  answered: boolean;
+  /** When the next lookup is due. */
+  refreshAt: number;
+  refreshing: Promise<unknown> | null;
+}
+
+// Pinned to globalThis unconditionally: the background warm-up runs from
+// instrumentation, whose bundle gets its own copy of this module, so a
+// module-level store (or `appCache`) there is not the one the routes read.
+const globalForVersionLookups = globalThis as unknown as {
+  versionLookups: Map<string, Lookup> | undefined;
+};
+const lookups = (globalForVersionLookups.versionLookups ??= new Map<string, Lookup>());
+
+/**
+ * Answer from the last lookup straight away and, once it is older than
+ * `CACHE_TTL_MS`, refresh it in the background. Only the very first lookup
+ * waits on GitHub. Every page's sidebar and the Settings page ask for these,
+ * and with a plain TTL cache the first request after each hourly expiry
+ * waited on GitHub — up to the 10s timeout where GitHub is slow or blocked.
+ *
+ * `fetchFresh` returns null when GitHub could not answer; the last good
+ * answer is then kept (`fallback` stands in when there has never been one).
+ * The next attempt waits another `CACHE_TTL_MS`, or `FIRST_LOOKUP_RETRY_MS`
+ * while GitHub has never answered.
+ */
+function staleWhileRevalidate<T>(
+  key: string,
+  fetchFresh: () => Promise<T | null>,
+  fallback: () => T,
+): Promise<T> {
+  let entry = lookups.get(key);
+  if (!entry) {
+    entry = { hasValue: false, value: undefined, answered: false, refreshAt: 0, refreshing: null };
+    lookups.set(key, entry);
+  }
+  if (!entry.refreshing && Date.now() >= entry.refreshAt) {
+    const target = entry;
+    target.refreshing = fetchFresh()
+      .then((fresh) => {
+        if (fresh !== null) {
+          target.value = fresh;
+          target.answered = true;
+        } else if (!target.hasValue) {
+          target.value = fallback();
+        }
+        target.hasValue = true;
+        target.refreshAt = Date.now() + (target.answered ? CACHE_TTL_MS : FIRST_LOOKUP_RETRY_MS);
+        return target.value;
+      })
+      .finally(() => {
+        target.refreshing = null;
+      });
+  }
+  return (entry.hasValue ? Promise.resolve(entry.value) : entry.refreshing) as Promise<T>;
+}
+
+/** Forget every stored lookup. Tests only. */
+export function resetVersionLookups(): void {
+  lookups.clear();
+}
 
 export interface UpdateCheckResult {
   currentVersion: string;
@@ -50,7 +122,8 @@ export function compareSemver(a: string, b: string): -1 | 0 | 1 {
 
 /**
  * Check GitHub Releases for the latest version and compare against current.
- * Results are cached for 1 hour via appCache. Never throws.
+ * Answered from the last lookup, refreshed in the background hourly (see
+ * `staleWhileRevalidate`). Never throws.
  */
 export async function checkForUpdate(): Promise<UpdateCheckResult> {
   const currentVersion = process.env.NEXT_PUBLIC_APP_VERSION ?? "unknown";
@@ -66,15 +139,24 @@ export async function checkForUpdate(): Promise<UpdateCheckResult> {
     };
   }
 
-  return appCache.getOrSet<UpdateCheckResult>(
+  const unknownLatest = (): UpdateCheckResult => ({
+    currentVersion,
+    latestVersion: null,
+    updateAvailable: false,
+    releaseUrl: null,
+    releaseName: null,
+    checkedAt: new Date().toISOString(),
+  });
+
+  return staleWhileRevalidate<UpdateCheckResult>(
     CACHE_KEY,
     async () => {
+      // The timeout covers reading the body too: headers followed by a stalled
+      // body would otherwise hold this lookup, and every request waiting on
+      // it, forever.
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
       try {
-        const controller = new AbortController();
-        const timeout = setTimeout(
-          () => controller.abort(),
-          REQUEST_TIMEOUT_MS,
-        );
 
         const response = await fetch(
           `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`,
@@ -87,21 +169,13 @@ export async function checkForUpdate(): Promise<UpdateCheckResult> {
           },
         );
 
-        clearTimeout(timeout);
 
         if (!response.ok) {
           logger.debug(
             "VersionCheck",
             `GitHub API returned ${response.status}`,
           );
-          return {
-            currentVersion,
-            latestVersion: null,
-            updateAvailable: false,
-            releaseUrl: null,
-            releaseName: null,
-            checkedAt: new Date().toISOString(),
-          };
+          return null;
         }
 
         const data = await response.json();
@@ -124,17 +198,12 @@ export async function checkForUpdate(): Promise<UpdateCheckResult> {
         logger.debug("VersionCheck", "Failed to check for updates", {
           error: String(error),
         });
-        return {
-          currentVersion,
-          latestVersion: null,
-          updateAvailable: false,
-          releaseUrl: null,
-          releaseName: null,
-          checkedAt: new Date().toISOString(),
-        };
+        return null;
+      } finally {
+        clearTimeout(timeout);
       }
     },
-    CACHE_TTL_MS,
+    unknownLatest,
   );
 }
 
@@ -190,22 +259,23 @@ export function deduplicateReleaseBody(body: string): string {
 /**
  * Fetch changelog/release notes from GitHub Releases.
  * Returns up to 10 release notes: any newer versions, the current version,
- * and recent prior versions. Results are cached for 1 hour.
+ * and recent prior versions. Answered from the last lookup, refreshed in the
+ * background hourly (see `staleWhileRevalidate`).
  */
 export async function fetchChangelog(): Promise<ReleaseNote[]> {
   const currentVersion = process.env.NEXT_PUBLIC_APP_VERSION ?? "unknown";
 
   if (currentVersion === "unknown") return [];
 
-  return appCache.getOrSet<ReleaseNote[]>(
+  return staleWhileRevalidate<ReleaseNote[]>(
     CHANGELOG_CACHE_KEY,
     async () => {
+      // The timeout covers reading the body too: headers followed by a stalled
+      // body would otherwise hold this lookup, and every request waiting on
+      // it, forever.
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
       try {
-        const controller = new AbortController();
-        const timeout = setTimeout(
-          () => controller.abort(),
-          REQUEST_TIMEOUT_MS,
-        );
 
         const response = await fetch(
           `https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=25`,
@@ -218,18 +288,17 @@ export async function fetchChangelog(): Promise<ReleaseNote[]> {
           },
         );
 
-        clearTimeout(timeout);
 
         if (!response.ok) {
           logger.debug(
             "Changelog",
             `GitHub API returned ${response.status}`,
           );
-          return [];
+          return null;
         }
 
         const releases = await response.json();
-        if (!Array.isArray(releases)) return [];
+        if (!Array.isArray(releases)) return null;
 
         const notes: ReleaseNote[] = [];
 
@@ -267,16 +336,19 @@ export async function fetchChangelog(): Promise<ReleaseNote[]> {
         logger.debug("Changelog", "Failed to fetch changelog", {
           error: String(error),
         });
-        return [];
+        return null;
+      } finally {
+        clearTimeout(timeout);
       }
     },
-    CACHE_TTL_MS,
+    () => [],
   );
 }
 
 /**
- * Pre-warm the version check cache. Called by the background scheduler.
+ * Start the first GitHub lookups at boot, so no request waits on them.
+ * Called from instrumentation; a lookup still fresh is left alone.
  */
 export async function warmVersionCache(): Promise<void> {
-  await checkForUpdate();
+  await Promise.all([checkForUpdate(), fetchChangelog()]);
 }

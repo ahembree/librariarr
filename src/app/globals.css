@@ -406,6 +406,16 @@ tr[data-clickable]:hover > .data-table-pinned {
 .pb-safe {
   padding-bottom: env(safe-area-inset-bottom);
 }
+/* Landscape on a notched phone: viewport-fit=cover extends the page under
+   the notch on the left or right, so the shell and anything that spans the
+   screen's width keep their content beside it. */
+.px-safe {
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+.pl-safe {
+  padding-left: env(safe-area-inset-left);
+}
 /* Honor reduced-motion: skip entrance animation, keep the resting (visible)
    state. Animations use `both`, so without this the content could otherwise
    be left mid-keyframe. */

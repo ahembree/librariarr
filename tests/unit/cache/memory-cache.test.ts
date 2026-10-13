@@ -364,3 +364,14 @@ describe("appCache singleton", () => {
     appCache.invalidate("test-singleton");
   });
 });
+
+describe("appCache", () => {
+  // The job worker (started from instrumentation) and the route handlers load
+  // separate copies of this module; both must read and invalidate one cache.
+  it("is one instance per process however many times the module is loaded", async () => {
+    const first = (await import("@/lib/cache/memory-cache")).appCache;
+    vi.resetModules();
+    const second = (await import("@/lib/cache/memory-cache")).appCache;
+    expect(second).toBe(first);
+  });
+});

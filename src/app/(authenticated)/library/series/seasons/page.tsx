@@ -8,6 +8,7 @@ import { getChipBadgeStyle } from "@/lib/theme/chip-colors";
 import { MediaCard, CARD_CONTENT_HEIGHT, PRIORITY_ROWS } from "@/components/media-card";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
 import { MediaFilters } from "@/components/media-filters";
+import { sameFilters } from "@/lib/filters/same-filters";
 import { ColorChip } from "@/components/color-chip";
 import { DataTable } from "@/components/data-table";
 import type { DataTableColumn } from "@/components/data-table";
@@ -18,6 +19,8 @@ import { useCardSize, estimateContentWidth } from "@/hooks/use-card-size";
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { useServers } from "@/hooks/use-servers";
 import { useRealtime } from "@/hooks/use-realtime";
+import { useListFetch } from "@/hooks/use-list-fetch";
+import { useDeferredOverscan } from "@/hooks/use-deferred-overscan";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { formatFileSize } from "@/lib/format";
 import { EmptyState } from "@/components/empty-state";
@@ -236,11 +239,12 @@ export default function AllSeasonsPage() {
     return Math.round(posterHeight + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
   }, [actualColumns]);
 
+  const overscan = useDeferredOverscan(!loading && rowCount > 0);
   const virtualizer = useVirtualizer({
     count: rowCount,
     getScrollElement: () => scrollElementRef.current,
     estimateSize,
-    overscan: 3,
+    overscan,
     scrollMargin,
   });
 
@@ -280,10 +284,7 @@ export default function AllSeasonsPage() {
     }
   }, [filters, sortBy, sortOrder]);
 
-  useEffect(() => {
-    const timeout = setTimeout(() => fetchSeasons(), 300);
-    return () => clearTimeout(timeout);
-  }, [fetchSeasons]);
+  useListFetch(fetchSeasons);
 
   // Auto-update when real-time sync adds/removes items — no manual refresh.
   useRealtime("sync:completed", fetchSeasons);
@@ -310,7 +311,7 @@ export default function AllSeasonsPage() {
       <LibraryTabs tabs={SERIES_TABS} active="/library/series/seasons" />
 
       <MediaFilters
-        onFilterChange={setFilters}
+        onFilterChange={(f) => setFilters((prev) => (sameFilters(prev, f) ? prev : f))}
         mediaType="SERIES"
         prefix={
           <LibraryToolbar

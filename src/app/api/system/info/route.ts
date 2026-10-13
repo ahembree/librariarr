@@ -1,9 +1,9 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { checkForUpdate } from "@/lib/version/update-checker";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   const session = await getSession();
   if (!session.isLoggedIn) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -36,13 +36,18 @@ export async function GET() {
   >`SELECT pg_size_pretty(pg_database_size(current_database())) as size`;
   const databaseSize = dbSize[0]?.size ?? "Unknown";
 
+  // `updateCheck=false` leaves out the GitHub release lookup: the Settings page
+  // reads it from `/api/system/update-check` instead, so the System tab never
+  // waits on GitHub.
+  const includeUpdate = request.nextUrl.searchParams.get("updateCheck") !== "false";
+
   // Stats
   const [mediaItems, enabledLibraries, totalLibraries, servers, updateInfo] = await Promise.all([
     prisma.mediaItem.count(),
     prisma.library.count({ where: { enabled: true } }),
     prisma.library.count(),
     prisma.mediaServer.count(),
-    checkForUpdate(),
+    includeUpdate ? checkForUpdate() : undefined,
   ]);
 
   return NextResponse.json({

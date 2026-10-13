@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
-import { jsonResponse } from "@/lib/api/json-response";
+import { jsonResponse, mapInSlices } from "@/lib/api/json-response";
 import { prisma } from "@/lib/db";
 import { escapeLike } from "@/lib/filters/escape-like";
 import type { Prisma } from "@/generated/prisma/client";
@@ -174,7 +174,7 @@ export async function GET(request: NextRequest) {
     serversByKey = await getServerPresenceByDedupKey(dedupKeys, sf.serverIds);
   }
 
-  const serializedItems = items.map((item) => ({
+  const serializedItems = await mapInSlices(items, (item) => ({
     ...item,
     fileSize: item.fileSize?.toString() ?? null,
     servers: serversByKey?.get(item.dedupKey!) ?? [

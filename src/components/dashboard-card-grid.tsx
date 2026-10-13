@@ -32,7 +32,16 @@ import {
   type CardEntry,
   type CustomCardConfig,
 } from "@/lib/dashboard/card-registry";
-import { CustomChartCard } from "@/components/custom-chart-card";
+import { ChartCardSkeleton } from "@/components/skeletons";
+import { lazyComponent } from "@/components/lazy-component";
+
+// Loaded on demand: it is the only dashboard card built on recharts (~500 KB
+// of script), and most dashboards have no custom card at all, so importing it
+// here put the whole chart library on the landing page for nothing.
+const CustomChartCard = lazyComponent(
+  () => import("@/components/custom-chart-card").then((m) => m.CustomChartCard),
+  ChartCardSkeleton,
+);
 
 const CHANNEL_LABELS: Record<number, string> = {
   1: "Mono (1.0)",

@@ -5,6 +5,7 @@ import Link from "next/link";
 import type { LucideIcon } from "lucide-react";
 import { ArrowUpRight, Film, HardDrive, Music, Tv } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Skeleton } from "@/components/ui/skeleton";
 import { formatBytesNum, formatDurationLarge } from "@/lib/format";
 import { useRealtime } from "@/hooks/use-realtime";
 import { buildSparkPoints, type SparkPoint } from "@/lib/dashboard/sparkline";
@@ -181,9 +182,10 @@ function LibraryTile({
   href?: string;
   icon: LucideIcon;
   label: string;
-  value: string;
-  sub?: string;
-  rows: { label: string; value: string }[];
+  /** null while the stats load: the figures render as placeholders. */
+  value: string | null;
+  sub?: string | null;
+  rows: { label: string; value: string | null }[];
   spark?: SparkPoint[];
   sparkCaption?: string;
   sparkFormatValue?: (n: number) => string;
@@ -199,10 +201,12 @@ function LibraryTile({
         )}
       </div>
       <div className="font-display text-[30px] leading-none font-semibold tracking-[-0.03em] tabular-nums">
-        {value}
+        {value ?? <Skeleton className="h-[30px] w-24" />}
       </div>
       <div className="mt-2 text-[13px] font-semibold">{label}</div>
-      <div className="mt-1 font-mono text-[11.5px] text-faint">{sub ?? "\u00A0"}</div>
+      <div className="mt-1 font-mono text-[11.5px] text-faint">
+        {sub === null ? <Skeleton className="my-0.5 h-3 w-40" /> : sub ?? "\u00A0"}
+      </div>
       {spark && (
         <div className="mt-3">
           <Sparkline points={spark} formatValue={sparkFormatValue} />
@@ -215,7 +219,11 @@ function LibraryTile({
         {rows.map((r) => (
           <div key={r.label} className="flex items-center justify-between">
             <span className="text-faint">{r.label}</span>
-            <span className="text-foreground">{r.value}</span>
+            {r.value === null ? (
+              <Skeleton className="h-3 w-14" />
+            ) : (
+              <span className="text-foreground">{r.value}</span>
+            )}
           </div>
         ))}
       </div>
@@ -248,7 +256,12 @@ export function LibraryTiles({
   availableTypes,
   serverId,
 }: {
-  stats: LibraryStats;
+  /**
+   * null while the stats load. The tiles and their sparklines don't wait for
+   * them: the stats are the slowest request on a cold cache, and the sparkline
+   * requests used to queue behind them.
+   */
+  stats: LibraryStats | null;
   availableTypes: string[];
   serverId?: string;
 }) {
@@ -323,11 +336,11 @@ export function LibraryTiles({
           href="/library/movies"
           icon={Film}
           label="Movies"
-          value={stats.movieCount.toLocaleString()}
+          value={stats && stats.movieCount.toLocaleString()}
           spark={sparks.MOVIE}
           rows={[
-            { label: "Size", value: formatBytesNum(Number(stats.movieSize)) },
-            { label: "Runtime", value: formatDurationLarge(stats.movieDuration) },
+            { label: "Size", value: stats && formatBytesNum(Number(stats.movieSize)) },
+            { label: "Runtime", value: stats && formatDurationLarge(stats.movieDuration) },
           ]}
         />
       )}
@@ -336,12 +349,12 @@ export function LibraryTiles({
           href="/library/series"
           icon={Tv}
           label="Series"
-          value={stats.seriesCount.toLocaleString()}
-          sub={`${stats.seasonCount.toLocaleString()} seasons · ${stats.episodeCount.toLocaleString()} episodes`}
+          value={stats && stats.seriesCount.toLocaleString()}
+          sub={stats && `${stats.seasonCount.toLocaleString()} seasons · ${stats.episodeCount.toLocaleString()} episodes`}
           spark={sparks.SERIES}
           rows={[
-            { label: "Size", value: formatBytesNum(Number(stats.seriesSize)) },
-            { label: "Runtime", value: formatDurationLarge(stats.seriesDuration) },
+            { label: "Size", value: stats && formatBytesNum(Number(stats.seriesSize)) },
+            { label: "Runtime", value: stats && formatDurationLarge(stats.seriesDuration) },
           ]}
         />
       )}
@@ -350,28 +363,28 @@ export function LibraryTiles({
           href="/library/music"
           icon={Music}
           label="Music"
-          value={stats.musicCount.toLocaleString()}
-          sub={`${stats.artistCount.toLocaleString()} artists · ${stats.albumCount.toLocaleString()} albums`}
+          value={stats && stats.musicCount.toLocaleString()}
+          sub={stats && `${stats.artistCount.toLocaleString()} artists · ${stats.albumCount.toLocaleString()} albums`}
           spark={sparks.MUSIC}
           rows={[
-            { label: "Size", value: formatBytesNum(Number(stats.musicSize)) },
-            { label: "Runtime", value: formatDurationLarge(stats.musicDuration) },
+            { label: "Size", value: stats && formatBytesNum(Number(stats.musicSize)) },
+            { label: "Runtime", value: stats && formatDurationLarge(stats.musicDuration) },
           ]}
         />
       )}
       <LibraryTile
         icon={HardDrive}
         label="Library size"
-        value={formatBytesNum(Number(stats.totalSize))}
+        value={stats && formatBytesNum(Number(stats.totalSize))}
         spark={sparks.ALL}
         sparkCaption={`Size · last ${SPARK_MONTHS}mo`}
         sparkFormatValue={formatBytesNum}
         rows={[
           {
             label: "Runtime",
-            value: formatDurationLarge(
-              stats.movieDuration + stats.seriesDuration + stats.musicDuration,
-            ),
+            value:
+              stats &&
+              formatDurationLarge(stats.movieDuration + stats.seriesDuration + stats.musicDuration),
           },
         ]}
       />

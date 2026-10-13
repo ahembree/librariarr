@@ -106,6 +106,13 @@ export const API_OPERATIONS: readonly Operation[] = [
     scope: "system:read",
     tag: "System",
     summary: "App version, database size and counts",
+    query: [
+      {
+        name: "updateCheck",
+        description: "`false` leaves out `updateInfo`, the GitHub release lookup, so the answer never waits on GitHub.",
+        schema: { type: "boolean", default: true },
+      },
+    ],
   },
   { method: "get", path: "/servers", scope: "servers:read", tag: "Servers and syncs", summary: "Media servers with their libraries and latest sync (tokens masked; addresses, machine ids and owner omitted)" },
   { method: "get", path: "/sync/status", scope: "servers:read", tag: "Servers and syncs", summary: "Running and recent sync jobs (server addresses and machine ids omitted, errors redacted)" },

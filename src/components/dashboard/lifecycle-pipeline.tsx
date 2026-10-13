@@ -52,16 +52,10 @@ export function LifecyclePipeline({ scheduleInfo }: { scheduleInfo: ScheduleInfo
 
   const load = useCallback(async () => {
     // A request that fails or rejects reads as null.
-    const get = (url: string) =>
-      fetch(url)
-        .then((r) => (r.ok ? r.json() : null))
-        .catch(() => null);
-    const [rules, matches, stats] = await Promise.all([
-      get("/api/lifecycle/rules"),
-      get("/api/lifecycle/rules/matches"),
-      get("/api/lifecycle/stats"),
-    ]);
-    setState(pipelineStateFrom(rules, matches, stats));
+    const summary = await fetch("/api/lifecycle/summary")
+      .then((r) => (r.ok ? r.json() : null))
+      .catch(() => null);
+    setState(pipelineStateFrom(summary));
   }, []);
 
   useEffect(() => {

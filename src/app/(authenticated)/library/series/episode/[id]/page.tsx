@@ -154,6 +154,7 @@ export default function EpisodeDetailPage() {
     >
       <MediaDetailContent
         item={item}
+        detailLoaded
         // The per-play list *is* this episode's Watch History card. It replaces
         // the per-user aggregate card (which reads the same plays live from the
         // server, minus the timestamps), so the page shows the data once.

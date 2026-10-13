@@ -283,7 +283,7 @@ function MatchItemsTableView({
   }
 
   return (
-    <div ref={scrollContainerRef} className="md:max-h-[60vh] overflow-y-auto rounded-lg border">
+    <div ref={scrollContainerRef} className="md:max-h-[60dvh] overflow-y-auto rounded-lg border">
       <table className="w-full text-sm table-fixed" style={{ minWidth: totalWidth }}>
         <thead className="sticky top-0 z-10 bg-background" style={{ display: "block" }}>
           <tr className="border-b bg-muted/50" style={{ display: "table", tableLayout: "fixed", width: "100%", minWidth: totalWidth }}>
@@ -468,7 +468,7 @@ function MatchItemsCardView({
   const aspectRatio = ruleSet.type === "MUSIC" ? "square" as const : "poster" as const;
 
   return (
-    <div ref={scrollContainerRef} className="md:max-h-[60vh] overflow-y-auto">
+    <div ref={scrollContainerRef} className="md:max-h-[60dvh] overflow-y-auto">
       <div
         style={{
           height: virtualizer.getTotalSize(),
@@ -885,12 +885,14 @@ export default function RuleMatchesPage() {
     <>
       <div className="overflow-y-auto h-full">
         <div className="p-4 sm:p-6 lg:p-8">
-      <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+      {/* Wraps rather than squeezing: beside a long title the toolbar would
+          otherwise fold into a column of single buttons on a tablet. */}
+      <div className="mb-6 flex flex-col sm:flex-row sm:flex-wrap sm:items-center sm:justify-between gap-3">
         <div>
           <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Rule Matches</h1>
           <p className="text-muted-foreground mt-1">Media items that match your lifecycle rules, grouped by rule set.</p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
           <div className="flex items-center gap-1 rounded-lg border p-1 h-9">
             <button
               onClick={() => handleViewModeChange("cards")}
@@ -1004,18 +1006,18 @@ export default function RuleMatchesPage() {
                 className="cursor-pointer"
                 onClick={() => toggleExpand(match.ruleSet.id)}
               >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex min-w-0 items-center gap-3">
                     {isExpanded ? (
-                      <ChevronDown className="h-5 w-5 text-muted-foreground" />
+                      <ChevronDown className="h-5 w-5 shrink-0 text-muted-foreground" />
                     ) : (
-                      <ChevronRight className="h-5 w-5 text-muted-foreground" />
+                      <ChevronRight className="h-5 w-5 shrink-0 text-muted-foreground" />
                     )}
-                    <div>
+                    <div className="min-w-0">
                       <CardTitle className="text-lg">
                         {match.ruleSet.name}
                       </CardTitle>
-                      <div className="flex items-center gap-2 mt-1">
+                      <div className="flex flex-wrap items-center gap-2 mt-1">
                         <ColorChip className={MEDIA_TYPE_BADGE_COLORS[match.ruleSet.type] ?? "border-border text-muted-foreground"}>
                           {mediaTypeLabel(match.ruleSet.type)}
                         </ColorChip>
@@ -1057,7 +1059,7 @@ export default function RuleMatchesPage() {
                   </div>
 
                   <div
-                    className="flex items-center gap-2"
+                    className="flex shrink-0 items-center gap-2 pl-8 sm:pl-0"
                     onClick={(e) => e.stopPropagation()}
                   >
                     <TooltipProvider>

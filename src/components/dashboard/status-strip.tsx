@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatRelativeDate, formatUntil } from "@/lib/format";
 import { useRealtime } from "@/hooks/use-realtime";
+import { fetchSyncStatus } from "@/lib/sync/sync-status-client";
 import type { ScheduleInfo } from "@/components/dashboard/types";
 
 type Tone = "ok" | "warn" | "err" | "idle";
@@ -48,9 +49,11 @@ function StatusTile({
   return (
     <Link
       href={href}
-      className="group flex items-center gap-3 rounded-[14px] border bg-card px-4 py-3 shadow-[var(--shadow-card)] transition-colors hover:border-border-strong hover:bg-surface-2/40"
+      className="group flex items-center gap-3 rounded-[14px] border bg-card px-3 py-3 shadow-[var(--shadow-card)] transition-colors hover:border-border-strong hover:bg-surface-2/40 sm:px-4"
     >
-      <span className="grid h-9 w-9 shrink-0 place-items-center rounded-[9px] border border-border bg-surface-2 text-muted-foreground transition-colors group-hover:text-foreground">
+      {/* Two tiles share a phone's width; the icon gives its room to the
+          text there, and the lines wrap instead of ending in "…". */}
+      <span className="hidden h-9 w-9 shrink-0 place-items-center sm:grid rounded-[9px] border border-border bg-surface-2 text-muted-foreground transition-colors group-hover:text-foreground">
         <Icon className="h-[18px] w-[18px]" />
       </span>
       <span className="min-w-0 flex-1">
@@ -63,13 +66,13 @@ function StatusTile({
         {loading ? (
           <Skeleton className="mt-1.5 h-4 w-20" />
         ) : (
-          <span className="mt-0.5 block truncate text-[15px] font-semibold tabular-nums">
+          <span className="mt-0.5 line-clamp-2 text-[15px] font-semibold tabular-nums break-words sm:block sm:truncate">
             {value}
           </span>
         )}
         {sub && !loading && (
           // title carries the full text when the line truncates
-          <span title={sub} className="block truncate font-mono text-[11px] text-faint">
+          <span title={sub} className="line-clamp-2 font-mono text-[11px] break-words text-faint sm:block sm:truncate">
             {sub}
           </span>
         )}
@@ -148,7 +151,7 @@ export function StatusStrip({ scheduleInfo }: { scheduleInfo: ScheduleInfo | nul
     fetchSessions();
     fetchHealth();
 
-    fetch("/api/system/update-check")
+    fetch("/api/system/update-check", { priority: "low" })
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
         if (data?.updateAvailable && data.latestVersion) {
@@ -175,10 +178,9 @@ export function StatusStrip({ scheduleInfo }: { scheduleInfo: ScheduleInfo | nul
   }, [fetchHealth]);
 
   const fetchSync = () => {
-    fetch("/api/sync/status")
-      .then((res) => (res.ok ? res.json() : null))
+    fetchSyncStatus()
       .then((data) => {
-        const jobs: { status: string; completedAt: string | null }[] = data?.jobs ?? [];
+        const jobs = data?.jobs ?? [];
         const active = jobs.some((j) => j.status === "RUNNING" || j.status === "PENDING");
         const lastRun = jobs
           .filter((j) => j.status === "COMPLETED" && j.completedAt)

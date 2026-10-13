@@ -88,8 +88,10 @@ export function PaginationControls({
   return (
     <div
       className={cn(
-        "flex items-center justify-center text-muted-foreground",
-        compact ? "gap-1" : "gap-3",
+        // Wraps so the range line drops above the buttons on a narrow phone
+        // rather than pushing Last off the side.
+        "flex flex-wrap items-center justify-center text-muted-foreground",
+        compact ? "gap-1" : "gap-x-3 gap-y-2",
         className,
       )}
     >

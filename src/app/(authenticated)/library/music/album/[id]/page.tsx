@@ -196,7 +196,7 @@ export default function AlbumDetailPage() {
     >
       {tracks.length > 0 && (
         <section className="mt-6">
-          <div className="mb-3 flex items-center gap-3">
+          <div className="mb-3 flex flex-wrap items-center gap-2 sm:gap-3">
             <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
               Tracks
             </h2>

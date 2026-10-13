@@ -193,12 +193,11 @@ export interface AuthInfo {
   displayName: string;
 }
 
-export interface UpdateInfo {
-  latestVersion: string | null;
+/** `GET /api/system/update-check` */
+export interface UpdateCheck {
   updateAvailable: boolean;
+  latestVersion: string | null;
   releaseUrl: string | null;
-  releaseName: string | null;
-  checkedAt: string;
 }
 
 export interface SystemInfo {
@@ -206,7 +205,6 @@ export interface SystemInfo {
   latestMigration: string;
   databaseSize: string;
   stats: { mediaItems: number; enabledLibraries: number; totalLibraries: number; servers: number };
-  updateInfo?: UpdateInfo;
 }
 
 export interface ImageCacheStats {

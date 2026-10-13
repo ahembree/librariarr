@@ -30,7 +30,10 @@ import { MediaGridSkeleton } from "@/components/skeletons";
 import { LibraryTabs, SERIES_TABS } from "@/components/library-tabs";
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
 import { useFilterPersistence } from "@/hooks/use-filter-persistence";
+import { sameFilters } from "@/lib/filters/same-filters";
 import { useRealtime } from "@/hooks/use-realtime";
+import { useListFetch } from "@/hooks/use-list-fetch";
+import { useDeferredOverscan } from "@/hooks/use-deferred-overscan";
 
 interface GroupedSeries {
   parentTitle: string;
@@ -190,8 +193,9 @@ export default function SeriesPage() {
   const { show, showServers, setVisible, prefs } = useCardDisplay("SERIES");
   const [seriesList, setSeriesList] = useState<GroupedSeries[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filters, setFilters] = useState<Record<string, string>>({});
   const { savedFilters, persistFilters } = useFilterPersistence("filters-/library/series");
+  // Start from the restored filters, so the first fetch is already filtered.
+  const [filters, setFilters] = useState<Record<string, string>>(savedFilters);
   const [viewMode, setViewMode] = useState<"cards" | "table">("cards");
   const [, startTransition] = useTransition();
 
@@ -286,10 +290,7 @@ export default function SeriesPage() {
 
   useRealtime("sync:completed", fetchSeries);
 
-  useEffect(() => {
-    const timeout = setTimeout(() => fetchSeries(), 300);
-    return () => clearTimeout(timeout);
-  }, [fetchSeries]);
+  useListFetch(fetchSeries);
 
   const filteredSeries = useMemo(
     () => applyFiltersToGroupedSeries(seriesList, filters),
@@ -309,11 +310,12 @@ export default function SeriesPage() {
     return Math.round(posterHeight + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
   }, [actualColumns]);
 
+  const overscan = useDeferredOverscan(!loading && rowCount > 0);
   const virtualizer = useVirtualizer({
     count: rowCount,
     getScrollElement: () => scrollElementRef.current,
     estimateSize,
-    overscan: 3,
+    overscan,
     scrollMargin,
   });
   useEffect(() => {
@@ -383,7 +385,7 @@ export default function SeriesPage() {
       <LibraryTabs tabs={SERIES_TABS} active="/library/series" />
 
       <MediaFilters
-        onFilterChange={(f) => { setFilters(f); persistFilters(f); }}
+        onFilterChange={(f) => { setFilters((prev) => (sameFilters(prev, f) ? prev : f)); persistFilters(f); }}
         externalFilters={Object.keys(savedFilters).length > 0 ? savedFilters : undefined}
         mediaType="SERIES"
         prefix={
