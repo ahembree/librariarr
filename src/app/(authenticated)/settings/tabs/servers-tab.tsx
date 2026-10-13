@@ -844,7 +844,7 @@ export function ServersTab({
   return (
     <>
       <div className="space-y-6">
-        <div className="flex items-start justify-between gap-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
           <div className="space-y-1">
             <h2 className="text-xl font-semibold">Media Servers</h2>
             <p className="text-sm text-muted-foreground">

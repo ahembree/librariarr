@@ -30,7 +30,7 @@ export function LibraryTabs({ tabs, active }: { tabs: LibraryTab[]; active: stri
   return (
     <nav
       aria-label="Library views"
-      className="mb-6 inline-flex h-9 items-center gap-1 overflow-x-auto rounded-lg border p-1"
+      className="mb-6 inline-flex h-9 max-w-full items-center gap-1 overflow-x-auto rounded-lg border p-1"
     >
       {tabs.map(({ href, label, icon: Icon }) => (
         <Link
@@ -40,13 +40,15 @@ export function LibraryTabs({ tabs, active }: { tabs: LibraryTab[]; active: stri
           prefetch
           aria-current={active === href ? "page" : undefined}
           className={cn(
-            "flex shrink-0 items-center gap-1.5 rounded-md px-3 py-1 text-[13px] font-medium whitespace-nowrap transition-colors",
+            "flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1 text-[13px] font-medium whitespace-nowrap transition-colors sm:px-3",
             active === href
               ? "bg-brand-dim text-brand-bright"
               : "text-muted-foreground hover:bg-surface-2 hover:text-foreground",
           )}
         >
-          <Icon className="h-3.5 w-3.5" />
+          {/* The icons go on the narrowest phones, where all three labels
+              would not otherwise fit beside one another. */}
+          <Icon className="hidden h-3.5 w-3.5 min-[360px]:block" />
           {label}
         </Link>
       ))}

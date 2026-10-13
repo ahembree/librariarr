@@ -1037,14 +1037,14 @@ export default function PendingActionsPage() {
         {deletionStats && (deletionStats.actionCount > 0 || deletionStats.pendingCount > 0 || deletionStats.resetAt) && (
           <div className="flex items-center gap-4 mb-6 rounded-xl border bg-card px-4 py-3 shadow-[var(--shadow-card)]">
             <Trash2 className="h-4 w-4 text-muted-foreground shrink-0" />
-            <div className="flex items-center gap-4 text-sm flex-wrap">
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
               {deletionStats.pendingCount > 0 && (
                 <>
                   <span>
                     <span className="font-medium text-amber">{formatFileSize(deletionStats.pendingBytes)}</span>
                     <span className="text-muted-foreground ml-1">pending</span>
                   </span>
-                  <span className="text-muted-foreground">·</span>
+                  <span className="hidden text-muted-foreground sm:inline">·</span>
                   <span>
                     <span className="font-medium text-amber">{deletionStats.pendingCount}</span>
                     <span className="text-muted-foreground ml-1">{deletionStats.pendingCount === 1 ? "action" : "actions"} queued</span>
@@ -1052,7 +1052,7 @@ export default function PendingActionsPage() {
                 </>
               )}
               {deletionStats.pendingCount > 0 && deletionStats.actionCount > 0 && (
-                <span className="text-muted-foreground">·</span>
+                <span className="hidden text-muted-foreground sm:inline">·</span>
               )}
               {deletionStats.actionCount > 0 && (
                 <>
@@ -1060,7 +1060,7 @@ export default function PendingActionsPage() {
                     <span className="font-medium">{formatFileSize(deletionStats.totalBytesDeleted)}</span>
                     <span className="text-muted-foreground ml-1">deleted</span>
                   </span>
-                  <span className="text-muted-foreground">·</span>
+                  <span className="hidden text-muted-foreground sm:inline">·</span>
                   <span>
                     <span className="font-medium">{deletionStats.actionCount}</span>
                     <span className="text-muted-foreground ml-1">{deletionStats.actionCount === 1 ? "action" : "actions"} completed</span>
@@ -1069,7 +1069,7 @@ export default function PendingActionsPage() {
               )}
               {deletionStats.resetAt && (
                 <>
-                  <span className="text-muted-foreground">·</span>
+                  <span className="hidden text-muted-foreground sm:inline">·</span>
                   <span className="text-xs text-muted-foreground">
                     since {new Date(deletionStats.resetAt).toLocaleDateString()}
                   </span>
@@ -1100,8 +1100,8 @@ export default function PendingActionsPage() {
         <TabNav tabs={MEDIA_TYPE_TABS} activeTab={mediaTypeTab} onTabChange={setMediaTypeTab} className="mb-6" />
 
         {/* Status filter + view toggle */}
-        <div className="flex items-center justify-between mb-4">
-          <div className="flex gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+          <div className="flex flex-wrap gap-2">
             {STATUS_FILTERS.map((status) => (
               <Button
                 key={status}
@@ -1116,8 +1116,8 @@ export default function PendingActionsPage() {
           <div className="flex items-center gap-2">
             {viewMode === "cards" && <CardSizeControl size={cardSize} onChange={setCardSize} />}
             <div className="flex rounded-md border">
-              <Button variant={viewMode === "table" ? "secondary" : "ghost"} size="icon" className="h-8 w-8 rounded-r-none" onClick={() => setViewMode("table")}><TableProperties className="h-4 w-4" /></Button>
-              <Button variant={viewMode === "cards" ? "secondary" : "ghost"} size="icon" className="h-8 w-8 rounded-l-none" onClick={() => setViewMode("cards")}><LayoutGrid className="h-4 w-4" /></Button>
+              <Button variant={viewMode === "table" ? "secondary" : "ghost"} size="icon" className="h-8 w-8 rounded-r-none" onClick={() => setViewMode("table")} aria-label="Table view" title="Table view"><TableProperties className="h-4 w-4" /></Button>
+              <Button variant={viewMode === "cards" ? "secondary" : "ghost"} size="icon" className="h-8 w-8 rounded-l-none" onClick={() => setViewMode("cards")} aria-label="Card view" title="Card view"><LayoutGrid className="h-4 w-4" /></Button>
             </div>
           </div>
         </div>
@@ -1161,21 +1161,21 @@ export default function PendingActionsPage() {
                     className="cursor-pointer"
                     onClick={() => toggleExpand(group.ruleSet.id)}
                   >
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-3">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div className="flex min-w-0 items-center gap-3">
                         {isExpanded ? (
-                          <ChevronDown className="h-5 w-5 text-muted-foreground" />
+                          <ChevronDown className="h-5 w-5 shrink-0 text-muted-foreground" />
                         ) : (
-                          <ChevronRight className="h-5 w-5 text-muted-foreground" />
+                          <ChevronRight className="h-5 w-5 shrink-0 text-muted-foreground" />
                         )}
-                        <div>
+                        <div className="min-w-0">
                           <CardTitle className="text-lg">
                             {group.ruleSet.name}
                             {group.ruleSet.deleted && (
                               <span className="ml-2 text-sm font-normal text-muted-foreground">(Deleted)</span>
                             )}
                           </CardTitle>
-                          <div className="flex items-center gap-2 mt-1">
+                          <div className="flex flex-wrap items-center gap-2 mt-1">
                             <ColorChip className={MEDIA_TYPE_BADGE_COLORS[group.ruleSet.type] ?? "border-border text-muted-foreground"}>
                               {mediaTypeLabel(group.ruleSet.type)}
                             </ColorChip>
@@ -1236,7 +1236,7 @@ export default function PendingActionsPage() {
                       {/* Execute All button (only for PENDING filter, not for deleted rule sets) */}
                       {isPending && group.count > 0 && !group.ruleSet.deleted && (
                         <div
-                          className="flex items-center gap-2"
+                          className="flex shrink-0 flex-wrap items-center gap-2 pl-8 sm:pl-0"
                           onClick={(e) => e.stopPropagation()}
                         >
                           {result && (

@@ -148,6 +148,14 @@ export function MediaDetailHero({
   playServers,
 }: MediaDetailHeroProps) {
   const [artFailed, setArtFailed] = useState(false);
+  // An item with no poster gets no empty poster-sized gap beside its title.
+  const [posterFailed, setPosterFailed] = useState(false);
+  const [posterSrc, setPosterSrc] = useState(imageUrl);
+  if (posterSrc !== imageUrl) {
+    setPosterSrc(imageUrl);
+    setPosterFailed(false);
+  }
+  const hasPlayServers = !!playServers && playServers.length > 0;
 
   const artUrl = artUrlProp ?? `/api/media/${itemId}/image?type=art`;
   const posterArtFallback = useParentArt
@@ -233,26 +241,33 @@ export function MediaDetailHero({
         <div className="absolute inset-x-0 bottom-0 z-10 px-4 pb-6 sm:px-6 sm:pb-8 lg:px-8 animate-fade-in-up">
           <div className="flex items-center gap-5 sm:gap-7">
             {/* Poster + play button */}
-            <div className="shrink-0 w-30 sm:w-40 lg:w-50">
-              <div
-                className="relative overflow-hidden rounded-lg shadow-2xl"
-                style={{
-                  boxShadow:
-                    "0 25px 50px -12px oklch(0 0 0 / 0.6), 0 0 0 1px oklch(1 0 0 / 0.08)",
-                }}
-              >
-                <FadeImage
-                  src={imageUrl}
-                  alt={title}
-                  className="block h-auto w-full"
-                  style={{ aspectRatio: posterAspectRatio, objectFit: "cover" }}
-                  onError={(e) => {
-                    (e.target as HTMLImageElement).style.display = "none";
+            <div
+              className={cn(
+                "shrink-0 w-30 sm:w-40 lg:w-50",
+                // Without a poster the column only ever holds the play
+                // button, which a phone shows beside the details instead.
+                posterFailed && (hasPlayServers ? "hidden sm:block" : "hidden"),
+              )}
+            >
+              {!posterFailed && (
+                <div
+                  className="relative overflow-hidden rounded-lg shadow-2xl"
+                  style={{
+                    boxShadow:
+                      "0 25px 50px -12px oklch(0 0 0 / 0.6), 0 0 0 1px oklch(1 0 0 / 0.08)",
                   }}
-                />
-              </div>
+                >
+                  <FadeImage
+                    src={imageUrl}
+                    alt={title}
+                    className="block h-auto w-full"
+                    style={{ aspectRatio: posterAspectRatio, objectFit: "cover" }}
+                    onError={() => setPosterFailed(true)}
+                  />
+                </div>
+              )}
               {playServers && playServers.length > 0 && (
-                <div className="mt-2 w-full overflow-hidden *:w-full *:justify-center">
+                <div className={cn("hidden w-full overflow-hidden *:w-full *:justify-center sm:block", !posterFailed && "mt-2")}>
                   <PlayButton playServers={playServers} />
                 </div>
               )}
@@ -291,6 +306,14 @@ export function MediaDetailHero({
               {genres && (
                 <div className="mt-2 flex gap-1.5 overflow-x-auto sm:flex-wrap [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                   {genres}
+                </div>
+              )}
+
+              {/* On a phone the 120px poster column cannot hold "Open in
+                  <server>", so the button sits under the details instead. */}
+              {playServers && playServers.length > 0 && (
+                <div className="mt-3 flex max-w-full *:max-w-full sm:hidden">
+                  <PlayButton playServers={playServers} />
                 </div>
               )}
 

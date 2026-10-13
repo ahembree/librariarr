@@ -78,7 +78,7 @@ export function TabNav<T extends string>({
               data-tab={tab.value}
               onClick={() => onTabChange(tab.value)}
               className={cn(
-                "flex items-center gap-2 border-b-2 px-4 py-2 text-sm font-medium transition-colors whitespace-nowrap shrink-0",
+                "flex items-center gap-2 border-b-2 px-3 sm:px-4 py-2 text-sm font-medium transition-colors whitespace-nowrap shrink-0",
                 isActive
                   ? "border-brand-bright text-foreground"
                   : "border-transparent text-muted-foreground hover:text-foreground hover:border-muted-foreground/30"

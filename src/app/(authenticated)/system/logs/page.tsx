@@ -329,7 +329,7 @@ export default function LogsPage() {
             {logs.map((log) => (
               <div
                 key={log.id}
-                className="flex items-baseline gap-3 px-4 py-[5px] transition-colors hover:bg-white/[0.03]"
+                className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 px-4 py-[5px] transition-colors hover:bg-white/[0.03] sm:flex-nowrap"
               >
                 <span className="shrink-0 font-mono text-[11px] whitespace-nowrap text-faint tabular-nums">
                   {formatTimestamp(log.createdAt)}
@@ -340,7 +340,10 @@ export default function LogsPage() {
                   {log.level}
                 </span>
                 <span className="shrink-0 font-mono text-[11.5px] text-brand-bright">{log.source}</span>
-                <span className="min-w-0 flex-1 font-mono text-[12px] break-words text-muted-foreground">
+                {/* A phone puts the message on its own line under the
+                    time, level and source rather than in the sliver of
+                    width they leave beside them. */}
+                <span className="w-full min-w-0 font-mono text-[12px] break-words text-muted-foreground sm:w-auto sm:flex-1">
                   {log.message}
                   {log.meta && Object.keys(log.meta).length > 0 && (
                     <span className="mt-0.5 block font-mono text-[11px] break-all whitespace-pre-wrap text-faint">
