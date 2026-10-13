@@ -40,7 +40,7 @@ describe("GET /api/tools/realtime/status", () => {
 
   it("reports enabled=true and no connections by default", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(GET);
     const body = await expectJson<StatusResponse>(res);
@@ -53,7 +53,7 @@ describe("GET /api/tools/realtime/status", () => {
     await getTestPrisma().appSettings.create({
       data: { userId: user.id, realtimeSync: false },
     });
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(GET);
     const body = await expectJson<StatusResponse>(res);

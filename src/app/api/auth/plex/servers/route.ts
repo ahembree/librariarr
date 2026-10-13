@@ -1,17 +1,22 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
-import { getPlexResources } from "@/lib/plex/auth";
+import { getPlexResources, getStoredPlexToken } from "@/lib/plex/auth";
 import { apiLogger } from "@/lib/logger";
 
 export async function GET() {
   try {
     const session = await getSession();
-
-    if (!session.isLoggedIn || !session.plexToken) {
+    if (!session.isLoggedIn || !session.userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const resources = await getPlexResources(session.plexToken);
+    // An account with no Plex account linked has no server list to show.
+    const plexToken = await getStoredPlexToken(session.userId);
+    if (!plexToken) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const resources = await getPlexResources(plexToken);
 
     // No `accessToken`: for a server the account owns, plex.tv can hand out
     // the account's own token here, and a Plex token signs in to Librariarr

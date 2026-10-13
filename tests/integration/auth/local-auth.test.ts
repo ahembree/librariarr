@@ -20,7 +20,7 @@ vi.mock("@/lib/rate-limit/rate-limiter", () => ({
   PASSWORD_CONFIRM_BUCKET: "password-confirm",
   checkAuthRateLimit: mockCheckAuthRateLimit,
   peekAuthRateLimit: () => null,
-  reserveAuthAttempt: () => ({ refused: null, refund: () => {} }),
+  reserveAuthAttempt: () => ({ refused: null, succeeded: () => {} }),
   authRateLimiter: { check: vi.fn().mockReturnValue({ limited: false }) },
   getClientIp: vi.fn().mockReturnValue("127.0.0.1"),
 }));
@@ -71,7 +71,7 @@ describe("POST /api/auth/local/change-password", () => {
 
   it("returns 400 when neither newPassword nor newUsername provided", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(POST, {
       url: "/api/auth/local/change-password",
@@ -93,7 +93,7 @@ describe("POST /api/auth/local/change-password", () => {
     // Password sign-in on: the only state in which the password is proof.
     await prisma.appSettings.create({ data: { userId: user.id, localAuthEnabled: true } });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(POST, {
       url: "/api/auth/local/change-password",
@@ -120,7 +120,7 @@ describe("POST /api/auth/local/change-password", () => {
     const prisma = getTestPrisma();
     const user = await createTestUser({ username: "OldName" });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(POST, {
       url: "/api/auth/local/change-password",
@@ -152,7 +152,7 @@ describe("POST /api/auth/local/change-password", () => {
     // Password sign-in on: the only state in which the password is proof.
     await prisma.appSettings.create({ data: { userId: user.id, localAuthEnabled: true } });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(POST, {
       url: "/api/auth/local/change-password",
@@ -169,7 +169,7 @@ describe("POST /api/auth/local/change-password", () => {
 
   it("returns 400 for password shorter than 8 characters", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(POST, {
       url: "/api/auth/local/change-password",
@@ -182,7 +182,7 @@ describe("POST /api/auth/local/change-password", () => {
 
   it("returns 400 for username shorter than 3 characters", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(POST, {
       url: "/api/auth/local/change-password",
@@ -203,7 +203,7 @@ describe("POST /api/auth/local/change-password", () => {
     // Password sign-in on: the only state in which the password is proof.
     await prisma.appSettings.create({ data: { userId: user.id, localAuthEnabled: true } });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(POST, {
       url: "/api/auth/local/change-password",
@@ -220,7 +220,7 @@ describe("POST /api/auth/local/change-password", () => {
     // User has no passwordHash set (null by default). Setting a first
     // password needs a recent sign-in (see recent-login.ts).
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
+    setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
     const response = await callRoute(POST, {
       url: "/api/auth/local/change-password",
@@ -246,7 +246,7 @@ describe("POST /api/auth/local/change-password", () => {
       data: { localUsername: "takenname" },
     });
 
-    setMockSession({ userId: user1.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user1.id, isLoggedIn: true });
 
     const response = await callRoute(POST, {
       url: "/api/auth/local/change-password",

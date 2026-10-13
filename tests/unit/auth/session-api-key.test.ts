@@ -54,7 +54,7 @@ describe("getSession under an API key (real module)", () => {
     const result = await principal.runAsApiKey(KEY, () => session.getSession());
     expect(result.isLoggedIn).toBe(true);
     expect(result.userId).toBe("user-1");
-    expect(result.plexToken).toBeUndefined();
+    expect("plexToken" in result).toBe(false);
     expect(cookies).not.toHaveBeenCalled();
     expect(findUnique).not.toHaveBeenCalled();
   });

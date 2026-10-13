@@ -56,7 +56,7 @@ const inDays = (days: number) => new Date(Date.now() + days * 86_400_000).toISOS
 // under "step-up" below.
 async function login(authenticatedAt: number | undefined = Date.now()) {
   const user = await createTestUser();
-  setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok", authenticatedAt });
+  setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt });
   return user;
 }
 
@@ -453,7 +453,7 @@ describe("/api/settings/api-keys", () => {
 
       // A session with no login stamp at all (one from before the stamp existed).
       const unstamped = await createTestUser();
-      setMockSession({ isLoggedIn: true, userId: unstamped.id, plexToken: "tok" });
+      setMockSession({ isLoggedIn: true, userId: unstamped.id});
       expect((await create(body())).status).toBe(403);
 
       await login(Date.now() - 1000);
@@ -490,8 +490,20 @@ describe("/api/settings/api-keys", () => {
       await prisma.user.update({ where: { id: user.id }, data: { plexId: null } });
       await prisma.appSettings.update({ where: { userId: user.id }, data: { ssoMode: "FORWARD_AUTH" } });
       await prisma.user.update({ where: { id: user.id }, data: { ssoIssuer: "forward-auth" } });
-      const proxy = await expectJson<{ methods: string[]; error: string }>(await create(body()), 403);
-      expect(proxy.methods).toEqual(["forward"]);
+      // The proxy is offered only while forward-auth is usable, which needs
+      // FORWARD_AUTH_SECRET set (forward-secret.ts).
+      const previousSecret = process.env.FORWARD_AUTH_SECRET;
+      delete process.env.FORWARD_AUTH_SECRET;
+      try {
+        const noProxy = await expectJson<{ methods: string[] }>(await create(body()), 403);
+        expect(noProxy.methods).toEqual([]);
+        process.env.FORWARD_AUTH_SECRET = "proxy-secret";
+        const proxy = await expectJson<{ methods: string[]; error: string }>(await create(body()), 403);
+        expect(proxy.methods).toEqual(["forward"]);
+      } finally {
+        if (previousSecret === undefined) delete process.env.FORWARD_AUTH_SECRET;
+        else process.env.FORWARD_AUTH_SECRET = previousSecret;
+      }
 
       await prisma.appSettings.update({ where: { userId: user.id }, data: { ssoEnabled: false } });
       const none = await expectJson<{ methods: string[]; error: string }>(await create(body()), 403);

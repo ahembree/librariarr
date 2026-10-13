@@ -16,14 +16,14 @@ vi.mock("bcryptjs", () => ({
 // Mock rate limiter: a wrong current password is charged to the shared
 // password-confirmation bucket (password-confirm-limit.test.ts runs the real
 // one). The limiter's in-memory state would otherwise persist across tests.
-const { mockPeek, mockReserve, mockRefund } = vi.hoisted(() => {
-  const mockRefund = vi.fn();
+const { mockPeek, mockReserve, mockSucceeded } = vi.hoisted(() => {
+  const mockSucceeded = vi.fn();
   return {
     mockPeek: vi.fn((): Response | null => null),
     mockReserve: vi.fn(
-      (): { refused: Response } | { refused: null; refund: () => void } => ({ refused: null, refund: mockRefund }),
+      (): { refused: Response } | { refused: null; succeeded: () => void } => ({ refused: null, succeeded: mockSucceeded }),
     ),
-    mockRefund,
+    mockSucceeded,
   };
 });
 vi.mock("@/lib/rate-limit/rate-limiter", () => ({
@@ -67,7 +67,7 @@ describe("POST /api/auth/local/change-password", () => {
     // Default: not rate limited
     vi.clearAllMocks();
     mockPeek.mockReturnValue(null);
-    mockReserve.mockReturnValue({ refused: null, refund: mockRefund });
+    mockReserve.mockReturnValue({ refused: null, succeeded: mockSucceeded });
   });
 
   afterAll(async () => {
@@ -86,7 +86,7 @@ describe("POST /api/auth/local/change-password", () => {
 
   it("returns 400 when neither newPassword nor newUsername provided", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
+    setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
     const response = await callRoute(POST, {
       url: "/api/auth/local/change-password",
@@ -99,7 +99,7 @@ describe("POST /api/auth/local/change-password", () => {
 
   it("returns 400 for password shorter than 8 characters", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
+    setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
     const response = await callRoute(POST, {
       url: "/api/auth/local/change-password",
@@ -112,7 +112,7 @@ describe("POST /api/auth/local/change-password", () => {
 
   it("returns 400 for username shorter than 3 characters", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
+    setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
     const response = await callRoute(POST, {
       url: "/api/auth/local/change-password",
@@ -131,7 +131,7 @@ describe("POST /api/auth/local/change-password", () => {
     });
     await enablePasswordSignIn(user.id);
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
+    setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
     const response = await callRoute(POST, {
       url: "/api/auth/local/change-password",
@@ -147,7 +147,7 @@ describe("POST /api/auth/local/change-password", () => {
     expect(updated?.passwordHash).toBe("hashed_newpassword123");
     // Reserved in the shared bucket and given back: a right password costs nothing.
     expect(mockReserve).toHaveBeenCalledWith(expect.anything(), "password-confirm");
-    expect(mockRefund).toHaveBeenCalledTimes(1);
+    expect(mockSucceeded).toHaveBeenCalledTimes(1);
   });
 
   it("returns 401 when currentPassword is wrong", async () => {
@@ -158,7 +158,7 @@ describe("POST /api/auth/local/change-password", () => {
     });
     await enablePasswordSignIn(user.id);
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
+    setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
     const response = await callRoute(POST, {
       url: "/api/auth/local/change-password",
@@ -170,14 +170,14 @@ describe("POST /api/auth/local/change-password", () => {
     // Charged to the bucket the other password confirmations share: one guess
     // budget across them, not one per route.
     expect(mockReserve).toHaveBeenCalledWith(expect.anything(), "password-confirm");
-    expect(mockRefund).not.toHaveBeenCalled();
+    expect(mockSucceeded).not.toHaveBeenCalled();
   });
 
   it("stops before comparing when the attempt cannot be reserved", async () => {
     const user = await createTestUser();
     await prisma.user.update({ where: { id: user.id }, data: { passwordHash: "hashed_correctpassword" } });
     await enablePasswordSignIn(user.id);
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
+    setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
     mockReserve.mockReturnValue({
       refused: new Response(JSON.stringify({ error: "Too many attempts" }), { status: 429 }),
     });
@@ -214,7 +214,7 @@ describe("POST /api/auth/local/change-password", () => {
     });
     await enablePasswordSignIn(user.id);
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
+    setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
     const response = await callRoute(POST, {
       url: "/api/auth/local/change-password",
@@ -227,7 +227,7 @@ describe("POST /api/auth/local/change-password", () => {
 
   it("allows setting password without currentPassword when no existing password", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
+    setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
     const response = await callRoute(POST, {
       url: "/api/auth/local/change-password",
@@ -248,7 +248,7 @@ describe("POST /api/auth/local/change-password", () => {
     ["a session with no sign-in time", undefined],
   ])("refuses to set a first password on %s", async (_label, authenticatedAt) => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt });
+    setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt });
 
     const response = await callRoute(POST, {
       url: "/api/auth/local/change-password",
@@ -270,7 +270,7 @@ describe("POST /api/auth/local/change-password", () => {
     const user = await createTestUser();
     await prisma.user.update({ where: { id: user.id }, data: { passwordHash: "hashed_oldpassword1" } });
     await enablePasswordSignIn(user.id);
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() - 60 * 60 * 1000 });
+    setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() - 60 * 60 * 1000 });
 
     const response = await callRoute(POST, {
       url: "/api/auth/local/change-password",
@@ -305,7 +305,7 @@ describe("POST /api/auth/local/change-password", () => {
       ["SSO replacing the local form", ssoOn],
     ])("%s: the right current password does not stand in for a recent sign-in", async (_label, settings) => {
       const user = await withPassword(settings);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() - 60 * 60 * 1000 });
+      setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() - 60 * 60 * 1000 });
 
       const response = await callRoute(POST, {
         url: "/api/auth/local/change-password",
@@ -323,7 +323,7 @@ describe("POST /api/auth/local/change-password", () => {
 
     it("a recent sign-in changes the credentials without the current password", async () => {
       const user = await withPassword({ localAuthEnabled: false });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
+      setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
       const response = await callRoute(POST, {
         url: "/api/auth/local/change-password",
@@ -339,7 +339,7 @@ describe("POST /api/auth/local/change-password", () => {
 
   it("changes username successfully", async () => {
     const user = await createTestUser({ username: "OldName" });
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
+    setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
     const response = await callRoute(POST, {
       url: "/api/auth/local/change-password",
@@ -363,7 +363,7 @@ describe("POST /api/auth/local/change-password", () => {
       data: { localUsername: "takenname" },
     });
 
-    setMockSession({ userId: user1.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
+    setMockSession({ userId: user1.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
     const response = await callRoute(POST, {
       url: "/api/auth/local/change-password",
@@ -382,7 +382,7 @@ describe("POST /api/auth/local/change-password", () => {
     });
     await enablePasswordSignIn(user.id);
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
+    setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
     const response = await callRoute(POST, {
       url: "/api/auth/local/change-password",
@@ -406,7 +406,7 @@ describe("POST /api/auth/local/change-password", () => {
   it("increments sessionVersion to invalidate other sessions", async () => {
     const user = await createTestUser();
     const initialVersion = user.sessionVersion;
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
+    setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
     await callRoute(POST, {
       url: "/api/auth/local/change-password",
@@ -423,7 +423,7 @@ describe("POST /api/auth/local/change-password", () => {
     // Ensure no localUsername is set
     expect(user.localUsername).toBeNull();
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
+    setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
     const response = await callRoute(POST, {
       url: "/api/auth/local/change-password",
@@ -445,7 +445,7 @@ describe("POST /api/auth/local/change-password", () => {
       data: { localUsername: "myname" },
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
+    setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
     const response = await callRoute(POST, {
       url: "/api/auth/local/change-password",
@@ -459,7 +459,7 @@ describe("POST /api/auth/local/change-password", () => {
 
   it("returns 401 when user no longer exists in DB", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
+    setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
     // Delete user from DB
     await prisma.user.delete({ where: { id: user.id } });

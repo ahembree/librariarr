@@ -67,7 +67,7 @@ describe("Lifecycle Exceptions API", () => {
 
     it("returns empty array when user has no exceptions", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET);
       const body = await expectJson<{ exceptions: unknown[] }>(response, 200);
@@ -76,7 +76,7 @@ describe("Lifecycle Exceptions API", () => {
 
     it("returns exceptions belonging to authenticated user", async () => {
       const { user, mediaItem } = await createUserWithMediaItem();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       await prisma.lifecycleException.create({
         data: { userId: user.id, mediaItemId: mediaItem.id, reason: "Keep forever" },
@@ -97,7 +97,7 @@ describe("Lifecycle Exceptions API", () => {
         data: { userId: user2.id, mediaItemId: item2.id },
       });
 
-      setMockSession({ userId: user1.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user1.id, isLoggedIn: true });
       const response = await callRoute(GET);
       const body = await expectJson<{ exceptions: unknown[] }>(response, 200);
       expect(body.exceptions).toHaveLength(0);
@@ -118,7 +118,7 @@ describe("Lifecycle Exceptions API", () => {
         ],
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       // Filter for MOVIE
       const movieResponse = await callRoute(GET, { url: "/api/lifecycle/exceptions?type=MOVIE" });
@@ -147,7 +147,7 @@ describe("Lifecycle Exceptions API", () => {
       });
       await prisma.lifecycleException.create({ data: { userId: user.id, mediaItemId: episode.id } });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
       const body = await expectJson<{
         exceptions: Array<{ mediaItem: { parentTitle: string | null; seasonNumber: number | null; episodeNumber: number | null } }>;
       }>(await callRoute(GET, { url: "/api/lifecycle/exceptions?type=SERIES" }), 200);
@@ -156,7 +156,7 @@ describe("Lifecycle Exceptions API", () => {
 
     it("rejects an unknown type with 400 instead of failing the query", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
       const body = await expectJson<{ error: string }>(
         await callRoute(GET, { url: "/api/lifecycle/exceptions?type=BOOK" }),
         400,
@@ -175,7 +175,7 @@ describe("Lifecycle Exceptions API", () => {
 
     it("returns 400 with invalid body", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(POST, { method: "POST", body: {} });
       await expectJson(response, 400);
@@ -185,14 +185,14 @@ describe("Lifecycle Exceptions API", () => {
       const { user: user1 } = await createUserWithMediaItem();
       const { mediaItem: item2 } = await createUserWithMediaItem();
 
-      setMockSession({ userId: user1.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user1.id, isLoggedIn: true });
       const response = await callRoute(POST, { method: "POST", body: { mediaItemId: item2.id } });
       await expectJson(response, 404);
     });
 
     it("creates exception with valid data", async () => {
       const { user, mediaItem } = await createUserWithMediaItem();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(POST, {
         method: "POST",
@@ -211,7 +211,7 @@ describe("Lifecycle Exceptions API", () => {
 
     it("upserts on duplicate (updates reason)", async () => {
       const { user, mediaItem } = await createUserWithMediaItem();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       // First create
       await callRoute(POST, { method: "POST", body: { mediaItemId: mediaItem.id, reason: "Original" } });
@@ -233,7 +233,7 @@ describe("Lifecycle Exceptions API", () => {
       const ruleSet = await createTestRuleSet(user.id, { type: "MOVIE" });
       await createTestRuleMatch(ruleSet.id, mediaItem.id);
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
       await callRoute(POST, { method: "POST", body: { mediaItemId: mediaItem.id } });
 
       const matches = await prisma.ruleMatch.findMany({
@@ -257,7 +257,7 @@ describe("Lifecycle Exceptions API", () => {
         },
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
       await callRoute(POST, { method: "POST", body: { mediaItemId: mediaItem.id } });
 
       const action = await prisma.lifecycleAction.findFirst({
@@ -297,7 +297,7 @@ describe("Lifecycle Exceptions API", () => {
         });
       }
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
       await callRoute(POST, { method: "POST", body: { mediaItemId: mediaItem.id } });
 
       const matches = await prisma.ruleMatch.findMany({ where: { ruleSetId: ruleSet.id } });
@@ -335,7 +335,7 @@ describe("Lifecycle Exceptions API", () => {
         },
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
       await callRoute(POST, { method: "POST", body: { mediaItemId: b7.id } });
 
       expect(await prisma.ruleMatch.count({ where: { ruleSetId: { in: [r1.id, r2.id] } } })).toBe(2);
@@ -373,7 +373,7 @@ describe("Lifecycle Exceptions API", () => {
         });
       }
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
       await callRoute(POST, { method: "POST", body: { mediaItemId: b7.id } });
 
       const left = await prisma.ruleMatch.findMany({ where: { ruleSetId: { in: [grouped.id, perEpisode.id] } } });
@@ -402,7 +402,7 @@ describe("Lifecycle Exceptions API", () => {
         copies: [{ id: mediaItem.id, libraryId: library.id, ratingKey: mediaItem.ratingKey, title: mediaItem.title }],
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
       await callRoute(POST, { method: "POST", body: { mediaItemId: mediaItem.id } });
 
       const calls = mockRemoveItemFromCollections.mock.calls.map((c) => [c[3], c[5]]);
@@ -443,7 +443,7 @@ describe("Lifecycle Exceptions API", () => {
         },
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
       const res = await callRoute(POST, { method: "POST", body: { mediaItemId: ep.id, scope: "series" } });
       const body = await expectJson<{ count: number }>(res, 201);
 
@@ -469,7 +469,7 @@ describe("Lifecycle Exceptions API", () => {
         },
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
       await callRoute(POST, { method: "POST", body: { mediaItemId: mediaItem.id } });
 
       const action = await prisma.lifecycleAction.findFirst({
@@ -489,7 +489,7 @@ describe("Lifecycle Exceptions API", () => {
 
     it("returns 404 when exception does not exist", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(DELETE, { id: "nonexistent" });
       await expectJson(response, 404);
@@ -503,7 +503,7 @@ describe("Lifecycle Exceptions API", () => {
         data: { userId: user2.id, mediaItemId: item2.id },
       });
 
-      setMockSession({ userId: user1.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user1.id, isLoggedIn: true });
       const response = await callRouteWithParams(DELETE, { id: exception.id });
       await expectJson(response, 404);
     });
@@ -514,7 +514,7 @@ describe("Lifecycle Exceptions API", () => {
         data: { userId: user.id, mediaItemId: mediaItem.id, reason: "test" },
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
       const response = await callRouteWithParams(DELETE, { id: exception.id });
       const body = await expectJson<{ success: boolean }>(response, 200);
       expect(body.success).toBe(true);
@@ -533,7 +533,7 @@ describe("Lifecycle Exceptions API", () => {
       const { user: other, mediaItem: otherItem } = await createUserWithMediaItem();
       const exception = await prisma.lifecycleException.create({ data: { userId: user.id, mediaItemId: mediaItem.id } });
       const foreign = await prisma.lifecycleException.create({ data: { userId: other.id, mediaItemId: otherItem.id } });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const patch = (id: string) =>
         callRouteWithParams(PATCH, { id }, { method: "PATCH", body: { reason: "keep" } });
@@ -570,7 +570,7 @@ describe("Lifecycle Exceptions API", () => {
       });
       // A grouped row's worth of ids: the two real ones plus the rest of a big show.
       const ids = [kept.id, second.id, ...Array.from({ length: 1598 }, (_, i) => `absent-${i}`)];
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
       return { ids, realIds: [kept.id, second.id] };
     }
 

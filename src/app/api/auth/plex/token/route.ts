@@ -4,16 +4,22 @@ import { prisma } from "@/lib/db";
 import { rotateSession } from "@/lib/auth/session";
 import { apiLogger } from "@/lib/logger";
 import { validateRequest, plexTokenSchema } from "@/lib/validation";
-import { checkAuthRateLimit } from "@/lib/rate-limit/rate-limiter";
+import { peekAuthRateLimit, reserveAuthAttempt } from "@/lib/rate-limit/rate-limiter";
 import { isSsoOverrideActive } from "@/lib/sso/config";
+
+const PLEX_TOKEN_BUCKET = "plex-token";
 
 export async function POST(request: NextRequest) {
   try {
-    const rateLimited = checkAuthRateLimit(request, "plex-token");
-    if (rateLimited) return rateLimited;
+    // Charged only on a failed sign-in (see `reserveAuthAttempt`).
+    const limited = peekAuthRateLimit(request, PLEX_TOKEN_BUCKET);
+    if (limited) return limited;
 
     const { data, error } = await validateRequest(request, plexTokenSchema);
     if (error) return error;
+
+    const attempt = reserveAuthAttempt(request, PLEX_TOKEN_BUCKET);
+    if (attempt.refused) return attempt.refused;
 
     const { authToken } = data;
     const plexUser = await getPlexUser(authToken);
@@ -60,12 +66,15 @@ export async function POST(request: NextRequest) {
         },
       });
 
+      attempt.succeeded();
+
       // Destroy first to clear any transient state (e.g. SSO handshake fields
       // from an abandoned OIDC init) before replacing with the authenticated
       // session — matches the pattern in local/login and the SSO callback.
+      // The token itself stays in the User row (`getStoredPlexToken`), never
+      // in the cookie.
       const session = await rotateSession();
       session.userId = existingUser.id;
-      session.plexToken = authToken;
       session.isLoggedIn = true;
       session.sessionVersion = existingUser.sessionVersion;
       await session.save();
@@ -130,13 +139,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    attempt.succeeded();
+
     // Rotating clears any transient state (e.g. SSO handshake fields from an
     // abandoned OIDC init) before establishing the authenticated session —
     // matches the pattern in the existing-user branch above and in local/login
     // and the SSO callback.
     const session = await rotateSession();
     session.userId = user.id;
-    session.plexToken = authToken;
     session.isLoggedIn = true;
     session.sessionVersion = 0;
     await session.save();

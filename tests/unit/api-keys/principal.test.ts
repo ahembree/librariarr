@@ -63,7 +63,7 @@ describe("apiKeySession", () => {
     const session = apiKeySession(principal());
     expect(session.isLoggedIn).toBe(true);
     expect(session.userId).toBe("user-1");
-    expect(session.plexToken).toBeUndefined();
+    expect("plexToken" in session).toBe(false);
     expect(session.sessionVersion).toBeUndefined();
   });
 

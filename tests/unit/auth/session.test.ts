@@ -350,14 +350,13 @@ describe("isSessionValid", () => {
  */
 describe("getSession — enforces revocation against the User row", () => {
   it("passes a current session through untouched", async () => {
-    const raw = { isLoggedIn: true, userId: "u1", sessionVersion: 3, plexToken: "tok" };
+    const raw = { isLoggedIn: true, userId: "u1", sessionVersion: 3 };
     mockGetIronSession.mockResolvedValue(raw);
     mockUserFindUnique.mockResolvedValue({ sessionVersion: 3 });
     const { getSession } = await load();
     const session = await getSession();
     expect(session.isLoggedIn).toBe(true);
     expect(session.userId).toBe("u1");
-    expect(session.plexToken).toBe("tok");
     expect(mockUserFindUnique).toHaveBeenCalledWith({
       where: { id: "u1" },
       select: { sessionVersion: true },
@@ -370,7 +369,6 @@ describe("getSession — enforces revocation against the User row", () => {
       isLoggedIn: true,
       userId: "u1",
       sessionVersion: 1,
-      plexToken: "tok",
       save,
     });
     mockUserFindUnique.mockResolvedValue({ sessionVersion: 2 });
@@ -379,7 +377,6 @@ describe("getSession — enforces revocation against the User row", () => {
     expect(session.isLoggedIn).toBe(false);
     expect(session.userId).toBeUndefined();
     expect(session.sessionVersion).toBeUndefined();
-    expect(session.plexToken).toBeUndefined();
     expect(save).not.toHaveBeenCalled();
   });
 

@@ -7,7 +7,7 @@ import { validateRequest, serverAddSchema } from "@/lib/validation";
 import { sanitize, sanitizeErrorDetail } from "@/lib/api/sanitize";
 import { eventBus } from "@/lib/events/event-bus";
 import { invalidateMediaCaches } from "@/lib/cache/invalidate";
-import { getPlexResources } from "@/lib/plex/auth";
+import { getPlexResources, getStoredPlexToken } from "@/lib/plex/auth";
 import { hasRecentLogin } from "@/lib/auth/recent-login";
 import { reauthRequired } from "@/lib/auth/reauth";
 import { apiLogger } from "@/lib/logger";
@@ -69,7 +69,8 @@ export async function POST(request: NextRequest) {
     // token, which signs in to Librariarr. A stolen cookie must not be able to
     // send it somewhere of its choosing (see recent-login.ts).
     // Checked first: confirming who you are cannot supply a Plex account.
-    if (!session.plexToken) {
+    const plexToken = await getStoredPlexToken(session.userId!);
+    if (!plexToken) {
       return NextResponse.json(
         { error: "Sign in with Plex to add a server from your Plex account" },
         { status: 400 }
@@ -80,7 +81,7 @@ export async function POST(request: NextRequest) {
     }
     let resources;
     try {
-      resources = await getPlexResources(session.plexToken);
+      resources = await getPlexResources(plexToken);
     } catch (err) {
       apiLogger.error("Auth", "Failed to fetch Plex servers", { error: String(err) });
       return NextResponse.json({ error: "Failed to fetch servers from Plex" }, { status: 502 });

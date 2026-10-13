@@ -44,7 +44,7 @@ describe("GET /api/media/library-types", () => {
 
   it("returns empty types when user has no servers", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/library-types",
@@ -74,7 +74,7 @@ describe("GET /api/media/library-types", () => {
       enabled: true,
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/library-types",
@@ -102,7 +102,7 @@ describe("GET /api/media/library-types", () => {
       enabled: false,
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/library-types",
@@ -130,7 +130,7 @@ describe("GET /api/media/library-types", () => {
       key: "movie-4k",
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/library-types",
@@ -158,7 +158,7 @@ describe("GET /api/media/library-types", () => {
       enabled: true,
     });
 
-    setMockSession({ userId: user1.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user1.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/library-types",
@@ -186,7 +186,7 @@ describe("GET /api/media/library-types", () => {
       enabled: true,
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/library-types",

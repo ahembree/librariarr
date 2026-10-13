@@ -41,7 +41,7 @@ describe("GET /api/settings/card-display-preferences", () => {
 
   it("returns null preferences when no settings exist", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(getCardDisplay);
     const body = await expectJson<{ preferences: unknown }>(res);
@@ -78,7 +78,7 @@ describe("PUT /api/settings/card-display-preferences", () => {
 
   it("updates card display preferences with valid data", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const preferences = {
       MOVIE: {
@@ -98,7 +98,7 @@ describe("PUT /api/settings/card-display-preferences", () => {
 
   it("GET after PUT returns updated preferences", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const preferences = {
       MOVIE: {
@@ -125,7 +125,7 @@ describe("PUT /api/settings/card-display-preferences", () => {
 
   it("rejects missing preferences field", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(putCardDisplay, {
       method: "PUT",
@@ -137,7 +137,7 @@ describe("PUT /api/settings/card-display-preferences", () => {
 
   it("rejects non-object preferences", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(putCardDisplay, {
       method: "PUT",
@@ -148,7 +148,7 @@ describe("PUT /api/settings/card-display-preferences", () => {
 
   it("rejects preferences with invalid inner structure (missing servers)", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(putCardDisplay, {
       method: "PUT",
@@ -167,7 +167,7 @@ describe("PUT /api/settings/card-display-preferences", () => {
 
   it("overwrites previous preferences on second PUT", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const first = {
       MOVIE: {

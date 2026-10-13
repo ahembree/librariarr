@@ -130,7 +130,8 @@ function unique() {
 export async function createTestUser(
   overrides?: Partial<{
     plexId: string;
-    plexToken: string;
+    /** `null` for an account with no Plex token stored (a local or SSO-only admin). */
+    plexToken: string | null;
     username: string;
     email: string;
   }>
@@ -139,7 +140,7 @@ export async function createTestUser(
   return prisma.user.create({
     data: {
       plexId: overrides?.plexId ?? `plex-${unique()}`,
-      plexToken: overrides?.plexToken ?? "test-plex-token",
+      plexToken: overrides && "plexToken" in overrides ? overrides.plexToken : "test-plex-token",
       username: overrides?.username ?? "testuser",
       email: overrides?.email ?? "test@example.com",
     },

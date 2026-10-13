@@ -57,9 +57,30 @@ describe("passwordSignInEnabled", () => {
     expect(passwordSignInEnabled({ localAuthEnabled: undefined, sso: null })).toBe(false);
     expect(passwordSignInEnabled({ localAuthEnabled: null, sso: null })).toBe(false);
     expect(passwordSignInEnabled({ localAuthEnabled: true, sso: sso() })).toBe(false);
-    expect(
-      passwordSignInEnabled({ localAuthEnabled: true, sso: sso({ ssoMode: "FORWARD_AUTH" }) }),
-    ).toBe(false);
+    // Forward-auth is usable only with the proxy secret set (forward-secret.ts).
+    const previous = process.env.FORWARD_AUTH_SECRET;
+    process.env.FORWARD_AUTH_SECRET = "proxy-secret";
+    try {
+      expect(
+        passwordSignInEnabled({ localAuthEnabled: true, sso: sso({ ssoMode: "FORWARD_AUTH" }) }),
+      ).toBe(false);
+    } finally {
+      if (previous === undefined) delete process.env.FORWARD_AUTH_SECRET;
+      else process.env.FORWARD_AUTH_SECRET = previous;
+    }
+  });
+
+  it("is on again when SSO is configured but cannot be offered (forward-auth without its secret)", () => {
+    const previous = process.env.FORWARD_AUTH_SECRET;
+    delete process.env.FORWARD_AUTH_SECRET;
+    try {
+      expect(
+        passwordSignInEnabled({ localAuthEnabled: true, sso: sso({ ssoMode: "FORWARD_AUTH" }) }),
+      ).toBe(true);
+    } finally {
+      if (previous === undefined) delete process.env.FORWARD_AUTH_SECRET;
+      else process.env.FORWARD_AUTH_SECRET = previous;
+    }
   });
 
   it("is on under SSO_DISABLE_OVERRIDE, the recovery path, as at login", () => {

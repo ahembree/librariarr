@@ -42,7 +42,7 @@ describe("GET /api/settings/image-cache", () => {
 
   it("returns cache stats", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     mockGetImageCacheStats.mockResolvedValue({ fileCount: 42, totalSize: 1048576 });
 
@@ -72,7 +72,7 @@ describe("DELETE /api/settings/image-cache", () => {
 
   it("clears cache successfully", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     mockClearImageCache.mockResolvedValue(undefined);
 
@@ -84,7 +84,7 @@ describe("DELETE /api/settings/image-cache", () => {
 
   it("returns 500 when clearing fails", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     mockClearImageCache.mockRejectedValue(new Error("disk error"));
 

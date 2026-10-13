@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from "vitest";
-import { FORWARD_AUTH_PROXY_HEADER, hasForwardAuthSecret } from "@/lib/sso/forward-secret";
+import { FORWARD_AUTH_PROXY_HEADER, hasForwardAuthSecret, isForwardAuthSecretConfigured } from "@/lib/sso/forward-secret";
 
 const original = process.env.FORWARD_AUTH_SECRET;
 
@@ -14,12 +14,28 @@ function headers(value?: string): Headers {
   return h;
 }
 
-describe("hasForwardAuthSecret", () => {
-  it("lets every request through while no secret is configured (opt-in)", () => {
+describe("isForwardAuthSecretConfigured", () => {
+  it("is true only for a non-empty value", () => {
     delete process.env.FORWARD_AUTH_SECRET;
-    expect(hasForwardAuthSecret(headers())).toBe(true);
+    expect(isForwardAuthSecretConfigured()).toBe(false);
     process.env.FORWARD_AUTH_SECRET = "";
-    expect(hasForwardAuthSecret(headers("anything"))).toBe(true);
+    expect(isForwardAuthSecretConfigured()).toBe(false);
+    process.env.FORWARD_AUTH_SECRET = "s3cret-value";
+    expect(isForwardAuthSecretConfigured()).toBe(true);
+  });
+});
+
+describe("hasForwardAuthSecret", () => {
+  // It used to let every request through while unset ("opt-in"), which meant
+  // any client that reached the app's port directly could sign in by sending
+  // the identity header itself. Unset, forward-auth is not usable at all.
+  it("refuses every request while no secret is configured", () => {
+    delete process.env.FORWARD_AUTH_SECRET;
+    expect(hasForwardAuthSecret(headers())).toBe(false);
+    expect(hasForwardAuthSecret(headers("anything"))).toBe(false);
+    process.env.FORWARD_AUTH_SECRET = "";
+    expect(hasForwardAuthSecret(headers("anything"))).toBe(false);
+    expect(hasForwardAuthSecret(headers(""))).toBe(false);
   });
 
   it("requires the exact secret once one is configured", () => {

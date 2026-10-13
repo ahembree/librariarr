@@ -48,6 +48,20 @@ export async function checkPlexPin(pinId: number, code?: string): Promise<PlexPi
   return response.data;
 }
 
+/**
+ * The signed-in account's plex.tv token, from the User row. It is deliberately
+ * not in the session cookie (see `SessionData` in `src/lib/auth/session.ts`):
+ * a token that signs in to Librariarr on its own must not be sealed into
+ * something every request carries and every browser stores.
+ */
+export async function getStoredPlexToken(userId: string): Promise<string | null> {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { plexToken: true },
+  });
+  return user?.plexToken ?? null;
+}
+
 export async function getPlexUser(authToken: string): Promise<PlexUser> {
   const response = await axios.get("https://plex.tv/api/v2/user", {
     headers: {

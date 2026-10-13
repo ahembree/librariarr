@@ -106,14 +106,75 @@ export class RateLimiter {
 export const authRateLimiter = new RateLimiter(10, 15 * 60 * 1000, 10_000);
 
 // The tamper-proof floor under the per-IP auth limit: total attempts per
-// bucket across ALL clients. The per-IP key is only as trustworthy as the IP,
-// and the IP comes from a header when a proxy is trusted — so a client that
-// can rotate `X-Forwarded-For` (a direct-exposure install, or a proxy that
-// appends rather than replaces) gets a fresh per-IP bucket on every request.
-// Measured before this existed: 12 login attempts with 12 different forwarded
-// addresses, zero 429s. This bucket cannot be escaped by anything in the
-// request. Generous enough that one admin never sees it; a brute force does.
+// bucket across every client whose address has never signed in. The per-IP key
+// is only as trustworthy as the IP, and the IP comes from a header when a proxy
+// is trusted — so a client that can rotate `X-Forwarded-For` (a direct-exposure
+// install, or a proxy that appends rather than replaces) gets a fresh per-IP
+// bucket on every request. Measured before this existed: 12 login attempts with
+// 12 different forwarded addresses, zero 429s. This bucket cannot be escaped by
+// anything in the request.
+//
+// It does NOT apply to an address a sign-in has succeeded from (`knownAddresses`
+// below). Applied to everyone, it was a lockout anyone could cause: sixty wrong
+// passwords from anywhere — four a minute, from a single rotating or shared
+// address — refused every client on the bucket for the rest of the window, the
+// admin included, for as long as the sender cared to keep going. An address
+// the admin has signed in from is judged by its own per-address budget alone,
+// which only that address's failures can spend; a flood of forged addresses
+// still meets the floor. An address that forges the admin's own keeps sharing
+// the admin's budget, as it always did.
 export const authGlobalRateLimiter = new RateLimiter(60, 15 * 60 * 1000);
+
+// ─── Addresses a sign-in has succeeded from ───
+//
+// Remembered by `AuthAttempt.succeeded()` and by `rememberAuthenticatedAddress`
+// for `KNOWN_ADDRESS_TTL_MS` (sliding), bounded so a run of successful
+// sign-ins through a proxy that reports a fresh address each time cannot grow
+// it without end. In memory only, like every limiter here: after a restart the
+// first sign-in from an address is subject to the floor again, exactly like a
+// first sign-in from anywhere. With `TRUST_PROXY_HEADERS=false` every client
+// is the one address "unknown", whose per-address budget is already a global
+// one, so the floor adds nothing there and is skipped after the first sign-in.
+const KNOWN_ADDRESS_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const MAX_KNOWN_ADDRESSES = 10_000;
+const knownAddresses = new Map<string, number>();
+
+/** Remember the request's address as one a sign-in has succeeded from. */
+export function rememberAuthenticatedAddress(request: Request): void {
+  const ip = getClientIp(request);
+  const now = Date.now();
+  if (!knownAddresses.has(ip) && knownAddresses.size >= MAX_KNOWN_ADDRESSES) {
+    for (const [key, until] of knownAddresses) if (until <= now) knownAddresses.delete(key);
+    if (knownAddresses.size >= MAX_KNOWN_ADDRESSES) {
+      const oldest = knownAddresses.keys().next().value;
+      if (oldest !== undefined) knownAddresses.delete(oldest);
+    }
+  }
+  // Re-inserted so insertion order is last-sign-in order for the eviction above.
+  knownAddresses.delete(ip);
+  knownAddresses.set(ip, now + KNOWN_ADDRESS_TTL_MS);
+}
+
+/** Whether a sign-in has succeeded from this address in the last 30 days. */
+export function isKnownAddress(ip: string): boolean {
+  const until = knownAddresses.get(ip);
+  if (until === undefined) return false;
+  if (until <= Date.now()) {
+    knownAddresses.delete(ip);
+    return false;
+  }
+  return true;
+}
+
+function cleanupKnownAddresses(): void {
+  const now = Date.now();
+  for (const [key, until] of knownAddresses) if (until <= now) knownAddresses.delete(key);
+}
+
+/** Test-only: forget every address a sign-in has succeeded from. */
+export function _resetKnownAddressesForTesting(): void {
+  knownAddresses.clear();
+}
 
 // AI chat/test is interactive — a user asks many questions in a session, so the
 // tight auth limit is wrong here. Still bounded so a runaway client (or a leaked
@@ -174,13 +235,17 @@ setInterval(() => {
   apiKeyUnknownLookupFloor.cleanup();
   apiKeyVerificationFloor.cleanup();
   apiKeyRequestLimiter.cleanup();
+  cleanupKnownAddresses();
 }, 5 * 60 * 1000).unref();
 
 /**
  * Check a rate limit against the given limiter and return a 429 Response if
  * limited, or null if allowed. Buckets per client IP (see getClientIp). When
  * a `globalLimiter` is given it is checked as well, keyed by bucket alone, so
- * the total across every client is bounded no matter what the IP claims.
+ * the total across every client is bounded no matter what the IP claims —
+ * except for an address a sign-in has succeeded from (`isKnownAddress`), which
+ * neither charges it nor is refused by it: its own per-address budget is the
+ * one bound that only its own attempts can spend.
  */
 export function checkRateLimit(
   request: Request,
@@ -191,7 +256,7 @@ export function checkRateLimit(
   const ip = getClientIp(request);
   const perIp = limiter.check(`${bucket}:${ip}`);
   if (perIp.limited) return tooManyAttempts(perIp.retryAfterMs);
-  if (globalLimiter) {
+  if (globalLimiter && !isKnownAddress(ip)) {
     const global = globalLimiter.check(`${bucket}:*`);
     if (global.limited) return tooManyAttempts(global.retryAfterMs);
   }
@@ -212,12 +277,26 @@ function tooManyAttempts(retryAfterMs: number | undefined): Response {
 
 /**
  * Check auth rate limit and return a 429 Response if limited, or null if allowed.
- * Consolidates the repeated rate-limit check pattern used across auth endpoints.
- * Applies both the per-IP limit and the global floor (`authGlobalRateLimiter`).
+ * Applies both the per-IP limit and the global floor (`authGlobalRateLimiter`),
+ * and charges EVERY call. For a route that only starts a flow (a Plex PIN, an
+ * OIDC handshake) — there is no success to give back. A route that verifies a
+ * credential uses `peekAuthRateLimit` + `reserveAuthAttempt` instead, so that
+ * only its failures count.
  */
 export function checkAuthRateLimit(request: Request, bucket: string): Response | null {
   return checkRateLimit(request, authRateLimiter, bucket, authGlobalRateLimiter);
 }
+
+/**
+ * The one bucket the routes that are open before the first admin exists share:
+ * `POST /api/auth/setup` (a bcrypt hash per call), and the setup-time backup
+ * listing and restore. Whoever reaches a fresh install first becomes its
+ * admin; this only keeps that from being a free CPU sink or a thousand
+ * restores a minute. Charged on every call — none of them verifies a
+ * credential — and ten per address per quarter hour is more than a setup
+ * wizard makes.
+ */
+export const SETUP_BUCKET = "setup";
 
 /**
  * The one bucket every current-password confirmation on a signed-in route is
@@ -229,34 +308,44 @@ export function checkAuthRateLimit(request: Request, bucket: string): Response |
 export const PASSWORD_CONFIRM_BUCKET = "password-confirm";
 
 /**
- * The same two auth limiters, charged only on FAILURE. For a password
+ * The same two auth limiters, charged only on FAILURE. For every route that
+ * verifies a credential: a login (the local password, a Plex token, an OIDC
+ * callback, the forward-auth proxy's header) and a password or identity
  * confirmation on a route the user is already signed in to — creating an API
- * key, `/api/auth/reauth/password`, changing the credentials — where counting
- * every attempt would lock a legitimate user out of a routine they may run
- * ten times in a row, while a wrong password still costs exactly what a
- * failed login does.
+ * key, `/api/auth/reauth/*`, changing the credentials. Counting every attempt
+ * spent the budget on sign-ins that succeeded (ten devices in a quarter hour,
+ * or a routine run ten times) while a wrong password still costs exactly what
+ * a failed login does.
  *
  * `peekAuthRateLimit` refuses early without counting; `reserveAuthAttempt`
- * charges the attempt immediately before the password is compared, and its
- * `refund` gives it back when the password matched. Charging only after a
- * failed compare let a burst of concurrent wrong passwords all pass the check
- * while their ~250 ms bcrypt compares ran — N guesses instead of 10 — whereas
- * a reservation counts each one the moment it starts.
+ * charges the attempt immediately before the credential is checked, and its
+ * `succeeded` gives it back when the check passed — and remembers the address
+ * as one a sign-in has succeeded from, which exempts it from the global floor
+ * (see `authGlobalRateLimiter`). Charging only after a failed compare let a
+ * burst of concurrent wrong passwords all pass the check while their ~250 ms
+ * bcrypt compares ran — N guesses instead of 10 — whereas a reservation counts
+ * each one the moment it starts.
  */
 export function peekAuthRateLimit(request: Request, bucket: string): Response | null {
   const ip = getClientIp(request);
   const perIp = authRateLimiter.peek(`${bucket}:${ip}`);
   if (perIp.limited) return tooManyAttempts(perIp.retryAfterMs);
-  const global = authGlobalRateLimiter.peek(`${bucket}:*`);
-  if (global.limited) return tooManyAttempts(global.retryAfterMs);
+  if (!isKnownAddress(ip)) {
+    const global = authGlobalRateLimiter.peek(`${bucket}:*`);
+    if (global.limited) return tooManyAttempts(global.retryAfterMs);
+  }
   return null;
 }
 
-/** A reserved attempt: refused with a 429, or held until `refund` gives it back. */
-export type AuthAttempt = { refused: Response } | { refused: null; refund: () => void };
+/**
+ * A reserved attempt: refused with a 429, or held until `succeeded` gives it
+ * back. An attempt that fails is simply left charged.
+ */
+export type AuthAttempt = { refused: Response } | { refused: null; succeeded: () => void };
 
 export function reserveAuthAttempt(request: Request, bucket: string): AuthAttempt {
-  const perIpKey = `${bucket}:${getClientIp(request)}`;
+  const ip = getClientIp(request);
+  const perIpKey = `${bucket}:${ip}`;
   const globalKey = `${bucket}:*`;
   const perIp = authRateLimiter.check(perIpKey);
   if (perIp.limited) {
@@ -264,22 +353,25 @@ export function reserveAuthAttempt(request: Request, bucket: string): AuthAttemp
     authRateLimiter.refund(perIpKey, perIp.window);
     return { refused: tooManyAttempts(perIp.retryAfterMs) };
   }
-  const global = authGlobalRateLimiter.check(globalKey);
-  if (global.limited) {
+  // The floor is for addresses no sign-in has succeeded from (see
+  // `authGlobalRateLimiter`); a known address is bounded by its own budget.
+  const global = isKnownAddress(ip) ? null : authGlobalRateLimiter.check(globalKey);
+  if (global?.limited) {
     authRateLimiter.refund(perIpKey, perIp.window);
     authGlobalRateLimiter.refund(globalKey, global.window);
     return { refused: tooManyAttempts(global.retryAfterMs) };
   }
   // Refunded against the windows it was charged in, once: a window that has
   // since rolled over counts other attempts, not this one.
-  let refunded = false;
+  let settled = false;
   return {
     refused: null,
-    refund: () => {
-      if (refunded) return;
-      refunded = true;
+    succeeded: () => {
+      if (settled) return;
+      settled = true;
       authRateLimiter.refund(perIpKey, perIp.window);
-      authGlobalRateLimiter.refund(globalKey, global.window);
+      if (global) authGlobalRateLimiter.refund(globalKey, global.window);
+      rememberAuthenticatedAddress(request);
     },
   };
 }

@@ -41,7 +41,7 @@ describe("GET /api/system/update-check", () => {
 
   it("returns whether a newer release exists and where it is", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
     mockCheckForUpdate.mockResolvedValue({
       currentVersion: "1.0.0",
       latestVersion: "1.1.0",
@@ -63,7 +63,7 @@ describe("GET /api/system/update-check", () => {
 
   it("answers with no release when GitHub could not be asked", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
     mockCheckForUpdate.mockResolvedValue({
       currentVersion: "1.0.0",
       latestVersion: null,

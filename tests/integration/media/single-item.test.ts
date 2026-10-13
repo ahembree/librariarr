@@ -48,7 +48,7 @@ describe("GET /api/media/[id]", () => {
 
   it("returns 404 when item does not exist", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRouteWithParams(
       GET,
@@ -75,7 +75,7 @@ describe("GET /api/media/[id]", () => {
       genres: ["Action", "Sci-Fi"],
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRouteWithParams(
       GET,
@@ -120,7 +120,7 @@ describe("GET /api/media/[id]", () => {
       fileSize: BigInt("10737418240"), // 10 GB
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRouteWithParams(
       GET,
@@ -155,7 +155,7 @@ describe("GET /api/media/[id]", () => {
       },
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRouteWithParams(
       GET,
@@ -181,7 +181,7 @@ describe("GET /api/media/[id]", () => {
     await createTestExternalId(item.id, "tmdb", "603");
     await createTestExternalId(item.id, "imdb", "tt0133093");
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRouteWithParams(
       GET,

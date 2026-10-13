@@ -219,7 +219,7 @@ describe("GET /api/media/series/watch-history — Tracearr detail", () => {
     clearMockSession();
     const user = await createTestUser();
     userId = user.id;
-    setMockSession({ userId, isLoggedIn: true, plexToken: "token" });
+    setMockSession({ userId, isLoggedIn: true});
     const server = await createTestServer(userId);
     serverId = server.id;
     const library = await createTestLibrary(server.id, { type: "SERIES" });

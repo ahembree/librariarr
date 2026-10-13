@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "crypto";
 import { appCache } from "@/lib/cache/memory-cache";
 import { getExternalBaseUrl } from "@/lib/url";
+import { oidcIssuerProblem } from "@/lib/sso/issuer-url";
 
 /**
  * Minimal OIDC client for the Authorization Code + PKCE flow.
@@ -9,8 +10,18 @@ import { getExternalBaseUrl } from "@/lib/url";
  * access token over HTTPS and then call the issuer's `userinfo_endpoint`. This
  * keeps the implementation small (no JWT library) while remaining secure: TLS
  * authenticates the issuer, the access token came from a fresh code exchange,
- * and PKCE binds the exchange to this client instance.
+ * and PKCE binds the exchange to this client instance. Which is why the issuer
+ * must be https (`src/lib/sso/issuer-url.ts`): `discoverOidc` refuses an
+ * insecure one with `InsecureIssuerError`, whatever the settings say.
  */
+
+/** The issuer URL is not one the client may talk to (see issuer-url.ts). */
+export class InsecureIssuerError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "InsecureIssuerError";
+  }
+}
 
 export interface OidcDiscovery {
   issuer: string;
@@ -141,6 +152,8 @@ export async function discoverOidc(
   issuer: string,
   options: DiscoverOptions = {}
 ): Promise<OidcDiscovery> {
+  const problem = oidcIssuerProblem(issuer);
+  if (problem) throw new InsecureIssuerError(problem);
   const base = normalizeIssuer(issuer);
   const cacheKey = DISCOVERY_CACHE_PREFIX + base;
 

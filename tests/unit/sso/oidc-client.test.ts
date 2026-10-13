@@ -9,6 +9,7 @@ import {
   generateState,
   invalidateOidcDiscoveryCache,
   resolveRedirectUri,
+  InsecureIssuerError,
   type OidcDiscovery,
 } from "@/lib/sso/oidc-client";
 
@@ -178,6 +179,22 @@ describe("discoverOidc", () => {
       "https://idp.example.com/.well-known/openid-configuration"
     );
     expect(result.issuer).toBe("https://idp.example.com");
+  });
+
+  // TLS is what authenticates the issuer here (no ID token signature is
+  // verified), so an http:// issuer off loopback is refused before any fetch.
+  it("refuses an http:// issuer on a network host without fetching", async () => {
+    const fetchMock = vi.fn();
+    globalThis.fetch = fetchMock as typeof fetch;
+    const original = process.env.OIDC_ALLOW_INSECURE_HTTP;
+    delete process.env.OIDC_ALLOW_INSECURE_HTTP;
+    try {
+      await expect(discoverOidc("http://idp.lan", { skipCache: true })).rejects.toBeInstanceOf(InsecureIssuerError);
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      if (original === undefined) delete process.env.OIDC_ALLOW_INSECURE_HTTP;
+      else process.env.OIDC_ALLOW_INSECURE_HTTP = original;
+    }
   });
 
   it("throws when discovery response is missing required endpoints", async () => {

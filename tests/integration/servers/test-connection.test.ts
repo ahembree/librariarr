@@ -57,7 +57,7 @@ describe("POST /api/servers/test", () => {
 
   it("returns 400 on invalid body", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(serverTest, {
       method: "POST",
@@ -68,7 +68,7 @@ describe("POST /api/servers/test", () => {
 
   it("returns success on valid connection", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
     mockTestConnection.mockResolvedValue({ ok: true, serverName: "My Plex" });
 
     const res = await callRoute(serverTest, {
@@ -83,7 +83,7 @@ describe("POST /api/servers/test", () => {
 
   it("returns error on failed connection", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
     mockTestConnection.mockResolvedValue({ ok: false, error: "Connection refused" });
 
     const res = await callRoute(serverTest, {
@@ -111,7 +111,7 @@ describe("POST /api/servers/[id]/test-connection", () => {
 
   it("returns 404 for non-existent server", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRouteWithParams(
       serverIdTestConnection,
@@ -124,7 +124,7 @@ describe("POST /api/servers/[id]/test-connection", () => {
   it("returns success on valid connection", async () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id);
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
     mockTestConnection.mockResolvedValue({ ok: true, serverName: "My Plex" });
 
     const res = await callRouteWithParams(
@@ -140,7 +140,7 @@ describe("POST /api/servers/[id]/test-connection", () => {
   it("returns error on failed connection", async () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id);
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
     mockTestConnection.mockResolvedValue({ ok: false, error: "Connection refused" });
 
     const res = await callRouteWithParams(

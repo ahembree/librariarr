@@ -79,7 +79,7 @@ describe("Radarr integration endpoints", () => {
 
     it("returns empty instances when user has none", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, { url: "/api/integrations/radarr" });
       const body = await expectJson<{ instances: unknown[] }>(response, 200);
@@ -89,7 +89,7 @@ describe("Radarr integration endpoints", () => {
     it("returns instances belonging to the authenticated user", async () => {
       const user = await createTestUser();
       await createTestRadarrInstance(user.id, { name: "My Radarr" });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, { url: "/api/integrations/radarr" });
       const body = await expectJson<{ instances: { name: string }[] }>(response, 200);
@@ -102,7 +102,7 @@ describe("Radarr integration endpoints", () => {
       const user2 = await createTestUser({ plexId: "user2" });
       await createTestRadarrInstance(user1.id, { name: "User1 Radarr" });
       await createTestRadarrInstance(user2.id, { name: "User2 Radarr" });
-      setMockSession({ userId: user2.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user2.id, isLoggedIn: true });
 
       const response = await callRoute(GET, { url: "/api/integrations/radarr" });
       const body = await expectJson<{ instances: { name: string }[] }>(response, 200);
@@ -126,7 +126,7 @@ describe("Radarr integration endpoints", () => {
 
     it("returns 400 when required fields are missing", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       // Missing name
       const res1 = await callRoute(POST, {
@@ -157,7 +157,7 @@ describe("Radarr integration endpoints", () => {
       mockTestConnection.mockResolvedValue({ ok: false, error: "Connection refused" });
 
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(POST, {
         url: "/api/integrations/radarr",
@@ -171,7 +171,7 @@ describe("Radarr integration endpoints", () => {
 
     it("creates a new instance on success", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(POST, {
         url: "/api/integrations/radarr",
@@ -190,7 +190,7 @@ describe("Radarr integration endpoints", () => {
 
     it("strips trailing slashes from url", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(POST, {
         url: "/api/integrations/radarr",
@@ -217,7 +217,7 @@ describe("Radarr integration endpoints", () => {
 
     it("returns 404 when instance does not exist", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(
         PUT,
@@ -236,7 +236,7 @@ describe("Radarr integration endpoints", () => {
       const user1 = await createTestUser({ plexId: "owner" });
       const user2 = await createTestUser({ plexId: "intruder" });
       const instance = await createTestRadarrInstance(user1.id);
-      setMockSession({ userId: user2.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user2.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(
         PUT,
@@ -252,7 +252,7 @@ describe("Radarr integration endpoints", () => {
 
       const user = await createTestUser();
       const instance = await createTestRadarrInstance(user.id);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
+      setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
       const response = await callRouteWithParams(
         PUT,
@@ -270,7 +270,7 @@ describe("Radarr integration endpoints", () => {
     it("updates instance fields successfully", async () => {
       const user = await createTestUser();
       const instance = await createTestRadarrInstance(user.id, { name: "Old Name" });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
+      setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
       const response = await callRouteWithParams(
         PUT,
@@ -302,7 +302,7 @@ describe("Radarr integration endpoints", () => {
 
     it("returns 404 when instance does not exist", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(
         DELETE,
@@ -320,7 +320,7 @@ describe("Radarr integration endpoints", () => {
       const user1 = await createTestUser({ plexId: "owner" });
       const user2 = await createTestUser({ plexId: "intruder" });
       const instance = await createTestRadarrInstance(user1.id);
-      setMockSession({ userId: user2.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user2.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(
         DELETE,
@@ -334,7 +334,7 @@ describe("Radarr integration endpoints", () => {
     it("deletes instance successfully", async () => {
       const user = await createTestUser();
       const instance = await createTestRadarrInstance(user.id);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(
         DELETE,
@@ -390,7 +390,7 @@ describe("Radarr integration endpoints", () => {
       await prisma.lifecycleAction.create({
         data: { ...actionBase, ruleSetId: untouched.id, arrInstanceId: other.id, status: "PENDING" },
       });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(
         DELETE,
@@ -429,7 +429,7 @@ describe("Radarr integration endpoints", () => {
         data: { externalUrl: "https://radarr.example.com" },
       });
       mockGetMediaManagementConfig.mockResolvedValue({ recycleBin: "/recycle", recycleBinCleanupDays: 7 });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(
         RECYCLE_BIN_GET,
@@ -445,7 +445,7 @@ describe("Radarr integration endpoints", () => {
       const user = await createTestUser();
       const instance = await createTestRadarrInstance(user.id, { url: "http://radarr:7878" });
       mockGetMediaManagementConfig.mockRejectedValue(new Error("down"));
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(
         RECYCLE_BIN_GET,
@@ -473,7 +473,7 @@ describe("Radarr integration endpoints", () => {
 
     it("returns 400 when required fields are missing", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const res1 = await callRoute(TEST_POST, {
         url: "/api/integrations/radarr/test",
@@ -492,7 +492,7 @@ describe("Radarr integration endpoints", () => {
 
     it("returns connection test result on success", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(TEST_POST, {
         url: "/api/integrations/radarr/test",
@@ -508,7 +508,7 @@ describe("Radarr integration endpoints", () => {
       mockTestConnection.mockResolvedValue({ ok: false, error: "Connection refused" });
 
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(TEST_POST, {
         url: "/api/integrations/radarr/test",
@@ -522,7 +522,7 @@ describe("Radarr integration endpoints", () => {
 
     it("does not save instance to database", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       await callRoute(TEST_POST, {
         url: "/api/integrations/radarr/test",
@@ -548,7 +548,7 @@ describe("Radarr integration endpoints", () => {
 
     it("returns 404 when instance does not exist", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(METADATA_GET, {
         id: "00000000-0000-0000-0000-000000000000",
@@ -560,7 +560,7 @@ describe("Radarr integration endpoints", () => {
     it("returns movie lookup, tags, and quality profiles", async () => {
       const user = await createTestUser();
       const instance = await createTestRadarrInstance(user.id);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       mockGetMovies.mockResolvedValue([
         {

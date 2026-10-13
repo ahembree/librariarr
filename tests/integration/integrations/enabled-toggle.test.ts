@@ -63,7 +63,7 @@ describe("Integration enable/disable toggle", () => {
     it("disables a Sonarr instance", async () => {
       const user = await createTestUser();
       const instance = await createTestSonarrInstance(user.id);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(
         SonarrPUT,
@@ -81,7 +81,7 @@ describe("Integration enable/disable toggle", () => {
     it("re-enables a disabled Sonarr instance", async () => {
       const user = await createTestUser();
       const instance = await createTestSonarrInstance(user.id, { enabled: false });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(
         SonarrPUT,
@@ -95,7 +95,7 @@ describe("Integration enable/disable toggle", () => {
     it("skips connection test when disabling", async () => {
       const user = await createTestUser();
       const instance = await createTestSonarrInstance(user.id);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       // Disable without triggering connection test
       const response = await callRouteWithParams(
@@ -112,7 +112,7 @@ describe("Integration enable/disable toggle", () => {
       const user = await createTestUser();
       await createTestSonarrInstance(user.id, { name: "Active", enabled: true });
       await createTestSonarrInstance(user.id, { name: "Inactive", enabled: false });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(SonarrGET, { url: "/api/integrations/sonarr" });
       const body = await expectJson<{ instances: { name: string; enabled: boolean }[] }>(response, 200);
@@ -128,7 +128,7 @@ describe("Integration enable/disable toggle", () => {
     it("disables a Seerr instance", async () => {
       const user = await createTestUser();
       const instance = await createTestSeerrInstance(user.id);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(
         SeerrPUT,
@@ -143,7 +143,7 @@ describe("Integration enable/disable toggle", () => {
       const user = await createTestUser();
       await createTestSeerrInstance(user.id, { name: "Active", enabled: true });
       await createTestSeerrInstance(user.id, { name: "Inactive", enabled: false });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(SeerrGET, { url: "/api/integrations/seerr" });
       const body = await expectJson<{ instances: { name: string; enabled: boolean }[] }>(response, 200);

@@ -32,6 +32,7 @@ const SSO_ERROR_MESSAGES: Record<string, string> = {
   not_linked: "Your SSO account is not linked to a Librariarr user. Ask an administrator to link it. (If you recently changed the configured SSO issuer, the previous link no longer applies — re-link from Settings.)",
   missing_user_header: "Forward-auth proxy did not provide a user identity header.",
   untrusted_proxy: "Forward-auth sign-in must come through the configured reverse proxy: the proxy secret header was missing or wrong.",
+  forward_auth_unconfigured: "Forward-auth sign-in is turned off until FORWARD_AUTH_SECRET is set on the Librariarr container and your proxy sends it as the X-Librariarr-Proxy-Secret header. Sign in another way, or see the SSO documentation.",
   csrf_blocked: "SSO login can only be initiated from the Librariarr login page. Open the login page directly and click Sign in with SSO.",
 };
 

@@ -76,7 +76,7 @@ describe("Tracearr integration endpoints", () => {
 
     it("returns empty instances when user has none", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, { url: "/api/integrations/tracearr" });
       const body = await expectJson<{ instances: unknown[] }>(response, 200);
@@ -86,7 +86,7 @@ describe("Tracearr integration endpoints", () => {
     it("returns the authenticated user's instances with the apiKey masked", async () => {
       const user = await createTestUser();
       await createTestTracearrInstance(user.id, { name: "My Tracearr" });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, { url: "/api/integrations/tracearr" });
       const body = await expectJson<{ instances: { name: string; apiKey: string }[] }>(
@@ -103,7 +103,7 @@ describe("Tracearr integration endpoints", () => {
       const user2 = await createTestUser({ plexId: "user2" });
       await createTestTracearrInstance(user1.id, { name: "User1 Tracearr" });
       await createTestTracearrInstance(user2.id, { name: "User2 Tracearr" });
-      setMockSession({ userId: user2.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user2.id, isLoggedIn: true });
 
       const response = await callRoute(GET, { url: "/api/integrations/tracearr" });
       const body = await expectJson<{ instances: { name: string }[] }>(response, 200);
@@ -127,7 +127,7 @@ describe("Tracearr integration endpoints", () => {
 
     it("returns 400 when required fields are missing or malformed", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       // Missing name
       const res1 = await callRoute(POST, {
@@ -158,7 +158,7 @@ describe("Tracearr integration endpoints", () => {
 
     it("creates the instance after passing the connection test, masking the key in the response", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(POST, {
         url: "/api/integrations/tracearr",
@@ -187,7 +187,7 @@ describe("Tracearr integration endpoints", () => {
 
     it("strips trailing slashes from the url before persisting", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(POST, {
         url: "/api/integrations/tracearr",
@@ -202,7 +202,7 @@ describe("Tracearr integration endpoints", () => {
       mockTestConnection.mockResolvedValue({ ok: false, error: "Connection refused" });
 
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(POST, {
         url: "/api/integrations/tracearr",
@@ -236,7 +236,7 @@ describe("Tracearr integration endpoints", () => {
 
     it("returns 404 for non-existent instance", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(
         PUT,
@@ -255,7 +255,7 @@ describe("Tracearr integration endpoints", () => {
       const user1 = await createTestUser({ plexId: "owner" });
       const user2 = await createTestUser({ plexId: "intruder" });
       const instance = await createTestTracearrInstance(user1.id);
-      setMockSession({ userId: user2.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user2.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(
         PUT,
@@ -278,7 +278,7 @@ describe("Tracearr integration endpoints", () => {
     it("renames the instance without re-testing the connection", async () => {
       const user = await createTestUser();
       const instance = await createTestTracearrInstance(user.id, { name: "Old Name" });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(
         PUT,
@@ -300,7 +300,7 @@ describe("Tracearr integration endpoints", () => {
       // whenever Tracearr was unreachable.
       const user = await createTestUser();
       const instance = await createTestTracearrInstance(user.id, { name: "Old Name" });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
       mockTestConnection.mockResolvedValue({ ok: false, error: "Connection refused" });
 
       const response = await callRouteWithParams(
@@ -320,7 +320,7 @@ describe("Tracearr integration endpoints", () => {
     it("keeps the stored apiKey when the masked value is echoed back", async () => {
       const user = await createTestUser();
       const instance = await createTestTracearrInstance(user.id, { apiKey: "trr_pub_original" });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(
         PUT,
@@ -347,7 +347,7 @@ describe("Tracearr integration endpoints", () => {
     it("re-tests and persists a new apiKey", async () => {
       const user = await createTestUser();
       const instance = await createTestTracearrInstance(user.id, { apiKey: "trr_pub_original" });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(
         PUT,
@@ -373,7 +373,7 @@ describe("Tracearr integration endpoints", () => {
     it("updates the url and strips its trailing slashes", async () => {
       const user = await createTestUser();
       const instance = await createTestTracearrInstance(user.id);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
+      setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
       const response = await callRouteWithParams(
         PUT,
@@ -392,7 +392,7 @@ describe("Tracearr integration endpoints", () => {
     it("skips the connection test when disabling the instance", async () => {
       const user = await createTestUser();
       const instance = await createTestTracearrInstance(user.id);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
+      setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
       const response = await callRouteWithParams(
         PUT,
@@ -417,7 +417,7 @@ describe("Tracearr integration endpoints", () => {
 
       const user = await createTestUser();
       const instance = await createTestTracearrInstance(user.id);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
+      setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
       const response = await callRouteWithParams(
         PUT,
@@ -456,7 +456,7 @@ describe("Tracearr integration endpoints", () => {
       const user1 = await createTestUser({ plexId: "owner" });
       const user2 = await createTestUser({ plexId: "intruder" });
       const instance = await createTestTracearrInstance(user1.id);
-      setMockSession({ userId: user2.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user2.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(
         DELETE,
@@ -472,7 +472,7 @@ describe("Tracearr integration endpoints", () => {
     it("deletes the instance successfully", async () => {
       const user = await createTestUser();
       const instance = await createTestTracearrInstance(user.id);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(
         DELETE,
@@ -507,7 +507,7 @@ describe("Tracearr integration endpoints", () => {
       const user1 = await createTestUser({ plexId: "owner" });
       const user2 = await createTestUser({ plexId: "intruder" });
       const instance = await createTestTracearrInstance(user1.id);
-      setMockSession({ userId: user2.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user2.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(
         TEST_POST,
@@ -526,7 +526,7 @@ describe("Tracearr integration endpoints", () => {
     it("returns the successful test result using the stored credentials", async () => {
       const user = await createTestUser();
       const instance = await createTestTracearrInstance(user.id, { apiKey: "trr_pub_stored" });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(
         TEST_POST,
@@ -552,7 +552,7 @@ describe("Tracearr integration endpoints", () => {
     it("falls back to the stored apiKey when the masked value is sent", async () => {
       const user = await createTestUser();
       const instance = await createTestTracearrInstance(user.id, { apiKey: "trr_pub_stored" });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
+      setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
       const response = await callRouteWithParams(
         TEST_POST,
@@ -572,7 +572,7 @@ describe("Tracearr integration endpoints", () => {
     it("uses a supplied apiKey when one is given", async () => {
       const user = await createTestUser();
       const instance = await createTestTracearrInstance(user.id, { apiKey: "trr_pub_stored" });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(
         TEST_POST,
@@ -594,7 +594,7 @@ describe("Tracearr integration endpoints", () => {
 
       const user = await createTestUser();
       const instance = await createTestTracearrInstance(user.id);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(
         TEST_POST,
@@ -628,7 +628,7 @@ describe("Tracearr integration endpoints", () => {
       const user1 = await createTestUser({ plexId: "owner" });
       const user2 = await createTestUser({ plexId: "intruder" });
       const instance = await createTestTracearrInstance(user1.id);
-      setMockSession({ userId: user2.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user2.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(
         SERVERS_GET,
@@ -643,7 +643,7 @@ describe("Tracearr integration endpoints", () => {
     it("returns the media servers the instance monitors", async () => {
       const user = await createTestUser();
       const instance = await createTestTracearrInstance(user.id, { apiKey: "trr_pub_stored" });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(
         SERVERS_GET,
@@ -662,7 +662,7 @@ describe("Tracearr integration endpoints", () => {
 
       const user = await createTestUser();
       const instance = await createTestTracearrInstance(user.id);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(
         SERVERS_GET,

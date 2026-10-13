@@ -42,7 +42,7 @@ describe("GET /api/media/[id]/series-summary", () => {
     vi.clearAllMocks();
     const user = await createTestUser();
     userId = user.id;
-    setMockSession({ userId, isLoggedIn: true, plexToken: "token" });
+    setMockSession({ userId, isLoggedIn: true});
     const server = await createTestServer(userId);
     const library = await createTestLibrary(server.id);
     libraryId = library.id;

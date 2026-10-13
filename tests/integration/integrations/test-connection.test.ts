@@ -85,7 +85,7 @@ describe("POST /api/integrations/radarr/[id]/test-connection", () => {
 
   it("returns 404 for non-existent instance", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRouteWithParams(
       radarrTestConnection,
@@ -98,7 +98,7 @@ describe("POST /api/integrations/radarr/[id]/test-connection", () => {
   it("returns success when connection works", async () => {
     const user = await createTestUser();
     const instance = await createTestRadarrInstance(user.id);
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
     mockRadarrTestConnection.mockResolvedValue({ ok: true, appName: "Radarr", version: "5.0" });
 
     const res = await callRouteWithParams(
@@ -113,7 +113,7 @@ describe("POST /api/integrations/radarr/[id]/test-connection", () => {
   it("returns error when connection fails", async () => {
     const user = await createTestUser();
     const instance = await createTestRadarrInstance(user.id);
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
     mockRadarrTestConnection.mockResolvedValue({ ok: false, error: "Connection refused" });
 
     const res = await callRouteWithParams(
@@ -142,7 +142,7 @@ describe("POST /api/integrations/sonarr/[id]/test-connection", () => {
 
   it("returns 404 for non-existent instance", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRouteWithParams(
       sonarrTestConnection,
@@ -155,7 +155,7 @@ describe("POST /api/integrations/sonarr/[id]/test-connection", () => {
   it("returns success when connection works", async () => {
     const user = await createTestUser();
     const instance = await createTestSonarrInstance(user.id);
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
     mockSonarrTestConnection.mockResolvedValue({ ok: true, appName: "Sonarr", version: "4.0" });
 
     const res = await callRouteWithParams(
@@ -170,7 +170,7 @@ describe("POST /api/integrations/sonarr/[id]/test-connection", () => {
   it("returns error when connection fails", async () => {
     const user = await createTestUser();
     const instance = await createTestSonarrInstance(user.id);
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
     mockSonarrTestConnection.mockResolvedValue({ ok: false, error: "Connection refused" });
 
     const res = await callRouteWithParams(
@@ -199,7 +199,7 @@ describe("POST /api/integrations/lidarr/[id]/test-connection", () => {
 
   it("returns 404 for non-existent instance", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRouteWithParams(
       lidarrTestConnection,
@@ -212,7 +212,7 @@ describe("POST /api/integrations/lidarr/[id]/test-connection", () => {
   it("returns success when connection works", async () => {
     const user = await createTestUser();
     const instance = await createTestLidarrInstance(user.id);
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
     mockLidarrTestConnection.mockResolvedValue({ ok: true, appName: "Lidarr", version: "2.0" });
 
     const res = await callRouteWithParams(
@@ -227,7 +227,7 @@ describe("POST /api/integrations/lidarr/[id]/test-connection", () => {
   it("returns error when connection fails", async () => {
     const user = await createTestUser();
     const instance = await createTestLidarrInstance(user.id);
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
     mockLidarrTestConnection.mockResolvedValue({ ok: false, error: "Connection refused" });
 
     const res = await callRouteWithParams(
@@ -256,7 +256,7 @@ describe("POST /api/integrations/seerr/[id]/test-connection", () => {
 
   it("returns 404 for non-existent instance", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRouteWithParams(
       seerrTestConnection,
@@ -269,7 +269,7 @@ describe("POST /api/integrations/seerr/[id]/test-connection", () => {
   it("returns success when connection works", async () => {
     const user = await createTestUser();
     const instance = await createTestSeerrInstance(user.id);
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
     mockSeerrTestConnection.mockResolvedValue({ ok: true, appName: "Seerr", version: "1.0" });
 
     const res = await callRouteWithParams(
@@ -284,7 +284,7 @@ describe("POST /api/integrations/seerr/[id]/test-connection", () => {
   it("returns error when connection fails", async () => {
     const user = await createTestUser();
     const instance = await createTestSeerrInstance(user.id);
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
     mockSeerrTestConnection.mockResolvedValue({ ok: false, error: "Connection refused" });
 
     const res = await callRouteWithParams(

@@ -60,7 +60,7 @@ describe("GET /api/media/stats/custom", () => {
 
   it("returns 400 when dimension is missing", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/stats/custom",
@@ -71,7 +71,7 @@ describe("GET /api/media/stats/custom", () => {
 
   it("returns 400 for invalid dimension ID", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/stats/custom",
@@ -83,7 +83,7 @@ describe("GET /api/media/stats/custom", () => {
 
   it("returns empty breakdown when user has no servers", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/stats/custom",
@@ -114,7 +114,7 @@ describe("GET /api/media/stats/custom", () => {
       videoCodec: "h265",
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/stats/custom",
@@ -158,7 +158,7 @@ describe("GET /api/media/stats/custom", () => {
       ratingKey: "m1080-2",
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/stats/custom",
@@ -196,7 +196,7 @@ describe("GET /api/media/stats/custom", () => {
       genres: ["Action", "Comedy"],
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/stats/custom",
@@ -222,7 +222,7 @@ describe("GET /api/media/stats/custom", () => {
     const user2 = await createTestUser({ plexId: "u2" });
     const server = await createTestServer(user1.id);
 
-    setMockSession({ userId: user2.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user2.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/stats/custom",
@@ -251,7 +251,7 @@ describe("GET /api/media/stats/custom", () => {
       ratingKey: "s2m1",
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/stats/custom",
@@ -286,7 +286,7 @@ describe("GET /api/media/stats/custom", () => {
       container: "mkv",
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/stats/custom",

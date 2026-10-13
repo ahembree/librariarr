@@ -63,7 +63,7 @@ describe("POST /api/servers/[id]/sync", () => {
 
   it("returns 404 when server does not exist", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRouteWithParams(
       POST,
@@ -82,7 +82,7 @@ describe("POST /api/servers/[id]/sync", () => {
     const user2 = await createTestUser({ plexId: "other" });
     const server = await createTestServer(user1.id);
 
-    setMockSession({ userId: user2.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user2.id, isLoggedIn: true });
 
     const response = await callRouteWithParams(
       POST,
@@ -100,7 +100,7 @@ describe("POST /api/servers/[id]/sync", () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id);
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRouteWithParams(
       POST,
@@ -138,7 +138,7 @@ describe("POST /api/servers/[id]/sync", () => {
     // than the request that started it.
     const user = await createTestUser();
     const server = await createTestServer(user.id);
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     let enqueuedAt = 0;
     mockEnqueueJob.mockImplementationOnce(async () => {
@@ -170,7 +170,7 @@ describe("POST /api/servers/[id]/sync", () => {
       data: { mediaServerId: server.id, status: "RUNNING" },
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRouteWithParams(
       POST,
@@ -197,7 +197,7 @@ describe("POST /api/servers/[id]/sync", () => {
       data: { mediaServerId: server.id, status: "PENDING" },
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRouteWithParams(
       POST,
@@ -217,7 +217,7 @@ describe("POST /api/servers/[id]/sync", () => {
     const server = await createTestServer(user.id);
     const library = await createTestLibrary(server.id, { key: "lib-key", title: "Movies" });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRouteWithParams(
       POST,
@@ -248,7 +248,7 @@ describe("POST /api/servers/[id]/sync", () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id);
     await createTestLibrary(server.id, { key: "lib-key", title: "Movies" });
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     for (const body of [
       { libraryKey: 123 },
@@ -293,7 +293,7 @@ describe("POST /api/servers/[id]/sync", () => {
     // and the click looked ignored for as long as the queue was busy.
     const user = await createTestUser();
     const server = await createTestServer(user.id);
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const events: AppEvent[] = [];
     const unsubscribe = eventBus.subscribe((event) => events.push(event));
@@ -328,7 +328,7 @@ describe("POST /api/servers/[id]/sync", () => {
     // answer 409 until a restart.
     const user = await createTestUser();
     const server = await createTestServer(user.id);
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
     mockEnqueueJob.mockResolvedValueOnce(false);
 
     const response = await callRouteWithParams(
@@ -358,7 +358,7 @@ describe("POST /api/servers/[id]/sync", () => {
     // and the first row sat PENDING with nothing to claim it.
     const user = await createTestUser();
     const server = await createTestServer(user.id);
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const post = () =>
       callRouteWithParams(

@@ -34,7 +34,7 @@ describe("GET /api/settings/column-preferences", () => {
 
   it("returns null preferences when no settings exist", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(GET);
     const body = await expectJson<{ preferences: unknown }>(res);
@@ -43,7 +43,7 @@ describe("GET /api/settings/column-preferences", () => {
 
   it("returns saved column preferences", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const columns = ["title", "year", "resolution"];
     await callRoute(PUT, { method: "PUT", body: { type: "MOVIE", columns } });
@@ -75,7 +75,7 @@ describe("PUT /api/settings/column-preferences", () => {
 
   it("saves column preferences successfully", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(PUT, {
       method: "PUT",
@@ -87,7 +87,7 @@ describe("PUT /api/settings/column-preferences", () => {
 
   it("merges preferences across library types", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     await callRoute(PUT, { method: "PUT", body: { type: "MOVIE", columns: ["title"] } });
     await callRoute(PUT, { method: "PUT", body: { type: "SERIES", columns: ["year"] } });
@@ -99,7 +99,7 @@ describe("PUT /api/settings/column-preferences", () => {
 
   it("returns 400 for invalid type", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(PUT, {
       method: "PUT",
@@ -110,7 +110,7 @@ describe("PUT /api/settings/column-preferences", () => {
 
   it("returns 400 for missing fields", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(PUT, { method: "PUT", body: {} });
     await expectJson(res, 400);

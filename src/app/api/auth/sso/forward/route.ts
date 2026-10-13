@@ -3,17 +3,17 @@ import { prisma } from "@/lib/db";
 import { rotateSession } from "@/lib/auth/session";
 import { currentSsoIssuer, getSsoSettings, isSsoUsable } from "@/lib/sso/config";
 import { apiLogger } from "@/lib/logger";
-import { checkAuthRateLimit } from "@/lib/rate-limit/rate-limiter";
+import { reserveAuthAttempt } from "@/lib/rate-limit/rate-limiter";
 import { getExternalBaseUrl, isSameOriginRequest } from "@/lib/url";
 import { sanitizeEmail, sanitizeUsername } from "@/lib/sso/identity-claims";
-import { hasForwardAuthSecret, FORWARD_AUTH_PROXY_HEADER } from "@/lib/sso/forward-secret";
+import { hasForwardAuthSecret, isForwardAuthSecretConfigured, FORWARD_AUTH_PROXY_HEADER } from "@/lib/sso/forward-secret";
 
 /**
  * Forward-auth login: trusts identity headers injected by an upstream reverse
- * proxy (Authelia, Authentik, oauth2-proxy, etc.). The proxy must be the only
- * way to reach this app — if users can hit it directly they could spoof these
- * headers. The admin is responsible for that network topology, and can make
- * it not matter by setting `FORWARD_AUTH_SECRET` (see forward-secret.ts).
+ * proxy (Authelia, Authentik, oauth2-proxy, etc.). A request proves it came
+ * through that proxy with `FORWARD_AUTH_SECRET` (see forward-secret.ts), which
+ * is required: without it anyone who reaches the app's port directly could
+ * send the headers themselves.
  *
  * GET so it can be linked from the login page as a normal anchor.
  */
@@ -30,16 +30,24 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(new URL("/login?sso_error=csrf_blocked", baseUrl));
   }
 
-  const rateLimited = checkAuthRateLimit(request, "sso-forward");
-  if (rateLimited) return rateLimited;
+  // Charged only on a refused sign-in (see `reserveAuthAttempt`).
+  const attempt = reserveAuthAttempt(request, "sso-forward");
+  if (attempt.refused) return attempt.refused;
 
   const settings = await getSsoSettings();
+  // Named before the general "not configured", so the login page can say
+  // exactly what is missing to the admin who turned forward-auth on before
+  // the secret was required.
+  if (settings?.ssoEnabled && settings.ssoMode === "FORWARD_AUTH" && !isForwardAuthSecretConfigured()) {
+    apiLogger.warn("Auth", "Forward-auth login refused: FORWARD_AUTH_SECRET is not set");
+    return NextResponse.redirect(new URL("/login?sso_error=forward_auth_unconfigured", baseUrl));
+  }
   if (!isSsoUsable(settings) || settings?.ssoMode !== "FORWARD_AUTH") {
     return NextResponse.redirect(new URL("/login?sso_error=sso_not_configured", baseUrl));
   }
 
-  // With FORWARD_AUTH_SECRET set, only a request that came through the proxy
-  // (which adds the secret) may use the identity header at all.
+  // Only a request that came through the proxy (which adds the secret) may
+  // use the identity header at all.
   if (!hasForwardAuthSecret(request.headers)) {
     apiLogger.warn(
       "Auth",
@@ -103,11 +111,12 @@ export async function GET(request: NextRequest) {
     await prisma.user.update({ where: { id: user.id }, data: updateData });
   }
 
+  attempt.succeeded();
+
   const session = await rotateSession();
   session.userId = user.id;
   session.isLoggedIn = true;
   session.sessionVersion = user.sessionVersion;
-  if (user.plexToken) session.plexToken = user.plexToken;
   await session.save();
 
   apiLogger.info("Auth", `SSO (forward-auth) login: "${user.username}"`);

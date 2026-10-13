@@ -2,17 +2,18 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth/session";
 import { currentSsoIssuer } from "@/lib/sso/config";
-import { hasForwardAuthSecret, FORWARD_AUTH_PROXY_HEADER } from "@/lib/sso/forward-secret";
+import { hasForwardAuthSecret, isForwardAuthSecretConfigured, FORWARD_AUTH_PROXY_HEADER } from "@/lib/sso/forward-secret";
 import { apiLogger } from "@/lib/logger";
-import { checkAuthRateLimit } from "@/lib/rate-limit/rate-limiter";
+import { reserveAuthAttempt } from "@/lib/rate-limit/rate-limiter";
 import { loadReauthContext, ssoIdentityMatches } from "@/lib/auth/reauth";
 
 /**
  * Confirms the signed-in admin's identity from the forward-auth proxy's
  * identity header — the same proof `/api/auth/sso/forward` accepts for a
  * login — and stamps `session.authenticatedAt`. The header must name the
- * subject linked to this user, and `FORWARD_AUTH_SECRET`, when set, must be
- * presented exactly as for a login.
+ * subject linked to this user, and `FORWARD_AUTH_SECRET` must be presented
+ * exactly as for a login — it is required, so without it this route refuses
+ * like the login does (see forward-secret.ts).
  */
 export async function POST(request: NextRequest) {
   const session = await getSession();
@@ -20,11 +21,19 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const rateLimited = checkAuthRateLimit(request, "sso-forward-reauth");
-  if (rateLimited) return rateLimited;
+  // Charged only on a refused confirmation (see `reserveAuthAttempt`); after
+  // the session check, so a request that is not signed in never drains it.
+  const attempt = reserveAuthAttempt(request, "sso-forward-reauth");
+  if (attempt.refused) return attempt.refused;
 
   // Forward-auth configured and usable, and an identity linked under it.
   const { methods, sso: settings } = await loadReauthContext(session.userId);
+  if (settings?.ssoEnabled && settings.ssoMode === "FORWARD_AUTH" && !isForwardAuthSecretConfigured()) {
+    return NextResponse.json(
+      { error: "Forward-auth sign-in is turned off until FORWARD_AUTH_SECRET is set", code: "forward_auth_unconfigured" },
+      { status: 400 },
+    );
+  }
   if (!settings || !methods.includes("forward")) {
     return NextResponse.json(
       { error: "SSO sign-in is not available for this account" },
@@ -59,6 +68,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  attempt.succeeded();
   session.authenticatedAt = Date.now();
   await session.save();
 

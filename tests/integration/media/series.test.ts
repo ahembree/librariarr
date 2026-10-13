@@ -47,7 +47,7 @@ describe("Series endpoints", () => {
 
     it("returns empty items when no series data exists", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, { url: "/api/media/series" });
       const body = await expectJson<{
@@ -77,7 +77,7 @@ describe("Series endpoints", () => {
         type: "MOVIE",
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, { url: "/api/media/series" });
       const body = await expectJson<{
@@ -106,7 +106,7 @@ describe("Series endpoints", () => {
         parentTitle: "Game of Thrones",
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, {
         url: "/api/media/series",
@@ -140,7 +140,7 @@ describe("Series endpoints", () => {
         episodeNumber: 1,
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, {
         url: "/api/media/series",
@@ -159,7 +159,7 @@ describe("Series endpoints", () => {
       const server = await createTestServer(user.id);
       const lib = await createTestLibrary(server.id, { type: "SERIES" });
       await createTestMediaItem(lib.id, { title: "S01E01", type: "SERIES", parentTitle: "Show", seasonNumber: 1, episodeNumber: 1 });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       for (const seasonNumber of ["3000000000", "-3000000000"]) {
         const body = await expectJson<{ items: unknown[] }>(
@@ -191,7 +191,7 @@ describe("Series endpoints", () => {
         parentTitle: "Unrelated Show",
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, {
         url: "/api/media/series",
@@ -216,7 +216,7 @@ describe("Series endpoints", () => {
         fileSize: BigInt("2147483648"),
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, { url: "/api/media/series" });
       const body = await expectJson<{
@@ -241,7 +241,7 @@ describe("Series endpoints", () => {
         await createTestMediaItem(lib.id, { type: "SERIES", parentTitle, title, seasonNumber, episodeNumber });
       }
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
       const body = await expectJson<{ items: { parentTitle: string; title: string }[] }>(
         await callRoute(GET, { url: "/api/media/series", searchParams: { sortBy: "parentTitle", sortOrder: "asc" } }),
         200,
@@ -269,7 +269,7 @@ describe("Series endpoints", () => {
 
     it("returns empty series list when no data", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET_GROUPED, {
         url: "/api/media/series/grouped",
@@ -315,7 +315,7 @@ describe("Series endpoints", () => {
         fileSize: BigInt("536870912"),
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET_GROUPED, {
         url: "/api/media/series/grouped",
@@ -364,7 +364,7 @@ describe("Series endpoints", () => {
         seasonNumber: 1,
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET_GROUPED, {
         url: "/api/media/series/grouped",
@@ -403,7 +403,7 @@ describe("Series endpoints", () => {
         });
       }
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET_GROUPED, {
         url: "/api/media/series/grouped",
@@ -431,7 +431,7 @@ describe("Series endpoints", () => {
         fileSize: BigInt("10737418240"),
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET_GROUPED, {
         url: "/api/media/series/grouped",
@@ -468,7 +468,7 @@ describe("Series endpoints", () => {
         seasonNumber: 1,
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET_GROUPED, {
         url: "/api/media/series/grouped",
@@ -503,7 +503,7 @@ describe("Series endpoints", () => {
         });
       }
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, {
         url: "/api/media/series",
@@ -537,7 +537,7 @@ describe("/api/media/series progressive loading", () => {
         summary: "Prose that would ride along on every row.",
       });
     }
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
   });
 
   it("returns everything after an offset when limit=0", async () => {
@@ -586,7 +586,7 @@ describe("/api/media/series total accounting", () => {
     for (let i = 1; i <= 5; i++) {
       await createTestMediaItem(lib.id, { title: `Ep ${i}`, type: "SERIES", ratingKey: `rk-shape-${i}` });
     }
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
   });
 
   it("derives total without a COUNT(*) when returning everything after an offset", async () => {
@@ -625,7 +625,7 @@ describe("/api/media/series total accounting", () => {
       seriesKey: "tvdb:73244", seasonNumber: 1, episodeNumber: 1,
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const body = await expectJson<{ items: { title: string }[] }>(
       await callRoute(GET, {

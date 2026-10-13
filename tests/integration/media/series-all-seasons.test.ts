@@ -59,7 +59,7 @@ describe("GET /api/media/series/all-seasons", () => {
 
   it("returns empty seasons when user has no servers", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/series/all-seasons",
@@ -104,7 +104,7 @@ describe("GET /api/media/series/all-seasons", () => {
       playCount: 0,
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/series/all-seasons",
@@ -156,7 +156,7 @@ describe("GET /api/media/series/all-seasons", () => {
       episodeNumber: 1,
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/series/all-seasons",
@@ -196,7 +196,7 @@ describe("GET /api/media/series/all-seasons", () => {
       });
     }
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/series/all-seasons",
@@ -233,7 +233,7 @@ describe("GET /api/media/series/all-seasons", () => {
       resolution: "4k",
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/series/all-seasons",
@@ -262,7 +262,7 @@ describe("GET /api/media/series/all-seasons", () => {
       fileSize: BigInt("10737418240"),
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/series/all-seasons",
@@ -290,7 +290,7 @@ describe("GET /api/media/series/all-seasons", () => {
       seriesKey: "tvdb:73244", seasonNumber: 1, episodeNumber: 1,
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const body = await expectJson<{
       seasons: { parentTitle: string; seriesKey: string | null; seasonNumber: number }[];

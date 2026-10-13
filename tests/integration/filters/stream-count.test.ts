@@ -150,7 +150,7 @@ describe("stream count filters", () => {
   describe("on the movies list", () => {
     it("applies the filter with paging intact", async () => {
       const { user, itemA, itemC } = await setupMediaWithStreams();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const page = async (searchParams: Record<string, string>) =>
         expectJson<{ items: { id: string }[]; pagination: { hasMore: boolean } }>(
@@ -186,7 +186,7 @@ describe("stream count filters", () => {
       for (let i = 0; i < N; i += 5000) await db.mediaItem.createMany({ data: items.slice(i, i + 5000) });
       const streams = items.map((it) => ({ mediaItemId: it.id, streamType: 2, index: 0 }));
       for (let i = 0; i < N; i += 5000) await db.mediaStream.createMany({ data: streams.slice(i, i + 5000) });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const body = await expectJson<{ items: { id: string }[]; pagination: { hasMore: boolean } }>(
         await callRoute(moviesGET, { url: "/api/media/movies", searchParams: { audioStreamCountConditions: "gte:1", limit: "3" } }),

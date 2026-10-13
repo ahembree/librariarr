@@ -38,7 +38,7 @@ const prisma = getTestPrisma();
 async function setup(overrides?: Record<string, unknown>) {
   const user = await createTestUser();
   await prisma.appSettings.create({ data: { userId: user.id, ...overrides } });
-  setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+  setMockSession({ isLoggedIn: true, userId: user.id});
   return user;
 }
 

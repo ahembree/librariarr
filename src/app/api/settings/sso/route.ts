@@ -3,7 +3,8 @@ import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { validateRequest, ssoConfigSchema } from "@/lib/validation";
 import { sanitize } from "@/lib/api/sanitize";
-import { currentSsoIssuer, isSsoOverrideActive } from "@/lib/sso/config";
+import { currentSsoIssuer, isSsoOverrideActive, ssoUnusableReason } from "@/lib/sso/config";
+import { isForwardAuthSecretConfigured } from "@/lib/sso/forward-secret";
 import { invalidateOidcDiscoveryCache } from "@/lib/sso/oidc-client";
 import { resolveSecretWrite } from "@/lib/sso/secret-write";
 import { isSameOriginRequest } from "@/lib/url";
@@ -82,6 +83,9 @@ export async function GET() {
     // Surface whether a one-step revert is available. UI uses this to gate
     // the "Revert to previous configuration" button in step 1 of the wizard.
     hasPreviousConfig: !!settings?.previousSsoConfig,
+    // Forward-auth cannot be turned on without it (see forward-secret.ts); the
+    // UI says so beside the mode rather than at the toggle.
+    forwardAuthSecretConfigured: isForwardAuthSecretConfigured(),
   });
 }
 
@@ -127,6 +131,27 @@ export async function PUT(request: NextRequest) {
           { status: 400 }
         );
       }
+      if (!isForwardAuthSecretConfigured()) {
+        return NextResponse.json(
+          {
+            error:
+              "Set FORWARD_AUTH_SECRET on the Librariarr container and have your proxy send it as the X-Librariarr-Proxy-Secret header before turning on forward-auth. Without it, anyone who reaches the app's port directly could sign in by sending the identity header themselves.",
+          },
+          { status: 400 }
+        );
+      }
+    }
+    // Everything the login would refuse (an http:// issuer stored under the
+    // older rule, among others): turning SSO on against it would leave the
+    // button on a login page that cannot honour it.
+    const unusable = ssoUnusableReason({
+      ...next,
+      ssoMode: next.ssoMode === "FORWARD_AUTH" ? "FORWARD_AUTH" : "OIDC",
+      oidcIssuer: next.oidcIssuer?.trim() || null,
+      oidcClientId: next.oidcClientId?.trim() || null,
+    });
+    if (unusable) {
+      return NextResponse.json({ error: `SSO cannot be turned on: ${unusable}` }, { status: 400 });
     }
 
     const me = await prisma.user.findUnique({

@@ -45,7 +45,7 @@ describe("GET /api/auth/me", () => {
 
   it("returns the display name and Plex method for a Plex-linked admin", async () => {
     const user = await createTestUser({ username: "ahembree", plexId: "plex-1" });
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, { url: "/api/auth/me", method: "GET" });
     const body = await expectJson<MeResponse>(response, 200);
@@ -61,7 +61,7 @@ describe("GET /api/auth/me", () => {
       where: { id: user.id },
       data: { passwordHash: "hashed", localUsername: "localadmin", plexId: null },
     });
-    setMockSession({ userId: user.id, plexToken: "", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, { url: "/api/auth/me", method: "GET" });
     const body = await expectJson<MeResponse>(response, 200);
@@ -74,7 +74,7 @@ describe("GET /api/auth/me", () => {
       where: { id: user.id },
       data: { ssoEnabled: true, ssoProvider: "Authentik", ssoSubject: "sub", ssoIssuer: "iss" },
     });
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, { url: "/api/auth/me", method: "GET" });
     const body = await expectJson<MeResponse>(response, 200);
@@ -83,7 +83,7 @@ describe("GET /api/auth/me", () => {
 
   it("returns 401 when the user no longer exists", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
     await prisma.user.delete({ where: { id: user.id } });
 
     const response = await callRoute(GET, { url: "/api/auth/me", method: "GET" });

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { currentSsoIssuer, isSsoOverrideActive, isSsoUsable, type SsoSettings } from "@/lib/sso/config";
+import { currentSsoIssuer, isSsoOverrideActive, isSsoUsable, ssoUnusableReason, type SsoSettings } from "@/lib/sso/config";
 
 function makeSettings(overrides: Partial<SsoSettings> = {}): SsoSettings {
   return {
@@ -51,7 +51,16 @@ describe("isSsoUsable", () => {
   });
 
   describe("FORWARD_AUTH mode", () => {
-    it("returns true when the user header is set", () => {
+    const originalSecret = process.env.FORWARD_AUTH_SECRET;
+    beforeEach(() => {
+      process.env.FORWARD_AUTH_SECRET = "proxy-secret";
+    });
+    afterEach(() => {
+      if (originalSecret === undefined) delete process.env.FORWARD_AUTH_SECRET;
+      else process.env.FORWARD_AUTH_SECRET = originalSecret;
+    });
+
+    it("returns true when the user header and FORWARD_AUTH_SECRET are set", () => {
       expect(
         isSsoUsable(
           makeSettings({
@@ -73,6 +82,40 @@ describe("isSsoUsable", () => {
           })
         )
       ).toBe(false);
+    });
+
+    // Without the secret a request cannot prove it came through the proxy, so
+    // the identity header proves nothing (forward-secret.ts).
+    it("returns false while FORWARD_AUTH_SECRET is unset or empty", () => {
+      const settings = makeSettings({ ssoMode: "FORWARD_AUTH" });
+      delete process.env.FORWARD_AUTH_SECRET;
+      expect(isSsoUsable(settings)).toBe(false);
+      expect(ssoUnusableReason(settings)).toMatch(/FORWARD_AUTH_SECRET/);
+      process.env.FORWARD_AUTH_SECRET = "";
+      expect(isSsoUsable(settings)).toBe(false);
+    });
+  });
+
+  // The OIDC client relies on TLS to authenticate the issuer (issuer-url.ts).
+  describe("OIDC issuer scheme", () => {
+    const originalAllow = process.env.OIDC_ALLOW_INSECURE_HTTP;
+    afterEach(() => {
+      if (originalAllow === undefined) delete process.env.OIDC_ALLOW_INSECURE_HTTP;
+      else process.env.OIDC_ALLOW_INSECURE_HTTP = originalAllow;
+    });
+
+    it("refuses an http:// issuer on a network host", () => {
+      delete process.env.OIDC_ALLOW_INSECURE_HTTP;
+      const settings = makeSettings({ oidcIssuer: "http://idp.lan" });
+      expect(isSsoUsable(settings)).toBe(false);
+      expect(ssoUnusableReason(settings)).toMatch(/https/);
+    });
+
+    it("accepts http:// on loopback, and anywhere under OIDC_ALLOW_INSECURE_HTTP", () => {
+      delete process.env.OIDC_ALLOW_INSECURE_HTTP;
+      expect(isSsoUsable(makeSettings({ oidcIssuer: "http://localhost:9000" }))).toBe(true);
+      process.env.OIDC_ALLOW_INSECURE_HTTP = "true";
+      expect(isSsoUsable(makeSettings({ oidcIssuer: "http://idp.lan" }))).toBe(true);
     });
   });
 });

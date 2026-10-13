@@ -63,7 +63,7 @@ describe("Available letters endpoints", () => {
 
     it("returns empty letters with no data", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET_MOVIE_LETTERS, {
         url: "/api/media/movies/available-letters",
@@ -82,7 +82,7 @@ describe("Available letters endpoints", () => {
       await createTestMediaItem(lib.id, { title: "Batman", type: "MOVIE" });
       await createTestMediaItem(lib.id, { title: "Casablanca", type: "MOVIE" });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET_MOVIE_LETTERS, {
         url: "/api/media/movies/available-letters",
@@ -101,7 +101,7 @@ describe("Available letters endpoints", () => {
       await createTestMediaItem(lib.id, { title: "300", type: "MOVIE" });
       await createTestMediaItem(lib.id, { title: "Alien", type: "MOVIE" });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET_MOVIE_LETTERS, {
         url: "/api/media/movies/available-letters",
@@ -121,7 +121,7 @@ describe("Available letters endpoints", () => {
       await createTestMediaItem(lib.id, { title: "Avatar", type: "MOVIE" });
       await createTestMediaItem(lib.id, { title: "Avengers", type: "MOVIE" });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET_MOVIE_LETTERS, {
         url: "/api/media/movies/available-letters",
@@ -142,7 +142,7 @@ describe("Available letters endpoints", () => {
       await createTestMediaItem(lib1.id, { title: "Alien", type: "MOVIE" });
       await createTestMediaItem(lib2.id, { title: "Batman", type: "MOVIE" });
 
-      setMockSession({ userId: user1.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user1.id, isLoggedIn: true });
 
       const response = await callRoute(GET_MOVIE_LETTERS, {
         url: "/api/media/movies/available-letters",
@@ -166,7 +166,7 @@ describe("Available letters endpoints", () => {
         parentTitle: "Breaking Bad",
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET_MOVIE_LETTERS, {
         url: "/api/media/movies/available-letters",
@@ -184,7 +184,7 @@ describe("Available letters endpoints", () => {
 
       await createTestMediaItem(lib.id, { title: "alien", type: "MOVIE" });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET_MOVIE_LETTERS, {
         url: "/api/media/movies/available-letters",
@@ -208,7 +208,7 @@ describe("Available letters endpoints", () => {
 
     it("returns empty letters with no data", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET_SERIES_LETTERS, {
         url: "/api/media/series/grouped/available-letters",
@@ -245,7 +245,7 @@ describe("Available letters endpoints", () => {
         episodeNumber: 1,
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET_SERIES_LETTERS, {
         url: "/api/media/series/grouped/available-letters",
@@ -275,7 +275,7 @@ describe("Available letters endpoints", () => {
         episodeNumber: 1,
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET_SERIES_LETTERS, {
         url: "/api/media/series/grouped/available-letters",
@@ -309,7 +309,7 @@ describe("Available letters endpoints", () => {
         episodeNumber: 2,
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET_SERIES_LETTERS, {
         url: "/api/media/series/grouped/available-letters",
@@ -337,7 +337,7 @@ describe("Available letters endpoints", () => {
         seasonNumber: 1,
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET_SERIES_LETTERS, {
         url: "/api/media/series/grouped/available-letters",
@@ -370,7 +370,7 @@ describe("Available letters endpoints", () => {
         seasonNumber: 1,
       });
 
-      setMockSession({ userId: user1.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user1.id, isLoggedIn: true });
 
       const response = await callRoute(GET_SERIES_LETTERS, {
         url: "/api/media/series/grouped/available-letters",
@@ -394,7 +394,7 @@ describe("Available letters endpoints", () => {
 
     it("returns empty letters with no data", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET_MUSIC_LETTERS, {
         url: "/api/media/music/grouped/available-letters",
@@ -428,7 +428,7 @@ describe("Available letters endpoints", () => {
         audioCodec: "mp3",
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET_MUSIC_LETTERS, {
         url: "/api/media/music/grouped/available-letters",
@@ -462,7 +462,7 @@ describe("Available letters endpoints", () => {
         audioCodec: "flac",
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET_MUSIC_LETTERS, {
         url: "/api/media/music/grouped/available-letters",
@@ -494,7 +494,7 @@ describe("Available letters endpoints", () => {
         ratingKey: "adele-2",
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET_MUSIC_LETTERS, {
         url: "/api/media/music/grouped/available-letters",
@@ -522,7 +522,7 @@ describe("Available letters endpoints", () => {
         audioCodec: "mp3",
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET_MUSIC_LETTERS, {
         url: "/api/media/music/grouped/available-letters",
@@ -555,7 +555,7 @@ describe("Available letters endpoints", () => {
         audioCodec: "mp3",
       });
 
-      setMockSession({ userId: user1.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user1.id, isLoggedIn: true });
 
       const response = await callRoute(GET_MUSIC_LETTERS, {
         url: "/api/media/music/grouped/available-letters",

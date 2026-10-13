@@ -49,7 +49,7 @@ describe("GET /api/settings/dashboard-layout", () => {
 
   it("returns null layout when no settings exist", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(GET);
     const body = await expectJson<{ layout: unknown }>(res);
@@ -58,7 +58,7 @@ describe("GET /api/settings/dashboard-layout", () => {
 
   it("returns saved layout", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     await callRoute(PUT, { method: "PUT", body: { layout: VALID_LAYOUT } });
 
@@ -89,7 +89,7 @@ describe("PUT /api/settings/dashboard-layout", () => {
 
   it("saves a valid layout", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(PUT, { method: "PUT", body: { layout: VALID_LAYOUT } });
     const body = await expectJson<{ layout: typeof VALID_LAYOUT }>(res);
@@ -98,7 +98,7 @@ describe("PUT /api/settings/dashboard-layout", () => {
 
   it("saves an empty layout (all tabs empty)", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(PUT, { method: "PUT", body: { layout: EMPTY_LAYOUT } });
     const body = await expectJson<{ layout: typeof EMPTY_LAYOUT }>(res);
@@ -107,7 +107,7 @@ describe("PUT /api/settings/dashboard-layout", () => {
 
   it("returns 400 for invalid layout structure (missing tabs)", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(PUT, {
       method: "PUT",
@@ -118,7 +118,7 @@ describe("PUT /api/settings/dashboard-layout", () => {
 
   it("returns 400 for invalid card id in layout", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(PUT, {
       method: "PUT",
@@ -136,7 +136,7 @@ describe("PUT /api/settings/dashboard-layout", () => {
 
   it("returns 400 for card placed in disallowed tab", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     // "stats" is only allowed in "main" tab
     const res = await callRoute(PUT, {
@@ -155,7 +155,7 @@ describe("PUT /api/settings/dashboard-layout", () => {
 
   it("returns 400 for missing layout field", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(PUT, { method: "PUT", body: {} });
     await expectJson(res, 400);

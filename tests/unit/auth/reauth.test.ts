@@ -114,7 +114,17 @@ describe("loadReauthContext", () => {
 
     mockFindUser.mockResolvedValue(user({ ssoEnabled: true, ssoSubject: "alice", ssoIssuer: "forward-auth" }));
     mockGetSso.mockResolvedValue(oidc({ ssoMode: "FORWARD_AUTH" }));
-    expect((await loadReauthContext("u")).methods).toEqual(["forward"]);
+    // The proxy only while forward-auth is usable: FORWARD_AUTH_SECRET set.
+    const previous = process.env.FORWARD_AUTH_SECRET;
+    try {
+      delete process.env.FORWARD_AUTH_SECRET;
+      expect((await loadReauthContext("u")).methods).toEqual([]);
+      process.env.FORWARD_AUTH_SECRET = "proxy-secret";
+      expect((await loadReauthContext("u")).methods).toEqual(["forward"]);
+    } finally {
+      if (previous === undefined) delete process.env.FORWARD_AUTH_SECRET;
+      else process.env.FORWARD_AUTH_SECRET = previous;
+    }
   });
 
   it("does not offer SSO when it is off, unconfigured, or linked under another issuer", async () => {

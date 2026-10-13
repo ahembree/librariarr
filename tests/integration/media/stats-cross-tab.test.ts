@@ -62,7 +62,7 @@ describe("GET /api/media/stats/cross-tab", () => {
 
   it("returns 400 when dimensions are missing", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/stats/cross-tab",
@@ -73,7 +73,7 @@ describe("GET /api/media/stats/cross-tab", () => {
 
   it("returns 400 when dimensions are the same", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/stats/cross-tab",
@@ -85,7 +85,7 @@ describe("GET /api/media/stats/cross-tab", () => {
 
   it("returns 400 for invalid dimension IDs", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/stats/cross-tab",
@@ -97,7 +97,7 @@ describe("GET /api/media/stats/cross-tab", () => {
 
   it("returns 400 when crossing two stream dimensions", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/stats/cross-tab",
@@ -109,7 +109,7 @@ describe("GET /api/media/stats/cross-tab", () => {
 
   it("returns empty rows when user has no servers", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/stats/cross-tab",
@@ -143,7 +143,7 @@ describe("GET /api/media/stats/cross-tab", () => {
       videoCodec: "h265",
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/stats/cross-tab",
@@ -166,7 +166,7 @@ describe("GET /api/media/stats/cross-tab", () => {
     const user2 = await createTestUser({ plexId: "u2" });
     const server = await createTestServer(user1.id);
 
-    setMockSession({ userId: user2.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user2.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/stats/cross-tab",
@@ -199,7 +199,7 @@ describe("GET /api/media/stats/cross-tab", () => {
       ratingKey: "s2m1",
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/stats/cross-tab",
@@ -231,7 +231,7 @@ describe("GET /api/media/stats/cross-tab", () => {
     await createTestMediaStream(movie.id, { streamType: 2, index: 2, language: "English" });
     await createTestMediaStream(movie.id, { streamType: 2, index: 3, language: "French" });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
     const response = await callRoute(GET, {
       url: "/api/media/stats/cross-tab",
       searchParams: { dimension1: "audioLanguage", dimension2: "videoCodec" },
@@ -270,7 +270,7 @@ describe("GET /api/media/stats/cross-tab", () => {
     await prisma.mediaItem.createMany({ data: rows });
     await createTestMediaItem(music.id, { type: "MUSIC", year: 1999, studio: "Label" });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
     const response = await callRoute(GET, {
       url: "/api/media/stats/cross-tab",
       searchParams: { dimension1: "year", dimension2: "studio" },

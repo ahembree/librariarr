@@ -97,7 +97,7 @@ export async function POST(request: NextRequest) {
         { status: 403 },
       );
     }
-    attempt.refund();
+    attempt.succeeded();
   } else if (!hasRecentLogin(session)) {
     // Names the ways to confirm the identity in place (Plex, SSO — never the
     // password while password sign-in is off), which the settings dialog

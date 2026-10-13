@@ -8,6 +8,9 @@ import {
   authRateLimiter,
   peekAuthRateLimit,
   reserveAuthAttempt,
+  rememberAuthenticatedAddress,
+  isKnownAddress,
+  _resetKnownAddressesForTesting,
 } from "@/lib/rate-limit/rate-limiter";
 
 describe("RateLimiter", () => {
@@ -319,6 +322,68 @@ describe("checkAuthRateLimit — global floor", () => {
     else process.env.TRUST_PROXY_HEADERS = originalValue;
     // The global limiter is a module singleton; drop our bucket's entry.
     (authGlobalRateLimiter as unknown as { store: Map<string, unknown> }).store.clear();
+    (authRateLimiter as unknown as { store: Map<string, unknown> }).store.clear();
+    _resetKnownAddressesForTesting();
+  });
+
+  // Sixty failures from anywhere used to refuse every client on the bucket
+  // for the rest of the window — a lockout anyone could cause with four
+  // requests a minute. An address a sign-in has succeeded from is judged by
+  // its own budget alone.
+  it("never refuses an address a sign-in has succeeded from, and never charges the floor for it", () => {
+    delete process.env.TRUST_PROXY_HEADERS;
+    const bucket = "floor-known-address";
+    const admin = new Request("http://localhost/api/auth/local/login", {
+      method: "POST",
+      headers: { "x-forwarded-for": "203.0.113.7" },
+    });
+    rememberAuthenticatedAddress(admin);
+    expect(isKnownAddress("203.0.113.7")).toBe(true);
+    // A flood from rotating addresses spends the whole floor.
+    for (let i = 0; i < 60; i++) {
+      const req = new Request("http://localhost/api/auth/local/login", {
+        method: "POST",
+        headers: { "x-forwarded-for": `10.0.${Math.floor(i / 256)}.${i % 256}` },
+      });
+      expect(checkAuthRateLimit(req, bucket)).toBeNull();
+    }
+    const fresh = new Request("http://localhost/api/auth/local/login", {
+      method: "POST",
+      headers: { "x-forwarded-for": "10.9.9.9" },
+    });
+    expect(checkAuthRateLimit(fresh, bucket)?.status).toBe(429);
+    // The admin's own address still gets its own ten.
+    const floor = (authGlobalRateLimiter as unknown as { store: Map<string, { count: number }> }).store;
+    const floorBefore = floor.get(`${bucket}:*`)!.count;
+    for (let i = 0; i < 10; i++) expect(checkAuthRateLimit(admin, bucket)).toBeNull();
+    expect(checkAuthRateLimit(admin, bucket)?.status).toBe(429);
+    // None of those eleven was counted against the floor.
+    expect(floor.get(`${bucket}:*`)!.count).toBe(floorBefore);
+  });
+
+  it("forgets an address after thirty days", () => {
+    vi.useFakeTimers();
+    try {
+      const req = new Request("http://localhost/api/x", { headers: { "x-forwarded-for": "198.51.100.1" } });
+      rememberAuthenticatedAddress(req);
+      vi.advanceTimersByTime(29 * 24 * 60 * 60 * 1000);
+      expect(isKnownAddress("198.51.100.1")).toBe(true);
+      vi.advanceTimersByTime(2 * 24 * 60 * 60 * 1000);
+      expect(isKnownAddress("198.51.100.1")).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("remembers at most 10,000 addresses, dropping the least recently signed in", () => {
+    for (let i = 0; i < 10_001; i++) {
+      rememberAuthenticatedAddress(
+        new Request("http://localhost/api/x", { headers: { "x-forwarded-for": `10.${i >> 16}.${(i >> 8) & 255}.${i & 255}` } }),
+      );
+    }
+    expect(isKnownAddress("10.0.0.0")).toBe(false);
+    expect(isKnownAddress("10.0.0.1")).toBe(true);
+    expect(isKnownAddress("10.0.39.16")).toBe(true);
   });
 
   it("rotating X-Forwarded-For cannot escape the limit indefinitely", () => {
@@ -447,6 +512,7 @@ describe("peekAuthRateLimit / reserveAuthAttempt", () => {
     if (originalValue === undefined) delete process.env.TRUST_PROXY_HEADERS;
     else process.env.TRUST_PROXY_HEADERS = originalValue;
     for (const store of stores()) store.clear();
+    _resetKnownAddressesForTesting();
   });
 
   const from = (ip: string) =>
@@ -462,7 +528,7 @@ describe("peekAuthRateLimit / reserveAuthAttempt", () => {
       expect(peekAuthRateLimit(from("10.9.0.1"), "peek-test")).toBeNull();
       const attempt = reserveAuthAttempt(from("10.9.0.1"), "peek-test");
       expect(attempt.refused).toBeNull();
-      if (!attempt.refused) attempt.refund();
+      if (!attempt.refused) attempt.succeeded();
     }
     // Ten wrong ones: reserved and kept.
     for (let i = 0; i < 10; i++) expect(reserveAuthAttempt(from("10.9.0.1"), "peek-test").refused).toBeNull();
@@ -487,14 +553,14 @@ describe("peekAuthRateLimit / reserveAuthAttempt", () => {
     // and only one, however often it is refunded.
     const success = held[0];
     if (!success.refused) {
-      success.refund();
-      success.refund();
+      success.succeeded();
+      success.succeeded();
     }
     expect(reserveAuthAttempt(from("10.9.1.1"), "burst").refused).toBeNull();
     expect(reserveAuthAttempt(from("10.9.1.1"), "burst").refused?.status).toBe(429);
   });
 
-  it("applies the global floor no address can escape", () => {
+  it("applies the global floor no fresh address can escape", () => {
     delete process.env.TRUST_PROXY_HEADERS;
     for (let i = 0; i < 60; i++) {
       expect(reserveAuthAttempt(from(`10.10.${Math.floor(i / 250)}.${i % 250}`), "peek-global").refused).toBeNull();
@@ -506,6 +572,30 @@ describe("peekAuthRateLimit / reserveAuthAttempt", () => {
     expect(perIp.get("peek-global:10.11.0.1")?.count ?? 0).toBe(0);
     // Other buckets keep their own floor.
     expect(peekAuthRateLimit(from("10.11.0.1"), "peek-other")).toBeNull();
+  });
+
+  it("a successful attempt makes its address known, and a known address is not held to the floor", () => {
+    delete process.env.TRUST_PROXY_HEADERS;
+    const attempt = reserveAuthAttempt(from("10.12.0.1"), "peek-known");
+    expect(attempt.refused).toBeNull();
+    if (!attempt.refused) attempt.succeeded();
+    expect(isKnownAddress("10.12.0.1")).toBe(true);
+    // A failed attempt makes nothing known.
+    expect(reserveAuthAttempt(from("10.12.0.2"), "peek-known").refused).toBeNull();
+    expect(isKnownAddress("10.12.0.2")).toBe(false);
+    // The floor fills from fresh addresses; the known one still peeks and reserves.
+    for (let i = 1; i < 60; i++) {
+      expect(reserveAuthAttempt(from(`10.13.${Math.floor(i / 250)}.${i % 250}`), "peek-known").refused).toBeNull();
+    }
+    expect(peekAuthRateLimit(from("10.14.0.1"), "peek-known")?.status).toBe(429);
+    expect(peekAuthRateLimit(from("10.12.0.1"), "peek-known")).toBeNull();
+    const held = reserveAuthAttempt(from("10.12.0.1"), "peek-known");
+    expect(held.refused).toBeNull();
+    // Its reservation did not touch the floor, and neither does its refund.
+    const floor = (authGlobalRateLimiter as unknown as { store: Map<string, { count: number }> }).store;
+    expect(floor.get("peek-known:*")?.count).toBe(60);
+    if (!held.refused) held.succeeded();
+    expect(floor.get("peek-known:*")?.count).toBe(60);
   });
 
   // The per-address key is whatever X-Forwarded-For says on a directly

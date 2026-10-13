@@ -67,7 +67,7 @@ describe("DELETE /api/servers/[id] lifecycle cleanup", () => {
       serverIds: [server1.id, server2.id],
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRouteWithParams(
       DELETE,
@@ -130,7 +130,7 @@ describe("DELETE /api/servers/[id] lifecycle cleanup", () => {
       },
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     // deleteData=false: items preserved, but server removed
     const response = await callRouteWithParams(
@@ -198,7 +198,7 @@ describe("DELETE /api/servers/[id] lifecycle cleanup", () => {
       },
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRouteWithParams(
       DELETE,
@@ -272,7 +272,7 @@ describe("DELETE /api/servers/[id] lifecycle cleanup", () => {
       },
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     // Delete server1 WITHOUT deleteData — items preserved but server gone
     const response = await callRouteWithParams(

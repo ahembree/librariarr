@@ -34,7 +34,7 @@ describe("GET /api/settings/chip-colors", () => {
 
   it("returns null when no chip colors saved", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(GET);
     const body = await expectJson<{ chipColors: unknown }>(res);
@@ -43,7 +43,7 @@ describe("GET /api/settings/chip-colors", () => {
 
   it("returns saved chip colors", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const colors = { resolution: { "4K": "#ff0000", "1080P": "#00ff00" } };
     await callRoute(PUT, { method: "PUT", body: { chipColors: colors } });
@@ -75,7 +75,7 @@ describe("PUT /api/settings/chip-colors", () => {
 
   it("saves chip colors successfully", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const colors = { resolution: { "4K": "#ff0000" }, codec: { h264: "#0000ff" } };
     const res = await callRoute(PUT, { method: "PUT", body: { chipColors: colors } });
@@ -85,7 +85,7 @@ describe("PUT /api/settings/chip-colors", () => {
 
   it("returns 400 for invalid chipColors structure", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(PUT, { method: "PUT", body: { chipColors: "not-an-object" } });
     await expectJson(res, 400);
@@ -93,7 +93,7 @@ describe("PUT /api/settings/chip-colors", () => {
 
   it("returns 400 for missing chipColors field", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(PUT, { method: "PUT", body: {} });
     await expectJson(res, 400);

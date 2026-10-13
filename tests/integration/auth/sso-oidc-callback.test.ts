@@ -29,6 +29,8 @@ vi.mock("@/lib/sso/oidc-client", () => ({
 
 vi.mock("@/lib/rate-limit/rate-limiter", () => ({
   checkAuthRateLimit: () => null,
+  peekAuthRateLimit: () => null,
+  reserveAuthAttempt: () => ({ refused: null, succeeded: () => {} }),
   authRateLimiter: { check: () => ({ limited: false }) },
   getClientIp: () => "127.0.0.1",
 }));
@@ -245,8 +247,11 @@ describe("GET /api/auth/sso/oidc/callback", () => {
     const session = getMockSession();
     expect(session.isLoggedIn).toBe(true);
     expect(session.userId).toBe(user.id);
-    // plexToken is re-attached after destroy() so server discovery still works.
-    expect(session.plexToken).toBe("preserved-plex-token");
+    // The Plex token stays in the User row, where server discovery reads it
+    // (`getStoredPlexToken`); the cookie never carries it.
+    expect("plexToken" in session).toBe(false);
+    const stored = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
+    expect(stored.plexToken).toBe("preserved-plex-token");
   });
 
   it("rejects login with not_linked when no user matches the subject", async () => {

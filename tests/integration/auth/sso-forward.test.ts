@@ -1,10 +1,13 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from "vitest";
+import { isSsoUsable, getSsoSettings } from "@/lib/sso/config";
 import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { clearMockSession, getMockSession } from "../../setup/mock-session";
 import { callRoute, createTestUser } from "../../setup/test-helpers";
 
 vi.mock("@/lib/rate-limit/rate-limiter", () => ({
   checkAuthRateLimit: () => null,
+  peekAuthRateLimit: () => null,
+  reserveAuthAttempt: () => ({ refused: null, succeeded: () => {} }),
   authRateLimiter: { check: () => ({ limited: false }) },
   getClientIp: () => "127.0.0.1",
 }));
@@ -25,7 +28,21 @@ import { GET } from "@/app/api/auth/sso/forward/route";
 const prisma = getTestPrisma();
 
 // Same-origin Referer satisfies the strict CSRF check the route uses.
-const SAME_ORIGIN_HEADERS = { Referer: "http://localhost:3000/login" };
+const REFERER = { Referer: "http://localhost:3000/login" };
+// Forward-auth is not usable without `FORWARD_AUTH_SECRET` (forward-secret.ts),
+// so the file runs with one set and the proxy sending it; the block at the end
+// covers an install that has not set it.
+const secret = "proxy-only-5f3a9c";
+const SAME_ORIGIN_HEADERS = { ...REFERER, "X-Librariarr-Proxy-Secret": secret };
+let previousSecret: string | undefined;
+beforeAll(() => {
+  previousSecret = process.env.FORWARD_AUTH_SECRET;
+  process.env.FORWARD_AUTH_SECRET = secret;
+});
+afterAll(() => {
+  if (previousSecret === undefined) delete process.env.FORWARD_AUTH_SECRET;
+  else process.env.FORWARD_AUTH_SECRET = previousSecret;
+});
 
 async function seedForwardAuth(userId: string, overrides: Partial<{
   ssoEnabled: boolean;
@@ -102,17 +119,7 @@ describe("GET /api/auth/sso/forward — strict CSRF + manual link", () => {
     expect(loc.searchParams.get("sso_error")).toBe("sso_not_configured");
   });
 
-  describe("with FORWARD_AUTH_SECRET set", () => {
-    const secret = "proxy-only-5f3a9c";
-    let previous: string | undefined;
-    beforeAll(() => {
-      previous = process.env.FORWARD_AUTH_SECRET;
-      process.env.FORWARD_AUTH_SECRET = secret;
-    });
-    afterAll(() => {
-      if (previous === undefined) delete process.env.FORWARD_AUTH_SECRET;
-      else process.env.FORWARD_AUTH_SECRET = previous;
-    });
+  describe("the proxy secret", () => {
 
     async function linkedAlice() {
       const user = await createTestUser();
@@ -130,25 +137,58 @@ describe("GET /api/auth/sso/forward — strict CSRF + manual link", () => {
       ["no secret header", {}],
       ["a wrong secret", { "X-Librariarr-Proxy-Secret": "guess" }],
       ["a secret of another length", { "X-Librariarr-Proxy-Secret": `${secret}x` }],
-    ])("refuses a spoofed identity header with %s", async (_label, extra) => {
+    ])("refuses a spoofed identity header with %s", async (_label, extra: Record<string, string>) => {
       await linkedAlice();
       const res = await callRoute(GET, {
         method: "GET",
-        headers: { ...SAME_ORIGIN_HEADERS, "Remote-User": "alice", ...extra },
+        headers: { ...REFERER, "Remote-User": "alice", ...extra },
       });
       const loc = new URL(res.headers.get("location")!);
       expect(loc.searchParams.get("sso_error")).toBe("untrusted_proxy");
       expect(getMockSession().isLoggedIn).toBeFalsy();
     });
 
-    it("signs in when the proxy sends the secret", async () => {
+    it("signs in when the proxy sends the secret — and the cookie carries no Plex token", async () => {
       const user = await linkedAlice();
       const res = await callRoute(GET, {
         method: "GET",
-        headers: { ...SAME_ORIGIN_HEADERS, "Remote-User": "alice", "X-Librariarr-Proxy-Secret": secret },
+        headers: { ...REFERER, "Remote-User": "alice", "X-Librariarr-Proxy-Secret": secret },
       });
       expect(new URL(res.headers.get("location")!).pathname).toBe("/");
       expect(getMockSession()).toMatchObject({ isLoggedIn: true, userId: user.id });
+      expect("plexToken" in getMockSession()).toBe(false);
+    });
+
+    // The secret used to be opt-in: unset, any client that reached the app's
+    // port directly signed in by sending `Remote-User` itself. Now forward-auth
+    // is simply not usable without it — the login page offers no SSO button,
+    // and a request that reaches the route anyway is refused by name.
+    describe("when FORWARD_AUTH_SECRET is unset", () => {
+      beforeEach(() => {
+        delete process.env.FORWARD_AUTH_SECRET;
+      });
+      afterAll(() => {
+        process.env.FORWARD_AUTH_SECRET = secret;
+      });
+
+      it("is not usable, so the login page does not offer it", async () => {
+        await linkedAlice();
+        expect(isSsoUsable(await getSsoSettings())).toBe(false);
+      });
+
+      it("refuses the identity header with forward_auth_unconfigured, even with a value in the secret header", async () => {
+        await linkedAlice();
+        const extras: Record<string, string>[] = [{}, { "X-Librariarr-Proxy-Secret": secret }];
+        for (const extra of extras) {
+          const res = await callRoute(GET, {
+            method: "GET",
+            headers: { ...REFERER, "Remote-User": "alice", ...extra },
+          });
+          const loc = new URL(res.headers.get("location")!);
+          expect(loc.searchParams.get("sso_error")).toBe("forward_auth_unconfigured");
+          expect(getMockSession().isLoggedIn).toBeFalsy();
+        }
+      });
     });
   });
 
@@ -282,7 +322,9 @@ describe("GET /api/auth/sso/forward — strict CSRF + manual link", () => {
     const session = getMockSession();
     expect(session.isLoggedIn).toBe(true);
     expect(session.userId).toBe(user.id);
-    expect(session.plexToken).toBe("kept-token");
+    // The Plex token stays in the User row; the cookie never carries it.
+    expect("plexToken" in session).toBe(false);
+    expect((await prisma.user.findUniqueOrThrow({ where: { id: user.id } })).plexToken).toBe("kept-token");
   });
 
   it("respects custom forwardAuthUserHeader names", async () => {

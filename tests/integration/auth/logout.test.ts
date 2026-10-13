@@ -34,7 +34,6 @@ describe("POST /api/auth/logout", () => {
   it("should destroy session and return success", async () => {
     setMockSession({
       userId: "user-123",
-      plexToken: "plex-token-abc",
       isLoggedIn: true,
     });
 
@@ -117,7 +116,6 @@ describe("GET /api/auth/logout", () => {
   it("should destroy session and redirect to /login", async () => {
     setMockSession({
       userId: "user-456",
-      plexToken: "plex-token-def",
       isLoggedIn: true,
     });
 

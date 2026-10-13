@@ -4,7 +4,7 @@ import { rotateSession } from "@/lib/auth/session";
 import bcrypt from "bcryptjs";
 import { apiLogger } from "@/lib/logger";
 import { validateRequest, authLoginSchema } from "@/lib/validation";
-import { checkAuthRateLimit } from "@/lib/rate-limit/rate-limiter";
+import { peekAuthRateLimit, reserveAuthAttempt } from "@/lib/rate-limit/rate-limiter";
 import { loadPasswordSignInState, passwordSignInEnabled } from "@/lib/auth/password-sign-in";
 
 /**
@@ -14,14 +14,22 @@ import { loadPasswordSignInState, passwordSignInEnabled } from "@/lib/auth/passw
 const UNKNOWN_USER_DUMMY_HASH =
   "$2b$12$Hx3w06n5Vs5p8Ajdvdz9FuOw0kR7BGtKcAGI4PyfqiNglFBMsoFY6";
 
+const LOGIN_BUCKET = "login";
+
 export async function POST(request: NextRequest) {
   try {
-    const rateLimited = checkAuthRateLimit(request, "login");
-    if (rateLimited) return rateLimited;
+    // Charged only on a failed sign-in (see `reserveAuthAttempt`): refused
+    // early without counting, reserved before the credentials are checked —
+    // a malformed body is not an attempt — and given back on success.
+    const limited = peekAuthRateLimit(request, LOGIN_BUCKET);
+    if (limited) return limited;
 
     const { data, error } = await validateRequest(request, authLoginSchema);
     if (error) return error;
     const { username, password } = data;
+
+    const attempt = reserveAuthAttempt(request, LOGIN_BUCKET);
+    if (attempt.refused) return attempt.refused;
 
     // Gate before credential check: the login page hides the local form when
     // localAuthEnabled is false or when SSO is usable (SSO hides local). Without
@@ -71,14 +79,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Destroy first to clear any stale data (e.g. prior plexToken from a different session)
+    attempt.succeeded();
+
+    // Discards whatever the visitor was carrying (a stale OIDC handshake, a
+    // pre-seeded cookie) before writing the login in.
     const session = await rotateSession();
     session.userId = user.id;
     session.isLoggedIn = true;
     session.sessionVersion = user.sessionVersion;
-    if (user.plexToken) {
-      session.plexToken = user.plexToken;
-    }
     await session.save();
 
     apiLogger.info("Auth", `Local login: "${user.username}"`);

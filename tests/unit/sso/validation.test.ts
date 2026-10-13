@@ -107,10 +107,15 @@ describe("ssoTestSchema", () => {
     ).toBe(true);
   });
 
-  it("accepts http for self-hosted environments", () => {
+  it("accepts http on loopback only (the rule in issuer-url.ts)", () => {
     expect(
       ssoTestSchema.safeParse({ oidcIssuer: "http://localhost:9000" }).success
     ).toBe(true);
+    const lan = ssoTestSchema.safeParse({ oidcIssuer: "http://idp.lan:9000" });
+    expect(lan.success).toBe(false);
+    expect(JSON.stringify(lan.error?.issues)).toMatch(/https/);
+    expect(ssoConfigSchema.safeParse({ oidcIssuer: "http://idp.lan:9000" }).success).toBe(false);
+    expect(ssoConfigSchema.safeParse({ oidcIssuer: "http://127.0.0.1:9000" }).success).toBe(true);
   });
 
   it("rejects when the issuer lacks a scheme", () => {

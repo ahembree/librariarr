@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
-import { clearMockSession } from "../../setup/mock-session";
+import { clearMockSession, getMockSession } from "../../setup/mock-session";
 import { callRoute, expectJson, createTestUser } from "../../setup/test-helpers";
 
 // Mock bcrypt
@@ -11,11 +11,22 @@ vi.mock("bcryptjs", () => ({
   compare: mockCompare,
 }));
 
-// Mock rate limiter
-const mockCheckAuthRateLimit = vi.hoisted(() => vi.fn());
+// Mock rate limiter. The route reserves an attempt before the credential
+// check and gives it back on success (see tests/integration/auth/login-lockout.test.ts
+// for the real limiter).
+const { mockPeek, mockReserve, mockSucceeded } = vi.hoisted(() => {
+  const mockSucceeded = vi.fn();
+  return {
+    mockPeek: vi.fn((): Response | null => null),
+    mockReserve: vi.fn(
+      (): { refused: Response } | { refused: null; succeeded: () => void } => ({ refused: null, succeeded: mockSucceeded }),
+    ),
+    mockSucceeded,
+  };
+});
 vi.mock("@/lib/rate-limit/rate-limiter", () => ({
-  checkAuthRateLimit: mockCheckAuthRateLimit,
-  authRateLimiter: { check: vi.fn().mockReturnValue({ limited: false }) },
+  peekAuthRateLimit: mockPeek,
+  reserveAuthAttempt: mockReserve,
   getClientIp: vi.fn().mockReturnValue("127.0.0.1"),
 }));
 
@@ -41,7 +52,8 @@ describe("POST /api/auth/local/login", () => {
     clearMockSession();
     vi.clearAllMocks();
     // Default: not rate limited
-    mockCheckAuthRateLimit.mockReturnValue(null);
+    mockPeek.mockReturnValue(null);
+    mockReserve.mockReturnValue({ refused: null, succeeded: mockSucceeded });
   });
 
   afterAll(async () => {
@@ -138,6 +150,9 @@ describe("POST /api/auth/local/login", () => {
     const body = await expectJson<{ error: string }>(response, 401);
     expect(body.error).toBe("Invalid username or password");
     expect(mockCompare).toHaveBeenCalledWith("wrongpassword", "hashed_correctpassword");
+    // A failed sign-in stays charged.
+    expect(mockReserve).toHaveBeenCalledTimes(1);
+    expect(mockSucceeded).not.toHaveBeenCalled();
   });
 
   it("returns 200 on valid credentials", async () => {
@@ -166,6 +181,11 @@ describe("POST /api/auth/local/login", () => {
     expect(body.user.id).toBe(user.id);
     expect(body.user.username).toBe("localuser");
     expect(mockCompare).toHaveBeenCalledWith("correctpassword", "hashed_password");
+    // A sign-in that succeeded is given back to the budget.
+    expect(mockSucceeded).toHaveBeenCalledTimes(1);
+    // The cookie carries the identity only — never the Plex token (it stays
+    // in the User row, see `SessionData`).
+    expect("plexToken" in getMockSession()).toBe(false);
   });
 
   it("handles case-insensitive username lookup", async () => {
@@ -193,8 +213,8 @@ describe("POST /api/auth/local/login", () => {
     expect(body.authenticated).toBe(true);
   });
 
-  it("returns 429 when rate limited", async () => {
-    mockCheckAuthRateLimit.mockReturnValue(
+  it("returns 429 when rate limited, before reading the body", async () => {
+    mockPeek.mockReturnValue(
       Response.json(
         { error: "Too many attempts. Try again later." },
         { status: 429, headers: { "Retry-After": "60" } }
@@ -209,6 +229,26 @@ describe("POST /api/auth/local/login", () => {
     const body = await expectJson<{ error: string }>(response, 429);
     expect(body.error).toBe("Too many attempts. Try again later.");
     expect(response.headers.get("Retry-After")).toBe("60");
+    expect(mockReserve).not.toHaveBeenCalled();
+  });
+
+  it("returns 429 when the reservation is refused, without comparing", async () => {
+    const refused = Response.json({ error: "Too many attempts. Try again later." }, { status: 429 });
+    mockReserve.mockReturnValue({ refused });
+    mockCompare.mockResolvedValue(true);
+
+    const response = await callRoute(POST, {
+      url: "/api/auth/local/login",
+      method: "POST",
+      body: { username: "anyuser", password: "anypassword" },
+    });
+    await expectJson(response, 429);
+    expect(mockCompare).not.toHaveBeenCalled();
+  });
+
+  it("does not reserve an attempt for a malformed body", async () => {
+    await callRoute(POST, { url: "/api/auth/local/login", method: "POST", body: {} });
+    expect(mockReserve).not.toHaveBeenCalled();
   });
 
   // ── Auth-bypass-prevention gate ─────────────────────────────────────

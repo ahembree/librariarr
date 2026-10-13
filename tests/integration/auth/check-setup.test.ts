@@ -365,7 +365,10 @@ describe("GET /api/auth/check-setup — SSO and Plex toggles", () => {
     expect(body.ssoEnabled).toBe(true);
   });
 
-  it("returns ssoMode 'FORWARD_AUTH' when configured for forward-auth mode", async () => {
+  it("returns ssoMode 'FORWARD_AUTH' when configured for forward-auth mode and the proxy secret is set", async () => {
+    const previous = process.env.FORWARD_AUTH_SECRET;
+    process.env.FORWARD_AUTH_SECRET = "proxy-secret";
+    try {
     const prisma = getTestPrisma();
     const user = await prisma.user.create({
       data: {
@@ -389,5 +392,35 @@ describe("GET /api/auth/check-setup — SSO and Plex toggles", () => {
     );
     expect(body.ssoEnabled).toBe(true);
     expect(body.ssoMode).toBe("FORWARD_AUTH");
+    } finally {
+      if (previous === undefined) delete process.env.FORWARD_AUTH_SECRET;
+      else process.env.FORWARD_AUTH_SECRET = previous;
+    }
+  });
+
+  // Forward-auth trusts a header; without the secret a request cannot prove
+  // it came through the proxy, so SSO is not offered and the login page falls
+  // back to whatever else the admin has (here: nothing but the hidden local
+  // form, which is what the lockout guards elsewhere exist for).
+  it("does not offer forward-auth while FORWARD_AUTH_SECRET is unset", async () => {
+    const previous = process.env.FORWARD_AUTH_SECRET;
+    delete process.env.FORWARD_AUTH_SECRET;
+    try {
+      const prisma = getTestPrisma();
+      const user = await prisma.user.create({
+        data: { username: "alice", ssoSubject: "alice", ssoIssuer: "forward-auth", ssoEnabled: true, passwordHash: "x" },
+      });
+      await prisma.appSettings.create({
+        data: { userId: user.id, ssoEnabled: true, ssoMode: "FORWARD_AUTH", forwardAuthUserHeader: "Remote-User", localAuthEnabled: true },
+      });
+
+      const body = await expectJson<CheckSetupBody>(await callRoute(GET, { url: "/api/auth/check-setup" }));
+      expect(body.ssoEnabled).toBe(false);
+      // SSO no longer hides the local form.
+      expect(body.localAuthEnabled).toBe(true);
+    } finally {
+      if (previous === undefined) delete process.env.FORWARD_AUTH_SECRET;
+      else process.env.FORWARD_AUTH_SECRET = previous;
+    }
   });
 });

@@ -78,7 +78,7 @@ describe("GET /api/tools/preroll", () => {
 
   it("returns DB-only overview with no servers", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(getPreroll);
     const body = await expectJson<{
@@ -95,7 +95,7 @@ describe("GET /api/tools/preroll", () => {
   it("does not call the media server", async () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id);
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
     void server;
 
     const { PlexClient } = await import("@/lib/plex/client");
@@ -117,7 +117,7 @@ describe("GET /api/tools/preroll/current", () => {
 
   it("returns empty when no servers configured", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(getPrerollCurrent);
     const body = await expectJson<{ currentPreroll: string; available: boolean }>(res);
@@ -129,7 +129,7 @@ describe("GET /api/tools/preroll/current", () => {
   it("returns current preroll from Plex server", async () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id);
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
     void server;
 
     const res = await callRoute(getPrerollCurrent);
@@ -155,7 +155,7 @@ describe("POST /api/tools/preroll", () => {
   it("sets preroll path on Plex servers", async () => {
     const user = await createTestUser();
     await createTestServer(user.id);
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(postPreroll, {
       method: "POST",
@@ -169,7 +169,7 @@ describe("POST /api/tools/preroll", () => {
 
   it("validates path is required", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(postPreroll, {
       method: "POST",
@@ -191,7 +191,7 @@ describe("GET /api/tools/preroll/presets", () => {
 
   it("returns empty list initially", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(getPresets);
     const body = await expectJson<{ presets: unknown[] }>(res);
@@ -210,7 +210,7 @@ describe("POST /api/tools/preroll/presets", () => {
 
   it("creates a preset", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(postPreset, {
       method: "POST",
@@ -227,7 +227,7 @@ describe("POST /api/tools/preroll/presets", () => {
 
   it("validates name is required", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(postPreset, {
       method: "POST",
@@ -239,7 +239,7 @@ describe("POST /api/tools/preroll/presets", () => {
 
   it("validates path is required", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(postPreset, {
       method: "POST",
@@ -251,7 +251,7 @@ describe("POST /api/tools/preroll/presets", () => {
 
   it("GET after POST returns created preset", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     await callRoute(postPreset, {
       method: "POST",
@@ -280,7 +280,7 @@ describe("PUT /api/tools/preroll/presets/[id]", () => {
 
   it("returns 404 for non-existent preset", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRouteWithParams(
       putPreset,
@@ -292,7 +292,7 @@ describe("PUT /api/tools/preroll/presets/[id]", () => {
 
   it("updates an existing preset", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     // Create preset
     const createRes = await callRoute(postPreset, {
@@ -320,7 +320,7 @@ describe("PUT /api/tools/preroll/presets/[id]", () => {
     const user2 = await createTestUser({ plexId: "plex-other" });
 
     // User 1 creates a preset
-    setMockSession({ isLoggedIn: true, userId: user1.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user1.id});
     const createRes = await callRoute(postPreset, {
       method: "POST",
       body: { name: "My Preset", path: "/my/path.mp4" },
@@ -328,7 +328,7 @@ describe("PUT /api/tools/preroll/presets/[id]", () => {
     const { preset: created } = await createRes.json();
 
     // User 2 tries to update it
-    setMockSession({ isLoggedIn: true, userId: user2.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user2.id});
     const res = await callRouteWithParams(
       putPreset,
       { id: created.id },
@@ -350,7 +350,7 @@ describe("DELETE /api/tools/preroll/presets/[id]", () => {
 
   it("deletes an existing preset", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     // Create preset
     const createRes = await callRoute(postPreset, {
@@ -378,14 +378,14 @@ describe("DELETE /api/tools/preroll/presets/[id]", () => {
     const user1 = await createTestUser({ plexId: "plex-owner" });
     const user2 = await createTestUser({ plexId: "plex-other" });
 
-    setMockSession({ isLoggedIn: true, userId: user1.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user1.id});
     const createRes = await callRoute(postPreset, {
       method: "POST",
       body: { name: "Protected", path: "/safe.mp4" },
     });
     const { preset: created } = await createRes.json();
 
-    setMockSession({ isLoggedIn: true, userId: user2.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user2.id});
     const res = await callRouteWithParams(
       deletePreset,
       { id: created.id },
@@ -406,7 +406,7 @@ describe("GET /api/tools/preroll/schedules", () => {
 
   it("returns empty list initially", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(getSchedules);
     const body = await expectJson<{ schedules: unknown[] }>(res);
@@ -431,7 +431,7 @@ describe("POST /api/tools/preroll/schedules", () => {
 
   it("creates a one_time preroll schedule", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(postSchedule, {
       method: "POST",
@@ -463,7 +463,7 @@ describe("POST /api/tools/preroll/schedules", () => {
 
   it("creates a recurring preroll schedule", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(postSchedule, {
       method: "POST",
@@ -495,7 +495,7 @@ describe("POST /api/tools/preroll/schedules", () => {
 
   it("validates name is required", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(postSchedule, {
       method: "POST",
@@ -512,7 +512,7 @@ describe("POST /api/tools/preroll/schedules", () => {
 
   it("validates prerollPath is required", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(postSchedule, {
       method: "POST",
@@ -529,7 +529,7 @@ describe("POST /api/tools/preroll/schedules", () => {
 
   it("validates startDate must be before endDate for one_time", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(postSchedule, {
       method: "POST",
@@ -547,7 +547,7 @@ describe("POST /api/tools/preroll/schedules", () => {
 
   it("validates recurring schedule requires daysOfWeek", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(postSchedule, {
       method: "POST",
@@ -565,7 +565,7 @@ describe("POST /api/tools/preroll/schedules", () => {
 
   it("GET after POST returns created schedule", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     await callRoute(postSchedule, {
       method: "POST",
@@ -599,7 +599,7 @@ describe("PUT /api/tools/preroll/schedules/[id]", () => {
 
   it("returns 404 for non-existent schedule", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRouteWithParams(
       putSchedule,
@@ -611,7 +611,7 @@ describe("PUT /api/tools/preroll/schedules/[id]", () => {
 
   it("updates an existing schedule", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     // Create schedule
     const createRes = await callRoute(postSchedule, {
@@ -650,7 +650,7 @@ describe("PUT /api/tools/preroll/schedules/[id]", () => {
     const user1 = await createTestUser({ plexId: "plex-owner" });
     const user2 = await createTestUser({ plexId: "plex-other" });
 
-    setMockSession({ isLoggedIn: true, userId: user1.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user1.id});
     const createRes = await callRoute(postSchedule, {
       method: "POST",
       body: {
@@ -663,7 +663,7 @@ describe("PUT /api/tools/preroll/schedules/[id]", () => {
     });
     const { schedule: created } = await createRes.json();
 
-    setMockSession({ isLoggedIn: true, userId: user2.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user2.id});
     const res = await callRouteWithParams(
       putSchedule,
       { id: created.id },
@@ -685,7 +685,7 @@ describe("DELETE /api/tools/preroll/schedules/[id]", () => {
 
   it("deletes an existing schedule", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     // Create schedule
     const createRes = await callRoute(postSchedule, {
@@ -719,7 +719,7 @@ describe("DELETE /api/tools/preroll/schedules/[id]", () => {
     const user1 = await createTestUser({ plexId: "plex-owner" });
     const user2 = await createTestUser({ plexId: "plex-other" });
 
-    setMockSession({ isLoggedIn: true, userId: user1.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user1.id});
     const createRes = await callRoute(postSchedule, {
       method: "POST",
       body: {
@@ -732,7 +732,7 @@ describe("DELETE /api/tools/preroll/schedules/[id]", () => {
     });
     const { schedule: created } = await createRes.json();
 
-    setMockSession({ isLoggedIn: true, userId: user2.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user2.id});
     const res = await callRouteWithParams(
       deleteSchedule,
       { id: created.id },

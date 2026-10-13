@@ -88,7 +88,12 @@ cover where to click and what defaults to expect.
 
 3. **In Librariarr** → **Settings → Authentication → Single Sign-On**:
    - **SSO Mode:** `OIDC`
-   - **Issuer URL:** the base URL where the IdP serves `.well-known/openid-configuration`
+   - **Issuer URL:** the base URL where the IdP serves `.well-known/openid-configuration`.
+     It must be `https://`: Librariarr relies on TLS to authenticate the IdP
+     (it verifies no ID token signature), so over plain HTTP anyone on the
+     path to the IdP could sign in as you. An `http://` issuer is accepted on
+     `localhost` only, or anywhere with `OIDC_ALLOW_INSECURE_HTTP=true` set on
+     the container — a lab setting, not a production one.
    - **Client ID** / **Client Secret:** from your IdP
    - **Scopes:** `openid profile email` (default — `openid` is required)
    - **Username Claim:** `preferred_username` (default — used for the display name shown in the app)
@@ -230,24 +235,37 @@ reverse proxy (Authelia, Authentik forward-auth outpost, oauth2-proxy, Caddy
 authentication upstream and injects identity headers.
 
 <Aside type="danger">
-  Forward auth trusts identity headers. **Librariarr must be reachable only
-  through your authenticating proxy.** If users can reach the container
-  directly (e.g. on the LAN at port 3000, or via another reverse-proxy route
-  that doesn't enforce auth), they can spoof these headers and bypass
-  authentication entirely. Block direct access at the firewall or bind the
-  container to localhost, and set `FORWARD_AUTH_SECRET` (below) so a request
-  that did not come through the proxy is refused even if it reaches the app.
+  Forward auth trusts identity headers, so a request has to prove it came
+  through your proxy: **`FORWARD_AUTH_SECRET` is required.** Without it,
+  anyone who could reach the container directly (e.g. on the LAN at port
+  3000, or via another reverse-proxy route that doesn't enforce auth) could
+  sign in by sending the headers themselves. While the variable is unset,
+  forward-auth cannot be turned on, an existing forward-auth setup is not
+  offered on the login page (the local form or the Plex button is shown
+  instead), and a request that reaches the sign-in route anyway is refused.
+  Blocking direct access at the firewall or binding the container to
+  localhost is still good practice, but the secret is what Librariarr checks.
 </Aside>
 
-### Require a proxy secret
+### The proxy secret
 
 Set the `FORWARD_AUTH_SECRET` environment variable on the Librariarr
 container to a random value, and have your proxy add it to every request as
-the `X-Librariarr-Proxy-Secret` header. Forward-auth sign-in then refuses any
+the `X-Librariarr-Proxy-Secret` header. Forward-auth sign-in refuses any
 request without the matching header, which a client that reaches port 3000
 directly cannot send. Use an ASCII value, for example the output of
-`openssl rand -hex 32`. While the variable is unset, forward-auth works as
-before.
+`openssl rand -hex 32`. Restart the container after setting it; the SSO
+settings page shows whether it is set.
+
+<Aside type="caution">
+  **Upgrading from a release where the secret was optional?** A forward-auth
+  setup without it stops being offered on the login page after the upgrade,
+  and the log says so at startup (`SSO login is turned on but cannot be
+  offered: FORWARD_AUTH_SECRET is not set`). Set the variable, add the
+  header at the proxy, restart, and forward-auth is back without touching
+  the stored configuration. Until then the login page shows your local form
+  or Plex button, or — with neither — see [Recovery](#recovery--locked-out-of-sso).
+</Aside>
 
 ```yaml title="docker-compose.yml"
 services:
@@ -266,7 +284,8 @@ Add the header in the proxy:
 
 A sign-in refused for a missing or wrong secret shows *"Forward-auth sign-in
 must come through the configured reverse proxy"* on the login page, and
-the log records the rejection.
+the log records the rejection. With the variable itself unset the page says
+*"Forward-auth sign-in is turned off until FORWARD_AUTH_SECRET is set"*.
 
 1. Configure your reverse proxy to perform forward auth and inject identity
    headers into requests forwarded to Librariarr. Default headers:
@@ -281,6 +300,8 @@ the log records the rejection.
    - **SSO Mode:** `Forward Auth`
    - Override the header names if your proxy uses different ones (some
      proxies use `X-Forwarded-User`, `X-authentik-username`, etc.)
+   - The page confirms that `FORWARD_AUTH_SECRET` is set; the **Enable SSO
+     Login** toggle stays off until it is.
 
 3. **Link your account** using the value your proxy sends as the user header
    (typically the username).
@@ -890,7 +911,8 @@ The login page surfaces SSO errors as a banner above the SSO button:
 | SSO request expired or was tampered with | State cookie was lost between redirect and callback, or `state` didn't match | Try again. If persistent, check that `COOKIE_SECURE` isn't forcing HTTPS-only on an HTTP host |
 | Failed to verify your identity with the SSO provider | Token exchange with the IdP failed | Check Librariarr logs for the underlying response — usually a redirect URI mismatch or wrong client secret |
 | Forward-auth proxy did not provide a user identity header | The configured user header was absent from the request | Verify the proxy is injecting the header and the name matches what's configured |
-| Forward-auth sign-in must come through the configured reverse proxy | `FORWARD_AUTH_SECRET` is set and the request's `X-Librariarr-Proxy-Secret` header was missing or different | Make the proxy add the header with the same value, or open Librariarr through the proxy rather than its port |
+| Forward-auth sign-in must come through the configured reverse proxy | The request's `X-Librariarr-Proxy-Secret` header was missing or different from `FORWARD_AUTH_SECRET` | Make the proxy add the header with the same value, or open Librariarr through the proxy rather than its port |
+| Forward-auth sign-in is turned off until FORWARD_AUTH_SECRET is set | Forward-auth is on in the settings but the container has no `FORWARD_AUTH_SECRET` | Set the variable, have the proxy send the header, restart. See [The proxy secret](#the-proxy-secret) |
 | SSO is not configured | Settings missing or override active | Complete the OIDC config, or unset `SSO_DISABLE_OVERRIDE` |
 
 ### "Test Discovery" fails

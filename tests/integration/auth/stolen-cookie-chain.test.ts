@@ -58,7 +58,11 @@ const { mockGetPlexUser, mockGetPlexResources } = vi.hoisted(() => ({
   mockGetPlexUser: vi.fn(),
   mockGetPlexResources: vi.fn(),
 }));
-vi.mock("@/lib/plex/auth", () => ({
+// `getStoredPlexToken` stays real: the routes read the account's token from
+// the User row (never from the cookie), so the chain below tests the real
+// source.
+vi.mock("@/lib/plex/auth", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/plex/auth")>()),
   getPlexUser: mockGetPlexUser,
   getPlexResources: mockGetPlexResources,
 }));
@@ -171,7 +175,7 @@ describe("a stolen session cookie cannot mint a lasting credential", () => {
 
   it("from a stale session, no route yields the Plex token, a fresh sign-in or a key", async () => {
     const stale = Date.now() - RECENT_LOGIN_WINDOW_MS - 60_000;
-    setMockSession({ isLoggedIn: true, userId, plexToken: ACCOUNT_TOKEN, authenticatedAt: stale });
+    setMockSession({ isLoggedIn: true, userId, authenticatedAt: stale });
     // Every body the stale session is sent, checked for the token at the end.
     const bodies: string[] = [];
     const read = async (response: Response) => {
@@ -323,7 +327,7 @@ describe("a stolen session cookie cannot mint a lasting credential", () => {
   // succeeds, which is what makes the backup routes worth gating. (A recent
   // session could create the key directly anyway.)
   it("from a recent session the chain works, because a backup holds the Plex token", async () => {
-    setMockSession({ isLoggedIn: true, userId, plexToken: ACCOUNT_TOKEN, authenticatedAt: Date.now() });
+    setMockSession({ isLoggedIn: true, userId, authenticatedAt: Date.now() });
 
     const { filename } = await expectJson<{ filename: string }>(
       await callRoute(createBackupRoute, {

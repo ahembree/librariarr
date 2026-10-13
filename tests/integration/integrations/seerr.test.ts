@@ -61,7 +61,7 @@ describe("Seerr integration endpoints", () => {
 
     it("returns empty instances when user has none", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, { url: "/api/integrations/seerr" });
       const body = await expectJson<{ instances: unknown[] }>(response, 200);
@@ -71,7 +71,7 @@ describe("Seerr integration endpoints", () => {
     it("returns instances belonging to the authenticated user", async () => {
       const user = await createTestUser();
       await createTestSeerrInstance(user.id, { name: "My Seerr" });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, { url: "/api/integrations/seerr" });
       const body = await expectJson<{ instances: { name: string }[] }>(response, 200);
@@ -84,7 +84,7 @@ describe("Seerr integration endpoints", () => {
       const user2 = await createTestUser({ plexId: "user2" });
       await createTestSeerrInstance(user1.id, { name: "User1 Seerr" });
       await createTestSeerrInstance(user2.id, { name: "User2 Seerr" });
-      setMockSession({ userId: user2.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user2.id, isLoggedIn: true });
 
       const response = await callRoute(GET, { url: "/api/integrations/seerr" });
       const body = await expectJson<{ instances: { name: string }[] }>(response, 200);
@@ -108,7 +108,7 @@ describe("Seerr integration endpoints", () => {
 
     it("returns 400 when required fields are missing", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       // Missing name
       const res1 = await callRoute(POST, {
@@ -137,7 +137,7 @@ describe("Seerr integration endpoints", () => {
 
     it("creates instance successfully after passing connection test", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(POST, {
         url: "/api/integrations/seerr",
@@ -159,7 +159,7 @@ describe("Seerr integration endpoints", () => {
 
     it("stores a normalized external URL, and none when blank", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const withExternal = await expectJson<{ instance: { externalUrl: string | null } }>(
         await callRoute(POST, {
@@ -193,7 +193,7 @@ describe("Seerr integration endpoints", () => {
       mockTestConnection.mockResolvedValue({ ok: false, error: "Connection refused" });
 
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(POST, {
         url: "/api/integrations/seerr",
@@ -225,7 +225,7 @@ describe("Seerr integration endpoints", () => {
 
     it("returns 404 for non-existent instance", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(
         PUT,
@@ -244,7 +244,7 @@ describe("Seerr integration endpoints", () => {
       const user1 = await createTestUser({ plexId: "owner" });
       const user2 = await createTestUser({ plexId: "intruder" });
       const instance = await createTestSeerrInstance(user1.id);
-      setMockSession({ userId: user2.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user2.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(
         PUT,
@@ -262,7 +262,7 @@ describe("Seerr integration endpoints", () => {
     it("updates instance successfully", async () => {
       const user = await createTestUser();
       const instance = await createTestSeerrInstance(user.id, { name: "Old Name" });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
+      setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
       const response = await callRouteWithParams(
         PUT,
@@ -281,7 +281,7 @@ describe("Seerr integration endpoints", () => {
     it("sets and clears the external URL without touching other fields", async () => {
       const user = await createTestUser();
       const instance = await createTestSeerrInstance(user.id, { name: "Keep" });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
       const put = (body: Record<string, unknown>) =>
         callRouteWithParams(PUT, { id: instance.id }, {
           url: `/api/integrations/seerr/${instance.id}`,
@@ -315,7 +315,7 @@ describe("Seerr integration endpoints", () => {
       mockTestConnection.mockResolvedValue({ ok: false, error: "Timeout" });
       const user = await createTestUser();
       const instance = await createTestSeerrInstance(user.id);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(
         PUT,
@@ -336,7 +336,7 @@ describe("Seerr integration endpoints", () => {
 
       const user = await createTestUser();
       const instance = await createTestSeerrInstance(user.id);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
+      setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
       const response = await callRouteWithParams(
         PUT,
@@ -367,7 +367,7 @@ describe("Seerr integration endpoints", () => {
 
     it("returns 404 for non-existent instance", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(
         DELETE,
@@ -384,7 +384,7 @@ describe("Seerr integration endpoints", () => {
     it("deletes instance successfully", async () => {
       const user = await createTestUser();
       const instance = await createTestSeerrInstance(user.id);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(
         DELETE,
@@ -403,7 +403,7 @@ describe("Seerr integration endpoints", () => {
     it("drops cached Seerr-derived answers so a removed instance stops being reported", async () => {
       const user = await createTestUser();
       const instance = await createTestSeerrInstance(user.id);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
       appCache.set("seerr-request-stats", { configured: true });
       appCache.set("seerr-user-requests:alice", { requests: [] });
       appCache.set(`integrations:health:${user.id}`, { ok: true });
@@ -435,7 +435,7 @@ describe("Seerr integration endpoints", () => {
 
     it("returns 400 when url or apiKey missing", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const res1 = await callRoute(TEST_POST, {
         url: "/api/integrations/seerr/test",
@@ -454,7 +454,7 @@ describe("Seerr integration endpoints", () => {
 
     it("returns test result", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(TEST_POST, {
         url: "/api/integrations/seerr/test",

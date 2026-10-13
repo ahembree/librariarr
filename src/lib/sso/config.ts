@@ -1,6 +1,8 @@
 import type { Prisma } from "@/generated/prisma/client";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
+import { isForwardAuthSecretConfigured } from "@/lib/sso/forward-secret";
+import { oidcIssuerProblem } from "@/lib/sso/issuer-url";
 
 export interface SsoSettings {
   ssoEnabled: boolean;
@@ -30,6 +32,7 @@ export function isSsoOverrideActive(): boolean {
 }
 
 let overrideWarningLogged = false;
+let unusableWarningLogged = false;
 
 /** Anything that can read AppSettings: the client, or a transaction's. */
 export type SettingsReader = Pick<Prisma.TransactionClient, "appSettings">;
@@ -71,16 +74,53 @@ export async function getSsoSettings(db: SettingsReader = prisma): Promise<SsoSe
     return { ...settings, ssoMode, ssoEnabled: false };
   }
 
-  return { ...settings, ssoMode };
+  const effective: SsoSettings = { ...settings, ssoMode };
+  // SSO is on in the database but refused here (ssoUnusableReason): an install
+  // upgraded past the requirement, most likely. Said once, loudly, because the
+  // login page silently shows the local form or the Plex button instead.
+  const reason = settings.ssoEnabled ? ssoUnusableReason(effective) : null;
+  if (reason && !unusableWarningLogged) {
+    logger.error("sso", `SSO login is turned on but cannot be offered: ${reason}`);
+    unusableWarningLogged = true;
+  }
+
+  return effective;
+}
+
+/**
+ * Why SSO, with `ssoEnabled` taken as given, cannot be offered — or null when
+ * it can. The requirements beyond the fields being filled in:
+ *
+ * - OIDC: the issuer must be an `https://` URL (loopback excepted, or
+ *   `OIDC_ALLOW_INSECURE_HTTP`): the client verifies no ID token signature and
+ *   relies on TLS to authenticate the issuer, so over plain HTTP whoever is on
+ *   the path to the IdP signs in as the admin (`src/lib/sso/issuer-url.ts`).
+ * - Forward-auth: `FORWARD_AUTH_SECRET` must be set, or anyone who reaches the
+ *   app's port directly signs in by sending the identity header themselves
+ *   (`src/lib/sso/forward-secret.ts`).
+ *
+ * `PUT /api/settings/sso` refuses to turn SSO on against either, so the only
+ * way to be here with a reason is an upgrade or a changed environment — and
+ * then the failsafe is the right one: SSO is not offered, so the local form or
+ * the Plex button is, and the admin is not locked out while fixing it.
+ */
+export function ssoUnusableReason(settings: SsoSettings): string | null {
+  if (settings.ssoMode === "OIDC") {
+    if (!settings.oidcIssuer || !settings.oidcClientId) return "the OIDC issuer and client ID are not both set";
+    const problem = oidcIssuerProblem(settings.oidcIssuer);
+    return problem ? `the OIDC issuer URL is not accepted: ${problem}` : null;
+  }
+  if (!settings.forwardAuthUserHeader) return "no forward-auth user header is set";
+  if (!isForwardAuthSecretConfigured()) {
+    return "FORWARD_AUTH_SECRET is not set, so a request cannot be told apart from one that bypassed the proxy";
+  }
+  return null;
 }
 
 /** Returns true if SSO is enabled AND fully configured for its selected mode. */
 export function isSsoUsable(settings: SsoSettings | null): boolean {
   if (!settings || !settings.ssoEnabled) return false;
-  if (settings.ssoMode === "OIDC") {
-    return Boolean(settings.oidcIssuer && settings.oidcClientId);
-  }
-  return Boolean(settings.forwardAuthUserHeader);
+  return ssoUnusableReason(settings) === null;
 }
 
 /**

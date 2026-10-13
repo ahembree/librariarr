@@ -11,9 +11,17 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { apiKeySession, getApiKeyPrincipal } from "@/lib/api-keys/principal";
 
+/**
+ * What the sealed cookie carries: WHO is signed in and whether that sign-in is
+ * still honoured — never a credential. The Plex account token used to ride in
+ * here too, sealed but sent on every request and sitting in every browser's
+ * cookie jar; a copy of `SESSION_SECRET` (the env var, or
+ * `/config/.session-secret` on the host volume) then unsealed a token that
+ * signs in to Librariarr by itself (`POST /api/auth/plex/token`). It lives in
+ * `User.plexToken` only, read through `getStoredPlexToken` where needed.
+ */
 export interface SessionData {
   userId?: string;
-  plexToken?: string;
   isLoggedIn: boolean;
   sessionVersion?: number;
   /**
@@ -235,7 +243,6 @@ export async function getSession(): Promise<IronSession<SessionData>> {
     session.isLoggedIn = false;
     session.userId = undefined;
     session.sessionVersion = undefined;
-    session.plexToken = undefined;
   }
   return session;
 }
@@ -260,7 +267,7 @@ async function isUserSessionCurrent(
  * Start a brand-new session for a login, discarding whatever the visitor was
  * carrying first. That discard is the session-fixation defence — a pre-seeded
  * cookie must not survive into the authenticated session — and it is also what
- * drops the transient OIDC handshake fields and any stale Plex token.
+ * drops the transient OIDC handshake fields.
  *
  * The destroy and the write have to happen on two different session objects:
  * iron-session refuses to save a session that was destroyed and then written

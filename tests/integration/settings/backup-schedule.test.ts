@@ -52,7 +52,7 @@ describe("GET /api/settings/backup-schedule", () => {
         backupRetentionCount: 10,
       },
     });
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(GET);
     const body = await expectJson<{
@@ -80,7 +80,7 @@ describe("PUT /api/settings/backup-schedule", () => {
 
   it("returns 400 on invalid schedule string", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(PUT, {
       method: "PUT",
@@ -92,7 +92,7 @@ describe("PUT /api/settings/backup-schedule", () => {
 
   it("updates backup schedule settings", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(PUT, {
       method: "PUT",
@@ -108,7 +108,7 @@ describe("PUT /api/settings/backup-schedule", () => {
 
   it("returns updated schedule after PUT", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     await callRoute(PUT, {
       method: "PUT",

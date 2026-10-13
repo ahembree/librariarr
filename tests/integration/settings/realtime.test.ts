@@ -35,7 +35,7 @@ describe("GET /api/settings/realtime", () => {
 
   it("defaults realtimeSync to true when no settings exist", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(GET);
     const body = await expectJson<{ realtimeSync: boolean }>(res);
@@ -44,7 +44,7 @@ describe("GET /api/settings/realtime", () => {
 
   it("returns the saved value after PUT", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     await callRoute(PUT, { method: "PUT", body: { realtimeSync: false } });
 
@@ -62,7 +62,7 @@ describe("PUT /api/settings/realtime", () => {
 
   it("saves realtimeSync=false", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(PUT, { method: "PUT", body: { realtimeSync: false } });
     const body = await expectJson<{ realtimeSync: boolean }>(res);
@@ -71,7 +71,7 @@ describe("PUT /api/settings/realtime", () => {
 
   it("returns 400 when realtimeSync is missing", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(PUT, { method: "PUT", body: {} });
     const body = await expectJson<{ error: string }>(res, 400);
@@ -80,7 +80,7 @@ describe("PUT /api/settings/realtime", () => {
 
   it("returns 400 when realtimeSync is not a boolean", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(PUT, { method: "PUT", body: { realtimeSync: "yes" } });
     const body = await expectJson<{ error: string }>(res, 400);
@@ -89,7 +89,7 @@ describe("PUT /api/settings/realtime", () => {
 
   it("toggles back and forth", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     await callRoute(PUT, { method: "PUT", body: { realtimeSync: false } });
     let body = await expectJson<{ realtimeSync: boolean }>(await callRoute(GET));

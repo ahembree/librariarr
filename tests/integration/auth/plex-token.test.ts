@@ -28,6 +28,8 @@ vi.mock("@/lib/plex/auth", () => ({
 // Mock rate limiter
 vi.mock("@/lib/rate-limit/rate-limiter", () => ({
   checkAuthRateLimit: () => null,
+  peekAuthRateLimit: () => null,
+  reserveAuthAttempt: () => ({ refused: null, succeeded: () => {} }),
   authRateLimiter: { check: () => ({ limited: false }) },
   getClientIp: () => "127.0.0.1",
 }));

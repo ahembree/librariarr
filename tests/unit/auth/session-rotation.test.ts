@@ -96,7 +96,6 @@ describe("rotateSession (real iron-session)", () => {
     session.userId = "user-1";
     session.isLoggedIn = true;
     session.sessionVersion = 4;
-    session.plexToken = "plex-token";
     session.oidcState = "handshake-state";
     session.oidcVerifier = "handshake-verifier";
     session.oidcFlow = "reauth";
@@ -106,7 +105,6 @@ describe("rotateSession (real iron-session)", () => {
     const readBack = await getSession();
     expect(readBack.isLoggedIn).toBe(false);
     expect(readBack.userId).toBeUndefined();
-    expect(readBack.plexToken).toBeUndefined();
     expect(readBack.oidcFlow).toBe("reauth");
     expect(readBack.oidcState).toBe("handshake-state");
     expect(readBack.oidcVerifier).toBe("handshake-verifier");
@@ -148,18 +146,16 @@ describe("rotateSession (real iron-session)", () => {
   it("drops everything the visitor was carrying into the login", async () => {
     const { rotateSession, getSession } = await load();
 
-    // A visitor arrives mid-OIDC-handshake, already holding a Plex token.
+    // A visitor arrives mid-OIDC-handshake, already signed in as someone else.
     const before = await getSession();
     before.userId = "someone-else";
     before.isLoggedIn = true;
-    before.plexToken = "stale-plex-token";
     before.oidcState = "handshake-state";
     before.oidcVerifier = "handshake-verifier";
     await before.save();
 
     const session = await rotateSession();
     expect(session.userId).toBeUndefined();
-    expect(session.plexToken).toBeUndefined();
     expect(session.oidcState).toBeUndefined();
     expect(session.oidcVerifier).toBeUndefined();
 
@@ -171,7 +167,6 @@ describe("rotateSession (real iron-session)", () => {
     mockFindUnique.mockResolvedValue({ sessionVersion: 1 });
     const readBack = await getSession();
     expect(readBack.userId).toBe("user-2");
-    expect(readBack.plexToken).toBeUndefined();
     expect(readBack.oidcState).toBeUndefined();
   });
 

@@ -60,7 +60,7 @@ describe("GET /api/media/series/seasons", () => {
 
   it("returns 400 when parentTitle is missing", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/series/seasons",
@@ -71,7 +71,7 @@ describe("GET /api/media/series/seasons", () => {
 
   it("returns empty seasons when user has no servers", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/series/seasons",
@@ -120,7 +120,7 @@ describe("GET /api/media/series/seasons", () => {
       playCount: 1,
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/series/seasons",
@@ -170,7 +170,7 @@ describe("GET /api/media/series/seasons", () => {
       episodeNumber: 1,
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/series/seasons",
@@ -214,7 +214,7 @@ describe("GET /api/media/series/seasons", () => {
       resolution: "1080p",
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/series/seasons",
@@ -257,7 +257,7 @@ describe("GET /api/media/series/seasons", () => {
       playCount: 1,
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/series/seasons",
@@ -283,7 +283,7 @@ describe("GET /api/media/series/seasons", () => {
       // seasonNumber is undefined => null => grouped as 0
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/series/seasons",
@@ -316,7 +316,7 @@ describe("GET /api/media/series/seasons", () => {
       seriesKey: "tvdb:73244", seasonNumber: 9, episodeNumber: 23,
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const body = await expectJson<{ seasons: { seasonNumber: number }[] }>(
       await callRoute(GET, {
@@ -331,7 +331,7 @@ describe("GET /api/media/series/seasons", () => {
 
   it("returns 400 when neither seriesKey nor parentTitle is given", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
     const body = await expectJson<{ error: string }>(
       await callRoute(GET, { url: "/api/media/series/seasons" }),
       400,

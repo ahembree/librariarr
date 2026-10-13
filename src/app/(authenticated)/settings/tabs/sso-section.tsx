@@ -57,6 +57,8 @@ interface SsoConfig {
   forwardAuthNameHeader: string;
   overrideActive?: boolean;
   hasPreviousConfig?: boolean;
+  /** Whether `FORWARD_AUTH_SECRET` is set on the container; forward-auth cannot be turned on without it. */
+  forwardAuthSecretConfigured?: boolean;
 }
 
 interface SsoLinkInfo {
@@ -65,11 +67,21 @@ interface SsoLinkInfo {
   ssoEnabled: boolean;
 }
 
-/** Returns true if the supplied config has the minimum fields for SSO to work
- *  in its selected mode — matches the server's `isSsoUsable` check. */
-function isConfigComplete(c: SsoConfig): boolean {
+/** Whether the supplied config has the fields its mode needs — what makes it
+ *  worth saving. */
+function hasRequiredFields(c: SsoConfig): boolean {
   if (c.ssoMode === "OIDC") return !!(c.oidcIssuer && c.oidcClientId);
   return !!c.forwardAuthUserHeader;
+}
+
+/** Returns true if the supplied config has everything for SSO to work in its
+ *  selected mode — matches the server's `isSsoUsable` check, which for
+ *  forward-auth also needs `FORWARD_AUTH_SECRET` set on the container. The
+ *  header names can be saved without it (`hasRequiredFields`); steps 2 and 3
+ *  wait for it. */
+function isConfigComplete(c: SsoConfig): boolean {
+  if (!hasRequiredFields(c)) return false;
+  return c.ssoMode === "OIDC" || c.forwardAuthSecretConfigured === true;
 }
 
 const codeClass = "font-mono text-[0.85em] rounded bg-muted/60 px-1 py-0.5";
@@ -578,18 +590,37 @@ export function SsoSection({ onChanged }: { onChanged?: () => void } = {}) {
                 />
               </div>
             </div>
-            <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
-              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-              <div>
-                <p className="font-medium">Security warning</p>
-                <p className="text-xs">
-                  Forward auth trusts the identity in these headers. Only
-                  enable it when Librariarr is reachable <em>exclusively</em>{" "}
-                  through your authenticating proxy — direct network access
-                  would let attackers spoof the headers.
-                </p>
+            {config.forwardAuthSecretConfigured ? (
+              <div className="flex items-start gap-2 rounded-md border border-amber/30 bg-amber/10 p-3 text-sm text-amber">
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                <div>
+                  <p className="font-medium">Proxy secret configured</p>
+                  <p className="text-xs">
+                    <code className={codeClass}>FORWARD_AUTH_SECRET</code> is set. A
+                    forward-auth sign-in is accepted only when the request carries the
+                    same value in the <code className={codeClass}>X-Librariarr-Proxy-Secret</code>{" "}
+                    header, which your proxy must add — a request that reaches the app
+                    without going through it is refused even if it sends the identity
+                    headers.
+                  </p>
+                </div>
               </div>
-            </div>
+            ) : (
+              <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                <div>
+                  <p className="font-medium">Proxy secret required</p>
+                  <p className="text-xs">
+                    Forward auth trusts the identity in these headers, so a request
+                    has to prove it came through your proxy. Set{" "}
+                    <code className={codeClass}>FORWARD_AUTH_SECRET</code> on the
+                    Librariarr container, have the proxy send it as the{" "}
+                    <code className={codeClass}>X-Librariarr-Proxy-Secret</code> header,
+                    and restart. Forward-auth login cannot be turned on until it is set.
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
@@ -607,7 +638,7 @@ export function SsoSection({ onChanged }: { onChanged?: () => void } = {}) {
         )}
 
         <div className="flex items-center gap-2 flex-wrap">
-          <Button size="sm" disabled={saving || !isConfigComplete(config)} onClick={handleSaveConfig}>
+          <Button size="sm" disabled={saving || !hasRequiredFields(config)} onClick={handleSaveConfig}>
             {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
             Save Configuration
           </Button>

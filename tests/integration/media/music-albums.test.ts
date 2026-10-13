@@ -60,7 +60,7 @@ describe("GET /api/media/music/albums", () => {
 
   it("returns 400 when parentTitle is missing", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, { url: "/api/media/music/albums" });
     const body = await expectJson<{ error: string }>(response, 400);
@@ -69,7 +69,7 @@ describe("GET /api/media/music/albums", () => {
 
   it("returns empty albums when user has no servers", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/music/albums",
@@ -92,7 +92,7 @@ describe("GET /api/media/music/albums", () => {
       audioCodec: "flac",
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/music/albums",
@@ -132,7 +132,7 @@ describe("GET /api/media/music/albums", () => {
       fileSize: BigInt("5000000"),
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/music/albums",
@@ -176,7 +176,7 @@ describe("GET /api/media/music/albums", () => {
       fileSize: BigInt("8000000"),
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/music/albums",
@@ -205,7 +205,7 @@ describe("GET /api/media/music/albums", () => {
       fileSize: BigInt("10737418240"),
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/music/albums",
