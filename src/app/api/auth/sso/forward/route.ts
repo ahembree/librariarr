@@ -1,12 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { rotateSession } from "@/lib/auth/session";
-import { currentSsoIssuer, getSsoSettings, isSsoUsable } from "@/lib/sso/config";
+import { currentSsoIssuer, getSsoSettings, isForwardAuthMissingSecret, isSsoUsable } from "@/lib/sso/config";
 import { apiLogger } from "@/lib/logger";
 import { reserveAuthAttempt } from "@/lib/rate-limit/rate-limiter";
 import { getExternalBaseUrl, isSameOriginRequest } from "@/lib/url";
 import { sanitizeEmail, sanitizeUsername } from "@/lib/sso/identity-claims";
-import { hasForwardAuthSecret, isForwardAuthSecretConfigured, FORWARD_AUTH_PROXY_HEADER } from "@/lib/sso/forward-secret";
+import { hasForwardAuthSecret, FORWARD_AUTH_PROXY_HEADER } from "@/lib/sso/forward-secret";
 
 /**
  * Forward-auth login: trusts identity headers injected by an upstream reverse
@@ -38,7 +38,7 @@ export async function GET(request: NextRequest) {
   // Named before the general "not configured", so the login page can say
   // exactly what is missing to the admin who turned forward-auth on before
   // the secret was required.
-  if (settings?.ssoEnabled && settings.ssoMode === "FORWARD_AUTH" && !isForwardAuthSecretConfigured()) {
+  if (isForwardAuthMissingSecret(settings)) {
     apiLogger.warn("Auth", "Forward-auth login refused: FORWARD_AUTH_SECRET is not set");
     return NextResponse.redirect(new URL("/login?sso_error=forward_auth_unconfigured", baseUrl));
   }

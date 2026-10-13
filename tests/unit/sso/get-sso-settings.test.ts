@@ -10,8 +10,9 @@ vi.mock("@/lib/db", () => ({
   },
 }));
 
+const { mockLoggerError } = vi.hoisted(() => ({ mockLoggerError: vi.fn() }));
 vi.mock("@/lib/logger", () => ({
-  logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: mockLoggerError },
 }));
 
 import { getSsoSettings } from "@/lib/sso/config";
@@ -83,5 +84,41 @@ describe("getSsoSettings", () => {
     process.env.SSO_DISABLE_OVERRIDE = "false";
     const result = await getSsoSettings();
     expect(result?.ssoEnabled).toBe(true);
+  });
+});
+
+describe("getSsoSettings — the 'cannot be offered' log line", () => {
+  const originalSecret = process.env.FORWARD_AUTH_SECRET;
+
+  beforeEach(() => {
+    findFirstMock.mockReset();
+    mockLoggerError.mockClear();
+    delete process.env.SSO_DISABLE_OVERRIDE;
+  });
+
+  afterEach(() => {
+    if (originalSecret === undefined) delete process.env.FORWARD_AUTH_SECRET;
+    else process.env.FORWARD_AUTH_SECRET = originalSecret;
+  });
+
+  it("logs once per reason, again for a new reason, and re-arms once fixed", async () => {
+    delete process.env.FORWARD_AUTH_SECRET;
+    findFirstMock.mockResolvedValue({ ...FULL_ROW, ssoMode: "FORWARD_AUTH" });
+    await getSsoSettings();
+    await getSsoSettings();
+    expect(mockLoggerError).toHaveBeenCalledTimes(1);
+    expect(String(mockLoggerError.mock.calls[0][1])).toMatch(/FORWARD_AUTH_SECRET/);
+
+    // Fixed: nothing more is logged, and the latch is released.
+    process.env.FORWARD_AUTH_SECRET = "proxy-secret";
+    await getSsoSettings();
+    expect(mockLoggerError).toHaveBeenCalledTimes(1);
+
+    // A different reason later in the same process is logged too.
+    findFirstMock.mockResolvedValue({ ...FULL_ROW, oidcIssuer: "http://idp.lan" });
+    await getSsoSettings();
+    await getSsoSettings();
+    expect(mockLoggerError).toHaveBeenCalledTimes(2);
+    expect(String(mockLoggerError.mock.calls[1][1])).toMatch(/https/);
   });
 });

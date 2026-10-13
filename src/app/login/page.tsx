@@ -42,6 +42,9 @@ export default function LoginPage() {
   const [plexLoginEnabled, setPlexLoginEnabled] = useState(true);
   const [ssoEnabled, setSsoEnabled] = useState(false);
   const [ssoMode, setSsoMode] = useState<"OIDC" | "FORWARD_AUTH">("OIDC");
+  // SSO is on but cannot be offered, and nothing else can be either: the
+  // server says why, so the admin learns what to fix from this page.
+  const [ssoUnavailable, setSsoUnavailable] = useState<string | null>(null);
   const [ssoError] = useState<string | null>(() => {
     if (typeof window === "undefined") return null;
     const code = new URLSearchParams(window.location.search).get("sso_error");
@@ -114,6 +117,7 @@ export default function LoginPage() {
         setLocalAuthEnabled(data.localAuthEnabled);
         setPlexLoginEnabled(data.plexLoginEnabled ?? true);
         setSsoEnabled(Boolean(data.ssoEnabled));
+        setSsoUnavailable(typeof data.ssoUnavailable === "string" ? data.ssoUnavailable : null);
         if (data.ssoMode === "FORWARD_AUTH") setSsoMode("FORWARD_AUTH");
       } catch {
         // If check fails, just show Plex login
@@ -402,13 +406,22 @@ export default function LoginPage() {
                   Sign in with SSO
                 </a>
               </Button>
-              {ssoError && (
-                <div className="flex items-center gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-                  <AlertCircle className="h-4 w-4 shrink-0" />
-                  {ssoError}
-                </div>
-              )}
             </>
+          )}
+          {/* An SSO refusal is shown whether or not the button is: a sign-in
+              refused because SSO can no longer be offered lands here with the
+              button gone, and the message is what says why. */}
+          {ssoError && (
+            <div className="flex items-center gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+              <AlertCircle className="h-4 w-4 shrink-0" />
+              {ssoError}
+            </div>
+          )}
+          {ssoUnavailable && !setupRequired && (
+            <div className="flex items-start gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>SSO login is turned on but cannot be offered: {ssoUnavailable}</span>
+            </div>
           )}
           {/* Setup prompt when no account exists */}
           {setupRequired && (

@@ -389,6 +389,35 @@ describe("getSession — enforces revocation against the User row", () => {
     expect(session.userId).toBeUndefined();
   });
 
+  // Older releases sealed the Plex token into the cookie. Such a cookie is
+  // downgraded (the admin signs in once) and the field is dropped, so a later
+  // save cannot re-seal the token.
+  it("does not honour a cookie sealed with the Plex token in it, and drops the field", async () => {
+    const save = vi.fn();
+    mockGetIronSession.mockResolvedValue({
+      isLoggedIn: true,
+      userId: "u1",
+      sessionVersion: 3,
+      plexToken: "tok",
+      save,
+    });
+    mockUserFindUnique.mockResolvedValue({ sessionVersion: 3 });
+    const { getSession } = await load();
+    const session = await getSession();
+    expect(session.isLoggedIn).toBe(false);
+    expect(session.userId).toBeUndefined();
+    expect("plexToken" in session).toBe(false);
+    expect(mockUserFindUnique).not.toHaveBeenCalled();
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("drops the legacy Plex token field from an anonymous cookie too", async () => {
+    mockGetIronSession.mockResolvedValue({ isLoggedIn: false, plexToken: "tok" });
+    const { getSession } = await load();
+    const session = await getSession();
+    expect("plexToken" in session).toBe(false);
+  });
+
   it("fails closed when the database lookup throws", async () => {
     mockGetIronSession.mockResolvedValue({ isLoggedIn: true, userId: "u1", sessionVersion: 1 });
     mockUserFindUnique.mockRejectedValue(new Error("db down"));

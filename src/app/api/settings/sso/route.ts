@@ -131,25 +131,22 @@ export async function PUT(request: NextRequest) {
           { status: 400 }
         );
       }
-      if (!isForwardAuthSecretConfigured()) {
-        return NextResponse.json(
-          {
-            error:
-              "Set FORWARD_AUTH_SECRET on the Librariarr container and have your proxy send it as the X-Librariarr-Proxy-Secret header before turning on forward-auth. Without it, anyone who reaches the app's port directly could sign in by sending the identity header themselves.",
-          },
-          { status: 400 }
-        );
-      }
     }
-    // Everything the login would refuse (an http:// issuer stored under the
-    // older rule, among others): turning SSO on against it would leave the
-    // button on a login page that cannot honour it.
-    const unusable = ssoUnusableReason({
-      ...next,
-      ssoMode: next.ssoMode === "FORWARD_AUTH" ? "FORWARD_AUTH" : "OIDC",
-      oidcIssuer: next.oidcIssuer?.trim() || null,
-      oidcClientId: next.oidcClientId?.trim() || null,
-    });
+    // Everything the login would refuse (FORWARD_AUTH_SECRET unset, an http://
+    // issuer stored under the older rule): turning SSO on against it would
+    // leave a button on the login page that cannot be honoured. Only when the
+    // save turns SSO on — on an install where it was on before the
+    // requirement, header names and the rest must stay saveable while the
+    // admin sorts the environment out.
+    const turningOn = data.ssoEnabled === true || !current.ssoEnabled;
+    const unusable = turningOn
+      ? ssoUnusableReason({
+          ...next,
+          ssoMode: next.ssoMode === "FORWARD_AUTH" ? "FORWARD_AUTH" : "OIDC",
+          oidcIssuer: next.oidcIssuer?.trim() || null,
+          oidcClientId: next.oidcClientId?.trim() || null,
+        })
+      : null;
     if (unusable) {
       return NextResponse.json({ error: `SSO cannot be turned on: ${unusable}` }, { status: 400 });
     }

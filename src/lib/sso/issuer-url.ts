@@ -15,6 +15,7 @@
  *
  * Client-safe: no Node imports, so the validation schemas can be bundled.
  */
+import { isTruthyFlag } from "@/lib/env-flag";
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]", "::1"]);
 
@@ -28,10 +29,7 @@ export function isLoopbackHost(hostname: string): boolean {
 }
 
 export function insecureHttpAllowed(env: NodeJS.ProcessEnv | undefined = typeof process === "undefined" ? undefined : process.env): boolean {
-  const raw = env?.[OIDC_INSECURE_HTTP_ENV];
-  if (!raw) return false;
-  const normalized = raw.trim().toLowerCase();
-  return normalized === "true" || normalized === "1" || normalized === "yes";
+  return isTruthyFlag(env?.[OIDC_INSECURE_HTTP_ENV]);
 }
 
 /**

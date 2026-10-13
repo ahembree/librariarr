@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { getSsoSettings, isSsoOverrideActive, isSsoUsable } from "@/lib/sso/config";
+import { getSsoSettings, isSsoOverrideActive, isSsoUsable, ssoUnusableReason } from "@/lib/sso/config";
 
 export async function GET() {
   const userCount = await prisma.user.count();
@@ -8,6 +8,11 @@ export async function GET() {
   let plexLoginEnabled = false;
   let ssoEnabled = false;
   let ssoMode: "OIDC" | "FORWARD_AUTH" = "OIDC";
+  // Why SSO is on in the settings yet not offered — sent ONLY when nothing
+  // else is offered either, so the admin locked out by an upgrade (the
+  // forward-auth secret now required, an http:// issuer) reads what to set
+  // on the login page itself rather than in a log they cannot reach.
+  let ssoUnavailable: string | undefined;
 
   if (userCount > 0) {
     // Single-user app: find the admin and read their state + their AppSettings
@@ -41,6 +46,8 @@ export async function GET() {
       ssoMode = ssoSettings!.ssoMode;
       // SSO replaces local username/password — hide the local form on login.
       localAuthEnabled = false;
+    } else if (ssoSettings?.ssoEnabled && !localAuthEnabled && !plexLoginEnabled) {
+      ssoUnavailable = ssoUnusableReason(ssoSettings) ?? undefined;
     }
 
     // Break-glass: when SSO_DISABLE_OVERRIDE is set, surface every credential
@@ -63,5 +70,6 @@ export async function GET() {
     plexLoginEnabled,
     ssoEnabled,
     ssoMode,
+    ...(ssoUnavailable && !localAuthEnabled && !plexLoginEnabled && { ssoUnavailable }),
   });
 }

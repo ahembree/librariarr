@@ -96,6 +96,27 @@ describe("POST /api/settings/sso/link/oidc/start — verify-and-link init", () =
     expect(body.error).toMatch(/Save the OIDC issuer URL/);
   });
 
+  it("returns 400 naming the https rule for an http:// issuer stored under the older rule", async () => {
+    const original = process.env.OIDC_ALLOW_INSECURE_HTTP;
+    delete process.env.OIDC_ALLOW_INSECURE_HTTP;
+    try {
+      const user = await createTestUser();
+      await prisma.appSettings.create({
+        data: { userId: user.id, ssoMode: "OIDC", oidcIssuer: "http://idp.lan", oidcClientId: "client" },
+      });
+      setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
+
+      const res = await callRoute(POST, { method: "POST" });
+      const body = await expectJson<{ error: string }>(res, 400);
+      expect(body.error).toMatch(/https/);
+      expect(mockDiscover).not.toHaveBeenCalled();
+      expect(getMockSession().oidcFlow).toBeUndefined();
+    } finally {
+      if (original === undefined) delete process.env.OIDC_ALLOW_INSECURE_HTTP;
+      else process.env.OIDC_ALLOW_INSECURE_HTTP = original;
+    }
+  });
+
   it("returns authorizationUrl and stashes link-flow state on success", async () => {
     const user = await createTestUser();
     await prisma.appSettings.create({

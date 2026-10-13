@@ -584,6 +584,26 @@ describe("PUT /api/settings/sso — what cannot be turned on", () => {
     expect(ok.ssoEnabled).toBe(true);
   });
 
+  // An install where forward-auth was on before the secret was required:
+  // header names must stay saveable (the body carries no ssoEnabled), while
+  // turning SSO on explicitly is refused.
+  it("lets an already-on forward-auth config be saved without the secret, but not turned on", async () => {
+    const user = await linkedForwardAdmin();
+    await prisma.appSettings.update({ where: { userId: user.id }, data: { ssoEnabled: true } });
+
+    const saved = await expectJson<{ forwardAuthEmailHeader: string; ssoEnabled: boolean }>(
+      await callRoute(PUT, { method: "PUT", body: { ssoMode: "FORWARD_AUTH", forwardAuthEmailHeader: "X-Email" } }),
+    );
+    expect(saved.forwardAuthEmailHeader).toBe("X-Email");
+    expect(saved.ssoEnabled).toBe(true);
+
+    const refused = await expectJson<{ error: string }>(
+      await callRoute(PUT, { method: "PUT", body: { ssoEnabled: true } }),
+      400,
+    );
+    expect(refused.error).toMatch(/FORWARD_AUTH_SECRET/);
+  });
+
   async function linkedOidcAdmin(issuer: string) {
     const user = await createTestUser();
     await prisma.user.update({

@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth/session";
-import { currentSsoIssuer } from "@/lib/sso/config";
-import { hasForwardAuthSecret, isForwardAuthSecretConfigured, FORWARD_AUTH_PROXY_HEADER } from "@/lib/sso/forward-secret";
+import { currentSsoIssuer, isForwardAuthMissingSecret } from "@/lib/sso/config";
+import { hasForwardAuthSecret, FORWARD_AUTH_PROXY_HEADER } from "@/lib/sso/forward-secret";
 import { apiLogger } from "@/lib/logger";
 import { reserveAuthAttempt } from "@/lib/rate-limit/rate-limiter";
 import { loadReauthContext, ssoIdentityMatches } from "@/lib/auth/reauth";
@@ -28,7 +28,7 @@ export async function POST(request: NextRequest) {
 
   // Forward-auth configured and usable, and an identity linked under it.
   const { methods, sso: settings } = await loadReauthContext(session.userId);
-  if (settings?.ssoEnabled && settings.ssoMode === "FORWARD_AUTH" && !isForwardAuthSecretConfigured()) {
+  if (isForwardAuthMissingSecret(settings)) {
     return NextResponse.json(
       { error: "Forward-auth sign-in is turned off until FORWARD_AUTH_SECRET is set", code: "forward_auth_unconfigured" },
       { status: 400 },

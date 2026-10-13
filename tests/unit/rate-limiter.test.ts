@@ -361,6 +361,23 @@ describe("checkAuthRateLimit — global floor", () => {
     expect(floor.get(`${bucket}:*`)!.count).toBe(floorBefore);
   });
 
+  // With no proxy header naming the client every request is "unknown", whose
+  // per-address budget of ten is already shared by everyone; the floor adds
+  // nothing there, and the admin's sign-in exempts the one address they have.
+  it("remembers the shared 'unknown' address like any other", () => {
+    process.env.TRUST_PROXY_HEADERS = "false";
+    const bucket = "floor-unknown";
+    const req = (ip: string) =>
+      new Request("http://localhost/api/auth/local/login", { method: "POST", headers: { "x-forwarded-for": ip } });
+    rememberAuthenticatedAddress(req("203.0.113.9"));
+    expect(isKnownAddress("unknown")).toBe(true);
+    for (let i = 0; i < 10; i++) expect(checkAuthRateLimit(req(`10.0.0.${i}`), bucket)).toBeNull();
+    // Refused by the shared per-address budget, never by the floor.
+    expect(checkAuthRateLimit(req("10.0.0.99"), bucket)?.status).toBe(429);
+    const floor = (authGlobalRateLimiter as unknown as { store: Map<string, unknown> }).store;
+    expect(floor.has(`${bucket}:*`)).toBe(false);
+  });
+
   it("forgets an address after thirty days", () => {
     vi.useFakeTimers();
     try {

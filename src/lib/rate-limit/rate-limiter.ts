@@ -132,9 +132,12 @@ export const authGlobalRateLimiter = new RateLimiter(60, 15 * 60 * 1000);
 // sign-ins through a proxy that reports a fresh address each time cannot grow
 // it without end. In memory only, like every limiter here: after a restart the
 // first sign-in from an address is subject to the floor again, exactly like a
-// first sign-in from anywhere. With `TRUST_PROXY_HEADERS=false` every client
-// is the one address "unknown", whose per-address budget is already a global
-// one, so the floor adds nothing there and is skipped after the first sign-in.
+// first sign-in from anywhere. Where no proxy header names the client —
+// `TRUST_PROXY_HEADERS=false`, or a direct install with no proxy at all —
+// every client is the one address "unknown", whose per-address budget of ten
+// is already shared by everyone: the floor adds nothing there, and "unknown"
+// is remembered like any other address so the admin is not refused by a floor
+// their own address could never be told apart from.
 const KNOWN_ADDRESS_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const MAX_KNOWN_ADDRESSES = 10_000;
 const knownAddresses = new Map<string, number>();

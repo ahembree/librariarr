@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { isForwardAuthSecretConfigured } from "@/lib/sso/forward-secret";
 import { oidcIssuerProblem } from "@/lib/sso/issuer-url";
+import { isTruthyFlag } from "@/lib/env-flag";
 
 export interface SsoSettings {
   ssoEnabled: boolean;
@@ -25,14 +26,12 @@ export interface SsoSettings {
  * can re-enable SSO simply by unsetting the variable.
  */
 export function isSsoOverrideActive(): boolean {
-  const raw = process.env.SSO_DISABLE_OVERRIDE;
-  if (!raw) return false;
-  const normalized = raw.trim().toLowerCase();
-  return normalized === "true" || normalized === "1" || normalized === "yes";
+  return isTruthyFlag(process.env.SSO_DISABLE_OVERRIDE);
 }
 
 let overrideWarningLogged = false;
-let unusableWarningLogged = false;
+/** The last reason logged, so a changed reason is logged again and a fixed one re-arms it. */
+let lastUnusableReasonLogged: string | null = null;
 
 /** Anything that can read AppSettings: the client, or a transaction's. */
 export type SettingsReader = Pick<Prisma.TransactionClient, "appSettings">;
@@ -76,15 +75,26 @@ export async function getSsoSettings(db: SettingsReader = prisma): Promise<SsoSe
 
   const effective: SsoSettings = { ...settings, ssoMode };
   // SSO is on in the database but refused here (ssoUnusableReason): an install
-  // upgraded past the requirement, most likely. Said once, loudly, because the
-  // login page silently shows the local form or the Plex button instead.
+  // upgraded past the requirement, most likely. Said once per reason, loudly,
+  // because the login page shows the local form or the Plex button instead —
+  // and the login page itself names the reason when nothing else is offered.
   const reason = settings.ssoEnabled ? ssoUnusableReason(effective) : null;
-  if (reason && !unusableWarningLogged) {
-    logger.error("sso", `SSO login is turned on but cannot be offered: ${reason}`);
-    unusableWarningLogged = true;
+  if (reason !== lastUnusableReasonLogged) {
+    if (reason) logger.error("sso", `SSO login is turned on but cannot be offered: ${reason}`);
+    lastUnusableReasonLogged = reason;
   }
 
   return effective;
+}
+
+/**
+ * Forward-auth is on in the settings but `FORWARD_AUTH_SECRET` is not set —
+ * the one unusable state the forward-auth routes name specifically
+ * (`forward_auth_unconfigured`), since the admin who turned forward-auth on
+ * before the secret was required needs to be told what to set.
+ */
+export function isForwardAuthMissingSecret(settings: SsoSettings | null): boolean {
+  return !!settings?.ssoEnabled && settings.ssoMode === "FORWARD_AUTH" && !isForwardAuthSecretConfigured();
 }
 
 /**
@@ -112,7 +122,11 @@ export function ssoUnusableReason(settings: SsoSettings): string | null {
   }
   if (!settings.forwardAuthUserHeader) return "no forward-auth user header is set";
   if (!isForwardAuthSecretConfigured()) {
-    return "FORWARD_AUTH_SECRET is not set, so a request cannot be told apart from one that bypassed the proxy";
+    return (
+      "FORWARD_AUTH_SECRET is not set on the Librariarr container. Set it, have your proxy send it as the " +
+      "X-Librariarr-Proxy-Secret header, and restart — without it a request cannot be told apart from one that " +
+      "bypassed the proxy, so anyone who reaches the app's port directly could sign in by sending the identity header"
+    );
   }
   return null;
 }

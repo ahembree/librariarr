@@ -48,6 +48,9 @@ export interface SessionData {
 
 const SESSION_SECRET_FILE = "/config/.session-secret";
 
+/** The field older releases sealed the Plex token into; never honoured now. */
+const LEGACY_PLEX_TOKEN_FIELD = "plexToken";
+
 /**
  * Resolve the session secret from (in priority order):
  * 1. SESSION_SECRET environment variable
@@ -228,6 +231,14 @@ export async function getRawSession(): Promise<IronSession<SessionData>> {
  * The DB lookup is a single primary-key read; a DB error is treated as
  * "not valid" (fail closed), matching what `isSessionValid` always did.
  *
+ * A cookie sealed by a release that still stored the Plex token in it (see
+ * `SessionData`) is not honoured either: the field is dropped from the unsealed
+ * object, so no later `save()` re-seals it, and the login is downgraded like a
+ * revoked one, so the admin signs in once and the cookie in every browser is
+ * re-sealed without the token. Stripping alone would have left the token in
+ * every cookie jar for up to 30 days, since a cookie is only rewritten by a
+ * route that saves.
+ *
  * Under an API key (a `/api/v1` handler, run by `withApiKey` after it has
  * authenticated the key and checked its scope) the cookie is never read: the
  * session is the key's owner, and it refuses every write. See
@@ -237,8 +248,10 @@ export async function getSession(): Promise<IronSession<SessionData>> {
   const principal = getApiKeyPrincipal();
   if (principal) return apiKeySession(principal);
   const session = await getRawSession();
+  const carriedPlexToken = LEGACY_PLEX_TOKEN_FIELD in session;
+  if (carriedPlexToken) delete (session as Record<string, unknown>)[LEGACY_PLEX_TOKEN_FIELD];
   if (!session.isLoggedIn) return session;
-  const valid = await isUserSessionCurrent(session.userId, session.sessionVersion);
+  const valid = !carriedPlexToken && (await isUserSessionCurrent(session.userId, session.sessionVersion));
   if (!valid) {
     session.isLoggedIn = false;
     session.userId = undefined;
