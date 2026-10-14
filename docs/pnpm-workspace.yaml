@@ -12,3 +12,11 @@ allowBuilds:
   "@scarf/scarf": false
   esbuild: true
   sharp: true
+
+# Dependency floors for advisories the direct dependencies have not picked up:
+# satori resolves fflate 0.7.3 (GHSA-px8p-9vwx-vf98) and astro
+# http-cache-semantics 4.2.0 (GHSA-ch52-4w7c-c8xp). Both floors sit inside the
+# ranges those packages declare.
+overrides:
+  fflate: ^0.7.5
+  http-cache-semantics: ^4.3.0
