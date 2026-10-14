@@ -1,0 +1,79 @@
+---
+title: Show a "Leaving Soon" Shelf in Plex
+description: "Put the movies and shows a lifecycle rule is about to delete into a Leaving Soon collection on the Plex home screen, ordered by when each one goes, so your users can watch or object first."
+seoTitle: "Leaving Soon Collection for Plex"
+---
+
+import { Aside, Steps } from "@astrojs/starlight/components";
+
+A deletion nobody saw coming is the complaint every automated cleanup gets.
+Librariarr can keep a Plex collection in sync with a rule set's matches, so
+everything scheduled for removal sits on the home screen as **Leaving Soon**
+for the length of the action delay, soonest first. Someone who wants a title
+watches it, and it drops out of the rule and the shelf on the next detection
+run.
+
+<Aside type="note">
+  Collections are a Plex feature. On Jellyfin and Emby the rule set still
+  works; only the shelf is unavailable.
+</Aside>
+
+## Attach a collection to a delete rule set
+
+The shelf belongs on the rule set that **deletes**, not on a separate one:
+ordering by action date reads the pending actions, and only an armed delete
+rule set has those.
+
+<Steps>
+
+1. Open the rule set — the one from
+   [Automatically Delete Unwatched Media](/docs/guides/delete-unwatched-media/),
+   say — in **Lifecycle → Rules**.
+
+2. Turn on **Sync matches to a Plex collection** and choose
+   **Create new collection…**. Name it *Leaving Soon*.
+
+3. Set **Sort order** to **Action date**, and turn on **Display on home
+   screens** so it appears where people look. **Display in library
+   recommended** adds it to the library's own recommended row.
+
+4. Give the rule set an **action delay** long enough for people to react —
+   two weeks is a reasonable default — and **Save**. The collection is
+   created on Plex and filled on the next detection run.
+
+</Steps>
+
+Or import the whole thing: the
+[Rule Set Library](/docs/guides/rule-set-library/#unwatched-movies-with-a-leaving-soon-shelf)
+has the unwatched-movies rule set with this collection already attached.
+
+## What your users see
+
+- The collection holds every current match, in the order their deletions
+  are scheduled. Items whose action has not been scheduled yet (the action
+  is off, or the item is excepted) sort last.
+- A title someone watches stops matching on the next detection run; its
+  pending deletion is cancelled and it leaves the shelf.
+- A title you protect with an **exception** is removed from the collection
+  at once, on every server that holds a copy — no need to wait for the next
+  run.
+- When nothing matches, the collection is removed from Plex rather than
+  left empty.
+
+## One shelf, several rule sets
+
+Collections are shared definitions. A second rule set — say, the
+[Seerr requests nobody watched](/docs/guides/seerr-request-cleanup/) rule
+set — can sync to the **same** *Leaving Soon* collection by picking it from
+the dropdown. The shelf then shows the union of both rule sets' matches,
+still ordered by action date across all of them. A collection belongs to one
+library type, so movies and series need two collections; both can be called
+*Leaving Soon*.
+
+## If the shelf stays empty
+
+Matches on the Matches page but an empty collection on Plex usually means
+the items could not be resolved to Plex rating keys. The
+[Plex Collections](/docs/features/lifecycle-rules/#troubleshooting-matches-exist-but-the-collection-is-empty)
+section lists the causes; **System → Logs** names the exact Plex request
+that failed.

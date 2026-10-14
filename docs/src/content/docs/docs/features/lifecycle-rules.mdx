@@ -366,6 +366,14 @@ Notes:
 - The [deletion limit](#limiting-how-much-one-run-can-delete) counts the whole run, not each batch: a run over the limit is refused before its first batch starts. A series action in episode view counts once per show.
 - Every run is recorded in the **Actions** history (and deletion stats) labelled *Ad-hoc query action*, so there's a full audit trail even though no rule set exists.
 
+### Importing and Exporting Rule Sets
+
+**Export**, beside **Save** in the rule editor, shows the rule set as JSON to copy: its rules and groups, the action and its options, the collection settings, the Discord toggles and **Sticky matches**. **Import** takes that JSON back — on the tab matching the rule set's `type` — and fills the editor with it as a new, unsaved rule set.
+
+Two things are deliberately left out of an export because they belong to one install: the *arr instance (and, for **Change Quality Profile**, the quality profile, whose id is specific to that instance) and the servers the rule set targets. After an import you pick the instance under **Actions**, and the rule set targets every server until you narrow it. Collection settings import as a fresh definition that is matched to an existing collection by name when you save, or created.
+
+The [Rule Set Library](/docs/guides/rule-set-library/) has ready-made rule sets in this format.
+
 ## Previewing Matches
 
 Before executing any actions, use the **Preview** feature to see which media items match your rules:

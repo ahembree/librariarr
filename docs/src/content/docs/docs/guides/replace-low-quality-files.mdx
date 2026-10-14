@@ -1,0 +1,72 @@
+---
+title: Find and Replace Low-Quality Files
+description: "Use a lifecycle rule to find standard-definition, low-bitrate or badly encoded movies and shows, then have Radarr or Sonarr search for a better copy, switch their quality profile, or delete and re-grab them."
+seoTitle: "Upgrade Low-Quality Movies and Shows Automatically"
+---
+
+import { Aside, Steps } from "@astrojs/starlight/components";
+
+Librariarr stores the resolution, codec, dynamic range, bitrate and file
+size of every item it syncs, so a lifecycle rule can pick out the files that
+no longer meet your standard and hand them to Radarr or Sonarr to improve.
+None of the actions here delete anything you do not ask them to.
+
+## Pick the files
+
+In **Lifecycle → Rules**, on the **Movies** tab, start with one condition
+and widen from there:
+
+- `resolution` **contains** `SD|480P` — the rule builder offers the values
+  your library actually holds (`4K`, `1080P`, `720P`, `480P`, `SD`); pick
+  several and they are ORed.
+- `arrMonitored` **equals** `true` — only files Radarr will act on.
+
+Useful additions:
+
+- `videoCodec` **contains** `mpeg2video` for old encodes, or
+  `dynamicRange` **equals** `SDR` when you want HDR copies of titles that
+  have one.
+- `videoBitrate` **less than** `2000` (kbps) for files that are 1080p in
+  name only.
+- `arrQualityCutoffMet` **equals** `false` (movies only) — Radarr's own
+  verdict that the file is below the profile's cutoff. This is the most
+  precise condition, since it reads the profile you configured there.
+
+Preview before choosing an action. A quality condition tends to match more
+than you expect.
+
+## Choose how to improve them
+
+| Action | What happens | When to use it |
+|--------|--------------|----------------|
+| **Search for New Copy** | Radarr searches; it replaces the file only if it finds a release its quality profile prefers. | The safe default. Nothing is removed if no better release exists. |
+| **Change Quality Profile** | The movie is moved to the profile you pick; with **Search for upgrade after profile change** on, a search follows. Items already on that profile are skipped. | Your current profile is the reason the file was never upgraded. |
+| **Monitor & Delete Files** with **Search after** | The file is deleted and Radarr immediately searches for a replacement. | You want the file gone whatever the search finds. Check the recycle bin is on. |
+
+The first is in the
+[Rule Set Library](/docs/guides/rule-set-library/#low-quality-movies-to-replace).
+An action with the same configuration runs **once** per item: a file that is
+still SD after a search is not searched again every cycle unless you change
+the action's configuration, which re-arms it.
+
+<Aside type="caution">
+  **Delete Files Only** and the two monitor-and-delete actions remove the
+  file on disk. With no recycle bin configured in Radarr or Sonarr the
+  delete is immediate; Librariarr warns in the action settings when that is
+  the case.
+</Aside>
+
+## Shows
+
+On the **Series** tab the same conditions work per episode. With
+**Series Scope** off, a file delete acts only on the episodes that matched
+(a 480p episode in an otherwise 1080p season), and Sonarr's search is run
+for exactly those episodes. With it on, the action covers the whole show.
+
+## Fix the profiles first
+
+If many files match, the quality profiles themselves may be the problem.
+[TRaSH Guide Sync](/docs/features/trash-guide-sync/) imports recommended
+custom formats and quality profiles into Radarr and Sonarr, with a preview of
+every change; a **Change Quality Profile** action can then move the matched
+items onto the new profile.

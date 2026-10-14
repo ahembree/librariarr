@@ -19,14 +19,26 @@ included. It works the same on Plex, Jellyfin, and Emby.
   for series connected under **Settings → Integrations**. Deleting goes through the
   *arr app, so it also stops the title being re-downloaded.
 - Play history established. **Play Count** and **Last Played** count plays by
-  every user on the server, read from the watch history Librariarr syncs. Until
-  that history has been synced once, a rule that reads it is refused rather than
-  treating every title as never watched — run **Library → History → Refresh** if
-  the rule editor says the history is not established yet.
+  every user on the server, read from the watch history Librariarr syncs —
+  from the server's own history, or from [Tracearr](/docs/integrations/tracearr/)
+  when you have set it as the server's watch-history source under
+  **Settings → Servers**. Until that history has been synced once, a rule that
+  reads it is refused rather than treating every title as never watched. If
+  the rule editor says the history is not established yet, run
+  **Library → History → Refresh**; on a Tracearr-mapped server, wait for the
+  import to finish backfilling (Settings → Servers shows its progress) — the
+  rule set un-pauses itself when it does.
 - A recycle bin configured in Radarr or Sonarr (**Settings → Media Management**).
   Librariarr warns when it is off, because a delete is then immediate.
 
 ## Build the rule set
+
+<Aside type="note">
+  Rather not click through it? The finished rule set is in the
+  [Rule Set Library](/docs/guides/rule-set-library/#unwatched-movies) as JSON:
+  **Import** it on the Movies tab, pick your Radarr instance, and skip to
+  [Preview](#build-the-rule-set). The series version is there too.
+</Aside>
 
 <Steps>
 
@@ -38,13 +50,14 @@ included. It works the same on Plex, Jellyfin, and Emby.
 
    - `addedAt` **not in last days** `180` — leave new arrivals alone, whether or
      not anyone has got to them yet.
-   - `lastPlayedAt` **not in last days** `365` — nothing in the last year.
-   - `playCount` **equals** `0` — and, if you want to catch titles that were
-     never started at all, add this with **OR** (the Logic Preview beside the
-     builder spells out the exact grouping).
+   - `lastPlayedAt` **more than X days ago** `365` — nothing in the last year.
+   - `playCount` **equals** `0`, joined with **OR** — a title that has never
+     been played has no last-played date at all, so the condition above
+     does not match it on its own. The Logic Preview beside the builder
+     spells out the exact grouping.
 
    For **series**, use the **Series** tab and the series rollup
-   **Series Last Played** (`seriesLastPlayedAt`) **not in last days** `365`
+   **Series Last Played** (`seriesLastPlayedAt`) **more than X days ago** `365`
    instead of the per-episode `lastPlayedAt`: it is the most recent play across
    *every* episode, so a show someone is part-way through is never selected
    because of its older episodes. `watchedEpisodePercentage` **equals** `0`
@@ -52,7 +65,7 @@ included. It works the same on Plex, Jellyfin, and Emby.
 
 3. **Keep what you are keeping.** Add conditions that exclude titles you know
    you want, for example `isWatchlisted` **equals** `false` on Plex, or a
-   `seerrRequestDate` **not in last days** `90` if you use
+   `seerrRequestDate` **more than X days ago** `90` if you use
    [Seerr](/docs/integrations/seerr/) and want recent requests left alone. For
    individual titles, the **Exceptions** list protects an item from every rule
    set, on every server.
@@ -106,3 +119,12 @@ Both can be run by hand with **Run Now**.
   matches, which you can watch for a week or two before switching the action to
   Delete. Changing the action re-arms every match with the new configuration.
 </Aside>
+
+## Related guides
+
+- [Show a "Leaving Soon" shelf in Plex](/docs/guides/leaving-soon-collection/)
+  so your users see what is scheduled before it goes.
+- [Clean up Seerr requests nobody watched](/docs/guides/seerr-request-cleanup/).
+- [Unmonitor or remove ended shows](/docs/guides/ended-shows/).
+- [Rule Set Library](/docs/guides/rule-set-library/) — every rule set from
+  these guides as importable JSON.

@@ -129,6 +129,26 @@ export default defineConfig({
               label: "Delete Unwatched Media",
               slug: "docs/guides/delete-unwatched-media",
             },
+            {
+              label: "Leaving Soon Shelf",
+              slug: "docs/guides/leaving-soon-collection",
+            },
+            {
+              label: "Seerr Request Cleanup",
+              slug: "docs/guides/seerr-request-cleanup",
+            },
+            {
+              label: "Replace Low-Quality Files",
+              slug: "docs/guides/replace-low-quality-files",
+            },
+            {
+              label: "Ended Shows",
+              slug: "docs/guides/ended-shows",
+            },
+            {
+              label: "Rule Set Library",
+              slug: "docs/guides/rule-set-library",
+            },
           ],
         },
         {
