@@ -58,7 +58,7 @@ describe("GET /api/media/history — order across pages", () => {
     clearMockSession();
     const user = await createTestUser();
     userId = user.id;
-    setMockSession({ userId, isLoggedIn: true, plexToken: "token" });
+    setMockSession({ userId, isLoggedIn: true});
     const server = await createTestServer(userId);
     const library = await createTestLibrary(server.id, { type: "MOVIE" });
 

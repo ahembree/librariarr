@@ -52,7 +52,7 @@ describe("Tools transcode manager endpoints", () => {
 
     it("returns defaults when no settings exist", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, { url: "/api/tools/transcode-manager" });
       const body = await expectJson<{
@@ -70,7 +70,7 @@ describe("Tools transcode manager endpoints", () => {
 
     it("returns saved settings", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const customCriteria = {
         anyTranscoding: false,
@@ -122,7 +122,7 @@ describe("Tools transcode manager endpoints", () => {
 
     it("creates settings when none exist (upsert create)", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(PUT, {
         url: "/api/tools/transcode-manager",
@@ -144,7 +144,7 @@ describe("Tools transcode manager endpoints", () => {
 
     it("updates existing settings (upsert update)", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       // Create initial settings
       await callRoute(PUT, {
@@ -172,7 +172,7 @@ describe("Tools transcode manager endpoints", () => {
 
     it("updates criteria independently", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       // Create initial
       await callRoute(PUT, {
@@ -204,7 +204,7 @@ describe("Tools transcode manager endpoints", () => {
 
     it("preserves delay and criteria when not provided in update", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const customCriteria = {
         anyTranscoding: false,
@@ -244,7 +244,7 @@ describe("Tools transcode manager endpoints", () => {
 
     it("sets custom delay on creation", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(PUT, {
         url: "/api/tools/transcode-manager",
@@ -258,7 +258,7 @@ describe("Tools transcode manager endpoints", () => {
 
     it("defaults the hardware exemption to off", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, { url: "/api/tools/transcode-manager" });
       const body = await expectJson<{ exemptHardware: boolean }>(response, 200);
@@ -268,7 +268,7 @@ describe("Tools transcode manager endpoints", () => {
 
     it("persists the hardware exemption", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const put = await callRoute(PUT, {
         url: "/api/tools/transcode-manager",
@@ -285,7 +285,7 @@ describe("Tools transcode manager endpoints", () => {
 
     it("leaves the hardware exemption untouched when the field is omitted", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       await callRoute(PUT, {
         url: "/api/tools/transcode-manager",
@@ -307,7 +307,7 @@ describe("Tools transcode manager endpoints", () => {
 
     it("rejects a non-boolean hardware exemption", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(PUT, {
         url: "/api/tools/transcode-manager",

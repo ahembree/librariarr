@@ -114,7 +114,7 @@ describe("POST /api/media/history/sync", () => {
 
     const user = await createTestUser();
     userId = user.id;
-    setMockSession({ userId, isLoggedIn: true, plexToken: "token" });
+    setMockSession({ userId, isLoggedIn: true});
   });
 
   afterAll(async () => {

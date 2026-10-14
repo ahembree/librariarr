@@ -56,7 +56,7 @@ describe("GET /api/media/stats", () => {
 
   it("returns zeroed stats when user has no servers", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, { url: "/api/media/stats" });
     const body = await expectJson<{
@@ -133,7 +133,7 @@ describe("GET /api/media/stats", () => {
       fileSize: BigInt("52428800"),
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, { url: "/api/media/stats" });
     const body = await expectJson<{
@@ -168,7 +168,7 @@ describe("GET /api/media/stats", () => {
       fileSize: BigInt("10737418240"),
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, { url: "/api/media/stats" });
     const body = await expectJson<{ totalSize: string }>(response, 200);
@@ -199,7 +199,7 @@ describe("GET /api/media/stats", () => {
       ratingKey: "m1080p2",
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, { url: "/api/media/stats" });
     const body = await expectJson<{
@@ -240,7 +240,7 @@ describe("GET /api/media/stats", () => {
       playCount: 5,
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, { url: "/api/media/stats" });
     const body = await expectJson<{
@@ -286,7 +286,7 @@ describe("GET /api/media/stats", () => {
       ratingKey: "b-ep1",
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, { url: "/api/media/stats" });
     const body = await expectJson<{
@@ -316,7 +316,7 @@ describe("GET /api/media/stats", () => {
       genres: ["Action", "Comedy"],
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, { url: "/api/media/stats" });
     const body = await expectJson<{
@@ -353,7 +353,7 @@ describe("GET /api/media/stats", () => {
       ratingKey: "s2m1",
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/stats",
@@ -373,7 +373,7 @@ describe("GET /api/media/stats", () => {
     const user2 = await createTestUser({ plexId: "u2" });
     const server = await createTestServer(user1.id);
 
-    setMockSession({ userId: user2.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user2.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/stats",
@@ -402,7 +402,7 @@ describe("GET /api/media/stats", () => {
       seriesKey: "tvdb:73244", seasonNumber: 1, episodeNumber: 2, playCount: 4, ratingKey: "us2",
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const body = await expectJson<{
       seriesCount: number;
@@ -448,7 +448,7 @@ describe("GET /api/media/stats", () => {
       });
     }
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
     const body = await expectJson<{ artistCount: number; albumCount: number; musicCount: number }>(
       await callRoute(GET, { url: "/api/media/stats" }),
       200,
@@ -508,7 +508,7 @@ describe("GET /api/media/stats", () => {
 
     it("counts, sizes and breaks down the canonical copies only", async () => {
       const { user } = await seedTwoServers();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const body = await expectJson<Record<string, unknown>>(await callRoute(GET, { url: "/api/media/stats" }), 200);
 
@@ -566,7 +566,7 @@ describe("GET /api/media/stats", () => {
 
     it("counts every copy on one server's view", async () => {
       const { user, serverB } = await seedTwoServers();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const body = await expectJson<Record<string, unknown>>(
         await callRoute(GET, { url: `/api/media/stats?serverId=${serverB.id}` }),
@@ -581,7 +581,7 @@ describe("GET /api/media/stats", () => {
     it("falls back to every copy's total size when no copy is canonical", async () => {
       const { user } = await seedTwoServers();
       await getTestPrisma().mediaItem.updateMany({ data: { dedupCanonical: false } });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const body = await expectJson<Record<string, unknown>>(await callRoute(GET, { url: "/api/media/stats" }), 200);
 

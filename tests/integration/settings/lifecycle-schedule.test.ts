@@ -34,7 +34,7 @@ describe("GET /api/settings/lifecycle-schedule", () => {
 
   it("returns default schedule values when no settings exist", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(GET);
     const body = await expectJson<{
@@ -49,7 +49,7 @@ describe("GET /api/settings/lifecycle-schedule", () => {
 
   it("returns saved schedule", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     await callRoute(PUT, {
       method: "PUT",
@@ -83,7 +83,7 @@ describe("PUT /api/settings/lifecycle-schedule", () => {
 
   it("updates detection schedule with preset value", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(PUT, {
       method: "PUT",
@@ -95,7 +95,7 @@ describe("PUT /api/settings/lifecycle-schedule", () => {
 
   it("updates execution schedule with preset value", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(PUT, {
       method: "PUT",
@@ -107,7 +107,7 @@ describe("PUT /api/settings/lifecycle-schedule", () => {
 
   it("updates both schedules at once", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(PUT, {
       method: "PUT",
@@ -126,7 +126,7 @@ describe("PUT /api/settings/lifecycle-schedule", () => {
 
   it("accepts valid cron expression", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(PUT, {
       method: "PUT",
@@ -138,7 +138,7 @@ describe("PUT /api/settings/lifecycle-schedule", () => {
 
   it("returns 400 for invalid detection schedule", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(PUT, {
       method: "PUT",
@@ -150,7 +150,7 @@ describe("PUT /api/settings/lifecycle-schedule", () => {
 
   it("returns 400 for invalid execution schedule", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(PUT, {
       method: "PUT",
@@ -162,7 +162,7 @@ describe("PUT /api/settings/lifecycle-schedule", () => {
 
   it("returns 400 when no schedule is provided", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(PUT, { method: "PUT", body: {} });
     const body = await expectJson<{ error: string }>(res, 400);

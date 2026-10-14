@@ -39,7 +39,7 @@ describe("GET /api/settings/discord", () => {
 
   it("returns default/empty discord settings when none configured", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(GET);
     const body = await expectJson<{
@@ -59,7 +59,7 @@ describe("GET /api/settings/discord", () => {
 
   it("round-trips the API key notification toggle", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     await expectJson(await callRoute(PUT, { method: "PUT", body: { notifyApiKeys: false } }), 200);
     let body = await expectJson<{ notifyApiKeys: boolean; notifyMaintenance: boolean }>(await callRoute(GET));
@@ -75,7 +75,7 @@ describe("GET /api/settings/discord", () => {
 
   it("returns saved discord settings after PUT", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     await callRoute(PUT, {
       method: "PUT",
@@ -118,7 +118,7 @@ describe("PUT /api/settings/discord", () => {
 
   it("saves and returns updated discord settings with webhookUrl", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(PUT, {
       method: "PUT",
@@ -141,7 +141,7 @@ describe("PUT /api/settings/discord", () => {
 
   it("updates only provided fields (partial update)", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     // Set initial values
     await callRoute(PUT, {
@@ -173,7 +173,7 @@ describe("PUT /api/settings/discord", () => {
 
   it("treats the echoed mask as 'keep the saved URL'", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
     await callRoute(PUT, {
       method: "PUT",
       body: { webhookUrl: "https://discord.com/api/webhooks/123/abc" },
@@ -195,7 +195,7 @@ describe("PUT /api/settings/discord", () => {
 
   it("clears webhookUrl when empty string is provided", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     // Set a webhook url first
     await callRoute(PUT, {
@@ -216,7 +216,7 @@ describe("PUT /api/settings/discord", () => {
 
   it("accepts an empty body (all fields optional)", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(PUT, {
       method: "PUT",
@@ -234,7 +234,7 @@ describe("PUT /api/settings/discord", () => {
 
   it("rejects non-boolean notifyMaintenance", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(PUT, {
       method: "PUT",

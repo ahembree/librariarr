@@ -42,7 +42,12 @@ vi.mock("@/lib/plex/client", () => ({
 }));
 
 const { mockGetPlexResources } = vi.hoisted(() => ({ mockGetPlexResources: vi.fn() }));
-vi.mock("@/lib/plex/auth", () => ({ getPlexResources: mockGetPlexResources }));
+// `getStoredPlexToken` stays real: the route reads the account's token from
+// the User row, never from the cookie.
+vi.mock("@/lib/plex/auth", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/plex/auth")>()),
+  getPlexResources: mockGetPlexResources,
+}));
 
 // Import route handlers AFTER mocks
 import { GET, POST } from "@/app/api/servers/route";
@@ -80,7 +85,7 @@ describe("Server CRUD endpoints", () => {
 
     it("returns empty servers array when user has no servers", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, { url: "/api/servers" });
       const body = await expectJson<{ servers: unknown[] }>(response, 200);
@@ -92,7 +97,7 @@ describe("Server CRUD endpoints", () => {
       const server = await createTestServer(user.id, { name: "My Plex" });
       await createTestLibrary(server.id, { title: "Movies", type: "MOVIE" });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, { url: "/api/servers" });
       const body = await expectJson<{
@@ -117,7 +122,7 @@ describe("Server CRUD endpoints", () => {
         ],
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, { url: "/api/servers" });
       const body = await expectJson<{
@@ -139,7 +144,7 @@ describe("Server CRUD endpoints", () => {
       await createTestServer(user1.id, { name: "User1 Server" });
       await createTestServer(user2.id, { name: "User2 Server" });
 
-      setMockSession({ userId: user2.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user2.id, isLoggedIn: true });
 
       const response = await callRoute(GET, { url: "/api/servers" });
       const body = await expectJson<{
@@ -166,7 +171,7 @@ describe("Server CRUD endpoints", () => {
 
     it("returns 400 when url or accessToken is missing", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(POST, {
         url: "/api/servers",
@@ -179,7 +184,7 @@ describe("Server CRUD endpoints", () => {
 
     it("returns 400 when URL lacks http/https protocol", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(POST, {
         url: "/api/servers",
@@ -201,7 +206,7 @@ describe("Server CRUD endpoints", () => {
       });
 
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(POST, {
         url: "/api/servers",
@@ -222,7 +227,7 @@ describe("Server CRUD endpoints", () => {
 
     it("creates a new server on success", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(POST, {
         url: "/api/servers",
@@ -252,7 +257,7 @@ describe("Server CRUD endpoints", () => {
         url: "http://old:32400",
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(POST, {
         url: "/api/servers",
@@ -277,7 +282,7 @@ describe("Server CRUD endpoints", () => {
 
     it("invalidates media caches when a server is created", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "token", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       await callRoute(POST, {
         url: "/api/servers",
@@ -294,7 +299,7 @@ describe("Server CRUD endpoints", () => {
     it("invalidates media caches when an existing server is re-pointed", async () => {
       const user = await createTestUser();
       await createTestServer(user.id, { machineId: "same-machine", name: "Old name" });
-      setMockSession({ userId: user.id, plexToken: "token", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       await callRoute(POST, {
         url: "/api/servers",
@@ -325,8 +330,8 @@ describe("Server CRUD endpoints", () => {
     };
 
     it("looks the token up on plex.tv and stores it", async () => {
-      const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "account-token", isLoggedIn: true, authenticatedAt: Date.now() });
+      const user = await createTestUser({ plexToken: "account-token" });
+      setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
       mockGetPlexResources.mockResolvedValue([
         { ...ownedServer, clientIdentifier: "someone-elses", owned: false, accessToken: "shared-token" },
         ownedServer,
@@ -348,8 +353,8 @@ describe("Server CRUD endpoints", () => {
     });
 
     it("asks a session with no recent sign-in to confirm it's them, before looking anything up", async () => {
-      const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "account-token", isLoggedIn: true, authenticatedAt: STALE });
+      const user = await createTestUser({ plexToken: "account-token" });
+      setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: STALE });
       mockGetPlexResources.mockResolvedValue([ownedServer]);
 
       const response = await callRoute(POST, {
@@ -366,8 +371,8 @@ describe("Server CRUD endpoints", () => {
     });
 
     it("returns 404 for a machine id the Plex account does not own", async () => {
-      const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "account-token", isLoggedIn: true, authenticatedAt: Date.now() });
+      const user = await createTestUser({ plexToken: "account-token" });
+      setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
       mockGetPlexResources.mockResolvedValue([{ ...ownedServer, owned: false }]);
 
       const response = await callRoute(POST, {
@@ -382,7 +387,7 @@ describe("Server CRUD endpoints", () => {
     // Checked before the recent sign-in: confirming who you are cannot supply
     // a Plex account, so asking for it first would only lead to this refusal.
     it("asks a session with no Plex account to sign in with Plex, not to confirm it's them", async () => {
-      const user = await createTestUser();
+      const user = await createTestUser({ plexToken: null });
       setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: STALE });
 
       const response = await callRoute(POST, {
@@ -396,8 +401,8 @@ describe("Server CRUD endpoints", () => {
     });
 
     it("reports plex.tv failing, or returning no token, as an upstream error", async () => {
-      const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "account-token", isLoggedIn: true, authenticatedAt: Date.now() });
+      const user = await createTestUser({ plexToken: "account-token" });
+      setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
       const add = () =>
         callRoute(POST, {
           url: "/api/servers",
@@ -416,8 +421,8 @@ describe("Server CRUD endpoints", () => {
     });
 
     it("still requires a token for a Jellyfin or Emby server", async () => {
-      const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "account-token", isLoggedIn: true, authenticatedAt: Date.now() });
+      const user = await createTestUser({ plexToken: "account-token" });
+      setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
       const response = await callRoute(POST, {
         url: "/api/servers",
@@ -449,7 +454,7 @@ describe("Server CRUD endpoints", () => {
 
     it("returns 404 when server does not exist", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(
         PUT,
@@ -469,7 +474,7 @@ describe("Server CRUD endpoints", () => {
       const user2 = await createTestUser({ plexId: "intruder" });
       const server = await createTestServer(user1.id);
 
-      setMockSession({ userId: user2.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user2.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(
         PUT,
@@ -487,7 +492,7 @@ describe("Server CRUD endpoints", () => {
     it("returns 400 when URL lacks http/https protocol", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(
         PUT,
@@ -510,7 +515,7 @@ describe("Server CRUD endpoints", () => {
 
       const user = await createTestUser();
       const server = await createTestServer(user.id);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
+      setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
       const response = await callRouteWithParams(
         PUT,
@@ -530,7 +535,7 @@ describe("Server CRUD endpoints", () => {
       const server = await createTestServer(user.id, {
         url: "http://old:32400",
       });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
+      setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
       const response = await callRouteWithParams(
         PUT,
@@ -553,7 +558,7 @@ describe("Server CRUD endpoints", () => {
       const server = await createTestServer(user.id, {
         url: "http://keep:32400",
       });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
+      setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
       const response = await callRouteWithParams(
         PUT,
@@ -579,7 +584,7 @@ describe("Server CRUD endpoints", () => {
     it("asks a session with no recent sign-in to confirm it's them before sending the stored token to a new URL", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id, { url: "http://keep:32400", accessToken: "stored-token" });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: STALE });
+      setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: STALE });
 
       for (const body of [{ url: "https://attacker.example" }, { url: "https://attacker.example", enabled: false }]) {
         const response = await callRouteWithParams(
@@ -601,7 +606,7 @@ describe("Server CRUD endpoints", () => {
     it("asks a session with no recent sign-in to confirm it's them before turning certificate checks off", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id, { url: "https://keep.plex.direct:32400", accessToken: "stored-token" });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: STALE });
+      setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: STALE });
       const put = (body: Record<string, unknown>) =>
         callRouteWithParams(PUT, { id: server.id }, { url: `/api/servers/${server.id}`, method: "PUT", body });
 
@@ -616,7 +621,7 @@ describe("Server CRUD endpoints", () => {
       // With a token of the caller's own, or a recent sign-in, it goes ahead.
       await expectJson(await put({ tlsSkipVerify: true, url: "https://keep.plex.direct:32400", accessToken: "new-token" }), 200);
       await getTestPrisma().mediaServer.update({ where: { id: server.id }, data: { tlsSkipVerify: false } });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
+      setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
       await expectJson(await put({ tlsSkipVerify: true }), 200);
     });
 
@@ -625,7 +630,7 @@ describe("Server CRUD endpoints", () => {
       const plex = await createTestServer(user.id, { url: "https://keep:32400", accessToken: "stored-token" });
       await getTestPrisma().mediaServer.update({ where: { id: plex.id }, data: { tlsSkipVerify: true } });
       const jelly = await createTestServer(user.id, { url: "https://jelly:8096", type: "JELLYFIN" });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: STALE });
+      setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: STALE });
 
       await expectJson(
         await callRouteWithParams(PUT, { id: plex.id }, { url: `/api/servers/${plex.id}`, method: "PUT", body: { tlsSkipVerify: false } }),
@@ -640,7 +645,7 @@ describe("Server CRUD endpoints", () => {
     it("lets a stale session re-save the same URL, or change it along with the token", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id, { url: "http://keep:32400", accessToken: "stored-token" });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: STALE });
+      setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: STALE });
 
       // The edit form sends the URL on every save.
       await expectJson(

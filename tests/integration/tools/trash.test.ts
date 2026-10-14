@@ -155,7 +155,7 @@ afterAll(async () => {
 
 async function authedUserWithRadarr() {
   const user = await createTestUser();
-  setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+  setMockSession({ isLoggedIn: true, userId: user.id});
   const radarr = await createTestRadarrInstance(user.id);
   return { user, radarr };
 }
@@ -167,7 +167,7 @@ describe("GET /api/tools/trash/instances", () => {
 
   it("returns Sonarr and Radarr instances tagged with service type", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
     await createTestSonarrInstance(user.id, { name: "S1" });
     await createTestRadarrInstance(user.id, { name: "R1" });
 
@@ -182,13 +182,13 @@ describe("GET /api/tools/trash/instances", () => {
 describe("GET /api/tools/trash/catalog", () => {
   it("rejects an invalid service", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
     await expectJson(await callRoute(getCatalog, { searchParams: { service: "plex" } }), 400);
   });
 
   it("returns catalog counts and naming", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
     const body = await expectJson<{
       catalog: {
         counts: { customFormats: number };
@@ -212,7 +212,7 @@ describe("GET /api/tools/trash/catalog", () => {
 describe("GET /api/tools/trash/status", () => {
   it("404s for an unknown instance", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
     await expectJson(
       await callRoute(getStatus, { searchParams: { serviceType: "RADARR", instanceId: "nope" } }),
       404,
@@ -275,7 +275,7 @@ describe("GET /api/tools/trash/status", () => {
 describe("POST /api/tools/trash/assignments", () => {
   it("404s for an instance the user doesn't own", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
     const res = await callRoute(postAssignment, {
       method: "POST",
       body: { serviceType: "RADARR", instanceId: "nope", items: [{ resourceType: "CUSTOM_FORMAT", trashId: "cf1", name: "AMZN" }] },
@@ -320,7 +320,7 @@ describe("POST /api/tools/trash/assignments", () => {
 
   it("rejects a Radarr custom format assigned to a Sonarr instance (cross-service gate)", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
     const sonarr = await createTestSonarrInstance(user.id);
     const res = await callRoute(postAssignment, {
       method: "POST",
@@ -429,7 +429,7 @@ describe("assignments/[id]", () => {
       data: { userId: other.id, serviceType: "RADARR", radarrInstanceId: otherRadarr.id, resourceType: "CUSTOM_FORMAT", trashId: "cf1", name: "AMZN" },
     });
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
     await expectJson(await callRouteWithParams(deleteAssignment, { id: row.id }, { method: "DELETE" }), 404);
   });
 

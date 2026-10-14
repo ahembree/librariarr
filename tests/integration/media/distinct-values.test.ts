@@ -74,7 +74,7 @@ describe("GET /api/media/distinct-values", () => {
 
   it("emits a same-named key for every endpoint-sourced enumerable field", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, { url: "/api/media/distinct-values" });
     const body = await expectJson<Record<string, unknown>>(response, 200);
@@ -92,7 +92,7 @@ describe("GET /api/media/distinct-values", () => {
 
   it("returns data with authenticated session", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/distinct-values",
@@ -108,7 +108,7 @@ describe("GET /api/media/distinct-values", () => {
 
   it("returns distinct resolution values normalized to standard labels", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
     const server = await createTestServer(user.id);
     const lib = await createTestLibrary(server.id);
 
@@ -141,7 +141,7 @@ describe("GET /api/media/distinct-values", () => {
 
   it("returns distinct video codecs sorted alphabetically", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
     const server = await createTestServer(user.id);
     const lib = await createTestLibrary(server.id);
 
@@ -171,7 +171,7 @@ describe("GET /api/media/distinct-values", () => {
 
   it("returns distinct audio codecs sorted alphabetically", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
     const server = await createTestServer(user.id);
     const lib = await createTestLibrary(server.id);
 
@@ -196,7 +196,7 @@ describe("GET /api/media/distinct-values", () => {
 
   it("returns distinct containers sorted alphabetically", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
     const server = await createTestServer(user.id);
     const lib = await createTestLibrary(server.id);
 
@@ -221,7 +221,7 @@ describe("GET /api/media/distinct-values", () => {
 
   it("returns distinct dynamic range values sorted by rank", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
     const server = await createTestServer(user.id);
     const lib = await createTestLibrary(server.id);
 
@@ -254,7 +254,7 @@ describe("GET /api/media/distinct-values", () => {
 
   it("aggregates labels from the JSONB labels array deduplicated", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
     const server = await createTestServer(user.id);
     const lib = await createTestLibrary(server.id);
 
@@ -272,7 +272,7 @@ describe("GET /api/media/distinct-values", () => {
 
   it("aggregates stream-query color fields from streams", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
     const server = await createTestServer(user.id);
     const lib = await createTestLibrary(server.id);
     const item = await createTestMediaItem(lib.id, { title: "HDR Movie", type: "MOVIE" });
@@ -297,7 +297,7 @@ describe("GET /api/media/distinct-values", () => {
 
   it("returns distinct genres from JSONB arrays deduplicated", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
     const server = await createTestServer(user.id);
     const lib = await createTestLibrary(server.id);
 
@@ -327,7 +327,7 @@ describe("GET /api/media/distinct-values", () => {
 
   it("returns distinct countries from JSONB arrays deduplicated", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
     const server = await createTestServer(user.id);
     const lib = await createTestLibrary(server.id);
 
@@ -356,7 +356,7 @@ describe("GET /api/media/distinct-values", () => {
 
   it("returns file size min/max as strings (BigInt)", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
     const server = await createTestServer(user.id);
     const lib = await createTestLibrary(server.id);
 
@@ -387,7 +387,7 @@ describe("GET /api/media/distinct-values", () => {
 
   it("returns year values sorted descending", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
     const server = await createTestServer(user.id);
     const lib = await createTestLibrary(server.id);
 
@@ -417,7 +417,7 @@ describe("GET /api/media/distinct-values", () => {
 
   it("returns null for size ranges when no items exist", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
     const response = await callRoute(GET, {
       url: "/api/media/distinct-values",
     });
@@ -436,7 +436,7 @@ describe("GET /api/media/distinct-values", () => {
 
   it("returns play count and rating ranges", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
     const server = await createTestServer(user.id);
     const lib = await createTestLibrary(server.id);
 
@@ -469,7 +469,7 @@ describe("GET /api/media/distinct-values", () => {
       const prisma = getTestPrisma();
 
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
       const server = await createTestServer(user.id);
       const lib = await createTestLibrary(server.id);
 
@@ -493,7 +493,7 @@ describe("GET /api/media/distinct-values", () => {
 
     it("returns an empty list when no WatchHistory rows exist", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, { url: "/api/media/distinct-values" });
       const body = await expectJson<{ watchedByUser: string[] }>(response, 200);

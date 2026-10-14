@@ -48,7 +48,7 @@ describe("GET /api/settings/auth", () => {
     await prisma.appSettings.create({
       data: { userId: user.id, localAuthEnabled: true },
     });
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(GET);
     const body = await expectJson<{
@@ -66,7 +66,7 @@ describe("GET /api/settings/auth", () => {
 
   it("returns default localAuthEnabled=false when no AppSettings exists", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(GET);
     const body = await expectJson<{ localAuthEnabled: boolean }>(res);
@@ -88,7 +88,7 @@ describe("PUT /api/settings/auth", () => {
 
   it("returns 400 on invalid body", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(PUT, {
       method: "PUT",
@@ -118,7 +118,7 @@ describe("PUT /api/settings/auth", () => {
         oidcClientId: "client",
       },
     });
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(GET);
     const body = await expectJson<{ localAuthHiddenBySso: boolean; passwordSignInEnabled: boolean }>(res);
@@ -143,7 +143,7 @@ describe("PUT /api/settings/auth", () => {
         oidcClientId: "client",
       },
     });
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(PUT, {
       method: "PUT",
@@ -168,7 +168,7 @@ describe("PUT /api/settings/auth", () => {
         oidcClientId: "client",
       },
     });
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(PUT, {
       method: "PUT",
@@ -181,7 +181,7 @@ describe("PUT /api/settings/auth", () => {
   it("refuses to enable local auth without a passwordHash set", async () => {
     const user = await createTestUser();
     // passwordHash is null
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(PUT, {
       method: "PUT",
@@ -204,7 +204,7 @@ describe("PUT /api/settings/auth", () => {
     });
     // Turning local login on gives the password its power back: it needs a
     // recent sign-in (refused otherwise, below).
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok", authenticatedAt: Date.now() });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
 
     const res = await callRoute(PUT, {
       method: "PUT",
@@ -231,7 +231,7 @@ describe("PUT /api/settings/auth", () => {
       data: { passwordHash: "hashed_existing", localUsername: "testuser" },
     });
     await prisma.appSettings.create({ data: { userId: user.id, localAuthEnabled: false } });
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok", authenticatedAt: Date.now() - 16 * 60 * 1000 });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() - 16 * 60 * 1000 });
 
     const body = await expectJson<{ code: string; methods: string[] }>(
       await callRoute(PUT, { method: "PUT", body: { localAuthEnabled: true } }),
@@ -259,7 +259,7 @@ describe("PUT /api/settings/auth", () => {
         oidcClientId: "client",
       },
     });
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok", authenticatedAt: Date.now() - 16 * 60 * 1000 });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() - 16 * 60 * 1000 });
 
     // SSO hides the local form, so the password stays off: nothing to confirm.
     await expectJson(await callRoute(PUT, { method: "PUT", body: { localAuthEnabled: true } }), 200);
@@ -332,7 +332,7 @@ describe("PUT /api/settings/auth", () => {
       data: { passwordHash: "hashed_existing", localUsername: "testuser" },
     });
     await prisma.appSettings.create({ data: { userId: user.id, localAuthEnabled: false } });
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok", authenticatedAt: Date.now() - 16 * 60 * 1000 });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() - 16 * 60 * 1000 });
     vi.stubEnv("SSO_DISABLE_OVERRIDE", "true");
     try {
       const info = await expectJson<{ passwordSignInEnabled: boolean }>(await callRoute(GET));

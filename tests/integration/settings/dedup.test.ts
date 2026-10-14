@@ -38,7 +38,7 @@ describe("GET /api/settings/dedup", () => {
 
   it("returns default dedupStats (true) when no settings exist", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(GET);
     const body = await expectJson<{ dedupStats: boolean }>(res);
@@ -47,7 +47,7 @@ describe("GET /api/settings/dedup", () => {
 
   it("returns saved dedupStats after PUT", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     await callRoute(PUT, {
       method: "PUT",
@@ -74,7 +74,7 @@ describe("PUT /api/settings/dedup", () => {
 
   it("saves dedupStats as true", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(PUT, {
       method: "PUT",
@@ -86,7 +86,7 @@ describe("PUT /api/settings/dedup", () => {
 
   it("saves dedupStats as false", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(PUT, {
       method: "PUT",
@@ -98,7 +98,7 @@ describe("PUT /api/settings/dedup", () => {
 
   it("returns 400 when dedupStats is missing", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(PUT, {
       method: "PUT",
@@ -110,7 +110,7 @@ describe("PUT /api/settings/dedup", () => {
 
   it("returns 400 when dedupStats is not a boolean", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(PUT, {
       method: "PUT",
@@ -122,7 +122,7 @@ describe("PUT /api/settings/dedup", () => {
 
   it("toggles dedupStats back and forth", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     // Set to false
     await callRoute(PUT, { method: "PUT", body: { dedupStats: false } });

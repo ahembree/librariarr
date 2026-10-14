@@ -54,7 +54,7 @@ describe("Tools maintenance endpoints", () => {
     it("fires only on an enabled<->disabled transition, not on every edit", async () => {
       const user = await createTestUser();
       await seedWebhook(user.id);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       // Enable -> transition -> 1 notification
       await callRoute(PUT, { url: "/api/tools/maintenance", method: "PUT", body: { enabled: true, message: "Down" } });
@@ -82,7 +82,7 @@ describe("Tools maintenance endpoints", () => {
           maintenanceMessage: "Back at 6pm",
         },
       });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       await callRoute(PUT, { url: "/api/tools/maintenance", method: "PUT", body: { enabled: true } });
 
@@ -102,7 +102,7 @@ describe("Tools maintenance endpoints", () => {
 
     it("returns defaults when no settings exist", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, { url: "/api/tools/maintenance" });
       const body = await expectJson<{
@@ -118,7 +118,7 @@ describe("Tools maintenance endpoints", () => {
 
     it("returns saved settings", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       // Save settings first
       await callRoute(PUT, {
@@ -155,7 +155,7 @@ describe("Tools maintenance endpoints", () => {
 
     it("creates settings when none exist (upsert create)", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(PUT, {
         url: "/api/tools/maintenance",
@@ -175,7 +175,7 @@ describe("Tools maintenance endpoints", () => {
 
     it("updates existing settings (upsert update)", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       // Create initial settings
       await callRoute(PUT, {
@@ -203,7 +203,7 @@ describe("Tools maintenance endpoints", () => {
 
     it("preserves delay when not provided in update", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       // Create with specific delay
       await callRoute(PUT, {

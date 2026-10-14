@@ -126,7 +126,7 @@ describe("GET /api/integrations/tracearr/status", () => {
   it("returns an empty list when no server is mapped to Tracearr", async () => {
     const user = await createTestUser();
     await createTestServer(user.id);
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, { url: STATUS_URL });
     const body = await expectJson<{ servers: StatusRow[] }>(response);
@@ -151,7 +151,7 @@ describe("GET /api/integrations/tracearr/status", () => {
       });
     }
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, { url: STATUS_URL });
     const body = await expectJson<{ servers: StatusRow[] }>(response);
@@ -177,7 +177,7 @@ describe("GET /api/integrations/tracearr/status", () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id, { name: "Idle" });
     await mapToTracearr(server.id, "55555555-5555-5555-5555-555555555555", { backfillComplete: true });
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const body = await expectJson<{ servers: StatusRow[] }>(await callRoute(GET, { url: STATUS_URL }));
 
@@ -190,7 +190,7 @@ describe("GET /api/integrations/tracearr/status", () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id, { name: "Busy" });
     await mapToTracearr(server.id, "66666666-6666-6666-6666-666666666666", { backfillComplete: true });
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const run = beginTracearrImport(server.id, user.id);
     recordTracearrImportPage(run, {
@@ -229,7 +229,7 @@ describe("GET /api/integrations/tracearr/status", () => {
       source: "NATIVE",
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, { url: STATUS_URL });
     const body = await expectJson<{ servers: StatusRow[] }>(response);
@@ -252,7 +252,7 @@ describe("GET /api/integrations/tracearr/status", () => {
       source: "NATIVE",
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, { url: STATUS_URL });
     const body = await expectJson<{ servers: StatusRow[] }>(response);
@@ -280,7 +280,7 @@ describe("GET /api/integrations/tracearr/status", () => {
       sourceEventId: "their-evt",
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, { url: STATUS_URL });
     const body = await expectJson<{ servers: StatusRow[] }>(response);
@@ -320,7 +320,7 @@ describe("GET /api/integrations/tracearr/status", () => {
       });
     }
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, { url: STATUS_URL });
     const body = await expectJson<{ servers: StatusRow[] }>(response);
@@ -370,7 +370,7 @@ describe("GET /api/integrations/tracearr/status", () => {
       });
     }
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, { url: STATUS_URL });
     const body = await expectJson<{ servers: StatusRow[] }>(response);
@@ -404,7 +404,7 @@ describe("GET /api/integrations/tracearr/status", () => {
       sourceEventId: "overshot-new",
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, { url: STATUS_URL });
     const body = await expectJson<{ servers: StatusRow[] }>(response);
@@ -429,7 +429,7 @@ describe("GET /api/integrations/tracearr/status", () => {
       sourceEventId: "single-evt",
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, { url: STATUS_URL });
     const body = await expectJson<{ servers: StatusRow[] }>(response);
@@ -452,7 +452,7 @@ describe("GET /api/integrations/tracearr/status", () => {
       sourceEventId: "unmeasured-evt",
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, { url: STATUS_URL });
     const body = await expectJson<{ servers: StatusRow[] }>(response);
@@ -470,7 +470,7 @@ describe("GET /api/integrations/tracearr/status", () => {
       oldestPlayAt,
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, { url: STATUS_URL });
     const body = await expectJson<{ servers: StatusRow[] }>(response);

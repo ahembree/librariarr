@@ -529,3 +529,131 @@ describe("PUT /api/settings/sso", () => {
     expect(snap?.oidcIssuer).toBe("https://genuine-old.example.com");
   });
 });
+
+describe("PUT /api/settings/sso — what cannot be turned on", () => {
+  const originalSecret = process.env.FORWARD_AUTH_SECRET;
+  const originalAllow = process.env.OIDC_ALLOW_INSECURE_HTTP;
+
+  beforeEach(async () => {
+    await cleanDatabase();
+    clearMockSession();
+    delete process.env.FORWARD_AUTH_SECRET;
+    delete process.env.OIDC_ALLOW_INSECURE_HTTP;
+  });
+
+  afterAll(async () => {
+    if (originalSecret === undefined) delete process.env.FORWARD_AUTH_SECRET;
+    else process.env.FORWARD_AUTH_SECRET = originalSecret;
+    if (originalAllow === undefined) delete process.env.OIDC_ALLOW_INSECURE_HTTP;
+    else process.env.OIDC_ALLOW_INSECURE_HTTP = originalAllow;
+    await disconnectTestDb();
+  });
+
+  async function linkedForwardAdmin() {
+    const user = await createTestUser();
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { ssoEnabled: true, ssoSubject: "alice", ssoIssuer: "forward-auth" },
+    });
+    await prisma.appSettings.create({
+      data: { userId: user.id, ssoMode: "FORWARD_AUTH", forwardAuthUserHeader: "Remote-User", plexLoginEnabled: true },
+    });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
+    return user;
+  }
+
+  // Without the secret a request cannot prove it came through the proxy, so
+  // the identity header proves nothing (forward-secret.ts).
+  it("refuses to turn forward-auth on while FORWARD_AUTH_SECRET is unset, and tells the UI", async () => {
+    const user = await linkedForwardAdmin();
+    const before = await expectJson<{ forwardAuthSecretConfigured: boolean }>(await callRoute(GET, { method: "GET" }));
+    expect(before.forwardAuthSecretConfigured).toBe(false);
+
+    const refused = await expectJson<{ error: string }>(
+      await callRoute(PUT, { method: "PUT", body: { ssoEnabled: true } }),
+      400,
+    );
+    expect(refused.error).toMatch(/FORWARD_AUTH_SECRET/);
+    const row = await prisma.appSettings.findUniqueOrThrow({ where: { userId: user.id } });
+    expect(row.ssoEnabled).toBe(false);
+
+    process.env.FORWARD_AUTH_SECRET = "proxy-secret";
+    const after = await expectJson<{ forwardAuthSecretConfigured: boolean }>(await callRoute(GET, { method: "GET" }));
+    expect(after.forwardAuthSecretConfigured).toBe(true);
+    const ok = await expectJson<{ ssoEnabled: boolean }>(await callRoute(PUT, { method: "PUT", body: { ssoEnabled: true } }));
+    expect(ok.ssoEnabled).toBe(true);
+  });
+
+  // An install where forward-auth was on before the secret was required:
+  // header names must stay saveable (the body carries no ssoEnabled), while
+  // turning SSO on explicitly is refused.
+  it("lets an already-on forward-auth config be saved without the secret, but not turned on", async () => {
+    const user = await linkedForwardAdmin();
+    await prisma.appSettings.update({ where: { userId: user.id }, data: { ssoEnabled: true } });
+
+    const saved = await expectJson<{ forwardAuthEmailHeader: string; ssoEnabled: boolean }>(
+      await callRoute(PUT, { method: "PUT", body: { ssoMode: "FORWARD_AUTH", forwardAuthEmailHeader: "X-Email" } }),
+    );
+    expect(saved.forwardAuthEmailHeader).toBe("X-Email");
+    expect(saved.ssoEnabled).toBe(true);
+
+    const refused = await expectJson<{ error: string }>(
+      await callRoute(PUT, { method: "PUT", body: { ssoEnabled: true } }),
+      400,
+    );
+    expect(refused.error).toMatch(/FORWARD_AUTH_SECRET/);
+  });
+
+  async function linkedOidcAdmin(issuer: string) {
+    const user = await createTestUser();
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { ssoEnabled: true, ssoSubject: "sub-1", ssoIssuer: issuer },
+    });
+    await prisma.appSettings.create({
+      data: { userId: user.id, ssoMode: "OIDC", oidcIssuer: issuer, oidcClientId: "client", plexLoginEnabled: true },
+    });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
+    return user;
+  }
+
+  // The OIDC client relies on TLS to authenticate the issuer (issuer-url.ts).
+  it("refuses an http:// issuer off loopback, saved or merely turned on", async () => {
+    const user = await linkedOidcAdmin("https://idp.example.com");
+    const saved = await expectJson<{ error: string; details?: Array<{ message: string }> }>(
+      await callRoute(PUT, { method: "PUT", body: { oidcIssuer: "http://idp.lan" } }),
+      400,
+    );
+    expect(JSON.stringify(saved)).toMatch(/https/);
+    expect((await prisma.appSettings.findUniqueOrThrow({ where: { userId: user.id } })).oidcIssuer).toBe(
+      "https://idp.example.com",
+    );
+
+    // An http:// issuer stored under the older rule: turning SSO on against
+    // it would put a button on the login page that cannot be honoured.
+    await prisma.appSettings.update({ where: { userId: user.id }, data: { oidcIssuer: "http://idp.lan" } });
+    await prisma.user.update({ where: { id: user.id }, data: { ssoIssuer: "http://idp.lan" } });
+    const turnedOn = await expectJson<{ error: string }>(
+      await callRoute(PUT, { method: "PUT", body: { ssoEnabled: true } }),
+      400,
+    );
+    expect(turnedOn.error).toMatch(/https/);
+    expect((await prisma.appSettings.findUniqueOrThrow({ where: { userId: user.id } })).ssoEnabled).toBe(false);
+  });
+
+  it("accepts http:// on loopback, and anywhere under OIDC_ALLOW_INSECURE_HTTP", async () => {
+    await linkedOidcAdmin("http://localhost:9000");
+    const loop = await expectJson<{ oidcIssuer: string; ssoEnabled: boolean }>(
+      await callRoute(PUT, { method: "PUT", body: { oidcIssuer: "http://localhost:9000", ssoEnabled: true } }),
+    );
+    expect(loop.ssoEnabled).toBe(true);
+
+    process.env.OIDC_ALLOW_INSECURE_HTTP = "true";
+    await cleanDatabase();
+    await linkedOidcAdmin("http://idp.lan");
+    const lan = await expectJson<{ ssoEnabled: boolean }>(
+      await callRoute(PUT, { method: "PUT", body: { ssoEnabled: true } }),
+    );
+    expect(lan.ssoEnabled).toBe(true);
+  });
+});

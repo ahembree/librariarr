@@ -12,6 +12,7 @@ import {
   PASSWORD_TOO_SHORT_MESSAGE,
   passwordByteLength,
 } from "@/lib/auth/password-rules";
+import { oidcIssuerProblem } from "@/lib/sso/issuer-url";
 
 /**
  * Parse and validate request JSON against a Zod schema.
@@ -702,12 +703,14 @@ export const apiExceptionDeleteSchema = z.strictObject({
 export const ssoConfigSchema = z.object({
   ssoEnabled: z.boolean().optional(),
   ssoMode: z.enum(["OIDC", "FORWARD_AUTH"]).optional(),
+  // The https rule lives in `src/lib/sso/issuer-url.ts`, shared with
+  // `isSsoUsable` and `discoverOidc` so a stored issuer is judged the same way.
   oidcIssuer: z
     .union([
-      z.string().refine(
-        (val) => /^https?:\/\//i.test(val),
-        "Issuer must start with http:// or https://"
-      ),
+      z.string().superRefine((val, ctx) => {
+        const problem = oidcIssuerProblem(val);
+        if (problem) ctx.addIssue({ code: "custom", message: problem });
+      }),
       z.literal(""),
     ])
     .nullable()
@@ -729,10 +732,10 @@ export const ssoConfigSchema = z.object({
 });
 
 export const ssoTestSchema = z.object({
-  oidcIssuer: z.string().refine(
-    (val) => /^https?:\/\//i.test(val),
-    "Issuer must start with http:// or https://"
-  ),
+  oidcIssuer: z.string().superRefine((val, ctx) => {
+    const problem = oidcIssuerProblem(val);
+    if (problem) ctx.addIssue({ code: "custom", message: problem });
+  }),
 });
 
 export const ssoLinkSchema = z.object({

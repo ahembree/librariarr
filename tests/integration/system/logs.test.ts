@@ -46,7 +46,7 @@ describe("System logs endpoints", () => {
 
     it("returns empty logs when none exist", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, { url: "/api/system/logs" });
       const body = await expectJson<{
@@ -64,7 +64,7 @@ describe("System logs endpoints", () => {
 
     it("returns paginated log entries", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       // Create 5 log entries
       for (let i = 0; i < 5; i++) {
@@ -90,7 +90,7 @@ describe("System logs endpoints", () => {
 
     it("filters by level", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       await createTestLogEntry({ level: "INFO", message: "info msg" });
       await createTestLogEntry({ level: "ERROR", message: "error msg" });
@@ -112,7 +112,7 @@ describe("System logs endpoints", () => {
 
     it("filters by multiple levels", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       await createTestLogEntry({ level: "INFO", message: "info" });
       await createTestLogEntry({ level: "ERROR", message: "error" });
@@ -130,7 +130,7 @@ describe("System logs endpoints", () => {
 
     it("filters by category", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       await createTestLogEntry({ category: "API", message: "api msg" });
       await createTestLogEntry({ category: "BACKEND", message: "backend msg" });
@@ -150,7 +150,7 @@ describe("System logs endpoints", () => {
 
     it("filters by source", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       await createTestLogEntry({ source: "sync-engine", message: "sync msg" });
       await createTestLogEntry({ source: "scheduler", message: "schedule msg" });
@@ -167,7 +167,7 @@ describe("System logs endpoints", () => {
 
     it("filters by search text (case insensitive)", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       await createTestLogEntry({ message: "Server started successfully" });
       await createTestLogEntry({ message: "Database connection established" });
@@ -184,7 +184,7 @@ describe("System logs endpoints", () => {
 
     it("returns second page", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       for (let i = 0; i < 5; i++) {
         await createTestLogEntry({ message: `log ${i}` });
@@ -202,7 +202,7 @@ describe("System logs endpoints", () => {
 
     it("clamps limit to max 500", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       await createTestLogEntry({ message: "test" });
 
@@ -228,7 +228,7 @@ describe("System logs endpoints", () => {
 
     it("returns empty sources when no logs exist", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(SOURCES_GET, { url: "/api/system/logs/sources" });
       const body = await expectJson<{ sources: string[]; categories: string[] }>(response, 200);
@@ -239,7 +239,7 @@ describe("System logs endpoints", () => {
 
     it("returns distinct source values", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       await createTestLogEntry({ source: "scheduler" });
       await createTestLogEntry({ source: "sync-engine" });

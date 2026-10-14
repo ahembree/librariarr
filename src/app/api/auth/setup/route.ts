@@ -4,9 +4,15 @@ import { rotateSession } from "@/lib/auth/session";
 import bcrypt from "bcryptjs";
 import { apiLogger } from "@/lib/logger";
 import { validateRequest, authSetupSchema } from "@/lib/validation";
+import { checkAuthRateLimit, SETUP_BUCKET } from "@/lib/rate-limit/rate-limiter";
 
 export async function POST(request: NextRequest) {
   try {
+    // Open to anyone until the first admin exists, and each call costs a
+    // bcrypt hash: bounded like a login (see `SETUP_BUCKET`).
+    const rateLimited = checkAuthRateLimit(request, SETUP_BUCKET);
+    if (rateLimited) return rateLimited;
+
     // Validate input outside the transaction so a bad payload doesn't even
     // hit the DB (bcrypt is expensive — do it before the lock too).
     const { data, error } = await validateRequest(request, authSetupSchema);
@@ -73,7 +79,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Set session (destroy first to clear any stale data like a prior plexToken)
+    // Set session (destroy first to clear any stale data, e.g. a pre-seeded cookie)
     const session = await rotateSession();
     session.userId = user.id;
     session.isLoggedIn = true;

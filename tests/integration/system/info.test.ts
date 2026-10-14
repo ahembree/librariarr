@@ -57,7 +57,7 @@ describe("GET /api/system/info", () => {
 
   it("returns system info with version and stats", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, { url: "/api/system/info" });
     const body = await expectJson<{
@@ -88,7 +88,7 @@ describe("GET /api/system/info", () => {
     await createTestLibrary(server.id, { title: "TV Shows", enabled: false });
     await createTestMediaItem(library1.id, { title: "Test Movie 1" });
     await createTestMediaItem(library1.id, { title: "Test Movie 2" });
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, { url: "/api/system/info" });
     const body = await expectJson<{
@@ -108,7 +108,7 @@ describe("GET /api/system/info", () => {
 
   it("includes the GitHub release check by default", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, { url: "/api/system/info" });
     const body = await expectJson<{ updateInfo?: typeof UPDATE }>(response, 200);
@@ -119,7 +119,7 @@ describe("GET /api/system/info", () => {
 
   it("leaves the GitHub release check out with updateCheck=false", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
     // A lookup that never answers: the response must not wait for it.
     mockCheckForUpdate.mockReturnValue(new Promise(() => {}));
 
@@ -133,7 +133,7 @@ describe("GET /api/system/info", () => {
 
   it("returns database size as a string", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, { url: "/api/system/info" });
     const body = await expectJson<{ databaseSize: string }>(response, 200);

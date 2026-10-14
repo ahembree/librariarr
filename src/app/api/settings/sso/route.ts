@@ -3,7 +3,8 @@ import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { validateRequest, ssoConfigSchema } from "@/lib/validation";
 import { sanitize } from "@/lib/api/sanitize";
-import { currentSsoIssuer, isSsoOverrideActive } from "@/lib/sso/config";
+import { currentSsoIssuer, isSsoOverrideActive, ssoUnusableReason } from "@/lib/sso/config";
+import { isForwardAuthSecretConfigured } from "@/lib/sso/forward-secret";
 import { invalidateOidcDiscoveryCache } from "@/lib/sso/oidc-client";
 import { resolveSecretWrite } from "@/lib/sso/secret-write";
 import { isSameOriginRequest } from "@/lib/url";
@@ -82,6 +83,9 @@ export async function GET() {
     // Surface whether a one-step revert is available. UI uses this to gate
     // the "Revert to previous configuration" button in step 1 of the wizard.
     hasPreviousConfig: !!settings?.previousSsoConfig,
+    // Forward-auth cannot be turned on without it (see forward-secret.ts); the
+    // UI says so beside the mode rather than at the toggle.
+    forwardAuthSecretConfigured: isForwardAuthSecretConfigured(),
   });
 }
 
@@ -127,6 +131,24 @@ export async function PUT(request: NextRequest) {
           { status: 400 }
         );
       }
+    }
+    // Everything the login would refuse (FORWARD_AUTH_SECRET unset, an http://
+    // issuer stored under the older rule): turning SSO on against it would
+    // leave a button on the login page that cannot be honoured. Only when the
+    // save turns SSO on — on an install where it was on before the
+    // requirement, header names and the rest must stay saveable while the
+    // admin sorts the environment out.
+    const turningOn = data.ssoEnabled === true || !current.ssoEnabled;
+    const unusable = turningOn
+      ? ssoUnusableReason({
+          ...next,
+          ssoMode: next.ssoMode === "FORWARD_AUTH" ? "FORWARD_AUTH" : "OIDC",
+          oidcIssuer: next.oidcIssuer?.trim() || null,
+          oidcClientId: next.oidcClientId?.trim() || null,
+        })
+      : null;
+    if (unusable) {
+      return NextResponse.json({ error: `SSO cannot be turned on: ${unusable}` }, { status: 400 });
     }
 
     const me = await prisma.user.findUnique({

@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db";
 import { getSession } from "@/lib/auth/session";
 import { apiLogger } from "@/lib/logger";
 import { validateRequest, plexTokenSchema } from "@/lib/validation";
-import { checkAuthRateLimit } from "@/lib/rate-limit/rate-limiter";
+import { peekAuthRateLimit, reserveAuthAttempt } from "@/lib/rate-limit/rate-limiter";
 import { loadReauthContext } from "@/lib/auth/reauth";
 
 /**
@@ -16,14 +16,18 @@ import { loadReauthContext } from "@/lib/auth/reauth";
  * and Plex sign-in must be allowed (`plexLoginEnabled`), as for a Plex login.
  * Like a Plex login, it also refreshes the stored Plex token.
  */
+const PLEX_REAUTH_BUCKET = "plex-reauth";
+
 export async function POST(request: NextRequest) {
   const session = await getSession();
   if (!session.isLoggedIn || !session.userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const rateLimited = checkAuthRateLimit(request, "plex-reauth");
-  if (rateLimited) return rateLimited;
+  // Charged only on a failed confirmation (see `reserveAuthAttempt`); after
+  // the session check, so a request that is not signed in never drains it.
+  const limited = peekAuthRateLimit(request, PLEX_REAUTH_BUCKET);
+  if (limited) return limited;
 
   const { data, error } = await validateRequest(request, plexTokenSchema);
   if (error) return error;
@@ -42,6 +46,9 @@ export async function POST(request: NextRequest) {
       { status: 400 },
     );
   }
+
+  const attempt = reserveAuthAttempt(request, PLEX_REAUTH_BUCKET);
+  if (attempt.refused) return attempt.refused;
 
   let plexUser;
   try {
@@ -64,11 +71,12 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  attempt.succeeded();
+
   await prisma.user.update({
     where: { id: session.userId },
     data: { plexToken: data.authToken },
   });
-  session.plexToken = data.authToken;
   session.authenticatedAt = Date.now();
   await session.save();
 

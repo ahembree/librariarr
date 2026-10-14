@@ -38,7 +38,7 @@ describe("GET /api/settings/action-retention", () => {
 
   it("returns default (30) when no settings exist", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(GET);
     const body = await expectJson<{ actionHistoryRetentionDays: number }>(res);
@@ -47,7 +47,7 @@ describe("GET /api/settings/action-retention", () => {
 
   it("returns saved value after PUT", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     await callRoute(PUT, {
       method: "PUT",
@@ -74,7 +74,7 @@ describe("PUT /api/settings/action-retention", () => {
 
   it("saves a valid retention value", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(PUT, {
       method: "PUT",
@@ -86,7 +86,7 @@ describe("PUT /api/settings/action-retention", () => {
 
   it("accepts 0 (keep forever)", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(PUT, {
       method: "PUT",
@@ -98,7 +98,7 @@ describe("PUT /api/settings/action-retention", () => {
 
   it("returns 400 for value > 365", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(PUT, {
       method: "PUT",
@@ -110,7 +110,7 @@ describe("PUT /api/settings/action-retention", () => {
 
   it("returns 400 for negative value", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(PUT, {
       method: "PUT",
@@ -122,7 +122,7 @@ describe("PUT /api/settings/action-retention", () => {
 
   it("returns 400 when field is missing", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(PUT, {
       method: "PUT",

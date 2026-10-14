@@ -66,7 +66,7 @@ async function musicLibrary(serverName = "Home Plex") {
   const user = await createTestUser();
   const server = await createTestServer(user.id, { name: serverName });
   const lib = await createTestLibrary(server.id, { type: "MUSIC" });
-  setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+  setMockSession({ userId: user.id, isLoggedIn: true });
   return { user, server, lib };
 }
 
@@ -87,7 +87,7 @@ describe("GET /api/media/music/albums/all", () => {
 
   it("returns no albums for a user without servers", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
     const body = await list();
     expect(body.albums).toEqual([]);
   });
@@ -188,7 +188,7 @@ describe("GET /api/media/music/albums/all", () => {
     const copy = await createTestMediaItem(libB.id, { type: "MUSIC", parentTitle: "Sade", albumTitle: "Diamond Life" });
     await prisma.mediaItem.update({ where: { id: canonical.id }, data: { dedupKey: "sade-1", dedupCanonical: true } });
     await prisma.mediaItem.update({ where: { id: copy.id }, data: { dedupKey: "sade-1", dedupCanonical: false } });
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const { albums } = await list();
     expect(albums).toHaveLength(1);

@@ -48,7 +48,7 @@ describe("GET /api/settings/backup-encryption-password", () => {
     await prisma.appSettings.create({
       data: { userId: user.id, backupEncryptionPassword: "mysecretpassword" },
     });
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(GET);
     const body = await expectJson<{ hasPassword: boolean }>(res);
@@ -57,7 +57,7 @@ describe("GET /api/settings/backup-encryption-password", () => {
 
   it("returns hasPassword false when no AppSettings exists", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(GET);
     const body = await expectJson<{ hasPassword: boolean }>(res);
@@ -80,7 +80,7 @@ describe("PUT /api/settings/backup-encryption-password", () => {
 
   it("sets encryption password", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(PUT, {
       method: "PUT",
@@ -101,7 +101,7 @@ describe("PUT /api/settings/backup-encryption-password", () => {
     await prisma.appSettings.create({
       data: { userId: user.id, backupEncryptionPassword: "existingpass" },
     });
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(PUT, {
       method: "PUT",

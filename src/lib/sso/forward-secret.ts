@@ -5,23 +5,35 @@ import { timingSafeEqual } from "node:crypto";
  * only safe while that proxy is the only way to reach the app. When the app's
  * port is also reachable directly — published on every interface, or reachable
  * from another container — anyone who can reach it can send the header
- * themselves and sign in as the linked admin.
+ * themselves and sign in as the linked admin; and a stolen cookie can confirm
+ * "it's you" the same way (`/api/auth/reauth/forward`), the linked subject
+ * being readable from `/api/settings/sso/me`.
  *
- * `FORWARD_AUTH_SECRET` closes that without depending on the network layout:
- * when it is set, a forward-auth login must also carry this header with the
- * same value, which only the proxy is configured to send. Unset, forward-auth
- * behaves as before (opt-in, so an existing setup keeps signing in until its
- * proxy is configured).
+ * `FORWARD_AUTH_SECRET` closes that without depending on the network layout: a
+ * forward-auth sign-in must also carry this header with the same value, which
+ * only the proxy is configured to send. It is REQUIRED for forward-auth —
+ * `isSsoUsable` reads forward-auth as not configured without it, so the login
+ * page offers no SSO button, the settings page refuses to turn it on, and the
+ * login and confirmation routes refuse with `forward_auth_unconfigured` — not
+ * opt-in, because the safe setup has to be the one an install gets by default
+ * and "block the port at the firewall" is a step nothing checks.
  */
 export const FORWARD_AUTH_PROXY_HEADER = "x-librariarr-proxy-secret";
 
+/** Whether `FORWARD_AUTH_SECRET` is set to a non-empty value. */
+export function isForwardAuthSecretConfigured(): boolean {
+  return !!process.env.FORWARD_AUTH_SECRET;
+}
+
 /**
- * Whether the request may use forward-auth: true when `FORWARD_AUTH_SECRET` is
- * unset or empty, otherwise only when the proxy header carries the same value.
+ * Whether the request came through the proxy: `FORWARD_AUTH_SECRET` is set and
+ * the proxy header carries the same value. Always false while it is unset —
+ * forward-auth is not usable then, and a route that reaches this check anyway
+ * must refuse.
  */
 export function hasForwardAuthSecret(headers: Headers): boolean {
   const configured = process.env.FORWARD_AUTH_SECRET;
-  if (!configured) return true;
+  if (!configured) return false;
   return matchesConfigured(
     Buffer.from(headers.get(FORWARD_AUTH_PROXY_HEADER) ?? "", "utf8"),
     Buffer.from(configured, "utf8"),

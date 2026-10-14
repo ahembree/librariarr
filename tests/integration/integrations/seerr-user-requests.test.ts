@@ -123,7 +123,7 @@ describe("GET /api/seerr/users/[userKey]/requests", () => {
 
   it("returns empty when user has no Seerr instances", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const body = await expectJson<{ user: unknown; requests: unknown[] }>(
       await callRouteWithParams(GET, { userKey: "alice" }),
@@ -136,7 +136,7 @@ describe("GET /api/seerr/users/[userKey]/requests", () => {
   it("filters requests to the matching userKey only", async () => {
     const user = await createTestUser();
     await createTestSeerrInstance(user.id);
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     mockGetRequests.mockResolvedValueOnce({
       pageInfo: { page: 1, pages: 1, results: 3 },
@@ -174,7 +174,7 @@ describe("GET /api/seerr/users/[userKey]/requests", () => {
     await createTestExternalId(movie.id, "TMDB", "603");
 
     await createTestSeerrInstance(user.id);
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     mockGetRequests.mockResolvedValueOnce({
       pageInfo: { page: 1, pages: 1, results: 1 },
@@ -234,7 +234,7 @@ describe("GET /api/seerr/users/[userKey]/requests", () => {
     await createTestExternalId(ep2.id, "TVDB", "81189");
 
     await createTestSeerrInstance(user.id);
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     mockGetRequests.mockResolvedValueOnce({
       pageInfo: { page: 1, pages: 1, results: 1 },
@@ -263,7 +263,7 @@ describe("GET /api/seerr/users/[userKey]/requests", () => {
   it("falls back to Seerr API when media is not in library", async () => {
     const user = await createTestUser();
     await createTestSeerrInstance(user.id);
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     mockGetRequests.mockResolvedValueOnce({
       pageInfo: { page: 1, pages: 1, results: 1 },
@@ -309,7 +309,7 @@ describe("GET /api/seerr/users/[userKey]/requests", () => {
     });
 
     await createTestSeerrInstance(user.id);
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     mockGetRequests.mockResolvedValueOnce({
       pageInfo: { page: 1, pages: 1, results: 1 },
@@ -356,7 +356,7 @@ describe("GET /api/seerr/users/[userKey]/requests", () => {
     });
 
     await createTestSeerrInstance(user.id);
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     mockGetRequests.mockResolvedValueOnce({
       pageInfo: { page: 1, pages: 1, results: 1 },
@@ -376,7 +376,7 @@ describe("GET /api/seerr/users/[userKey]/requests", () => {
   it("falls back to Seerr getTvShow when tvdbId is null (uses tmdbId)", async () => {
     const user = await createTestUser();
     await createTestSeerrInstance(user.id);
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     mockGetRequests.mockResolvedValueOnce({
       pageInfo: { page: 1, pages: 1, results: 1 },
@@ -424,7 +424,7 @@ describe("GET /api/seerr/users/[userKey]/requests", () => {
   it("falls back to Seerr getTvShow when tvdbId is 0 (Seerr couldn't match)", async () => {
     const user = await createTestUser();
     await createTestSeerrInstance(user.id);
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     mockGetRequests.mockResolvedValueOnce({
       pageInfo: { page: 1, pages: 1, results: 1 },
@@ -460,7 +460,7 @@ describe("GET /api/seerr/users/[userKey]/requests", () => {
   it("sorts resolved requests by createdAt descending (newest first)", async () => {
     const user = await createTestUser();
     await createTestSeerrInstance(user.id);
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     mockGetRequests.mockResolvedValueOnce({
       pageInfo: { page: 1, pages: 1, results: 3 },
@@ -492,7 +492,7 @@ describe("GET /api/seerr/users/[userKey]/requests", () => {
     const user = await createTestUser();
     await createTestSeerrInstance(user.id, { name: "Seerr A" });
     await createTestSeerrInstance(user.id, { name: "Seerr B" });
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     mockGetRequests
       .mockResolvedValueOnce({
@@ -523,7 +523,7 @@ describe("GET /api/seerr/users/[userKey]/requests", () => {
   it("returns 4k flag and status fields on requests", async () => {
     const user = await createTestUser();
     await createTestSeerrInstance(user.id);
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     mockGetRequests.mockResolvedValueOnce({
       pageInfo: { page: 1, pages: 1, results: 1 },
@@ -552,7 +552,7 @@ describe("GET /api/seerr/users/[userKey]/requests", () => {
     const user = await createTestUser();
     await createTestSeerrInstance(user.id, { name: "Down", url: "http://down:5055" });
     await createTestSeerrInstance(user.id, { name: "Up", url: "http://up:5055" });
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     mockGetRequests
       .mockRejectedValueOnce(new Error("Seerr unreachable"))
@@ -574,7 +574,7 @@ describe("GET /api/seerr/users/[userKey]/requests", () => {
   it("accepts a userKey containing '%' (Next has already decoded the param)", async () => {
     const user = await createTestUser();
     await createTestSeerrInstance(user.id);
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     // Both lookups below walk the same request list.
     mockGetRequests.mockResolvedValue({
@@ -601,7 +601,7 @@ describe("GET /api/seerr/users/[userKey]/requests", () => {
   it("resolves only the requester keyed by userKey, not one whose display name equals it", async () => {
     const user = await createTestUser();
     await createTestSeerrInstance(user.id);
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     mockGetRequests.mockResolvedValueOnce({
       pageInfo: { page: 1, pages: 1, results: 2 },
@@ -637,7 +637,7 @@ describe("GET /api/seerr/users/[userKey]/requests", () => {
     await createTestExternalId(ep.id, "TMDB", "12345");
 
     await createTestSeerrInstance(user.id);
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     mockGetRequests.mockResolvedValueOnce({
       pageInfo: { page: 1, pages: 1, results: 1 },

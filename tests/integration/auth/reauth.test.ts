@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from "vitest";
 import bcrypt from "bcryptjs";
 import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { setMockSession, clearMockSession, getMockSession } from "../../setup/mock-session";
@@ -16,14 +16,14 @@ vi.mock("@/lib/sso/oidc-client", async (importOriginal) => ({
   resolveRedirectUri: () => "http://localhost:3000/api/auth/sso/oidc/callback",
 }));
 
-const { mockPeek, mockReserve, mockRefund } = vi.hoisted(() => {
-  const mockRefund = vi.fn();
+const { mockPeek, mockReserve, mockSucceeded } = vi.hoisted(() => {
+  const mockSucceeded = vi.fn();
   return {
     mockPeek: vi.fn((): Response | null => null),
     mockReserve: vi.fn(
-      (): { refused: Response } | { refused: null; refund: () => void } => ({ refused: null, refund: mockRefund }),
+      (): { refused: Response } | { refused: null; succeeded: () => void } => ({ refused: null, succeeded: mockSucceeded }),
     ),
-    mockRefund,
+    mockSucceeded,
   };
 });
 vi.mock("@/lib/rate-limit/rate-limiter", () => ({
@@ -55,7 +55,7 @@ const STALE = 1;
 
 async function signIn(overrides: Parameters<typeof createTestUser>[0] = {}) {
   const user = await createTestUser(overrides);
-  setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "old", authenticatedAt: STALE });
+  setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: STALE });
   return user;
 }
 
@@ -65,7 +65,7 @@ describe("/api/auth/reauth/*", () => {
     clearMockSession();
     vi.clearAllMocks();
     mockPeek.mockReturnValue(null);
-    mockReserve.mockReturnValue({ refused: null, refund: mockRefund });
+    mockReserve.mockReturnValue({ refused: null, succeeded: mockSucceeded });
   });
 
   afterAll(async () => {
@@ -90,7 +90,8 @@ describe("/api/auth/reauth/*", () => {
 
       const session = getMockSession();
       expect(session.authenticatedAt).toBeGreaterThanOrEqual(before);
-      expect(session.plexToken).toBe("fresh");
+      // The refreshed token goes to the User row only, never the cookie.
+      expect("plexToken" in session).toBe(false);
       expect(session.userId).toBe(user.id);
       const refreshed = await prisma.user.findUnique({ where: { id: user.id } });
       expect(refreshed?.plexToken).toBe("fresh");
@@ -205,8 +206,22 @@ describe("/api/auth/reauth/*", () => {
   });
 
   describe("POST /api/auth/reauth/forward", () => {
+    // Forward-auth is not usable without the secret (forward-secret.ts); the
+    // proxy sends it on every request, so every call here carries it unless
+    // a test says otherwise.
+    const SECRET = "proxy-secret-value";
+    const PROXY = { "X-Librariarr-Proxy-Secret": SECRET };
+    let previousSecret: string | undefined;
+    beforeEach(() => {
+      previousSecret = process.env.FORWARD_AUTH_SECRET;
+      process.env.FORWARD_AUTH_SECRET = SECRET;
+    });
+    afterEach(() => {
+      if (previousSecret === undefined) delete process.env.FORWARD_AUTH_SECRET;
+      else process.env.FORWARD_AUTH_SECRET = previousSecret;
+    });
     const call = (headers: Record<string, string> = {}) =>
-      callRoute(forwardPOST, { url: "/api/auth/reauth/forward", method: "POST", body: {}, headers });
+      callRoute(forwardPOST, { url: "/api/auth/reauth/forward", method: "POST", body: {}, headers: { ...PROXY, ...headers } });
 
     async function seedForward(userId: string) {
       await prisma.appSettings.create({
@@ -238,22 +253,25 @@ describe("/api/auth/reauth/*", () => {
       expect(getMockSession().authenticatedAt).toBe(STALE);
     });
 
-    it("requires FORWARD_AUTH_SECRET when it is set", async () => {
+    it("requires the proxy secret the proxy was configured with", async () => {
       const user = await signIn();
       await seedForward(user.id);
-      const previous = process.env.FORWARD_AUTH_SECRET;
-      process.env.FORWARD_AUTH_SECRET = "proxy-secret-value";
-      try {
-        await expectJson(await call({ "Remote-User": "alice" }), 403);
+      for (const wrong of ["", "guess"]) {
+        await expectJson(await call({ "Remote-User": "alice", "X-Librariarr-Proxy-Secret": wrong }), 403);
         expect(getMockSession().authenticatedAt).toBe(STALE);
-        await expectJson(
-          await call({ "Remote-User": "alice", "X-Librariarr-Proxy-Secret": "proxy-secret-value" }),
-          200,
-        );
-      } finally {
-        if (previous === undefined) delete process.env.FORWARD_AUTH_SECRET;
-        else process.env.FORWARD_AUTH_SECRET = previous;
       }
+      await expectJson(await call({ "Remote-User": "alice" }), 200);
+    });
+
+    // A stolen cookie can read the linked subject from /api/settings/sso/me;
+    // with the secret unset the route must not accept the header at all.
+    it("refuses with forward_auth_unconfigured while FORWARD_AUTH_SECRET is unset", async () => {
+      const user = await signIn();
+      await seedForward(user.id);
+      delete process.env.FORWARD_AUTH_SECRET;
+      const body = await expectJson<{ code: string }>(await call({ "Remote-User": "alice" }), 400);
+      expect(body.code).toBe("forward_auth_unconfigured");
+      expect(getMockSession().authenticatedAt).toBe(STALE);
     });
 
     it("refuses when forward-auth is not configured", async () => {
@@ -304,7 +322,7 @@ describe("/api/auth/reauth/*", () => {
       expect(getMockSession().authenticatedAt).toBeGreaterThanOrEqual(before);
       // Charged up front and given back: a right password costs nothing.
       expect(mockReserve).toHaveBeenCalledTimes(1);
-      expect(mockRefund).toHaveBeenCalledTimes(1);
+      expect(mockSucceeded).toHaveBeenCalledTimes(1);
     });
 
     it("refuses a wrong password and charges it like a failed login", async () => {
@@ -315,7 +333,7 @@ describe("/api/auth/reauth/*", () => {
       // The API-key step-up's bucket: one guess budget for both, not two.
       expect(mockReserve).toHaveBeenCalledTimes(1);
       expect(mockReserve).toHaveBeenCalledWith(expect.anything(), "password-confirm");
-      expect(mockRefund).not.toHaveBeenCalled();
+      expect(mockSucceeded).not.toHaveBeenCalled();
     });
 
     // Reserved before the compare, so concurrent guesses count as they start.
@@ -328,7 +346,7 @@ describe("/api/auth/reauth/*", () => {
       expect((await call({ password: PASSWORD })).status).toBe(429);
       expect(compare).not.toHaveBeenCalled();
       expect(getMockSession().authenticatedAt).toBe(STALE);
-      expect(mockRefund).not.toHaveBeenCalled();
+      expect(mockSucceeded).not.toHaveBeenCalled();
       compare.mockRestore();
     });
 

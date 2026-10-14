@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import { cleanDatabase, disconnectTestDb } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
-import { callRoute, expectJson } from "../../setup/test-helpers";
+import { callRoute, expectJson, createTestUser } from "../../setup/test-helpers";
 import type { PlexResource } from "@/lib/plex/types";
 
 // Critical: redirect prisma to test database
@@ -22,7 +22,10 @@ const { mockGetPlexResources } = vi.hoisted(() => ({
   mockGetPlexResources: vi.fn(),
 }));
 
-vi.mock("@/lib/plex/auth", () => ({
+// `getStoredPlexToken` stays real: the route reads the token from the User
+// row (never from the cookie), so each test stores one there.
+vi.mock("@/lib/plex/auth", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/plex/auth")>()),
   getPlexResources: mockGetPlexResources,
 }));
 
@@ -79,12 +82,9 @@ describe("GET /api/auth/plex/servers", () => {
     expect(mockGetPlexResources).not.toHaveBeenCalled();
   });
 
-  it("should return 401 when logged in but missing plexToken", async () => {
-    setMockSession({
-      userId: "user-123",
-      isLoggedIn: true,
-      // plexToken intentionally omitted
-    });
+  it("should return 401 when logged in but the account has no Plex token", async () => {
+    const user = await createTestUser({ plexToken: null });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/auth/plex/servers",
@@ -98,11 +98,8 @@ describe("GET /api/auth/plex/servers", () => {
   });
 
   it("should return owned servers filtered from resources", async () => {
-    setMockSession({
-      userId: "user-123",
-      plexToken: "valid-plex-token",
-      isLoggedIn: true,
-    });
+    const user = await createTestUser({ plexToken: "valid-plex-token" });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const ownedServer = createMockResource({
       name: "Home Server",
@@ -176,11 +173,8 @@ describe("GET /api/auth/plex/servers", () => {
   });
 
   it("should return multiple owned servers", async () => {
-    setMockSession({
-      userId: "user-456",
-      plexToken: "multi-server-token",
-      isLoggedIn: true,
-    });
+    const user = await createTestUser({ plexToken: "multi-server-token" });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const server1 = createMockResource({
       name: "Primary Server",
@@ -213,11 +207,8 @@ describe("GET /api/auth/plex/servers", () => {
   });
 
   it("should return empty servers array when no owned servers exist", async () => {
-    setMockSession({
-      userId: "user-789",
-      plexToken: "no-servers-token",
-      isLoggedIn: true,
-    });
+    const user = await createTestUser({ plexToken: "no-servers-token" });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const sharedServer = createMockResource({
       name: "Shared Server",
@@ -239,13 +230,10 @@ describe("GET /api/auth/plex/servers", () => {
     expect(body.servers).toHaveLength(0);
   });
 
-  it("should pass the session plexToken to getPlexResources", async () => {
+  it("passes the account's stored Plex token to getPlexResources — the cookie carries none", async () => {
     const plexToken = "specific-token-for-test";
-    setMockSession({
-      userId: "user-token-test",
-      plexToken,
-      isLoggedIn: true,
-    });
+    const user = await createTestUser({ plexToken });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     mockGetPlexResources.mockResolvedValue([]);
 
@@ -258,11 +246,8 @@ describe("GET /api/auth/plex/servers", () => {
   });
 
   it("should return 500 when getPlexResources throws", async () => {
-    setMockSession({
-      userId: "user-err",
-      plexToken: "error-token",
-      isLoggedIn: true,
-    });
+    const user = await createTestUser({ plexToken: "error-token" });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     mockGetPlexResources.mockRejectedValue(new Error("Network timeout"));
 
@@ -277,11 +262,8 @@ describe("GET /api/auth/plex/servers", () => {
   });
 
   it("should only return expected fields in server objects", async () => {
-    setMockSession({
-      userId: "user-fields",
-      plexToken: "fields-token",
-      isLoggedIn: true,
-    });
+    const user = await createTestUser({ plexToken: "fields-token" });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const server = createMockResource({
       name: "Field Test Server",

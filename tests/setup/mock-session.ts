@@ -4,7 +4,6 @@ import { vi } from "vitest";
 
 export interface MockSessionData {
   userId?: string;
-  plexToken?: string;
   isLoggedIn: boolean;
   sessionVersion?: number;
   /** Epoch ms of the login; `rotateSession` stamps it like the real one does. */

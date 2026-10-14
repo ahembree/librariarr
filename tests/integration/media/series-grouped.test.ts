@@ -65,7 +65,7 @@ describe("GET /api/media/series/grouped", () => {
   describe("empty state", () => {
     it("returns empty series with no data, includes pagination", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, {
         url: "/api/media/series/grouped",
@@ -129,7 +129,7 @@ describe("GET /api/media/series/grouped", () => {
         fileSize: BigInt("536870912"),
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, {
         url: "/api/media/series/grouped",
@@ -185,7 +185,7 @@ describe("GET /api/media/series/grouped", () => {
         audioCodec: "flac",
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, {
         url: "/api/media/series/grouped",
@@ -211,7 +211,7 @@ describe("GET /api/media/series/grouped", () => {
         fileSize: BigInt("10737418240"),
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, {
         url: "/api/media/series/grouped",
@@ -245,7 +245,7 @@ describe("GET /api/media/series/grouped", () => {
         seasonNumber: 1,
       });
 
-      setMockSession({ userId: user1.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user1.id, isLoggedIn: true });
 
       const response = await callRoute(GET, {
         url: "/api/media/series/grouped",
@@ -280,7 +280,7 @@ describe("GET /api/media/series/grouped", () => {
         });
       }
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       // Page 1, limit 2
       const response1 = await callRoute(GET, {
@@ -339,7 +339,7 @@ describe("GET /api/media/series/grouped", () => {
           ratingKey: `rk-${name}`,
         });
       }
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const titles = async (searchParams: Record<string, string>) => {
         const body = await expectJson<{ series: { parentTitle: string }[]; pagination: { hasMore: boolean } }>(
@@ -369,7 +369,7 @@ describe("GET /api/media/series/grouped", () => {
         seasonNumber: 1,
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, {
         url: "/api/media/series/grouped",
@@ -397,7 +397,7 @@ describe("GET /api/media/series/grouped", () => {
         });
       }
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, {
         url: "/api/media/series/grouped",
@@ -444,7 +444,7 @@ describe("GET /api/media/series/grouped", () => {
         ratingKey: "rk-bcs",
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, {
         url: "/api/media/series/grouped",
@@ -486,7 +486,7 @@ describe("GET /api/media/series/grouped", () => {
         ratingKey: "rk-arrow",
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, {
         url: "/api/media/series/grouped",
@@ -521,7 +521,7 @@ describe("GET /api/media/series/grouped", () => {
         ratingKey: "rk-wire",
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, {
         url: "/api/media/series/grouped",
@@ -562,7 +562,7 @@ describe("GET /api/media/series/grouped", () => {
         ratingKey: "rk-arrow",
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, {
         url: "/api/media/series/grouped",
@@ -607,7 +607,7 @@ describe("GET /api/media/series/grouped", () => {
         ratingKey: "rk-b",
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, {
         url: "/api/media/series/grouped",
@@ -643,7 +643,7 @@ describe("GET /api/media/series/grouped", () => {
         ratingKey: "rk-b",
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, {
         url: "/api/media/series/grouped",
@@ -685,7 +685,7 @@ describe("GET /api/media/series/grouped", () => {
         });
       }
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, {
         url: "/api/media/series/grouped",
@@ -723,7 +723,7 @@ describe("GET /api/media/series/grouped", () => {
         ratingKey: "rk-small",
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, {
         url: "/api/media/series/grouped",
@@ -774,7 +774,7 @@ describe("GET /api/media/series/grouped", () => {
         ratingKey: "rk-3",
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, {
         url: "/api/media/series/grouped",
@@ -808,7 +808,7 @@ describe("GET /api/media/series/grouped", () => {
         episodeNumber: 1,
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, {
         url: "/api/media/series/grouped",
@@ -848,7 +848,7 @@ describe("GET /api/media/series/grouped", () => {
         seriesKey: "tvdb:73244", seasonNumber: 9, episodeNumber: 23,
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const body = await expectJson<{
         series: { parentTitle: string; seriesKey: string; episodeCount: number; seasonCount: number }[];
@@ -890,7 +890,7 @@ describe("GET /api/media/series/grouped", () => {
       await prisma.mediaItem.update({ where: { id: rows[0].id }, data: { dedupCanonical: true } });
       await prisma.mediaItem.update({ where: { id: rows[1].id }, data: { dedupCanonical: false } });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const body = await expectJson<{
         series: { seriesKey: string; episodeCount: number; servers: { serverName: string }[] }[];

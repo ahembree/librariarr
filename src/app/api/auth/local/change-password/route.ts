@@ -74,7 +74,7 @@ export async function POST(request: NextRequest) {
           { status: 401 }
         );
       }
-      attempt.refund();
+      attempt.succeeded();
     } else if (user.passwordHash && !hasRecentLogin(session)) {
       // Password sign-in is off, so the current password proves nothing. Any
       // credential change still needs proof, as it does with the password on:

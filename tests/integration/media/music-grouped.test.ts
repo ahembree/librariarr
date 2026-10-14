@@ -66,7 +66,7 @@ describe("GET /api/media/music/grouped", () => {
   describe("empty state", () => {
     it("returns empty artists with no data, includes pagination", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, {
         url: "/api/media/music/grouped",
@@ -118,7 +118,7 @@ describe("GET /api/media/music/grouped", () => {
         fileSize: BigInt("73400320"),
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, {
         url: "/api/media/music/grouped",
@@ -174,7 +174,7 @@ describe("GET /api/media/music/grouped", () => {
         seasonNumber: 1,
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, {
         url: "/api/media/music/grouped",
@@ -200,7 +200,7 @@ describe("GET /api/media/music/grouped", () => {
         fileSize: BigInt("5368709120"),
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, {
         url: "/api/media/music/grouped",
@@ -244,7 +244,7 @@ describe("GET /api/media/music/grouped", () => {
         ratingKey: "rk-3",
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, {
         url: "/api/media/music/grouped",
@@ -279,7 +279,7 @@ describe("GET /api/media/music/grouped", () => {
         audioCodec: "mp3",
       });
 
-      setMockSession({ userId: user1.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user1.id, isLoggedIn: true });
 
       const response = await callRoute(GET, {
         url: "/api/media/music/grouped",
@@ -313,7 +313,7 @@ describe("GET /api/media/music/grouped", () => {
         });
       }
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       // Page 1, limit 2
       const response1 = await callRoute(GET, {
@@ -371,7 +371,7 @@ describe("GET /api/media/music/grouped", () => {
           ratingKey: `rk-${name}`,
         });
       }
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const artists = async (searchParams: Record<string, string>) => {
         const body = await expectJson<{ artists: { parentTitle: string }[]; pagination: { hasMore: boolean } }>(
@@ -398,7 +398,7 @@ describe("GET /api/media/music/grouped", () => {
         audioCodec: "mp3",
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, {
         url: "/api/media/music/grouped",
@@ -426,7 +426,7 @@ describe("GET /api/media/music/grouped", () => {
         });
       }
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, {
         url: "/api/media/music/grouped",
@@ -473,7 +473,7 @@ describe("GET /api/media/music/grouped", () => {
         ratingKey: "rk-beyonce",
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, {
         url: "/api/media/music/grouped",
@@ -515,7 +515,7 @@ describe("GET /api/media/music/grouped", () => {
         ratingKey: "rk-adele",
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, {
         url: "/api/media/music/grouped",
@@ -550,7 +550,7 @@ describe("GET /api/media/music/grouped", () => {
         ratingKey: "rk-pf",
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, {
         url: "/api/media/music/grouped",
@@ -591,7 +591,7 @@ describe("GET /api/media/music/grouped", () => {
         ratingKey: "rk-adele",
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, {
         url: "/api/media/music/grouped",
@@ -636,7 +636,7 @@ describe("GET /api/media/music/grouped", () => {
         ratingKey: "rk-b",
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, {
         url: "/api/media/music/grouped",
@@ -672,7 +672,7 @@ describe("GET /api/media/music/grouped", () => {
         ratingKey: "rk-b",
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, {
         url: "/api/media/music/grouped",
@@ -713,7 +713,7 @@ describe("GET /api/media/music/grouped", () => {
         });
       }
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, {
         url: "/api/media/music/grouped",
@@ -770,7 +770,7 @@ describe("GET /api/media/music/grouped", () => {
         ratingKey: "rk-b1",
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, {
         url: "/api/media/music/grouped",
@@ -808,7 +808,7 @@ describe("GET /api/media/music/grouped", () => {
         ratingKey: "rk-small",
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, {
         url: "/api/media/music/grouped",
@@ -853,7 +853,7 @@ describe("GET /api/media/music/grouped", () => {
         ratingKey: "rk-3",
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, {
         url: "/api/media/music/grouped",
@@ -886,7 +886,7 @@ describe("GET /api/media/music/grouped", () => {
         audioCodec: "flac",
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, {
         url: "/api/media/music/grouped",
@@ -932,7 +932,7 @@ describe("GET /api/media/music/grouped", () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id, { name: "Home Plex" });
       const lib = await createTestLibrary(server.id, { type: "MUSIC" });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
       return { user, server, lib };
     }
 
@@ -1036,7 +1036,7 @@ describe("GET /api/media/music/grouped", () => {
       const copy = await createTestMediaItem(libB.id, { type: "MUSIC", parentTitle: "Sade", albumTitle: "Diamond Life" });
       await prisma.mediaItem.update({ where: { id: canonical.id }, data: { dedupKey: "sade-1", dedupCanonical: true } });
       await prisma.mediaItem.update({ where: { id: copy.id }, data: { dedupKey: "sade-1", dedupCanonical: false } });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const [sade] = await artists();
       expect(sade.trackCount).toBe(1);

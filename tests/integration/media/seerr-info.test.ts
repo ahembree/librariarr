@@ -84,7 +84,7 @@ describe("GET /api/media/[id]/seerr-info", () => {
     const owner = await createTestUser({ plexId: "owner" });
     const movie = await movieWith(owner.id, [["TMDB", "603"]]);
     const other = await createTestUser({ plexId: "other" });
-    setMockSession({ userId: other.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: other.id, isLoggedIn: true });
 
     expect((await callRouteWithParams(GET, { id: "missing" })).status).toBe(404);
     expect((await callRouteWithParams(GET, { id: movie.id })).status).toBe(403);
@@ -94,7 +94,7 @@ describe("GET /api/media/[id]/seerr-info", () => {
     const user = await createTestUser();
     const movie = await movieWith(user.id, [["TMDB", "603"]]);
     await createTestSeerrInstance(user.id, { name: "Seerr", url: "http://seerr:5055" });
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
     mockGetMovie.mockResolvedValue({ mediaInfo: { status: 5, status4k: 1, requests: [seerrRequest(1)] } });
 
     const body = await expectJson<{
@@ -121,7 +121,7 @@ describe("GET /api/media/[id]/seerr-info", () => {
       where: { id: instance.id },
       data: { externalUrl: "https://requests.example.com" },
     });
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
     mockGetMovie.mockResolvedValue({ mediaInfo: { status: 5, requests: [seerrRequest(1)] } });
 
     const body = await expectJson<{ matches: Array<{ seerrUrl: string }> }>(
@@ -137,7 +137,7 @@ describe("GET /api/media/[id]/seerr-info", () => {
     const user = await createTestUser();
     const movie = await movieWith(user.id, [["TMDB", "603"]]);
     await createTestSeerrInstance(user.id);
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
     mockGetMovie.mockResolvedValue({
       mediaInfo: { status: 1, status4k: 3, requests: [seerrRequest(1, { status: 2, is4k: true })] },
     });
@@ -158,7 +158,7 @@ describe("GET /api/media/[id]/seerr-info", () => {
     });
     await createTestExternalId(ep.id, "TVDB", "81189");
     await createTestSeerrInstance(user.id);
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
     mockGetRequests.mockResolvedValue({
       results: [
         seerrRequest(2, { type: "tv", tmdbId: 1396, tvdbId: 81189, media: { status: 4 } }),
@@ -189,7 +189,7 @@ describe("GET /api/media/[id]/seerr-info", () => {
     const user = await createTestUser();
     const movie = await movieWith(user.id, [["TVDB", "123"]]);
     await createTestSeerrInstance(user.id);
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const body = await expectJson<{ matches: unknown[] }>(await callRouteWithParams(GET, { id: movie.id }), 200);
 
@@ -203,7 +203,7 @@ describe("GET /api/media/[id]/seerr-info", () => {
     const library = await createTestLibrary(server.id, { type: "MUSIC" });
     const track = await createTestMediaItem(library.id, { type: "MUSIC", title: "Song" });
     await createTestSeerrInstance(user.id);
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const body = await expectJson<{ matches: unknown[] }>(await callRouteWithParams(GET, { id: track.id }), 200);
     expect(body.matches).toEqual([]);
@@ -215,7 +215,7 @@ describe("GET /api/media/[id]/seerr-info", () => {
     const movie = await movieWith(user.id, [["TMDB", "603"]]);
     await createTestSeerrInstance(user.id, { name: "Down", url: "http://down:5055" });
     await createTestSeerrInstance(user.id, { name: "Up", url: "http://up:5055" });
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
     mockGetMovie.mockImplementation(async (url: string) => {
       if (url === "http://down:5055") throw new Error("Seerr unreachable");
       return { mediaInfo: { status: 5, requests: [seerrRequest(1)] } };

@@ -45,7 +45,7 @@ describe("GET /api/media/stats/timeline", () => {
 
   async function authedUser() {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
     return user;
   }
 
@@ -194,7 +194,7 @@ describe("GET /api/media/stats/timeline", () => {
 
   it("refuses a breakdown it cannot colour by instead of returning a plain total", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     for (const breakdown of ["genre", "countries", "audioLanguage", "subtitleLanguage", "lastPlayedAt"]) {
       const response = await callRoute(GET, {

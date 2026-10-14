@@ -91,7 +91,7 @@ describe("Tools sessions endpoints", () => {
 
     it("returns empty sessions when no servers exist", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, { url: "/api/tools/sessions" });
       const body = await expectJson<{ sessions: unknown[] }>(response, 200);
@@ -101,7 +101,7 @@ describe("Tools sessions endpoints", () => {
     it("returns sessions from Plex servers", async () => {
       const user = await createTestUser();
       await createTestServer(user.id, { name: "Test Plex" });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, { url: "/api/tools/sessions" });
       const body = await expectJson<{
@@ -127,7 +127,7 @@ describe("Tools sessions endpoints", () => {
       const user = await createTestUser();
       await createTestServer(user.id, { name: "Server 1" });
       await createTestServer(user.id, { name: "Server 2" });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, { url: "/api/tools/sessions" });
       const body = await expectJson<{ sessions: unknown[] }>(response, 200);
@@ -140,7 +140,7 @@ describe("Tools sessions endpoints", () => {
       const user = await createTestUser();
       await createTestServer(user.id, { name: "Good Server" });
       await createTestServer(user.id, { name: "Bad Server" });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       // Make the second call throw
       let callCount = 0;
@@ -185,7 +185,7 @@ describe("Tools sessions endpoints", () => {
 
     it("returns 400 when message is missing", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(POST, {
         url: "/api/tools/sessions/terminate",
@@ -199,7 +199,7 @@ describe("Tools sessions endpoints", () => {
     it("terminates specific sessions on a server", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id, { name: "My Plex" });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(POST, {
         url: "/api/tools/sessions/terminate",
@@ -223,7 +223,7 @@ describe("Tools sessions endpoints", () => {
       const user = await createTestUser();
       await createTestServer(user.id, { name: "Server 1" });
       await createTestServer(user.id, { name: "Server 2" });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(POST, {
         url: "/api/tools/sessions/terminate",
@@ -240,7 +240,7 @@ describe("Tools sessions endpoints", () => {
     it("reports errors when termination fails", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id, { name: "Test Server" });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       mockTerminateSession.mockRejectedValue(new Error("Network error"));
 
@@ -263,7 +263,7 @@ describe("Tools sessions endpoints", () => {
     it("logs the username, media title and reason for each termination", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id, { name: "My Plex" });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       mockGetSessions.mockResolvedValue([
         { sessionId: "s1", userId: "u1", username: "alice", title: "Arrival", type: "movie", year: 2016 },
@@ -317,7 +317,7 @@ describe("Tools sessions endpoints", () => {
     it("labels the terminate-all path from the sessions it fetched", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id, { name: "My Plex" });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       mockGetSessions.mockResolvedValue([
         {
@@ -346,7 +346,7 @@ describe("Tools sessions endpoints", () => {
     it("still terminates, naming the id, when the session was never listed", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id, { name: "My Plex" });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       // A cold process: nothing has listed this server's sessions, so there is
       // no label to be had. Termination must still happen.
@@ -368,7 +368,7 @@ describe("Tools sessions endpoints", () => {
     it("names the viewer and media on a FAILED termination too", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id, { name: "My Plex" });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       mockGetSessions.mockResolvedValue([
         { sessionId: "s1", userId: "u1", username: "alice", title: "Arrival", type: "movie", year: 2016 },
@@ -396,7 +396,7 @@ describe("Tools sessions endpoints", () => {
       const other = await createTestUser({ plexId: "other-plex-id", username: "other" });
       const disabled = await createTestServer(user.id, { name: "Off", enabled: false });
       const foreign = await createTestServer(other.id, { name: "Theirs" });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       for (const serverId of ["00000000-0000-0000-0000-000000000000", disabled.id, foreign.id]) {
         const response = await callRoute(POST, {
@@ -411,7 +411,7 @@ describe("Tools sessions endpoints", () => {
 
     it("answers 200 with nothing terminated for \"all\" when no server is enabled", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(POST, {
         url: "/api/tools/sessions/terminate",

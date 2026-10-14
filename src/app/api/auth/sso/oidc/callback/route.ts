@@ -13,7 +13,7 @@ import {
 } from "@/lib/sso/oidc-client";
 import { sanitizeEmail, sanitizeUsername } from "@/lib/sso/identity-claims";
 import { apiLogger } from "@/lib/logger";
-import { checkAuthRateLimit } from "@/lib/rate-limit/rate-limiter";
+import { reserveAuthAttempt } from "@/lib/rate-limit/rate-limiter";
 import { getExternalBaseUrl } from "@/lib/url";
 import { reauthNonceFromState, ssoIdentityMatches } from "@/lib/auth/reauth";
 
@@ -62,9 +62,10 @@ export async function GET(request: NextRequest) {
   // Rate-limit the callback too, not just /login init. Each callback hits the
   // IdP for token exchange + userinfo (and discovery if not cached), so an
   // attacker pounding this endpoint with stale code/state values would burn
-  // IdP-side resources even though we'd reject every request.
-  const rateLimited = checkAuthRateLimit(request, "sso-oidc-callback");
-  if (rateLimited) return rateLimited;
+  // IdP-side resources even though we'd reject every request. Charged only
+  // when the callback fails (see `reserveAuthAttempt`).
+  const attempt = reserveAuthAttempt(request, "sso-oidc-callback");
+  if (attempt.refused) return attempt.refused;
 
   const settings = await getSsoSettings();
   // For login: SSO must be usable (enabled + configured). For link: only the
@@ -185,6 +186,7 @@ export async function GET(request: NextRequest) {
       );
       return redirectAfterReauth(request, { error: "not_linked" });
     }
+    attempt.succeeded();
     session.authenticatedAt = Date.now();
     await session.save();
     apiLogger.info("Auth", "Identity confirmed with SSO (OIDC)");
@@ -260,6 +262,8 @@ export async function GET(request: NextRequest) {
       return redirectToSsoSettings(request, { ssoLinkError: "session_lost" });
     }
 
+    attempt.succeeded();
+
     // Keep the current admin's session alive after the version bump.
     session.sessionVersion = updated.sessionVersion;
     await session.save();
@@ -317,12 +321,13 @@ export async function GET(request: NextRequest) {
     await prisma.user.update({ where: { id: user.id }, data: updateData });
   }
 
-  // Replace any prior session data so we don't leak Plex tokens across logins.
+  attempt.succeeded();
+
+  // Replace any prior session data (a pre-seeded cookie, a stale handshake).
   const authenticated = await rotateSession();
   authenticated.userId = user.id;
   authenticated.isLoggedIn = true;
   authenticated.sessionVersion = user.sessionVersion;
-  if (user.plexToken) authenticated.plexToken = user.plexToken;
   await authenticated.save();
 
   apiLogger.info("Auth", `SSO (OIDC) login: "${user.username}"`);

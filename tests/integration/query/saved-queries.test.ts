@@ -71,7 +71,7 @@ describe("Saved queries API", () => {
 
     it("returns empty list when no queries exist", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, { url: "/api/saved-queries" });
       const body = await expectJson<{ queries: unknown[] }>(response, 200);
@@ -83,15 +83,15 @@ describe("Saved queries API", () => {
       const user2 = await createTestUser({ plexId: "user2" });
 
       // Create queries as user1
-      setMockSession({ userId: user1.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user1.id, isLoggedIn: true });
       await createSavedQuery("User1 Query");
 
       // Create queries as user2
-      setMockSession({ userId: user2.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user2.id, isLoggedIn: true });
       await createSavedQuery("User2 Query");
 
       // List as user1 — should only see their own
-      setMockSession({ userId: user1.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user1.id, isLoggedIn: true });
       const response = await callRoute(GET, { url: "/api/saved-queries" });
       const body = await expectJson<{ queries: { name: string }[] }>(response, 200);
       expect(body.queries).toHaveLength(1);
@@ -100,7 +100,7 @@ describe("Saved queries API", () => {
 
     it("returns queries ordered by updatedAt descending", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       await createSavedQuery("First");
       await createSavedQuery("Second");
@@ -130,7 +130,7 @@ describe("Saved queries API", () => {
 
     it("creates a saved query successfully", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const query = makeQuery({ mediaTypes: ["MOVIE", "SERIES"] });
       const body = await createSavedQuery("My Query", query);
@@ -144,7 +144,7 @@ describe("Saved queries API", () => {
 
     it("returns 400 when name is empty", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(POST, {
         url: "/api/saved-queries",
@@ -157,7 +157,7 @@ describe("Saved queries API", () => {
 
     it("returns 400 when query is missing", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(POST, {
         url: "/api/saved-queries",
@@ -169,7 +169,7 @@ describe("Saved queries API", () => {
 
     it("returns 400 when name exceeds 100 characters", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(POST, {
         url: "/api/saved-queries",
@@ -182,7 +182,7 @@ describe("Saved queries API", () => {
 
     it("returns 400 for invalid query shape", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(POST, {
         url: "/api/saved-queries",
@@ -194,7 +194,7 @@ describe("Saved queries API", () => {
 
     it("rejects fields invalid for every selected media type", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       // arrSeasonCount is series-only; a MUSIC-only query can never match it.
       const query = makeQuery({
@@ -223,7 +223,7 @@ describe("Saved queries API", () => {
 
     it("accepts a field valid for at least one of several selected types", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       // arrSeasonCount is valid for SERIES, so a Movie+Series query keeps it.
       const query = makeQuery({
@@ -265,7 +265,7 @@ describe("Saved queries API", () => {
 
     it("returns 404 for non-existent query", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(
         PUT,
@@ -279,10 +279,10 @@ describe("Saved queries API", () => {
       const owner = await createTestUser({ plexId: "owner" });
       const intruder = await createTestUser({ plexId: "intruder" });
 
-      setMockSession({ userId: owner.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: owner.id, isLoggedIn: true });
       const created = await createSavedQuery("Owner's Query");
 
-      setMockSession({ userId: intruder.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: intruder.id, isLoggedIn: true });
       const response = await callRouteWithParams(
         PUT,
         { id: created.query.id },
@@ -293,7 +293,7 @@ describe("Saved queries API", () => {
 
     it("updates name successfully", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const created = await createSavedQuery("Original Name");
 
@@ -308,7 +308,7 @@ describe("Saved queries API", () => {
 
     it("updates query definition successfully", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const created = await createSavedQuery("My Query", makeQuery({ mediaTypes: ["MOVIE"] }));
 
@@ -324,7 +324,7 @@ describe("Saved queries API", () => {
 
     it("updates both name and query at once", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const created = await createSavedQuery("Old");
 
@@ -349,7 +349,7 @@ describe("Saved queries API", () => {
 
     it("returns 400 for invalid update data", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const created = await createSavedQuery("Valid");
 
@@ -378,7 +378,7 @@ describe("Saved queries API", () => {
 
     it("returns 404 for non-existent query", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(
         DELETE,
@@ -392,10 +392,10 @@ describe("Saved queries API", () => {
       const owner = await createTestUser({ plexId: "owner" });
       const intruder = await createTestUser({ plexId: "intruder" });
 
-      setMockSession({ userId: owner.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: owner.id, isLoggedIn: true });
       const created = await createSavedQuery("Owner's Query");
 
-      setMockSession({ userId: intruder.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: intruder.id, isLoggedIn: true });
       const response = await callRouteWithParams(
         DELETE,
         { id: created.query.id },
@@ -406,7 +406,7 @@ describe("Saved queries API", () => {
 
     it("deletes query successfully", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const created = await createSavedQuery("To Delete");
 
@@ -426,7 +426,7 @@ describe("Saved queries API", () => {
 
     it("only deletes the targeted query, leaving others intact", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const q1 = await createSavedQuery("Keep This");
       const q2 = await createSavedQuery("Delete This");

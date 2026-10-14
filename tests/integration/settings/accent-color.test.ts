@@ -33,14 +33,14 @@ describe("GET /api/settings/accent-color", () => {
   });
 
   it("returns 401 when user no longer exists in DB", async () => {
-    setMockSession({ isLoggedIn: true, userId: "nonexistent-id", plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: "nonexistent-id"});
     const res = await callRoute(GET);
     await expectJson(res, 401);
   });
 
   it("returns default accent color when no settings exist", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(GET);
     const body = await expectJson<{ accentColor: string }>(res);
@@ -49,7 +49,7 @@ describe("GET /api/settings/accent-color", () => {
 
   it("returns saved accent color", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     // Set a color first
     await callRoute(PUT, { method: "PUT", body: { accentColor: "blue" } });
@@ -77,14 +77,14 @@ describe("PUT /api/settings/accent-color", () => {
   });
 
   it("returns 401 when user no longer exists in DB", async () => {
-    setMockSession({ isLoggedIn: true, userId: "nonexistent-id", plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: "nonexistent-id"});
     const res = await callRoute(PUT, { method: "PUT", body: { accentColor: "blue" } });
     await expectJson(res, 401);
   });
 
   it("updates accent color successfully", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(PUT, { method: "PUT", body: { accentColor: "violet" } });
     const body = await expectJson<{ accentColor: string }>(res);
@@ -93,7 +93,7 @@ describe("PUT /api/settings/accent-color", () => {
 
   it("returns 400 for invalid accent color name", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(PUT, { method: "PUT", body: { accentColor: "neon-pink" } });
     const body = await expectJson<{ error: string }>(res, 400);
@@ -102,7 +102,7 @@ describe("PUT /api/settings/accent-color", () => {
 
   it("returns 400 for empty accent color", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(PUT, { method: "PUT", body: { accentColor: "" } });
     await expectJson(res, 400);
@@ -110,7 +110,7 @@ describe("PUT /api/settings/accent-color", () => {
 
   it("returns 400 for missing accentColor field", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(PUT, { method: "PUT", body: {} });
     await expectJson(res, 400);

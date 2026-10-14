@@ -38,7 +38,7 @@ afterAll(async () => {
 
 async function login() {
   const user = await createTestUser();
-  setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+  setMockSession({ isLoggedIn: true, userId: user.id});
   return user;
 }
 

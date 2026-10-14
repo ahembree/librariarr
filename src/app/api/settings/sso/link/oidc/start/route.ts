@@ -11,6 +11,7 @@ import {
 import { apiLogger } from "@/lib/logger";
 import { isSameOriginRequest } from "@/lib/url";
 import { hasRecentLogin } from "@/lib/auth/recent-login";
+import { oidcIssuerProblem } from "@/lib/sso/issuer-url";
 import { reauthRequired } from "@/lib/auth/reauth";
 
 /**
@@ -62,6 +63,12 @@ export async function POST(request: NextRequest) {
   // the same normalization, so the issuer captured here will round-trip.
   if (!currentSsoIssuer(settings)) {
     return NextResponse.json({ error: "SSO is not configured" }, { status: 400 });
+  }
+  // An issuer stored under the older rule (http:// off loopback): discovery
+  // would refuse it with the same words, but as a 500 nobody could act on.
+  const issuerProblem = oidcIssuerProblem(settings.oidcIssuer);
+  if (issuerProblem) {
+    return NextResponse.json({ error: issuerProblem }, { status: 400 });
   }
 
   try {

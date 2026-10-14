@@ -90,7 +90,6 @@ describe("GET /api/settings/sync-schedule", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     const res = await callRoute(getSyncSchedule);
@@ -142,7 +141,6 @@ describe("PUT /api/settings/sync-schedule", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     const res = await callRoute(putSyncSchedule, {
@@ -158,7 +156,6 @@ describe("PUT /api/settings/sync-schedule", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     const res = await callRoute(putSyncSchedule, {
@@ -174,7 +171,6 @@ describe("PUT /api/settings/sync-schedule", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     await callRoute(putSyncSchedule, {
@@ -192,7 +188,6 @@ describe("PUT /api/settings/sync-schedule", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     const res = await callRoute(putSyncSchedule, {
@@ -207,7 +202,6 @@ describe("PUT /api/settings/sync-schedule", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     const res = await callRoute(putSyncSchedule, {
@@ -233,7 +227,6 @@ describe("GET /api/settings/lifecycle-schedule", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     const res = await callRoute(getLifecycleSchedule);
@@ -260,7 +253,6 @@ describe("PUT /api/settings/lifecycle-schedule", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     const res = await callRoute(putLifecycleSchedule, {
@@ -280,7 +272,6 @@ describe("PUT /api/settings/lifecycle-schedule", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     const res = await callRoute(putLifecycleSchedule, {
@@ -299,7 +290,6 @@ describe("PUT /api/settings/lifecycle-schedule", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     const res = await callRoute(putLifecycleSchedule, {
@@ -322,7 +312,6 @@ describe("PUT /api/settings/lifecycle-schedule", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     const res = await callRoute(putLifecycleSchedule, {
@@ -340,7 +329,6 @@ describe("PUT /api/settings/lifecycle-schedule", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     await callRoute(putLifecycleSchedule, {
@@ -365,7 +353,6 @@ describe("PUT /api/settings/lifecycle-schedule", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     const res = await callRoute(putLifecycleSchedule, {
@@ -381,7 +368,6 @@ describe("PUT /api/settings/lifecycle-schedule", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     const res = await callRoute(putLifecycleSchedule, {
@@ -397,7 +383,6 @@ describe("PUT /api/settings/lifecycle-schedule", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     const res = await callRoute(putLifecycleSchedule, {
@@ -423,7 +408,6 @@ describe("GET /api/settings/schedule-info", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     const res = await callRoute(getScheduleInfo);
@@ -445,7 +429,6 @@ describe("GET /api/settings/schedule-info", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     // Create settings with default schedules
@@ -467,7 +450,6 @@ describe("GET /api/settings/schedule-info", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     await prisma.appSettings.create({
@@ -505,7 +487,6 @@ describe("GET /api/settings/accent-color", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     const res = await callRoute(getAccentColor);
@@ -528,7 +509,6 @@ describe("PUT /api/settings/accent-color", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     const res = await callRoute(putAccentColor, {
@@ -544,7 +524,6 @@ describe("PUT /api/settings/accent-color", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     await callRoute(putAccentColor, {
@@ -562,7 +541,6 @@ describe("PUT /api/settings/accent-color", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     const res = await callRoute(putAccentColor, {
@@ -578,7 +556,6 @@ describe("PUT /api/settings/accent-color", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     const res = await callRoute(putAccentColor, {
@@ -603,7 +580,6 @@ describe("GET /api/settings/chip-colors", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     const res = await callRoute(getChipColors);
@@ -626,7 +602,6 @@ describe("PUT /api/settings/chip-colors", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     const chipColors = {
@@ -647,7 +622,6 @@ describe("PUT /api/settings/chip-colors", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     const chipColors = {
@@ -669,7 +643,6 @@ describe("PUT /api/settings/chip-colors", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     const res = await callRoute(putChipColors, {
@@ -685,7 +658,6 @@ describe("PUT /api/settings/chip-colors", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     const res = await callRoute(putChipColors, {
@@ -710,7 +682,6 @@ describe("GET /api/settings/column-preferences", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     const res = await callRoute(getColumnPreferences);
@@ -733,7 +704,6 @@ describe("PUT /api/settings/column-preferences", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     const res = await callRoute(putColumnPreferences, {
@@ -749,7 +719,6 @@ describe("PUT /api/settings/column-preferences", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     const res = await callRoute(putColumnPreferences, {
@@ -765,7 +734,6 @@ describe("PUT /api/settings/column-preferences", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     const columns = ["title", "year", "fileSize"];
@@ -786,7 +754,6 @@ describe("PUT /api/settings/column-preferences", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     await callRoute(putColumnPreferences, {
@@ -814,7 +781,6 @@ describe("PUT /api/settings/column-preferences", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     const res = await callRoute(putColumnPreferences, {
@@ -830,7 +796,6 @@ describe("PUT /api/settings/column-preferences", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     const res = await callRoute(putColumnPreferences, {
@@ -846,7 +811,6 @@ describe("PUT /api/settings/column-preferences", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     const res = await callRoute(putColumnPreferences, {
@@ -872,7 +836,6 @@ describe("GET /api/settings/dashboard-layout", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     const res = await callRoute(getDashboardLayout);
@@ -903,7 +866,6 @@ describe("PUT /api/settings/dashboard-layout", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     const layout = {
@@ -929,7 +891,6 @@ describe("PUT /api/settings/dashboard-layout", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     const layout = {
@@ -954,7 +915,6 @@ describe("PUT /api/settings/dashboard-layout", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     const res = await callRoute(putDashboardLayout, {
@@ -975,7 +935,6 @@ describe("PUT /api/settings/dashboard-layout", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     const res = await callRoute(putDashboardLayout, {
@@ -997,7 +956,6 @@ describe("PUT /api/settings/dashboard-layout", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     // "stats" is only allowed in "main" tab
@@ -1020,7 +978,6 @@ describe("PUT /api/settings/dashboard-layout", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     const res = await callRoute(putDashboardLayout, {
@@ -1045,7 +1002,6 @@ describe("GET /api/settings/log-retention", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     const res = await callRoute(getLogRetention);
@@ -1068,7 +1024,6 @@ describe("PUT /api/settings/log-retention", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     const res = await callRoute(putLogRetention, {
@@ -1084,7 +1039,6 @@ describe("PUT /api/settings/log-retention", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     await callRoute(putLogRetention, {
@@ -1102,7 +1056,6 @@ describe("PUT /api/settings/log-retention", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     const res = await callRoute(putLogRetention, {
@@ -1118,7 +1071,6 @@ describe("PUT /api/settings/log-retention", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     const res = await callRoute(putLogRetention, {
@@ -1134,7 +1086,6 @@ describe("PUT /api/settings/log-retention", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     const res = await callRoute(putLogRetention, {
@@ -1150,7 +1101,6 @@ describe("PUT /api/settings/log-retention", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     const res = await callRoute(putLogRetention, {
@@ -1166,7 +1116,6 @@ describe("PUT /api/settings/log-retention", () => {
     setMockSession({
       isLoggedIn: true,
       userId: user.id,
-      plexToken: "tok",
     });
 
     const res = await callRoute(putLogRetention, {

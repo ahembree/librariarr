@@ -64,7 +64,7 @@ describe("Server Libraries endpoints", () => {
 
     it("returns 404 when server does not exist", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(
         GET,
@@ -90,7 +90,7 @@ describe("Server Libraries endpoints", () => {
         { key: "2", title: "TV Shows", type: "show" },
       ]);
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(
         GET,
@@ -128,7 +128,7 @@ describe("Server Libraries endpoints", () => {
         { key: "3", title: "Music", type: "artist" },
       ]);
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(
         GET,
@@ -162,7 +162,7 @@ describe("Server Libraries endpoints", () => {
 
     it("returns 404 when server does not exist", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(
         PUT,
@@ -180,7 +180,7 @@ describe("Server Libraries endpoints", () => {
     it("returns 400 when libraries is not an array", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(
         PUT,
@@ -205,7 +205,7 @@ describe("Server Libraries endpoints", () => {
         enabled: true,
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(
         PUT,
@@ -232,7 +232,7 @@ describe("Server Libraries endpoints", () => {
         { key: "new-1", title: "New Library", type: "movie" },
       ]);
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(
         PUT,

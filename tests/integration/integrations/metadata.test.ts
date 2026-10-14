@@ -132,7 +132,7 @@ describe("Integration metadata endpoints", () => {
 
     it("returns 404 for non-existent instance", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(LidarrMetadataGET, {
         id: "00000000-0000-0000-0000-000000000000",
@@ -144,7 +144,7 @@ describe("Integration metadata endpoints", () => {
       const owner = await createTestUser({ plexId: "owner" });
       const intruder = await createTestUser({ plexId: "intruder" });
       const instance = await createTestLidarrInstance(owner.id);
-      setMockSession({ userId: intruder.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: intruder.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(LidarrMetadataGET, { id: instance.id });
       await expectJson<{ error: string }>(response, 404);
@@ -153,7 +153,7 @@ describe("Integration metadata endpoints", () => {
     it("returns artists, tags, and quality profiles", async () => {
       const user = await createTestUser();
       const instance = await createTestLidarrInstance(user.id);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       mockLidarrGetArtists.mockResolvedValue([
         {
@@ -187,7 +187,7 @@ describe("Integration metadata endpoints", () => {
     it("falls back to tag id string when tag not found", async () => {
       const user = await createTestUser();
       const instance = await createTestLidarrInstance(user.id);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       mockLidarrGetArtists.mockResolvedValue([
         { foreignArtistId: "mb-1", tags: [99], qualityProfileId: 1, monitored: false, ratings: null },
@@ -206,7 +206,7 @@ describe("Integration metadata endpoints", () => {
     it("derives distinct artist statuses for the enumerable arrStatus field", async () => {
       const user = await createTestUser();
       const instance = await createTestLidarrInstance(user.id);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       mockLidarrGetArtists.mockResolvedValue([
         { foreignArtistId: "mb-1", tags: [], qualityProfileId: 1, monitored: true, status: "continuing" },
@@ -235,7 +235,7 @@ describe("Integration metadata endpoints", () => {
 
     it("returns 404 for non-existent instance", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(RadarrMetadataGET, {
         id: "00000000-0000-0000-0000-000000000000",
@@ -247,7 +247,7 @@ describe("Integration metadata endpoints", () => {
       const owner = await createTestUser({ plexId: "owner" });
       const intruder = await createTestUser({ plexId: "intruder" });
       const instance = await createTestRadarrInstance(owner.id);
-      setMockSession({ userId: intruder.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: intruder.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(RadarrMetadataGET, { id: instance.id });
       await expectJson<{ error: string }>(response, 404);
@@ -256,7 +256,7 @@ describe("Integration metadata endpoints", () => {
     it("returns movies, tags, quality profiles, and languages", async () => {
       const user = await createTestUser();
       const instance = await createTestRadarrInstance(user.id);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       mockRadarrGetMovies.mockResolvedValue([
         {
@@ -299,7 +299,7 @@ describe("Integration metadata endpoints", () => {
     it("derives distinct movie statuses for the enumerable arrStatus field", async () => {
       const user = await createTestUser();
       const instance = await createTestRadarrInstance(user.id);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       mockRadarrGetMovies.mockResolvedValue([
         { tmdbId: 1, tags: [], qualityProfileId: 1, monitored: true, status: "released" },
@@ -319,7 +319,7 @@ describe("Integration metadata endpoints", () => {
     it("handles movie with no ratings", async () => {
       const user = await createTestUser();
       const instance = await createTestRadarrInstance(user.id);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       mockRadarrGetMovies.mockResolvedValue([
         { tmdbId: 100, tags: [], qualityProfileId: 99, monitored: false, ratings: {} },
@@ -340,7 +340,7 @@ describe("Integration metadata endpoints", () => {
     it("derives distinct downloaded-file quality names for the enumerable arrQualityName field", async () => {
       const user = await createTestUser();
       const instance = await createTestRadarrInstance(user.id);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       mockRadarrGetMovies.mockResolvedValue([
         { tmdbId: 1, tags: [], qualityProfileId: 1, monitored: true, movieFile: { quality: { quality: { name: "Bluray-1080p" } } } },
@@ -369,7 +369,7 @@ describe("Integration metadata endpoints", () => {
 
     it("returns 404 for non-existent instance", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(SonarrMetadataGET, {
         id: "00000000-0000-0000-0000-000000000000",
@@ -381,7 +381,7 @@ describe("Integration metadata endpoints", () => {
       const owner = await createTestUser({ plexId: "owner" });
       const intruder = await createTestUser({ plexId: "intruder" });
       const instance = await createTestSonarrInstance(owner.id);
-      setMockSession({ userId: intruder.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: intruder.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(SonarrMetadataGET, { id: instance.id });
       await expectJson<{ error: string }>(response, 404);
@@ -390,7 +390,7 @@ describe("Integration metadata endpoints", () => {
     it("returns series, tags, quality profiles, and languages", async () => {
       const user = await createTestUser();
       const instance = await createTestSonarrInstance(user.id);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       mockSonarrGetSeries.mockResolvedValue([
         {
@@ -435,7 +435,7 @@ describe("Integration metadata endpoints", () => {
     it("derives distinct statuses and seriesTypes for the enumerable fields", async () => {
       const user = await createTestUser();
       const instance = await createTestSonarrInstance(user.id);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       mockSonarrGetSeries.mockResolvedValue([
         { tvdbId: 1, tags: [], qualityProfileId: 1, monitored: true, status: "continuing", seriesType: "standard" },
@@ -456,7 +456,7 @@ describe("Integration metadata endpoints", () => {
     it("returns empty statuses/seriesTypes when there are no series", async () => {
       const user = await createTestUser();
       const instance = await createTestSonarrInstance(user.id);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(SonarrMetadataGET, { id: instance.id });
       const body = await expectJson<{ statuses: string[]; seriesTypes: string[] }>(response, 200);
@@ -468,7 +468,7 @@ describe("Integration metadata endpoints", () => {
     it("handles series with no ratings", async () => {
       const user = await createTestUser();
       const instance = await createTestSonarrInstance(user.id);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       mockSonarrGetSeries.mockResolvedValue([
         { tvdbId: 999, tags: [], qualityProfileId: 1, monitored: false, ratings: {} },
@@ -497,7 +497,7 @@ describe("Integration metadata endpoints", () => {
 
     it("returns 404 for non-existent instance", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(SeerrMetadataGET, {
         id: "00000000-0000-0000-0000-000000000000",
@@ -509,7 +509,7 @@ describe("Integration metadata endpoints", () => {
       const owner = await createTestUser({ plexId: "owner" });
       const intruder = await createTestUser({ plexId: "intruder" });
       const instance = await createTestSeerrInstance(owner.id);
-      setMockSession({ userId: intruder.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: intruder.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(SeerrMetadataGET, { id: instance.id });
       await expectJson<{ error: string }>(response, 404);
@@ -518,7 +518,7 @@ describe("Integration metadata endpoints", () => {
     it("returns sorted unique users", async () => {
       const user = await createTestUser();
       const instance = await createTestSeerrInstance(user.id);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       mockSeerrGetUsers.mockResolvedValue({
         pageInfo: { pages: 1, page: 1, results: 3 },
@@ -539,7 +539,7 @@ describe("Integration metadata endpoints", () => {
     it("deduplicates users across pages", async () => {
       const user = await createTestUser();
       const instance = await createTestSeerrInstance(user.id);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       // First call returns full page (length === take), second returns partial
       mockSeerrGetUsers
@@ -571,7 +571,7 @@ describe("Integration metadata endpoints", () => {
     it("returns empty users array when no users exist", async () => {
       const user = await createTestUser();
       const instance = await createTestSeerrInstance(user.id);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       mockSeerrGetUsers.mockResolvedValue({
         pageInfo: { pages: 1, page: 1, results: 0 },
@@ -587,7 +587,7 @@ describe("Integration metadata endpoints", () => {
     it("uses email as fallback when username and plexUsername are missing", async () => {
       const user = await createTestUser();
       const instance = await createTestSeerrInstance(user.id);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       mockSeerrGetUsers.mockResolvedValue({
         pageInfo: { pages: 1, page: 1, results: 1 },

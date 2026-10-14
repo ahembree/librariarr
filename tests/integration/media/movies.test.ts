@@ -43,7 +43,7 @@ describe("GET /api/media/movies", () => {
 
   it("returns empty items when user has no media", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, { url: "/api/media/movies" });
     const body = await expectJson<{
@@ -77,7 +77,7 @@ describe("GET /api/media/movies", () => {
       parentTitle: "Breaking Bad",
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, { url: "/api/media/movies" });
     const body = await expectJson<{
@@ -101,7 +101,7 @@ describe("GET /api/media/movies", () => {
       fileSize: BigInt("5368709120"), // 5 GB
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, { url: "/api/media/movies" });
     const body = await expectJson<{
@@ -126,7 +126,7 @@ describe("GET /api/media/movies", () => {
       });
     }
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/movies",
@@ -152,7 +152,7 @@ describe("GET /api/media/movies", () => {
     await createTestMediaItem(lib.id, { title: "Inception", type: "MOVIE" });
     await createTestMediaItem(lib.id, { title: "The Dark Knight", type: "MOVIE" });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/movies",
@@ -179,7 +179,7 @@ describe("GET /api/media/movies", () => {
     await createTestMediaItem(lib.id, { title: "1_ Things", type: "MOVIE" });
     await createTestMediaItem(lib.id, { title: "Inception", type: "MOVIE" });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const literal = await expectJson<{ items: { title: string }[] }>(
       await callRoute(GET, { url: "/api/media/movies", searchParams: { search: "1_ Things" } }),
@@ -213,7 +213,7 @@ describe("GET /api/media/movies", () => {
     await createTestMediaItem(lib.id, { title: "Alpha", type: "MOVIE" });
     await createTestMediaItem(lib.id, { title: "%Percent", type: "MOVIE" });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const percent = await expectJson<{ items: { title: string }[] }>(
       await callRoute(GET, { url: "/api/media/movies", searchParams: { startsWith: "%" } }),
@@ -237,7 +237,7 @@ describe("GET /api/media/movies", () => {
     await createTestMediaItem(lib.id, { title: "Charlie", type: "MOVIE" });
     await createTestMediaItem(lib.id, { title: "Bravo", type: "MOVIE" });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/movies",
@@ -261,7 +261,7 @@ describe("GET /api/media/movies", () => {
 
     await createTestMediaItem(lib.id, { title: "Test", type: "MOVIE" });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/movies",
@@ -285,7 +285,7 @@ describe("GET /api/media/movies", () => {
     await createTestMediaItem(lib1.id, { title: "User1 Movie", type: "MOVIE" });
     await createTestMediaItem(lib2.id, { title: "User2 Movie", type: "MOVIE" });
 
-    setMockSession({ userId: user1.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user1.id, isLoggedIn: true });
 
     const response = await callRoute(GET, { url: "/api/media/movies" });
     const body = await expectJson<{
@@ -303,7 +303,7 @@ describe("GET /api/media/movies", () => {
 
     await createTestMediaItem(lib.id, { title: "Test Film", type: "MOVIE" });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, { url: "/api/media/movies" });
     const body = await expectJson<{
@@ -327,7 +327,7 @@ describe("GET /api/media/movies", () => {
     await createTestMediaItem(lib.id, { title: "Bravo", type: "MOVIE" });
     await createTestMediaItem(lib.id, { title: "300", type: "MOVIE" });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/movies",
@@ -350,7 +350,7 @@ describe("GET /api/media/movies", () => {
     await createTestMediaItem(lib.id, { title: "300", type: "MOVIE" });
     await createTestMediaItem(lib.id, { title: "Alpha", type: "MOVIE" });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/movies",
@@ -373,7 +373,7 @@ describe("GET /api/media/movies", () => {
     await createTestMediaItem(lib.id, { title: "Alpha Two", type: "MOVIE" });
     await createTestMediaItem(lib.id, { title: "Beta One", type: "MOVIE" });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/movies",
@@ -402,7 +402,7 @@ describe("GET /api/media/movies", () => {
         });
       }
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
     });
 
     it("returns paginated results with page and limit", async () => {
@@ -548,7 +548,7 @@ describe("GET /api/media/movies", () => {
         lastPlayedAt: new Date("2024-04-01T00:00:00Z"),
       });
       await getTestPrisma().mediaItem.update({ where: { id: item.id }, data: { videoBitDepth: 10, rating: 7.5 } });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
     }
 
     async function count(searchParams: Record<string, string>): Promise<number> {
@@ -602,7 +602,7 @@ describe("GET /api/media/movies", () => {
         SELECT 'tie-'||lpad(i::text,6,'0'), '${lib.id}', 'rk-tie-'||i, 'Movie '||i, 'Movie '||i,
                (i*7919) % 40, 'MOVIE', 0, true, false, NOW(), NOW()
         FROM generate_series(1,${TIED_ROWS}) i`);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       // Exactly what fetchListProgressively issues.
       const first = await expectJson<{ items: { id: string }[] }>(
@@ -638,7 +638,7 @@ describe("GET /api/media/movies", () => {
         title: "Summarised",
         summary: "A paragraph of prose that would ride along on every single row.",
       });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const body = await expectJson<{ items: Record<string, unknown>[] }>(
         await callRoute(GET, { url: "/api/media/movies", searchParams: { limit: "0" } }),
@@ -664,7 +664,7 @@ describe("GET /api/media/movies", () => {
       await createTestMediaItem(lib.id, { title: "Batman", type: "MOVIE" });
       await createTestMediaItem(lib.id, { title: "1917", type: "MOVIE" });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
     });
 
     it("filters by letter", async () => {

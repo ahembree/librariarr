@@ -81,7 +81,7 @@ describe("GET /api/integrations/health", () => {
 
   it("returns empty health when no integrations are configured", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const data = await getHealth();
 
@@ -99,7 +99,7 @@ describe("GET /api/integrations/health", () => {
     await createTestRadarrInstance(user.id, { name: "My Radarr" });
     await createTestSonarrInstance(user.id, { name: "My Sonarr" });
     await createTestSeerrInstance(user.id, { name: "My Seerr" });
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     mockRadarrTestConnection.mockResolvedValue({ ok: true, appName: "Radarr" });
     mockSonarrTestConnection.mockResolvedValue({ ok: true, appName: "Sonarr" });
@@ -119,7 +119,7 @@ describe("GET /api/integrations/health", () => {
   it("reports unreachable instance with the error message", async () => {
     const user = await createTestUser();
     await createTestRadarrInstance(user.id, { name: "My Radarr" });
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     mockRadarrTestConnection.mockResolvedValue({ ok: false, error: "ECONNREFUSED" });
 
@@ -138,7 +138,7 @@ describe("GET /api/integrations/health", () => {
   it("treats client throws as unreachable rather than 500-ing", async () => {
     const user = await createTestUser();
     await createTestSonarrInstance(user.id, { name: "My Sonarr" });
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     mockSonarrTestConnection.mockRejectedValue(new Error("Connection timeout"));
 
@@ -155,7 +155,7 @@ describe("GET /api/integrations/health", () => {
     const user = await createTestUser();
     await createTestRadarrInstance(user.id, { name: "My Radarr" });
     await createTestSonarrInstance(user.id, { name: "My Sonarr" });
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     mockRadarrTestConnection.mockResolvedValue({ ok: false, error: "connect ECONNREFUSED 192.168.1.20:7878" });
     mockSonarrTestConnection.mockRejectedValue(new Error("boom at /app/src/lib/arr/sonarr-client.ts"));
@@ -171,7 +171,7 @@ describe("GET /api/integrations/health", () => {
     await createTestRadarrInstance(user.id);
     await createTestSonarrInstance(user.id);
     await createTestLidarrInstance(user.id);
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     mockRadarrTestConnection.mockResolvedValue({ ok: false, error: "down" });
     mockSonarrTestConnection.mockResolvedValue({ ok: true, appName: "Sonarr" });
@@ -185,7 +185,7 @@ describe("GET /api/integrations/health", () => {
   it("excludes disabled instances entirely", async () => {
     const user = await createTestUser();
     await createTestRadarrInstance(user.id, { name: "Disabled", enabled: false });
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const data = await getHealth();
 
@@ -201,7 +201,7 @@ describe("GET /api/integrations/health", () => {
 
     mockRadarrTestConnection.mockResolvedValue({ ok: true, appName: "Radarr" });
 
-    setMockSession({ isLoggedIn: true, userId: u1.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: u1.id});
     const data = await getHealth();
 
     expect(data.radarr.configured).toBe(1);
@@ -211,7 +211,7 @@ describe("GET /api/integrations/health", () => {
   it("caches results for repeated calls within the TTL window", async () => {
     const user = await createTestUser();
     await createTestRadarrInstance(user.id);
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     mockRadarrTestConnection.mockResolvedValue({ ok: true, appName: "Radarr" });
 

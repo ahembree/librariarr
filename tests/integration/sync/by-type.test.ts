@@ -57,7 +57,7 @@ describe("POST /api/sync/by-type", () => {
     // A SERIES library that should be ignored
     await createTestLibrary(server.id, { key: "s1", type: "SERIES" });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(POST, {
       url: "/api/sync/by-type",
@@ -85,7 +85,7 @@ describe("POST /api/sync/by-type", () => {
     const a = await createTestLibrary(server.id, { key: "m1", type: "MOVIE" });
     const b = await createTestLibrary(server.id, { key: "m2", type: "MOVIE" });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     await callRoute(POST, {
       url: "/api/sync/by-type",
@@ -127,7 +127,7 @@ describe("POST /api/sync/by-type", () => {
     await createTestLibrary(server.id, { key: "m1", type: "MOVIE" });
     await testPrisma.syncJob.create({ data: { mediaServerId: server.id, status: "RUNNING" } });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(POST, {
       url: "/api/sync/by-type",
@@ -147,7 +147,7 @@ describe("POST /api/sync/by-type", () => {
     const server = await createTestServer(user.id);
     await createTestLibrary(server.id, { key: "s1", type: "SERIES" });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(POST, {
       url: "/api/sync/by-type",

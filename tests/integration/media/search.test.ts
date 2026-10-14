@@ -47,7 +47,7 @@ describe("GET /api/media/search", () => {
 
   it("returns empty items when q is missing", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/search",
@@ -59,7 +59,7 @@ describe("GET /api/media/search", () => {
 
   it("returns empty items when q is empty string", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/search",
@@ -71,7 +71,7 @@ describe("GET /api/media/search", () => {
 
   it("returns 400 when type is missing", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/search",
@@ -83,7 +83,7 @@ describe("GET /api/media/search", () => {
 
   it("returns 400 when type is invalid", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/search",
@@ -109,7 +109,7 @@ describe("GET /api/media/search", () => {
       year: 2010,
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/search",
@@ -140,7 +140,7 @@ describe("GET /api/media/search", () => {
       episodeNumber: 1,
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     // Should match both: one by parentTitle, one by title
     const response = await callRoute(GET, {
@@ -159,7 +159,7 @@ describe("GET /api/media/search", () => {
       title: "Pilot", type: "SERIES", parentTitle: "Breaking Bad", seasonNumber: 1, episodeNumber: 1,
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
     const response = await callRoute(GET, {
       url: "/api/media/search",
       searchParams: { q: "Pilot", type: "SERIES" },
@@ -192,7 +192,7 @@ describe("GET /api/media/search", () => {
       episodeNumber: 1,
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/search",
@@ -228,7 +228,7 @@ describe("GET /api/media/search", () => {
       episodeNumber: 2,
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/search",
@@ -253,7 +253,7 @@ describe("GET /api/media/search", () => {
       });
     }
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/search",
@@ -274,7 +274,7 @@ describe("GET /api/media/search", () => {
       type: "MOVIE",
     });
 
-    setMockSession({ userId: user2.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user2.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/search",

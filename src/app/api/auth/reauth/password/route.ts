@@ -63,7 +63,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  attempt.refund();
+  attempt.succeeded();
 
   session.authenticatedAt = Date.now();
   await session.save();

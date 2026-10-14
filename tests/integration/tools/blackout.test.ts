@@ -82,7 +82,7 @@ describe("GET /api/tools/blackout", () => {
 
   it("returns empty list initially", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(GET);
     const body = await expectJson<{ schedules: unknown[] }>(res);
@@ -91,7 +91,7 @@ describe("GET /api/tools/blackout", () => {
 
   it("returns created schedules", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     await createOneTimeSchedule();
     await createRecurringSchedule();
@@ -113,7 +113,7 @@ describe("POST /api/tools/blackout", () => {
 
   it("creates a one_time blackout schedule", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await createOneTimeSchedule({
       name: "New Year Blackout",
@@ -141,7 +141,7 @@ describe("POST /api/tools/blackout", () => {
 
   it("creates a recurring blackout schedule", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await createRecurringSchedule();
     const body = await expectJson<{
@@ -166,7 +166,7 @@ describe("POST /api/tools/blackout", () => {
 
   it("validates required name field", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(POST, {
       method: "POST",
@@ -183,7 +183,7 @@ describe("POST /api/tools/blackout", () => {
 
   it("validates required action field", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(POST, {
       method: "POST",
@@ -200,7 +200,7 @@ describe("POST /api/tools/blackout", () => {
 
   it("validates one_time requires startDate and endDate", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(POST, {
       method: "POST",
@@ -216,7 +216,7 @@ describe("POST /api/tools/blackout", () => {
 
   it("validates one_time startDate must be before endDate", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await createOneTimeSchedule({
       startDate: "2030-01-02T00:00:00Z",
@@ -228,7 +228,7 @@ describe("POST /api/tools/blackout", () => {
 
   it("validates recurring requires daysOfWeek", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(POST, {
       method: "POST",
@@ -246,7 +246,7 @@ describe("POST /api/tools/blackout", () => {
 
   it("validates recurring requires startTime and endTime", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(POST, {
       method: "POST",
@@ -263,7 +263,7 @@ describe("POST /api/tools/blackout", () => {
 
   it("validates recurring time format must be HH:mm", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(POST, {
       method: "POST",
@@ -282,7 +282,7 @@ describe("POST /api/tools/blackout", () => {
 
   it("creates schedule with optional excludedUsers", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await createOneTimeSchedule({
       excludedUsers: ["user-1", "user-2"],
@@ -309,7 +309,7 @@ describe("PUT /api/tools/blackout/[id]", () => {
 
   it("returns 404 for non-existent schedule", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRouteWithParams(
       PUT,
@@ -321,7 +321,7 @@ describe("PUT /api/tools/blackout/[id]", () => {
 
   it("updates an existing schedule", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     // Create a schedule
     const createRes = await createOneTimeSchedule();
@@ -351,7 +351,7 @@ describe("PUT /api/tools/blackout/[id]", () => {
 
   it("toggling enabled (partial body) preserves a one_time schedule's dates", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const createRes = await createOneTimeSchedule();
     const { schedule: created } = await createRes.json();
@@ -373,7 +373,7 @@ describe("PUT /api/tools/blackout/[id]", () => {
 
   it("toggling enabled (partial body) preserves a recurring schedule's times", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const createRes = await createRecurringSchedule();
     const { schedule: created } = await createRes.json();
@@ -393,7 +393,7 @@ describe("PUT /api/tools/blackout/[id]", () => {
 
   it("applies a partial time edit against the existing recurring type", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const createRes = await createRecurringSchedule();
     const { schedule: created } = await createRes.json();
@@ -416,7 +416,7 @@ describe("PUT /api/tools/blackout/[id]", () => {
 
   it("rejects an out-of-range time on a partial edit", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const createRes = await createRecurringSchedule();
     const { schedule: created } = await createRes.json();
@@ -431,7 +431,7 @@ describe("PUT /api/tools/blackout/[id]", () => {
 
   it("rejects an out-of-range time on create", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await createRecurringSchedule({ startTime: "24:00", endTime: "25:61" });
     await expectJson(res, 400);
@@ -442,12 +442,12 @@ describe("PUT /api/tools/blackout/[id]", () => {
     const user2 = await createTestUser({ plexId: "plex-other" });
 
     // User 1 creates a schedule
-    setMockSession({ isLoggedIn: true, userId: user1.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user1.id});
     const createRes = await createOneTimeSchedule();
     const { schedule: created } = await createRes.json();
 
     // User 2 tries to update it
-    setMockSession({ isLoggedIn: true, userId: user2.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user2.id});
     const res = await callRouteWithParams(
       PUT,
       { id: created.id },
@@ -472,7 +472,7 @@ describe("DELETE /api/tools/blackout/[id]", () => {
 
   it("returns 404 for non-existent schedule", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRouteWithParams(
       DELETE,
@@ -484,7 +484,7 @@ describe("DELETE /api/tools/blackout/[id]", () => {
 
   it("deletes an existing schedule", async () => {
     const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
 
     // Create a schedule
     const createRes = await createOneTimeSchedule();
@@ -510,12 +510,12 @@ describe("DELETE /api/tools/blackout/[id]", () => {
     const user2 = await createTestUser({ plexId: "plex-other" });
 
     // User 1 creates a schedule
-    setMockSession({ isLoggedIn: true, userId: user1.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user1.id});
     const createRes = await createOneTimeSchedule();
     const { schedule: created } = await createRes.json();
 
     // User 2 tries to delete it
-    setMockSession({ isLoggedIn: true, userId: user2.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user2.id});
     const res = await callRouteWithParams(
       DELETE,
       { id: created.id },
@@ -524,7 +524,7 @@ describe("DELETE /api/tools/blackout/[id]", () => {
     await expectJson(res, 404);
 
     // Verify it still exists for user1
-    setMockSession({ isLoggedIn: true, userId: user1.id, plexToken: "tok" });
+    setMockSession({ isLoggedIn: true, userId: user1.id});
     const listRes = await callRoute(GET);
     const listBody = await expectJson<{ schedules: unknown[] }>(listRes);
     expect(listBody.schedules).toHaveLength(1);

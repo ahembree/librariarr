@@ -74,7 +74,7 @@ describe("Server enable/disable toggle", () => {
     it("disables a server", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(
         PUT,
@@ -92,7 +92,7 @@ describe("Server enable/disable toggle", () => {
     it("re-enables a disabled server", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id, { enabled: false });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(
         PUT,
@@ -113,7 +113,7 @@ describe("Server enable/disable toggle", () => {
       });
       const library = await createTestLibrary(server.id);
       await createTestMediaItem(library.id);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(
         PUT,
@@ -135,7 +135,7 @@ describe("Server enable/disable toggle", () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id);
       // A new URL for a Plex server keeping its token needs a recent sign-in.
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
+      setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
       // Send enabled=false with a bad URL — should succeed because connection test is skipped
       const response = await callRouteWithParams(
@@ -155,7 +155,7 @@ describe("Server enable/disable toggle", () => {
       const user = await createTestUser();
       await createTestServer(user.id, { name: "Enabled", enabled: true });
       await createTestServer(user.id, { name: "Disabled", enabled: false });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, { url: "/api/servers" });
       const body = await expectJson<{ servers: { name: string; enabled: boolean }[] }>(response, 200);
@@ -174,7 +174,7 @@ describe("Server enable/disable toggle", () => {
     it("returns 400 when trying to sync a disabled server", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id, { enabled: false });
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(
         SyncPOST,
@@ -198,7 +198,7 @@ describe("Server enable/disable toggle", () => {
       await createTestLibrary(enabledServer.id, { type: "MOVIE", title: "Movies" });
       await createTestLibrary(disabledServer.id, { type: "MUSIC", title: "Music" });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(LibraryTypesGET, { url: "/api/media/library-types" });
       const body = await expectJson<{ types: string[] }>(response, 200);

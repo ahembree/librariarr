@@ -85,7 +85,7 @@ describe("PUT /api/servers/[id] — Tracearr mapping", () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id);
     await seedWatchHistory(server.id, 3);
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await putMapping(server.id, { tracearrServerId: TRACEARR_SERVER_A });
     const body = await expectJson<{ server: { tracearrServerId: string | null } }>(response, 200);
@@ -105,7 +105,7 @@ describe("PUT /api/servers/[id] — Tracearr mapping", () => {
       data: { tracearrServerId: TRACEARR_SERVER_A },
     });
     await seedWatchHistory(server.id, 2);
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await putMapping(server.id, { tracearrServerId: null });
     const body = await expectJson<{ server: { tracearrServerId: string | null } }>(response, 200);
@@ -123,7 +123,7 @@ describe("PUT /api/servers/[id] — Tracearr mapping", () => {
       data: { tracearrServerId: TRACEARR_SERVER_A },
     });
     await seedWatchHistory(server.id, 2);
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await putMapping(server.id, { tracearrServerId: TRACEARR_SERVER_B });
     const body = await expectJson<{ server: { tracearrServerId: string | null } }>(response, 200);
@@ -139,7 +139,7 @@ describe("PUT /api/servers/[id] — Tracearr mapping", () => {
       data: { tracearrServerId: TRACEARR_SERVER_A },
     });
     await seedWatchHistory(server.id, 2);
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await putMapping(server.id, { tracearrServerId: TRACEARR_SERVER_A });
     await expectJson(response, 200);
@@ -156,7 +156,7 @@ describe("PUT /api/servers/[id] — Tracearr mapping", () => {
       data: { tracearrServerId: TRACEARR_SERVER_A },
     });
     await seedWatchHistory(server.id, 2);
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await putMapping(server.id, { tracearrServerId: "" });
     const body = await expectJson<{ server: { tracearrServerId: string | null } }>(response, 200);
@@ -168,7 +168,7 @@ describe("PUT /api/servers/[id] — Tracearr mapping", () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id);
     await seedWatchHistory(server.id, 2);
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await putMapping(server.id, { tracearrServerId: "" });
     await expectJson(response, 200);
@@ -185,7 +185,7 @@ describe("PUT /api/servers/[id] — Tracearr mapping", () => {
       data: { tracearrServerId: TRACEARR_SERVER_A },
     });
     await seedWatchHistory(server.id, 2);
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await putMapping(server.id, { externalUrl: "https://plex.example.com" });
     await expectJson(response, 200);
@@ -205,7 +205,7 @@ describe("PUT /api/servers/[id] — Tracearr mapping", () => {
     });
     await seedWatchHistory(server.id, 2);
     // A new URL for a Plex server keeping its token needs a recent sign-in.
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true, authenticatedAt: Date.now() });
+    setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
     const response = await putMapping(server.id, { url: "http://plex.test:32401" });
     await expectJson(response, 200);
@@ -223,7 +223,7 @@ describe("PUT /api/servers/[id] — Tracearr mapping", () => {
     const untouched = await createTestServer(user.id, { name: "Untouched" });
     await seedWatchHistory(switched.id, 2);
     await seedWatchHistory(untouched.id, 3);
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await putMapping(switched.id, { tracearrServerId: TRACEARR_SERVER_A });
     await expectJson(response, 200);
@@ -243,7 +243,7 @@ describe("PUT /api/servers/[id] — Tracearr mapping", () => {
       data: { tracearrServerId: TRACEARR_SERVER_A },
     });
     await seedWatchHistory(second.id, 2);
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await putMapping(second.id, { tracearrServerId: TRACEARR_SERVER_A });
     const body = await expectJson<{ error: string; detail: string }>(response, 409);
@@ -261,7 +261,7 @@ describe("PUT /api/servers/[id] — Tracearr mapping", () => {
       watchHistorySyncedAt: new Date("2026-01-01T00:00:00Z"),
     });
     await seedWatchHistory(server.id, 2);
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await putMapping(server.id, { tracearrServerId: null });
     await expectJson(response, 200);
@@ -307,7 +307,7 @@ describe("PUT /api/servers/[id] — Tracearr mapping", () => {
       // the residue this reset exists to clear.
       await setBackfillComplete(server.id);
       await seedWatchHistory(server.id, 3);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await putMapping(server.id, { tracearrServerId: TRACEARR_SERVER_A });
       await expectJson(response, 200);
@@ -329,7 +329,7 @@ describe("PUT /api/servers/[id] — Tracearr mapping", () => {
         data: { tracearrServerId: TRACEARR_SERVER_A, tracearrBackfillComplete: true },
       });
       await seedWatchHistory(server.id, 2);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await putMapping(server.id, { tracearrServerId: TRACEARR_SERVER_B });
       await expectJson(response, 200);
@@ -351,7 +351,7 @@ describe("PUT /api/servers/[id] — Tracearr mapping", () => {
         data: { tracearrServerId: TRACEARR_SERVER_A, tracearrBackfillComplete: true },
       });
       await seedWatchHistory(server.id, 2);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await putMapping(server.id, { tracearrServerId: null });
       await expectJson(response, 200);
@@ -373,7 +373,7 @@ describe("PUT /api/servers/[id] — Tracearr mapping", () => {
         data: { tracearrServerId: TRACEARR_SERVER_A, tracearrBackfillComplete: true },
       });
       await seedWatchHistory(server.id, 2);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await putMapping(server.id, { tracearrServerId: TRACEARR_SERVER_A });
       await expectJson(response, 200);
@@ -395,7 +395,7 @@ describe("PUT /api/servers/[id] — Tracearr mapping", () => {
         data: { tracearrServerId: TRACEARR_SERVER_A, tracearrBackfillComplete: true },
       });
       await seedWatchHistory(server.id, 2);
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await putMapping(server.id, { externalUrl: "https://plex.example.com" });
       await expectJson(response, 200);
@@ -428,7 +428,7 @@ describe("PUT /api/servers/[id] — Tracearr mapping", () => {
     const other = await createTestUser({ plexId: "other" });
     const server = await createTestServer(owner.id);
     await seedWatchHistory(server.id, 2);
-    setMockSession({ userId: other.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: other.id, isLoggedIn: true });
 
     const response = await putMapping(server.id, { tracearrServerId: TRACEARR_SERVER_A });
     const body = await expectJson<{ error: string }>(response, 404);

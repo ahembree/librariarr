@@ -26,6 +26,13 @@ vi.mock("@/lib/backup/backup-service", () => ({
   listBackups: mockListBackups,
 }));
 
+// The real limiter is exercised in tests/integration/auth/setup-rate-limit.test.ts;
+// here it would make the eleventh request of the file a 429.
+vi.mock("@/lib/rate-limit/rate-limiter", () => ({
+  SETUP_BUCKET: "setup",
+  checkAuthRateLimit: () => null,
+}));
+
 // Import route handler AFTER mocks
 import { GET } from "@/app/api/backup/list-setup/route";
 

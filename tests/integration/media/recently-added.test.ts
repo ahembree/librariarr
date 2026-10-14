@@ -49,7 +49,7 @@ describe("GET /api/media/recently-added", () => {
 
   it("returns empty items when user has no servers", async () => {
     const user = await createTestUser();
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/recently-added",
@@ -88,7 +88,7 @@ describe("GET /api/media/recently-added", () => {
       addedAt: recent,
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/recently-added",
@@ -118,7 +118,7 @@ describe("GET /api/media/recently-added", () => {
       });
     }
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/recently-added",
@@ -144,7 +144,7 @@ describe("GET /api/media/recently-added", () => {
       addedAt: new Date(),
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/recently-added",
@@ -172,7 +172,7 @@ describe("GET /api/media/recently-added", () => {
       addedAt: new Date("2024-12-02"),
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/recently-added",
@@ -200,7 +200,7 @@ describe("GET /api/media/recently-added", () => {
       addedAt,
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/recently-added",
@@ -232,7 +232,7 @@ describe("GET /api/media/recently-added", () => {
       ratingKey: "s2-m",
     });
 
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/recently-added",
@@ -252,7 +252,7 @@ describe("GET /api/media/recently-added", () => {
     const user2 = await createTestUser({ plexId: "u2" });
     const server = await createTestServer(user1.id);
 
-    setMockSession({ userId: user2.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user2.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/recently-added",
@@ -282,7 +282,7 @@ describe("GET /api/media/recently-added", () => {
       ratingKey: "u2-m",
     });
 
-    setMockSession({ userId: user1.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user1.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/recently-added",
@@ -312,7 +312,7 @@ describe("GET /api/media/recently-added", () => {
         ratingKey: `bb-s27-e${i}`,
       });
     }
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const body = await expectJson<{
       items: { memberCount: number; parentTitle: string; seasonNumber: number }[];
@@ -345,7 +345,7 @@ describe("GET /api/media/recently-added", () => {
         });
       }
     }
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const body = await expectJson<{ items: { seasonNumber: number; memberCount: number }[] }>(
       await callRoute(GET, { url: "/api/media/recently-added" }), 200);
@@ -372,7 +372,7 @@ describe("GET /api/media/recently-added", () => {
         ratingKey: `office-${rk}`,
       });
     }
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const body = await expectJson<{ items: unknown[] }>(
       await callRoute(GET, { url: "/api/media/recently-added" }), 200);
@@ -395,7 +395,7 @@ describe("GET /api/media/recently-added", () => {
         ratingKey: `ir-${i}`,
       });
     }
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const body = await expectJson<{
       items: { memberCount: number; parentTitle: string; albumTitle: string }[];
@@ -419,7 +419,7 @@ describe("GET /api/media/recently-added", () => {
         ratingKey: `mv-${i}`,
       });
     }
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const body = await expectJson<{ items: { memberCount: number }[] }>(
       await callRoute(GET, { url: "/api/media/recently-added" }), 200);
@@ -446,7 +446,7 @@ describe("GET /api/media/recently-added", () => {
         ratingKey: `legacy-${i}`,
       });
     }
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const body = await expectJson<{ items: { memberCount: number }[] }>(
       await callRoute(GET, { url: "/api/media/recently-added" }), 200);
@@ -475,7 +475,7 @@ describe("GET /api/media/recently-added", () => {
         });
       }
     }
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const body = await expectJson<{ items: { memberCount: number }[]; total: number }>(
       await callRoute(GET, { url: "/api/media/recently-added?limit=2" }), 200);
@@ -497,7 +497,7 @@ describe("GET /api/media/recently-added", () => {
         addedAt: new Date(), ratingKey: `noseason-${i}`,
       });
     }
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
     const body = await expectJson<{ items: { memberCount: number }[] }>(
       await callRoute(GET, { url: "/api/media/recently-added" }), 200);
     expect(body.items).toHaveLength(3);
@@ -514,7 +514,7 @@ describe("GET /api/media/recently-added", () => {
         albumTitle: "Greatest Hits", addedAt: new Date(), ratingKey: `noartist-${i}`,
       });
     }
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
     const body = await expectJson<{ items: { memberCount: number }[] }>(
       await callRoute(GET, { url: "/api/media/recently-added" }), 200);
     expect(body.items).toHaveLength(3);
@@ -539,7 +539,7 @@ describe("GET /api/media/recently-added", () => {
       seriesKey: "tvdb:7", seasonNumber: 3, episodeNumber: 8,
       addedAt: new Date(), ratingKey: "wk-8",
     });
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
     const body = await expectJson<{ items: { memberCount: number }[] }>(
       await callRoute(GET, { url: "/api/media/recently-added" }), 200);
     expect(body.items).toHaveLength(1);
@@ -551,7 +551,7 @@ describe("GET /api/media/recently-added", () => {
     const server = await createTestServer(user.id);
     const lib = await createTestLibrary(server.id, { type: "MOVIE" });
     await createTestMediaItem(lib.id, { title: "M", type: "MOVIE", addedAt: new Date(), ratingKey: "t1" });
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
     // `type` reaches raw SQL; an unvalidated value was both an injection vector
     // and a 500. Anything unrecognized is treated as "no type filter".
     for (const bad of ["BOGUS", "MOVIE'; DROP TABLE \"MediaItem\"; --", ""]) {
@@ -581,7 +581,7 @@ describe("GET /api/media/recently-added", () => {
         });
       }
     }
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const body = await expectJson<{ items: { memberCount: number }[] }>(
       await callRoute(GET, { url: "/api/media/recently-added" }), 200);
@@ -608,7 +608,7 @@ describe("GET /api/media/recently-added", () => {
         title: `Movie ${i}`, type: "MOVIE", addedAt: stamp, ratingKey: `tie-${i}`,
       });
     }
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const read = async (limit: number) =>
       (await expectJson<{ items: { groupKey: string }[] }>(
@@ -633,7 +633,7 @@ describe("GET /api/media/recently-added", () => {
         });
       }
     }
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const body = await expectJson<{ items: unknown[]; total: number }>(
       await callRoute(GET, { url: "/api/media/recently-added?limit=2" }), 200);
@@ -663,7 +663,7 @@ describe("GET /api/media/recently-added", () => {
       where: { id: rows[1].id },
       data: { seasonThumbUrl: "/season/poster.jpg" },
     });
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const body = await expectJson<{ items: { id: string; seasonThumbUrl: string | null }[] }>(
       await callRoute(GET, { url: "/api/media/recently-added" }), 200);
@@ -695,7 +695,7 @@ describe("GET /api/media/recently-added", () => {
     await prisma.mediaItem.update({
       where: { id: seasonArt.id }, data: { seasonThumbUrl: "/season.jpg" },
     });
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const body = await expectJson<{ items: { id: string }[] }>(
       await callRoute(GET, { url: "/api/media/recently-added" }), 200);
@@ -708,7 +708,7 @@ describe("GET /api/media/recently-added", () => {
     const server = await createTestServer(user.id);
     const lib = await createTestLibrary(server.id, { type: "MOVIE" });
     await createTestMediaItem(lib.id, { title: "First", type: "MOVIE", addedAt: new Date("2024-01-01T00:00:00Z") });
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const first = await expectJson<{ items: { title: string }[] }>(
       await callRoute(GET, { url: "/api/media/recently-added" }),

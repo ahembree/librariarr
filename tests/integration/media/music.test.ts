@@ -47,7 +47,7 @@ describe("Music endpoints", () => {
 
     it("returns empty items when no music data exists", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, { url: "/api/media/music" });
       const body = await expectJson<{
@@ -83,7 +83,7 @@ describe("Music endpoints", () => {
         type: "MOVIE",
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, { url: "/api/media/music" });
       const body = await expectJson<{
@@ -114,7 +114,7 @@ describe("Music endpoints", () => {
         audioCodec: "flac",
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, {
         url: "/api/media/music",
@@ -148,7 +148,7 @@ describe("Music endpoints", () => {
         audioCodec: "mp3",
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, {
         url: "/api/media/music",
@@ -189,7 +189,7 @@ describe("Music endpoints", () => {
         audioCodec: "mp3",
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, {
         url: "/api/media/music",
@@ -215,7 +215,7 @@ describe("Music endpoints", () => {
         fileSize: BigInt("104857600"),
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET, { url: "/api/media/music" });
       const body = await expectJson<{
@@ -240,7 +240,7 @@ describe("Music endpoints", () => {
 
     it("returns empty artists list when no data", async () => {
       const user = await createTestUser();
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET_GROUPED, {
         url: "/api/media/music/grouped",
@@ -283,7 +283,7 @@ describe("Music endpoints", () => {
         fileSize: BigInt("73400320"),
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET_GROUPED, {
         url: "/api/media/music/grouped",
@@ -333,7 +333,7 @@ describe("Music endpoints", () => {
         ratingKey: "pf-1",
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET_GROUPED, {
         url: "/api/media/music/grouped",
@@ -371,7 +371,7 @@ describe("Music endpoints", () => {
         });
       }
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET_GROUPED, {
         url: "/api/media/music/grouped",
@@ -398,7 +398,7 @@ describe("Music endpoints", () => {
         fileSize: BigInt("5368709120"),
       });
 
-      setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(GET_GROUPED, {
         url: "/api/media/music/grouped",
@@ -428,7 +428,7 @@ describe("/api/media/music progressive loading", () => {
         summary: "Prose that would ride along on every row.",
       });
     }
-    setMockSession({ userId: user.id, plexToken: "tok", isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
   });
 
   it("returns everything after an offset when limit=0", async () => {
