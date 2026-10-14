@@ -370,7 +370,7 @@ Notes:
 
 **Export**, beside **Save** in the rule editor, shows the rule set as JSON to copy: its rules and groups, the action and its options, the collection settings, the Discord toggles and **Sticky matches**. **Import** takes that JSON back — on the tab matching the rule set's `type` — and fills the editor with it as a new, unsaved rule set.
 
-Two things are deliberately left out of an export because they belong to one install: the *arr instance (and, for **Change Quality Profile**, the quality profile, whose id is specific to that instance) and the servers the rule set targets. After an import you pick the instance under **Actions**, and the rule set targets every server until you narrow it. Collection settings import as a fresh definition that is matched to an existing collection by name when you save, or created.
+Two things are deliberately left out of an export because they belong to one install: the *arr instance (and, for **Change Quality Profile**, the quality profile, whose id is specific to that instance) and the servers the rule set targets. After an import you pick the **Media Servers** and the *arr server at the top of the editor — an import targets no server, and **Preview** and **Save** wait until it does. Collection settings import as **+ Create new collection…** with the exported name; if a collection of that name already exists for the library type, saving is refused as a duplicate, so pick the existing one in the **Collection** dropdown instead.
 
 The [Rule Set Library](/docs/guides/rule-set-library/) has ready-made rule sets in this format.
 
@@ -396,7 +396,7 @@ Saving with **Run detection now** reports the same thing: if detection refuses t
 
 ## Actions
 
-Actions determine what happens to matched media. Configure them in the **Actions** tab of a rule set.
+Actions determine what happens to matched media. Configure them in the action section below the rule builder, which opens once **Enable lifecycle action** is switched on.
 
 ### Available Actions
 

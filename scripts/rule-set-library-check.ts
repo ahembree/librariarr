@@ -59,6 +59,7 @@ const EXPORT_KEYS = new Set<string>([
 ]);
 
 const LIBRARY_TYPES = new Set<string>(["MOVIE", "SERIES", "MUSIC"]);
+const SCOPED_TYPES = new Set<string>(["SERIES", "MUSIC"]);
 const COLLECTION_SORTS = new Set<string>(["RELEASE_DATE", "ALPHABETICAL", "ACTION_DATE"]);
 const DAY_OPERATORS = new Set(["inLastDays", "notInLastDays"]);
 const VALUELESS_OPERATORS = new Set(["isNull", "isNotNull"]);
@@ -109,9 +110,10 @@ export function ruleSetProblems(ruleSet: RuleSetExport): string[] {
   for (const key of Object.keys(ruleSet)) {
     if (!EXPORT_KEYS.has(key)) fail(`unknown export key "${key}"`);
   }
-  // Series Scope is a series-only setting; the importer reads it only there.
-  if (ruleSet.type === "SERIES" && typeof ruleSet.seriesScope !== "boolean") fail("a SERIES rule set needs seriesScope");
-  if (ruleSet.type !== "SERIES" && "seriesScope" in ruleSet) fail("seriesScope only applies to SERIES rule sets");
+  // The Series and Music tabs export their scope (series / artist) as
+  // `seriesScope`; the Movies tab has none and its importer ignores it.
+  if (SCOPED_TYPES.has(ruleSet.type) && typeof ruleSet.seriesScope !== "boolean") fail(`a ${ruleSet.type} rule set needs seriesScope`);
+  if (!SCOPED_TYPES.has(ruleSet.type) && "seriesScope" in ruleSet) fail("seriesScope only applies to SERIES and MUSIC rule sets");
 
   // The library never arms an action: the reader previews first.
   if (ruleSet.actionEnabled !== false) fail("actionEnabled must be false in the library");

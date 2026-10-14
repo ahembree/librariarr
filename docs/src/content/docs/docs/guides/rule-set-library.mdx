@@ -27,27 +27,34 @@ are built, so what is published is what the editor accepts.
 
 2. Click **Import** (beside **Save** in the rule editor), paste the JSON, and
    click **Import** again. The editor fills in with the rules, action and
-   settings.
+   settings as a new, unsaved rule set.
 
-3. On the **Actions** tab choose your *arr instance. A rule set whose action
-   is **Change Quality Profile** also needs a profile picked here — profile
-   ids belong to one instance, so they are never part of an export.
+3. Pick the **Media Servers** the rule set applies to — an import targets
+   none, and **Preview** and **Save** stay disabled until at least one is
+   chosen — and, beside it, the **Radarr Server** (or Sonarr) the rules and
+   action use.
 
 4. **Preview** the matches and read the list. Adjust any threshold that does
    not fit your library; the values below are starting points, not
    recommendations for every household.
 
-5. Turn the action on if you want it, set the delay, and **Save**. A rule
-   set with Discord notifications enabled only posts once a
-   [webhook](/docs/features/notifications/) is configured.
+5. Switch on **Enable lifecycle action** if you want the action to run. Its
+   options appear below the switch: a **Change Quality Profile** action
+   needs its **Target quality profile** picked there, since profile ids
+   belong to one instance and are never part of an export. Set the delay
+   and **Save**. A rule set with Discord notifications enabled only posts
+   once a [webhook](/docs/features/notifications/) is configured.
 
 </Steps>
 
 What an export does **not** carry, because it is specific to one install:
 the *arr instance and quality profile, which servers the rule set targets
-(it imports targeting every server), and the collection's identity (a rule
-set with collection settings is matched to an existing collection by name on
-save, or creates one).
+(an import targets none until you pick them), and the collection's
+identity. A rule set with collection settings imports as
+**+ Create new collection…** with the exported name and options; if a
+collection of that name already exists for the tab's library type, saving
+is refused as a duplicate, so open the **Collection** dropdown and pick the
+existing one instead.
 
 <Aside type="tip">
   **Export** on any of your own rule sets gives you the same JSON. It is how
@@ -142,8 +149,8 @@ is the rule set the
 
 `lastPlayedAt` **More Than X Days Ago** matches only items that have a last
 played date, so `playCount equals 0` is ORed in for titles never played at
-all. On Jellyfin and Emby `isWatchlisted` is never set, so that condition
-simply matches every item there.
+all. On Jellyfin and Emby `isWatchlisted` is the connected account's
+**Favorite** flag, so favourited items are what that condition leaves out.
 
 ## Unwatched shows
 
@@ -230,8 +237,8 @@ See [ended shows](/docs/guides/ended-shows/) for a non-destructive variant.
 ## Ended shows nobody watches
 
 Shows Sonarr reports as ended, with nothing left to air, that nobody has
-played in a year: Sonarr stops monitoring them for upgrades. Nothing is
-deleted, so the delay is short.
+played in a year, or ever: Sonarr stops monitoring them for upgrades.
+Nothing is deleted, so the delay is short.
 
 **Needs:** Sonarr, established play history.
 
@@ -261,16 +268,31 @@ deleted, so the delay is short.
           "operator": "equals",
           "value": "false",
           "condition": "AND"
-        },
-        {
-          "id": "r3",
-          "field": "seriesLastPlayedAt",
-          "operator": "notInLastDays",
-          "value": "365",
-          "condition": "AND"
         }
       ],
-      "groups": []
+      "groups": [
+        {
+          "id": "g2",
+          "condition": "AND",
+          "rules": [
+            {
+              "id": "r3",
+              "field": "watchedEpisodePercentage",
+              "operator": "equals",
+              "value": "0",
+              "condition": "AND"
+            },
+            {
+              "id": "r4",
+              "field": "seriesLastPlayedAt",
+              "operator": "notInLastDays",
+              "value": "365",
+              "condition": "OR"
+            }
+          ],
+          "groups": []
+        }
+      ]
     }
   ],
   "seriesScope": true,
@@ -298,8 +320,9 @@ deleted, so the delay is short.
 
 ## Seerr requests nobody watched
 
-Titles that were requested through Seerr and approved more than 90 days ago,
-yet have never been played by anyone. Two weeks on the Pending page before
+Titles requested through Seerr whose most recent request was approved (or
+has since completed) more than 90 days ago, yet have never been played by
+anyone. Two weeks on the Pending page before
 Radarr removes them. Make the same rule set on the **Series** tab with
 `DELETE_SONARR` for shows.
 
@@ -445,8 +468,8 @@ are not on the watchlist and whose file is 4K, are moved to a lower Radarr
 quality profile with **Search for upgrade after profile change** on: Radarr
 searches at once, grabs a release the profile prefers and replaces the 4K
 file when it imports. Nothing is deleted unless a replacement was found. A
-movie already on the profile is skipped. Pick the profile on the
-**Actions** tab after importing.
+movie already on the profile is skipped. Pick the profile under
+**Target quality profile** once the action is switched on.
 
 The profile has to be a **downgrade profile**. Radarr ranks qualities by
 their order in the profile, not by which are ticked, so a profile with the
@@ -528,7 +551,7 @@ walks through it. Widen `4K` to `4K|1080P` for a profile that stops at
 </details>
 
 For shows, build the same rule set on the **Series** tab with **Series
-Scope** on: `watchedEpisodePercentage` **greater than or equal** `100` and
+Scope** on: `watchedEpisodePercentage` **>=** `100` and
 `seriesLastPlayedAt` **More Than X Days Ago** `30` select fully watched
 shows for **Change Quality Profile** (Sonarr), whose profiles order the
 same way.
