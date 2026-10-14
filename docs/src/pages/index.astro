@@ -6,45 +6,87 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Librariarr — Media Library Management</title>
+    <title>Librariarr — Media Library Manager for Plex, Jellyfin &amp; Emby</title>
     <meta
       name="description"
       content="Self-hosted media library management for Plex, Jellyfin, and Emby. Browse, filter, and automate your media with lifecycle rules, stream management, and more."
     />
+    <meta name="robots" content="index, follow, max-image-preview:large" />
+    <link rel="canonical" href="https://librariarr.dev/" />
+    <link rel="sitemap" href="/sitemap-index.xml" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 
     <!-- Open Graph -->
     <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Librariarr" />
+    <meta property="og:locale" content="en_US" />
     <meta property="og:url" content="https://librariarr.dev/" />
-    <meta property="og:title" content="Librariarr — Media Library Management" />
+    <meta property="og:title" content="Librariarr — Media Library Manager for Plex, Jellyfin & Emby" />
     <meta property="og:description" content="Self-hosted media library management for Plex, Jellyfin, and Emby. Browse, filter, and automate your media with lifecycle rules, stream management, and more." />
     <meta property="og:image" content="https://librariarr.dev/librariarr_hero.png" />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Librariarr — media library management for Plex, Jellyfin, and Emby" />
 
     <!-- Twitter Card -->
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="Librariarr — Media Library Management" />
+    <meta name="twitter:title" content="Librariarr — Media Library Manager for Plex, Jellyfin & Emby" />
     <meta name="twitter:description" content="Self-hosted media library management for Plex, Jellyfin, and Emby. Browse, filter, and automate your media with lifecycle rules, stream management, and more." />
     <meta name="twitter:image" content="https://librariarr.dev/librariarr_hero.png" />
+    <meta name="twitter:image:alt" content="Librariarr — media library management for Plex, Jellyfin, and Emby" />
 
     <!-- Structured Data -->
     <script is:inline type="application/ld+json">
       {
         "@context": "https://schema.org",
-        "@type": "SoftwareApplication",
-        "name": "Librariarr",
-        "applicationCategory": "MultimediaApplication",
-        "operatingSystem": "Linux",
-        "description": "Self-hosted media library management for Plex, Jellyfin, and Emby. Browse, filter, and automate your media with lifecycle rules, stream management, and more.",
-        "url": "https://librariarr.dev",
-        "image": "https://librariarr.dev/librariarr_hero.png",
-        "license": "https://www.gnu.org/licenses/agpl-3.0.html",
-        "isAccessibleForFree": true,
-        "offers": {
-          "@type": "Offer",
-          "price": "0",
-          "priceCurrency": "USD"
-        },
-        "codeRepository": "https://github.com/ahembree/librariarr"
+        "@graph": [
+          {
+            "@type": "WebSite",
+            "@id": "https://librariarr.dev/#website",
+            "url": "https://librariarr.dev/",
+            "name": "Librariarr",
+            "description": "Self-hosted media library management for Plex, Jellyfin, and Emby.",
+            "inLanguage": "en"
+          },
+          {
+            "@type": "SoftwareApplication",
+            "@id": "https://librariarr.dev/#software",
+            "name": "Librariarr",
+            "applicationCategory": "MultimediaApplication",
+            "applicationSubCategory": "Media library management",
+            "operatingSystem": "Linux, Docker",
+            "description": "Self-hosted media library management for Plex, Jellyfin, and Emby. Browse, filter, and automate your media with lifecycle rules, stream management, and more.",
+            "url": "https://librariarr.dev/",
+            "image": "https://librariarr.dev/librariarr_hero.png",
+            "screenshot": "https://librariarr.dev/screenshots/dashboard.webp",
+            "featureList": [
+              "Library browsing with filters for resolution, codec, HDR, audio, file size, and play history",
+              "Lifecycle rules that automate cleanup through Sonarr, Radarr, and Lidarr",
+              "Stream manager with maintenance mode, transcode policies, and blackout schedules",
+              "Customizable dashboard with library statistics and insights",
+              "Multi-server support with cross-server deduplication",
+              "Backup and restore, Discord notifications, and a scoped public API"
+            ],
+            "softwareHelp": {
+              "@type": "CreativeWork",
+              "url": "https://librariarr.dev/docs/"
+            },
+            "downloadUrl": "https://hub.docker.com/r/ahembree/librariarr",
+            "license": "https://www.gnu.org/licenses/agpl-3.0.html",
+            "isAccessibleForFree": true,
+            "offers": {
+              "@type": "Offer",
+              "price": "0",
+              "priceCurrency": "USD"
+            },
+            "codeRepository": "https://github.com/ahembree/librariarr",
+            "sameAs": [
+              "https://github.com/ahembree/librariarr",
+              "https://hub.docker.com/r/ahembree/librariarr"
+            ]
+          }
+        ]
       }
     </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -1034,6 +1076,7 @@
             height="1375"
             alt="Librariarr dashboard showing library statistics and a quality breakdown chart"
             fetchpriority="high"
+            decoding="async"
           />
         </div>
       </div>
@@ -1084,7 +1127,7 @@
               <span class="shot-dot"></span>
               <span class="shot-dot"></span>
             </div>
-            <img src="/screenshots/movies.webp" width="1760" height="1100" alt="Movie library grid with posters and quality details" loading="lazy" />
+            <img src="/screenshots/movies.webp" width="1760" height="1100" alt="Movie library grid with posters and quality details" loading="lazy" decoding="async" />
           </div>
         </div>
       </div>
@@ -1125,7 +1168,7 @@
               <span class="shot-dot"></span>
               <span class="shot-dot"></span>
             </div>
-            <img src="/screenshots/rules.webp" width="1760" height="1401" alt="Editing a lifecycle rule set with a nested condition group in the rule builder, alongside a live logic preview" loading="lazy" />
+            <img src="/screenshots/rules.webp" width="1760" height="1401" alt="Editing a lifecycle rule set with a nested condition group in the rule builder, alongside a live logic preview" loading="lazy" decoding="async" />
           </div>
         </div>
       </div>
@@ -1165,7 +1208,7 @@
               <span class="shot-dot"></span>
               <span class="shot-dot"></span>
             </div>
-            <img src="/screenshots/streams.webp" width="1760" height="1222" alt="Stream manager showing live playback sessions, maintenance mode, and transcode manager" loading="lazy" />
+            <img src="/screenshots/streams.webp" width="1760" height="1222" alt="Stream manager showing live playback sessions, maintenance mode, and transcode manager" loading="lazy" decoding="async" />
           </div>
         </div>
       </div>
@@ -1205,7 +1248,7 @@
               <span class="shot-dot"></span>
               <span class="shot-dot"></span>
             </div>
-            <img src="/screenshots/insights.webp" width="1760" height="1100" alt="Customizable Insights grid with the recently added shelf and distribution charts" loading="lazy" />
+            <img src="/screenshots/insights.webp" width="1760" height="1100" alt="Customizable Insights grid with the recently added shelf and distribution charts" loading="lazy" decoding="async" />
           </div>
         </div>
       </div>
@@ -1224,7 +1267,7 @@
       <div class="bento" data-reveal-stagger>
         <div class="bento-card">
           <div class="bento-media">
-            <img src="/screenshots/logs.webp" width="1360" height="850" alt="System logs with filterable levels, categories, and sources" loading="lazy" />
+            <img src="/screenshots/logs.webp" width="1360" height="850" alt="System logs with filterable levels, categories, and sources" loading="lazy" decoding="async" />
           </div>
           <div class="bento-body">
             <h4>System Logs</h4>
@@ -1237,7 +1280,7 @@
 
         <div class="bento-card">
           <div class="bento-media">
-            <img src="/screenshots/preroll.webp" width="1360" height="883" alt="Preroll manager showing saved presets and recurring and seasonal schedules" loading="lazy" />
+            <img src="/screenshots/preroll.webp" width="1360" height="883" alt="Preroll manager showing saved presets and recurring and seasonal schedules" loading="lazy" decoding="async" />
           </div>
           <div class="bento-body">
             <h4>Preroll Manager</h4>
@@ -1250,7 +1293,7 @@
 
         <div class="bento-card">
           <div class="bento-media">
-            <img src="/screenshots/settings.webp" width="1360" height="850" alt="Settings page with accent color and badge color customization" loading="lazy" />
+            <img src="/screenshots/settings.webp" width="1360" height="850" alt="Settings page with accent color and badge color customization" loading="lazy" decoding="async" />
           </div>
           <div class="bento-body">
             <h4>Make it yours</h4>

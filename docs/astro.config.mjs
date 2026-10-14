@@ -15,6 +15,15 @@ export default defineConfig({
       favicon: "/favicon.svg",
       description:
         "Media library management for Plex, Jellyfin, and Emby servers",
+      // "Last updated" dates under every page, read from git history. The
+      // deploy workflow checks out with fetch-depth 0 for this: on a shallow
+      // clone every page would carry the date of the one commit fetched.
+      lastUpdated: true,
+      components: {
+        // Adds BreadcrumbList + TechArticle structured data to every docs
+        // page on top of Starlight's own head tags.
+        Head: "./src/components/Head.astro",
+      },
       social: [
         {
           icon: "github",
@@ -31,11 +40,42 @@ export default defineConfig({
           content:
             'localStorage.setItem("starlight-theme","dark");document.documentElement.dataset.theme="dark";',
         },
+        // Starlight emits the canonical URL, og:title/type/url/locale/
+        // description/site_name, the meta description and twitter:card
+        // itself (src/utils/head.ts); these add the share image and what a
+        // crawler needs to use it.
+        {
+          tag: "meta",
+          attrs: {
+            name: "robots",
+            content: "index, follow, max-image-preview:large",
+          },
+        },
         {
           tag: "meta",
           attrs: {
             property: "og:image",
             content: "https://librariarr.dev/librariarr_hero.png",
+          },
+        },
+        {
+          tag: "meta",
+          attrs: { property: "og:image:type", content: "image/png" },
+        },
+        {
+          tag: "meta",
+          attrs: { property: "og:image:width", content: "1200" },
+        },
+        {
+          tag: "meta",
+          attrs: { property: "og:image:height", content: "630" },
+        },
+        {
+          tag: "meta",
+          attrs: {
+            property: "og:image:alt",
+            content:
+              "Librariarr — media library management for Plex, Jellyfin, and Emby",
           },
         },
         {
@@ -50,6 +90,14 @@ export default defineConfig({
           attrs: {
             name: "twitter:image",
             content: "https://librariarr.dev/librariarr_hero.png",
+          },
+        },
+        {
+          tag: "meta",
+          attrs: {
+            name: "twitter:image:alt",
+            content:
+              "Librariarr — media library management for Plex, Jellyfin, and Emby",
           },
         },
       ],

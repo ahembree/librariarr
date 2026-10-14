@@ -475,7 +475,8 @@ pnpm docs:preview  # Preview built docs
 
 **Structure:**
 
-- `docs/src/pages/index.astro` — Custom hero/landing page at `librariarr.dev/`
+- `docs/src/pages/index.astro` — Custom hero/landing page at `librariarr.dev/`. It is outside Starlight, so it carries its own `<head>`: title, meta description, canonical, sitemap link, `robots` with `max-image-preview:large`, Open Graph and Twitter tags with the share image's size and alt text, and `WebSite` + `SoftwareApplication` JSON-LD — Starlight emits none of that for it
+- `docs/src/components/Head.astro` — the Starlight `Head` override (`components.Head` in `astro.config.mjs`): renders Starlight's own head (canonical, Open Graph, meta description, the share-image tags from the config `head`) and appends `BreadcrumbList` (Home → Documentation → page) + `TechArticle` JSON-LD with the page's `dateModified`. That date comes from `lastUpdated: true`, which reads git history per page, so `docs-deploy.yml` checks out with `fetch-depth: 0` — on the default shallow clone every page carries the one fetched commit's date. Every page keeps a specific, keyword-bearing `description` in its frontmatter (quoted when it contains `: `, which YAML otherwise reads as a mapping); Starlight uses it for the meta description and `og:description`
 - `docs/src/content/docs/docs/` — MDX documentation at `librariarr.dev/docs/...`
 - `docs/astro.config.mjs` — Sidebar structure, site config
 - `docs/src/content.config.ts` — Astro 5 content collection config
