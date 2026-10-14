@@ -1,0 +1,151 @@
+---
+title: Automatically Delete Unwatched Media
+description: "Set up a lifecycle rule that finds movies and shows nobody has watched, waits for your review, and removes them through Radarr or Sonarr — on Plex, Jellyfin, or Emby."
+seoTitle: "Delete Unwatched Media Automatically"
+---
+
+import { Aside, Steps } from "@astrojs/starlight/components";
+
+A library grows faster than anyone watches it. This guide builds a
+[lifecycle rule](/docs/features/lifecycle-rules/) that finds movies (or shows)
+that have sat unwatched for a long time, shows you the list, waits a few days
+for you to object, and then removes them through Radarr or Sonarr — files
+included. It works the same on Plex, Jellyfin, and Emby.
+
+## Before you start
+
+- A media server connected and synced ([Connecting a Server](/docs/getting-started/connecting-a-server/)).
+- [Radarr](/docs/integrations/radarr/) for movies or [Sonarr](/docs/integrations/sonarr/)
+  for series connected under **Settings → Integrations**. Deleting goes through the
+  *arr app; with **Add import list exclusion** on the action, a list or a new
+  request cannot bring the title straight back.
+- Play history established. **Play Count** and **Last Played** count plays by
+  every user on the server, read from the watch history Librariarr syncs —
+  from the server's own history, or from [Tracearr](/docs/integrations/tracearr/)
+  when you have set it as the server's watch-history source under
+  **Settings → Media Servers**. Until that history has been synced once, a rule that
+  reads it is refused rather than treating every title as never watched. If
+  the rule editor says the history is not established yet, run
+  **Library → History → Refresh**; on a Tracearr-mapped server, wait for the
+  import to finish backfilling (Settings → Media Servers shows its progress) — the
+  rule set un-pauses itself when it does.
+- A recycle bin configured in Radarr or Sonarr (**Settings → Media Management**).
+  Librariarr warns when it is off, because a delete is then immediate.
+
+## Build the rule set
+
+<Aside type="note">
+  Rather not click through it? The finished rule set is in the
+  [Rule Set Library](/docs/guides/rule-set-library/#unwatched-movies) as JSON:
+  **Import** it on the Movies tab, pick your media servers and Radarr server,
+  and skip to step 4. The series version is there too.
+</Aside>
+
+<Steps>
+
+1. **Create the rule set.** Go to **Lifecycle → Rules**, pick the **Movies**
+   tab and add a rule set. Give it a name you will recognise in notifications,
+   such as *Unwatched for a year*.
+
+2. **Add the conditions.** In the top group:
+
+   - `addedAt` **More Than X Days Ago** `180` — leave new arrivals alone,
+     whether or not anyone has got to them yet.
+
+   Then **Add Group** inside it, holding the two ways of being unwatched,
+   joined with **OR**:
+
+   - `playCount` **equals** `0` — never played by anyone.
+   - `lastPlayedAt` **More Than X Days Ago** `365` — played, but not in the
+     last year. A title that has never been played has no last-played date,
+     so this condition does not match it on its own.
+
+   The nested group matters: rules in one group fold left to right, so an
+   OR beside the `addedAt` rule would read as *(added long ago AND not
+   played in a year) OR never played* and let every new, never-played title
+   through. The Logic Preview beside the builder spells out the exact
+   grouping.
+
+   For **series**, use the **Series** tab and the series rollup
+   **Series Last Played** (`seriesLastPlayedAt`) **more than X days ago** `365`
+   instead of the per-episode `lastPlayedAt`: it is the most recent play across
+   *every* episode, so a show someone is part-way through is never selected
+   because of its older episodes. `watchedEpisodePercentage` **equals** `0`
+   finds shows nobody has started.
+
+3. **Keep what you are keeping.** Add conditions to the top group that
+   exclude titles you know you want, for example `isWatchlisted` **equals**
+   `false` (the connected account's Plex watchlist; its Favorites on Jellyfin
+   and Emby). If you use [Seerr](/docs/integrations/seerr/) and want recent
+   requests left alone, put `seerrRequestDate` **In Last X Days** `90` in a
+   group of its own with the group's **NOT** switch on — a plain *More Than
+   X Days Ago* would also drop every title that was never requested, since
+   those have no request date. For individual titles, the **Exceptions**
+   list protects an item from every rule set, on every server.
+
+4. **Preview.** The **Preview** panel lists exactly what the rules match right
+   now, with the criteria each item satisfied. Read it. A rule that selects 40
+   titles you did not mean will delete 40 titles.
+
+5. **Set the action.** Pick your **Radarr Server** (or Sonarr) at the top
+   of the editor, switch on **Enable lifecycle action** and choose
+   **Delete from Radarr** (or **Delete from Sonarr**). It always removes the
+   files; **Unmonitor Only** is the action that keeps them. Turn on
+   **Add import list exclusion** so the title is not re-added. Set
+   **Delay (days)** to several days: matches then sit on the **Pending**
+   page with their scheduled date, and you can execute or exclude any of
+   them before the scheduled run touches them.
+
+6. **Save and detect matches.** That save button evaluates the rules at
+   once and fills the **Matches** page; the actions are scheduled on the
+   next detection run.
+
+</Steps>
+
+## Put a ceiling on it
+
+Under **Settings → General**, *Delete without asking, up to N items per run*
+holds any execution run that would delete more than N items. Nothing is
+deleted; the actions stay on the Pending page until you execute them yourself.
+It is worth setting while a new rule set beds in — see
+[Deletion Safety](/docs/features/deletion-safety/) for everything else that
+stands between a match and a deleted file.
+
+Turn on the rule set's **Send Discord notification on action execution** as
+well, so a run that deletes something tells you. A held run is announced
+whenever a [webhook](/docs/features/notifications/) is configured, whatever
+the rule set's own toggles say.
+
+## What happens next
+
+Lifecycle processing runs on two schedules under **Settings → Scheduling**:
+
+- **Detection** evaluates the rules and keeps the Matches page current. A
+  title someone watches in the meantime stops matching, and its pending action
+  is cancelled automatically.
+- **Execution** runs the actions whose delay has passed. Each one is checked
+  again just before it runs: the item must still match, must not be on the
+  Exceptions list, and must still be the title that was matched (a
+  *Fix Match* in Plex or *Identify* in Jellyfin that changed its identity
+  cancels the action). Completed deletions are recorded in the action history
+  with the space reclaimed.
+
+Both can be run by hand with **Run Now**.
+
+<Aside type="tip">
+  Leave **Enable lifecycle action** off at first. The rule set then only
+  collects matches, which you can watch for a week or two before switching
+  the delete on; the matches are kept, and the next detection run schedules
+  their actions with the delay you set. (With the switch on, even
+  **Do Nothing** schedules a *Monitor Only* action per match, which runs as
+  a no-op.)
+</Aside>
+
+## Related guides
+
+- [Show a "Leaving Soon" shelf in Plex](/docs/guides/leaving-soon-collection/)
+  so your users see what is scheduled before it goes.
+- [Clean up Seerr requests nobody watched](/docs/guides/seerr-request-cleanup/).
+- [Unmonitor or remove ended shows](/docs/guides/ended-shows/).
+- [Rule Set Library](/docs/guides/rule-set-library/) — every rule set from
+  these guides as importable JSON.

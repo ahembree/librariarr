@@ -30,6 +30,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          # Starlight's `lastUpdated` reads each page's date from git; on
+          # the default shallow clone every page gets the one fetched
+          # commit's date.
+          fetch-depth: 0
 
       - name: Build docs with Astro
         uses: withastro/action@v6

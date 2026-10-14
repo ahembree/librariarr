@@ -1,15 +1,19 @@
 /* Librariarr docs theme — aligned with app styling (OKLCH, navy-tinted surfaces) */
 
-@import url("https://fonts.googleapis.com/css2?family=Sora:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap");
+/* Self-hosted variable fonts (the same packages the app uses). Served from
+   this origin, so text renders without a round trip to Google Fonts. */
+@import "@fontsource-variable/sora";
+@import "@fontsource-variable/plus-jakarta-sans";
+@import "@fontsource-variable/jetbrains-mono";
 
 /* Starlight accent overrides — match app sidebar-primary blue */
 :root {
   --sl-color-accent-low: oklch(0.22 0.06 264);
   --sl-color-accent: oklch(0.55 0.26 264);
   --sl-color-accent-high: oklch(0.85 0.08 264);
-  --sl-font: "Plus Jakarta Sans", sans-serif;
-  --sl-font-system: "Plus Jakarta Sans", sans-serif;
-  --sl-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo,
+  --sl-font: "Plus Jakarta Sans Variable", sans-serif;
+  --sl-font-system: "Plus Jakarta Sans Variable", sans-serif;
+  --sl-font-mono: "JetBrains Mono Variable", ui-monospace, SFMono-Regular, Menlo,
     Monaco, Consolas, monospace;
 }
 
@@ -51,7 +55,7 @@
 /* Typography — use Sora for headings */
 .sl-markdown-content :is(h1, h2, h3, h4),
 .content-panel h1 {
-  font-family: "Sora", sans-serif;
+  font-family: "Sora Variable", sans-serif;
   letter-spacing: -0.02em;
 }
 

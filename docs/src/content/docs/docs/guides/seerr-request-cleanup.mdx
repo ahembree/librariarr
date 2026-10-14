@@ -1,0 +1,66 @@
+---
+title: Clean Up Seerr Requests Nobody Watched
+description: "Find media that was requested through Seerr, Overseerr or Jellyseerr, approved months ago, and never played — then remove it automatically with a lifecycle rule that reads the request data."
+seoTitle: "Delete Unwatched Seerr Requests Automatically"
+---
+
+import { Aside, Steps } from "@astrojs/starlight/components";
+
+Requests are where a library grows fastest: someone asks for a film, it
+arrives, and nobody opens it. With a [Seerr](/docs/integrations/seerr/)
+instance connected, lifecycle rules can see who requested what and when, so
+a rule set can act on exactly that pattern — requested, approved a while
+ago, never watched.
+
+## Before you start
+
+- Seerr (or Overseerr / Jellyseerr) connected under **Settings → Integrations**.
+  Librariarr reads every enabled instance.
+- Radarr or Sonarr connected, for the action.
+- Play history established on the targeted servers — see the
+  [delete unwatched media](/docs/guides/delete-unwatched-media/#before-you-start)
+  guide. A rule set that reads **Play Count** is paused until it is.
+
+## The rule set
+
+In **Lifecycle → Rules**, on the **Movies** tab, one AND group:
+
+- `seerrRequested` **equals** `true` — it was requested at all.
+- `seerrApprovalDate` **more than X days ago** `90` — the most recent
+  request was approved at least three months ago. **Approval Date** counts
+  requests Seerr has since marked *Completed* (the media arrived), which is
+  the normal state of anything now in your library.
+- `playCount` **equals** `0` — nobody has played it, whoever requested it.
+- `isWatchlisted` **equals** `false` — unless it is on the connected
+  account's Plex watchlist (its Favorites on Jellyfin and Emby).
+
+Action: **Delete from Radarr** with a delay of two weeks. Import it from the
+[Rule Set Library](/docs/guides/rule-set-library/#seerr-requests-nobody-watched)
+if you would rather not build it.
+
+A deleted title that is requested again counts as **freshly requested**:
+the dates a rule reads are those of the most recent request, so a re-request
+sits in the library for another 90 days before this rule set looks at it.
+
+## Variations
+
+- **Per requester.** `seerrRequestedBy` **contains** a username (an exact
+  name, or several separated by `|`) restricts the rule set to one person's
+  requests — useful for a household member who requests more than they
+  watch. The dropdown lists every user the Seerr instance knows, requester
+  or not; the name is the Plex username where Seerr has one, else the Seerr
+  username, else the email.
+- **Shows.** The same conditions on the **Series** tab with
+  **Delete from Sonarr**. Seerr fields apply to movie and series rule sets
+  only; music rule sets reject them.
+- **Nudge instead of delete.** Choose **Do Nothing** and turn on the Discord
+  match notification: you get a list of unwatched requests to raise with the
+  people who made them, and nothing is removed.
+
+## Where else the request data shows up
+
+The dashboard's Seerr card counts requests per user and whether they were
+watched, from the same walk of every instance's requests the rules read.
+If a title reads as never requested,
+check that the instance that holds the request is **enabled**: a disabled
+instance is not read, and a title requested only there looks unrequested.

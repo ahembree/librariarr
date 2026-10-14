@@ -15,6 +15,13 @@ export default defineConfig({
       favicon: "/favicon.svg",
       description:
         "Media library management for Plex, Jellyfin, and Emby servers",
+      // "Last updated" dates under every page, read from git history. The
+      // deploy workflow checks out with fetch-depth 0 for this: on a shallow
+      // clone every page would carry the date of the one commit fetched.
+      lastUpdated: true,
+      // Per-page <title>/og:title (from `seoTitle` frontmatter), per-page
+      // social image and BreadcrumbList + TechArticle structured data.
+      routeMiddleware: "./src/route-data.ts",
       social: [
         {
           icon: "github",
@@ -31,11 +38,42 @@ export default defineConfig({
           content:
             'localStorage.setItem("starlight-theme","dark");document.documentElement.dataset.theme="dark";',
         },
+        // Starlight emits the canonical URL, og:title/type/url/locale/
+        // description/site_name, the meta description and twitter:card
+        // itself (src/utils/head.ts); these add the share image and what a
+        // crawler needs to use it.
+        {
+          tag: "meta",
+          attrs: {
+            name: "robots",
+            content: "index, follow, max-image-preview:large",
+          },
+        },
         {
           tag: "meta",
           attrs: {
             property: "og:image",
             content: "https://librariarr.dev/librariarr_hero.png",
+          },
+        },
+        {
+          tag: "meta",
+          attrs: { property: "og:image:type", content: "image/png" },
+        },
+        {
+          tag: "meta",
+          attrs: { property: "og:image:width", content: "1200" },
+        },
+        {
+          tag: "meta",
+          attrs: { property: "og:image:height", content: "630" },
+        },
+        {
+          tag: "meta",
+          attrs: {
+            property: "og:image:alt",
+            content:
+              "Librariarr — media library management for Plex, Jellyfin, and Emby",
           },
         },
         {
@@ -50,6 +88,14 @@ export default defineConfig({
           attrs: {
             name: "twitter:image",
             content: "https://librariarr.dev/librariarr_hero.png",
+          },
+        },
+        {
+          tag: "meta",
+          attrs: {
+            name: "twitter:image:alt",
+            content:
+              "Librariarr — media library management for Plex, Jellyfin, and Emby",
           },
         },
       ],
@@ -73,6 +119,35 @@ export default defineConfig({
             {
               label: "Connecting a Server",
               slug: "docs/getting-started/connecting-a-server",
+            },
+          ],
+        },
+        {
+          label: "Guides",
+          items: [
+            {
+              label: "Delete Unwatched Media",
+              slug: "docs/guides/delete-unwatched-media",
+            },
+            {
+              label: "Leaving Soon Shelf",
+              slug: "docs/guides/leaving-soon-collection",
+            },
+            {
+              label: "Seerr Request Cleanup",
+              slug: "docs/guides/seerr-request-cleanup",
+            },
+            {
+              label: "Replace Low-Quality Files",
+              slug: "docs/guides/replace-low-quality-files",
+            },
+            {
+              label: "Ended Shows",
+              slug: "docs/guides/ended-shows",
+            },
+            {
+              label: "Rule Set Library",
+              slug: "docs/guides/rule-set-library",
             },
           ],
         },
@@ -148,6 +223,10 @@ export default defineConfig({
             {
               label: "API Reference",
               slug: "docs/advanced/api-reference",
+            },
+            {
+              label: "Style Guide",
+              slug: "docs/development/style-guide",
             },
           ],
         },
