@@ -19,11 +19,9 @@ export default defineConfig({
       // deploy workflow checks out with fetch-depth 0 for this: on a shallow
       // clone every page would carry the date of the one commit fetched.
       lastUpdated: true,
-      components: {
-        // Adds BreadcrumbList + TechArticle structured data to every docs
-        // page on top of Starlight's own head tags.
-        Head: "./src/components/Head.astro",
-      },
+      // Per-page <title>/og:title (from `seoTitle` frontmatter), per-page
+      // social image and BreadcrumbList + TechArticle structured data.
+      routeMiddleware: "./src/route-data.ts",
       social: [
         {
           icon: "github",
@@ -125,6 +123,15 @@ export default defineConfig({
           ],
         },
         {
+          label: "Guides",
+          items: [
+            {
+              label: "Delete Unwatched Media",
+              slug: "docs/guides/delete-unwatched-media",
+            },
+          ],
+        },
+        {
           label: "Features",
           items: [
             { label: "Dashboard", slug: "docs/features/dashboard" },
@@ -196,6 +203,10 @@ export default defineConfig({
             {
               label: "API Reference",
               slug: "docs/advanced/api-reference",
+            },
+            {
+              label: "Style Guide",
+              slug: "docs/development/style-guide",
             },
           ],
         },
