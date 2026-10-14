@@ -172,11 +172,14 @@ describe("/api/v1 read endpoints never return a media file path", () => {
     ]);
 
     const { key } = await createTestApiKey(user.id, { scopes: [...READ_ONLY_SCOPES] });
-    return { key, movie, episode, track };
+    return { key, user, movie, episode, track };
   }
 
-  it("holds for every read endpoint that returns JSON", async () => {
-    const { key, movie } = await seed();
+  // Also the owner's user id: rule sets, actions and exceptions carry it as
+  // their owner column, and a media server as `userId`. It is the app's
+  // internal identity for the account, and no integration needs it.
+  it("holds for every read endpoint that returns JSON, and none returns the owner's user id", async () => {
+    const { key, user, movie } = await seed();
 
     const cases: Array<{ label: string; handler: unknown; url: string; params?: Record<string, string> }> = [
       { label: "GET /me", handler: me.GET, url: "/api/v1/me" },
@@ -227,6 +230,7 @@ describe("/api/v1 read endpoints never return a media file path", () => {
     ];
 
     const leaks: string[] = [];
+    const ownerLeaks: string[] = [];
     const failures: string[] = [];
     for (const { label, handler, url, params } of cases) {
       const res = await callRouteWithParams(handler as Handler, params ?? {}, {
@@ -236,9 +240,21 @@ describe("/api/v1 read endpoints never return a media file path", () => {
       const text = await res.text();
       if (res.status !== 200) failures.push(`${label} → ${res.status}`);
       if (text.includes(STORAGE)) leaks.push(label);
+      if (text.includes(user.id)) ownerLeaks.push(label);
     }
     expect(failures).toEqual([]);
     expect(leaks).toEqual([]);
+    expect(ownerLeaks).toEqual([]);
+  });
+
+  it("keeps a stream viewer's own userId — the media server's id for who is watching", async () => {
+    const { key } = await seed();
+    const res = await callRouteWithParams(sessions.GET as unknown as Handler, {}, {
+      url: "/api/v1/tools/sessions",
+      headers: { authorization: `Bearer ${key}` },
+    });
+    const body = (await res.json()) as { sessions: Array<Record<string, unknown>> };
+    expect(body.sessions[0]).toMatchObject({ userId: "u1", username: "alice" });
   });
 
   it("keeps what a stream listing is for: who is watching what, on which player", async () => {

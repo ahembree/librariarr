@@ -5,6 +5,8 @@ import { createMediaServerClient } from "@/lib/media-server/factory";
 import { stampFirstSeen, rememberSession } from "@/lib/media-server/session-first-seen";
 import type { MediaSession } from "@/lib/media-server/types";
 import type { MediaServerType } from "@/generated/prisma/client";
+import { getApiKeyPrincipal } from "@/lib/api-keys/principal";
+import { getCachedSessionListing } from "@/lib/media-server/session-listing-cache";
 
 export interface SessionWithServer extends MediaSession {
   serverId: string;
@@ -32,13 +34,18 @@ export async function GET() {
 
   const now = Date.now();
   const unreachableServers: UnreachableServer[] = [];
+  // Under an API key each server's listing is answered from a short cache —
+  // see `session-listing-cache.ts` for why, and why a cookie request is not.
+  const viaApiKey = getApiKeyPrincipal() !== undefined;
 
   const results = await Promise.allSettled(
     servers.map(async (server) => {
       const client = createMediaServerClient(server.type, server.url, server.accessToken, {
         skipTlsVerify: server.tlsSkipVerify,
       });
-      const sessions = await client.getSessions();
+      const sessions = viaApiKey
+        ? await getCachedSessionListing(server.id, () => client.getSessions())
+        : await client.getSessions();
       return sessions.map<SessionWithServer>((s) => {
         // Keeps the label the terminate route logs with current.
         rememberSession(server.id, s);

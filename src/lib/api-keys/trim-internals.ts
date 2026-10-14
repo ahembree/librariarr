@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { jsonResponse } from "@/lib/api/json-response";
 import { sanitizeErrorDetail } from "@/lib/api/sanitize";
+import { getApiKeyPrincipal } from "./principal";
 
 /**
  * Drops a media server's addressing details from a JSON response before it
@@ -31,6 +32,14 @@ import { sanitizeErrorDetail } from "@/lib/api/sanitize";
  *   omits `type` still carries `machineId`, and `playServers` rows carry
  *   neither, only `serverUrl`. Nothing else in these responses has a `url`
  *   (an artwork `thumbUrl` is a different key and is kept).
+ * - a `userId` whose value is the KEY OWNER's id is removed from every object.
+ *   Rule sets, actions and exceptions each carry the admin's user id as their
+ *   owner column; it is the app's internal identity for the account (the
+ *   advisory-lock and job keys are built from it) and no integration needs
+ *   it. Matched by value rather than by key alone, because a playback session
+ *   also has a `userId` — the media server's id for the VIEWER, which is what
+ *   a stream listing is for. The owner is read from the request's API-key
+ *   principal (`withoutServerInternals`), or passed in by the caller.
  * - a string `error` is passed through `sanitizeErrorDetail`. The writers
  *   sanitize before persisting, but a `SyncJob`/`LifecycleAction` row stored
  *   before they did still holds the raw text.
@@ -48,6 +57,12 @@ const FILE_PATH_KEYS = new Set(["filePath", "partFile"]);
 const SERVER_TYPES = new Set(["PLEX", "JELLYFIN", "EMBY"]);
 const SERVER_INTERNAL_KEYS = new Set(["url", "externalUrl", "serverUrl", "machineId", "userId", "accessToken"]);
 const SERVER_CONTAINER_KEYS = new Set(["mediaServer", "playServers"]);
+const OWNER_KEY = "userId";
+
+export interface TrimOptions {
+  /** The key owner's user id: a `userId` holding it is dropped from every object. */
+  ownerId?: string;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -58,8 +73,12 @@ function looksLikeServer(obj: Record<string, unknown>): boolean {
 }
 
 /** The transform itself, exported for the unit test. Returns a new value; never mutates. */
-export function trimServerInternals(value: unknown, underServerKey = false): unknown {
-  if (Array.isArray(value)) return value.map((item) => trimServerInternals(item, underServerKey));
+export function trimServerInternals(value: unknown, options: TrimOptions = {}): unknown {
+  return trim(value, false, options.ownerId);
+}
+
+function trim(value: unknown, underServerKey: boolean, ownerId: string | undefined): unknown {
+  if (Array.isArray(value)) return value.map((item) => trim(item, underServerKey, ownerId));
   if (!isRecord(value)) return value;
 
   const isServer = underServerKey || looksLikeServer(value);
@@ -67,11 +86,12 @@ export function trimServerInternals(value: unknown, underServerKey = false): unk
   for (const [key, child] of Object.entries(value)) {
     if (FILE_PATH_KEYS.has(key)) continue;
     if (isServer && SERVER_INTERNAL_KEYS.has(key)) continue;
+    if (key === OWNER_KEY && ownerId !== undefined && child === ownerId) continue;
     if (key === "error" && typeof child === "string") {
       result[key] = sanitizeErrorDetail(child) ?? child;
       continue;
     }
-    result[key] = trimServerInternals(child, SERVER_CONTAINER_KEYS.has(key));
+    result[key] = trim(child, SERVER_CONTAINER_KEYS.has(key), ownerId);
   }
   return result;
 }
@@ -111,7 +131,8 @@ export function withoutServerInternals<C>(handler: RouteHandler<C>): (request: N
     const response = await handler(withoutAcceptEncoding(request), context);
     if (!isJson(response) || response.body === null) return response;
 
-    const trimmed = trimServerInternals(await response.json());
+    // The handler ran under the key's principal, so the owner is the key's user.
+    const trimmed = trimServerInternals(await response.json(), { ownerId: getApiKeyPrincipal()?.userId });
     const headers = new Headers();
     response.headers.forEach((value, key) => {
       if (!BODY_HEADERS.has(key.toLowerCase())) headers.set(key, value);

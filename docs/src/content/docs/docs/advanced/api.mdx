@@ -128,10 +128,10 @@ Most endpoints are the same routes the web app uses, served under `/api/v1`: the
 
 | Method | Path | Scope | Description |
 |--------|------|-------|-------------|
-| `GET` | `/api/v1/lifecycle/rules` | `lifecycle:read` | Rule sets |
+| `GET` | `/api/v1/lifecycle/rules` | `lifecycle:read` | Rule sets. The owner's user id is omitted |
 | `GET` | `/api/v1/lifecycle/rules/matches` | `lifecycle:read` | Current matches per rule set. Each match carries the item as detection stored it, without its file path. Not paged: each call counts as 20 requests |
-| `GET` | `/api/v1/lifecycle/actions` | `lifecycle:read` | Actions by `status`: `PENDING` (default), `COMPLETED`, `FAILED` or `ALL`. A series action's `mediaItem.title` is the show, or `<Show> SxxExx` (for example `Breaking Bad S03E10`) when the action acts on a single episode; its `parentTitle` is `null`. A failed action's error has internal paths and addresses redacted. Not paged: each call counts as 20 requests |
-| `GET` | `/api/v1/lifecycle/exceptions` | `lifecycle:read` | Exceptions; `type` = `MOVIE`, `SERIES`, `MUSIC` or `ALL`. Not paged: each call counts as 20 requests |
+| `GET` | `/api/v1/lifecycle/actions` | `lifecycle:read` | Actions by `status`: `PENDING` (default), `COMPLETED`, `FAILED` or `ALL`. A series action's `mediaItem.title` is the show, or `<Show> SxxExx` (for example `Breaking Bad S03E10`) when the action acts on a single episode; its `parentTitle` is `null`. A failed action's error has internal paths and addresses redacted, and the owner's user id is omitted. Not paged: each call counts as 20 requests |
+| `GET` | `/api/v1/lifecycle/exceptions` | `lifecycle:read` | Exceptions; `type` = `MOVIE`, `SERIES`, `MUSIC` or `ALL`. The owner's user id is omitted. Not paged: each call counts as 20 requests |
 | `GET` | `/api/v1/lifecycle/stats` | `lifecycle:read` | Deletion statistics |
 | `POST` | `/api/v1/lifecycle/exceptions` | `lifecycle:write` | Exclude an item from every rule: `{ "mediaItemId": "…", "reason": "…", "scope": "individual" }` (`scope` can also be `series`, `artist` or `album`). Answers `201` |
 | `POST` | `/api/v1/jobs/detection` | `lifecycle:write` | Queue lifecycle detection for every enabled rule set, like **Run now**. Answers `202` with `{ "queued": true, "jobs": 1 }`; read the result from `/api/v1/lifecycle/rules/matches` once the job has run |
@@ -144,7 +144,7 @@ Most endpoints are the same routes the web app uses, served under `/api/v1`: the
 
 | Method | Path | Scope | Description |
 |--------|------|-------|-------------|
-| `GET` | `/api/v1/tools/sessions` | `streams:read` | Active playback sessions on every enabled server, without the path of the file being played |
+| `GET` | `/api/v1/tools/sessions` | `streams:read` | Active playback sessions on every enabled server, without the path of the file being played. Answered from a listing at most 5 seconds old, so polling faster than that returns the same answer |
 | `GET` | `/api/v1/tools/maintenance` | `streams:read` | Maintenance mode status |
 | `POST` | `/api/v1/tools/sessions/terminate` | `streams:write` | Stop playback: `{ "serverId": "…" or "all", "sessionIds": ["…"], "message": "…" }` (omit `sessionIds` to stop every stream on the server). Session ids are the `sessionId` values `/api/v1/tools/sessions` returns; anything but letters, digits, `-` and `_` is refused with `400`, and a `serverId` that is not one of your enabled servers with `404` |
 | `PUT` | `/api/v1/tools/maintenance` | `streams:write` | Turn maintenance mode on or off: `{ "enabled": true, "message": "Back soon", "delay": 30 }`. `message` (up to 500 characters) and `delay` (0–3600 seconds) are optional and keep their current values when left out. Who is exempt from maintenance mode and whether Discord is notified can only be changed in Librariarr; sending those fields is a `400` |

@@ -3,6 +3,7 @@ import { gunzipSync } from "node:zlib";
 import { NextRequest, NextResponse } from "next/server";
 import { jsonResponse, MIN_COMPRESS_BYTES } from "@/lib/api/json-response";
 import { trimServerInternals, withoutServerInternals } from "@/lib/api-keys/trim-internals";
+import { runAsApiKey } from "@/lib/api-keys/principal";
 
 const request = (headers: Record<string, string> = {}) =>
   new NextRequest("http://localhost/api/v1/servers", { headers });
@@ -91,9 +92,33 @@ describe("trimServerInternals", () => {
     });
   });
 
-  it("keeps url and userId on objects that are not servers", () => {
+  it("keeps url and userId on objects that are not servers when no owner is given", () => {
     const body = { rule: { id: "r1", userId: "u1", url: "https://example.com", type: "MOVIE" }, items: [{ url: "keep" }] };
     expect(trimServerInternals(body)).toEqual(body);
+  });
+
+  // Rule sets, actions and exceptions carry the admin's user id as their owner
+  // column; a playback session's `userId` is the viewer's media-server id.
+  it("drops the owner's userId from every object, at any depth, and keeps any other", () => {
+    const body = {
+      ruleSets: [{ id: "r1", userId: "owner", name: "Unwatched", collection: { id: "c1", userId: "owner" } }],
+      actions: [{ id: "a1", userId: "owner", ruleSet: { userId: "owner" }, mediaItem: { id: "i1" } }],
+      exceptions: [{ id: "e1", userId: "owner", reason: "keep" }],
+      sessions: [{ sessionId: "s1", userId: "plex-viewer-7", username: "alice" }],
+      nested: { deeper: { userId: "owner", other: "kept" } },
+    };
+    expect(trimServerInternals(body, { ownerId: "owner" })).toEqual({
+      ruleSets: [{ id: "r1", name: "Unwatched", collection: { id: "c1" } }],
+      actions: [{ id: "a1", ruleSet: {}, mediaItem: { id: "i1" } }],
+      exceptions: [{ id: "e1", reason: "keep" }],
+      sessions: [{ sessionId: "s1", userId: "plex-viewer-7", username: "alice" }],
+      nested: { deeper: { other: "kept" } },
+    });
+  });
+
+  it("matches the owner by value only — a userId under another key, or another value, stays", () => {
+    const body = { ownerUserId: "owner", row: { userId: "someone-else" } };
+    expect(trimServerInternals(body, { ownerId: "owner" })).toEqual(body);
   });
 
   it("sanitizes string error fields and leaves other errors alone", () => {
@@ -137,6 +162,27 @@ describe("withoutServerInternals", () => {
     expect(res.headers.get("cache-control")).toBe("public");
     expect(res.headers.get("content-type")).toMatch(/^application\/json/);
     expect(await res.json()).toEqual({ servers: [{ id: "s1", name: "Home", type: "JELLYFIN" }] });
+  });
+
+  it("reads the owner off the request's API-key principal", async () => {
+    const wrapped = withoutServerInternals(async () =>
+      NextResponse.json({
+        ruleSets: [{ id: "r1", userId: "owner" }],
+        sessions: [{ sessionId: "s1", userId: "viewer" }],
+      }),
+    );
+    const principal = { keyId: "k1", userId: "owner", name: "ci", prefix: "lbr_abcdef", scopes: [] as const };
+    const res = await runAsApiKey(principal, () => wrapped(request()));
+    expect(await res.json()).toEqual({
+      ruleSets: [{ id: "r1" }],
+      sessions: [{ sessionId: "s1", userId: "viewer" }],
+    });
+    // Outside a principal nothing names an owner, so nothing is dropped by value.
+    const bare = await wrapped(request());
+    expect(await bare.json()).toEqual({
+      ruleSets: [{ id: "r1", userId: "owner" }],
+      sessions: [{ sessionId: "s1", userId: "viewer" }],
+    });
   });
 
   it("passes the route context through", async () => {

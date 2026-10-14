@@ -5,6 +5,9 @@ import { escapeLike } from "@/lib/filters/escape-like";
 import { resolveSeriesKey } from "@/lib/media/series-key";
 import type { Prisma } from "@/generated/prisma/client";
 
+/** Longest `q` the search accepts; longer is a 400 (quoted in `openapi.ts`). */
+const MAX_SEARCH_QUERY_LENGTH = 200;
+
 export async function GET(request: NextRequest) {
   const session = await getSession();
   if (!session.isLoggedIn) {
@@ -22,6 +25,15 @@ export async function GET(request: NextRequest) {
 
   if (!q || q.length === 0) {
     return NextResponse.json({ items: [] });
+  }
+  // Bounded: `q` becomes an ILIKE pattern run over every title in the type,
+  // and the public API reaches this route, where nothing else limited it but
+  // the request line (kilobytes). A title search is never that long.
+  if (q.length > MAX_SEARCH_QUERY_LENGTH) {
+    return NextResponse.json(
+      { error: `Search text must be ${MAX_SEARCH_QUERY_LENGTH} characters or fewer` },
+      { status: 400 }
+    );
   }
   if (!type || !["MOVIE", "SERIES", "MUSIC"].includes(type)) {
     return NextResponse.json({ error: "Invalid type" }, { status: 400 });

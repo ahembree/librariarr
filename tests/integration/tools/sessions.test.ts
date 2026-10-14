@@ -35,6 +35,8 @@ vi.mock("@/lib/plex/client", () => ({
 // Import route handlers AFTER mocks
 import { logger } from "@/lib/logger";
 import { _resetFirstSeen } from "@/lib/media-server/session-first-seen";
+import { invalidateSessionListings } from "@/lib/media-server/session-listing-cache";
+import { runAsApiKey, type ApiKeyPrincipal } from "@/lib/api-keys/principal";
 import { GET } from "@/app/api/tools/sessions/route";
 import { POST } from "@/app/api/tools/sessions/terminate/route";
 
@@ -56,6 +58,7 @@ describe("Tools sessions endpoints", () => {
     clearMockSession();
     vi.clearAllMocks();
     _resetFirstSeen();
+    invalidateSessionListings();
     mockGetSessions.mockResolvedValue([
       {
         sessionId: "s1",
@@ -167,6 +170,73 @@ describe("Tools sessions endpoints", () => {
 
       // Should still return sessions from the good server
       expect(body.sessions).toHaveLength(1);
+    });
+  });
+
+  // Through `/api/v1/tools/sessions` the route runs under an API-key principal
+  // (the guard sets it and the session mock mirrors the real `getSession`).
+  // A key may send 600 requests a minute, each a round trip per server, so
+  // its answer comes from a short per-server cache; the UI's cookie requests
+  // do not, since they refetch on a pushed `session-changed` event.
+  describe("GET /api/tools/sessions under an API key", () => {
+    const asKey = <T,>(userId: string, fn: () => Promise<T>): Promise<T> => {
+      const principal: ApiKeyPrincipal = { keyId: "k1", userId, name: "poller", prefix: "lbr_abcdef", scopes: ["streams:read"] };
+      return runAsApiKey(principal, fn);
+    };
+
+    it("asks each server once within the cache window, not once per request", async () => {
+      const user = await createTestUser();
+      await createTestServer(user.id, { name: "Server 1" });
+      await createTestServer(user.id, { name: "Server 2" });
+
+      for (let i = 0; i < 5; i++) {
+        const response = await asKey(user.id, () => callRoute(GET, { url: "/api/v1/tools/sessions" }));
+        const body = await expectJson<{ sessions: unknown[] }>(response, 200);
+        expect(body.sessions).toHaveLength(2);
+      }
+      expect(mockGetSessions).toHaveBeenCalledTimes(2);
+    });
+
+    it("asks again on every cookie request — the UI refetches on a pushed change", async () => {
+      const user = await createTestUser();
+      await createTestServer(user.id, { name: "Server 1" });
+      setMockSession({ userId: user.id, isLoggedIn: true });
+
+      for (let i = 0; i < 3; i++) {
+        await expectJson(await callRoute(GET, { url: "/api/tools/sessions" }), 200);
+      }
+      expect(mockGetSessions).toHaveBeenCalledTimes(3);
+    });
+
+    it("does not keep a failed fetch, and lists a stream again once it is gone after a termination", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id, { name: "Server 1" });
+
+      mockGetSessions.mockRejectedValueOnce(new Error("Connection refused"));
+      let body = await expectJson<{ sessions: unknown[]; unreachableServers: unknown[] }>(
+        await asKey(user.id, () => callRoute(GET, { url: "/api/v1/tools/sessions" })),
+        200,
+      );
+      expect(body.unreachableServers).toHaveLength(1);
+
+      body = await expectJson(await asKey(user.id, () => callRoute(GET, { url: "/api/v1/tools/sessions" })), 200);
+      expect(body.sessions).toHaveLength(1);
+      expect(mockGetSessions).toHaveBeenCalledTimes(2);
+
+      // Stopping the stream drops the listing: the next read asks the server,
+      // which now reports nothing playing.
+      mockGetSessions.mockResolvedValue([]);
+      const stop = await asKey(user.id, () =>
+        callRoute(POST, {
+          url: "/api/v1/tools/sessions/terminate",
+          method: "POST",
+          body: { serverId: server.id, sessionIds: ["s1"], message: "Bye" },
+        }),
+      );
+      await expectJson(stop, 200);
+      body = await expectJson(await asKey(user.id, () => callRoute(GET, { url: "/api/v1/tools/sessions" })), 200);
+      expect(body.sessions).toHaveLength(0);
+      expect(mockGetSessions).toHaveBeenCalledTimes(3);
     });
   });
 

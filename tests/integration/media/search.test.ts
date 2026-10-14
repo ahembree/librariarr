@@ -69,6 +69,24 @@ describe("GET /api/media/search", () => {
     expect(body.items).toEqual([]);
   });
 
+  it("returns 400 when q is longer than 200 characters", async () => {
+    const user = await createTestUser();
+    setMockSession({ userId: user.id, isLoggedIn: true });
+
+    const atLimit = await callRoute(GET, {
+      url: "/api/media/search",
+      searchParams: { q: "a".repeat(200), type: "MOVIE" },
+    });
+    await expectJson<{ items: unknown[] }>(atLimit, 200);
+
+    const response = await callRoute(GET, {
+      url: "/api/media/search",
+      searchParams: { q: "a".repeat(201), type: "MOVIE" },
+    });
+    const body = await expectJson<{ error: string }>(response, 400);
+    expect(body.error).toBe("Search text must be 200 characters or fewer");
+  });
+
   it("returns 400 when type is missing", async () => {
     const user = await createTestUser();
     setMockSession({ userId: user.id, isLoggedIn: true });
