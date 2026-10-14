@@ -21,14 +21,19 @@ Sonarr knows the first fact; Librariarr's play history knows the second.
 
 ## Step one: stop monitoring
 
-Start with the non-destructive version. On the **Series** tab, **Series
-Scope** on, one AND group:
+Start with the non-destructive version. On the **Series** tab with
+**Match against entire series** on, the top group holds:
 
 - `arrEnded` **equals** `true` — Sonarr reports the show as ended.
 - `arrHasUnaired` **equals** `false` — nothing is still due to air (a
   show marked ended can have a final episode pending).
-- `seriesLastPlayedAt` **more than X days ago** `365` — the newest play
-  across every episode is over a year old.
+
+and a nested group (**Add Group**) joined with **OR** inside:
+
+- `watchedEpisodePercentage` **equals** `0` — nobody has ever started it.
+- `seriesLastPlayedAt` **More Than X Days Ago** `365` — the newest play
+  across every episode is over a year old. A show nobody has played has no
+  play date at all, so this condition alone would skip it.
 
 Action **Unmonitor Only**, delay of a few days. Sonarr stops searching for
 upgrades; every file stays. Import it from the

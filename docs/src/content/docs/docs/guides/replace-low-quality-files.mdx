@@ -17,8 +17,8 @@ In **Lifecycle → Rules**, on the **Movies** tab, start with one condition
 and widen from there:
 
 - `resolution` **contains** `SD|480P` — the rule builder offers the values
-  your library actually holds (`4K`, `1080P`, `720P`, `480P`, `SD`); pick
-  several and they are ORed.
+  your library actually holds (`4K`, `1080P`, `720P`, `480P`, `SD`, and
+  `Other` for files it could not classify); pick several and they are ORed.
 - `arrMonitored` **equals** `true` — only files Radarr will act on.
 
 Useful additions:
@@ -41,7 +41,7 @@ than you expect.
 |--------|--------------|----------------|
 | **Search for New Copy** | Radarr searches; it replaces the file only if it finds a release its quality profile prefers. | The safe default. Nothing is removed if no better release exists. |
 | **Change Quality Profile** | The movie is moved to the profile you pick; with **Search for upgrade after profile change** on, a search follows. Items already on that profile are skipped. | Your current profile is the reason the file was never upgraded. |
-| **Monitor & Delete Files** with **Search after** | The file is deleted and Radarr immediately searches for a replacement. | You want the file gone whatever the search finds. Check the recycle bin is on. |
+| **Monitor & Delete Files** with **Search for new copy after file deletion** | The file is deleted and Radarr immediately searches for a replacement. | You want the file gone whatever the search finds. Check the recycle bin is on. |
 
 The first is in the
 [Rule Set Library](/docs/guides/rule-set-library/#low-quality-movies-to-replace).
@@ -50,9 +50,11 @@ profile that prefers 1080p, which Radarr then fetches and swaps in — and the
 library has
 [that rule set](/docs/guides/rule-set-library/#downgrade-watched-movies)
 too, with the profile ordering it depends on.
-An action with the same configuration runs **once** per item: a file that is
-still SD after a search is not searched again every cycle unless you change
-the action's configuration, which re-arms it.
+A non-destructive action with the same configuration runs **once** per
+item: a file that is still SD after a search is not searched again every
+cycle unless you change the action's configuration, which re-arms it.
+**Monitor & Delete Files** is a delete, and a delete is scheduled again
+whenever the item still matches.
 
 <Aside type="caution">
   **Delete Files Only** and the two monitor-and-delete actions remove the
@@ -64,7 +66,7 @@ the action's configuration, which re-arms it.
 ## Shows
 
 On the **Series** tab the same conditions work per episode. With
-**Series Scope** off, a file delete acts only on the episodes that matched
+**Match against entire series** off, a file delete acts only on the episodes that matched
 (a 480p episode in an otherwise 1080p season), and Sonarr's search is run
 for exactly those episodes. With it on, the action covers the whole show.
 

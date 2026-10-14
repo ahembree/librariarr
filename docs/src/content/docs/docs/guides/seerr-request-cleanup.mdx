@@ -31,8 +31,8 @@ In **Lifecycle → Rules**, on the **Movies** tab, one AND group:
   requests Seerr has since marked *Completed* (the media arrived), which is
   the normal state of anything now in your library.
 - `playCount` **equals** `0` — nobody has played it, whoever requested it.
-- `isWatchlisted` **equals** `false` — unless someone has it on their Plex
-  watchlist.
+- `isWatchlisted` **equals** `false` — unless it is on the connected
+  account's Plex watchlist (its Favorites on Jellyfin and Emby).
 
 Action: **Delete from Radarr** with a delay of two weeks. Import it from the
 [Rule Set Library](/docs/guides/rule-set-library/#seerr-requests-nobody-watched)
@@ -44,10 +44,11 @@ sits in the library for another 90 days before this rule set looks at it.
 
 ## Variations
 
-- **Per requester.** `seerrRequestedBy` **contains** a username restricts
-  the rule set to one person's requests — useful for a household member who
-  requests more than they watch. The dropdown lists the requesters Seerr
-  knows; the name is the Plex username where Seerr has one, else the Seerr
+- **Per requester.** `seerrRequestedBy` **contains** a username (an exact
+  name, or several separated by `|`) restricts the rule set to one person's
+  requests — useful for a household member who requests more than they
+  watch. The dropdown lists every user the Seerr instance knows, requester
+  or not; the name is the Plex username where Seerr has one, else the Seerr
   username, else the email.
 - **Shows.** The same conditions on the **Series** tab with
   **Delete from Sonarr**. Seerr fields apply to movie and series rule sets
@@ -59,7 +60,7 @@ sits in the library for another 90 days before this rule set looks at it.
 ## Where else the request data shows up
 
 The dashboard's Seerr card counts requests per user and whether they were
-watched, and the **Requested By** values in the rule builder come from the
-same walk of every instance's requests. If a title reads as never requested,
+watched, from the same walk of every instance's requests the rules read.
+If a title reads as never requested,
 check that the instance that holds the request is **enabled**: a disabled
 instance is not read, and a title requested only there looks unrequested.

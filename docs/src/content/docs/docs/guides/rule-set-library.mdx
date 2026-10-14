@@ -154,7 +154,8 @@ all. On Jellyfin and Emby `isWatchlisted` is the connected account's
 
 ## Unwatched shows
 
-The series version, evaluated per show with **Series Scope** on: no episode
+The series version, evaluated per show with **Match against entire series**
+on: no episode
 added in six months, and either nobody has watched any of it or the newest
 play across the whole show is over a year old. **Delete from Sonarr** removes
 the entire series.
@@ -550,8 +551,8 @@ walks through it. Widen `4K` to `4K|1080P` for a profile that stops at
 
 </details>
 
-For shows, build the same rule set on the **Series** tab with **Series
-Scope** on: `watchedEpisodePercentage` **>=** `100` and
+For shows, build the same rule set on the **Series** tab with **Match
+against entire series** on: `watchedEpisodePercentage` **>=** `100` and
 `seriesLastPlayedAt` **More Than X Days Ago** `30` select fully watched
 shows for **Change Quality Profile** (Sonarr), whose profiles order the
 same way.

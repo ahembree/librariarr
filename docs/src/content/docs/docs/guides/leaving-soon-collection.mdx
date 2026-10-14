@@ -20,9 +20,9 @@ run.
 
 ## Attach a collection to a delete rule set
 
-The shelf belongs on the rule set that **deletes**, not on a separate one:
-ordering by action date reads the pending actions, and only an armed delete
-rule set has those.
+The shelf belongs on the rule set whose action is **enabled**, not on a
+separate one: ordering by action date reads that rule set's pending
+actions, and a rule set with its action switched off has none.
 
 <Steps>
 
@@ -39,7 +39,8 @@ rule set has those.
 
 4. Give the rule set an **action delay** long enough for people to react —
    two weeks is a reasonable default — and **Save**. The collection is
-   created on Plex and filled on the next detection run.
+   created on Plex, and filled, by the first detection run that matches
+   something.
 
 </Steps>
 
@@ -50,8 +51,8 @@ has the unwatched-movies rule set with this collection already attached.
 ## What your users see
 
 - The collection holds every current match, in the order their deletions
-  are scheduled. Items whose action has not been scheduled yet (the action
-  is off, or the item is excepted) sort last.
+  are scheduled. Matches with no pending action — from a rule set feeding
+  the same collection with its action off — sort last.
 - A title someone watches stops matching on the next detection run; its
   pending deletion is cancelled and it leaves the shelf.
 - A title you protect with an **exception** is removed from the collection
