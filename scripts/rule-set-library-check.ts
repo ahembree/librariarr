@@ -61,6 +61,8 @@ const EXPORT_KEYS = new Set<string>([
 const LIBRARY_TYPES = new Set<string>(["MOVIE", "SERIES", "MUSIC"]);
 const COLLECTION_SORTS = new Set<string>(["RELEASE_DATE", "ALPHABETICAL", "ACTION_DATE"]);
 const DAY_OPERATORS = new Set(["inLastDays", "notInLastDays"]);
+const VALUELESS_OPERATORS = new Set(["isNull", "isNotNull"]);
+const EXACT_OPERATORS = new Set(["equals", "notEquals"]);
 
 const ACTION_TYPES: Record<LibraryType, Set<string>> = {
   MOVIE: new Set(MOVIE_ACTION_TYPES.map((a) => a.value)),
@@ -159,11 +161,13 @@ export function ruleSetProblems(ruleSet: RuleSetExport): string[] {
         fail(`${rule.field}: value must be a string, got ${typeof rule.value}`);
         continue;
       }
+      // Is Empty / Is Not Empty take no value; the editor stores "".
+      if (VALUELESS_OPERATORS.has(rule.operator)) continue;
       if (field.type === "boolean" && rule.value !== "true" && rule.value !== "false") fail(`${rule.field}: boolean value must be "true" or "false"`);
       if ((field.type === "number" || DAY_OPERATORS.has(rule.operator)) && !/^-?\d+(\.\d+)?$/.test(rule.value)) {
         fail(`${rule.field} ${rule.operator} needs a number, got "${rule.value}"`);
       }
-      if (field.knownValues && rule.operator === "equals" && !field.knownValues.includes(rule.value)) {
+      if (field.knownValues && EXACT_OPERATORS.has(rule.operator) && !field.knownValues.includes(rule.value)) {
         fail(`${rule.field}: "${rule.value}" is not one of ${field.knownValues.join(", ")}`);
       }
     }

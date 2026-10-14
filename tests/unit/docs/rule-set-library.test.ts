@@ -68,6 +68,18 @@ describe("docs rule set library", () => {
       'isWatchlisted: boolean value must be "true" or "false"',
       'isWatchlisted: "yes" is not one of true, false',
     ]);
+    expect(broken((r) => { r.rules[0].rules[1].operator = "notEquals"; r.rules[0].rules[1].value = "yes"; return r; })).toEqual([
+      'isWatchlisted: boolean value must be "true" or "false"',
+      'isWatchlisted: "yes" is not one of true, false',
+    ]);
     expect(checkRuleSetLibrary("```json\n{ not json\n```").problems.get("block #1")?.[0]).toMatch(/^not valid JSON/);
+  });
+
+  it("accepts the valueless operators as the editor stores them", () => {
+    // Is Empty / Is Not Empty save `value: ""`, which is not a number.
+    const base = structuredClone(ruleSets[0]);
+    base.rules[0].rules[0] = { id: "r1", field: "lastPlayedAt", operator: "isNull", value: "", condition: "AND" };
+    base.rules[0].rules[1] = { id: "r2", field: "playCount", operator: "isNotNull", value: "", condition: "AND" };
+    expect(ruleSetProblems(base)).toEqual([]);
   });
 });
