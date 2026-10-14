@@ -1,6 +1,6 @@
 ---
 title: Rule Set Library
-description: "Ready-made Librariarr lifecycle rule sets to import as JSON: delete unwatched movies and shows, clean up Seerr requests, replace low-quality files, a Leaving Soon shelf, and more."
+description: "Ready-made Librariarr lifecycle rule sets to import as JSON: delete unwatched movies and shows, clean up Seerr requests, replace low-quality files, downgrade watched 4K movies, a Leaving Soon shelf, and more."
 seoTitle: "Rule Set Library: Importable Lifecycle Rules"
 ---
 
@@ -437,6 +437,170 @@ for the quality-profile and delete-and-re-grab variants.
 
 The `resolution` values your library actually holds are listed in the rule
 builder's dropdown; add `720P` to the pipe-separated list to widen the net.
+
+## Downgrade watched movies: change the profile
+
+The first half of a downgrade. Movies someone has watched, that nobody has
+played again in a month and that are not on the watchlist, are moved to a
+lower Radarr quality profile — one that tops out at 1080p or 720p, say,
+while new releases keep arriving in 4K. Pick that profile on the **Actions**
+tab after importing; a movie already on it is skipped.
+
+A profile change on its own never shrinks anything: Radarr only ever
+replaces a file with one its profile ranks *higher*, so the 4K file stays
+until the next rule set removes it. **Search for upgrade after profile
+change** is left off for the same reason.
+
+**Needs:** Radarr with a lower profile set up, established play history.
+
+<details>
+<summary>JSON — Downgrade watched movies (profile)</summary>
+
+```json
+{
+  "version": 1,
+  "type": "MOVIE",
+  "name": "Downgrade watched movies (profile)",
+  "rules": [
+    {
+      "id": "g1",
+      "condition": "AND",
+      "rules": [
+        {
+          "id": "r1",
+          "field": "playCount",
+          "operator": "greaterThanOrEqual",
+          "value": "1",
+          "condition": "AND"
+        },
+        {
+          "id": "r2",
+          "field": "lastPlayedAt",
+          "operator": "notInLastDays",
+          "value": "30",
+          "condition": "AND"
+        },
+        {
+          "id": "r3",
+          "field": "isWatchlisted",
+          "operator": "equals",
+          "value": "false",
+          "condition": "AND"
+        }
+      ],
+      "groups": []
+    }
+  ],
+  "enabled": true,
+  "actionEnabled": false,
+  "actionType": "CHANGE_QUALITY_PROFILE_RADARR",
+  "actionDelayDays": 7,
+  "addImportExclusion": false,
+  "searchAfterAction": false,
+  "addArrTags": [],
+  "removeArrTags": [],
+  "collectionEnabled": false,
+  "collectionName": null,
+  "collectionSortName": null,
+  "collectionHomeScreen": false,
+  "collectionRecommended": false,
+  "collectionSort": "ALPHABETICAL",
+  "discordNotifyOnAction": true,
+  "discordNotifyOnMatch": false,
+  "stickyMatches": false
+}
+```
+
+</details>
+
+## Downgrade watched movies: replace the file
+
+The second half. Movies already on the lower profile whose file is still
+4K, and that have been played, get **Monitor & Delete Files** with
+**Search after**: Radarr deletes the file and immediately searches for a
+release the lower profile allows. Change `Archive` to the name of your
+profile — with an instance selected, the rule builder lists its profiles
+under **Quality Profile** — and widen `4K` to `4K|1080P` if the lower
+profile stops at 720p.
+
+Run the two together: the first moves a movie onto the profile, this one
+replaces its file on a later cycle. Once the smaller file is in, the movie
+no longer matches, and the same action is never repeated on an item.
+
+**Needs:** Radarr with a recycle bin — without one the delete is immediate
+— and established play history.
+
+<details>
+<summary>JSON — Downgrade watched movies (file)</summary>
+
+```json
+{
+  "version": 1,
+  "type": "MOVIE",
+  "name": "Downgrade watched movies (file)",
+  "rules": [
+    {
+      "id": "g1",
+      "condition": "AND",
+      "rules": [
+        {
+          "id": "r1",
+          "field": "arrQualityProfile",
+          "operator": "contains",
+          "value": "Archive",
+          "condition": "AND"
+        },
+        {
+          "id": "r2",
+          "field": "resolution",
+          "operator": "contains",
+          "value": "4K",
+          "condition": "AND"
+        },
+        {
+          "id": "r3",
+          "field": "playCount",
+          "operator": "greaterThanOrEqual",
+          "value": "1",
+          "condition": "AND"
+        }
+      ],
+      "groups": []
+    }
+  ],
+  "enabled": true,
+  "actionEnabled": false,
+  "actionType": "MONITOR_DELETE_FILES_RADARR",
+  "actionDelayDays": 3,
+  "addImportExclusion": false,
+  "searchAfterAction": true,
+  "addArrTags": [],
+  "removeArrTags": [],
+  "collectionEnabled": false,
+  "collectionName": null,
+  "collectionSortName": null,
+  "collectionHomeScreen": false,
+  "collectionRecommended": false,
+  "collectionSort": "ALPHABETICAL",
+  "discordNotifyOnAction": true,
+  "discordNotifyOnMatch": false,
+  "stickyMatches": false
+}
+```
+
+</details>
+
+<Aside type="caution">
+  If Radarr's search finds no release the lower profile accepts, the movie
+  is left with no file. Keep the profile's allowed qualities broad enough
+  that something is always available, and preview the matches first.
+</Aside>
+
+For shows, build the same pair on the **Series** tab with **Series Scope**
+on: `watchedEpisodePercentage` **greater than or equal** `100` and
+`seriesLastPlayedAt` **More Than X Days Ago** `30` select fully watched
+shows for **Change Quality Profile** (Sonarr), and **Monitor & Delete Files**
+on the lower profile replaces every episode file.
 
 ## Unwatched movies with a Leaving Soon shelf
 
