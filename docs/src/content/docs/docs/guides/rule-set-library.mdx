@@ -12,6 +12,11 @@ produces, ready to paste into **Import**. Each one ships with its action
 the matches, pick your Radarr or Sonarr instance, and switch the action on
 when you are happy with the list.
 
+The JSON sits folded under each rule set — open **JSON — …**, then use the
+copy button in the top-right corner of the block. Every block is checked
+against the app's own field, operator and action registries when the docs
+are built, so what is published is what the editor accepts.
+
 ## Importing a rule set
 
 <Steps>
@@ -59,6 +64,9 @@ is the rule set the
 
 **Needs:** Radarr, and play history established on every targeted server
 (see [Play history](/docs/guides/delete-unwatched-media/#before-you-start)).
+
+<details>
+<summary>JSON — Unwatched movies</summary>
 
 ```json
 {
@@ -130,6 +138,8 @@ is the rule set the
 }
 ```
 
+</details>
+
 `lastPlayedAt` **More Than X Days Ago** matches only items that have a last
 played date, so `playCount equals 0` is ORed in for titles never played at
 all. On Jellyfin and Emby `isWatchlisted` is never set, so that condition
@@ -143,6 +153,9 @@ play across the whole show is over a year old. **Delete from Sonarr** removes
 the entire series.
 
 **Needs:** Sonarr, established play history.
+
+<details>
+<summary>JSON — Unwatched shows</summary>
 
 ```json
 {
@@ -208,6 +221,8 @@ the entire series.
 }
 ```
 
+</details>
+
 **Series Last Played** is the most recent play of *any* episode, so a show
 someone is part-way through is never selected because of its older episodes.
 See [ended shows](/docs/guides/ended-shows/) for a non-destructive variant.
@@ -219,6 +234,9 @@ played in a year: Sonarr stops monitoring them for upgrades. Nothing is
 deleted, so the delay is short.
 
 **Needs:** Sonarr, established play history.
+
+<details>
+<summary>JSON — Ended shows nobody watches</summary>
 
 ```json
 {
@@ -276,6 +294,8 @@ deleted, so the delay is short.
 }
 ```
 
+</details>
+
 ## Seerr requests nobody watched
 
 Titles that were requested through Seerr and approved more than 90 days ago,
@@ -285,6 +305,9 @@ Radarr removes them. Make the same rule set on the **Series** tab with
 
 **Needs:** Radarr, [Seerr](/docs/integrations/seerr/), established play
 history. See [cleaning up Seerr requests](/docs/guides/seerr-request-cleanup/).
+
+<details>
+<summary>JSON — Seerr requests nobody watched</summary>
 
 ```json
 {
@@ -348,6 +371,8 @@ history. See [cleaning up Seerr requests](/docs/guides/seerr-request-cleanup/).
 }
 ```
 
+</details>
+
 ## Low-quality movies to replace
 
 Movies whose file is standard definition, still monitored in Radarr, get a
@@ -356,6 +381,9 @@ only when its quality profile allows the upgrade. Nothing is deleted.
 
 **Needs:** Radarr. See [replacing low-quality files](/docs/guides/replace-low-quality-files/)
 for the quality-profile and delete-and-re-grab variants.
+
+<details>
+<summary>JSON — Low-quality movies to replace</summary>
 
 ```json
 {
@@ -405,6 +433,8 @@ for the quality-profile and delete-and-re-grab variants.
 }
 ```
 
+</details>
+
 The `resolution` values your library actually holds are listed in the rule
 builder's dropdown; add `720P` to the pipe-separated list to widen the net.
 
@@ -416,6 +446,9 @@ home screen, soonest first, for the two weeks before it goes. Plex only. See
 [the Leaving Soon guide](/docs/guides/leaving-soon-collection/).
 
 **Needs:** Radarr, established play history, a Plex server.
+
+<details>
+<summary>JSON — Unwatched movies (Leaving Soon)</summary>
 
 ```json
 {
@@ -487,6 +520,8 @@ home screen, soonest first, for the two weeks before it goes. Plex only. See
 }
 ```
 
+</details>
+
 ## Large unwatched files to review
 
 Not a cleanup, a watch list: movies over 20 GB that nobody has played in the
@@ -496,6 +531,9 @@ the list changes. Useful as a first rule set while you get a feel for what
 matching looks like on your library.
 
 **Needs:** nothing beyond a synced server (play history for `playCount`).
+
+<details>
+<summary>JSON — Large unwatched files to review</summary>
 
 ```json
 {
@@ -551,5 +589,7 @@ matching looks like on your library.
   "stickyMatches": false
 }
 ```
+
+</details>
 
 `fileSize` is in megabytes: `20000` is about 20 GB.

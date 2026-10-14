@@ -3,11 +3,12 @@
   "private": true,
   "packageManager": "pnpm@12.8.1",
   "scripts": {
-    "dev": "pnpm run generate:openapi && astro dev",
-    "build": "pnpm run generate:openapi && astro build",
+    "dev": "pnpm run generate:openapi && pnpm run validate:rulesets && astro dev",
+    "build": "pnpm run generate:openapi && pnpm run validate:rulesets && astro build",
     "preview": "astro preview",
     "astro": "astro",
-    "generate:openapi": "tsx ../scripts/generate-openapi.ts"
+    "generate:openapi": "tsx ../scripts/generate-openapi.ts",
+    "validate:rulesets": "tsx ../scripts/validate-rule-set-library.ts"
   },
   "dependencies": {
     "@astrojs/starlight": "^0.42.4",
