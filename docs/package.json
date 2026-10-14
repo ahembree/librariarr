@@ -3,15 +3,21 @@
   "private": true,
   "packageManager": "pnpm@12.8.1",
   "scripts": {
-    "dev": "pnpm run generate:openapi && astro dev",
-    "build": "pnpm run generate:openapi && astro build",
+    "dev": "pnpm run generate:openapi && pnpm run validate:rulesets && astro dev",
+    "build": "pnpm run generate:openapi && pnpm run validate:rulesets && astro build",
     "preview": "astro preview",
     "astro": "astro",
-    "generate:openapi": "tsx ../scripts/generate-openapi.ts"
+    "generate:openapi": "tsx ../scripts/generate-openapi.ts",
+    "validate:rulesets": "tsx ../scripts/validate-rule-set-library.ts"
   },
   "dependencies": {
     "@astrojs/starlight": "^0.42.4",
+    "@fontsource-variable/jetbrains-mono": "^5.3.0",
+    "@fontsource-variable/plus-jakarta-sans": "^5.3.0",
+    "@fontsource-variable/sora": "^5.3.0",
+    "@fontsource/sora": "^5.3.0",
     "astro": "^7.3.5",
+    "satori": "^0.56.1",
     "sharp": "^0.35.5"
   },
   "devDependencies": {

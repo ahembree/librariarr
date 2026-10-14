@@ -1999,7 +1999,8 @@ export function LifecycleRulePage({
       setManageTagsEnabled((data.addArrTags ?? []).length > 0 || (data.removeArrTags ?? []).length > 0);
       setTagMode((data.addArrTags ?? []).length > 0 ? "add" : (data.removeArrTags ?? []).length > 0 ? "remove" : "add");
       // Imported collection settings populate a fresh collection definition;
-      // saving matches it to an existing collection by name or creates one.
+      // saving creates a collection of that name, and the create route
+      // answers 409 when one exists (the user then picks it in the dropdown).
       setCollectionEnabled(data.collectionEnabled ?? false);
       setSelectedCollectionId(data.collectionEnabled ? NEW_COLLECTION : "");
       setCollectionName(data.collectionName ?? "");

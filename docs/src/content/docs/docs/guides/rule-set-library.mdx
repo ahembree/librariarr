@@ -1,0 +1,714 @@
+---
+title: Rule Set Library
+description: "Ready-made Librariarr lifecycle rule sets to import as JSON: delete unwatched movies and shows, clean up Seerr requests, replace low-quality files, downgrade watched 4K movies, a Leaving Soon shelf, and more."
+seoTitle: "Rule Set Library: Importable Lifecycle Rules"
+---
+
+import { Aside, Steps } from "@astrojs/starlight/components";
+
+Every rule set on this page is the JSON the rule editor's **Export** button
+produces, ready to paste into **Import**. Each one ships with its action
+**configured but turned off**, so importing never arms anything: you preview
+the matches, pick your Radarr or Sonarr instance, and switch the action on
+when you are happy with the list.
+
+The JSON sits folded under each rule set — open **JSON — …**, then use the
+copy button in the top-right corner of the block. Every block is checked
+against the app's own field, operator and action registries when the docs
+are built, so what is published is what the editor accepts.
+
+## Importing a rule set
+
+<Steps>
+
+1. Go to **Lifecycle → Rules** and open the tab that matches the rule set's
+   `type` — **Movies** for `MOVIE`, **Series** for `SERIES`. The import is
+   refused on the wrong tab.
+
+2. Click **Import** (beside **Save** in the rule editor), paste the JSON, and
+   click **Import** again. The editor fills in with the rules, action and
+   settings as a new, unsaved rule set.
+
+3. Pick the **Media Servers** the rule set applies to — an import targets
+   none, and **Preview** and **Save** stay disabled until at least one is
+   chosen — and, beside it, the **Radarr Server** (or Sonarr) the rules and
+   action use.
+
+4. **Preview** the matches and read the list. Adjust any threshold that does
+   not fit your library; the values below are starting points, not
+   recommendations for every household.
+
+5. Switch on **Enable lifecycle action** if you want the action to run. Its
+   options appear below the switch: a **Change Quality Profile** action
+   needs its **Target quality profile** picked there, since profile ids
+   belong to one instance and are never part of an export. Set the delay
+   and **Save**. A rule set with Discord notifications enabled only posts
+   once a [webhook](/docs/features/notifications/) is configured.
+
+</Steps>
+
+What an export does **not** carry, because it is specific to one install:
+the *arr instance and quality profile, which servers the rule set targets
+(an import targets none until you pick them), and the collection's
+identity. A rule set with collection settings imports as
+**+ Create new collection…** with the exported name and options; if a
+collection of that name already exists for the tab's library type, saving
+is refused as a duplicate, so open the **Collection** dropdown and pick the
+existing one instead.
+
+<Aside type="tip">
+  **Export** on any of your own rule sets gives you the same JSON. It is how
+  to back a rule set up, move it to another install, or share it.
+</Aside>
+
+## Unwatched movies
+
+Movies added at least six months ago that nobody has played in a year, or
+ever, and that are not on your Plex watchlist. Removed from Radarr with
+their files and an import exclusion, after a week on the Pending page. This
+is the rule set the
+[delete unwatched media](/docs/guides/delete-unwatched-media/) guide builds.
+
+**Needs:** Radarr, and play history established on every targeted server
+(see [Play history](/docs/guides/delete-unwatched-media/#before-you-start)).
+
+<details>
+<summary>JSON — Unwatched movies</summary>
+
+```json
+{
+  "version": 1,
+  "type": "MOVIE",
+  "name": "Unwatched movies",
+  "rules": [
+    {
+      "id": "g1",
+      "condition": "AND",
+      "rules": [
+        {
+          "id": "r1",
+          "field": "addedAt",
+          "operator": "notInLastDays",
+          "value": "180",
+          "condition": "AND"
+        },
+        {
+          "id": "r2",
+          "field": "isWatchlisted",
+          "operator": "equals",
+          "value": "false",
+          "condition": "AND"
+        }
+      ],
+      "groups": [
+        {
+          "id": "g2",
+          "condition": "AND",
+          "rules": [
+            {
+              "id": "r3",
+              "field": "playCount",
+              "operator": "equals",
+              "value": "0",
+              "condition": "AND"
+            },
+            {
+              "id": "r4",
+              "field": "lastPlayedAt",
+              "operator": "notInLastDays",
+              "value": "365",
+              "condition": "OR"
+            }
+          ],
+          "groups": []
+        }
+      ]
+    }
+  ],
+  "enabled": true,
+  "actionEnabled": false,
+  "actionType": "DELETE_RADARR",
+  "actionDelayDays": 7,
+  "addImportExclusion": true,
+  "searchAfterAction": false,
+  "addArrTags": [],
+  "removeArrTags": [],
+  "collectionEnabled": false,
+  "collectionName": null,
+  "collectionSortName": null,
+  "collectionHomeScreen": false,
+  "collectionRecommended": false,
+  "collectionSort": "ALPHABETICAL",
+  "discordNotifyOnAction": true,
+  "discordNotifyOnMatch": false,
+  "stickyMatches": false
+}
+```
+
+</details>
+
+`lastPlayedAt` **More Than X Days Ago** matches only items that have a last
+played date, so `playCount equals 0` is ORed in for titles never played at
+all. On Jellyfin and Emby `isWatchlisted` is the connected account's
+**Favorite** flag, so favourited items are what that condition leaves out.
+
+## Unwatched shows
+
+The series version, evaluated per show with **Match against entire series**
+on: no episode
+added in six months, and either nobody has watched any of it or the newest
+play across the whole show is over a year old. **Delete from Sonarr** removes
+the entire series.
+
+**Needs:** Sonarr, established play history.
+
+<details>
+<summary>JSON — Unwatched shows</summary>
+
+```json
+{
+  "version": 1,
+  "type": "SERIES",
+  "name": "Unwatched shows",
+  "rules": [
+    {
+      "id": "g1",
+      "condition": "AND",
+      "rules": [
+        {
+          "id": "r1",
+          "field": "lastEpisodeAddedAt",
+          "operator": "notInLastDays",
+          "value": "180",
+          "condition": "AND"
+        }
+      ],
+      "groups": [
+        {
+          "id": "g2",
+          "condition": "AND",
+          "rules": [
+            {
+              "id": "r2",
+              "field": "watchedEpisodePercentage",
+              "operator": "equals",
+              "value": "0",
+              "condition": "AND"
+            },
+            {
+              "id": "r3",
+              "field": "seriesLastPlayedAt",
+              "operator": "notInLastDays",
+              "value": "365",
+              "condition": "OR"
+            }
+          ],
+          "groups": []
+        }
+      ]
+    }
+  ],
+  "seriesScope": true,
+  "enabled": true,
+  "actionEnabled": false,
+  "actionType": "DELETE_SONARR",
+  "actionDelayDays": 7,
+  "addImportExclusion": true,
+  "searchAfterAction": false,
+  "addArrTags": [],
+  "removeArrTags": [],
+  "collectionEnabled": false,
+  "collectionName": null,
+  "collectionSortName": null,
+  "collectionHomeScreen": false,
+  "collectionRecommended": false,
+  "collectionSort": "ALPHABETICAL",
+  "discordNotifyOnAction": true,
+  "discordNotifyOnMatch": false,
+  "stickyMatches": false
+}
+```
+
+</details>
+
+**Series Last Played** is the most recent play of *any* episode, so a show
+someone is part-way through is never selected because of its older episodes.
+See [ended shows](/docs/guides/ended-shows/) for a non-destructive variant.
+
+## Ended shows nobody watches
+
+Shows Sonarr reports as ended, with nothing left to air, that nobody has
+played in a year, or ever: Sonarr stops monitoring them for upgrades.
+Nothing is deleted, so the delay is short.
+
+**Needs:** Sonarr, established play history.
+
+<details>
+<summary>JSON — Ended shows nobody watches</summary>
+
+```json
+{
+  "version": 1,
+  "type": "SERIES",
+  "name": "Ended shows nobody watches",
+  "rules": [
+    {
+      "id": "g1",
+      "condition": "AND",
+      "rules": [
+        {
+          "id": "r1",
+          "field": "arrEnded",
+          "operator": "equals",
+          "value": "true",
+          "condition": "AND"
+        },
+        {
+          "id": "r2",
+          "field": "arrHasUnaired",
+          "operator": "equals",
+          "value": "false",
+          "condition": "AND"
+        }
+      ],
+      "groups": [
+        {
+          "id": "g2",
+          "condition": "AND",
+          "rules": [
+            {
+              "id": "r3",
+              "field": "watchedEpisodePercentage",
+              "operator": "equals",
+              "value": "0",
+              "condition": "AND"
+            },
+            {
+              "id": "r4",
+              "field": "seriesLastPlayedAt",
+              "operator": "notInLastDays",
+              "value": "365",
+              "condition": "OR"
+            }
+          ],
+          "groups": []
+        }
+      ]
+    }
+  ],
+  "seriesScope": true,
+  "enabled": true,
+  "actionEnabled": false,
+  "actionType": "UNMONITOR_SONARR",
+  "actionDelayDays": 3,
+  "addImportExclusion": false,
+  "searchAfterAction": false,
+  "addArrTags": [],
+  "removeArrTags": [],
+  "collectionEnabled": false,
+  "collectionName": null,
+  "collectionSortName": null,
+  "collectionHomeScreen": false,
+  "collectionRecommended": false,
+  "collectionSort": "ALPHABETICAL",
+  "discordNotifyOnAction": true,
+  "discordNotifyOnMatch": false,
+  "stickyMatches": false
+}
+```
+
+</details>
+
+## Seerr requests nobody watched
+
+Titles requested through Seerr whose most recent request was approved (or
+has since completed) more than 90 days ago, yet have never been played by
+anyone. Two weeks on the Pending page before
+Radarr removes them. Make the same rule set on the **Series** tab with
+`DELETE_SONARR` for shows.
+
+**Needs:** Radarr, [Seerr](/docs/integrations/seerr/), established play
+history. See [cleaning up Seerr requests](/docs/guides/seerr-request-cleanup/).
+
+<details>
+<summary>JSON — Seerr requests nobody watched</summary>
+
+```json
+{
+  "version": 1,
+  "type": "MOVIE",
+  "name": "Seerr requests nobody watched",
+  "rules": [
+    {
+      "id": "g1",
+      "condition": "AND",
+      "rules": [
+        {
+          "id": "r1",
+          "field": "seerrRequested",
+          "operator": "equals",
+          "value": "true",
+          "condition": "AND"
+        },
+        {
+          "id": "r2",
+          "field": "seerrApprovalDate",
+          "operator": "notInLastDays",
+          "value": "90",
+          "condition": "AND"
+        },
+        {
+          "id": "r3",
+          "field": "playCount",
+          "operator": "equals",
+          "value": "0",
+          "condition": "AND"
+        },
+        {
+          "id": "r4",
+          "field": "isWatchlisted",
+          "operator": "equals",
+          "value": "false",
+          "condition": "AND"
+        }
+      ],
+      "groups": []
+    }
+  ],
+  "enabled": true,
+  "actionEnabled": false,
+  "actionType": "DELETE_RADARR",
+  "actionDelayDays": 14,
+  "addImportExclusion": true,
+  "searchAfterAction": false,
+  "addArrTags": [],
+  "removeArrTags": [],
+  "collectionEnabled": false,
+  "collectionName": null,
+  "collectionSortName": null,
+  "collectionHomeScreen": false,
+  "collectionRecommended": false,
+  "collectionSort": "ALPHABETICAL",
+  "discordNotifyOnAction": true,
+  "discordNotifyOnMatch": false,
+  "stickyMatches": false
+}
+```
+
+</details>
+
+## Low-quality movies to replace
+
+Movies whose file is standard definition, still monitored in Radarr, get a
+**Search for New Copy**: Radarr looks for a release and replaces the file
+only when its quality profile allows the upgrade. Nothing is deleted.
+
+**Needs:** Radarr. See [replacing low-quality files](/docs/guides/replace-low-quality-files/)
+for the quality-profile and delete-and-re-grab variants.
+
+<details>
+<summary>JSON — Low-quality movies to replace</summary>
+
+```json
+{
+  "version": 1,
+  "type": "MOVIE",
+  "name": "Low-quality movies to replace",
+  "rules": [
+    {
+      "id": "g1",
+      "condition": "AND",
+      "rules": [
+        {
+          "id": "r1",
+          "field": "resolution",
+          "operator": "contains",
+          "value": "SD|480P",
+          "condition": "AND"
+        },
+        {
+          "id": "r2",
+          "field": "arrMonitored",
+          "operator": "equals",
+          "value": "true",
+          "condition": "AND"
+        }
+      ],
+      "groups": []
+    }
+  ],
+  "enabled": true,
+  "actionEnabled": false,
+  "actionType": "SEARCH_RADARR",
+  "actionDelayDays": 1,
+  "addImportExclusion": false,
+  "searchAfterAction": false,
+  "addArrTags": [],
+  "removeArrTags": [],
+  "collectionEnabled": false,
+  "collectionName": null,
+  "collectionSortName": null,
+  "collectionHomeScreen": false,
+  "collectionRecommended": false,
+  "collectionSort": "ALPHABETICAL",
+  "discordNotifyOnAction": true,
+  "discordNotifyOnMatch": false,
+  "stickyMatches": false
+}
+```
+
+</details>
+
+The `resolution` values your library actually holds are listed in the rule
+builder's dropdown; add `720P` to the pipe-separated list to widen the net.
+
+## Downgrade watched movies
+
+Movies someone has watched, that nobody has played again in a month, that
+are not on the watchlist and whose file is 4K, are moved to a lower Radarr
+quality profile with **Search for upgrade after profile change** on: Radarr
+searches at once, grabs a release the profile prefers and replaces the 4K
+file when it imports. Nothing is deleted unless a replacement was found. A
+movie already on the profile is skipped. Pick the profile under
+**Target quality profile** once the action is switched on.
+
+The profile has to be a **downgrade profile**. Radarr ranks qualities by
+their order in the profile, not by which are ticked, so a profile with the
+usual order treats the 4K file as better than anything it would fetch and
+the search leaves it alone. In Radarr, under **Settings → Profiles**, drag
+the quality you want (Bluray-1080p, say) *above* the 2160p entries and set
+**Upgrade Until** to it; TRaSH's
+[How to order Quality Source](https://trash-guides.info/Radarr/Tips/How-to-order-Quality-Source/)
+walks through it. Widen `4K` to `4K|1080P` for a profile that stops at
+720p.
+
+**Needs:** Radarr with a downgrade profile, established play history.
+
+<details>
+<summary>JSON — Downgrade watched movies</summary>
+
+```json
+{
+  "version": 1,
+  "type": "MOVIE",
+  "name": "Downgrade watched movies",
+  "rules": [
+    {
+      "id": "g1",
+      "condition": "AND",
+      "rules": [
+        {
+          "id": "r1",
+          "field": "playCount",
+          "operator": "greaterThanOrEqual",
+          "value": "1",
+          "condition": "AND"
+        },
+        {
+          "id": "r2",
+          "field": "lastPlayedAt",
+          "operator": "notInLastDays",
+          "value": "30",
+          "condition": "AND"
+        },
+        {
+          "id": "r3",
+          "field": "isWatchlisted",
+          "operator": "equals",
+          "value": "false",
+          "condition": "AND"
+        },
+        {
+          "id": "r4",
+          "field": "resolution",
+          "operator": "contains",
+          "value": "4K",
+          "condition": "AND"
+        }
+      ],
+      "groups": []
+    }
+  ],
+  "enabled": true,
+  "actionEnabled": false,
+  "actionType": "CHANGE_QUALITY_PROFILE_RADARR",
+  "actionDelayDays": 7,
+  "addImportExclusion": false,
+  "searchAfterAction": true,
+  "addArrTags": [],
+  "removeArrTags": [],
+  "collectionEnabled": false,
+  "collectionName": null,
+  "collectionSortName": null,
+  "collectionHomeScreen": false,
+  "collectionRecommended": false,
+  "collectionSort": "ALPHABETICAL",
+  "discordNotifyOnAction": true,
+  "discordNotifyOnMatch": false,
+  "stickyMatches": false
+}
+```
+
+</details>
+
+For shows, build the same rule set on the **Series** tab with **Match
+against entire series** on: `watchedEpisodePercentage` **>=** `100` and
+`seriesLastPlayedAt` **More Than X Days Ago** `30` select fully watched
+shows for **Change Quality Profile** (Sonarr), whose profiles order the
+same way.
+
+## Unwatched movies with a Leaving Soon shelf
+
+The unwatched-movies rule set with a Plex collection attached: everything
+scheduled for deletion appears in a **Leaving Soon** collection on the Plex
+home screen, soonest first, for the two weeks before it goes. Plex only. See
+[the Leaving Soon guide](/docs/guides/leaving-soon-collection/).
+
+**Needs:** Radarr, established play history, a Plex server.
+
+<details>
+<summary>JSON — Unwatched movies (Leaving Soon)</summary>
+
+```json
+{
+  "version": 1,
+  "type": "MOVIE",
+  "name": "Unwatched movies (Leaving Soon)",
+  "rules": [
+    {
+      "id": "g1",
+      "condition": "AND",
+      "rules": [
+        {
+          "id": "r1",
+          "field": "addedAt",
+          "operator": "notInLastDays",
+          "value": "180",
+          "condition": "AND"
+        },
+        {
+          "id": "r2",
+          "field": "isWatchlisted",
+          "operator": "equals",
+          "value": "false",
+          "condition": "AND"
+        }
+      ],
+      "groups": [
+        {
+          "id": "g2",
+          "condition": "AND",
+          "rules": [
+            {
+              "id": "r3",
+              "field": "playCount",
+              "operator": "equals",
+              "value": "0",
+              "condition": "AND"
+            },
+            {
+              "id": "r4",
+              "field": "lastPlayedAt",
+              "operator": "notInLastDays",
+              "value": "365",
+              "condition": "OR"
+            }
+          ],
+          "groups": []
+        }
+      ]
+    }
+  ],
+  "enabled": true,
+  "actionEnabled": false,
+  "actionType": "DELETE_RADARR",
+  "actionDelayDays": 14,
+  "addImportExclusion": true,
+  "searchAfterAction": false,
+  "addArrTags": [],
+  "removeArrTags": [],
+  "collectionEnabled": true,
+  "collectionName": "Leaving Soon",
+  "collectionSortName": null,
+  "collectionHomeScreen": true,
+  "collectionRecommended": true,
+  "collectionSort": "ACTION_DATE",
+  "discordNotifyOnAction": true,
+  "discordNotifyOnMatch": false,
+  "stickyMatches": false
+}
+```
+
+</details>
+
+## Large unwatched files to review
+
+Not a cleanup, a watch list: movies over 20 GB that nobody has played in the
+three months since they arrived. The action is **Do Nothing**, so the rule
+set only collects matches, and the Discord match notification tells you when
+the list changes. Useful as a first rule set while you get a feel for what
+matching looks like on your library.
+
+**Needs:** nothing beyond a synced server (play history for `playCount`).
+
+<details>
+<summary>JSON — Large unwatched files to review</summary>
+
+```json
+{
+  "version": 1,
+  "type": "MOVIE",
+  "name": "Large unwatched files to review",
+  "rules": [
+    {
+      "id": "g1",
+      "condition": "AND",
+      "rules": [
+        {
+          "id": "r1",
+          "field": "fileSize",
+          "operator": "greaterThan",
+          "value": "20000",
+          "condition": "AND"
+        },
+        {
+          "id": "r2",
+          "field": "playCount",
+          "operator": "equals",
+          "value": "0",
+          "condition": "AND"
+        },
+        {
+          "id": "r3",
+          "field": "addedAt",
+          "operator": "notInLastDays",
+          "value": "90",
+          "condition": "AND"
+        }
+      ],
+      "groups": []
+    }
+  ],
+  "enabled": true,
+  "actionEnabled": false,
+  "actionType": "DO_NOTHING",
+  "actionDelayDays": 7,
+  "addImportExclusion": false,
+  "searchAfterAction": false,
+  "addArrTags": [],
+  "removeArrTags": [],
+  "collectionEnabled": false,
+  "collectionName": null,
+  "collectionSortName": null,
+  "collectionHomeScreen": false,
+  "collectionRecommended": false,
+  "collectionSort": "ALPHABETICAL",
+  "discordNotifyOnAction": false,
+  "discordNotifyOnMatch": true,
+  "stickyMatches": false
+}
+```
+
+</details>
+
+`fileSize` is in megabytes: `20000` is about 20 GB.

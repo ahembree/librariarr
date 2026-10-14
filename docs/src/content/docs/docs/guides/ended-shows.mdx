@@ -1,0 +1,74 @@
+---
+title: Unmonitor or Remove Ended Shows Nobody Watches
+description: "Use Sonarr's ended status with Librariarr's series play history to stop monitoring, or delete, finished shows that nobody in the household has watched in a year."
+seoTitle: "Clean Up Ended TV Shows Automatically"
+---
+
+import { Aside, Steps } from "@astrojs/starlight/components";
+
+A show that has ended will never get a new episode, so there is nothing to
+monitor — and if nobody has watched it in a year, little reason to keep it.
+Sonarr knows the first fact; Librariarr's play history knows the second.
+
+## Before you start
+
+- Sonarr connected under **Settings → Integrations**. The **Ended** and
+  **Has Unaired** fields read from it.
+- Play history established on the targeted servers, from the server's own
+  history or from [Tracearr](/docs/integrations/tracearr/); see the
+  [delete unwatched media](/docs/guides/delete-unwatched-media/#before-you-start)
+  guide.
+
+## Step one: stop monitoring
+
+Start with the non-destructive version. On the **Series** tab with
+**Match against entire series** on, the top group holds:
+
+- `arrEnded` **equals** `true` — Sonarr reports the show as ended.
+- `arrHasUnaired` **equals** `false` — nothing is still due to air (a
+  show marked ended can have a final episode pending).
+
+and a nested group (**Add Group**) joined with **OR** inside:
+
+- `watchedEpisodePercentage` **equals** `0` — nobody has ever started it.
+- `seriesLastPlayedAt` **More Than X Days Ago** `365` — the newest play
+  across every episode is over a year old. A show nobody has played has no
+  play date at all, so this condition alone would skip it.
+
+Action **Unmonitor Only**, delay of a few days. Sonarr stops searching for
+upgrades; every file stays. Import it from the
+[Rule Set Library](/docs/guides/rule-set-library/#ended-shows-nobody-watches).
+
+**Series Last Played** is what makes this safe for a show someone is
+working through: it is the most recent play of *any* episode, so an old
+season watched last year does not count against a show whose newest
+episode was played last week.
+
+## Step two: remove them
+
+Once you trust the matches, a second rule set can delete. Use the same
+conditions plus `watchedEpisodePercentage` **less than** `25` — shows the
+household abandoned early rather than finished — with **Delete from Sonarr**
+and a delay of two weeks. **Delete from Sonarr** removes the whole series
+and its files; it is refused outright when *any* episode of the show is on
+the Exceptions list, even one the rule never matched.
+
+To keep what people did finish, invert the test: `watchedEpisodePercentage`
+**greater than** `90` with **Unmonitor Only** stops Sonarr spending
+bandwidth on upgrades for shows that have already been watched through.
+
+<Aside type="tip">
+  Attach a [Leaving Soon collection](/docs/guides/leaving-soon-collection/) to
+  the delete rule set so the shows appear on the Plex home screen for the
+  two weeks before they go.
+</Aside>
+
+## Related fields
+
+- `arrSeriesType` — Sonarr's series type (standard, daily, anime), to keep
+  anime out of a rule written for standard ordering.
+- `availableEpisodeCount` — how many episodes are actually on disk, so a
+  show you only ever had two episodes of can be treated differently from a
+  complete run.
+- `lastEpisodeAddedAt` — when the newest episode arrived; `more than X
+  days ago` keeps a show that is still being filled in off the list.
