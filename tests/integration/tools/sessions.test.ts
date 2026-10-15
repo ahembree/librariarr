@@ -208,7 +208,7 @@ describe("Tools sessions endpoints", () => {
       expect(mockGetSessions).toHaveBeenCalledTimes(3);
     });
 
-    it("does not keep a failed fetch, and lists a stream again once it is gone after a termination", async () => {
+    it("remembers an unreachable server for the window, and asks again after a termination there", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id, { name: "Server 1" });
 
@@ -219,12 +219,15 @@ describe("Tools sessions endpoints", () => {
       );
       expect(body.unreachableServers).toHaveLength(1);
 
+      // Still reported unreachable, without another connection attempt.
       body = await expectJson(await asKey(user.id, () => callRoute(GET, { url: "/api/v1/tools/sessions" })), 200);
-      expect(body.sessions).toHaveLength(1);
-      expect(mockGetSessions).toHaveBeenCalledTimes(2);
+      expect(body.unreachableServers).toHaveLength(1);
+      expect(mockGetSessions).toHaveBeenCalledTimes(1);
 
-      // Stopping the stream drops the listing: the next read asks the server,
-      // which now reports nothing playing.
+      // Stopping a stream there drops what is remembered: the next reads ask
+      // the server — every one of them for a while, since a server still
+      // reports a just-stopped stream for a moment — which now reports
+      // nothing playing.
       mockGetSessions.mockResolvedValue([]);
       const stop = await asKey(user.id, () =>
         callRoute(POST, {
@@ -234,8 +237,11 @@ describe("Tools sessions endpoints", () => {
         }),
       );
       await expectJson(stop, 200);
-      body = await expectJson(await asKey(user.id, () => callRoute(GET, { url: "/api/v1/tools/sessions" })), 200);
-      expect(body.sessions).toHaveLength(0);
+      for (let i = 0; i < 2; i++) {
+        body = await expectJson(await asKey(user.id, () => callRoute(GET, { url: "/api/v1/tools/sessions" })), 200);
+        expect(body.sessions).toHaveLength(0);
+        expect(body.unreachableServers).toHaveLength(0);
+      }
       expect(mockGetSessions).toHaveBeenCalledTimes(3);
     });
   });

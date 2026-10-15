@@ -202,7 +202,7 @@ export const API_OPERATIONS: readonly Operation[] = [
     tag: "Library",
     summary: "Search by title",
     query: [
-      { name: "q", description: `Search text, at most ${MAX_SEARCH_QUERY_LENGTH} characters.`, required: true },
+      { name: "q", description: `Search text, at most ${MAX_SEARCH_QUERY_LENGTH} characters.`, schema: { type: "string", maxLength: MAX_SEARCH_QUERY_LENGTH }, required: true },
       { name: "type", description: "Library type.", schema: MEDIA_TYPE, required: true },
       { name: "seriesScope", description: "With `type=SERIES`, return shows rather than episodes.", schema: { type: "boolean", default: false } },
       { name: "musicScope", description: "With `type=MUSIC`, return artists and albums rather than tracks.", schema: { type: "boolean", default: false } },

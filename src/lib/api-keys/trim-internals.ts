@@ -1,3 +1,4 @@
+import { gunzipSync } from "node:zlib";
 import { NextRequest } from "next/server";
 import { jsonResponse } from "@/lib/api/json-response";
 import { sanitizeErrorDetail } from "@/lib/api/sanitize";
@@ -46,11 +47,14 @@ import { getApiKeyPrincipal } from "./principal";
  *
  * A non-JSON response (an image, a stream, a body with no JSON content type)
  * is returned untouched. The internal handler is called with the client's
- * `Accept-Encoding` removed (GET/HEAD — every wrapped route), so it hands back
- * plain JSON rather than a body this wrapper would have to inflate only to
- * compress it again; the trimmed body is re-emitted through `jsonResponse`
- * against the ORIGINAL request, so the caller still gets gzip when it asked
- * for it. Status and every other header are preserved.
+ * `Accept-Encoding` removed on GET/HEAD, so it hands back plain JSON rather
+ * than a body this wrapper would have to inflate only to compress it again;
+ * a body that arrives gzipped anyway (a POST — the request is passed through
+ * with its body, so its `Accept-Encoding` stays — whose handler answers
+ * through `jsonResponse`) is inflated here. The trimmed body is re-emitted
+ * through `jsonResponse` against the ORIGINAL request, so the caller still
+ * gets gzip when it asked for it. Status and every other header are
+ * preserved.
  */
 
 const FILE_PATH_KEYS = new Set(["filePath", "partFile"]);
@@ -106,6 +110,14 @@ const BODY_HEADERS = new Set(["content-type", "content-encoding", "content-lengt
 
 type RouteHandler<C> = (request: NextRequest, context: C) => Response | Promise<Response>;
 
+/** The parsed body, inflated first when the handler gzipped it. */
+async function readJsonBody(response: Response): Promise<unknown> {
+  const encoding = response.headers.get("content-encoding")?.trim().toLowerCase();
+  if (encoding !== "gzip") return response.json();
+  const bytes = gunzipSync(new Uint8Array(await response.arrayBuffer()));
+  return JSON.parse(bytes.toString("utf8"));
+}
+
 /**
  * The request the internal handler sees: the same, minus `Accept-Encoding`, so
  * `jsonResponse` there does not gzip a body this wrapper is about to parse.
@@ -132,7 +144,7 @@ export function withoutServerInternals<C>(handler: RouteHandler<C>): (request: N
     if (!isJson(response) || response.body === null) return response;
 
     // The handler ran under the key's principal, so the owner is the key's user.
-    const trimmed = trimServerInternals(await response.json(), { ownerId: getApiKeyPrincipal()?.userId });
+    const trimmed = trimServerInternals(await readJsonBody(response), { ownerId: getApiKeyPrincipal()?.userId });
     const headers = new Headers();
     response.headers.forEach((value, key) => {
       if (!BODY_HEADERS.has(key.toLowerCase())) headers.set(key, value);

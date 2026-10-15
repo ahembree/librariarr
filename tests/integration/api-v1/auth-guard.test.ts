@@ -165,11 +165,17 @@ describe("/api/v1 authentication guard", () => {
       await expectJson(res, 401);
     });
 
-    it("401 for an expired key", async () => {
+    // A known key past its date is not a guess: a still-polling integration
+    // must keep hearing "expired", never the failure limiter's 429.
+    it("401 for an expired key, however often it is retried, logged once", async () => {
       const user = await createTestUser();
       const { key } = await createTestApiKey(user.id, { expiresAt: new Date(Date.now() - 1000) });
-      const body = await expectJson<{ error: string }>(await callRoute(meGET, { headers: withKey(key) }), 401);
-      expect(body.error).toBe("API key has expired");
+      for (let i = 0; i < 25; i++) {
+        const body = await expectJson<{ error: string }>(await callRoute(meGET, { headers: withKey(key) }), 401);
+        expect(body.error).toBe("API key has expired");
+      }
+      const warnings = apiLogger.warn.mock.calls.filter(([, msg]) => String(msg).includes("has expired"));
+      expect(warnings).toHaveLength(1);
     });
 
     it("accepts a key right up to its expiry", async () => {

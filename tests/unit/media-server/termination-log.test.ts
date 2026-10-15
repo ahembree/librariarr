@@ -12,7 +12,7 @@ import {
   terminationFailureMessage,
   TERMINATION_SOURCE,
 } from "@/lib/media-server/termination-log";
-import { getCachedSessionListing } from "@/lib/media-server/session-listing-cache";
+import { getCachedSessionListing, invalidateSessionListings } from "@/lib/media-server/session-listing-cache";
 
 const base = {
   serverId: "srv1",
@@ -63,15 +63,20 @@ describe("termination logging", () => {
 
   // Every successful termination passes here, from the route and the enforcer
   // alike, so the public API's cached listing is dropped here.
-  it("drops the public API's cached session listing", async () => {
+  it("drops the public API's cached session listing for that server only", async () => {
+    invalidateSessionListings();
     const fetchSessions = vi.fn().mockResolvedValue([]);
+    const other = vi.fn().mockResolvedValue([]);
     await getCachedSessionListing("srv1", fetchSessions);
     await getCachedSessionListing("srv1", fetchSessions);
+    await getCachedSessionListing("srv2", other);
     expect(fetchSessions).toHaveBeenCalledTimes(1);
 
     logTermination({ ...base, trigger: "maintenance mode" });
     await getCachedSessionListing("srv1", fetchSessions);
+    await getCachedSessionListing("srv2", other);
     expect(fetchSessions).toHaveBeenCalledTimes(2);
+    expect(other).toHaveBeenCalledTimes(1);
   });
 
   it("falls back when the session was never seen", () => {

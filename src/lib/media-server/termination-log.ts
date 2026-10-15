@@ -39,9 +39,9 @@ function describe(t: Termination, username: string, mediaTitle: string): string 
 export function logTermination(t: Termination): void {
   // Every successful termination passes here — the manual route and the
   // maintenance/blackout/transcode enforcer alike — so this is where the
-  // public API's cached session listing is dropped: an integration listing
-  // right after a stream was stopped must not see it still playing.
-  invalidateSessionListings();
+  // public API's cached listing for that server is dropped: an integration
+  // listing right after a stream was stopped must not see it still playing.
+  invalidateSessionListings(t.serverId);
   const { username, mediaTitle } = label(t);
   logger.info(
     TERMINATION_SOURCE,

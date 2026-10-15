@@ -223,6 +223,24 @@ describe("withoutServerInternals", () => {
     expect(JSON.stringify(body)).not.toContain("machineId");
   });
 
+  // A POST is passed through with its body, so its Accept-Encoding stays and
+  // a handler answering through jsonResponse gzips a large body.
+  it("inflates a gzipped answer before trimming, on a method whose request is passed through", async () => {
+    const rows = Array.from({ length: 300 }, (_, i) => ({ id: `e${i}`, userId: "owner", reason: "keep".padEnd(30, ".") }));
+    const wrapped = withoutServerInternals(async (req: NextRequest) => jsonResponse(req, { exceptions: rows }));
+    const post = new NextRequest("http://localhost/api/v1/lifecycle/exceptions", {
+      method: "POST",
+      headers: { "accept-encoding": "gzip", "content-type": "application/json" },
+      body: "{}",
+    });
+    const principal = { keyId: "k1", userId: "owner", name: "ci", prefix: "lbr_abcdef", scopes: [] as const };
+    const res = await runAsApiKey(principal, () => wrapped(post));
+    expect(res.headers.get("content-encoding")).toBe("gzip");
+    const body = JSON.parse(gunzipSync(new Uint8Array(await res.arrayBuffer())).toString("utf8")) as { exceptions: Record<string, unknown>[] };
+    expect(body.exceptions).toHaveLength(300);
+    expect(body.exceptions[0]).toEqual({ id: "e0", reason: rows[0].reason });
+  });
+
   it("returns a non-JSON response untouched", async () => {
     const original = new Response("url machineId filePath", { status: 200, headers: { "content-type": "text/plain" } });
     const wrapped = withoutServerInternals(async () => original);

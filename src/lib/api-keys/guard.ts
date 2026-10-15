@@ -289,7 +289,14 @@ export async function authenticateApiKey(
 
   const now = new Date();
   if (row.expiresAt && row.expiresAt.getTime() <= now.getTime()) {
-    return invalid(`API key "${row.name}" (${row.prefix}…) has expired`, "API key has expired");
+    // A known key past its date, not a guess: the failure limiter is for
+    // credentials that might be forged, and charging this one turned the
+    // "expired" answer a still-polling integration needs into a 429 after
+    // twenty calls. Forgotten so the row is re-read next time (deleted or
+    // renewed); logged once per key per window, not per poll.
+    verifiedKeys.delete(presented);
+    warnOnce(`expired:${row.id}`, `Rejected an API request: API key "${row.name}" (${row.prefix}…) has expired`);
+    return refuse(401, "API key has expired", { "WWW-Authenticate": `${REALM}, error="invalid_token"` });
   }
   rememberVerified(presented, row.id);
 
