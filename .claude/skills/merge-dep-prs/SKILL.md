@@ -9,11 +9,27 @@ Merge every open PR labelled `dependencies`, one at a time. Don't treat green CI
 route tests mock the session and external clients, so a breaking runtime change can pass
 (iron-session v9 broke every login with only Browser E2E failing).
 
+**Passing lint, types, tests, build and CI is not the evaluation.** Step 1 is. A run that
+validated and merged ten PRs without it is a skipped step, not a fast one.
+
 ## For each PR
 
-1. Read the changelog in the PR body and `git diff origin/main...origin/<branch> -- package.json`.
-   For a major or anything touching auth/sessions/HTTP clients, find the call sites and check
-   the breaking changes against them.
+1. **Evaluate before validating. This is a gate: no merge without its written result.**
+   - Read the changelog for **every** version between the old and the new one. The PR body is
+     often cut off (`... (truncated)`) or names an older version than the lockfile now holds;
+     open the linked release notes/CHANGELOG for whatever is missing.
+   - Find what actually imports the package: `grep -rn "from \"<pkg>\"\|require(\"<pkg>\")" src e2e tests scripts`.
+     If nothing does, find what does. An unused direct dependency means the bump changes
+     nothing the app runs (the UI imports Radix through the `radix-ui` umbrella package, so a
+     bump of an individual `@radix-ui/react-*` package does not reach a single component),
+     and the update that matters is the umbrella one.
+   - For every entry that changes behaviour (a removal, a stricter parse, a changed default,
+     a new limit, a deprecation), open each call site and decide whether it needs a change.
+     Majors and anything touching auth/sessions/HTTP clients get this for every call site.
+   - Write the result: one line per behaviour change naming the call site checked and the
+     verdict (`no change needed — …` / `changed …`), plus whether the package is used at all.
+     It goes into the squash commit body (`commit_message`) in step 5 and into your report
+     to the user. A PR with no written evaluation is not ready to merge.
 2. Update the branch to main (`update_pull_request_branch`) — the ruleset only merges
    up-to-date branches, so every merge makes the rest stale. On a merge conflict, see below.
 3. Check it out and run (with the pnpm version in `packageManager`, installed via
@@ -24,11 +40,24 @@ route tests mock the session and external clients, so a breaking runtime change 
 4. If code changes are needed, push them to the Dependabot branch.
 5. Wait for CI on the final head, including Browser E2E, then squash-merge
    (`expectedHeadSha` must be the full 40-character SHA — `git ls-remote origin <branch>`).
+   Take the version for `commit_title` from the lockfile on that head
+   (`git show <sha>:pnpm-lock.yaml | grep "^  '<pkg>@"`), never from the PR title or the
+   branch name: Dependabot's rebase moves the version without renaming the branch. Put the
+   step-1 evaluation in `commit_message`.
 6. Check the CI run the merge starts on `main`. If it fails, fix that before the next PR —
    every later PR is built on top of it.
 
 When the list is empty, run `pnpm audit` (root and `docs/`). Dependabot stops at 10 open PRs,
-so a security fix can be missing from the list entirely.
+so a security fix can be missing from the list entirely. Fix what can be fixed in one PR of its
+own, validated like any other:
+
+- A patched version inside the range the parent already declares: `pnpm update <pkg> …`
+  (pnpm 12 updates transitive dependencies by name; `--depth` takes a number, not `Infinity`).
+- A patched version that needs a newer direct dependency: bump that dependency within its major.
+- Only when neither reaches it: a floor in `pnpm-workspace.yaml` `overrides`, with a comment
+  naming the advisory and the path, and only if the parent's code works with that version.
+- Report what is left and why: no patched release, blocked by `minimumReleaseAge` (say when it
+  clears), or a major the parent does not accept.
 
 ## Integration tests
 
