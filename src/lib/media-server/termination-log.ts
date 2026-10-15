@@ -1,5 +1,6 @@
 import { logger } from "@/lib/logger";
 import { formatSessionMediaTitle, type SessionTitleParts } from "./session-title";
+import { invalidateSessionListings } from "./session-listing-cache";
 
 /**
  * One source for every termination, whichever subsystem stopped the stream.
@@ -36,6 +37,11 @@ function describe(t: Termination, username: string, mediaTitle: string): string 
 }
 
 export function logTermination(t: Termination): void {
+  // Every successful termination passes here — the manual route and the
+  // maintenance/blackout/transcode enforcer alike — so this is where the
+  // public API's cached session listing is dropped: an integration listing
+  // right after a stream was stopped must not see it still playing.
+  invalidateSessionListings();
   const { username, mediaTitle } = label(t);
   logger.info(
     TERMINATION_SOURCE,

@@ -247,6 +247,24 @@ describe("/api/v1 read endpoints never return a media file path", () => {
     expect(ownerLeaks).toEqual([]);
   });
 
+  it("omits the owner's user id from the exception an add answers with", async () => {
+    const { user, track } = await seed();
+    const { key } = await createTestApiKey(user.id, { name: "writer", scopes: ["lifecycle:write"] });
+    const res = await callRouteWithParams(exceptions.POST as unknown as Handler, {}, {
+      url: "/api/v1/lifecycle/exceptions",
+      method: "POST",
+      body: { mediaItemId: track.id, reason: "keep" },
+      headers: { authorization: `Bearer ${key}` },
+    });
+    expect(res.status).toBe(201);
+    const text = await res.text();
+    expect(text).not.toContain(user.id);
+    expect((JSON.parse(text) as { exception: Record<string, unknown> }).exception).toMatchObject({
+      mediaItemId: track.id,
+      reason: "keep",
+    });
+  });
+
   it("keeps a stream viewer's own userId — the media server's id for who is watching", async () => {
     const { key } = await seed();
     const res = await callRouteWithParams(sessions.GET as unknown as Handler, {}, {

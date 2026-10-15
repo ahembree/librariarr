@@ -40,12 +40,14 @@ export async function GET() {
 
   const results = await Promise.allSettled(
     servers.map(async (server) => {
-      const client = createMediaServerClient(server.type, server.url, server.accessToken, {
-        skipTlsVerify: server.tlsSkipVerify,
-      });
+      // Built inside the fetch so a cache hit does no more than the lookup.
+      const fetchSessions = () =>
+        createMediaServerClient(server.type, server.url, server.accessToken, {
+          skipTlsVerify: server.tlsSkipVerify,
+        }).getSessions();
       const sessions = viaApiKey
-        ? await getCachedSessionListing(server.id, () => client.getSessions())
-        : await client.getSessions();
+        ? await getCachedSessionListing(server.id, fetchSessions)
+        : await fetchSessions();
       return sessions.map<SessionWithServer>((s) => {
         // Keeps the label the terminate route logs with current.
         rememberSession(server.id, s);

@@ -1,5 +1,5 @@
 import { API_SCOPE_INFO, API_SCOPES, type ApiScope } from "./scopes";
-import { API_DESTRUCTIVE_PER_HOUR, API_DESTRUCTIVE_PER_REQUEST, FULL_LISTING_REQUEST_COST } from "./limits";
+import { API_DESTRUCTIVE_PER_HOUR, API_DESTRUCTIVE_PER_REQUEST, FULL_LISTING_REQUEST_COST, MAX_SEARCH_QUERY_LENGTH } from "./limits";
 
 // The list routes' limits (`src/lib/api/pagination.ts`), repeated rather than
 // imported: this module is read by the docs build and must stay free of path
@@ -202,7 +202,7 @@ export const API_OPERATIONS: readonly Operation[] = [
     tag: "Library",
     summary: "Search by title",
     query: [
-      { name: "q", description: "Search text, at most 200 characters.", required: true },
+      { name: "q", description: `Search text, at most ${MAX_SEARCH_QUERY_LENGTH} characters.`, required: true },
       { name: "type", description: "Library type.", schema: MEDIA_TYPE, required: true },
       { name: "seriesScope", description: "With `type=SERIES`, return shows rather than episodes.", schema: { type: "boolean", default: false } },
       { name: "musicScope", description: "With `type=MUSIC`, return artists and albums rather than tracks.", schema: { type: "boolean", default: false } },

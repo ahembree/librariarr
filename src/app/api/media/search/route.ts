@@ -4,9 +4,7 @@ import { prisma } from "@/lib/db";
 import { escapeLike } from "@/lib/filters/escape-like";
 import { resolveSeriesKey } from "@/lib/media/series-key";
 import type { Prisma } from "@/generated/prisma/client";
-
-/** Longest `q` the search accepts; longer is a 400 (quoted in `openapi.ts`). */
-const MAX_SEARCH_QUERY_LENGTH = 200;
+import { MAX_SEARCH_QUERY_LENGTH } from "@/lib/api-keys/limits";
 
 export async function GET(request: NextRequest) {
   const session = await getSession();
@@ -26,9 +24,7 @@ export async function GET(request: NextRequest) {
   if (!q || q.length === 0) {
     return NextResponse.json({ items: [] });
   }
-  // Bounded: `q` becomes an ILIKE pattern run over every title in the type,
-  // and the public API reaches this route, where nothing else limited it but
-  // the request line (kilobytes). A title search is never that long.
+  // Bounded (see `limits.ts`): a title search is never this long.
   if (q.length > MAX_SEARCH_QUERY_LENGTH) {
     return NextResponse.json(
       { error: `Search text must be ${MAX_SEARCH_QUERY_LENGTH} characters or fewer` },

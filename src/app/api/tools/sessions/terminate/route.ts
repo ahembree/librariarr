@@ -7,7 +7,6 @@ import { logTermination, terminationFailureMessage } from "@/lib/media-server/te
 import type { MediaSession } from "@/lib/media-server/types";
 import { validateRequest, terminateSessionSchema } from "@/lib/validation";
 import { sanitizeErrorDetail } from "@/lib/api/sanitize";
-import { invalidateSessionListings } from "@/lib/media-server/session-listing-cache";
 
 export async function POST(request: NextRequest) {
   const session = await getSession();
@@ -100,8 +99,7 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  // The API's cached listing would otherwise still show the stopped stream.
-  if (terminated > 0) invalidateSessionListings();
-
+  // Each successful termination above went through `logTermination`, which
+  // also drops the public API's cached session listing.
   return NextResponse.json({ terminated, errors });
 }

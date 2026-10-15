@@ -10,7 +10,8 @@ import { validateRequest, apiExceptionDeleteSchema } from "@/lib/validation";
 // Trimmed: each exception row carries the owner's user id.
 export const GET = withApiKey("lifecycle:read", withoutServerInternals(appGet), { fullListing: true });
 // Adding an exception only ever protects media.
-export const POST = withApiKey("lifecycle:write", appPost);
+// Trimmed too: an individual-scope add answers with the exception row.
+export const POST = withApiKey("lifecycle:write", withoutServerInternals(appPost));
 // Removing one lifts that protection, after which the rules can match the item
 // and the executor delete it — so it needs the destructive scope, not
 // `lifecycle:write`, or that scope could get protected media deleted. For the
