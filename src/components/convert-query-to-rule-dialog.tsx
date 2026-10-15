@@ -244,15 +244,11 @@ function ConvertDialogBody({
           typeof payload.error === "string"
             ? payload.error
             : `Request failed (${res.status})`;
+        // validateRequest sends each issue as a "path: message" string.
         const detailLines = Array.isArray(payload.details)
-          ? (payload.details as Array<{ path?: unknown; message?: unknown }>)
-              .map((d) => {
-                const pathStr = typeof d.path === "string" ? d.path : "";
-                const msgStr = typeof d.message === "string" ? d.message : "";
-                if (!msgStr) return null;
-                return pathStr ? `${pathStr}: ${msgStr}` : msgStr;
-              })
-              .filter((line): line is string => !!line)
+          ? payload.details.filter(
+              (line): line is string => typeof line === "string" && line !== "",
+            )
           : [];
         setSubmitError([top, ...detailLines].join("\n"));
         setSubmitting(false);
