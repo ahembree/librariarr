@@ -70,7 +70,7 @@ export const AUDIO_CODEC_ORDER = [
 
 // ── Palette of selectable colors ──────────────────────────────────
 
-export interface ColorPreset {
+interface ColorPreset {
   name: string;
   hex: string;
 }

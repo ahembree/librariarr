@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
-import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasArrRules, hasSeerrRules, hasAnyActiveRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
+import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasArrRules, hasSeerrRules, hasAnyActiveRules, hasSeriesAggregateRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRuleGroup, LifecycleRule } from "@/lib/rules/types";
 import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
@@ -24,7 +24,9 @@ export async function POST(request: NextRequest) {
   const { data, error } = await validateRequest(request, rulePreviewSchema);
   if (error) return error;
 
-  const { rules, type, seriesScope, serverIds, arrInstanceId } = data;
+  const { rules, type, seriesScope, serverIds, arrInstanceId, ruleSetId } = data;
+  // "Has Pending Action" reads other rule sets' actions, as detection reads it.
+  const crossSystemOptions = { excludeRuleSetId: ruleSetId };
   const typedRules = rules as unknown as LifecycleRule[] | LifecycleRuleGroup[];
 
   // SAFETY: Refuse to evaluate if no rules are active — would match everything
@@ -77,18 +79,26 @@ export async function POST(request: NextRequest) {
 
     emit({ type: "phase", key: "evaluate" });
     let items;
-    if (type === "SERIES" && seriesScope !== false) {
+    // A series-aggregate field forces the series path even with series scope
+    // off, members restricted to the matching episodes — exactly as detection
+    // routes it (detect-matches.ts). Evaluated per episode the aggregate reads
+    // absent, and the preview showed a different set from the one stored.
+    const aggregateForced = type === "SERIES" && seriesScope === false && hasSeriesAggregateRules(typedRules);
+    if (type === "SERIES" && (seriesScope !== false || aggregateForced)) {
       items = await evaluateSeriesScope(
         typedRules,
         serverIds,
         arrData,
-        seerrData
+        seerrData,
+        aggregateForced,
+        crossSystemOptions,
       );
     } else if (type === "MUSIC" && seriesScope !== false) {
       items = await evaluateMusicScope(
         typedRules,
         serverIds,
-        arrData
+        arrData,
+        crossSystemOptions,
       );
     } else {
       const rawItems = await evaluateLifecycleRules(
@@ -96,7 +106,8 @@ export async function POST(request: NextRequest) {
         type,
         serverIds,
         arrData,
-        seerrData
+        seerrData,
+        crossSystemOptions,
       );
       items = type === "SERIES" ? groupSeriesResults(rawItems) : rawItems;
     }

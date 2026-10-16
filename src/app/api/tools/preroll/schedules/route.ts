@@ -68,20 +68,6 @@ function validateScheduleInput(body: ScheduleInput) {
   return null;
 }
 
-export async function GET() {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const schedules = await prisma.prerollSchedule.findMany({
-    where: { userId: session.userId! },
-    orderBy: { priority: "desc" },
-  });
-
-  return NextResponse.json({ schedules });
-}
-
 export async function POST(request: NextRequest) {
   const session = await getSession();
   if (!session.isLoggedIn) {

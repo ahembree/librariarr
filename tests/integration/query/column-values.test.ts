@@ -113,6 +113,44 @@ describe("POST /api/query/column-values", () => {
     expect(body.values[ids[1]]).toEqual({ availableEpisodeCount: null, watchedEpisodePercentage: null, videoBitrate: 5000 });
   });
 
+  it("reads a grouped show row's cross-system values across its episodes, as the query filter does", async () => {
+    // The query engine folds Matched By Rule Set / Has Pending Action / Server
+    // Count over a show's episodes (foldCrossSystemData), so a show listed for
+    // "Matched By Rule Set = Keep" because one episode is kept must not show
+    // an empty column read off its representative episode alone.
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const server = await createTestServer(user.id);
+    const lib = await createTestLibrary(server.id, { type: "SERIES" });
+    const ids: string[] = [];
+    for (let e = 1; e <= 3; e++) {
+      const ep = await createTestMediaItem(lib.id, {
+        type: "SERIES", title: `E${e}`, parentTitle: "Show", seriesKey: "title:show", seasonNumber: 1, episodeNumber: e,
+      });
+      ids.push(ep.id);
+    }
+    const prisma = getTestPrisma();
+    const keep = await prisma.ruleSet.create({
+      data: { userId: user.id, name: "Keep", type: "SERIES", rules: [], seriesScope: false },
+    });
+    await prisma.ruleMatch.create({
+      data: { ruleSetId: keep.id, mediaItemId: ids[2], itemData: { id: ids[2], title: "Show", memberIds: [ids[2]] } },
+    });
+    await prisma.lifecycleAction.create({
+      data: { userId: user.id, mediaItemId: ids[1], ruleSetId: keep.id, actionType: "DO_NOTHING", status: "PENDING", scheduledFor: new Date() },
+    });
+
+    const res = await callRoute(POST, {
+      url: "/api/query/column-values",
+      method: "POST",
+      body: { items: [{ id: ids[0], grouped: true }, { id: ids[1] }], fields: ["matchedByRuleSet", "hasPendingAction"] },
+    });
+    const body = await expectJson<Body>(res, 200);
+    expect(body.values[ids[0]]).toEqual({ matchedByRuleSet: ["Keep"], hasPendingAction: true });
+    // An episode row reads its own.
+    expect(body.values[ids[1]]).toEqual({ matchedByRuleSet: [], hasPendingAction: true });
+  });
+
   it("shows no stream counts on a grouped show row, only on an episode row", async () => {
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id });

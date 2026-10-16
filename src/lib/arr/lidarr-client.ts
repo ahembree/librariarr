@@ -4,33 +4,6 @@ import { IntegrationError } from "@/lib/integration-error";
 import { configureRetry, NO_RETRY } from "@/lib/http-retry";
 import { isExistingExclusionError } from "@/lib/arr/exclusion";
 
-// Tracked-download states that mean the item is NOT actively downloading.
-// Anything else (downloading, queued, warning, etc.) counts as an active download.
-const INACTIVE_DOWNLOAD_STATES = new Set([
-  "imported",
-  "importpending",
-  "failed",
-  "failedpending",
-  "ignored",
-]);
-
-/**
- * A queue record is "actively downloading" unless its tracked-download state
- * indicates it has already finished (imported), failed, or is ignored. Falling
- * back to `true` when state is absent preserves the prior behaviour for queues
- * that don't report a state.
- */
-function isActiveDownloadRecord(record: {
-  trackedDownloadState?: string;
-  status?: string;
-}): boolean {
-  const state = (record.trackedDownloadState ?? "").toLowerCase();
-  if (state && INACTIVE_DOWNLOAD_STATES.has(state)) return false;
-  const status = (record.status ?? "").toLowerCase();
-  if (status === "completed" || status === "failed") return false;
-  return true;
-}
-
 export interface LidarrArtist {
   id: number;
   artistName: string;
@@ -55,24 +28,17 @@ export interface LidarrArtist {
   status?: string;
 }
 
-export interface LidarrTag {
+interface LidarrTag {
   id: number;
   label: string;
 }
 
-export interface LidarrQualityProfile {
+interface LidarrQualityProfile {
   id: number;
   name: string;
 }
 
-export interface LidarrTrackFile {
-  id: number;
-  artistId: number;
-  relativePath: string;
-  size: number;
-}
-
-export interface LidarrAlbum {
+interface LidarrAlbum {
   id: number;
   title: string;
 }
@@ -93,13 +59,7 @@ export interface LidarrTrack {
   foreignRecordingId?: string;
 }
 
-export interface LidarrExclusion {
-  id?: number;
-  foreignId: string;
-  artistName: string;
-}
-
-export interface LidarrMediaManagementConfig {
+interface LidarrMediaManagementConfig {
   recycleBin: string | null;
   recycleBinCleanupDays: number;
 }
@@ -207,13 +167,6 @@ export class LidarrClient {
     return data;
   }
 
-  async getTrackFiles(artistId: number): Promise<LidarrTrackFile[]> {
-    const { data } = await this.client.get<LidarrTrackFile[]>("/api/v1/trackfile", {
-      params: { artistId },
-    });
-    return data;
-  }
-
   async deleteTrackFiles(trackFileIds: number[]): Promise<void> {
     if (trackFileIds.length === 0) return;
     await this.client.delete("/api/v1/trackfile/bulk", {
@@ -247,27 +200,6 @@ export class LidarrClient {
       name: "ArtistSearch",
       artistId,
     });
-  }
-
-  async getQueue(artistId: number): Promise<{ downloading: boolean; status: string | null }> {
-    try {
-      // `indexes: null` sends `artistIds=1`; axios' default `artistIds[]=1` is
-      // not bound, so the filter was skipped (see RadarrClient.getQueue).
-      const { data } = await this.client.get("/api/v1/queue", {
-        params: { artistIds: [artistId], pageSize: 50 },
-        paramsSerializer: { indexes: null },
-      });
-      const records = ((data.records || []) as Array<{ artistId?: number; status?: string; trackedDownloadStatus?: string; trackedDownloadState?: string }>)
-        .filter((r) => r.artistId === artistId);
-      if (records.length === 0) return { downloading: false, status: null };
-      const active = records.find(isActiveDownloadRecord);
-      if (!active) {
-        return { downloading: false, status: records[0].status ?? records[0].trackedDownloadStatus ?? null };
-      }
-      return { downloading: true, status: active.status ?? active.trackedDownloadStatus ?? "downloading" };
-    } catch {
-      return { downloading: false, status: null };
-    }
   }
 
   async getTags(): Promise<LidarrTag[]> {

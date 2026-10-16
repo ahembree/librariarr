@@ -1,5 +1,5 @@
 /** `GET /api/sync/status`'s body: the latest jobs, newest first. */
-export interface SyncStatusBody {
+interface SyncStatusBody {
   jobs?: { id: string; status: string; completedAt: string | null; [key: string]: unknown }[];
 }
 

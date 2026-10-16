@@ -1,4 +1,4 @@
-export interface AccentPreset {
+interface AccentPreset {
   name: string;
   label: string;
   color: string; // Display color for the swatch (hex)

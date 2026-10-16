@@ -235,7 +235,7 @@ There's also a **year guard** that runs first, because title normalization strip
 
 If neither check passes, the action is rejected with an error logged to System Logs and surfaced in the Pending Actions page. The action moves to "Failed" status — it does not execute against the unverified record.
 
-When you retry a failed action manually from the Pending Actions page, you have the option to skip title validation if you've inspected the mismatch and confirmed it's safe (for example, a legitimate rename you've already verified). A retry still runs every other guard: the rule set must be **enabled** (a disabled rule set's matches are frozen, so its failed actions can't be re-fired), the item must still be a current match, and the exception checks — including the whole-record sibling check — must pass.
+When you retry a failed action manually from the Pending Actions page, you have the option to skip title validation if you've inspected the mismatch and confirmed it's safe (for example, a legitimate rename you've already verified). A retry still runs every other guard: the rule set must be **enabled** (a disabled rule set's matches are frozen, so its failed actions can't be re-fired), the item must still be a current match, and the exception checks — including the whole-record sibling check — must pass. A retried file delete acts only on the episodes or tracks that still match and have no exception; it is refused when none are left, and a whole-record delete is refused when any of its episodes or tracks has one.
 
 ### Recoverability depends on *arr's recycle bin, not on Librariarr
 

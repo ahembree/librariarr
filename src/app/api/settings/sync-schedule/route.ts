@@ -2,9 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { validateRequest, syncScheduleSchema } from "@/lib/validation";
-import cron from "node-cron";
-
-const PRESET_SCHEDULES = ["MANUAL", "EVERY_6H", "EVERY_12H", "DAILY", "WEEKLY"];
+// The dispatcher's own rule: a cron it cannot evaluate would save and never run.
+import { isValidSchedule } from "@/lib/jobs/schedule";
 
 // Only what the Scheduling tab reads. AppSettings also holds the backup
 // passphrase, the OIDC client secret, the AI key and the Discord webhook URL;
@@ -44,7 +43,7 @@ export async function PUT(request: NextRequest) {
 
   const { syncSchedule } = data;
 
-  if (!PRESET_SCHEDULES.includes(syncSchedule) && !cron.validate(syncSchedule)) {
+  if (!isValidSchedule(syncSchedule)) {
     return NextResponse.json(
       { error: "Invalid schedule. Must be a preset or a valid cron expression (e.g. '0 */4 * * *')." },
       { status: 400 }

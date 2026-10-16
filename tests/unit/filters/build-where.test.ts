@@ -35,6 +35,56 @@ describe("applyCommonFilters", () => {
       const andClauses = where.AND as Prisma.MediaItemWhereInput[];
       expect(andClauses.length).toBeGreaterThanOrEqual(1);
     });
+
+    // With the stored values grouped by label (`loadResolutionSpellings`), a
+    // label matches what `normalizeResolutionLabel` calls it — the label the
+    // quality chips show — not only its fixed spellings.
+    describe("with resolution spellings", () => {
+      const spellings = new Map([
+        ["480P", ["480", "576"]],
+        ["1080P", ["1080", "1024"]],
+        ["Other", ["", "weird"]],
+      ]);
+      const build = (resolution: string) => {
+        const where: Prisma.MediaItemWhereInput = {};
+        applyCommonFilters(where, new URLSearchParams({ resolution }), undefined, spellings);
+        return where.AND as Prisma.MediaItemWhereInput[];
+      };
+
+      it("matches every stored value the label covers", () => {
+        expect(build("480P")).toEqual([{ resolution: { in: ["480", "576"] } }]);
+      });
+
+      it("ORs a multi-select", () => {
+        expect(build("480P|1080P")).toEqual([
+          { OR: [{ resolution: { in: ["480", "576"] } }, { resolution: { in: ["1080", "1024"] } }] },
+        ]);
+      });
+
+      // A movie, episode or track card shows no chip for a missing resolution,
+      // so on those listings it is not Other.
+      it("leaves a missing resolution out of Other by default", () => {
+        expect(build("Other")).toEqual([{ resolution: { in: ["", "weird"] } }]);
+      });
+
+      it("takes a missing resolution as Other where the chips count it so", () => {
+        const where: Prisma.MediaItemWhereInput = {};
+        applyCommonFilters(where, new URLSearchParams({ resolution: "Other" }), undefined, spellings, {
+          resolutionOtherIncludesNull: true,
+        });
+        expect(where.AND).toEqual([
+          { OR: [{ resolution: { in: ["", "weird"] } }, { resolution: null }] },
+        ]);
+      });
+
+      it("matches nothing for a label no stored value has", () => {
+        expect(build("4K")).toEqual([{ resolution: { in: [] } }]);
+      });
+
+      it("matches a value that is not a label as a stored value", () => {
+        expect(build("1440")).toEqual([{ resolution: { in: ["1440"] } }]);
+      });
+    });
   });
 
   describe("string contains filters", () => {
@@ -210,6 +260,21 @@ describe("applyCommonFilters", () => {
       const where = buildWhere({ genre: "Action|Comedy" });
       const andClauses = where.AND as Prisma.MediaItemWhereInput[];
       expect(andClauses).toHaveLength(2);
+    });
+
+    it("matches any stored spelling of a genre when given them", () => {
+      // `array_contains` is case-sensitive; the dropdown offers one entry per
+      // genre whatever its case, so the filter must cover every spelling.
+      const where: Prisma.MediaItemWhereInput = {};
+      applyCommonFilters(
+        where,
+        new URLSearchParams({ genre: "SCI-FI|Drama" }),
+        new Map([["sci-fi", ["Sci-Fi", "sci-fi"]], ["drama", ["Drama"]]]),
+      );
+      expect(where.AND).toEqual([
+        { OR: [{ genres: { array_contains: "Sci-Fi" } }, { genres: { array_contains: "sci-fi" } }] },
+        { genres: { array_contains: "Drama" } },
+      ]);
     });
   });
 

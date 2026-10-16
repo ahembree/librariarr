@@ -2,8 +2,22 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { escapeLike } from "@/lib/filters/escape-like";
-import { resolveSeriesKey } from "@/lib/media/series-key";
-import type { Prisma } from "@/generated/prisma/client";
+import { Prisma } from "@/generated/prisma/client";
+
+/**
+ * How many distinct items a group of matching rows holds — the "N eps" /
+ * "N tracks" of a scoped result. A copy on another server is the same item, so
+ * rows fold by `dedupKey`, but only ACROSS servers: `computeDedupKey` names a
+ * track by artist + title and an episode by show + SxxExx, so two different
+ * rows of ONE server can share a key (the same song on an album and on a
+ * compilation; episodes without numbers). Each row is numbered among the rows
+ * of its own group, server and key (`copyNumber`), and the group counts its
+ * distinct (key, number) pairs: per key, as many items as any one server holds.
+ */
+const dedupKey = Prisma.sql`COALESCE(mi."dedupKey", mi.id)`;
+const copyNumber = (group: Prisma.Sql) =>
+  Prisma.sql`ROW_NUMBER() OVER (PARTITION BY ${group}, l."mediaServerId", ${dedupKey} ORDER BY mi.id)`;
+const itemCount = Prisma.sql`COUNT(DISTINCT (m.k, m.copy))::int`;
 
 export async function GET(request: NextRequest) {
   const session = await getSession();
@@ -34,14 +48,45 @@ export async function GET(request: NextRequest) {
 
   // Music scope: search by artist (parentTitle) and album (albumTitle), return deduplicated grouped results
   if (musicScope && type === "MUSIC") {
-    const items = await prisma.mediaItem.findMany({
-      where: {
-        ...ownershipFilter,
-        OR: [
-          { parentTitle: { contains: escapeLike(q), mode: "insensitive" } },
-          { albumTitle: { contains: escapeLike(q), mode: "insensitive" } },
-        ],
-      },
+    // Grouped and counted in SQL. Grouping the first 200 matching TRACKS in JS
+    // (ordered by artist) let one prolific artist fill the window, so a later
+    // matching artist or album never came back at all, and every count was the
+    // number of tracks that landed in the window. A copy on another server is
+    // the same track, so tracks are counted as `itemCount` counts them.
+    const pattern = escapeLike(q);
+    const [artistGroups, albumGroups] = await Promise.all([
+      prisma.$queryRaw<{ id: string; n: number }[]>`
+        SELECT (array_agg(m.id ORDER BY m."albumTitle", m.title, m.id))[1] AS id, ${itemCount} AS n
+        FROM (
+          SELECT mi.id, mi.title, mi."parentTitle", mi."albumTitle", ${dedupKey} AS k,
+            ${copyNumber(Prisma.sql`mi."parentTitle"`)} AS copy
+          FROM "MediaItem" mi
+          JOIN "Library" l ON l.id = mi."libraryId"
+          JOIN "MediaServer" ms ON ms.id = l."mediaServerId"
+          WHERE ms."userId" = ${session.userId} AND mi.type = 'MUSIC'::"LibraryType"
+            AND mi."parentTitle" ILIKE '%' || ${pattern} || '%'
+        ) m
+        GROUP BY m."parentTitle"
+        ORDER BY m."parentTitle"
+        LIMIT 20`,
+      prisma.$queryRaw<{ id: string; n: number }[]>`
+        SELECT (array_agg(m.id ORDER BY m.title, m.id))[1] AS id, ${itemCount} AS n
+        FROM (
+          SELECT mi.id, mi.title, mi."parentTitle", mi."albumTitle", ${dedupKey} AS k,
+            ${copyNumber(Prisma.sql`mi."parentTitle", mi."albumTitle"`)} AS copy
+          FROM "MediaItem" mi
+          JOIN "Library" l ON l.id = mi."libraryId"
+          JOIN "MediaServer" ms ON ms.id = l."mediaServerId"
+          WHERE ms."userId" = ${session.userId} AND mi.type = 'MUSIC'::"LibraryType"
+            AND mi."albumTitle" ILIKE '%' || ${pattern} || '%'
+        ) m
+        GROUP BY m."parentTitle", m."albumTitle"
+        ORDER BY m."parentTitle" NULLS FIRST, m."albumTitle"
+        LIMIT 20`,
+    ]);
+
+    const reps = await prisma.mediaItem.findMany({
+      where: { id: { in: [...artistGroups, ...albumGroups].map((g) => g.id) } },
       select: {
         id: true,
         title: true,
@@ -52,43 +97,15 @@ export async function GET(request: NextRequest) {
         type: true,
         libraryId: true,
       },
-      orderBy: { parentTitle: "asc" },
-      take: 200,
     });
-
-    const qLower = q.toLowerCase();
-    const artists = new Map<
-      string,
-      { item: (typeof items)[0]; count: number }
-    >();
-    const albums = new Map<
-      string,
-      { item: (typeof items)[0]; count: number }
-    >();
-
-    for (const item of items) {
-      // Bucket into artists by parentTitle match
-      if (item.parentTitle?.toLowerCase().includes(qLower)) {
-        const key = item.parentTitle;
-        const existing = artists.get(key);
-        if (existing) {
-          existing.count++;
-        } else {
-          artists.set(key, { item, count: 1 });
-        }
-      }
-
-      // Bucket into albums by albumTitle match
-      if (item.albumTitle?.toLowerCase().includes(qLower)) {
-        const key = `${item.parentTitle ?? ""}::${item.albumTitle}`;
-        const existing = albums.get(key);
-        if (existing) {
-          existing.count++;
-        } else {
-          albums.set(key, { item, count: 1 });
-        }
-      }
-    }
+    const repById = new Map(reps.map((r) => [r.id, r]));
+    const toGroups = (groups: { id: string; n: number }[]) =>
+      groups.flatMap((g) => {
+        const item = repById.get(g.id);
+        return item ? [{ item, count: g.n }] : [];
+      });
+    const artists = new Map(toGroups(artistGroups).map((g) => [g.item.parentTitle!, g]));
+    const albums = toGroups(albumGroups);
 
     const results: Record<string, unknown>[] = [];
 
@@ -111,7 +128,7 @@ export async function GET(request: NextRequest) {
     // (avoids confusing near-duplicates when artist and album names overlap)
     const artistKeys = new Set(artists.keys());
 
-    for (const [, { item, count }] of albums) {
+    for (const { item, count } of albums) {
       if (item.parentTitle && artistKeys.has(item.parentTitle) && item.albumTitle?.toLowerCase() === item.parentTitle.toLowerCase()) {
         continue;
       }
@@ -132,13 +149,58 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ items: results.slice(0, 20) });
   }
 
+  // Series (or artist) scope: one row per show, grouped and counted in SQL.
+  // This took the first 100 matching EPISODE rows (ordered by the episode's own
+  // title) and grouped them in JS, so a long show whose episode titles sort
+  // first filled the window and a second matching show was never returned at
+  // all — the Exceptions dialog could not find it to protect it — and every
+  // "N eps" was the number of rows that landed in the window. Keyed on series
+  // identity (`seriesKey`; a legacy row without one keys on its title the way
+  // `resolveSeriesKey` would) so two same-titled shows list separately, and a
+  // copy on another server is the same episode (see `itemCount`).
+  if (seriesScope && type !== "MOVIE") {
+    const seriesGroup = Prisma.sql`COALESCE(mi."seriesKey", 'title:' || LOWER(TRIM(mi."parentTitle")))`;
+    const groups = await prisma.$queryRaw<{ id: string; n: number }[]>`
+      SELECT (array_agg(m.id ORDER BY m.title, m.id))[1] AS id, ${itemCount} AS n
+      FROM (
+        SELECT mi.id, mi.title, mi."parentTitle", ${seriesGroup} AS g, ${dedupKey} AS k,
+          ${copyNumber(seriesGroup)} AS copy
+        FROM "MediaItem" mi
+        JOIN "Library" l ON l.id = mi."libraryId"
+        JOIN "MediaServer" ms ON ms.id = l."mediaServerId"
+        WHERE ms."userId" = ${session.userId} AND mi.type = ${type}::"LibraryType"
+          AND mi."parentTitle" ILIKE '%' || ${escapeLike(q)} || '%'
+      ) m
+      GROUP BY m.g
+      ORDER BY MIN(LOWER(m."parentTitle")), m.g
+      LIMIT 10`;
+    const reps = await prisma.mediaItem.findMany({
+      where: { id: { in: groups.map((g) => g.id) } },
+      select: { id: true, title: true, parentTitle: true, year: true, thumbUrl: true, type: true, libraryId: true },
+    });
+    const repById = new Map(reps.map((r) => [r.id, r]));
+    const grouped = groups.flatMap((g) => {
+      const item = repById.get(g.id);
+      if (!item) return [];
+      return [{
+        id: item.id,
+        title: item.parentTitle ?? item.title,
+        parentTitle: null,
+        year: item.year,
+        thumbUrl: item.thumbUrl,
+        type: item.type,
+        libraryId: item.libraryId,
+        scope: "series",
+        itemCount: g.n,
+      }];
+    });
+    return NextResponse.json({ items: grouped });
+  }
+
   const where: Prisma.MediaItemWhereInput = { ...ownershipFilter };
 
   if (type === "MOVIE") {
     where.title = { contains: escapeLike(q), mode: "insensitive" };
-  } else if (seriesScope) {
-    // Series/music with scope: only search by parentTitle (series/artist name)
-    where.parentTitle = { contains: escapeLike(q), mode: "insensitive" };
   } else {
     // Series/music without scope: search by title and parentTitle
     where.OR = [
@@ -163,35 +225,8 @@ export async function GET(request: NextRequest) {
       libraryId: true,
     },
     orderBy: { title: "asc" },
-    take: seriesScope && type !== "MOVIE" ? 100 : 10,
+    take: 10,
   });
-
-  // For series with scope, deduplicate by parentTitle and return grouped results
-  if (seriesScope && type !== "MOVIE") {
-    const seen = new Map<string, { item: (typeof items)[0]; count: number }>();
-    for (const item of items) {
-      // Group by series identity so two same-titled shows list separately.
-      const key = resolveSeriesKey(item) ?? item.parentTitle ?? item.title;
-      const existing = seen.get(key);
-      if (existing) {
-        existing.count++;
-      } else {
-        seen.set(key, { item, count: 1 });
-      }
-    }
-    const grouped = [...seen.values()].slice(0, 10).map(({ item, count }) => ({
-      id: item.id,
-      title: item.parentTitle ?? item.title,
-      parentTitle: null,
-      year: item.year,
-      thumbUrl: item.thumbUrl,
-      type: item.type,
-      libraryId: item.libraryId,
-      scope: "series",
-      itemCount: count,
-    }));
-    return NextResponse.json({ items: grouped });
-  }
 
   // Default: individual items (movies or unscoped series/music)
   const withScope = items.map((item) => ({

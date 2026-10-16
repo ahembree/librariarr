@@ -318,7 +318,6 @@ export function LibraryTiles({
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [serverId, show.movie, show.series, show.music, refreshKey]);
 
   const visibleCount = Number(show.movie) + Number(show.series) + Number(show.music) + 1;

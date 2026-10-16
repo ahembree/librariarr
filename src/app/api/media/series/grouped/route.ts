@@ -5,9 +5,13 @@ import { MAX_GROUPED_LIST_LIMIT, parseListPagination } from "@/lib/api/paginatio
 import { prisma } from "@/lib/db";
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
 import { getServerPresenceByGroup } from "@/lib/dedup/server-presence";
+import { applyCommonFilters } from "@/lib/filters/build-where";
+import { loadGenreSpellings } from "@/lib/filters/genre-spellings";
+import { loadResolutionSpellings } from "@/lib/filters/resolution-spellings";
 import { escapeLike } from "@/lib/filters/escape-like";
 import { firstNonNullSql, qualityCountsSql, resolutionLabelSql } from "@/lib/media/series-sql";
 import { loadMissingSummaries } from "@/lib/media/group-summaries";
+import type { Prisma } from "@/generated/prisma/client";
 
 interface SeriesGroupRow {
   group_key: string;
@@ -108,7 +112,12 @@ function parseConditions(raw: string | null, logic: string): ((val: number) => b
     : (val) => fns.every((fn) => fn(val));
 }
 
-/** Parse a date filter (min/max range or "last N days") into a predicate */
+/**
+ * Parse a date filter (min/max range or "last N days") into a predicate. Days
+ * are UTC calendar days, as `applyCommonFilters` reads them for All Seasons and
+ * every flat list: local midnight put a show played on the bound's own day
+ * outside it on a server west of UTC.
+ */
 function parseDateFilter(
   params: URLSearchParams,
   minKey: string,
@@ -119,9 +128,8 @@ function parseDateFilter(
   if (daysStr) {
     const days = parseInt(daysStr);
     if (isNaN(days) || days <= 0) return null;
-    const since = new Date();
-    since.setDate(since.getDate() - days);
-    since.setHours(0, 0, 0, 0);
+    const since = new Date(Date.now() - days * 86_400_000);
+    since.setUTCHours(0, 0, 0, 0);
     return (val) => val != null && val >= since;
   }
   const minStr = params.get(minKey);
@@ -129,7 +137,7 @@ function parseDateFilter(
   if (!minStr && !maxStr) return null;
   const minDate = minStr ? new Date(minStr) : null;
   const maxDate = maxStr ? new Date(maxStr) : null;
-  if (maxDate) maxDate.setHours(23, 59, 59, 999);
+  if (maxDate) maxDate.setUTCHours(23, 59, 59, 999);
   return (val) => {
     if (val == null) return false;
     if (minDate && val < minDate) return false;
@@ -147,6 +155,16 @@ interface SeriesItem {
   lastEpisodeAiredAt: Date | null;
   isWatchlisted: boolean;
 }
+
+/**
+ * The `applyCommonFilters` keys `applySeriesFilters` answers on the show's own
+ * figures, so they are kept out of the per-episode match.
+ */
+const SHOW_LEVEL_FILTER_KEYS = [
+  "lastPlayedAtMin", "lastPlayedAtMax", "lastPlayedAtDays",
+  "addedAtMin", "addedAtMax", "addedAtDays",
+  "isWatchlisted",
+];
 
 /** Apply post-aggregation filters on series-level fields */
 function applySeriesFilters<T extends SeriesItem>(list: T[], params: URLSearchParams): T[] {
@@ -231,6 +249,54 @@ export async function GET(request: NextRequest) {
       filters.push(`AND mi."parentTitle" ILIKE $${params.length} || '%'`);
     }
   }
+  // The library filters (resolution, genre, year, codec, …) are per-episode
+  // facts, so a show qualifies when ANY of its episodes matches — and its
+  // figures stay the whole show's: a "4K" filter lists every show with a 4K
+  // episode with its full episode count and quality mix, which is what the
+  // Series page showed when it filtered resolution on the client (it filtered
+  // nothing else, and sent the server no filter at all). `applyCommonFilters`
+  // builds a Prisma where with no SQL form here, so Prisma resolves the
+  // qualifying series keys and the aggregate is scoped to them. The date and
+  // watchlist filters are facts about the SHOW (its latest play, its newest
+  // addition) and are answered on its own figures by `applySeriesFilters`
+  // below — never per episode as well, where they were ANDed into the one
+  // episode that has to match: "4K, last played this month" then demanded a
+  // single episode that is both, and dropped a show whose 4K episodes were
+  // watched years ago and whose latest play was last week.
+  const episodeParams = new URLSearchParams(searchParams);
+  for (const key of SHOW_LEVEL_FILTER_KEYS) episodeParams.delete(key);
+  const narrowing: Prisma.MediaItemWhereInput = {};
+  // Every stored spelling of a genre, as the other listings match it, and a
+  // resolution by the label its quality chip shows ("576" is 480P): this page
+  // filtered resolution by those chips' labels before it filtered on the server.
+  const [genreSpellings, resolutionSpellings] = await Promise.all([
+    loadGenreSpellings(searchParams),
+    loadResolutionSpellings(searchParams),
+  ]);
+  applyCommonFilters(narrowing, episodeParams, genreSpellings, resolutionSpellings, {
+    resolutionOtherIncludesNull: true,
+  });
+  if (Object.keys(narrowing).length > 0) {
+    const qualifying = await prisma.mediaItem.findMany({
+      where: {
+        AND: [
+          narrowing,
+          {
+            type: "SERIES",
+            seriesKey: { not: null },
+            parentTitle: { not: null },
+            library: { mediaServerId: { in: sf.serverIds } },
+            ...(sf.isSingleServer ? {} : { dedupCanonical: true }),
+          },
+        ],
+      },
+      select: { seriesKey: true },
+      distinct: ["seriesKey"],
+    });
+    params.push(qualifying.map((r) => r.seriesKey));
+    filters.push(`AND mi."seriesKey" = ANY($${params.length}::text[])`);
+  }
+
   // `parentTitle IS NOT NULL`: a row can carry a TVDB-derived seriesKey with no
   // show title, and MIN("parentTitle") over such a group is NULL, which the
   // title sort below cannot compare.

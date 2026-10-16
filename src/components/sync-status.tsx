@@ -17,9 +17,11 @@ import {
   Database,
 } from "lucide-react";
 import { ServerTypeChip } from "@/components/server-type-chip";
+import { activeSyncPerServer } from "@/lib/sync/active-sync";
 
 interface SyncJob {
   id: string;
+  mediaServerId: string;
   status: "PENDING" | "RUNNING" | "COMPLETED" | "FAILED";
   startedAt: string;
   completedAt: string | null;
@@ -148,7 +150,7 @@ export function SyncStatus({ onSyncComplete }: SyncStatusProps) {
         </CardTitle>
       </CardHeader>
       <CardContent className="flex-1 min-h-0 overflow-auto space-y-3">
-        {activeJobs.map((job) => (
+        {activeSyncPerServer(activeJobs).map((job) => (
           <ActiveSyncJob key={job.id} job={job} />
         ))}
         {recentJobs.map((job) => (

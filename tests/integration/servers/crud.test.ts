@@ -138,6 +138,27 @@ describe("Server CRUD endpoints", () => {
       expect(byId.get(other.id)!.syncJobs).toEqual([]);
     });
 
+    // The library pages' Sync queues behind a running sync under a PENDING row
+    // of its own; returning that newer row hid the running sync's progress.
+    it("returns a running sync ahead of a newer row queued behind it", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id, { name: "My Plex" });
+      const prisma = getTestPrisma();
+      await prisma.syncJob.createMany({
+        data: [
+          { mediaServerId: server.id, status: "RUNNING", startedAt: new Date("2026-01-02T00:00:00Z"), itemsProcessed: 40 },
+          { mediaServerId: server.id, status: "PENDING", startedAt: new Date("2026-01-03T00:00:00Z") },
+        ],
+      });
+      setMockSession({ userId: user.id, isLoggedIn: true });
+
+      const body = await expectJson<{
+        servers: { id: string; syncJobs: { status: string; itemsProcessed: number }[] }[];
+      }>(await callRoute(GET, { url: "/api/servers" }), 200);
+
+      expect(body.servers[0].syncJobs).toEqual([expect.objectContaining({ status: "RUNNING", itemsProcessed: 40 })]);
+    });
+
     it("does not return servers belonging to another user", async () => {
       const user1 = await createTestUser({ plexId: "user1" });
       const user2 = await createTestUser({ plexId: "user2" });
@@ -625,22 +646,42 @@ describe("Server CRUD endpoints", () => {
       await expectJson(await put({ tlsSkipVerify: true }), 200);
     });
 
-    it("lets a stale session turn certificate checks back on, and leave a Jellyfin server's alone", async () => {
+    it("lets a stale session turn certificate checks back on", async () => {
       const user = await createTestUser();
       const plex = await createTestServer(user.id, { url: "https://keep:32400", accessToken: "stored-token" });
       await getTestPrisma().mediaServer.update({ where: { id: plex.id }, data: { tlsSkipVerify: true } });
-      const jelly = await createTestServer(user.id, { url: "https://jelly:8096", type: "JELLYFIN" });
       setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: STALE });
 
       await expectJson(
         await callRouteWithParams(PUT, { id: plex.id }, { url: `/api/servers/${plex.id}`, method: "PUT", body: { tlsSkipVerify: false } }),
         200
       );
-      await expectJson(
-        await callRouteWithParams(PUT, { id: jelly.id }, { url: `/api/servers/${jelly.id}`, method: "PUT", body: { tlsSkipVerify: true } }),
-        200
-      );
     });
+
+    // A Jellyfin/Emby API key is an admin key — it can delete media and shut
+    // the server down — so it gets the same rule as the Plex token.
+    it.each(["JELLYFIN", "EMBY"] as const)(
+      "asks a stale session to confirm it's them before sending a %s server's stored key elsewhere",
+      async (type) => {
+        const user = await createTestUser();
+        const server = await createTestServer(user.id, { url: "https://media.lan:8096", type, accessToken: "admin-key" });
+        setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: STALE });
+        const put = (body: Record<string, unknown>) =>
+          callRouteWithParams(PUT, { id: server.id }, { url: `/api/servers/${server.id}`, method: "PUT", body });
+
+        for (const body of [{ url: "https://attacker.example" }, { tlsSkipVerify: true }]) {
+          const refusal = await expectJson<{ code: string }>(await put(body), 403);
+          expect(refusal.code).toBe("reauth_required");
+        }
+        const stored = await getTestPrisma().mediaServer.findUniqueOrThrow({ where: { id: server.id } });
+        expect(stored.url).toBe("https://media.lan:8096");
+        expect(stored.tlsSkipVerify).toBe(false);
+
+        // `enabled: false` skips the connection test, so nothing goes out here.
+        setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
+        await expectJson(await put({ url: "https://moved.lan:8096", enabled: false }), 200);
+      },
+    );
 
     it("lets a stale session re-save the same URL, or change it along with the token", async () => {
       const user = await createTestUser();

@@ -57,10 +57,22 @@ export async function cleanupOldActions(): Promise<void> {
   const cutoff = new Date();
   cutoff.setDate(cutoff.getDate() - retentionDays);
 
+  // Aged by when the action RAN, not when it was scheduled. The executor
+  // completes an action by updating its PENDING row, so `createdAt` is the
+  // detection run that scheduled it — `actionDelayDays` (up to 365) earlier.
+  // Keyed on it, every action of a rule set whose delay is at least the
+  // retention ("delete 30 days after it matches" against the default 30) was
+  // purged within 15 minutes of running: its history row, the failure the
+  // user should see and retry, the bytes the deletion stats count, and the
+  // completed row that stops a non-destructive action re-firing. Only a row
+  // that never recorded a run time falls back to `createdAt`.
   const deleted = await prisma.lifecycleAction.deleteMany({
     where: {
       status: { not: "PENDING" },
-      createdAt: { lt: cutoff },
+      OR: [
+        { executedAt: { lt: cutoff } },
+        { executedAt: null, createdAt: { lt: cutoff } },
+      ],
     },
   });
 
@@ -107,6 +119,15 @@ const syncServer: Task = async (payload) => {
       "Jobs",
       `Skipping sync for server ${serverId} (${trigger ?? "trigger not recorded"}) — already running`,
     );
+    // A row the sync route created for this job would otherwise stay PENDING
+    // with nothing left to claim it, and a PENDING row makes every Sync button
+    // answer as though a sync were queued.
+    if (syncJobId) {
+      await prisma.syncJob.updateMany({
+        where: { id: syncJobId, status: "PENDING" },
+        data: { status: "FAILED", completedAt: new Date(), error: "Another sync of this server was already running" },
+      });
+    }
     return;
   }
 

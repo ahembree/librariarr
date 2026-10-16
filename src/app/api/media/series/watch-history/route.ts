@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { fetchPlayHistory, parsePlayHistoryPaging } from "@/lib/media/play-history";
+import { INT_MAX, INT_MIN } from "@/lib/filters/build-where";
 
 /**
  * Per-play watch history scoped to one series (and optionally one season or a
@@ -54,6 +55,15 @@ export async function GET(request: NextRequest) {
   const episodeNumber = rawEpisode != null && rawEpisode !== "" ? parseInt(rawEpisode) : null;
   if (episodeNumber != null && Number.isNaN(episodeNumber)) {
     return NextResponse.json({ error: "episodeNumber must be a number" }, { status: 400 });
+  }
+  // Bound for the `::int` casts below: out of the column's range a number
+  // matches nothing (as on /api/media/series), where binding it failed the
+  // query with "integer out of range" — a 500 instead of an empty page.
+  const outOfRange = (n: number | null) => n != null && (n < INT_MIN || n > INT_MAX);
+  if (outOfRange(seasonNumber) || outOfRange(episodeNumber)) {
+    return NextResponse.json(
+      await fetchPlayHistory({ userId: session.userId!, mediaItemIds: [], serverId, page, limit }),
+    );
   }
 
   // Resolve the episodes in scope FIRST, keyed by series identity (`seriesKey`

@@ -4,7 +4,6 @@ import {
   trashCfToArr,
   cfComparable,
   projectManagedFields,
-  findArrCfByName,
   findManagedArrResource,
   applyQualitySizes,
   qualityDefsComparable,
@@ -128,9 +127,9 @@ describe("custom format translation", () => {
 
   it("finds an Arr custom format by name (case-insensitive fallback)", () => {
     const arr: ArrCustomFormat[] = [{ id: 1, name: "AMZN", specifications: [] }];
-    expect(findArrCfByName(arr, "AMZN")?.id).toBe(1);
-    expect(findArrCfByName(arr, "amzn")?.id).toBe(1);
-    expect(findArrCfByName(arr, "Nope")).toBeUndefined();
+    expect(findManagedArrResource(arr, "AMZN", undefined)?.id).toBe(1);
+    expect(findManagedArrResource(arr, "amzn", undefined)?.id).toBe(1);
+    expect(findManagedArrResource(arr, "Nope", undefined)).toBeUndefined();
   });
 
   it("findManagedArrResource falls back to the recorded id, preferring a name match", () => {

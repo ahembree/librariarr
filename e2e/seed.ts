@@ -83,3 +83,44 @@ export async function seedMovieLibrary(): Promise<void> {
     );
   });
 }
+
+/**
+ * A media server nothing listens for (`127.0.0.1:1` refuses at once), for the
+ * specs that need work the job worker or the realtime manager does on a real
+ * server row — a sync that fails, a WebSocket that cannot connect.
+ */
+export const UNREACHABLE_SERVER = {
+  id: "e2e-unreachable-server",
+  name: "E2E Unreachable Server",
+} as const;
+
+interface SeedServer {
+  id: string;
+  name: string;
+}
+
+export async function seedUnreachableServer(server: SeedServer = UNREACHABLE_SERVER): Promise<void> {
+  await cleanupUnreachableServer(server);
+  await withClient(async (c) => {
+    const { rows } = await c.query<{ id: string }>(
+      `SELECT id FROM "User" ORDER BY "createdAt" ASC LIMIT 1`,
+    );
+    if (rows.length === 0) throw new Error("No admin user found to own seed data");
+    await c.query(
+      `INSERT INTO "MediaServer"
+         (id, "userId", type, name, url, "accessToken", enabled, "createdAt", "updatedAt")
+       VALUES ($1, $2, 'PLEX', $3, 'http://127.0.0.1:1', 'e2e-unreachable-token', true, NOW(), NOW())`,
+      [server.id, rows[0].id, server.name],
+    );
+  });
+}
+
+/** Remove the server and any retry of its sync still queued in the worker. */
+export async function cleanupUnreachableServer(server: SeedServer = UNREACHABLE_SERVER): Promise<void> {
+  await withClient(async (c) => {
+    await c
+      .query(`SELECT graphile_worker.remove_job($1)`, [`sync:${server.id}`])
+      .catch(() => undefined); // schema absent before the worker's first start
+    await c.query(`DELETE FROM "MediaServer" WHERE id = $1`, [server.id]);
+  });
+}

@@ -2,13 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { validateRequest, lifecycleScheduleSchema } from "@/lib/validation";
-import cron from "node-cron";
-
-const PRESET_SCHEDULES = ["MANUAL", "EVERY_6H", "EVERY_12H", "DAILY", "WEEKLY"];
-
-function isValidSchedule(value: string): boolean {
-  return PRESET_SCHEDULES.includes(value) || cron.validate(value);
-}
+// The dispatcher's own rule: a cron it cannot evaluate would save and never run.
+import { isValidSchedule } from "@/lib/jobs/schedule";
 
 export async function GET() {
   const session = await getSession();

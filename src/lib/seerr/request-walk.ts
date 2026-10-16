@@ -1,7 +1,7 @@
 import { IntegrationError } from "@/lib/integration-error";
 import type { SeerrClient, SeerrRequest } from "@/lib/seerr/seerr-client";
 
-export const SEERR_REQUEST_PAGE_SIZE = 100;
+const SEERR_REQUEST_PAGE_SIZE = 100;
 // Hard ceiling so a huge or looping instance can't hang the caller.
 // 1000 pages × ~90 new requests per page ≈ 90k requests.
 export const SEERR_MAX_REQUEST_PAGES = 1000;
@@ -13,7 +13,7 @@ export const SEERR_MAX_REQUEST_PAGES = 1000;
 // that the walk cannot prove it read everything and throws.
 const PAGE_OVERLAP = 10;
 
-export interface WalkSeerrRequestsOptions {
+interface WalkSeerrRequestsOptions {
   /** Instance name, for error messages. */
   instanceName: string;
   /**

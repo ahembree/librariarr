@@ -267,13 +267,7 @@ export function nullValueResult(operator: string): boolean {
 
 // Non-nullable field metadata lives in ./field-metadata.ts. Re-exported here
 // for backward compatibility with existing imports.
-export {
-  isNonNullableField,
-  isNonNullableTextField,
-  isNonNullableNonTextField,
-  getNonNullableType,
-  type PrismaScalarType,
-} from "./field-metadata";
+export { isNonNullableField } from "./field-metadata";
 
 // Stable arrays for callers that need to enumerate
 export const ARR_FIELDS = Array.from(ARR_FIELD_VALUES);
@@ -361,7 +355,7 @@ export function hasResolutionRules(groups: ConditionGroup[]): boolean {
 
 /** The JSONB-array fields. Kept as one shared set so both engines' Phase-2
  *  detectors and the WHERE handler agree on the membership. */
-export const ARRAY_FIELDS = new Set([GENRE_FIELD, LABELS_FIELD, COUNTRY_FIELD]);
+const ARRAY_FIELDS = new Set([GENRE_FIELD, LABELS_FIELD, COUNTRY_FIELD]);
 
 export function isArrayField(field: string): boolean {
   return ARRAY_FIELDS.has(field);

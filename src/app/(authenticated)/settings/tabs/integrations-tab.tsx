@@ -358,7 +358,7 @@ interface TracearrSectionProps {
   onToggleEnabled: (id: string, enabled: boolean) => void;
 }
 
-export interface IntegrationsTabProps {
+interface IntegrationsTabProps {
   sonarr: ArrSectionProps;
   radarr: ArrSectionProps;
   lidarr: ArrSectionProps;

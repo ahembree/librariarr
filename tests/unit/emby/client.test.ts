@@ -35,6 +35,8 @@ vi.mock("axios", () => ({
 
 vi.mock("@/lib/http-retry", () => ({
   configureRetry: vi.fn(),
+  NO_RETRY: { __noRetry: true },
+  NO_BREAKER_MARK: { __noBreakerMark: true },
 }));
 
 vi.mock("@/lib/logger", () => ({

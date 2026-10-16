@@ -115,7 +115,7 @@ export function resetRecoveryAnswers(): void {
 /** A caller cannot opt out of the request budget, only ask for less of it. */
 export const MAX_CANDIDATE_LIMIT = 500;
 
-export interface RecoverNewItemHistoryOptions {
+interface RecoverNewItemHistoryOptions {
   /** Candidate cap for this pass; clamped to `MAX_CANDIDATE_LIMIT`. */
   limit?: number;
   /**
@@ -128,7 +128,7 @@ export interface RecoverNewItemHistoryOptions {
   signal?: AbortSignal;
 }
 
-export interface RecoverNewItemHistoryResult {
+interface RecoverNewItemHistoryResult {
   /** Items actually asked about — i.e. requests issued. */
   checked: number;
   /** `WatchHistory` rows written (inserted or merged) across those items. */
@@ -199,15 +199,14 @@ export async function recoverHistoryForNewItems(
   // row on this server, or a re-added item's plays would be attributed to a
   // different "person" than the item's earlier plays were.
   //
-  // This pass REFUSES to run without the map, exactly as the archive walk does,
-  // and for the same reason: the rows it writes are old plays that nothing will
-  // ever re-deliver. `findCandidates` excludes any item that already has a
-  // TRACEARR row, the forward pass reaches back only `OVERLAP_MS`, and
-  // `tracearrBackfillComplete` is already true by the time this runs — so a row
-  // written under a Tracearr identity label ("Nick W") sits permanently beside
-  // rows written under the media server's account name ("weingart"), and a
-  // `watchedByUser` rule sees one person as two. The forward pass's
-  // self-healing argument does not apply here.
+  // This pass REFUSES to run without the map, exactly as the archive walk and
+  // the forward pass do, and for the same reason: the rows it writes are old
+  // plays that nothing will ever re-deliver. `findCandidates` excludes any item
+  // that already has a TRACEARR row, the forward pass reaches back only
+  // `OVERLAP_MS`, and `tracearrBackfillComplete` is already true by the time
+  // this runs — so a row written under a Tracearr identity label ("Nick W")
+  // sits permanently beside rows written under the media server's account name
+  // ("weingart"), and a `watchedByUser` rule sees one person as two.
   //
   // An empty map is treated as a failure to load for the same reason it is in
   // the archive walk — `getServerAccountNames` returns one rather than throwing

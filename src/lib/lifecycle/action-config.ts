@@ -8,17 +8,17 @@
  */
 import { prisma } from "@/lib/db";
 
-export type ArrFamily = "RADARR" | "SONARR" | "LIDARR";
+type ArrFamily = "RADARR" | "SONARR" | "LIDARR";
 
 /** The only Arr family whose records correspond to each library type. */
-export const FAMILY_FOR_LIBRARY: Record<"MOVIE" | "SERIES" | "MUSIC", ArrFamily> = {
+const FAMILY_FOR_LIBRARY: Record<"MOVIE" | "SERIES" | "MUSIC", ArrFamily> = {
   MOVIE: "RADARR",
   SERIES: "SONARR",
   MUSIC: "LIDARR",
 };
 
 /** Family encoded in an actionType suffix, or null for DO_NOTHING/null. */
-export function actionFamilyForType(actionType: string | null | undefined): ArrFamily | null {
+function actionFamilyForType(actionType: string | null | undefined): ArrFamily | null {
   if (!actionType || actionType === "DO_NOTHING") return null;
   if (actionType.endsWith("_RADARR")) return "RADARR";
   if (actionType.endsWith("_SONARR")) return "SONARR";

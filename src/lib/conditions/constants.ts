@@ -1,6 +1,7 @@
 export const MB_IN_BYTES = 1024 * 1024;
 export const DURATION_MS_PER_MIN = 60_000;
 
+/** Standardized resolution labels mapped to the raw values servers store. */
 export const RESOLUTION_DB_VALUES: Record<string, string[]> = {
   "4K": ["4k", "2160", "2160p"],
   "1080P": ["1080", "1080p"],

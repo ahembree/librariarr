@@ -26,7 +26,7 @@ const BATCH_SIZE = 500;
  */
 const INCREMENTAL_OVERLAP_MS = 60 * 60_000;
 
-export interface WatchHistorySyncOptions {
+interface WatchHistorySyncOptions {
   /**
    * Append only the plays newer than the stored history instead of running
    * the full replace.

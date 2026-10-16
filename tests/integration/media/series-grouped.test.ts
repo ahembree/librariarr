@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
-import { cleanDatabase, disconnectTestDb } from "../../setup/test-db";
+import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
 import {
   callRoute,
@@ -574,6 +574,157 @@ describe("GET /api/media/series/grouped", () => {
 
       expect(body.series).toHaveLength(1);
       expect(body.series[0].parentTitle).toBe("Breaking Bad");
+    });
+
+    // The Series page sent no filter at all and filtered resolution, dates and
+    // search on the client — every other filter in its panel did nothing.
+    describe("library filters", () => {
+      async function twoShows() {
+        const user = await createTestUser();
+        const server = await createTestServer(user.id);
+        const lib = await createTestLibrary(server.id, { type: "SERIES" });
+        // Drama: one 4K episode of three, all watched, genre Drama.
+        for (let ep = 1; ep <= 3; ep++) {
+          await createTestMediaItem(lib.id, {
+            title: `D${ep}`, type: "SERIES", parentTitle: "Drama Show", seasonNumber: 1, episodeNumber: ep,
+            resolution: ep === 1 ? "4k" : "1080", genres: ["Drama"], playCount: 1,
+          });
+        }
+        // Comedy: one 1080p episode, unwatched, genre Comedy.
+        await createTestMediaItem(lib.id, {
+          title: "C1", type: "SERIES", parentTitle: "Comedy Show", seasonNumber: 1, episodeNumber: 1,
+          resolution: "1080", genres: ["Comedy"], playCount: 0,
+        });
+        setMockSession({ userId: user.id, isLoggedIn: true });
+      }
+
+      const titles = async (searchParams: Record<string, string>) => {
+        const response = await callRoute(GET, { url: "/api/media/series/grouped", searchParams });
+        const body = await expectJson<{
+          series: { parentTitle: string; episodeCount: number; qualityCounts: Record<string, number> }[];
+        }>(response, 200);
+        return body.series;
+      };
+
+      it("applies a per-episode filter as 'any episode matches', keeping the show's own figures", async () => {
+        await twoShows();
+        const series = await titles({ resolution: "4K" });
+        expect(series.map((s) => s.parentTitle)).toEqual(["Drama Show"]);
+        // Whole-show figures, not just the matching episode's.
+        expect(series[0].episodeCount).toBe(3);
+        expect(series[0].qualityCounts).toMatchObject({ "4K": 1, "1080P": 2 });
+      });
+
+      it("applies the common filters the library panel offers (genre)", async () => {
+        await twoShows();
+        expect((await titles({ genre: "Comedy" })).map((s) => s.parentTitle)).toEqual(["Comedy Show"]);
+      });
+
+      it("applies the show-level filters", async () => {
+        await twoShows();
+        expect((await titles({ episodeCountConditions: "gte:2" })).map((s) => s.parentTitle)).toEqual(["Drama Show"]);
+        expect(
+          (await titles({ watchedEpisodePercentageConditions: "lt:50" })).map((s) => s.parentTitle),
+        ).toEqual(["Comedy Show"]);
+      });
+
+      it("returns nothing when no episode matches", async () => {
+        await twoShows();
+        expect(await titles({ genre: "Horror" })).toEqual([]);
+      });
+
+      // The page filtered resolution by its quality chips' labels before the
+      // filter moved to the server; a PAL show stored as "576" is a 480P chip,
+      // and the server's fixed spellings left it out of 480P and put it under
+      // Other.
+      it("matches a resolution by the label its quality chip shows", async () => {
+        const user = await createTestUser();
+        const server = await createTestServer(user.id);
+        const lib = await createTestLibrary(server.id, { type: "SERIES" });
+        await createTestMediaItem(lib.id, {
+          title: "P1", type: "SERIES", parentTitle: "PAL Show", seasonNumber: 1, episodeNumber: 1, resolution: "576",
+        });
+        await createTestMediaItem(lib.id, {
+          title: "H1", type: "SERIES", parentTitle: "HD Show", seasonNumber: 1, episodeNumber: 1, resolution: "1080",
+        });
+        // Its chip reads Other, so the Other filter keeps it.
+        const unanalyzed = await createTestMediaItem(lib.id, {
+          title: "U1", type: "SERIES", parentTitle: "Unanalyzed Show", seasonNumber: 1, episodeNumber: 1,
+        });
+        await getTestPrisma().mediaItem.update({ where: { id: unanalyzed.id }, data: { resolution: null } });
+        setMockSession({ userId: user.id, isLoggedIn: true });
+
+        const pal = (await titles({})).find((s) => s.parentTitle === "PAL Show");
+        expect(pal?.qualityCounts).toEqual({ "480P": 1 });
+        const unanalyzedShow = (await titles({})).find((s) => s.parentTitle === "Unanalyzed Show");
+        expect(unanalyzedShow?.qualityCounts).toEqual({ Other: 1 });
+        expect((await titles({ resolution: "480P" })).map((s) => s.parentTitle)).toEqual(["PAL Show"]);
+        expect((await titles({ resolution: "Other" })).map((s) => s.parentTitle)).toEqual(["Unanalyzed Show"]);
+        expect((await titles({ resolution: "480P|1080P" })).map((s) => s.parentTitle)).toEqual(["HD Show", "PAL Show"]);
+      });
+
+      // A date or watchlist filter is a fact about the SHOW (its latest play,
+      // its newest addition), answered by `applySeriesFilters`. Applied per
+      // episode as well, it was ANDed into the episode match, so beside any
+      // other filter it demanded ONE episode that was both 4K and played
+      // recently — dropping a show whose 4K episode was watched long ago and
+      // whose latest play was last week, which the page used to list.
+      it("answers a date filter beside an episode filter with the show's own figures", async () => {
+        const user = await createTestUser();
+        const server = await createTestServer(user.id);
+        const lib = await createTestLibrary(server.id, { type: "SERIES" });
+        await createTestMediaItem(lib.id, {
+          title: "M1", type: "SERIES", parentTitle: "Mixed Show", seasonNumber: 1, episodeNumber: 1,
+          resolution: "4k", lastPlayedAt: new Date("2022-01-10T12:00:00Z"),
+        });
+        await createTestMediaItem(lib.id, {
+          title: "M2", type: "SERIES", parentTitle: "Mixed Show", seasonNumber: 1, episodeNumber: 2,
+          resolution: "1080", lastPlayedAt: new Date("2024-06-10T12:00:00Z"),
+        });
+        // Unplayed 4K episode, the rest of the show last played in 2022.
+        await createTestMediaItem(lib.id, {
+          title: "O1", type: "SERIES", parentTitle: "Old Show", seasonNumber: 1, episodeNumber: 1,
+          resolution: "4k",
+        });
+        await createTestMediaItem(lib.id, {
+          title: "O2", type: "SERIES", parentTitle: "Old Show", seasonNumber: 1, episodeNumber: 2,
+          resolution: "1080", lastPlayedAt: new Date("2022-03-10T12:00:00Z"),
+        });
+        setMockSession({ userId: user.id, isLoggedIn: true });
+
+        // Mixed Show has 4K and was last played in 2024.
+        expect(
+          (await titles({ resolution: "4K", lastPlayedAtMin: "2024-01-01" })).map((s) => s.parentTitle),
+        ).toEqual(["Mixed Show"]);
+        // Old Show has 4K and has not been played since 2022.
+        expect(
+          (await titles({ resolution: "4K", lastPlayedAtMax: "2023-01-01" })).map((s) => s.parentTitle),
+        ).toEqual(["Old Show"]);
+      });
+
+      // A date bound is a UTC calendar day, as on All Seasons and every flat
+      // list. Ended at local midnight instead, a server west of UTC dropped a
+      // show played on the bound's own day from the Series tab only.
+      it("ends a date bound at the end of its UTC day whatever the server's time zone", async () => {
+        const tz = process.env.TZ;
+        process.env.TZ = "America/New_York";
+        try {
+          const user = await createTestUser();
+          const server = await createTestServer(user.id);
+          const lib = await createTestLibrary(server.id, { type: "SERIES" });
+          await createTestMediaItem(lib.id, {
+            title: "E1", type: "SERIES", parentTitle: "Boundary Show", seasonNumber: 1, episodeNumber: 1,
+            lastPlayedAt: new Date("2023-01-01T15:00:00Z"),
+          });
+          setMockSession({ userId: user.id, isLoggedIn: true });
+
+          expect((await titles({ lastPlayedAtMax: "2023-01-01" })).map((s) => s.parentTitle)).toEqual(["Boundary Show"]);
+          expect(await titles({ lastPlayedAtMax: "2022-12-31" })).toEqual([]);
+        } finally {
+          if (tz === undefined) delete process.env.TZ;
+          else process.env.TZ = tz;
+        }
+      });
     });
   });
 

@@ -52,7 +52,7 @@ export type TracearrJoinSkipReason =
   /** `live`/`photo`/`trailer`/`unknown` — not a library item at all. */
   | "unsupported-type";
 
-export type TracearrJoinResult =
+type TracearrJoinResult =
   | { mediaItemId: string }
   | { skipped: TracearrJoinSkipReason };
 

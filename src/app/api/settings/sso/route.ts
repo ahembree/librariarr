@@ -290,6 +290,35 @@ export async function PUT(request: NextRequest) {
   // it is then, so a concurrent change (local login turned on) cannot pass on
   // this one's old state while this one passes on its.
   const userId = session.userId;
+
+  // Which identity SSO accepts is decided by the mode and, for forward-auth,
+  // by the header the proxy is trusted to set. A proxy overwrites its own
+  // identity headers but usually passes others through from the client, so a
+  // stolen cookie that could name another header would let anyone the proxy
+  // admits send the admin's subject in it — signing in, or renewing a stale
+  // session through reauth/forward. Changing either needs a recent sign-in,
+  // and so does turning SSO on, or a change made while it was off would take
+  // effect without one.
+  //
+  // In OIDC mode the issuer is that source: it is who vouches for the subject,
+  // and the stored client secret goes to its token endpoint. A link made before
+  // issuers were recorded (`ssoIssuer` null) is accepted under any issuer, so a
+  // stale cookie could point SSO at its own IdP, answer an OIDC confirmation
+  // with the admin's subject and come back with a fresh sign-in. While SSO is
+  // off nothing reads the issuer — no login, no confirmation, and linking or
+  // turning SSO on asks for a recent sign-in itself — so setup is not prompted.
+  const issuerOf = (issuer: string | null) => (issuer ?? "").replace(/\/+$/, "");
+  const changesIdentitySource =
+    writeData.ssoMode !== current.ssoMode ||
+    writeData.forwardAuthUserHeader !== current.forwardAuthUserHeader ||
+    (current.ssoEnabled &&
+      writeData.ssoMode === "OIDC" &&
+      issuerOf(writeData.oidcIssuer) !== issuerOf(current.oidcIssuer));
+  const turnsSsoOn = !!writeData.ssoEnabled && !current.ssoEnabled;
+  if ((changesIdentitySource || turnsSsoOn) && !hasRecentLogin(session)) {
+    return reauthRequired(userId, turnsSsoOn ? "Turning on SSO" : "Changing which identity SSO trusts");
+  }
+
   const updated = await prisma.$transaction(async (tx) => {
     await lockSignInSettings(tx);
     const before = await loadPasswordSignInState(tx);

@@ -25,6 +25,12 @@ Librariarr supports Jellyfin and Emby as media server backends alongside Plex.
 
 </Steps>
 
+The API key is an admin key: it can delete media and shut the server down. So
+changing a server's URL, or turning on **Skip TLS Verification**, without
+entering a new key needs a sign-in from the last 15 minutes — the saved key
+would go to the new address, or to whoever answers there unverified. If it has
+been longer, Librariarr asks you to confirm it's you and then carries on.
+
 ### Getting an API Key
 
 #### Jellyfin

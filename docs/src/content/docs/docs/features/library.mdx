@@ -96,7 +96,7 @@ Over 30 filters are available. Filters can be combined — multiple active filte
 | Year | Conditions with AND/OR logic | ≥ 2020 AND ≤ 2024 |
 | Content Rating | Multi-select (exact) | G, PG, PG-13, R |
 | Studio | Multi-select (contains) | |
-| Genre | Multi-select (exact) | Must match all selected genres |
+| Genre | Multi-select (case-insensitive) | Must match all selected genres |
 
 ### Activity Filters
 
@@ -106,6 +106,14 @@ Over 30 filters are available. Filters can be combined — multiple active filte
 | Play Count | Range | 0 – 10 plays |
 | Last Played | Date range | Before/after specific dates |
 | Added Date | Date range | When item was added to library |
+
+### Where Each Filter Applies
+
+- **Audio Tracks** and **Subtitle Tracks** (track-count filters) appear on **Movies** only.
+- **Episode Count**, **Watched Episodes**, **Watched %**, **Last Episode Aired** and **Watchlisted** (show-level filters) appear on the **Series** tab only.
+- On the **Series** and **All Seasons** tabs, a filter on an episode's own property (resolution, codec, genre, year and so on) keeps a show or season when **any** of its episodes matches. The totals shown stay those of the whole show or season. Last Played, Added Date and Watchlisted judge the show or season as a whole — its most recent play and newest episode — even when combined with other filters.
+- **Resolution** matches the label on the quality chip on every library page, so a film or show stored at 576 lines counts as 480P. A file with no resolution recorded shows no chip on a movie, episode or track card and is not **Other** there; on the **Series** and **All Seasons** tabs, where it counts toward a show's **Other** chip, it is.
+- The **Albums** tab filters exactly like the **Artists** tab: an album is kept when any of its tracks matches, and its totals count the matching tracks.
 
 ### Multi-Select Behavior
 
@@ -122,6 +130,8 @@ Sort by any of these fields in ascending or descending order:
 - Play Count
 - Last Played
 - Date Added
+
+In table view, every column with a sort arrow sorts — Dynamic Range, Audio Profile, Channels, Container, Studio, Bit Depth, Frame Rate, Video Bitrate, Aspect Ratio and Release Date included.
 
 ## Detail Panel
 
@@ -246,6 +256,8 @@ The history table supports column visibility controls with columns grouped into 
 | File | Duration, Size |
 | Device | Device Name, Platform (Plex only) |
 | Stream | Transcode, Completion, Player, Stream Resolution |
+
+Every column sorts, HDR, the codecs and Server (by server name) included.
 
 The **Stream** columns default to **hidden**. They are only populated for a server whose [watch-history source](#watch-history-sources) is Tracearr, so on a native-history setup they would be an empty block of columns — turn them on from the column controls once a server is linked. **Stream Resolution** is what was actually delivered to the client and is a separate column from **Resolution**, which is the file's own; the two disagree on any transcoded play.
 

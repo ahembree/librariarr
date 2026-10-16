@@ -89,6 +89,8 @@ vi.mock("@/lib/sync/watch-reconcile", () => ({
 
 vi.mock("@/lib/http-retry", () => ({
   configureRetry: vi.fn(),
+  NO_RETRY: { __noRetry: true },
+  NO_BREAKER_MARK: { __noBreakerMark: true },
 }));
 
 vi.mock("@/lib/events/event-bus", () => ({
@@ -112,6 +114,7 @@ import {
 } from "@/lib/sync/sync-server";
 import { createMediaServerClient } from "@/lib/media-server/factory";
 import { PlexClient } from "@/lib/plex/client";
+import { MediaItemNotFoundError } from "@/lib/media-server/client";
 import type { MediaStream, MediaPart } from "@/lib/media-server/types";
 
 // Note: detectDynamicRangeFromFilename and detectAudioProfileFromFilename
@@ -468,7 +471,7 @@ describe("syncMediaServer", () => {
 // MediaItems it deletes, so a spurious purge silently strips "never delete
 // this" lifecycle protection. These tests pin the guard conditions.
 describe("syncMediaServer stale-item purge guard", () => {
-  const STALE_ROW = { id: "stale-1", thumbUrl: null, parentThumbUrl: null, seasonThumbUrl: null };
+  const STALE_ROW = { id: "stale-1", ratingKey: "rk-stale", thumbUrl: null, parentThumbUrl: null, seasonThumbUrl: null };
 
   function mockSyncDb(opts: { staleRows?: (typeof STALE_ROW)[]; existingCount?: bigint }) {
     mockPrisma.$queryRawUnsafe.mockImplementation(async (sql: string) => {
@@ -507,6 +510,13 @@ describe("syncMediaServer stale-item purge guard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockClient.testConnection.mockResolvedValue({ ok: true, serverName: "Test Plex" });
+    // Each stale candidate is confirmed with the server before it is deleted.
+    // By default the server answers "gone" — the purge-path tests below are
+    // about the traversal guards; the confirmation has its own tests.
+    mockClient.getItemMetadata.mockReset();
+    mockClient.getItemMetadata.mockImplementation(async (key: string) => {
+      throw new MediaItemNotFoundError(key);
+    });
   });
 
   it("refuses to wipe a previously populated library when the server returns zero items", async () => {
@@ -646,6 +656,177 @@ describe("syncMediaServer stale-item purge guard", () => {
     expect(inserts[0]).toContain("rk1");
     // 500 skipped + 1 upserted == the reported total, so the purge still runs.
     expect(staleDelete().length).toBe(1);
+  });
+
+  // "The traversal did not touch it" is not "the server deleted it". The listing
+  // is read by offset, so a library that changes while it is read shifts under
+  // the pager — one item removed before the current offset and one added after
+  // it, and the item that slid into the window already read is never seen while
+  // the counts still add up. Only the server's own "gone" may delete a row.
+  describe("stale candidates are confirmed with the server first", () => {
+    const completeTraversal = () =>
+      mockClient.getLibraryItemsPage.mockResolvedValue({
+        items: [{ ratingKey: "rk1", title: "Movie A", type: "movie" }],
+        total: 1,
+      });
+
+    it("asks the server about each candidate by its rating key", async () => {
+      mockSyncDb({ staleRows: [STALE_ROW] });
+      completeTraversal();
+
+      await syncMediaServer("server-1");
+
+      expect(mockClient.getItemMetadata).toHaveBeenCalledWith("rk-stale");
+      expect(staleDelete().length).toBe(1);
+    });
+
+    it("keeps a candidate the server still has in this library", async () => {
+      mockSyncDb({ staleRows: [STALE_ROW] });
+      completeTraversal();
+      mockClient.getItemMetadata.mockResolvedValue({
+        ratingKey: "rk-stale", title: "Still Here", type: "movie", librarySectionID: 1,
+      });
+
+      await syncMediaServer("server-1");
+
+      expect(staleDelete().length).toBe(0);
+      expect(findDbCalls('UPDATE "SyncJob"', "COMPLETED").length).toBeGreaterThan(0);
+    });
+
+    it("keeps a candidate when the server cannot answer for it", async () => {
+      // A timeout, a 5xx or the circuit breaker is not evidence of deletion.
+      mockSyncDb({ staleRows: [STALE_ROW] });
+      completeTraversal();
+      mockClient.getItemMetadata.mockRejectedValue(new Error("timeout of 30000ms exceeded"));
+
+      await syncMediaServer("server-1");
+
+      expect(staleDelete().length).toBe(0);
+    });
+
+    it("keeps a candidate when a client resolves nothing", async () => {
+      // Contracted to throw instead, so nothing here proves the item is gone.
+      mockSyncDb({ staleRows: [STALE_ROW] });
+      completeTraversal();
+      mockClient.getItemMetadata.mockResolvedValue(undefined);
+
+      await syncMediaServer("server-1");
+
+      expect(staleDelete().length).toBe(0);
+    });
+
+    it("deletes a candidate answered with a bare HTTP 404", async () => {
+      mockSyncDb({ staleRows: [STALE_ROW] });
+      completeTraversal();
+      mockClient.getItemMetadata.mockRejectedValue(
+        Object.assign(new Error("Request failed with status code 404"), { response: { status: 404 } }),
+      );
+
+      await syncMediaServer("server-1");
+
+      expect(staleDelete().length).toBe(1);
+    });
+
+    it("deletes a candidate that now belongs to another library section", async () => {
+      mockSyncDb({ staleRows: [STALE_ROW] });
+      completeTraversal();
+      mockClient.getItemMetadata.mockResolvedValue({
+        ratingKey: "rk-stale", title: "Moved", type: "movie", librarySectionID: 7,
+      });
+
+      await syncMediaServer("server-1");
+
+      expect(staleDelete().length).toBe(1);
+    });
+
+    // A rating key is a row id the server may hand to a different item. One
+    // that now names something this library never stores — another type, or a
+    // collection/playlist — in this very section is not the stored movie, so
+    // the section match alone must not keep the row alive forever.
+    it("deletes a candidate whose rating key now names another type of item in this section", async () => {
+      mockSyncDb({ staleRows: [STALE_ROW] });
+      completeTraversal();
+      mockClient.getItemMetadata.mockResolvedValue({
+        ratingKey: "rk-stale", title: "Season 1", type: "season", librarySectionID: 1,
+      });
+
+      await syncMediaServer("server-1");
+
+      expect(staleDelete().length).toBe(1);
+    });
+
+    it("deletes a candidate whose rating key now names a collection in this section", async () => {
+      mockSyncDb({ staleRows: [STALE_ROW] });
+      completeTraversal();
+      mockClient.getItemMetadata.mockResolvedValue({
+        ratingKey: "rk-stale", title: "Leaving Soon", type: "collection", librarySectionID: 1,
+      });
+
+      await syncMediaServer("server-1");
+
+      expect(staleDelete().length).toBe(1);
+    });
+
+    describe("on a server whose items name no library (Jellyfin/Emby)", () => {
+      const client = mockClient as typeof mockClient & { resolveLibraryKey?: ReturnType<typeof vi.fn> };
+      afterEach(() => {
+        delete client.resolveLibraryKey;
+      });
+
+      it("asks which library holds the item and keeps it when it is this one", async () => {
+        mockSyncDb({ staleRows: [STALE_ROW] });
+        completeTraversal();
+        mockClient.getItemMetadata.mockResolvedValue({ ratingKey: "rk-stale", title: "Here", type: "movie" });
+        client.resolveLibraryKey = vi.fn().mockResolvedValue("1");
+
+        await syncMediaServer("server-1");
+
+        expect(client.resolveLibraryKey).toHaveBeenCalledWith("rk-stale");
+        expect(staleDelete().length).toBe(0);
+      });
+
+      it("deletes it when another library holds it", async () => {
+        mockSyncDb({ staleRows: [STALE_ROW] });
+        completeTraversal();
+        mockClient.getItemMetadata.mockResolvedValue({ ratingKey: "rk-stale", title: "Moved", type: "movie" });
+        client.resolveLibraryKey = vi.fn().mockResolvedValue("other-library");
+
+        await syncMediaServer("server-1");
+
+        expect(staleDelete().length).toBe(1);
+      });
+
+      it("keeps it when the library lookup fails or finds none", async () => {
+        mockSyncDb({ staleRows: [STALE_ROW, { ...STALE_ROW, id: "stale-2", ratingKey: "rk-2" }] });
+        completeTraversal();
+        mockClient.getItemMetadata.mockImplementation(async (key: string) => ({ ratingKey: key, title: "?", type: "movie" }));
+        client.resolveLibraryKey = vi.fn(async (key: string) => {
+          if (key === "rk-2") throw new Error("timeout");
+          return null;
+        });
+
+        await syncMediaServer("server-1");
+
+        expect(staleDelete().length).toBe(0);
+      });
+    });
+
+    it("deletes only the confirmed ones out of a mixed set", async () => {
+      const gone = { ...STALE_ROW, id: "stale-gone", ratingKey: "rk-gone" };
+      const kept = { ...STALE_ROW, id: "stale-kept", ratingKey: "rk-kept" };
+      mockSyncDb({ staleRows: [gone, kept] });
+      completeTraversal();
+      mockClient.getItemMetadata.mockImplementation(async (key: string) => {
+        if (key === "rk-gone") throw new MediaItemNotFoundError(key);
+        return { ratingKey: key, title: "Kept", type: "movie", librarySectionID: 1 };
+      });
+
+      await syncMediaServer("server-1");
+
+      const deletes = staleDelete();
+      expect(deletes.length).toBe(1);
+      expect(deletes[0][1]).toEqual(["stale-gone"]);
+    });
   });
 });
 
@@ -791,6 +972,77 @@ describe("syncMediaServer per-item enrichment resilience", () => {
 
     expect(findDbCalls('UPDATE "SyncJob"', "COMPLETED").length).toBeGreaterThan(0);
     expect(findDbCalls('INSERT INTO "MediaItem"').some((args) => args.includes("Movie A"))).toBe(true);
+  });
+
+  // A failed fetch leaves the BULK listing item, which carries no stream
+  // detail. Upserting it over a stored row degraded every stream-derived column
+  // (a Dolby Vision film read as SDR) and recorded the item's `serverUpdatedAt`,
+  // so every later sync called it unchanged and never enriched it again.
+  it("leaves a STORED row untouched when its per-item fetch fails, so the next sync retries", async () => {
+    mockSyncDb();
+    const base = mockPrisma.$queryRawUnsafe.getMockImplementation()!;
+    mockPrisma.$queryRawUnsafe.mockImplementation(async (sql: string, ...params: unknown[]) => {
+      if (sql.startsWith('SELECT "ratingKey","thumbUrl"')) {
+        return [{
+          ratingKey: "rk1", thumbUrl: null, parentThumbUrl: null, seasonThumbUrl: null,
+          // Stored at an older server timestamp: the item changed, so it is enriched.
+          serverUpdatedAt: new Date(1_600_000_000_000), isWatchlisted: false,
+        }];
+      }
+      return base(sql, ...params);
+    });
+    mockClient.getLibraryItemsPage.mockResolvedValue({
+      items: [{ ratingKey: "rk1", title: "Movie A", type: "movie", updatedAt: 1_700_000_000 }],
+      total: 1,
+    });
+    mockClient.getItemMetadata.mockRejectedValue(new Error("timeout of 30000ms exceeded"));
+
+    await syncMediaServer("server-1");
+
+    // Not upserted from the listing...
+    expect(findDbCalls('INSERT INTO "MediaItem"').length).toBe(0);
+    // ...but touched, so the stale purge does not take it for removed.
+    const touches = findDbCalls('UPDATE "MediaItem" SET "updatedAt"=$1');
+    expect(touches.some((args) => (args[3] as string[]).includes("rk1"))).toBe(true);
+    expect(findDbCalls('UPDATE "SyncJob"', "COMPLETED").length).toBeGreaterThan(0);
+  });
+
+  it("stores a NEW item from the listing without its server timestamp when its fetch fails", async () => {
+    // It has to exist, so the listing version is stored — but with no
+    // `serverUpdatedAt`, which the next sync reads as "changed" and enriches.
+    mockSyncDb();
+    mockClient.getLibraryItemsPage.mockResolvedValue({
+      items: [{ ratingKey: "rk1", title: "Movie A", type: "movie", updatedAt: 1_700_000_000 }],
+      total: 1,
+    });
+    mockClient.getItemMetadata.mockRejectedValue(new Error("timeout of 30000ms exceeded"));
+
+    await syncMediaServer("server-1");
+
+    const inserts = findDbCalls('INSERT INTO "MediaItem"');
+    expect(inserts.length).toBe(1);
+    expect(inserts[0]).toContain("Movie A");
+    expect(
+      inserts[0].some((param) => param instanceof Date && param.getTime() === 1_700_000_000_000),
+    ).toBe(false);
+  });
+
+  it("records the server timestamp of an item it did enrich", async () => {
+    mockSyncDb();
+    mockClient.getLibraryItemsPage.mockResolvedValue({
+      items: [{ ratingKey: "rk1", title: "Movie A", type: "movie", updatedAt: 1_700_000_000 }],
+      total: 1,
+    });
+    mockClient.getItemMetadata.mockResolvedValue({
+      ratingKey: "rk1", title: "Movie A", type: "movie", updatedAt: 1_700_000_000,
+    });
+
+    await syncMediaServer("server-1");
+
+    const inserts = findDbCalls('INSERT INTO "MediaItem"');
+    expect(
+      inserts[0].some((param) => param instanceof Date && param.getTime() === 1_700_000_000_000),
+    ).toBe(true);
   });
 
   it("uses the enriched item when the per-item fetch succeeds", async () => {

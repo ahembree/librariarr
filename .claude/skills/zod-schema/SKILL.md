@@ -78,7 +78,7 @@ export const thingUpdateSchema = thingCreateSchema.partial();
 - `ruleSetCreateSchema` / `ruleSetUpdateSchema` — create + update pair
 - `syncScheduleSchema` — single field
 - `dashboardLayoutSchema` — nested objects with arrays
-- `customCardConfigSchema` — uses `.refine()` for cross-field validation
+- `discordWebhookUrlSchema` — uses `.refine()` for custom validation
 
 ## Usage in API Routes
 

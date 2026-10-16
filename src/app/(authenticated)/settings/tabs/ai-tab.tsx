@@ -18,7 +18,7 @@ import type { TestResult } from "../types";
 
 export type AiProvider = "openai-compatible" | "anthropic";
 
-export interface AiTabProps {
+interface AiTabProps {
   aiEnabled: boolean;
   aiProvider: AiProvider;
   aiBaseUrl: string;

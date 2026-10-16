@@ -743,17 +743,24 @@ export default function PendingActionsPage() {
     return map;
   }, [deletionStats?.byRuleSet]);
 
+  // Only the latest request may write. The Pending listing is the slow one
+  // (it estimates rows for matches without an action), so switching to
+  // Completed while it loaded let it land second and fill the Completed tab
+  // with pending rows — without their Execute buttons, which follow the tab.
+  const actionsReqToken = useRef(0);
   const fetchActions = useCallback(async () => {
+    const token = ++actionsReqToken.current;
     setLoading(true);
     try {
       const params = new URLSearchParams({ status: statusFilter });
       const response = await fetch(`/api/lifecycle/actions?${params}`);
       const data = await response.json();
+      if (token !== actionsReqToken.current) return;
       setGroups(data.groups || []);
     } catch (error) {
       console.error("Failed to fetch actions:", error);
     } finally {
-      setLoading(false);
+      if (token === actionsReqToken.current) setLoading(false);
     }
   }, [statusFilter]);
 

@@ -67,6 +67,7 @@ Set repeating schedules tied to specific days and times.
 - **Days of week**: Select which days the preroll should play
 - **Start/End time**: 24-hour format time window
 - **Example**: Play holiday prerolls on weekends from 6:00 PM to 11:00 PM
+- A window whose end is before its start (22:00 to 06:00) runs past midnight and belongs to the day it starts: Monday 22:00–06:00 plays from Monday night into Tuesday morning
 
 #### One-Time
 
@@ -80,6 +81,7 @@ Use built-in holiday presets or define custom date ranges.
 
 - **Holiday presets**: New Year, Valentine's Day, Easter, Halloween, Christmas, and more (dates auto-calculated)
 - **Custom**: Define your own annual date range
+- A seasonal schedule repeats every year; the year in its dates is ignored
 
 ### Priority
 
@@ -101,6 +103,9 @@ The preroll enforcer checks every 30 seconds:
 1. Evaluates which preroll schedules are currently active
 2. Selects the highest-priority active schedule
 3. Sets that schedule's preroll path on the media server
+4. When no enabled schedule remains (the last one was deleted or turned off), clears the preroll it set
+
+The **Active** badge on the Preroll page uses the same rules, so it shows exactly the schedules the enforcer is applying.
 
 ## Limitations
 

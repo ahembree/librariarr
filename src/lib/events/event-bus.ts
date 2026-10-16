@@ -79,7 +79,7 @@ export interface AppEvent {
   meta?: Record<string, unknown>;
 }
 
-export type AppEventListener = (event: AppEvent) => void;
+type AppEventListener = (event: AppEvent) => void;
 
 const EVENT_KEY = "app-event";
 
@@ -111,10 +111,14 @@ class AppEventBus {
   }
 }
 
+// Pinned to globalThis unconditionally, not only in development: the job worker
+// and the realtime manager started from instrumentation load their own copy of
+// this module, so a production build pinned to nothing had two buses, and
+// nothing they emitted (a background sync's progress and result, Tracearr
+// import progress, a media server's connection state) reached
+// /api/events/stream.
 const globalForEventBus = globalThis as unknown as {
   eventBus: AppEventBus | undefined;
 };
 
-export const eventBus = globalForEventBus.eventBus ?? new AppEventBus();
-
-if (process.env.NODE_ENV !== "production") globalForEventBus.eventBus = eventBus;
+export const eventBus = (globalForEventBus.eventBus ??= new AppEventBus());

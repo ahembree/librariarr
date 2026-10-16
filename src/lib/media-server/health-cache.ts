@@ -5,7 +5,33 @@ interface FailureEntry {
   message: string;
 }
 
-const failures = new Map<string, FailureEntry>();
+// Pinned to globalThis: the job worker and the enforcer (started from
+// instrumentation) and the route handlers each load their own copy of this
+// module in a production build, so an unpinned map was one circuit breaker per
+// side — a server the enforcer had just found down cost every route its full
+// retry budget again, and the shell's unreachable banner disagreed with it.
+const globalForHealth = globalThis as unknown as {
+  mediaServerFailures: Map<string, FailureEntry> | undefined;
+};
+const failures = (globalForHealth.mediaServerFailures ??= new Map<string, FailureEntry>());
+
+/**
+ * Per-request opt-out of the breaker, spread into an axios request config:
+ * `client.get(url, { ...BYPASS_BREAKER })`. For connection tests only. The
+ * breaker is shared with the job worker and the enforcer and keyed by URL
+ * alone, so a background failure would otherwise answer the Settings Test
+ * button — and the server edit, which tests before it saves — without asking
+ * the server, even when it is back or the edit (Skip TLS verification, say)
+ * is what fixes it.
+ */
+export const BYPASS_BREAKER = { __bypassBreaker: true } as const;
+
+declare module "axios" {
+  interface AxiosRequestConfig {
+    /** Set via `BYPASS_BREAKER`: the client sends the request even while its server is marked unreachable. */
+    __bypassBreaker?: boolean;
+  }
+}
 
 function normalize(baseURL: string): string {
   return baseURL.replace(/\/+$/, "");

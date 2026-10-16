@@ -23,7 +23,7 @@ interface ServerPresence {
   serverType: string;
 }
 
-export interface QualitySegment {
+interface QualitySegment {
   color: string;
   weight: number;
   label?: string;
@@ -48,7 +48,7 @@ const GRID_IMAGE_WIDTH = {
  *  without the split the browser races the visible row against off-screen ones. */
 export const PRIORITY_ROWS = 2;
 
-export interface MediaCardProps {
+interface MediaCardProps {
   imageUrl: string;
   title: string;
   href?: string;

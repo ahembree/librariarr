@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db";
 import type { DimensionMeta } from "@/lib/dashboard/custom-dimensions";
+import { excludedTypesSql } from "./breakdown";
 
 export const ALLOWED_DATE_COLUMNS = new Set(["addedAt", "lastPlayedAt", "originallyAvailableAt"]);
 export const VALID_BINS = new Set(["day", "week", "month", "quarter", "year"]);
@@ -153,8 +154,21 @@ function formatBucket(d: Date, bin: string): string {
   }
 }
 
+/** Most buckets gap-filling will produce; a wider range is returned unfilled. */
+const MAX_FILLED_BUCKETS = 5000;
+
 /** Fill gaps in a points array so every bucket between min and max is present */
 function fillGaps(points: TimelinePoint[], bin: string, series: string[]): TimelinePoint[] {
+  // Ensure all series keys exist (some points may lack certain series)
+  if (series.length > 0) {
+    for (const point of points) {
+      if (!point.breakdown) continue;
+      for (const s of series) {
+        if (!(s in point.breakdown)) point.breakdown[s] = 0;
+      }
+    }
+  }
+
   if (points.length < 2) return points;
 
   const firstDate = parseBucketDate(points[0].date, bin);
@@ -167,21 +181,20 @@ function fillGaps(points: TimelinePoint[], bin: string, series: string[]): Timel
     : undefined;
 
   const filled: TimelinePoint[] = [];
+  let matched = 0;
   let cursor = firstDate;
-  // Safety limit to prevent infinite loops with bad data
-  const maxIter = 5000;
-  let iter = 0;
 
-  while (cursor <= lastDate && iter++ < maxIter) {
+  while (cursor <= lastDate) {
+    // Too many buckets to fill (Release Date by day across decades — the
+    // dialog offers Day for every date field): return the real points as they
+    // are. This used to stop the walk at the limit and return only what it
+    // had walked, silently dropping every point after it — the most recent
+    // data first.
+    if (filled.length >= MAX_FILLED_BUCKETS) return points;
     const label = formatBucket(cursor, bin);
     const point = existing.get(label);
     if (point) {
-      // Ensure all series keys exist (some points may lack certain series)
-      if (series.length > 0 && point.breakdown) {
-        for (const s of series) {
-          if (!(s in point.breakdown)) point.breakdown[s] = 0;
-        }
-      }
+      matched++;
       filled.push(point);
     } else {
       filled.push({ date: label, total: 0, ...(emptyBreakdown ? { breakdown: { ...emptyBreakdown } } : {}) });
@@ -189,7 +202,9 @@ function fillGaps(points: TimelinePoint[], bin: string, series: string[]): Timel
     cursor = advanceBucket(cursor, bin);
   }
 
-  return filled;
+  // A label the walk cannot reproduce (a year below 100, which `new Date`
+  // reads as 19xx) would otherwise vanish behind zero buckets.
+  return matched === points.length ? filled : points;
 }
 
 /**
@@ -255,13 +270,16 @@ export async function computeTimeline(params: {
     return { points: fillGaps(points, bin, []), series: [] };
   }
 
-  // Query with breakdown
+  // Query with breakdown. Types the dimension does not apply to (a track has
+  // no resolution) are left out, as in the breakdown card, rather than charted
+  // as one large "Unknown" series.
   const rows = await prisma.$queryRawUnsafe<{ date: string; bk: string; cnt: number }[]>(
     `SELECT ${bucketExpr} AS "date", ${bExpr} AS "bk", ${aggExpr} AS "cnt"
      FROM "MediaItem" mi
      JOIN "Library" l ON mi."libraryId" = l.id
      WHERE l."mediaServerId" = ANY($1)
        AND ${col} IS NOT NULL${typeWhere}${dedupWhere}
+       ${excludedTypesSql(breakdownMeta)}
      GROUP BY "date", "bk"
      ORDER BY "date" ASC`,
     ...queryParams,

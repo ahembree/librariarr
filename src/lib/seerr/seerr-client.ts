@@ -4,20 +4,6 @@ import { IntegrationError } from "@/lib/integration-error";
 import { configureRetry, NO_RETRY } from "@/lib/http-retry";
 
 /**
- * Seerr's `MediaStatus` (server/constants/media.ts). Legacy Overseerr used 6
- * for DELETED; in Seerr 6 is BLOCKLISTED and DELETED moved to 7.
- */
-export const SeerrMediaStatus = {
-  UNKNOWN: 1,
-  PENDING: 2,
-  PROCESSING: 3,
-  PARTIALLY_AVAILABLE: 4,
-  AVAILABLE: 5,
-  BLOCKLISTED: 6,
-  DELETED: 7,
-} as const;
-
-/**
  * Seerr's `MediaRequestStatus`. Seerr moves an APPROVED (or FAILED) request to
  * COMPLETED once its media becomes available, so nearly every request whose
  * media is actually in the library reports COMPLETED, not APPROVED.
@@ -85,7 +71,8 @@ export interface SeerrMediaInfo {
   id: number;
   tmdbId: number;
   tvdbId: number | null;
-  status: number; // SeerrMediaStatus
+  /** Seerr's `MediaStatus`: 1 UNKNOWN … 5 AVAILABLE, 6 BLOCKLISTED, 7 DELETED (legacy Overseerr used 6 for DELETED). */
+  status: number;
   /** Status of the 4K copy — the one a request with `is4k` refers to. */
   status4k?: number;
   requests?: SeerrRequest[];
@@ -108,23 +95,23 @@ export interface SeerrRequest {
   rootFolder: string;
 }
 
-export interface SeerrPageInfo {
+interface SeerrPageInfo {
   page: number;
   pages: number;
   results: number;
 }
 
-export interface SeerrRequestsResponse {
+interface SeerrRequestsResponse {
   pageInfo: SeerrPageInfo;
   results: SeerrRequest[];
 }
 
-export interface SeerrUsersResponse {
+interface SeerrUsersResponse {
   pageInfo: SeerrPageInfo;
   results: SeerrUser[];
 }
 
-export interface SeerrMovieDetails {
+interface SeerrMovieDetails {
   id: number;
   title: string;
   originalTitle: string;
@@ -135,7 +122,7 @@ export interface SeerrMovieDetails {
   mediaInfo?: SeerrMediaInfo;
 }
 
-export interface SeerrTvDetails {
+interface SeerrTvDetails {
   id: number;
   name: string;
   originalName: string;
@@ -147,7 +134,7 @@ export interface SeerrTvDetails {
 }
 
 /** Per-call options for the Seerr lookups interactive routes wait on. */
-export interface SeerrCallOptions {
+interface SeerrCallOptions {
   /** `false` fails on the first transport error instead of retrying it. */
   retry?: boolean;
   /** Cancels the call once its caller has stopped waiting for the answer. */
@@ -247,13 +234,6 @@ export class SeerrClient {
     const { data } = await this.client.get<SeerrRequestsResponse>(
       "/api/v1/request",
       { params, ...callConfig(options) }
-    );
-    return data;
-  }
-
-  async getRequest(id: number): Promise<SeerrRequest> {
-    const { data } = await this.client.get<SeerrRequest>(
-      `/api/v1/request/${id}`
     );
     return data;
   }

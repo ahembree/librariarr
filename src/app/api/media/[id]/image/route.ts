@@ -40,6 +40,9 @@ export async function GET(
       prisma.mediaItem.findUnique({
         where: { id },
         select: {
+          // The image cache is keyed within the item's library: artwork paths
+          // are per-server ids (see computeCacheKey).
+          libraryId: true,
           thumbUrl: true,
           artUrl: true,
           parentThumbUrl: true,
@@ -98,7 +101,7 @@ export async function GET(
   const maxWidth = type === "art" ? CACHE_WIDTH_ART : parseImageWidth(searchParams.get("w")) ?? undefined;
 
   // Fast path: check if cached image exists and handle ETag/304
-  const cached = await getCachedImageInfo(thumbPath, { maxWidth });
+  const cached = await getCachedImageInfo(item.libraryId, thumbPath, { maxWidth });
   if (cached) {
     const etag = `"${cached.cacheKey}"`;
 
@@ -148,6 +151,7 @@ export async function GET(
     // it can resize before sending instead of shipping the full-size original.
     const effectiveWidth = maxWidth ?? CACHE_WIDTH_DEFAULT;
     const result = await cacheImage(
+      item.libraryId,
       thumbPath,
       () => client.fetchImage(thumbPath, { width: effectiveWidth }),
       maxWidth ? { maxWidth } : undefined,

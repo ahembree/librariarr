@@ -232,7 +232,7 @@ describe("PUT /api/settings/sso", () => {
         oidcClientId: "client",
       },
     });
-    setMockSession({ isLoggedIn: true, userId: user.id });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
 
     const res = await callRoute(PUT, {
       method: "PUT",
@@ -240,6 +240,98 @@ describe("PUT /api/settings/sso", () => {
     });
     const body = await expectJson<{ ssoEnabled: boolean }>(res, 200);
     expect(body.ssoEnabled).toBe(true);
+  });
+
+  // Turning SSO on applies whatever identity settings were saved while it was
+  // off, so a stale session must not be the one to do it.
+  it("asks a stale session to confirm it's them before turning SSO on", async () => {
+    const user = await createTestUser();
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { ssoSubject: "abc", ssoIssuer: "https://idp.example.com", ssoEnabled: true },
+    });
+    await prisma.appSettings.create({
+      data: { userId: user.id, ssoMode: "OIDC", oidcIssuer: "https://idp.example.com", oidcClientId: "client" },
+    });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() - 16 * 60 * 1000 });
+
+    const refused = await expectJson<{ code: string }>(
+      await callRoute(PUT, { method: "PUT", body: { ssoEnabled: true } }),
+      403,
+    );
+    expect(refused.code).toBe("reauth_required");
+    expect((await prisma.appSettings.findFirstOrThrow()).ssoEnabled).toBe(false);
+  });
+
+  // A link made before issuers were recorded is accepted under any issuer, so
+  // a stale cookie that could repoint SSO at its own IdP would answer an OIDC
+  // confirmation with the admin's subject and come back with a fresh sign-in.
+  it("asks a stale session to confirm it's them before changing the OIDC issuer while SSO is on", async () => {
+    const user = await createTestUser();
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { ssoSubject: "abc", ssoIssuer: null, ssoEnabled: true },
+    });
+    await prisma.appSettings.create({
+      data: {
+        userId: user.id, ssoEnabled: true, ssoMode: "OIDC",
+        oidcIssuer: "https://idp.example.com", oidcClientId: "client", oidcClientSecret: "real-secret",
+      },
+    });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() - 16 * 60 * 1000 });
+
+    const refused = await expectJson<{ code: string }>(
+      await callRoute(PUT, { method: "PUT", body: { oidcIssuer: "https://attacker.example" } }),
+      403,
+    );
+    expect(refused.code).toBe("reauth_required");
+    expect((await prisma.appSettings.findFirstOrThrow()).oidcIssuer).toBe("https://idp.example.com");
+
+    // A trailing slash names the same issuer.
+    await expectJson(await callRoute(PUT, { method: "PUT", body: { oidcIssuer: "https://idp.example.com/" } }), 200);
+
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
+    await expectJson(await callRoute(PUT, { method: "PUT", body: { oidcIssuer: "https://idp2.example.com" } }), 200);
+    expect((await prisma.appSettings.findFirstOrThrow()).oidcIssuer).toBe("https://idp2.example.com");
+  });
+
+  it("lets setup change the OIDC issuer while SSO is off without a recent sign-in", async () => {
+    const user = await createTestUser();
+    await prisma.appSettings.create({
+      data: { userId: user.id, ssoMode: "OIDC", oidcIssuer: "https://idp.example.com", oidcClientId: "client" },
+    });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() - 16 * 60 * 1000 });
+
+    await expectJson(await callRoute(PUT, { method: "PUT", body: { oidcIssuer: "https://idp2.example.com" } }), 200);
+    expect((await prisma.appSettings.findFirstOrThrow()).oidcIssuer).toBe("https://idp2.example.com");
+  });
+
+  // A proxy overwrites its own identity header but passes others through from
+  // the client: pointed at one of those, anyone the proxy admits could send the
+  // admin's subject in it.
+  it("asks a stale session to confirm it's them before changing the forward-auth user header", async () => {
+    const user = await createTestUser();
+    await prisma.appSettings.create({
+      data: { userId: user.id, ssoMode: "FORWARD_AUTH", forwardAuthUserHeader: "Remote-User" },
+    });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() - 16 * 60 * 1000 });
+
+    for (const body of [{ forwardAuthUserHeader: "X-Passthrough-User" }, { ssoMode: "OIDC" }]) {
+      const refused = await expectJson<{ code: string }>(await callRoute(PUT, { method: "PUT", body }), 403);
+      expect(refused.code).toBe("reauth_required");
+    }
+    const stored = await prisma.appSettings.findFirstOrThrow();
+    expect(stored.forwardAuthUserHeader).toBe("Remote-User");
+    expect(stored.ssoMode).toBe("FORWARD_AUTH");
+
+    // The other headers carry no identity; a recent sign-in may change the user header.
+    await expectJson(await callRoute(PUT, { method: "PUT", body: { forwardAuthEmailHeader: "X-Email" } }), 200);
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
+    const body = await expectJson<{ forwardAuthUserHeader: string }>(
+      await callRoute(PUT, { method: "PUT", body: { forwardAuthUserHeader: "X-Forwarded-User" } }),
+      200,
+    );
+    expect(body.forwardAuthUserHeader).toBe("X-Forwarded-User");
   });
 
   // ── Disable lockout guard ─────────────────────────────────────────────

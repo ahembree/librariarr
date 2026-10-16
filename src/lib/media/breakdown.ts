@@ -2,7 +2,7 @@ import { prisma } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
 import type { DimensionMeta } from "@/lib/dashboard/custom-dimensions";
 
-export type BreakdownRow = { value: string | null; type: string; _count: number };
+type BreakdownRow = { value: string | null; type: string; _count: number };
 
 // Defense-in-depth: allowlisted column names for raw SQL queries.
 // Values from DIMENSION_REGISTRY are hardcoded, but validating here prevents
@@ -27,6 +27,27 @@ function escapeSqlLiteral(value: string): string {
   return value.replace(/'/g, "''");
 }
 
+const LIBRARY_TYPES = new Set(["MOVIE", "SERIES", "MUSIC"]);
+
+/**
+ * The media types none of `metas` applies to (`excludeTypes`: a music track has
+ * no video codec or resolution). Their rows hold NULL in the column and were
+ * counted anyway, so a Video Codec card's "Unknown" bucket was the library's
+ * track count. Validated against `LibraryType` because the SQL form below is
+ * spliced into a statement.
+ */
+function excludedTypes(...metas: DimensionMeta[]): string[] {
+  return [...new Set(metas.flatMap((m) => m.excludeTypes ?? []))].filter((t) => LIBRARY_TYPES.has(t));
+}
+
+/** `AND mi.type NOT IN (…)` for the types `metas` exclude, or "" when none. */
+export function excludedTypesSql(...metas: DimensionMeta[]): string {
+  const types = excludedTypes(...metas);
+  return types.length > 0
+    ? `AND mi.type NOT IN (${types.map((t) => `'${t}'::"LibraryType"`).join(", ")})`
+    : "";
+}
+
 /**
  * Compute a single-dimension distribution over the given servers. Shared by
  * `GET /api/media/stats/custom` and the AI analysis `get_breakdown` tool so the
@@ -38,9 +59,15 @@ export function computeBreakdown(
   serverIds: string[],
   dedupEnabled: boolean,
 ): Promise<BreakdownRow[]> {
-  const serverFilter = dedupEnabled
-    ? { library: { mediaServerId: { in: serverIds } }, dedupCanonical: true }
-    : { library: { mediaServerId: { in: serverIds } } };
+  const excluded = excludedTypes(meta);
+  const serverFilter = {
+    library: { mediaServerId: { in: serverIds } },
+    ...(dedupEnabled ? { dedupCanonical: true } : {}),
+    ...(excluded.length > 0 ? { type: { notIn: excluded as ("MOVIE" | "SERIES" | "MUSIC")[] } } : {}),
+  };
+  // Every raw query below ends its WHERE with this, the SQL form of the same
+  // exclusion, after its own dedup clause.
+  const typeClause = excludedTypesSql(meta);
 
   switch (meta.category) {
     case "direct":
@@ -48,13 +75,13 @@ export function computeBreakdown(
     case "value_map":
       return queryValueMap(meta.dbField, meta.valueMapFn!, serverFilter);
     case "json_unnest":
-      return queryJsonUnnest(meta.dbField, serverIds, dedupEnabled);
+      return queryJsonUnnest(meta.dbField, serverIds, dedupEnabled, typeClause);
     case "numeric_bucket":
-      return queryNumericBucket(meta.dbField, meta.nullLabel, meta.bucketConfig!.ranges, serverIds, dedupEnabled);
+      return queryNumericBucket(meta.dbField, meta.nullLabel, meta.bucketConfig!.ranges, serverIds, dedupEnabled, typeClause);
     case "stream_group":
-      return queryStreamGroup(meta.streamType!, meta.streamField!, meta.nullLabel, serverIds, dedupEnabled);
+      return queryStreamGroup(meta.streamType!, meta.streamField!, meta.nullLabel, serverIds, dedupEnabled, typeClause);
     case "date_bucket":
-      return queryDateBucket(meta.dbField, meta.nullLabel, meta.dateBucketGranularity!, serverIds, dedupEnabled);
+      return queryDateBucket(meta.dbField, meta.nullLabel, meta.dateBucketGranularity!, serverIds, dedupEnabled, typeClause);
   }
 }
 
@@ -103,7 +130,8 @@ async function queryValueMap(
 async function queryJsonUnnest(
   dbField: string,
   serverIds: string[],
-  dedupEnabled: boolean
+  dedupEnabled: boolean,
+  typeClause: string,
 ): Promise<BreakdownRow[]> {
   assertAllowedColumn(dbField, ALLOWED_MEDIA_ITEM_COLUMNS);
   return prisma.$queryRaw<BreakdownRow[]>`
@@ -116,6 +144,7 @@ async function queryJsonUnnest(
       AND mi.${Prisma.raw(`"${dbField}"`)} IS NOT NULL
       AND jsonb_typeof(mi.${Prisma.raw(`"${dbField}"`)}) = 'array'
       ${dedupEnabled ? Prisma.sql`AND mi."dedupCanonical" = true` : Prisma.empty}
+      ${Prisma.raw(typeClause)}
     GROUP BY g.val, mi.type
     ORDER BY "_count" DESC
   `;
@@ -126,7 +155,8 @@ async function queryNumericBucket(
   nullLabel: string,
   ranges: [number | null, number | null, string][],
   serverIds: string[],
-  dedupEnabled: boolean
+  dedupEnabled: boolean,
+  typeClause: string,
 ): Promise<BreakdownRow[]> {
   assertAllowedColumn(dbField, ALLOWED_MEDIA_ITEM_COLUMNS);
   const col = `mi."${dbField}"`;
@@ -156,6 +186,7 @@ async function queryNumericBucket(
      JOIN "Library" l ON mi."libraryId" = l.id
      WHERE l."mediaServerId" = ANY($1)
        ${dedupClause}
+       ${typeClause}
      GROUP BY "value", mi.type
      ORDER BY "_count" DESC`,
     serverIds
@@ -167,7 +198,8 @@ async function queryStreamGroup(
   streamField: string,
   nullLabel: string,
   serverIds: string[],
-  dedupEnabled: boolean
+  dedupEnabled: boolean,
+  typeClause: string,
 ): Promise<BreakdownRow[]> {
   assertAllowedColumn(streamField, ALLOWED_STREAM_COLUMNS);
   const safeNullLabel = escapeSqlLiteral(nullLabel);
@@ -182,6 +214,7 @@ async function queryStreamGroup(
      WHERE l."mediaServerId" = ANY($1)
        AND ms."streamType" = $2
        ${dedupClause}
+       ${typeClause}
      GROUP BY ms."${streamField}", mi.type
      ORDER BY "_count" DESC`,
     serverIds,
@@ -194,7 +227,8 @@ async function queryDateBucket(
   nullLabel: string,
   granularity: "month" | "year",
   serverIds: string[],
-  dedupEnabled: boolean
+  dedupEnabled: boolean,
+  typeClause: string,
 ): Promise<BreakdownRow[]> {
   assertAllowedColumn(dbField, ALLOWED_MEDIA_ITEM_COLUMNS);
   const safeNullLabel = escapeSqlLiteral(nullLabel);
@@ -212,6 +246,7 @@ async function queryDateBucket(
      JOIN "Library" l ON mi."libraryId" = l.id
      WHERE l."mediaServerId" = ANY($1)
        ${dedupClause}
+       ${typeClause}
      GROUP BY "value", mi.type
      ORDER BY "value" DESC`,
     serverIds

@@ -13,9 +13,11 @@ import {
 import { CheckCircle, XCircle, Loader2 } from "lucide-react";
 import { ServerTypeChip } from "@/components/server-type-chip";
 import { latestSyncOutcome } from "@/lib/sync/latest-outcome";
+import { activeSyncPerServer } from "@/lib/sync/active-sync";
 
 interface SyncJob {
   id: string;
+  mediaServerId: string;
   status: "PENDING" | "RUNNING" | "COMPLETED" | "FAILED";
   startedAt: string;
   completedAt: string | null;
@@ -69,7 +71,7 @@ function ActiveSyncBar({ job }: { job: SyncJob }) {
               <Loader2 className="h-4 w-4 animate-spin text-sky" />
               <ServerTypeChip type={job.mediaServer.type} />
               <span className="text-sky">
-                Syncing {job.mediaServer.name}
+                {job.status === "PENDING" ? "Queued" : "Syncing"} {job.mediaServer.name}
                 {job.totalItems > 0 && ` \u00b7 ${progress}%`}
                 {eta && ` \u00b7 ${eta}`}
               </span>
@@ -230,7 +232,7 @@ export function SyncIndicator({ onSyncComplete }: SyncIndicatorProps) {
   if (activeJobs.length > 0) {
     return (
       <>
-        {activeJobs.map((job) => (
+        {activeSyncPerServer(activeJobs).map((job) => (
           <ActiveSyncBar key={job.id} job={job} />
         ))}
       </>

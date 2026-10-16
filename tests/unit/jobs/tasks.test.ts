@@ -13,7 +13,7 @@ const m = vi.hoisted(() => ({
   pruneBackups: vi.fn().mockResolvedValue(0),
   archiveLogs: vi.fn().mockResolvedValue(undefined),
   dispatchScheduledJobs: vi.fn().mockResolvedValue(undefined),
-  syncJob: { findFirst: vi.fn() },
+  syncJob: { findFirst: vi.fn(), updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
   appSettings: { findFirst: vi.fn() },
   lifecycleAction: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
 }));
@@ -227,6 +227,30 @@ describe("taskList", () => {
     expect(syncMediaServer).not.toHaveBeenCalled();
   });
 
+  it("sync task closes the row its route created when it skips", async () => {
+    // Nothing else would claim it, and a PENDING row makes every Sync button
+    // answer as though a sync were queued for the server.
+    syncJob.findFirst.mockResolvedValue({ id: "running" });
+    await (taskList[TASK_SYNC_SERVER] as (p: unknown, h: unknown) => Promise<void>)(
+      { serverId: "server-1", syncJobId: "route-row" },
+      helpers,
+    );
+    expect(syncMediaServer).not.toHaveBeenCalled();
+    expect(syncJob.updateMany).toHaveBeenCalledWith({
+      where: { id: "route-row", status: "PENDING" },
+      data: expect.objectContaining({ status: "FAILED" }),
+    });
+  });
+
+  it("sync task leaves rows alone when it skips a job no route asked for", async () => {
+    syncJob.findFirst.mockResolvedValue({ id: "running" });
+    await (taskList[TASK_SYNC_SERVER] as (p: unknown, h: unknown) => Promise<void>)(
+      { serverId: "server-1", trigger: "scheduled sync" },
+      helpers,
+    );
+    expect(syncJob.updateMany).not.toHaveBeenCalled();
+  });
+
   it("lifecycle tasks delegate to the processor with the userId", async () => {
     await (taskList[TASK_LIFECYCLE_DETECTION] as (p: unknown, h: unknown) => Promise<void>)({ userId: "u1" }, helpers);
     await (taskList[TASK_LIFECYCLE_EXECUTION] as (p: unknown, h: unknown) => Promise<void>)({ userId: "u1" }, helpers);
@@ -274,7 +298,13 @@ describe("cleanupOldActions", () => {
       where: { status: "PENDING", mediaItemId: null },
     });
     expect(lifecycleAction.deleteMany).not.toHaveBeenCalledWith({
-      where: { status: { not: "PENDING" }, createdAt: { lt: expect.any(Date) } },
+      where: {
+        status: { not: "PENDING" },
+        OR: [
+          { executedAt: { lt: expect.any(Date) } },
+          { executedAt: null, createdAt: { lt: expect.any(Date) } },
+        ],
+      },
     });
   });
 
@@ -283,7 +313,13 @@ describe("cleanupOldActions", () => {
     lifecycleAction.deleteMany.mockResolvedValue({ count: 4 });
     await cleanupOldActions();
     expect(lifecycleAction.deleteMany).toHaveBeenCalledWith({
-      where: { status: { not: "PENDING" }, createdAt: { lt: expect.any(Date) } },
+      where: {
+        status: { not: "PENDING" },
+        OR: [
+          { executedAt: { lt: expect.any(Date) } },
+          { executedAt: null, createdAt: { lt: expect.any(Date) } },
+        ],
+      },
     });
   });
 });

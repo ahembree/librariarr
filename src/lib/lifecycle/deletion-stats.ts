@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db";
 
 /** One row of the per-rule-set deletion breakdown. */
-export interface RuleSetDeletionStats {
+interface RuleSetDeletionStats {
   ruleSetId: string | null;
   ruleSetName: string;
   ruleSetType: string | null;
@@ -13,7 +13,7 @@ export interface RuleSetDeletionStats {
   pendingCount: number;
 }
 
-export interface DeletionStats {
+interface DeletionStats {
   totalBytesDeleted: string;
   actionCount: number;
   pendingBytes: string;

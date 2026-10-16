@@ -42,6 +42,9 @@ export async function GET(request: NextRequest) {
           id: true,
           title: true,
           parentTitle: true,
+          // The Exceptions page groups a show's exceptions by series identity;
+          // by title, two same-titled shows were one row (and one Remove).
+          seriesKey: true,
           albumTitle: true,
           type: true,
           year: true,

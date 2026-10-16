@@ -301,4 +301,78 @@ describe("GET /api/media/series/all-seasons", () => {
     expect(s1).toHaveLength(2);
     expect(new Set(s1.map((x) => x.seriesKey))).toEqual(new Set(["tvdb:78107", "tvdb:73244"]));
   });
+
+  // The All Seasons tab forwards every library filter; this route used to read
+  // only the search, so resolution, genre, year … changed nothing on screen.
+  describe("library filters", () => {
+    async function seasons(query: string) {
+      const body = await expectJson<{
+        seasons: { parentTitle: string; seasonNumber: number; episodeCount: number }[];
+      }>(await callRoute(GET, { url: `/api/media/series/all-seasons?${query}` }), 200);
+      return body.seasons;
+    }
+
+    it("keeps a season with any matching episode, with its whole-season figures", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const lib = await createTestLibrary(server.id, { type: "SERIES" });
+      await createTestMediaItem(lib.id, { type: "SERIES", parentTitle: "Show A", seasonNumber: 1, episodeNumber: 1, resolution: "4k" });
+      await createTestMediaItem(lib.id, { type: "SERIES", parentTitle: "Show A", seasonNumber: 1, episodeNumber: 2, resolution: "1080" });
+      await createTestMediaItem(lib.id, { type: "SERIES", parentTitle: "Show A", seasonNumber: 2, episodeNumber: 1, resolution: "1080" });
+      await createTestMediaItem(lib.id, { type: "SERIES", parentTitle: "Show B", seasonNumber: 1, episodeNumber: 1, resolution: "720" });
+      setMockSession({ userId: user.id, isLoggedIn: true });
+
+      // Exactly what the page sends with the Resolution chip set to 4K.
+      const result = await seasons("sortBy=parentTitle&sortOrder=asc&resolution=4K");
+      expect(result.map((s) => [s.parentTitle, s.seasonNumber])).toEqual([["Show A", 1]]);
+      expect(result[0].episodeCount).toBe(2);
+    });
+
+    it("answers a date filter with the season's own latest play", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const lib = await createTestLibrary(server.id, { type: "SERIES" });
+      // Season 1: one episode last played in 2022, its finale in 2024.
+      await createTestMediaItem(lib.id, { type: "SERIES", parentTitle: "Show", seasonNumber: 1, episodeNumber: 1, lastPlayedAt: new Date("2022-03-01") });
+      await createTestMediaItem(lib.id, { type: "SERIES", parentTitle: "Show", seasonNumber: 1, episodeNumber: 2, lastPlayedAt: new Date("2024-03-01") });
+      // Season 2: last played in 2022 only.
+      await createTestMediaItem(lib.id, { type: "SERIES", parentTitle: "Show", seasonNumber: 2, episodeNumber: 1, lastPlayedAt: new Date("2022-06-01") });
+      setMockSession({ userId: user.id, isLoggedIn: true });
+
+      const result = await seasons("lastPlayedAtMax=2023-01-01");
+      expect(result.map((s) => s.seasonNumber)).toEqual([2]);
+    });
+
+    // A season stored as "576" is a 480P chip, and must be found under 480P.
+    it("matches a resolution by the label its quality chip shows", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const lib = await createTestLibrary(server.id, { type: "SERIES" });
+      await createTestMediaItem(lib.id, { type: "SERIES", parentTitle: "PAL Show", seasonNumber: 1, episodeNumber: 1, resolution: "576" });
+      await createTestMediaItem(lib.id, { type: "SERIES", parentTitle: "HD Show", seasonNumber: 1, episodeNumber: 1, resolution: "1080" });
+      setMockSession({ userId: user.id, isLoggedIn: true });
+
+      expect((await seasons("resolution=480P")).map((s) => s.parentTitle)).toEqual(["PAL Show"]);
+      expect(await seasons("resolution=Other")).toEqual([]);
+    });
+
+    // The season's own latest play answers the date filter; it must not also be
+    // ANDed into the episode match, or beside another filter it demands ONE
+    // episode that is both 4K and recently played.
+    it("answers a date filter beside an episode filter with the season's own figures", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const lib = await createTestLibrary(server.id, { type: "SERIES" });
+      // Season 1: its 4K episode played in 2022, its 1080p finale in 2024.
+      await createTestMediaItem(lib.id, { type: "SERIES", parentTitle: "Show", seasonNumber: 1, episodeNumber: 1, resolution: "4k", lastPlayedAt: new Date("2022-03-01") });
+      await createTestMediaItem(lib.id, { type: "SERIES", parentTitle: "Show", seasonNumber: 1, episodeNumber: 2, resolution: "1080", lastPlayedAt: new Date("2024-03-01") });
+      // Season 2: an unplayed 4K episode, the rest last played in 2022.
+      await createTestMediaItem(lib.id, { type: "SERIES", parentTitle: "Show", seasonNumber: 2, episodeNumber: 1, resolution: "4k" });
+      await createTestMediaItem(lib.id, { type: "SERIES", parentTitle: "Show", seasonNumber: 2, episodeNumber: 2, resolution: "1080", lastPlayedAt: new Date("2022-06-01") });
+      setMockSession({ userId: user.id, isLoggedIn: true });
+
+      expect((await seasons("resolution=4K&lastPlayedAtMin=2024-01-01")).map((s) => s.seasonNumber)).toEqual([1]);
+      expect((await seasons("resolution=4K&lastPlayedAtMax=2023-01-01")).map((s) => s.seasonNumber)).toEqual([2]);
+    });
+  });
 });

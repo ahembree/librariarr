@@ -66,7 +66,7 @@ export function withImageWidth(url: string, width: number): string {
 }
 
 /** The artwork fields the proxy can resolve a `?type=` against. */
-export interface ArtworkSource {
+interface ArtworkSource {
   thumbUrl: string | null;
   artUrl: string | null;
   parentThumbUrl: string | null;

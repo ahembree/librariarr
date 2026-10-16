@@ -22,7 +22,7 @@ import { isDestructiveActionType } from "@/lib/lifecycle/action-types";
  * acting on an arbitrary subset of a match set you already distrust is not
  * safer, just quieter about it.
  */
-export interface DeleteCeilingVerdict {
+interface DeleteCeilingVerdict {
   /** `true` when the run may proceed (under the ceiling, or none configured). */
   allowed: boolean;
   /** Destructive items this run would act on. */

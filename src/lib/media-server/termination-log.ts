@@ -9,7 +9,7 @@ import { formatSessionMediaTitle, type SessionTitleParts } from "./session-title
  */
 export const TERMINATION_SOURCE = "Streams";
 
-export interface Termination {
+interface Termination {
   serverId: string;
   serverName: string;
   sessionId: string;

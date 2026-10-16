@@ -18,9 +18,36 @@ export interface CrossSystemDataEntry {
   hasPendingAction: boolean;
 }
 
-export type CrossSystemDataMap = Map<string, CrossSystemDataEntry>;
+type CrossSystemDataMap = Map<string, CrossSystemDataEntry>;
 
-export async function fetchCrossSystemData(itemIds: string[]): Promise<CrossSystemDataMap> {
+/**
+ * Postgres takes at most 32,767 bind parameters. Prisma splits a lone `in`
+ * list on a plain findMany, but not on a groupBy, so a list built from a whole
+ * library — every episode or track the series- and artist-scope engines pass —
+ * is sent in slices.
+ */
+const IN_CHUNK = 10_000;
+
+function inChunks<T>(values: readonly T[]): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < values.length; i += IN_CHUNK) out.push(values.slice(i, i + IN_CHUNK));
+  return out;
+}
+
+export interface CrossSystemDataOptions {
+  /**
+   * The rule set being evaluated. Its own pending actions are not "another"
+   * pending action: counted, a rule set reading "Has Pending Action = false"
+   * saw the action it scheduled on its last run, dropped the match, cancelled
+   * the action and scheduled it again `actionDelayDays` out on the next.
+   */
+  excludeRuleSetId?: string;
+}
+
+export async function fetchCrossSystemData(
+  itemIds: string[],
+  { excludeRuleSetId }: CrossSystemDataOptions = {},
+): Promise<CrossSystemDataMap> {
   const result: CrossSystemDataMap = new Map();
   if (itemIds.length === 0) return result;
 
@@ -34,14 +61,17 @@ export async function fetchCrossSystemData(itemIds: string[]): Promise<CrossSyst
     select: { id: true, dedupKey: true },
   });
   const dedupKeys = itemsWithDedup.map((i) => i.dedupKey).filter(Boolean) as string[];
+  const countMap = new Map<string, number>();
   if (dedupKeys.length > 0) {
     const uniqueKeys = [...new Set(dedupKeys)];
-    const serverCounts = await prisma.mediaItem.groupBy({
-      by: ["dedupKey"],
-      where: { dedupKey: { in: uniqueKeys } },
-      _count: { id: true },
-    });
-    const countMap = new Map(serverCounts.map((r) => [r.dedupKey, r._count.id]));
+    for (const keys of inChunks(uniqueKeys)) {
+      const serverCounts = await prisma.mediaItem.groupBy({
+        by: ["dedupKey"],
+        where: { dedupKey: { in: keys } },
+        _count: { id: true },
+      });
+      for (const row of serverCounts) if (row.dedupKey) countMap.set(row.dedupKey, row._count.id);
+    }
     for (const item of itemsWithDedup) {
       if (item.dedupKey) {
         const entry = result.get(item.id);
@@ -68,9 +98,32 @@ export async function fetchCrossSystemData(itemIds: string[]): Promise<CrossSyst
   ).flatMap((m) =>
     m.copyIds.filter((id) => requested.has(id)).map((id) => ({ mediaItemId: id, name: m.ruleSet.name })),
   );
+  // A show or an artist match is stored on ONE representative episode or track
+  // and lists everything it acts on in `itemData.memberIds` — every one of
+  // those was matched by the rule set too. Counting the representative alone,
+  // a "NOT Matched By Rule Set = Keep" rule read every other episode of a show
+  // "Keep" holds as unmatched, and deleted them.
+  // The member lists are read whole and intersected here: the callers pass a
+  // whole library's ids, and joined in SQL against `unnest($1)` the lookup was
+  // estimated past `jit_above_cost`, so Postgres JIT-compiled it on every
+  // detection run (~0.7 s for 28k episodes, ~4 s for 150k). This reads one
+  // row per series/artist match instead.
+  const memberLists = await prisma.$queryRawUnsafe<{ memberIds: unknown; name: string }[]>(
+    `SELECT rm."itemData"->'memberIds' AS "memberIds", rs.name
+       FROM "RuleMatch" rm
+       JOIN "RuleSet" rs ON rs.id = rm."ruleSetId"
+      WHERE rs.type::text IN ('SERIES', 'MUSIC')
+        AND jsonb_typeof(rm."itemData"->'memberIds') = 'array'`,
+  );
+  const memberMatches = memberLists.flatMap((m) =>
+    (Array.isArray(m.memberIds) ? m.memberIds : [])
+      .filter((id): id is string => typeof id === "string" && requested.has(id))
+      .map((id) => ({ mediaItemId: id, name: m.name })),
+  );
   for (const match of [
     ...ruleMatches.map((m) => ({ mediaItemId: m.mediaItemId, name: m.ruleSet.name })),
     ...copyMatches,
+    ...memberMatches,
   ]) {
     const entry = result.get(match.mediaItemId);
     if (entry && match.name && !entry.matchedRuleSets.includes(match.name)) {
@@ -78,17 +131,90 @@ export async function fetchCrossSystemData(itemIds: string[]): Promise<CrossSyst
     }
   }
 
-  // Pending actions
+  // Pending actions. An item has one pending when an action names it: as the
+  // item the action is stored against; as one of the episodes or tracks a show
+  // or artist action acts on (`matchedMediaItemIds` — the action is stored on
+  // ONE representative, and reading that alone left every other episode of a
+  // show already scheduled for deletion free to be scheduled again); or as
+  // another copy of what it names — a title matched on several servers is held
+  // on one copy with the others in the match's `copyIds`, and every copy (the
+  // same `dedupKey`) is backed by the one Arr record the action acts on, so a
+  // second rule set on another server scheduled the same title again. Every
+  // pending action is read whole and intersected here: the callers pass a
+  // whole library's ids, and only pending actions are read, not the library.
   const pendingActions = await prisma.lifecycleAction.findMany({
-    where: { mediaItemId: { in: itemIds, not: null }, status: "PENDING" },
-    select: { mediaItemId: true },
-    distinct: ["mediaItemId"],
+    where: {
+      status: "PENDING",
+      ...(excludeRuleSetId ? { OR: [{ ruleSetId: null }, { ruleSetId: { not: excludeRuleSetId } }] } : {}),
+    },
+    select: { ruleSetId: true, mediaItemId: true, matchedMediaItemIds: true },
   });
-  for (const action of pendingActions) {
-    if (!action.mediaItemId) continue;
-    const entry = result.get(action.mediaItemId);
-    if (entry) entry.hasPendingAction = true;
+  if (pendingActions.length > 0) {
+    const pendingIds = new Set<string>();
+    const pendingMatches = new Set<string>();
+    for (const action of pendingActions) {
+      if (action.mediaItemId) {
+        pendingIds.add(action.mediaItemId);
+        if (action.ruleSetId) pendingMatches.add(`${action.ruleSetId}\u0000${action.mediaItemId}`);
+      }
+      for (const id of action.matchedMediaItemIds) pendingIds.add(id);
+    }
+    const collapsed = await prisma.ruleMatch.findMany({
+      where: { copyIds: { isEmpty: false } },
+      select: { ruleSetId: true, mediaItemId: true, copyIds: true },
+    });
+    for (const match of collapsed) {
+      if (!pendingMatches.has(`${match.ruleSetId}\u0000${match.mediaItemId}`)) continue;
+      for (const id of match.copyIds) pendingIds.add(id);
+    }
+
+    // Copies by `dedupKey`: only a requested item whose key more than one row
+    // carries can have one, so the pending items' keys are read only then.
+    const sharedKeys = new Set(dedupKeys.filter((key) => (countMap.get(key) ?? 1) > 1));
+    const pendingKeys = new Set<string>();
+    if (sharedKeys.size > 0) {
+      for (const ids of inChunks([...pendingIds])) {
+        const rows = await prisma.mediaItem.findMany({
+          where: { id: { in: ids }, dedupKey: { not: null } },
+          select: { dedupKey: true },
+        });
+        for (const row of rows) if (row.dedupKey && sharedKeys.has(row.dedupKey)) pendingKeys.add(row.dedupKey);
+      }
+    }
+
+    const keyOf = new Map(itemsWithDedup.map((item) => [item.id, item.dedupKey]));
+    for (const id of itemIds) {
+      const key = keyOf.get(id);
+      if (pendingIds.has(id) || (key && pendingKeys.has(key))) result.get(id)!.hasPendingAction = true;
+    }
   }
 
   return result;
+}
+
+/**
+ * The cross-system values of a show or an artist, read across its episodes or
+ * tracks: matched by every rule set that matched any of them, pending if any
+ * has a pending action, on as many servers as its most-copied one. The
+ * series- and artist-scope engines evaluate the aggregate record, which used
+ * to carry none of these — every show read "matched by no rule set, no pending
+ * action, on one server", so an exclusion such as "NOT Matched By Rule Set =
+ * Keep" failed open.
+ */
+export function foldCrossSystemData(
+  memberIds: readonly string[],
+  data: CrossSystemDataMap | undefined,
+): CrossSystemDataEntry | undefined {
+  if (!data) return undefined;
+  const names = new Set<string>();
+  let serverCount = 1;
+  let hasPendingAction = false;
+  for (const id of memberIds) {
+    const entry = data.get(id);
+    if (!entry) continue;
+    for (const name of entry.matchedRuleSets) names.add(name);
+    serverCount = Math.max(serverCount, entry.serverCount);
+    hasPendingAction ||= entry.hasPendingAction;
+  }
+  return { serverCount, matchedRuleSets: [...names], hasPendingAction };
 }

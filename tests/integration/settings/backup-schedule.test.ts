@@ -90,6 +90,20 @@ describe("PUT /api/settings/backup-schedule", () => {
     expect(body.error).toContain("Invalid schedule");
   });
 
+  it("returns 400 for a cron expression the dispatcher cannot evaluate", async () => {
+    // node-cron accepts a wrap-around range; cron-parser, which the dispatcher
+    // runs, does not — so it used to save and backups then never ran.
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id });
+
+    const res = await callRoute(PUT, {
+      method: "PUT",
+      body: { backupSchedule: "0 22-2 * * *" },
+    });
+    const body = await expectJson<{ error: string }>(res, 400);
+    expect(body.error).toContain("Invalid schedule");
+  });
+
   it("updates backup schedule settings", async () => {
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id});

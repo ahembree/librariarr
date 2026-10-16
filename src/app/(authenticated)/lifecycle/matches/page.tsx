@@ -682,15 +682,22 @@ export default function RuleMatchesPage() {
     setColumnVisibility({ ...columnVisibility, [colId]: checked });
   }, [columnVisibility, setColumnVisibility]);
 
+  // Only the latest read may write. Every run re-reads the whole listing when
+  // it returns, and runs of different rule sets overlap: a read issued when
+  // the first run returned could answer after one issued when the second did,
+  // putting the second rule set's pre-run matches back on screen.
+  const matchesReqToken = useRef(0);
   const fetchMatches = useCallback(async () => {
+    const token = ++matchesReqToken.current;
     try {
       const response = await fetch("/api/lifecycle/rules/matches");
       const data = await response.json();
+      if (token !== matchesReqToken.current) return;
       setRuleMatches(data.ruleMatches || []);
     } catch (error) {
       console.error("Failed to fetch matches:", error);
     } finally {
-      setLoading(false);
+      if (token === matchesReqToken.current) setLoading(false);
     }
   }, []);
 
@@ -798,23 +805,14 @@ export default function RuleMatchesPage() {
         return;
       }
       reportSkipped(data.skipped);
-      if (data.ruleMatches) {
-        setRuleMatches((prev) => {
-          const updated = data.ruleMatches as RuleSetMatch[];
-          const updatedMap = new Map(updated.map((m) => [m.ruleSet.id, m]));
-          return prev.map((m) => {
-            if (m.ruleSet.id !== ruleSetId) return m;
-            // A rule set ABSENT from the results was skipped, not evaluated to
-            // zero — `runDetection` pushes an entry for every rule set it
-            // evaluates, including one that matched nothing. Detection
-            // deliberately PRESERVES a skipped rule set's matches, so blanking
-            // the row here showed the user the opposite of what happened: a
-            // rule set paused mid-Tracearr-import appeared to have lost every
-            // match, with no error, until the page was reloaded.
-            return updatedMap.get(ruleSetId) ?? m;
-          });
-        });
-      }
+      // Re-read the stored matches rather than splicing in the run's result:
+      // detection's result rows are not this page's shape — they lack the
+      // collection name, the quality-profile target and every match's
+      // `detectedAt` — so the row lost its "Collection:" label, its action
+      // label's profile and every Match Date until a reload. The stored
+      // matches also keep a skipped rule set's matches, which detection
+      // deliberately preserves (blanking the row read as every match lost).
+      await fetchMatches();
     } catch (error) {
       console.error("Failed to run rule:", error);
       toast.error("Couldn't run the rule");
@@ -825,7 +823,7 @@ export default function RuleMatchesPage() {
         return next;
       });
     }
-  }, [reportSkipped]);
+  }, [reportSkipped, fetchMatches]);
 
   const reEvalAllRules = useCallback(async () => {
     setReEvalRunning(true);
@@ -843,20 +841,15 @@ export default function RuleMatchesPage() {
         return;
       }
       reportSkipped(data.skipped);
-      if (data.ruleMatches) {
-        const updated = data.ruleMatches as RuleSetMatch[];
-        const updatedMap = new Map(updated.map((m) => [m.ruleSet.id, m]));
-        // Same as `runRule`: a rule set missing from the results was skipped and
-        // still holds its matches, so leave its row alone rather than zeroing it.
-        setRuleMatches((prev) => prev.map((m) => updatedMap.get(m.ruleSet.id) ?? m));
-      }
+      // Same as `runRule`: the stored matches, not the run's result rows.
+      await fetchMatches();
     } catch (error) {
       console.error("Failed to re-evaluate all rules:", error);
       toast.error("Couldn't re-evaluate rules");
     } finally {
       setReEvalRunning(false);
     }
-  }, [reportSkipped]);
+  }, [reportSkipped, fetchMatches]);
 
   const toggleExpand = (ruleSetId: string) => {
     setExpandedRules((prev) => {

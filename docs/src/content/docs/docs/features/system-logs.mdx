@@ -56,7 +56,7 @@ Configure log retention in **Settings → General → Log Retention**:
 
 Archived logs are stored in `/config/logs` (configurable via the `LOG_ARCHIVE_DIR` environment variable). Each archive contains a single day's logs in JSON format.
 
-You can browse and download archived logs via the **System Logs** page or the `/api/system/logs/archives` API endpoint.
+The System Logs page shows only the logs still in the database. To read an archive, open it from that directory on the host (it is under the `/config` volume by default).
 
 <Aside>
   Debug logs can be very verbose. Enable `LOG_DEBUG=true` only when troubleshooting specific issues, and consider lowering retention during extended debug sessions.

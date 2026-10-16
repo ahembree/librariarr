@@ -2,7 +2,7 @@ import { arrIdSourceFor } from "@/lib/lifecycle/cross-server-copies";
 
 type MediaType = "MOVIE" | "SERIES" | "MUSIC";
 
-export interface CollapsibleItem {
+interface CollapsibleItem {
   id: string;
   parentTitle: string | null;
   seriesKey?: string | null;

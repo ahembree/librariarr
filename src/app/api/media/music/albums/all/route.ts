@@ -3,10 +3,14 @@ import { getSession } from "@/lib/auth/session";
 import { jsonResponse } from "@/lib/api/json-response";
 import { prisma } from "@/lib/db";
 import { escapeLike } from "@/lib/filters/escape-like";
+import { applyCommonFilters } from "@/lib/filters/build-where";
+import { loadGenreSpellings } from "@/lib/filters/genre-spellings";
+import { loadResolutionSpellings } from "@/lib/filters/resolution-spellings";
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
 import { firstNonNullSql } from "@/lib/media/series-sql";
 import { loadMissingSummaries } from "@/lib/media/group-summaries";
 import { audioCodecLabelSql, foldCodecCounts, type CodecCountRow } from "@/lib/media/music-sql";
+import type { Prisma } from "@/generated/prisma/client";
 
 const UNKNOWN_ALBUM = "Unknown Album";
 const UNKNOWN_ARTIST = "Unknown Artist";
@@ -73,6 +77,36 @@ export async function GET(request: NextRequest) {
   if (search) {
     params.push(escapeLike(search));
     conditions.push(`(mi."albumTitle" ILIKE '%' || $${params.length} || '%' OR mi."parentTitle" ILIKE '%' || $${params.length} || '%')`);
+  }
+  // The library filters the Albums tab sends (genre, codec, year, …) were
+  // ignored entirely: the page forwarded every one and this route read only
+  // the search. Applied as the artist listing applies them — the same tab
+  // strip, so the two must agree: Prisma resolves the matching tracks
+  // (`applyCommonFilters` builds a where with no SQL form here) and every
+  // album aggregate runs over those.
+  const narrowing: Prisma.MediaItemWhereInput = {};
+  // Every stored spelling of a genre, as the other listings match it.
+  const [genreSpellings, resolutionSpellings] = await Promise.all([
+    loadGenreSpellings(searchParams),
+    loadResolutionSpellings(searchParams),
+  ]);
+  applyCommonFilters(narrowing, searchParams, genreSpellings, resolutionSpellings);
+  if (Object.keys(narrowing).length > 0) {
+    const matching = await prisma.mediaItem.findMany({
+      where: {
+        AND: [
+          narrowing,
+          {
+            type: "MUSIC",
+            library: { mediaServerId: { in: sf.serverIds } },
+            ...(sf.isSingleServer ? {} : { dedupCanonical: true }),
+          },
+        ],
+      },
+      select: { id: true },
+    });
+    params.push(matching.map((r) => r.id));
+    conditions.push(`mi.id = ANY($${params.length}::text[])`);
   }
   const scope = `
       FROM "MediaItem" mi

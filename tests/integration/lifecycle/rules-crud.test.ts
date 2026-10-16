@@ -13,6 +13,7 @@ import {
   createTestSonarrInstance,
   createTestRadarrInstance,
   createTestCollection,
+  createTestRuleMatch,
 } from "../../setup/test-helpers";
 
 // Critical: redirect prisma to test database
@@ -39,6 +40,7 @@ vi.mock("@/lib/lifecycle/collections", () => ({
 }));
 
 // Import AFTER mocks
+import { appCache } from "@/lib/cache/memory-cache";
 import { GET, POST } from "@/app/api/lifecycle/rules/route";
 import { PUT, DELETE } from "@/app/api/lifecycle/rules/[id]/route";
 
@@ -779,6 +781,75 @@ describe("Lifecycle Rules CRUD", () => {
         expect(after?.actionType).toBe("SEARCH_RADARR");
       });
 
+      // A rule set's Arr criteria are read from its own instance, so with Arr
+      // criteria a new instance is a rule change: kept, the matches judged on
+      // the old instance armed the re-pointed actions against copies nothing
+      // checked (a "keep" tag on the 4K Radarr ignored, the 4K copy deleted).
+      async function setupArrScopedMatch(rules: unknown) {
+        const user = await createTestUser();
+        const server = await createTestServer(user.id);
+        const library = await createTestLibrary(server.id, { type: "MOVIE" });
+        const item = await createTestMediaItem(library.id, { title: "Dune", type: "MOVIE" });
+        const radarr1080 = await createTestRadarrInstance(user.id, { name: "Radarr 1080p" });
+        const radarr4k = await createTestRadarrInstance(user.id, { name: "Radarr 4K", url: "http://radarr4k:7878" });
+        const ruleSet = await createTestRuleSet(user.id, {
+          type: "MOVIE", rules, actionEnabled: true, actionType: "DELETE_RADARR", arrInstanceId: radarr1080.id,
+        });
+        await createTestRuleMatch(ruleSet.id, item.id, { id: item.id, title: "Dune" });
+        const action = await getTestPrisma().lifecycleAction.create({
+          data: {
+            userId: user.id, mediaItemId: item.id, ruleSetId: ruleSet.id, actionType: "DELETE_RADARR",
+            status: "PENDING", scheduledFor: new Date(), arrInstanceId: radarr1080.id,
+          },
+        });
+        return { user, ruleSet, action, radarr4k };
+      }
+
+      it("clears matches and PENDING actions when the instance its Arr criteria are read from changes", async () => {
+        const { user, ruleSet, action, radarr4k } = await setupArrScopedMatch([{
+          id: "g", condition: "AND", groups: [],
+          rules: [{ id: "r", field: "arrTag", operator: "notContains", value: "keep", condition: "AND" }],
+        }]);
+        setMockSession({ isLoggedIn: true, userId: user.id });
+
+        await expectJson(
+          await callRouteWithParams(PUT, { id: ruleSet.id }, {
+            url: `/api/lifecycle/rules/${ruleSet.id}`,
+            method: "PUT",
+            searchParams: { clearMatches: "false" },
+            body: { arrInstanceId: radarr4k.id },
+          }),
+          200,
+        );
+
+        const prisma = getTestPrisma();
+        expect(await prisma.ruleMatch.count({ where: { ruleSetId: ruleSet.id } })).toBe(0);
+        expect(await prisma.lifecycleAction.findUnique({ where: { id: action.id } })).toBeNull();
+      });
+
+      it("re-points PENDING actions at a new instance when the rules read nothing from Arr", async () => {
+        const { user, ruleSet, action, radarr4k } = await setupArrScopedMatch([{
+          id: "g", condition: "AND", groups: [],
+          rules: [{ id: "r", field: "playCount", operator: "equals", value: "0", condition: "AND" }],
+        }]);
+        setMockSession({ isLoggedIn: true, userId: user.id });
+
+        await expectJson(
+          await callRouteWithParams(PUT, { id: ruleSet.id }, {
+            url: `/api/lifecycle/rules/${ruleSet.id}`,
+            method: "PUT",
+            searchParams: { clearMatches: "false" },
+            body: { arrInstanceId: radarr4k.id },
+          }),
+          200,
+        );
+
+        const prisma = getTestPrisma();
+        expect(await prisma.ruleMatch.count({ where: { ruleSetId: ruleSet.id } })).toBe(1);
+        const after = await prisma.lifecycleAction.findUnique({ where: { id: action.id } });
+        expect(after?.arrInstanceId).toBe(radarr4k.id);
+      });
+
       it("cancels PENDING actions instead of re-snapshotting when the action is disabled", async () => {
         const { user, ruleSet, action } = await setupPendingAction("SEARCH_RADARR");
         setMockSession({ isLoggedIn: true, userId: user.id });
@@ -932,6 +1003,65 @@ describe("Lifecycle Rules CRUD", () => {
       expect(body.success).toBe(true);
     });
   });
+
+  // "Matched By Rule Set" offers rule set names from the cached distinct-value
+  // lists (library filters and the query builder), five minutes at a time: a
+  // new, renamed or deleted rule set was missing, or still offered, until then.
+  describe("rule set name caches", () => {
+    const seedCaches = () => {
+      appCache.set("distinct-values", { matchedByRuleSet: ["stale"] }, 300_000);
+      appCache.set("query-distinct-values", { matchedByRuleSet: ["stale"] }, 300_000);
+    };
+    const cachesCleared = () =>
+      appCache.get("distinct-values") === undefined && appCache.get("query-distinct-values") === undefined;
+
+    it("drops them when a rule set is created", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      seedCaches();
+
+      await expectJson(
+        await callRoute(POST, {
+          url: "/api/lifecycle/rules",
+          method: "POST",
+          body: { name: "Keep", type: "MOVIE", rules: [dummyRule], serverIds: [server.id] },
+        }),
+        201,
+      );
+      expect(cachesCleared()).toBe(true);
+    });
+
+    it("drops them on a rename, and keeps them when the name is untouched", async () => {
+      const user = await createTestUser();
+      const ruleSet = await createTestRuleSet(user.id, { name: "Keep" });
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const put = (body: Record<string, unknown>) =>
+        callRouteWithParams(PUT, { id: ruleSet.id }, {
+          url: `/api/lifecycle/rules/${ruleSet.id}`, method: "PUT", searchParams: { clearMatches: "false" }, body,
+        });
+
+      seedCaches();
+      await expectJson(await put({ enabled: false }), 200);
+      expect(cachesCleared()).toBe(false);
+
+      await expectJson(await put({ name: "Keep forever" }), 200);
+      expect(cachesCleared()).toBe(true);
+    });
+
+    it("drops them when a rule set is deleted", async () => {
+      const user = await createTestUser();
+      const ruleSet = await createTestRuleSet(user.id, { name: "Keep" });
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      seedCaches();
+
+      await expectJson(
+        await callRouteWithParams(DELETE, { id: ruleSet.id }, { url: `/api/lifecycle/rules/${ruleSet.id}`, method: "DELETE" }),
+        200,
+      );
+      expect(cachesCleared()).toBe(true);
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -939,7 +1069,7 @@ describe("Lifecycle Rules CRUD", () => {
 // ---------------------------------------------------------------------------
 
 describe("action configuration validation", () => {
-  const base = (user: { id: string }, serverId: string) => ({
+  const base = (serverId: string) => ({
     name: "Config Audit",
     type: "MOVIE" as const,
     rules: [{ id: "g1", condition: "AND", rules: [dummyRule], groups: [] }],
@@ -953,7 +1083,7 @@ describe("action configuration validation", () => {
     const response = await callRoute(POST, {
       method: "POST",
       url: "/api/lifecycle/rules",
-      body: { ...base(user, server.id), actionEnabled: true, actionType: "DELETE_SONARR" },
+      body: { ...base(server.id), actionEnabled: true, actionType: "DELETE_SONARR" },
     });
     const json = await expectJson<{ error: string }>(response, 400);
     expect(json.error).toMatch(/not valid for movie/i);
@@ -966,7 +1096,7 @@ describe("action configuration validation", () => {
     const response = await callRoute(POST, {
       method: "POST",
       url: "/api/lifecycle/rules",
-      body: { ...base(user, server.id), actionType: "DELETE_RADARR", arrInstanceId: "nonexistent-id" },
+      body: { ...base(server.id), actionType: "DELETE_RADARR", arrInstanceId: "nonexistent-id" },
     });
     const json = await expectJson<{ error: string }>(response, 400);
     expect(json.error).toMatch(/instance not found/i);
@@ -980,7 +1110,7 @@ describe("action configuration validation", () => {
     const response = await callRoute(POST, {
       method: "POST",
       url: "/api/lifecycle/rules",
-      body: { ...base(user, server.id), actionType: "DELETE_RADARR", arrInstanceId: sonarr.id },
+      body: { ...base(server.id), actionType: "DELETE_RADARR", arrInstanceId: sonarr.id },
     });
     await expectJson<{ error: string }>(response, 400);
   });
@@ -993,7 +1123,7 @@ describe("action configuration validation", () => {
     const createRes = await callRoute(POST, {
       method: "POST",
       url: "/api/lifecycle/rules",
-      body: { ...base(user, server.id), actionType: "DELETE_RADARR", arrInstanceId: radarr.id },
+      body: { ...base(server.id), actionType: "DELETE_RADARR", arrInstanceId: radarr.id },
     });
     const created = await expectJson<{ ruleSet: { id: string } }>(createRes, 201);
 

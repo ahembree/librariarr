@@ -11,7 +11,7 @@
  * [00:00, end] — so the overlap test stays correct across the wrap-around.
  */
 
-export interface ScheduleConflictInput {
+interface ScheduleConflictInput {
   scheduleType?: string;
   startDate?: string;
   endDate?: string;

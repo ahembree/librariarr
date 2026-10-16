@@ -33,7 +33,7 @@ vi.mock("@/lib/lifecycle/collections", () => ({
 
 // Route imports — MUST come AFTER vi.mock() calls
 import { GET, POST, DELETE as BULK_DELETE, PATCH as BULK_PATCH } from "@/app/api/lifecycle/exceptions/route";
-import { DELETE, PATCH } from "@/app/api/lifecycle/exceptions/[id]/route";
+import { DELETE } from "@/app/api/lifecycle/exceptions/[id]/route";
 
 const prisma = getTestPrisma();
 
@@ -152,6 +152,32 @@ describe("Lifecycle Exceptions API", () => {
         exceptions: Array<{ mediaItem: { parentTitle: string | null; seasonNumber: number | null; episodeNumber: number | null } }>;
       }>(await callRoute(GET, { url: "/api/lifecycle/exceptions?type=SERIES" }), 200);
       expect(body.exceptions[0].mediaItem).toMatchObject({ parentTitle: "Breaking Bad", seasonNumber: 1, episodeNumber: 7 });
+    });
+
+    // The Exceptions page groups a show's exceptions into one row; by title,
+    // The Office (UK) and The Office (US) were one row, and Remove took both
+    // shows' protection away.
+    it("returns each episode's series identity, so two same-titled shows group apart", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "SERIES" });
+      const uk = await createTestMediaItem(library.id, {
+        type: "SERIES", title: "Downsize", parentTitle: "The Office", seriesKey: "tvdb:78107", seasonNumber: 1, episodeNumber: 1,
+      });
+      const us = await createTestMediaItem(library.id, {
+        type: "SERIES", title: "Pilot", parentTitle: "The Office", seriesKey: "tvdb:73244", seasonNumber: 1, episodeNumber: 1,
+      });
+      await prisma.lifecycleException.createMany({
+        data: [{ userId: user.id, mediaItemId: uk.id }, { userId: user.id, mediaItemId: us.id }],
+      });
+
+      setMockSession({ userId: user.id, isLoggedIn: true });
+      const body = await expectJson<{
+        exceptions: Array<{ mediaItem: { id: string; seriesKey: string | null } }>;
+      }>(await callRoute(GET, { url: "/api/lifecycle/exceptions?type=SERIES" }), 200);
+      const keyById = new Map(body.exceptions.map((e) => [e.mediaItem.id, e.mediaItem.seriesKey]));
+      expect(keyById.get(uk.id)).toBe("tvdb:78107");
+      expect(keyById.get(us.id)).toBe("tvdb:73244");
     });
 
     it("rejects an unknown type with 400 instead of failing the query", async () => {
@@ -524,32 +550,6 @@ describe("Lifecycle Exceptions API", () => {
         where: { id: exception.id },
       });
       expect(dbException).toBeNull();
-    });
-  });
-
-  describe("PATCH /api/lifecycle/exceptions/[id]", () => {
-    it("updates the reason, and answers 404 — not a 500 — for one that is gone or not the user's", async () => {
-      const { user, mediaItem } = await createUserWithMediaItem();
-      const { user: other, mediaItem: otherItem } = await createUserWithMediaItem();
-      const exception = await prisma.lifecycleException.create({ data: { userId: user.id, mediaItemId: mediaItem.id } });
-      const foreign = await prisma.lifecycleException.create({ data: { userId: other.id, mediaItemId: otherItem.id } });
-      setMockSession({ userId: user.id, isLoggedIn: true });
-
-      const patch = (id: string) =>
-        callRouteWithParams(PATCH, { id }, { method: "PATCH", body: { reason: "keep" } });
-      const body = await expectJson<{ exception: { reason: string } }>(await patch(exception.id), 200);
-      expect(body.exception.reason).toBe("keep");
-      await expectJson(await patch(foreign.id), 404);
-
-      // Removed by another tab, or the API, between the two writes.
-      const [removed, edited] = await Promise.all([
-        callRouteWithParams(DELETE, { id: exception.id }),
-        patch(exception.id),
-      ]);
-      expect(removed.status).toBe(200);
-      expect([200, 404]).toContain(edited.status);
-      await expectJson(await patch(exception.id), 404);
-      expect((await prisma.lifecycleException.findUnique({ where: { id: foreign.id } }))?.reason).toBeNull();
     });
   });
 

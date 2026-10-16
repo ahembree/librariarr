@@ -8,6 +8,7 @@ import {
   STREAM_QUERY_SECTIONS,
   getStreamQueryFieldsForType,
   getConditionField,
+  isValuelessOperator,
   type Condition,
   type ConditionGroup,
   type ConditionLogic,
@@ -23,8 +24,8 @@ import {
 } from "./builder/tree-utils";
 
 // Backward-compat type aliases for existing callers
-export type LifecycleRule = Condition;
-export type LifecycleRuleGroup = ConditionGroup;
+type LifecycleRule = Condition;
+type LifecycleRuleGroup = ConditionGroup;
 
 // ─── Re-exports for backward compatibility ──────────────────────────────────
 
@@ -99,7 +100,7 @@ export const ruleBuilderConfig: BuilderConfig<LifecycleRule, LifecycleRuleGroup>
     return null;
   },
 
-  isValuelessOperator: (op) => op === "isNull" || op === "isNotNull",
+  isValuelessOperator,
 
   getFieldUnreachableTooltip: (field, ctx) => {
     const def = getConditionField(field);

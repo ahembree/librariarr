@@ -24,32 +24,8 @@ function getCardWidthServerSnapshot(): number {
   return CARD_MIN_WIDTHS.medium;
 }
 
-/** Stats card skeleton matching StatsCards layout */
-export function StatsCardsSkeleton({ count = 4 }: { count?: number }) {
-  const gridCols =
-    count <= 2 ? "sm:grid-cols-2" : count === 3 ? "sm:grid-cols-3" : "sm:grid-cols-2 lg:grid-cols-4";
-  return (
-    <div className={`grid gap-4 ${gridCols}`}>
-      {Array.from({ length: count }).map((_, i) => (
-        <div
-          key={i}
-          className="rounded-[14px] border bg-card px-[18px] pt-[17px] pb-4 shadow-[var(--shadow-card)]"
-        >
-          <Skeleton className="mb-3.5 h-[34px] w-[34px] rounded-[9px]" />
-          <Skeleton className="h-7 w-24" />
-          <Skeleton className="mt-2.5 h-3.5 w-16" />
-          <div className="mt-4 space-y-2">
-            <Skeleton className="h-3 w-full" />
-            <Skeleton className="h-3 w-2/3" />
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 /** Media card skeleton matching MediaCard layout */
-export function MediaCardSkeleton() {
+function MediaCardSkeleton() {
   return (
     <div className="overflow-hidden rounded-lg border bg-card">
       <Skeleton className="aspect-2/3 w-full" />

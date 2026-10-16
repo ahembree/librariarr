@@ -8,9 +8,6 @@ import { sanitizeErrorDetail } from "@/lib/api/sanitize";
 import { actionHonorsMemberIds, formatActionLabel, supportsSearchAfter } from "@/lib/lifecycle/action-types";
 import { seriesTitleOf } from "@/lib/media/display-title";
 
-// Re-export constants so server-side consumers can import from here too
-export { MOVIE_ACTION_TYPES, SERIES_ACTION_TYPES, MUSIC_ACTION_TYPES } from "@/lib/lifecycle/action-types";
-
 /**
  * Extract a meaningful error message from Arr API failures, including the
  * response body — SANITIZED: this is what gets persisted on the
@@ -125,7 +122,7 @@ export function normalizeTitle(title: string): string {
  *    `arrYear - expectedYear > 1` (the external id points at a newer same-named
  *    series).
  */
-export type YearMatchMode = "release" | "episodeOfSeries";
+type YearMatchMode = "release" | "episodeOfSeries";
 
 /**
  * Validate that the item resolved from the Arr API matches what we expect.

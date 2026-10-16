@@ -2,11 +2,6 @@
 // New code should import from `@/lib/media-server/types` instead.
 export type {
   MediaLibrarySection as PlexLibrarySection,
-  MediaStream as PlexMediaStream,
-  MediaPart as PlexMediaPart,
-  MediaInfo as PlexMedia,
-  MediaTag as PlexTag,
-  MediaRole as PlexRole,
   MediaMetadataItem as PlexMetadataItem,
   MediaCollection as PlexCollection,
   MediaSession as PlexSession,

@@ -166,19 +166,6 @@ describe("RadarrClient", () => {
     });
   });
 
-  describe("getMovieFiles", () => {
-    it("fetches movie files with array params", async () => {
-      const files = [{ id: 1, movieId: 5 }];
-      mockAxiosInstance.get.mockResolvedValueOnce({ data: files });
-      const result = await client.getMovieFiles(5);
-      expect(result).toEqual(files);
-      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v3/moviefile", {
-        params: { movieId: [5] },
-        paramsSerializer: { indexes: null },
-      });
-    });
-  });
-
   describe("getCustomFormatScores", () => {
     it("returns an empty map without calling the API for no movie ids", async () => {
       const result = await client.getCustomFormatScores([]);
@@ -264,61 +251,6 @@ describe("RadarrClient", () => {
         name: "MoviesSearch",
         movieIds: [42],
       });
-    });
-  });
-
-  describe("getQueue", () => {
-    it("does not report a completed (inactive) record as downloading", async () => {
-      mockAxiosInstance.get.mockResolvedValueOnce({
-        data: { records: [{ movieId: 1, status: "completed" }] },
-      });
-      const result = await client.getQueue(1);
-      expect(result).toEqual({ downloading: false, status: "completed" });
-    });
-
-    it("returns not downloading when no records", async () => {
-      mockAxiosInstance.get.mockResolvedValueOnce({ data: { records: [] } });
-      const result = await client.getQueue(1);
-      expect(result).toEqual({ downloading: false, status: null });
-    });
-
-    it("falls back to trackedDownloadStatus", async () => {
-      mockAxiosInstance.get.mockResolvedValueOnce({
-        data: { records: [{ movieId: 1, trackedDownloadStatus: "warning" }] },
-      });
-      const result = await client.getQueue(1);
-      expect(result).toEqual({ downloading: true, status: "warning" });
-    });
-
-    it("defaults to 'downloading' when no status fields", async () => {
-      mockAxiosInstance.get.mockResolvedValueOnce({
-        data: { records: [{ movieId: 1 }] },
-      });
-      const result = await client.getQueue(1);
-      expect(result).toEqual({ downloading: true, status: "downloading" });
-    });
-
-    it("sends movieIds unbracketed so Radarr applies the filter", async () => {
-      mockAxiosInstance.get.mockResolvedValueOnce({ data: { records: [] } });
-      await client.getQueue(7);
-      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v3/queue", expect.objectContaining({
-        params: expect.objectContaining({ movieIds: [7] }),
-        paramsSerializer: { indexes: null },
-      }));
-    });
-
-    it("ignores another movie's active download", async () => {
-      mockAxiosInstance.get.mockResolvedValueOnce({
-        data: { records: [{ movieId: 2, status: "downloading" }] },
-      });
-      const result = await client.getQueue(1);
-      expect(result).toEqual({ downloading: false, status: null });
-    });
-
-    it("returns not downloading on error", async () => {
-      mockAxiosInstance.get.mockRejectedValueOnce(new Error("timeout"));
-      const result = await client.getQueue(1);
-      expect(result).toEqual({ downloading: false, status: null });
     });
   });
 

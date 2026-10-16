@@ -27,7 +27,7 @@ interface ServerInfo {
   type?: string;
 }
 
-export interface LibraryToolbarProps {
+interface LibraryToolbarProps {
   /** Current view mode */
   viewMode: "cards" | "table";
   /** Callback when view mode changes */

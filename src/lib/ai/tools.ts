@@ -13,7 +13,7 @@ import { DIMENSION_REGISTRY, getDimensionMeta, DATE_DIMENSION_IDS } from "@/lib/
 import { executeQuery } from "@/lib/query/query-engine";
 import type { QueryDefinition } from "@/lib/query/types";
 import { CONDITION_FIELDS, CONDITION_OPERATORS } from "@/lib/conditions";
-import type { AiTool, AiToolResult } from "./types";
+import type { AiTool } from "./types";
 
 const MEDIA_TYPES = ["MOVIE", "SERIES", "MUSIC"] as const;
 const DIMENSION_IDS = DIMENSION_REGISTRY.map((d) => d.id);
@@ -460,4 +460,3 @@ export function getAiToolMap(): Map<string, AiTool> {
   return new Map(ALL_TOOLS.map((t) => [t.definition.name, t]));
 }
 
-export type { AiToolResult };

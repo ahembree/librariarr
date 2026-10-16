@@ -373,4 +373,37 @@ describe("POST /api/servers/[id]/sync", () => {
     expect(rows).toHaveLength(1);
     expect(mockEnqueueJob).toHaveBeenCalledTimes(1);
   });
+
+  // Three requests at once rarely overlap closely enough to show the race, so
+  // the test above passes without the lock too. Here another request holds the
+  // per-server `sync-request:` lock and creates its row only after this one has
+  // had time to run its check: serialized, it sees that row and answers 409.
+  it("checks for a queued sync under the per-server lock", async () => {
+    const testPrisma = getTestPrisma();
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    setMockSession({ userId: user.id, isLoggedIn: true });
+
+    let commit!: () => void;
+    const committed = new Promise<void>((resolve) => { commit = resolve; });
+    let locked!: () => void;
+    const lockHeld = new Promise<void>((resolve) => { locked = resolve; });
+    const otherRequest = testPrisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe(`SELECT pg_advisory_xact_lock(hashtext('sync-request:' || $1))`, server.id);
+      locked();
+      await committed;
+      await tx.syncJob.create({ data: { mediaServerId: server.id, status: "PENDING", startedAt: new Date() } });
+    }, { timeout: 10_000 });
+    await lockHeld;
+
+    const request = callRouteWithParams(POST, { id: server.id }, { url: `/api/servers/${server.id}/sync`, method: "POST" });
+    // Long enough for an unserialized request to run its check and insert.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    commit();
+    await otherRequest;
+
+    expect((await request).status).toBe(409);
+    expect(await testPrisma.syncJob.count({ where: { mediaServerId: server.id } })).toBe(1);
+    expect(mockEnqueueJob).not.toHaveBeenCalled();
+  });
 });

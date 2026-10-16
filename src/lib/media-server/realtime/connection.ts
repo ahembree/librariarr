@@ -15,7 +15,7 @@ const BASE_BACKOFF_MS = 1_000;
 const MAX_BACKOFF_MS = 60_000;
 const KEEPALIVE_MS = 30_000;
 
-export interface ConnectionCallbacks {
+interface ConnectionCallbacks {
   onEvent(event: RealtimeEvent): void;
   onStatus(serverId: string, status: RealtimeConnectionStatus): void;
 }
@@ -52,10 +52,6 @@ export class ServerRealtimeConnection {
     this.config = config;
     this.cb = cb;
     this.socketFactory = socketFactory;
-  }
-
-  getStatus(): RealtimeConnectionStatus {
-    return this.status;
   }
 
   start(): void {

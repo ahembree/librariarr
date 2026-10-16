@@ -79,7 +79,7 @@ interface CfComparableSpec {
   fields: Record<string, unknown>;
 }
 
-export interface CfComparable {
+interface CfComparable {
   name: string;
   includeCustomFormatWhenRenaming: boolean;
   /** Keyed by spec name, so ordering never matters. */
@@ -162,15 +162,6 @@ export function findManagedArrResource<T extends { id?: number; name: string }>(
   if (byName) return byName;
   if (arrId == null) return undefined;
   return resources.find((r) => r.id === arrId);
-}
-
-/** Match by name, exact first then case-insensitive/trimmed — so a resource that
- *  differs only in case updates instead of erroring on create. */
-export function findArrCfByName(
-  arrCfs: ArrCustomFormat[],
-  name: string,
-): ArrCustomFormat | undefined {
-  return findManagedArrResource(arrCfs, name, undefined);
 }
 
 // ─── Quality definitions (sizes) ───
@@ -268,7 +259,7 @@ function resolveLanguage(
   return existing ?? schema.language;
 }
 
-export interface BuildProfileResult {
+interface BuildProfileResult {
   payload: ArrQualityProfile;
   warnings: string[];
   /**
@@ -280,7 +271,7 @@ export interface BuildProfileResult {
 }
 
 /** Per-profile build options (mirrors Recyclarr's `score_set` / `reset_unmatched_scores`). */
-export interface BuildProfileOptions {
+interface BuildProfileOptions {
   /** Override which guide score set the profile's custom-format scores come from. */
   scoreSet?: string;
   /**

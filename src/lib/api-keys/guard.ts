@@ -410,15 +410,19 @@ function requestCost(request: NextRequest, fullListing: boolean, limitZeroMeansA
 }
 
 /**
- * `decodeURIComponent` that hands back the input when it is not valid
- * percent-encoding, so a stray `%` in a search term cannot turn the guard
- * into a 400 or a throw.
+ * `decodeURIComponent` that decodes what it can, so a stray `%` in a search
+ * term cannot turn the guard into a 400 or a throw. When the value is not
+ * valid percent-encoding, its ASCII escapes are still decoded (a key is ASCII
+ * alone): handing the input back unchanged let a stray `%zz` beside a
+ * doubly-encoded key (`lbr%255F…%25zz`) skip the extra layer.
  */
 function safeDecode(value: string): string {
   try {
     return decodeURIComponent(value);
   } catch {
-    return value;
+    return value.replace(/%([0-7][0-9A-Fa-f])/g, (_escape, hex: string) =>
+      String.fromCharCode(parseInt(hex, 16)),
+    );
   }
 }
 
@@ -437,7 +441,10 @@ function carriesKey(part: string): boolean {
 }
 
 function urlCarriesKey(url: URL): boolean {
-  if (carriesKey(url.pathname)) return true;
+  // Unlike the query string, the parser leaves the path percent-encoded, so
+  // the path gets the layer the parser gave the query before the same two
+  // checks — or `/lbr%255F…` passed where `?q=lbr%255F…` was refused.
+  if (carriesKey(safeDecode(url.pathname))) return true;
   for (const [name, value] of url.searchParams) {
     if (KEY_QUERY_PARAMS.has(name.toLowerCase())) return true;
     if (carriesKey(name) || carriesKey(value)) return true;

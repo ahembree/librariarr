@@ -205,4 +205,21 @@ describe("GET /api/media/music/albums/all", () => {
 
     expect((await list()).albums).toEqual([]);
   });
+
+  // The Albums tab forwards every library filter; this route used to read only
+  // the search, so a Genre or codec filter changed nothing on screen.
+  it("applies the library filters the page sends, as the artist listing does", async () => {
+    const { lib } = await musicLibrary();
+    await createTestMediaItem(lib.id, { type: "MUSIC", title: "Track 1", parentTitle: "Artist A", albumTitle: "Rock Album", genres: ["Rock"], audioCodec: "flac" });
+    await createTestMediaItem(lib.id, { type: "MUSIC", title: "Track 2", parentTitle: "Artist B", albumTitle: "Jazz Album", genres: ["Jazz"], audioCodec: "mp3" });
+
+    // Exactly what the page sends with the Genre chip set to Rock.
+    const rock = await list("limit=0&sortBy=albumTitle&sortOrder=asc&genre=Rock");
+    expect(rock.albums.map((a) => a.albumTitle)).toEqual(["Rock Album"]);
+
+    const mp3 = await list("limit=0&audioCodec=mp3");
+    expect(mp3.albums.map((a) => a.albumTitle)).toEqual(["Jazz Album"]);
+
+    expect((await list("limit=0&genre=Blues")).albums).toEqual([]);
+  });
 });

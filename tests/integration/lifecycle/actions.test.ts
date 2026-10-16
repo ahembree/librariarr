@@ -1377,6 +1377,99 @@ describe("Lifecycle Actions", () => {
       });
     });
 
+    // A FAILED row keeps the members it was scheduled with. The retry must act
+    // only on those the current match still lists and none an exception
+    // protects — sent as stored, it deleted the files of episodes watched or
+    // excepted since the failure.
+    async function failedEpisodeDelete() {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "SERIES" });
+      const eps = [];
+      for (let n = 1; n <= 3; n++) {
+        const ep = await createTestMediaItem(library.id, {
+          title: `Episode ${n}`, type: "SERIES", parentTitle: "The Show", seasonNumber: 1, episodeNumber: n,
+        });
+        await createTestExternalId(ep.id, "TVDB", "1234");
+        eps.push(ep);
+      }
+      const ruleSet = await createTestRuleSet(user.id, { name: "Old episodes", type: "SERIES", seriesScope: false });
+      const action = await getTestPrisma().lifecycleAction.create({
+        data: {
+          userId: user.id, mediaItemId: eps[0].id, ruleSetId: ruleSet.id, actionType: "DELETE_FILES_SONARR",
+          status: "FAILED", error: "HTTP 503", scheduledFor: new Date(), executedAt: new Date(),
+          matchedMediaItemIds: eps.map((e) => e.id),
+          mediaItemTitle: "The Show", mediaItemParentTitle: null, mediaItemExternalId: "1234",
+        },
+      });
+      return { user, ruleSet, action, eps };
+    }
+
+    it("leaves out of a retried file delete an episode excepted since the failure", async () => {
+      const { user, ruleSet, action, eps: [e1, e2, e3] } = await failedEpisodeDelete();
+      await createTestRuleMatch(ruleSet.id, e1.id, { id: e1.id, title: "The Show", parentTitle: null, memberIds: [e1.id, e3.id] });
+      await getTestPrisma().lifecycleException.create({ data: { userId: user.id, mediaItemId: e2.id } });
+
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      await expectJson(
+        await callRouteWithParams(actionRetry, { id: action.id }, { url: `/api/lifecycle/actions/${action.id}`, method: "POST" }),
+        200,
+      );
+
+      const { executeAction } = await import("@/lib/lifecycle/actions");
+      const sent = vi.mocked(executeAction).mock.calls[0][0];
+      expect([...sent.matchedMediaItemIds].sort()).toEqual([e1.id, e3.id].sort());
+      const retried = await getTestPrisma().lifecycleAction.findUniqueOrThrow({ where: { id: action.id } });
+      expect([...retried.matchedMediaItemIds].sort()).toEqual([e1.id, e3.id].sort());
+    });
+
+    it("leaves out of a retried file delete the episodes that no longer match", async () => {
+      const { user, ruleSet, action, eps: [e1] } = await failedEpisodeDelete();
+      // Episodes 2 and 3 were watched since and dropped out of the match.
+      await createTestRuleMatch(ruleSet.id, e1.id, { id: e1.id, title: "The Show", parentTitle: null, memberIds: [e1.id] });
+
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      await expectJson(
+        await callRouteWithParams(actionRetry, { id: action.id }, { url: `/api/lifecycle/actions/${action.id}`, method: "POST" }),
+        200,
+      );
+
+      const { executeAction } = await import("@/lib/lifecycle/actions");
+      expect(vi.mocked(executeAction).mock.calls[0][0].matchedMediaItemIds).toEqual([e1.id]);
+    });
+
+    it("refuses to retry a file delete none of whose episodes still match", async () => {
+      const { user, ruleSet, action, eps } = await failedEpisodeDelete();
+      const other = await createTestMediaItem((await createTestLibrary((await createTestServer(user.id)).id, { type: "SERIES" })).id, {
+        title: "Other", type: "SERIES", parentTitle: "The Show", seasonNumber: 2, episodeNumber: 1,
+      });
+      await createTestRuleMatch(ruleSet.id, eps[0].id, { id: eps[0].id, title: "The Show", parentTitle: null, memberIds: [other.id] });
+
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const body = await expectJson<{ error: string }>(
+        await callRouteWithParams(actionRetry, { id: action.id }, { url: `/api/lifecycle/actions/${action.id}`, method: "POST" }),
+        400,
+      );
+      expect(body.error).toMatch(/still match/);
+      const { executeAction } = await import("@/lib/lifecycle/actions");
+      expect(executeAction).not.toHaveBeenCalled();
+    });
+
+    it("refuses a whole-record retry when one of its members was excepted", async () => {
+      const { user, ruleSet, action, eps: [e1, e2] } = await failedEpisodeDelete();
+      await getTestPrisma().lifecycleAction.update({ where: { id: action.id }, data: { actionType: "DELETE_SONARR" } });
+      await createTestRuleMatch(ruleSet.id, e1.id, { id: e1.id, title: "The Show", parentTitle: null });
+      await getTestPrisma().lifecycleException.create({ data: { userId: user.id, mediaItemId: e2.id } });
+
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      await expectJson(
+        await callRouteWithParams(actionRetry, { id: action.id }, { url: `/api/lifecycle/actions/${action.id}`, method: "POST" }),
+        400,
+      );
+      const { executeAction } = await import("@/lib/lifecycle/actions");
+      expect(executeAction).not.toHaveBeenCalled();
+    });
+
     it("retries a FAILED action when no exception exists", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id);

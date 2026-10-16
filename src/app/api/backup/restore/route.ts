@@ -51,7 +51,8 @@ export async function POST(request: NextRequest) {
           // stats) no longer correspond to the restored dataset.
           await clearImageCache().catch(() => {});
 
-          // Destroy current session since user data may have changed
+          // The restore revoked every session (`revokeRestoredSessions`), this
+          // one included; clear its cookie so the browser goes to sign-in.
           session.isLoggedIn = false;
           session.userId = undefined;
           await session.save();

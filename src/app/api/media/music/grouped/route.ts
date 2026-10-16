@@ -6,6 +6,8 @@ import { prisma } from "@/lib/db";
 import { escapeLike } from "@/lib/filters/escape-like";
 import type { Prisma } from "@/generated/prisma/client";
 import { applyCommonFilters, applyStartsWithFilter } from "@/lib/filters/build-where";
+import { loadGenreSpellings } from "@/lib/filters/genre-spellings";
+import { loadResolutionSpellings } from "@/lib/filters/resolution-spellings";
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
 import { getServerPresenceByGroup } from "@/lib/dedup/server-presence";
 import { firstNonNullSql } from "@/lib/media/series-sql";
@@ -82,7 +84,11 @@ export async function GET(request: NextRequest) {
   }
 
   if (startsWith) applyStartsWithFilter(whereClause, "parentTitle", startsWith);
-  applyCommonFilters(whereClause, searchParams);
+  const [genreSpellings, resolutionSpellings] = await Promise.all([
+    loadGenreSpellings(searchParams),
+    loadResolutionSpellings(searchParams),
+  ]);
+  applyCommonFilters(whereClause, searchParams, genreSpellings, resolutionSpellings);
 
   // For multi-server, only fetch canonical items (pre-deduped)
   if (!sf.isSingleServer) {
@@ -99,7 +105,7 @@ export async function GET(request: NextRequest) {
   // runs over those. Without a filter the base predicate below is the whole
   // where, and the id round trip is skipped.
   const narrowing: Prisma.MediaItemWhereInput = {};
-  applyCommonFilters(narrowing, searchParams);
+  applyCommonFilters(narrowing, searchParams, genreSpellings, resolutionSpellings);
   const filtered = !!search || !!startsWith || Object.keys(narrowing).length > 0;
   const matchingIds = filtered
     ? (await prisma.mediaItem.findMany({ where: whereClause, select: { id: true } })).map((r) => r.id)

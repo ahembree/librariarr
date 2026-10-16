@@ -652,7 +652,6 @@ model LifecycleAction {
   matchedMediaItemIds    String[]              @default([])
   addArrTags             String[]              @default([])
   removeArrTags          String[]              @default([])
-  externalMediaId        Int?
   deletedBytes           BigInt?
   createdAt              DateTime              @default(now())
   updatedAt              DateTime              @updatedAt

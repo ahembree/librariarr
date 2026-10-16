@@ -123,18 +123,18 @@ describe("GET /api/media/[id]/image", () => {
     }
 
     it("serves the default width when no w is given", async () => {
-      expect(await etagFor()).toBe(`"${computeCacheKey(THUMB, CACHE_WIDTH_DEFAULT)}"`);
+      expect(await etagFor()).toBe(`"${computeCacheKey(libraryId, THUMB, CACHE_WIDTH_DEFAULT)}"`);
     });
 
     it("serves the grid width for w=400", async () => {
       expect(await etagFor({ w: String(CACHE_WIDTH_GRID) })).toBe(
-        `"${computeCacheKey(THUMB, CACHE_WIDTH_GRID)}"`,
+        `"${computeCacheKey(libraryId, THUMB, CACHE_WIDTH_GRID)}"`,
       );
     });
 
     it("serves the wide grid width for w=640", async () => {
       expect(await etagFor({ w: String(CACHE_WIDTH_GRID_WIDE) })).toBe(
-        `"${computeCacheKey(THUMB, CACHE_WIDTH_GRID_WIDE)}"`,
+        `"${computeCacheKey(libraryId, THUMB, CACHE_WIDTH_GRID_WIDE)}"`,
       );
     });
 
@@ -147,13 +147,13 @@ describe("GET /api/media/[id]/image", () => {
 
     it("falls back to the default width for a w outside the allow-list", async () => {
       // Otherwise any caller could mint arbitrary cache entries.
-      expect(await etagFor({ w: "401" })).toBe(`"${computeCacheKey(THUMB, CACHE_WIDTH_DEFAULT)}"`);
-      expect(await etagFor({ w: "abc" })).toBe(`"${computeCacheKey(THUMB, CACHE_WIDTH_DEFAULT)}"`);
+      expect(await etagFor({ w: "401" })).toBe(`"${computeCacheKey(libraryId, THUMB, CACHE_WIDTH_DEFAULT)}"`);
+      expect(await etagFor({ w: "abc" })).toBe(`"${computeCacheKey(libraryId, THUMB, CACHE_WIDTH_DEFAULT)}"`);
     });
 
     it("ignores w for type=art — the hero picks its own width", async () => {
       expect(await etagFor({ type: "art", w: String(CACHE_WIDTH_GRID) })).toBe(
-        `"${computeCacheKey(ART, CACHE_WIDTH_ART)}"`,
+        `"${computeCacheKey(libraryId, ART, CACHE_WIDTH_ART)}"`,
       );
     });
 
@@ -207,5 +207,38 @@ describe("GET /api/media/[id]/image", () => {
       await etagFor({ type: "art" });
       expect(mockFetchImage).toHaveBeenCalledWith(ART, { width: CACHE_WIDTH_ART });
     });
+  });
+
+  it("does not serve one server's cached poster for another server's item at the same path", async () => {
+    // Plex rating keys are per-server row ids, so two Plex servers both hold a
+    // `/library/metadata/1234/thumb/...` for UNRELATED items. Keyed by the path
+    // alone, whichever was fetched first was served for the other for the TTL.
+    const solid = (background: string) =>
+      sharp({ create: { width: 32, height: 48, channels: 3, background } }).jpeg().toBuffer();
+    mockFetchImage.mockReset();
+    mockFetchImage
+      .mockResolvedValueOnce({ data: await solid("#ff0000"), contentType: "image/jpeg" })
+      .mockResolvedValueOnce({ data: await solid("#0000ff"), contentType: "image/jpeg" });
+
+    const otherServer = await createTestServer(userId, { name: "Plex B", url: "http://plex-b.test:32400" });
+    const otherLibrary = await createTestLibrary(otherServer.id, { type: "SERIES" });
+    const movieOnA = await createTestMediaItem(libraryId, {
+      ratingKey: "1234", thumbUrl: "/library/metadata/1234/thumb/1700000000",
+    });
+    const episodeOnB = await createTestMediaItem(otherLibrary.id, {
+      type: "SERIES", parentTitle: "Some Show", ratingKey: "1234",
+      thumbUrl: "/library/metadata/1234/thumb/1711111111",
+    });
+
+    const resA = await callRouteWithParams(GET, { id: movieOnA.id });
+    expect(resA.status).toBe(200);
+    const resB = await callRouteWithParams(GET, { id: episodeOnB.id });
+    expect(resB.status).toBe(200);
+
+    // Server B was asked for its own artwork, and its item shows it (blue).
+    expect(mockFetchImage).toHaveBeenCalledTimes(2);
+    const [r, , b] = (await sharp(Buffer.from(await resB.arrayBuffer())).stats()).channels.map((c) => c.mean);
+    expect(b).toBeGreaterThan(r);
+    expect(resB.headers.get("etag")).not.toBe(resA.headers.get("etag"));
   });
 });

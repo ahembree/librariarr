@@ -25,7 +25,11 @@ import {
   ruleToWhere,
   STREAM_COUNT_FIELDS,
 } from "@/lib/conditions/where-builder";
-import { fetchCrossSystemData } from "@/lib/conditions/cross-system-data";
+import {
+  fetchCrossSystemData,
+  foldCrossSystemData,
+  type CrossSystemDataOptions,
+} from "@/lib/conditions/cross-system-data";
 import type { Condition } from "@/lib/conditions/types";
 import { streamQueryNeedsInMemory } from "@/lib/conditions/stream-query-where";
 import { buildGroupConditions, buildGroupConditionsPreFilter } from "@/lib/conditions/group-composition";
@@ -310,7 +314,7 @@ function hasStreamCountRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boo
 }
 
 /** Check if any rule uses cross-system fields (always require in-memory evaluation) */
-function hasCrossSystemFieldRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
+export function hasCrossSystemFieldRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
   if (rules.length === 0) return false;
   if (isRuleGroups(rules)) {
     for (const group of rules) {
@@ -928,7 +932,7 @@ export function evaluateSeerrRule(rule: Condition, meta: SeerrMetadata | undefin
   return negate ? !result : result;
 }
 
-export interface MatchedCriterion {
+interface MatchedCriterion {
   ruleId: string;
   field: string;
   operator: string;
@@ -2048,7 +2052,7 @@ export function evaluateAllRulesInMemory(
   return evaluateAllRulesInMemory(converted, item, arrMeta, seerrMeta);
 }
 
-export { hasArrRules, hasSeerrRules, hasStreamRules, hasExternalIdFieldRules, hasStreamQueryInMemoryRules, hasSeriesAggregateRules };
+export { hasArrRules, hasSeerrRules, hasStreamRules, hasExternalIdFieldRules, hasSeriesAggregateRules };
 
 /**
  * Evaluate rules at the series scope: aggregate ALL episodes into series
@@ -2073,6 +2077,8 @@ export async function evaluateSeriesScope(
    * only narrow a deletion (never wrong-target or over-delete).
    */
   restrictMembersToEpisodeMatches: boolean = false,
+  /** Passed to `fetchCrossSystemData`: the rule set being evaluated. */
+  crossSystemOptions: CrossSystemDataOptions = {},
 ) {
   // Defense-in-depth: refuse to evaluate if no active rules exist
   if (rules.length === 0 || !hasAnyActiveRules(rules)) return [];
@@ -2229,14 +2235,25 @@ export async function evaluateSeriesScope(
     });
   }
 
+  // Cross-system fields, read across each show's episodes (foldCrossSystemData).
+  const crossSystem = hasCrossSystemFieldRules(rules)
+    ? await fetchCrossSystemData(allEpisodes.map((ep) => ep.id), crossSystemOptions)
+    : undefined;
+
   // Evaluate rules in-memory against aggregated series records
   const externalIdSource = "TVDB";
   const matching = [];
 
   for (const series of aggregated) {
+    // Folded over every episode, before a forced per-episode run narrows the
+    // members; also carried on the returned record, so the criteria and actual
+    // values reported for a match (getMatchedCriteriaForItems) see what the
+    // match was selected on — as the flat path's records do.
+    const cross = foldCrossSystemData(series.memberIds, crossSystem);
     // Serialize for in-memory evaluation (mirrors evaluateLifecycleRules output format)
     const item: Record<string, unknown> = {
       ...series,
+      ...cross,
       fileSize: series.fileSize,
       lastPlayedAt: series.lastPlayedAt
         ? series.lastPlayedAt instanceof Date
@@ -2315,13 +2332,14 @@ export async function evaluateSeriesScope(
               streams: "streams" in ep ? ep.streams : [],
               watchHistory: "watchHistory" in ep ? ep.watchHistory : [],
               externalIds: epExternalIds,
+              ...crossSystem?.get(ep.id),
               ...aggInjection,
             };
             return evaluateAllRulesInMemory(rules, epItem, arrMeta, seerrMeta);
           })
           .map((ep) => ep.id);
       }
-      matching.push(series);
+      matching.push({ ...series, ...cross });
     }
   }
 
@@ -2352,7 +2370,9 @@ export async function evaluateSeriesScope(
 export async function evaluateMusicScope(
   rules: LifecycleRule[] | LifecycleRuleGroup[],
   serverIds: string[],
-  arrData?: ArrDataMap
+  arrData?: ArrDataMap,
+  /** Passed to `fetchCrossSystemData`: the rule set being evaluated. */
+  crossSystemOptions: CrossSystemDataOptions = {},
 ) {
   // Defense-in-depth: refuse to evaluate if no active rules exist
   if (rules.length === 0 || !hasAnyActiveRules(rules)) return [];
@@ -2466,9 +2486,17 @@ export async function evaluateMusicScope(
   const externalIdSource = "MUSICBRAINZ";
   const matching = [];
 
+  // Cross-system fields, read across each artist's tracks (foldCrossSystemData).
+  const crossSystem = hasCrossSystemFieldRules(rules)
+    ? await fetchCrossSystemData(allTracks.map((t) => t.id), crossSystemOptions)
+    : undefined;
+
   for (const artist of aggregated) {
+    // Also carried on the returned record (see evaluateSeriesScope).
+    const cross = foldCrossSystemData(artist.memberIds, crossSystem);
     const item: Record<string, unknown> = {
       ...artist,
+      ...cross,
       fileSize: artist.fileSize,
       lastPlayedAt: artist.lastPlayedAt
         ? artist.lastPlayedAt instanceof Date
@@ -2490,7 +2518,7 @@ export async function evaluateMusicScope(
     const arrMeta = arrData && extId ? arrData[extId.externalId] : undefined;
 
     if (evaluateAllRulesInMemory(rules, item, arrMeta)) {
-      matching.push(artist);
+      matching.push({ ...artist, ...cross });
     }
   }
 
@@ -2510,7 +2538,9 @@ export async function evaluateLifecycleRules(
   type: "MOVIE" | "SERIES" | "MUSIC",
   serverIds: string[],
   arrData?: ArrDataMap,
-  seerrData?: SeerrDataMap
+  seerrData?: SeerrDataMap,
+  /** Passed to `fetchCrossSystemData`: the rule set being evaluated. */
+  crossSystemOptions: CrossSystemDataOptions = {},
 ) {
   // Defense-in-depth: refuse to evaluate if no active rules exist
   if (!hasAnyActiveRules(rules)) return [];
@@ -2596,13 +2626,13 @@ export async function evaluateLifecycleRules(
   // Unified in-memory post-filter: applies when ANY rules can't be fully expressed in Prisma
   // (wildcard operators, stream counts, Arr/Seerr fields). Evaluates ALL rules together so that
   // AND/OR logic between groups with mixed field types is correctly enforced.
+  let crossSystemData: Map<string, { serverCount: number; matchedRuleSets: string[]; hasPendingAction: boolean }> | undefined;
   if (needsFullReeval) {
     const arrIdSource = type === "MOVIE" ? "TMDB" : type === "MUSIC" ? "MUSICBRAINZ" : "TVDB";
 
     // Batch-fetch cross-system data if needed
-    let crossSystemData: Map<string, { serverCount: number; matchedRuleSets: string[]; hasPendingAction: boolean }> | undefined;
     if (hasCrossSystem) {
-      crossSystemData = await fetchCrossSystemData(filteredItems.map((i) => i.id));
+      crossSystemData = await fetchCrossSystemData(filteredItems.map((i) => i.id), crossSystemOptions);
     }
 
     filteredItems = filteredItems.filter((item) => {
@@ -2629,8 +2659,14 @@ export async function evaluateLifecycleRules(
     });
   }
 
+  // The cross-system values ride on the returned rows, as the series- and
+  // artist-scope engines carry theirs: detection, the preview and the diff
+  // explain a match from these records, and without them a match made on
+  // "Matched By Rule Set" or "Has Pending Action" recorded neither among the
+  // criteria it matched on.
   return filteredItems.map((item) => ({
     ...item,
+    ...(crossSystemData?.get(item.id) ?? {}),
     fileSize: item.fileSize?.toString() ?? null,
   }));
 }

@@ -2172,28 +2172,27 @@ describe("syncTracearrHistory", () => {
       expect(mockPrisma.mediaServer.updateMany).not.toHaveBeenCalled();
     });
 
-    it("still catches up on new plays when the account map cannot be loaded", async () => {
-      // The opposite trade-off, deliberately. The forward pass covers an hour of
-      // overlap, not an archive, so it writes a handful of rows — and the next
-      // successful run re-delivers exactly those rows inside the same overlap
-      // window, where a bridged name overwrites the fallback. Degraded
-      // attribution here is self-healing; refusing to run would instead leave
-      // the History page showing nothing new for as long as `/users` is unhappy.
+    it("does not catch up on new plays either when the account map cannot be loaded", async () => {
+      // The forward pass used to run anyway, on the argument that the next
+      // healthy run re-delivers its rows and re-labels them. That holds only
+      // inside the next run's window — `MAX(watchedAt) - 1h` — while the forward
+      // window has no upper bound: after downtime it walked days of plays, and
+      // everything older than an hour before the newest stayed filed under
+      // Tracearr's identity labels for good, under an evidence marker the next
+      // healthy run re-established. Not writing costs only freshness: the
+      // watermark stays put, so the next run with the map imports these plays.
       storedRows({
         min: new Date("2025-07-10T11:00:00.000Z"),
         max: new Date("2025-07-10T12:00:00.000Z"),
         backfillComplete: true,
       });
       mockGetServerAccountNames.mockRejectedValue(new Error("boom"));
-      mockGetHistoryPage.mockResolvedValueOnce({
-        records: [withUser("chain-new", "srv-user-1", "Nick W")],
-        nextCursor: null,
-      });
 
       await expect(
         syncTracearrHistory("server-1", { passes: "forward" }),
-      ).resolves.toMatchObject({ count: 1 });
-      expect(insertCalls()[0].slice(1)).toContain("Nick W");
+      ).resolves.toMatchObject({ count: 0 });
+      expect(mockGetHistoryPage).not.toHaveBeenCalled();
+      expect(insertCalls()).toHaveLength(0);
     });
 
     it("never lets a fallback name overwrite an account name already stored", async () => {
@@ -2222,8 +2221,8 @@ describe("syncTracearrHistory", () => {
     });
 
     it("lets a bridged name correct a fallback stored by an earlier run", async () => {
-      // The other half of the rule, and what makes a degraded forward run
-      // self-healing: the best name there is may overwrite anything.
+      // The other half of the rule: the best name there is may overwrite
+      // anything — an account the map did not cover then and does now.
       mockGetServerAccountNames.mockResolvedValue(
         new Map([["srv-user-1", "weingart"]]),
       );
@@ -2583,7 +2582,7 @@ describe("syncTracearrHistory", () => {
   });
 
 
-  describe("degraded attribution withdraws the evidence marker", () => {
+  describe("a run without a usable account map writes nothing", () => {
     /** `withUser` lives in another describe; this block needs its own. */
     function play(id: string, serverUserId: string, username: string) {
       return historyRecord({
@@ -2598,33 +2597,49 @@ describe("syncTracearrHistory", () => {
       });
     }
 
-    // The forward pass runs without the account-name map on purpose, so its
-    // rows land under Tracearr's identity label ("Nick W") instead of the
-    // media server's account name ("weingart"). `watchedByUser` matches on that
-    // exact string, and a MISSING name arms a negative rule rather than
-    // disarming it: "delete unless watched by weingart" matches an item
-    // weingart did watch, because the play is filed under a name the rule does
-    // not recognise. Monotonic play state cannot save that one.
-    it("pauses play-activity rules after storing rows without the account map", async () => {
+    // Without the map a row would carry Tracearr's identity label ("Nick W")
+    // instead of the media server's account name ("weingart"). `watchedByUser`
+    // matches on that exact string, and a MISSING name arms a negative rule
+    // rather than disarming it: "delete unless watched by weingart" matches an
+    // item weingart did watch. Writing nothing is what keeps the stored history
+    // in one vocabulary — so there is also nothing to withdraw the evidence
+    // marker over: the history is merely not advancing, as between any syncs.
+    it("fetches no page, stores nothing and leaves the evidence marker alone", async () => {
       storedRows({
         min: new Date("2025-07-10T11:00:00.000Z"),
         max: new Date("2025-07-10T12:00:00.000Z"),
         backfillComplete: true,
       });
       mockGetServerAccountNames.mockRejectedValue(new Error("users endpoint down"));
-      mockGetHistoryPage.mockResolvedValueOnce({
-        records: [play("chain-new", "srv-user-1", "Nick W")],
-        nextCursor: null,
-      });
 
       await syncTracearrHistory("server-1", { passes: "forward" });
 
-      expect(mockInvalidateWatchHistoryEvidence).toHaveBeenCalledWith(["server-1"]);
+      expect(mockGetHistoryPage).not.toHaveBeenCalled();
+      expect(insertCalls()).toHaveLength(0);
+      expect(mockInvalidateWatchHistoryEvidence).not.toHaveBeenCalled();
     });
 
-    it("does not pause when the map loaded and merely lacks a removed user", async () => {
+    it("treats an EMPTY map like a failed one", async () => {
+      // `getServerAccountNames` returns `new Map()` rather than throwing on an
+      // unexpected `/users` shape, and an empty Map is truthy.
+      storedRows({
+        min: new Date("2025-07-10T11:00:00.000Z"),
+        max: new Date("2025-07-10T12:00:00.000Z"),
+        backfillComplete: true,
+      });
+      mockGetServerAccountNames.mockResolvedValue(new Map());
+
+      await expect(
+        syncTracearrHistory("server-1", { passes: "both" }),
+      ).resolves.toMatchObject({ count: 0 });
+
+      expect(mockGetHistoryPage).not.toHaveBeenCalled();
+      expect(insertCalls()).toHaveLength(0);
+    });
+
+    it("still imports when the map loaded and merely lacks a removed user", async () => {
       // A user Tracearr has since removed is legitimately absent from a healthy
-      // map. That fallback is permanent and correct, so pausing for it would
+      // map. That fallback is permanent and correct, so refusing for it would
       // never lift — the condition is an UNUSABLE map, not any fallback name.
       storedRows({
         min: new Date("2025-07-10T11:00:00.000Z"),
@@ -2637,35 +2652,11 @@ describe("syncTracearrHistory", () => {
         nextCursor: null,
       });
 
-      await syncTracearrHistory("server-1", { passes: "forward" });
+      await expect(
+        syncTracearrHistory("server-1", { passes: "forward" }),
+      ).resolves.toMatchObject({ count: 1 });
 
       expect(mockInvalidateWatchHistoryEvidence).not.toHaveBeenCalled();
-    });
-
-    it("pauses before the first page, not after the run", async () => {
-      // Rows commit per page and the forward window has no upper bound, so an
-      // end-of-run withdrawal leaves the guard vouching for the server for the
-      // whole walk — and a match formed in that window survives the later pause,
-      // because a transient refusal preserves existing matches and the executor
-      // never re-checks. Asserted by the ORDER of the two calls.
-      storedRows({
-        min: new Date("2025-07-10T11:00:00.000Z"),
-        max: new Date("2025-07-10T12:00:00.000Z"),
-        backfillComplete: true,
-      });
-      mockGetServerAccountNames.mockResolvedValue(new Map());
-      const order: string[] = [];
-      mockInvalidateWatchHistoryEvidence.mockImplementation(async () => {
-        order.push("paused");
-      });
-      mockGetHistoryPage.mockImplementation(async () => {
-        order.push("fetched");
-        return { records: [], nextCursor: null };
-      });
-
-      await syncTracearrHistory("server-1", { passes: "forward" });
-
-      expect(order[0]).toBe("paused");
     });
   });
 
@@ -2678,8 +2669,8 @@ describe("syncTracearrHistory", () => {
     }
 
     it("re-establishes play history on a forward run once the account map is back", async () => {
-      // The withdrawal above has no counterpart on the Tracearr path unless
-      // this one exists. `watchHistorySyncedAt` was written in exactly one
+      // A withdrawn marker has no way back on the Tracearr path unless this
+      // one exists. `watchHistorySyncedAt` was written in exactly one
       // place — the run that walks the archive to its far end — and that run
       // happens once in a server's life. Afterwards every run is forward-only,
       // so a single sync that could not load the account map paused every
@@ -2713,9 +2704,9 @@ describe("syncTracearrHistory", () => {
     });
 
     it("does not release it while the account map is still unusable", async () => {
-      // Releasing on the same run that withdrew would make the withdrawal
-      // decorative: the rows just written still carry Tracearr's identity
-      // labels, and `watchedByUser` matches on that exact string.
+      // A run that could not load the map imported nothing and verified
+      // nothing about the vocabulary the stored rows carry, so it must not
+      // vouch for the server either.
       storedRows({
         min: new Date("2021-03-04T08:00:00.000Z"),
         max: new Date("2025-07-10T12:00:00.000Z"),
@@ -2726,7 +2717,6 @@ describe("syncTracearrHistory", () => {
 
       await syncTracearrHistory("server-1", { passes: "forward" });
 
-      expect(mockInvalidateWatchHistoryEvidence).toHaveBeenCalledWith(["server-1"]);
       expect(markerWrites()).toHaveLength(0);
     });
 

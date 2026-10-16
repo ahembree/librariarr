@@ -11,7 +11,7 @@ import { syncCollectionById, syncAllCollections } from "@/lib/lifecycle/collecti
 import { describePlexError } from "@/lib/plex/errors";
 import { findExceptedItemIds, findExceptionProtectedGroups, protectionKey } from "@/lib/lifecycle/exception-guard";
 import type { Prisma } from "@/generated/prisma/client";
-import { arrExternalIdsOf, arrIdSourceFor, copyIdsOf, copyRank, crossServerCopyKeys } from "@/lib/lifecycle/cross-server-copies";
+import { arrExternalIdsOf, arrIdSourceFor, copyIdsOf, copyRank, crossServerCopyKeys, groupsTracksByArtist } from "@/lib/lifecycle/cross-server-copies";
 import { identityFingerprint } from "@/lib/lifecycle/match-identity";
 
 interface RuleSetConfig {
@@ -134,17 +134,21 @@ async function planActionCarryOver(
  * ids doubled the size the Pending page and the deletion stats report. Only a
  * later copy's member is dropped for a key an earlier copy already has — two
  * members of one copy are never merged, even if their keys collide.
+ *
+ * `tracksAsMembers`: the group is an artist's matched tracks folded into one
+ * match (`groupsTracksByArtist`), each track standing for itself as a member.
  */
 async function collapseCopies(
   alreadyMatched: Set<string>,
   heldCopies: Set<string>,
   groups: Record<string, unknown>[][],
   episodeIdMap: Map<string, string[]>,
+  tracksAsMembers = false,
 ): Promise<void> {
+  const membersOf = (i: Record<string, unknown>): string[] =>
+    (i.memberIds as string[] | undefined) ?? (tracksAsMembers ? [i.id as string] : []);
 
-  const allMemberIds = [
-    ...new Set(groups.flat().flatMap((i) => (i.memberIds as string[] | undefined) ?? [])),
-  ];
+  const allMemberIds = [...new Set(groups.flat().flatMap(membersOf))];
   const memberKeys = new Map<string, string | null>();
   if (allMemberIds.length > 0) {
     const rows = await prisma.mediaItem.findMany({
@@ -183,13 +187,13 @@ async function collapseCopies(
       parentTitle: o.parentTitle ?? null,
     }));
 
-    if (group.some((i) => ((i.memberIds as string[] | undefined) ?? []).length > 0)) {
+    if (group.some((i) => membersOf(i).length > 0)) {
       const merged: string[] = [];
       const seenIds = new Set<string>();
       const earlierKeys = new Set<string>();
       for (const copy of group) {
         const keys: string[] = [];
-        for (const id of (copy.memberIds as string[] | undefined) ?? []) {
+        for (const id of membersOf(copy)) {
           if (seenIds.has(id)) continue;
           const key = memberKeys.get(id);
           if (key && earlierKeys.has(key)) continue;
@@ -288,13 +292,15 @@ export async function detectAndSaveMatches(
   // and the episode path silently drops it (see hasSeriesAggregateRules). This
   // mirrors the query engine's aggregateSeriesAndFilter routing.
   const seriesUsesAggregate = ruleSet.type === "SERIES" && hasSeriesAggregateRules(rules);
+  // "Has Pending Action" reads other rule sets' actions, never this one's own.
+  const crossSystemOptions = { excludeRuleSetId: ruleSet.id };
   if (ruleSet.type === "SERIES" && (ruleSet.seriesScope || seriesUsesAggregate)) {
     // When seriesScope is false the series path is FORCED by an aggregate field;
     // the user still asked for per-episode scope, so restrict each matched
     // series' member episodes to those that individually satisfy the rule (a
     // member-scoped file delete then acts only on matching episodes, not the
     // whole series). With seriesScope true, every episode stays a member.
-    matched = await evaluateSeriesScope(rules, serverIds, arrData, seerrData, !ruleSet.seriesScope);
+    matched = await evaluateSeriesScope(rules, serverIds, arrData, seerrData, !ruleSet.seriesScope, crossSystemOptions);
     // Build episode ID map so actions track individual episodes for file size calculation
     for (const m of matched) {
       const ids = (m as unknown as { memberIds?: string[] }).memberIds;
@@ -303,7 +309,7 @@ export async function detectAndSaveMatches(
       }
     }
   } else if (ruleSet.type === "MUSIC" && ruleSet.seriesScope) {
-    matched = await evaluateMusicScope(rules, serverIds, arrData);
+    matched = await evaluateMusicScope(rules, serverIds, arrData, crossSystemOptions);
     // Build track ID map so actions track individual tracks for file size calculation
     for (const m of matched) {
       const ids = (m as unknown as { memberIds?: string[] }).memberIds;
@@ -312,7 +318,7 @@ export async function detectAndSaveMatches(
       }
     }
   } else {
-    const rawItems = await evaluateLifecycleRules(rules, ruleSet.type, serverIds, arrData, seerrData);
+    const rawItems = await evaluateLifecycleRules(rules, ruleSet.type, serverIds, arrData, seerrData, crossSystemOptions);
     if (ruleSet.type === "SERIES") {
       const grouped = groupSeriesResults(rawItems);
       // Build episode ID map: grouped item id → individual episode ids
@@ -448,11 +454,16 @@ export async function detectAndSaveMatches(
           const remainingMembers = members.filter((mid) => !excludedIds.has(mid));
           if (remainingMembers.length > 0) {
             const updated: Record<string, unknown> = { ...item, memberIds: remainingMembers };
-            // If the representative ID itself was excepted, promote the first
-            // remaining member so execution-time exception checks don't cancel
-            // the action for the non-excepted episodes.
+            // If the representative ID itself was excepted, promote a remaining
+            // member so execution-time exception checks don't cancel the action
+            // for the non-excepted episodes — the LOWEST id, the same stable
+            // choice `groupSeriesResults` makes. `remainingMembers[0]` followed
+            // the engine's unordered row order, which a sync rewriting any
+            // member changes: the match was re-keyed, its action cancelled and
+            // rescheduled `actionDelayDays` out, and a sticky rule set kept
+            // both and armed two actions against one series.
             if (excludedIds.has(item.id as string)) {
-              updated.id = remainingMembers[0];
+              updated.id = remainingMembers.reduce((min, id) => (id.localeCompare(min) < 0 ? id : min));
             }
             filtered.push(updated);
           }
@@ -512,13 +523,19 @@ export async function detectAndSaveMatches(
     heldMatches.flatMap((m) => copyIdsOf(m.itemData as Record<string, unknown>)),
   );
 
-  if (ruleSet.serverIds.length > 1) {
-    const copyKeys = await crossServerCopyKeys(enrichedItems, {
-      type: ruleSet.type,
-      serverCount: ruleSet.serverIds.length,
-      arrData,
-      actionArmed: ruleSet.actionEnabled && !!ruleSet.actionType,
-    });
+  // Track-scope music folds an artist's matched tracks into one match for an
+  // artist-level action, on a single server too (`groupsTracksByArtist`).
+  const copyOpts = {
+    type: ruleSet.type,
+    serverCount: ruleSet.serverIds.length,
+    arrData,
+    actionArmed: ruleSet.actionEnabled && !!ruleSet.actionType,
+    trackScope: !ruleSet.seriesScope,
+    actionType: ruleSet.actionType,
+  };
+  const tracksByArtist = groupsTracksByArtist(copyOpts);
+  if (ruleSet.serverIds.length > 1 || tracksByArtist) {
+    const copyKeys = await crossServerCopyKeys(enrichedItems, copyOpts);
     const groups = new Map<string, Record<string, unknown>[]>();
     for (const item of enrichedItems) {
       const key = copyKeys.get(item.id as string);
@@ -529,7 +546,7 @@ export async function detectAndSaveMatches(
     }
     const duplicated = [...groups.values()].filter((g) => g.length > 1);
     if (duplicated.length > 0) {
-      await collapseCopies(heldIds, heldCopyIds, duplicated, episodeIdMap);
+      await collapseCopies(heldIds, heldCopyIds, duplicated, episodeIdMap, tracksByArtist);
       const kept = new Set(duplicated.map((g) => g[0]));
       const dropped = new Set(duplicated.flat().filter((i) => !kept.has(i)));
       logger.info(

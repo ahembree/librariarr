@@ -28,6 +28,9 @@ allowBuilds:
   "@prisma/engines": true
   # swagger-ui-dist's install-time telemetry; never run it.
   "@scarf/scarf": false
+  # tsx (prisma/seed.ts) runs on esbuild, whose install script checks its
+  # platform binary.
+  esbuild: true
   msw: false
   prisma: true
   sharp: true

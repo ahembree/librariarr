@@ -671,6 +671,17 @@ one, so SSO would stop recognising you while the password stays off. Turn
 SSO login off first, save the new settings, link your identity again, then
 turn SSO login back on.
 
+Turning SSO login on, switching between OIDC and forward-auth, changing
+the header forward-auth reads the user from, and — while SSO login is on —
+changing the OIDC issuer each need a sign-in from the last 15 minutes, because
+together they decide which identity Librariarr accepts. A proxy overwrites its
+own identity headers but usually passes other headers through from the client,
+so naming the wrong one would let anyone the proxy lets in claim to be you;
+and the issuer is who vouches for your identity, the one your client secret is
+sent to. If it has been longer, Librariarr asks you to confirm it's you first.
+Editing the issuer while SSO login is off asks nothing: it takes effect only
+when SSO is turned on, which asks for a recent sign-in itself.
+
 To remove the link entirely, click **Unlink SSO**. Unlinking also
 automatically turns off the global SSO toggle — keeping it on after removing
 your identity would silently hide the local form without giving you a way to

@@ -8,6 +8,11 @@ import {
   TERMINATION_SOURCE,
 } from "@/lib/media-server/termination-log";
 import { normalizeResolutionLabel } from "@/lib/resolution";
+import {
+  isBlackoutWindowActive,
+  isPrerollWindowActive,
+  type ScheduleWindow,
+} from "./schedule-activity";
 import { logger } from "@/lib/logger";
 import type { MediaSession } from "@/lib/media-server/types";
 
@@ -102,82 +107,16 @@ export function sessionMatchesCriteria(
   return false;
 }
 
-/** Exported for direct unit testing. */
-export function isBlackoutActive(schedule: {
-  scheduleType: string;
-  startDate: Date | null;
-  endDate: Date | null;
-  daysOfWeek: unknown;
-  startTime: string | null;
-  endTime: string | null;
-}): boolean {
-  const now = new Date();
-
-  if (schedule.scheduleType === "one_time") {
-    if (!schedule.startDate || !schedule.endDate) return false;
-    return now >= schedule.startDate && now <= schedule.endDate;
-  }
-
-  if (schedule.scheduleType === "recurring") {
-    const days = schedule.daysOfWeek as number[] | null;
-    if (!days || !schedule.startTime || !schedule.endTime) return false;
-
-    const [startH, startM] = schedule.startTime.split(":").map(Number);
-    const [endH, endM] = schedule.endTime.split(":").map(Number);
-    const currentMin = now.getHours() * 60 + now.getMinutes();
-    const startMin = startH * 60 + startM;
-    const endMin = endH * 60 + endM;
-
-    const today = now.getDay();
-
-    // Overnight spans (e.g. 22:00 to 06:00) run past midnight into the NEXT
-    // calendar day, so the selected day identifies when the window *starts*.
-    // Testing the day against `now` alone both truncated the window at
-    // midnight and made it spuriously active in the small hours of the
-    // start day itself.
-    if (endMin <= startMin) {
-      const yesterday = (today + 6) % 7;
-      return (
-        (days.includes(today) && currentMin >= startMin) ||
-        (days.includes(yesterday) && currentMin <= endMin)
-      );
-    }
-
-    return days.includes(today) && currentMin >= startMin && currentMin <= endMin;
-  }
-
-  return false;
+/**
+ * Exported for direct unit testing. The rules live in `schedule-activity.ts`,
+ * shared with the Preroll page's "Active" badge so the two cannot drift.
+ */
+export function isBlackoutActive(schedule: ScheduleWindow): boolean {
+  return isBlackoutWindowActive(schedule);
 }
 
 // Cache the last-set preroll path per user to avoid redundant Plex API calls
 const lastPrerollPath = new Map<string, string>();
-
-function isPrerollScheduleActive(schedule: {
-  scheduleType: string;
-  startDate: Date | null;
-  endDate: Date | null;
-  daysOfWeek: unknown;
-  startTime: string | null;
-  endTime: string | null;
-}): boolean {
-  // Seasonal = an annually-recurring date range (compare month/day, ignore
-  // year). Not a blackout schedule type, so handle it here — otherwise
-  // isBlackoutActive falls through to `return false` and seasonal preroll
-  // schedules never activate.
-  if (schedule.scheduleType === "seasonal") {
-    if (!schedule.startDate || !schedule.endDate) return false;
-    const now = new Date();
-    const md = (d: Date) => (d.getMonth() + 1) * 100 + d.getDate();
-    const cur = md(now);
-    const start = md(schedule.startDate);
-    const end = md(schedule.endDate);
-    // Wrap across the year boundary (e.g. Dec 15 → Jan 5).
-    if (end < start) return cur >= start || cur <= end;
-    return cur >= start && cur <= end;
-  }
-  // one_time / recurring share the blackout active check (same structure).
-  return isBlackoutActive(schedule);
-}
 
 /** Exported for direct testing. */
 export async function processPrerollSchedules() {
@@ -201,7 +140,10 @@ export async function processPrerollSchedules() {
       },
     });
 
-    if (schedules.length === 0) return;
+    // No early return when there are no schedules: the cleanup below, which
+    // clears a preroll the enforcer set for a user who has no enabled schedule
+    // left, has to run then too. Returning here skipped it exactly when the last
+    // schedule was deleted or disabled, so its preroll stayed on Plex for good.
 
     // Group by user
     const byUser = new Map<string, { servers: typeof schedules[0]["user"]["mediaServers"]; schedules: typeof schedules }>();
@@ -220,7 +162,7 @@ export async function processPrerollSchedules() {
       processedUserIds.add(userId);
 
       // Find highest-priority active schedule
-      const activeSchedule = userSchedules.find((s) => isPrerollScheduleActive(s));
+      const activeSchedule = userSchedules.find((s) => isPrerollWindowActive(s));
       const desiredPath = activeSchedule?.prerollPath ?? "";
       const cached = lastPrerollPath.get(userId);
 

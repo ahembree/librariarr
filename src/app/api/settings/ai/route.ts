@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { validateRequest, aiSettingsUpdateSchema } from "@/lib/validation";
 import { MASKED_VALUE } from "@/lib/api/sanitize";
 import { asProvider, getStoredAiSettings } from "@/lib/ai/config";
+import { refuseStoredKeyToNewUrl } from "@/lib/integrations/stored-key-guard";
 
 type StoredAi = Awaited<ReturnType<typeof getStoredAiSettings>>;
 
@@ -40,6 +41,13 @@ export async function PUT(request: NextRequest) {
   if (error) return error;
 
   const current = await getStoredAiSettings(session.userId!);
+
+  // A new base URL saved with the stored key kept sends that key there on the
+  // next chat, so it needs a recent sign-in (stored-key-guard.ts).
+  if (current?.aiApiKey && (data.apiKey === undefined || data.apiKey === MASKED_VALUE)) {
+    const refused = await refuseStoredKeyToNewUrl(session, current.aiBaseUrl ?? "", data.baseUrl, undefined, "the AI provider");
+    if (refused) return refused;
+  }
 
   const fields: Record<string, unknown> = {};
   if (data.enabled !== undefined) fields.aiEnabled = data.enabled;

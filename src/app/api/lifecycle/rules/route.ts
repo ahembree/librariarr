@@ -5,6 +5,7 @@ import type { Prisma } from "@/generated/prisma/client";
 import { validateRequest, ruleSetCreateSchema } from "@/lib/validation";
 import { findFieldsInvalidForType } from "@/lib/conditions";
 import { validateActionConfig } from "@/lib/lifecycle/action-config";
+import { invalidateRuleSetNameCaches } from "@/lib/cache/invalidate";
 
 export async function GET() {
   const session = await getSession();
@@ -147,6 +148,8 @@ export async function POST(request: NextRequest) {
       serverIds,
     },
   });
+  // "Matched By Rule Set" lists rule set names from the cached dropdowns.
+  invalidateRuleSetNameCaches();
 
   return NextResponse.json({ ruleSet }, { status: 201 });
 }

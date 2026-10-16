@@ -1,7 +1,8 @@
 import axios, { type AxiosInstance } from "axios";
 import https from "https";
-import { configureRetry } from "@/lib/http-retry";
+import { configureRetry, NO_BREAKER_MARK, NO_RETRY } from "@/lib/http-retry";
 import {
+  BYPASS_BREAKER,
   isUnreachable,
   markUnreachable,
   clearUnreachable,
@@ -21,7 +22,7 @@ import { isMediaItem } from "@/lib/media-server/item-types";
 import { normalizeResolutionFromDimensions } from "@/lib/resolution";
 import { logger } from "@/lib/logger";
 
-export interface PlexClientOptions {
+interface PlexClientOptions {
   skipTlsVerify?: boolean;
 }
 
@@ -68,7 +69,7 @@ export class PlexClient implements MediaServerClient {
 
     const baseURLForHealth = this.baseURL;
     this.client.interceptors.request.use((config) => {
-      if (isUnreachable(baseURLForHealth)) {
+      if (!config.__bypassBreaker && isUnreachable(baseURLForHealth)) {
         return Promise.reject(
           new ServerUnreachableError(baseURLForHealth, getLastFailureMessage(baseURLForHealth)),
         ) as never;
@@ -289,19 +290,33 @@ export class PlexClient implements MediaServerClient {
     return map;
   }
 
+  /**
+   * Account id → name, or an empty map when `/accounts` cannot be read.
+   * Lenient on purpose for the callers that only decorate a view (a per-item
+   * history panel, the excluded-users picker); the watch-history sync uses
+   * {@link fetchAccounts}, which throws instead.
+   */
   async getAccounts(): Promise<Map<number, string>> {
     try {
-      const response = await this.client.get("/accounts");
-      const accounts =
-        response.data.MediaContainer.Account || [];
-      const map = new Map<number, string>();
-      for (const acct of accounts) {
-        map.set(acct.id, acct.name);
-      }
-      return map;
+      return await this.fetchAccounts();
     } catch {
       return new Map();
     }
+  }
+
+  /** `/accounts` as a map, throwing on a failed or unrecognisable response. */
+  private async fetchAccounts(): Promise<Map<number, string>> {
+    const response = await this.client.get("/accounts");
+    const container = response.data?.MediaContainer;
+    if (!container || typeof container !== "object") {
+      throw new Error("Unrecognized Plex /accounts response (no MediaContainer)");
+    }
+    const accounts = container.Account || [];
+    const map = new Map<number, string>();
+    for (const acct of accounts) {
+      map.set(acct.id, acct.name);
+    }
+    return map;
   }
 
   /**
@@ -492,8 +507,21 @@ export class PlexClient implements MediaServerClient {
     }> = [];
 
     try {
+      // The STRICT account lookup. Every play is attributed through this map,
+      // and the lenient one answers a failed `/accounts` (a single 500 — only
+      // 502-504 are retried) with an empty map, which filed every play under
+      // "Unknown": the native full replace then rewrote the server's ENTIRE
+      // history that way and marked it established, so `watchedByUser` rules
+      // saw none of the real users' plays ("delete unless watched by alice"
+      // matched what alice watched). The incremental append was worse — its
+      // dedup key includes the username, so each play in the overlap was stored
+      // again under "Unknown", and again under the real name once `/accounts`
+      // recovered: a permanent `playCount` inflation, since that column is
+      // reconciled monotonically. Throwing makes the sync take its existing
+      // "fetch failed — leave the stored history intact" path. Devices stay
+      // lenient: they only label a row.
       const [accountMap, deviceMap] = await Promise.all([
-        this.getAccounts(),
+        this.fetchAccounts(),
         this.getDevices(),
       ]);
 
@@ -917,6 +945,7 @@ export class PlexClient implements MediaServerClient {
         const response = await this.client.get(`/photo/:/transcode?${params.toString()}`, {
           responseType: "arraybuffer",
           timeout: 15000,
+          ...NO_BREAKER_MARK,
         });
         const contentType = response.headers["content-type"];
         const isImage = typeof contentType !== "string" || contentType.startsWith("image/");
@@ -937,6 +966,7 @@ export class PlexClient implements MediaServerClient {
     const response = await this.client.get(path, {
       responseType: "arraybuffer",
       timeout: 15000,
+      ...NO_BREAKER_MARK,
     });
     const contentType = response.headers["content-type"];
     return {
@@ -968,7 +998,9 @@ export class PlexClient implements MediaServerClient {
 
   async testConnection(): Promise<{ ok: boolean; error?: string; serverName?: string }> {
     try {
-      const response = await this.client.get("/");
+      // Asks the server even while it is marked unreachable (see
+      // BYPASS_BREAKER), and reports the first failure rather than retrying.
+      const response = await this.client.get("/", { ...BYPASS_BREAKER, ...NO_RETRY });
       if (response.data.MediaContainer) {
         return { ok: true, serverName: response.data.MediaContainer.friendlyName };
       }

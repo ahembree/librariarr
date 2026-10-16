@@ -23,11 +23,21 @@ sharp.cache(false);
 // browsing. Inputs are server-resized (see fetchImage), so one thread is plenty.
 sharp.concurrency(1);
 
-// In-flight request deduplication: cacheKey -> Promise<Buffer>
-const inFlight = new Map<string, Promise<Buffer>>();
-
-// Serialize stats file updates to prevent read-modify-write races
-let statsLock: Promise<void> = Promise.resolve();
+// Pinned to globalThis: the sync in the job worker (started from
+// instrumentation) invalidates files and the artwork routes add them, and a
+// production build gives each its own copy of this module. With a lock per
+// copy their read-modify-write updates of _stats.json interleaved and lost
+// counts.
+const globalForImageCache = globalThis as unknown as {
+  imageCacheState: { inFlight: Map<string, Promise<Buffer>>; statsLock: Promise<void> } | undefined;
+};
+const state = (globalForImageCache.imageCacheState ??= {
+  // In-flight request deduplication: cacheKey -> Promise<Buffer>
+  inFlight: new Map<string, Promise<Buffer>>(),
+  // Serializes stats file updates to prevent read-modify-write races
+  statsLock: Promise.resolve(),
+});
+const inFlight = state.inFlight;
 
 class SharpFailedError extends Error {
   constructor(
@@ -93,7 +103,7 @@ async function writeStatsFile(s: { fileCount: number; totalSize: number }): Prom
 
 /** Fire-and-forget stats update, serialized via lock to prevent races. */
 function updateStats(fn: (s: { fileCount: number; totalSize: number }) => void): void {
-  statsLock = statsLock.then(async () => {
+  state.statsLock = state.statsLock.then(async () => {
     const s = await readStatsFile();
     fn(s);
     if (s.fileCount < 0) s.fileCount = 0;
@@ -145,14 +155,26 @@ async function scanCacheStats(): Promise<{ fileCount: number; totalSize: number 
   return { fileCount, totalSize };
 }
 
-/** Compute the cache key for a given thumb URL path and optional max width. */
-export function computeCacheKey(thumbPath: string, maxWidth?: number): string {
+/**
+ * Compute the cache key for a thumb URL path and optional max width, within
+ * `scope` — the id of the library the artwork belongs to.
+ *
+ * The scope is not decoration: an artwork path only means something to the
+ * server that issued it. Plex rating keys (and Emby item ids) are per-server
+ * row ids, so two Plex servers both hold a `/library/metadata/1234/thumb` for
+ * unrelated items, and keyed by the path alone whichever was fetched first was
+ * served for the other for the whole TTL. A library belongs to exactly one
+ * server and an item's artwork (its own, its season's, its show's or artist's)
+ * lives in the item's own library, so the library id separates servers without
+ * splitting artwork the items of one library share.
+ */
+export function computeCacheKey(scope: string, thumbPath: string, maxWidth?: number): string {
   const mw = maxWidth ?? CACHE_WIDTH_DEFAULT;
-  const normalized = normalizeCacheUrl(thumbPath);
-  return getCacheKey(mw === CACHE_WIDTH_DEFAULT ? normalized : `${normalized}@${mw}`);
+  const scoped = `${scope}:${normalizeCacheUrl(thumbPath)}`;
+  return getCacheKey(mw === CACHE_WIDTH_DEFAULT ? scoped : `${scoped}@${mw}`);
 }
 
-export interface CachedImageInfo {
+interface CachedImageInfo {
   /** Cache key usable as an ETag */
   cacheKey: string;
   /** Absolute path to the cached file */
@@ -168,10 +190,11 @@ export interface CachedImageInfo {
  * Returns metadata for ETag/304 checks and streaming without reading the file into memory.
  */
 export async function getCachedImageInfo(
+  scope: string,
   thumbPath: string,
   options?: { maxWidth?: number },
 ): Promise<CachedImageInfo | null> {
-  const cacheKey = computeCacheKey(thumbPath, options?.maxWidth);
+  const cacheKey = computeCacheKey(scope, thumbPath, options?.maxWidth);
   const cachePath = getCachePath(cacheKey);
   try {
     const stat = await fs.stat(cachePath);
@@ -202,16 +225,18 @@ export function streamCachedImage(filePath: string): ReadableStream<Uint8Array> 
 }
 
 /**
- * Cache an image by its thumb URL path. Items sharing the same artwork URL
- * (e.g. all episodes of a series) share a single cached file.
+ * Cache an image by its thumb URL path within `scope` (see `computeCacheKey`).
+ * Items of one library sharing the same artwork URL (e.g. all episodes of a
+ * series) share a single cached file.
  */
 export async function cacheImage(
+  scope: string,
   thumbPath: string,
   fetchFn: () => Promise<{ data: Buffer; contentType: string }>,
   options?: { maxWidth?: number },
 ): Promise<{ data: Buffer; contentType: string; cacheKey: string }> {
   const maxWidth = options?.maxWidth ?? CACHE_WIDTH_DEFAULT;
-  const cacheKey = computeCacheKey(thumbPath, maxWidth);
+  const cacheKey = computeCacheKey(scope, thumbPath, maxWidth);
   const cachePath = getCachePath(cacheKey);
 
   // 1. Try disk cache (with TTL — re-fetch if older than CACHE_MAX_AGE_MS)
@@ -279,10 +304,15 @@ export async function cacheImage(
 }
 
 /**
- * Invalidate cached images for the given thumb URL paths.
+ * Invalidate cached images for the given thumb URL paths of one library
+ * (`scope`, the id `cacheImage` was given — see `computeCacheKey`). Scoped so a
+ * sync of one server cannot purge another server's artwork at the same path.
  * Null/undefined values are silently skipped.
  */
-export async function invalidateCachedUrls(urls: (string | null | undefined)[]): Promise<void> {
+export async function invalidateCachedUrls(
+  scope: string,
+  urls: (string | null | undefined)[],
+): Promise<void> {
   for (const url of urls) {
     if (!url) continue;
     // Every width variant of this artwork has to go, not just the default one.
@@ -292,7 +322,7 @@ export async function invalidateCachedUrls(urls: (string | null | undefined)[]):
     // grid would keep serving the old artwork from its own width until the TTL
     // expired even though the default-width file was purged.
     for (const width of ALL_CACHE_WIDTHS) {
-      const cachePath = getCachePath(computeCacheKey(url, width));
+      const cachePath = getCachePath(computeCacheKey(scope, url, width));
       try {
         const fileStat = await fs.stat(cachePath);
         await fs.unlink(cachePath);

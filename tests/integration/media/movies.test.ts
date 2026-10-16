@@ -24,6 +24,7 @@ vi.mock("@/lib/logger", () => ({
 
 // Import route handler AFTER mocks
 import { GET } from "@/app/api/media/movies/route";
+import { appCache } from "@/lib/cache/memory-cache";
 
 describe("GET /api/media/movies", () => {
   beforeEach(async () => {
@@ -526,6 +527,36 @@ describe("GET /api/media/movies", () => {
       const body = await expectJson<{ items: unknown[]; pagination: { hasMore: boolean } }>(response, 200);
       expect(body.items).toEqual([]);
       expect(body.pagination.hasMore).toBe(false);
+    });
+  });
+
+  describe("resolution filter", () => {
+    // The card's quality chip labels a resolution with normalizeResolutionLabel
+    // ("576" is 480P); the filter used the fixed RESOLUTION_DB_VALUES spellings,
+    // so a PAL film was missing from 480P and listed under Other instead.
+    it("matches a resolution by the label its quality chip shows", async () => {
+      appCache.clear();
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const lib = await createTestLibrary(server.id);
+      await createTestMediaItem(lib.id, { title: "PAL Film", resolution: "576" });
+      await createTestMediaItem(lib.id, { title: "HD Film", resolution: "1080" });
+      await createTestMediaItem(lib.id, { title: "Odd Film", resolution: "weird" });
+      // No chip on its card, so not Other either.
+      const unanalyzed = await createTestMediaItem(lib.id, { title: "Unanalyzed Film" });
+      await getTestPrisma().mediaItem.update({ where: { id: unanalyzed.id }, data: { resolution: null } });
+      setMockSession({ userId: user.id, isLoggedIn: true });
+
+      const titles = async (resolution: string) => {
+        const body = await expectJson<{ items: { title: string }[] }>(
+          await callRoute(GET, { url: "/api/media/movies", searchParams: { resolution, sortBy: "title" } }),
+          200,
+        );
+        return body.items.map((i) => i.title);
+      };
+      expect(await titles("480P")).toEqual(["PAL Film"]);
+      expect(await titles("Other")).toEqual(["Odd Film"]);
+      expect(await titles("480P|1080P")).toEqual(["HD Film", "PAL Film"]);
     });
   });
 

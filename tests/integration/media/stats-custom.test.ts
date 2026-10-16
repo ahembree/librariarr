@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
-import { cleanDatabase, disconnectTestDb } from "../../setup/test-db";
+import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
 import {
   callRoute,
@@ -301,5 +301,40 @@ describe("GET /api/media/stats/custom", () => {
     expect(mkvRows).toHaveLength(2);
     const types = mkvRows.map((r) => r.type).sort();
     expect(types).toEqual(["MOVIE", "SERIES"]);
+  });
+
+  it("leaves out the types a dimension does not apply to (excludeTypes)", async () => {
+    // Video dimensions declare excludeTypes: ["MUSIC"], but nothing read it:
+    // every track (NULL video codec) was counted, and the card's "All" view
+    // showed the library's track count as "Unknown".
+    const user = await createTestUser();
+    setMockSession({ userId: user.id, isLoggedIn: true });
+    const server = await createTestServer(user.id);
+    const movies = await createTestLibrary(server.id, { type: "MOVIE" });
+    const music = await createTestLibrary(server.id, { type: "MUSIC" });
+    await createTestMediaItem(movies.id, { title: "Film", videoCodec: "h264" });
+    for (let i = 0; i < 3; i++) {
+      const track = await createTestMediaItem(music.id, { title: `Track ${i}`, type: "MUSIC" });
+      await getTestPrisma().mediaItem.update({
+        where: { id: track.id },
+        data: { videoCodec: null, resolution: null, videoBitrate: null },
+      });
+    }
+
+    // direct, value_map and numeric_bucket — the categories video dimensions use.
+    for (const dimension of ["videoCodec", "resolution", "videoBitrate"]) {
+      const body = await expectJson<{ breakdown: { type: string }[] }>(
+        await callRoute(GET, { url: "/api/media/stats/custom", searchParams: { dimension } }),
+        200,
+      );
+      expect(body.breakdown.map((r) => r.type), dimension).toEqual(["MOVIE"]);
+    }
+
+    // A dimension that applies to music still counts it.
+    const audio = await expectJson<{ breakdown: { type: string }[] }>(
+      await callRoute(GET, { url: "/api/media/stats/custom", searchParams: { dimension: "audioCodec" } }),
+      200,
+    );
+    expect(audio.breakdown.map((r) => r.type).sort()).toEqual(["MOVIE", "MUSIC"]);
   });
 });

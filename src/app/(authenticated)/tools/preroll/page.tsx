@@ -57,6 +57,7 @@ import {
   Check,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { isPrerollWindowActive } from "@/lib/maintenance/schedule-activity";
 import {
   DndContext,
   closestCenter,
@@ -176,33 +177,10 @@ function formatTimeDisplay(time: string): string {
   return `${displayHour}:${String(m).padStart(2, "0")} ${period}`;
 }
 
+// The enforcer's own rule (seasonal = every year, an overnight window belongs
+// to the day it starts), so the badge says what will actually play.
 function isScheduleCurrentlyActive(schedule: PrerollSchedule): boolean {
-  if (!schedule.enabled) return false;
-  const now = new Date();
-
-  if (schedule.scheduleType === "one_time" || schedule.scheduleType === "seasonal") {
-    if (!schedule.startDate || !schedule.endDate) return false;
-    return now >= new Date(schedule.startDate) && now <= new Date(schedule.endDate);
-  }
-
-  if (schedule.scheduleType === "recurring") {
-    const days = schedule.daysOfWeek;
-    if (!days || !schedule.startTime || !schedule.endTime) return false;
-    if (!days.includes(now.getDay())) return false;
-
-    const [startH, startM] = schedule.startTime.split(":").map(Number);
-    const [endH, endM] = schedule.endTime.split(":").map(Number);
-    const currentMin = now.getHours() * 60 + now.getMinutes();
-    const startMin = startH * 60 + startM;
-    const endMin = endH * 60 + endM;
-
-    if (endMin <= startMin) {
-      return currentMin >= startMin || currentMin <= endMin;
-    }
-    return currentMin >= startMin && currentMin <= endMin;
-  }
-
-  return false;
+  return schedule.enabled && isPrerollWindowActive(schedule);
 }
 
 function formatScheduleTypeLabel(type: string): string {

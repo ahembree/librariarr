@@ -128,11 +128,17 @@ const COLUMN_TO_SORT_FIELD: Record<string, string> = {
   year: "year",
   resolution: "resolution",
   dynamicRange: "dynamicRange",
+  videoCodec: "videoCodec",
+  audioCodec: "audioCodec",
   duration: "duration",
   fileSize: "fileSize",
   deviceName: "deviceName",
   platform: "platform",
-  server: "serverUsername",
+  // Its own key: mapping it to `serverUsername` sorted by the User column and,
+  // through the reverse map below, moved User's sort arrow onto this column
+  // (so User could never be sorted descending). Every value here must be
+  // unique for that reverse map to name the column the user clicked.
+  server: "serverName",
   // Tracearr stream facts. `streamResolution` maps to its own API sort key
   // rather than reusing `resolution`, which sorts the FILE's resolution on the
   // MediaItem — the two disagree on any transcoded play.

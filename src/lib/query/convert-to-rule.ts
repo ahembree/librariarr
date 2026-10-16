@@ -7,9 +7,9 @@ import {
   dropIncompatibleRules,
 } from "@/components/builder/library-type-validity";
 
-export type RuleSetCreateBody = z.infer<typeof ruleSetCreateSchema>;
+type RuleSetCreateBody = z.infer<typeof ruleSetCreateSchema>;
 
-export interface ConvertOptions {
+interface ConvertOptions {
   name: string;
   targetLibraryType: LibraryType;
   serverIds: string[];

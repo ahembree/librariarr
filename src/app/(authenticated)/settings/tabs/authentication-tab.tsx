@@ -41,7 +41,7 @@ export interface PromptForm {
   confirmPassword: string;
 }
 
-export interface AuthenticationTabProps {
+interface AuthenticationTabProps {
   authInfo: AuthInfo | null;
   authLoading: boolean;
   plexLinking: boolean;

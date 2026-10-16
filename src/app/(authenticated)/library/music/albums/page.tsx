@@ -3,7 +3,6 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
 import { MediaCard , CARD_CONTENT_HEIGHT } from "@/components/media-card";
 import { useChipColors } from "@/components/chip-color-provider";
 import { AUDIO_CODEC_ORDER, getChipBadgeStyle } from "@/lib/theme/chip-colors";

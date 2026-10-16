@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
 import type { QueryRule, QueryGroup, QueryDefinition, LifecycleRuleCondition } from "./types";
-import { GENRE_FIELD, LABELS_FIELD, COUNTRY_FIELD, EXTERNAL_ID_FIELD, ARR_QUERY_FIELDS, SEERR_QUERY_FIELDS, isExternalQueryField, isCrossSystemQueryField, isSeriesAggregateField, hasArrRules, hasSeerrRules, hasCrossSystemRules, hasSeriesAggregateRules, hasWatchedByUserRules, hasResolutionRules, hasArrayFieldRules, hasStreamCountRules } from "./types";
+import { GENRE_FIELD, LABELS_FIELD, COUNTRY_FIELD, EXTERNAL_ID_FIELD, ARR_QUERY_FIELDS, SEERR_QUERY_FIELDS, isExternalQueryField, isCrossSystemQueryField, hasArrRules, hasSeerrRules, hasCrossSystemRules, hasSeriesAggregateRules, hasWatchedByUserRules, hasResolutionRules, hasArrayFieldRules, hasStreamCountRules } from "./types";
 import {
   isStreamQueryField, isStreamQueryGroup, isStreamQueryComputedField,
   streamQueryFieldToColumn, STREAM_TYPE_INT_MAP,
@@ -33,7 +33,7 @@ import {
   isUnconfiguredContainsRule,
   ruleToWhere,
 } from "@/lib/conditions/where-builder";
-import { fetchCrossSystemData } from "@/lib/conditions/cross-system-data";
+import { fetchCrossSystemData, foldCrossSystemData } from "@/lib/conditions/cross-system-data";
 import { streamQueryNeedsInMemory } from "@/lib/conditions/stream-query-where";
 import { buildGroupConditions, buildGroupConditionsPreFilter } from "@/lib/conditions/group-composition";
 import { pushDownGroupNegation } from "@/lib/conditions/negation";
@@ -612,10 +612,14 @@ async function computeAggregateSurvivingEpisodeIds(
     episodes as unknown as AggregableEpisode[],
     { includeStreams: true },
   );
+  // Cross-system fields, read across each show's episodes (foldCrossSystemData).
+  const crossSystem = hasCrossSystemRules(groups)
+    ? await fetchCrossSystemData(episodes.map((ep) => ep.id))
+    : undefined;
 
   const survivingIds: string[] = [];
   for (const series of aggregates) {
-    const item = serializeSeriesAggregateForEval(series);
+    const item = { ...serializeSeriesAggregateForEval(series), ...foldCrossSystemData(series.memberIds, crossSystem) };
     const { arrMeta, seerrMeta } = lookupExternalMeta(
       item, arrDataByType, seerrDataByType,
     );
@@ -755,15 +759,18 @@ async function filterAndGroupSeriesEpisodes(
 
   if (episodes.length === 0) return [];
 
+  // Each episode carries its own cross-system values, as on the ungrouped path
+  // — never enriched here, every episode read "matched by no rule set".
+  const crossSystem = hasCrossSystemRules(groups)
+    ? await fetchCrossSystemData(episodes.map((ep) => ep.id))
+    : undefined;
+
   // Unified in-memory evaluation: evaluates ALL rules with correct AND/OR logic
   const survivingIds = episodes
     .filter((ep) => {
-      const { arrMeta, seerrMeta } = lookupExternalMeta(
-        ep as unknown as Record<string, unknown>, arrDataByType, seerrDataByType,
-      );
-      return evaluateAllQueryRulesInMemory(
-        groups, ep as unknown as Record<string, unknown>, arrMeta, seerrMeta,
-      );
+      const item = { ...(ep as unknown as Record<string, unknown>), ...crossSystem?.get(ep.id) };
+      const { arrMeta, seerrMeta } = lookupExternalMeta(item, arrDataByType, seerrDataByType);
+      return evaluateAllQueryRulesInMemory(groups, item, arrMeta, seerrMeta);
     })
     .map((ep) => ep.id);
 

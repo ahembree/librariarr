@@ -280,9 +280,8 @@ describe("watch-reconcile", () => {
       // by rating key and `processBatch` looks up by rating key, so without the
       // library scope both items' plays were summed and the total written to
       // both — inflating `playCount`, which is monotonic and never walked back.
-      const { user, server, library } = await setup();
+      const { server, library } = await setup();
       const secondLibrary = await createTestLibrary(server.id, { type: "MOVIE" });
-      void user;
       const inFirst = await createTestMediaItem(library.id, { ratingKey: "dup-rk" });
       const inSecond = await createTestMediaItem(secondLibrary.id, { ratingKey: "dup-rk" });
 

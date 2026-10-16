@@ -378,7 +378,7 @@ const VALID_STREAM_QUERY_TYPES = new Set(["audio", "video", "subtitle"]);
 function validateRuleStructure(rules: Record<string, unknown>[]): boolean {
   for (const item of rules) {
     if ("rules" in item) {
-      // RuleGroup format: must have condition and rules array
+      // ConditionGroup format: must have condition and rules array
       if (!Array.isArray(item.rules)) return false;
       if (item.condition !== "AND" && item.condition !== "OR") return false;
       // Validate streamQuery property if present
@@ -497,6 +497,8 @@ export const rulePreviewSchema = z.object({
    * instance alone, as detection reads them from the rule set's.
    */
   arrInstanceId: z.string().max(200).nullable().optional(),
+  /** The rule set being edited, whose own pending actions "Has Pending Action" leaves out. */
+  ruleSetId: z.string().max(200).optional(),
 });
 
 export const ruleTestItemSchema = z.object({
@@ -510,6 +512,8 @@ export const ruleTestItemSchema = z.object({
    * instance alone, as detection reads them from the rule set's.
    */
   arrInstanceId: z.string().max(200).nullable().optional(),
+  /** The rule set being edited, whose own pending actions "Has Pending Action" leaves out. */
+  ruleSetId: z.string().max(200).optional(),
 });
 
 export const actionExecuteSchema = z.object({
@@ -568,10 +572,6 @@ export const exceptionCreateSchema = z.object({
   scope: z
     .enum(["individual", "series", "artist", "album"])
     .default("individual"),
-});
-
-export const exceptionUpdateSchema = z.object({
-  reason: exceptionReasonSchema.optional(),
 });
 
 export const exceptionBulkDeleteSchema = z.object({
@@ -880,15 +880,6 @@ export const serverTestSchema = z.object({
   tlsSkipVerify: z.boolean().optional(),
 });
 
-// ─── Media / Requests schemas ───
-
-export const arrActionSchema = z.object({
-  action: z.string().min(1, "Action is required"),
-  instanceId: z.string().min(1, "Instance ID is required"),
-  arrItemId: z.coerce.number(),
-  type: z.enum(["radarr", "sonarr", "lidarr"]),
-});
-
 /**
  * `POST /api/servers/[id]/sync` (also `/api/v1/servers/{id}/sync`): the body
  * is optional, and names at most one library. A malformed body is refused
@@ -933,7 +924,7 @@ const queryGroupSchema: z.ZodType = z.lazy(() =>
   })
 );
 
-export const queryDefinitionSchema = z.object({
+const queryDefinitionSchema = z.object({
   mediaTypes: z.array(z.enum(["MOVIE", "SERIES", "MUSIC"])).max(3),
   serverIds: z.array(z.string()).max(20),
   groups: z.array(queryGroupSchema).max(20),

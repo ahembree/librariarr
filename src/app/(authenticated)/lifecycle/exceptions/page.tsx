@@ -53,6 +53,8 @@ interface ExceptionItem {
     id: string;
     title: string;
     parentTitle: string | null;
+    /** Series identity (src/lib/media/series-key.ts); null on movies and tracks. */
+    seriesKey?: string | null;
     albumTitle?: string | null;
     type: string;
     year: number | null;
@@ -206,11 +208,15 @@ function groupExceptions(
     });
   }
 
-  // Series: group by parentTitle
+  // Series: group by series identity, never by title. Keyed on `parentTitle`,
+  // two different shows sharing a title (The Office UK and US) became one row,
+  // and Remove or Edit Reason then acted on both shows' exceptions — taking
+  // the protection off a show the user never meant to touch. The same show on
+  // two servers shares a key and stays one row.
   if (tab === "SERIES") {
     const groups = new Map<string, ExceptionItem[]>();
     for (const e of exceptions) {
-      const key = e.mediaItem.parentTitle ?? e.mediaItem.title;
+      const key = e.mediaItem.seriesKey ?? `title:${(e.mediaItem.parentTitle ?? e.mediaItem.title).trim().toLowerCase()}`;
       const group = groups.get(key);
       if (group) {
         group.push(e);
@@ -218,7 +224,8 @@ function groupExceptions(
         groups.set(key, [e]);
       }
     }
-    return [...groups.entries()].map(([seriesName, items]) => {
+    return [...groups.values()].map((items) => {
+      const seriesName = items[0].mediaItem.parentTitle ?? items[0].mediaItem.title;
       const agg = computeAggregates(items);
       const seasons = new Set(
         items
@@ -314,18 +321,24 @@ export default function LifecycleExceptionsPage() {
     maxWidth: 800,
   });
 
+  // Only the latest request may write: a tab switch while the previous tab's
+  // list loaded let the older response land second, and the new tab grouped
+  // the other type's exceptions under its own columns.
+  const exceptionsReqToken = useRef(0);
   const fetchExceptions = useCallback(async () => {
+    const token = ++exceptionsReqToken.current;
     setLoading(true);
     try {
       const response = await fetch(`/api/lifecycle/exceptions?type=${activeTab}`);
       if (response.ok) {
         const data = await response.json();
+        if (token !== exceptionsReqToken.current) return;
         setExceptions(data.exceptions);
       }
     } catch (error) {
       console.error("Failed to fetch exceptions:", error);
     } finally {
-      setLoading(false);
+      if (token === exceptionsReqToken.current) setLoading(false);
     }
   }, [activeTab]);
 

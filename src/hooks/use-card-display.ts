@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 
-export type CardLibraryType =
+type CardLibraryType =
   | "MOVIE"
   | "SERIES"
   | "SERIES_SEASONS"
@@ -17,7 +17,7 @@ export interface CardDisplayPreferences {
   servers: boolean;
 }
 
-export type AllCardDisplayPreferences = Partial<
+type AllCardDisplayPreferences = Partial<
   Record<CardLibraryType, CardDisplayPreferences>
 >;
 

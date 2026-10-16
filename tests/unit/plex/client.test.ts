@@ -6,6 +6,8 @@ vi.mock("@/lib/logger", () => ({
 
 vi.mock("@/lib/http-retry", () => ({
   configureRetry: vi.fn(),
+  NO_RETRY: { __noRetry: true },
+  NO_BREAKER_MARK: { __noBreakerMark: true },
 }));
 
 const mockAxiosInstance = {
@@ -925,6 +927,16 @@ describe("PlexClient", () => {
       );
     });
 
+    // The breaker is shared with the job worker: a poster the transcoder was
+    // slow to resize must not mark the server down for a sync reaching it fine.
+    it("does not let an artwork failure mark the server unreachable", async () => {
+      mockAxiosInstance.get.mockRejectedValueOnce(new Error("timeout")).mockResolvedValueOnce(imageResponse());
+      await client.fetchImage("/library/metadata/123/thumb", { width: 400 });
+      for (const [, config] of mockAxiosInstance.get.mock.calls) {
+        expect(config).toMatchObject({ __noBreakerMark: true });
+      }
+    });
+
     it("asks the photo transcoder to resize when a width is requested", async () => {
       // Server-side resize is the whole point: a grid-sized poster arrives as
       // tens of KB instead of the multi-megabyte original.
@@ -1109,6 +1121,16 @@ describe("PlexClient", () => {
     });
   });
 
+  describe("getAccounts", () => {
+    it("stays lenient for the views that only decorate a name", async () => {
+      // The per-item history panel and the excluded-users picker keep working
+      // without names; only the watch-history sync needs the strict lookup.
+      mockAxiosInstance.get.mockRejectedValueOnce(new Error("fail"));
+      const result = await client.getAccounts();
+      expect(result.size).toBe(0);
+    });
+  });
+
   describe("getDevices", () => {
     it("returns device map", async () => {
       mockAxiosInstance.get.mockResolvedValueOnce({
@@ -1151,6 +1173,45 @@ describe("PlexClient", () => {
         String(c[0]).startsWith("/status/sessions/history/all"),
       )!;
       expect(historyCall[0]).toBe("/status/sessions/history/all");
+    });
+
+    it("fails instead of filing every play under \"Unknown\" when /accounts cannot be read", async () => {
+      // Every play is attributed through the account map. Answering a failed
+      // `/accounts` with an empty map made the native full replace rewrite the
+      // whole stored history under "Unknown" (and mark it established), and made
+      // the incremental append store each play in its overlap a second time
+      // under the other name — a permanent playCount inflation. A throw sends
+      // the sync down its "leave the stored history intact" path instead.
+      mockAxiosInstance.get
+        .mockRejectedValueOnce(Object.assign(new Error("Request failed with status code 500"), { response: { status: 500 } }))
+        .mockResolvedValueOnce(emptyContainer);
+
+      await expect(client.getDetailedWatchHistory()).rejects.toThrow("status code 500");
+      // The history itself is never paged.
+      expect(
+        mockAxiosInstance.get.mock.calls.some((c) => String(c[0]).startsWith("/status/sessions/history/all")),
+      ).toBe(false);
+    });
+
+    it("fails on an /accounts answer that is not an account container", async () => {
+      // A proxy's HTML page or an error document parses to no MediaContainer —
+      // just as unusable as a failed request.
+      mockAxiosInstance.get
+        .mockResolvedValueOnce({ data: "<html>sign in</html>" })
+        .mockResolvedValueOnce(emptyContainer);
+
+      await expect(client.getDetailedWatchHistory()).rejects.toThrow(/accounts/);
+    });
+
+    it("names each play by its account", async () => {
+      mockAxiosInstance.get
+        .mockResolvedValueOnce({ data: { MediaContainer: { Account: [{ id: 1, name: "alice" }] } } })
+        .mockResolvedValueOnce(emptyContainer)
+        .mockResolvedValueOnce(page([{ ratingKey: "1", viewedAt: 1700000000, accountID: 1 }]));
+
+      const entries = await client.getDetailedWatchHistory();
+
+      expect(entries.map((e) => e.username)).toEqual(["alice"]);
     });
 
     it("puts the `viewedAt>=` filter in the URL verbatim for an incremental fetch", async () => {
