@@ -184,11 +184,31 @@ describe("useColumnResize", () => {
     act(() => {
       document.dispatchEvent(new MouseEvent("mouseup"));
     });
-    const setItem = vi.spyOn(Storage.prototype, "setItem");
+    const setItem = vi.spyOn(localStorage, "setItem");
     act(() => {
       document.dispatchEvent(new MouseEvent("mouseup"));
     });
     expect(setItem).not.toHaveBeenCalled();
+  });
+
+  it("ends overlapping drags cleanly, persisting the latest column", () => {
+    const { result } = renderHook(() => useColumnResize({ columns: COLUMNS, storageKey: KEY }));
+    act(() => result.current.getResizeProps("title").onMouseDown(mouseDownEvent(0).e));
+    // A second press before release takes over the drag.
+    act(() => result.current.getResizeProps("year").onMouseDown(mouseDownEvent(0).e));
+    expect(result.current.resizingColumnId).toBe("year");
+    act(() => mouseMove(20));
+    expect(result.current.columnWidths).toEqual({ title: 200, year: 100 });
+    const setItem = vi.spyOn(localStorage, "setItem");
+    act(() => {
+      document.dispatchEvent(new MouseEvent("mouseup"));
+    });
+    // Both sets of listeners end, but only one save happens.
+    expect(setItem).toHaveBeenCalledTimes(1);
+    expect(result.current.resizingColumnId).toBeNull();
+    expect(stored()).toEqual({ year: 100 });
+    act(() => mouseMove(500));
+    expect(result.current.columnWidths).toEqual({ title: 200, year: 100 });
   });
 
   it("double-click resets a column to its default and persists it", () => {
@@ -207,10 +227,10 @@ describe("useColumnResize", () => {
   });
 
   it("keeps working when localStorage throws on read and write", () => {
-    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+    vi.spyOn(localStorage, "getItem").mockImplementation(() => {
       throw new Error("blocked");
     });
-    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+    vi.spyOn(localStorage, "setItem").mockImplementation(() => {
       throw new Error("quota");
     });
     const { result } = renderHook(() => useColumnResize({ columns: COLUMNS, storageKey: KEY }));

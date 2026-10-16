@@ -67,6 +67,7 @@ describe("fetchTrashCatalog edge cases", () => {
           blob("docs/json/sonarr/cf-groups/broken.json"),
           blob("docs/json/sonarr/quality-profiles/web.json"),
           blob("docs/json/sonarr/quality-profiles/bad.json"),
+          blob("docs/json/sonarr/quality-profiles/anime.json"),
           blob("docs/json/sonarr/quality-size/anime.json"),
           blob("docs/json/sonarr/quality-size/series.json"),
           blob("docs/json/sonarr/quality-size/junk.json"),
@@ -81,6 +82,7 @@ describe("fetchTrashCatalog edge cases", () => {
         "cf-groups/broken.json": { name: "No list" },
         "quality-profiles/web.json": { trash_id: "w", name: "WEB", items: [] },
         "quality-profiles/bad.json": { trash_id: "x", name: "No items" },
+        "quality-profiles/anime.json": { trash_id: "an", name: "Anime", items: [] },
         "quality-size/anime.json": { trash_id: "qa", type: "anime", qualities: [] },
         "quality-size/series.json": { trash_id: "qs", type: "series", qualities: [] },
         "quality-size/junk.json": { trash_id: "qj", type: "series" },
@@ -93,7 +95,7 @@ describe("fetchTrashCatalog edge cases", () => {
     // Null/empty entries in a group's list are dropped.
     expect(cat.cfGroups[1].customFormats).toEqual(["z"]);
     expect(cat.cfGroups[1].trash_id).toBeUndefined();
-    expect(cat.qualityProfiles.map((p) => p.trash_id)).toEqual(["w"]);
+    expect(cat.qualityProfiles.map((p) => p.trash_id)).toEqual(["an", "w"]);
     expect(cat.qualitySize?.trash_id).toBe("qs");
     expect(cat.naming).toBeNull();
     // A non-JSON file and another service's file are never fetched.
