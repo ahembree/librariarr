@@ -122,7 +122,6 @@ vi.mock("@/lib/rules/lifecycle-engine", () => ({
 }));
 
 import {
-  scheduleActionsForRuleSet,
   processLifecycleRules,
   executeLifecycleActions,
 } from "@/lib/lifecycle/processor";

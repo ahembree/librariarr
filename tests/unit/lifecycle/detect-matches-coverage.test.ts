@@ -97,7 +97,7 @@ vi.mock("@/lib/lifecycle/collections", () => ({
   syncAllCollections: mockSyncAllCollections,
 }));
 
-import { detectAndSaveMatches, runDetection, syncCollectionsAfterDetection } from "@/lib/lifecycle/detect-matches";
+import { detectAndSaveMatches, runDetection } from "@/lib/lifecycle/detect-matches";
 
 function makeRuleSetConfig(overrides: Partial<Parameters<typeof detectAndSaveMatches>[0]> = {}) {
   return {
