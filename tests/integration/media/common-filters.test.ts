@@ -27,6 +27,13 @@ vi.mock("@/lib/logger", () => ({
 // Import route handlers AFTER mocks
 import { GET as moviesGET } from "@/app/api/media/movies/route";
 import { GET as distinctGET } from "@/app/api/media/distinct-values/route";
+import { GET as seriesGET } from "@/app/api/media/series/route";
+import { GET as seriesGroupedGET } from "@/app/api/media/series/grouped/route";
+import { GET as allSeasonsGET } from "@/app/api/media/series/all-seasons/route";
+import { GET as musicGET } from "@/app/api/media/music/route";
+import { GET as musicGroupedGET } from "@/app/api/media/music/grouped/route";
+import { GET as albumsGET } from "@/app/api/media/music/albums/route";
+import { GET as allAlbumsGET } from "@/app/api/media/music/albums/all/route";
 
 /** `applyCommonFilters` (build-where.ts), exercised through the movies list. */
 describe("common media filters", () => {
@@ -106,6 +113,47 @@ describe("common media filters", () => {
 
       expect(await titles("/api/media/movies?genre=Sci-Fi|drama")).toEqual(["Dune"]);
       expect(await titles("/api/media/movies?genre=Western")).toEqual([]);
+    });
+
+    // Every listing builds its genre clause through applyCommonFilters, and
+    // each has to hand it the stored spellings — one that forgets matches only
+    // the exact spelling again, and only the movies list checked it.
+    it("matches every stored spelling on the series and music listings too", async () => {
+      const user = await createTestUser();
+      setMockSession({ userId: user.id, isLoggedIn: true });
+      const server = await createTestServer(user.id);
+      const shows = await createTestLibrary(server.id, { type: "SERIES" });
+      const music = await createTestLibrary(server.id, { type: "MUSIC" });
+      for (const [show, genres] of [["Alpha", ["Sci-Fi"]], ["Beta", ["sci-fi"]], ["Gamma", ["Drama"]]] as const) {
+        await createTestMediaItem(shows.id, {
+          type: "SERIES", title: `${show} Pilot`, parentTitle: show, seasonNumber: 1, episodeNumber: 1, genres: [...genres],
+        });
+      }
+      for (const [artist, album, genres] of [
+        ["Ann", "First", ["Sci-Fi"]],
+        ["Ann", "Second", ["sci-fi"]],
+        ["Bob", "Third", ["sci-fi"]],
+        ["Cid", "Fourth", ["Drama"]],
+      ] as const) {
+        await createTestMediaItem(music.id, {
+          type: "MUSIC", title: `${album} Track`, parentTitle: artist, albumTitle: album, genres: [...genres],
+        });
+      }
+
+      const genre = "genre=SCI-FI";
+      const count = async (
+        handler: Parameters<typeof callRoute>[0],
+        url: string,
+        key: string,
+      ) => (await expectJson<Record<string, unknown[]>>(await callRoute(handler, { url }), 200))[key].length;
+
+      expect(await count(seriesGET, `/api/media/series?${genre}`, "items")).toBe(2);
+      expect(await count(seriesGroupedGET, `/api/media/series/grouped?${genre}`, "series")).toBe(2);
+      expect(await count(allSeasonsGET, `/api/media/series/all-seasons?${genre}`, "seasons")).toBe(2);
+      expect(await count(musicGET, `/api/media/music?${genre}`, "items")).toBe(3);
+      expect(await count(musicGroupedGET, `/api/media/music/grouped?${genre}`, "artists")).toBe(2);
+      expect(await count(albumsGET, `/api/media/music/albums?parentTitle=Ann&${genre}`, "albums")).toBe(2);
+      expect(await count(allAlbumsGET, `/api/media/music/albums/all?limit=0&${genre}`, "albums")).toBe(3);
     });
   });
 });

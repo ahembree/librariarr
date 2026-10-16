@@ -2,7 +2,22 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { escapeLike } from "@/lib/filters/escape-like";
-import type { Prisma } from "@/generated/prisma/client";
+import { Prisma } from "@/generated/prisma/client";
+
+/**
+ * How many distinct items a group of matching rows holds — the "N eps" /
+ * "N tracks" of a scoped result. A copy on another server is the same item, so
+ * rows fold by `dedupKey`, but only ACROSS servers: `computeDedupKey` names a
+ * track by artist + title and an episode by show + SxxExx, so two different
+ * rows of ONE server can share a key (the same song on an album and on a
+ * compilation; episodes without numbers). Each row is numbered among the rows
+ * of its own group, server and key (`copyNumber`), and the group counts its
+ * distinct (key, number) pairs: per key, as many items as any one server holds.
+ */
+const dedupKey = Prisma.sql`COALESCE(mi."dedupKey", mi.id)`;
+const copyNumber = (group: Prisma.Sql) =>
+  Prisma.sql`ROW_NUMBER() OVER (PARTITION BY ${group}, l."mediaServerId", ${dedupKey} ORDER BY mi.id)`;
+const itemCount = Prisma.sql`COUNT(DISTINCT (m.k, m.copy))::int`;
 
 export async function GET(request: NextRequest) {
   const session = await getSession();
@@ -37,30 +52,36 @@ export async function GET(request: NextRequest) {
     // (ordered by artist) let one prolific artist fill the window, so a later
     // matching artist or album never came back at all, and every count was the
     // number of tracks that landed in the window. A copy on another server is
-    // the same track, so tracks are counted by `dedupKey`.
+    // the same track, so tracks are counted as `itemCount` counts them.
     const pattern = escapeLike(q);
     const [artistGroups, albumGroups] = await Promise.all([
       prisma.$queryRaw<{ id: string; n: number }[]>`
-        SELECT (array_agg(mi.id ORDER BY mi."albumTitle", mi.title, mi.id))[1] AS id,
-          COUNT(DISTINCT COALESCE(mi."dedupKey", mi.id))::int AS n
-        FROM "MediaItem" mi
-        JOIN "Library" l ON l.id = mi."libraryId"
-        JOIN "MediaServer" ms ON ms.id = l."mediaServerId"
-        WHERE ms."userId" = ${session.userId} AND mi.type = 'MUSIC'::"LibraryType"
-          AND mi."parentTitle" ILIKE '%' || ${pattern} || '%'
-        GROUP BY mi."parentTitle"
-        ORDER BY mi."parentTitle"
+        SELECT (array_agg(m.id ORDER BY m."albumTitle", m.title, m.id))[1] AS id, ${itemCount} AS n
+        FROM (
+          SELECT mi.id, mi.title, mi."parentTitle", mi."albumTitle", ${dedupKey} AS k,
+            ${copyNumber(Prisma.sql`mi."parentTitle"`)} AS copy
+          FROM "MediaItem" mi
+          JOIN "Library" l ON l.id = mi."libraryId"
+          JOIN "MediaServer" ms ON ms.id = l."mediaServerId"
+          WHERE ms."userId" = ${session.userId} AND mi.type = 'MUSIC'::"LibraryType"
+            AND mi."parentTitle" ILIKE '%' || ${pattern} || '%'
+        ) m
+        GROUP BY m."parentTitle"
+        ORDER BY m."parentTitle"
         LIMIT 20`,
       prisma.$queryRaw<{ id: string; n: number }[]>`
-        SELECT (array_agg(mi.id ORDER BY mi.title, mi.id))[1] AS id,
-          COUNT(DISTINCT COALESCE(mi."dedupKey", mi.id))::int AS n
-        FROM "MediaItem" mi
-        JOIN "Library" l ON l.id = mi."libraryId"
-        JOIN "MediaServer" ms ON ms.id = l."mediaServerId"
-        WHERE ms."userId" = ${session.userId} AND mi.type = 'MUSIC'::"LibraryType"
-          AND mi."albumTitle" ILIKE '%' || ${pattern} || '%'
-        GROUP BY mi."parentTitle", mi."albumTitle"
-        ORDER BY mi."parentTitle" NULLS FIRST, mi."albumTitle"
+        SELECT (array_agg(m.id ORDER BY m.title, m.id))[1] AS id, ${itemCount} AS n
+        FROM (
+          SELECT mi.id, mi.title, mi."parentTitle", mi."albumTitle", ${dedupKey} AS k,
+            ${copyNumber(Prisma.sql`mi."parentTitle", mi."albumTitle"`)} AS copy
+          FROM "MediaItem" mi
+          JOIN "Library" l ON l.id = mi."libraryId"
+          JOIN "MediaServer" ms ON ms.id = l."mediaServerId"
+          WHERE ms."userId" = ${session.userId} AND mi.type = 'MUSIC'::"LibraryType"
+            AND mi."albumTitle" ILIKE '%' || ${pattern} || '%'
+        ) m
+        GROUP BY m."parentTitle", m."albumTitle"
+        ORDER BY m."parentTitle" NULLS FIRST, m."albumTitle"
         LIMIT 20`,
     ]);
 
@@ -136,18 +157,22 @@ export async function GET(request: NextRequest) {
   // "N eps" was the number of rows that landed in the window. Keyed on series
   // identity (`seriesKey`; a legacy row without one keys on its title the way
   // `resolveSeriesKey` would) so two same-titled shows list separately, and a
-  // copy on another server is the same episode, so episodes count by `dedupKey`.
+  // copy on another server is the same episode (see `itemCount`).
   if (seriesScope && type !== "MOVIE") {
+    const seriesGroup = Prisma.sql`COALESCE(mi."seriesKey", 'title:' || LOWER(TRIM(mi."parentTitle")))`;
     const groups = await prisma.$queryRaw<{ id: string; n: number }[]>`
-      SELECT (array_agg(mi.id ORDER BY mi.title, mi.id))[1] AS id,
-        COUNT(DISTINCT COALESCE(mi."dedupKey", mi.id))::int AS n
-      FROM "MediaItem" mi
-      JOIN "Library" l ON l.id = mi."libraryId"
-      JOIN "MediaServer" ms ON ms.id = l."mediaServerId"
-      WHERE ms."userId" = ${session.userId} AND mi.type = ${type}::"LibraryType"
-        AND mi."parentTitle" ILIKE '%' || ${escapeLike(q)} || '%'
-      GROUP BY COALESCE(mi."seriesKey", 'title:' || LOWER(TRIM(mi."parentTitle")))
-      ORDER BY MIN(LOWER(mi."parentTitle")), COALESCE(mi."seriesKey", 'title:' || LOWER(TRIM(mi."parentTitle")))
+      SELECT (array_agg(m.id ORDER BY m.title, m.id))[1] AS id, ${itemCount} AS n
+      FROM (
+        SELECT mi.id, mi.title, mi."parentTitle", ${seriesGroup} AS g, ${dedupKey} AS k,
+          ${copyNumber(seriesGroup)} AS copy
+        FROM "MediaItem" mi
+        JOIN "Library" l ON l.id = mi."libraryId"
+        JOIN "MediaServer" ms ON ms.id = l."mediaServerId"
+        WHERE ms."userId" = ${session.userId} AND mi.type = ${type}::"LibraryType"
+          AND mi."parentTitle" ILIKE '%' || ${escapeLike(q)} || '%'
+      ) m
+      GROUP BY m.g
+      ORDER BY MIN(LOWER(m."parentTitle")), m.g
       LIMIT 10`;
     const reps = await prisma.mediaItem.findMany({
       where: { id: { in: groups.map((g) => g.id) } },
