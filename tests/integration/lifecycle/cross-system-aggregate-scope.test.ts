@@ -86,6 +86,67 @@ describe("cross-system fields on grouped records", () => {
     expect(stored).toBe(0);
   });
 
+  it("reports a series-scope cross-system rule among the matched criteria it matched on", async () => {
+    // The Matches page, the preview and the diff explain a match from the
+    // records the engine returns. The series-scope engine evaluated the folded
+    // values on a copy, so the stored match said "Matched By Rule Set = Keep"
+    // did NOT hold on a show selected because it did.
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const library = await createTestLibrary(server.id, { type: "SERIES" });
+    const eps = [];
+    for (let n = 1; n <= 2; n++) {
+      eps.push(await createTestMediaItem(library.id, {
+        type: "SERIES", title: `Ep ${n}`, parentTitle: "Favourite Show", seasonNumber: 1, episodeNumber: n,
+      }));
+    }
+    const repId = eps.map((e) => e.id).sort()[0];
+    const keep = await createTestRuleSet(user.id, { name: "Keep", type: "SERIES", seriesScope: true, serverIds: [server.id] });
+    await createTestRuleMatch(keep.id, repId, { id: repId, title: "Favourite Show", parentTitle: null, memberIds: eps.map((e) => e.id) });
+    const rules: LifecycleRuleGroup[] = [{
+      id: "g", condition: "AND", groups: [],
+      rules: [{ id: "r1", field: "matchedByRuleSet", operator: "equals", value: "Keep", condition: "AND" }],
+    }];
+    const rs = await createTestRuleSet(user.id, { name: "Follow-up", type: "SERIES", seriesScope: true, rules, serverIds: [server.id] });
+
+    const { items } = await detectAndSaveMatches(
+      { ...rs, type: "SERIES", rules, seriesScope: true, serverIds: [server.id] } as never,
+      [server.id],
+    );
+
+    expect(items.map((i) => i.title)).toEqual(["Favourite Show"]);
+    const criteria = items[0].matchedCriteria as Array<{ ruleId: string }>;
+    expect(criteria.map((c) => c.ruleId)).toEqual(["r1"]);
+    const [stored] = await getTestPrisma().ruleMatch.findMany({ where: { ruleSetId: rs.id } });
+    expect((stored.itemData as { matchedCriteria: Array<{ ruleId: string }> }).matchedCriteria.map((c) => c.ruleId)).toEqual(["r1"]);
+  });
+
+  it("reports an artist-scope cross-system rule among the matched criteria it matched on", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const library = await createTestLibrary(server.id, { type: "MUSIC" });
+    const tracks = [];
+    for (let n = 1; n <= 2; n++) {
+      tracks.push(await createTestMediaItem(library.id, { type: "MUSIC", title: `Song ${n}`, parentTitle: "Kept Artist" }));
+    }
+    const repId = tracks.map((t) => t.id).sort()[0];
+    const keep = await createTestRuleSet(user.id, { name: "Keep", type: "MUSIC", seriesScope: true, serverIds: [server.id] });
+    await createTestRuleMatch(keep.id, repId, { id: repId, title: "Kept Artist", parentTitle: null, memberIds: tracks.map((t) => t.id) });
+    const rules: LifecycleRuleGroup[] = [{
+      id: "g", condition: "AND", groups: [],
+      rules: [{ id: "r1", field: "matchedByRuleSet", operator: "equals", value: "Keep", condition: "AND" }],
+    }];
+    const rs = await createTestRuleSet(user.id, { name: "Follow-up", type: "MUSIC", seriesScope: true, rules, serverIds: [server.id] });
+
+    const { items } = await detectAndSaveMatches(
+      { ...rs, type: "MUSIC", rules, seriesScope: true, serverIds: [server.id] } as never,
+      [server.id],
+    );
+
+    expect(items).toHaveLength(1);
+    expect((items[0].matchedCriteria as Array<{ ruleId: string }>).map((c) => c.ruleId)).toEqual(["r1"]);
+  });
+
   it("'Has Pending Action = false' does not match a show that has one", async () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id);
