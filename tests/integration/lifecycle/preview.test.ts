@@ -327,6 +327,33 @@ describe("Lifecycle Rules Preview", () => {
       const { result } = await expectStreamResult<{ items: Array<{ title: string }> }>(response);
       expect(result.items.map((i) => i.title)).toEqual(["Small Show"]);
     });
+
+    it("previews only the episodes that match on their own as the show's members, as detection stores them", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "SERIES" });
+      const GiB = BigInt(1024 * 1024 * 1024);
+      const big = await createTestMediaItem(library.id, { type: "SERIES", title: "Big", parentTitle: "Small Show", seasonNumber: 1, episodeNumber: 1, fileSize: GiB * BigInt(3) });
+      await createTestMediaItem(library.id, { type: "SERIES", title: "Small", parentTitle: "Small Show", seasonNumber: 1, episodeNumber: 2, fileSize: GiB });
+      // The show (4 GiB in all) passes the size rule; only one episode does on its own.
+      const rules = [{
+        id: "g", condition: "AND", groups: [],
+        rules: [
+          { id: "r1", field: "availableEpisodeCount", operator: "lessThan", value: "3", condition: "AND" },
+          { id: "r2", field: "fileSize", operator: "greaterThan", value: "2000", condition: "AND" },
+        ],
+      }];
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      const response = await callRoute(adHocPreviewPOST, {
+        url: "/api/lifecycle/rules/preview",
+        method: "POST",
+        body: { rules, type: "SERIES", seriesScope: false, serverIds: [server.id] },
+      });
+      const { result } = await expectStreamResult<{ items: Array<{ title: string; memberIds?: string[] }> }>(response);
+      expect(result.items.map((i) => i.title)).toEqual(["Small Show"]);
+      expect(result.items[0].memberIds).toEqual([big.id]);
+    });
   });
 
   describe("no-enabled-instance match-all guard", () => {

@@ -40,6 +40,7 @@ vi.mock("@/lib/lifecycle/collections", () => ({
 }));
 
 // Import AFTER mocks
+import { appCache } from "@/lib/cache/memory-cache";
 import { GET, POST } from "@/app/api/lifecycle/rules/route";
 import { PUT, DELETE } from "@/app/api/lifecycle/rules/[id]/route";
 
@@ -1000,6 +1001,65 @@ describe("Lifecycle Rules CRUD", () => {
 
       const body = await expectJson<{ success: boolean }>(response, 200);
       expect(body.success).toBe(true);
+    });
+  });
+
+  // "Matched By Rule Set" offers rule set names from the cached distinct-value
+  // lists (library filters and the query builder), five minutes at a time: a
+  // new, renamed or deleted rule set was missing, or still offered, until then.
+  describe("rule set name caches", () => {
+    const seedCaches = () => {
+      appCache.set("distinct-values", { matchedByRuleSet: ["stale"] }, 300_000);
+      appCache.set("query-distinct-values", { matchedByRuleSet: ["stale"] }, 300_000);
+    };
+    const cachesCleared = () =>
+      appCache.get("distinct-values") === undefined && appCache.get("query-distinct-values") === undefined;
+
+    it("drops them when a rule set is created", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      seedCaches();
+
+      await expectJson(
+        await callRoute(POST, {
+          url: "/api/lifecycle/rules",
+          method: "POST",
+          body: { name: "Keep", type: "MOVIE", rules: [dummyRule], serverIds: [server.id] },
+        }),
+        201,
+      );
+      expect(cachesCleared()).toBe(true);
+    });
+
+    it("drops them on a rename, and keeps them when the name is untouched", async () => {
+      const user = await createTestUser();
+      const ruleSet = await createTestRuleSet(user.id, { name: "Keep" });
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const put = (body: Record<string, unknown>) =>
+        callRouteWithParams(PUT, { id: ruleSet.id }, {
+          url: `/api/lifecycle/rules/${ruleSet.id}`, method: "PUT", searchParams: { clearMatches: "false" }, body,
+        });
+
+      seedCaches();
+      await expectJson(await put({ enabled: false }), 200);
+      expect(cachesCleared()).toBe(false);
+
+      await expectJson(await put({ name: "Keep forever" }), 200);
+      expect(cachesCleared()).toBe(true);
+    });
+
+    it("drops them when a rule set is deleted", async () => {
+      const user = await createTestUser();
+      const ruleSet = await createTestRuleSet(user.id, { name: "Keep" });
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      seedCaches();
+
+      await expectJson(
+        await callRouteWithParams(DELETE, { id: ruleSet.id }, { url: `/api/lifecycle/rules/${ruleSet.id}`, method: "DELETE" }),
+        200,
+      );
+      expect(cachesCleared()).toBe(true);
     });
   });
 });

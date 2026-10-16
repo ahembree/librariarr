@@ -191,6 +191,100 @@ describe("cross-system fields on grouped records", () => {
     );
     expect(items.map((i) => i.title)).toEqual([]);
   });
+  it("series scope forced by an aggregate field: each episode is judged on its own cross-system values", async () => {
+    // seriesScope off, but a series-aggregate field routes detection through
+    // evaluateSeriesScope, which then keeps as members only the episodes that
+    // match on their own. Those per-episode records carried no cross-system
+    // values, so a positive "Matched By Rule Set" read false for every episode
+    // and the show was stored with no members at all.
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const library = await createTestLibrary(server.id, { type: "SERIES" });
+    const eps = [];
+    for (let n = 1; n <= 3; n++) {
+      eps.push(await createTestMediaItem(library.id, {
+        type: "SERIES", title: `Ep ${n}`, parentTitle: "Tagged Show", seasonNumber: 1, episodeNumber: n,
+      }));
+    }
+    // "Tagged" (per-episode) matched episode 2 alone.
+    const tagged = await createTestRuleSet(user.id, { name: "Tagged", type: "SERIES", seriesScope: false, serverIds: [server.id] });
+    await createTestRuleMatch(tagged.id, eps[1].id, { id: eps[1].id, title: "Tagged Show", parentTitle: null, memberIds: [eps[1].id] });
+
+    const rules: LifecycleRuleGroup[] = [{
+      id: "g", condition: "AND", groups: [],
+      rules: [
+        { id: "r1", field: "availableEpisodeCount", operator: "greaterThan", value: "0", condition: "AND" },
+        { id: "r2", field: "matchedByRuleSet", operator: "equals", value: "Tagged", condition: "AND" },
+      ],
+    }];
+    const rs = await createTestRuleSet(user.id, { name: "Follow-up", type: "SERIES", seriesScope: false, rules, serverIds: [server.id] });
+    const { episodeIdMap } = await detectAndSaveMatches(
+      { ...rs, type: "SERIES", rules, seriesScope: false, serverIds: [server.id] } as never,
+      [server.id],
+    );
+
+    const [match] = await getTestPrisma().ruleMatch.findMany({ where: { ruleSetId: rs.id } });
+    expect((match.itemData as { memberIds?: string[] }).memberIds).toEqual([eps[1].id]);
+    expect([...episodeIdMap.values()]).toEqual([[eps[1].id]]);
+  });
+
+  it("query page (series aggregate path) does not list a show 'Keep' matched for 'NOT Matched By Rule Set = Keep'", async () => {
+    // A series-aggregate field sends the grouped query through
+    // `computeAggregateSurvivingEpisodeIds`, whose aggregate records carried no
+    // cross-system values — every show read "matched by no rule set".
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const library = await createTestLibrary(server.id, { type: "SERIES" });
+    const eps = [];
+    for (let n = 1; n <= 2; n++) {
+      eps.push(await createTestMediaItem(library.id, {
+        type: "SERIES", title: `Ep ${n}`, parentTitle: "Favourite Show", seasonNumber: 1, episodeNumber: n, playCount: 0,
+      }));
+    }
+    await createTestMediaItem(library.id, {
+      type: "SERIES", title: "Pilot", parentTitle: "Other Show", seasonNumber: 1, episodeNumber: 1, playCount: 0,
+    });
+    const repId = eps.map((e) => e.id).sort()[0];
+    const keep = await createTestRuleSet(user.id, { name: "Keep", type: "SERIES", seriesScope: true, serverIds: [server.id] });
+    await createTestRuleMatch(keep.id, repId, { id: repId, title: "Favourite Show", parentTitle: null, memberIds: eps.map((e) => e.id) });
+
+    const result = await executeQuery({
+      mediaTypes: ["SERIES"], serverIds: [server.id], sortBy: "title", sortOrder: "asc",
+      groups: [{
+        id: "g", condition: "AND", groups: [],
+        rules: [
+          { id: "r1", field: "availableEpisodeCount", operator: "greaterThan", value: "0", condition: "AND" },
+          { id: "r2", field: "matchedByRuleSet", operator: "equals", value: "Keep", condition: "AND", negate: true },
+        ],
+      }] as never,
+    }, user.id, 1, 0);
+    expect(result.items.map((i) => i.title)).toEqual(["Other Show"]);
+  });
+
+  it("Test Media reads a single item's cross-system values as detection does", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const library = await createTestLibrary(server.id, { type: "MOVIE" });
+    const movie = await createTestMediaItem(library.id, { type: "MOVIE", title: "Favourite Movie" });
+    const keep = await createTestRuleSet(user.id, { name: "Keep", type: "MOVIE", serverIds: [server.id] });
+    await createTestRuleMatch(keep.id, movie.id, { id: movie.id, title: "Favourite Movie" });
+    const rules = [{
+      id: "g", condition: "AND", groups: [],
+      rules: [{ id: "r", field: "matchedByRuleSet", operator: "equals", value: "Keep", condition: "AND", negate: true }],
+    }];
+
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const body = await expectJson<{ matches: boolean }>(
+      await callRoute(testItemPost, {
+        url: "/api/lifecycle/rules/test-item",
+        method: "POST",
+        body: { rules, type: "MOVIE", mediaItemId: movie.id, serverIds: [server.id] },
+      }),
+      200,
+    );
+    expect(body.matches).toBe(false);
+  });
+
   it("counts a grouped match's members as matched by its rule set", async () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id);

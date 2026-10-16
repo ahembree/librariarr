@@ -83,10 +83,16 @@ describe("excepted representative promotion", () => {
 
       // A sync rewrites the promoted episode's row (e.g. a metadata refresh):
       // Postgres writes a new tuple version, so it moves in the scan order.
-      // Repeated a few times, as successive syncs would.
+      // Repeated a few times, as successive syncs would. The title changes
+      // too: it is indexed, so the update cannot be HOT and the new version
+      // really does land at the end of the heap — a summary-only update stays
+      // in place and would never reorder the engine's rows.
       for (let i = 0; i < 3; i++) {
         const [current] = await prisma.ruleMatch.findMany({ where: { ruleSetId: ruleSet.id } });
-        await prisma.mediaItem.update({ where: { id: current.mediaItemId }, data: { summary: `refreshed ${i}` } });
+        await prisma.mediaItem.update({
+          where: { id: current.mediaItemId },
+          data: { summary: `refreshed ${i}`, title: `Ep refreshed ${i}` },
+        });
         await run();
         const matches = await prisma.ruleMatch.findMany({ where: { ruleSetId: ruleSet.id } });
         const actions = await prisma.lifecycleAction.findMany({ where: { ruleSetId: ruleSet.id, status: "PENDING" } });

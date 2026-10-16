@@ -446,6 +446,77 @@ describe("POST /api/lifecycle/rules/[id]/diff", () => {
     });
   });
 
+  // Track-scope music folds as detection does (`groupsTracksByArtist`): an
+  // artist-level Lidarr action stores ONE match per artist, on one server too,
+  // while a track file delete keeps a match per track and folds only another
+  // server's copy of the same track. Previewed per track, the diff a user
+  // reviews before arming an artist delete listed a row per track.
+  describe("track-scope music", () => {
+    async function artistTracks(servers: 1 | 2) {
+      const user = await createTestUser();
+      const s1 = await createTestServer(user.id);
+      const s2 = await createTestServer(user.id);
+      const l1 = await createTestLibrary(s1.id, { type: "MUSIC" });
+      const l2 = await createTestLibrary(s2.id, { type: "MUSIC" });
+      const track = async (libraryId: string, n: number) => {
+        const t = await createTestMediaItem(libraryId, {
+          type: "MUSIC", title: `Song ${n}`, parentTitle: "The Artist", albumTitle: "Album", episodeNumber: n,
+        });
+        await createTestExternalId(t.id, "MUSICBRAINZ", "artist-mbid-1");
+        await getTestPrisma().mediaItem.update({ where: { id: t.id }, data: { dedupKey: `music:the artist:song ${n}` } });
+        return getTestPrisma().mediaItem.findUniqueOrThrow({ where: { id: t.id } });
+      };
+      const tracks = [await track(l1.id, 1), await track(l1.id, 2), await track(l1.id, 3)];
+      const copy = servers === 2 ? await track(l2.id, 1) : null;
+      const ruleSet = await createTestRuleSet(user.id, { name: "Tracks", type: "MUSIC", seriesScope: false });
+      // The engine returns rows without external ids; the route loads them.
+      mockEvaluateRules.mockResolvedValue(
+        [...tracks, ...(copy ? [copy] : [])].map((t) => ({
+          id: t.id, title: t.title, parentTitle: t.parentTitle, dedupKey: t.dedupKey,
+        })),
+      );
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      return { tracks, copy, ruleSet, serverIds: servers === 2 ? [s1.id, s2.id] : [s1.id] };
+    }
+
+    async function diff(ruleSetId: string, body: Record<string, unknown>) {
+      return expectJson<{
+        added: { id: string; copyIds?: string[] }[];
+        counts: { added: number; removed: number; retained: number };
+      }>(
+        await callRouteWithParams(POST, { id: ruleSetId }, {
+          url: `/api/lifecycle/rules/${ruleSetId}/diff`, method: "POST", body,
+        }),
+        200,
+      );
+    }
+
+    it("adds an artist once for an artist-level action, on a single server", async () => {
+      const { tracks, ruleSet, serverIds } = await artistTracks(1);
+
+      const body = await diff(ruleSet.id, {
+        rules: validRules, type: "MUSIC", seriesScope: false, serverIds, actionEnabled: true, actionType: "DELETE_LIDARR",
+      });
+
+      expect(body.counts).toEqual({ added: 1, removed: 0, retained: 0 });
+      const [kept, ...folded] = tracks.map((t) => t.id).sort();
+      expect(body.added[0].id).toBe(kept);
+      expect([...(body.added[0].copyIds ?? [])].sort()).toEqual(folded);
+    });
+
+    it("adds a track file delete once per track, folding only another server's copy of the same track", async () => {
+      const { tracks, copy, ruleSet, serverIds } = await artistTracks(2);
+
+      const body = await diff(ruleSet.id, {
+        rules: validRules, type: "MUSIC", seriesScope: false, serverIds, actionEnabled: true, actionType: "DELETE_FILES_LIDARR",
+      });
+
+      expect(body.counts).toEqual({ added: 3, removed: 0, retained: 0 });
+      const firstTrack = body.added.find((a) => a.id === tracks[0].id || a.id === copy!.id)!;
+      expect([firstTrack.id, ...(firstTrack.copyIds ?? [])].sort()).toEqual([tracks[0].id, copy!.id].sort());
+    });
+  });
+
   it("computes full diff with added, removed, and retained", async () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id);
