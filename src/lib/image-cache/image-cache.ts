@@ -23,11 +23,21 @@ sharp.cache(false);
 // browsing. Inputs are server-resized (see fetchImage), so one thread is plenty.
 sharp.concurrency(1);
 
-// In-flight request deduplication: cacheKey -> Promise<Buffer>
-const inFlight = new Map<string, Promise<Buffer>>();
-
-// Serialize stats file updates to prevent read-modify-write races
-let statsLock: Promise<void> = Promise.resolve();
+// Pinned to globalThis: the sync in the job worker (started from
+// instrumentation) invalidates files and the artwork routes add them, and a
+// production build gives each its own copy of this module. With a lock per
+// copy their read-modify-write updates of _stats.json interleaved and lost
+// counts.
+const globalForImageCache = globalThis as unknown as {
+  imageCacheState: { inFlight: Map<string, Promise<Buffer>>; statsLock: Promise<void> } | undefined;
+};
+const state = (globalForImageCache.imageCacheState ??= {
+  // In-flight request deduplication: cacheKey -> Promise<Buffer>
+  inFlight: new Map<string, Promise<Buffer>>(),
+  // Serializes stats file updates to prevent read-modify-write races
+  statsLock: Promise.resolve(),
+});
+const inFlight = state.inFlight;
 
 class SharpFailedError extends Error {
   constructor(
@@ -93,7 +103,7 @@ async function writeStatsFile(s: { fileCount: number; totalSize: number }): Prom
 
 /** Fire-and-forget stats update, serialized via lock to prevent races. */
 function updateStats(fn: (s: { fileCount: number; totalSize: number }) => void): void {
-  statsLock = statsLock.then(async () => {
+  state.statsLock = state.statsLock.then(async () => {
     const s = await readStatsFile();
     fn(s);
     if (s.fileCount < 0) s.fileCount = 0;

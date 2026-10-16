@@ -5,7 +5,8 @@ describe("sync-semaphore", () => {
   let releaseSyncSlot: typeof import("@/lib/sync/sync-semaphore").releaseSyncSlot;
 
   beforeEach(async () => {
-    // Re-import with fresh module state each time
+    // Re-import with fresh state each time (the slots live on globalThis)
+    delete (globalThis as Record<string, unknown>).syncSlots;
     vi.resetModules();
     const mod = await import("@/lib/sync/sync-semaphore");
     acquireSyncSlot = mod.acquireSyncSlot;
@@ -125,5 +126,21 @@ describe("sync-semaphore", () => {
     expect(resolved).toBe(true);
 
     releaseSyncSlot();
+  });
+
+  it("is one limiter across module copies, as the worker and a route bundle load it", async () => {
+    await acquireSyncSlot();
+    vi.resetModules();
+    const other = await import("@/lib/sync/sync-semaphore");
+
+    let acquired = false;
+    const waiting = other.acquireSyncSlot().then(() => { acquired = true; });
+    await Promise.resolve();
+    expect(acquired).toBe(false);
+
+    releaseSyncSlot();
+    await waiting;
+    expect(acquired).toBe(true);
+    other.releaseSyncSlot();
   });
 });

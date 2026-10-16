@@ -9,7 +9,7 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 // `NODE_ENV` is stubbed to "production" because under "test" the old,
 // development-only pin passed too.
 
-const GLOBAL_KEYS = ["eventBus", "realtimeBus", "realtimeSelfWrites"] as const;
+const GLOBAL_KEYS = ["eventBus", "realtimeBus", "realtimeSelfWrites", "mediaServerFailures"] as const;
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -48,5 +48,13 @@ describe("singletons shared between instrumentation and routes", () => {
     const [writer, reader] = await loadTwice(() => import("@/lib/media-server/realtime/self-writes"));
     writer.markSelfWrites("server-1", ["rk-1"]);
     expect(reader.isSelfWrite("server-1", "rk-1")).toBe(true);
+  });
+
+  it("server health: a server the worker found down is down for the routes too", async () => {
+    const [worker, route] = await loadTwice(() => import("@/lib/media-server/health-cache"));
+    worker.markUnreachable("http://plex.lan:32400", new Error("ECONNREFUSED"));
+    expect(route.isUnreachable("http://plex.lan:32400/")).toBe(true);
+    route.clearUnreachable("http://plex.lan:32400");
+    expect(worker.isUnreachable("http://plex.lan:32400")).toBe(false);
   });
 });

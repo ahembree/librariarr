@@ -5,7 +5,15 @@ interface FailureEntry {
   message: string;
 }
 
-const failures = new Map<string, FailureEntry>();
+// Pinned to globalThis: the job worker and the enforcer (started from
+// instrumentation) and the route handlers each load their own copy of this
+// module in a production build, so an unpinned map was one circuit breaker per
+// side — a server the enforcer had just found down cost every route its full
+// retry budget again, and the shell's unreachable banner disagreed with it.
+const globalForHealth = globalThis as unknown as {
+  mediaServerFailures: Map<string, FailureEntry> | undefined;
+};
+const failures = (globalForHealth.mediaServerFailures ??= new Map<string, FailureEntry>());
 
 function normalize(baseURL: string): string {
   return baseURL.replace(/\/+$/, "");

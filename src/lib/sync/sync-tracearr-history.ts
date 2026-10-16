@@ -498,9 +498,14 @@ interface TracearrImportResult {
  * Keyed per server so two servers importing at once cannot starve each other's
  * updates. Module-level rather than per-run because the backfill runs as a
  * series of separate five-minute slices, and a fresh map each slice would let
- * the first page of every slice through unthrottled.
+ * the first page of every slice through unthrottled. Pinned to globalThis
+ * because the History page's Refresh imports from a route bundle while the
+ * backfill imports from the job worker, and a production build gives each its
+ * own copy of this module — one throttle per side let both through.
  */
-const lastImportProgressEmit = new Map<string, number>();
+const lastImportProgressEmit = ((
+  globalThis as unknown as { tracearrImportProgressEmit?: Map<string, number> }
+).tracearrImportProgressEmit ??= new Map<string, number>());
 const IMPORT_PROGRESS_THROTTLE_MS = 2_000;
 
 function emitImportProgress(userId: string, serverId: string, force = false): void {
