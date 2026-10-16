@@ -4,6 +4,7 @@ import { jsonResponse } from "@/lib/api/json-response";
 import { prisma } from "@/lib/db";
 import type { Prisma } from "@/generated/prisma/client";
 import { applyCommonFilters } from "@/lib/filters/build-where";
+import { loadGenreSpellings } from "@/lib/filters/genre-spellings";
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
 
 export async function GET(request: NextRequest) {
@@ -32,7 +33,7 @@ export async function GET(request: NextRequest) {
     ...(!sf.isSingleServer && { dedupCanonical: true }),
   };
 
-  applyCommonFilters(where, searchParams);
+  applyCommonFilters(where, searchParams, await loadGenreSpellings(searchParams));
 
   const items = await prisma.mediaItem.findMany({
     where,

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
-import { cleanDatabase, disconnectTestDb } from "../../setup/test-db";
+import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
 import {
   callRoute,
@@ -203,5 +203,31 @@ describe("GET /api/media/stats/timeline", () => {
       });
       await expectJson(response, 400);
     }
+  });
+
+  // The dialog offers Day and Week for every date field. Gap-filling a range
+  // wider than its bucket limit used to stop the walk part-way and return only
+  // the buckets walked, dropping every point after them — the newest first.
+  it.each([
+    ["day", "1990-06-15T00:00:00Z", "2024-06-15T00:00:00Z"],
+    ["week", "1927-01-10T00:00:00Z", "2024-06-12T00:00:00Z"],
+  ])("keeps every release on a %s timeline wider than the gap-fill limit", async (bin, oldest, newest) => {
+    const user = await authedUser();
+    const server = await createTestServer(user.id);
+    const library = await createTestLibrary(server.id);
+    for (const date of [oldest, newest]) {
+      const item = await createTestMediaItem(library.id);
+      await getTestPrisma().mediaItem.update({
+        where: { id: item.id },
+        data: { originallyAvailableAt: new Date(date) },
+      });
+    }
+
+    const body = await expectJson<TimelineBody>(
+      await callRoute(GET, { url: `${BASE}?dateField=originallyAvailableAt&bin=${bin}` }),
+      200,
+    );
+    expect(body.points.reduce((sum, p) => sum + p.total, 0)).toBe(2);
+    expect(body.points.at(-1)?.total).toBe(1);
   });
 });

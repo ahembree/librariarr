@@ -47,6 +47,19 @@ interface MediaFiltersProps {
   externalFilters?: MediaFilterValues;
   mediaType?: "MOVIE" | "SERIES" | "MUSIC";
   prefix?: React.ReactNode;
+  /**
+   * Offer the show-level filters (Episode Count, Watched Episodes, Watched %,
+   * Last Episode Aired). Only the series listing computes those figures; on
+   * the episode and season tabs they showed an active chip over an unfiltered
+   * list, so a page opts in rather than getting them for any SERIES type.
+   */
+  seriesAggregateFilters?: boolean;
+  /**
+   * Offer the Audio Tracks / Subtitle Tracks counts. Only the movie listing
+   * evaluates them (see `src/lib/filters/stream-count.ts`); the option range
+   * comes from every library, so without the opt-in every page offered them.
+   */
+  streamCountFilters?: boolean;
 }
 
 // Content rating sort order (most restrictive first)
@@ -1028,7 +1041,7 @@ function InlineSliderPopover({
   );
 }
 
-export function MediaFilters({ onFilterChange, externalFilters, mediaType, prefix }: MediaFiltersProps) {
+export function MediaFilters({ onFilterChange, externalFilters, mediaType, prefix, seriesAggregateFilters = false, streamCountFilters = false }: MediaFiltersProps) {
   const [filters, setFilters] = useState<MediaFilterValues>({});
   const [searchInput, setSearchInput] = useState("");
   const [distinctData, setDistinctData] = useState<DistinctData>({});
@@ -1694,7 +1707,7 @@ export function MediaFilters({ onFilterChange, externalFilters, mediaType, prefi
                 })}
 
                 {/* Stream count filters */}
-                {(distinctData.audioStreamCountMax != null || distinctData.subtitleStreamCountMax != null) && (() => {
+                {streamCountFilters && (distinctData.audioStreamCountMax != null || distinctData.subtitleStreamCountMax != null) && (() => {
                   const hasAudioTracks = distinctData.audioStreamCountMax != null && matchesFilterSearch("Audio Tracks");
                   const hasSubTracks = distinctData.subtitleStreamCountMax != null && matchesFilterSearch("Subtitle Tracks");
                   if (!hasAudioTracks && !hasSubTracks && isSearching) return null;
@@ -1792,7 +1805,7 @@ export function MediaFilters({ onFilterChange, externalFilters, mediaType, prefi
                 })()}
 
                 {/* Series aggregate filters */}
-                {mediaType === "SERIES" && (() => {
+                {mediaType === "SERIES" && seriesAggregateFilters && (() => {
                   const seriesItems: React.ReactNode[] = [];
                   if (matchesFilterSearch("Episode Count")) seriesItems.push(<ComparisonPopover key="episodeCount" label="Episode Count" icon={Hash} conditionsKey="episodeCountConditions" logicKey="episodeCountLogic" conditions={episodeCountConditions} logic={episodeCountLogic} onApply={applyConditions} onClear={clearConditions} step="1" placeholder="10" inline />);
                   if (matchesFilterSearch("Watched Episodes")) seriesItems.push(<ComparisonPopover key="watchedEpisodes" label="Watched Episodes" icon={Play} conditionsKey="watchedEpisodeCountConditions" logicKey="watchedEpisodeCountLogic" conditions={watchedEpisodeCountConditions} logic={watchedEpisodeCountLogic} onApply={applyConditions} onClear={clearConditions} step="1" placeholder="5" inline />);

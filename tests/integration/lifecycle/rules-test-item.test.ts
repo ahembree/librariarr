@@ -45,6 +45,7 @@ vi.mock("@/lib/rules/lifecycle-engine", () => ({
   hasPlayActivityRules: vi.fn(() => false),
   hasStreamRules: mockHasStreamRules,
   hasSeriesAggregateRules: vi.fn(() => false),
+  hasCrossSystemFieldRules: vi.fn(() => false),
   lookupSeerrMeta: vi.fn().mockReturnValue(undefined),
 }));
 

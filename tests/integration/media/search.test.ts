@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
-import { cleanDatabase, disconnectTestDb } from "../../setup/test-db";
+import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
 import {
   callRoute,
@@ -282,5 +282,100 @@ describe("GET /api/media/search", () => {
     });
     const body = await expectJson<{ items: unknown[] }>(response, 200);
     expect(body.items).toHaveLength(0);
+  });
+
+  // Scoped search used to group a fixed window of rows (100 episodes ordered
+  // by the episode's own title, 200 tracks) in JS: a long show filled the
+  // window, so another matching show never came back, and every count was the
+  // number of rows that happened to land in it.
+  it("returns every matching show with its real episode count when seriesScope=true", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const lib = await createTestLibrary(server.id, { type: "SERIES" });
+    const prisma = getTestPrisma();
+    await prisma.mediaItem.createMany({
+      data: Array.from({ length: 120 }, (_, i) => ({
+        libraryId: lib.id, ratingKey: `st-${i}`, type: "SERIES" as const,
+        title: `A Trek Episode ${String(i).padStart(3, "0")}`,
+        parentTitle: "Star Trek", seriesKey: "tvdb:1", seasonNumber: 1, episodeNumber: i + 1,
+      })),
+    });
+    await prisma.mediaItem.createMany({
+      data: Array.from({ length: 3 }, (_, i) => ({
+        libraryId: lib.id, ratingKey: `sw-${i}`, type: "SERIES" as const,
+        title: `Z Andor Episode ${i}`,
+        parentTitle: "Star Wars: Andor", seriesKey: "tvdb:2", seasonNumber: 1, episodeNumber: i + 1,
+      })),
+    });
+    setMockSession({ userId: user.id, isLoggedIn: true });
+
+    const body = await expectJson<{ items: { title: string; itemCount: number }[] }>(
+      await callRoute(GET, { url: "/api/media/search", searchParams: { q: "star", type: "SERIES", seriesScope: "true" } }),
+      200,
+    );
+    expect(body.items.map((i) => [i.title, i.itemCount])).toEqual([
+      ["Star Trek", 120],
+      ["Star Wars: Andor", 3],
+    ]);
+  });
+
+  it("keeps two same-titled shows apart and counts a copy on another server once", async () => {
+    const user = await createTestUser();
+    const serverA = await createTestServer(user.id, { name: "A" });
+    const serverB = await createTestServer(user.id, { name: "B" });
+    const libA = await createTestLibrary(serverA.id, { type: "SERIES" });
+    const libB = await createTestLibrary(serverB.id, { type: "SERIES" });
+    const prisma = getTestPrisma();
+    // The Office (US) on both servers — the same two episodes — and The Office (UK).
+    for (const libraryId of [libA.id, libB.id]) {
+      await prisma.mediaItem.createMany({
+        data: [1, 2].map((e) => ({
+          libraryId, ratingKey: `us-${e}`, type: "SERIES" as const, title: `US ${e}`,
+          parentTitle: "The Office", seriesKey: "tvdb:73244", seasonNumber: 1, episodeNumber: e,
+          dedupKey: `office-us-1-${e}`,
+        })),
+      });
+    }
+    await prisma.mediaItem.create({
+      data: {
+        libraryId: libA.id, ratingKey: "uk-1", type: "SERIES", title: "UK 1",
+        parentTitle: "The Office", seriesKey: "tvdb:78107", seasonNumber: 1, episodeNumber: 1,
+      },
+    });
+    setMockSession({ userId: user.id, isLoggedIn: true });
+
+    const body = await expectJson<{ items: { title: string; itemCount: number }[] }>(
+      await callRoute(GET, { url: "/api/media/search", searchParams: { q: "office", type: "SERIES", seriesScope: "true" } }),
+      200,
+    );
+    expect(body.items.map((i) => i.itemCount).sort()).toEqual([1, 2]);
+    expect(body.items.every((i) => i.title === "The Office")).toBe(true);
+  });
+
+  it("returns every matching artist with its real track count when musicScope=true", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const lib = await createTestLibrary(server.id, { type: "MUSIC" });
+    const prisma = getTestPrisma();
+    await prisma.mediaItem.createMany({
+      data: Array.from({ length: 210 }, (_, i) => ({
+        libraryId: lib.id, ratingKey: `b-${i}`, type: "MUSIC" as const, title: `Track ${i}`,
+        parentTitle: "The Beatles", albumTitle: `Album ${i % 10}`,
+      })),
+    });
+    await prisma.mediaItem.create({
+      data: { libraryId: lib.id, ratingKey: "w-1", type: "MUSIC", title: "Baba O'Riley", parentTitle: "The Who", albumTitle: "Who's Next" },
+    });
+    setMockSession({ userId: user.id, isLoggedIn: true });
+
+    const body = await expectJson<{ items: { title: string; scope: string; itemCount: number }[] }>(
+      await callRoute(GET, { url: "/api/media/search", searchParams: { q: "the", type: "MUSIC", musicScope: "true" } }),
+      200,
+    );
+    const artists = body.items.filter((i) => i.scope === "artist");
+    expect(artists.map((a) => [a.title, a.itemCount])).toEqual([
+      ["The Beatles", 210],
+      ["The Who", 1],
+    ]);
   });
 });

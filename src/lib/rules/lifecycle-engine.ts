@@ -25,7 +25,7 @@ import {
   ruleToWhere,
   STREAM_COUNT_FIELDS,
 } from "@/lib/conditions/where-builder";
-import { fetchCrossSystemData } from "@/lib/conditions/cross-system-data";
+import { fetchCrossSystemData, foldCrossSystemData } from "@/lib/conditions/cross-system-data";
 import type { Condition } from "@/lib/conditions/types";
 import { streamQueryNeedsInMemory } from "@/lib/conditions/stream-query-where";
 import { buildGroupConditions, buildGroupConditionsPreFilter } from "@/lib/conditions/group-composition";
@@ -310,7 +310,7 @@ function hasStreamCountRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boo
 }
 
 /** Check if any rule uses cross-system fields (always require in-memory evaluation) */
-function hasCrossSystemFieldRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
+export function hasCrossSystemFieldRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
   if (rules.length === 0) return false;
   if (isRuleGroups(rules)) {
     for (const group of rules) {
@@ -2229,6 +2229,11 @@ export async function evaluateSeriesScope(
     });
   }
 
+  // Cross-system fields, read across each show's episodes (foldCrossSystemData).
+  const crossSystem = hasCrossSystemFieldRules(rules)
+    ? await fetchCrossSystemData(allEpisodes.map((ep) => ep.id))
+    : undefined;
+
   // Evaluate rules in-memory against aggregated series records
   const externalIdSource = "TVDB";
   const matching = [];
@@ -2237,6 +2242,7 @@ export async function evaluateSeriesScope(
     // Serialize for in-memory evaluation (mirrors evaluateLifecycleRules output format)
     const item: Record<string, unknown> = {
       ...series,
+      ...foldCrossSystemData(series.memberIds, crossSystem),
       fileSize: series.fileSize,
       lastPlayedAt: series.lastPlayedAt
         ? series.lastPlayedAt instanceof Date
@@ -2315,6 +2321,7 @@ export async function evaluateSeriesScope(
               streams: "streams" in ep ? ep.streams : [],
               watchHistory: "watchHistory" in ep ? ep.watchHistory : [],
               externalIds: epExternalIds,
+              ...crossSystem?.get(ep.id),
               ...aggInjection,
             };
             return evaluateAllRulesInMemory(rules, epItem, arrMeta, seerrMeta);
@@ -2466,9 +2473,15 @@ export async function evaluateMusicScope(
   const externalIdSource = "MUSICBRAINZ";
   const matching = [];
 
+  // Cross-system fields, read across each artist's tracks (foldCrossSystemData).
+  const crossSystem = hasCrossSystemFieldRules(rules)
+    ? await fetchCrossSystemData(allTracks.map((t) => t.id))
+    : undefined;
+
   for (const artist of aggregated) {
     const item: Record<string, unknown> = {
       ...artist,
+      ...foldCrossSystemData(artist.memberIds, crossSystem),
       fileSize: artist.fileSize,
       lastPlayedAt: artist.lastPlayedAt
         ? artist.lastPlayedAt instanceof Date

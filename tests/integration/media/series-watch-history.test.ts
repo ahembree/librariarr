@@ -154,6 +154,26 @@ describe("GET /api/media/series/watch-history", () => {
     expect(body.error).toBe("episodeNumber must be a number");
   });
 
+  it("answers an empty page for a season or episode number out of the column's range", async () => {
+    // Bound into `::int`, an out-of-range number failed the query ("integer
+    // out of range") — a 500 where /api/media/series answers an empty page.
+    const ep = await makeEpisode(1, 1, "Slumber Party Panic");
+    await addWatch(ep);
+
+    for (const searchParams of [
+      { parentTitle: "Adventure Time", seasonNumber: "3000000000" } as Record<string, string>,
+      { parentTitle: "Adventure Time", episodeNumber: "-3000000000" },
+      { parentTitle: "Adventure Time", seasonNumber: "99999999999999999999" },
+    ]) {
+      const data = await expectJson<HistoryResponse>(
+        await callRoute(GET, { url: "/api/media/series/watch-history", searchParams }),
+        200,
+      );
+      expect(data.items).toEqual([]);
+      expect(data.pagination.totalCount).toBe(0);
+    }
+  });
+
   it("returns every play across all seasons of the series, with user/time/episode", async () => {
     const s1e1 = await makeEpisode(1, 1, "Slumber Party Panic");
     const s2e3 = await makeEpisode(2, 3, "Loyal to the King");

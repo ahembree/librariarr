@@ -20,21 +20,29 @@ vi.mock("@/lib/logger", () => ({
   dbLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-const { mockEnqueueJob } = vi.hoisted(() => ({
-  mockEnqueueJob: vi.fn().mockResolvedValue(undefined),
+// `enqueueJob` answers whether the job was queued.
+const { mockEnqueueJob, mockEmit } = vi.hoisted(() => ({
+  mockEnqueueJob: vi.fn().mockResolvedValue(true),
+  mockEmit: vi.fn(),
 }));
 
 vi.mock("@/lib/jobs/client", () => ({ enqueueJob: mockEnqueueJob }));
+vi.mock("@/lib/events/event-bus", () => ({ eventBus: { emit: mockEmit } }));
 
 import { POST } from "@/app/api/sync/by-type/route";
-import { TASK_SYNC_SERVER, TASK_SYNC_WATCH_HISTORY, MAIN_QUEUE } from "@/lib/jobs/constants";
+import {
+  TASK_SYNC_SERVER,
+  TASK_SYNC_WATCH_HISTORY,
+  MAIN_QUEUE,
+  REQUESTED_SYNC_PRIORITY,
+} from "@/lib/jobs/constants";
 
 describe("POST /api/sync/by-type", () => {
   beforeEach(async () => {
     await cleanDatabase();
     clearMockSession();
     vi.clearAllMocks();
-    mockEnqueueJob.mockResolvedValue(undefined);
+    mockEnqueueJob.mockResolvedValue(true);
   });
 
   afterAll(async () => {
@@ -74,9 +82,94 @@ describe("POST /api/sync/by-type", () => {
         libraryKey: movies.key,
         skipWatchHistory: true,
         trigger: "manual sync of every MOVIE library",
+        syncJobId: expect.any(String),
       },
-      expect.objectContaining({ jobKey: `sync:${server.id}:${movies.key}`, queueName: MAIN_QUEUE }),
+      expect.objectContaining({
+        jobKey: `sync:${server.id}:${movies.key}`,
+        queueName: MAIN_QUEUE,
+        priority: REQUESTED_SYNC_PRIORITY,
+      }),
     );
+  });
+
+  // The library page's Sync button polls /api/sync/status two seconds after
+  // the click and ends its spinner when no job is RUNNING or PENDING. With the
+  // row written only when the worker reached the job, a busy MAIN_QUEUE made
+  // every click read as an instant, finished sync.
+  it("creates one PENDING SyncJob per server that every library job claims", async () => {
+    const testPrisma = getTestPrisma();
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    await createTestLibrary(server.id, { key: "m1", type: "MOVIE" });
+    await createTestLibrary(server.id, { key: "m2", type: "MOVIE" });
+
+    setMockSession({ userId: user.id, isLoggedIn: true });
+
+    await callRoute(POST, {
+      url: "/api/sync/by-type",
+      method: "POST",
+      body: { libraryType: "MOVIE" },
+    });
+
+    const rows = await testPrisma.syncJob.findMany({ where: { mediaServerId: server.id } });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].status).toBe("PENDING");
+
+    const libraryJobs = mockEnqueueJob.mock.calls.filter((call) => call[0] === TASK_SYNC_SERVER);
+    expect(libraryJobs).toHaveLength(2);
+    for (const [, payload] of libraryJobs) {
+      expect((payload as { syncJobId: string }).syncJobId).toBe(rows[0].id);
+    }
+    expect(mockEmit).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "sync:started", meta: { serverId: server.id } }),
+    );
+  });
+
+  it("closes the row as FAILED when no library job could be queued", async () => {
+    const testPrisma = getTestPrisma();
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    await createTestLibrary(server.id, { key: "m1", type: "MOVIE" });
+    mockEnqueueJob.mockResolvedValue(false);
+
+    setMockSession({ userId: user.id, isLoggedIn: true });
+
+    const response = await callRoute(POST, {
+      url: "/api/sync/by-type",
+      method: "POST",
+      body: { libraryType: "MOVIE" },
+    });
+    const body = await expectJson<{ syncedCount: number; skippedCount: number }>(response, 200);
+
+    expect(body.syncedCount).toBe(0);
+    expect(body.skippedCount).toBe(1);
+    // A PENDING row nothing will claim would block every later sync request.
+    const rows = await testPrisma.syncJob.findMany({ where: { mediaServerId: server.id } });
+    expect(rows.map((r) => r.status)).toEqual(["FAILED"]);
+    // No follow-up refresh and no "started" for a sync that was never queued.
+    expect(mockEnqueueJob.mock.calls.some((call) => call[0] === TASK_SYNC_WATCH_HISTORY)).toBe(false);
+    expect(mockEmit).not.toHaveBeenCalled();
+  });
+
+  it("skips a server whose sync is already queued", async () => {
+    const testPrisma = getTestPrisma();
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    await createTestLibrary(server.id, { key: "m1", type: "MOVIE" });
+    await testPrisma.syncJob.create({ data: { mediaServerId: server.id, status: "PENDING" } });
+
+    setMockSession({ userId: user.id, isLoggedIn: true });
+
+    const response = await callRoute(POST, {
+      url: "/api/sync/by-type",
+      method: "POST",
+      body: { libraryType: "MOVIE" },
+    });
+    const body = await expectJson<{ syncedCount: number; skippedCount: number }>(response, 200);
+
+    expect(body.skippedCount).toBe(1);
+    expect(mockEnqueueJob).not.toHaveBeenCalled();
+    expect(await testPrisma.syncJob.count({ where: { mediaServerId: server.id } })).toBe(1);
   });
 
   it("queues a watch-history refresh after the library jobs of each server", async () => {
@@ -107,9 +200,10 @@ describe("POST /api/sync/by-type", () => {
     expect(tasks.filter((t) => t === TASK_SYNC_WATCH_HISTORY)).toHaveLength(1);
     expect(tasks.filter((t) => t === TASK_SYNC_SERVER)).toHaveLength(2);
 
-    // MAIN_QUEUE runs in enqueue order, so the refresh must be queued *after*
-    // both library jobs — otherwise syncWatchHistoryTask's "a full sync is
-    // already running" guard swallows it and nothing reconciles.
+    // The refresh must run *after* both library jobs — otherwise
+    // syncWatchHistoryTask's "a full sync is already running" guard swallows
+    // it and nothing reconciles. MAIN_QUEUE orders by priority, then enqueue
+    // time: the library jobs are the more urgent and are queued first.
     const libraryKeys = [a.key, b.key];
     const lastLibraryJob = Math.max(
       ...mockEnqueueJob.mock.calls
@@ -118,6 +212,10 @@ describe("POST /api/sync/by-type", () => {
         .map(({ i }) => i),
     );
     expect(tasks.indexOf(TASK_SYNC_WATCH_HISTORY)).toBeGreaterThan(lastLibraryJob);
+    const refreshSpec = mockEnqueueJob.mock.calls.find((call) => call[0] === TASK_SYNC_WATCH_HISTORY)![2] as {
+      priority?: number;
+    };
+    expect(refreshSpec.priority ?? 0).toBeGreaterThan(REQUESTED_SYNC_PRIORITY);
   });
 
   it("skips servers that already have a running sync", async () => {

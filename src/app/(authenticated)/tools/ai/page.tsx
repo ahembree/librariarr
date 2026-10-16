@@ -8,6 +8,7 @@ import { MarkdownLite } from "@/components/ai/markdown-lite";
 import { Skeleton } from "@/components/ui/skeleton";
 import { lazyComponent } from "@/components/lazy-component";
 import type { AiEvidence, AiChatResponse } from "@/lib/ai/types";
+import { chatHistoryForRequest } from "@/components/ai/chat-history";
 
 // Loaded on demand: evidence charts are built on recharts (~500 KB of script),
 // and nothing renders one until an answer arrives.
@@ -86,13 +87,17 @@ export default function AiAnalysisPage() {
         const resp = await fetch("/api/ai/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ messages: history.map((m) => ({ role: m.role, content: m.content })) }),
+          // The route caps the conversation's length; the newest turns that fit.
+          body: JSON.stringify({ messages: chatHistoryForRequest(history) }),
           signal: controller.signal,
         });
 
         if (!resp.ok || !resp.body) {
           const err = await resp.json().catch(() => null);
-          throw new Error(err?.error ?? "Request failed");
+          // A validation refusal's `error` is only "Validation failed"; the
+          // first detail is the part that says what was wrong.
+          const detail = Array.isArray(err?.details) && typeof err.details[0] === "string" ? err.details[0] : null;
+          throw new Error(detail ? `${err?.error ?? "Request failed"} — ${detail}` : err?.error ?? "Request failed");
         }
 
         const reader = resp.body.getReader();

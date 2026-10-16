@@ -848,15 +848,19 @@ export function LifecycleRulePage({
     collectionRecommended, collectionSort, discordNotifyOnAction, discordNotifyOnMatch, stickyMatches, serverIds,
   ]);
 
-  // Whether rule logic (rules/scope/servers) changed vs only config fields
+  // Whether rule logic (rules/scope/servers) changed vs only config fields.
+  // With Arr criteria the Arr instance is rule logic too: the criteria are read
+  // from it, so the matches judged on the old one must not be kept (the PUT
+  // clears them in that case whatever this sends).
   const rulesChanged = useMemo(() => {
     if (!snapshot) return true;
     return (
       snapshot.groups !== JSON.stringify(groups) ||
       snapshot.seriesScope !== seriesScope ||
-      snapshot.serverIds !== JSON.stringify([...serverIds].sort())
+      snapshot.serverIds !== JSON.stringify([...serverIds].sort()) ||
+      (ruleUsesArr && snapshot.arrInstanceId !== arrInstanceId)
     );
-  }, [snapshot, groups, seriesScope, serverIds]);
+  }, [snapshot, groups, seriesScope, serverIds, ruleUsesArr, arrInstanceId]);
 
   // The saved targetQualityProfileId no longer exists on the selected Arr
   // instance (e.g. the user deleted the profile from Sonarr/Radarr/Lidarr,
@@ -3532,7 +3536,13 @@ export function LifecycleRulePage({
                 items={diffData.retained}
                 color="text-muted-foreground"
                 bgColor="bg-muted/50"
-                note="Scheduled actions will be preserved"
+                note={
+                  // The PUT clears every match when the instance the Arr criteria
+                  // are read from changes, so nothing scheduled survives that save.
+                  ruleUsesArr && snapshot && snapshot.arrInstanceId !== arrInstanceId
+                    ? "Matches restart against the new *arr instance — pending actions are rescheduled"
+                    : "Scheduled actions will be preserved"
+                }
                 expanded={diffExpanded.retained ?? false}
                 onToggle={() => setDiffExpanded((prev) => ({ ...prev, retained: !prev.retained }))}
               />

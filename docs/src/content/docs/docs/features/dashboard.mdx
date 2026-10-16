@@ -96,13 +96,13 @@ Custom cards let you create charts with any dimension and chart type. Click **Cu
 | Treemap | Proportional rectangle grid |
 | Heatmap | Two-dimension correlation grid (requires two different dimensions; Audio Language and Subtitle Language cannot be crossed with each other). A language cell counts items, so a film with two English audio tracks counts once |
 | Count | Large single number |
-| Timeline | Time-series chart with zoom slider; pick a date field for the X-axis, an optional breakdown dimension for colored series, and a time interval (day, week, month, quarter, year). Genre, Countries, Audio Language and Subtitle Language can't color a timeline, so they aren't offered |
+| Timeline | Time-series chart with zoom slider; pick a date field for the X-axis, an optional breakdown dimension for colored series, and a time interval (day, week, month, quarter, year). Genre, Countries, Audio Language and Subtitle Language can't color a timeline, so they aren't offered. A timeline that would need more than 5,000 intervals (Release Date by day across decades) is drawn without the empty intervals filled in |
 
 ##### Available Dimensions
 
 Custom cards can visualize data across many dimensions, grouped by category:
 
-- **Video** — Resolution, Video Codec, Dynamic Range, Video Profile, Frame Rate, Bit Depth, Scan Type, Aspect Ratio, Video Bitrate
+- **Video** — Resolution, Video Codec, Dynamic Range, Video Profile, Frame Rate, Bit Depth, Scan Type, Aspect Ratio, Video Bitrate (music tracks are left out of these, rather than counted as Unknown)
 - **Audio** — Audio Codec, Audio Channels, Audio Profile, Sampling Rate, Audio Bitrate
 - **Streams** — Audio Language, Subtitle Language
 - **Content** — Content Rating, Genre, Year, Studio, Countries

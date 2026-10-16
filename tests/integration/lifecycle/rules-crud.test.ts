@@ -13,6 +13,7 @@ import {
   createTestSonarrInstance,
   createTestRadarrInstance,
   createTestCollection,
+  createTestRuleMatch,
 } from "../../setup/test-helpers";
 
 // Critical: redirect prisma to test database
@@ -777,6 +778,75 @@ describe("Lifecycle Rules CRUD", () => {
 
         const after = await prisma.lifecycleAction.findUnique({ where: { id: completed.id } });
         expect(after?.actionType).toBe("SEARCH_RADARR");
+      });
+
+      // A rule set's Arr criteria are read from its own instance, so with Arr
+      // criteria a new instance is a rule change: kept, the matches judged on
+      // the old instance armed the re-pointed actions against copies nothing
+      // checked (a "keep" tag on the 4K Radarr ignored, the 4K copy deleted).
+      async function setupArrScopedMatch(rules: unknown) {
+        const user = await createTestUser();
+        const server = await createTestServer(user.id);
+        const library = await createTestLibrary(server.id, { type: "MOVIE" });
+        const item = await createTestMediaItem(library.id, { title: "Dune", type: "MOVIE" });
+        const radarr1080 = await createTestRadarrInstance(user.id, { name: "Radarr 1080p" });
+        const radarr4k = await createTestRadarrInstance(user.id, { name: "Radarr 4K", url: "http://radarr4k:7878" });
+        const ruleSet = await createTestRuleSet(user.id, {
+          type: "MOVIE", rules, actionEnabled: true, actionType: "DELETE_RADARR", arrInstanceId: radarr1080.id,
+        });
+        await createTestRuleMatch(ruleSet.id, item.id, { id: item.id, title: "Dune" });
+        const action = await getTestPrisma().lifecycleAction.create({
+          data: {
+            userId: user.id, mediaItemId: item.id, ruleSetId: ruleSet.id, actionType: "DELETE_RADARR",
+            status: "PENDING", scheduledFor: new Date(), arrInstanceId: radarr1080.id,
+          },
+        });
+        return { user, ruleSet, action, radarr4k };
+      }
+
+      it("clears matches and PENDING actions when the instance its Arr criteria are read from changes", async () => {
+        const { user, ruleSet, action, radarr4k } = await setupArrScopedMatch([{
+          id: "g", condition: "AND", groups: [],
+          rules: [{ id: "r", field: "arrTag", operator: "notContains", value: "keep", condition: "AND" }],
+        }]);
+        setMockSession({ isLoggedIn: true, userId: user.id });
+
+        await expectJson(
+          await callRouteWithParams(PUT, { id: ruleSet.id }, {
+            url: `/api/lifecycle/rules/${ruleSet.id}`,
+            method: "PUT",
+            searchParams: { clearMatches: "false" },
+            body: { arrInstanceId: radarr4k.id },
+          }),
+          200,
+        );
+
+        const prisma = getTestPrisma();
+        expect(await prisma.ruleMatch.count({ where: { ruleSetId: ruleSet.id } })).toBe(0);
+        expect(await prisma.lifecycleAction.findUnique({ where: { id: action.id } })).toBeNull();
+      });
+
+      it("re-points PENDING actions at a new instance when the rules read nothing from Arr", async () => {
+        const { user, ruleSet, action, radarr4k } = await setupArrScopedMatch([{
+          id: "g", condition: "AND", groups: [],
+          rules: [{ id: "r", field: "playCount", operator: "equals", value: "0", condition: "AND" }],
+        }]);
+        setMockSession({ isLoggedIn: true, userId: user.id });
+
+        await expectJson(
+          await callRouteWithParams(PUT, { id: ruleSet.id }, {
+            url: `/api/lifecycle/rules/${ruleSet.id}`,
+            method: "PUT",
+            searchParams: { clearMatches: "false" },
+            body: { arrInstanceId: radarr4k.id },
+          }),
+          200,
+        );
+
+        const prisma = getTestPrisma();
+        expect(await prisma.ruleMatch.count({ where: { ruleSetId: ruleSet.id } })).toBe(1);
+        const after = await prisma.lifecycleAction.findUnique({ where: { id: action.id } });
+        expect(after?.arrInstanceId).toBe(radarr4k.id);
       });
 
       it("cancels PENDING actions instead of re-snapshotting when the action is disabled", async () => {

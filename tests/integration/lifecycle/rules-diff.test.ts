@@ -35,6 +35,7 @@ const mockHasSeerrRules = vi.hoisted(() => vi.fn().mockReturnValue(false));
 const mockHasAnyActiveRules = vi.hoisted(() => vi.fn().mockReturnValue(true));
 const mockHasWatchedByUserRules = vi.hoisted(() => vi.fn().mockReturnValue(false));
 const mockHasPlayActivityRules = vi.hoisted(() => vi.fn().mockReturnValue(false));
+const mockHasSeriesAggregateRules = vi.hoisted(() => vi.fn().mockReturnValue(false));
 const mockGroupSeriesResults = vi.hoisted(() => vi.fn().mockImplementation((items: unknown[]) => items));
 const mockGetMatchedCriteriaForItems = vi.hoisted(() => vi.fn().mockReturnValue(new Map()));
 const mockGetActualValuesForAllRules = vi.hoisted(() => vi.fn().mockReturnValue(new Map()));
@@ -48,6 +49,7 @@ vi.mock("@/lib/rules/lifecycle-engine", () => ({
   hasAnyActiveRules: mockHasAnyActiveRules,
   hasWatchedByUserRules: mockHasWatchedByUserRules,
   hasPlayActivityRules: mockHasPlayActivityRules,
+  hasSeriesAggregateRules: mockHasSeriesAggregateRules,
   groupSeriesResults: mockGroupSeriesResults,
   getMatchedCriteriaForItems: mockGetMatchedCriteriaForItems,
   getActualValuesForAllRules: mockGetActualValuesForAllRules,
@@ -82,6 +84,7 @@ describe("POST /api/lifecycle/rules/[id]/diff", () => {
     mockHasEnabledArrInstances.mockResolvedValue(true);
     mockHasEnabledSeerrInstances.mockResolvedValue(true);
     mockEvaluateRules.mockResolvedValue([]);
+    mockHasSeriesAggregateRules.mockReturnValue(false);
   });
 
   afterAll(async () => {
@@ -594,6 +597,26 @@ describe("POST /api/lifecycle/rules/[id]/diff", () => {
       seasonNumber: null,
       episodeNumber: null,
     });
+  });
+
+  it("routes a series-aggregate rule through the series path with series scope off, as detection does", async () => {
+    // Evaluated per episode the aggregate reads absent, and the diff a user
+    // reviews before arming an action disagreed with what detection stores.
+    const { user, server, ruleSet } = await seedSeriesFixture("SERIES");
+    mockHasSeriesAggregateRules.mockReturnValue(true);
+    setMockSession({ isLoggedIn: true, userId: user.id });
+
+    await expectJson(
+      await callRouteWithParams(POST, { id: ruleSet.id }, {
+        url: `/api/lifecycle/rules/${ruleSet.id}/diff`,
+        method: "POST",
+        body: { rules: activeGroup, type: "SERIES", seriesScope: false, serverIds: [server.id] },
+      }),
+      200,
+    );
+
+    expect(mockEvaluateSeriesScope).toHaveBeenCalledWith(activeGroup, [server.id], undefined, undefined, true);
+    expect(mockEvaluateRules).not.toHaveBeenCalled();
   });
 
   it("leaves MOVIE rows untouched — they have no group to aggregate", async () => {

@@ -109,13 +109,14 @@ function OnboardingContent() {
 
   // ─── Plex OAuth (for users without a Plex token) ───
 
-  const fetchPlexServers = useCallback(async () => {
+  /** Lists the account's Plex servers; true when there was a Plex token to list them with. */
+  const fetchPlexServers = useCallback(async (): Promise<boolean> => {
     try {
       const [plexRes, existingRes] = await Promise.all([
         fetch("/api/auth/plex/servers"),
         fetch("/api/servers"),
       ]);
-      if (!plexRes.ok) return;
+      if (!plexRes.ok) return false;
       setHasPlexToken(true);
       const plexData = await plexRes.json();
       const existingData = await existingRes.json();
@@ -136,8 +137,10 @@ function OnboardingContent() {
       if (alreadyAdded.size > 0) setAddedServers(alreadyAdded);
 
       setMode("plex");
+      return true;
     } catch {
       // Network error
+      return false;
     }
   }, []);
 
@@ -162,10 +165,12 @@ function OnboardingContent() {
   useEffect(() => {
     async function detect() {
       try {
-        await fetchPlexServers();
-        // If fetchPlexServers succeeded, it set mode to "plex"
-        // Mark as auto-detected so we don't show a back button
-        setAutoDetectedPlex(true);
+        // Marked only when a token was actually found, so the Plex view hides
+        // its back button for a Plex sign-in alone. It used to be set
+        // unconditionally — `fetchPlexServers` swallows a missing token — so a
+        // local account that linked Plex later lost the way back to Jellyfin
+        // and Emby.
+        if (await fetchPlexServers()) setAutoDetectedPlex(true);
       } catch {
         // No Plex token or network error → stay on "choose"
       } finally {
@@ -281,15 +286,19 @@ function OnboardingContent() {
 
   // ─── Manual server handlers (Jellyfin/Emby) ───
 
+  // Connect only TESTS the connection; the server is created on "Select
+  // Libraries". Connect used to create it, and the form stays editable after a
+  // successful connect — any edit (a typo in the name) brought Connect back,
+  // and pressing it again created a second server, since a Jellyfin/Emby
+  // server has no machine id to deduplicate on.
   const testManualConnection = useCallback(async () => {
     setManualTesting(true);
     setManualTestResult(null);
     try {
-      const response = await fetch("/api/servers", {
+      const response = await fetch("/api/servers/test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          name: manualForm.name || `${manualType === "JELLYFIN" ? "Jellyfin" : "Emby"} Server`,
           url: manualForm.url,
           accessToken: manualForm.apiKey,
           type: manualType,
@@ -297,12 +306,10 @@ function OnboardingContent() {
         }),
       });
       const data = await response.json();
-      if (!response.ok) {
+      if (!response.ok || !data.ok) {
         setManualTestResult({ ok: false, error: data.detail || data.error });
       } else {
         setManualTestResult({ ok: true });
-        // Server was created — store its ID for library selection
-        setManualServerId(data.server?.id || null);
       }
     } catch {
       setManualTestResult({ ok: false, error: "Network error — could not reach Librariarr API" });
@@ -312,11 +319,38 @@ function OnboardingContent() {
   }, [manualForm, manualType]);
 
   const proceedToManualLibraries = useCallback(async () => {
-    if (!manualServerId) return;
     setManualAdding(true);
     setManualError(null);
+    let serverId = manualServerId;
+    if (!serverId) {
+      try {
+        const response = await fetch("/api/servers", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: manualForm.name || `${manualType === "JELLYFIN" ? "Jellyfin" : "Emby"} Server`,
+            url: manualForm.url,
+            accessToken: manualForm.apiKey,
+            type: manualType,
+            tlsSkipVerify: manualForm.tlsSkipVerify,
+          }),
+        });
+        const data = await response.json().catch(() => null);
+        if (!response.ok || !data?.server?.id) {
+          setManualError(data?.detail || data?.error || "Failed to add server");
+          setManualAdding(false);
+          return;
+        }
+        serverId = data.server.id as string;
+        setManualServerId(serverId);
+      } catch {
+        setManualError("Network error — could not reach Librariarr API");
+        setManualAdding(false);
+        return;
+      }
+    }
     try {
-      const libRes = await fetch(`/api/servers/${manualServerId}/libraries`);
+      const libRes = await fetch(`/api/servers/${serverId}/libraries`);
       const libData = await libRes.json();
       const libs: DiscoveredLibrary[] = libData.libraries || [];
       setManualLibraries(libs);
@@ -326,12 +360,12 @@ function OnboardingContent() {
       setManualSelectingLibs(true);
     } catch {
       // If library fetch fails, just sync all
-      await fetch(`/api/servers/${manualServerId}/sync`, { method: "POST" });
+      await fetch(`/api/servers/${serverId}/sync`, { method: "POST" });
       setManualAdded(true);
     } finally {
       setManualAdding(false);
     }
-  }, [manualServerId]);
+  }, [manualServerId, manualForm, manualType]);
 
   const confirmManualLibraries = useCallback(async () => {
     if (!manualServerId) return;
@@ -791,7 +825,7 @@ function OnboardingContent() {
                     {manualTestResult.ok ? (
                       <>
                         <CheckCircle className="h-4 w-4 shrink-0" />
-                        Connection successful — server added
+                        Connection successful
                       </>
                     ) : (
                       <>

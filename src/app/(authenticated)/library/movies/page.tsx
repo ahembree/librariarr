@@ -358,6 +358,7 @@ export default function MoviesPage() {
       <MediaFilters
         onFilterChange={(f) => { setFilters((prev) => (sameFilters(prev, f) ? prev : f)); persistFilters(f); }}
         externalFilters={Object.keys(savedFilters).length > 0 ? savedFilters : undefined}
+        streamCountFilters
         prefix={
           <LibraryToolbar
             viewMode={viewMode}

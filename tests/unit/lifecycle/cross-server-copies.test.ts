@@ -11,6 +11,7 @@ import {
   copyIdsOf,
   copyRank,
   crossServerCopyKeys,
+  groupsTracksByArtist,
 } from "@/lib/lifecycle/cross-server-copies";
 import type { ArrDataMap } from "@/lib/rules/lifecycle-engine";
 
@@ -109,5 +110,39 @@ describe("copyRank", () => {
     expect(copyRank("a", held, listed)).toBe(0);
     expect(copyRank("b", held, listed)).toBe(1);
     expect(copyRank("c", held, listed)).toBe(2);
+  });
+});
+
+describe("track-scope music", () => {
+  const track = (id: string, dedupKey: string | null) => ({ ...withIds(id, "MUSICBRAINZ", "artist-1"), dedupKey });
+
+  it("folds an artist's tracks only for an artist-level action", () => {
+    const base = { type: "MUSIC" as const, trackScope: true, actionArmed: true };
+    expect(groupsTracksByArtist({ ...base, actionType: "DELETE_LIDARR" })).toBe(true);
+    expect(groupsTracksByArtist({ ...base, actionType: "UNMONITOR_LIDARR" })).toBe(true);
+    expect(groupsTracksByArtist({ ...base, actionType: "DELETE_FILES_LIDARR" })).toBe(false);
+    expect(groupsTracksByArtist({ ...base, actionType: "DO_NOTHING" })).toBe(false);
+    expect(groupsTracksByArtist({ ...base, actionArmed: false, actionType: "DELETE_LIDARR" })).toBe(false);
+    expect(groupsTracksByArtist({ ...base, trackScope: false, actionType: "DELETE_LIDARR" })).toBe(false);
+    expect(groupsTracksByArtist({ ...base, type: "MOVIE", actionType: "DELETE_RADARR" })).toBe(false);
+  });
+
+  it("keys a track by its own identity, not its artist's id, for a track file delete", async () => {
+    const keys = await crossServerCopyKeys(
+      [track("a1", "music:x:one"), track("a2", "music:x:two"), track("b1", "music:x:one"), track("nokey", null)],
+      { type: "MUSIC", serverCount: 2, actionArmed: true, trackScope: true, actionType: "DELETE_FILES_LIDARR" },
+    );
+    expect(keys.get("a1")).toBe(keys.get("b1"));
+    expect(keys.get("a1")).not.toBe(keys.get("a2"));
+    expect(keys.has("nokey")).toBe(false);
+  });
+
+  it("keys every track by its artist for an artist-level action, on one server too", async () => {
+    const keys = await crossServerCopyKeys(
+      [track("a1", "music:x:one"), track("a2", "music:x:two")],
+      { type: "MUSIC", serverCount: 1, actionArmed: true, trackScope: true, actionType: "DELETE_LIDARR" },
+    );
+    expect(keys.get("a1")).toBe("artist-1");
+    expect(keys.get("a2")).toBe("artist-1");
   });
 });

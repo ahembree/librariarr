@@ -11,8 +11,10 @@ import {
   hasStreamRules,
   hasSeriesAggregateRules,
   hasWatchedByUserRules,
+  hasCrossSystemFieldRules,
   lookupSeerrMeta,
 } from "@/lib/rules/lifecycle-engine";
+import { fetchCrossSystemData, foldCrossSystemData } from "@/lib/conditions/cross-system-data";
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRuleGroup, LifecycleRule } from "@/lib/rules/types";
 import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
@@ -109,9 +111,15 @@ export async function POST(request: NextRequest) {
     seerrData = await fetchSeerrMetadata(session.userId!, type);
   }
 
+  // Cross-system fields, enriched as detection enriches them: the item's own,
+  // and a group's read across its members (below).
+  const crossSystemFor = (ids: string[]) =>
+    hasCrossSystemFieldRules(typedRules) ? fetchCrossSystemData(ids) : Promise.resolve(undefined);
+
   // Single item, as the episode/movie/track itself.
   const single: Record<string, unknown> = {
     ...item,
+    ...(await crossSystemFor([item.id]))?.get(item.id),
     fileSize: item.fileSize?.toString() ?? null,
     lastPlayedAt: item.lastPlayedAt?.toISOString() ?? null,
     addedAt: item.addedAt?.toISOString() ?? null,
@@ -221,6 +229,7 @@ export async function POST(request: NextRequest) {
 
     group = {
       ...item,
+      ...foldCrossSystemData(allItems.map((ep) => ep.id), await crossSystemFor(allItems.map((ep) => ep.id))),
       title: groupField,
       ...(type === "SERIES"
         ? { summary: item.parentSummary ?? item.summary }

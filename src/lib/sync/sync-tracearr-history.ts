@@ -18,7 +18,6 @@ import {
   TracearrClient,
   type TracearrHistoryRecord,
 } from "@/lib/tracearr/tracearr-client";
-import { invalidateWatchHistoryEvidence } from "@/lib/media/watch-evidence";
 import { eventBus } from "@/lib/events/event-bus";
 import {
   beginTracearrImport,
@@ -268,8 +267,8 @@ function upsertAssignment(
   // cosmetic difference.
   //
   // So: a bridged name may overwrite anything — it is the best value there is,
-  // and being able to correct an earlier fallback write is what makes a
-  // degraded forward run self-healing. A fallback name may only fill a NULL.
+  // and it corrects an earlier fallback write for an account the map did not
+  // cover then and does now. A fallback name may only fill a NULL.
   if (column === "serverUsername") {
     return trustIncomingUsername
       ? `${col} = COALESCE(${incoming}, ${stored})`
@@ -663,55 +662,50 @@ async function runTracearrImport(
   // One map per run, for the same reason as the join index: it is small (users,
   // not plays) and the alternative is guessing at a username per record.
   //
-  // Whether a failure here is survivable depends entirely on WHICH pass wants
-  // to run, so it is recorded rather than shrugged off — see the backfill gate
-  // below, which refuses to walk the archive without it.
-
-
+  // A failure here is recorded rather than shrugged off: neither pass writes
+  // without the map (see `accountMapUsable` below).
   let accountNames: Map<string, string> | undefined;
   try {
     accountNames = await client.getServerAccountNames(mappedServerId, { signal });
   } catch (error) {
     logger.warn(
       "WatchHistory",
-      `Could not load Tracearr account names for "${serverName}" — plays will be ` +
-        `attributed by Tracearr's identity name, which may not match the ` +
-        `server's own account names`,
+      `Could not load Tracearr account names for "${serverName}"`,
       { error: String(error) },
     );
   }
 
-  // ATTRIBUTION IS DEGRADED — say so BEFORE writing a single row.
+  // NOTHING IS WRITTEN WITHOUT A USABLE MAP — by either pass.
   //
-  // The forward pass deliberately keeps running without the map, because it
-  // covers an hour of overlap whose rows the next successful run re-delivers
-  // and re-labels. But those rows carry Tracearr's identity label ("Nick W")
-  // where every other row on this server carries the media server's account
-  // name ("weingart"), and `watchedByUser` matches on exactly that string. So
-  // a rule "delete unless watched by weingart" matches an item weingart DID
-  // watch in this window: the play is there, under a name the rule does not
-  // recognise. Monotonic play state does not save this one — unlike playCount,
-  // a missing username ARMS a negative rule rather than disarming it.
+  // Without it a row carries Tracearr's identity label ("Nick W") where every
+  // other row on this server carries the media server's account name
+  // ("weingart"), and `watchedByUser` matches on exactly that string. A
+  // MISSING name arms a negative rule rather than disarming it: "delete unless
+  // watched by weingart" matches an item weingart did watch, the play filed
+  // under a name the rule does not recognise.
   //
-  // Withdrawing the marker FIRST, not at the end of the run, is the whole
-  // point. Rows commit per page, the forward window has no upper bound (after
-  // downtime it can walk days of plays over minutes), and detection runs on its
-  // own dispatcher — unserialised against a History-page Refresh. An
-  // end-of-run withdrawal leaves the guard vouching for the server for the
-  // entire walk, and a match formed in that window SURVIVES the later pause,
-  // because a transient refusal preserves existing matches and pending actions
-  // and the executor never re-checks evaluability before firing.
+  // The forward pass used to run anyway, on the argument that its rows are
+  // re-delivered by the next healthy run and re-labelled there. That holds only
+  // inside the next run's window, `MAX(watchedAt) - OVERLAP_MS`, and the
+  // forward window itself has no upper bound: after downtime it walks days of
+  // plays, and every one of them older than an hour before the newest stayed
+  // mislabelled for good — while the next healthy run re-established the
+  // evidence marker over them, so play-activity rules resumed against the
+  // wrong names. Not writing costs only freshness: the watermark does not move,
+  // so the next run with a usable map imports exactly these plays, correctly.
   //
-  // Conditioned on the map being UNUSABLE, not on any fallback name: a user
-  // Tracearr has since removed is legitimately absent from a healthy map, and
-  // that fallback is permanent and correct — pausing for it would never lift.
-  if (!accountNames || accountNames.size === 0) {
-    await invalidateWatchHistoryEvidence([serverId]);
+  // An EMPTY map counts as unusable (see the archive-walk gate below for why),
+  // and the condition is the MAP, not any single fallback name: a user Tracearr
+  // has since removed is legitimately absent from a healthy map, and that
+  // fallback is permanent and correct.
+  const accountMapUsable = accountNames !== undefined && accountNames.size > 0;
+  if (!accountMapUsable) {
     logger.warn(
       "WatchHistory",
-      `Importing plays for "${serverName}" without the account-name map, so they ` +
-        `will carry Tracearr's identity names. Play-activity lifecycle rules are ` +
-        `paused for this server until a sync with a usable map re-establishes it.`,
+      `Not importing Tracearr plays for "${serverName}" this run — the account-name ` +
+        `map is unavailable, and plays stored without it would carry Tracearr's ` +
+        `identity names instead of the server's account names. The next run with ` +
+        `a usable map imports them.`,
     );
   }
 
@@ -1028,7 +1022,7 @@ async function runTracearrImport(
   const wantsForward = passes === "forward" || passes === "both";
   const wantsBackfill = passes === "backfill" || passes === "both";
 
-  if (wantsForward && window.since) {
+  if (wantsForward && window.since && accountMapUsable) {
     await walk("forward", { since: window.since });
   }
 
@@ -1064,14 +1058,9 @@ async function runTracearrImport(
   // slice and nothing else — the pass is resumable by design and every boundary
   // it needs is derived from stored rows.
   //
-  // The FORWARD pass deliberately keeps running without it. Its trade-off is
-  // the opposite one: it covers an hour of overlap, not an archive, so it
-  // touches a handful of rows; those rows are re-delivered by the very next
-  // successful run (whose overlap window still contains them), where a bridged
-  // name overwrites the fallback — see `upsertAssignment` — so degraded
-  // attribution there is self-healing rather than permanent. Refusing to run it
-  // would instead leave the History page showing nothing new for as long as
-  // Tracearr's user endpoint is unhappy, which is the worse outcome.
+  // The forward pass refuses too, for the reason given where the map is
+  // loaded; only this pass reports the refusal as an outcome, because only the
+  // queued backfill task decides from it whether to re-enqueue.
   //
   // An EMPTY map counts as "could not load", not as "this server has no users".
   // `getServerAccountNames` returns `new Map()` rather than throwing when the
@@ -1212,16 +1201,15 @@ async function runTracearrImport(
     }
   }
 
-  // RELEASE the evidence marker — the counterpart to the withdrawal at the top
-  // of this function, and the half that was missing.
+  // RELEASE the evidence marker on a healthy run of an archive already walked.
   //
-  // The two were not symmetric, and the asymmetry was an outage. The ONLY place
-  // the Tracearr path ever wrote `watchHistorySyncedAt` is the `finished`
-  // branch above, which fires exactly once in a server's life: the run that
-  // walks the archive to its far end. Every run after that is forward-only
-  // (`backfillDue` is false once the flag is set), so a single forward pass
-  // that could not load the account map withdrew the marker with nothing left
-  // in the system able to put it back. `checkWatchHistoryCompleteness` then
+  // Without this the ONLY place the Tracearr path wrote `watchHistorySyncedAt`
+  // is the `finished` branch above, which fires exactly once in a server's
+  // life: the run that walks the archive to its far end. Every run after that
+  // is forward-only (`backfillDue` is false once the flag is set), so a marker
+  // withdrawn afterwards (an earlier version of this importer withdrew it on
+  // every run that could not load the account map) had nothing left in the
+  // system able to put it back. `checkWatchHistoryCompleteness` then
   // refused every play-activity rule set, preview, test-item and query action
   // scoped to that server — permanently — while Settings → Servers went on
   // reporting the import as complete, because it reads
@@ -1229,9 +1217,9 @@ async function runTracearrImport(
   // for an import that has already finished. A guard that never releases is its
   // own outage.
   //
-  // Conditioned on exactly what the withdrawal is conditioned on — a USABLE
-  // account map, so the rows carry the media server's own account names and
-  // `watchedByUser` matches the vocabulary it was written against — plus the
+  // Conditioned on a USABLE account map — a run that could not load one
+  // imported nothing and has verified nothing about the vocabulary the rows
+  // carry, which is what `watchedByUser` matches against — plus the
   // archive having been walked, which is the other half of what "established"
   // means for a Tracearr-sourced server. A forward pass that stopped early does
   // not block it: the marker describes the stored archive, not this run's page

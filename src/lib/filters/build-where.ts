@@ -97,10 +97,14 @@ export function intEqualsFilter(n: number): number | { in: number[] } {
 /**
  * Build Prisma WHERE clauses from common filter search params.
  * Handles multi-select (pipe-separated), range filters, and date filters.
+ *
+ * `genreSpellings` (from `loadGenreSpellings`) makes the genre filter
+ * case-insensitive; without it a genre matches only its exact spelling.
  */
 export function applyCommonFilters(
   where: Prisma.MediaItemWhereInput,
-  params: URLSearchParams
+  params: URLSearchParams,
+  genreSpellings?: Map<string, string[]>,
 ): void {
   const andClauses: Prisma.MediaItemWhereInput[] = Array.isArray(where.AND)
     ? [...where.AND]
@@ -202,12 +206,19 @@ export function applyCommonFilters(
   // Year — multi-condition with AND/OR logic
   applyConditionFilter(where, andClauses, params, "yearConditions", "yearLogic", "year", parseInt, INT_RANGE);
 
-  // Genre (case-insensitive match in JSON array)
+  // Genre (case-insensitive match in JSON array). `array_contains` is
+  // case-sensitive with no insensitive form, so each genre matches any stored
+  // spelling of it — the dropdown offers one entry per genre whatever its case.
   const genreValues = parseMulti(params.get("genre"));
   if (genreValues) {
     // For multi-genre, require all genres to be present (AND)
     for (const g of genreValues) {
-      andClauses.push({ genres: { array_contains: g } });
+      const spellings = genreSpellings?.get(g.toLowerCase()) ?? [g];
+      andClauses.push(
+        spellings.length === 1
+          ? { genres: { array_contains: spellings[0] } }
+          : { OR: spellings.map((s) => ({ genres: { array_contains: s } })) },
+      );
     }
   }
 
@@ -319,7 +330,10 @@ export function applyCommonFilters(
   }
 
   // Stream-based relation filters (audio language, subtitle language, stream codec)
-  // Note: Prisma's `in` doesn't support `mode: "insensitive"`, so we use OR + equals
+  // Note: Prisma's `in` doesn't support `mode: "insensitive"`, so we use OR + equals.
+  // An insensitive `equals` compiles to ILIKE, so the value is escaped like any
+  // other LIKE pattern: unescaped, `?audioLanguage=%` matched every item with an
+  // audio language and `Engl_sh` matched "English" (see escape-like.ts).
   const audioLanguages = parseMulti(params.get("audioLanguage"));
   if (audioLanguages) {
     if (audioLanguages.length === 1) {
@@ -327,7 +341,7 @@ export function applyCommonFilters(
         streams: {
           some: {
             streamType: 2,
-            language: { equals: audioLanguages[0], mode: "insensitive" },
+            language: { equals: escapeLike(audioLanguages[0]), mode: "insensitive" },
           },
         },
       });
@@ -337,7 +351,7 @@ export function applyCommonFilters(
           streams: {
             some: {
               streamType: 2,
-              language: { equals: l, mode: "insensitive" },
+              language: { equals: escapeLike(l), mode: "insensitive" },
             },
           },
         })),
@@ -352,7 +366,7 @@ export function applyCommonFilters(
         streams: {
           some: {
             streamType: 3,
-            language: { equals: subtitleLanguages[0], mode: "insensitive" },
+            language: { equals: escapeLike(subtitleLanguages[0]), mode: "insensitive" },
           },
         },
       });
@@ -362,7 +376,7 @@ export function applyCommonFilters(
           streams: {
             some: {
               streamType: 3,
-              language: { equals: l, mode: "insensitive" },
+              language: { equals: escapeLike(l), mode: "insensitive" },
             },
           },
         })),

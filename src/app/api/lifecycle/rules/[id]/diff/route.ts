@@ -3,7 +3,7 @@ import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { findExceptedItemIds } from "@/lib/lifecycle/exception-guard";
 import { copyRank, crossServerCopyKeys } from "@/lib/lifecycle/cross-server-copies";
-import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasArrRules, hasSeerrRules, hasAnyActiveRules, hasWatchedByUserRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
+import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasArrRules, hasSeerrRules, hasAnyActiveRules, hasWatchedByUserRules, hasSeriesAggregateRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRuleGroup, LifecycleRule } from "@/lib/rules/types";
 import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
@@ -163,8 +163,11 @@ export async function POST(
   }
 
   let items;
-  if (type === "SERIES" && seriesScope !== false) {
-    items = await evaluateSeriesScope(typedRules, serverIds, arrData, seerrData);
+  // Routed exactly as detection routes it: a series-aggregate field forces the
+  // series path even with series scope off (see the preview route).
+  const aggregateForced = type === "SERIES" && seriesScope === false && hasSeriesAggregateRules(typedRules);
+  if (type === "SERIES" && (seriesScope !== false || aggregateForced)) {
+    items = await evaluateSeriesScope(typedRules, serverIds, arrData, seerrData, aggregateForced);
   } else if (type === "MUSIC" && seriesScope !== false) {
     items = await evaluateMusicScope(typedRules, serverIds, arrData);
   } else {
@@ -193,14 +196,16 @@ export async function POST(
   const candidates = (items as unknown as Record<string, unknown>[]).filter(
     (rec) => !excludedIds.has(rec.id as string),
   );
+  const actionType = data.actionType !== undefined ? data.actionType : ruleSet.actionType;
   const copyKeys = await crossServerCopyKeys(candidates, {
     type,
     serverCount: serverIds.length,
     arrData,
     // The config being saved, not the stored one: arming an action in the
     // same edit is what makes detection collapse copies without Arr data.
-    actionArmed: (data.actionEnabled ?? ruleSet.actionEnabled) &&
-      !!(data.actionType !== undefined ? data.actionType : ruleSet.actionType),
+    actionArmed: (data.actionEnabled ?? ruleSet.actionEnabled) && !!actionType,
+    trackScope: seriesScope === false,
+    actionType,
   });
   // Ranked exactly as detection's collapse ranks them (`copyRank`).
   const keptForKey = new Map<string, string>();

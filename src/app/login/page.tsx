@@ -254,6 +254,16 @@ export default function LoginPage() {
         body: JSON.stringify(body),
       });
 
+      // A refusal — the rate limit, setup already done, an invalid body — is
+      // plain JSON sent before any stream opens. Read as the stream it is not,
+      // its one line had no `type` and the server's reason became "Restore
+      // failed".
+      if (!res.ok) {
+        const data = (await res.json().catch(() => null)) as { error?: string } | null;
+        setRestoreError(data?.error || "Restore failed");
+        setRestoreLoading(false);
+        return;
+      }
       if (!res.body) {
         setRestoreError("Restore failed");
         setRestoreLoading(false);

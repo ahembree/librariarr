@@ -301,6 +301,34 @@ describe("Lifecycle Rules Preview", () => {
   // Arr/Seerr rules evaluated with no enabled instance behind them would
   // preview the ENTIRE library as matching ("foundInArr = false" goes
   // vacuously true) — the routes must refuse instead.
+  describe("series-aggregate rules with series scope off", () => {
+    // Detection routes such a rule set through the series aggregate (members
+    // restricted to the matching episodes); the preview evaluated it per
+    // episode, where the aggregate reads absent, and showed a different set.
+    it("previews the set detection stores", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "SERIES" });
+      for (let e = 1; e <= 5; e++) {
+        await createTestMediaItem(library.id, { type: "SERIES", title: `Big ${e}`, parentTitle: "Big Show", seasonNumber: 1, episodeNumber: e });
+      }
+      await createTestMediaItem(library.id, { type: "SERIES", title: "Small 1", parentTitle: "Small Show", seasonNumber: 1, episodeNumber: 1 });
+      const rules = [{
+        id: "g", condition: "AND", groups: [],
+        rules: [{ id: "r", field: "availableEpisodeCount", operator: "lessThan", value: "3", condition: "AND" }],
+      }];
+      setMockSession({ isLoggedIn: true, userId: user.id });
+
+      const response = await callRoute(adHocPreviewPOST, {
+        url: "/api/lifecycle/rules/preview",
+        method: "POST",
+        body: { rules, type: "SERIES", seriesScope: false, serverIds: [server.id] },
+      });
+      const { result } = await expectStreamResult<{ items: Array<{ title: string }> }>(response);
+      expect(result.items.map((i) => i.title)).toEqual(["Small Show"]);
+    });
+  });
+
   describe("no-enabled-instance match-all guard", () => {
     it("ad-hoc preview evaluates Arr rules normally once an enabled instance exists", async () => {
       const user = await createTestUser();

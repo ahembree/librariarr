@@ -199,6 +199,14 @@ export async function GET(request: NextRequest) {
     type: 'mi."type"',
     year: 'mi."year"',
     resolution: 'mi."resolution"',
+    // The History page's HDR, codec and Server columns. All are sortable
+    // headers, and without a key here they silently fell back to `watchedAt`
+    // (HDR kept its own sort arrow while doing so), and Server sent
+    // `serverUsername` — the User column.
+    dynamicRange: 'mi."dynamicRange"',
+    videoCodec: 'mi."videoCodec"',
+    audioCodec: 'mi."audioCodec"',
+    serverName: 'ms."name"',
     duration: 'mi."duration"',
     fileSize: 'mi."fileSize"',
     // Tracearr-sourced play columns. `streamResolution` is deliberately a

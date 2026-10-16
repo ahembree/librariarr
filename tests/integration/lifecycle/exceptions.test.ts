@@ -154,6 +154,32 @@ describe("Lifecycle Exceptions API", () => {
       expect(body.exceptions[0].mediaItem).toMatchObject({ parentTitle: "Breaking Bad", seasonNumber: 1, episodeNumber: 7 });
     });
 
+    // The Exceptions page groups a show's exceptions into one row; by title,
+    // The Office (UK) and The Office (US) were one row, and Remove took both
+    // shows' protection away.
+    it("returns each episode's series identity, so two same-titled shows group apart", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const library = await createTestLibrary(server.id, { type: "SERIES" });
+      const uk = await createTestMediaItem(library.id, {
+        type: "SERIES", title: "Downsize", parentTitle: "The Office", seriesKey: "tvdb:78107", seasonNumber: 1, episodeNumber: 1,
+      });
+      const us = await createTestMediaItem(library.id, {
+        type: "SERIES", title: "Pilot", parentTitle: "The Office", seriesKey: "tvdb:73244", seasonNumber: 1, episodeNumber: 1,
+      });
+      await prisma.lifecycleException.createMany({
+        data: [{ userId: user.id, mediaItemId: uk.id }, { userId: user.id, mediaItemId: us.id }],
+      });
+
+      setMockSession({ userId: user.id, isLoggedIn: true });
+      const body = await expectJson<{
+        exceptions: Array<{ mediaItem: { id: string; seriesKey: string | null } }>;
+      }>(await callRoute(GET, { url: "/api/lifecycle/exceptions?type=SERIES" }), 200);
+      const keyById = new Map(body.exceptions.map((e) => [e.mediaItem.id, e.mediaItem.seriesKey]));
+      expect(keyById.get(uk.id)).toBe("tvdb:78107");
+      expect(keyById.get(us.id)).toBe("tvdb:73244");
+    });
+
     it("rejects an unknown type with 400 instead of failing the query", async () => {
       const user = await createTestUser();
       setMockSession({ userId: user.id, isLoggedIn: true });

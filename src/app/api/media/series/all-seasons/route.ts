@@ -5,7 +5,10 @@ import { prisma } from "@/lib/db";
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
 import { loadMissingSummaries } from "@/lib/media/group-summaries";
 import { escapeLike } from "@/lib/filters/escape-like";
+import { applyCommonFilters } from "@/lib/filters/build-where";
+import { loadGenreSpellings } from "@/lib/filters/genre-spellings";
 import { firstNonNullSql, qualityCountsSql, resolutionLabelSql } from "@/lib/media/series-sql";
+import type { Prisma } from "@/generated/prisma/client";
 
 interface SeasonRow {
   seriesKey: string;
@@ -34,6 +37,23 @@ interface SeasonRepresentativeRow {
   seasonNumber: number;
   mediaItemId: string;
   summary: string | null;
+}
+
+/**
+ * Whether a season-level date sits inside the bounds `applyCommonFilters` put
+ * on the matching episode column (`{ gte?, lte? }`), so the season's own figure
+ * answers the date filters — see the narrowing in GET. Anything else (no
+ * bound, or a shape this does not recognise) leaves the season in.
+ */
+function withinDateBounds(value: Date | null, bound: unknown): boolean {
+  if (!bound || typeof bound !== "object") return true;
+  const { gte, lte } = bound as { gte?: unknown; lte?: unknown };
+  if (!(gte instanceof Date) && !(lte instanceof Date)) return true;
+  if (value == null) return false;
+  const time = new Date(value).getTime();
+  if (gte instanceof Date && time < gte.getTime()) return false;
+  if (lte instanceof Date && time > lte.getTime()) return false;
+  return true;
 }
 
 /** First non-null value in episode order — show-level metadata is the same on every episode. */
@@ -72,6 +92,41 @@ export async function GET(request: NextRequest) {
     params.push(escapeLike(search));
     filters.push(`AND mi."parentTitle" ILIKE '%' || $${params.length} || '%'`);
   }
+
+  // The library filters the All Seasons tab sends (resolution, genre, year,
+  // codec, …) were ignored entirely: the page forwarded every one and this
+  // route read only the search. They are per-episode facts, so — as on the
+  // series listing — a season qualifies when ANY of its episodes matches and
+  // keeps its whole-season figures. `applyCommonFilters` builds a Prisma where
+  // with no SQL form here, so Prisma resolves the qualifying seasons first.
+  const narrowing: Prisma.MediaItemWhereInput = {};
+  // Every stored spelling of a genre, as the other listings match it.
+  applyCommonFilters(narrowing, searchParams, await loadGenreSpellings(searchParams));
+  if (Object.keys(narrowing).length > 0) {
+    const qualifying = await prisma.mediaItem.findMany({
+      where: {
+        AND: [
+          narrowing,
+          {
+            type: "SERIES",
+            seriesKey: { not: null },
+            parentTitle: { not: null },
+            library: { mediaServerId: { in: sf.serverIds } },
+            ...(sf.isSingleServer ? {} : { dedupCanonical: true }),
+          },
+        ],
+      },
+      select: { seriesKey: true, seasonNumber: true },
+      distinct: ["seriesKey", "seasonNumber"],
+    });
+    params.push(qualifying.map((r) => r.seriesKey));
+    const keysParam = params.length;
+    params.push(qualifying.map((r) => r.seasonNumber ?? 0));
+    filters.push(
+      `AND (mi."seriesKey", COALESCE(mi."seasonNumber", 0)) IN (SELECT * FROM unnest($${keysParam}::text[], $${params.length}::int[]))`,
+    );
+  }
+
   const scope = `
       FROM "MediaItem" mi
       JOIN "Library" l ON mi."libraryId" = l.id
@@ -162,6 +217,11 @@ export async function GET(request: NextRequest) {
   );
 
   const seasonsList = rows
+    // "Any episode matched" is the wrong question for a date: a season whose
+    // first episode was last played in 2022 and its finale yesterday would
+    // pass "last played before 2023". The season's own latest play and newest
+    // addition answer those filters instead.
+    .filter((s) => withinDateBounds(s.lastPlayed, narrowing.lastPlayedAt) && withinDateBounds(s.addedAt, narrowing.addedAt))
     .map((s) => {
       // Both statements share `scope` and group on the same key, so every
       // aggregate row has its representative.

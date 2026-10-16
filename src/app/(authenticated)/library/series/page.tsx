@@ -137,51 +137,6 @@ function seriesTableColumns(getHex: (category: "resolution" | "dynamicRange" | "
   ];
 }
 
-function applyFiltersToGroupedSeries(
-  seriesList: GroupedSeries[],
-  filters: Record<string, string>
-): GroupedSeries[] {
-  if (Object.keys(filters).length === 0) return seriesList;
-
-  return seriesList.filter((series) => {
-    if (filters.resolution) {
-      const allowed = filters.resolution.split("|");
-      const hasMatch = allowed.some((r) => series.qualityCounts[r] > 0);
-      if (!hasMatch) return false;
-    }
-
-    if (filters.lastPlayedAtDays) {
-      const daysAgo = new Date();
-      daysAgo.setDate(daysAgo.getDate() - parseInt(filters.lastPlayedAtDays));
-      if (!series.lastPlayed || new Date(series.lastPlayed) < daysAgo) return false;
-    }
-    if (filters.lastPlayedAtMin) {
-      if (!series.lastPlayed || new Date(series.lastPlayed) < new Date(filters.lastPlayedAtMin)) return false;
-    }
-    if (filters.lastPlayedAtMax) {
-      if (!series.lastPlayed || new Date(series.lastPlayed) > new Date(filters.lastPlayedAtMax)) return false;
-    }
-
-    if (filters.addedAtDays) {
-      const daysAgo = new Date();
-      daysAgo.setDate(daysAgo.getDate() - parseInt(filters.addedAtDays));
-      if (!series.addedAt || new Date(series.addedAt) < daysAgo) return false;
-    }
-    if (filters.addedAtMin) {
-      if (!series.addedAt || new Date(series.addedAt) < new Date(filters.addedAtMin)) return false;
-    }
-    if (filters.addedAtMax) {
-      if (!series.addedAt || new Date(series.addedAt) > new Date(filters.addedAtMax)) return false;
-    }
-
-    if (filters.search) {
-      if (!series.parentTitle.toLowerCase().includes(filters.search.toLowerCase())) return false;
-    }
-
-    return true;
-  });
-}
-
 const GAP = 16;
 const CARD_BORDER = 2; // 1px top + 1px bottom border on Card
 const QUALITY_BAR_HEIGHT = 12; // h-1 quality bar (4px) + py-1 padding (8px)
@@ -274,6 +229,14 @@ export default function SeriesPage() {
       if (selectedServerId !== "all") {
         params.set("serverId", selectedServerId);
       }
+      // Every filter goes to the server. This page used to send none and
+      // filter on the client for resolution, dates and search only, so the
+      // rest of the panel — Episode Count, Watched %, Last Episode Aired,
+      // Watchlisted (which the route already implements), genre, year, codecs
+      // — showed an active chip over an unfiltered list.
+      for (const [key, value] of Object.entries(filters)) {
+        if (value) params.set(key, value);
+      }
       const response = await fetch(`/api/media/series/grouped?${params}`);
       const data = await response.json();
       if (token !== reqToken.current) return;
@@ -285,20 +248,15 @@ export default function SeriesPage() {
       console.error("Failed to fetch series:", error);
       if (token === reqToken.current) setLoading(false);
     }
-  }, [sortBy, sortOrder, selectedServerId]);
+  }, [sortBy, sortOrder, selectedServerId, filters]);
 
   useRealtime("sync:completed", fetchSeries);
 
   useListFetch(fetchSeries);
 
-  const filteredSeries = useMemo(
-    () => applyFiltersToGroupedSeries(seriesList, filters),
-    [seriesList, filters]
-  );
-
   const rowCount = useMemo(
-    () => (filteredSeries.length > 0 ? Math.ceil(filteredSeries.length / actualColumns) : 0),
-    [filteredSeries.length, actualColumns]
+    () => (seriesList.length > 0 ? Math.ceil(seriesList.length / actualColumns) : 0),
+    [seriesList.length, actualColumns]
   );
 
   const estimateSize = useCallback(() => {
@@ -322,8 +280,8 @@ export default function SeriesPage() {
   }, [actualColumns, virtualizer]);
 
   const alphabetItems = useMemo(
-    () => filteredSeries.map((s) => ({ title: s.parentTitle })),
-    [filteredSeries]
+    () => seriesList.map((s) => ({ title: s.parentTitle })),
+    [seriesList]
   );
   const gridAlphabet = useVirtualGridAlphabet({
     items: alphabetItems,
@@ -368,9 +326,9 @@ export default function SeriesPage() {
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-3">
             <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Series</h1>
-            {!loading && filteredSeries.length > 0 && (
+            {!loading && seriesList.length > 0 && (
               <span className="font-mono text-xs text-faint">
-                {filteredSeries.length.toLocaleString()} series · {filteredSeries.reduce((sum, s) => sum + s.seasonCount, 0).toLocaleString()} seasons · {filteredSeries.reduce((sum, s) => sum + s.episodeCount, 0).toLocaleString()} episodes
+                {seriesList.length.toLocaleString()} series · {seriesList.reduce((sum, s) => sum + s.seasonCount, 0).toLocaleString()} seasons · {seriesList.reduce((sum, s) => sum + s.episodeCount, 0).toLocaleString()} episodes
               </span>
             )}
           </div>
@@ -387,6 +345,7 @@ export default function SeriesPage() {
         onFilterChange={(f) => { setFilters((prev) => (sameFilters(prev, f) ? prev : f)); persistFilters(f); }}
         externalFilters={Object.keys(savedFilters).length > 0 ? savedFilters : undefined}
         mediaType="SERIES"
+        seriesAggregateFilters
         prefix={
           <LibraryToolbar
             viewMode={viewMode}
@@ -410,7 +369,7 @@ export default function SeriesPage() {
 
       {loading ? (
         <MediaGridSkeleton />
-      ) : filteredSeries.length === 0 ? (
+      ) : seriesList.length === 0 ? (
         <EmptyState
           icon={Tv}
           title="No series found."
@@ -422,7 +381,7 @@ export default function SeriesPage() {
           {viewMode === "table" ? (
             <DataTable<GroupedSeries>
               columns={seriesTableColumns(getHex)}
-              data={filteredSeries}
+              data={seriesList}
               keyExtractor={(s) => s.seriesKey ?? s.parentTitle}
               defaultSortId="parentTitle"
               resizeStorageKey="dt-widths-series"
@@ -464,7 +423,7 @@ export default function SeriesPage() {
               >
                 {virtualizer.getVirtualItems().map((virtualRow) => {
                   const rowStart = virtualRow.index * actualColumns;
-                  const rowItems = filteredSeries.slice(rowStart, rowStart + actualColumns);
+                  const rowItems = seriesList.slice(rowStart, rowStart + actualColumns);
                   return (
                     <div
                       key={virtualRow.key}

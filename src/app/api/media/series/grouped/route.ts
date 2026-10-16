@@ -5,9 +5,12 @@ import { MAX_GROUPED_LIST_LIMIT, parseListPagination } from "@/lib/api/paginatio
 import { prisma } from "@/lib/db";
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
 import { getServerPresenceByGroup } from "@/lib/dedup/server-presence";
+import { applyCommonFilters } from "@/lib/filters/build-where";
+import { loadGenreSpellings } from "@/lib/filters/genre-spellings";
 import { escapeLike } from "@/lib/filters/escape-like";
 import { firstNonNullSql, qualityCountsSql, resolutionLabelSql } from "@/lib/media/series-sql";
 import { loadMissingSummaries } from "@/lib/media/group-summaries";
+import type { Prisma } from "@/generated/prisma/client";
 
 interface SeriesGroupRow {
   group_key: string;
@@ -231,6 +234,41 @@ export async function GET(request: NextRequest) {
       filters.push(`AND mi."parentTitle" ILIKE $${params.length} || '%'`);
     }
   }
+  // The library filters (resolution, genre, year, codec, …) are per-episode
+  // facts, so a show qualifies when ANY of its episodes matches — and its
+  // figures stay the whole show's: a "4K" filter lists every show with a 4K
+  // episode with its full episode count and quality mix, which is what the
+  // Series page showed when it filtered resolution on the client (it filtered
+  // nothing else, and sent the server no filter at all). `applyCommonFilters`
+  // builds a Prisma where with no SQL form here, so Prisma resolves the
+  // qualifying series keys and the aggregate is scoped to them. The date and
+  // watchlist filters it also applies per episode are re-checked on the
+  // show's own figures by `applySeriesFilters` below, which together give the
+  // show-level answer (e.g. "last played before X" is the show's latest play).
+  const narrowing: Prisma.MediaItemWhereInput = {};
+  // Every stored spelling of a genre, as the other listings match it.
+  applyCommonFilters(narrowing, searchParams, await loadGenreSpellings(searchParams));
+  if (Object.keys(narrowing).length > 0) {
+    const qualifying = await prisma.mediaItem.findMany({
+      where: {
+        AND: [
+          narrowing,
+          {
+            type: "SERIES",
+            seriesKey: { not: null },
+            parentTitle: { not: null },
+            library: { mediaServerId: { in: sf.serverIds } },
+            ...(sf.isSingleServer ? {} : { dedupCanonical: true }),
+          },
+        ],
+      },
+      select: { seriesKey: true },
+      distinct: ["seriesKey"],
+    });
+    params.push(qualifying.map((r) => r.seriesKey));
+    filters.push(`AND mi."seriesKey" = ANY($${params.length}::text[])`);
+  }
+
   // `parentTitle IS NOT NULL`: a row can carry a TVDB-derived seriesKey with no
   // show title, and MIN("parentTitle") over such a group is NULL, which the
   // title sort below cannot compare.

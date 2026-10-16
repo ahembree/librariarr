@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db";
 import type { ArrDataMap } from "@/lib/rules/lifecycle-engine";
+import { actionHonorsMemberIds } from "@/lib/lifecycle/action-types";
 
 /** The external-id source a rule set's Arr family resolves its records by. */
 export function arrIdSourceFor(type: "MOVIE" | "SERIES" | "MUSIC"): string {
@@ -43,6 +44,31 @@ export async function arrExternalIdsOf(
 }
 
 /**
+ * Whether a track-scope music rule set folds every matched track of an artist
+ * into ONE match (its tracks recorded as members). Every Lidarr action but the
+ * member-scoped file deletes acts on the ARTIST, so one action per track ran
+ * the same artist action once per track — a whole-artist delete succeeded once
+ * and failed "not found" for the rest, and the deletion ceiling counted every
+ * track — on one server as on several. Mirrors `collapseActionItems` on the
+ * query page. "Do Nothing" keeps one match per track.
+ */
+export function groupsTracksByArtist(opts: {
+  type: "MOVIE" | "SERIES" | "MUSIC";
+  trackScope: boolean;
+  actionArmed: boolean;
+  actionType?: string | null;
+}): boolean {
+  return (
+    opts.type === "MUSIC" &&
+    opts.trackScope &&
+    opts.actionArmed &&
+    !!opts.actionType &&
+    opts.actionType !== "DO_NOTHING" &&
+    !actionHonorsMemberIds(opts.actionType)
+  );
+}
+
+/**
  * The cross-server identity detection collapses copies of one title by: the
  * external id the rule set's Arr family resolves its record by, for every item
  * that can be collapsed — keyed by item id; an item absent from the map stays
@@ -63,18 +89,32 @@ export async function crossServerCopyKeys(
     serverCount: number;
     arrData?: ArrDataMap;
     actionArmed: boolean;
+    /** A track-scope music rule set (items are tracks, not artists). */
+    trackScope?: boolean;
+    actionType?: string | null;
   },
 ): Promise<Map<string, string>> {
   const keys = new Map<string, string>();
-  if (opts.serverCount <= 1) return keys;
+  const trackScope = opts.type === "MUSIC" && !!opts.trackScope;
+  const byArtist = groupsTracksByArtist({ ...opts, trackScope });
+  if (opts.serverCount <= 1 && !byArtist) return keys;
   const collapseWithoutArr = !opts.arrData && opts.actionArmed;
   if (!opts.arrData && !collapseWithoutArr) return keys;
 
   const ids = await arrExternalIdsOf(opts.type, items, { loadMissing: collapseWithoutArr });
   for (const item of items) {
-    const key = ids.get(item.id as string);
+    let key = ids.get(item.id as string);
     if (!key) continue;
     if (opts.arrData && !opts.arrData[key]) continue;
+    // A track's Arr-family id is its ARTIST's MusicBrainz id, shared by every
+    // track of the artist. Unless the artist's tracks fold (above), only
+    // another server's copy of the SAME track — its `dedupKey` — is the same
+    // title; keyed on the artist alone, distinct tracks collapsed into one
+    // match and a file delete acted on one track per artist per cycle.
+    if (trackScope && !byArtist) {
+      if (typeof item.dedupKey !== "string") continue;
+      key = `${key}:${item.dedupKey}`;
+    }
     keys.set(item.id as string, key);
   }
   return keys;

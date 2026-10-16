@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { escapeLike } from "@/lib/filters/escape-like";
 import type { Prisma } from "@/generated/prisma/client";
 import { applyCommonFilters, applyStartsWithFilter } from "@/lib/filters/build-where";
+import { loadGenreSpellings } from "@/lib/filters/genre-spellings";
 import { filterIdsByStreamCounts, parseStreamCountFilters } from "@/lib/filters/stream-count";
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
 import { parseListPagination } from "@/lib/api/pagination";
@@ -25,6 +26,21 @@ const SORT_COLUMNS = new Set([
   "rating",
   "audienceRating",
   "contentRating",
+  // Every column the library table (src/components/media-table.tsx) offers a
+  // sort header for. A field missing here silently sorted by title while the
+  // header showed the clicked column's arrow — Dynamic Range is visible by
+  // default. All are plain MediaItem columns; `{ id: "asc" }` keeps the order
+  // total as with the rest.
+  "dynamicRange",
+  "audioProfile",
+  "audioChannels",
+  "container",
+  "studio",
+  "videoBitDepth",
+  "videoFrameRate",
+  "videoBitrate",
+  "aspectRatio",
+  "originallyAvailableAt",
 ]);
 
 /** How many ids one `findInOrder` query names, well under the bind-parameter limit. */
@@ -72,7 +88,7 @@ export async function GET(request: NextRequest) {
   // About You" and `?search=%` matched everything (see escape-like.ts).
   if (search) where.title = { contains: escapeLike(search), mode: "insensitive" };
   if (startsWith) applyStartsWithFilter(where, "title", startsWith);
-  applyCommonFilters(where, searchParams);
+  applyCommonFilters(where, searchParams, await loadGenreSpellings(searchParams));
 
   // Stream count filters (audio track count, subtitle count), applied below.
   const streamCounts = parseStreamCountFilters(searchParams);

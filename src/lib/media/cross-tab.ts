@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db";
 import type { DimensionMeta } from "@/lib/dashboard/custom-dimensions";
+import { excludedTypesSql } from "./breakdown";
 
 export type CrossTabRow = { dim1: string | null; dim2: string | null; type: string; _count: number };
 
@@ -15,13 +16,17 @@ export async function computeCrossTab(
   serverIds: string[],
   dedupEnabled: boolean,
 ): Promise<CrossTabRow[]> {
+  // A type either dimension does not apply to (a track has no video codec)
+  // would only add NULL cells, as in the single-dimension breakdown.
+  const typeClause = excludedTypesSql(meta1, meta2);
+
   // Fast path: both dimensions are simple direct fields on MediaItem
   if (meta1.category === "direct" && meta2.category === "direct") {
-    return queryDirectDirect(meta1.dbField, meta2.dbField, serverIds, dedupEnabled);
+    return queryDirectDirect(meta1.dbField, meta2.dbField, serverIds, dedupEnabled, typeClause);
   }
 
   // General path: fetch raw items, resolve labels in JS, cross-tabulate
-  return queryGeneral(meta1, meta2, serverIds, dedupEnabled);
+  return queryGeneral(meta1, meta2, serverIds, dedupEnabled, typeClause);
 }
 
 /** Most cells returned for any one media type. */
@@ -43,7 +48,8 @@ async function queryDirectDirect(
   field1: string,
   field2: string,
   serverIds: string[],
-  dedupEnabled: boolean
+  dedupEnabled: boolean,
+  typeClause: string,
 ): Promise<CrossTabRow[]> {
   const dedupClause = dedupEnabled ? `AND mi."dedupCanonical" = true` : "";
   // Capped per TYPE, not overall: the card filters to one type after the
@@ -58,6 +64,7 @@ async function queryDirectDirect(
        JOIN "Library" l ON mi."libraryId" = l.id
        WHERE l."mediaServerId" = ANY($1)
          ${dedupClause}
+         ${typeClause}
        GROUP BY mi."${field1}", mi."${field2}", mi.type
      ) ranked
      WHERE "rank" <= ${MAX_ROWS_PER_TYPE}
@@ -77,9 +84,10 @@ async function queryGeneral(
   meta1: DimensionMeta,
   meta2: DimensionMeta,
   serverIds: string[],
-  dedupEnabled: boolean
+  dedupEnabled: boolean,
+  typeClause: string,
 ): Promise<CrossTabRow[]> {
-  const items = await fetchItems(meta1, meta2, serverIds, dedupEnabled);
+  const items = await fetchItems(meta1, meta2, serverIds, dedupEnabled, typeClause);
 
   // Cross-tabulate: for each item, resolve labels for both dimensions and count
   const countMap = new Map<string, number>();
@@ -112,7 +120,8 @@ async function fetchItems(
   meta1: DimensionMeta,
   meta2: DimensionMeta,
   serverIds: string[],
-  dedupEnabled: boolean
+  dedupEnabled: boolean,
+  typeClause: string,
 ): Promise<RawItem[]> {
   // If either dimension is stream_group, we need a JOIN to MediaStream
   const streamMeta = meta1.category === "stream_group" ? meta1
@@ -121,7 +130,7 @@ async function fetchItems(
 
   if (streamMeta) {
     const otherMeta = streamMeta === meta1 ? meta2 : meta1;
-    return fetchWithStreamJoin(streamMeta, otherMeta, streamMeta === meta1, serverIds, dedupEnabled);
+    return fetchWithStreamJoin(streamMeta, otherMeta, streamMeta === meta1, serverIds, dedupEnabled, typeClause);
   }
 
   // All other combos: select from MediaItem with both fields
@@ -137,7 +146,8 @@ async function fetchItems(
      FROM "MediaItem" mi
      JOIN "Library" l ON mi."libraryId" = l.id
      WHERE l."mediaServerId" = ANY($1)
-       ${dedupClause}`,
+       ${dedupClause}
+       ${typeClause}`,
     serverIds
   );
 }
@@ -153,7 +163,8 @@ async function fetchWithStreamJoin(
   otherMeta: DimensionMeta,
   isStreamDim1: boolean,
   serverIds: string[],
-  dedupEnabled: boolean
+  dedupEnabled: boolean,
+  typeClause: string,
 ): Promise<RawItem[]> {
   const otherFields = new Set<string>();
   addRequiredFields(otherMeta, otherFields);
@@ -174,7 +185,8 @@ async function fetchWithStreamJoin(
      JOIN "Library" l ON mi."libraryId" = l.id
      WHERE l."mediaServerId" = ANY($1)
        AND ms."streamType" = $2
-       ${dedupClause}`,
+       ${dedupClause}
+       ${typeClause}`,
     serverIds,
     streamMeta.streamType!
   );
@@ -223,11 +235,15 @@ function resolveValues(meta: DimensionMeta, item: RawItem): string[] {
       if (raw == null) return [meta.nullLabel];
       const date = raw instanceof Date ? raw : new Date(String(raw));
       if (isNaN(date.getTime())) return [meta.nullLabel];
+      // UTC, as the breakdown and timeline bucket the same column in SQL
+      // (`TO_CHAR` of the stored timestamp, which Prisma hands back as UTC).
+      // The process timezone (TZ=America/New_York on the Unraid template) put
+      // an item added in a month's first UTC hours in the previous month here.
       if (meta.dateBucketGranularity === "year") {
-        return [String(date.getFullYear())];
+        return [String(date.getUTCFullYear())];
       }
-      const y = date.getFullYear();
-      const m = String(date.getMonth() + 1).padStart(2, "0");
+      const y = date.getUTCFullYear();
+      const m = String(date.getUTCMonth() + 1).padStart(2, "0");
       return [`${y}-${m}`];
     }
 

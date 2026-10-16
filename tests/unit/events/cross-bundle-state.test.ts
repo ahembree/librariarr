@@ -23,6 +23,8 @@ const ALLOWED: Record<string, string> = {
     "derived from Prisma's generated field enums, identical in every copy",
   "src/lib/backup/backup-service.ts#droppedFieldsReported":
     "log-once set; a second copy logs the dropped column once more",
+  "src/lib/jobs/schedule.ts#reportedUnrunnable":
+    "log-once set for unevaluable schedules; a second copy logs the same one once more",
   "src/lib/jobs/client.ts#pool": "a connection pool per copy; the queue itself is in Postgres",
   "src/lib/jobs/client.ts#workerUtils": "per-copy handle onto the same Postgres queue",
   "src/lib/jobs/client.ts#workerUtilsPromise": "per-copy handle onto the same Postgres queue",

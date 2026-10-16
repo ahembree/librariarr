@@ -15,6 +15,8 @@ import {
 import { matchIdentityChange } from "@/lib/lifecycle/match-identity";
 import { arrIdSourceFor } from "@/lib/lifecycle/cross-server-copies";
 import { hasSeerrRules } from "@/lib/rules/lifecycle-engine";
+import { actionHonorsMemberIds } from "@/lib/lifecycle/action-types";
+import { memberIdsFromItemData } from "@/lib/lifecycle/group-aggregate";
 import type { LifecycleRuleGroup } from "@/lib/rules/types";
 import type { Prisma } from "@/generated/prisma/client";
 
@@ -156,7 +158,7 @@ async function retryAction(
   // executor enforces).
   const stillMatched = await prisma.ruleMatch.findFirst({
     where: { ruleSetId: action.ruleSetId, mediaItemId: action.mediaItemId },
-    select: { id: true },
+    select: { itemData: true },
   });
   if (!stillMatched) {
     return NextResponse.json(
@@ -165,16 +167,47 @@ async function retryAction(
     );
   }
 
+  // The episodes/tracks the retry acts on, judged as the scheduled executor
+  // judges them (processor.ts, pass 1): the FAILED row keeps the member list it
+  // was scheduled with, which can be months old. A member-scoped file delete
+  // acts only on members the current match still lists, and none that an
+  // exception protects — sent as stored, a retry deleted the files of episodes
+  // watched or excepted since the failure.
+  let members = action.matchedMediaItemIds ?? [];
+  if (members.length > 0 && actionHonorsMemberIds(action.actionType)) {
+    const current = new Set(memberIdsFromItemData(stillMatched.itemData));
+    if (current.size > 0) {
+      members = members.filter((m) => current.has(m));
+      if (members.length === 0) {
+        return NextResponse.json(
+          { error: "None of the episodes/tracks this action targeted still match — re-run detection before retrying" },
+          { status: 400 }
+        );
+      }
+    }
+  }
+
   // Exceptions added AFTER an action failed must still protect the item —
   // exception creation deletes PENDING actions, but FAILED rows survive and
   // could otherwise be force-retried against an excluded item.
   // An exception on another server's copy of the item (same dedupKey) counts.
-  const excepted = await findExceptedItemIds(session.userId!, [action.mediaItemId]);
-  if (excepted.size > 0) {
+  const excepted = await findExceptedItemIds(session.userId!, [action.mediaItemId, ...members]);
+  if (excepted.has(action.mediaItemId)) {
     return NextResponse.json(
       { error: "This item has a lifecycle exception and cannot be actioned" },
       { status: 400 }
     );
+  }
+  if (members.some((m) => excepted.has(m))) {
+    const kept = members.filter((m) => !excepted.has(m));
+    // A whole-record delete cannot leave an excepted member out.
+    if (kept.length === 0 || isWholeRecordDestructiveAction(action.actionType)) {
+      return NextResponse.json(
+        { error: "An episode/track of this action has a lifecycle exception and cannot be actioned" },
+        { status: 400 }
+      );
+    }
+    members = kept;
   }
 
   // Whole-record destructive actions destroy every episode/track of the
@@ -223,7 +256,8 @@ async function retryAction(
   }
 
   // A file delete on exactly one other episode is named after it.
-  const targetTitle = actionTargetTitle({ ...action, mediaItem, memberEpisodes: await loadMemberEpisodes([action]) });
+  const running = { ...action, matchedMediaItemIds: members };
+  const targetTitle = actionTargetTitle({ ...running, mediaItem, memberEpisodes: await loadMemberEpisodes([running]) });
 
   try {
     await executeAction({
@@ -233,7 +267,7 @@ async function retryAction(
       targetQualityProfileId: action.targetQualityProfileId,
       addImportExclusion: action.addImportExclusion,
       searchAfterAction: action.searchAfterAction,
-      matchedMediaItemIds: action.matchedMediaItemIds,
+      matchedMediaItemIds: members,
       addArrTags: action.addArrTags,
       removeArrTags: action.removeArrTags,
       skipTitleValidation,
@@ -247,6 +281,8 @@ async function retryAction(
         status: "COMPLETED",
         executedAt: new Date(),
         error: null,
+        // What it acted on, not what was scheduled (see `members` above).
+        matchedMediaItemIds: members,
       },
     });
 

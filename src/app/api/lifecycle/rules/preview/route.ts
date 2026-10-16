@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
-import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasArrRules, hasSeerrRules, hasAnyActiveRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
+import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasArrRules, hasSeerrRules, hasAnyActiveRules, hasSeriesAggregateRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRuleGroup, LifecycleRule } from "@/lib/rules/types";
 import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
@@ -77,12 +77,18 @@ export async function POST(request: NextRequest) {
 
     emit({ type: "phase", key: "evaluate" });
     let items;
-    if (type === "SERIES" && seriesScope !== false) {
+    // A series-aggregate field forces the series path even with series scope
+    // off, members restricted to the matching episodes — exactly as detection
+    // routes it (detect-matches.ts). Evaluated per episode the aggregate reads
+    // absent, and the preview showed a different set from the one stored.
+    const aggregateForced = type === "SERIES" && seriesScope === false && hasSeriesAggregateRules(typedRules);
+    if (type === "SERIES" && (seriesScope !== false || aggregateForced)) {
       items = await evaluateSeriesScope(
         typedRules,
         serverIds,
         arrData,
-        seerrData
+        seerrData,
+        aggregateForced,
       );
     } else if (type === "MUSIC" && seriesScope !== false) {
       items = await evaluateMusicScope(

@@ -575,6 +575,64 @@ describe("GET /api/media/series/grouped", () => {
       expect(body.series).toHaveLength(1);
       expect(body.series[0].parentTitle).toBe("Breaking Bad");
     });
+
+    // The Series page sent no filter at all and filtered resolution, dates and
+    // search on the client — every other filter in its panel did nothing.
+    describe("library filters", () => {
+      async function twoShows() {
+        const user = await createTestUser();
+        const server = await createTestServer(user.id);
+        const lib = await createTestLibrary(server.id, { type: "SERIES" });
+        // Drama: one 4K episode of three, all watched, genre Drama.
+        for (let ep = 1; ep <= 3; ep++) {
+          await createTestMediaItem(lib.id, {
+            title: `D${ep}`, type: "SERIES", parentTitle: "Drama Show", seasonNumber: 1, episodeNumber: ep,
+            resolution: ep === 1 ? "4k" : "1080", genres: ["Drama"], playCount: 1,
+          });
+        }
+        // Comedy: one 1080p episode, unwatched, genre Comedy.
+        await createTestMediaItem(lib.id, {
+          title: "C1", type: "SERIES", parentTitle: "Comedy Show", seasonNumber: 1, episodeNumber: 1,
+          resolution: "1080", genres: ["Comedy"], playCount: 0,
+        });
+        setMockSession({ userId: user.id, isLoggedIn: true });
+      }
+
+      const titles = async (searchParams: Record<string, string>) => {
+        const response = await callRoute(GET, { url: "/api/media/series/grouped", searchParams });
+        const body = await expectJson<{
+          series: { parentTitle: string; episodeCount: number; qualityCounts: Record<string, number> }[];
+        }>(response, 200);
+        return body.series;
+      };
+
+      it("applies a per-episode filter as 'any episode matches', keeping the show's own figures", async () => {
+        await twoShows();
+        const series = await titles({ resolution: "4K" });
+        expect(series.map((s) => s.parentTitle)).toEqual(["Drama Show"]);
+        // Whole-show figures, not just the matching episode's.
+        expect(series[0].episodeCount).toBe(3);
+        expect(series[0].qualityCounts).toMatchObject({ "4K": 1, "1080P": 2 });
+      });
+
+      it("applies the common filters the library panel offers (genre)", async () => {
+        await twoShows();
+        expect((await titles({ genre: "Comedy" })).map((s) => s.parentTitle)).toEqual(["Comedy Show"]);
+      });
+
+      it("applies the show-level filters", async () => {
+        await twoShows();
+        expect((await titles({ episodeCountConditions: "gte:2" })).map((s) => s.parentTitle)).toEqual(["Drama Show"]);
+        expect(
+          (await titles({ watchedEpisodePercentageConditions: "lt:50" })).map((s) => s.parentTitle),
+        ).toEqual(["Comedy Show"]);
+      });
+
+      it("returns nothing when no episode matches", async () => {
+        await twoShows();
+        expect(await titles({ genre: "Horror" })).toEqual([]);
+      });
+    });
   });
 
   // ─── Sorting ───

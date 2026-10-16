@@ -9,6 +9,9 @@ vi.mock("@/lib/logger", () => ({
 
 let cacheDir: string;
 
+/** The library the artwork belongs to — the cache's scope (see computeCacheKey). */
+const LIB = "lib-a";
+
 /** Materialise a cache file at the key the cache itself would compute. */
 function writeVariant(cacheKey: string) {
   const shardDir = path.join(cacheDir, cacheKey.slice(0, 2), cacheKey.slice(2, 4));
@@ -35,10 +38,10 @@ describe("invalidateCachedUrls", () => {
     const { ALL_CACHE_WIDTHS } = await import("@/lib/image-url");
 
     const url = "/library/metadata/12345/thumb/1706000000";
-    const variants = ALL_CACHE_WIDTHS.map((w) => writeVariant(computeCacheKey(url, w)));
+    const variants = ALL_CACHE_WIDTHS.map((w) => writeVariant(computeCacheKey(LIB, url, w)));
     expect(variants.every(existsSync)).toBe(true);
 
-    await invalidateCachedUrls([url]);
+    await invalidateCachedUrls(LIB, [url]);
 
     // A variant left behind would keep serving the old artwork for the rest of
     // the TTL: the key comes from the *normalized* URL, so Plex swapping the
@@ -52,9 +55,9 @@ describe("invalidateCachedUrls", () => {
     const { invalidateCachedUrls, computeCacheKey } = await import("@/lib/image-cache/image-cache");
     const { CACHE_WIDTH_GRID } = await import("@/lib/image-url");
 
-    const cached = writeVariant(computeCacheKey("/library/metadata/99/thumb/1700000000", CACHE_WIDTH_GRID));
+    const cached = writeVariant(computeCacheKey(LIB, "/library/metadata/99/thumb/1700000000", CACHE_WIDTH_GRID));
 
-    await invalidateCachedUrls(["/library/metadata/99/thumb/1799999999"]);
+    await invalidateCachedUrls(LIB, ["/library/metadata/99/thumb/1799999999"]);
 
     expect(existsSync(cached)).toBe(false);
   });
@@ -63,15 +66,31 @@ describe("invalidateCachedUrls", () => {
     const { invalidateCachedUrls, computeCacheKey } = await import("@/lib/image-cache/image-cache");
     const { CACHE_WIDTH_GRID } = await import("@/lib/image-url");
 
-    const other = writeVariant(computeCacheKey("/library/metadata/777/thumb", CACHE_WIDTH_GRID));
+    const other = writeVariant(computeCacheKey(LIB, "/library/metadata/777/thumb", CACHE_WIDTH_GRID));
 
-    await invalidateCachedUrls([null, undefined, "/library/metadata/12345/thumb"]);
+    await invalidateCachedUrls(LIB, [null, undefined, "/library/metadata/12345/thumb"]);
 
     expect(existsSync(other)).toBe(true);
   });
 
   it("does not throw when nothing is cached for the URL", async () => {
     const { invalidateCachedUrls } = await import("@/lib/image-cache/image-cache");
-    await expect(invalidateCachedUrls(["/library/metadata/404/thumb"])).resolves.toBeUndefined();
+    await expect(invalidateCachedUrls(LIB, ["/library/metadata/404/thumb"])).resolves.toBeUndefined();
+  });
+
+  it("leaves the same path cached for another library (another server) alone", async () => {
+    const { invalidateCachedUrls, computeCacheKey } = await import("@/lib/image-cache/image-cache");
+    const { CACHE_WIDTH_GRID } = await import("@/lib/image-url");
+
+    // Plex rating keys are per-server, so another server's item can hold the
+    // very same path. A sync of this library must not purge that one's art.
+    const url = "/library/metadata/1234/thumb/1700000000";
+    const mine = writeVariant(computeCacheKey(LIB, url, CACHE_WIDTH_GRID));
+    const theirs = writeVariant(computeCacheKey("lib-on-other-server", url, CACHE_WIDTH_GRID));
+
+    await invalidateCachedUrls(LIB, [url]);
+
+    expect(existsSync(mine)).toBe(false);
+    expect(existsSync(theirs)).toBe(true);
   });
 });

@@ -6,6 +6,9 @@ import { cleanupArrTags } from "@/lib/lifecycle/actions";
 import { validateRequest, ruleSetUpdateSchema } from "@/lib/validation";
 import { findFieldsInvalidForType } from "@/lib/conditions";
 import { validateActionConfig } from "@/lib/lifecycle/action-config";
+import { invalidateRuleSetNameCaches } from "@/lib/cache/invalidate";
+import { hasArrRules } from "@/lib/rules/lifecycle-engine";
+import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
 
 export async function PUT(
   request: NextRequest,
@@ -103,10 +106,11 @@ export async function PUT(
   // Validate the MERGED action configuration (PUT only sends changed
   // fields): family of actionType must match the library type, and a
   // referenced instance must exist in that family for this user.
+  let arrScopeChanged = false;
   if (actionType !== undefined || arrInstanceId !== undefined) {
     const current = await prisma.ruleSet.findFirst({
       where: { id, userId: session.userId },
-      select: { type: true, actionType: true, arrInstanceId: true },
+      select: { type: true, actionType: true, arrInstanceId: true, rules: true },
     });
     if (current) {
       const actionConfigError = await validateActionConfig({
@@ -118,6 +122,15 @@ export async function PUT(
       if (actionConfigError) {
         return NextResponse.json({ error: actionConfigError }, { status: 400 });
       }
+      // A rule set's Arr criteria are read from its own instance
+      // (`resolveArrInstanceScope`), so with Arr criteria a new instance is a
+      // rule change, not configuration: the matches were judged on the old
+      // instance's tags, monitoring and quality, and kept they would arm the
+      // re-pointed actions against copies nothing ever checked.
+      arrScopeChanged =
+        arrInstanceId !== undefined &&
+        arrInstanceId !== current.arrInstanceId &&
+        hasArrRules((rules ?? current.rules) as unknown as LifecycleRule[] | LifecycleRuleGroup[]);
     }
   }
 
@@ -164,8 +177,9 @@ export async function PUT(
 
   // clearMatches=false preserves existing matches and pending actions (e.g. when user
   // wants to keep matches intact after a config-only change). Defaults to true for
-  // backwards compatibility and safety.
-  const clearMatches = request.nextUrl.searchParams.get("clearMatches") !== "false";
+  // backwards compatibility and safety. A change of the instance the Arr
+  // criteria are read from always clears (see `arrScopeChanged`).
+  const clearMatches = request.nextUrl.searchParams.get("clearMatches") !== "false" || arrScopeChanged;
 
   // Wrap update + cleanup + read in a single transaction so the returned
   // record reflects exactly the values we just wrote and isn't clobbered
@@ -220,6 +234,8 @@ export async function PUT(
   if (!updated) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
+  // A rename changes "Matched By Rule Set" in the cached dropdowns.
+  if (name !== undefined) invalidateRuleSetNameCaches();
 
   return NextResponse.json({ ruleSet: updated });
 }
@@ -264,6 +280,8 @@ export async function DELETE(
   const collectionId = ruleSet.collectionId;
 
   await prisma.ruleSet.delete({ where: { id } });
+  // Its name leaves "Matched By Rule Set" in the cached dropdowns.
+  invalidateRuleSetNameCaches();
 
   // Re-sync the collection this rule set fed (if any). The collection is NOT
   // removed wholesale — other rule sets may still feed it. After this rule set's

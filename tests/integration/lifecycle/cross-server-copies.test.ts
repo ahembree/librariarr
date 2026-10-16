@@ -215,6 +215,66 @@ describe("cross-server copies of one title", () => {
   });
 });
 
+// A track's Arr-family id is its ARTIST's MusicBrainz id, shared by every track
+// of the artist. Keyed on it alone, distinct tracks of one artist on two
+// servers collapsed into one match — a file delete acted on one track per
+// cycle — while on one server an artist-level action was scheduled once per
+// track, the first succeeding and the rest failing "not found".
+describe("track-scope music", () => {
+  beforeEach(async () => {
+    await cleanDatabase();
+    vi.clearAllMocks();
+  });
+
+  /** Three tracks of one artist on server A (the first also on server B). */
+  async function artistTracks(opts: { servers: 1 | 2; actionType: string }) {
+    const user = await createTestUser();
+    const s1 = await createTestServer(user.id);
+    const s2 = await createTestServer(user.id);
+    const l1 = await createTestLibrary(s1.id, { type: "MUSIC" });
+    const l2 = await createTestLibrary(s2.id, { type: "MUSIC" });
+    const track = async (libraryId: string, n: number) => {
+      const t = await createTestMediaItem(libraryId, {
+        type: "MUSIC", title: `Song ${n}`, parentTitle: "The Artist", albumTitle: "Album", episodeNumber: n, playCount: 0,
+      });
+      await createTestExternalId(t.id, "MUSICBRAINZ", "artist-mbid-1");
+      await prisma.mediaItem.update({ where: { id: t.id }, data: { dedupKey: `music:the artist:song ${n}` } });
+      return t;
+    };
+    const tracks = [await track(l1.id, 1), await track(l1.id, 2), await track(l1.id, 3)];
+    const copy = opts.servers === 2 ? await track(l2.id, 1) : null;
+    const ruleSet = await createTestRuleSet(user.id, {
+      name: "Unplayed tracks", type: "MUSIC", seriesScope: false, rules: UNWATCHED,
+      serverIds: opts.servers === 2 ? [s1.id, s2.id] : [s1.id],
+      actionEnabled: true, actionType: opts.actionType, arrInstanceId: "lidarr-1",
+    });
+    return { user, tracks, copy, ruleSet };
+  }
+
+  it("keeps one match per track for a track file delete, folding only another server's copy of the same track", async () => {
+    const { user, tracks, copy, ruleSet } = await artistTracks({ servers: 2, actionType: "DELETE_FILES_LIDARR" });
+
+    await processLifecycleRules(user.id);
+
+    const matches = await prisma.ruleMatch.findMany({ where: { ruleSetId: ruleSet.id } });
+    expect(matches.map((m) => m.mediaItemId).sort()).toEqual(tracks.map((t) => t.id).sort());
+    expect(matches.find((m) => m.mediaItemId === tracks[0].id)?.copyIds).toEqual([copy!.id]);
+    const actions = await prisma.lifecycleAction.findMany({ where: { ruleSetId: ruleSet.id, status: "PENDING" } });
+    expect(actions.map((a) => a.mediaItemId).sort()).toEqual(tracks.map((t) => t.id).sort());
+  });
+
+  it("schedules an artist-level action once per artist, on a single server too", async () => {
+    const { user, tracks, ruleSet } = await artistTracks({ servers: 1, actionType: "DELETE_LIDARR" });
+
+    await processLifecycleRules(user.id);
+
+    const actions = await prisma.lifecycleAction.findMany({ where: { ruleSetId: ruleSet.id, status: "PENDING" } });
+    expect(actions).toHaveLength(1);
+    expect([...actions[0].matchedMediaItemIds].sort()).toEqual(tracks.map((t) => t.id).sort());
+    expect(await prisma.ruleMatch.count({ where: { ruleSetId: ruleSet.id } })).toBe(1);
+  });
+});
+
 describe("arrExternalIdsOf", () => {
   beforeEach(async () => {
     await cleanDatabase();

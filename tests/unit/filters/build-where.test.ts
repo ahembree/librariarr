@@ -211,6 +211,21 @@ describe("applyCommonFilters", () => {
       const andClauses = where.AND as Prisma.MediaItemWhereInput[];
       expect(andClauses).toHaveLength(2);
     });
+
+    it("matches any stored spelling of a genre when given them", () => {
+      // `array_contains` is case-sensitive; the dropdown offers one entry per
+      // genre whatever its case, so the filter must cover every spelling.
+      const where: Prisma.MediaItemWhereInput = {};
+      applyCommonFilters(
+        where,
+        new URLSearchParams({ genre: "SCI-FI|Drama" }),
+        new Map([["sci-fi", ["Sci-Fi", "sci-fi"]], ["drama", ["Drama"]]]),
+      );
+      expect(where.AND).toEqual([
+        { OR: [{ genres: { array_contains: "Sci-Fi" } }, { genres: { array_contains: "sci-fi" } }] },
+        { genres: { array_contains: "Drama" } },
+      ]);
+    });
   });
 
   describe("date filters", () => {

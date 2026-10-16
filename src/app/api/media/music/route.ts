@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { escapeLike } from "@/lib/filters/escape-like";
 import type { Prisma } from "@/generated/prisma/client";
 import { applyCommonFilters } from "@/lib/filters/build-where";
+import { loadGenreSpellings } from "@/lib/filters/genre-spellings";
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
 import { parseListPagination } from "@/lib/api/pagination";
 import { getServerPresenceByDedupKey } from "@/lib/dedup/server-presence";
@@ -24,6 +25,23 @@ const SORT_COLUMNS = new Set([
   "rating",
   "audienceRating",
   "contentRating",
+  // Every column the library table (src/components/media-table.tsx) offers a
+  // sort header for. A field missing here silently sorted by title while the
+  // header showed the clicked column's arrow — Dynamic Range is visible by
+  // default. All are plain MediaItem columns; `{ id: "asc" }` keeps the order
+  // total as with the rest.
+  "resolution",
+  "videoCodec",
+  "dynamicRange",
+  "audioProfile",
+  "audioChannels",
+  "container",
+  "studio",
+  "videoBitDepth",
+  "videoFrameRate",
+  "videoBitrate",
+  "aspectRatio",
+  "originallyAvailableAt",
 ]);
 
 export async function GET(request: NextRequest) {
@@ -65,7 +83,7 @@ export async function GET(request: NextRequest) {
     ];
   }
 
-  applyCommonFilters(where, searchParams);
+  applyCommonFilters(where, searchParams, await loadGenreSpellings(searchParams));
 
   // Select only fields needed for card/table rendering.
   // Full item data is fetched on demand by the detail panel via /api/media/{id}.

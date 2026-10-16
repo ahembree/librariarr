@@ -68,9 +68,27 @@ export async function fetchCrossSystemData(itemIds: string[]): Promise<CrossSyst
   ).flatMap((m) =>
     m.copyIds.filter((id) => requested.has(id)).map((id) => ({ mediaItemId: id, name: m.ruleSet.name })),
   );
+  // A show or an artist match is stored on ONE representative episode or track
+  // and lists everything it acts on in `itemData.memberIds` — every one of
+  // those was matched by the rule set too. Counting the representative alone,
+  // a "NOT Matched By Rule Set = Keep" rule read every other episode of a show
+  // "Keep" holds as unmatched, and deleted them.
+  const memberMatches = await prisma.$queryRawUnsafe<{ mediaItemId: string; name: string }[]>(
+    `SELECT DISTINCT req.id AS "mediaItemId", rs.name
+       FROM "RuleMatch" rm
+       JOIN "RuleSet" rs ON rs.id = rm."ruleSetId"
+       CROSS JOIN LATERAL jsonb_array_elements_text(
+         CASE WHEN jsonb_typeof(rm."itemData"->'memberIds') = 'array'
+           THEN rm."itemData"->'memberIds' ELSE '[]'::jsonb END
+       ) AS member(id)
+       JOIN unnest($1::text[]) AS req(id) ON req.id = member.id
+      WHERE rs.type::text IN ('SERIES', 'MUSIC')`,
+    itemIds,
+  );
   for (const match of [
     ...ruleMatches.map((m) => ({ mediaItemId: m.mediaItemId, name: m.ruleSet.name })),
     ...copyMatches,
+    ...memberMatches,
   ]) {
     const entry = result.get(match.mediaItemId);
     if (entry && match.name && !entry.matchedRuleSets.includes(match.name)) {
@@ -91,4 +109,31 @@ export async function fetchCrossSystemData(itemIds: string[]): Promise<CrossSyst
   }
 
   return result;
+}
+
+/**
+ * The cross-system values of a show or an artist, read across its episodes or
+ * tracks: matched by every rule set that matched any of them, pending if any
+ * has a pending action, on as many servers as its most-copied one. The
+ * series- and artist-scope engines evaluate the aggregate record, which used
+ * to carry none of these — every show read "matched by no rule set, no pending
+ * action, on one server", so an exclusion such as "NOT Matched By Rule Set =
+ * Keep" failed open.
+ */
+export function foldCrossSystemData(
+  memberIds: readonly string[],
+  data: CrossSystemDataMap | undefined,
+): CrossSystemDataEntry | undefined {
+  if (!data) return undefined;
+  const names = new Set<string>();
+  let serverCount = 1;
+  let hasPendingAction = false;
+  for (const id of memberIds) {
+    const entry = data.get(id);
+    if (!entry) continue;
+    for (const name of entry.matchedRuleSets) names.add(name);
+    serverCount = Math.max(serverCount, entry.serverCount);
+    hasPendingAction ||= entry.hasPendingAction;
+  }
+  return { serverCount, matchedRuleSets: [...names], hasPendingAction };
 }

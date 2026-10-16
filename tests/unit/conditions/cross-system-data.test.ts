@@ -12,6 +12,7 @@ const { mockPrisma } = vi.hoisted(() => ({
     lifecycleAction: {
       findMany: vi.fn(),
     },
+    $queryRawUnsafe: vi.fn(),
   },
 }));
 
@@ -29,6 +30,7 @@ describe("fetchCrossSystemData", () => {
     mockPrisma.mediaItem.groupBy.mockResolvedValue([]);
     mockPrisma.ruleMatch.findMany.mockResolvedValue([]);
     mockPrisma.lifecycleAction.findMany.mockResolvedValue([]);
+    mockPrisma.$queryRawUnsafe.mockResolvedValue([]);
   });
 
   it("returns an empty map and queries nothing for empty input", async () => {

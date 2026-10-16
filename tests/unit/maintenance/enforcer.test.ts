@@ -1494,4 +1494,38 @@ describe("preroll cache resilience", () => {
     await processPrerollSchedules();
     expect(setPreroll).toHaveBeenCalledTimes(2);
   });
+
+  it("clears the preroll once the last enabled schedule is deleted or disabled", async () => {
+    // The "no more enabled schedules" cleanup used to sit behind an early
+    // return for an empty schedule list — exactly the state the last deletion
+    // leaves on a single-admin install — so the preroll stayed on Plex for good.
+    const server = { id: "s1", type: "PLEX", url: "http://plex", accessToken: "t", tlsSkipVerify: false };
+    vi.mocked(prisma.user.findUnique).mockResolvedValue({ mediaServers: [server] } as never);
+    const setPreroll = vi.fn().mockResolvedValue(undefined);
+    const clearPreroll = vi.fn().mockResolvedValue(undefined);
+    vi.mocked(createMediaServerClient).mockReturnValue({
+      setPrerollPath: setPreroll,
+      clearPreroll,
+    } as unknown as ReturnType<typeof createMediaServerClient>);
+
+    vi.mocked(prisma.prerollSchedule.findMany).mockResolvedValue([
+      {
+        id: "p1", userId: "user1", name: "Xmas", enabled: true, priority: 1,
+        prerollPath: "/x.mp4", scheduleType: "seasonal",
+        startDate: new Date(2020, 0, 1), endDate: new Date(2020, 11, 31),
+        daysOfWeek: null, startTime: null, endTime: null,
+        user: { id: "user1", mediaServers: [server] },
+      },
+    ] as never);
+    await processPrerollSchedules();
+    expect(setPreroll).toHaveBeenCalledWith("/x.mp4");
+
+    vi.mocked(prisma.prerollSchedule.findMany).mockResolvedValue([]);
+    await processPrerollSchedules();
+    expect(clearPreroll).toHaveBeenCalledTimes(1);
+
+    // Cleared once; nothing to redo on later ticks.
+    await processPrerollSchedules();
+    expect(clearPreroll).toHaveBeenCalledTimes(1);
+  });
 });

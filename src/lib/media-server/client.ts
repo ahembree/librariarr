@@ -35,6 +35,20 @@ export class MediaItemNotFoundError extends Error {
   }
 }
 
+/**
+ * "The server answered, and said this item is gone": a `MediaItemNotFoundError`
+ * or a bare HTTP 404 (Jellyfin/Emby answer a missing item id that way). The
+ * only failure of `getItemMetadata` that may be read as evidence of deletion;
+ * every other one — a timeout, a 5xx, an unparseable body — says nothing about
+ * whether the item exists.
+ */
+export function isMediaItemNotFound(error: unknown): boolean {
+  return (
+    error instanceof MediaItemNotFoundError ||
+    (error as { response?: { status?: number } } | null)?.response?.status === 404
+  );
+}
+
 export interface MediaServerClient {
   /** Whether the bulk listing endpoint may return incomplete metadata requiring per-item enrichment */
   readonly bulkListingIncomplete?: boolean;

@@ -472,7 +472,7 @@ export async function syncMediaServerItems(
       serverId, [...toDelete],
     );
     if (rows.length > 0) {
-      for (const r of rows) await invalidateCachedUrls([r.thumbUrl, r.parentThumbUrl, r.seasonThumbUrl]);
+      for (const r of rows) await invalidateCachedUrls(r.libraryId, [r.thumbUrl, r.parentThumbUrl, r.seasonThumbUrl]);
       const ids = rows.map((r) => r.id);
       const exceptions = await prisma.lifecycleException.count({ where: { mediaItemId: { in: ids } } });
       if (exceptions > 0) {

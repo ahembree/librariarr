@@ -289,19 +289,33 @@ export class PlexClient implements MediaServerClient {
     return map;
   }
 
+  /**
+   * Account id → name, or an empty map when `/accounts` cannot be read.
+   * Lenient on purpose for the callers that only decorate a view (a per-item
+   * history panel, the excluded-users picker); the watch-history sync uses
+   * {@link fetchAccounts}, which throws instead.
+   */
   async getAccounts(): Promise<Map<number, string>> {
     try {
-      const response = await this.client.get("/accounts");
-      const accounts =
-        response.data.MediaContainer.Account || [];
-      const map = new Map<number, string>();
-      for (const acct of accounts) {
-        map.set(acct.id, acct.name);
-      }
-      return map;
+      return await this.fetchAccounts();
     } catch {
       return new Map();
     }
+  }
+
+  /** `/accounts` as a map, throwing on a failed or unrecognisable response. */
+  private async fetchAccounts(): Promise<Map<number, string>> {
+    const response = await this.client.get("/accounts");
+    const container = response.data?.MediaContainer;
+    if (!container || typeof container !== "object") {
+      throw new Error("Unrecognized Plex /accounts response (no MediaContainer)");
+    }
+    const accounts = container.Account || [];
+    const map = new Map<number, string>();
+    for (const acct of accounts) {
+      map.set(acct.id, acct.name);
+    }
+    return map;
   }
 
   /**
@@ -492,8 +506,21 @@ export class PlexClient implements MediaServerClient {
     }> = [];
 
     try {
+      // The STRICT account lookup. Every play is attributed through this map,
+      // and the lenient one answers a failed `/accounts` (a single 500 — only
+      // 502-504 are retried) with an empty map, which filed every play under
+      // "Unknown": the native full replace then rewrote the server's ENTIRE
+      // history that way and marked it established, so `watchedByUser` rules
+      // saw none of the real users' plays ("delete unless watched by alice"
+      // matched what alice watched). The incremental append was worse — its
+      // dedup key includes the username, so each play in the overlap was stored
+      // again under "Unknown", and again under the real name once `/accounts`
+      // recovered: a permanent `playCount` inflation, since that column is
+      // reconciled monotonically. Throwing makes the sync take its existing
+      // "fetch failed — leave the stored history intact" path. Devices stay
+      // lenient: they only label a row.
       const [accountMap, deviceMap] = await Promise.all([
-        this.getAccounts(),
+        this.fetchAccounts(),
         this.getDevices(),
       ]);
 
