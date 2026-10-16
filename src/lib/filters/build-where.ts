@@ -1,20 +1,12 @@
 import type { Prisma } from "@/generated/prisma/client";
+import { RESOLUTION_DB_VALUES } from "@/lib/conditions/constants";
 import { escapeLike } from "./escape-like";
-
-// Map standardized resolution labels to raw DB patterns
-const RESOLUTION_DB_VALUES: Record<string, string[]> = {
-  "4K": ["4k", "2160", "2160p"],
-  "1080P": ["1080", "1080p"],
-  "720P": ["720", "720p"],
-  "480P": ["480", "480p"],
-  "SD": ["sd", "360", "360p"],
-};
 
 /**
  * Parse a multi-select filter value. Values are pipe-separated, e.g. "4K|1080P".
  * Returns null if value is null/empty, or an array of values.
  */
-export function parseMulti(value: string | null): string[] | null {
+function parseMulti(value: string | null): string[] | null {
   if (!value) return null;
   const vals = value.split("|").filter(Boolean);
   return vals.length > 0 ? vals : null;

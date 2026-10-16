@@ -71,7 +71,7 @@ declare module "axios" {
   }
 }
 
-export interface ConfigureRetryOptions {
+interface ConfigureRetryOptions {
   /**
    * Called when a network-level error is final — either retries are exhausted,
    * or the error is a non-retryable network error (e.g., ECONNREFUSED, ENOTFOUND).

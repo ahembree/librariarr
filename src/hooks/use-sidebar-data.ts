@@ -36,7 +36,7 @@ export interface NavItem {
   dotTooltip?: string;
 }
 
-export interface NavGroup {
+interface NavGroup {
   label: string;
   items: NavItem[];
 }

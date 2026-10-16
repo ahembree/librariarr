@@ -79,7 +79,7 @@ export function resetVersionLookups(): void {
   lookups.clear();
 }
 
-export interface UpdateCheckResult {
+interface UpdateCheckResult {
   currentVersion: string;
   latestVersion: string | null;
   updateAvailable: boolean;
@@ -209,7 +209,7 @@ export async function checkForUpdate(): Promise<UpdateCheckResult> {
 
 // ─── Changelog / Release Notes ───
 
-export interface ReleaseNote {
+interface ReleaseNote {
   version: string;
   name: string | null;
   body: string;

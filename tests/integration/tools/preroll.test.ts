@@ -39,18 +39,12 @@ import {
   POST as postPreroll,
 } from "@/app/api/tools/preroll/route";
 import { GET as getPrerollCurrent } from "@/app/api/tools/preroll/current/route";
-import {
-  GET as getPresets,
-  POST as postPreset,
-} from "@/app/api/tools/preroll/presets/route";
+import { POST as postPreset } from "@/app/api/tools/preroll/presets/route";
 import {
   PUT as putPreset,
   DELETE as deletePreset,
 } from "@/app/api/tools/preroll/presets/[id]/route";
-import {
-  GET as getSchedules,
-  POST as postSchedule,
-} from "@/app/api/tools/preroll/schedules/route";
+import { POST as postSchedule } from "@/app/api/tools/preroll/schedules/route";
 import {
   PUT as putSchedule,
   DELETE as deleteSchedule,
@@ -94,9 +88,8 @@ describe("GET /api/tools/preroll", () => {
 
   it("does not call the media server", async () => {
     const user = await createTestUser();
-    const server = await createTestServer(user.id);
+    await createTestServer(user.id);
     setMockSession({ isLoggedIn: true, userId: user.id});
-    void server;
 
     const { PlexClient } = await import("@/lib/plex/client");
     const res = await callRoute(getPreroll);
@@ -128,9 +121,8 @@ describe("GET /api/tools/preroll/current", () => {
 
   it("returns current preroll from Plex server", async () => {
     const user = await createTestUser();
-    const server = await createTestServer(user.id);
+    await createTestServer(user.id);
     setMockSession({ isLoggedIn: true, userId: user.id});
-    void server;
 
     const res = await callRoute(getPrerollCurrent);
     const body = await expectJson<{ currentPreroll: string; available: boolean }>(res);
@@ -183,22 +175,6 @@ describe("POST /api/tools/preroll", () => {
 // ---------------------------------------------------------------------------
 // Preroll Presets CRUD
 // ---------------------------------------------------------------------------
-describe("GET /api/tools/preroll/presets", () => {
-  it("returns 401 without auth", async () => {
-    const res = await callRoute(getPresets);
-    await expectJson(res, 401);
-  });
-
-  it("returns empty list initially", async () => {
-    const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id});
-
-    const res = await callRoute(getPresets);
-    const body = await expectJson<{ presets: unknown[] }>(res);
-    expect(body.presets).toEqual([]);
-  });
-});
-
 describe("POST /api/tools/preroll/presets", () => {
   it("returns 401 without auth", async () => {
     const res = await callRoute(postPreset, {
@@ -258,7 +234,7 @@ describe("POST /api/tools/preroll/presets", () => {
       body: { name: "Summer", path: "/prerolls/summer.mp4" },
     });
 
-    const res = await callRoute(getPresets);
+    const res = await callRoute(getPreroll);
     const body = await expectJson<{
       presets: { name: string; path: string }[];
     }>(res);
@@ -369,7 +345,7 @@ describe("DELETE /api/tools/preroll/presets/[id]", () => {
     expect(body.success).toBe(true);
 
     // Verify it's gone
-    const listRes = await callRoute(getPresets);
+    const listRes = await callRoute(getPreroll);
     const listBody = await expectJson<{ presets: unknown[] }>(listRes);
     expect(listBody.presets).toHaveLength(0);
   });
@@ -398,22 +374,6 @@ describe("DELETE /api/tools/preroll/presets/[id]", () => {
 // ---------------------------------------------------------------------------
 // Preroll Schedules CRUD
 // ---------------------------------------------------------------------------
-describe("GET /api/tools/preroll/schedules", () => {
-  it("returns 401 without auth", async () => {
-    const res = await callRoute(getSchedules);
-    await expectJson(res, 401);
-  });
-
-  it("returns empty list initially", async () => {
-    const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id});
-
-    const res = await callRoute(getSchedules);
-    const body = await expectJson<{ schedules: unknown[] }>(res);
-    expect(body.schedules).toEqual([]);
-  });
-});
-
 describe("POST /api/tools/preroll/schedules", () => {
   it("returns 401 without auth", async () => {
     const res = await callRoute(postSchedule, {
@@ -578,7 +538,7 @@ describe("POST /api/tools/preroll/schedules", () => {
       },
     });
 
-    const res = await callRoute(getSchedules);
+    const res = await callRoute(getPreroll);
     const body = await expectJson<{
       schedules: { name: string; prerollPath: string }[];
     }>(res);
@@ -710,7 +670,7 @@ describe("DELETE /api/tools/preroll/schedules/[id]", () => {
     expect(body.success).toBe(true);
 
     // Verify it's gone
-    const listRes = await callRoute(getSchedules);
+    const listRes = await callRoute(getPreroll);
     const listBody = await expectJson<{ schedules: unknown[] }>(listRes);
     expect(listBody.schedules).toHaveLength(0);
   });

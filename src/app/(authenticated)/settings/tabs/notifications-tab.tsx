@@ -15,7 +15,7 @@ import {
 import { SettingsSection } from "../components";
 import type { TestResult } from "../types";
 
-export interface NotificationsTabProps {
+interface NotificationsTabProps {
   discordWebhookUrl: string;
   discordWebhookUsername: string;
   discordWebhookAvatarUrl: string;

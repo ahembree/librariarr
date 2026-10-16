@@ -63,17 +63,17 @@ export interface RadarrMovie {
   status?: string;
 }
 
-export interface RadarrTag {
+interface RadarrTag {
   id: number;
   label: string;
 }
 
-export interface RadarrQualityProfile {
+interface RadarrQualityProfile {
   id: number;
   name: string;
 }
 
-export interface RadarrMovieFile {
+interface RadarrMovieFile {
   id: number;
   movieId: number;
   relativePath: string;
@@ -87,14 +87,7 @@ export interface RadarrMovieFile {
 // request line stays well under Radarr's ~8 KB Kestrel limit on large libraries.
 const MOVIE_FILE_QUERY_CHUNK = 100;
 
-export interface RadarrExclusion {
-  id?: number;
-  tmdbId: number;
-  movieTitle: string;
-  movieYear: number;
-}
-
-export interface RadarrMediaManagementConfig {
+interface RadarrMediaManagementConfig {
   recycleBin: string | null;
   recycleBinCleanupDays: number;
 }

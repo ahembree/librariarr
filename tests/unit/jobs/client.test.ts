@@ -14,7 +14,7 @@ const m = vi.hoisted(() => {
     warn: vi.fn(),
   };
 });
-const { addJob, makeWorkerUtils, poolEnd, poolOn, poolQuery, error, warn } = m;
+const { addJob, makeWorkerUtils, poolOn, poolQuery, error, warn } = m;
 
 vi.mock("graphile-worker", () => ({ makeWorkerUtils: m.makeWorkerUtils }));
 vi.mock("pg", () => ({

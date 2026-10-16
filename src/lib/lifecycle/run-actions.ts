@@ -10,7 +10,7 @@ import { computeDeletedBytes } from "@/lib/lifecycle/deleted-bytes";
  * Action configuration shared by rule-based and ad-hoc (query page) execution.
  * Mirrors the relevant fields of a RuleSet / LifecycleAction.
  */
-export interface ActionConfig {
+interface ActionConfig {
   actionType: string;
   arrInstanceId: string | null;
   targetQualityProfileId: number | null;
@@ -25,7 +25,7 @@ export interface ActionConfig {
  * For rule-based execution this points at the originating rule set; for ad-hoc
  * query-page actions ruleSetId is null and ruleSetName is a synthetic label.
  */
-export interface HistoryContext {
+interface HistoryContext {
   ruleSetId: string | null;
   ruleSetName: string | null;
   ruleSetType: string | null;
@@ -38,7 +38,7 @@ export interface HistoryContext {
 }
 
 /** The subset of a MediaItem the executor and history writer need. */
-export interface ActionItem {
+interface ActionItem {
   id: string;
   title: string;
   parentTitle: string | null;
@@ -54,7 +54,7 @@ export interface ActionItem {
   externalIds: { source: string; externalId: string }[];
 }
 
-export interface RunActionsResult {
+interface RunActionsResult {
   executed: number;
   failed: number;
   errors: string[];
@@ -68,7 +68,7 @@ export interface RunActionsResult {
 }
 
 /** Live progress for a bounded action run, suitable for a streaming UI. */
-export interface ActionRunProgress {
+interface ActionRunProgress {
   /** Items fully processed so far (success or failure). */
   done: number;
   /** Total items in this run. */

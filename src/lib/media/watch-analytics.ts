@@ -15,7 +15,7 @@ const WATCH_GROUP_COLUMNS: Record<string, string> = {
   platform: "platform",
 };
 
-export interface WatchTrendRow {
+interface WatchTrendRow {
   title: string;
   type: string;
   plays: number;
@@ -23,7 +23,7 @@ export interface WatchTrendRow {
   lastWatchedAt: Date | null;
 }
 
-export interface WatchLeaderboardRow {
+interface WatchLeaderboardRow {
   key: string;
   plays: number;
   items: number;

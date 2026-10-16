@@ -5,7 +5,7 @@ import { logger } from "@/lib/logger";
 import { markSelfWrites } from "@/lib/media-server/realtime/self-writes";
 
 /** A saved, reusable Plex collection definition. */
-export interface CollectionSettings {
+interface CollectionSettings {
   id: string;
   userId: string;
   name: string;

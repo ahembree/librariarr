@@ -2,14 +2,13 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo, useLayoutEffect, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import Link from "next/link";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { MediaTable } from "@/components/media-table";
 import { MediaFilters } from "@/components/media-filters";
 import { sameFilters } from "@/lib/filters/same-filters";
 import { MediaCard, CARD_CONTENT_HEIGHT, PRIORITY_ROWS } from "@/components/media-card";
 import { useChipColors } from "@/components/chip-color-provider";
-import { Music, Disc3, ListMusic, Clock, HardDrive } from "lucide-react";
+import { Music, ListMusic, Clock, HardDrive } from "lucide-react";
 import { LibraryToolbar } from "@/components/library-toolbar";
 import type { MediaListItem } from "@/lib/types";
 import { useCardSize, estimateContentWidth } from "@/hooks/use-card-size";

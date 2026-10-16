@@ -29,10 +29,6 @@ function getState(): RealtimeState {
   return globalForRealtime.__librariarrRealtime;
 }
 
-export function getRealtimeManager(): RealtimeManager {
-  return getState().manager;
-}
-
 /**
  * Start the media-server realtime manager: open a WebSocket per enabled server,
  * reconcile on server/settings changes, and keep a periodic safety reconcile.
@@ -84,10 +80,3 @@ export function _resetRealtimeForTesting(): void {
 }
 
 export { realtimeBus } from "./bus";
-export { RealtimeManager } from "./manager";
-export type {
-  RealtimeEvent,
-  RealtimeEventKind,
-  RealtimeConnectionStatus,
-  RealtimeServerConfig,
-} from "./types";

@@ -11,8 +11,6 @@ import { RECENT_LOGIN_WINDOW_MS } from "@/lib/auth/recent-login";
 import { passwordSignInEnabled } from "@/lib/auth/password-sign-in";
 import type { ReauthMethod } from "@/lib/auth/reauth-client";
 
-export type { ReauthMethod } from "@/lib/auth/reauth-client";
-
 /**
  * A re-authentication handshake's `state` is `<random>.<nonce>`: the random
  * part is what the callback verifies, the nonce what its report to the popup
@@ -73,7 +71,7 @@ export function ssoIdentityMatches(user: SsoLink, subject: string, issuer: strin
   return ssoLinkedToIssuer(user, issuer) && user.ssoSubject === subject;
 }
 
-export interface ReauthContext {
+interface ReauthContext {
   /** Plex, then SSO, then password — the order the prompt lists them in. */
   methods: ReauthMethod[];
   /** The SSO configuration the methods were derived from. */

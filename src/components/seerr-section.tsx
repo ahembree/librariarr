@@ -1,9 +1,8 @@
 "use client";
 
-import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { ColorChip } from "@/components/color-chip";
-import { ExternalLink, Inbox, Loader2 } from "lucide-react";
+import { ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export interface SeerrRequestSummary {
@@ -183,73 +182,5 @@ export function SeerrInstanceCard({ match }: { match: SeerrMatch }) {
         />
       </div>
     </div>
-  );
-}
-
-export function SeerrSection({ itemId, mediaType }: { itemId: string; mediaType?: string }) {
-  // Keyed by itemId so a stale response from a previous id doesn't render against the new one.
-  const [fetchState, setFetchState] = useState<{ forId: string; data: SeerrInfoResponse | null } | null>(null);
-  const data = fetchState && fetchState.forId === itemId ? fetchState.data : null;
-  const loading = !fetchState || fetchState.forId !== itemId;
-
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const response = await fetch(`/api/media/${itemId}/seerr-info`);
-        const body: SeerrInfoResponse = await response.json();
-        if (cancelled) return;
-        setFetchState({ forId: itemId, data: body });
-      } catch {
-        if (cancelled) return;
-        setFetchState({ forId: itemId, data: null });
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [itemId]);
-
-  // Seerr does not handle music — skip the section entirely
-  if (mediaType === "MUSIC") return null;
-
-  if (loading) {
-    return (
-      <section>
-        <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-          <Inbox className={cn("h-3.5 w-3.5", SEERR_TYPE_STYLE.text)} />
-          Seerr
-        </h3>
-        <div className="rounded-xl border border-white/6 bg-muted/30 p-5 shadow-[inset_0_1px_0_oklch(1_0_0/3%)]">
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            Loading request info…
-          </div>
-        </div>
-      </section>
-    );
-  }
-
-  if (!data || data.matches.length === 0) return null;
-
-  const count = data.matches.length;
-
-  return (
-    <section>
-      <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-        <Inbox className={cn("h-3.5 w-3.5", SEERR_TYPE_STYLE.text)} />
-        Seerr
-        {count > 1 && (
-          <span className="text-xs font-normal normal-case tracking-normal">
-            ({count} instances)
-          </span>
-        )}
-      </h3>
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-        {data.matches.map((match) => (
-          <SeerrInstanceCard key={match.instanceId} match={match} />
-        ))}
-      </div>
-    </section>
   );
 }

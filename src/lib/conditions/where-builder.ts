@@ -35,7 +35,7 @@ import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
 import { wildcardToRegex } from "./wildcard";
 import type { Condition } from "./types";
 
-export function applyNegate(clause: Prisma.MediaItemWhereInput, negate?: boolean): Prisma.MediaItemWhereInput {
+function applyNegate(clause: Prisma.MediaItemWhereInput, negate?: boolean): Prisma.MediaItemWhereInput {
   if (!negate) return clause;
   return { NOT: clause };
 }
@@ -64,7 +64,7 @@ export { escapeLike };
  * Phase 2 would have matched. For non-nullable columns the wrapper is a
  * no-op (no NULL rows exist).
  */
-export function withNullSafety(field: string, notClause: Prisma.MediaItemWhereInput): Prisma.MediaItemWhereInput {
+function withNullSafety(field: string, notClause: Prisma.MediaItemWhereInput): Prisma.MediaItemWhereInput {
   if (isNonNullableField(field)) return notClause;
   return { OR: [{ [field]: null }, notClause] };
 }
@@ -83,7 +83,7 @@ export function withNullSafety(field: string, notClause: Prisma.MediaItemWhereIn
  * sentinel constants (UNSATISFIABLE_WHERE, MATCH_ALL_WHERE), or relation
  * queries (which don't have NULL-row semantics), use plain `applyNegate`.
  */
-export function applyNegateNullable(field: string, positiveClause: Prisma.MediaItemWhereInput, negate?: boolean): Prisma.MediaItemWhereInput {
+function applyNegateNullable(field: string, positiveClause: Prisma.MediaItemWhereInput, negate?: boolean): Prisma.MediaItemWhereInput {
   if (!negate) return positiveClause;
   return withNullSafety(field, { NOT: positiveClause });
 }
@@ -112,7 +112,7 @@ export const UNSATISFIABLE_WHERE: Prisma.MediaItemWhereInput = {
  * collapsed to empty. A non-empty always-true predicate survives composition
  * and inverts correctly via applyNegate.
  */
-export const MATCH_ALL_WHERE: Prisma.MediaItemWhereInput = {
+const MATCH_ALL_WHERE: Prisma.MediaItemWhereInput = {
   id: { not: "__librariarr_never_id__" },
 };
 
@@ -142,7 +142,7 @@ export const MATCH_ALL_WHERE: Prisma.MediaItemWhereInput = {
  * routing. Each guard returns a non-`{}` clause directly so the result
  * survives composition without `applyNegate` flipping it to "match everything".
  */
-export function validateRulePreamble(
+function validateRulePreamble(
   field: string,
   operator: string,
   value: string | number,
@@ -182,15 +182,15 @@ export function isUnconfiguredContainsRule(operator: string, value: string | num
 //   - Stream-query (sq*), cross-system, arr/seerr, series-aggregate —
 //     handled at higher layers (Phase 2, group-level, enrichment)
 
-export type FieldHandler = (
+type FieldHandler = (
   operator: string,
   value: string | number,
   field: string,
   negate?: boolean,
 ) => Prisma.MediaItemWhereInput;
 
-export const DATE_HANDLER_FIELDS = new Set(["lastPlayedAt", "addedAt", "originallyAvailableAt"]);
-export const NUMERIC_HANDLER_FIELDS = new Set([
+const DATE_HANDLER_FIELDS = new Set(["lastPlayedAt", "addedAt", "originallyAvailableAt"]);
+const NUMERIC_HANDLER_FIELDS = new Set([
   "playCount", "videoBitrate", "audioChannels", "year",
   "videoBitDepth", "audioSamplingRate", "audioBitrate",
   "rating", "audienceRating", "ratingCount",
@@ -427,7 +427,7 @@ const genreLabelsHandler: FieldHandler = () => {
  *
  * The dispatcher calls this when FIELD_HANDLERS has no entry for the field.
  */
-export const textGenericHandler: FieldHandler = (operator, value, field, negate) => {
+const textGenericHandler: FieldHandler = (operator, value, field, negate) => {
   const enumerable = isEnumerableField(field);
   let clause: Prisma.MediaItemWhereInput;
   switch (operator) {
@@ -516,7 +516,7 @@ export const textGenericHandler: FieldHandler = (operator, value, field, negate)
  */
 /** External-id sources written by sync — the finite domain hasExternalId
  *  wildcards match against (both phases use the same list). */
-export const KNOWN_EXTERNAL_ID_SOURCES = ["TMDB", "TVDB", "IMDB", "MUSICBRAINZ"] as const;
+const KNOWN_EXTERNAL_ID_SOURCES = ["TMDB", "TVDB", "IMDB", "MUSICBRAINZ"] as const;
 
 const hasExternalIdHandler: FieldHandler = (operator, value, _field, negate) => {
   // hasExternalId is enumerable, so the UI offers `contains`/`notContains`

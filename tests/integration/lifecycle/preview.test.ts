@@ -3,14 +3,12 @@ import { cleanDatabase, disconnectTestDb } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
 import {
   callRoute,
-  callRouteWithParams,
   expectJson,
   expectStreamResult,
   createTestUser,
   createTestServer,
   createTestLibrary,
   createTestMediaItem,
-  createTestRuleSet,
   createTestRadarrInstance,
   createTestExternalId,
 } from "../../setup/test-helpers";
@@ -64,7 +62,6 @@ vi.mock("@/lib/arr/lidarr-client", () => ({
 }));
 
 // Import AFTER mocks
-import { POST as savedPreviewPOST } from "@/app/api/lifecycle/rules/[id]/preview/route";
 import { POST as adHocPreviewPOST } from "@/app/api/lifecycle/rules/preview/route";
 // The real client the Preview button feeds every response to. Imported here so
 // the refusal below is asserted end-to-end rather than only at the route.
@@ -81,151 +78,6 @@ describe("Lifecycle Rules Preview", () => {
   afterAll(async () => {
     await disconnectTestDb();
   });
-
-  // ---- POST /api/lifecycle/rules/[id]/preview (saved rule preview) ----
-
-  describe("POST /api/lifecycle/rules/[id]/preview", () => {
-    it("returns 401 without auth", async () => {
-      const response = await callRouteWithParams(
-        savedPreviewPOST,
-        { id: "nonexistent" },
-        {
-          url: "/api/lifecycle/rules/nonexistent/preview",
-          method: "POST",
-        }
-      );
-      await expectJson(response, 401);
-    });
-
-    it("returns 404 for non-existent rule set", async () => {
-      const user = await createTestUser();
-      setMockSession({ isLoggedIn: true, userId: user.id });
-
-      const response = await callRouteWithParams(
-        savedPreviewPOST,
-        { id: "nonexistent-id" },
-        {
-          url: "/api/lifecycle/rules/nonexistent-id/preview",
-          method: "POST",
-        }
-      );
-
-      await expectJson(response, 404);
-    });
-
-    it("returns 404 for another user's rule set", async () => {
-      const user1 = await createTestUser({ plexId: "owner" });
-      const user2 = await createTestUser({ plexId: "viewer" });
-      const ruleSet = await createTestRuleSet(user1.id, { name: "Private" });
-
-      setMockSession({ isLoggedIn: true, userId: user2.id });
-
-      const response = await callRouteWithParams(
-        savedPreviewPOST,
-        { id: ruleSet.id },
-        {
-          url: `/api/lifecycle/rules/${ruleSet.id}/preview`,
-          method: "POST",
-        }
-      );
-
-      await expectJson(response, 404);
-    });
-
-    it("returns matching items for a saved rule set with playCount rule", async () => {
-      const user = await createTestUser();
-      const server = await createTestServer(user.id);
-      const library = await createTestLibrary(server.id, { type: "MOVIE" });
-
-      // Create items: one unwatched, one watched
-      await createTestMediaItem(library.id, {
-        title: "Unwatched Movie",
-        type: "MOVIE",
-        playCount: 0,
-      });
-      await createTestMediaItem(library.id, {
-        title: "Watched Movie",
-        type: "MOVIE",
-        playCount: 5,
-      });
-
-      const ruleSet = await createTestRuleSet(user.id, {
-        name: "Unwatched",
-        type: "MOVIE",
-        serverIds: [server.id],
-        rules: [
-          {
-            id: "r1",
-            field: "playCount",
-            operator: "equals",
-            value: 0,
-            condition: "AND",
-          },
-        ],
-      });
-
-      setMockSession({ isLoggedIn: true, userId: user.id });
-
-      const response = await callRouteWithParams(
-        savedPreviewPOST,
-        { id: ruleSet.id },
-        {
-          url: `/api/lifecycle/rules/${ruleSet.id}/preview`,
-          method: "POST",
-        }
-      );
-
-      const body = await expectJson<{ items: { title: string }[]; count: number }>(
-        response,
-        200
-      );
-      expect(body.count).toBe(1);
-      expect(body.items[0].title).toBe("Unwatched Movie");
-    });
-
-    it("returns empty items when no matches", async () => {
-      const user = await createTestUser();
-      const server = await createTestServer(user.id);
-      const library = await createTestLibrary(server.id, { type: "MOVIE" });
-
-      await createTestMediaItem(library.id, {
-        title: "Watched",
-        type: "MOVIE",
-        playCount: 10,
-      });
-
-      const ruleSet = await createTestRuleSet(user.id, {
-        name: "Unwatched",
-        type: "MOVIE",
-        rules: [
-          {
-            id: "r1",
-            field: "playCount",
-            operator: "equals",
-            value: 0,
-            condition: "AND",
-          },
-        ],
-      });
-
-      setMockSession({ isLoggedIn: true, userId: user.id });
-
-      const response = await callRouteWithParams(
-        savedPreviewPOST,
-        { id: ruleSet.id },
-        {
-          url: `/api/lifecycle/rules/${ruleSet.id}/preview`,
-          method: "POST",
-        }
-      );
-
-      const body = await expectJson<{ items: unknown[]; count: number }>(response, 200);
-      expect(body.count).toBe(0);
-      expect(body.items).toHaveLength(0);
-    });
-  });
-
-  // ---- POST /api/lifecycle/rules/preview (ad-hoc preview) ----
 
   describe("POST /api/lifecycle/rules/preview", () => {
     it("returns 401 without auth", async () => {
@@ -446,99 +298,33 @@ describe("Lifecycle Rules Preview", () => {
 
   // ---- Safety guard tests for saved rule preview ----
 
-  describe("POST /api/lifecycle/rules/[id]/preview — safety guards", () => {
-    it("returns 400 when saved rule set has all rules disabled", async () => {
-      const user = await createTestUser();
-      const server = await createTestServer(user.id);
-      await createTestLibrary(server.id, { type: "MOVIE" });
-
-      const ruleSet = await createTestRuleSet(user.id, {
-        name: "All Disabled",
-        type: "MOVIE",
-        rules: [
-          {
-            id: "g1",
-            condition: "AND",
-            rules: [
-              { id: "r1", field: "playCount", operator: "greaterThan", value: 0, condition: "AND", enabled: false },
-            ],
-            groups: [],
-          },
-        ],
-      });
-
-      setMockSession({ isLoggedIn: true, userId: user.id });
-
-      const response = await callRouteWithParams(
-        savedPreviewPOST,
-        { id: ruleSet.id },
-        {
-          url: `/api/lifecycle/rules/${ruleSet.id}/preview`,
-          method: "POST",
-        }
-      );
-
-      const body = await expectJson<{ error: string }>(response, 400);
-      expect(body.error).toBe("No active rules to evaluate");
-    });
-  });
-
   // Arr/Seerr rules evaluated with no enabled instance behind them would
   // preview the ENTIRE library as matching ("foundInArr = false" goes
   // vacuously true) — the routes must refuse instead.
   describe("no-enabled-instance match-all guard", () => {
-    it("saved preview returns 400 when rules use Arr criteria and no enabled Arr instance exists", async () => {
-      const user = await createTestUser();
-      const server = await createTestServer(user.id);
-      const library = await createTestLibrary(server.id, { type: "MOVIE" });
-      await createTestMediaItem(library.id, { title: "Any Movie", type: "MOVIE" });
-
-      const ruleSet = await createTestRuleSet(user.id, {
-        name: "Orphan hunter",
-        type: "MOVIE",
-        serverIds: [server.id],
-        rules: [
-          { id: "r1", field: "foundInArr", operator: "equals", value: "false", condition: "AND" },
-        ],
-      });
-
-      setMockSession({ isLoggedIn: true, userId: user.id });
-      const response = await callRouteWithParams(
-        savedPreviewPOST,
-        { id: ruleSet.id },
-        { url: `/api/lifecycle/rules/${ruleSet.id}/preview`, method: "POST" }
-      );
-
-      const body = await expectJson<{ error: string }>(response, 400);
-      expect(body.error).toMatch(/no enabled Radarr instance/i);
-    });
-
-    it("saved preview evaluates Arr rules normally once an enabled instance exists", async () => {
+    it("ad-hoc preview evaluates Arr rules normally once an enabled instance exists", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id);
       const library = await createTestLibrary(server.id, { type: "MOVIE" });
       await createTestMediaItem(library.id, { title: "Unmanaged Movie", type: "MOVIE" });
       await createTestRadarrInstance(user.id, { enabled: true });
 
-      const ruleSet = await createTestRuleSet(user.id, {
-        name: "Orphan hunter 2",
-        type: "MOVIE",
-        serverIds: [server.id],
-        rules: [
-          { id: "r1", field: "foundInArr", operator: "equals", value: "false", condition: "AND" },
-        ],
-      });
-
       setMockSession({ isLoggedIn: true, userId: user.id });
-      const response = await callRouteWithParams(
-        savedPreviewPOST,
-        { id: ruleSet.id },
-        { url: `/api/lifecycle/rules/${ruleSet.id}/preview`, method: "POST" }
-      );
+      const response = await callRoute(adHocPreviewPOST, {
+        url: "/api/lifecycle/rules/preview",
+        method: "POST",
+        body: {
+          type: "MOVIE",
+          serverIds: [server.id],
+          rules: [
+            { id: "r1", field: "foundInArr", operator: "equals", value: "false", condition: "AND" },
+          ],
+        },
+      });
 
       // Instance exists (mocked client returns an empty Radarr library), so
       // "not found in Arr" legitimately matches the unmanaged item.
-      const body = await expectJson<{ count: number }>(response, 200);
+      const { result: body } = await expectStreamResult<{ count: number }>(response);
       expect(body.count).toBe(1);
     });
 
@@ -554,25 +340,7 @@ describe("Lifecycle Rules Preview", () => {
         { id: 1, tmdbId: 100, title: "Only In 1080p", tags: [], qualityProfileId: 1, monitored: true, hasFile: false },
       ]);
 
-      const ruleSet = await createTestRuleSet(user.id, {
-        type: "MOVIE",
-        serverIds: [server.id],
-        arrInstanceId: uhd.id,
-        rules: [
-          { id: "r1", field: "foundInArr", operator: "equals", value: "false", condition: "AND" },
-        ],
-      });
-
       setMockSession({ isLoggedIn: true, userId: user.id });
-      const saved = await callRouteWithParams(
-        savedPreviewPOST,
-        { id: ruleSet.id },
-        { url: `/api/lifecycle/rules/${ruleSet.id}/preview`, method: "POST" }
-      );
-      // Not on the 4K instance the rule set acts on — even though the 1080p
-      // instance has it.
-      expect((await expectJson<{ count: number }>(saved, 200)).count).toBe(1);
-
       const adHoc = await callRoute(adHocPreviewPOST, {
         url: "/api/lifecycle/rules/preview",
         method: "POST",
@@ -585,32 +353,32 @@ describe("Lifecycle Rules Preview", () => {
           ],
         },
       });
+      // Not on the 4K instance the rule set acts on — even though the 1080p
+      // instance has it.
       const { result: adHocBody } = await expectStreamResult<{ count: number }>(adHoc);
       expect(adHocBody.count).toBe(1);
     });
 
-    it("refuses when the rule set's own Arr instance is disabled, even with another enabled", async () => {
+    it("refuses when the chosen Arr instance is disabled, even with another enabled", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id);
       await createTestLibrary(server.id, { type: "MOVIE" });
       await createTestRadarrInstance(user.id, { name: "Radarr 1080p", enabled: true });
       const uhd = await createTestRadarrInstance(user.id, { name: "Radarr 4K", enabled: false });
 
-      const ruleSet = await createTestRuleSet(user.id, {
-        type: "MOVIE",
-        serverIds: [server.id],
-        arrInstanceId: uhd.id,
-        rules: [
-          { id: "r1", field: "foundInArr", operator: "equals", value: "false", condition: "AND" },
-        ],
-      });
-
       setMockSession({ isLoggedIn: true, userId: user.id });
-      const response = await callRouteWithParams(
-        savedPreviewPOST,
-        { id: ruleSet.id },
-        { url: `/api/lifecycle/rules/${ruleSet.id}/preview`, method: "POST" }
-      );
+      const response = await callRoute(adHocPreviewPOST, {
+        url: "/api/lifecycle/rules/preview",
+        method: "POST",
+        body: {
+          type: "MOVIE",
+          serverIds: [server.id],
+          arrInstanceId: uhd.id,
+          rules: [
+            { id: "r1", field: "foundInArr", operator: "equals", value: "false", condition: "AND" },
+          ],
+        },
+      });
       const body = await expectJson<{ error: string }>(response, 400);
       expect(body.error).toMatch(/instance "Radarr 4K" is disabled/);
     });

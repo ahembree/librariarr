@@ -33,7 +33,7 @@ import {
 } from "lucide-react";
 import type { SystemInfo, ImageCacheStats, ReleaseNote, UpdateCheck } from "../types";
 
-export interface SystemTabProps {
+interface SystemTabProps {
   systemInfo: SystemInfo | null;
   /** Loaded separately (it asks GitHub); null until it answers. */
   updateCheck: UpdateCheck | null;

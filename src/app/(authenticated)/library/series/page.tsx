@@ -19,7 +19,6 @@ import { Button } from "@/components/ui/button";
 import { Tv, Layers, List, HardDrive } from "lucide-react";
 import { DataTable } from "@/components/data-table";
 import type { DataTableColumn } from "@/components/data-table";
-import Link from "next/link";
 import { useCardSize, estimateContentWidth } from "@/hooks/use-card-size";
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";

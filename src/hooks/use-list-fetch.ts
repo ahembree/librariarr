@@ -3,7 +3,7 @@
 import { useEffect, useRef } from "react";
 
 /** How long a filter or sort change waits for the next one before refetching. */
-export const LIST_REFETCH_DEBOUNCE_MS = 300;
+const LIST_REFETCH_DEBOUNCE_MS = 300;
 
 /**
  * Run a library list's fetch on mount and again whenever `fetchList` changes

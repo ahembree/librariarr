@@ -52,7 +52,7 @@ import { mbidFromGuids, withArtistMbid } from "@/lib/media/musicbrainz";
  *   `"fell-back"` rather than letting `processBatch` read the gap as "this show
  *   has no ids" and clear them.
  */
-export interface IncrementalSyncResult {
+interface IncrementalSyncResult {
   status: "done" | "fell-back" | "skipped";
   upserted: number;
   deleted: number;

@@ -928,7 +928,7 @@ export function evaluateSeerrRule(rule: Condition, meta: SeerrMetadata | undefin
   return negate ? !result : result;
 }
 
-export interface MatchedCriterion {
+interface MatchedCriterion {
   ruleId: string;
   field: string;
   operator: string;
@@ -2048,7 +2048,7 @@ export function evaluateAllRulesInMemory(
   return evaluateAllRulesInMemory(converted, item, arrMeta, seerrMeta);
 }
 
-export { hasArrRules, hasSeerrRules, hasStreamRules, hasExternalIdFieldRules, hasStreamQueryInMemoryRules, hasSeriesAggregateRules };
+export { hasArrRules, hasSeerrRules, hasStreamRules, hasExternalIdFieldRules, hasSeriesAggregateRules };
 
 /**
  * Evaluate rules at the series scope: aggregate ALL episodes into series

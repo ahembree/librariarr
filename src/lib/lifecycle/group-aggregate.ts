@@ -31,7 +31,7 @@ export interface GroupMemberStats {
   episodeNumber: number | null;
 }
 
-export interface GroupTotals {
+interface GroupTotals {
   fileSize: bigint;
   playCount: number;
   lastPlayedAt: Date | null;

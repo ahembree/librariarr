@@ -18,7 +18,7 @@ export interface CrossSystemDataEntry {
   hasPendingAction: boolean;
 }
 
-export type CrossSystemDataMap = Map<string, CrossSystemDataEntry>;
+type CrossSystemDataMap = Map<string, CrossSystemDataEntry>;
 
 export async function fetchCrossSystemData(itemIds: string[]): Promise<CrossSystemDataMap> {
   const result: CrossSystemDataMap = new Map();

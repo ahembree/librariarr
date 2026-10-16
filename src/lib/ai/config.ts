@@ -19,7 +19,7 @@ export function asProvider(value: string | null | undefined): AiProvider {
     : "openai-compatible";
 }
 
-export interface AiConfigInput {
+interface AiConfigInput {
   provider: AiProvider;
   baseUrl?: string | null;
   apiKey?: string | null;

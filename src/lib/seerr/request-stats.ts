@@ -20,7 +20,7 @@ const STATS_CACHE_KEY = "seerr-request-stats";
 /** The per-requester drill-down (`/api/seerr/users/[userKey]/requests`) caches under this prefix. */
 export const USER_REQUESTS_CACHE_PREFIX = "seerr-user-requests:";
 
-export interface SeerrUserRequestStats {
+interface SeerrUserRequestStats {
   /** Stable identity key — see `seerrRequesterKey`. */
   userKey: string;
   seerrUsername: string;
@@ -41,7 +41,7 @@ export interface SeerrUserRequestStats {
   correlatable: boolean;
 }
 
-export interface SeerrRequestStatsResult {
+interface SeerrRequestStatsResult {
   configured: boolean;
   /**
    * True when at least one instance's request list could not be read in full

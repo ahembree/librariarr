@@ -73,17 +73,17 @@ export interface SonarrSeries {
   }>;
 }
 
-export interface SonarrTag {
+interface SonarrTag {
   id: number;
   label: string;
 }
 
-export interface SonarrQualityProfile {
+interface SonarrQualityProfile {
   id: number;
   name: string;
 }
 
-export interface SonarrEpisode {
+interface SonarrEpisode {
   id: number;
   seasonNumber: number;
   episodeNumber: number;
@@ -94,20 +94,14 @@ export interface SonarrEpisode {
   airDate?: string;
 }
 
-export interface SonarrEpisodeFile {
+interface SonarrEpisodeFile {
   id: number;
   seriesId: number;
   relativePath: string;
   size: number;
 }
 
-export interface SonarrExclusion {
-  id?: number;
-  tvdbId: number;
-  title: string;
-}
-
-export interface SonarrMediaManagementConfig {
+interface SonarrMediaManagementConfig {
   recycleBin: string | null;
   recycleBinCleanupDays: number;
 }

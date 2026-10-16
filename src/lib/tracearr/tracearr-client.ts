@@ -101,7 +101,7 @@ export type TracearrPlaybackState = "playing" | "paused" | "stopped";
 export type TracearrStreamDecision = "directplay" | "copy" | "transcode";
 
 /** `HealthResponse.servers[]` — the media servers this instance monitors. */
-export interface TracearrServerStatus {
+interface TracearrServerStatus {
   id: string;
   name: string;
   type: TracearrServerType;
@@ -109,7 +109,7 @@ export interface TracearrServerStatus {
   activeStreams: number;
 }
 
-export interface TracearrHealthResponse {
+interface TracearrHealthResponse {
   status: "ok";
   version: string;
   timestamp: string;
@@ -273,13 +273,13 @@ export interface TracearrHistoryRecord {
   user: TracearrHistoryUser;
 }
 
-export interface TracearrHistoryPage {
+interface TracearrHistoryPage {
   records: TracearrHistoryRecord[];
   /** Opaque keyset cursor; null when there are no further pages. */
   nextCursor: string | null;
 }
 
-export interface GetHistoryPageOptions {
+interface GetHistoryPageOptions {
   cursor?: string;
   /**
    * Use the bulk retry budget rather than the single interactive retry. Set by

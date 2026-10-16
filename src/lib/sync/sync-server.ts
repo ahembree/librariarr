@@ -300,7 +300,7 @@ const SKIP_ON_UPDATE = new Set(["id", "libraryId", "ratingKey", "type", "created
 // `buildItemData` maxes the fetched metadata against the stored watch history,
 // but both of its inputs are account-scoped or table-derived and can legitimately
 // read zero for an item somebody else watched: Plex metadata carries only the
-// admin token's own `viewCount`, `JellyfinBase.getWatchCounts()` returns an
+// admin token's own `viewCount`, `JellyfinCompatClient.getWatchCounts()` returns an
 // empty map by design, and `loadWatchCountsFromHistory` returns nothing while
 // `WatchHistory` is empty. A plain `= EXCLUDED` then writes `playCount = 0,
 // lastPlayedAt = null` over a real, higher stored value.
@@ -694,7 +694,7 @@ export async function processBatch(
   }
 }
 
-export interface SyncMediaServerOptions {
+interface SyncMediaServerOptions {
   skipWatchHistory?: boolean;
   /**
    * Why the sync is running, logged on the "Starting sync" line. See

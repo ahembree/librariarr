@@ -58,7 +58,7 @@ import { completedPlaySql } from "@/lib/media/watch-completion";
  * that delete files.
  */
 
-export interface WatchCountEntry {
+interface WatchCountEntry {
   count: number;
   /** Epoch **seconds** — the unit `buildItemData` multiplies by 1000. */
   lastWatchedAt: number;

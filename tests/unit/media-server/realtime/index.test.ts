@@ -10,7 +10,7 @@ vi.mock("@/lib/logger", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-import { startRealtime, getRealtimeManager, _resetRealtimeForTesting } from "@/lib/media-server/realtime";
+import { startRealtime, _resetRealtimeForTesting } from "@/lib/media-server/realtime";
 import { eventBus } from "@/lib/events/event-bus";
 
 describe("startRealtime", () => {
@@ -23,11 +23,15 @@ describe("startRealtime", () => {
   });
   afterEach(() => _resetRealtimeForTesting());
 
-  it("is idempotent — repeated calls reuse the same manager", () => {
+  it("is idempotent — a repeated call starts nothing a second time", async () => {
     startRealtime();
-    const first = getRealtimeManager();
     startRealtime();
-    expect(getRealtimeManager()).toBe(first);
+    await vi.waitFor(() => expect(h.mediaServer.findMany).toHaveBeenCalledTimes(1));
+    // One subscription: a server change reconciles once, not once per call.
+    eventBus.emit({ type: "server:changed", userId: "u1" });
+    await vi.waitFor(() => expect(h.mediaServer.findMany).toHaveBeenCalledTimes(2));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(h.mediaServer.findMany).toHaveBeenCalledTimes(2);
   });
 
   it("reconciles on start and on server:changed", async () => {

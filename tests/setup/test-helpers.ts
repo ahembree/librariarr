@@ -7,7 +7,7 @@ import { normalizeScopes, type ApiScope } from "@/lib/api-keys/scopes";
 
 // ---- Route Handler Invocation ----
 
-export function createTestRequest(
+function createTestRequest(
   url: string,
   options?: {
     method?: string;

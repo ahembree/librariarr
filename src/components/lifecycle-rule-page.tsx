@@ -291,7 +291,7 @@ interface ActionTypeOption {
   label: string;
 }
 
-export interface LifecycleRulePageProps {
+interface LifecycleRulePageProps {
   mediaType: "MOVIE" | "SERIES" | "MUSIC";
   pageTitle: string;
   ruleDescription: string;

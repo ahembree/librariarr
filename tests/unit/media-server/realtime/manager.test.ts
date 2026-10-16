@@ -34,7 +34,6 @@ class FakeSocket implements RealtimeSocket {
   private openCb: (() => void) | null = null;
   private msgCb: ((d: string) => void) | null = null;
   private closeCb: ((c: number, r: string) => void) | null = null;
-  private errCb: ((e: Error) => void) | null = null;
   send(d: string) {
     this.sent.push(d);
   }
@@ -53,9 +52,7 @@ class FakeSocket implements RealtimeSocket {
   onClose(cb: (c: number, r: string) => void) {
     this.closeCb = cb;
   }
-  onError(cb: (e: Error) => void) {
-    this.errCb = cb;
-  }
+  onError() {}
   fireOpen() {
     this.openCb?.();
   }

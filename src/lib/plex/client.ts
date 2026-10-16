@@ -21,7 +21,7 @@ import { isMediaItem } from "@/lib/media-server/item-types";
 import { normalizeResolutionFromDimensions } from "@/lib/resolution";
 import { logger } from "@/lib/logger";
 
-export interface PlexClientOptions {
+interface PlexClientOptions {
   skipTlsVerify?: boolean;
 }
 

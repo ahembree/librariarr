@@ -55,24 +55,24 @@ export interface LidarrArtist {
   status?: string;
 }
 
-export interface LidarrTag {
+interface LidarrTag {
   id: number;
   label: string;
 }
 
-export interface LidarrQualityProfile {
+interface LidarrQualityProfile {
   id: number;
   name: string;
 }
 
-export interface LidarrTrackFile {
+interface LidarrTrackFile {
   id: number;
   artistId: number;
   relativePath: string;
   size: number;
 }
 
-export interface LidarrAlbum {
+interface LidarrAlbum {
   id: number;
   title: string;
 }
@@ -93,13 +93,7 @@ export interface LidarrTrack {
   foreignRecordingId?: string;
 }
 
-export interface LidarrExclusion {
-  id?: number;
-  foreignId: string;
-  artistName: string;
-}
-
-export interface LidarrMediaManagementConfig {
+interface LidarrMediaManagementConfig {
   recycleBin: string | null;
   recycleBinCleanupDays: number;
 }

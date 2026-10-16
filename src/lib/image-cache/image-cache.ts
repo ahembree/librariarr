@@ -152,7 +152,7 @@ export function computeCacheKey(thumbPath: string, maxWidth?: number): string {
   return getCacheKey(mw === CACHE_WIDTH_DEFAULT ? normalized : `${normalized}@${mw}`);
 }
 
-export interface CachedImageInfo {
+interface CachedImageInfo {
   /** Cache key usable as an ETag */
   cacheKey: string;
   /** Absolute path to the cached file */

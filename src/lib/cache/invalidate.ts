@@ -3,7 +3,7 @@
  *
  * Any mutation that changes the set of media items, their server membership,
  * dedup canonical selection, or the title/artwork preference must call this so
- * that read-heavy cached paths (library listings, alphabet bars, dashboard
+ * that read-heavy cached paths (library listings, dashboard
  * stats/insight charts, filter dropdowns) don't serve stale data.
  *
  * Keeping the full prefix list in one place prevents the recurring class of bug
@@ -17,7 +17,6 @@ const MEDIA_CACHE_PREFIXES = [
   "server-filter:",
   "distinct-values",
   "stats:",
-  "letters:",
   "group-summary:",
   "cross-tab:",
   "custom-stats:",

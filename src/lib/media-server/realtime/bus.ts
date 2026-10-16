@@ -10,7 +10,7 @@ import type { RealtimeEvent } from "./types";
  * consumed in-process (the sessions stream, the enforcer trigger). Keeping them
  * apart avoids polluting the app event union and its per-user SSE fan-out.
  */
-export type RealtimeListener = (event: RealtimeEvent) => void;
+type RealtimeListener = (event: RealtimeEvent) => void;
 
 const EVENT_KEY = "realtime-event";
 

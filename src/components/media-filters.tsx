@@ -38,7 +38,7 @@ import {
 import { X, SlidersHorizontal, ChevronRight, ChevronDown, Play, Calendar, Star, Hash, Plus, Trash2, AudioLines, Languages, Search, MonitorPlay, Volume2, Layers, BookOpen, Tv, File, type LucideIcon } from "lucide-react";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 
-export interface MediaFilterValues {
+interface MediaFilterValues {
   [key: string]: string;
 }
 

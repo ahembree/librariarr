@@ -115,7 +115,7 @@ export function resetRecoveryAnswers(): void {
 /** A caller cannot opt out of the request budget, only ask for less of it. */
 export const MAX_CANDIDATE_LIMIT = 500;
 
-export interface RecoverNewItemHistoryOptions {
+interface RecoverNewItemHistoryOptions {
   /** Candidate cap for this pass; clamped to `MAX_CANDIDATE_LIMIT`. */
   limit?: number;
   /**
@@ -128,7 +128,7 @@ export interface RecoverNewItemHistoryOptions {
   signal?: AbortSignal;
 }
 
-export interface RecoverNewItemHistoryResult {
+interface RecoverNewItemHistoryResult {
   /** Items actually asked about — i.e. requests issued. */
   checked: number;
   /** `WatchHistory` rows written (inserted or merged) across those items. */

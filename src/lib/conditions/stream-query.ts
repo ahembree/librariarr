@@ -88,7 +88,7 @@ const SQ_COLUMN_MAP: Record<StreamQueryField, string | null> = {
   sqChromaSubsampling: "chromaSubsampling",
 };
 
-export const STREAM_QUERY_COMPUTED_FIELDS: StreamQueryField[] = [
+const STREAM_QUERY_COMPUTED_FIELDS: StreamQueryField[] = [
   "sqAudioProfile",
   "sqDynamicRange",
 ];
@@ -127,7 +127,7 @@ export const STREAM_QUERY_SECTIONS: ConditionSectionDef[] = [
   { key: "streamQuery", label: "Stream Properties" },
 ];
 
-export const ALL_STREAM_QUERY_FIELD_VALUES: StreamQueryField[] =
+const ALL_STREAM_QUERY_FIELD_VALUES: StreamQueryField[] =
   STREAM_QUERY_FIELDS.map((f) => f.value as StreamQueryField);
 
 export function isStreamQueryField(field: string): boolean {

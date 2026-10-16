@@ -33,9 +33,3 @@ export type ProgressUpdate =
 
 /** Callback an engine/route uses to report progress. */
 export type ProgressEmit = (update: ProgressUpdate) => void;
-
-/** Full wire envelope (progress events plus terminal result/error). */
-export type ProgressWireEvent =
-  | ProgressUpdate
-  | { type: "result"; result: unknown }
-  | { type: "error"; message: string };

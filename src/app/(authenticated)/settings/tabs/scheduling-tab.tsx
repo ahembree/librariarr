@@ -18,7 +18,7 @@ import type { ScheduleInfo } from "../types";
 
 type JobKey = "sync" | "detection" | "execution";
 
-export interface SchedulingTabProps {
+interface SchedulingTabProps {
   // Daily run time
   scheduledJobTime: string;
   savingJobTime: boolean;

@@ -1,6 +1,6 @@
 import { MAX_QUERY_ACTION_ITEMS } from "./constants";
 
-export type BatchMediaType = "MOVIE" | "SERIES" | "MUSIC";
+type BatchMediaType = "MOVIE" | "SERIES" | "MUSIC";
 
 /** Minimal shape needed to batch a query-result selection (a subset of the
  *  page's `QueryResultItem`). */

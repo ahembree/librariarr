@@ -194,7 +194,7 @@ export function reauthWithPassword(password: string, signal?: AbortSignal): Prom
 // mounted, `confirmIdentity` answers false at once and the caller shows the
 // server's refusal as before.
 
-export interface ReauthRequest {
+interface ReauthRequest {
   /** Distinct per prompt, so the dialog starts each one fresh. */
   id: number;
   methods: ReauthMethod[];

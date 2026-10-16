@@ -8,6 +8,7 @@ import {
   STREAM_QUERY_SECTIONS,
   getStreamQueryFieldsForType,
   getConditionField,
+  isValuelessOperator,
   type Condition,
   type ConditionGroup,
   type ConditionLogic,
@@ -23,8 +24,8 @@ import {
 } from "./builder/tree-utils";
 
 // Backward-compat type aliases
-export type QueryRule = Condition;
-export type QueryGroup = ConditionGroup;
+type QueryRule = Condition;
+type QueryGroup = ConditionGroup;
 
 // ─── Re-exports for backward compatibility ──────────────────────────────────
 
@@ -142,7 +143,7 @@ export const queryBuilderConfig: BuilderConfig<QueryRule, QueryGroup> = {
     return null;
   },
 
-  isValuelessOperator: (op) => op === "isNull" || op === "isNotNull",
+  isValuelessOperator,
 
   // Stream query support
   streamQueryFields: STREAM_QUERY_FIELDS,

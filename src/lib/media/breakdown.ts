@@ -2,7 +2,7 @@ import { prisma } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
 import type { DimensionMeta } from "@/lib/dashboard/custom-dimensions";
 
-export type BreakdownRow = { value: string | null; type: string; _count: number };
+type BreakdownRow = { value: string | null; type: string; _count: number };
 
 // Defense-in-depth: allowlisted column names for raw SQL queries.
 // Values from DIMENSION_REGISTRY are hardcoded, but validating here prevents

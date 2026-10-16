@@ -1,9 +1,8 @@
 "use client";
 
-import { useState, useEffect } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Boxes, ExternalLink, Loader2 } from "lucide-react";
+import { ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export interface ArrMatch {
@@ -34,16 +33,6 @@ const ARR_TYPE_STYLES: Record<ArrMatch["type"], ArrTypeStyle> = {
   radarr: { label: "Radarr", text: "text-amber-400", dot: "bg-amber-400 shadow-[0_0_6px] shadow-amber-400/60" },
   lidarr: { label: "Lidarr", text: "text-emerald-400", dot: "bg-emerald-400 shadow-[0_0_6px] shadow-emerald-400/60" },
 };
-
-function getArrTypeStyle(type: string | null, mediaType?: string): ArrTypeStyle | null {
-  if (mediaType === "MUSIC") return ARR_TYPE_STYLES.lidarr;
-  if (type && type in ARR_TYPE_STYLES) return ARR_TYPE_STYLES[type as ArrMatch["type"]];
-  return null;
-}
-
-function getArrLabel(type: string | null, mediaType?: string): string {
-  return getArrTypeStyle(type, mediaType)?.label ?? "Arr";
-}
 
 function ArrDetailRow({ label, value }: { label: string; value: React.ReactNode }) {
   return (
@@ -109,77 +98,5 @@ export function ArrInstanceCard({ match, hideQualityProfile }: { match: ArrMatch
         </div>
       )}
     </div>
-  );
-}
-
-export function ArrSection({ itemId, mediaType, hideQualityProfile }: { itemId: string; mediaType?: string; hideQualityProfile?: boolean }) {
-  // Keyed by itemId so a stale response from a previous id doesn't render against the new one.
-  const [arrFetch, setArrFetch] = useState<{ forId: string; data: ArrInfoResponse | null } | null>(null);
-  const arrData = arrFetch && arrFetch.forId === itemId ? arrFetch.data : null;
-  const loading = !arrFetch || arrFetch.forId !== itemId;
-
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const response = await fetch(`/api/media/${itemId}/arr-info`);
-        const data: ArrInfoResponse = await response.json();
-        if (cancelled) return;
-        setArrFetch({ forId: itemId, data });
-      } catch {
-        if (cancelled) return;
-        setArrFetch({ forId: itemId, data: null });
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [itemId]);
-
-  if (loading) {
-    const loadingStyle = getArrTypeStyle(null, mediaType);
-    return (
-      <section>
-        <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-          <Boxes className={cn("h-3.5 w-3.5", loadingStyle?.text)} />
-          {getArrLabel(null, mediaType)}
-        </h3>
-        <div className="rounded-xl border border-white/6 bg-muted/30 p-5 shadow-[inset_0_1px_0_oklch(1_0_0/3%)]">
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            Loading match info…
-          </div>
-        </div>
-      </section>
-    );
-  }
-
-  if (!arrData || arrData.matches.length === 0) return null;
-
-  const headingStyle = getArrTypeStyle(arrData.matches[0].type, mediaType);
-  const typeLabel = headingStyle?.label ?? "Arr";
-  const count = arrData.matches.length;
-
-  return (
-    <section>
-      <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-        <Boxes className={cn("h-3.5 w-3.5", headingStyle?.text)} />
-        {typeLabel}
-        {count > 1 && (
-          <span className="text-xs font-normal normal-case tracking-normal">
-            ({count} instances)
-          </span>
-        )}
-      </h3>
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
-        {arrData.matches.map((match) => (
-          <ArrInstanceCard
-            key={match.instanceId}
-            match={match}
-            hideQualityProfile={hideQualityProfile}
-          />
-        ))}
-      </div>
-    </section>
   );
 }

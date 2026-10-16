@@ -5,7 +5,7 @@ import type { LucideIcon } from "lucide-react";
 import { Tv, Layers, List, Music, Disc3, ListMusic } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-export interface LibraryTab {
+interface LibraryTab {
   href: string;
   label: string;
   icon: LucideIcon;

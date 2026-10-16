@@ -1996,7 +1996,7 @@ function ProfileFormatsTab({
 
   // A score only applies to a custom format that already exists in the app. The
   // page's status (resolved by trash_id against the CURRENT guide name, matched
-  // trimmed and case-insensitively like the backend's findArrCfByName) is the
+  // trimmed and case-insensitively like the backend's findManagedArrResource) is the
   // authority: a saved row's name is from save time and goes stale on a guide
   // rename. Only a format the status doesn't know falls back to a name check
   // against the instance's format list — an exact match there would call "hdr"

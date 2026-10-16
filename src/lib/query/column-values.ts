@@ -28,13 +28,13 @@ import { QUERY_COLUMN_FIELDS, type QueryColumnValue } from "./column-fields";
  * which `warnings` then explains.
  */
 
-export interface ColumnValueRequestItem {
+interface ColumnValueRequestItem {
   id: string;
   /** A grouped series row (one row per show): values come from the show's aggregate. */
   grouped?: boolean;
 }
 
-export interface ColumnValuesResult {
+interface ColumnValuesResult {
   values: Record<string, Record<string, QueryColumnValue>>;
   warnings: string[];
 }

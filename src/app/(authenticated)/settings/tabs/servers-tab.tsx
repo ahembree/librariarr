@@ -630,7 +630,7 @@ function WatchHistorySourceSelect({
   );
 }
 
-export interface ServersTabProps {
+interface ServersTabProps {
   // Server data
   servers: MediaServer[];
   hasActiveSync: boolean;

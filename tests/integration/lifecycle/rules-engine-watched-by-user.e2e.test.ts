@@ -31,7 +31,6 @@ let serverId: string;
 let movieAliceId: string;
 let movieBobId: string;
 let movieAliceBobId: string;
-let movieUnwatchedId: string;
 
 beforeAll(async () => {
   await cleanDatabase();
@@ -77,7 +76,7 @@ beforeAll(async () => {
       data: { libraryId: movieLib.id, ratingKey: "m-none", title: "Never Watched", type: "MOVIE" },
     }),
   ]);
-  [movieAliceId, movieBobId, movieAliceBobId, movieUnwatchedId] = movies.map((m) => m.id);
+  [movieAliceId, movieBobId, movieAliceBobId] = movies.map((m) => m.id);
 
   await prisma.watchHistory.createMany({
     data: [
@@ -90,12 +89,12 @@ beforeAll(async () => {
       // Both
       { mediaItemId: movieAliceBobId, mediaServerId: server.id, serverUsername: "alice" },
       { mediaItemId: movieAliceBobId, mediaServerId: server.id, serverUsername: "bob" },
-      // movieUnwatchedId — no rows
+      // "Never Watched" — no rows
     ],
   });
 
   // ─── Series: 2 series, each with 2 episodes ────────────────────────────
-  const showA = await prisma.mediaItem.createMany({
+  await prisma.mediaItem.createMany({
     data: [
       {
         libraryId: seriesLib.id, ratingKey: "showA-S1E1", title: "S1E1", type: "SERIES",
@@ -107,8 +106,7 @@ beforeAll(async () => {
       },
     ],
   });
-  void showA;
-  const showB = await prisma.mediaItem.createMany({
+  await prisma.mediaItem.createMany({
     data: [
       {
         libraryId: seriesLib.id, ratingKey: "showB-S1E1", title: "S1E1", type: "SERIES",
@@ -120,12 +118,8 @@ beforeAll(async () => {
       },
     ],
   });
-  void showB;
   const showAEpisodes = await prisma.mediaItem.findMany({
     where: { libraryId: seriesLib.id, parentTitle: "Show A" },
-  });
-  const showBEpisodes = await prisma.mediaItem.findMany({
-    where: { libraryId: seriesLib.id, parentTitle: "Show B" },
   });
   // Show A: episode 1 watched by alice; episode 2 watched by bob.
   // Show B: nobody watched anything.

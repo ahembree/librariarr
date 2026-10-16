@@ -1,5 +1,5 @@
 /** The fields of a finished sync job the outcome is decided from. */
-export interface FinishedSyncJob {
+interface FinishedSyncJob {
   status: string;
   completedAt: string | null;
 }

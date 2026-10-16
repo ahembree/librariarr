@@ -138,7 +138,7 @@ export interface CardEntry {
 
 export type DashboardLayout = Record<DashboardTab, CardEntry[]>;
 
-export interface DashboardCardDefinition {
+interface DashboardCardDefinition {
   id: string;
   label: string;
   description: string;

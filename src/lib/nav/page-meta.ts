@@ -7,7 +7,7 @@
  * longest-prefix matching, so `/library/movies/abc123` still reads
  * `Library › Movies`.
  */
-export interface PageMeta {
+interface PageMeta {
   /** Top-level nav group label, e.g. "Library". */
   group: string;
   /** Page title, e.g. "Movies". */

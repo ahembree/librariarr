@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { escapeLike } from "@/lib/filters/escape-like";
+import { RESOLUTION_DB_VALUES } from "@/lib/conditions/constants";
 import { appCache } from "@/lib/cache/memory-cache";
 import { jsonResponse } from "@/lib/api/json-response";
 import { clampSkip, parsePage } from "@/lib/api/pagination";
@@ -135,13 +136,6 @@ export async function GET(request: NextRequest) {
   }
 
   if (resolution) {
-    const RESOLUTION_DB_VALUES: Record<string, string[]> = {
-      "4K": ["4k", "2160", "2160p"],
-      "1080P": ["1080", "1080p"],
-      "720P": ["720", "720p"],
-      "480P": ["480", "480p"],
-      "SD": ["sd", "360", "360p"],
-    };
     const vals = resolution.split("|").filter(Boolean);
     // Expand display labels to all matching DB values
     const dbVals = vals.flatMap((v) => RESOLUTION_DB_VALUES[v] ?? [v]);

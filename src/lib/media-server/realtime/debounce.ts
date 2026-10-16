@@ -1,4 +1,4 @@
-export interface DebouncerOptions {
+interface DebouncerOptions {
   /** Fire once the input has been quiet for this long (ms). */
   quietMs: number;
   /**

@@ -55,7 +55,7 @@ import type { ChipColorMap, ChipColorCategory, MediaServer, BackupEntry } from "
 import { getDuplicateServerNames } from "@/lib/server-styles";
 import { ServerTypeChip } from "@/components/server-type-chip";
 
-export interface GeneralTabProps {
+interface GeneralTabProps {
   // Accent color
   accentColor: string;
   onSaveAccentColor: (name: string) => void;

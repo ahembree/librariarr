@@ -41,7 +41,7 @@ export const MUSIC_ACTION_TYPES = [
  * (series / artist / movie) and ignores the member list, so a partially-
  * excepted member set cannot be honored by them.
  */
-export const MEMBER_SCOPED_ACTION_TYPES = new Set<string>([
+const MEMBER_SCOPED_ACTION_TYPES = new Set<string>([
   "UNMONITOR_DELETE_FILES_SONARR",
   "MONITOR_DELETE_FILES_SONARR",
   "DELETE_FILES_SONARR",
@@ -77,7 +77,7 @@ export function supportsSearchAfter(actionType: string): boolean {
 }
 
 /** Human-readable labels for every action type (notifications, summaries). */
-export const ACTION_LABELS: Record<string, string> = {
+const ACTION_LABELS: Record<string, string> = {
   DO_NOTHING: "Monitor Only",
   DELETE_RADARR: "Delete from Radarr",
   DELETE_SONARR: "Delete from Sonarr",

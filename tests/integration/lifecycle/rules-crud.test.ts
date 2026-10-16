@@ -939,7 +939,7 @@ describe("Lifecycle Rules CRUD", () => {
 // ---------------------------------------------------------------------------
 
 describe("action configuration validation", () => {
-  const base = (user: { id: string }, serverId: string) => ({
+  const base = (serverId: string) => ({
     name: "Config Audit",
     type: "MOVIE" as const,
     rules: [{ id: "g1", condition: "AND", rules: [dummyRule], groups: [] }],
@@ -953,7 +953,7 @@ describe("action configuration validation", () => {
     const response = await callRoute(POST, {
       method: "POST",
       url: "/api/lifecycle/rules",
-      body: { ...base(user, server.id), actionEnabled: true, actionType: "DELETE_SONARR" },
+      body: { ...base(server.id), actionEnabled: true, actionType: "DELETE_SONARR" },
     });
     const json = await expectJson<{ error: string }>(response, 400);
     expect(json.error).toMatch(/not valid for movie/i);
@@ -966,7 +966,7 @@ describe("action configuration validation", () => {
     const response = await callRoute(POST, {
       method: "POST",
       url: "/api/lifecycle/rules",
-      body: { ...base(user, server.id), actionType: "DELETE_RADARR", arrInstanceId: "nonexistent-id" },
+      body: { ...base(server.id), actionType: "DELETE_RADARR", arrInstanceId: "nonexistent-id" },
     });
     const json = await expectJson<{ error: string }>(response, 400);
     expect(json.error).toMatch(/instance not found/i);
@@ -980,7 +980,7 @@ describe("action configuration validation", () => {
     const response = await callRoute(POST, {
       method: "POST",
       url: "/api/lifecycle/rules",
-      body: { ...base(user, server.id), actionType: "DELETE_RADARR", arrInstanceId: sonarr.id },
+      body: { ...base(server.id), actionType: "DELETE_RADARR", arrInstanceId: sonarr.id },
     });
     await expectJson<{ error: string }>(response, 400);
   });
@@ -993,7 +993,7 @@ describe("action configuration validation", () => {
     const createRes = await callRoute(POST, {
       method: "POST",
       url: "/api/lifecycle/rules",
-      body: { ...base(user, server.id), actionType: "DELETE_RADARR", arrInstanceId: radarr.id },
+      body: { ...base(server.id), actionType: "DELETE_RADARR", arrInstanceId: radarr.id },
     });
     const created = await expectJson<{ ruleSet: { id: string } }>(createRes, 201);
 

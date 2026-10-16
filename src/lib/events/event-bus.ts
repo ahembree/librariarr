@@ -79,7 +79,7 @@ export interface AppEvent {
   meta?: Record<string, unknown>;
 }
 
-export type AppEventListener = (event: AppEvent) => void;
+type AppEventListener = (event: AppEvent) => void;
 
 const EVENT_KEY = "app-event";
 

@@ -23,7 +23,7 @@ const TOOL_LABELS: Record<string, string> = {
   get_watch_leaderboard: "Ranking recent activity",
 };
 
-export interface AnalystInput {
+interface AnalystInput {
   userId: string;
   config: AiConfig;
   messages: { role: "user" | "assistant"; content: string }[];

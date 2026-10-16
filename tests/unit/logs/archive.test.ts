@@ -25,11 +25,7 @@ vi.mock("@/lib/db", () => ({ prisma: mockPrisma }));
 vi.mock("@/lib/logger", () => ({ logger: mockLogger }));
 vi.mock("fs/promises", () => ({ default: mockFs, ...mockFs }));
 
-import {
-  archiveLogs,
-  listArchives,
-  getArchivePath,
-} from "@/lib/logs/archive";
+import { archiveLogs } from "@/lib/logs/archive";
 
 // LOG_ARCHIVE_DIR is read at module-eval (before this file's body runs, since
 // ESM imports are hoisted), so the module uses the default. fs is fully mocked,
@@ -153,77 +149,5 @@ describe("archiveLogs", () => {
 
     await expect(archiveLogs()).resolves.toBeUndefined();
     expect(mockFs.unlink).not.toHaveBeenCalled();
-  });
-});
-
-describe("listArchives", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it("returns matching archives sorted newest-first with sizes", async () => {
-    mockFs.readdir.mockResolvedValue([
-      "logs-2026-06-10.tar.gz",
-      "logs-2026-06-12.tar.gz",
-      "logs-2026-06-11.tar.gz",
-      "random.txt",
-    ]);
-    mockFs.stat.mockResolvedValue({ size: 1234 });
-
-    const result = await listArchives();
-
-    expect(mockFs.mkdir).toHaveBeenCalledWith(ARCHIVE_DIR, { recursive: true });
-    expect(result.map((a) => a.date)).toEqual([
-      "2026-06-12",
-      "2026-06-11",
-      "2026-06-10",
-    ]);
-    expect(result[0]).toEqual({
-      filename: "logs-2026-06-12.tar.gz",
-      date: "2026-06-12",
-      size: 1234,
-    });
-  });
-
-  it("returns an empty array when the directory cannot be read", async () => {
-    mockFs.readdir.mockRejectedValue(new Error("ENOENT"));
-    const result = await listArchives();
-    expect(result).toEqual([]);
-  });
-
-  it("ignores files that do not match the archive naming pattern", async () => {
-    mockFs.readdir.mockResolvedValue(["logs.tar.gz", "logs-bad.tar.gz", "README.md"]);
-    const result = await listArchives();
-    expect(result).toEqual([]);
-    expect(mockFs.stat).not.toHaveBeenCalled();
-  });
-});
-
-describe("getArchivePath", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it("returns the full path when the filename is valid and exists", async () => {
-    mockFs.access.mockResolvedValue(undefined);
-    const result = await getArchivePath("logs-2026-06-12.tar.gz");
-    expect(result).toBe(`${ARCHIVE_DIR}/logs-2026-06-12.tar.gz`);
-  });
-
-  it("returns null for an invalid filename (no fs access)", async () => {
-    const result = await getArchivePath("../../etc/passwd");
-    expect(result).toBeNull();
-    expect(mockFs.access).not.toHaveBeenCalled();
-  });
-
-  it("rejects a filename with a path traversal even if it ends correctly", async () => {
-    const result = await getArchivePath("logs-2026-06-12.tar.gz/../secret");
-    expect(result).toBeNull();
-  });
-
-  it("returns null when the file does not exist", async () => {
-    mockFs.access.mockRejectedValue(new Error("ENOENT"));
-    const result = await getArchivePath("logs-2026-06-12.tar.gz");
-    expect(result).toBeNull();
   });
 });

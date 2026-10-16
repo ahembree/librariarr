@@ -62,7 +62,7 @@ function decryptBuffer(data: Buffer, passphrase: string): Buffer {
   }
 }
 
-export interface BackupMetadata {
+interface BackupMetadata {
   version: number;
   appVersion: string;
   createdAt: string;
@@ -70,7 +70,7 @@ export interface BackupMetadata {
   configOnly?: boolean;
 }
 
-export interface BackupInfo {
+interface BackupInfo {
   filename: string;
   createdAt: string;
   size: number;

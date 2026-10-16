@@ -38,7 +38,7 @@ export interface AggregableEpisode {
 }
 
 /** A series-level aggregate, suitable for in-memory rule evaluation. */
-export type SeriesAggregate<E extends AggregableEpisode> = Omit<E, "fileSize"> & {
+type SeriesAggregate<E extends AggregableEpisode> = Omit<E, "fileSize"> & {
   episodeCount: number;
   /** Sum of all episode `fileSize` (BigInt) serialized as a string, or null when zero. */
   fileSize: string | null;

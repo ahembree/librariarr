@@ -388,7 +388,7 @@ interface ImportCounters {
  * off-by-one silently costs plays (too late a `since` skips them) or costs a
  * full re-pull every run (too early).
  */
-export function resolveSince(
+function resolveSince(
   maxWatchedAt: Date | null,
   oldestOpenChain: Date | null,
   now: number = Date.now(),
@@ -421,9 +421,9 @@ export function resolveSince(
 }
 
 /** Which of the two boundaries a run should walk. */
-export type TracearrImportPass = "forward" | "backfill" | "both";
+type TracearrImportPass = "forward" | "backfill" | "both";
 
-export interface TracearrImportOptions {
+interface TracearrImportOptions {
   onProgress?: WatchHistoryProgressReporter;
   /**
    * Cancels the import between pages.
@@ -470,7 +470,7 @@ export interface TracearrImportOptions {
   yieldTo?: () => boolean;
 }
 
-export interface TracearrImportResult {
+interface TracearrImportResult {
   /**
    * How the backfill pass ended, when one ran. `"errored"` means the run could
    * not reach Tracearr — the caller must NOT immediately re-enqueue on it, or
