@@ -2239,10 +2239,15 @@ export async function evaluateSeriesScope(
   const matching = [];
 
   for (const series of aggregated) {
+    // Folded over every episode, before a forced per-episode run narrows the
+    // members; also carried on the returned record, so the criteria and actual
+    // values reported for a match (getMatchedCriteriaForItems) see what the
+    // match was selected on — as the flat path's records do.
+    const cross = foldCrossSystemData(series.memberIds, crossSystem);
     // Serialize for in-memory evaluation (mirrors evaluateLifecycleRules output format)
     const item: Record<string, unknown> = {
       ...series,
-      ...foldCrossSystemData(series.memberIds, crossSystem),
+      ...cross,
       fileSize: series.fileSize,
       lastPlayedAt: series.lastPlayedAt
         ? series.lastPlayedAt instanceof Date
@@ -2328,7 +2333,7 @@ export async function evaluateSeriesScope(
           })
           .map((ep) => ep.id);
       }
-      matching.push(series);
+      matching.push({ ...series, ...cross });
     }
   }
 
@@ -2479,9 +2484,11 @@ export async function evaluateMusicScope(
     : undefined;
 
   for (const artist of aggregated) {
+    // Also carried on the returned record (see evaluateSeriesScope).
+    const cross = foldCrossSystemData(artist.memberIds, crossSystem);
     const item: Record<string, unknown> = {
       ...artist,
-      ...foldCrossSystemData(artist.memberIds, crossSystem),
+      ...cross,
       fileSize: artist.fileSize,
       lastPlayedAt: artist.lastPlayedAt
         ? artist.lastPlayedAt instanceof Date
@@ -2503,7 +2510,7 @@ export async function evaluateMusicScope(
     const arrMeta = arrData && extId ? arrData[extId.externalId] : undefined;
 
     if (evaluateAllRulesInMemory(rules, item, arrMeta)) {
-      matching.push(artist);
+      matching.push({ ...artist, ...cross });
     }
   }
 
