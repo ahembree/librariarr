@@ -304,6 +304,57 @@ describe("cross-system fields on grouped records", () => {
     expect(cross.get(outsider.id)?.matchedRuleSets).toEqual([]);
   });
 
+  it("plans its raw member lookup below Postgres' JIT threshold for a whole library's ids", async () => {
+    // The series- and artist-scope engines pass every episode/track of the
+    // library. Joined in SQL against `unnest($1)`, the member lookup was
+    // estimated in the millions, so Postgres JIT-compiled it on every
+    // detection run: ~0.7 s of compilation for a 28k-episode request,
+    // ~4 s for 150k (measured against postgres:18-alpine), for a lookup the
+    // planner otherwise answers in tens of milliseconds.
+    const prisma = getTestPrisma();
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const library = await createTestLibrary(server.id, { type: "SERIES" });
+    // 1,000 series matches of 30 episodes each, one representative per show.
+    await prisma.mediaItem.createMany({
+      data: Array.from({ length: 1000 }, (_, s) => ({
+        id: `rep-${s}`, libraryId: library.id, ratingKey: `rk-${s}`, type: "SERIES" as const,
+        title: "E1", parentTitle: `Show ${s}`, seasonNumber: 1, episodeNumber: 1,
+      })),
+    });
+    const keep = await createTestRuleSet(user.id, { name: "Keep", type: "SERIES", seriesScope: true });
+    await prisma.ruleMatch.createMany({
+      data: Array.from({ length: 1000 }, (_, s) => ({
+        ruleSetId: keep.id,
+        mediaItemId: `rep-${s}`,
+        itemData: {
+          id: `rep-${s}`, title: `Show ${s}`, parentTitle: null,
+          memberIds: [`rep-${s}`, ...Array.from({ length: 29 }, (_, e) => `episode-${s * 30 + e}`)],
+        },
+      })),
+    });
+    await prisma.$executeRawUnsafe(`ANALYZE "RuleMatch"`);
+    await prisma.$executeRawUnsafe(`ANALYZE "RuleSet"`);
+    const [{ jit_above_cost: jitAboveCost }] = await prisma.$queryRawUnsafe<{ jit_above_cost: string }[]>("SHOW jit_above_cost");
+
+    const raw = vi.spyOn(prisma, "$queryRawUnsafe");
+    const ids = ["rep-0", ...Array.from({ length: 30_000 }, (_, i) => `episode-${i}`)];
+    const cross = await fetchCrossSystemData(ids);
+    const calls = raw.mock.calls.map(([sql, ...params]) => ({ sql: String(sql), params }));
+    raw.mockRestore();
+
+    expect(cross.get("rep-0")?.matchedRuleSets).toEqual(["Keep"]);
+    expect(cross.get("episode-31")?.matchedRuleSets).toEqual(["Keep"]);
+    expect(cross.get("episode-29999")?.matchedRuleSets).toEqual([]);
+    for (const { sql, params } of calls) {
+      const [{ "QUERY PLAN": plan }] = await prisma.$queryRawUnsafe<{ "QUERY PLAN": Array<{ Plan: { "Total Cost": number } }> }[]>(
+        `EXPLAIN (FORMAT JSON) ${sql}`,
+        ...params,
+      );
+      expect(plan[0].Plan["Total Cost"]).toBeLessThan(Number(jitAboveCost));
+    }
+  });
+
   it("artist scope: an artist 'Keep' matched is not matched by 'NOT Matched By Rule Set = Keep'", async () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id);

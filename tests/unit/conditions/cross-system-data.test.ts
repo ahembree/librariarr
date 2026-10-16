@@ -146,6 +146,23 @@ describe("fetchCrossSystemData", () => {
     expect(result.get("b")?.matchedRuleSets).toEqual(["Leaving Soon"]);
   });
 
+  it("counts the requested members of a series/artist match, reading each member list whole", async () => {
+    // A show match is stored on one representative episode and lists every
+    // episode it covers in itemData.memberIds; the query takes no id list
+    // (joining a whole library's ids in SQL triggered Postgres JIT).
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([
+      { memberIds: ["rep", "b", "unrequested"], name: "Keep" },
+      { memberIds: ["b", 42, null], name: "Leaving Soon" },
+    ]);
+
+    const result = await fetchCrossSystemData(["b", "c"]);
+
+    expect(mockPrisma.$queryRawUnsafe).toHaveBeenCalledWith(expect.any(String));
+    expect(result.get("b")?.matchedRuleSets).toEqual(["Keep", "Leaving Soon"]);
+    expect(result.get("c")?.matchedRuleSets).toEqual([]);
+    expect(result.has("unrequested")).toBe(false);
+  });
+
   it("skips rule matches with empty rule set names", async () => {
     mockPrisma.ruleMatch.findMany.mockResolvedValueOnce([
       { mediaItemId: "a", ruleSet: { name: "" } },

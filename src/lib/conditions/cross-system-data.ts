@@ -73,17 +73,22 @@ export async function fetchCrossSystemData(itemIds: string[]): Promise<CrossSyst
   // those was matched by the rule set too. Counting the representative alone,
   // a "NOT Matched By Rule Set = Keep" rule read every other episode of a show
   // "Keep" holds as unmatched, and deleted them.
-  const memberMatches = await prisma.$queryRawUnsafe<{ mediaItemId: string; name: string }[]>(
-    `SELECT DISTINCT req.id AS "mediaItemId", rs.name
+  // The member lists are read whole and intersected here: the callers pass a
+  // whole library's ids, and joined in SQL against `unnest($1)` the lookup was
+  // estimated past `jit_above_cost`, so Postgres JIT-compiled it on every
+  // detection run (~0.7 s for 28k episodes, ~4 s for 150k). This reads one
+  // row per series/artist match instead.
+  const memberLists = await prisma.$queryRawUnsafe<{ memberIds: unknown; name: string }[]>(
+    `SELECT rm."itemData"->'memberIds' AS "memberIds", rs.name
        FROM "RuleMatch" rm
        JOIN "RuleSet" rs ON rs.id = rm."ruleSetId"
-       CROSS JOIN LATERAL jsonb_array_elements_text(
-         CASE WHEN jsonb_typeof(rm."itemData"->'memberIds') = 'array'
-           THEN rm."itemData"->'memberIds' ELSE '[]'::jsonb END
-       ) AS member(id)
-       JOIN unnest($1::text[]) AS req(id) ON req.id = member.id
-      WHERE rs.type::text IN ('SERIES', 'MUSIC')`,
-    itemIds,
+      WHERE rs.type::text IN ('SERIES', 'MUSIC')
+        AND jsonb_typeof(rm."itemData"->'memberIds') = 'array'`,
+  );
+  const memberMatches = memberLists.flatMap((m) =>
+    (Array.isArray(m.memberIds) ? m.memberIds : [])
+      .filter((id): id is string => typeof id === "string" && requested.has(id))
+      .map((id) => ({ mediaItemId: id, name: m.name })),
   );
   for (const match of [
     ...ruleMatches.map((m) => ({ mediaItemId: m.mediaItemId, name: m.ruleSet.name })),
