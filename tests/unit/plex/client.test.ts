@@ -6,6 +6,7 @@ vi.mock("@/lib/logger", () => ({
 
 vi.mock("@/lib/http-retry", () => ({
   configureRetry: vi.fn(),
+  NO_RETRY: { __noRetry: true },
 }));
 
 const mockAxiosInstance = {

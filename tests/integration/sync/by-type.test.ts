@@ -172,6 +172,46 @@ describe("POST /api/sync/by-type", () => {
     expect(await testPrisma.syncJob.count({ where: { mediaServerId: server.id } })).toBe(1);
   });
 
+  // The duplicate check and the insert run under the per-server
+  // `sync-request:` lock the per-server route takes too. Without it, requests
+  // that arrived together each passed the check and each created a row; the
+  // later enqueue replaced the earlier jobs' payloads (same jobKeys), so the
+  // earlier row sat PENDING with nothing to claim it — and a PENDING row makes
+  // every later sync request answer as though a sync were already queued.
+  it("checks for a queued sync under the per-server route's lock", async () => {
+    const testPrisma = getTestPrisma();
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    await createTestLibrary(server.id, { key: "m1", type: "MOVIE" });
+    setMockSession({ userId: user.id, isLoggedIn: true });
+
+    // Stand in for `/api/servers/[id]/sync` mid-request: it holds the lock,
+    // and creates its PENDING row before committing.
+    let commit!: () => void;
+    const committed = new Promise<void>((resolve) => { commit = resolve; });
+    let locked!: () => void;
+    const lockHeld = new Promise<void>((resolve) => { locked = resolve; });
+    const perServerRequest = testPrisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe(`SELECT pg_advisory_xact_lock(hashtext('sync-request:' || $1))`, server.id);
+      locked();
+      await committed;
+      await tx.syncJob.create({ data: { mediaServerId: server.id, status: "PENDING", startedAt: new Date() } });
+    }, { timeout: 10_000 });
+    await lockHeld;
+
+    const byType = callRoute(POST, { url: "/api/sync/by-type", method: "POST", body: { libraryType: "MOVIE" } });
+    // Long enough for an unserialized request to run its check and insert.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    commit();
+    await perServerRequest;
+
+    const body = await expectJson<{ syncedCount: number; skippedCount: number }>(await byType, 200);
+    expect(body).toMatchObject({ syncedCount: 0, skippedCount: 1 });
+    const rows = await testPrisma.syncJob.findMany({ where: { mediaServerId: server.id } });
+    expect(rows).toHaveLength(1);
+    expect(mockEnqueueJob).not.toHaveBeenCalled();
+  });
+
   it("queues a watch-history refresh after the library jobs of each server", async () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id);

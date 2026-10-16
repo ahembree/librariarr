@@ -1,8 +1,9 @@
 import axios, { type AxiosInstance } from "axios";
 import https from "https";
-import { configureRetry } from "@/lib/http-retry";
+import { configureRetry, NO_RETRY } from "@/lib/http-retry";
 import { ARTIST_MBID_SCHEME, firstMbid } from "@/lib/media/musicbrainz";
 import {
+  BYPASS_BREAKER,
   isUnreachable,
   markUnreachable,
   clearUnreachable,
@@ -171,7 +172,7 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
     // Auth headers added via interceptor — safe because requests only fire
     // after the subclass constructor has completed.
     this.client.interceptors.request.use((config) => {
-      if (isUnreachable(baseURLForHealth)) {
+      if (!config.__bypassBreaker && isUnreachable(baseURLForHealth)) {
         return Promise.reject(
           new ServerUnreachableError(baseURLForHealth, getLastFailureMessage(baseURLForHealth)),
         ) as never;
@@ -225,8 +226,10 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
 
   async testConnection(): Promise<{ ok: boolean; error?: string; serverName?: string }> {
     try {
-      // First hit the public endpoint to check connectivity and get server name
-      const publicResponse = await this.client.get("/System/Info/Public");
+      // First hit the public endpoint to check connectivity and get server name.
+      // Both requests ask the server even while it is marked unreachable (see
+      // BYPASS_BREAKER), and report the first failure rather than retrying.
+      const publicResponse = await this.client.get("/System/Info/Public", { ...BYPASS_BREAKER, ...NO_RETRY });
       if (!publicResponse.data?.ServerName) {
         return { ok: false, error: `This does not appear to be a ${this.logPrefix} server` };
       }
@@ -235,7 +238,7 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
       // Now hit an authenticated endpoint to verify the API key is valid
       // /System/Info requires authentication, unlike /System/Info/Public
       try {
-        await this.client.get("/System/Info");
+        await this.client.get("/System/Info", { ...BYPASS_BREAKER, ...NO_RETRY });
       } catch (authError) {
         if (axios.isAxiosError(authError) && authError.response?.status === 401) {
           return { ok: false, error: "Authentication failed — invalid API key" };
