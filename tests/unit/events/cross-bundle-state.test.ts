@@ -90,7 +90,7 @@ function routeEntries(dir: string): string[] {
 
 const MUTATION = (name: string) =>
   new RegExp(
-    `\\b${name.replace(/\$/g, "\\$")}\\s*(?:\\.(?:set|add|delete|clear|push|pop|shift|unshift|splice)\\(|\\[[^\\]]*\\]\\s*=(?!=)|\\.[A-Za-z_$][\\w$]*\\s*=(?!=))`,
+    `\\b${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*(?:\\.(?:set|add|delete|clear|push|pop|shift|unshift|splice)\\(|\\[[^\\]]*\\]\\s*=(?!=)|\\.[A-Za-z_$][\\w$]*\\s*=(?!=))`,
   );
 
 /** `name`s of module-level state in `source`: every let/var, and const collections the file mutates. */
