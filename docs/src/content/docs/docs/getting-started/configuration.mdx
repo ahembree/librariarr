@@ -166,7 +166,7 @@ environment:
   - TZ=America/New_York
 ```
 
-If `TZ` is not set, the container defaults to **UTC**. The current server timezone is displayed in the scheduling settings. On a daylight saving change, a schedule at a fixed time runs once: a time that happens twice runs at its first occurrence, and a time that is skipped runs as the clock jumps past it. Schedules whose hour is `*` (every hour) run every real hour.
+If `TZ` is not set, the container defaults to **UTC**. The current server timezone is displayed in the scheduling settings. On a daylight saving change, a schedule at a fixed time runs once: a time that happens twice runs at its first occurrence, and a time that is skipped runs as the clock jumps past it. Schedules that run every hour (an hour field of `*`, `*/1` or `0-23`) run every real hour.
 
 ### Daily Run Time
 

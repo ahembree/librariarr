@@ -55,20 +55,31 @@ export async function POST(request: NextRequest) {
     //
     // Checked and created under the same per-server lock as the per-server
     // route, so the two cannot each create a row for one server.
+    //
+    // A queued (PENDING) row is joined, not a reason to skip: a row records no
+    // scope, and the one already there may be this route's own for another
+    // library type — skipping on it dropped a Series sync asked for while a
+    // Movies sync waited in the queue. The jobs share its id, so one Stop still
+    // cancels everything queued for the server. A RUNNING sync is still
+    // skipped, as it always was.
     const syncJob = await prisma.$transaction(async (tx) => {
       await tx.$executeRawUnsafe(
         `SELECT pg_advisory_xact_lock(hashtext('sync-request:' || $1))`,
         server.id,
       );
-      const activeJob = await tx.syncJob.findFirst({
+      const activeJobs = await tx.syncJob.findMany({
         where: { mediaServerId: server.id, status: { in: ["RUNNING", "PENDING"] } },
-        select: { id: true },
+        select: { id: true, status: true },
+        orderBy: { startedAt: "asc" },
       });
-      if (activeJob) return null;
-      return tx.syncJob.create({
+      if (activeJobs.some((job) => job.status === "RUNNING")) return null;
+      const queued = activeJobs.find((job) => job.status === "PENDING");
+      if (queued) return { id: queued.id, created: false };
+      const row = await tx.syncJob.create({
         data: { mediaServerId: server.id, status: "PENDING", startedAt: new Date() },
         select: { id: true },
       });
+      return { id: row.id, created: true };
     });
     if (!syncJob) {
       skippedCount++;
@@ -99,11 +110,14 @@ export async function POST(request: NextRequest) {
     }
     if (!queued) {
       // Nothing will ever claim the row, and a PENDING row makes every sync
-      // route answer as though a sync were already queued — close it here.
-      await prisma.syncJob.update({
-        where: { id: syncJob.id },
-        data: { status: "FAILED", completedAt: new Date(), error: "Could not queue the sync job" },
-      });
+      // route answer as though a sync were already queued — close it here. A
+      // joined row belongs to the request that made it and is left alone.
+      if (syncJob.created) {
+        await prisma.syncJob.update({
+          where: { id: syncJob.id },
+          data: { status: "FAILED", completedAt: new Date(), error: "Could not queue the sync job" },
+        });
+      }
       skippedCount++;
       continue;
     }
