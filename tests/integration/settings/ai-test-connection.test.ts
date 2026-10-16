@@ -74,4 +74,25 @@ describe("POST /api/settings/ai/test", () => {
     await post({ provider: "openai-compatible", model: "m", apiKey: "••••••••" }, "10.9.0.4");
     expect(captured[captured.length - 1].apiKey).toBe("saved-key");
   });
+
+  it("asks a stale session to confirm it's them before sending the saved key to a new base URL", async () => {
+    const user = await createTestUser();
+    await getTestPrisma().appSettings.create({
+      data: { userId: user.id, aiApiKey: "saved-key", aiBaseUrl: "https://api.openai.com/v1" },
+    });
+    setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() - 24 * 60 * 60 * 1000 });
+    mockTest.mockResolvedValue({ ok: true, model: "m" });
+
+    const refusal = await expectJson<{ code: string }>(
+      await post({ provider: "openai-compatible", baseUrl: "https://attacker.example/v1", model: "m", apiKey: "••••••••" }, "10.9.0.5"),
+      403,
+    );
+    expect(refusal.code).toBe("reauth_required");
+    expect(captured).toEqual([]);
+
+    // The saved URL, or a key of the caller's own, needs nothing more.
+    await post({ provider: "openai-compatible", baseUrl: "https://api.openai.com/v1/", model: "m" }, "10.9.0.5");
+    await post({ provider: "openai-compatible", baseUrl: "https://attacker.example/v1", model: "m", apiKey: "own-key" }, "10.9.0.5");
+    expect(captured.map((c) => c.apiKey)).toEqual(["saved-key", "own-key"]);
+  });
 });

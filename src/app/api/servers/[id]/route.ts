@@ -77,7 +77,9 @@ export async function PUT(
   // A new URL with the stored token kept sends that token to the new URL —
   // the connection test below, then every sync and the realtime socket. A
   // Plex server's token can be the Plex account's own token, which signs in
-  // to Librariarr, so a stolen cookie must not be able to point it somewhere
+  // to Librariarr, and a Jellyfin/Emby API key is an admin key that can delete
+  // media and shut the server down (the rule stored-key-guard.ts applies to the
+  // Arr keys), so a stolen cookie must not be able to point either somewhere
   // of its choosing (see recent-login.ts). Turning certificate checks off is
   // the same thing by another route: the token then goes to whoever answers
   // at the URL, and the default one onboarding picks is the remote
@@ -86,10 +88,10 @@ export async function PUT(
   const urlChanged = url !== undefined && withoutTrailingSlash(url) !== withoutTrailingSlash(server.url);
   const turnsTlsChecksOff = tlsSkipVerify === true && !server.tlsSkipVerify;
   const keepsStoredToken = accessToken === undefined || accessToken === "";
-  if (server.type === "PLEX" && (urlChanged || turnsTlsChecksOff) && keepsStoredToken && !hasRecentLogin(session)) {
+  if ((urlChanged || turnsTlsChecksOff) && keepsStoredToken && !hasRecentLogin(session)) {
     return reauthRequired(
       session.userId!,
-      urlChanged ? "Changing a Plex server's URL" : "Turning off certificate checks for a Plex server",
+      urlChanged ? "Changing a media server's URL" : "Turning off certificate checks for a media server",
     );
   }
 

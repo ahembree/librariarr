@@ -72,7 +72,7 @@ The assistant is strongest at understanding, auditing, and cleaning up your libr
 - The assistant is **read-only** — there are no tools that delete, unmonitor, download, or otherwise change anything, so it cannot take a destructive action even if asked.
 - The tools never run model-generated SQL. They take structured, validated arguments and run the same safe queries the rest of the app uses.
 - Your library **metadata** (titles, technical details, watch history) is sent to the provider you configure. Use a **local model** if you'd rather keep everything on your own hardware.
-- The API key is stored on your server and masked in all API responses.
+- The API key is stored on your server and masked in all API responses. Saving or testing a different base URL while keeping the saved key needs a sign-in from the last 15 minutes, because the key would go to that address; if it has been longer, Librariarr asks you to confirm it's you. Entering the key again along with the new URL needs nothing extra.
 - The chat endpoint is rate-limited and requires an authenticated session.
 
 <Aside type="caution">

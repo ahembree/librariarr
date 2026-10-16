@@ -2721,7 +2721,7 @@ export default function SettingsPage() {
     setAiSaving(true);
     setAiTestResult(null);
     try {
-      const res = await fetch("/api/settings/ai", {
+      const res = await fetchWithReauth("/api/settings/ai", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -2754,7 +2754,7 @@ export default function SettingsPage() {
     setAiTesting(true);
     setAiTestResult(null);
     try {
-      const res = await fetch("/api/settings/ai/test", {
+      const res = await fetchWithReauth("/api/settings/ai/test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

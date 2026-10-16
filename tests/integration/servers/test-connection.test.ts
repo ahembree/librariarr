@@ -94,6 +94,19 @@ describe("POST /api/servers/test", () => {
     expect(body.ok).toBe(false);
     expect(body.error).toBe("Connection refused");
   });
+
+  it("scrubs private addresses from the error", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id});
+    mockTestConnection.mockResolvedValue({ ok: false, error: "connect ECONNREFUSED 192.168.1.20:32400" });
+
+    const res = await callRoute(serverTest, {
+      method: "POST",
+      body: { url: "http://plex.test:32400", accessToken: "test-token", type: "PLEX" },
+    });
+    const body = await expectJson<{ error: string | null }>(res);
+    expect(body.error).not.toContain("192.168.1.20");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -151,5 +164,16 @@ describe("POST /api/servers/[id]/test-connection", () => {
     const body = await expectJson<{ ok: boolean; error: string | null }>(res);
     expect(body.ok).toBe(false);
     expect(body.error).toBe("Connection refused");
+  });
+
+  it("scrubs private addresses from the error", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    setMockSession({ isLoggedIn: true, userId: user.id});
+    mockTestConnection.mockResolvedValue({ ok: false, error: "connect ECONNREFUSED 10.0.0.7:8096" });
+
+    const res = await callRouteWithParams(serverIdTestConnection, { id: server.id }, { method: "POST" });
+    const body = await expectJson<{ error: string | null }>(res);
+    expect(body.error).not.toContain("10.0.0.7");
   });
 });

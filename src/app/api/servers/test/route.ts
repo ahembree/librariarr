@@ -3,6 +3,7 @@ import { getSession } from "@/lib/auth/session";
 import { createMediaServerClient } from "@/lib/media-server/factory";
 import type { MediaServerType } from "@/generated/prisma/client";
 import { validateRequest, serverTestSchema } from "@/lib/validation";
+import { sanitizeErrorDetail } from "@/lib/api/sanitize";
 
 export async function POST(request: NextRequest) {
   const session = await getSession();
@@ -24,5 +25,5 @@ export async function POST(request: NextRequest) {
 
   const result = await client.testConnection();
 
-  return NextResponse.json({ ok: result.ok, error: result.error ?? null, serverName: result.serverName ?? null });
+  return NextResponse.json({ ok: result.ok, error: sanitizeErrorDetail(result.error) ?? null, serverName: result.serverName ?? null });
 }

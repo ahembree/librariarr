@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { createMediaServerClient } from "@/lib/media-server/factory";
+import { sanitizeErrorDetail } from "@/lib/api/sanitize";
 
 export async function POST(
   _request: Request,
@@ -30,7 +31,7 @@ export async function POST(
 
   return NextResponse.json({
     ok: result.ok,
-    error: result.error ?? null,
+    error: sanitizeErrorDetail(result.error) ?? null,
     serverName: result.serverName ?? null,
   });
 }

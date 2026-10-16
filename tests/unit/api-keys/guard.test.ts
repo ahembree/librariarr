@@ -185,6 +185,12 @@ describe("authenticateApiKey — keys in the URL", () => {
   });
 
   const key = newApiKey();
+  // Every character percent-encoded, then the `%` itself: a real double
+  // encoding. `encodeURIComponent` twice is not one — it leaves `_` and every
+  // base62 character as they are, so it hands back the plain key.
+  const doublyEncoded = (value: string) =>
+    [...value].map((c) => `%25${c.charCodeAt(0).toString(16).toUpperCase().padStart(2, "0")}`).join("");
+  const underscoreDoublyEncoded = key.replace("_", "%255F");
 
   it.each([
     ["an upper-case parameter name", `?API_KEY=${key}`],
@@ -197,9 +203,11 @@ describe("authenticateApiKey — keys in the URL", () => {
     // The URL parser decodes once, so a doubly-encoded key reaches the check
     // as `lbr%5F…` — live, the one spelling that passed where every other
     // encoding was refused.
-    ["a doubly-encoded key in a value", `?q=${encodeURIComponent(encodeURIComponent(key))}`],
-    ["a doubly-encoded key as the parameter name", `?${encodeURIComponent(encodeURIComponent(key))}`],
-    ["a doubly-encoded key in the path", `/${encodeURIComponent(encodeURIComponent(key))}`],
+    ["a doubly-encoded key in a value", `?q=${doublyEncoded(key)}`],
+    ["a doubly-encoded key as the parameter name", `?${doublyEncoded(key)}`],
+    ["a doubly-encoded key in the path", `/${doublyEncoded(key)}`],
+    ["a key with a doubly-encoded underscore in a value", `?q=${underscoreDoublyEncoded}`],
+    ["a key with a doubly-encoded underscore in the path", `/${underscoreDoublyEncoded}`],
   ])("refuses %s with 400 and never looks the key up", async (_label, suffix) => {
     const url = suffix.startsWith("/")
       ? `http://localhost/api/v1/media${suffix}`

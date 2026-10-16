@@ -437,7 +437,10 @@ function carriesKey(part: string): boolean {
 }
 
 function urlCarriesKey(url: URL): boolean {
-  if (carriesKey(url.pathname)) return true;
+  // Unlike the query string, the parser leaves the path percent-encoded, so
+  // the path gets the layer the parser gave the query before the same two
+  // checks — or `/lbr%255F…` passed where `?q=lbr%255F…` was refused.
+  if (carriesKey(safeDecode(url.pathname))) return true;
   for (const [name, value] of url.searchParams) {
     if (KEY_QUERY_PARAMS.has(name.toLowerCase())) return true;
     if (carriesKey(name) || carriesKey(value)) return true;

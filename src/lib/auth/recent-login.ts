@@ -18,8 +18,13 @@
  *   choose the passphrase it is encrypted with,
  * - adding a Plex server by machine id, whose access token the server looks up
  *   on plex.tv and sends to the URL in the request (`POST /api/servers`),
- * - pointing a Plex server at a new URL while its stored token stays
- *   (`PUT /api/servers/[id]`), which sends that token to the new URL.
+ * - pointing a media server at a new URL while its stored token stays
+ *   (`PUT /api/servers/[id]`), which sends that token to the new URL — a Plex
+ *   token signs in, a Jellyfin/Emby key is an admin key,
+ * - sending an integration's or the AI provider's stored API key to a new URL
+ *   (stored-key-guard.ts),
+ * - turning SSO on, or changing its mode or forward-auth user header, which
+ *   decide whose identity signs in (`PUT /api/settings/sso`).
  *
  * Each outlives the cookie session that performs it. Logging out and changing
  * the password revoke sessions, not a key, a password or a linked identity, so
