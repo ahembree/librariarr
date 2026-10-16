@@ -1,6 +1,9 @@
 import { test, expect, type Page } from "@playwright/test";
 import { seedUnreachableServer, cleanupUnreachableServer, UNREACHABLE_SERVER } from "./seed";
 
+/** Added mid-test, so the manager's first state for it can only reach the page as a push. */
+const LATE_SERVER = { id: "e2e-unreachable-server-late", name: "E2E Late Server" } as const;
+
 /**
  * Work the job worker and the realtime manager do must reach the browser.
  *
@@ -21,6 +24,7 @@ test.describe("events from background work reach the page", () => {
 
   test.afterAll(async () => {
     await cleanupUnreachableServer();
+    await cleanupUnreachableServer(LATE_SERVER);
   });
 
   /** Resolves with the first `type` event the page's own stream delivers for the server. */
@@ -59,27 +63,22 @@ test.describe("events from background work reach the page", () => {
     expect(await failed).toBe(true);
   });
 
-  test("a server's connection state, from the realtime manager, updates Settings without a reload", async ({ page }) => {
+  test("a server's connection state, from the realtime manager, reaches the page and its Settings line", async ({ page }) => {
     await page.goto("/settings#general");
-    const line = page
-      .getByTestId("realtime-connection-status")
-      .locator("li", { hasText: UNREACHABLE_SERVER.name });
-    await expect(line).toBeVisible();
+    await expect(page.getByTestId("realtime-connection-status")).toBeVisible();
 
-    // The manager opens the socket on its next reconcile (at most a minute) and
-    // the connection is refused at once.
-    await expect
-      .poll(
-        async () => {
-          const body = await (await page.request.get("/api/tools/realtime/status")).json();
-          return body.servers.find((s: { serverId: string }) => s.serverId === UNREACHABLE_SERVER.id)?.status;
-        },
-        { timeout: 90_000, intervals: [1_000] },
-      )
-      .toBe("disconnected");
+    // Listen BEFORE the server exists. The manager picks it up on its next
+    // reconcile (at most a minute) and the connection is refused at once, so
+    // its first `server-status` can only arrive over the stream — the page's
+    // 60s fallback poll cannot stand in for a lost push here.
+    const pushed = waitForStreamEvent(page, "server-status", LATE_SERVER.id, 100_000);
+    await page.waitForTimeout(1_000);
+    await seedUnreachableServer(LATE_SERVER);
+    expect(await pushed).toBe(true);
 
-    // Pushed as `server-status`, so the line turns well inside the page's 60s
-    // fallback poll.
-    await expect(line).toContainText("Not connected", { timeout: 10_000 });
+    // The page refetches on that same push.
+    await expect(
+      page.getByTestId("realtime-connection-status").locator("li", { hasText: LATE_SERVER.name }),
+    ).toContainText("Not connected", { timeout: 10_000 });
   });
 });

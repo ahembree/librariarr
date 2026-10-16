@@ -94,8 +94,13 @@ export const UNREACHABLE_SERVER = {
   name: "E2E Unreachable Server",
 } as const;
 
-export async function seedUnreachableServer(): Promise<void> {
-  await cleanupUnreachableServer();
+interface SeedServer {
+  id: string;
+  name: string;
+}
+
+export async function seedUnreachableServer(server: SeedServer = UNREACHABLE_SERVER): Promise<void> {
+  await cleanupUnreachableServer(server);
   await withClient(async (c) => {
     const { rows } = await c.query<{ id: string }>(
       `SELECT id FROM "User" ORDER BY "createdAt" ASC LIMIT 1`,
@@ -105,17 +110,17 @@ export async function seedUnreachableServer(): Promise<void> {
       `INSERT INTO "MediaServer"
          (id, "userId", type, name, url, "accessToken", enabled, "createdAt", "updatedAt")
        VALUES ($1, $2, 'PLEX', $3, 'http://127.0.0.1:1', 'e2e-unreachable-token', true, NOW(), NOW())`,
-      [UNREACHABLE_SERVER.id, rows[0].id, UNREACHABLE_SERVER.name],
+      [server.id, rows[0].id, server.name],
     );
   });
 }
 
 /** Remove the server and any retry of its sync still queued in the worker. */
-export async function cleanupUnreachableServer(): Promise<void> {
+export async function cleanupUnreachableServer(server: SeedServer = UNREACHABLE_SERVER): Promise<void> {
   await withClient(async (c) => {
     await c
-      .query(`SELECT graphile_worker.remove_job($1)`, [`sync:${UNREACHABLE_SERVER.id}`])
+      .query(`SELECT graphile_worker.remove_job($1)`, [`sync:${server.id}`])
       .catch(() => undefined); // schema absent before the worker's first start
-    await c.query(`DELETE FROM "MediaServer" WHERE id = $1`, [UNREACHABLE_SERVER.id]);
+    await c.query(`DELETE FROM "MediaServer" WHERE id = $1`, [server.id]);
   });
 }
