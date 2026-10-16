@@ -10,16 +10,20 @@ const { mockPrismaModels, TABLE_NAMES, mockFs } = vi.hoisted(() => {
     "systemConfig", "user", "appSettings", "mediaServer", "library",
     "mediaItem", "mediaItemExternalId", "mediaStream", "syncJob",
     "sonarrInstance", "radarrInstance", "lidarrInstance", "seerrInstance",
+    "tracearrInstance", "trashManagedResource", "collection",
     "ruleSet", "ruleMatch", "lifecycleAction", "lifecycleException",
     "watchHistory", "blackoutSchedule", "prerollPreset",
     "prerollSchedule", "savedQuery", "logEntry",
   ];
 
-  const mockPrismaModels: Record<string, { findMany: ReturnType<typeof import("vitest")["vi"]["fn"]>; createMany: ReturnType<typeof import("vitest")["vi"]["fn"]> }> = {};
+  type MockFn = ReturnType<typeof import("vitest")["vi"]["fn"]>;
+  const mockPrismaModels: Record<string, { findMany: MockFn; createMany: MockFn; aggregate: MockFn }> = {};
   for (const t of TABLE_NAMES) {
     mockPrismaModels[t] = {
       findMany: vi.fn().mockResolvedValue([]),
       createMany: vi.fn().mockResolvedValue({ count: 0 }),
+      // Restore reads the highest session version in use before truncating.
+      aggregate: vi.fn().mockResolvedValue({ _max: { sessionVersion: null } }),
     };
   }
 
@@ -131,6 +135,15 @@ describe("createBackup", () => {
     // Config tables should be queried
     expect(mockPrismaModels.user.findMany).toHaveBeenCalled();
     expect(mockPrismaModels.appSettings.findMany).toHaveBeenCalled();
+  });
+
+  it("fails, writing no file, when a table cannot be read", async () => {
+    // A read error used to be stored as an empty table: the file was reported
+    // as a good backup, and restoring it emptied that table.
+    mockPrismaModels.appSettings.findMany.mockRejectedValueOnce(new Error("Connection terminated unexpectedly"));
+
+    await expect(createBackup()).rejects.toThrow("Connection terminated unexpectedly");
+    expect(mockFs.writeFile).not.toHaveBeenCalled();
   });
 
   it("includes all tables when configOnly is false", async () => {
@@ -246,7 +259,45 @@ describe("restoreBackup", () => {
 
     const row = mockPrismaModels.user.createMany.mock.calls.at(-1)![0].data[0];
     expect(row).toMatchObject({ id: "u1", username: "admin" });
-    expect(row.createdAt).toBeInstanceOf(Date);
+    // Passed on as written: Prisma's DateTime input takes the ISO string, and
+    // only a DateTime field reads it as a date.
+    expect(row.createdAt).toBe("2024-01-01T00:00:00.000Z");
+  });
+
+  it("never turns a value into a Date by its shape", async () => {
+    // A String column whose whole value is a timestamp used to come back as a
+    // Date, and Prisma refused the batch — the backup could not be restored.
+    const backupData = {
+      metadata: { version: 1, appVersion: "1.0.0", createdAt: new Date().toISOString(), tables: { ruleSet: 1 } },
+      data: { ruleSet: [{ id: "rs1", userId: "u1", name: "2024-01-01T00:00:00Z", type: "MOVIE", rules: {} }] },
+    };
+    mockFs.readFile.mockResolvedValue(gzipSync(Buffer.from(JSON.stringify(backupData))));
+
+    await restoreBackup("librariarr-backup-2024-01-01T00-00-00.json.gz");
+
+    const row = mockPrismaModels.ruleSet.createMany.mock.calls.at(-1)![0].data[0];
+    expect(row.name).toBe("2024-01-01T00:00:00Z");
+  });
+
+  it("gives restored users a session version above the file's and the one in use", async () => {
+    // Restoring the file's version verbatim moved it back, and every cookie
+    // sealed at that value — revoked since — was honoured again.
+    mockPrismaModels.user.aggregate.mockResolvedValueOnce({ _max: { sessionVersion: 7 } });
+    const backupData = {
+      metadata: { version: 1, appVersion: "1.0.0", createdAt: new Date().toISOString(), tables: { user: 2 } },
+      data: {
+        user: [
+          { id: "u1", username: "admin", sessionVersion: 3 },
+          { id: "u2", username: "later", sessionVersion: 12 },
+        ],
+      },
+    };
+    mockFs.readFile.mockResolvedValue(gzipSync(Buffer.from(JSON.stringify(backupData))));
+
+    await restoreBackup("librariarr-backup-2024-01-01T00-00-00.json.gz");
+
+    const rows = mockPrismaModels.user.createMany.mock.calls.at(-1)![0].data;
+    expect(rows.map((r: { sessionVersion: number }) => r.sessionVersion)).toEqual([8, 13]);
   });
 
   it("rejects invalid filenames", async () => {
