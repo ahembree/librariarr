@@ -437,7 +437,7 @@ export function GeneralTab({
                 </Button>
               </div>
               <p className="mt-1.5 text-xs text-muted-foreground">
-                Completed and failed actions older than this will be automatically deleted. Set to 0 to keep forever.
+                Completed and failed actions that ran more than this long ago are automatically deleted. Set to 0 to keep forever.
               </p>
             </div>
             <div>

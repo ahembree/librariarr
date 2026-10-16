@@ -4,6 +4,7 @@ vi.mock("@/lib/logger", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
+import { logger } from "@/lib/logger";
 import {
   buildApiKeyEmbed,
   sendDiscordNotification,
@@ -99,9 +100,72 @@ describe("sendDiscordNotification", () => {
     expect(result.ok).toBe(false);
     expect(result.error).toBe("Unknown error");
   });
+  // Discord rate-limits a webhook (~5 requests / 2 s) and the scheduled
+  // executor posts its summaries back to back: a 429 used to drop the
+  // notification outright, and with no log line anywhere.
+  const WEBHOOK = "https://discord.com/api/webhooks/123/abc";
+  const rateLimited = (body: unknown, headers: Record<string, string> = {}) =>
+    new Response(JSON.stringify(body), { status: 429, headers: { "content-type": "application/json", ...headers } });
+
+  it("retries once after the wait a 429's retry_after asks for, and delivers", async () => {
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValueOnce(rateLimited({ message: "You are being rate limited.", retry_after: 0.05, global: false }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", mockFetch);
+
+    const result = await sendDiscordNotification(WEBHOOK, { content: "Hello!" });
+
+    expect(result).toEqual({ ok: true });
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("falls back to the Retry-After header when the 429 body carries no retry_after", async () => {
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValueOnce(rateLimited({ message: "slow down" }, { "retry-after": "0" }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", mockFetch);
+
+    expect(await sendDiscordNotification(WEBHOOK, { content: "Hello!" })).toEqual({ ok: true });
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not hold the caller for a long rate limit, and retries only once", async () => {
+    const long = vi.fn().mockResolvedValue(rateLimited({ retry_after: 30, global: true }));
+    vi.stubGlobal("fetch", long);
+    expect((await sendDiscordNotification(WEBHOOK, { content: "Hello!" })).ok).toBe(false);
+    expect(long).toHaveBeenCalledTimes(1);
+
+    const repeated = vi.fn().mockImplementation(async () => rateLimited({ retry_after: 0.01 }));
+    vi.stubGlobal("fetch", repeated);
+    const result = await sendDiscordNotification(WEBHOOK, { content: "Hello!" });
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("429");
+    expect(repeated).toHaveBeenCalledTimes(2);
+  });
+
+  it("logs an undelivered notification at WARN, without the webhook URL", async () => {
+    vi.mocked(logger.warn).mockClear();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response('{"message": "Unknown Webhook", "code": 10015}', { status: 404 })));
+
+    const result = await sendDiscordNotification(WEBHOOK, { content: "Hello!" });
+
+    expect(result.ok).toBe(false);
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    const [, message] = vi.mocked(logger.warn).mock.calls[0];
+    expect(message).toContain("404");
+    expect(message).not.toContain("webhooks/123/abc");
+  });
 });
 
 describe("buildSuccessSummaryEmbed", () => {
+  it("bullets each item once", () => {
+    // The lines used to arrive pre-bulleted, and the list adds its own: "• • Movie A".
+    const embed = buildSuccessSummaryEmbed("R", "DELETE_RADARR", ["Movie A", "Movie B"]);
+    expect(embed.fields!.find((f) => f.name === "Items")?.value).toBe("• Movie A\n• Movie B");
+  });
+
   it("builds embed with correct structure for single item", () => {
     const embed = buildSuccessSummaryEmbed("My Rule", "DELETE_RADARR", ["Movie A"]);
 
@@ -136,6 +200,11 @@ describe("buildSuccessSummaryEmbed", () => {
 });
 
 describe("buildFailureSummaryEmbed", () => {
+  it("bullets each item once", () => {
+    const embed = buildFailureSummaryEmbed("R", "DELETE_RADARR", [{ title: "Movie A", error: "boom" }]);
+    expect(embed.fields!.find((f) => f.name === "Items")?.value).toBe("• Movie A: boom");
+  });
+
   it("builds embed with red color and failure info", () => {
     const failures = [
       { title: "Movie A", error: "Not found in Radarr" },

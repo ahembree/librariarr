@@ -211,6 +211,19 @@ describe("PUT /api/settings/sync-schedule", () => {
     const body = await expectJson<{ error: string }>(res, 400);
     expect(body.error).toContain("Invalid schedule");
   });
+
+  it("rejects a cron expression the dispatcher cannot evaluate", async () => {
+    // node-cron accepts a wrap-around range; cron-parser, which the dispatcher
+    // runs, does not — so it used to save and then never run.
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id });
+
+    const res = await callRoute(putSyncSchedule, {
+      method: "PUT",
+      body: { syncSchedule: "0 22-2 * * *" },
+    });
+    await expectJson(res, 400);
+  });
 });
 
 // ---------------------------------------------------------------------------

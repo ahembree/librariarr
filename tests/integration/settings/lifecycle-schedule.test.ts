@@ -160,6 +160,20 @@ describe("PUT /api/settings/lifecycle-schedule", () => {
     expect(body.error).toContain("Invalid execution schedule");
   });
 
+  it("returns 400 for a cron expression the dispatcher cannot evaluate", async () => {
+    // node-cron accepts these; cron-parser, which the dispatcher runs, does not
+    // (a wrap-around range) or reads them as no cron does (`H` is random) —
+    // they used to save and then never run, or run at a random minute.
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id });
+
+    for (const lifecycleExecutionSchedule of ["0 22-2 * * *", "0 3 * * FRI-MON", "H * * * *"]) {
+      const res = await callRoute(PUT, { method: "PUT", body: { lifecycleExecutionSchedule } });
+      const body = await expectJson<{ error: string }>(res, 400);
+      expect(body.error).toContain("Invalid execution schedule");
+    }
+  });
+
   it("returns 400 when no schedule is provided", async () => {
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id});

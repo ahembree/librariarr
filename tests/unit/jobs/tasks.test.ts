@@ -274,7 +274,13 @@ describe("cleanupOldActions", () => {
       where: { status: "PENDING", mediaItemId: null },
     });
     expect(lifecycleAction.deleteMany).not.toHaveBeenCalledWith({
-      where: { status: { not: "PENDING" }, createdAt: { lt: expect.any(Date) } },
+      where: {
+        status: { not: "PENDING" },
+        OR: [
+          { executedAt: { lt: expect.any(Date) } },
+          { executedAt: null, createdAt: { lt: expect.any(Date) } },
+        ],
+      },
     });
   });
 
@@ -283,7 +289,13 @@ describe("cleanupOldActions", () => {
     lifecycleAction.deleteMany.mockResolvedValue({ count: 4 });
     await cleanupOldActions();
     expect(lifecycleAction.deleteMany).toHaveBeenCalledWith({
-      where: { status: { not: "PENDING" }, createdAt: { lt: expect.any(Date) } },
+      where: {
+        status: { not: "PENDING" },
+        OR: [
+          { executedAt: { lt: expect.any(Date) } },
+          { executedAt: null, createdAt: { lt: expect.any(Date) } },
+        ],
+      },
     });
   });
 });

@@ -1,5 +1,9 @@
-import { describe, it, expect, beforeEach } from "vitest";
-import { getSystemTimezone, presetToCron, isScheduleDue } from "@/lib/jobs/schedule";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+
+const log = vi.hoisted(() => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }));
+vi.mock("@/lib/logger", () => ({ logger: log }));
+
+import { getSystemTimezone, presetToCron, isScheduleDue, isValidSchedule } from "@/lib/jobs/schedule";
 
 // ---------------------------------------------------------------------------
 // getSystemTimezone
@@ -108,5 +112,127 @@ describe("isScheduleDue", () => {
 
   it("returns false for an invalid cron expression", () => {
     expect(isScheduleDue("not a cron", null, new Date(), "00:00")).toBe(false);
+  });
+
+  it("logs a schedule it cannot evaluate, once rather than on every tick", () => {
+    log.error.mockClear();
+    const expr = "0 22-2 * * *"; // a wrap-around range cron-parser refuses
+    for (let i = 0; i < 5; i++) isScheduleDue(expr, null, new Date(), "00:00");
+    const lines = log.error.mock.calls.filter(([, message]) => String(message).includes(expr));
+    expect(lines).toHaveLength(1);
+  });
+
+  it("logs when the timezone is not an IANA name, instead of silently never running", () => {
+    log.error.mockClear();
+    process.env.TZ = "CET-1CEST,M3.5.0,M10.5.0/3";
+    expect(isScheduleDue("DAILY", null, new Date(), "03:00")).toBe(false);
+    expect(log.error).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isScheduleDue across daylight saving changes
+// ---------------------------------------------------------------------------
+
+/**
+ * Run the per-minute dispatcher over [from, to), returning when the schedule
+ * fired. It ticks one second past each minute, as the real one runs just after
+ * it (a fire time is only "previous" once the clock is past it).
+ */
+function simulateDispatcher(schedule: string, time: string, from: string, to: string, lastRun: Date | null) {
+  const fires: string[] = [];
+  let watermark = lastRun;
+  for (let t = Date.parse(from) + 1_000; t < Date.parse(to); t += 60_000) {
+    const now = new Date(t);
+    if (isScheduleDue(schedule, watermark, now, time)) {
+      fires.push(now.toISOString());
+      watermark = now; // the dispatcher advances lastScheduled* to `now`
+    }
+  }
+  return fires;
+}
+
+describe("isScheduleDue across daylight saving changes (America/New_York)", () => {
+  const origTZ = process.env.TZ;
+  beforeEach(() => {
+    process.env.TZ = "America/New_York";
+  });
+  afterEach(() => {
+    if (origTZ !== undefined) process.env.TZ = origTZ;
+    else delete process.env.TZ;
+  });
+
+  it("runs a 01:30 daily schedule once on the night 01:30 happens twice", () => {
+    // 2026-11-01: 01:30 local is 05:30Z (EDT) and again 06:30Z (EST).
+    const fires = simulateDispatcher("DAILY", "01:30", "2026-11-01T04:00:00Z", "2026-11-01T09:00:00Z",
+      new Date("2026-10-31T05:30:00Z"));
+    expect(fires).toEqual(["2026-11-01T05:30:01.000Z"]);
+  });
+
+  it("runs a 02:30 daily schedule on the day 02:30 does not exist, when the clock jumps past it", () => {
+    // 2026-03-08: local time jumps from 02:00 EST (07:00Z) to 03:00 EDT.
+    const fires = simulateDispatcher("DAILY", "02:30", "2026-03-08T05:00:00Z", "2026-03-10T05:00:00Z",
+      new Date("2026-03-07T07:30:00Z"));
+    expect(fires).toEqual(["2026-03-08T07:00:01.000Z", "2026-03-09T06:30:01.000Z"]);
+  });
+
+  it("keeps the local time either side of the change", () => {
+    const fires = simulateDispatcher("DAILY", "03:00", "2026-10-31T00:00:00Z", "2026-11-03T00:00:00Z",
+      new Date("2026-10-30T07:00:00Z"));
+    // 03:00 EDT (07:00Z), then 03:00 EST (08:00Z) on both later days.
+    expect(fires).toEqual([
+      "2026-10-31T07:00:01.000Z",
+      "2026-11-01T08:00:01.000Z",
+      "2026-11-02T08:00:01.000Z",
+    ]);
+  });
+
+  it("an every-hour schedule keeps real time: it runs in both 01:00 hours", () => {
+    const fires = simulateDispatcher("0 * * * *", "00:00", "2026-11-01T04:30:00Z", "2026-11-01T07:30:00Z",
+      new Date("2026-11-01T04:00:00Z"));
+    expect(fires).toEqual([
+      "2026-11-01T05:00:01.000Z",
+      "2026-11-01T06:00:01.000Z",
+      "2026-11-01T07:00:01.000Z",
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// isValidSchedule
+// ---------------------------------------------------------------------------
+
+describe("isValidSchedule", () => {
+  it("accepts MANUAL and every preset", () => {
+    for (const value of ["MANUAL", "EVERY_6H", "EVERY_12H", "DAILY", "WEEKLY"]) {
+      expect(isValidSchedule(value)).toBe(true);
+    }
+  });
+
+  it("accepts cron expressions the dispatcher can run", () => {
+    for (const value of ["0 */4 * * *", "30 3 * * 1-5", "0 0 * * THU", "*/30 * * * * *", "@daily"]) {
+      expect(isValidSchedule(value)).toBe(true);
+      expect(isScheduleDue(value, null, new Date("2026-10-16T12:00:00Z"), "00:00")).toBe(true);
+    }
+  });
+
+  it("refuses expressions node-cron accepts but the dispatcher cannot evaluate", () => {
+    // Wrap-around ranges and `W`: these used to save, then never run.
+    for (const value of ["0 22-2 * * *", "0 3 * * FRI-MON", "0 0 15-10 * *", "0 0 1W * *"]) {
+      expect(isValidSchedule(value)).toBe(false);
+    }
+  });
+
+  it("refuses what only cron-parser accepts", () => {
+    // `H` draws a random value on every parse; an empty expression means every minute.
+    for (const value of ["H * * * *", "", "   "]) {
+      expect(isValidSchedule(value)).toBe(false);
+    }
+  });
+
+  it("refuses garbage", () => {
+    for (const value of ["not a cron", "60 * * * *", "0 0 31 2 *", "0 0 * * * * *"]) {
+      expect(isValidSchedule(value)).toBe(false);
+    }
   });
 });

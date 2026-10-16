@@ -166,7 +166,7 @@ environment:
   - TZ=America/New_York
 ```
 
-If `TZ` is not set, the container defaults to **UTC**. The current server timezone is displayed in the scheduling settings. Daylight saving time transitions are handled automatically.
+If `TZ` is not set, the container defaults to **UTC**. The current server timezone is displayed in the scheduling settings. On a daylight saving change, a schedule at a fixed time runs once: a time that happens twice runs at its first occurrence, and a time that is skipped runs as the clock jumps past it. Schedules whose hour is `*` (every hour) run every real hour.
 
 ### Daily Run Time
 
@@ -183,6 +183,8 @@ Controls how often Librariarr fetches metadata from your connected media servers
 | Daily (default) | Once daily at the Daily Run Time |
 | Weekly | Weekly on Monday at the Daily Run Time |
 | Custom | A custom schedule expression |
+
+A custom schedule is standard cron: five fields, or six with seconds. Wrap-around ranges such as `22-2` or `FRI-MON` are refused — list the values instead (`22,23,0,1,2`). The same rule applies to the lifecycle and backup schedules.
 
 When [Real-Time Sync](/docs/features/real-time-sync/) is enabled, library and watch-state changes on a server also trigger an incremental sync between scheduled runs, so this schedule mainly acts as a full reconciliation pass.
 

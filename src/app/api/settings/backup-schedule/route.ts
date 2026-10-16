@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
-import cron from "node-cron";
 import { validateRequest, backupScheduleSchema } from "@/lib/validation";
-
-const PRESET_SCHEDULES = ["MANUAL", "EVERY_6H", "EVERY_12H", "DAILY", "WEEKLY"];
+// The dispatcher's own rule: a cron it cannot evaluate would save and never run.
+import { isValidSchedule } from "@/lib/jobs/schedule";
 
 export async function GET() {
   const session = await getSession();
@@ -38,7 +37,7 @@ export async function PUT(request: NextRequest) {
   const { backupSchedule, backupRetentionCount } = data;
 
   if (backupSchedule !== undefined) {
-    if (!PRESET_SCHEDULES.includes(backupSchedule) && !cron.validate(backupSchedule)) {
+    if (!isValidSchedule(backupSchedule)) {
       return NextResponse.json(
         { error: "Invalid schedule. Use a preset (MANUAL, EVERY_6H, EVERY_12H, DAILY, WEEKLY) or a valid cron expression." },
         { status: 400 }
