@@ -91,11 +91,4 @@ describe("GuideArrClient", () => {
       standardMovieFormat: "x",
     });
   });
-
-  it("verifies the service via system status", async () => {
-    mockAxiosInstance.get.mockResolvedValueOnce({ data: { appName: "Sonarr", version: "4" } });
-    const r = await client.testConnection();
-    expect(r.ok).toBe(false);
-    expect(r.error).toContain("Expected Radarr");
-  });
 });

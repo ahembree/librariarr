@@ -4,33 +4,6 @@ import { IntegrationError } from "@/lib/integration-error";
 import { configureRetry, NO_RETRY } from "@/lib/http-retry";
 import { isExistingExclusionError } from "@/lib/arr/exclusion";
 
-// Tracked-download states that mean the item is NOT actively downloading.
-// Anything else (downloading, queued, warning, etc.) counts as an active download.
-const INACTIVE_DOWNLOAD_STATES = new Set([
-  "imported",
-  "importpending",
-  "failed",
-  "failedpending",
-  "ignored",
-]);
-
-/**
- * A queue record is "actively downloading" unless its tracked-download state
- * indicates it has already finished (imported), failed, or is ignored. Falling
- * back to `true` when state is absent preserves the prior behaviour for queues
- * that don't report a state.
- */
-function isActiveDownloadRecord(record: {
-  trackedDownloadState?: string;
-  status?: string;
-}): boolean {
-  const state = (record.trackedDownloadState ?? "").toLowerCase();
-  if (state && INACTIVE_DOWNLOAD_STATES.has(state)) return false;
-  const status = (record.status ?? "").toLowerCase();
-  if (status === "completed" || status === "failed") return false;
-  return true;
-}
-
 export interface RadarrMovie {
   id: number;
   title: string;
@@ -189,14 +162,6 @@ export class RadarrClient {
     return data;
   }
 
-  async getMovieFiles(movieId: number): Promise<RadarrMovieFile[]> {
-    const { data } = await this.client.get<RadarrMovieFile[]>("/api/v3/moviefile", {
-      params: { movieId: [movieId] },
-      paramsSerializer: { indexes: null },
-    });
-    return data;
-  }
-
   /**
    * Custom format scores keyed by movie id.
    *
@@ -250,29 +215,6 @@ export class RadarrClient {
       name: "MoviesSearch",
       movieIds: [movieId],
     });
-  }
-
-  async getQueue(movieId: number): Promise<{ downloading: boolean; status: string | null }> {
-    try {
-      // `indexes: null` sends `movieIds=1`. axios' default `movieIds[]=1` is
-      // not bound by Radarr, which then skips the filter and returns the head
-      // of the whole queue — so any download made every movie read as
-      // downloading. Records are re-checked by id for the same reason.
-      const { data } = await this.client.get("/api/v3/queue", {
-        params: { movieIds: [movieId], pageSize: 50 },
-        paramsSerializer: { indexes: null },
-      });
-      const records = ((data.records || []) as Array<{ movieId?: number; status?: string; trackedDownloadStatus?: string; trackedDownloadState?: string }>)
-        .filter((r) => r.movieId === movieId);
-      if (records.length === 0) return { downloading: false, status: null };
-      const active = records.find(isActiveDownloadRecord);
-      if (!active) {
-        return { downloading: false, status: records[0].status ?? records[0].trackedDownloadStatus ?? null };
-      }
-      return { downloading: true, status: active.status ?? active.trackedDownloadStatus ?? "downloading" };
-    } catch {
-      return { downloading: false, status: null };
-    }
   }
 
   async getTags(): Promise<RadarrTag[]> {

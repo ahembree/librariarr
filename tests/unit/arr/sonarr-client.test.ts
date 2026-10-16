@@ -158,18 +158,6 @@ describe("SonarrClient", () => {
     });
   });
 
-  describe("getEpisodeFiles", () => {
-    it("fetches episode files for series", async () => {
-      const files = [{ id: 1, seriesId: 5 }];
-      mockAxiosInstance.get.mockResolvedValueOnce({ data: files });
-      const result = await client.getEpisodeFiles(5);
-      expect(result).toEqual(files);
-      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v3/episodefile", {
-        params: { seriesId: 5 },
-      });
-    });
-  });
-
   describe("getEpisodes", () => {
     it("fetches episodes for series", async () => {
       const episodes = [{ id: 1, seasonNumber: 1, episodeNumber: 1, episodeFileId: 10, hasFile: true }];
@@ -211,40 +199,6 @@ describe("SonarrClient", () => {
         name: "SeriesSearch",
         seriesId: 10,
       });
-    });
-  });
-
-  describe("getQueue", () => {
-    it("does not report a completed (inactive) record as downloading", async () => {
-      mockAxiosInstance.get.mockResolvedValueOnce({
-        data: { records: [{ seriesId: 1, status: "completed" }] },
-      });
-      const result = await client.getQueue(1);
-      expect(result).toEqual({ downloading: false, status: "completed" });
-    });
-
-    it("ignores another item's active download and sends seriesIds unbracketed", async () => {
-      mockAxiosInstance.get.mockResolvedValueOnce({
-        data: { records: [{ seriesId: 2, status: "downloading" }] },
-      });
-      const result = await client.getQueue(1);
-      expect(result).toEqual({ downloading: false, status: null });
-      expect(mockAxiosInstance.get).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
-        params: expect.objectContaining({ seriesIds: [1] }),
-        paramsSerializer: { indexes: null },
-      }));
-    });
-
-    it("returns not downloading when no records", async () => {
-      mockAxiosInstance.get.mockResolvedValueOnce({ data: { records: [] } });
-      const result = await client.getQueue(1);
-      expect(result).toEqual({ downloading: false, status: null });
-    });
-
-    it("returns not downloading on error", async () => {
-      mockAxiosInstance.get.mockRejectedValueOnce(new Error("fail"));
-      const result = await client.getQueue(1);
-      expect(result).toEqual({ downloading: false, status: null });
     });
   });
 

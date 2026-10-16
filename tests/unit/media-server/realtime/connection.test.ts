@@ -104,7 +104,7 @@ describe("ServerRealtimeConnection", () => {
 
     sockets[0].fireOpen();
     expect(sockets[0].sent).toContain(JSON.stringify({ MessageType: "SessionsStart", Data: "0,1500" }));
-    expect(conn.getStatus()).toBe("connected");
+    expect(statuses.at(-1)).toEqual(["s2", "connected"]);
     expect(events.some((e) => e.kind === "session-changed")).toBe(true);
     expect(events.some((e) => e.kind === "server-status" && e.status === "connected")).toBe(true);
   });
@@ -231,6 +231,6 @@ describe("ServerRealtimeConnection", () => {
     sockets[0].fireClose();
     vi.advanceTimersByTime(120_000);
     expect(sockets).toHaveLength(1);
-    expect(conn.getStatus()).toBe("disconnected");
+    expect(statuses.at(-1)?.[1]).toBe("disconnected");
   });
 });

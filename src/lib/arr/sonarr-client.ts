@@ -4,33 +4,6 @@ import { IntegrationError } from "@/lib/integration-error";
 import { configureRetry, NO_RETRY } from "@/lib/http-retry";
 import { isExistingExclusionError } from "@/lib/arr/exclusion";
 
-// Tracked-download states that mean the item is NOT actively downloading.
-// Anything else (downloading, queued, warning, etc.) counts as an active download.
-const INACTIVE_DOWNLOAD_STATES = new Set([
-  "imported",
-  "importpending",
-  "failed",
-  "failedpending",
-  "ignored",
-]);
-
-/**
- * A queue record is "actively downloading" unless its tracked-download state
- * indicates it has already finished (imported), failed, or is ignored. Falling
- * back to `true` when state is absent preserves the prior behaviour for queues
- * that don't report a state.
- */
-function isActiveDownloadRecord(record: {
-  trackedDownloadState?: string;
-  status?: string;
-}): boolean {
-  const state = (record.trackedDownloadState ?? "").toLowerCase();
-  if (state && INACTIVE_DOWNLOAD_STATES.has(state)) return false;
-  const status = (record.status ?? "").toLowerCase();
-  if (status === "completed" || status === "failed") return false;
-  return true;
-}
-
 export interface SonarrSeries {
   id: number;
   title: string;
@@ -92,13 +65,6 @@ interface SonarrEpisode {
   title?: string;
   /** Local air date, `YYYY-MM-DD`; absent for an unaired or TBA episode. */
   airDate?: string;
-}
-
-interface SonarrEpisodeFile {
-  id: number;
-  seriesId: number;
-  relativePath: string;
-  size: number;
 }
 
 interface SonarrMediaManagementConfig {
@@ -205,13 +171,6 @@ export class SonarrClient {
     return data;
   }
 
-  async getEpisodeFiles(seriesId: number): Promise<SonarrEpisodeFile[]> {
-    const { data } = await this.client.get<SonarrEpisodeFile[]>("/api/v3/episodefile", {
-      params: { seriesId },
-    });
-    return data;
-  }
-
   async getEpisodes(seriesId: number): Promise<SonarrEpisode[]> {
     const { data } = await this.client.get("/api/v3/episode", {
       params: { seriesId },
@@ -274,27 +233,6 @@ export class SonarrClient {
       name: "SeriesSearch",
       seriesId,
     });
-  }
-
-  async getQueue(seriesId: number): Promise<{ downloading: boolean; status: string | null }> {
-    try {
-      // `indexes: null` sends `seriesIds=1`; axios' default `seriesIds[]=1` is
-      // not bound, so the filter was skipped (see RadarrClient.getQueue).
-      const { data } = await this.client.get("/api/v3/queue", {
-        params: { seriesIds: [seriesId], pageSize: 50 },
-        paramsSerializer: { indexes: null },
-      });
-      const records = ((data.records || []) as Array<{ seriesId?: number; status?: string; trackedDownloadStatus?: string; trackedDownloadState?: string }>)
-        .filter((r) => r.seriesId === seriesId);
-      if (records.length === 0) return { downloading: false, status: null };
-      const active = records.find(isActiveDownloadRecord);
-      if (!active) {
-        return { downloading: false, status: records[0].status ?? records[0].trackedDownloadStatus ?? null };
-      }
-      return { downloading: true, status: active.status ?? active.trackedDownloadStatus ?? "downloading" };
-    } catch {
-      return { downloading: false, status: null };
-    }
   }
 
   async getTags(): Promise<SonarrTag[]> {

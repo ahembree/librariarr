@@ -53,11 +53,6 @@ export class Debouncer {
     }
   }
 
-  /** Run immediately if a fire is pending; no-op otherwise. */
-  flush(): void {
-    if (this.timer || this.maxTimer) this.run();
-  }
-
   private run(): void {
     this.cancel();
     try {

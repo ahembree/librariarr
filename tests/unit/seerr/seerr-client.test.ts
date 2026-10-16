@@ -126,16 +126,6 @@ describe("SeerrClient", () => {
     });
   });
 
-  describe("getRequest", () => {
-    it("fetches a single request", async () => {
-      const request = { id: 5, type: "movie", status: 2 };
-      mockAxiosInstance.get.mockResolvedValueOnce({ data: request });
-      const result = await client.getRequest(5);
-      expect(result).toEqual(request);
-      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v1/request/5");
-    });
-  });
-
   describe("getMovie", () => {
     it("fetches movie details by tmdb id", async () => {
       const movie = { id: 12345, title: "Test Movie" };

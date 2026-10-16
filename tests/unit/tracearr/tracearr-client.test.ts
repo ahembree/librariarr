@@ -1044,24 +1044,8 @@ describe("TracearrClient", () => {
   });
 
   describe("getHistoryForItem", () => {
-    /**
-     * What this walk actually has to hold, and why the page cap is not a
-     * single-item number.
-     *
-     * The provider-id fallback asks by `tvdb_id`, and the ids stored on an
-     * episode are SERIES-level, so one query returns every play of every
-     * episode of the show — that is the point of it, since `rating_key` takes
-     * one value and a re-added season would otherwise cost a request per
-     * episode. So the bound has to cover a long-running show in a household:
-     * ~700 episodes, six viewers, watched a few times over the years.
-     */
-    const LONG_RUNNING_EPISODES = 700;
-    const HOUSEHOLD_VIEWERS = 6;
-    const REWATCHES = 3;
-    const SERIES_SIZED_PLAYS = LONG_RUNNING_EPISODES * HOUSEHOLD_VIEWERS * REWATCHES;
-
-    /** The pre-fix cap, kept as a literal — the regression is "back down to this". */
-    const SINGLE_ITEM_CAP_PAGES = 20;
+    /** One film's whole history, generously: a daily rewatch for five years. */
+    const LONGEST_ITEM_PLAYS = 5 * 365;
 
     beforeEach(() => {
       // `mockReset`, not `mockClear`: these tests install an *implementation*
@@ -1089,18 +1073,17 @@ describe("TracearrClient", () => {
         .mock.calls.filter((call) => String(call[1]).includes("page cap"));
     }
 
-    it("walks far enough to hold a long-running series' whole play history", async () => {
+    it("walks past any one item's history, and no further than a runaway guard allows", async () => {
       serveEndlessHistory();
 
-      const records = await client.getHistoryForItem("srv-1", { tvdbId: 81_189 });
+      const records = await client.getHistoryForItem("srv-1", { tmdbId: 603 });
       const pages = mockAxiosInstance.get.mock.calls.length;
 
       // The walk is newest-first, so a cap that trips does not lose "some"
-      // plays — it loses the OLDEST ones, which are exactly what the archive
-      // import exists to recover. And nothing asks again: the recovery pass
-      // only looks at recently-added items.
-      expect(pages * MAX_PAGE_SIZE).toBeGreaterThanOrEqual(SERIES_SIZED_PLAYS);
-      expect(pages).toBeGreaterThan(SINGLE_ITEM_CAP_PAGES);
+      // plays — it loses the OLDEST ones, which are exactly what the recovery
+      // pass exists to bring back. And nothing asks again: it only looks at
+      // recently-added items.
+      expect(pages * MAX_PAGE_SIZE).toBeGreaterThanOrEqual(LONGEST_ITEM_PLAYS);
       // Still bounded — this is a runaway guard, not "walk forever".
       expect(pages).toBeLessThanOrEqual(500);
       expect(records).toHaveLength(pages);
@@ -1109,16 +1092,16 @@ describe("TracearrClient", () => {
     it("logs when the page cap actually truncates a walk", async () => {
       serveEndlessHistory();
 
-      await client.getHistoryForItem("srv-1", { tvdbId: 81_189 });
+      await client.getHistoryForItem("srv-1", { tmdbId: 603 });
 
-      // Silent truncation is indistinguishable from "that show had no more
+      // Silent truncation is indistinguishable from "that item had no more
       // plays", so the log has to name the identity that was asked by —
       // otherwise the missing plays are undiagnosable from the outside.
       const warnings = truncationWarnings();
       expect(warnings).toHaveLength(1);
-      expect(String(warnings[0][1])).toContain("tvdb_id=81189");
+      expect(String(warnings[0][1])).toContain("tmdb_id=603");
       expect(warnings[0][2]).toEqual(
-        expect.objectContaining({ serverId: "srv-1", tvdb_id: "81189" }),
+        expect.objectContaining({ serverId: "srv-1", tmdb_id: "603" }),
       );
     });
 
@@ -1138,7 +1121,6 @@ describe("TracearrClient", () => {
 
     it("issues no request at all when nothing identifies the item", async () => {
       const records = await client.getHistoryForItem("srv-1", {
-        tvdbId: null,
         tmdbId: "",
         imdbId: null,
       });

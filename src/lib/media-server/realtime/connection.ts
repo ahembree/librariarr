@@ -54,10 +54,6 @@ export class ServerRealtimeConnection {
     this.socketFactory = socketFactory;
   }
 
-  getStatus(): RealtimeConnectionStatus {
-    return this.status;
-  }
-
   start(): void {
     if (this.stopped) return;
     this.connect();

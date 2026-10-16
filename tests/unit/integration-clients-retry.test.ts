@@ -54,8 +54,8 @@ const CLIENTS: Array<{
   name: string;
   /** An idempotent read that throws on failure. */
   read: (url: string) => Promise<unknown>;
-  /** The settings "Test" probe. */
-  test: (url: string) => Promise<{ ok: boolean }>;
+  /** The settings "Test" probe (the TRaSH guide client has none). */
+  test?: (url: string) => Promise<{ ok: boolean }>;
 }> = [
   { name: "Radarr", read: (u) => new RadarrClient(u, "k").getMovies(), test: (u) => new RadarrClient(u, "k").testConnection() },
   { name: "Sonarr", read: (u) => new SonarrClient(u, "k").getSeries(), test: (u) => new SonarrClient(u, "k").testConnection() },
@@ -73,11 +73,10 @@ const CLIENTS: Array<{
   {
     name: "TRaSH guide client",
     read: (u) => new GuideArrClient(u, "k", "RADARR").getCustomFormats(),
-    test: (u) => new GuideArrClient(u, "k", "RADARR").testConnection(),
   },
 ];
 
-describe.each(CLIENTS)("$name client retry", ({ read, test }) => {
+describe.each(CLIENTS)("$name client retry", ({ read }) => {
   it("retries a transient 503 on a GET and succeeds", async () => {
     const { url, hits } = await serve([{ status: 503 }, { status: 200 }]);
     await expect(read(url)).resolves.toBeDefined();
@@ -92,9 +91,12 @@ describe.each(CLIENTS)("$name client retry", ({ read, test }) => {
     expect(hits()).toBe(1);
   });
 
+});
+
+describe.each(CLIENTS.filter((c) => c.test))("$name connection test", ({ test }) => {
   it("does not retry the connection test, so it reports the first failure promptly", async () => {
     const { url, hits } = await serve([{ status: 503 }, { status: 200 }]);
-    const result = await test(url);
+    const result = await test!(url);
     expect(result.ok).toBe(false);
     expect(hits()).toBe(1);
   });

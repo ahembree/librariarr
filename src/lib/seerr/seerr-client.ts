@@ -238,13 +238,6 @@ export class SeerrClient {
     return data;
   }
 
-  async getRequest(id: number): Promise<SeerrRequest> {
-    const { data } = await this.client.get<SeerrRequest>(
-      `/api/v1/request/${id}`
-    );
-    return data;
-  }
-
   async getMovie(tmdbId: number, options: SeerrCallOptions = {}): Promise<SeerrMovieDetails> {
     const { data } = await this.client.get<SeerrMovieDetails>(`/api/v1/movie/${tmdbId}`, callConfig(options));
     return data;

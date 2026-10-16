@@ -26,7 +26,6 @@ const mockSonarrClient = vi.hoisted(() => ({
   deleteSeries: vi.fn(),
   updateSeries: vi.fn(),
   addExclusion: vi.fn(),
-  getEpisodeFiles: vi.fn(),
   deleteEpisodeFiles: vi.fn(),
   getEpisodes: vi.fn(),
   triggerSeriesSearch: vi.fn(),
@@ -44,7 +43,6 @@ const mockLidarrClient = vi.hoisted(() => ({
   deleteArtist: vi.fn(),
   updateArtist: vi.fn(),
   addExclusion: vi.fn(),
-  getTrackFiles: vi.fn(),
   getTracks: vi.fn(),
   getAlbums: vi.fn(),
   deleteTrackFiles: vi.fn(),
@@ -958,8 +956,7 @@ describe("executeAction", () => {
       },
     }));
 
-    // Only the matched track's file is deleted; the whole-artist getTrackFiles
-    // path is never used and deleteArtist is never called.
+    // Only the matched track's file is deleted; deleteArtist is never called.
     expect(mockLidarrClient.deleteTrackFiles).toHaveBeenCalledWith([101]);
     expect(mockLidarrClient.deleteArtist).not.toHaveBeenCalled();
   });
