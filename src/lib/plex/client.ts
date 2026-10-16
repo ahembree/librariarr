@@ -1,7 +1,8 @@
 import axios, { type AxiosInstance } from "axios";
 import https from "https";
-import { configureRetry } from "@/lib/http-retry";
+import { configureRetry, NO_RETRY } from "@/lib/http-retry";
 import {
+  BYPASS_BREAKER,
   isUnreachable,
   markUnreachable,
   clearUnreachable,
@@ -68,7 +69,7 @@ export class PlexClient implements MediaServerClient {
 
     const baseURLForHealth = this.baseURL;
     this.client.interceptors.request.use((config) => {
-      if (isUnreachable(baseURLForHealth)) {
+      if (!config.__bypassBreaker && isUnreachable(baseURLForHealth)) {
         return Promise.reject(
           new ServerUnreachableError(baseURLForHealth, getLastFailureMessage(baseURLForHealth)),
         ) as never;
@@ -995,7 +996,9 @@ export class PlexClient implements MediaServerClient {
 
   async testConnection(): Promise<{ ok: boolean; error?: string; serverName?: string }> {
     try {
-      const response = await this.client.get("/");
+      // Asks the server even while it is marked unreachable (see
+      // BYPASS_BREAKER), and reports the first failure rather than retrying.
+      const response = await this.client.get("/", { ...BYPASS_BREAKER, ...NO_RETRY });
       if (response.data.MediaContainer) {
         return { ok: true, serverName: response.data.MediaContainer.friendlyName };
       }

@@ -15,6 +15,24 @@ const globalForHealth = globalThis as unknown as {
 };
 const failures = (globalForHealth.mediaServerFailures ??= new Map<string, FailureEntry>());
 
+/**
+ * Per-request opt-out of the breaker, spread into an axios request config:
+ * `client.get(url, { ...BYPASS_BREAKER })`. For connection tests only. The
+ * breaker is shared with the job worker and the enforcer and keyed by URL
+ * alone, so a background failure would otherwise answer the Settings Test
+ * button — and the server edit, which tests before it saves — without asking
+ * the server, even when it is back or the edit (Skip TLS verification, say)
+ * is what fixes it.
+ */
+export const BYPASS_BREAKER = { __bypassBreaker: true } as const;
+
+declare module "axios" {
+  interface AxiosRequestConfig {
+    /** Set via `BYPASS_BREAKER`: the client sends the request even while its server is marked unreachable. */
+    __bypassBreaker?: boolean;
+  }
+}
+
 function normalize(baseURL: string): string {
   return baseURL.replace(/\/+$/, "");
 }
