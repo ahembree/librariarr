@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
-import { cleanDatabase, disconnectTestDb } from "../../setup/test-db";
+import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
 import {
   callRoute,
@@ -647,12 +647,19 @@ describe("GET /api/media/series/grouped", () => {
         await createTestMediaItem(lib.id, {
           title: "H1", type: "SERIES", parentTitle: "HD Show", seasonNumber: 1, episodeNumber: 1, resolution: "1080",
         });
+        // Its chip reads Other, so the Other filter keeps it.
+        const unanalyzed = await createTestMediaItem(lib.id, {
+          title: "U1", type: "SERIES", parentTitle: "Unanalyzed Show", seasonNumber: 1, episodeNumber: 1,
+        });
+        await getTestPrisma().mediaItem.update({ where: { id: unanalyzed.id }, data: { resolution: null } });
         setMockSession({ userId: user.id, isLoggedIn: true });
 
         const pal = (await titles({})).find((s) => s.parentTitle === "PAL Show");
         expect(pal?.qualityCounts).toEqual({ "480P": 1 });
+        const unanalyzedShow = (await titles({})).find((s) => s.parentTitle === "Unanalyzed Show");
+        expect(unanalyzedShow?.qualityCounts).toEqual({ Other: 1 });
         expect((await titles({ resolution: "480P" })).map((s) => s.parentTitle)).toEqual(["PAL Show"]);
-        expect(await titles({ resolution: "Other" })).toEqual([]);
+        expect((await titles({ resolution: "Other" })).map((s) => s.parentTitle)).toEqual(["Unanalyzed Show"]);
         expect((await titles({ resolution: "480P|1080P" })).map((s) => s.parentTitle)).toEqual(["HD Show", "PAL Show"]);
       });
 
@@ -693,6 +700,30 @@ describe("GET /api/media/series/grouped", () => {
         expect(
           (await titles({ resolution: "4K", lastPlayedAtMax: "2023-01-01" })).map((s) => s.parentTitle),
         ).toEqual(["Old Show"]);
+      });
+
+      // A date bound is a UTC calendar day, as on All Seasons and every flat
+      // list. Ended at local midnight instead, a server west of UTC dropped a
+      // show played on the bound's own day from the Series tab only.
+      it("ends a date bound at the end of its UTC day whatever the server's time zone", async () => {
+        const tz = process.env.TZ;
+        process.env.TZ = "America/New_York";
+        try {
+          const user = await createTestUser();
+          const server = await createTestServer(user.id);
+          const lib = await createTestLibrary(server.id, { type: "SERIES" });
+          await createTestMediaItem(lib.id, {
+            title: "E1", type: "SERIES", parentTitle: "Boundary Show", seasonNumber: 1, episodeNumber: 1,
+            lastPlayedAt: new Date("2023-01-01T15:00:00Z"),
+          });
+          setMockSession({ userId: user.id, isLoggedIn: true });
+
+          expect((await titles({ lastPlayedAtMax: "2023-01-01" })).map((s) => s.parentTitle)).toEqual(["Boundary Show"]);
+          expect(await titles({ lastPlayedAtMax: "2022-12-31" })).toEqual([]);
+        } finally {
+          if (tz === undefined) delete process.env.TZ;
+          else process.env.TZ = tz;
+        }
       });
     });
   });

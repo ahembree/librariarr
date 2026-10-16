@@ -106,12 +106,16 @@ export function intEqualsFilter(n: number): number | { in: number[] } {
  * label by every stored value `normalizeResolutionLabel` gives that label, as
  * the quality chips show it; without it a label matches only its fixed
  * spellings in `RESOLUTION_DB_VALUES` ("576" is then "Other", not "480P").
+ * `resolutionOtherIncludesNull` makes "Other" also take a row with no
+ * resolution — only for the series listings, whose quality chips count one as
+ * Other; a movie, episode or track card shows no chip for it.
  */
 export function applyCommonFilters(
   where: Prisma.MediaItemWhereInput,
   params: URLSearchParams,
   genreSpellings?: Map<string, string[]>,
   resolutionSpellings?: Map<string, string[]>,
+  { resolutionOtherIncludesNull = false }: { resolutionOtherIncludesNull?: boolean } = {},
 ): void {
   const andClauses: Prisma.MediaItemWhereInput[] = Array.isArray(where.AND)
     ? [...where.AND]
@@ -122,7 +126,9 @@ export function applyCommonFilters(
   // Resolution (multi-select with standardized label mapping)
   const resolutions = parseMulti(params.get("resolution"));
   if (resolutions && resolutionSpellings) {
-    const clauses = resolutions.map((label) => resolutionLabelClause(label, resolutionSpellings));
+    const clauses = resolutions.map((label) =>
+      resolutionLabelClause(label, resolutionSpellings, resolutionOtherIncludesNull),
+    );
     andClauses.push(clauses.length === 1 ? clauses[0] : { OR: clauses });
   } else if (resolutions) {
     if (resolutions.length === 1) {
@@ -554,13 +560,17 @@ const RESOLUTION_LABELS = new Set<string>(QUALITY_ORDER);
 
 /**
  * Rows whose resolution carries `label` by `normalizeResolutionLabel`, given
- * the stored values grouped by label. "Other" also takes a row with no
- * resolution, which the label (and the quality chips) count as Other. A value
- * that is not a label at all is matched as a stored value, as before.
+ * the stored values grouped by label. With `otherIncludesNull`, "Other" also
+ * takes a row with no resolution, as the series quality chips count it. A
+ * value that is not a label at all is matched as a stored value, as before.
  */
-function resolutionLabelClause(label: string, spellings: Map<string, string[]>): Prisma.MediaItemWhereInput {
+function resolutionLabelClause(
+  label: string,
+  spellings: Map<string, string[]>,
+  otherIncludesNull: boolean,
+): Prisma.MediaItemWhereInput {
   const values = spellings.get(label) ?? (RESOLUTION_LABELS.has(label) ? [] : [label]);
-  return label === "Other"
+  return label === "Other" && otherIncludesNull
     ? { OR: [{ resolution: { in: values } }, { resolution: null }] }
     : { resolution: { in: values } };
 }

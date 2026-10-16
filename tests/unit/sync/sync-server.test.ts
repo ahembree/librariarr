@@ -89,6 +89,8 @@ vi.mock("@/lib/sync/watch-reconcile", () => ({
 
 vi.mock("@/lib/http-retry", () => ({
   configureRetry: vi.fn(),
+  NO_RETRY: { __noRetry: true },
+  NO_BREAKER_MARK: { __noBreakerMark: true },
 }));
 
 vi.mock("@/lib/events/event-bus", () => ({

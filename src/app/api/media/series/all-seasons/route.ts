@@ -126,7 +126,9 @@ export async function GET(request: NextRequest) {
     loadGenreSpellings(searchParams),
     loadResolutionSpellings(searchParams),
   ]);
-  applyCommonFilters(narrowing, episodeParams, genreSpellings, resolutionSpellings);
+  applyCommonFilters(narrowing, episodeParams, genreSpellings, resolutionSpellings, {
+    resolutionOtherIncludesNull: true,
+  });
   if (Object.keys(narrowing).length > 0) {
     const qualifying = await prisma.mediaItem.findMany({
       where: {

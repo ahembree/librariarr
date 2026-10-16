@@ -1,6 +1,6 @@
 import axios, { type AxiosInstance } from "axios";
 import https from "https";
-import { configureRetry, NO_RETRY } from "@/lib/http-retry";
+import { configureRetry, NO_BREAKER_MARK, NO_RETRY } from "@/lib/http-retry";
 import { ARTIST_MBID_SCHEME, firstMbid } from "@/lib/media/musicbrainz";
 import {
   BYPASS_BREAKER,
@@ -686,6 +686,7 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
     const response = await this.client.get(relativePath, {
       responseType: "arraybuffer",
       timeout: 15000,
+      ...NO_BREAKER_MARK,
     });
     const contentType = response.headers["content-type"];
     return {

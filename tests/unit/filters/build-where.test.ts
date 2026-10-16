@@ -61,8 +61,18 @@ describe("applyCommonFilters", () => {
         ]);
       });
 
-      it("takes a missing resolution as Other, as the label does", () => {
-        expect(build("Other")).toEqual([
+      // A movie, episode or track card shows no chip for a missing resolution,
+      // so on those listings it is not Other.
+      it("leaves a missing resolution out of Other by default", () => {
+        expect(build("Other")).toEqual([{ resolution: { in: ["", "weird"] } }]);
+      });
+
+      it("takes a missing resolution as Other where the chips count it so", () => {
+        const where: Prisma.MediaItemWhereInput = {};
+        applyCommonFilters(where, new URLSearchParams({ resolution: "Other" }), undefined, spellings, {
+          resolutionOtherIncludesNull: true,
+        });
+        expect(where.AND).toEqual([
           { OR: [{ resolution: { in: ["", "weird"] } }, { resolution: null }] },
         ]);
       });

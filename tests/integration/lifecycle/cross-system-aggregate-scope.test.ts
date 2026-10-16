@@ -433,6 +433,140 @@ describe("cross-system fields on grouped records", () => {
     expect(memberIds).toEqual([sorted[2].id]);
   });
 
+  it("answers a whole library past Postgres' bind-parameter limit", async () => {
+    // The series- and artist-scope engines pass every episode or track of the
+    // rule set's servers. The server-count groupBy and the pending lookup sent
+    // each id as its own bind parameter, and past 32,767 Postgres refused the
+    // query, so every such rule set threw on every detection run.
+    const prisma = getTestPrisma();
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const library = await createTestLibrary(server.id, { type: "SERIES" });
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO "MediaItem" ("id","libraryId","ratingKey","title","type","dedupKey","updatedAt")
+       SELECT 'ep-' || n, $1, 'rk-' || n, 'E' || n, 'SERIES', 'key-' || (n / 2), now()
+         FROM generate_series(0, 39999) AS n`,
+      library.id,
+    );
+    const other = await createTestRuleSet(user.id, { name: "Other", type: "SERIES" });
+    await prisma.lifecycleAction.create({
+      data: {
+        userId: user.id, mediaItemId: "ep-100", ruleSetId: other.id, actionType: "DELETE_FILES_SONARR",
+        status: "PENDING", scheduledFor: new Date(Date.now() + 86400000),
+      },
+    });
+
+    const ids = Array.from({ length: 40_000 }, (_, n) => `ep-${n}`);
+    const cross = await fetchCrossSystemData(ids);
+
+    expect(cross.get("ep-0")?.serverCount).toBe(2);
+    expect(cross.get("ep-100")?.hasPendingAction).toBe(true);
+    // ep-101 is the same title (same dedupKey) as ep-100, backed by the one Arr record.
+    expect(cross.get("ep-101")?.hasPendingAction).toBe(true);
+    expect(cross.get("ep-102")?.hasPendingAction).toBe(false);
+  });
+
+  it("leaves the evaluating rule set's own pending actions out of Has Pending Action", async () => {
+    // Counted, a rule set reading "Has Pending Action = false" saw the action
+    // it scheduled last run, dropped the match and cancelled it.
+    const prisma = getTestPrisma();
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const library = await createTestLibrary(server.id, { type: "MOVIE" });
+    const movie = await createTestMediaItem(library.id, { type: "MOVIE", title: "Film" });
+    const rules: LifecycleRuleGroup[] = [{
+      id: "g", condition: "AND", groups: [],
+      rules: [{ id: "r1", field: "hasPendingAction", operator: "equals", value: "false", condition: "AND" }],
+    }];
+    const own = await createTestRuleSet(user.id, {
+      name: "Cleanup", type: "MOVIE", rules, serverIds: [server.id],
+      actionEnabled: true, actionType: "DELETE_RADARR", arrInstanceId: "radarr-1",
+    });
+    await createTestRuleMatch(own.id, movie.id, { id: movie.id, title: "Film" });
+    await prisma.lifecycleAction.create({
+      data: {
+        userId: user.id, mediaItemId: movie.id, ruleSetId: own.id, actionType: "DELETE_RADARR",
+        status: "PENDING", scheduledFor: new Date(Date.now() + 30 * 86400000),
+      },
+    });
+
+    expect((await fetchCrossSystemData([movie.id])).get(movie.id)?.hasPendingAction).toBe(true);
+    expect((await fetchCrossSystemData([movie.id], { excludeRuleSetId: own.id })).get(movie.id)?.hasPendingAction).toBe(false);
+
+    const { items } = await detectAndSaveMatches(
+      { ...own, type: "MOVIE", rules, seriesScope: false, serverIds: [server.id] } as never,
+      [server.id],
+    );
+    expect(items.map((i) => i.id)).toEqual([movie.id]);
+    expect(await prisma.ruleMatch.count({ where: { ruleSetId: own.id } })).toBe(1);
+
+    // Another rule set's action still counts.
+    const other = await createTestRuleSet(user.id, { name: "Other", type: "MOVIE" });
+    await prisma.lifecycleAction.create({
+      data: {
+        userId: user.id, mediaItemId: movie.id, ruleSetId: other.id, actionType: "DELETE_RADARR",
+        status: "PENDING", scheduledFor: new Date(Date.now() + 86400000),
+      },
+    });
+    expect((await fetchCrossSystemData([movie.id], { excludeRuleSetId: own.id })).get(movie.id)?.hasPendingAction).toBe(true);
+  });
+
+  it("counts another server's copy of a held match as having its pending action", async () => {
+    // A title matched on two servers is held on one copy, the other listed in
+    // copyIds; the action acts on the one Arr record both are backed by, so a
+    // rule set on the second server must not schedule the title again.
+    const prisma = getTestPrisma();
+    const user = await createTestUser();
+    const s1 = await createTestServer(user.id, { name: "S1" });
+    const s2 = await createTestServer(user.id, { name: "S2" });
+    const lib1 = await createTestLibrary(s1.id, { type: "MOVIE" });
+    const lib2 = await createTestLibrary(s2.id, { type: "MOVIE" });
+    const c1 = await createTestMediaItem(lib1.id, { type: "MOVIE", title: "Film A" });
+    const c2 = await createTestMediaItem(lib2.id, { type: "MOVIE", title: "Film A (2)" });
+    await prisma.mediaItem.update({ where: { id: c1.id }, data: { dedupKey: "film-a-s1" } });
+    await prisma.mediaItem.update({ where: { id: c2.id }, data: { dedupKey: "film-a-s2" } });
+    const a = await createTestRuleSet(user.id, { name: "A", type: "MOVIE", serverIds: [s1.id, s2.id] });
+    await prisma.ruleMatch.create({
+      data: { ruleSetId: a.id, mediaItemId: c1.id, itemData: { id: c1.id, title: "Film A" }, copyIds: [c2.id] },
+    });
+    await prisma.lifecycleAction.create({
+      data: {
+        userId: user.id, mediaItemId: c1.id, ruleSetId: a.id, actionType: "DELETE_RADARR",
+        status: "PENDING", scheduledFor: new Date(Date.now() + 86400000),
+      },
+    });
+
+    const cross = await fetchCrossSystemData([c1.id, c2.id]);
+    expect(cross.get(c1.id)?.hasPendingAction).toBe(true);
+    expect(cross.get(c2.id)?.hasPendingAction).toBe(true);
+
+    // Once the action is no longer pending, neither copy has one.
+    await prisma.lifecycleAction.updateMany({ data: { status: "COMPLETED" } });
+    expect((await fetchCrossSystemData([c2.id])).get(c2.id)?.hasPendingAction).toBe(false);
+  });
+
+  it("records a flat-path cross-system rule among the criteria a match matched on", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const library = await createTestLibrary(server.id, { type: "MOVIE" });
+    const movie = await createTestMediaItem(library.id, { type: "MOVIE", title: "Kept Film" });
+    const keep = await createTestRuleSet(user.id, { name: "Keep", type: "MOVIE", serverIds: [server.id] });
+    await createTestRuleMatch(keep.id, movie.id, { id: movie.id, title: "Kept Film" });
+    const rules: LifecycleRuleGroup[] = [{
+      id: "g", condition: "AND", groups: [],
+      rules: [{ id: "r1", field: "matchedByRuleSet", operator: "equals", value: "Keep", condition: "AND" }],
+    }];
+    const rs = await createTestRuleSet(user.id, { name: "Follow-up", type: "MOVIE", rules, serverIds: [server.id] });
+
+    const { items } = await detectAndSaveMatches(
+      { ...rs, type: "MOVIE", rules, seriesScope: false, serverIds: [server.id] } as never,
+      [server.id],
+    );
+
+    expect(items.map((i) => i.id)).toEqual([movie.id]);
+    expect((items[0].matchedCriteria as Array<{ ruleId: string }>).map((c) => c.ruleId)).toEqual(["r1"]);
+  });
+
   it("plans its raw member lookup below Postgres' JIT threshold for a whole library's ids", async () => {
     // The series- and artist-scope engines pass every episode/track of the
     // library. Joined in SQL against `unnest($1)`, the member lookup was

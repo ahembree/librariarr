@@ -7,6 +7,7 @@ vi.mock("@/lib/logger", () => ({
 vi.mock("@/lib/http-retry", () => ({
   configureRetry: vi.fn(),
   NO_RETRY: { __noRetry: true },
+  NO_BREAKER_MARK: { __noBreakerMark: true },
 }));
 
 const mockAxiosInstance = {
@@ -924,6 +925,16 @@ describe("PlexClient", () => {
         "/library/metadata/123/thumb",
         expect.objectContaining({ responseType: "arraybuffer" }),
       );
+    });
+
+    // The breaker is shared with the job worker: a poster the transcoder was
+    // slow to resize must not mark the server down for a sync reaching it fine.
+    it("does not let an artwork failure mark the server unreachable", async () => {
+      mockAxiosInstance.get.mockRejectedValueOnce(new Error("timeout")).mockResolvedValueOnce(imageResponse());
+      await client.fetchImage("/library/metadata/123/thumb", { width: 400 });
+      for (const [, config] of mockAxiosInstance.get.mock.calls) {
+        expect(config).toMatchObject({ __noBreakerMark: true });
+      }
     });
 
     it("asks the photo transcoder to resize when a width is requested", async () => {

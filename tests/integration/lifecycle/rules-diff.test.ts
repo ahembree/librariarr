@@ -686,7 +686,10 @@ describe("POST /api/lifecycle/rules/[id]/diff", () => {
       200,
     );
 
-    expect(mockEvaluateSeriesScope).toHaveBeenCalledWith(activeGroup, [server.id], undefined, undefined, true);
+    // The rule set's own pending actions are left out of Has Pending Action, as detection leaves them out.
+    expect(mockEvaluateSeriesScope).toHaveBeenCalledWith(activeGroup, [server.id], undefined, undefined, true, {
+      excludeRuleSetId: ruleSet.id,
+    });
     expect(mockEvaluateRules).not.toHaveBeenCalled();
   });
 

@@ -497,6 +497,8 @@ export const rulePreviewSchema = z.object({
    * instance alone, as detection reads them from the rule set's.
    */
   arrInstanceId: z.string().max(200).nullable().optional(),
+  /** The rule set being edited, whose own pending actions "Has Pending Action" leaves out. */
+  ruleSetId: z.string().max(200).optional(),
 });
 
 export const ruleTestItemSchema = z.object({
@@ -510,6 +512,8 @@ export const ruleTestItemSchema = z.object({
    * instance alone, as detection reads them from the rule set's.
    */
   arrInstanceId: z.string().max(200).nullable().optional(),
+  /** The rule set being edited, whose own pending actions "Has Pending Action" leaves out. */
+  ruleSetId: z.string().max(200).optional(),
 });
 
 export const actionExecuteSchema = z.object({

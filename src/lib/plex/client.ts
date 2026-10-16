@@ -1,6 +1,6 @@
 import axios, { type AxiosInstance } from "axios";
 import https from "https";
-import { configureRetry, NO_RETRY } from "@/lib/http-retry";
+import { configureRetry, NO_BREAKER_MARK, NO_RETRY } from "@/lib/http-retry";
 import {
   BYPASS_BREAKER,
   isUnreachable,
@@ -945,6 +945,7 @@ export class PlexClient implements MediaServerClient {
         const response = await this.client.get(`/photo/:/transcode?${params.toString()}`, {
           responseType: "arraybuffer",
           timeout: 15000,
+          ...NO_BREAKER_MARK,
         });
         const contentType = response.headers["content-type"];
         const isImage = typeof contentType !== "string" || contentType.startsWith("image/");
@@ -965,6 +966,7 @@ export class PlexClient implements MediaServerClient {
     const response = await this.client.get(path, {
       responseType: "arraybuffer",
       timeout: 15000,
+      ...NO_BREAKER_MARK,
     });
     const contentType = response.headers["content-type"];
     return {

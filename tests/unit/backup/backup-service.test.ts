@@ -293,11 +293,40 @@ describe("restoreBackup", () => {
       },
     };
     mockFs.readFile.mockResolvedValue(gzipSync(Buffer.from(JSON.stringify(backupData))));
-
-    await restoreBackup("librariarr-backup-2024-01-01T00-00-00.json.gz");
+    // Five seconds past the floor's epoch: the floor (5) is below both.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2024-01-01T00:00:05Z"));
+    try {
+      await restoreBackup("librariarr-backup-2024-01-01T00-00-00.json.gz");
+    } finally {
+      vi.useRealTimers();
+    }
 
     const rows = mockPrismaModels.user.createMany.mock.calls.at(-1)![0].data;
     expect(rows.map((r: { sessionVersion: number }) => r.sessionVersion)).toEqual([8, 13]);
+  });
+
+  it("puts a setup-time restore past every version issued before it", async () => {
+    // No user row is left, so the version in use reads 0; the seconds since
+    // 2024 stand in for it, which no version issued earlier can reach.
+    mockPrismaModels.user.aggregate.mockResolvedValueOnce({ _max: { sessionVersion: null } });
+    const backupData = {
+      metadata: { version: 1, appVersion: "1.0.0", createdAt: new Date().toISOString(), tables: { user: 1 } },
+      data: { user: [{ id: "u1", username: "admin", sessionVersion: 3 }] },
+    };
+    mockFs.readFile.mockResolvedValue(gzipSync(Buffer.from(JSON.stringify(backupData))));
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+    try {
+      await restoreBackup("librariarr-backup-2024-01-01T00-00-00.json.gz");
+    } finally {
+      vi.useRealTimers();
+    }
+
+    const rows = mockPrismaModels.user.createMany.mock.calls.at(-1)![0].data;
+    const secondsSince2024 = (Date.UTC(2026, 0, 1) - Date.UTC(2024, 0, 1)) / 1000;
+    expect(rows[0].sessionVersion).toBe(secondsSince2024 + 1);
+    expect(rows[0].sessionVersion).toBeLessThan(2 ** 31);
   });
 
   it("rejects invalid filenames", async () => {

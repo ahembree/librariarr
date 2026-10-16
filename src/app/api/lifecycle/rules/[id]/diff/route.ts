@@ -166,12 +166,14 @@ export async function POST(
   // Routed exactly as detection routes it: a series-aggregate field forces the
   // series path even with series scope off (see the preview route).
   const aggregateForced = type === "SERIES" && seriesScope === false && hasSeriesAggregateRules(typedRules);
+  // "Has Pending Action" reads other rule sets' actions, as detection reads it.
+  const crossSystemOptions = { excludeRuleSetId: id };
   if (type === "SERIES" && (seriesScope !== false || aggregateForced)) {
-    items = await evaluateSeriesScope(typedRules, serverIds, arrData, seerrData, aggregateForced);
+    items = await evaluateSeriesScope(typedRules, serverIds, arrData, seerrData, aggregateForced, crossSystemOptions);
   } else if (type === "MUSIC" && seriesScope !== false) {
-    items = await evaluateMusicScope(typedRules, serverIds, arrData);
+    items = await evaluateMusicScope(typedRules, serverIds, arrData, crossSystemOptions);
   } else {
-    const rawItems = await evaluateLifecycleRules(typedRules, type, serverIds, arrData, seerrData);
+    const rawItems = await evaluateLifecycleRules(typedRules, type, serverIds, arrData, seerrData, crossSystemOptions);
     items = type === "SERIES" ? groupSeriesResults(rawItems) : rawItems;
   }
 

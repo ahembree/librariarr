@@ -64,10 +64,22 @@ function isNetworkError(error: AxiosError): boolean {
  */
 export const NO_RETRY = { __noRetry: true } as const;
 
+/**
+ * Per-request opt-out of marking the server unreachable, spread into an axios
+ * request config: `client.get(url, { ...NO_BREAKER_MARK })`. For best-effort
+ * requests — artwork — whose timeout says nothing about the server's health:
+ * the breaker is shared with the job worker (`health-cache.ts`), so a poster
+ * the photo transcoder was slow to resize while a sync kept the server busy
+ * marked the server down and the sync's next page failed without asking it.
+ */
+export const NO_BREAKER_MARK = { __noBreakerMark: true } as const;
+
 declare module "axios" {
   interface AxiosRequestConfig {
     /** Set via `NO_RETRY`: `configureRetry` rethrows this request's failure as-is. */
     __noRetry?: boolean;
+    /** Set via `NO_BREAKER_MARK`: this request's network failure does not mark the server unreachable. */
+    __noBreakerMark?: boolean;
   }
 }
 
@@ -101,7 +113,7 @@ export function configureRetry(
     // exhausted. The retry will go through the request interceptor and short-circuit
     // via the breaker, so concurrent in-flight requests fail at ~15s (single timeout)
     // instead of ~51s (full retry cycle). The breaker self-clears on the next success.
-    if (isNetworkError(error)) options?.onTerminalNetworkError?.(error);
+    if (isNetworkError(error) && !error.config?.__noBreakerMark) options?.onTerminalNetworkError?.(error);
 
     const config = error.config;
     if (!config || config.__noRetry || !isRetryable(error)) {

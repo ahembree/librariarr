@@ -1456,6 +1456,7 @@ export function LifecycleRulePage({
         type: mediaType,
         serverIds,
         arrInstanceId: arrInstanceId || null,
+        ...(activeRuleSetId ? { ruleSetId: activeRuleSetId } : {}),
       };
       if (scopeConfig) {
         previewBody.seriesScope = seriesScope;
@@ -1645,6 +1646,7 @@ export function LifecycleRulePage({
             mediaItemId: itemId,
             serverIds,
             arrInstanceId: arrInstanceId || null,
+            ...(activeRuleSetId ? { ruleSetId: activeRuleSetId } : {}),
           }),
         });
         if (response.ok) {
@@ -1664,7 +1666,7 @@ export function LifecycleRulePage({
         setTestMediaEvaluating(false);
       }
     },
-    [groups, mediaType, scopeConfig, seriesScope, serverIds, arrInstanceId],
+    [groups, mediaType, scopeConfig, seriesScope, serverIds, arrInstanceId, activeRuleSetId],
   );
 
   const takeSnapshot = (): RuleSetSnapshot => ({

@@ -2735,8 +2735,9 @@ export default function SettingsPage() {
       });
       if (!res.ok) {
         const data = await res.json().catch(() => null);
-        const detail = data?.details?.[0]?.message ?? data?.detail;
-        toast.error("Failed to save AI settings", { description: detail ?? data?.error });
+        // Validation details are strings ("baseUrl: Invalid URL"), as the
+        // integration forms read them.
+        toast.error("Failed to save AI settings", { description: integrationSaveError(data, "Save failed") });
         return;
       }
       const data = await res.json();

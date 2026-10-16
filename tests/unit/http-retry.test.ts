@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { AxiosInstance, AxiosError, InternalAxiosRequestConfig } from "axios";
-import { configureRetry, NO_RETRY } from "@/lib/http-retry";
+import { configureRetry, NO_BREAKER_MARK, NO_RETRY } from "@/lib/http-retry";
 
 /**
  * Creates a minimal mock AxiosInstance with an interceptors registry.
@@ -543,5 +543,23 @@ describe("configureRetry", () => {
         expect.stringContaining("attempt 3/3"),
       );
     });
+  });
+});
+
+describe("configureRetry marking the server unreachable", () => {
+  it("marks it on a network failure, but not for a request sent with NO_BREAKER_MARK", async () => {
+    const mockAxios = createMockAxios();
+    const onTerminalNetworkError = vi.fn();
+    configureRetry(mockAxios.instance, "Test", { warn: vi.fn() }, { onTerminalNetworkError });
+
+    const marked = makeAxiosError({ code: "ECONNREFUSED" });
+    (marked.config as InternalAxiosRequestConfig).__noRetry = true;
+    await expect(mockAxios.triggerError(marked)).rejects.toBe(marked);
+    expect(onTerminalNetworkError).toHaveBeenCalledTimes(1);
+
+    const artwork = makeAxiosError({ code: "ECONNABORTED" });
+    Object.assign(artwork.config as InternalAxiosRequestConfig, { ...NO_BREAKER_MARK, ...NO_RETRY });
+    await expect(mockAxios.triggerError(artwork)).rejects.toBe(artwork);
+    expect(onTerminalNetworkError).toHaveBeenCalledTimes(1);
   });
 });

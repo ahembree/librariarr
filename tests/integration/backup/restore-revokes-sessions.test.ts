@@ -122,6 +122,29 @@ describe("restore vs session revocation", () => {
     expect((await getSession()).isLoggedIn).toBe(false);
   });
 
+  // The setup screen's restore runs with no user row left (after
+  // `reset-auth delete-user`, or a lost database volume beside a kept session
+  // secret), so the version in use is unknown: a cookie sealed at a version
+  // issued after the backup, and revoked since, must not come back.
+  it("keeps a revoked cookie revoked when restoring from the setup screen", async () => {
+    const { rotateSession, getSession, createBackup, restoreBackup } = await load();
+
+    const user = await prisma.user.create({ data: { username: "admin" } });
+    const filename = await createBackup(undefined, true);
+
+    // Signed out everywhere once, signed in again, and that cookie is copied.
+    await prisma.user.update({ where: { id: user.id }, data: { sessionVersion: { increment: 1 } } });
+    const stolen = await signIn(rotateSession, user.id);
+    // Revoked, then the account is deleted and the backup restored at setup.
+    await prisma.user.update({ where: { id: user.id }, data: { sessionVersion: { increment: 1 } } });
+    await prisma.user.deleteMany({});
+
+    await restoreBackup(filename);
+
+    store.jar.set(COOKIE, stolen);
+    expect((await getSession()).isLoggedIn).toBe(false);
+  });
+
   it("signs out every session that was valid before the restore, and a new sign-in works", async () => {
     const { rotateSession, getSession, createBackup, restoreBackup } = await load();
 
@@ -135,7 +158,7 @@ describe("restore vs session revocation", () => {
     await restoreBackup(filename);
 
     const restored = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
-    expect(restored.sessionVersion).toBe(5);
+    expect(restored.sessionVersion).toBeGreaterThan(4);
     store.jar.set(COOKIE, current);
     expect((await getSession()).isLoggedIn).toBe(false);
 

@@ -35,6 +35,7 @@ vi.mock("axios", () => {
 vi.mock("@/lib/http-retry", () => ({
   configureRetry: vi.fn(),
   NO_RETRY: { __noRetry: true },
+  NO_BREAKER_MARK: { __noBreakerMark: true },
 }));
 
 vi.mock("@/lib/logger", () => ({
@@ -114,6 +115,14 @@ describe("JellyfinClient", () => {
       const { client, axiosClient } = newClient();
       await client.fetchImage("/Items/abc/Images/Primary");
       expect(axiosClient.get.mock.calls[0][0]).toBe("/Items/abc/Images/Primary");
+    });
+
+    // The breaker is shared with the job worker: a slow poster must not mark
+    // the server down for a sync that is reaching it fine.
+    it("does not let an artwork failure mark the server unreachable", async () => {
+      const { client, axiosClient } = newClient();
+      await client.fetchImage("/Items/abc/Images/Primary", { width: 400 });
+      expect(axiosClient.get.mock.calls[0][1]).toMatchObject({ __noBreakerMark: true });
     });
 
     it("asks the server to resize when a width is given", async () => {

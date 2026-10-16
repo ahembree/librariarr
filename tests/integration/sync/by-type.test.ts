@@ -21,12 +21,14 @@ vi.mock("@/lib/logger", () => ({
 }));
 
 // `enqueueJob` answers whether the job was queued.
-const { mockEnqueueJob, mockEmit } = vi.hoisted(() => ({
+// `queuedSyncJobIds` answers which row each still-queued library job carries.
+const { mockEnqueueJob, mockQueuedSyncJobIds, mockEmit } = vi.hoisted(() => ({
   mockEnqueueJob: vi.fn().mockResolvedValue(true),
+  mockQueuedSyncJobIds: vi.fn().mockResolvedValue(new Map()),
   mockEmit: vi.fn(),
 }));
 
-vi.mock("@/lib/jobs/client", () => ({ enqueueJob: mockEnqueueJob }));
+vi.mock("@/lib/jobs/client", () => ({ enqueueJob: mockEnqueueJob, queuedSyncJobIds: mockQueuedSyncJobIds }));
 vi.mock("@/lib/events/event-bus", () => ({ eventBus: { emit: mockEmit } }));
 
 import { POST } from "@/app/api/sync/by-type/route";
@@ -43,6 +45,7 @@ describe("POST /api/sync/by-type", () => {
     clearMockSession();
     vi.clearAllMocks();
     mockEnqueueJob.mockResolvedValue(true);
+    mockQueuedSyncJobIds.mockResolvedValue(new Map());
   });
 
   afterAll(async () => {
@@ -96,7 +99,7 @@ describe("POST /api/sync/by-type", () => {
   // the click and ends its spinner when no job is RUNNING or PENDING. With the
   // row written only when the worker reached the job, a busy MAIN_QUEUE made
   // every click read as an instant, finished sync.
-  it("creates one PENDING SyncJob per server that every library job claims", async () => {
+  it("creates a PENDING SyncJob for each library job, carried in its own payload", async () => {
     const testPrisma = getTestPrisma();
     const user = await createTestUser();
     const server = await createTestServer(user.id);
@@ -111,15 +114,18 @@ describe("POST /api/sync/by-type", () => {
       body: { libraryType: "MOVIE" },
     });
 
+    // One row per job: a row shared by every library job was claimed by the
+    // first and completed with it, so the button stopped spinning — and a Stop
+    // stopped nothing — while the other libraries were still queued.
     const rows = await testPrisma.syncJob.findMany({ where: { mediaServerId: server.id } });
-    expect(rows).toHaveLength(1);
-    expect(rows[0].status).toBe("PENDING");
+    expect(rows).toHaveLength(2);
+    expect(rows.every((row) => row.status === "PENDING")).toBe(true);
 
     const libraryJobs = mockEnqueueJob.mock.calls.filter((call) => call[0] === TASK_SYNC_SERVER);
     expect(libraryJobs).toHaveLength(2);
-    for (const [, payload] of libraryJobs) {
-      expect((payload as { syncJobId: string }).syncJobId).toBe(rows[0].id);
-    }
+    expect(new Set(libraryJobs.map(([, payload]) => (payload as { syncJobId: string }).syncJobId))).toEqual(
+      new Set(rows.map((row) => row.id)),
+    );
     expect(mockEmit).toHaveBeenCalledWith(
       expect.objectContaining({ type: "sync:started", meta: { serverId: server.id } }),
     );
@@ -185,10 +191,10 @@ describe("POST /api/sync/by-type", () => {
     expect((await testPrisma.syncJob.findUniqueOrThrow({ where: { id: running.id } })).status).toBe("RUNNING");
   });
 
-  // A row records no scope: the queued one may be this route's own for another
-  // library type, so skipping on it dropped a Series sync asked for while a
-  // Movies sync was still waiting in the queue.
-  it("joins a sync already queued for the server instead of dropping its own", async () => {
+  // A Series request made while a Movies sync is queued must get rows of its
+  // own: joined to the Movies row, its button stopped spinning once the first
+  // Movies library finished, before any Series library had synced.
+  it("gives another library type's request rows of its own", async () => {
     const testPrisma = getTestPrisma();
     const user = await createTestUser();
     const server = await createTestServer(user.id);
@@ -204,20 +210,66 @@ describe("POST /api/sync/by-type", () => {
 
     expect(body).toMatchObject({ syncedCount: 1, skippedCount: 0 });
     const rows = await testPrisma.syncJob.findMany({ where: { mediaServerId: server.id } });
-    expect(rows).toHaveLength(1);
+    expect(rows).toHaveLength(2);
     const libraryJobs = mockEnqueueJob.mock.calls.filter((call) => call[0] === TASK_SYNC_SERVER);
     expect(libraryJobs.map((call) => (call[1] as { libraryKey: string }).libraryKey)).toEqual(["m1", "s1"]);
-    for (const call of libraryJobs) {
-      expect(call[1]).toMatchObject({ syncJobId: rows[0].id });
-    }
+    expect((libraryJobs[0][1] as { syncJobId: string }).syncJobId).not.toBe((libraryJobs[1][1] as { syncJobId: string }).syncJobId);
   });
 
-  it("leaves a joined row alone when none of its own jobs could be queued", async () => {
+  // A keyed enqueue replaces a still-queued job's payload, so a repeated
+  // request for the same library carries that job's row on rather than leaving
+  // it PENDING with nothing to claim it.
+  it("reuses the row a still-queued job for the same library carries", async () => {
+    const testPrisma = getTestPrisma();
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    await createTestLibrary(server.id, { key: "m1", type: "MOVIE" });
+    await createTestLibrary(server.id, { key: "m2", type: "MOVIE" });
+    const queued = await testPrisma.syncJob.create({ data: { mediaServerId: server.id, status: "PENDING" } });
+    mockQueuedSyncJobIds.mockResolvedValue(new Map([[`sync:${server.id}:m1`, queued.id]]));
+    setMockSession({ userId: user.id, isLoggedIn: true });
+
+    await expectJson(await callRoute(POST, { url: "/api/sync/by-type", method: "POST", body: { libraryType: "MOVIE" } }), 200);
+
+    expect(mockQueuedSyncJobIds).toHaveBeenCalledWith([`sync:${server.id}:m1`, `sync:${server.id}:m2`]);
+    const rows = await testPrisma.syncJob.findMany({ where: { mediaServerId: server.id } });
+    expect(rows).toHaveLength(2);
+    const byLibrary = new Map(
+      mockEnqueueJob.mock.calls
+        .filter((call) => call[0] === TASK_SYNC_SERVER)
+        .map((call) => [(call[1] as { libraryKey: string }).libraryKey, (call[1] as { syncJobId: string }).syncJobId]),
+    );
+    expect(byLibrary.get("m1")).toBe(queued.id);
+    expect(byLibrary.get("m2")).not.toBe(queued.id);
+  });
+
+  it("does not reuse a row its queued job has already finished with", async () => {
+    const testPrisma = getTestPrisma();
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    await createTestLibrary(server.id, { key: "m1", type: "MOVIE" });
+    const done = await testPrisma.syncJob.create({ data: { mediaServerId: server.id, status: "COMPLETED" } });
+    mockQueuedSyncJobIds.mockResolvedValue(new Map([[`sync:${server.id}:m1`, done.id]]));
+    setMockSession({ userId: user.id, isLoggedIn: true });
+
+    await expectJson(await callRoute(POST, { url: "/api/sync/by-type", method: "POST", body: { libraryType: "MOVIE" } }), 200);
+
+    const pending = await testPrisma.syncJob.findMany({ where: { mediaServerId: server.id, status: "PENDING" } });
+    expect(pending).toHaveLength(1);
+    expect(mockEnqueueJob).toHaveBeenCalledWith(
+      TASK_SYNC_SERVER,
+      expect.objectContaining({ syncJobId: pending[0].id }),
+      expect.anything(),
+    );
+  });
+
+  it("leaves a reused row alone when its job could not be queued again", async () => {
     const testPrisma = getTestPrisma();
     const user = await createTestUser();
     const server = await createTestServer(user.id);
     await createTestLibrary(server.id, { key: "m1", type: "MOVIE" });
     const queued = await testPrisma.syncJob.create({ data: { mediaServerId: server.id, status: "PENDING" } });
+    mockQueuedSyncJobIds.mockResolvedValue(new Map([[`sync:${server.id}:m1`, queued.id]]));
     mockEnqueueJob.mockResolvedValue(false);
     setMockSession({ userId: user.id, isLoggedIn: true });
 
@@ -260,17 +312,18 @@ describe("POST /api/sync/by-type", () => {
     const byType = callRoute(POST, { url: "/api/sync/by-type", method: "POST", body: { libraryType: "MOVIE" } });
     // Long enough for an unserialized request to run its check and insert.
     await new Promise((resolve) => setTimeout(resolve, 300));
+    // Serialized: it reads the queued jobs only once the lock is free, after
+    // the other request committed, and then adds a row of its own.
+    expect(mockQueuedSyncJobIds).not.toHaveBeenCalled();
     commit();
     await perServerRequest;
-
-    // Serialized, it finds the per-server request's row and joins it; without
-    // the lock it would have created a second one.
     await expectJson(await byType, 200);
-    const rows = await testPrisma.syncJob.findMany({ where: { mediaServerId: server.id } });
-    expect(rows).toHaveLength(1);
+    expect(mockQueuedSyncJobIds).toHaveBeenCalledTimes(1);
+    const rows = await testPrisma.syncJob.findMany({ where: { mediaServerId: server.id }, orderBy: { startedAt: "asc" } });
+    expect(rows).toHaveLength(2);
     expect(mockEnqueueJob).toHaveBeenCalledWith(
       TASK_SYNC_SERVER,
-      expect.objectContaining({ syncJobId: rows[0].id }),
+      expect.objectContaining({ syncJobId: rows[1].id }),
       expect.anything(),
     );
   });

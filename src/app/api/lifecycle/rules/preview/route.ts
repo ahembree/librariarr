@@ -24,7 +24,9 @@ export async function POST(request: NextRequest) {
   const { data, error } = await validateRequest(request, rulePreviewSchema);
   if (error) return error;
 
-  const { rules, type, seriesScope, serverIds, arrInstanceId } = data;
+  const { rules, type, seriesScope, serverIds, arrInstanceId, ruleSetId } = data;
+  // "Has Pending Action" reads other rule sets' actions, as detection reads it.
+  const crossSystemOptions = { excludeRuleSetId: ruleSetId };
   const typedRules = rules as unknown as LifecycleRule[] | LifecycleRuleGroup[];
 
   // SAFETY: Refuse to evaluate if no rules are active — would match everything
@@ -89,12 +91,14 @@ export async function POST(request: NextRequest) {
         arrData,
         seerrData,
         aggregateForced,
+        crossSystemOptions,
       );
     } else if (type === "MUSIC" && seriesScope !== false) {
       items = await evaluateMusicScope(
         typedRules,
         serverIds,
-        arrData
+        arrData,
+        crossSystemOptions,
       );
     } else {
       const rawItems = await evaluateLifecycleRules(
@@ -102,7 +106,8 @@ export async function POST(request: NextRequest) {
         type,
         serverIds,
         arrData,
-        seerrData
+        seerrData,
+        crossSystemOptions,
       );
       items = type === "SERIES" ? groupSeriesResults(rawItems) : rawItems;
     }

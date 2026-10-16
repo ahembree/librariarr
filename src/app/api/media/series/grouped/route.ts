@@ -112,7 +112,12 @@ function parseConditions(raw: string | null, logic: string): ((val: number) => b
     : (val) => fns.every((fn) => fn(val));
 }
 
-/** Parse a date filter (min/max range or "last N days") into a predicate */
+/**
+ * Parse a date filter (min/max range or "last N days") into a predicate. Days
+ * are UTC calendar days, as `applyCommonFilters` reads them for All Seasons and
+ * every flat list: local midnight put a show played on the bound's own day
+ * outside it on a server west of UTC.
+ */
 function parseDateFilter(
   params: URLSearchParams,
   minKey: string,
@@ -123,9 +128,8 @@ function parseDateFilter(
   if (daysStr) {
     const days = parseInt(daysStr);
     if (isNaN(days) || days <= 0) return null;
-    const since = new Date();
-    since.setDate(since.getDate() - days);
-    since.setHours(0, 0, 0, 0);
+    const since = new Date(Date.now() - days * 86_400_000);
+    since.setUTCHours(0, 0, 0, 0);
     return (val) => val != null && val >= since;
   }
   const minStr = params.get(minKey);
@@ -133,7 +137,7 @@ function parseDateFilter(
   if (!minStr && !maxStr) return null;
   const minDate = minStr ? new Date(minStr) : null;
   const maxDate = maxStr ? new Date(maxStr) : null;
-  if (maxDate) maxDate.setHours(23, 59, 59, 999);
+  if (maxDate) maxDate.setUTCHours(23, 59, 59, 999);
   return (val) => {
     if (val == null) return false;
     if (minDate && val < minDate) return false;
@@ -269,7 +273,9 @@ export async function GET(request: NextRequest) {
     loadGenreSpellings(searchParams),
     loadResolutionSpellings(searchParams),
   ]);
-  applyCommonFilters(narrowing, episodeParams, genreSpellings, resolutionSpellings);
+  applyCommonFilters(narrowing, episodeParams, genreSpellings, resolutionSpellings, {
+    resolutionOtherIncludesNull: true,
+  });
   if (Object.keys(narrowing).length > 0) {
     const qualifying = await prisma.mediaItem.findMany({
       where: {

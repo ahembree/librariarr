@@ -541,6 +541,10 @@ describe("GET /api/media/movies", () => {
       const lib = await createTestLibrary(server.id);
       await createTestMediaItem(lib.id, { title: "PAL Film", resolution: "576" });
       await createTestMediaItem(lib.id, { title: "HD Film", resolution: "1080" });
+      await createTestMediaItem(lib.id, { title: "Odd Film", resolution: "weird" });
+      // No chip on its card, so not Other either.
+      const unanalyzed = await createTestMediaItem(lib.id, { title: "Unanalyzed Film" });
+      await getTestPrisma().mediaItem.update({ where: { id: unanalyzed.id }, data: { resolution: null } });
       setMockSession({ userId: user.id, isLoggedIn: true });
 
       const titles = async (resolution: string) => {
@@ -551,7 +555,7 @@ describe("GET /api/media/movies", () => {
         return body.items.map((i) => i.title);
       };
       expect(await titles("480P")).toEqual(["PAL Film"]);
-      expect(await titles("Other")).toEqual([]);
+      expect(await titles("Other")).toEqual(["Odd Film"]);
       expect(await titles("480P|1080P")).toEqual(["HD Film", "PAL Film"]);
     });
   });

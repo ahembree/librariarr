@@ -565,11 +565,28 @@ function detachMissingCollections(rows: unknown[], collectionIds: Set<unknown>):
  * browser that ran it out as well.
  */
 function revokeRestoredSessions(rows: unknown[], versionInUse: number): unknown[] {
+  const floor = sessionVersionFloor();
   return rows.map((row) => {
     const r = row as Record<string, unknown>;
     const restored = typeof r.sessionVersion === "number" ? r.sessionVersion : 0;
-    return { ...r, sessionVersion: Math.max(restored, versionInUse) + 1 };
+    return { ...r, sessionVersion: Math.max(restored, versionInUse, floor) + 1 };
   });
+}
+
+const SESSION_VERSION_EPOCH_MS = Date.UTC(2024, 0, 1);
+
+/**
+ * A session version no cookie issued before now can carry. The version in use
+ * is unknown when the restore runs from the setup screen — no user row is left
+ * (after `reset-auth delete-user`, or a lost database volume beside a kept
+ * session secret) — so a cookie sealed at a version issued after the backup
+ * was taken, and revoked since, came back. Versions grow by one per sign-out
+ * or password change, and every restore lands on at least this many seconds
+ * since 2024, so nothing issued earlier reaches it; it stays inside the
+ * column's 32-bit Int until 2092.
+ */
+function sessionVersionFloor(now = Date.now()): number {
+  return Math.floor((now - SESSION_VERSION_EPOCH_MS) / 1000);
 }
 
 // Migrate legacy field names and drop removed columns so older backups still

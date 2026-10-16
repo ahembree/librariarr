@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
-import { enqueueJob } from "@/lib/jobs/client";
+import { enqueueJob, queuedSyncJobIds } from "@/lib/jobs/client";
 import { eventBus } from "@/lib/events/event-bus";
 import {
   MAIN_QUEUE,
@@ -43,82 +43,94 @@ export async function POST(request: NextRequest) {
   let skippedCount = 0;
 
   for (const server of servers) {
-    // The row exists from the moment the sync is asked for, exactly as in
-    // `/api/servers/[id]/sync`: MAIN_QUEUE is serial, so these jobs can wait
-    // behind a Tracearr backfill slice, another server's sync or a lifecycle
-    // run, and with no row until the worker reached them the library page's
-    // Sync button saw no RUNNING/PENDING job on its first poll and reported the
-    // sync finished while it had not started. One row per server, shared by
-    // its library jobs: the first job claims it, the rest claim their own when
-    // they run (see `claimSyncJob`), and a Stop on the queued row cancels every
-    // one of them — they all carry its id and skip on CANCELLED.
+    // Each library job's row exists from the moment the sync is asked for,
+    // exactly as in `/api/servers/[id]/sync`: MAIN_QUEUE is serial, so these
+    // jobs can wait behind a Tracearr backfill slice, another server's sync or
+    // a lifecycle run, and with no row until the worker reached them the
+    // library page's Sync button saw no RUNNING/PENDING job on its first poll
+    // and reported the sync finished while it had not started.
     //
-    // Checked and created under the same per-server lock as the per-server
-    // route, so the two cannot each create a row for one server.
+    // One row per library job, each carried in its own payload and claimed by
+    // that job (see `claimSyncJob`). A row shared by the server's library jobs
+    // was claimed by the first and completed with it, so the button stopped
+    // spinning between libraries — before a Series request that had joined a
+    // queued Movies row synced anything at all — and a Stop pressed then could
+    // not reach the libraries still queued. Now a queued row is PENDING until
+    // its own job runs, and Stop ends every PENDING row.
     //
-    // A queued (PENDING) row is joined, not a reason to skip: a row records no
-    // scope, and the one already there may be this route's own for another
-    // library type — skipping on it dropped a Series sync asked for while a
-    // Movies sync waited in the queue. The jobs share its id, so one Stop still
-    // cancels everything queued for the server.
+    // A row is reused only for the job it already belongs to: a keyed enqueue
+    // replaces a still-queued job's payload, so a repeated request for the same
+    // library carries that job's row on rather than leaving it PENDING with
+    // nothing to claim it.
     //
-    // Nor is a RUNNING sync: it may be a scheduled sync that already passed
-    // these libraries, or this route's own for another type, and skipping
-    // dropped the request — the button stopped spinning at once and nothing
-    // ran. The jobs queue behind it instead (MAIN_QUEUE is serial, and the
-    // sync task's guard counts RUNNING rows only, so by the time they start
-    // the running one has finished), and the new row is what keeps the button
-    // spinning until they have.
-    const syncJob = await prisma.$transaction(async (tx) => {
+    // Created under the same per-server lock as the per-server route. Neither a
+    // queued nor a RUNNING sync makes the server skip: the jobs queue behind it
+    // (MAIN_QUEUE is serial, and the sync task's guard counts RUNNING rows
+    // only, so by the time they start the running one has finished).
+    const jobKeyOf = (libraryKey: string) => `sync:${server.id}:${libraryKey}`;
+    const libraryRows = await prisma.$transaction(async (tx) => {
       await tx.$executeRawUnsafe(
         `SELECT pg_advisory_xact_lock(hashtext('sync-request:' || $1))`,
         server.id,
       );
-      const queued = await tx.syncJob.findFirst({
-        where: { mediaServerId: server.id, status: "PENDING" },
-        select: { id: true },
-        orderBy: { startedAt: "asc" },
-      });
-      if (queued) return { id: queued.id, created: false };
-      const row = await tx.syncJob.create({
-        data: { mediaServerId: server.id, status: "PENDING", startedAt: new Date() },
-        select: { id: true },
-      });
-      return { id: row.id, created: true };
+      const queuedRows = await queuedSyncJobIds(server.libraries.map((library) => jobKeyOf(library.key)));
+      const stillPending = new Set(
+        (
+          await tx.syncJob.findMany({
+            where: { id: { in: [...(queuedRows?.values() ?? [])] }, status: "PENDING" },
+            select: { id: true },
+          })
+        ).map((row) => row.id),
+      );
+      const rows: { libraryKey: string; id: string; created: boolean }[] = [];
+      for (const library of server.libraries) {
+        const queuedId = queuedRows?.get(jobKeyOf(library.key));
+        if (queuedId && stillPending.has(queuedId)) {
+          rows.push({ libraryKey: library.key, id: queuedId, created: false });
+          continue;
+        }
+        const row = await tx.syncJob.create({
+          data: { mediaServerId: server.id, status: "PENDING", startedAt: new Date() },
+          select: { id: true },
+        });
+        rows.push({ libraryKey: library.key, id: row.id, created: true });
+      }
+      return rows;
     });
 
     let queued = false;
-    for (const library of server.libraries) {
+    for (const row of libraryRows) {
       const enqueued = await enqueueJob(
         TASK_SYNC_SERVER,
         {
           serverId: server.id,
-          libraryKey: library.key,
+          libraryKey: row.libraryKey,
           skipWatchHistory: true,
           trigger: `manual sync of every ${libraryType} library`,
-          syncJobId: syncJob.id,
+          syncJobId: row.id,
         },
         // Someone is waiting on this sync, so it goes ahead of queued
         // background work, as a sync requested from Settings does.
         {
-          jobKey: `sync:${server.id}:${library.key}`,
+          jobKey: jobKeyOf(row.libraryKey),
           queueName: MAIN_QUEUE,
           maxAttempts: 3,
           priority: REQUESTED_SYNC_PRIORITY,
         },
       );
-      if (enqueued) queued = true;
-    }
-    if (!queued) {
-      // Nothing will ever claim the row, and a PENDING row makes every sync
-      // route answer as though a sync were already queued — close it here. A
-      // joined row belongs to the request that made it and is left alone.
-      if (syncJob.created) {
+      if (enqueued) {
+        queued = true;
+      } else if (row.created) {
+        // Nothing will ever claim the row, and a PENDING row makes every sync
+        // route answer as though a sync were already queued — close it here. A
+        // reused row still belongs to the job already queued under the key.
         await prisma.syncJob.update({
-          where: { id: syncJob.id },
+          where: { id: row.id },
           data: { status: "FAILED", completedAt: new Date(), error: "Could not queue the sync job" },
         });
       }
+    }
+    if (!queued) {
       skippedCount++;
       continue;
     }
