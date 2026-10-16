@@ -6,6 +6,7 @@ import { escapeLike } from "@/lib/filters/escape-like";
 import type { Prisma } from "@/generated/prisma/client";
 import { applyCommonFilters, applyStartsWithFilter } from "@/lib/filters/build-where";
 import { loadGenreSpellings } from "@/lib/filters/genre-spellings";
+import { loadResolutionSpellings } from "@/lib/filters/resolution-spellings";
 import { filterIdsByStreamCounts, parseStreamCountFilters } from "@/lib/filters/stream-count";
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
 import { parseListPagination } from "@/lib/api/pagination";
@@ -88,7 +89,11 @@ export async function GET(request: NextRequest) {
   // About You" and `?search=%` matched everything (see escape-like.ts).
   if (search) where.title = { contains: escapeLike(search), mode: "insensitive" };
   if (startsWith) applyStartsWithFilter(where, "title", startsWith);
-  applyCommonFilters(where, searchParams, await loadGenreSpellings(searchParams));
+  const [genreSpellings, resolutionSpellings] = await Promise.all([
+    loadGenreSpellings(searchParams),
+    loadResolutionSpellings(searchParams),
+  ]);
+  applyCommonFilters(where, searchParams, genreSpellings, resolutionSpellings);
 
   // Stream count filters (audio track count, subtitle count), applied below.
   const streamCounts = parseStreamCountFilters(searchParams);

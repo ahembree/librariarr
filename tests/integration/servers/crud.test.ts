@@ -138,6 +138,27 @@ describe("Server CRUD endpoints", () => {
       expect(byId.get(other.id)!.syncJobs).toEqual([]);
     });
 
+    // The library pages' Sync queues behind a running sync under a PENDING row
+    // of its own; returning that newer row hid the running sync's progress.
+    it("returns a running sync ahead of a newer row queued behind it", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id, { name: "My Plex" });
+      const prisma = getTestPrisma();
+      await prisma.syncJob.createMany({
+        data: [
+          { mediaServerId: server.id, status: "RUNNING", startedAt: new Date("2026-01-02T00:00:00Z"), itemsProcessed: 40 },
+          { mediaServerId: server.id, status: "PENDING", startedAt: new Date("2026-01-03T00:00:00Z") },
+        ],
+      });
+      setMockSession({ userId: user.id, isLoggedIn: true });
+
+      const body = await expectJson<{
+        servers: { id: string; syncJobs: { status: string; itemsProcessed: number }[] }[];
+      }>(await callRoute(GET, { url: "/api/servers" }), 200);
+
+      expect(body.servers[0].syncJobs).toEqual([expect.objectContaining({ status: "RUNNING", itemsProcessed: 40 })]);
+    });
+
     it("does not return servers belonging to another user", async () => {
       const user1 = await createTestUser({ plexId: "user1" });
       const user2 = await createTestUser({ plexId: "user2" });

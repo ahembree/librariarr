@@ -6,6 +6,7 @@ import { escapeLike } from "@/lib/filters/escape-like";
 import type { Prisma } from "@/generated/prisma/client";
 import { applyCommonFilters, intEqualsFilter } from "@/lib/filters/build-where";
 import { loadGenreSpellings } from "@/lib/filters/genre-spellings";
+import { loadResolutionSpellings } from "@/lib/filters/resolution-spellings";
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
 import { parseListPagination } from "@/lib/api/pagination";
 import { getServerPresenceByDedupKey } from "@/lib/dedup/server-presence";
@@ -94,7 +95,11 @@ export async function GET(request: NextRequest) {
     ];
   }
 
-  applyCommonFilters(where, searchParams, await loadGenreSpellings(searchParams));
+  const [genreSpellings, resolutionSpellings] = await Promise.all([
+    loadGenreSpellings(searchParams),
+    loadResolutionSpellings(searchParams),
+  ]);
+  applyCommonFilters(where, searchParams, genreSpellings, resolutionSpellings);
 
   // Select only fields needed for card/table rendering.
   // Full item data is fetched on demand by the detail panel via /api/media/{id}.

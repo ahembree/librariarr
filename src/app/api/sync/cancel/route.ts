@@ -25,8 +25,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Server not found" }, { status: 404 });
   }
 
-  // Find running sync job for this server
-  const job = await prisma.syncJob.findFirst({
+  // Every active row for the server: the library pages' Sync queues behind a
+  // running sync, so a server can hold a RUNNING row and a PENDING one at once,
+  // and Stop must end both rather than whichever one a lookup returned first.
+  const jobs = await prisma.syncJob.findMany({
     where: {
       mediaServerId: serverId,
       status: { in: ["RUNNING", "PENDING"] },
@@ -34,29 +36,35 @@ export async function POST(request: NextRequest) {
     select: { id: true, status: true },
   });
 
-  if (!job) {
+  if (jobs.length === 0) {
     return NextResponse.json({ error: "No active sync to cancel" }, { status: 404 });
   }
 
   // Still queued: nothing is running to notice a flag, and the queue may not
-  // reach this job for minutes, so end it now. Its job sees the CANCELLED row
-  // and exits without syncing. Conditional on PENDING because the worker can
-  // flip the row to RUNNING at the same moment — then the flag below applies.
-  if (job.status === "PENDING") {
-    const stopped = await prisma.syncJob.updateMany({
-      where: { id: job.id, status: "PENDING" },
-      data: { status: "CANCELLED", completedAt: new Date(), cancelRequested: true },
-    });
-    if (stopped.count > 0) {
-      eventBus.emit({ type: "sync:failed", userId: session.userId!, meta: { serverId } });
-      return NextResponse.json({ success: true });
-    }
-  }
+  // reach these jobs for minutes, so end them now. Their jobs see the
+  // CANCELLED row and exit without syncing. Conditional on PENDING because the
+  // worker can flip a row to RUNNING at the same moment — then the flag below
+  // applies.
+  const pendingIds = jobs.filter((job) => job.status === "PENDING").map((job) => job.id);
+  const stopped =
+    pendingIds.length > 0
+      ? await prisma.syncJob.updateMany({
+          where: { id: { in: pendingIds }, status: "PENDING" },
+          data: { status: "CANCELLED", completedAt: new Date(), cancelRequested: true },
+        })
+      : { count: 0 };
 
-  await prisma.syncJob.update({
-    where: { id: job.id },
+  // A running sync (and a queued row the worker claimed meanwhile) notices the
+  // flag at its next checkpoint and announces its own exit.
+  await prisma.syncJob.updateMany({
+    where: { id: { in: jobs.map((job) => job.id) }, status: "RUNNING" },
     data: { cancelRequested: true },
   });
+
+  // Status surfaces refetch on it and drop the rows ended here at once.
+  if (stopped.count > 0) {
+    eventBus.emit({ type: "sync:failed", userId: session.userId!, meta: { serverId } });
+  }
 
   return NextResponse.json({ success: true });
 }

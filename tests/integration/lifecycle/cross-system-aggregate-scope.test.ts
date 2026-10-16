@@ -365,6 +365,74 @@ describe("cross-system fields on grouped records", () => {
     expect(cross.get(outsider.id)?.matchedRuleSets).toEqual([]);
   });
 
+  it("counts a grouped action's members as having a pending action", async () => {
+    // A show action is stored against one representative episode and names
+    // the episodes it acts on in matchedMediaItemIds; only the representative
+    // read as pending, so every other episode looked free.
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const library = await createTestLibrary(server.id, { type: "SERIES" });
+    const [rep, member, outsider] = [
+      await createTestMediaItem(library.id, { type: "SERIES", title: "E1", parentTitle: "Show", seasonNumber: 1, episodeNumber: 1 }),
+      await createTestMediaItem(library.id, { type: "SERIES", title: "E2", parentTitle: "Show", seasonNumber: 1, episodeNumber: 2 }),
+      await createTestMediaItem(library.id, { type: "SERIES", title: "E3", parentTitle: "Show", seasonNumber: 1, episodeNumber: 3 }),
+    ];
+    const other = await createTestRuleSet(user.id, { name: "Other", type: "SERIES" });
+    const prisma = getTestPrisma();
+    await prisma.lifecycleAction.create({
+      data: {
+        userId: user.id, mediaItemId: rep.id, ruleSetId: other.id, actionType: "DELETE_FILES_SONARR", status: "PENDING",
+        scheduledFor: new Date(Date.now() + 86400000), matchedMediaItemIds: [rep.id, member.id],
+      },
+    });
+    // A settled action's members are not pending.
+    await prisma.lifecycleAction.create({
+      data: {
+        userId: user.id, mediaItemId: rep.id, ruleSetId: other.id, actionType: "DELETE_FILES_SONARR", status: "COMPLETED",
+        scheduledFor: new Date(), matchedMediaItemIds: [outsider.id],
+      },
+    });
+
+    const cross = await fetchCrossSystemData([rep.id, member.id, outsider.id]);
+
+    expect(cross.get(rep.id)?.hasPendingAction).toBe(true);
+    expect(cross.get(member.id)?.hasPendingAction).toBe(true);
+    expect(cross.get(outsider.id)?.hasPendingAction).toBe(false);
+  });
+
+  it("per-episode scope: an episode another rule set's show action covers does not match 'Has Pending Action = false'", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const library = await createTestLibrary(server.id, { type: "SERIES" });
+    const eps = [];
+    for (let n = 1; n <= 3; n++) {
+      eps.push(await createTestMediaItem(library.id, {
+        type: "SERIES", title: `Ep ${n}`, parentTitle: "Queued Show", seasonNumber: 1, episodeNumber: n,
+      }));
+    }
+    const sorted = [...eps].sort((a, b) => a.id.localeCompare(b.id));
+    const other = await createTestRuleSet(user.id, { name: "Other", type: "SERIES" });
+    await getTestPrisma().lifecycleAction.create({
+      data: {
+        userId: user.id, mediaItemId: sorted[0].id, ruleSetId: other.id, actionType: "DELETE_FILES_SONARR", status: "PENDING",
+        scheduledFor: new Date(Date.now() + 86400000), matchedMediaItemIds: [sorted[0].id, sorted[1].id],
+      },
+    });
+
+    const rules: LifecycleRuleGroup[] = [{
+      id: "g", condition: "AND", groups: [],
+      rules: [{ id: "r1", field: "hasPendingAction", operator: "equals", value: "false", condition: "AND" }],
+    }];
+    const rs = await createTestRuleSet(user.id, { name: "NoPending", type: "SERIES", seriesScope: false, rules, serverIds: [server.id] });
+    const { items } = await detectAndSaveMatches(
+      { ...rs, type: "SERIES", rules, seriesScope: false, serverIds: [server.id] } as never,
+      [server.id],
+    );
+
+    const memberIds = items.flatMap((i) => ((i as { memberIds?: string[] }).memberIds ?? [i.id]));
+    expect(memberIds).toEqual([sorted[2].id]);
+  });
+
   it("plans its raw member lookup below Postgres' JIT threshold for a whole library's ids", async () => {
     // The series- and artist-scope engines pass every episode/track of the
     // library. Joined in SQL against `unnest($1)`, the member lookup was

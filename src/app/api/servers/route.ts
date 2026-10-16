@@ -32,8 +32,16 @@ export async function GET() {
   // `take` into SQL, so that loaded every job the server had ever run and
   // dropped all but one — and nothing prunes SyncJob, so this route (behind
   // most pages) got slower for as long as the install ran.
+  //
+  // A running sync wins over a newer row: the library pages' Sync queues
+  // behind a running sync under a PENDING row of its own, and showing that
+  // row hid the running one's progress bar for as long as it ran.
   const latestJobs = await Promise.all(
-    servers.map((server) =>
+    servers.map(async (server) =>
+      (await prisma.syncJob.findFirst({
+        where: { mediaServerId: server.id, status: "RUNNING" },
+        orderBy: { startedAt: "desc" },
+      })) ??
       prisma.syncJob.findFirst({
         where: { mediaServerId: server.id },
         orderBy: { startedAt: "desc" },

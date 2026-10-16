@@ -200,6 +200,25 @@ describe("fetchCrossSystemData", () => {
     });
   });
 
+  it("flags the requested members of a pending grouped action, reading each list whole", async () => {
+    // A show/artist action is stored against one representative and names the
+    // episodes/tracks it acts on in matchedMediaItemIds.
+    mockPrisma.lifecycleAction.findMany
+      .mockResolvedValueOnce([{ mediaItemId: "rep" }])
+      .mockResolvedValueOnce([{ matchedMediaItemIds: ["rep", "b", "unrequested"] }]);
+
+    const result = await fetchCrossSystemData(["rep", "b", "c"]);
+
+    expect(result.get("rep")?.hasPendingAction).toBe(true);
+    expect(result.get("b")?.hasPendingAction).toBe(true);
+    expect(result.get("c")?.hasPendingAction).toBe(false);
+    expect(result.has("unrequested")).toBe(false);
+    expect(mockPrisma.lifecycleAction.findMany).toHaveBeenLastCalledWith({
+      where: { status: "PENDING", matchedMediaItemIds: { isEmpty: false } },
+      select: { matchedMediaItemIds: true },
+    });
+  });
+
   it("combines all three enrichment sources for the same item", async () => {
     mockPrisma.mediaItem.findMany.mockResolvedValueOnce([
       { id: "a", dedupKey: "k1" },

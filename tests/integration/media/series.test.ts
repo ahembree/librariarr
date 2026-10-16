@@ -25,6 +25,7 @@ vi.mock("@/lib/logger", () => ({
 // Import route handlers AFTER mocks
 import { GET } from "@/app/api/media/series/route";
 import { GET as GET_GROUPED } from "@/app/api/media/series/grouped/route";
+import { appCache } from "@/lib/cache/memory-cache";
 
 describe("Series endpoints", () => {
   beforeEach(async () => {
@@ -253,6 +254,29 @@ describe("Series endpoints", () => {
         "Breaking Bad/Fly",
         "Breaking Bad/Ozymandias",
       ]);
+    });
+
+    // The All Episodes cards label a resolution with normalizeResolutionLabel
+    // ("576" is 480P), as the Series and All Seasons listings now filter it.
+    it("matches a resolution by the label its quality chip shows", async () => {
+      appCache.clear();
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const lib = await createTestLibrary(server.id, { type: "SERIES" });
+      await createTestMediaItem(lib.id, { type: "SERIES", parentTitle: "PAL Show", title: "P1", seasonNumber: 1, episodeNumber: 1, resolution: "576" });
+      await createTestMediaItem(lib.id, { type: "SERIES", parentTitle: "HD Show", title: "H1", seasonNumber: 1, episodeNumber: 1, resolution: "1080" });
+      setMockSession({ userId: user.id, isLoggedIn: true });
+
+      const titles = async (resolution: string) => {
+        const body = await expectJson<{ items: { title: string }[] }>(
+          await callRoute(GET, { url: "/api/media/series", searchParams: { resolution, sortBy: "parentTitle" } }),
+          200,
+        );
+        return body.items.map((i) => i.title);
+      };
+      expect(await titles("480P")).toEqual(["P1"]);
+      expect(await titles("Other")).toEqual([]);
+      expect(await titles("480P|1080P")).toEqual(["H1", "P1"]);
     });
   });
 

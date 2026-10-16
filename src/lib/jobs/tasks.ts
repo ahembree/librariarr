@@ -119,6 +119,15 @@ const syncServer: Task = async (payload) => {
       "Jobs",
       `Skipping sync for server ${serverId} (${trigger ?? "trigger not recorded"}) — already running`,
     );
+    // A row the sync route created for this job would otherwise stay PENDING
+    // with nothing left to claim it, and a PENDING row makes every Sync button
+    // answer as though a sync were queued.
+    if (syncJobId) {
+      await prisma.syncJob.updateMany({
+        where: { id: syncJobId, status: "PENDING" },
+        data: { status: "FAILED", completedAt: new Date(), error: "Another sync of this server was already running" },
+      });
+    }
     return;
   }
 

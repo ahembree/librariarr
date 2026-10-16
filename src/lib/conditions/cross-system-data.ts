@@ -112,6 +112,24 @@ export async function fetchCrossSystemData(itemIds: string[]): Promise<CrossSyst
     const entry = result.get(action.mediaItemId);
     if (entry) entry.hasPendingAction = true;
   }
+  // A show or an artist action is stored against ONE representative episode
+  // or track and names the ones it acts on in `matchedMediaItemIds`; each of
+  // those has an action pending too. Reading the representative alone, "NOT
+  // Has Pending Action" in another rule set read every other episode of a show
+  // already scheduled for deletion as free, and scheduled them a second time.
+  // Read whole and intersected here, like the match member lists above: only
+  // grouped actions carry a list, one row per show or artist.
+  const memberActions = await prisma.lifecycleAction.findMany({
+    where: { status: "PENDING", matchedMediaItemIds: { isEmpty: false } },
+    select: { matchedMediaItemIds: true },
+  });
+  for (const action of memberActions) {
+    for (const id of action.matchedMediaItemIds) {
+      if (!requested.has(id)) continue;
+      const entry = result.get(id);
+      if (entry) entry.hasPendingAction = true;
+    }
+  }
 
   return result;
 }

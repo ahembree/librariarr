@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { escapeLike } from "@/lib/filters/escape-like";
 import { applyCommonFilters } from "@/lib/filters/build-where";
 import { loadGenreSpellings } from "@/lib/filters/genre-spellings";
+import { loadResolutionSpellings } from "@/lib/filters/resolution-spellings";
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
 import { firstNonNullSql } from "@/lib/media/series-sql";
 import { loadMissingSummaries } from "@/lib/media/group-summaries";
@@ -85,7 +86,11 @@ export async function GET(request: NextRequest) {
   // album aggregate runs over those.
   const narrowing: Prisma.MediaItemWhereInput = {};
   // Every stored spelling of a genre, as the other listings match it.
-  applyCommonFilters(narrowing, searchParams, await loadGenreSpellings(searchParams));
+  const [genreSpellings, resolutionSpellings] = await Promise.all([
+    loadGenreSpellings(searchParams),
+    loadResolutionSpellings(searchParams),
+  ]);
+  applyCommonFilters(narrowing, searchParams, genreSpellings, resolutionSpellings);
   if (Object.keys(narrowing).length > 0) {
     const matching = await prisma.mediaItem.findMany({
       where: {

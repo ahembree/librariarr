@@ -60,20 +60,25 @@ export async function POST(request: NextRequest) {
     // scope, and the one already there may be this route's own for another
     // library type — skipping on it dropped a Series sync asked for while a
     // Movies sync waited in the queue. The jobs share its id, so one Stop still
-    // cancels everything queued for the server. A RUNNING sync is still
-    // skipped, as it always was.
+    // cancels everything queued for the server.
+    //
+    // Nor is a RUNNING sync: it may be a scheduled sync that already passed
+    // these libraries, or this route's own for another type, and skipping
+    // dropped the request — the button stopped spinning at once and nothing
+    // ran. The jobs queue behind it instead (MAIN_QUEUE is serial, and the
+    // sync task's guard counts RUNNING rows only, so by the time they start
+    // the running one has finished), and the new row is what keeps the button
+    // spinning until they have.
     const syncJob = await prisma.$transaction(async (tx) => {
       await tx.$executeRawUnsafe(
         `SELECT pg_advisory_xact_lock(hashtext('sync-request:' || $1))`,
         server.id,
       );
-      const activeJobs = await tx.syncJob.findMany({
-        where: { mediaServerId: server.id, status: { in: ["RUNNING", "PENDING"] } },
-        select: { id: true, status: true },
+      const queued = await tx.syncJob.findFirst({
+        where: { mediaServerId: server.id, status: "PENDING" },
+        select: { id: true },
         orderBy: { startedAt: "asc" },
       });
-      if (activeJobs.some((job) => job.status === "RUNNING")) return null;
-      const queued = activeJobs.find((job) => job.status === "PENDING");
       if (queued) return { id: queued.id, created: false };
       const row = await tx.syncJob.create({
         data: { mediaServerId: server.id, status: "PENDING", startedAt: new Date() },
@@ -81,10 +86,6 @@ export async function POST(request: NextRequest) {
       });
       return { id: row.id, created: true };
     });
-    if (!syncJob) {
-      skippedCount++;
-      continue;
-    }
 
     let queued = false;
     for (const library of server.libraries) {

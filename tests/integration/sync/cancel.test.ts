@@ -96,4 +96,33 @@ describe("POST /api/sync/cancel", () => {
     expect(row.status).toBe("RUNNING");
     expect(row.cancelRequested).toBe(true);
   });
+
+  // The library pages' Sync queues behind a running sync, so a server can hold
+  // both at once; a single lookup stopped whichever came back first and left
+  // the other to run.
+  it("stops a running sync and the one queued behind it together", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const running = await prisma.syncJob.create({
+      data: { mediaServerId: server.id, status: "RUNNING", startedAt: new Date(Date.now() - 60_000) },
+    });
+    const queued = await prisma.syncJob.create({ data: { mediaServerId: server.id, status: "PENDING" } });
+    setMockSession({ userId: user.id, isLoggedIn: true });
+
+    const events: AppEvent[] = [];
+    const unsubscribe = eventBus.subscribe((event) => events.push(event));
+    try {
+      await expectJson(await cancel(server.id), 200);
+    } finally {
+      unsubscribe();
+    }
+
+    const runningRow = await prisma.syncJob.findUniqueOrThrow({ where: { id: running.id } });
+    expect(runningRow.status).toBe("RUNNING");
+    expect(runningRow.cancelRequested).toBe(true);
+    const queuedRow = await prisma.syncJob.findUniqueOrThrow({ where: { id: queued.id } });
+    expect(queuedRow.status).toBe("CANCELLED");
+    expect(queuedRow.completedAt).not.toBeNull();
+    expect(events.filter((e) => e.type === "sync:failed")).toHaveLength(1);
+  });
 });

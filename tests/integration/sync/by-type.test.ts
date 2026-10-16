@@ -151,12 +151,18 @@ describe("POST /api/sync/by-type", () => {
     expect(mockEmit).not.toHaveBeenCalled();
   });
 
-  it("skips a server whose sync is running", async () => {
+  // A running sync may be a scheduled one that already passed these libraries,
+  // or this route's own for another type; skipping on it dropped the request
+  // and the button stopped spinning with nothing queued. The jobs queue behind
+  // it under a row of their own, which the running sync's row does not hide.
+  it("queues behind a running sync instead of skipping the server", async () => {
     const testPrisma = getTestPrisma();
     const user = await createTestUser();
     const server = await createTestServer(user.id);
     await createTestLibrary(server.id, { key: "m1", type: "MOVIE" });
-    await testPrisma.syncJob.create({ data: { mediaServerId: server.id, status: "RUNNING" } });
+    const running = await testPrisma.syncJob.create({
+      data: { mediaServerId: server.id, status: "RUNNING", startedAt: new Date(Date.now() - 60_000) },
+    });
 
     setMockSession({ userId: user.id, isLoggedIn: true });
 
@@ -167,9 +173,16 @@ describe("POST /api/sync/by-type", () => {
     });
     const body = await expectJson<{ syncedCount: number; skippedCount: number }>(response, 200);
 
-    expect(body.skippedCount).toBe(1);
-    expect(mockEnqueueJob).not.toHaveBeenCalled();
-    expect(await testPrisma.syncJob.count({ where: { mediaServerId: server.id } })).toBe(1);
+    expect(body).toMatchObject({ syncedCount: 1, skippedCount: 0 });
+    const queued = await testPrisma.syncJob.findMany({ where: { mediaServerId: server.id, status: "PENDING" } });
+    expect(queued).toHaveLength(1);
+    expect(queued[0].id).not.toBe(running.id);
+    expect(mockEnqueueJob).toHaveBeenCalledWith(
+      TASK_SYNC_SERVER,
+      expect.objectContaining({ serverId: server.id, libraryKey: "m1", syncJobId: queued[0].id }),
+      expect.objectContaining({ jobKey: `sync:${server.id}:m1` }),
+    );
+    expect((await testPrisma.syncJob.findUniqueOrThrow({ where: { id: running.id } })).status).toBe("RUNNING");
   });
 
   // A row records no scope: the queued one may be this route's own for another
@@ -308,7 +321,7 @@ describe("POST /api/sync/by-type", () => {
     expect(refreshSpec.priority ?? 0).toBeGreaterThan(REQUESTED_SYNC_PRIORITY);
   });
 
-  it("skips servers that already have a running sync", async () => {
+  it("queues the watch-history refresh after the library jobs behind a running sync", async () => {
     const testPrisma = getTestPrisma();
     const user = await createTestUser();
     const server = await createTestServer(user.id);
@@ -324,10 +337,8 @@ describe("POST /api/sync/by-type", () => {
     });
     const body = await expectJson<{ syncedCount: number; skippedCount: number }>(response, 200);
 
-    expect(body.syncedCount).toBe(0);
-    expect(body.skippedCount).toBe(1);
-    // Neither the library jobs nor the watch-history refresh.
-    expect(mockEnqueueJob).not.toHaveBeenCalled();
+    expect(body).toMatchObject({ syncedCount: 1, skippedCount: 0 });
+    expect(mockEnqueueJob.mock.calls.map((call) => call[0])).toEqual([TASK_SYNC_SERVER, TASK_SYNC_WATCH_HISTORY]);
   });
 
   it("returns a no-op message when no servers have the requested type", async () => {

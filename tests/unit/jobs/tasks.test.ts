@@ -13,7 +13,7 @@ const m = vi.hoisted(() => ({
   pruneBackups: vi.fn().mockResolvedValue(0),
   archiveLogs: vi.fn().mockResolvedValue(undefined),
   dispatchScheduledJobs: vi.fn().mockResolvedValue(undefined),
-  syncJob: { findFirst: vi.fn() },
+  syncJob: { findFirst: vi.fn(), updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
   appSettings: { findFirst: vi.fn() },
   lifecycleAction: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
 }));
@@ -225,6 +225,30 @@ describe("taskList", () => {
       helpers,
     );
     expect(syncMediaServer).not.toHaveBeenCalled();
+  });
+
+  it("sync task closes the row its route created when it skips", async () => {
+    // Nothing else would claim it, and a PENDING row makes every Sync button
+    // answer as though a sync were queued for the server.
+    syncJob.findFirst.mockResolvedValue({ id: "running" });
+    await (taskList[TASK_SYNC_SERVER] as (p: unknown, h: unknown) => Promise<void>)(
+      { serverId: "server-1", syncJobId: "route-row" },
+      helpers,
+    );
+    expect(syncMediaServer).not.toHaveBeenCalled();
+    expect(syncJob.updateMany).toHaveBeenCalledWith({
+      where: { id: "route-row", status: "PENDING" },
+      data: expect.objectContaining({ status: "FAILED" }),
+    });
+  });
+
+  it("sync task leaves rows alone when it skips a job no route asked for", async () => {
+    syncJob.findFirst.mockResolvedValue({ id: "running" });
+    await (taskList[TASK_SYNC_SERVER] as (p: unknown, h: unknown) => Promise<void>)(
+      { serverId: "server-1", trigger: "scheduled sync" },
+      helpers,
+    );
+    expect(syncJob.updateMany).not.toHaveBeenCalled();
   });
 
   it("lifecycle tasks delegate to the processor with the userId", async () => {
