@@ -59,7 +59,8 @@ const cases = [
     create: createTestSonarrInstance,
     config: mockSonarrConfig,
     ctor: sonarrCtor,
-    model: "sonarrInstance" as const,
+    setExternalUrl: (id: string, externalUrl: string) =>
+      getTestPrisma().sonarrInstance.update({ where: { id }, data: { externalUrl } }),
   },
   {
     name: "Lidarr",
@@ -67,7 +68,8 @@ const cases = [
     create: createTestLidarrInstance,
     config: mockLidarrConfig,
     ctor: lidarrCtor,
-    model: "lidarrInstance" as const,
+    setExternalUrl: (id: string, externalUrl: string) =>
+      getTestPrisma().lidarrInstance.update({ where: { id }, data: { externalUrl } }),
   },
 ];
 
@@ -148,10 +150,7 @@ describe.each(cases)("GET /api/integrations/$name/[id]/recycle-bin", (c) => {
   it("prefers the external URL for the browser link", async () => {
     const user = await createTestUser();
     const instance = await c.create(user.id, { url: "http://internal:1" });
-    await getTestPrisma()[c.model].update({
-      where: { id: instance.id },
-      data: { externalUrl: "https://arr.example.com" },
-    });
+    await c.setExternalUrl(instance.id, "https://arr.example.com");
     setMockSession({ userId: user.id, isLoggedIn: true });
     c.config.mockResolvedValue({ recycleBin: "/r", recycleBinCleanupDays: 1 });
 
