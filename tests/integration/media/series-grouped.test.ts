@@ -632,6 +632,46 @@ describe("GET /api/media/series/grouped", () => {
         await twoShows();
         expect(await titles({ genre: "Horror" })).toEqual([]);
       });
+
+
+      // A date or watchlist filter is a fact about the SHOW (its latest play,
+      // its newest addition), answered by `applySeriesFilters`. Applied per
+      // episode as well, it was ANDed into the episode match, so beside any
+      // other filter it demanded ONE episode that was both 4K and played
+      // recently — dropping a show whose 4K episode was watched long ago and
+      // whose latest play was last week, which the page used to list.
+      it("answers a date filter beside an episode filter with the show's own figures", async () => {
+        const user = await createTestUser();
+        const server = await createTestServer(user.id);
+        const lib = await createTestLibrary(server.id, { type: "SERIES" });
+        await createTestMediaItem(lib.id, {
+          title: "M1", type: "SERIES", parentTitle: "Mixed Show", seasonNumber: 1, episodeNumber: 1,
+          resolution: "4k", lastPlayedAt: new Date("2022-01-10T12:00:00Z"),
+        });
+        await createTestMediaItem(lib.id, {
+          title: "M2", type: "SERIES", parentTitle: "Mixed Show", seasonNumber: 1, episodeNumber: 2,
+          resolution: "1080", lastPlayedAt: new Date("2024-06-10T12:00:00Z"),
+        });
+        // Unplayed 4K episode, the rest of the show last played in 2022.
+        await createTestMediaItem(lib.id, {
+          title: "O1", type: "SERIES", parentTitle: "Old Show", seasonNumber: 1, episodeNumber: 1,
+          resolution: "4k",
+        });
+        await createTestMediaItem(lib.id, {
+          title: "O2", type: "SERIES", parentTitle: "Old Show", seasonNumber: 1, episodeNumber: 2,
+          resolution: "1080", lastPlayedAt: new Date("2022-03-10T12:00:00Z"),
+        });
+        setMockSession({ userId: user.id, isLoggedIn: true });
+
+        // Mixed Show has 4K and was last played in 2024.
+        expect(
+          (await titles({ resolution: "4K", lastPlayedAtMin: "2024-01-01" })).map((s) => s.parentTitle),
+        ).toEqual(["Mixed Show"]);
+        // Old Show has 4K and has not been played since 2022.
+        expect(
+          (await titles({ resolution: "4K", lastPlayedAtMax: "2023-01-01" })).map((s) => s.parentTitle),
+        ).toEqual(["Old Show"]);
+      });
     });
   });
 
