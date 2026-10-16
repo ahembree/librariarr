@@ -7,6 +7,7 @@ import { resolveServerFilter } from "@/lib/dedup/server-filter";
 import { getServerPresenceByGroup } from "@/lib/dedup/server-presence";
 import { applyCommonFilters } from "@/lib/filters/build-where";
 import { loadGenreSpellings } from "@/lib/filters/genre-spellings";
+import { loadResolutionSpellings } from "@/lib/filters/resolution-spellings";
 import { escapeLike } from "@/lib/filters/escape-like";
 import { firstNonNullSql, qualityCountsSql, resolutionLabelSql } from "@/lib/media/series-sql";
 import { loadMissingSummaries } from "@/lib/media/group-summaries";
@@ -261,8 +262,14 @@ export async function GET(request: NextRequest) {
   const episodeParams = new URLSearchParams(searchParams);
   for (const key of SHOW_LEVEL_FILTER_KEYS) episodeParams.delete(key);
   const narrowing: Prisma.MediaItemWhereInput = {};
-  // Every stored spelling of a genre, as the other listings match it.
-  applyCommonFilters(narrowing, episodeParams, await loadGenreSpellings(searchParams));
+  // Every stored spelling of a genre, as the other listings match it, and a
+  // resolution by the label its quality chip shows ("576" is 480P): this page
+  // filtered resolution by those chips' labels before it filtered on the server.
+  const [genreSpellings, resolutionSpellings] = await Promise.all([
+    loadGenreSpellings(searchParams),
+    loadResolutionSpellings(searchParams),
+  ]);
+  applyCommonFilters(narrowing, episodeParams, genreSpellings, resolutionSpellings);
   if (Object.keys(narrowing).length > 0) {
     const qualifying = await prisma.mediaItem.findMany({
       where: {

@@ -1,5 +1,6 @@
 import type { Prisma } from "@/generated/prisma/client";
 import { RESOLUTION_DB_VALUES } from "@/lib/conditions/constants";
+import { QUALITY_ORDER } from "@/lib/resolution";
 import { escapeLike } from "./escape-like";
 
 /**
@@ -100,11 +101,17 @@ export function intEqualsFilter(n: number): number | { in: number[] } {
  *
  * `genreSpellings` (from `loadGenreSpellings`) makes the genre filter
  * case-insensitive; without it a genre matches only its exact spelling.
+ *
+ * `resolutionSpellings` (from `loadResolutionSpellings`) matches a resolution
+ * label by every stored value `normalizeResolutionLabel` gives that label, as
+ * the quality chips show it; without it a label matches only its fixed
+ * spellings in `RESOLUTION_DB_VALUES` ("576" is then "Other", not "480P").
  */
 export function applyCommonFilters(
   where: Prisma.MediaItemWhereInput,
   params: URLSearchParams,
   genreSpellings?: Map<string, string[]>,
+  resolutionSpellings?: Map<string, string[]>,
 ): void {
   const andClauses: Prisma.MediaItemWhereInput[] = Array.isArray(where.AND)
     ? [...where.AND]
@@ -114,7 +121,10 @@ export function applyCommonFilters(
 
   // Resolution (multi-select with standardized label mapping)
   const resolutions = parseMulti(params.get("resolution"));
-  if (resolutions) {
+  if (resolutions && resolutionSpellings) {
+    const clauses = resolutions.map((label) => resolutionLabelClause(label, resolutionSpellings));
+    andClauses.push(clauses.length === 1 ? clauses[0] : { OR: clauses });
+  } else if (resolutions) {
     if (resolutions.length === 1) {
       applyResolutionFilter(where, andClauses, resolutions[0]);
     } else {
@@ -538,6 +548,21 @@ export function applyStartsWithFilter(
       (where as Record<string, unknown>)[field] = { startsWith: escapeLike(startsWith), mode: "insensitive" };
     }
   }
+}
+
+const RESOLUTION_LABELS = new Set<string>(QUALITY_ORDER);
+
+/**
+ * Rows whose resolution carries `label` by `normalizeResolutionLabel`, given
+ * the stored values grouped by label. "Other" also takes a row with no
+ * resolution, which the label (and the quality chips) count as Other. A value
+ * that is not a label at all is matched as a stored value, as before.
+ */
+function resolutionLabelClause(label: string, spellings: Map<string, string[]>): Prisma.MediaItemWhereInput {
+  const values = spellings.get(label) ?? (RESOLUTION_LABELS.has(label) ? [] : [label]);
+  return label === "Other"
+    ? { OR: [{ resolution: { in: values } }, { resolution: null }] }
+    : { resolution: { in: values } };
 }
 
 function applyResolutionFilter(

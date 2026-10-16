@@ -7,6 +7,7 @@ import { loadMissingSummaries } from "@/lib/media/group-summaries";
 import { escapeLike } from "@/lib/filters/escape-like";
 import { applyCommonFilters } from "@/lib/filters/build-where";
 import { loadGenreSpellings } from "@/lib/filters/genre-spellings";
+import { loadResolutionSpellings } from "@/lib/filters/resolution-spellings";
 import { firstNonNullSql, qualityCountsSql, resolutionLabelSql } from "@/lib/media/series-sql";
 import type { Prisma } from "@/generated/prisma/client";
 
@@ -118,8 +119,14 @@ export async function GET(request: NextRequest) {
   const seasonDates: Prisma.MediaItemWhereInput = {};
   applyCommonFilters(seasonDates, seasonParams);
   const narrowing: Prisma.MediaItemWhereInput = {};
-  // Every stored spelling of a genre, as the other listings match it.
-  applyCommonFilters(narrowing, episodeParams, await loadGenreSpellings(searchParams));
+  // Every stored spelling of a genre, as the other listings match it, and
+  // every stored value of a resolution label ("576" is 480P), as the quality
+  // chips and the Series tab count it.
+  const [genreSpellings, resolutionSpellings] = await Promise.all([
+    loadGenreSpellings(searchParams),
+    loadResolutionSpellings(searchParams),
+  ]);
+  applyCommonFilters(narrowing, episodeParams, genreSpellings, resolutionSpellings);
   if (Object.keys(narrowing).length > 0) {
     const qualifying = await prisma.mediaItem.findMany({
       where: {

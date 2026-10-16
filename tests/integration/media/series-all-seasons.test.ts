@@ -343,6 +343,19 @@ describe("GET /api/media/series/all-seasons", () => {
       expect(result.map((s) => s.seasonNumber)).toEqual([2]);
     });
 
+    // A season stored as "576" is a 480P chip, and must be found under 480P.
+    it("matches a resolution by the label its quality chip shows", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const lib = await createTestLibrary(server.id, { type: "SERIES" });
+      await createTestMediaItem(lib.id, { type: "SERIES", parentTitle: "PAL Show", seasonNumber: 1, episodeNumber: 1, resolution: "576" });
+      await createTestMediaItem(lib.id, { type: "SERIES", parentTitle: "HD Show", seasonNumber: 1, episodeNumber: 1, resolution: "1080" });
+      setMockSession({ userId: user.id, isLoggedIn: true });
+
+      expect((await seasons("resolution=480P")).map((s) => s.parentTitle)).toEqual(["PAL Show"]);
+      expect(await seasons("resolution=Other")).toEqual([]);
+    });
+
     // The season's own latest play answers the date filter; it must not also be
     // ANDed into the episode match, or beside another filter it demands ONE
     // episode that is both 4K and recently played.

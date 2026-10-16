@@ -633,6 +633,28 @@ describe("GET /api/media/series/grouped", () => {
         expect(await titles({ genre: "Horror" })).toEqual([]);
       });
 
+      // The page filtered resolution by its quality chips' labels before the
+      // filter moved to the server; a PAL show stored as "576" is a 480P chip,
+      // and the server's fixed spellings left it out of 480P and put it under
+      // Other.
+      it("matches a resolution by the label its quality chip shows", async () => {
+        const user = await createTestUser();
+        const server = await createTestServer(user.id);
+        const lib = await createTestLibrary(server.id, { type: "SERIES" });
+        await createTestMediaItem(lib.id, {
+          title: "P1", type: "SERIES", parentTitle: "PAL Show", seasonNumber: 1, episodeNumber: 1, resolution: "576",
+        });
+        await createTestMediaItem(lib.id, {
+          title: "H1", type: "SERIES", parentTitle: "HD Show", seasonNumber: 1, episodeNumber: 1, resolution: "1080",
+        });
+        setMockSession({ userId: user.id, isLoggedIn: true });
+
+        const pal = (await titles({})).find((s) => s.parentTitle === "PAL Show");
+        expect(pal?.qualityCounts).toEqual({ "480P": 1 });
+        expect((await titles({ resolution: "480P" })).map((s) => s.parentTitle)).toEqual(["PAL Show"]);
+        expect(await titles({ resolution: "Other" })).toEqual([]);
+        expect((await titles({ resolution: "480P|1080P" })).map((s) => s.parentTitle)).toEqual(["HD Show", "PAL Show"]);
+      });
 
       // A date or watchlist filter is a fact about the SHOW (its latest play,
       // its newest addition), answered by `applySeriesFilters`. Applied per

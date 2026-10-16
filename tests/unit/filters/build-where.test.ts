@@ -35,6 +35,46 @@ describe("applyCommonFilters", () => {
       const andClauses = where.AND as Prisma.MediaItemWhereInput[];
       expect(andClauses.length).toBeGreaterThanOrEqual(1);
     });
+
+    // With the stored values grouped by label (`loadResolutionSpellings`), a
+    // label matches what `normalizeResolutionLabel` calls it — the label the
+    // quality chips show — not only its fixed spellings.
+    describe("with resolution spellings", () => {
+      const spellings = new Map([
+        ["480P", ["480", "576"]],
+        ["1080P", ["1080", "1024"]],
+        ["Other", ["", "weird"]],
+      ]);
+      const build = (resolution: string) => {
+        const where: Prisma.MediaItemWhereInput = {};
+        applyCommonFilters(where, new URLSearchParams({ resolution }), undefined, spellings);
+        return where.AND as Prisma.MediaItemWhereInput[];
+      };
+
+      it("matches every stored value the label covers", () => {
+        expect(build("480P")).toEqual([{ resolution: { in: ["480", "576"] } }]);
+      });
+
+      it("ORs a multi-select", () => {
+        expect(build("480P|1080P")).toEqual([
+          { OR: [{ resolution: { in: ["480", "576"] } }, { resolution: { in: ["1080", "1024"] } }] },
+        ]);
+      });
+
+      it("takes a missing resolution as Other, as the label does", () => {
+        expect(build("Other")).toEqual([
+          { OR: [{ resolution: { in: ["", "weird"] } }, { resolution: null }] },
+        ]);
+      });
+
+      it("matches nothing for a label no stored value has", () => {
+        expect(build("4K")).toEqual([{ resolution: { in: [] } }]);
+      });
+
+      it("matches a value that is not a label as a stored value", () => {
+        expect(build("1440")).toEqual([{ resolution: { in: ["1440"] } }]);
+      });
+    });
   });
 
   describe("string contains filters", () => {
