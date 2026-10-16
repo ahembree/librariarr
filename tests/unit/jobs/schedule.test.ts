@@ -196,6 +196,22 @@ describe("isScheduleDue across daylight saving changes (America/New_York)", () =
       "2026-11-01T07:00:01.000Z",
     ]);
   });
+
+  it("so does an every-hour schedule that spells its hours out", () => {
+    // `*/1` and `0-23` name every hour exactly as `*` does, but cron-parser
+    // does not report them as a wildcard — evaluated on the wall clock they
+    // sat out the repeated hour, unlike the `*` they are equivalent to.
+    for (const schedule of ["0 */1 * * *", "0 0-23 * * *", "*/30 0-23 * * *"]) {
+      const fires = simulateDispatcher(schedule, "00:00", "2026-11-01T04:30:00Z", "2026-11-01T07:30:00Z",
+        new Date("2026-11-01T04:00:00Z"));
+      expect(fires).toEqual(
+        simulateDispatcher(schedule.replace(/ (\*\/1|0-23) /, " * "), "00:00", "2026-11-01T04:30:00Z",
+          "2026-11-01T07:30:00Z", new Date("2026-11-01T04:00:00Z")),
+      );
+      expect(fires).toContain("2026-11-01T05:00:01.000Z");
+      expect(fires).toContain("2026-11-01T06:00:01.000Z");
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------

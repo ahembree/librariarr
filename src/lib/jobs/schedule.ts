@@ -100,8 +100,8 @@ const reportedUnrunnable = new Set<string>();
  * forward, 02:30 never happens and an instant-based check skipped that day's
  * run. On the wall clock the repeated 01:30 is the one already run, and the
  * missing 02:30 is due as soon as the clock jumps past it. A schedule whose
- * hour field is `*` fires every hour anyway, so it keeps real time — on the
- * wall clock it would sit out the repeated hour.
+ * hour field names every hour (`*`, a step of 1, `0-23`) fires every hour anyway,
+ * so it keeps real time — on the wall clock it would sit out the repeated hour.
  */
 export function isScheduleDue(
   schedule: string,
@@ -116,7 +116,9 @@ export function isScheduleDue(
   const tz = getSystemTimezone();
 
   try {
-    const everyHour = CronExpressionParser.parse(cronExpr, { tz: "UTC" }).fields.hour.isWildcard;
+    // Every hour however it is spelled: `*/1` and `0-23` are not reported as
+    // a wildcard, and on the wall clock they would sit out the repeated hour.
+    const everyHour = CronExpressionParser.parse(cronExpr, { tz: "UTC" }).fields.hour.values.length === 24;
     if (everyHour) {
       const prevRun = CronExpressionParser.parse(cronExpr, { currentDate: now, tz }).prev().toDate();
       return !lastRun || prevRun.getTime() > lastRun.getTime();
