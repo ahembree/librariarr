@@ -29,6 +29,11 @@ function getState(): RealtimeState {
   return globalForRealtime.__librariarrRealtime;
 }
 
+/** The process's realtime manager — the status route reads its live connection states. */
+export function getRealtimeManager(): RealtimeManager {
+  return getState().manager;
+}
+
 /**
  * Start the media-server realtime manager: open a WebSocket per enabled server,
  * reconcile on server/settings changes, and keep a periodic safety reconcile.

@@ -87,8 +87,20 @@ Real-time sync is **on by default**. Toggle it in **Settings → General → Dis
 
 Turn it off to rely on scheduled polling only. This is useful when a reverse proxy in front of your server doesn't allow WebSocket upgrades — in that case the connection would fail and reconnect in the background, and disabling it avoids the churn.
 
+## Checking the connection
+
+While real-time sync is on, the toggle has one line under it for each enabled server, showing that server's connection:
+
+| Status | Meaning |
+|---|---|
+| **Connected** | The WebSocket is open and events are arriving. |
+| **Connecting…** | Librariarr is opening the connection, or trying again after it dropped. A server you have just added or turned on shows this until its first connection. |
+| **Not connected** | The last attempt failed. Librariarr keeps retrying (every minute at most), and scheduled syncs still run. |
+
+The lines update as soon as a connection opens or drops. A server whose WebSocket fails while normal sync still works is almost always behind a reverse proxy that doesn't forward WebSocket upgrades.
+
 <Aside type="tip">
-  If a server sits behind a reverse proxy, make sure the proxy forwards WebSocket upgrade headers (`Upgrade` / `Connection`) for the notification endpoint. Without that, real-time events won't arrive even though normal (HTTP) sync still works.
+  If a server sits behind a reverse proxy, make sure the proxy forwards WebSocket upgrade headers (`Upgrade` / `Connection`) for the notification endpoint. Without that, real-time events won't arrive even though normal (HTTP) sync still works, and the server shows **Not connected** under the toggle.
 </Aside>
 
 <Aside>

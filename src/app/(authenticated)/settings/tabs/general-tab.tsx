@@ -51,7 +51,7 @@ import {
   CHIP_CATEGORY_ORDER,
   getChipBadgeStyle,
 } from "@/lib/theme/chip-colors";
-import type { ChipColorMap, ChipColorCategory, MediaServer, BackupEntry } from "../types";
+import type { ChipColorMap, ChipColorCategory, MediaServer, BackupEntry, RealtimeServerStatus } from "../types";
 import { getDuplicateServerNames } from "@/lib/server-styles";
 import { ServerTypeChip } from "@/components/server-type-chip";
 
@@ -74,6 +74,7 @@ interface GeneralTabProps {
   realtimeSync: boolean;
   savingRealtime: boolean;
   onSaveRealtimeSetting: (checked: boolean) => void;
+  realtimeServers: RealtimeServerStatus[];
 
   // Log retention
   logRetentionDays: number;
@@ -138,6 +139,7 @@ export function GeneralTab({
   realtimeSync,
   savingRealtime,
   onSaveRealtimeSetting,
+  realtimeServers,
   logRetentionDays,
   logRetentionInput,
   savingLogRetention,
@@ -313,6 +315,9 @@ export function GeneralTab({
               disabled={savingRealtime}
             />
           </div>
+          {realtimeSync && realtimeServers.length > 0 && (
+            <RealtimeConnectionList servers={realtimeServers} />
+          )}
 
           {servers.length > 1 && (
             <>
@@ -762,6 +767,46 @@ export function GeneralTab({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+    </div>
+  );
+}
+
+const REALTIME_STATUS_DISPLAY: Record<RealtimeServerStatus["status"], { label: string; dot: string }> = {
+  connected: { label: "Connected", dot: "bg-emerald-500" },
+  connecting: { label: "Connecting…", dot: "bg-amber-500" },
+  disconnected: { label: "Not connected", dot: "bg-red-500" },
+};
+
+/**
+ * One line per enabled server under the real-time toggle. A proxy that drops
+ * the WebSocket upgrade stops real-time updates while every sync still works,
+ * so this is the only place that failure shows.
+ */
+function RealtimeConnectionList({ servers }: { servers: RealtimeServerStatus[] }) {
+  const dupeNames = useMemo(() => getDuplicateServerNames(servers), [servers]);
+  const anyDown = servers.some((s) => s.status === "disconnected");
+  return (
+    <div className="space-y-2" data-testid="realtime-connection-status">
+      <ul className="space-y-1.5" aria-label="Real-time connection per server">
+        {servers.map((server) => {
+          const display = REALTIME_STATUS_DISPLAY[server.status];
+          return (
+            <li key={server.serverId} className="flex min-w-0 items-center gap-2 text-sm">
+              <span className={cn("h-2 w-2 shrink-0 rounded-full", display.dot)} aria-hidden="true" />
+              <span className="min-w-0 truncate">{server.name}</span>
+              {dupeNames.has(server.name) && <ServerTypeChip type={server.type} />}
+              <span className="ml-auto shrink-0 text-muted-foreground">{display.label}</span>
+            </li>
+          );
+        })}
+      </ul>
+      {anyDown && (
+        <p className="text-xs text-muted-foreground">
+          Librariarr keeps retrying, and scheduled syncs still run. If the server is up, check that any
+          reverse proxy in front of it forwards WebSocket upgrades (the <code>Upgrade</code> and{" "}
+          <code>Connection</code> headers).
+        </p>
+      )}
     </div>
   );
 }

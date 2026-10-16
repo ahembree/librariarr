@@ -54,6 +54,7 @@ import type {
   SystemInfo,
   UpdateCheck,
   ImageCacheStats,
+  RealtimeServerStatus,
   TestResult,
   BackupEntry,
   ReleaseNote,
@@ -89,6 +90,10 @@ const VALID_SETTINGS_TABS = new Set<string>(SETTINGS_TABS.map((t) => t.value));
  * reports complete.
  */
 const TRACEARR_IMPORT_POLL_MS = 30_000;
+// Fallback for a dropped event stream only: connection changes are pushed as
+// `server-status`, and a retry flipping between connecting and disconnected is
+// deliberately not pushed, so this is what eventually shows it.
+const REALTIME_STATUS_POLL_MS = 60_000;
 
 /**
  * The message to show for a failed integration save. A validation failure
@@ -397,6 +402,7 @@ export default function SettingsPage() {
   const [savingDedup, setSavingDedup] = useState(false);
   const [realtimeSync, setRealtimeSync] = useState(true);
   const [savingRealtime, setSavingRealtime] = useState(false);
+  const [realtimeServers, setRealtimeServers] = useState<RealtimeServerStatus[]>([]);
 
   // Connection test state (add form)
   const [sonarrTesting, setSonarrTesting] = useState(false);
@@ -541,6 +547,18 @@ export default function SettingsPage() {
       }
     } catch {
       // Silent
+    }
+  }, []);
+
+  const fetchRealtimeStatus = useCallback(async () => {
+    try {
+      const response = await fetch("/api/tools/realtime/status");
+      if (response.ok) {
+        const data = await response.json();
+        setRealtimeServers(data.servers ?? []);
+      }
+    } catch {
+      // Silent — the indicator keeps its last state
     }
   }, []);
 
@@ -940,6 +958,7 @@ export default function SettingsPage() {
         fetchChipColors,
         fetchDedupSetting,
         fetchRealtimeSetting,
+        fetchRealtimeStatus,
         fetchLogRetention,
         fetchActionRetention,
         fetchDeleteCeiling,
@@ -961,7 +980,7 @@ export default function SettingsPage() {
       ai: [fetchAiSettings],
       system: [fetchSystemInfo, fetchImageCacheStats],
     }),
-    [fetchServers, fetchSettings, fetchSonarrInstances, fetchRadarrInstances, fetchLidarrInstances, fetchSeerrInstances, fetchTracearrInstances, fetchSystemInfo, fetchAccentColor, fetchChipColors, fetchLogRetention, fetchActionRetention, fetchDeleteCeiling, fetchBackupSettings, fetchLifecycleSchedule, fetchScheduleInfo, fetchDiscordSettings, fetchAiSettings, fetchDedupSetting, fetchRealtimeSetting, fetchImageCacheStats, fetchAuthInfo, fetchTitlePreference],
+    [fetchServers, fetchSettings, fetchSonarrInstances, fetchRadarrInstances, fetchLidarrInstances, fetchSeerrInstances, fetchTracearrInstances, fetchSystemInfo, fetchAccentColor, fetchChipColors, fetchLogRetention, fetchActionRetention, fetchDeleteCeiling, fetchBackupSettings, fetchLifecycleSchedule, fetchScheduleInfo, fetchDiscordSettings, fetchAiSettings, fetchDedupSetting, fetchRealtimeSetting, fetchRealtimeStatus, fetchImageCacheStats, fetchAuthInfo, fetchTitlePreference],
   );
 
   // A fetcher two tabs share, or a tab opened twice, runs once.
@@ -1061,6 +1080,18 @@ export default function SettingsPage() {
   useRealtime("sync:completed", fetchServers);
   useRealtime("sync:failed", fetchServers);
   useRealtime("server:changed", fetchServers);
+
+  // The real-time connection line per server, under the toggle on General.
+  // A connect or a drop is pushed (`server-status`, terminal states only); a
+  // server added, removed or disabled changes the list.
+  useRealtime("server-status", fetchRealtimeStatus);
+  useRealtime("server:changed", fetchRealtimeStatus);
+  const pollRealtimeStatus = activeTab === "general" && realtimeSync;
+  useEffect(() => {
+    if (!pollRealtimeStatus) return;
+    const interval = setInterval(() => { void fetchRealtimeStatus(); }, REALTIME_STATUS_POLL_MS);
+    return () => clearInterval(interval);
+  }, [pollRealtimeStatus, fetchRealtimeStatus]);
 
   // The per-server "syncing" button state, reconciled against the pushed server
   // list during render. `fetchServers` also drops a settled request from state;
@@ -1844,6 +1875,7 @@ export default function SettingsPage() {
         return;
       }
       setRealtimeSync(value);
+      void fetchRealtimeStatus();
       toast.success(value ? "Real-time sync enabled" : "Real-time sync disabled");
     } catch {
       toast.error("Failed to save real-time sync setting");
@@ -3009,6 +3041,7 @@ export default function SettingsPage() {
               realtimeSync={realtimeSync}
               savingRealtime={savingRealtime}
               onSaveRealtimeSetting={saveRealtimeSetting}
+              realtimeServers={realtimeServers}
               logRetentionDays={logRetentionDays}
               logRetentionInput={logRetentionInput}
               savingLogRetention={savingLogRetention}

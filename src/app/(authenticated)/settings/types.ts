@@ -207,6 +207,18 @@ export interface SystemInfo {
   stats: { mediaItems: number; enabledLibraries: number; totalLibraries: number; servers: number };
 }
 
+/**
+ * One enabled server's realtime WebSocket, from `GET /api/tools/realtime/status`.
+ * `connecting` covers a retry in progress and a server the manager has not
+ * opened yet; `disconnected` is a server it could not reach on the last try.
+ */
+export interface RealtimeServerStatus {
+  serverId: string;
+  name: string;
+  type: string;
+  status: "connecting" | "connected" | "disconnected";
+}
+
 export interface ImageCacheStats {
   fileCount: number;
   totalSize: number;
