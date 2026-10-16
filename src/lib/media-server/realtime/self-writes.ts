@@ -75,16 +75,16 @@ class SelfWriteRegistry {
   }
 }
 
-// Singleton pinned to globalThis so Next.js dev HMR (which re-evaluates
-// modules) doesn't hand the lifecycle layer and the realtime manager two
-// registries that can't see each other's marks. Same pattern as `eventBus`.
+// Pinned to globalThis unconditionally, like `eventBus`: a route handler (a
+// manual detection run) writes marks and the realtime manager, started from
+// instrumentation, reads them, and a production build gives each its own copy
+// of this module — pinned only in development, a route's marks were invisible
+// to the manager.
 const globalForSelfWrites = globalThis as unknown as {
   realtimeSelfWrites: SelfWriteRegistry | undefined;
 };
 
-const registry = globalForSelfWrites.realtimeSelfWrites ?? new SelfWriteRegistry();
-
-if (process.env.NODE_ENV !== "production") globalForSelfWrites.realtimeSelfWrites = registry;
+const registry = (globalForSelfWrites.realtimeSelfWrites ??= new SelfWriteRegistry());
 
 /**
  * Record that librariarr is about to write (or has just written) these items

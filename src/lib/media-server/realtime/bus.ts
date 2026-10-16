@@ -44,12 +44,12 @@ class RealtimeBus {
   }
 }
 
-// Singleton pinned to globalThis so Next.js dev HMR (which re-evaluates modules)
-// doesn't spawn a second bus that producers and consumers can't see each other on.
+// Pinned to globalThis unconditionally: the producer (the realtime manager,
+// started from instrumentation) and the consumer (the sessions stream route)
+// load separate copies of this module in a production build, so pinning only
+// in development left the route subscribed to a bus nothing published on.
 const globalForRealtimeBus = globalThis as unknown as {
   realtimeBus: RealtimeBus | undefined;
 };
 
-export const realtimeBus = globalForRealtimeBus.realtimeBus ?? new RealtimeBus();
-
-if (process.env.NODE_ENV !== "production") globalForRealtimeBus.realtimeBus = realtimeBus;
+export const realtimeBus = (globalForRealtimeBus.realtimeBus ??= new RealtimeBus());
