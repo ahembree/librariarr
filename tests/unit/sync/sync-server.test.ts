@@ -737,6 +737,34 @@ describe("syncMediaServer stale-item purge guard", () => {
       expect(staleDelete().length).toBe(1);
     });
 
+    // A rating key is a row id the server may hand to a different item. One
+    // that now names something this library never stores — another type, or a
+    // collection/playlist — in this very section is not the stored movie, so
+    // the section match alone must not keep the row alive forever.
+    it("deletes a candidate whose rating key now names another type of item in this section", async () => {
+      mockSyncDb({ staleRows: [STALE_ROW] });
+      completeTraversal();
+      mockClient.getItemMetadata.mockResolvedValue({
+        ratingKey: "rk-stale", title: "Season 1", type: "season", librarySectionID: 1,
+      });
+
+      await syncMediaServer("server-1");
+
+      expect(staleDelete().length).toBe(1);
+    });
+
+    it("deletes a candidate whose rating key now names a collection in this section", async () => {
+      mockSyncDb({ staleRows: [STALE_ROW] });
+      completeTraversal();
+      mockClient.getItemMetadata.mockResolvedValue({
+        ratingKey: "rk-stale", title: "Leaving Soon", type: "collection", librarySectionID: 1,
+      });
+
+      await syncMediaServer("server-1");
+
+      expect(staleDelete().length).toBe(1);
+    });
+
     describe("on a server whose items name no library (Jellyfin/Emby)", () => {
       const client = mockClient as typeof mockClient & { resolveLibraryKey?: ReturnType<typeof vi.fn> };
       afterEach(() => {
