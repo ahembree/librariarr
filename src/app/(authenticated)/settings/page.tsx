@@ -1381,8 +1381,9 @@ export default function SettingsPage() {
     setEditServerSaving(true);
     setEditServerError("");
     try {
-      // A new URL for a Plex server that keeps its stored token needs a recent
-      // sign-in (the token would go to the new URL).
+      // A new URL, or certificate checks turned off, for a server that keeps
+      // its stored token or API key needs a recent sign-in (it would go to
+      // whoever answers there).
       const response = await fetchWithReauth(`/api/servers/${serverId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
