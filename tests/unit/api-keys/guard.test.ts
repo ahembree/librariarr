@@ -208,6 +208,10 @@ describe("authenticateApiKey — keys in the URL", () => {
     ["a doubly-encoded key in the path", `/${doublyEncoded(key)}`],
     ["a key with a doubly-encoded underscore in a value", `?q=${underscoreDoublyEncoded}`],
     ["a key with a doubly-encoded underscore in the path", `/${underscoreDoublyEncoded}`],
+    // A stray `%` beside it made the whole extra decode throw, and the key was
+    // then tested only in its still-encoded form.
+    ["a doubly-encoded key next to a stray % in a value", `?q=${underscoreDoublyEncoded}%zz`],
+    ["a doubly-encoded key next to a stray % in the path", `/${underscoreDoublyEncoded}%25zz`],
   ])("refuses %s with 400 and never looks the key up", async (_label, suffix) => {
     const url = suffix.startsWith("/")
       ? `http://localhost/api/v1/media${suffix}`
