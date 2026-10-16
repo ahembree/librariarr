@@ -378,4 +378,65 @@ describe("GET /api/media/search", () => {
       ["The Who", 1],
     ]);
   });
+
+  // `dedupKey` names a track by artist + title and an episode by show +
+  // SxxExx, so on ONE server two different rows can share it: the same song
+  // on a studio album and a compilation, or episodes with no numbers. Only a
+  // copy on ANOTHER server is the same item.
+  it("counts same-titled tracks on one server separately, and a copy on another server once", async () => {
+    const user = await createTestUser();
+    const serverA = await createTestServer(user.id, { name: "A" });
+    const serverB = await createTestServer(user.id, { name: "B" });
+    const libA = await createTestLibrary(serverA.id, { type: "MUSIC" });
+    const libB = await createTestLibrary(serverB.id, { type: "MUSIC" });
+    const track = (libraryId: string, ratingKey: string, albumTitle: string, title: string) => ({
+      libraryId, ratingKey, type: "MUSIC" as const, title, parentTitle: "Queen", albumTitle,
+      // As computeDedupKey writes it for a track: artist + title, no album.
+      dedupKey: `music:queen:${title.toLowerCase()}`,
+    });
+    await getTestPrisma().mediaItem.createMany({
+      data: [
+        track(libA.id, "a1", "A Night at the Opera", "Bohemian Rhapsody"),
+        track(libA.id, "a2", "Greatest Hits", "Bohemian Rhapsody"),
+        track(libA.id, "a3", "Greatest Hits", "Killer Queen"),
+        // Server B holds a copy of the compilation.
+        track(libB.id, "b1", "Greatest Hits", "Bohemian Rhapsody"),
+        track(libB.id, "b2", "Greatest Hits", "Killer Queen"),
+      ],
+    });
+    setMockSession({ userId: user.id, isLoggedIn: true });
+
+    const artists = await expectJson<{ items: { title: string; scope: string; itemCount: number }[] }>(
+      await callRoute(GET, { url: "/api/media/search", searchParams: { q: "queen", type: "MUSIC", musicScope: "true" } }),
+      200,
+    );
+    expect(artists.items.filter((i) => i.scope === "artist").map((a) => [a.title, a.itemCount])).toEqual([["Queen", 3]]);
+
+    const albums = await expectJson<{ items: { title: string; scope: string; itemCount: number }[] }>(
+      await callRoute(GET, { url: "/api/media/search", searchParams: { q: "greatest", type: "MUSIC", musicScope: "true" } }),
+      200,
+    );
+    expect(albums.items.map((a) => [a.title, a.itemCount])).toEqual([["Greatest Hits", 2]]);
+  });
+
+  it("counts a show's unnumbered episodes on one server separately", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const lib = await createTestLibrary(server.id, { type: "SERIES" });
+    await getTestPrisma().mediaItem.createMany({
+      data: [1, 2, 3].map((i) => ({
+        libraryId: lib.id, ratingKey: `n-${i}`, type: "SERIES" as const, title: `Special ${i}`,
+        parentTitle: "Night Show", seriesKey: "tvdb:5",
+        // computeDedupKey reads a missing season/episode number as 0.
+        dedupKey: "series:tvdb:5:s0e0",
+      })),
+    });
+    setMockSession({ userId: user.id, isLoggedIn: true });
+
+    const body = await expectJson<{ items: { title: string; itemCount: number }[] }>(
+      await callRoute(GET, { url: "/api/media/search", searchParams: { q: "night", type: "SERIES", seriesScope: "true" } }),
+      200,
+    );
+    expect(body.items.map((i) => [i.title, i.itemCount])).toEqual([["Night Show", 3]]);
+  });
 });
