@@ -263,6 +263,32 @@ describe("track-scope music", () => {
     expect(actions.map((a) => a.mediaItemId).sort()).toEqual(tracks.map((t) => t.id).sort());
   });
 
+  it("folds the per-track matches an older version stored onto the lowest-id track, keeping its countdown", async () => {
+    const { user, tracks, ruleSet } = await artistTracks({ servers: 1, actionType: "DELETE_LIDARR" });
+    // Before the fold, every track had its own match and PENDING action.
+    const scheduledFor = new Date(Date.now() + 10 * 86_400_000);
+    const before = new Map<string, string>();
+    for (const t of tracks) {
+      await createTestRuleMatch(ruleSet.id, t.id, { id: t.id, title: t.title, parentTitle: "The Artist" });
+      const action = await prisma.lifecycleAction.create({
+        data: {
+          userId: user.id, mediaItemId: t.id, ruleSetId: ruleSet.id, actionType: "DELETE_LIDARR", status: "PENDING",
+          scheduledFor, arrInstanceId: "lidarr-1", mediaItemTitle: t.title, mediaItemParentTitle: "The Artist",
+        },
+      });
+      before.set(t.id, action.id);
+    }
+
+    await processLifecycleRules(user.id);
+
+    const kept = tracks.map((t) => t.id).sort()[0];
+    const matches = await prisma.ruleMatch.findMany({ where: { ruleSetId: ruleSet.id } });
+    expect(matches.map((m) => m.mediaItemId)).toEqual([kept]);
+    const actions = await prisma.lifecycleAction.findMany({ where: { ruleSetId: ruleSet.id, status: "PENDING" } });
+    expect(actions.map((a) => a.id)).toEqual([before.get(kept)]);
+    expect(actions[0].scheduledFor.getTime()).toBe(scheduledFor.getTime());
+  });
+
   it("schedules an artist-level action once per artist, on a single server too", async () => {
     const { user, tracks, ruleSet } = await artistTracks({ servers: 1, actionType: "DELETE_LIDARR" });
 
