@@ -7,6 +7,7 @@ import { resolveServerFilter } from "@/lib/dedup/server-filter";
 import { getServerPresenceByGroup } from "@/lib/dedup/server-presence";
 import { applyCommonFilters } from "@/lib/filters/build-where";
 import { loadGenreSpellings } from "@/lib/filters/genre-spellings";
+import { loadResolutionSpellings } from "@/lib/filters/resolution-spellings";
 import { escapeLike } from "@/lib/filters/escape-like";
 import { firstNonNullSql, qualityCountsSql, resolutionLabelSql } from "@/lib/media/series-sql";
 import { loadMissingSummaries } from "@/lib/media/group-summaries";
@@ -151,6 +152,16 @@ interface SeriesItem {
   isWatchlisted: boolean;
 }
 
+/**
+ * The `applyCommonFilters` keys `applySeriesFilters` answers on the show's own
+ * figures, so they are kept out of the per-episode match.
+ */
+const SHOW_LEVEL_FILTER_KEYS = [
+  "lastPlayedAtMin", "lastPlayedAtMax", "lastPlayedAtDays",
+  "addedAtMin", "addedAtMax", "addedAtDays",
+  "isWatchlisted",
+];
+
 /** Apply post-aggregation filters on series-level fields */
 function applySeriesFilters<T extends SeriesItem>(list: T[], params: URLSearchParams): T[] {
   let result = list;
@@ -242,12 +253,23 @@ export async function GET(request: NextRequest) {
   // nothing else, and sent the server no filter at all). `applyCommonFilters`
   // builds a Prisma where with no SQL form here, so Prisma resolves the
   // qualifying series keys and the aggregate is scoped to them. The date and
-  // watchlist filters it also applies per episode are re-checked on the
-  // show's own figures by `applySeriesFilters` below, which together give the
-  // show-level answer (e.g. "last played before X" is the show's latest play).
+  // watchlist filters are facts about the SHOW (its latest play, its newest
+  // addition) and are answered on its own figures by `applySeriesFilters`
+  // below — never per episode as well, where they were ANDed into the one
+  // episode that has to match: "4K, last played this month" then demanded a
+  // single episode that is both, and dropped a show whose 4K episodes were
+  // watched years ago and whose latest play was last week.
+  const episodeParams = new URLSearchParams(searchParams);
+  for (const key of SHOW_LEVEL_FILTER_KEYS) episodeParams.delete(key);
   const narrowing: Prisma.MediaItemWhereInput = {};
-  // Every stored spelling of a genre, as the other listings match it.
-  applyCommonFilters(narrowing, searchParams, await loadGenreSpellings(searchParams));
+  // Every stored spelling of a genre, as the other listings match it, and a
+  // resolution by the label its quality chip shows ("576" is 480P): this page
+  // filtered resolution by those chips' labels before it filtered on the server.
+  const [genreSpellings, resolutionSpellings] = await Promise.all([
+    loadGenreSpellings(searchParams),
+    loadResolutionSpellings(searchParams),
+  ]);
+  applyCommonFilters(narrowing, episodeParams, genreSpellings, resolutionSpellings);
   if (Object.keys(narrowing).length > 0) {
     const qualifying = await prisma.mediaItem.findMany({
       where: {

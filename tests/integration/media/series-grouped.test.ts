@@ -632,6 +632,68 @@ describe("GET /api/media/series/grouped", () => {
         await twoShows();
         expect(await titles({ genre: "Horror" })).toEqual([]);
       });
+
+      // The page filtered resolution by its quality chips' labels before the
+      // filter moved to the server; a PAL show stored as "576" is a 480P chip,
+      // and the server's fixed spellings left it out of 480P and put it under
+      // Other.
+      it("matches a resolution by the label its quality chip shows", async () => {
+        const user = await createTestUser();
+        const server = await createTestServer(user.id);
+        const lib = await createTestLibrary(server.id, { type: "SERIES" });
+        await createTestMediaItem(lib.id, {
+          title: "P1", type: "SERIES", parentTitle: "PAL Show", seasonNumber: 1, episodeNumber: 1, resolution: "576",
+        });
+        await createTestMediaItem(lib.id, {
+          title: "H1", type: "SERIES", parentTitle: "HD Show", seasonNumber: 1, episodeNumber: 1, resolution: "1080",
+        });
+        setMockSession({ userId: user.id, isLoggedIn: true });
+
+        const pal = (await titles({})).find((s) => s.parentTitle === "PAL Show");
+        expect(pal?.qualityCounts).toEqual({ "480P": 1 });
+        expect((await titles({ resolution: "480P" })).map((s) => s.parentTitle)).toEqual(["PAL Show"]);
+        expect(await titles({ resolution: "Other" })).toEqual([]);
+        expect((await titles({ resolution: "480P|1080P" })).map((s) => s.parentTitle)).toEqual(["HD Show", "PAL Show"]);
+      });
+
+      // A date or watchlist filter is a fact about the SHOW (its latest play,
+      // its newest addition), answered by `applySeriesFilters`. Applied per
+      // episode as well, it was ANDed into the episode match, so beside any
+      // other filter it demanded ONE episode that was both 4K and played
+      // recently — dropping a show whose 4K episode was watched long ago and
+      // whose latest play was last week, which the page used to list.
+      it("answers a date filter beside an episode filter with the show's own figures", async () => {
+        const user = await createTestUser();
+        const server = await createTestServer(user.id);
+        const lib = await createTestLibrary(server.id, { type: "SERIES" });
+        await createTestMediaItem(lib.id, {
+          title: "M1", type: "SERIES", parentTitle: "Mixed Show", seasonNumber: 1, episodeNumber: 1,
+          resolution: "4k", lastPlayedAt: new Date("2022-01-10T12:00:00Z"),
+        });
+        await createTestMediaItem(lib.id, {
+          title: "M2", type: "SERIES", parentTitle: "Mixed Show", seasonNumber: 1, episodeNumber: 2,
+          resolution: "1080", lastPlayedAt: new Date("2024-06-10T12:00:00Z"),
+        });
+        // Unplayed 4K episode, the rest of the show last played in 2022.
+        await createTestMediaItem(lib.id, {
+          title: "O1", type: "SERIES", parentTitle: "Old Show", seasonNumber: 1, episodeNumber: 1,
+          resolution: "4k",
+        });
+        await createTestMediaItem(lib.id, {
+          title: "O2", type: "SERIES", parentTitle: "Old Show", seasonNumber: 1, episodeNumber: 2,
+          resolution: "1080", lastPlayedAt: new Date("2022-03-10T12:00:00Z"),
+        });
+        setMockSession({ userId: user.id, isLoggedIn: true });
+
+        // Mixed Show has 4K and was last played in 2024.
+        expect(
+          (await titles({ resolution: "4K", lastPlayedAtMin: "2024-01-01" })).map((s) => s.parentTitle),
+        ).toEqual(["Mixed Show"]);
+        // Old Show has 4K and has not been played since 2022.
+        expect(
+          (await titles({ resolution: "4K", lastPlayedAtMax: "2023-01-01" })).map((s) => s.parentTitle),
+        ).toEqual(["Old Show"]);
+      });
     });
   });
 

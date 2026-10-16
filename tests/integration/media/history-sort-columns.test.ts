@@ -72,6 +72,26 @@ describe("Watch History page sort columns vs /api/media/history", () => {
     }
   });
 
+  // A sortable column with no entry falls back to `watchedAt` (the page's
+  // `?? "watchedAt"`), so its header sorted by watch date — the video and
+  // audio codec columns shipped that way.
+  it("maps every sortable column", () => {
+    const source = read("src/app/(authenticated)/library/history/page.tsx");
+    const page = recordLiteral(source, "COLUMN_TO_SORT_FIELD");
+    const start = source.indexOf("const allColumns");
+    const block = source.slice(start, source.indexOf("\n  ], [", start));
+    const sortable = block
+      .split(/\n\s*\{\s*\n\s*id: "/)
+      .slice(1)
+      .filter((column) => /\bsortValue:/.test(column))
+      .map((column) => column.slice(0, column.indexOf('"')));
+
+    expect(sortable).toEqual(expect.arrayContaining(["title", "videoCodec", "audioCodec", "server"]));
+    for (const column of sortable) {
+      expect(Object.hasOwn(page, column), `column ${column}`).toBe(true);
+    }
+  });
+
   describe("sorting", () => {
     let serverA: { id: string };
     let serverB: { id: string };
