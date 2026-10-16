@@ -682,15 +682,22 @@ export default function RuleMatchesPage() {
     setColumnVisibility({ ...columnVisibility, [colId]: checked });
   }, [columnVisibility, setColumnVisibility]);
 
+  // Only the latest read may write. Every run re-reads the whole listing when
+  // it returns, and runs of different rule sets overlap: a read issued when
+  // the first run returned could answer after one issued when the second did,
+  // putting the second rule set's pre-run matches back on screen.
+  const matchesReqToken = useRef(0);
   const fetchMatches = useCallback(async () => {
+    const token = ++matchesReqToken.current;
     try {
       const response = await fetch("/api/lifecycle/rules/matches");
       const data = await response.json();
+      if (token !== matchesReqToken.current) return;
       setRuleMatches(data.ruleMatches || []);
     } catch (error) {
       console.error("Failed to fetch matches:", error);
     } finally {
-      setLoading(false);
+      if (token === matchesReqToken.current) setLoading(false);
     }
   }, []);
 
