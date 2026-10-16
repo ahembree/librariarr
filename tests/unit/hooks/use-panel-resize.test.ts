@@ -117,3 +117,46 @@ describe("usePanelResize", () => {
     expect(localStorage.getItem("panel-w")).toBeNull();
   });
 });
+
+describe("usePanelResize stored width and unmount", () => {
+  it("ignores a stored width that is not a number", () => {
+    localStorage.setItem("panel-w", "abc");
+    const { result } = renderHook(() => usePanelResize(OPTS));
+    expect(result.current.width).toBe(400);
+  });
+
+  it("clamps a stored width to today's bounds", () => {
+    localStorage.setItem("panel-w", "900");
+    expect(renderHook(() => usePanelResize(OPTS)).result.current.width).toBe(600);
+    localStorage.setItem("panel-w", "10");
+    expect(renderHook(() => usePanelResize(OPTS)).result.current.width).toBe(300);
+  });
+
+  it("restores the page and stops listening when unmounted mid-drag", () => {
+    const { result, unmount } = renderHook(() => usePanelResize(OPTS));
+    act(() => result.current.resizeHandleProps.onMouseDown(mouseDown(1000).e));
+    expect(document.body.style.userSelect).toBe("none");
+    expect(document.body.style.cursor).toBe("col-resize");
+
+    unmount();
+    expect(document.body.style.userSelect).toBe("");
+    expect(document.body.style.cursor).toBe("");
+
+    // The listeners are gone: a later mouseup stores nothing.
+    document.dispatchEvent(new MouseEvent("mousemove", { clientX: 900 }));
+    document.dispatchEvent(new MouseEvent("mouseup"));
+    expect(localStorage.getItem("panel-w")).toBeNull();
+  });
+
+  it("does nothing on unmount when no drag is in progress", () => {
+    document.body.style.cursor = "wait";
+    const { result, unmount } = renderHook(() => usePanelResize(OPTS));
+    act(() => result.current.resizeHandleProps.onMouseDown(mouseDown(1000).e));
+    act(() => {
+      document.dispatchEvent(new MouseEvent("mouseup"));
+    });
+    document.body.style.cursor = "wait";
+    unmount();
+    expect(document.body.style.cursor).toBe("wait");
+  });
+});

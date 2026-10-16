@@ -328,7 +328,7 @@ async function resolveUserRequests(
         createdAt: req.createdAt,
         tmdbId: tmdb,
         tvdbId: null,
-        title: local?.title ?? fallback?.title ?? `Movie (TMDB ${tmdb})`,
+        title: local?.title ?? fallback?.title ?? (tmdb > 0 ? `Movie (TMDB ${tmdb})` : "Movie"),
         year: local?.year ?? fallback?.year ?? null,
         posterUrl: local ? `/api/media/${local.id}/image` : fallback?.posterUrl ?? null,
         mediaItem: local ? { id: local.id, route: "movie" } : null,

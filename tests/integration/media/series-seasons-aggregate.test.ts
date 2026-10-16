@@ -143,8 +143,9 @@ describe("GET /api/media/series/seasons — season aggregation", () => {
     expect(season.totalSize).toBe("7");
     expect(season.episodeCount).toBe(2);
     // Both episodes carry a summary and neither has season art: the fold keeps
-    // whichever row the unordered query returned first.
-    expect(season.summary).toBeOneOf(["First", "Second"]);
+    // the first episode's, whatever order the rows sit in on disk (the UPDATE
+    // above moved E1's row after E2's).
+    expect(season.summary).toBe("First");
     expect(season.year).toBe(2024);
   });
 
@@ -198,5 +199,34 @@ describe("GET /api/media/series/seasons — season aggregation", () => {
     });
     const seasons = await getSeasons({ parentTitle: "Show", seriesKey: "tvdb:1" });
     expect(seasons.map((s) => s.seasonNumber)).toEqual([3]);
+  });
+});
+
+describe("GET /api/media/series/seasons ordering", () => {
+  it("takes the season's fields from its lowest-numbered episode however the rows are stored", async () => {
+    const user = await createTestUser();
+    setMockSession({ userId: user.id, isLoggedIn: true });
+    const server = await createTestServer(user.id);
+    const lib = await createTestLibrary(server.id, { type: "SERIES" });
+    const prisma = getTestPrisma();
+    // Created out of episode order, then rewritten so the heap order differs again.
+    const e3 = await createTestMediaItem(lib.id, {
+      type: "SERIES", title: "E3", parentTitle: "Show", seasonNumber: 1, episodeNumber: 3, summary: "Third",
+    });
+    const e1 = await createTestMediaItem(lib.id, {
+      type: "SERIES", title: "E1", parentTitle: "Show", seasonNumber: 1, episodeNumber: 1, summary: "First",
+    });
+    await createTestMediaItem(lib.id, {
+      type: "SERIES", title: "E2", parentTitle: "Show", seasonNumber: 1, episodeNumber: 2, summary: "Second",
+    });
+    await prisma.mediaItem.update({ where: { id: e1.id }, data: { year: 2001, rating: 8 } });
+    await prisma.mediaItem.update({ where: { id: e3.id }, data: { year: 2003, rating: 3 } });
+
+    for (let i = 0; i < 3; i++) {
+      const [season] = await getSeasons({ parentTitle: "Show" });
+      expect(season.summary).toBe("First");
+      expect(season.year).toBe(2001);
+      expect(season.rating).toBe(8);
+    }
   });
 });

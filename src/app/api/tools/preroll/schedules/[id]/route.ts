@@ -59,6 +59,15 @@ export async function PUT(
     enabled: body.enabled ?? existing.enabled,
   };
 
+  // A date sent in the body is written whatever the schedule type, so it must
+  // parse: an unparseable one compared as NaN (passing the start-before-end
+  // check) and reached the database write as an Invalid Date.
+  for (const [label, value] of [["Start date", body.startDate], ["End date", body.endDate]] as const) {
+    if (value !== undefined && isNaN(new Date(value).getTime())) {
+      return NextResponse.json({ error: `${label} must be a valid date` }, { status: 400 });
+    }
+  }
+
   // Validate schedule type specific fields if schedule type is being changed or set
   if (merged.scheduleType && !VALID_SCHEDULE_TYPES.includes(merged.scheduleType)) {
     return NextResponse.json(

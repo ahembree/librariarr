@@ -193,3 +193,26 @@ describe("PUT /api/tools/preroll/schedules/[id] conflicts and writes", () => {
     expect(row?.prerollPath).toBe("/prerolls/holiday.mp4");
   });
 });
+
+describe("PUT /api/tools/preroll/schedules/[id] date parsing", () => {
+  async function errorOf(res: Response) {
+    return (await expectJson<{ error: string }>(res, 400)).error;
+  }
+
+  it("refuses an unparseable start date instead of writing an Invalid Date", async () => {
+    const s = await oneTime();
+    expect(await errorOf(await put(s.id, { startDate: "garbage" }))).toBe("Start date must be a valid date");
+    const row = await prisma.prerollSchedule.findUnique({ where: { id: s.id } });
+    expect(row?.startDate?.toISOString()).toBe("2030-12-20T00:00:00.000Z");
+  });
+
+  it("refuses an unparseable end date", async () => {
+    const s = await oneTime();
+    expect(await errorOf(await put(s.id, { endDate: "never" }))).toBe("End date must be a valid date");
+  });
+
+  it("refuses an unparseable date on a recurring schedule too, since it would still be written", async () => {
+    const s = await recurring();
+    expect(await errorOf(await put(s.id, { startDate: "garbage" }))).toBe("Start date must be a valid date");
+  });
+});

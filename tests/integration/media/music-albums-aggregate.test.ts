@@ -127,9 +127,11 @@ describe("GET /api/media/music/albums — album aggregation", () => {
       audienceRatingImage: "img:a",
       servers: [{ serverId: server.id, serverName: "Main", serverType: "PLEX" }],
     });
-    // Two tracks carry a rating/year; the fold keeps whichever it saw first.
-    expect(albums[0].rating).toBeOneOf([7, 1]);
-    expect(albums[0].year).toBeOneOf([1999, 2020]);
+    // Two tracks carry a rating/year; the fold keeps the earlier track's (no
+    // track numbers here, so the row id decides), not whichever row the UPDATEs
+    // above left first on disk.
+    expect(albums[0].rating).toBe(7);
+    expect(albums[0].year).toBe(1999);
     // addedAt is the newest track's.
     expect(new Date(albums[0].addedAt!).getTime()).toBeGreaterThanOrEqual(newer.getTime());
   });
@@ -175,5 +177,27 @@ describe("GET /api/media/music/albums — album aggregation", () => {
     // Genre matching is case-insensitive against the stored spelling.
     const jazz = await getAlbums({ parentTitle: "Band", genre: "jazz" });
     expect(jazz.map((a) => [a.albumTitle, a.trackCount])).toEqual([["A", 2]]);
+  });
+});
+
+describe("GET /api/media/music/albums ordering", () => {
+  it("takes the album's fields from its first track by track number", async () => {
+    const user = await createTestUser();
+    setMockSession({ userId: user.id, isLoggedIn: true });
+    const server = await createTestServer(user.id);
+    const lib = await createTestLibrary(server.id, { type: "MUSIC" });
+    const prisma = getTestPrisma();
+    const t2 = await createTestMediaItem(lib.id, {
+      type: "MUSIC", title: "Two", parentTitle: "Band", albumTitle: "Album", episodeNumber: 2, summary: "from two",
+    });
+    const t1 = await createTestMediaItem(lib.id, {
+      type: "MUSIC", title: "One", parentTitle: "Band", albumTitle: "Album", episodeNumber: 1, summary: "from one",
+    });
+    await prisma.mediaItem.update({ where: { id: t2.id }, data: { year: 2002 } });
+    await prisma.mediaItem.update({ where: { id: t1.id }, data: { year: 2001 } });
+
+    const albums = await getAlbums({ parentTitle: "Band" });
+    expect(albums[0].summary).toBe("from one");
+    expect(albums[0].year).toBe(2001);
   });
 });

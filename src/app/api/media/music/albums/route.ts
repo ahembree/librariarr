@@ -68,6 +68,11 @@ export async function GET(request: NextRequest) {
         },
       },
     },
+    // The fold below keeps the FIRST track carrying each field (summary, year,
+    // rating, the linked item), so the rows need a fixed order: unordered,
+    // Postgres returned them in heap order and an UPDATE could change which
+    // track's values an album showed. Tracks store their number in episodeNumber.
+    orderBy: [{ episodeNumber: { sort: "asc", nulls: "last" } }, { id: "asc" }],
   });
 
   // Group by album title (canonical items are already deduped)

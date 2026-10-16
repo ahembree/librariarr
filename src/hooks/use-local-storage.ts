@@ -70,7 +70,13 @@ export function useLocalStorage<T extends string>(
   return [value, setValue];
 }
 
-const jsonCache = new Map<string, { raw: string | null; parsed: unknown }>();
+const jsonCache = new Map<string, { raw: string; parsed: unknown }>();
+// The default a hook falls back to (nothing stored, or unparseable JSON), kept
+// per key AND default so two hooks on one key with different defaults each get
+// their own — keyed by the key alone, whichever rendered first decided both.
+// Cached at all because useSyncExternalStore needs a stable snapshot, and a
+// caller's inline default is a new object on every render.
+const defaultCache = new Map<string, unknown>();
 
 export function useLocalStorageJSON<T>(
   key: string,
@@ -79,20 +85,21 @@ export function useLocalStorageJSON<T>(
   const sub = useCallback((l: () => void) => subscribe(key, l), [key]);
   const getSnapshot = useCallback((): T => {
     const raw = safeGet(key);
-    const cached = jsonCache.get(key);
-    if (cached && cached.raw === raw) return cached.parsed as T;
-    let parsed: T;
-    if (raw == null) {
-      parsed = defaultValue;
-    } else {
+    if (raw != null) {
+      const cached = jsonCache.get(key);
+      if (cached && cached.raw === raw) return cached.parsed as T;
       try {
-        parsed = JSON.parse(raw) as T;
+        const parsed = JSON.parse(raw) as T;
+        jsonCache.set(key, { raw, parsed });
+        return parsed;
       } catch {
-        parsed = defaultValue;
+        // Unparseable: fall back to the default below.
       }
     }
-    jsonCache.set(key, { raw, parsed });
-    return parsed;
+    const defaultKey = `${key}\u0000${JSON.stringify(defaultValue) ?? "undefined"}`;
+    if (defaultCache.has(defaultKey)) return defaultCache.get(defaultKey) as T;
+    defaultCache.set(defaultKey, defaultValue);
+    return defaultValue;
   }, [key, defaultValue]);
   const getServerSnapshot = useCallback(() => defaultValue, [defaultValue]);
 

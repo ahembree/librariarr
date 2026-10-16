@@ -199,3 +199,41 @@ describe("PUT /api/tools/blackout/[id] writes", () => {
     });
   });
 });
+
+describe("PUT /api/tools/blackout/[id] partial date edits", () => {
+  it("refuses an end date before the stored start, and keeps the stored window", async () => {
+    const s = await oneTime();
+    expect(await errorOf(await put(s.id, { endDate: "2029-01-01T00:00:00Z" }))).toBe("startDate must be before endDate");
+    const row = await prisma.blackoutSchedule.findUnique({ where: { id: s.id } });
+    expect(row?.endDate?.toISOString()).toBe("2030-01-02T00:00:00.000Z");
+  });
+
+  it("refuses a start date after the stored end", async () => {
+    const s = await oneTime();
+    expect(await errorOf(await put(s.id, { startDate: "2031-01-01T00:00:00Z" }))).toBe("startDate must be before endDate");
+  });
+
+  it("refuses an unparseable date with a 400 rather than failing the write", async () => {
+    const s = await oneTime();
+    expect(await errorOf(await put(s.id, { startDate: "soon" }))).toBe("startDate and endDate must be valid dates");
+    expect(await errorOf(await put(s.id, { endDate: "later" }))).toBe("startDate and endDate must be valid dates");
+  });
+
+  it("accepts a partial date edit that keeps the window in order", async () => {
+    const s = await oneTime();
+    const body = await expectJson<{ schedule: { startDate: string; endDate: string } }>(
+      await put(s.id, { endDate: "2030-01-05T00:00:00Z" }),
+      200,
+    );
+    expect(new Date(body.schedule.startDate).toISOString()).toBe("2030-01-01T00:00:00.000Z");
+    expect(new Date(body.schedule.endDate).toISOString()).toBe("2030-01-05T00:00:00.000Z");
+  });
+
+  it("leaves a recurring schedule's ignored date fields unchecked", async () => {
+    const s = await recurring();
+    await expectJson(await put(s.id, { startDate: "not a date", name: "Renamed" }), 200);
+    const row = await prisma.blackoutSchedule.findUnique({ where: { id: s.id } });
+    expect(row?.name).toBe("Renamed");
+    expect(row?.startDate).toBeNull();
+  });
+});

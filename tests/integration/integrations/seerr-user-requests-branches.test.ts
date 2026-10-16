@@ -170,7 +170,8 @@ describe("GET /api/seerr/users/[userKey]/requests — partial walks, fallbacks, 
     expect(byId.get(4)!.title).toBe("Series");
     // No media at all: status falls back to 1 (unknown).
     expect(byId.get(4)!.mediaStatus).toBe(1);
-    expect(byId.get(5)!.title).toBe("Movie (TMDB 0)");
+    // No TMDB id at all: a bare "Movie", as a series with no id reads "Series".
+    expect(byId.get(5)!.title).toBe("Movie");
     // Newest first.
     expect(body.requests.map((r) => r.seerrId)).toEqual([5, 4, 3, 2, 1]);
     // Only the two requests with a TMDB id were looked up.

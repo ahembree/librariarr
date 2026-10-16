@@ -114,3 +114,36 @@ describe("useLocalStorageJSON", () => {
     expect(result.current[0]).toBe(2);
   });
 });
+
+describe("useLocalStorageJSON defaults per hook", () => {
+  it("gives two hooks on one empty key their own defaults", () => {
+    const a = renderHook(() => useLocalStorageJSON<string>("json-shared-default", "a-default"));
+    const b = renderHook(() => useLocalStorageJSON<string>("json-shared-default", "b-default"));
+    expect(a.result.current[0]).toBe("a-default");
+    expect(b.result.current[0]).toBe("b-default");
+  });
+
+  it("still gives every hook the stored value once one is written", () => {
+    const a = renderHook(() => useLocalStorageJSON<string>("json-shared-write", "a"));
+    const b = renderHook(() => useLocalStorageJSON<string>("json-shared-write", "b"));
+    act(() => a.result.current[1]("written"));
+    expect(a.result.current[0]).toBe("written");
+    expect(b.result.current[0]).toBe("written");
+  });
+
+  it("keeps an inline default's snapshot stable across renders", () => {
+    const { result, rerender } = renderHook(() => useLocalStorageJSON("json-inline", { cols: ["a"] }));
+    const first = result.current[0];
+    rerender();
+    rerender();
+    expect(result.current[0]).toBe(first);
+  });
+
+  it("falls back to each hook's own default for unparseable JSON", () => {
+    localStorage.setItem("json-shared-bad", "{nope");
+    const a = renderHook(() => useLocalStorageJSON<number>("json-shared-bad", 1));
+    const b = renderHook(() => useLocalStorageJSON<number>("json-shared-bad", 2));
+    expect(a.result.current[0]).toBe(1);
+    expect(b.result.current[0]).toBe(2);
+  });
+});
