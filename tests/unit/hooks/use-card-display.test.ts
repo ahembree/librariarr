@@ -96,9 +96,13 @@ describe("useCardDisplay", () => {
     expect(stored.SERIES_EPISODES.servers).toBe(false);
     expect(stored.SERIES_EPISODES.badges.resolution).toBe(false);
 
-    act(() => vi.advanceTimersByTime(999));
+    act(() => {
+      vi.advanceTimersByTime(999);
+    });
     expect(putCalls()).toHaveLength(0);
-    act(() => vi.advanceTimersByTime(1));
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
     expect(putCalls()).toHaveLength(1);
     const [url, init] = putCalls()[0];
     expect(url).toBe("/api/settings/card-display-preferences");

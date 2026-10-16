@@ -113,7 +113,9 @@ describe("useVirtualGridAlphabet", () => {
     act(() => result.current.scrollToLetter("D"));
     fire(el);
     expect(result.current.activeLetter).toBe("D");
-    act(() => vi.advanceTimersByTime(100));
+    act(() => {
+      vi.advanceTimersByTime(100);
+    });
     fire(el);
     expect(result.current.activeLetter).toBe("A");
   });

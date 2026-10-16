@@ -109,7 +109,7 @@ describe("sync-semaphore", () => {
     await acquireSyncSlot();
 
     let resolved = false;
-    acquireSyncSlot().then(() => {
+    const blocked = acquireSyncSlot().then(() => {
       resolved = true;
     });
 
@@ -120,9 +120,7 @@ describe("sync-semaphore", () => {
     expect(resolved).toBe(false);
 
     releaseSyncSlot();
-    // Now yield for the promise to resolve
-    await Promise.resolve();
-    await Promise.resolve();
+    await blocked;
     expect(resolved).toBe(true);
 
     releaseSyncSlot();

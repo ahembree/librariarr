@@ -56,7 +56,9 @@ describe("usePanelResize", () => {
     expect(result.current.width).toBe(450);
     expect(localStorage.getItem("panel-w")).toBeNull();
 
-    act(() => document.dispatchEvent(new MouseEvent("mouseup")));
+    act(() => {
+      document.dispatchEvent(new MouseEvent("mouseup"));
+    });
     expect(result.current.isDragging).toBe(false);
     expect(localStorage.getItem("panel-w")).toBe("450");
     expect(document.body.style.cursor).toBe("");
@@ -78,15 +80,21 @@ describe("usePanelResize", () => {
 
     const touchMove = new Event("touchmove") as Event & { touches: { clientX: number }[] };
     Object.defineProperty(touchMove, "touches", { value: [{ clientX: 760 }] });
-    act(() => document.dispatchEvent(touchMove));
+    act(() => {
+      document.dispatchEvent(touchMove);
+    });
     expect(result.current.width).toBe(440);
 
     const empty = new Event("touchmove");
     Object.defineProperty(empty, "touches", { value: [] });
-    act(() => document.dispatchEvent(empty));
+    act(() => {
+      document.dispatchEvent(empty);
+    });
     expect(result.current.width).toBe(440);
 
-    act(() => document.dispatchEvent(new Event("touchend")));
+    act(() => {
+      document.dispatchEvent(new Event("touchend"));
+    });
     expect(result.current.isDragging).toBe(false);
     expect(localStorage.getItem("panel-w")).toBe("440");
   });
@@ -110,10 +118,14 @@ describe("usePanelResize", () => {
   it("a second mouseup after the drag ended is a no-op", () => {
     const { result } = renderHook(() => usePanelResize(OPTS));
     act(() => result.current.resizeHandleProps.onMouseDown(mouseDown(100).e));
-    act(() => document.dispatchEvent(new Event("touchcancel")));
+    act(() => {
+      document.dispatchEvent(new Event("touchcancel"));
+    });
     expect(result.current.isDragging).toBe(false);
     localStorage.removeItem("panel-w");
-    act(() => document.dispatchEvent(new MouseEvent("mouseup")));
+    act(() => {
+      document.dispatchEvent(new MouseEvent("mouseup"));
+    });
     expect(localStorage.getItem("panel-w")).toBeNull();
   });
 });

@@ -105,7 +105,9 @@ describe("useTableAlphabet", () => {
       el.dispatchEvent(new Event("scroll"));
     });
     expect(result.current.activeLetter).toBeNull();
-    act(() => vi.advanceTimersByTime(16));
+    act(() => {
+      vi.advanceTimersByTime(16);
+    });
     expect(result.current.activeLetter).toBe("#");
   });
 
@@ -113,7 +115,9 @@ describe("useTableAlphabet", () => {
     const el = scrollEl();
     const { result } = renderHook(() => useTableAlphabet({ items: ITEMS, scrollElement: el }));
     act(() => result.current.scrollToLetter("A"));
-    act(() => vi.advanceTimersByTime(100));
+    act(() => {
+      vi.advanceTimersByTime(100);
+    });
     act(() => {
       el.dispatchEvent(new Event("scroll"));
       vi.advanceTimersByTime(16);
@@ -122,7 +126,9 @@ describe("useTableAlphabet", () => {
 
     virtualRows([[99, 0]]);
     act(() => result.current.scrollToLetter("D"));
-    act(() => vi.advanceTimersByTime(100));
+    act(() => {
+      vi.advanceTimersByTime(100);
+    });
     act(() => {
       el.dispatchEvent(new Event("scroll"));
       vi.advanceTimersByTime(16);
@@ -143,7 +149,9 @@ describe("useTableAlphabet", () => {
       vi.advanceTimersByTime(16);
     });
     expect(result.current.activeLetter).toBe("D");
-    act(() => vi.advanceTimersByTime(100));
+    act(() => {
+      vi.advanceTimersByTime(100);
+    });
     act(() => {
       el.dispatchEvent(new Event("scroll"));
       vi.advanceTimersByTime(16);

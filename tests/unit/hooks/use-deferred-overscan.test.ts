@@ -20,7 +20,9 @@ afterEach(() => {
 describe("useDeferredOverscan", () => {
   it("stays at the initial overscan until ready", () => {
     const { result } = renderHook(() => useDeferredOverscan(false));
-    act(() => vi.advanceTimersByTime(1000));
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
     expect(result.current).toBe(1);
   });
 
@@ -31,10 +33,14 @@ describe("useDeferredOverscan", () => {
     expect(result.current).toBe(2);
     rerender({ ready: true });
     expect(result.current).toBe(2);
-    act(() => vi.advanceTimersByTime(16));
+    act(() => {
+      vi.advanceTimersByTime(16);
+    });
     // The frame fired, the task has not.
     expect(result.current).toBe(2);
-    act(() => vi.advanceTimersByTime(1));
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
     expect(result.current).toBe(5);
   });
 
@@ -42,7 +48,9 @@ describe("useDeferredOverscan", () => {
     const { result, rerender } = renderHook(({ ready }) => useDeferredOverscan(ready), {
       initialProps: { ready: true },
     });
-    act(() => vi.advanceTimersByTime(50));
+    act(() => {
+      vi.advanceTimersByTime(50);
+    });
     expect(result.current).toBe(3);
     rerender({ ready: false });
     expect(result.current).toBe(3);
@@ -57,7 +65,9 @@ describe("useDeferredOverscan", () => {
 
   it("cancels a scheduled task when unmounted between frame and task", () => {
     const { unmount } = renderHook(() => useDeferredOverscan(true));
-    act(() => vi.advanceTimersByTime(16));
+    act(() => {
+      vi.advanceTimersByTime(16);
+    });
     expect(vi.getTimerCount()).toBe(1);
     unmount();
     expect(vi.getTimerCount()).toBe(0);

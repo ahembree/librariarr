@@ -24,7 +24,9 @@ describe("useListFetch", () => {
     expect(fetchList).not.toHaveBeenCalled();
     await flushMicrotasks();
     expect(fetchList).toHaveBeenCalledTimes(1);
-    act(() => vi.advanceTimersByTime(1000));
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
     expect(fetchList).toHaveBeenCalledTimes(1);
   });
 
@@ -37,12 +39,18 @@ describe("useListFetch", () => {
     const second = vi.fn();
     const third = vi.fn();
     rerender({ fn: second });
-    act(() => vi.advanceTimersByTime(200));
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
     rerender({ fn: third });
-    act(() => vi.advanceTimersByTime(299));
+    act(() => {
+      vi.advanceTimersByTime(299);
+    });
     expect(second).not.toHaveBeenCalled();
     expect(third).not.toHaveBeenCalled();
-    act(() => vi.advanceTimersByTime(1));
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
     expect(second).not.toHaveBeenCalled();
     expect(third).toHaveBeenCalledTimes(1);
   });
@@ -53,7 +61,9 @@ describe("useListFetch", () => {
     await flushMicrotasks();
     const next = vi.fn();
     rerender({ fn: next });
-    act(() => vi.advanceTimersByTime(0));
+    act(() => {
+      vi.advanceTimersByTime(0);
+    });
     expect(next).toHaveBeenCalledTimes(1);
   });
 
@@ -72,7 +82,9 @@ describe("useListFetch", () => {
     const next = vi.fn();
     rerender({ fn: next });
     unmount();
-    act(() => vi.advanceTimersByTime(1000));
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
     expect(next).not.toHaveBeenCalled();
   });
 
@@ -81,7 +93,9 @@ describe("useListFetch", () => {
     const wrapper = ({ children }: { children: ReactNode }) => createElement(StrictMode, null, children);
     renderHook(() => useListFetch(fetchList), { wrapper });
     await flushMicrotasks();
-    act(() => vi.advanceTimersByTime(1000));
+    act(() => {
+      vi.advanceTimersByTime(1000);
+    });
     expect(fetchList).toHaveBeenCalledTimes(1);
   });
 });

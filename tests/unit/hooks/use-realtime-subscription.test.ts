@@ -150,9 +150,13 @@ describe("useRealtime ref count and idle close", () => {
     expect(result.current.connected).toBe(true);
     const source = latest();
     unmount();
-    act(() => vi.advanceTimersByTime(9_999));
+    act(() => {
+      vi.advanceTimersByTime(9_999);
+    });
     expect(source.closed).toBe(false);
-    act(() => vi.advanceTimersByTime(1));
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
     expect(source.closed).toBe(true);
   });
 
@@ -160,10 +164,14 @@ describe("useRealtime ref count and idle close", () => {
     const outgoing = renderHook(() => useRealtime("page-a", () => {}));
     const source = latest();
     outgoing.unmount();
-    act(() => vi.advanceTimersByTime(5_000));
+    act(() => {
+      vi.advanceTimersByTime(5_000);
+    });
     const cb = vi.fn();
     renderHook(() => useRealtime("page-b", cb));
-    act(() => vi.advanceTimersByTime(20_000));
+    act(() => {
+      vi.advanceTimersByTime(20_000);
+    });
     expect(FakeEventSource.instances).toHaveLength(1);
     expect(source.closed).toBe(false);
     act(() => source.emit("page-b", "{}"));
@@ -174,7 +182,9 @@ describe("useRealtime ref count and idle close", () => {
     const first = renderHook(() => useRealtime("e", () => {}));
     act(() => latest().open());
     first.unmount();
-    act(() => vi.advanceTimersByTime(10_000));
+    act(() => {
+      vi.advanceTimersByTime(10_000);
+    });
     const cb = vi.fn();
     renderHook(() => useRealtime("e", cb));
     expect(FakeEventSource.instances).toHaveLength(2);

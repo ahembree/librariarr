@@ -43,21 +43,31 @@ describe("useScrollRestoration — saving", () => {
   it("saves the position 150ms after the last scroll event", () => {
     renderHook(() => useScrollRestoration(KEY, false, 120, undefined, { getFirstVisibleIndex: () => 42 }));
     scroll(300);
-    act(() => vi.advanceTimersByTime(100));
+    act(() => {
+      vi.advanceTimersByTime(100);
+    });
     scroll(500);
-    act(() => vi.advanceTimersByTime(149));
+    act(() => {
+      vi.advanceTimersByTime(149);
+    });
     expect(stored()).toBeNull();
-    act(() => vi.advanceTimersByTime(1));
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
     expect(stored()).toEqual({ scrollTop: 500, firstVisibleIndex: 42, visibleCount: 120 });
   });
 
   it("records -1 without an index callback and clears the entry at the top", () => {
     renderHook(() => useScrollRestoration(KEY, false));
     scroll(200);
-    act(() => vi.advanceTimersByTime(150));
+    act(() => {
+      vi.advanceTimersByTime(150);
+    });
     expect(stored()).toEqual({ scrollTop: 200, firstVisibleIndex: -1 });
     scroll(0);
-    act(() => vi.advanceTimersByTime(150));
+    act(() => {
+      vi.advanceTimersByTime(150);
+    });
     expect(stored()).toBeNull();
   });
 
@@ -65,9 +75,13 @@ describe("useScrollRestoration — saving", () => {
     const { unmount } = renderHook(() => useScrollRestoration(KEY, false));
     scroll(200);
     unmount();
-    act(() => vi.advanceTimersByTime(500));
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
     scroll(300);
-    act(() => vi.advanceTimersByTime(500));
+    act(() => {
+      vi.advanceTimersByTime(500);
+    });
     expect(stored()).toBeNull();
   });
 
@@ -82,7 +96,9 @@ describe("useScrollRestoration — restoring", () => {
     sessionStorage.setItem(`scroll-${KEY}`, JSON.stringify({ scrollTop: 400, firstVisibleIndex: -1 }));
     renderHook(() => useScrollRestoration(KEY, true));
     expect(stored()).toBeNull();
-    act(() => vi.advanceTimersByTime(100));
+    act(() => {
+      vi.advanceTimersByTime(100);
+    });
     expect(scrollTo).not.toHaveBeenCalled();
   });
 
@@ -98,7 +114,9 @@ describe("useScrollRestoration — restoring", () => {
       ({ ready }) => useScrollRestoration(KEY, ready, undefined, setVisibleCount, { scrollToIndex }),
       { initialProps: { ready: false } },
     );
-    act(() => vi.advanceTimersByTime(100));
+    act(() => {
+      vi.advanceTimersByTime(100);
+    });
     expect(scrollTo).not.toHaveBeenCalled();
 
     rerender({ ready: true });
@@ -106,16 +124,22 @@ describe("useScrollRestoration — restoring", () => {
     expect(sessionStorage.getItem(`scroll-${KEY}-preserve`)).toBeNull();
     expect(stored()).toBeNull();
 
-    act(() => vi.advanceTimersByTime(16));
+    act(() => {
+      vi.advanceTimersByTime(16);
+    });
     expect(scrollTo).toHaveBeenCalledWith({ top: 400, behavior: "instant" });
     expect(scrollToIndex).not.toHaveBeenCalled();
-    act(() => vi.advanceTimersByTime(32));
+    act(() => {
+      vi.advanceTimersByTime(32);
+    });
     expect(scrollToIndex).toHaveBeenCalledWith(30);
 
     // A second ready transition does not restore again.
     rerender({ ready: false });
     rerender({ ready: true });
-    act(() => vi.advanceTimersByTime(100));
+    act(() => {
+      vi.advanceTimersByTime(100);
+    });
     expect(scrollTo).toHaveBeenCalledTimes(1);
   });
 
@@ -124,7 +148,9 @@ describe("useScrollRestoration — restoring", () => {
     sessionStorage.setItem(`scroll-${KEY}`, JSON.stringify({ scrollTop: 250, firstVisibleIndex: -1 }));
     const scrollToIndex = vi.fn();
     renderHook(() => useScrollRestoration(KEY, true, undefined, undefined, { scrollToIndex }));
-    act(() => vi.advanceTimersByTime(100));
+    act(() => {
+      vi.advanceTimersByTime(100);
+    });
     expect(scrollTo).toHaveBeenCalledTimes(1);
     expect(scrollToIndex).not.toHaveBeenCalled();
 
@@ -132,7 +158,9 @@ describe("useScrollRestoration — restoring", () => {
     sessionStorage.setItem(`scroll-other`, JSON.stringify({ scrollTop: 0, firstVisibleIndex: 3, visibleCount: 0 }));
     const setVisibleCount = vi.fn();
     renderHook(() => useScrollRestoration("other", true, undefined, setVisibleCount));
-    act(() => vi.advanceTimersByTime(100));
+    act(() => {
+      vi.advanceTimersByTime(100);
+    });
     expect(scrollTo).toHaveBeenCalledTimes(1);
     expect(setVisibleCount).not.toHaveBeenCalled();
   });
@@ -143,7 +171,9 @@ describe("useScrollRestoration — restoring", () => {
     expect(() => renderHook(() => useScrollRestoration(KEY, true))).not.toThrow();
     sessionStorage.setItem(`scroll-x-preserve`, "true");
     expect(() => renderHook(() => useScrollRestoration("x", true))).not.toThrow();
-    act(() => vi.advanceTimersByTime(100));
+    act(() => {
+      vi.advanceTimersByTime(100);
+    });
     expect(scrollTo).not.toHaveBeenCalled();
   });
 
