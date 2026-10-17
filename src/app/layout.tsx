@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import { connection } from "next/server";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Toaster } from "sonner";
 // Self-hosted (Fontsource) rather than next/font/google, which downloads the
@@ -38,11 +39,15 @@ export const viewport: Viewport = {
   interactiveWidget: "resizes-content",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // Render every page per request: its scripts carry the request's CSP nonce
+  // (`src/proxy.ts`), and a page prerendered at build time would have none, so
+  // the browser would refuse to run it. Only the login pages were static.
+  await connection();
   return (
     <html lang="en" className="dark">
       <body className="antialiased">
