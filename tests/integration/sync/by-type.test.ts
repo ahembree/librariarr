@@ -58,15 +58,18 @@ describe("POST /api/sync/by-type", () => {
       method: "POST",
       body: { libraryType: "MOVIE" },
     });
-    await expectJson(response, 401);
+    const body = await expectJson<{ error: string }>(response, 401);
+    expect(body.error).toBe("Unauthorized");
+    expect(mockEnqueueJob).not.toHaveBeenCalled();
   });
 
   it("enqueues a job per enabled library of the requested type", async () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id);
     const movies = await createTestLibrary(server.id, { key: "m1", type: "MOVIE" });
-    // A SERIES library that should be ignored
+    // A SERIES library and a disabled MOVIE library, both of which are ignored
     await createTestLibrary(server.id, { key: "s1", type: "SERIES" });
+    await createTestLibrary(server.id, { key: "m2", type: "MOVIE", enabled: false });
 
     setMockSession({ userId: user.id, isLoggedIn: true });
 
@@ -77,7 +80,9 @@ describe("POST /api/sync/by-type", () => {
     });
     const body = await expectJson<{ message: string; syncedCount: number; skippedCount: number }>(response, 200);
 
-    expect(body.syncedCount).toBe(1);
+    expect(body).toEqual({ message: "Sync started", syncedCount: 1, skippedCount: 0 });
+    const libraryJobs = mockEnqueueJob.mock.calls.filter((call) => call[0] === TASK_SYNC_SERVER);
+    expect(libraryJobs).toHaveLength(1);
     expect(mockEnqueueJob).toHaveBeenCalledWith(
       TASK_SYNC_SERVER,
       {
@@ -87,11 +92,12 @@ describe("POST /api/sync/by-type", () => {
         trigger: "manual sync of every MOVIE library",
         syncJobId: expect.any(String),
       },
-      expect.objectContaining({
+      {
         jobKey: `sync:${server.id}:${movies.key}`,
         queueName: MAIN_QUEUE,
+        maxAttempts: 3,
         priority: REQUESTED_SYNC_PRIORITY,
-      }),
+      },
     );
   });
 
@@ -126,9 +132,7 @@ describe("POST /api/sync/by-type", () => {
     expect(new Set(libraryJobs.map(([, payload]) => (payload as { syncJobId: string }).syncJobId))).toEqual(
       new Set(rows.map((row) => row.id)),
     );
-    expect(mockEmit).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "sync:started", meta: { serverId: server.id } }),
-    );
+    expect(mockEmit).toHaveBeenCalledWith({ type: "sync:started", userId: user.id, meta: { serverId: server.id } });
   });
 
   it("closes the row as FAILED when no library job could be queued", async () => {
@@ -305,7 +309,7 @@ describe("POST /api/sync/by-type", () => {
       await tx.$executeRawUnsafe(`SELECT pg_advisory_xact_lock(hashtext('sync-request:' || $1))`, server.id);
       locked();
       await committed;
-      await tx.syncJob.create({ data: { mediaServerId: server.id, status: "PENDING", startedAt: new Date() } });
+      return tx.syncJob.create({ data: { mediaServerId: server.id, status: "PENDING", startedAt: new Date() } });
     }, { timeout: 10_000 });
     await lockHeld;
 
@@ -316,14 +320,17 @@ describe("POST /api/sync/by-type", () => {
     // the other request committed, and then adds a row of its own.
     expect(mockQueuedSyncJobIds).not.toHaveBeenCalled();
     commit();
-    await perServerRequest;
+    const perServerRow = await perServerRequest;
     await expectJson(await byType, 200);
     expect(mockQueuedSyncJobIds).toHaveBeenCalledTimes(1);
-    const rows = await testPrisma.syncJob.findMany({ where: { mediaServerId: server.id }, orderBy: { startedAt: "asc" } });
+    const rows = await testPrisma.syncJob.findMany({ where: { mediaServerId: server.id } });
     expect(rows).toHaveLength(2);
+    // Identified by id, not by timestamp order: both rows can carry the same millisecond.
+    const byTypeRow = rows.find((row) => row.id !== perServerRow.id)!;
+    expect(byTypeRow.status).toBe("PENDING");
     expect(mockEnqueueJob).toHaveBeenCalledWith(
       TASK_SYNC_SERVER,
-      expect.objectContaining({ syncJobId: rows[1].id }),
+      expect.objectContaining({ syncJobId: byTypeRow.id }),
       expect.anything(),
     );
   });

@@ -28,6 +28,7 @@ describe("emitWatchHistoryUpdated", () => {
 
     await emitWatchHistoryUpdated("srv-1", { imported: 42 });
 
+    expect(h.findUnique).toHaveBeenCalledWith({ where: { id: "srv-1" }, select: { userId: true } });
     expect(h.emit).toHaveBeenCalledWith({
       type: "watch-history:updated",
       userId: "user-1",
@@ -43,7 +44,10 @@ describe("emitWatchHistoryUpdated", () => {
 
     await emitWatchHistoryUpdated("srv-1");
 
+    // Exactly one event, and it is not sync:completed.
+    expect(h.emit).toHaveBeenCalledTimes(1);
     expect(h.emit.mock.calls[0][0].type).toBe("watch-history:updated");
+    expect(h.emit).not.toHaveBeenCalledWith(expect.objectContaining({ type: "sync:completed" }));
   });
 
   it("emits with no extra meta when none is given", async () => {
@@ -67,6 +71,9 @@ describe("emitWatchHistoryUpdated", () => {
 
     await expect(emitWatchHistoryUpdated("srv-1")).resolves.toBeUndefined();
     expect(h.emit).not.toHaveBeenCalled();
-    expect(h.warn).toHaveBeenCalled();
+    expect(h.warn).toHaveBeenCalledWith("WatchHistory", "Failed to emit watch-history:updated", {
+      serverId: "srv-1",
+      error: "Error: db down",
+    });
   });
 });

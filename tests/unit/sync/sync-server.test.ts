@@ -342,8 +342,15 @@ describe("syncMediaServer", () => {
   it("creates a sync job and acquires semaphore", async () => {
     const { acquireSyncSlot, releaseSyncSlot } = await import("@/lib/sync/sync-semaphore");
     await syncMediaServer("server-1");
-    expect(acquireSyncSlot).toHaveBeenCalled();
-    expect(releaseSyncSlot).toHaveBeenCalled();
+    // No requested row and none queued: the run inserts its own PENDING row.
+    const inserts = findDbCalls('INSERT INTO "SyncJob"');
+    expect(inserts).toHaveLength(1);
+    expect(inserts[0].slice(2, 4)).toEqual(["server-1", "PENDING"]);
+    expect(acquireSyncSlot).toHaveBeenCalledTimes(1);
+    expect(releaseSyncSlot).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(acquireSyncSlot).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(releaseSyncSlot).mock.invocationCallOrder[0],
+    );
   });
 
   it("throws when server not found", async () => {
@@ -355,6 +362,8 @@ describe("syncMediaServer", () => {
     });
 
     await expect(syncMediaServer("nonexistent")).rejects.toThrow("MediaServer not found");
+    // The row it claimed is closed rather than left RUNNING.
+    expect(findDbCalls('UPDATE "SyncJob"', "FAILED")).toHaveLength(1);
   });
 
   it("cancels sync for disabled server", async () => {
@@ -401,6 +410,9 @@ describe("syncMediaServer", () => {
 
     mockPrisma.$queryRawUnsafe.mockImplementation(async (sql: string) => {
       if (sql.includes('INSERT INTO "SyncJob"')) return [{ id: "sync-job-id" }];
+      // A missing row reads as cancelled, so the flag must be answered for
+      // the run to reach the libraries at all.
+      if (sql.includes('SELECT "cancelRequested"')) return [{ cancelRequested: false }];
       if (sql.includes('UPDATE "SyncJob"')) return [{ id: "sync-job-id" }];
       if (sql.includes('SELECT') && sql.includes('"MediaServer"')) {
         return [{
@@ -417,9 +429,9 @@ describe("syncMediaServer", () => {
       if (sql.includes('SELECT') && sql.includes('"Library"') && sql.includes('enabled')) {
         return [{ key: "2" }]; // Library 2 is disabled
       }
-      // Library upsert/sync queries
-      if (sql.includes('INSERT INTO "Library"') || sql.includes('ON CONFLICT')) {
-        return [{ id: "lib-1" }];
+      // Library upsert (RETURNING "id","enabled") for the enabled library
+      if (sql.includes('INSERT INTO "Library"')) {
+        return [{ id: "lib-1", enabled: true }];
       }
       if (sql.includes('SELECT') && sql.includes('"MediaItem"') && sql.includes('thumbUrl')) {
         return [];
@@ -437,7 +449,13 @@ describe("syncMediaServer", () => {
     mockClient.getLibraryItemsPage.mockResolvedValue({ items: [], total: 0 });
 
     await syncMediaServer("server-1");
-    // Should complete successfully — disabled library skipped
+
+    // Only the enabled library is listed; the disabled one is never touched.
+    expect(mockClient.getLibraryItemsPage).toHaveBeenCalledWith("1", "movie", 0, expect.any(Number));
+    expect(mockClient.getLibraryItemsPage).not.toHaveBeenCalledWith("2", expect.anything(), expect.anything(), expect.anything());
+    expect(mockClient.getLibraryShows).not.toHaveBeenCalled();
+    expect(findDbCalls('INSERT INTO "Library"', "2")).toHaveLength(0);
+    expect(findDbCalls('UPDATE "SyncJob"', "COMPLETED").length).toBeGreaterThan(0);
   });
 
   it("releases semaphore even on error", async () => {
@@ -546,6 +564,7 @@ describe("syncMediaServer stale-item purge guard", () => {
     await syncMediaServer("server-1");
 
     expect(staleDelete().length).toBe(0);
+    expect(findDbCalls('"updatedAt"<$2').length).toBe(0);
     expect(findDbCalls('UPDATE "SyncJob"', "COMPLETED").length).toBeGreaterThan(0);
   });
 
@@ -560,14 +579,21 @@ describe("syncMediaServer stale-item purge guard", () => {
     await syncMediaServer("server-1");
 
     expect(staleDelete().length).toBe(1);
+    expect(staleDelete()[0][1]).toEqual(["stale-1"]);
     // The purge checks how many lifecycle exceptions it is about to cascade away
     expect(mockPrisma.lifecycleException.count).toHaveBeenCalledWith({
       where: { mediaItemId: { in: ["stale-1"] } },
     });
+    // ...and says so, since the exceptions do not come back with the item.
+    const { logger } = await import("@/lib/logger");
+    expect(logger.warn).toHaveBeenCalledWith(
+      "Sync",
+      'Removing 1 stale item(s) from library "Movies" deletes 2 lifecycle exception(s) attached to them — re-create the exception(s) if the item(s) reappear',
+    );
     expect(findDbCalls('UPDATE "SyncJob"', "COMPLETED").length).toBeGreaterThan(0);
   });
 
-  it("still purges an emptied library once a non-empty sync confirms the library state", async () => {
+  it("runs the stale check for an empty listing when the library holds no rows either", async () => {
     // Zero items fetched but the library had no rows either — nothing to
     // protect, the (empty) purge path is allowed through.
     mockSyncDb({ staleRows: [], existingCount: BigInt(0) });
@@ -933,6 +959,10 @@ describe("syncMediaServer per-item enrichment resilience", () => {
     vi.clearAllMocks();
     mockClient.testConnection.mockResolvedValue({ ok: true, serverName: "Test Plex" });
     mockClient.bulkListingIncomplete = true; // Plex: per-item enrichment runs
+  });
+  afterEach(() => {
+    // The client mock is shared by every describe: leave enrichment off.
+    mockClient.bulkListingIncomplete = false;
   });
 
   it("keeps the bulk-listing item when its per-item fetch REJECTS", async () => {
@@ -1442,14 +1472,18 @@ describe("syncMediaServer job lifecycle events", () => {
   it("aborts the watch-history phase on a Stop and ends the run CANCELLED", async () => {
     const { syncWatchHistory } = await import("@/lib/sync/sync-watch-history");
     const { logger } = await import("@/lib/logger");
+    let signalAbortedInPhase: boolean | undefined;
     vi.mocked(syncWatchHistory).mockImplementationOnce(async (_serverId, _onProgress, signal) => {
       // What the native path does on abort: roll back and throw.
       cancelWatch.controller!.abort();
-      expect(signal?.aborted).toBe(true);
+      signalAbortedInPhase = signal?.aborted;
       throw new Error("Watch history sync cancelled");
     });
 
     await syncMediaServer("server-1");
+
+    // The phase was handed the cancel watch's signal.
+    expect(signalAbortedInPhase).toBe(true);
 
     // A Stop here used to be ignored: the run finished COMPLETED.
     expect(findDbCalls('UPDATE "SyncJob"', "CANCELLED").length).toBe(1);

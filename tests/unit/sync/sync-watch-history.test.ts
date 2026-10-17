@@ -8,6 +8,7 @@ const {
   mockSyncTracearr,
   mockEnqueueJob,
   mockIsJobRetrying,
+  mockEmitUpdated,
 } = vi.hoisted(() => {
   // The DELETE + INSERTs run inside prisma.$transaction(cb) via tx.$executeRawUnsafe.
   // Route the tx's raw methods to the same fn the tests assert against so the
@@ -17,7 +18,7 @@ const {
   return {
     mockPrisma: {
       tracearrInstance: { findFirst: vi.fn() },
-      // Clears the "history cleared" marker once the full replace repopulates.
+      // Sets `watchHistorySyncedAt` once a full replace establishes the history.
       mediaServer: { updateMany: vi.fn().mockResolvedValue({ count: 0 }) },
       $queryRawUnsafe: queryRawUnsafe,
       $executeRawUnsafe: queryRawUnsafe,
@@ -46,6 +47,7 @@ const {
     mockEnqueueJob: vi.fn(
       async (_identifier: string, _payload: unknown, _spec?: unknown) => true,
     ),
+    mockEmitUpdated: vi.fn(async (_serverId: string, _meta?: Record<string, unknown>) => {}),
   };
 });
 
@@ -80,6 +82,10 @@ vi.mock("@/lib/jobs/client", () => ({
   isJobRetrying: mockIsJobRetrying,
 }));
 
+vi.mock("@/lib/sync/watch-history-events", () => ({
+  emitWatchHistoryUpdated: mockEmitUpdated,
+}));
+
 import { syncWatchHistory } from "@/lib/sync/sync-watch-history";
 // Deliberately NOT mocked: `@/lib/jobs/constants` is a dependency-free module of
 // string literals, and asserting against the real identifiers is what keeps the
@@ -89,6 +95,10 @@ import { TASK_TRACEARR_BACKFILL, MAIN_QUEUE } from "@/lib/jobs/constants";
 describe("syncWatchHistory", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Each test queues its own raw-query answers in call order; a queue left
+    // over by another test would shift every answer by one.
+    mockPrisma.$queryRawUnsafe.mockReset();
+    mockClient.getDetailedWatchHistory.mockReset();
     mockReconcile.mockResolvedValue(0);
     mockSyncTracearr.mockResolvedValue({ count: 7, backfillPending: false });
     mockEnqueueJob.mockResolvedValue(true);
@@ -130,6 +140,11 @@ describe("syncWatchHistory", () => {
         passes: "forward",
       });
       expect(mockClient.getDetailedWatchHistory).not.toHaveBeenCalled();
+      // The forward pass may have left `playCount`/`lastPlayedAt` where the full
+      // sync's account-scoped values put them, so it reconciles, and tells open
+      // pages the plays moved.
+      expect(mockReconcile).toHaveBeenCalledWith("server-1");
+      expect(mockEmitUpdated).toHaveBeenCalledWith("server-1", { imported: 7 });
     });
 
     it("skips entirely — never falls back to native — when the instance is disabled", async () => {
@@ -201,7 +216,7 @@ describe("syncWatchHistory", () => {
 
     mockClient.getDetailedWatchHistory.mockResolvedValueOnce([]);
 
-    // DELETE from WatchHistory
+    // pg_advisory_xact_lock (the DELETE follows it)
     mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]);
 
     const result = await syncWatchHistory("server-1");
@@ -262,19 +277,21 @@ describe("syncWatchHistory", () => {
       { id: "item-2", ratingKey: "200" },
     ]);
 
-    // DELETE from WatchHistory
+    // pg_advisory_xact_lock, then the DELETE
     mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]);
-
-    // INSERT into WatchHistory
     mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]);
 
     const result = await syncWatchHistory("server-1");
     expect(result).toEqual({ count: 2 }); // Only 2 matched, not 3
 
-    // Verify INSERT was called with correct number of value sets
+    // One INSERT carrying the two matched plays and not the unmatched one.
     const insertCalls = mockPrisma.$queryRawUnsafe.mock.calls
       .filter((args) => (args[0] as string).includes('INSERT INTO "WatchHistory"'));
     expect(insertCalls.length).toBe(1);
+    const params = insertCalls[0].slice(1);
+    expect(params).toEqual(expect.arrayContaining(["item-1", "Admin", "item-2", "User1"]));
+    expect(params).not.toContain("User2");
+    expect(mockEmitUpdated).toHaveBeenCalledWith("server-1", { imported: 2 });
   });
 
   it("handles entries in batches", async () => {
@@ -306,10 +323,10 @@ describe("syncWatchHistory", () => {
     }));
     mockPrisma.$queryRawUnsafe.mockResolvedValueOnce(mediaItems);
 
-    // DELETE from WatchHistory
+    // pg_advisory_xact_lock, the DELETE, then INSERT batch 1 (500 items) and
+    // batch 2 (100 items)
     mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]);
-
-    // INSERT batch 1 (500 items) and batch 2 (100 items)
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]);
     mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]);
     mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]);
 
@@ -341,7 +358,8 @@ describe("syncWatchHistory", () => {
     // No matching media items
     mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]);
 
-    // DELETE from WatchHistory
+    // pg_advisory_xact_lock, then the DELETE
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]);
     mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]);
 
     const result = await syncWatchHistory("server-1");
@@ -351,6 +369,8 @@ describe("syncWatchHistory", () => {
     const insertCalls = mockPrisma.$queryRawUnsafe.mock.calls
       .filter((args) => (args[0] as string).includes('INSERT INTO "WatchHistory"'));
     expect(insertCalls.length).toBe(0);
+    // Nothing landed, so no open page is asked to refetch.
+    expect(mockEmitUpdated).not.toHaveBeenCalled();
   });
 
   it("keeps every undated play a count-only server reports", async () => {
@@ -972,6 +992,8 @@ describe("syncWatchHistory", () => {
 describe("syncWatchHistory — incremental refresh", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockPrisma.$queryRawUnsafe.mockReset();
+    mockClient.getDetailedWatchHistory.mockReset();
     mockReconcile.mockResolvedValue(0);
     mockEnqueueJob.mockResolvedValue(true);
     mockPrisma.tracearrInstance.findFirst.mockResolvedValue(null);
@@ -1036,6 +1058,7 @@ describe("syncWatchHistory — incremental refresh", () => {
     const result = await syncWatchHistory("server-1", undefined, undefined, { incremental: true });
 
     expect(result).toEqual({ count: 1 });
+    expect(mockEmitUpdated).toHaveBeenCalledWith("server-1", { imported: 1 });
     // since = newest − 1h
     expect(mockClient.getDetailedWatchHistory).toHaveBeenCalledWith({
       since: new Date("2024-06-01T11:00:00.000Z"),
@@ -1082,7 +1105,7 @@ describe("syncWatchHistory — incremental refresh", () => {
       { establishedAt: null, newest: new Date("2024-06-01T12:00:00Z") },
     ]);
     mockClient.getDetailedWatchHistory.mockResolvedValueOnce([]);
-    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // DELETE (empty history path)
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // pg_advisory_xact_lock (empty history path)
 
     await syncWatchHistory("server-1", undefined, undefined, { incremental: true });
 
@@ -1094,11 +1117,14 @@ describe("syncWatchHistory — incremental refresh", () => {
     mockClient.supportsHistorySince = false;
     mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([plexRow({ type: "JELLYFIN" })]);
     mockClient.getDetailedWatchHistory.mockResolvedValueOnce([]);
-    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // DELETE (empty history path)
+    mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // pg_advisory_xact_lock (empty history path)
 
     await syncWatchHistory("server-1", undefined, undefined, { incremental: true });
 
-    // No boundary query is even made: the second raw call is the DELETE.
+    // No boundary query is even made.
+    expect(
+      mockPrisma.$queryRawUnsafe.mock.calls.some((args) => (args[0] as string).includes('MAX(wh."watchedAt")')),
+    ).toBe(false);
     expect(mockClient.getDetailedWatchHistory).toHaveBeenCalledWith(undefined);
     expect(deleteCalls()).toHaveLength(1);
   });
@@ -1115,7 +1141,9 @@ describe("syncWatchHistory — incremental refresh", () => {
     expect(result).toEqual({ count: 0 });
     expect(deleteCalls()).toHaveLength(0);
     expect(insertCalls()).toHaveLength(0);
-    // Nothing appended: no server-wide reconcile per finished playback.
+    // Nothing appended: no server-wide reconcile per finished playback, and
+    // no refetch for every open page either.
     expect(mockReconcile).not.toHaveBeenCalled();
+    expect(mockEmitUpdated).not.toHaveBeenCalled();
   });
 });

@@ -31,7 +31,9 @@ describe("cleanupOrphanedSyncJobs", () => {
     const sql = mockPrisma.$queryRawUnsafe.mock.calls[0][0] as string;
     expect(sql).toContain('UPDATE "SyncJob"');
     expect(sql).toContain("SET \"status\" = 'FAILED'");
-    expect(sql).toContain("'RUNNING', 'PENDING'");
+    expect(sql).toContain('"completedAt" = NOW()');
+    expect(sql).toContain("\"error\" = 'Server restarted while sync was in progress'");
+    expect(sql).toContain("WHERE \"status\" IN ('RUNNING', 'PENDING')");
 
     expect(mockLogger.info).toHaveBeenCalledTimes(1);
     expect(mockLogger.info).toHaveBeenCalledWith(
@@ -65,7 +67,7 @@ describe("cleanupOrphanedSyncJobs", () => {
     expect(mockLogger.info).not.toHaveBeenCalled();
   });
 
-  it("logs the singular-message count for a single orphan", async () => {
+  it("logs a count of one for a single orphan", async () => {
     mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([{ count: 1n }]);
 
     await cleanupOrphanedSyncJobs();

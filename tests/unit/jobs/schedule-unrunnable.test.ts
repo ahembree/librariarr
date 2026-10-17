@@ -30,7 +30,8 @@ describe("isScheduleDue with an unevaluable schedule", () => {
     // Every distinct expression was reported once.
     expect(reportsBefore).toBe(101);
 
-    // The 101st report cleared the set, so the first one is reported again.
+    // Once the set holds 100 problems it is cleared before the next one is
+    // added, so the first one is no longer remembered and is reported again.
     isScheduleDue("bad schedule 0", null, now, "03:00");
     expect(m.error).toHaveBeenCalledTimes(reportsBefore + 1);
   });

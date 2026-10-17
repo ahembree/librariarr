@@ -19,9 +19,9 @@ vi.mock("@/lib/db", async () => {
   return { prisma: getTestPrisma() };
 });
 
-const log = vi.hoisted(() => ({ warn: vi.fn(), error: vi.fn() }));
+const log = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }));
 vi.mock("@/lib/logger", () => ({
-  logger: { debug: vi.fn(), info: vi.fn(), warn: log.warn, error: log.error },
+  logger: { debug: vi.fn(), info: log.info, warn: log.warn, error: log.error },
   apiLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   dbLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
@@ -128,7 +128,7 @@ describe("item classification", () => {
     expect(line).toContain("x0, x1, x2, x3, x4, x5, x6, x7, x8, x9 (+2 more)");
   });
 
-  it("names the plural when items in several disabled libraries are skipped", async () => {
+  it("names the plural when several items in a disabled library are skipped", async () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id, { type: "PLEX" });
     await createTestLibrary(server.id, { key: "1", type: "MOVIE", enabled: false });
@@ -140,6 +140,10 @@ describe("item classification", () => {
 
     expect(result).toMatchObject({ status: "done", skippedDisabled: 2, upserted: 0 });
     expect(await prisma.mediaItem.count()).toBe(0);
+    expect(log.info).toHaveBeenCalledWith(
+      "SyncIncremental",
+      'Server "Test Server": upserted 0, deleted 0, skipped 2 in disabled libraries (incremental)',
+    );
   });
 });
 

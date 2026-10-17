@@ -3,7 +3,7 @@
  * defaults when no settings row exists, the unencrypted-backup warning, and an
  * incremental payload that omits its id lists or a fall-back reason.
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const m = vi.hoisted(() => ({
   syncMediaServerItems: vi.fn(),
@@ -48,24 +48,38 @@ beforeEach(() => {
 });
 
 describe("defaults with no settings row", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("prunes action history at the 30-day default", async () => {
-    const before = Date.now();
+    // A fixed clock in a stretch with no daylight-saving change anywhere: the
+    // cutoff is computed in local calendar days, so across a change it would
+    // be 30 days ± 1 hour and an exact assertion would depend on the TZ.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-07-15T12:00:00.000Z"));
     await cleanupOldActions();
     // The orphan sweep, then the retention pass.
     expect(m.lifecycleAction.deleteMany).toHaveBeenCalledTimes(2);
-    const where = JSON.stringify(m.lifecycleAction.deleteMany.mock.calls[1][0].where);
-    const cutoffs = [...where.matchAll(/"(\d{4}-\d{2}-\d{2}T[^"]+)"/g)].map((x) => new Date(x[1]).getTime());
-    expect(cutoffs.length).toBeGreaterThan(0);
-    for (const cutoff of cutoffs) {
-      expect(before - cutoff).toBeGreaterThanOrEqual(30 * 86_400_000 - 1000);
-      expect(before - cutoff).toBeLessThan(31 * 86_400_000);
-    }
+    const cutoff = new Date("2026-06-15T12:00:00.000Z");
+    expect(m.lifecycleAction.deleteMany).toHaveBeenNthCalledWith(2, {
+      where: {
+        status: { not: "PENDING" },
+        OR: [
+          { executedAt: { lt: cutoff } },
+          { executedAt: null, createdAt: { lt: cutoff } },
+        ],
+      },
+    });
   });
 
   it("warns that a backup without a passphrase is unencrypted, and keeps 7 backups", async () => {
     m.getBackupPassphrase.mockResolvedValue(null);
     await runScheduledBackup();
-    expect(m.warn).toHaveBeenCalledWith("Jobs", expect.stringContaining("UNENCRYPTED"));
+    expect(m.warn).toHaveBeenCalledWith(
+      "Jobs",
+      "Scheduled backup is UNENCRYPTED — it contains plaintext secrets. Set a backup encryption password under Settings → General.",
+    );
     expect(m.createBackup).toHaveBeenCalledWith(null);
     expect(m.pruneBackups).toHaveBeenCalledWith(7);
   });

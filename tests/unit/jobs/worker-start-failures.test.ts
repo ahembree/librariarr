@@ -37,7 +37,7 @@ beforeEach(async () => {
 describe("startWorker", () => {
   it("shares one in-flight start between concurrent callers", async () => {
     let resolve!: (r: unknown) => void;
-    m.run.mockReturnValue(new Promise((r) => { resolve = r; }));
+    m.run.mockReturnValueOnce(new Promise((r) => { resolve = r; }));
 
     const first = startWorker();
     const second = startWorker();

@@ -24,9 +24,12 @@ vi.mock("@/lib/logger", () => ({
 }));
 
 import { startWorker, stopWorker, recoverOrphanedWorkerLocks } from "@/lib/jobs/worker";
+import { taskList } from "@/lib/jobs/tasks";
 
 describe("worker runner", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    // The runner is module state: make sure no test inherits a started one.
+    await stopWorker();
     vi.clearAllMocks();
     runMigrations.mockResolvedValue(undefined);
     query.mockResolvedValue({ rows: [] });
@@ -39,19 +42,25 @@ describe("worker runner", () => {
     expect(run).toHaveBeenCalledTimes(1);
 
     const opts = run.mock.calls[0][0];
-    expect(opts.taskList).toBeDefined();
+    expect(opts.pgPool).toBe(m.pool);
+    expect(opts.taskList).toBe(taskList);
     expect(opts.parsedCronItems).toEqual([{ task: "dispatch-scheduled" }]);
     expect(opts.noHandleSignals).toBe(false);
-    expect(opts.concurrency).toBeGreaterThan(0);
+    expect(opts.concurrency).toBe(3);
     expect(parseCrontab).toHaveBeenCalledOnce();
 
     await stopWorker();
   });
 
-  it("builds a crontab that includes the dispatcher every minute", async () => {
+  it("builds a crontab: dispatcher every minute, action cleanup every 15 minutes, logs hourly, image prune daily", async () => {
     await startWorker();
     const crontab = parseCrontab.mock.calls[0][0] as string;
-    expect(crontab).toMatch(/^\* \* \* \* \* dispatch-scheduled$/m);
+    expect(crontab.split("\n")).toEqual([
+      "* * * * * dispatch-scheduled",
+      "*/15 * * * * cleanup-old-actions",
+      "0 * * * * archive-logs",
+      "30 3 * * * prune-image-cache",
+    ]);
     await stopWorker();
   });
 
@@ -103,6 +112,7 @@ describe("worker runner", () => {
     await recoverOrphanedWorkerLocks(m.pool as never);
 
     expect(runMigrations).toHaveBeenCalledWith({ pgPool: m.pool });
+    expect(runMigrations.mock.invocationCallOrder[0]).toBeLessThan(query.mock.invocationCallOrder[0]);
     expect(query).toHaveBeenCalledTimes(2);
     expect(query.mock.calls.some((c) => /_private_job_queues/.test(c[0] as string))).toBe(true);
     expect(query.mock.calls.some((c) => /_private_jobs/.test(c[0] as string))).toBe(true);

@@ -66,6 +66,10 @@ function record(id: string, ratingKey: string, overrides: Record<string, unknown
     tvdb_id: null,
     started_at: startedAt.toISOString(),
     stopped_at: new Date(startedAt.getTime() + 3_600_000).toISOString(),
+    // A 40%-watched play of a 100-minute film; the int64 fields arrive as strings.
+    duration_ms: 2_400_000,
+    progress_ms: "2400000",
+    total_duration_ms: "6000000",
     watched: false,
     percent_complete: 40,
     segment_count: 1,

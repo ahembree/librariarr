@@ -33,6 +33,8 @@ vi.mock("@/lib/sync/sync-watch-history", () => ({ syncWatchHistory: vi.fn(async 
 const state = vi.hoisted(() => ({
   catalog: [] as string[],
   onFirstPage: null as null | (() => void),
+  /** Rating keys the sync asked the server about one by one. */
+  confirmed: [] as string[],
 }));
 
 function movie(key: string) {
@@ -65,6 +67,7 @@ vi.mock("@/lib/media-server/factory", async () => {
         return { items, total };
       }),
       getItemMetadata: vi.fn(async (key: string) => {
+        state.confirmed.push(key);
         if (!state.catalog.includes(key)) throw new MediaItemNotFoundError(key);
         return movie(key);
       }),
@@ -82,6 +85,7 @@ beforeEach(async () => {
   await prisma.lifecycleException.deleteMany();
   await cleanDatabase();
   state.onFirstPage = null;
+  state.confirmed = [];
 });
 afterAll(async () => {
   await prisma.watchHistory.deleteMany();
@@ -116,9 +120,13 @@ describe("full sync stale purge under a shifting listing", () => {
       state.catalog = state.catalog.filter((k) => k !== keyAt(10));
       state.catalog.push("z-new-movie");
     };
+    // Keeps the second sync's start strictly after the first sync's row writes,
+    // so the skipped row really is a stale candidate below.
     await new Promise((r) => setTimeout(r, 5));
     await syncMediaServer(server.id, undefined, { skipWatchHistory: true });
 
+    // It was a stale candidate, and kept only because the server confirmed it.
+    expect(state.confirmed).toEqual([keyAt(500)]);
     const still = await prisma.mediaItem.findFirst({ where: { ratingKey: keyAt(500) } });
     expect(still, "k0500 is still on the server but was purged").not.toBeNull();
     expect(await prisma.watchHistory.count({ where: { mediaItemId: skipped.id } })).toBe(1);

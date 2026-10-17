@@ -149,6 +149,7 @@ describe("recoverHistoryForNewItems", () => {
       updated: 0,
       skipped: 0,
     });
+    m.reconcileWatchStateFromHistory.mockResolvedValue(0);
   });
 
   describe("candidate selection", () => {
@@ -296,7 +297,7 @@ describe("recoverHistoryForNewItems", () => {
         // The account-name map: recovered plays must be attributed with the same
         // username vocabulary as every other row on the server, or a re-added
         // item's history lands under a different "person".
-        expect.anything(),
+        new Map([["srv-user-1", "weingart"]]),
         // The Tracearr server they came from, which every write re-checks.
         TRACEARR_SERVER_ID,
       );
@@ -385,14 +386,20 @@ describe("recoverHistoryForNewItems", () => {
         updated: 0,
         skipped: 0,
       });
-      m.reconcileWatchStateFromHistory.mockRejectedValue(new Error("db down"));
+      m.reconcileWatchStateFromHistory.mockRejectedValueOnce(new Error("db down"));
 
       // The rows are committed; the next run's reconcile corrects the columns.
       expect(await recoverHistoryForNewItems(SERVER_ID)).toEqual({
         checked: 1,
         imported: 1,
       });
-      expect(m.logger.warn).toHaveBeenCalled();
+      expect(m.logger.warn).toHaveBeenCalledWith(
+        "WatchHistory",
+        'Failed to reconcile play state after recovering Tracearr history for "Test Plex"',
+        { error: "Error: db down" },
+      );
+      // The caches still drop, so the recovered plays show on the History page.
+      expect(m.invalidateMediaCaches).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -422,8 +429,10 @@ describe("recoverHistoryForNewItems", () => {
 
     it("does not abort the pass when one item's lookup fails", async () => {
       candidates = [candidate(1), candidate(2), candidate(3)];
+      // A failure about this item's answer, not the host — a 429 or an
+      // unreachable Tracearr stops the pass instead (see below).
       m.getHistoryForItem
-        .mockRejectedValueOnce(new Error("tracearr 429"))
+        .mockRejectedValueOnce(new TypeError("Cannot read properties of undefined (reading 'records')"))
         .mockResolvedValue([play("chain-1")]);
       m.importTracearrRecords.mockResolvedValue({
         inserted: 1,
@@ -437,8 +446,8 @@ describe("recoverHistoryForNewItems", () => {
       expect(result).toEqual({ checked: 3, imported: 2 });
       expect(m.logger.warn).toHaveBeenCalledWith(
         "WatchHistory",
-        expect.stringContaining("Item 1"),
-        expect.objectContaining({ error: expect.stringContaining("429") }),
+        'Could not recover Tracearr history for "Item 1" on "Test Plex" — continuing with the remaining candidates',
+        { error: "TypeError: Cannot read properties of undefined (reading 'records')" },
       );
     });
 

@@ -35,7 +35,8 @@ describe("POST /api/sync/cancel", () => {
 
   it("returns 401 without auth", async () => {
     const response = await cancel("whatever");
-    await expectJson(response, 401);
+    const body = await expectJson<{ error: string }>(response, 401);
+    expect(body.error).toBe("Unauthorized");
   });
 
   it("returns 404 when the server does not exist", async () => {
@@ -89,12 +90,21 @@ describe("POST /api/sync/cancel", () => {
     const job = await prisma.syncJob.create({ data: { mediaServerId: server.id, status: "RUNNING" } });
     setMockSession({ userId: user.id, isLoggedIn: true });
 
-    const response = await cancel(server.id);
-    await expectJson(response, 200);
+    const events: AppEvent[] = [];
+    const unsubscribe = eventBus.subscribe((event) => events.push(event));
+    try {
+      const response = await cancel(server.id);
+      expect(await expectJson(response, 200)).toEqual({ success: true });
+    } finally {
+      unsubscribe();
+    }
 
     const row = await prisma.syncJob.findUniqueOrThrow({ where: { id: job.id } });
     expect(row.status).toBe("RUNNING");
     expect(row.cancelRequested).toBe(true);
+    expect(row.completedAt).toBeNull();
+    // The run announces its own exit; nothing ended here, so nothing is announced.
+    expect(events.filter((e) => e.type === "sync:failed")).toEqual([]);
   });
 
   // The library pages' Sync queues behind a running sync, so a server can hold

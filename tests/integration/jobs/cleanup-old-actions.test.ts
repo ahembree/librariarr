@@ -89,6 +89,9 @@ describe("cleanupOldActions (real database)", () => {
     });
 
     const before = await computeDeletionStats(user.id);
+    // The completed delete is counted before cleanup runs...
+    expect(before.totalBytesDeleted).toBe("4000000000");
+    expect(before.actionCount).toBe(1);
     await cleanupOldActions();
 
     expect(await exists(completed.id)).toBe(true);
@@ -104,10 +107,17 @@ describe("cleanupOldActions (real database)", () => {
       createdAt: new Date(Date.now() - 61 * DAY),
       executedAt: new Date(Date.now() - 31 * DAY),
     });
+    // Inside the window: kept beside it.
+    const recent = await action(user.id, ruleSet.id, {
+      status: "COMPLETED",
+      createdAt: new Date(Date.now() - 59 * DAY),
+      executedAt: new Date(Date.now() - 29 * DAY),
+    });
 
     await cleanupOldActions();
 
     expect(await exists(old.id)).toBe(false);
+    expect(await exists(recent.id)).toBe(true);
   });
 
   it("ages a row with no recorded run time by when it was created", async () => {

@@ -15,7 +15,11 @@ describe("runJobNow execution via an API key", () => {
     await expect(
       runJobNow("u1", "execution", "via API key", { viaApiKey: "Script" }),
     ).resolves.toEqual({ ok: false, error: "Failed to enqueue execution job" });
-    expect(m.enqueueJob.mock.calls[0][2]).toMatchObject({ jobKey: "execution-api:u1" });
+    expect(m.enqueueJob.mock.calls[0][2]).toEqual({
+      jobKey: "execution-api:u1",
+      queueName: "librariarr:main",
+      maxAttempts: 1,
+    });
     expect(m.update).not.toHaveBeenCalled();
   });
 });

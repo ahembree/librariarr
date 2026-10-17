@@ -100,5 +100,11 @@ describe("dispatchScheduledJobs enqueue failures", () => {
 
     // The failed sync write is followed by the detection, execution and backup writes.
     expect(m.appSettings.update).toHaveBeenCalledTimes(4);
+    expect(m.error).toHaveBeenCalledTimes(1);
+    expect(m.error).toHaveBeenCalledWith(
+      "Jobs",
+      "Failed to dispatch scheduled sync — leaving watermark unadvanced",
+      { error: "Error: write failed" },
+    );
   });
 });
