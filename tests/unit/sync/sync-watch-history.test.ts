@@ -1064,6 +1064,7 @@ describe("syncWatchHistory — incremental refresh", () => {
     // since = newest − 1h
     expect(mockClient.getDetailedWatchHistory).toHaveBeenCalledWith({
       since: new Date("2024-06-01T11:00:00.000Z"),
+      signal: undefined,
     });
     // Append-only: the stored history is never dropped on this path.
     expect(deleteCalls()).toHaveLength(0);
@@ -1097,7 +1098,7 @@ describe("syncWatchHistory — incremental refresh", () => {
     const result = await syncWatchHistory("server-1", undefined, undefined, { incremental: true });
 
     expect(result).toEqual({ count: 1 });
-    expect(mockClient.getDetailedWatchHistory).toHaveBeenCalledWith(undefined);
+    expect(mockClient.getDetailedWatchHistory).toHaveBeenCalledWith({ signal: undefined });
     expect(deleteCalls()).toHaveLength(1);
   });
 
@@ -1111,7 +1112,7 @@ describe("syncWatchHistory — incremental refresh", () => {
 
     await syncWatchHistory("server-1", undefined, undefined, { incremental: true });
 
-    expect(mockClient.getDetailedWatchHistory).toHaveBeenCalledWith(undefined);
+    expect(mockClient.getDetailedWatchHistory).toHaveBeenCalledWith({ signal: undefined });
     expect(deleteCalls()).toHaveLength(1);
   });
 
@@ -1127,7 +1128,7 @@ describe("syncWatchHistory — incremental refresh", () => {
     expect(
       mockPrisma.$queryRawUnsafe.mock.calls.some((args) => (args[0] as string).includes('MAX(wh."watchedAt")')),
     ).toBe(false);
-    expect(mockClient.getDetailedWatchHistory).toHaveBeenCalledWith(undefined);
+    expect(mockClient.getDetailedWatchHistory).toHaveBeenCalledWith({ signal: undefined });
     expect(deleteCalls()).toHaveLength(1);
   });
 

@@ -409,6 +409,7 @@ export class PlexClient implements MediaServerClient {
   private async forEachHistoryPage(
     onPage: (metadata: Array<Record<string, unknown>>) => void,
     since?: Date,
+    signal?: AbortSignal,
   ): Promise<void> {
     const PAGE_SIZE = 5000;
     let start = 0;
@@ -424,12 +425,14 @@ export class PlexClient implements MediaServerClient {
       : "/status/sessions/history/all";
 
     while (true) {
+      signal?.throwIfAborted();
       const response = await this.client.get(path, {
         params: {
           sort: "viewedAt:desc",
           "X-Plex-Container-Start": start,
           "X-Plex-Container-Size": PAGE_SIZE,
         },
+        signal,
       });
       const container = response.data?.MediaContainer ?? {};
       const metadata: Array<Record<string, unknown>> = container.Metadata || [];
@@ -510,7 +513,7 @@ export class PlexClient implements MediaServerClient {
   /** `getDetailedWatchHistory({ since })` filters server-side via `viewedAt>=`. */
   readonly supportsHistorySince = true;
 
-  async getDetailedWatchHistory(options?: { since?: Date }): Promise<DetailedWatchHistoryEntry[]> {
+  async getDetailedWatchHistory(options?: { since?: Date; signal?: AbortSignal }): Promise<DetailedWatchHistoryEntry[]> {
     const entries: DetailedWatchHistoryEntry[] = [];
 
     try {
@@ -571,7 +574,7 @@ export class PlexClient implements MediaServerClient {
             ...(section != null && section !== "" ? { librarySectionId: String(section) } : {}),
           });
         }
-      }, options?.since);
+      }, options?.since, options?.signal);
     } catch (error) {
       // Re-throw so the caller can tell a fetch failure apart from a genuinely
       // empty history. The watch-history sync does a destructive full-replace;

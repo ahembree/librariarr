@@ -107,7 +107,12 @@ export interface MediaServerClient {
    * "played" set, not dated events) ignores it and returns everything, and the
    * caller must treat the result as the full set.
    */
-  getDetailedWatchHistory(options?: { since?: Date }): Promise<DetailedWatchHistoryEntry[]>;
+  /**
+   * `signal` cancels the fetch between (and during) its requests: it rejects
+   * with the abort rather than returning what was read so far, since a partial
+   * history fed to the full replace would delete every play it missed.
+   */
+  getDetailedWatchHistory(options?: { since?: Date; signal?: AbortSignal }): Promise<DetailedWatchHistoryEntry[]>;
   /**
    * True only when `getDetailedWatchHistory({ since })` really filters
    * server-side. The incremental watch-history refresh appends whatever comes
