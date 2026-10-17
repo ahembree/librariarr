@@ -37,8 +37,8 @@ export async function GET(
   const item = await appCache.getOrSet(
     `image-meta:${id}`,
     () =>
-      prisma.mediaItem.findUnique({
-        where: { id },
+      prisma.mediaItem.findFirst({
+        where: { id, library: { mediaServer: { userId: session.userId } } },
         select: {
           // The image cache is keyed within the item's library: artwork paths
           // are per-server ids (see computeCacheKey).
@@ -52,7 +52,6 @@ export async function GET(
             select: {
               mediaServer: {
                 select: {
-                  userId: true,
                   url: true,
                   accessToken: true,
                   tlsSkipVerify: true,
@@ -72,10 +71,6 @@ export async function GET(
 
   if (!item.library.mediaServer) {
     return NextResponse.json({ error: "Server not found" }, { status: 404 });
-  }
-
-  if (item.library.mediaServer.userId !== session.userId) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
   // Resolve thumb path based on type. Everything but `role` goes through the

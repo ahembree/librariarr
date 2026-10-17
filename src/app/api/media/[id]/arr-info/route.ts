@@ -32,22 +32,13 @@ export async function GET(
 
   const { id } = await params;
 
-  const item = await prisma.mediaItem.findUnique({
-    where: { id },
-    include: {
-      externalIds: true,
-      library: {
-        include: { mediaServer: true },
-      },
-    },
+  const item = await prisma.mediaItem.findFirst({
+    where: { id, library: { mediaServer: { userId: session.userId } } },
+    include: { externalIds: true },
   });
 
   if (!item) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
-  }
-
-  if (!item.library.mediaServer || item.library.mediaServer.userId !== session.userId) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
   // One live lookup per instance, in parallel, each bounded: a timing-out
