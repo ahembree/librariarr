@@ -298,6 +298,19 @@ describe("POST /api/tools/preroll/presets", () => {
     expect(await getTestPrisma().prerollPreset.count()).toBe(0);
   });
 
+  // Only spaces was stored as "" once trimmed.
+  it.each([
+    ["name", { name: "   ", path: "/prerolls/holiday.mp4" }, "name: Name is required"],
+    ["path", { name: "Holiday", path: "  " }, "path: Path is required"],
+  ])("refuses a %s that is only spaces", async (_label, body, detail) => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id});
+
+    const res = await callRoute(postPreset, { method: "POST", body });
+    expect(await expectJson(res, 400)).toEqual({ error: "Validation failed", details: [detail] });
+    expect(await getTestPrisma().prerollPreset.count()).toBe(0);
+  });
+
   it("GET after POST returns created preset", async () => {
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id});
@@ -362,6 +375,22 @@ describe("PUT /api/tools/preroll/presets/[id]", () => {
 
     expect(body.preset.name).toBe("New Name");
     expect(body.preset.path).toBe("/new/path.mp4");
+  });
+
+  it.each([
+    ["name", { name: "  " }, "name: Name is required"],
+    ["path", { path: "   " }, "path: Path is required"],
+  ])("refuses changing the %s to only spaces", async (_label, update, detail) => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id});
+    const { preset: created } = await (
+      await callRoute(postPreset, { method: "POST", body: { name: "Old Name", path: "/old/path.mp4" } })
+    ).json();
+
+    const res = await callRouteWithParams(putPreset, { id: created.id }, { method: "PUT", body: update });
+    expect(await expectJson(res, 400)).toEqual({ error: "Validation failed", details: [detail] });
+    const row = await getTestPrisma().prerollPreset.findUniqueOrThrow({ where: { id: created.id } });
+    expect(row).toMatchObject({ name: "Old Name", path: "/old/path.mp4" });
   });
 
   it("cannot update another user's preset", async () => {

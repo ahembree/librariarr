@@ -199,6 +199,22 @@ describe("removeItemFromCollections", () => {
     expect(mockPlex.deleteCollection).toHaveBeenCalledWith("col1");
   });
 
+  // The sync adds a show to the collection by trimmed, lower-cased title; the
+  // exclusion must find the same show, or it is added and never removed.
+  it("finds the show the way the sync that added it did, ignoring case and spaces", async () => {
+    mockPrisma.library.findMany.mockResolvedValue([tvLib]);
+    mockPlex.getCollections.mockResolvedValue([{ ratingKey: "col1", title: "Leaving Soon" }]);
+    mockPlex.getLibraryItems.mockResolvedValue([{ title: "The Office", ratingKey: "show-7" }]);
+    mockPlex.getCollectionItems
+      .mockResolvedValueOnce([{ ratingKey: "show-7" }, { ratingKey: "show-8" }])
+      .mockResolvedValueOnce([{ ratingKey: "show-8" }]);
+
+    await removeItemFromCollections("u1", "SERIES", "Leaving Soon", "ep-rk", " the office ");
+
+    expect(mockPlex.removeCollectionItem).toHaveBeenCalledExactlyOnceWith("col1", "show-7");
+    expect(mockPlex.deleteCollection).not.toHaveBeenCalled();
+  });
+
   it("leaves the collection alone when the show is not in Plex", async () => {
     mockPrisma.library.findMany.mockResolvedValue([tvLib]);
     mockPlex.getCollections.mockResolvedValue([{ ratingKey: "col1", title: "Leaving Soon" }]);

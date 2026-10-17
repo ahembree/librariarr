@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { createMediaServerClient } from "@/lib/media-server/factory";
-import type { MediaServerType } from "@/generated/prisma/client";
 import { validateRequest, serverTestSchema } from "@/lib/validation";
 import { sanitizeErrorDetail } from "@/lib/api/sanitize";
 
@@ -17,7 +16,7 @@ export async function POST(request: NextRequest) {
   const { url, accessToken, type, tlsSkipVerify } = data;
 
   const client = createMediaServerClient(
-    type as MediaServerType,
+    type,
     url,
     accessToken,
     { skipTlsVerify: !!tlsSkipVerify }

@@ -529,6 +529,8 @@ export async function runEnforcerTick() {
 
                 if (schedule.action === "terminate_immediate") {
                   for (const session of sessions) {
+                    // No id: nothing to terminate (see the maintenance loop).
+                    if (!session.sessionId) continue;
                     if (blackoutExcluded.includes(session.username)) continue;
                     const termination = {
                       serverId: server.id,
@@ -552,6 +554,9 @@ export async function runEnforcerTick() {
                   const blackoutNow = Date.now();
 
                   for (const session of sessions) {
+                    // No id: it would share one pending key with every other
+                    // id-less session, and there is nothing to terminate.
+                    if (!session.sessionId) continue;
                     if (blackoutExcluded.includes(session.username)) continue;
                     const sessionKey = `blackout:${schedule.id}:${schedule.userId}:${server.id}:${session.sessionId}`;
                     activeBlackoutSessionKeys.add(sessionKey);
@@ -616,6 +621,7 @@ export async function runEnforcerTick() {
                     // Blackout already active — terminate any sessions not in the known set
                     const knownIds = knownBlackoutSessions.get(snapshotKey)!;
                     for (const session of sessions) {
+                      if (!session.sessionId) continue;
                       if (blackoutExcluded.includes(session.username)) continue;
                       if (!knownIds.has(blockNewIdentity(session))) {
                         const termination = {

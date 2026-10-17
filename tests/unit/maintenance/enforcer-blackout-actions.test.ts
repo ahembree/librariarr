@@ -117,6 +117,14 @@ describe("blackout terminate_immediate", () => {
     expect(c.terminateSession).toHaveBeenCalledWith("s2", "Bye");
   });
 
+  // As the maintenance loop does: an id-less session cannot be terminated.
+  it("skips a session with no id", async () => {
+    setBlackouts([blackout({})]);
+    const c = client({ getSessions: vi.fn().mockResolvedValue([session(""), session("s2")]) });
+    await runEnforcerTick();
+    expect(c.terminateSession).toHaveBeenCalledExactlyOnceWith("s2", DEFAULT_BLACKOUT_MSG);
+  });
+
   it("does nothing outside the window", async () => {
     setBlackouts([blackout(pastWindow())]);
     const c = client({ getSessions: vi.fn().mockResolvedValue([session("s1")]) });
@@ -210,7 +218,34 @@ describe("blackout warn_then_terminate", () => {
   });
 });
 
+describe("blackout warn_then_terminate, id-less sessions", () => {
+  it("neither warns nor terminates a session with no id", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2030-01-01T12:00:00Z"));
+    setBlackouts([blackout({ action: "warn_then_terminate", delay: 10 })]);
+    const notifySession = vi.fn().mockResolvedValue(undefined);
+    const c = client({ getSessions: vi.fn().mockResolvedValue([session(""), session("s2")]), notifySession });
+
+    await runEnforcerTick();
+    vi.setSystemTime(new Date("2030-01-01T12:00:11Z"));
+    await runEnforcerTick();
+    expect(notifySession).toHaveBeenCalledExactlyOnceWith("s2", DEFAULT_BLACKOUT_MSG);
+    expect(c.terminateSession).toHaveBeenCalledExactlyOnceWith("s2", DEFAULT_BLACKOUT_MSG);
+  });
+});
+
 describe("blackout block_new_only", () => {
+  it("skips a new session with no id", async () => {
+    setBlackouts([blackout({ action: "block_new_only" })]);
+    const getSessions = vi.fn().mockResolvedValue([session("old")]);
+    const c = client({ getSessions });
+
+    await runEnforcerTick(); // snapshot {old}
+    getSessions.mockResolvedValue([session("old"), session("", "carol", "2"), session("new")]);
+    await runEnforcerTick();
+    expect(c.terminateSession).toHaveBeenCalledExactlyOnceWith("new", DEFAULT_BLACKOUT_MSG);
+  });
+
   it("re-snapshots after the window closes and logs a failed termination; excluded users are spared", async () => {
     const schedule = blackout({ action: "block_new_only" });
     setBlackouts([schedule]);

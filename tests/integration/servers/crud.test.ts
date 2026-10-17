@@ -239,6 +239,24 @@ describe("Server CRUD endpoints", () => {
       expect(body.details).toEqual(["url: URL must start with http:// or https://"]);
     });
 
+    // `createMediaServerClient` throws for a type it cannot build, which was a 500.
+    it("returns 400 for a server type the app cannot talk to", async () => {
+      const user = await createTestUser();
+      setMockSession({ userId: user.id, isLoggedIn: true });
+
+      const response = await callRoute(POST, {
+        url: "/api/servers",
+        method: "POST",
+        body: { name: "Kodi", url: "http://kodi:8080", accessToken: "tok", type: "KODI" },
+      });
+      expect(await expectJson(response, 400)).toEqual({
+        error: "Validation failed",
+        details: ["type: Server type must be PLEX, JELLYFIN or EMBY"],
+      });
+      expect(mockTestConnection).not.toHaveBeenCalled();
+      expect(await getTestPrisma().mediaServer.count()).toBe(0);
+    });
+
     it("returns 400 when Plex connection test fails", async () => {
       mockTestConnection.mockResolvedValue({
         ok: false,

@@ -219,10 +219,15 @@ const discordWebhookUrlSchema = z
   )
   .optional();
 
+// "" is kept, not turned into "absent": the settings page sends "" to clear a
+// saved avatar, and the PUT leaves an absent field as it is — so dropping ""
+// made clearing it impossible.
+const discordAvatarUrlSchema = z.union([z.string().url(), z.literal("")]).optional();
+
 export const discordSettingsSchema = z.object({
   webhookUrl: discordWebhookUrlSchema,
   webhookUsername: z.string().max(80).optional(),
-  webhookAvatarUrl: z.string().optional().transform((v) => v || undefined).pipe(z.string().url().optional()),
+  webhookAvatarUrl: discordAvatarUrlSchema,
   notifyMaintenance: z.boolean().optional(),
   notifyApiKeys: z.boolean().optional(),
 });
@@ -230,7 +235,7 @@ export const discordSettingsSchema = z.object({
 export const discordTestSchema = z.object({
   webhookUrl: discordWebhookUrlSchema,
   webhookUsername: z.string().max(80).optional(),
-  webhookAvatarUrl: z.string().optional().transform((v) => v || undefined).pipe(z.string().url().optional()),
+  webhookAvatarUrl: discordAvatarUrlSchema,
 });
 
 export const dedupSettingsSchema = z.object({
@@ -319,7 +324,8 @@ export const terminateSessionSchema = z.object({
 // specific user-facing messages. Keep this schema permissive so those messages
 // surface instead of a generic "Validation failed".
 export const blackoutCreateSchema = z.object({
-  name: z.string().min(1, "Name is required"),
+  // Trimmed first: "   " passed `min(1)` and was stored as "".
+  name: z.string().trim().min(1, "Name is required"),
   scheduleType: z.enum(["one_time", "recurring"]),
   startDate: z.string().nullable().optional(),
   endDate: z.string().nullable().optional(),
@@ -347,8 +353,9 @@ export const prerollValidatePathSchema = z.object({
 });
 
 export const prerollPresetCreateSchema = z.object({
-  name: z.string().min(1, "Name is required"),
-  path: z.string().min(1, "Path is required"),
+  // Trimmed first: "   " passed `min(1)` and was stored as "".
+  name: z.string().trim().min(1, "Name is required"),
+  path: z.string().trim().min(1, "Path is required"),
 });
 
 export const prerollPresetUpdateSchema = prerollPresetCreateSchema.partial();
@@ -817,6 +824,15 @@ export const arrTestConnectionSchema = z.object({
 
 // ─── Server schemas ───
 
+// The media servers `createMediaServerClient` can build. A free string let an
+// unknown type through validation and the factory threw, answering 500.
+const mediaServerTypeSchema = z.enum(["PLEX", "JELLYFIN", "EMBY"], {
+  error: (issue) =>
+    issue.input === undefined || issue.input === ""
+      ? "Server type is required"
+      : "Server type must be PLEX, JELLYFIN or EMBY",
+});
+
 /**
  * `POST /api/servers`. A Plex server picked from discovery sends its
  * `machineId` and no `accessToken`: the route looks the token up on plex.tv
@@ -832,7 +848,7 @@ export const serverAddSchema = z.object({
   accessToken: z.string().min(1, "Access token is required").optional(),
   machineId: z.string().optional(),
   tlsSkipVerify: z.boolean().optional(),
-  type: z.string().optional(),
+  type: mediaServerTypeSchema.optional(),
 }).refine(
   (data) => data.accessToken !== undefined || (!!data.machineId && (data.type ?? "PLEX") === "PLEX"),
   { message: "Access token is required", path: ["accessToken"] }
@@ -876,7 +892,7 @@ export const serverTestSchema = z.object({
     "URL must start with http:// or https://"
   ),
   accessToken: z.string().min(1, "Access token is required"),
-  type: z.string().min(1, "Server type is required"),
+  type: mediaServerTypeSchema,
   tlsSkipVerify: z.boolean().optional(),
 });
 

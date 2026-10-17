@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { createMediaServerClient } from "@/lib/media-server/factory";
-import type { MediaServerType } from "@/generated/prisma/client";
 import { validateRequest, serverAddSchema } from "@/lib/validation";
 import { sanitize, sanitizeErrorDetail } from "@/lib/api/sanitize";
 import { eventBus } from "@/lib/events/event-bus";
@@ -66,7 +65,7 @@ export async function POST(request: NextRequest) {
   if (error) return error;
 
   const { name, url, machineId, tlsSkipVerify, type } = data;
-  const serverType = (type as MediaServerType) ?? "PLEX";
+  const serverType = type ?? "PLEX";
 
   let accessToken = data.accessToken;
   if (accessToken === undefined) {

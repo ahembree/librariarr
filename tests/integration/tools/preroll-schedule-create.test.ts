@@ -107,6 +107,38 @@ describe("POST /api/tools/preroll/schedules — validation and conflicts", () =>
     expect(await getTestPrisma().prerollSchedule.count()).toBe(1);
   });
 
+  // As the PUT does: a disabled schedule never plays, and enabling it later
+  // is checked then.
+  it("creates a disabled schedule that overlaps an enabled one", async () => {
+    await expectJson(await post(RECURRING), 201);
+    const res = await post({ ...RECURRING, name: "Spare", enabled: false });
+    const { schedule } = await expectJson<{ schedule: { name: string; enabled: boolean } }>(res, 201);
+    expect(schedule).toMatchObject({ name: "Spare", enabled: false });
+    expect(await getTestPrisma().prerollSchedule.count()).toBe(2);
+  });
+
+  // A seasonal schedule repeats every year (as the enforcer plays it), so it
+  // conflicts with a one-time range in a later year on the same month/days.
+  it("refuses a one-time range that falls inside a seasonal schedule saved in another year", async () => {
+    const seasonal = await expectJson<{ schedule: { id: string } }>(
+      await post({
+        ...ONE_TIME,
+        name: "Christmas",
+        scheduleType: "seasonal",
+        startDate: new Date(2023, 11, 1).toISOString(),
+        endDate: new Date(2023, 11, 26, 23, 59).toISOString(),
+      }),
+      201,
+    );
+    const res = await post({
+      ...ONE_TIME,
+      startDate: new Date(2026, 11, 10).toISOString(),
+      endDate: new Date(2026, 11, 12).toISOString(),
+    });
+    const json = await expectJson<{ conflictingSchedule: { id: string } }>(res, 409);
+    expect(json.conflictingSchedule.id).toBe(seasonal.schedule.id);
+  });
+
   it("trims name and path, stores only the fields of its type, and applies defaults", async () => {
     const res = await post({
       ...ONE_TIME,

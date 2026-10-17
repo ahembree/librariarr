@@ -77,6 +77,22 @@ describe("POST /api/servers/test", () => {
     expect(createMediaServerClient).not.toHaveBeenCalled();
   });
 
+  // `createMediaServerClient` throws for a type it cannot build, which was a 500.
+  it("refuses a server type the app cannot talk to with 400", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id});
+
+    const res = await callRoute(serverTest, {
+      method: "POST",
+      body: { url: "http://kodi.test:8080", accessToken: "tok", type: "KODI" },
+    });
+    expect(await expectJson(res, 400)).toEqual({
+      error: "Validation failed",
+      details: ["type: Server type must be PLEX, JELLYFIN or EMBY"],
+    });
+    expect(createMediaServerClient).not.toHaveBeenCalled();
+  });
+
   it("returns success on valid connection", async () => {
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id});

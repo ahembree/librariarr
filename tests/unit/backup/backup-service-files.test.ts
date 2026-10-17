@@ -127,10 +127,18 @@ describe("restoreBackup file formats and failures", () => {
     expect(invalidate).not.toHaveBeenCalled();
   });
 
-  it("carries on when a TRUNCATE fails", async () => {
-    writeBackup("librariarr-backup-ok.json", backupJson({}));
-    executeRaw.mockRejectedValue(new Error("no such table"));
-    await expect(restoreBackup("librariarr-backup-ok.json")).resolves.toBeUndefined();
+  // A failed TRUNCATE aborts the Postgres transaction: carrying on only made
+  // the next statement fail with "current transaction is aborted", naming a
+  // later table instead of the cause.
+  it("fails with the TRUNCATE's own error, inserting nothing", async () => {
+    writeBackup("librariarr-backup-ok.json", backupJson({ systemConfig: [{ id: "x" }] }));
+    executeRaw.mockResolvedValueOnce(0).mockRejectedValueOnce(new Error("permission denied for table Foo"));
+    await expect(restoreBackup("librariarr-backup-ok.json")).rejects.toThrow(
+      /^Failed to clear table \w+: permission denied for table Foo$/,
+    );
+    expect(executeRaw).toHaveBeenCalledTimes(2);
+    expect(model("systemConfig").createMany).not.toHaveBeenCalled();
+    expect(invalidate).not.toHaveBeenCalled();
   });
 });
 

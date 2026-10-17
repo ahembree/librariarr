@@ -291,8 +291,12 @@ export async function restoreBackup(
     for (const table of reversedTables) {
       try {
         await tx.$executeRawUnsafe(`TRUNCATE TABLE "${tableToDbName(table)}" CASCADE`);
-      } catch {
-        // Table may not exist
+      } catch (error) {
+        // Never swallowed: a failed statement aborts the whole transaction, so
+        // every later one fails with "current transaction is aborted" and the
+        // restore would report a later table instead of this cause.
+        logger.error("Backup", `Failed to clear table ${table}`, { error: String(error) });
+        throw new Error(`Failed to clear table ${table}: ${error instanceof Error ? error.message : String(error)}`);
       }
     }
 

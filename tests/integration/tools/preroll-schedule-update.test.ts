@@ -123,6 +123,17 @@ describe("PUT /api/tools/preroll/schedules/[id] validation", () => {
     expect(body.error).toBe("Time must be in HH:mm format");
   });
 
+  it.each([
+    ["name", { name: "   " }, "Name is required"],
+    ["preroll path", { prerollPath: "  " }, "Preroll path is required"],
+  ])("refuses a blank %s, as on create", async (_label, update, message) => {
+    const s = await oneTime();
+    const body = await expectJson<{ error: string }>(await put(s.id, update), 400);
+    expect(body.error).toBe(message);
+    const row = await prisma.prerollSchedule.findUniqueOrThrow({ where: { id: s.id } });
+    expect(row).toMatchObject({ name: "Holiday", prerollPath: "/prerolls/holiday.mp4" });
+  });
+
   it("rejects a stored schedule type the route does not know", async () => {
     const s = await oneTime({ scheduleType: "legacy" });
     const body = await expectJson<{ error: string }>(await put(s.id, { name: "x" }), 400);
@@ -191,6 +202,53 @@ describe("PUT /api/tools/preroll/schedules/[id] conflicts and writes", () => {
       priority: 5,
       enabled: true,
     });
+  });
+
+  // Switching type rewrites the definition for the new type, as create
+  // stores it, rather than leaving the old type's fields behind.
+  it("clears the dates when a dated schedule becomes recurring", async () => {
+    const s = await oneTime();
+    await expectJson(
+      await put(s.id, { scheduleType: "recurring", daysOfWeek: [1], startTime: "22:00", endTime: "02:00" }),
+      200,
+    );
+    const row = await prisma.prerollSchedule.findUniqueOrThrow({ where: { id: s.id } });
+    expect(row).toMatchObject({
+      scheduleType: "recurring",
+      startDate: null,
+      endDate: null,
+      daysOfWeek: [1],
+      startTime: "22:00",
+      endTime: "02:00",
+    });
+  });
+
+  it("clears the days and times when a recurring schedule becomes dated", async () => {
+    const s = await recurring();
+    await expectJson(
+      await put(s.id, {
+        scheduleType: "seasonal",
+        startDate: "2030-11-01T00:00:00Z",
+        endDate: "2030-11-30T00:00:00Z",
+      }),
+      200,
+    );
+    const row = await prisma.prerollSchedule.findUniqueOrThrow({ where: { id: s.id } });
+    expect(row).toMatchObject({
+      scheduleType: "seasonal",
+      startDate: new Date("2030-11-01T00:00:00Z"),
+      endDate: new Date("2030-11-30T00:00:00Z"),
+      daysOfWeek: null,
+      startTime: null,
+      endTime: null,
+    });
+  });
+
+  it("keeps the stored definition when the same type is sent with only some of its fields", async () => {
+    const s = await recurring();
+    await expectJson(await put(s.id, { scheduleType: "recurring", endTime: "23:30" }), 200);
+    const row = await prisma.prerollSchedule.findUniqueOrThrow({ where: { id: s.id } });
+    expect(row).toMatchObject({ daysOfWeek: [0, 6], startTime: "18:00", endTime: "23:30", startDate: null });
   });
 
   it("updates a seasonal schedule's dates", async () => {

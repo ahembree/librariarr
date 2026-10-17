@@ -82,20 +82,23 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: validationError }, { status: 400 });
   }
 
-  // Conflict detection
-  const existingSchedules = await prisma.prerollSchedule.findMany({
-    where: { userId: session.userId! },
-  });
+  // Conflict detection — only for a schedule created enabled, as the PUT does:
+  // a disabled one never plays, and enabling it later is checked then.
+  if (body.enabled !== false) {
+    const existingSchedules = await prisma.prerollSchedule.findMany({
+      where: { userId: session.userId! },
+    });
 
-  const conflict = checkConflict(body, existingSchedules);
-  if (conflict) {
-    return NextResponse.json(
-      {
-        error: "Schedule conflicts with existing schedule",
-        conflictingSchedule: conflict,
-      },
-      { status: 409 }
-    );
+    const conflict = checkConflict(body, existingSchedules);
+    if (conflict) {
+      return NextResponse.json(
+        {
+          error: "Schedule conflicts with existing schedule",
+          conflictingSchedule: conflict,
+        },
+        { status: 409 }
+      );
+    }
   }
 
   const isDateType = body.scheduleType === "one_time" || body.scheduleType === "seasonal";

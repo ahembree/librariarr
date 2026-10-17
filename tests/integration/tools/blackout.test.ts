@@ -201,6 +201,17 @@ describe("POST /api/tools/blackout", () => {
     expect(await getTestPrisma().blackoutSchedule.count()).toBe(0);
   });
 
+  // A name that is only spaces was stored as "" once trimmed.
+  it("refuses a name that is only spaces", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id});
+
+    const res = await createOneTimeSchedule({ name: "   " });
+    const body = await expectJson<{ error: string; details: string[] }>(res, 400);
+    expect(body).toEqual({ error: "Validation failed", details: ["name: Name is required"] });
+    expect(await getTestPrisma().blackoutSchedule.count()).toBe(0);
+  });
+
   it("validates required action field", async () => {
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id});
@@ -375,6 +386,18 @@ describe("PUT /api/tools/blackout/[id]", () => {
       startDate: "2030-06-01T00:00:00.000Z",
       endDate: "2030-06-02T00:00:00.000Z",
     });
+  });
+
+  it("refuses renaming a schedule to only spaces", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id});
+    const { schedule: created } = await (await createOneTimeSchedule()).json();
+
+    const res = await callRouteWithParams(PUT, { id: created.id }, { method: "PUT", body: { name: "  " } });
+    const body = await expectJson<{ error: string; details: string[] }>(res, 400);
+    expect(body).toEqual({ error: "Validation failed", details: ["name: Name is required"] });
+    const row = await getTestPrisma().blackoutSchedule.findUniqueOrThrow({ where: { id: created.id } });
+    expect(row.name).toBe("Test Blackout");
   });
 
   it("toggling enabled (partial body) preserves a one_time schedule's dates", async () => {

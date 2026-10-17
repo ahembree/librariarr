@@ -92,8 +92,13 @@ describe("Discord webhook URL", () => {
     expect(ok("not a url")).toBe(false);
   });
 
-  it("drops an empty avatar URL and validates a set one", () => {
-    expect(discordTestSchema.parse({ webhookAvatarUrl: "" }).webhookAvatarUrl).toBeUndefined();
+  // Kept as "": that is how the settings page clears a saved avatar, and an
+  // absent field means "leave it".
+  it("keeps an empty avatar URL and validates a set one", () => {
+    expect(discordTestSchema.parse({ webhookAvatarUrl: "" }).webhookAvatarUrl).toBe("");
+    expect(discordSettingsSchema.parse({ webhookAvatarUrl: "" }).webhookAvatarUrl).toBe("");
+    expect(discordSettingsSchema.parse({}).webhookAvatarUrl).toBeUndefined();
+    expect(discordSettingsSchema.safeParse({ webhookAvatarUrl: "nope" }).success).toBe(false);
     expect(discordTestSchema.safeParse({ webhookAvatarUrl: "nope" }).success).toBe(false);
     expect(discordTestSchema.parse({ webhookAvatarUrl: "https://a.example/x.png" }).webhookAvatarUrl).toBe(
       "https://a.example/x.png",
@@ -198,6 +203,28 @@ describe("server schemas", () => {
     expect(ext.error?.issues[0].message).toBe("External URL must start with http:// or https://");
     expect(serverTestSchema.safeParse({ url: "x", accessToken: "t", type: "PLEX" }).error?.issues[0].path).toEqual(["url"]);
     expect(serverTestSchema.safeParse({ url: "http://x", accessToken: "t", type: "PLEX" }).success).toBe(true);
+  });
+
+  // Only the types `createMediaServerClient` builds: anything else threw
+  // there and answered 500.
+  it("accepts only the media server types the app can talk to", () => {
+    const messages = (r: { error?: { issues: Array<{ path: PropertyKey[]; message: string }> } }) =>
+      r.error?.issues.map((i) => `${i.path.join(".")}: ${i.message}`);
+    for (const type of ["PLEX", "JELLYFIN", "EMBY"]) {
+      expect(serverTestSchema.safeParse({ url: "http://x", accessToken: "t", type }).success).toBe(true);
+      expect(serverAddSchema.safeParse({ url: "http://x", accessToken: "t", type }).success).toBe(true);
+    }
+    for (const type of ["KODI", "plex", 1]) {
+      expect(messages(serverTestSchema.safeParse({ url: "http://x", accessToken: "t", type }))).toEqual([
+        "type: Server type must be PLEX, JELLYFIN or EMBY",
+      ]);
+      expect(messages(serverAddSchema.safeParse({ url: "http://x", accessToken: "t", type }))).toEqual([
+        "type: Server type must be PLEX, JELLYFIN or EMBY",
+      ]);
+    }
+    expect(messages(serverTestSchema.safeParse({ url: "http://x", accessToken: "t" }))).toEqual([
+      "type: Server type is required",
+    ]);
   });
 });
 

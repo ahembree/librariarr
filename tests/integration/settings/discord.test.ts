@@ -233,6 +233,35 @@ describe("PUT /api/settings/discord", () => {
     expect((await storedSettings(user.id))?.discordWebhookUrl).toBeNull();
   });
 
+  // The settings page sends "" for a cleared field; an absent one is left alone.
+  it("clears a saved avatar URL when sent empty, and keeps it when absent", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id});
+    await prisma.appSettings.create({
+      data: { userId: user.id, discordWebhookAvatarUrl: "https://example.com/avatar.png" },
+    });
+
+    await expectJson(await callRoute(PUT, { method: "PUT", body: { notifyMaintenance: true } }));
+    expect((await storedSettings(user.id))?.discordWebhookAvatarUrl).toBe("https://example.com/avatar.png");
+
+    const body = await expectJson<{ webhookAvatarUrl: string }>(
+      await callRoute(PUT, { method: "PUT", body: { webhookAvatarUrl: "" } }),
+    );
+    expect(body.webhookAvatarUrl).toBe("");
+    expect((await storedSettings(user.id))?.discordWebhookAvatarUrl).toBeNull();
+  });
+
+  it("refuses an avatar URL that is not a URL", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id});
+
+    const res = await callRoute(PUT, { method: "PUT", body: { webhookAvatarUrl: "not a url" } });
+    expect(await expectJson(res, 400)).toEqual({
+      error: "Validation failed",
+      details: ["webhookAvatarUrl: Invalid URL"],
+    });
+  });
+
   it("accepts an empty body (all fields optional)", async () => {
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id});
