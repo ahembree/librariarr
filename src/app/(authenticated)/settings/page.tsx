@@ -26,6 +26,7 @@ import { cn } from "@/lib/utils";
 import { MASKED_VALUE } from "@/lib/api/sanitize";
 import { SettingsPanelSkeleton, SettingsSkeleton } from "@/components/skeletons";
 import { isSyncRequestSettled, type PendingSyncRequest } from "@/lib/sync/sync-request";
+import { readUrlHash, replaceUrlHash, subscribeToUrlHash } from "@/lib/url-hash";
 
 // ─── Tab components ───
 import { GeneralTab } from "./tabs/general-tab";
@@ -119,11 +120,14 @@ function integrationSaveError(
 /** `useSyncExternalStore` subscriber for a value that never changes. */
 const subscribeNothing = () => () => {};
 
-function getInitialSettingsTab(): SettingsTab {
-  if (typeof window === "undefined") return "general";
-  const hash = window.location.hash.slice(1);
-  return VALID_SETTINGS_TABS.has(hash) ? (hash as SettingsTab) : "general";
+/** The tab a URL hash names, or null for no hash or one that names none. */
+function tabFromHash(hash: string): SettingsTab | null {
+  const tab = hash.slice(1);
+  return VALID_SETTINGS_TABS.has(tab) ? (tab as SettingsTab) : null;
 }
+
+/** Server snapshot for the URL hash: the server never sees it. */
+const noUrlHash = () => "";
 
 // ─── Tab navigation helpers ───
 
@@ -181,7 +185,11 @@ function SettingsSubNav({
 // ─── Main component ───
 
 export default function SettingsPage() {
-  const [activeTab, setActiveTab] = useState<SettingsTab>(getInitialSettingsTab);
+  // The open tab IS the URL hash — see `src/lib/url-hash.ts` for why it is
+  // read through a store rather than once on mount.
+  const urlHash = useSyncExternalStore(subscribeToUrlHash, readUrlHash, noUrlHash);
+  const activeTab: SettingsTab = tabFromHash(urlHash) ?? "general";
+  const setActiveTab = useCallback((tab: SettingsTab) => replaceUrlHash(`#${tab}`), []);
   // False only while server-rendering and hydrating. The open tab comes from
   // the URL hash, which the server cannot see, so until then the page renders
   // the skeleton the server did; a client-side navigation skips straight past.
@@ -476,14 +484,14 @@ export default function SettingsPage() {
   const [editTracearrTesting, setEditTracearrTesting] = useState(false);
   const [editTracearrTestResult, setEditTracearrTestResult] = useState<TestResult | null>(null);
 
-  // Sync active tab to URL hash (replaceState avoids creating extra history
-  // entries that break browser back/forward navigation in the App Router)
+  // A URL naming no tab (/settings alone, or an unknown hash) is pointed at
+  // the General tab it shows. Read live, not from this render's `activeTab`:
+  // on a client-side navigation this runs before the store has re-read the
+  // hash the router just wrote, and normalising from the render's value
+  // overwrote #authentication with #general.
   useEffect(() => {
-    const newHash = `#${activeTab}`;
-    if (window.location.hash !== newHash) {
-      window.history.replaceState(window.history.state, "", newHash);
-    }
-  }, [activeTab]);
+    if (!tabFromHash(readUrlHash())) replaceUrlHash("#general");
+  }, [urlHash]);
 
   // ─── Fetchers ───
 
@@ -1014,7 +1022,7 @@ export default function SettingsPage() {
   }, [activeTab, loadTab, startOnce, fetchChangelog]);
 
   useEffect(() => {
-    const openTab = getInitialSettingsTab();
+    const openTab = tabFromHash(readUrlHash()) ?? "general";
     const eager = [openTab, ...SETTINGS_TABS.map((t) => t.value).filter((tab) => tab !== openTab)].filter(
       (tab) => tab !== "system",
     );

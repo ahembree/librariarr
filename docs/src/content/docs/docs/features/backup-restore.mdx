@@ -155,6 +155,8 @@ The restore process:
 
 </Steps>
 
+The restore runs in a single transaction. If any step fails — a table that cannot be cleared, a row the database refuses — nothing is changed, and the error names the table where it stopped.
+
 ## Storage
 
 | Path | Description |
