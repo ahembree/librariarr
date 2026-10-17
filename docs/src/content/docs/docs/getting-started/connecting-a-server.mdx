@@ -12,31 +12,30 @@ import { Aside, Steps } from "@astrojs/starlight/components";
 
 1. **Navigate to Settings → Servers**
 
-   Click the **Add Server** button to open the server setup dialog.
+   Click the **Add Server** menu and choose **Plex**, **Jellyfin**, or **Emby**.
 
-2. **Choose server type**
+   For **Plex**, Librariarr opens the server picker (the same one as the
+   [onboarding flow](#onboarding-flow)), which lists the servers on your Plex
+   account. If no Plex account is linked yet, you are asked to sign in with
+   Plex first.
 
-   Select **Plex**, **Jellyfin**, or **Emby**.
+2. **Enter connection details** (Jellyfin and Emby)
 
-3. **Enter connection details**
+   - **URL**: The base URL of your server, including `http://` or `https://` (e.g., `http://192.168.1.100:8096`)
+   - **API Key**: An API key from your server's dashboard (see below)
+   - **Skip TLS verification**: Enable if your server uses a self-signed or untrusted certificate. For a certificate signed by your own CA, set [`NODE_EXTRA_CA_CERTS`](/docs/getting-started/installation/#environment-variables) instead
 
-   - **URL**: The base URL of your server (e.g., `http://192.168.1.100:32400` for Plex)
-   - **Access Token**: Your server's API token
-   - **Skip TLS Verification**: Enable if your server uses a self-signed or untrusted SSL certificate
+3. **Test the connection**
 
-   For Plex, the app can auto-discover your servers from your Plex account and suggest connection URLs.
+   Click **Test**. **Add Server** is enabled only after a successful test.
 
-4. **Test connection**
+4. **Select libraries**
 
-   Click **Test Connection** to verify Librariarr can reach your server. Fix any issues before proceeding.
+   After **Add Server**, choose which libraries to sync in **Select Libraries to Sync**. Each library can be independently enabled or disabled.
 
-5. **Select libraries**
+5. **Confirm and sync**
 
-   After a successful connection test, choose which libraries to sync. Each library can be independently enabled or disabled.
-
-6. **Save and sync**
-
-   The server is saved and an initial sync begins automatically.
+   Click **Confirm & Sync** to save the selection and start the first sync.
 
 </Steps>
 
@@ -60,10 +59,15 @@ import { Aside, Steps } from "@astrojs/starlight/components";
 
 If this is your first time logging in and no servers are configured, Librariarr will guide you through an onboarding flow:
 
-1. **Plex server discovery** — If you signed in with Plex, all your accessible servers are listed automatically with their name, platform, version, and available connections
-2. **Connection customization** — Choose or edit the connection URL for each server
-3. **Library selection** — Pick which libraries to sync
-4. **Redirect to settings** — After completing onboarding, you're taken to Settings → Servers for further configuration
+1. **Connect a Media Server** — Choose **Plex**, **Jellyfin**, or **Emby** (or *Skip for now*). Choosing Plex without a linked Plex account opens Plex sign-in first
+2. **Plex server discovery** — Your Plex servers are listed with their name, platform, version, and known addresses
+3. **Connection customization** — Choose or edit the connection URL for each server, and enable **Skip TLS Verification** if needed. Jellyfin and Emby take a URL and API key, tested before the server is added
+4. **Library selection** — Pick which libraries to sync, then confirm to start the first sync
+5. **Continue to Dashboard** — Once at least one server is added, you're taken to the dashboard
+
+## Editing a Server
+
+Click **Edit** on a server in **Settings → Servers** to change its URL, external URL, API key, or TLS setting. Changing the URL, or turning **Skip TLS verification** on, while keeping the stored token or API key needs a sign-in from the last 15 minutes; if it has been longer, Librariarr asks you to confirm it's you first. This stops a stolen browser session from sending the server's admin token to an address of its choosing.
 
 ## Library Management
 
@@ -72,12 +76,12 @@ If this is your first time logging in and no servers are configured, Librariarr 
 Each library can be toggled on or off in **Settings → Servers**. Only enabled libraries are synced.
 
 <Aside type="caution">
-  When disabling the last library of a given type (e.g., the only Movie library), you'll be prompted to either keep or delete all media data for that type from the database.
+  When you disable a library, you'll be asked whether to keep or delete that library's synced media data from the database (no media files are touched). The prompt also warns you when it is the last enabled library of its type.
 </Aside>
 
 ### Refreshing Libraries
 
-Click **Refresh Libraries** on a server to fetch the latest library list. New libraries are added automatically and can be enabled for syncing.
+Click **Refresh** next to a server's library list to fetch the latest library list. New libraries are added automatically and can be enabled for syncing.
 
 ## Sync Behavior
 
@@ -96,7 +100,7 @@ For each media item, Librariarr syncs:
 
 When the same media exists on multiple servers, Librariarr:
 
-1. Identifies duplicates by comparing title, year, and season/episode info
+1. Identifies duplicates by external ID where available (TMDB or IMDB for movies, the series' TVDB ID plus season/episode for episodes), falling back to title and year, series title plus season/episode, or artist plus track title
 2. Picks one copy as the **preferred version** shown in the library
 3. Tracks which servers have each item and at what quality
 

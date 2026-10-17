@@ -50,7 +50,9 @@ Librariarr provides Unraid XML templates for easy installation through the Unrai
    | Field | Default | Notes |
    |-------|---------|-------|
    | **Database URL** | `postgresql://librariarr:librariarr@librariarr-db:5432/librariarr` | Update the password if you changed it in step 1 |
-   | **Config Path** | `/mnt/user/appdata/librariarr` | Persistent storage for backups and cache |
+   | **WebUI Port** | `3000` | Host port for the web interface |
+   | **Session Secret** | _empty_ | Leave empty to auto-generate one and save it in the config path, or enter 32+ characters |
+   | **Config Path** | `/mnt/user/appdata/librariarr` | Persistent storage for backups, cache, logs and the session secret |
    | **PUID** | `99` | Unraid `nobody` user |
    | **PGID** | `100` | Unraid `users` group |
    | **Timezone** | `America/New_York` | Your local timezone |
