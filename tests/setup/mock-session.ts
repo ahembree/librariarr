@@ -75,6 +75,22 @@ function sessionProxy() {
       (currentSession as unknown as Record<string, unknown>)[prop as string] = value;
       return true;
     },
+    // `in`, spreads, JSON.stringify and `delete` must see the session too, or
+    // a route reading the session that way would act on an empty object.
+    has(_target, prop: string | symbol) {
+      return prop in currentSession;
+    },
+    ownKeys() {
+      return Reflect.ownKeys(currentSession);
+    },
+    getOwnPropertyDescriptor(_target, prop: string | symbol) {
+      const descriptor = Object.getOwnPropertyDescriptor(currentSession, prop);
+      return descriptor && { ...descriptor, configurable: true };
+    },
+    deleteProperty(_target, prop: string | symbol) {
+      delete (currentSession as unknown as Record<PropertyKey, unknown>)[prop];
+      return true;
+    },
   });
 }
 
@@ -90,12 +106,19 @@ vi.mock("@/lib/auth/session", async () => {
       return principal ? apiKeySession(principal) : sessionProxy();
     }),
     // Mirrors the real helper: whatever the visitor was carrying is discarded,
-    // and the caller gets an empty session to write the new login into.
+    // and the caller gets an empty session to write the new login into. Like
+    // the real one it refuses an API key request, so a login flow wrongly
+    // exposed under /api/v1 fails here as it would in production.
     rotateSession: vi.fn().mockImplementation(async () => {
+      if (getApiKeyPrincipal()) {
+        throw new Error("rotateSession() is not available to API key requests");
+      }
       currentSession = { isLoggedIn: false, authenticatedAt: Date.now() };
       return sessionProxy();
     }),
+    // The real one reads `getSession()`, so an API key request is valid.
     isSessionValid: vi.fn().mockImplementation(async () => {
+      if (getApiKeyPrincipal()) return true;
       return currentSession.isLoggedIn && !!currentSession.userId;
     }),
   };

@@ -661,7 +661,7 @@ describe("GET /api/media/movies", () => {
       expect(body.items[0]).not.toHaveProperty("summary");
       // The fields the cards and table actually render still come through.
       expect(body.items[0]).toHaveProperty("title", "Summarised");
-      expect(body.items[0]).toHaveProperty("resolution", "1080p");
+      expect(body.items[0]).toHaveProperty("resolution", "1080");
     });
   });
 

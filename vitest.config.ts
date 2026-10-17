@@ -21,8 +21,8 @@ export default defineConfig({
     },
     fileParallelism: false,
     env: {
-      DATABASE_URL:
-        "postgresql://librariarr:librariarr@localhost:5432/librariarr_test",
+      // The same server global-setup creates the database on.
+      DATABASE_URL: `${process.env.TEST_DATABASE_URL ?? "postgresql://librariarr:librariarr@localhost:5432"}/librariarr_test`,
       // file deepcode ignore HardcodedNonCryptoSecret/test: test file
       SESSION_SECRET:
         "test-secret-must-be-at-least-32-characters-long!!",
