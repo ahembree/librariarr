@@ -29,21 +29,22 @@ Send notifications to a Discord channel via webhook.
 
 Discord notifications are sent for:
 
-- **Lifecycle actions**: When rules execute actions (delete, unmonitor, etc.) — success or failure, for both scheduled and manual execution
-- **Match changes**: When rule detection finds new matches or removes stale ones (configurable per rule set)
-- **Maintenance mode**: When maintenance mode is toggled on/off
+- **Lifecycle actions**: When a scheduled execution run executes actions (delete, unmonitor, etc.), one summary per rule set for its successes and one for its failures. A manual **Execute** from the Pending page notifies on failures only.
+- **Match changes**: When a scheduled detection run (or **Run now** in Settings → Scheduling) finds new matches or removes stale ones. A **Re-evaluate** from the Matches page does not notify.
+- **Deletion held for review**: When a run is held by the [deletion limit](/docs/features/lifecycle-rules/#limiting-how-much-one-run-can-delete), or a run queued through the public API is held by the [API deletion limits](/docs/advanced/api/#deletion-limits) (at most once per 15 minutes). Sent whenever a webhook is set; it has no toggle.
+- **Maintenance mode**: When maintenance mode is toggled on/off. Turn this on with **Notify Discord** in the maintenance section of **Tools → Streams** (off by default).
 - **API keys**: When a key for the [public API](/docs/advanced/api/) is created or deleted. On by default whenever a webhook is set (**Settings → Notifications → API keys**), because a key outlives the login session that created it — a creation you did not make is the sign of a stolen session, and the notification says what to do.
 
-Lifecycle notifications are configured **per rule set** via the `discordNotifyOnAction` and `discordNotifyOnMatch` toggles in the rule set settings.
+Lifecycle action and match notifications are off by default and configured **per rule set** in the rule editor: **Send Discord notification on action execution** and **Send Discord notification on match changes**.
 
 ### Message Format
 
 Notifications are sent as Discord embeds with:
 
-- **Title**: Media title or event name
-- **Description**: Action details and status
-- **Color**: Green for success, red for failure
-- **Footer**: "Librariarr Lifecycle"
+- **Title**: Rule set or event name
+- **Description**: Action details and status, with the affected titles listed
+- **Color**: Green for success, red for failure, blue for match changes and a created API key, amber for maintenance on and for a held deletion
+- **Footer**: "Librariarr Lifecycle", "Librariarr Maintenance" or "Librariarr API Keys"
 - **Timestamp**: When the event occurred
 
 ## Limitations

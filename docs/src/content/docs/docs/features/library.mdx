@@ -50,7 +50,7 @@ Toggle between two view modes:
 | Mode | Description |
 |------|-------------|
 | **Table** | Detailed rows with columns for title, year, resolution, codec, audio, file size, play count, and more. Columns are resizable via drag-to-resize. |
-| **Grid** | Poster cards in a responsive grid. Three size options: Small, Medium, Large . |
+| **Card** | Poster cards in a responsive grid. Three sizes (S, M, L), plus a control for which details each card shows. |
 
 Both views use smooth scrolling, so libraries of any size load and render without pagination. On desktop, the toolbar — search, sort, view controls, and filters — stays pinned to the top of the page while you scroll; on mobile it scrolls with the page to leave more room for content.
 
@@ -62,7 +62,7 @@ A clickable alphabet bar (A–Z plus `#` for non-alphabetic titles) lets you jum
 
 ## Filters
 
-Over 30 filters are available. Filters can be combined — multiple active filters apply with AND logic.
+Over 30 filters are available, grouped into Video, Audio, Streams, Content, File and Dates sections (the Video section is hidden on Music); a search box at the top of the panel finds a filter by name. Filters can be combined — multiple active filters apply with AND logic.
 
 ### Video Filters
 
@@ -72,10 +72,11 @@ Over 30 filters are available. Filters can be combined — multiple active filte
 | Video Codec | Multi-select (contains) | H.264, H.265, AV1 |
 | Dynamic Range | Multi-select (exact) | SDR, HDR10, HDR10+, Dolby Vision, HLG |
 | Video Bit Depth | Multi-select | 8-bit, 10-bit |
-| Video Frame Rate | Multi-select (exact) | 23.976fps, 24fps, 30fps, 60fps |
+| Frame Rate | Multi-select (exact) | 23.976fps, 24fps, 30fps, 60fps |
 | Aspect Ratio | Multi-select (exact) | 16:9, 4:3, 2.39:1 |
-| Scan Type | Multi-select (exact) | progressive, interlaced |
+| Scan Type | Multi-select (contains) | progressive, interlaced |
 | Video Profile | Multi-select (contains) | Baseline, Main, High |
+| Video Bitrate | Conditions (kbps) | > 5000 |
 
 ### Audio Filters
 
@@ -84,52 +85,65 @@ Over 30 filters are available. Filters can be combined — multiple active filte
 | Audio Codec | Multi-select (contains) | AAC, AC3, EAC3, FLAC |
 | Audio Profile | Multi-select (exact) | Dolby Atmos, Dolby TrueHD, DTS-HD MA, DTS:X |
 | Audio Channels | Multi-select | 2.0, 5.1, 7.1 |
-| Audio Sampling Rate | Multi-select | 44100, 48000 |
+| Sample Rate | Multi-select | 44.1 kHz, 48 kHz |
+| Audio Bitrate | Conditions (kbps) | > 320 |
+
+### Stream Filters
+
+| Filter | Type | Example |
+|--------|------|---------|
+| Audio Language | Multi-select (case-insensitive) | English, Japanese |
+| Subtitle Language | Multi-select (case-insensitive) | English, Spanish |
+| Stream Audio Codec | Multi-select (contains) | AAC, TrueHD — matches any audio track, not only the main one |
+| Audio Tracks / Subtitle Tracks | Conditions (track count) | Movies only — see below |
 
 ### File & Metadata Filters
 
 | Filter | Type | Example |
 |--------|------|---------|
 | Container | Multi-select (contains) | MP4, MKV, AVI |
-| File Size | Range (GB) | 1 GB – 50 GB |
+| File Size | Range (MB or GB) | 1 GB – 50 GB |
 | Duration | Range (minutes) | 90 – 180 min |
 | Year | Conditions with AND/OR logic | ≥ 2020 AND ≤ 2024 |
 | Content Rating | Multi-select (exact) | G, PG, PG-13, R |
 | Studio | Multi-select (contains) | |
 | Genre | Multi-select (case-insensitive) | Must match all selected genres |
+| Rating / Audience Rating | Conditions | ≥ 7.0 |
+| Watchlisted | Yes / No | |
 
 ### Activity Filters
 
 | Filter | Type | Example |
 |--------|------|---------|
-| Search | Text (title/summary) | Free text search |
-| Play Count | Range | 0 – 10 plays |
-| Last Played | Date range | Before/after specific dates |
-| Added Date | Date range | When item was added to library |
+| Search | Text (title) | The search box in the toolbar |
+| Play Count | Conditions with AND/OR logic | = 0 |
+| Last Played | Date range or last N days | Before/after specific dates |
+| Date Added | Date range or last N days | When item was added to library |
+| Release Date | Date range or last N days | When the item was first released |
 
 ### Where Each Filter Applies
 
 - **Audio Tracks** and **Subtitle Tracks** (track-count filters) appear on **Movies** only.
-- **Episode Count**, **Watched Episodes**, **Watched %**, **Last Episode Aired** and **Watchlisted** (show-level filters) appear on the **Series** tab only.
+- **Episode Count**, **Watched Episodes**, **Watched %** and **Last Episode Aired** (show-level filters) appear on the **Series** tab only.
 - On the **Series** and **All Seasons** tabs, a filter on an episode's own property (resolution, codec, genre, year and so on) keeps a show or season when **any** of its episodes matches. The totals shown stay those of the whole show or season. Last Played, Added Date and Watchlisted judge the show or season as a whole — its most recent play and newest episode — even when combined with other filters.
 - **Resolution** matches the label on the quality chip on every library page, so a film or show stored at 576 lines counts as 480P. A file with no resolution recorded shows no chip on a movie, episode or track card and is not **Other** there; on the **Series** and **All Seasons** tabs, where it counts toward a show's **Other** chip, it is.
 - The **Albums** tab filters exactly like the **Artists** tab: an album is kept when any of its tracks matches, and its totals count the matching tracks.
 
 ### Multi-Select Behavior
 
-When multiple values are selected within a single filter (e.g., Resolution: 4K and 1080P), they're combined with **OR** logic — items matching either value are shown. When multiple different filters are active, they combine with **AND** logic.
+When multiple values are selected within a single filter (e.g., Resolution: 4K and 1080P), they're combined with **OR** logic — items matching either value are shown. **Genre** is the exception: an item must carry every selected genre. When multiple different filters are active, they combine with **AND** logic.
 
 ## Sorting
 
-Sort by any of these fields in ascending or descending order:
+The sort menu offers, in ascending or descending order:
 
-- Title
-- Year
-- Rating
-- File Size
-- Play Count
-- Last Played
-- Date Added
+| Page | Sort fields |
+|-|-|
+| Movies | Name, Year, Date Added, Last Played, File Size, Duration, Rating |
+| Series | Name, Seasons, Episodes, Size, Last Watched, Date Added |
+| All Seasons | Series Name, Season Number, Episodes, Size, Last Watched, Date Added |
+| Music (artists) | Name, Albums, Tracks, Size, Last Played, Date Added |
+| Albums | Name, Artist, Tracks, Size |
 
 In table view, every column with a sort arrow sorts — Dynamic Range, Audio Profile, Channels, Container, Studio, Bit Depth, Frame Rate, Video Bitrate, Aspect Ratio and Release Date included.
 
@@ -143,15 +157,16 @@ Click any item to open a slide-out detail panel showing:
 - **Video details**: codec, resolution, bit depth, profile, frame rate, color info, aspect ratio, scan type
 - **Audio details**: codec, channels, profile, bit rate, sampling rate, languages (for each audio stream)
 - **Subtitle streams**: language, format, forced/default flags
-- **File info**: size, container, path, duration, optimized for streaming flag
+- **File info**: size, container, path, duration
 - **Stream list**: All video, audio, and subtitle streams with detailed info
 
 ### Actions from Detail Panel
 
 Depending on configuration:
 
-- **Open in Plex/Jellyfin/Emby** — Direct link to the item on your server
-- **View in Radarr/Sonarr** — Link to the item in your *arr instance (requires integration)
+- **Open in *server name*** — Direct link to the item on your Plex, Jellyfin or Emby server
+- **Open in Radarr/Sonarr/Lidarr** — Link to the item in your *arr instance (requires integration)
+- **Open in Seerr** — Link to the item's request page in Seerr (requires integration)
 
 ## Multi-Server Deduplication
 
@@ -159,10 +174,10 @@ When browsing with multiple servers connected:
 
 - Items are **deduplicated** by default — only the preferred copy is shown
 - An indicator shows which servers have each item
-- Use the server dropdown in the navigation to filter by a specific server
+- Use the server dropdown in the library toolbar to filter by a specific server
 
 <Aside>
-  Duplicates are detected using external IDs (TMDB, IMDB) when available, falling back to title and year matching. In rare cases, different items with identical metadata may be incorrectly grouped.
+  Duplicates are detected using external IDs when available — TMDB or IMDB for a movie, the series' TVDB id plus season and episode number for an episode — falling back to title and year (movies), show title plus season and episode (episodes), or artist and title (tracks). In rare cases, different items with identical metadata may be incorrectly grouped.
 </Aside>
 
 ## Watch History
@@ -192,7 +207,7 @@ Movie and track pages — and the detail side panel opened from any library or l
 
 ### Syncing Watch History
 
-Watch history data is synced from your media servers in two ways:
+Watch history data is synced from your media servers in three ways:
 
 - **Automatic** — During each scheduled library sync, detailed play events are fetched and stored
 - **On-demand** — Click the **Refresh** button on the history page to sync immediately
@@ -221,13 +236,13 @@ What the **native** source can report differs by server type:
 | Data | Plex | Jellyfin | Emby |
 |-|-|-|-|
 | Username | Yes | Yes | Yes |
-| Watched date | Yes (per play) | First play only | First play only |
+| Watched date | Yes (per play) | Most recent play only | Most recent play only |
 | Device name | Yes | No | No |
 | Platform | Yes | No | No |
 | Play count (per item) | Yes | Yes | Yes |
 
 <Aside type="note">
-  Of the three, Plex provides the most detailed native watch history, with individual timestamps and device information for each play event. Jellyfin and Emby only report which items have been played and the last played date — individual play timestamps beyond the first are not available. [Tracearr](/docs/integrations/tracearr/) removes this difference: it records plays itself as they happen, so a Jellyfin or Emby server linked to it gets full per-play history too.
+  Of the three, Plex provides the most detailed native watch history, with individual timestamps and device information for each play event. Jellyfin and Emby only report how many times each user played an item and the date of the most recent play — earlier plays are listed with no date. [Tracearr](/docs/integrations/tracearr/) removes this difference: it records plays itself as they happen, so a Jellyfin or Emby server linked to it gets full per-play history too.
 </Aside>
 
 ### Play Count vs. Watch History
@@ -237,9 +252,7 @@ The **Play Count** and **Last Played** fields shown on media items in the librar
 - **The server's native item metadata**, read during library sync. This is scoped to the account Librariarr connects with — on Plex it is that account's own views across every server it has access to, so a brand-new Plex server may show play counts from plays that happened elsewhere under the same account.
 - **The Watch History table**, which covers plays by *every* user on the server. After each watch-history sync, these plays are rolled back into Play Count and Last Played.
 
-The two are combined by taking the higher play count and the more recent date, so a play by anyone in your household is reflected — never overwritten by the connected account's older view. This matters for lifecycle rules: criteria such as **Last Played** and **Series Last Played** read these fields, so a series someone else is actively watching will not look untouched.
-
-- **Watch History** records — individual play events fetched from the server's session history. Only includes plays that actually occurred on that specific server.
+The two are combined by taking the higher play count and the more recent date, so a play by anyone in your household is reflected — never overwritten by the connected account's older view. This matters for lifecycle rules: criteria such as **Last Played** and **Series Last Played** read these fields, so a series someone else is actively watching will not look untouched. Watch History records themselves only include plays that occurred on that specific server.
 
 **Partial plays do not count.** A server's native history has no notion of one, but [Tracearr](/docs/integrations/tracearr/) reports how far through each play got and marks it watched only once it crosses its completion threshold (85% by default). Plays short of that are stored and listed in the watch-history views, but they are excluded from Play Count and never advance Last Played — someone sampling four minutes of a film is not a viewing, and because both fields only ever move forward, letting one through would mark the item recently watched for good and quietly disarm every rule that reads it. An item with plays in its history but a Play Count of zero was started and never finished.
 
