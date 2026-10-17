@@ -514,7 +514,61 @@ async function executeUnmonitorDeleteFilesSonarr(action: ActionRecord): Promise<
 
 async function executeDeleteLidarr(action: ActionRecord) {
   const { client, artist } = await resolveLidarrArtist(action);
+  await refuseSplitArtistDelete(client, artist, action);
   await client.deleteArtist(artist.id, true, action.addImportExclusion);
+}
+
+/** How many other ids under one artist title are checked; past it the delete is refused. */
+const MAX_SPLIT_ID_CHECKS = 10;
+
+/**
+ * Refuses a whole-artist delete when the library holds the artist under
+ * another MusicBrainz id that Lidarr resolves to the SAME artist.
+ *
+ * The artist-scope engine splits an artist title into one group per id when
+ * the title carries several (`splitArtistGroupByMbid`) — two different bands
+ * called "Nirvana". But one artist can carry two ids too: an id MusicBrainz has
+ * since merged (Lidarr answers the old id with the merged artist), or Jellyfin
+ * falling back to a track artist's id. Then each group holds part of the
+ * artist, its play counts read only that part, and a "not played" rule
+ * matching one part would delete the whole artist, the played part included.
+ * Nothing in the library can tell the two cases apart; Lidarr can.
+ */
+async function refuseSplitArtistDelete(
+  client: LidarrClient,
+  artist: { id: number; artistName: string },
+  action: ActionRecord,
+): Promise<void> {
+  const mbid = action.mediaItem.externalIds.find((e) => e.source === "MUSICBRAINZ")?.externalId;
+  const row = await prisma.mediaItem.findUnique({
+    where: { id: action.mediaItem.id },
+    select: { libraryId: true, parentTitle: true },
+  });
+  if (!mbid || !row?.parentTitle) return;
+  const others = await prisma.mediaItemExternalId.findMany({
+    where: {
+      source: "MUSICBRAINZ",
+      externalId: { not: mbid },
+      mediaItem: { libraryId: row.libraryId, type: "MUSIC", parentTitle: row.parentTitle },
+    },
+    select: { externalId: true },
+    distinct: ["externalId"],
+    take: MAX_SPLIT_ID_CHECKS + 1,
+  });
+  if (others.length > MAX_SPLIT_ID_CHECKS) {
+    throw new Error(
+      `"${row.parentTitle}" is held under more than ${MAX_SPLIT_ID_CHECKS} MusicBrainz artist ids in this library; refusing to delete the artist`,
+    );
+  }
+  for (const { externalId } of others) {
+    const other = await client.getArtistByMusicBrainzId(externalId);
+    if (other?.id === artist.id) {
+      throw new Error(
+        `Lidarr resolves MusicBrainz ids ${mbid} and ${externalId} to the same artist ("${artist.artistName}"), ` +
+          "but the library holds its tracks under both, so they were evaluated as two artists; refusing to delete it",
+      );
+    }
+  }
 }
 
 async function executeUnmonitorLidarr(action: ActionRecord) {

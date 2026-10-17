@@ -8,7 +8,7 @@ import {
   exceptionBulkUpdateSchema,
 } from "@/lib/validation";
 import { removeItemFromCollections } from "@/lib/lifecycle/collections";
-import { exceptionProtectionKeys, isGroupProtected } from "@/lib/lifecycle/exception-guard";
+import { protectionKeys, isGroupProtected } from "@/lib/lifecycle/exception-guard";
 import { artistMbidOf } from "@/lib/media/artist-key";
 import type { Prisma } from "@/generated/prisma/client";
 
@@ -274,7 +274,7 @@ async function disarmExcludedItems(userId: string, items: ExcludedItem[]): Promi
       : [];
   const affected = new Set([...items.map((i) => i.id), ...twins.map((t) => t.id)]);
 
-  const groupKeys = new Set(items.flatMap((i) => exceptionProtectionKeys(i)));
+  const groupKeys = new Set(items.flatMap((i) => protectionKeys(i)));
   const parents = [...new Set(items.map((i) => i.parentTitle).filter((t): t is string => !!t))];
   const seriesKeys = [...new Set(items.map((i) => i.seriesKey).filter((k): k is string => !!k))];
   const artistMbids = [
@@ -297,7 +297,7 @@ async function disarmExcludedItems(userId: string, items: ExcludedItem[]): Promi
                 ruleSet: { userId, seriesScope: true, type: { in: ["SERIES" as const, "MUSIC" as const] } },
                 mediaItem: {
                   OR: [
-                    ...(parents.length > 0 ? [{ parentTitle: { in: parents } }] : []),
+                    ...(parents.length > 0 ? [{ parentTitle: { in: parents, mode: "insensitive" as const } }] : []),
                     ...(seriesKeys.length > 0 ? [{ seriesKey: { in: seriesKeys } }] : []),
                     ...(artistMbids.length > 0
                       ? [{ externalIds: { some: { source: "MUSICBRAINZ", externalId: { in: artistMbids } } } }]
@@ -324,8 +324,8 @@ async function disarmExcludedItems(userId: string, items: ExcludedItem[]): Promi
     },
   });
   // Re-keyed as detection keys it (`isGroupProtected`): the title/seriesKey
-  // probe above also finds a same-titled DIFFERENT show or artist, which the
-  // exception does not protect.
+  // probe above also finds a same-titled DIFFERENT show, which the exception
+  // does not protect.
   const groupHits = candidates.filter(
     (m) =>
       !affected.has(m.mediaItemId) &&

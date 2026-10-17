@@ -20,15 +20,19 @@ describe("splitArtistGroupByMbid", () => {
     expect(ids(splitArtistGroupByMbid([t("1"), t("2")], (x) => x.mbid))).toEqual([["1", "2"]]);
   });
 
-  it("splits a title carrying two artist ids, with the id-less tracks on their own", () => {
-    const groups = splitArtistGroupByMbid(
-      [t("1", "A"), t("2", "B"), t("3"), t("4", "A")],
-      (x) => x.mbid,
-    );
-    expect(ids(groups)).toEqual([["1", "4"], ["2"], ["3"]]);
+  it("keeps a title with two ids whole when any track has none", () => {
+    // The untagged track belongs to one of them; split off, its plays would be
+    // missing from that artist's aggregate.
+    const groups = splitArtistGroupByMbid([t("1", "A"), t("2", "B"), t("3"), t("4", "A")], (x) => x.mbid);
+    expect(ids(groups)).toEqual([["1", "2", "3", "4"]]);
   });
 
-  it("returns no id-less group when every track has an id", () => {
+  it("splits a title carrying two ids when every track has one", () => {
+    const groups = splitArtistGroupByMbid([t("1", "A"), t("2", "B"), t("4", "A")], (x) => x.mbid);
+    expect(ids(groups)).toEqual([["1", "4"], ["2"]]);
+  });
+
+  it("splits two fully tagged artists", () => {
     expect(ids(splitArtistGroupByMbid([t("1", "A"), t("2", "B")], (x) => x.mbid))).toEqual([["1"], ["2"]]);
   });
 });

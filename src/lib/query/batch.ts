@@ -1,4 +1,5 @@
 import { MAX_QUERY_ACTION_ITEMS } from "./constants";
+import { normalizeArtistTitle } from "@/lib/media/artist-key";
 
 type BatchMediaType = "MOVIE" | "SERIES" | "MUSIC";
 
@@ -47,7 +48,7 @@ function groupKey(item: BatchableItem): string {
   // artist's tracks into one action (collapse-actions.ts) — split across
   // batches, the artist would be acted on once per batch.
   if (item.type === "MUSIC") {
-    return `artist:${(item.parentTitle ?? "").trim().toLowerCase()}`;
+    return `artist:${normalizeArtistTitle(item.parentTitle ?? "")}`;
   }
   return `id:${item.id}`;
 }

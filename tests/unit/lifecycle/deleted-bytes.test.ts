@@ -27,7 +27,7 @@ describe("computeDeletedBytes", () => {
     });
   });
 
-  it("counts a whole-artist Lidarr delete by the artist's MusicBrainz id, not a same-named artist's tracks", async () => {
+  it("counts a whole-artist Lidarr delete by the artist's MusicBrainz id plus its untagged tracks, not a same-named artist's", async () => {
     mockPrisma.mediaItem.aggregate.mockResolvedValue({ _sum: { fileSize: BigInt(300) } });
     const withId = { ...item, externalIds: [{ source: "MUSICBRAINZ", externalId: "mb-1" }] };
     expect(await computeDeletedBytes("DELETE_LIDARR", withId, ["t1"], {})).toBe(BigInt(300));
@@ -35,7 +35,10 @@ describe("computeDeletedBytes", () => {
       where: {
         type: "MUSIC",
         libraryId: "lib1",
-        externalIds: { some: { source: "MUSICBRAINZ", externalId: "mb-1" } },
+        OR: [
+          { externalIds: { some: { source: "MUSICBRAINZ", externalId: "mb-1" } } },
+          { parentTitle: "Artist", externalIds: { none: { source: "MUSICBRAINZ" } } },
+        ],
       },
       _sum: { fileSize: true },
     });

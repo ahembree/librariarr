@@ -84,7 +84,7 @@ vi.mock("@/lib/lifecycle/run-actions", async (importOriginal) => {
 import { GET } from "@/app/api/lifecycle/actions/route";
 import { DELETE as actionDelete, POST as actionRetry } from "@/app/api/lifecycle/actions/[id]/route";
 import { POST as executePost } from "@/app/api/lifecycle/actions/execute/route";
-import { tryBeginExecute, endExecute, queryExecuteKey } from "@/lib/lifecycle/execute-in-flight";
+import { tryBeginExecute, endExecute, queryExecuteKey, tryBeginQueryExecution, endQueryExecution } from "@/lib/lifecycle/execute-in-flight";
 
 describe("Lifecycle Actions", () => {
   beforeEach(async () => {
@@ -1739,11 +1739,11 @@ describe("Lifecycle Actions", () => {
       const { runner, release } = await holdNextRun();
       const first = execute(ruleSet.id, [item.id]);
       await vi.waitFor(() => expect(runner).toHaveBeenCalledTimes(1));
-      expect(tryBeginExecute(queryExecuteKey(user.id))).toBe(false);
+      expect(tryBeginQueryExecution(user.id)).toBe("rule-set-running");
       release();
       expect((await first).status).toBe(200);
-      expect(tryBeginExecute(queryExecuteKey(user.id))).toBe(true);
-      endExecute(queryExecuteKey(user.id));
+      expect(tryBeginQueryExecution(user.id)).toBe("claimed");
+      endQueryExecution(user.id);
     });
 
     it("refuses a force-retry of the same rule set while an execute holds the lock", async () => {

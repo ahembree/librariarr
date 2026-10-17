@@ -15,7 +15,7 @@ import {
   findExceptedItemIds,
   findExceptionProtectedGroups,
   isGroupProtected,
-  protectionKey,
+  hasProtectionGroup,
   isWholeRecordDestructiveAction,
 } from "@/lib/lifecycle/exception-guard";
 import { matchIdentityChange } from "@/lib/lifecycle/match-identity";
@@ -110,8 +110,7 @@ export async function POST(
   }
   // Kept apart from an ad-hoc query action, which can act on another copy or
   // track of the same Arr record (see `execute-in-flight.ts`).
-  const userToken = tryBeginRuleSetExecution(session.userId!);
-  if (!userToken) {
+  if (!tryBeginRuleSetExecution(session.userId!)) {
     endExecute(ruleSetId, lockedItems);
     return NextResponse.json(
       { error: "A query action is running — wait for it to finish" },
@@ -121,7 +120,7 @@ export async function POST(
   try {
     return await retryAction(session, { ...action, ruleSetId }, skipTitleValidation);
   } finally {
-    endRuleSetExecution(session.userId!, userToken);
+    endRuleSetExecution(session.userId!);
     endExecute(ruleSetId, lockedItems);
   }
 }
@@ -230,7 +229,7 @@ async function retryAction(
   // Whole-record destructive actions destroy every episode/track of the
   // series/artist — refuse the retry if ANY sibling is excepted (mirrors the
   // scheduled executor and the manual execute route).
-  if (isWholeRecordDestructiveAction(action.actionType) && protectionKey(action.mediaItem)) {
+  if (isWholeRecordDestructiveAction(action.actionType) && hasProtectionGroup(action.mediaItem)) {
     const protectedGroups = await findExceptionProtectedGroups(session.userId!, [
       action.mediaItem,
     ]);

@@ -11,7 +11,8 @@ const mockPrisma = vi.hoisted(() => ({
   radarrInstance: { findUnique: vi.fn() },
   sonarrInstance: { findUnique: vi.fn() },
   lidarrInstance: { findUnique: vi.fn() },
-  mediaItem: { findMany: vi.fn() },
+  mediaItem: { findMany: vi.fn(), findUnique: vi.fn() },
+  mediaItemExternalId: { findMany: vi.fn() },
 }));
 
 const mockRadarr = vi.hoisted(() => ({

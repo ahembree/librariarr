@@ -35,7 +35,13 @@ vi.mock("@/lib/lifecycle/actions", async (importOriginal) => {
 import { POST } from "@/app/api/query/actions/route";
 import { executeQuery } from "@/lib/query/query-engine";
 import { executeAction } from "@/lib/lifecycle/actions";
-import { tryBeginExecute, endExecute, queryExecuteKey } from "@/lib/lifecycle/execute-in-flight";
+import {
+  tryBeginExecute,
+  endExecute,
+  queryExecuteKey,
+  tryBeginRuleSetExecution,
+  endRuleSetExecution,
+} from "@/lib/lifecycle/execute-in-flight";
 
 const mockedExecuteQuery = vi.mocked(executeQuery);
 const mockedExecuteAction = vi.mocked(executeAction);
@@ -135,5 +141,25 @@ describe("POST /api/query/actions — single-flight", () => {
     } finally {
       endExecute(key);
     }
+  });
+
+  it("waits for a running lifecycle execution instead of refusing the batch", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const radarr = await createTestRadarrInstance(user.id);
+    const server = await createTestServer(user.id);
+    const library = await createTestLibrary(server.id, { type: "MOVIE" });
+    const item = await createTestMediaItem(library.id, { type: "MOVIE", title: "Item", parentTitle: null });
+    await createTestExternalId(item.id, "TMDB", "42");
+    mockedExecuteQuery.mockResolvedValue(queryResult([{ id: item.id, type: "MOVIE", title: "Item", parentTitle: null }]));
+    // The scheduled executor is mid-action: it releases a moment later.
+    expect(tryBeginRuleSetExecution(user.id)).toBe(true);
+    setTimeout(() => endRuleSetExecution(user.id), 400);
+
+    const { result } = await expectStreamResult<{ executed: number }>(
+      await post({ mediaItemIds: [item.id], actionType: "DO_NOTHING", removeArrTags: ["old"], arrInstanceId: radarr.id }),
+    );
+
+    expect(result.executed).toBe(1);
   });
 });

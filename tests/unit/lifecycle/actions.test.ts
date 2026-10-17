@@ -4,7 +4,8 @@ const mockPrisma = vi.hoisted(() => ({
   radarrInstance: { findUnique: vi.fn() },
   sonarrInstance: { findUnique: vi.fn() },
   lidarrInstance: { findUnique: vi.fn() },
-  mediaItem: { findMany: vi.fn() },
+  mediaItem: { findMany: vi.fn(), findUnique: vi.fn() },
+  mediaItemExternalId: { findMany: vi.fn() },
 }));
 
 const mockRadarrClient = vi.hoisted(() => ({
@@ -439,6 +440,64 @@ describe("executeAction", () => {
     await executeAction(action);
 
     expect(mockLidarrClient.deleteArtist).toHaveBeenCalledWith(5, true, false);
+  });
+
+  describe("DELETE_LIDARR when the library holds the artist title under other MusicBrainz ids", () => {
+    const lidarrArtist = { id: 5, artistName: "Nirvana", foreignArtistId: "mb-a", tags: [] };
+    const deleteAction = () =>
+      makeAction({
+        actionType: "DELETE_LIDARR",
+        mediaItem: {
+          id: "item1",
+          title: "Nirvana",
+          parentTitle: "Nirvana",
+          year: null,
+          externalIds: [{ source: "MUSICBRAINZ", externalId: "mb-a" }],
+        },
+      });
+
+    beforeEach(() => {
+      mockPrisma.lidarrInstance.findUnique.mockResolvedValue({ id: "arr1", url: "http://lidarr", apiKey: "key", enabled: true });
+      mockPrisma.mediaItem.findUnique.mockResolvedValue({ libraryId: "lib1", parentTitle: "Nirvana" });
+      mockLidarrClient.deleteArtist.mockClear();
+    });
+
+    it("refuses when another id resolves to the same Lidarr artist (one artist, two ids)", async () => {
+      mockPrisma.mediaItemExternalId.findMany.mockResolvedValue([{ externalId: "mb-old" }]);
+      mockLidarrClient.getArtistByMusicBrainzId.mockImplementation(async () => lidarrArtist);
+
+      await expect(executeAction(deleteAction())).rejects.toThrow(/same artist/);
+      expect(mockLidarrClient.deleteArtist).not.toHaveBeenCalled();
+      expect(mockPrisma.mediaItemExternalId.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            source: "MUSICBRAINZ",
+            externalId: { not: "mb-a" },
+            mediaItem: { libraryId: "lib1", type: "MUSIC", parentTitle: "Nirvana" },
+          },
+        }),
+      );
+    });
+
+    it("deletes when the other id is a different artist", async () => {
+      mockPrisma.mediaItemExternalId.findMany.mockResolvedValue([{ externalId: "mb-b" }]);
+      mockLidarrClient.getArtistByMusicBrainzId.mockImplementation(async (id: string) =>
+        id === "mb-b" ? { ...lidarrArtist, id: 9, foreignArtistId: "mb-b" } : lidarrArtist,
+      );
+
+      await executeAction(deleteAction());
+      expect(mockLidarrClient.deleteArtist).toHaveBeenCalledWith(5, true, false);
+    });
+
+    it("refuses when the title carries more ids than it checks", async () => {
+      mockPrisma.mediaItemExternalId.findMany.mockResolvedValue(
+        Array.from({ length: 11 }, (_, i) => ({ externalId: `mb-${i}` })),
+      );
+      mockLidarrClient.getArtistByMusicBrainzId.mockImplementation(async () => lidarrArtist);
+
+      await expect(executeAction(deleteAction())).rejects.toThrow(/more than 10/);
+      expect(mockLidarrClient.deleteArtist).not.toHaveBeenCalled();
+    });
   });
 
   it("throws when arr instance is not configured", async () => {

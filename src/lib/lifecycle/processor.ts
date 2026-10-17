@@ -24,7 +24,7 @@ import {
   findExceptedItemIds,
   findExceptionProtectedGroups,
   isGroupProtected,
-  protectionKey,
+  hasProtectionGroup,
   isWholeRecordDestructiveAction,
   type ProtectionTarget,
 } from "@/lib/lifecycle/exception-guard";
@@ -633,7 +633,7 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
   const wholeRecordTargetsByUser = new Map<string, ProtectionTarget[]>();
   for (const a of pendingActions) {
     if (!a.mediaItem || !isWholeRecordDestructiveAction(a.actionType)) continue;
-    if (!protectionKey(a.mediaItem)) continue;
+    if (!hasProtectionGroup(a.mediaItem)) continue;
     const targets = wholeRecordTargetsByUser.get(a.userId) ?? [];
     targets.push(a.mediaItem);
     wholeRecordTargetsByUser.set(a.userId, targets);
@@ -928,6 +928,9 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
   // retry budget against a dead instance on the serial MAIN_QUEUE.
   const unreachable = new UnreachableInstances();
   const deferredByInstance = new Map<string, number>();
+  // Actions left because an ad-hoc query action was running: logged once,
+  // not once per action — a query run can span the whole of pass 2.
+  let leftForQuery = 0;
   for (const { action, mediaItem, filteredMatchedIds } of executable) {
     // Held by the ceiling: leave it PENDING and untouched so the Pending page
     // can execute it after review. Only destructive actions are held — an
@@ -971,10 +974,10 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
       skip(`a manual execution of it is running for rule set "${action.ruleSet?.name ?? action.ruleSetId}"`);
       continue;
     }
-    const userToken = tryBeginRuleSetExecution(action.userId);
-    if (!userToken) {
+    if (!tryBeginRuleSetExecution(action.userId)) {
       endExecute(lockScope, lockItems);
-      skip("an ad-hoc query action is running");
+      leftForQuery += 1;
+      if (apiReservation && isDestructiveActionType(action.actionType)) apiReservation.release(1);
       continue;
     }
     try {
@@ -1001,7 +1004,7 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
       }
       await runAction(action, mediaItem, filteredMatchedIds);
     } finally {
-      endRuleSetExecution(action.userId, userToken);
+      endRuleSetExecution(action.userId);
       endExecute(lockScope, lockItems);
     }
   }
@@ -1024,7 +1027,7 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
     if (filed === 0) return false;
     if ((await findExceptedItemIds(uid, [mediaItem.id, ...memberIds])).size > 0) return true;
     if (!isWholeRecordDestructiveAction(actionType)) return false;
-    if (!protectionKey(mediaItem)) return false;
+    if (!hasProtectionGroup(mediaItem)) return false;
     return isGroupProtected(await findExceptionProtectedGroups(uid, [mediaItem]), mediaItem);
   }
 
@@ -1133,6 +1136,13 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
       }
 
     }
+  }
+
+  if (leftForQuery > 0) {
+    logger.info(
+      "Lifecycle",
+      `Left ${leftForQuery} action(s) for the next run — an ad-hoc query action was running`,
+    );
   }
 
   for (const [instanceId, count] of deferredByInstance) {

@@ -1,4 +1,5 @@
 import { arrIdSourceFor } from "@/lib/lifecycle/cross-server-copies";
+import { normalizeArtistTitle } from "@/lib/media/artist-key";
 
 type MediaType = "MOVIE" | "SERIES" | "MUSIC";
 
@@ -20,7 +21,7 @@ function recordKey(type: MediaType, item: CollapsibleItem): string {
   const arrId = item.externalIds.find((e) => e.source === source)?.externalId;
   if (arrId) return `${source}:${arrId}`;
   if (type === "SERIES") return `series:${item.seriesKey ?? (item.parentTitle ?? "").trim().toLowerCase()}`;
-  if (type === "MUSIC") return `artist:${(item.parentTitle ?? "").trim().toLowerCase()}`;
+  if (type === "MUSIC") return `artist:${normalizeArtistTitle(item.parentTitle ?? "")}`;
   return `id:${item.id}`;
 }
 

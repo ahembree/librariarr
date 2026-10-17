@@ -111,8 +111,7 @@ export async function POST(request: NextRequest) {
   }
   // Kept apart from an ad-hoc query action, which can act on another copy or
   // track of the same Arr record (see `execute-in-flight.ts`).
-  const userToken = tryBeginRuleSetExecution(session.userId!);
-  if (!userToken) {
+  if (!tryBeginRuleSetExecution(session.userId!)) {
     endExecute(ruleSet.id, lockedItems);
     return NextResponse.json(
       { error: "A query action is running — wait for it to finish" },
@@ -122,7 +121,7 @@ export async function POST(request: NextRequest) {
   try {
     return await executeRuleSet(session, ruleSet, mediaItemIds);
   } finally {
-    endRuleSetExecution(session.userId!, userToken);
+    endRuleSetExecution(session.userId!);
     endExecute(ruleSet.id, lockedItems);
   }
 }

@@ -196,12 +196,11 @@ describe("lifecycle engine scopes", () => {
         expect(res[0].memberIds).not.toContain(seattle.id);
       });
 
-      it("keeps tracks with no id out of both artists", async () => {
-        const { server, untagged } = await seedNirvanas({ untagged: true });
+      it("keeps the title whole when a track carries no id", async () => {
+        const { server, seattle, uk, untagged } = await seedNirvanas({ untagged: true });
         const res = await evaluateMusicScope([group([rule("title", "equals", "Nirvana")])], [server.id]);
-        const memberSets = res.map((r) => (r.memberIds as string[]).length).sort();
-        expect(memberSets).toEqual([1, 1, 1]);
-        expect(res.find((r) => (r.memberIds as string[]).includes(untagged!.id))!.memberIds).toEqual([untagged!.id]);
+        expect(res).toHaveLength(1);
+        expect([...(res[0].memberIds as string[])].sort()).toEqual([seattle.id, uk.id, untagged!.id].sort());
       });
 
       it("keeps one artist together when only some of its tracks carry the id", async () => {

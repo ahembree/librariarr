@@ -61,6 +61,8 @@ import {
   tryBeginExecute,
   endExecute,
   queryExecuteKey,
+  tryBeginQueryExecution,
+  endQueryExecution,
   _resetExecuteInFlightForTesting,
 } from "@/lib/lifecycle/execute-in-flight";
 import { reserveApiDestructive, resetApiDestructiveBudget } from "@/lib/api-keys/destructive-budget";
@@ -349,17 +351,17 @@ describe("scheduled execution while the actions change under it", () => {
 
   it("refuses an ad-hoc query action while an action runs, and releases the user after", async () => {
     const { user } = await dueDeletes(1);
-    let queryWhileRunning: boolean | undefined;
+    let queryWhileRunning: string | undefined;
     mockExecuteAction.mockImplementationOnce(async () => {
-      queryWhileRunning = tryBeginExecute(queryExecuteKey(user.id));
+      queryWhileRunning = tryBeginQueryExecution(user.id);
       return {};
     });
 
     await executeLifecycleActions(user.id);
 
-    expect(queryWhileRunning).toBe(false);
-    expect(tryBeginExecute(queryExecuteKey(user.id))).toBe(true);
-    endExecute(queryExecuteKey(user.id));
+    expect(queryWhileRunning).toBe("rule-set-running");
+    expect(tryBeginQueryExecution(user.id)).toBe("claimed");
+    endQueryExecution(user.id);
   });
 
   it("holds each item against a manual Execute while it runs, and releases it after", async () => {

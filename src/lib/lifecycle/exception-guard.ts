@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db";
 import { actionHonorsMemberIds, isDestructiveActionType } from "@/lib/lifecycle/action-types";
 import { seriesKeyFromTitle } from "@/lib/media/series-key";
-import { artistMbidOf, normalizeArtistTitle, type ArtistExternalIdLike } from "@/lib/media/artist-key";
+import { artistMbidOf, type ArtistExternalIdLike } from "@/lib/media/artist-key";
 
 type MediaType = "MOVIE" | "SERIES" | "MUSIC";
 const VALID_TYPES: readonly MediaType[] = ["MOVIE", "SERIES", "MUSIC"];
@@ -23,25 +23,24 @@ export interface ProtectionTarget {
   type: string;
   /**
    * The row's external ids. Read for MUSIC only, for the artist's MusicBrainz
-   * id; a target passed without them is guarded by its title alone, which
-   * only ever over-blocks (see `musicTargetKeys`).
+   * id; a track passed without them is guarded by its title alone.
    */
   externalIds?: ReadonlyArray<ArtistExternalIdLike> | null;
 }
 
 /**
- * The group a whole-record action destroys, or null for an item with no group
- * (a movie — its own exception row is checked directly by every caller).
+ * The group a whole-record action destroys, keyed by title (or `seriesKey`),
+ * or null for an item with none (a movie — its own exception row is checked
+ * directly by every caller).
  *
  * SERIES keys on `seriesKey`, not `parentTitle`: the same show on two servers
  * can carry two titles under one TVDB id, and keyed on the title an exception on
  * one copy did not protect the other from a delete of the whole Sonarr series.
  * The fallback for a row with no key is `seriesKeyFromTitle`, the same string
  * `computeSeriesKey` derives, so a legacy row still collides with a backfilled
- * one. MUSIC's group is the normalized artist title, namespaced by type so a
- * same-named show and artist cannot cross — but whether an exception in that
- * group protects a target is decided by `isGroupProtected`, which also reads
- * the artist's MusicBrainz id.
+ * one. MUSIC keys on the normalized artist title, namespaced by type so a
+ * same-named show and artist cannot cross; `protectionKeys` adds its
+ * MusicBrainz id.
  */
 export function protectionKey(item: ProtectionTarget): string | null {
   const key =
@@ -50,71 +49,42 @@ export function protectionKey(item: ProtectionTarget): string | null {
   return key ? `${item.type}:${key}` : null;
 }
 
-/*
- * MUSIC keys. An artist title can name two different artists ("Nirvana",
- * "Bush"), told apart only by their MusicBrainz ids, and coverage of that id
- * can be partial. The rule, pairwise between an exception E and a target T of
- * the same normalized title:
- *
- *   - both carry an id  → protected only when the ids are equal;
- *   - either lacks one  → protected (the title is all there is to go on).
- *
- * Plus: equal ids under DIFFERENT titles (one artist spelled two ways on two
- * servers) are protected — the Lidarr action resolves the one artist by id.
- *
- * Encoded as key sets so the guard stays a set lookup. E contributes
- * `mbid:<id>` + `id-title:<t>` when it has an id, else `bare-title:<t>`; T
- * contributes `mbid:<id>` + `bare-title:<t>` when it has an id, else
- * `bare-title:<t>` + `id-title:<t>`. T is protected iff they share a key.
+/**
+ * Every key a group is known by. An artist is known by its normalized title
+ * AND by its MusicBrainz id, and an exception protects a target that shares
+ * EITHER: the same id under another spelling is the one Lidarr artist, and the
+ * same title is protected whatever the ids say. Telling two same-named artists
+ * apart by id here would under-block whenever one artist carries two ids — an
+ * id MusicBrainz has merged, which Lidarr resolves to the same artist — and
+ * under-blocking deletes protected media, while over-blocking only skips a
+ * delete. Empty for an item with no group.
  */
-const MUSIC = "MUSIC";
-
-function musicExceptionKeys(item: ProtectionTarget): string[] {
-  const title = item.parentTitle ? normalizeArtistTitle(item.parentTitle) : "";
-  const mbid = artistMbidOf(item.externalIds);
-  const keys: string[] = [];
-  if (mbid) {
-    keys.push(`${MUSIC}:mbid:${mbid}`);
-    if (title) keys.push(`${MUSIC}:id-title:${title}`);
-  } else if (title) {
-    keys.push(`${MUSIC}:bare-title:${title}`);
-  }
-  return keys;
-}
-
-function musicTargetKeys(item: ProtectionTarget): string[] {
-  const title = item.parentTitle ? normalizeArtistTitle(item.parentTitle) : "";
-  const mbid = artistMbidOf(item.externalIds);
-  const keys: string[] = [];
-  if (mbid) keys.push(`${MUSIC}:mbid:${mbid}`);
-  if (title) {
-    // Any exception without an id under this title protects it…
-    keys.push(`${MUSIC}:bare-title:${title}`);
-    // …and, when the target's own id is unknown, any exception under it at all.
-    if (!mbid) keys.push(`${MUSIC}:id-title:${title}`);
-  }
-  return keys;
-}
-
-/** The keys an EXCEPTION on `item` puts into the protected set. */
-export function exceptionProtectionKeys(item: ProtectionTarget): string[] {
-  if (item.type === MUSIC) return musicExceptionKeys(item);
+export function protectionKeys(item: ProtectionTarget): string[] {
   const key = protectionKey(item);
-  return key ? [key] : [];
+  const keys = key ? [key] : [];
+  if (item.type === MUSIC) {
+    const mbid = artistMbidOf(item.externalIds);
+    if (mbid) keys.push(`${MUSIC}:mbid:${mbid}`);
+  }
+  return keys;
+}
+
+/** Whether the item belongs to a group a whole-record action destroys. */
+export function hasProtectionGroup(item: ProtectionTarget): boolean {
+  return protectionKeys(item).length > 0;
 }
 
 /**
  * Whether a whole-record action on `target` would destroy an excepted item:
- * `protectedSet` is what `findExceptionProtectedGroups` (or
- * `exceptionProtectionKeys` over a set of excepted items) returned. False for
- * an item with no group.
+ * `protectedSet` is what `findExceptionProtectedGroups` (or `protectionKeys`
+ * over a set of excepted items) returned. False for an item with no group.
  */
 export function isGroupProtected(protectedSet: ReadonlySet<string>, target: ProtectionTarget): boolean {
   if (protectedSet.size === 0) return false;
-  if (target.type === MUSIC) return musicTargetKeys(target).some((k) => protectedSet.has(k));
-  const key = protectionKey(target);
-  return !!key && protectedSet.has(key);
+  return protectionKeys(target).some((k) => protectedSet.has(k));
 }
+
+const MUSIC = "MUSIC";
 
 /**
  * Exception inviolability for whole-record destructive actions.
@@ -153,13 +123,15 @@ export async function findExceptionProtectedGroups(
   // exception filed under the other server's title for the same show (or
   // artist, by its MusicBrainz id), `seriesKey` alone misses one on a row that
   // predates the column. Each hit is then re-keyed, so a same-titled DIFFERENT
-  // show or artist comes back under its own key and never matches the caller's.
+  // show comes back under its own key and never matches the caller's.
   const exceptions = await prisma.lifecycleException.findMany({
     where: {
       userId,
       mediaItem: {
         OR: [
-          ...(parents.length > 0 ? [{ parentTitle: { in: parents } }] : []),
+          // Case-insensitively, as the keys compare: an exception filed under
+          // "nirvana" on one server protects "Nirvana" on another.
+          ...(parents.length > 0 ? [{ parentTitle: { in: parents, mode: "insensitive" as const } }] : []),
           ...(seriesKeys.length > 0 ? [{ seriesKey: { in: seriesKeys } }] : []),
           ...(artistMbids.length > 0
             ? [{
@@ -183,7 +155,7 @@ export async function findExceptionProtectedGroups(
     },
   });
 
-  return new Set(exceptions.flatMap((e) => exceptionProtectionKeys(e.mediaItem)));
+  return new Set(exceptions.flatMap((e) => protectionKeys(e.mediaItem)));
 }
 
 /**

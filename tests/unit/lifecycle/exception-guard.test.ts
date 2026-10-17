@@ -7,8 +7,9 @@ const mockPrisma = vi.hoisted(() => ({
 vi.mock("@/lib/db", () => ({ prisma: mockPrisma }));
 
 import {
-  exceptionProtectionKeys,
   findExceptionProtectedGroups,
+  hasProtectionGroup,
+  protectionKeys,
   isGroupProtected,
   protectionKey,
   isWholeRecordDestructiveAction,
@@ -62,7 +63,7 @@ describe("protectionKey", () => {
     );
   });
 
-  it("groups music by the artist title (`isGroupProtected` tells same-named artists apart)", () => {
+  it("keys music on the artist title (`protectionKeys` adds the MusicBrainz id)", () => {
     expect(protectionKey({ parentTitle: "Boards of Canada", type: "MUSIC" })).toBe("MUSIC:title:boards of canada");
     expect(protectionKey({ parentTitle: "boards of canada", type: "MUSIC" })).toBe("MUSIC:title:boards of canada");
   });
@@ -133,7 +134,7 @@ describe("findExceptionProtectedGroups", () => {
         userId: "u1",
         mediaItem: {
           OR: [
-            { parentTitle: { in: ["Protected Show"] } },
+            { parentTitle: { in: ["Protected Show"], mode: "insensitive" } },
             { seriesKey: { in: ["tvdb:1"] } },
           ],
           type: { in: ["SERIES"] },
@@ -179,19 +180,21 @@ describe("findExceptionProtectedGroups", () => {
 
 describe("isGroupProtected — artists", () => {
   // Two different artists named "Nirvana": the Seattle band and the 1960s UK
-  // one, told apart only by their MusicBrainz artist ids.
+  // one, with their MusicBrainz artist ids.
   const SEATTLE = "5b11f4ce-a62d-471e-81fc-a69a8278c7da";
   const UK = "9282c8b4-ca0b-4c6b-b7e3-4f7762dfc4d6";
-  const track = (parentTitle: string, mbid?: string): ProtectionTarget => ({
+  const track = (parentTitle: string | null, mbid?: string): ProtectionTarget => ({
     parentTitle,
     type: "MUSIC",
     externalIds: mbid ? [{ source: "MUSICBRAINZ", externalId: mbid }] : [],
   });
   const protectedBy = (exceptions: ProtectionTarget[], target: ProtectionTarget) =>
-    isGroupProtected(new Set(exceptions.flatMap(exceptionProtectionKeys)), target);
+    isGroupProtected(new Set<string>(exceptions.flatMap(protectionKeys)), target);
 
-  it("does not let a same-named DIFFERENT artist's exception block a delete", () => {
-    expect(protectedBy([track("Nirvana", UK)], track("Nirvana", SEATTLE))).toBe(false);
+  it("protects on the same title even when the ids differ — never under-blocks", () => {
+    // Two ids under one name may be two artists or one artist under a merged
+    // id Lidarr resolves to the same record; only the first is safe to delete.
+    expect(protectedBy([track("Nirvana", UK)], track("Nirvana", SEATTLE))).toBe(true);
   });
 
   it("protects the same artist, whatever the title's case or spacing", () => {
@@ -203,7 +206,7 @@ describe("isGroupProtected — artists", () => {
     expect(protectedBy([track("Beyonce", "mbid-b")], track("Beyoncé", "mbid-b"))).toBe(true);
   });
 
-  it("falls back to the title when either side has no id — over-blocking, never under", () => {
+  it("protects on the title when either side has no id", () => {
     expect(protectedBy([track("Nirvana")], track("Nirvana", SEATTLE))).toBe(true);
     expect(protectedBy([track("Nirvana", UK)], track("Nirvana"))).toBe(true);
     expect(protectedBy([track("Nirvana")], track("Nirvana"))).toBe(true);
@@ -214,33 +217,34 @@ describe("isGroupProtected — artists", () => {
     expect(protectedBy([track("Bush")], track("Nirvana"))).toBe(false);
   });
 
-  it("keeps a target loaded without external ids on the title alone", () => {
-    expect(protectedBy([track("Nirvana", UK)], { parentTitle: "Nirvana", type: "MUSIC" })).toBe(true);
+  it("guards a track with an id but no artist title", () => {
+    const untitled = track(null, SEATTLE);
+    expect(hasProtectionGroup(untitled)).toBe(true);
+    expect(protectedBy([track("Nirvana", SEATTLE)], untitled)).toBe(true);
+    expect(hasProtectionGroup(track(null))).toBe(false);
   });
 
-  it("looks exceptions up by the targets' artist ids as well as their titles", async () => {
+  it("looks exceptions up by the targets' artist ids as well as their titles, titles case-insensitively", async () => {
     mockPrisma.lifecycleException.findMany.mockResolvedValue([]);
     await findExceptionProtectedGroups("u1", [track("Beyoncé", "mbid-b")]);
     expect(mockPrisma.lifecycleException.findMany.mock.lastCall![0].where.mediaItem.OR).toEqual([
-      { parentTitle: { in: ["Beyoncé"] } },
+      { parentTitle: { in: ["Beyoncé"], mode: "insensitive" } },
       { type: "MUSIC", externalIds: { some: { source: "MUSICBRAINZ", externalId: { in: ["mbid-b"] } } } },
     ]);
   });
 
-  it("re-keys each exception it finds by its own artist id", async () => {
+  it("finds an exception filed on the artist under another spelling by its id", async () => {
     mockPrisma.lifecycleException.findMany.mockResolvedValue([
-      { mediaItem: { parentTitle: "Nirvana", seriesKey: null, type: "MUSIC", externalIds: [{ source: "MUSICBRAINZ", externalId: UK }] } },
+      { mediaItem: { parentTitle: "Beyonce", seriesKey: null, type: "MUSIC", externalIds: [{ source: "MUSICBRAINZ", externalId: "mbid-b" }] } },
     ]);
-    const target = track("Nirvana", SEATTLE);
-    const result = await findExceptionProtectedGroups("u1", [target]);
-    expect(isGroupProtected(result, target)).toBe(false);
-    expect(isGroupProtected(result, track("Nirvana", UK))).toBe(true);
+    const target = track("Beyoncé", "mbid-b");
+    expect(isGroupProtected(await findExceptionProtectedGroups("u1", [target]), target)).toBe(true);
   });
 });
 
 describe("isGroupProtected — series and movies", () => {
   it("matches a series on its protection key", () => {
-    const set = new Set(exceptionProtectionKeys({ parentTitle: "The Office (US)", seriesKey: "tvdb:73244", type: "SERIES" }));
+    const set = new Set(protectionKeys({ parentTitle: "The Office (US)", seriesKey: "tvdb:73244", type: "SERIES" }));
     expect(isGroupProtected(set, { parentTitle: "The Office", seriesKey: "tvdb:73244", type: "SERIES" })).toBe(true);
     expect(isGroupProtected(set, { parentTitle: "The Office", seriesKey: "tvdb:78107", type: "SERIES" })).toBe(false);
   });
