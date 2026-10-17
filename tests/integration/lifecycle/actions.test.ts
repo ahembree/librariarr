@@ -84,6 +84,7 @@ vi.mock("@/lib/lifecycle/run-actions", async (importOriginal) => {
 import { GET } from "@/app/api/lifecycle/actions/route";
 import { DELETE as actionDelete, POST as actionRetry } from "@/app/api/lifecycle/actions/[id]/route";
 import { POST as executePost } from "@/app/api/lifecycle/actions/execute/route";
+import { tryBeginExecute, endExecute, queryExecuteKey } from "@/lib/lifecycle/execute-in-flight";
 
 describe("Lifecycle Actions", () => {
   beforeEach(async () => {
@@ -1708,6 +1709,41 @@ describe("Lifecycle Actions", () => {
       expect(one.error).toMatch(/already running for this rule set/i);
       heldAll.release();
       expect((await whole).status).toBe(200);
+    });
+
+    it("answers 409 to an execute and a force-retry while an ad-hoc query action runs for the user, then releases both locks", async () => {
+      const { user, item, ruleSet } = await seedExecutable();
+      const failedAction = await createTestAction(user.id, item.id, ruleSet.id, { status: "FAILED" });
+      const key = queryExecuteKey(user.id);
+      expect(tryBeginExecute(key)).toBe(true);
+      try {
+        const refused = await expectJson<{ error: string }>(await execute(ruleSet.id, [item.id]), 409);
+        expect(refused.error).toMatch(/query action is running/i);
+        const retry = await callRouteWithParams(actionRetry, { id: failedAction.id }, {
+          url: `/api/lifecycle/actions/${failedAction.id}`,
+          method: "POST",
+        });
+        expect((await expectJson<{ error: string }>(retry, 409)).error).toMatch(/query action is running/i);
+      } finally {
+        endExecute(key);
+      }
+      // Neither refusal left its rule-set claim behind.
+      expect(tryBeginExecute(ruleSet.id)).toBe(true);
+      endExecute(ruleSet.id);
+      expect(tryBeginExecute(key)).toBe(true);
+      endExecute(key);
+    });
+
+    it("holds the user's query scope while an execute runs", async () => {
+      const { user, item, ruleSet } = await seedExecutable();
+      const { runner, release } = await holdNextRun();
+      const first = execute(ruleSet.id, [item.id]);
+      await vi.waitFor(() => expect(runner).toHaveBeenCalledTimes(1));
+      expect(tryBeginExecute(queryExecuteKey(user.id))).toBe(false);
+      release();
+      expect((await first).status).toBe(200);
+      expect(tryBeginExecute(queryExecuteKey(user.id))).toBe(true);
+      endExecute(queryExecuteKey(user.id));
     });
 
     it("refuses a force-retry of the same rule set while an execute holds the lock", async () => {

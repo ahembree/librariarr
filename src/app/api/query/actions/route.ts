@@ -9,7 +9,7 @@ import { MOVIE_ACTION_TYPES, SERIES_ACTION_TYPES, MUSIC_ACTION_TYPES, actionHono
 import {
   findExceptedItemIds,
   findExceptionProtectedGroups,
-  protectionKey,
+  isGroupProtected,
   isWholeRecordDestructiveAction,
 } from "@/lib/lifecycle/exception-guard";
 import { arrFamilyLabel } from "@/lib/lifecycle/fetch-arr-metadata";
@@ -245,11 +245,13 @@ export async function POST(request: NextRequest) {
   // requests, so one key per user refuses only a genuinely concurrent second
   // run (a double-click, or a second tab) and never a legitimate batch. Held
   // until the stream's run finishes, which is when the last Arr call has
-  // returned. See `execute-in-flight.ts`.
+  // returned. The same claim is refused while a rule-set execution (Execute,
+  // force-retry, the scheduled executor) is running, which can act on the same
+  // Arr records through other rows. See `execute-in-flight.ts`.
   const executeKey = queryExecuteKey(userId);
   if (!tryBeginExecute(executeKey)) {
     return NextResponse.json(
-      { error: "A query action is already running — wait for it to finish" },
+      { error: "A query action or lifecycle execution is already running — wait for it to finish" },
       { status: 409 },
     );
   }
@@ -503,13 +505,11 @@ export async function POST(request: NextRequest) {
       const protectedGroups = await findExceptionProtectedGroups(userId, items);
       if (protectedGroups.size > 0) {
         const before = items.length;
-        // `protectionKey` on both sides — see the guard: SERIES identity is
+        // Keyed as the guard keys it (`isGroupProtected`): SERIES identity is
         // `seriesKey`, so an exception filed under another server's title for
-        // the same show still protects this copy.
-        items = items.filter((i) => {
-          const key = protectionKey(i);
-          return !key || !protectedGroups.has(key);
-        });
+        // the same show still protects this copy, and a same-named artist with
+        // a different MusicBrainz id does not.
+        items = items.filter((i) => !isGroupProtected(protectedGroups, i));
         if (items.length < before) {
           skipped += before - items.length;
           logger.warn("Lifecycle", `Ad-hoc ${actionType}: skipped ${before - items.length} whole-record target(s) — an episode/track of the series/artist is excluded via lifecycle exception`);

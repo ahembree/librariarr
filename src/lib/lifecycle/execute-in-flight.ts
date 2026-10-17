@@ -40,6 +40,17 @@
  * whole-artist delete) meet the same record in sequence too, which this lock
  * never covered.
  *
+ * The ad-hoc query route and the rule-set paths (the two routes above and the
+ * scheduled executor's pass 2) are also kept apart, as WHOLE runs: a query
+ * action acts on whatever rows the query returned, which can be any copy or
+ * track of a title a rule set's PENDING action is stored against, so no item
+ * id lock can tell that the two would send the same Arr call. A query run
+ * holds `query:<userId>` whole; every rule-set run additionally holds one
+ * private token ITEM in that scope (`tryBeginRuleSetExecution`), so the query
+ * run is refused while any rule-set run is in progress and every rule-set run
+ * is refused while a query run is — and rule-set runs, holding different
+ * tokens, never refuse one another there.
+ *
  * In-process on purpose: a lock that dies with the process is a lock whose
  * holder is no longer running. Pinned to `globalThis` unconditionally, the
  * same way as `eventBus` and the realtime self-write registry — the routes
@@ -113,4 +124,22 @@ export function endExecute(scope: string, itemIds?: readonly string[]): void {
 /** Test-only: release every scope. */
 export function _resetExecuteInFlightForTesting(): void {
   inFlight.clear();
+}
+
+/**
+ * Claim a rule-set execution's share of the user's query scope (see the header):
+ * refused — null — while an ad-hoc query action runs for `userId`. Returns the
+ * token to pass to `endRuleSetExecution`; take it AFTER the rule-set claim and
+ * release it before that one, from the same `finally`.
+ */
+export function tryBeginRuleSetExecution(userId: string): string | null {
+  // Random, not a counter: the routes and the job worker load separate copies
+  // of this module, and two counters would hand out the same token.
+  const token = `rule-set-run:${crypto.randomUUID()}`;
+  return tryBeginExecute(queryExecuteKey(userId), [token]) ? token : null;
+}
+
+/** Release what `tryBeginRuleSetExecution` claimed. */
+export function endRuleSetExecution(userId: string, token: string): void {
+  endExecute(queryExecuteKey(userId), [token]);
 }

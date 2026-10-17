@@ -23,6 +23,7 @@ import { checkLifecycleRuleEvaluability } from "@/lib/lifecycle/evaluability";
 import { validateRequest, ruleTestItemSchema } from "@/lib/validation";
 import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
 import { resolveSeriesKey } from "@/lib/media/series-key";
+import { artistMbidOf, splitArtistGroupByMbid } from "@/lib/media/artist-key";
 
 export async function POST(request: NextRequest) {
   const session = await getSession();
@@ -148,7 +149,8 @@ export async function POST(request: NextRequest) {
     // never by `parentTitle`, which merges two different shows sharing a title
     // (The Office UK and US). A row predating the column has no stored key, so
     // those are fetched too and keyed the way detection keys them. An artist
-    // has no identity column and is grouped by `parentTitle`, as in detection.
+    // is grouped by `parentTitle`, split by MusicBrainz id only when the title
+    // carries several (`splitArtistGroupByMbid`), as in detection.
     const seriesKey = type === "SERIES" ? resolveSeriesKey(item) : null;
     const candidates = await prisma.mediaItem.findMany({
       where: {
@@ -178,7 +180,9 @@ export async function POST(request: NextRequest) {
     const allItems =
       type === "SERIES"
         ? candidates.filter((ep) => resolveSeriesKey(ep) === seriesKey)
-        : candidates;
+        : (splitArtistGroupByMbid(candidates, (t) => artistMbidOf(t.externalIds)).find((g) =>
+            g.some((t) => t.id === item.id),
+          ) ?? candidates);
 
     const totalPlays = allItems.reduce((sum, ep) => sum + ep.playCount, 0);
     const totalSize = allItems.reduce(

@@ -3,6 +3,8 @@ import {
   tryBeginExecute,
   endExecute,
   queryExecuteKey,
+  tryBeginRuleSetExecution,
+  endRuleSetExecution,
   _resetExecuteInFlightForTesting,
 } from "@/lib/lifecycle/execute-in-flight";
 
@@ -118,6 +120,35 @@ describe("lifecycle execute single-flight registry", () => {
       endExecute("rs-1", ["b"]);
       expect(running("rs-1")).toBe(false);
       expect(tryBeginExecute("rs-1")).toBe(true);
+    });
+  });
+
+  describe("query runs and rule-set runs exclude each other", () => {
+    it("refuses a query run while a rule-set run is in progress for the user", () => {
+      const token = tryBeginRuleSetExecution("u1");
+      expect(token).not.toBeNull();
+      expect(tryBeginExecute(queryExecuteKey("u1"))).toBe(false);
+      endRuleSetExecution("u1", token!);
+      expect(tryBeginExecute(queryExecuteKey("u1"))).toBe(true);
+    });
+
+    it("refuses a rule-set run while a query run is in progress for the user", () => {
+      expect(tryBeginExecute(queryExecuteKey("u1"))).toBe(true);
+      expect(tryBeginRuleSetExecution("u1")).toBeNull();
+      endExecute(queryExecuteKey("u1"));
+      expect(tryBeginRuleSetExecution("u1")).not.toBeNull();
+    });
+
+    it("never makes two rule-set runs refuse each other", () => {
+      const a = tryBeginRuleSetExecution("u1");
+      const b = tryBeginRuleSetExecution("u1");
+      expect(a).not.toBeNull();
+      expect(b).not.toBeNull();
+      expect(a).not.toBe(b);
+      endRuleSetExecution("u1", a!);
+      expect(tryBeginExecute(queryExecuteKey("u1"))).toBe(false);
+      endRuleSetExecution("u1", b!);
+      expect(tryBeginExecute(queryExecuteKey("u1"))).toBe(true);
     });
   });
 });

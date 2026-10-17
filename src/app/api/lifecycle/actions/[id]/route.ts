@@ -5,10 +5,16 @@ import { logger } from "@/lib/logger";
 import { executeAction, extractActionError, describeActionError } from "@/lib/lifecycle/actions";
 import { actionTargetTitle } from "@/lib/lifecycle/action-target";
 import { loadMemberEpisodes } from "@/lib/lifecycle/member-episodes";
-import { tryBeginExecute, endExecute } from "@/lib/lifecycle/execute-in-flight";
+import {
+  tryBeginExecute,
+  endExecute,
+  tryBeginRuleSetExecution,
+  endRuleSetExecution,
+} from "@/lib/lifecycle/execute-in-flight";
 import {
   findExceptedItemIds,
   findExceptionProtectedGroups,
+  isGroupProtected,
   protectionKey,
   isWholeRecordDestructiveAction,
 } from "@/lib/lifecycle/exception-guard";
@@ -102,9 +108,20 @@ export async function POST(
       { status: 409 }
     );
   }
+  // Kept apart from an ad-hoc query action, which can act on another copy or
+  // track of the same Arr record (see `execute-in-flight.ts`).
+  const userToken = tryBeginRuleSetExecution(session.userId!);
+  if (!userToken) {
+    endExecute(ruleSetId, lockedItems);
+    return NextResponse.json(
+      { error: "A query action is running — wait for it to finish" },
+      { status: 409 }
+    );
+  }
   try {
     return await retryAction(session, { ...action, ruleSetId }, skipTitleValidation);
   } finally {
+    endRuleSetExecution(session.userId!, userToken);
     endExecute(ruleSetId, lockedItems);
   }
 }
@@ -213,12 +230,11 @@ async function retryAction(
   // Whole-record destructive actions destroy every episode/track of the
   // series/artist — refuse the retry if ANY sibling is excepted (mirrors the
   // scheduled executor and the manual execute route).
-  const retryGroupKey = protectionKey(action.mediaItem);
-  if (isWholeRecordDestructiveAction(action.actionType) && retryGroupKey) {
+  if (isWholeRecordDestructiveAction(action.actionType) && protectionKey(action.mediaItem)) {
     const protectedGroups = await findExceptionProtectedGroups(session.userId!, [
       action.mediaItem,
     ]);
-    if (protectedGroups.has(retryGroupKey)) {
+    if (isGroupProtected(protectedGroups, action.mediaItem)) {
       return NextResponse.json(
         { error: "An episode/track of this series/artist has a lifecycle exception — a whole-record delete cannot exclude it" },
         { status: 400 }
