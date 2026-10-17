@@ -32,7 +32,7 @@ For each active stream:
 ### Working with Sessions
 
 - **Click a session card** to open its detail panel with full overview, stream, media, and transcode information.
-- **Tick the checkbox** in a card's corner to select sessions, then use **Terminate Selected** — or **Select All** / **Terminate All** for everything at once.
+- **Tick the checkbox** in a card's corner to select sessions, then use **Terminate Selected** — or **Select All** / **Terminate All** for everything at once. You pick the message the viewer is shown from a list of presets or write your own (required, up to 500 characters).
 - The strip along each card's bottom edge shows playback progress, colored by state (accent while playing, amber while paused).
 - Every termination is written to **System Logs** under the `Streams` source — manual ones and automatic ones (maintenance mode, transcode manager, blackout) alike, so one filter shows them all. Each line names the viewer, the media they were watching, what triggered the stop, and the message they were shown as the reason. An episode is named by its show and its season and episode number, for example *Breaking Bad S01E01*.
 
@@ -44,9 +44,10 @@ Temporarily pause all streaming activity for server maintenance.
 
 | Setting | Description |
 |---------|-------------|
-| **Custom Message** | Message displayed to users explaining the maintenance |
-| **Delay** | Seconds to wait before terminating active streams (default: 30) |
+| **Termination Message** | Message shown to users when their stream is stopped — a preset or a custom message |
+| **Termination Delay** | Seconds a stream may play, from when the enforcer first sees it, before it is terminated (default: 30; 0 = immediately) |
 | **Excluded Users** | Users who can continue streaming during maintenance |
+| **Notify Discord** | Send a Discord notification when maintenance mode is turned on or off (default: off; needs a webhook under Settings → Notifications) |
 
 <Aside>
   The excluded-users picker (used here, in the Transcode Manager, and in Blackout Schedules) lists the users known to your connected servers. Exclusions are matched against the name that appears on a session. For Plex, that is the account's **friendly name** (the "Full Name" from Plex account settings) when one is set, otherwise the login username — so the picker shows, and matches on, whichever name is displayed on the session card.
@@ -56,19 +57,20 @@ Temporarily pause all streaming activity for server maintenance.
 
 When maintenance mode is **enabled**:
 
-1. A grace period countdown begins (configurable delay)
-2. Active streams receive a notification
-3. After the delay, sessions are terminated
-4. New connection attempts are rejected with the custom message
-5. Discord notification sent (if configured)
+1. Each stream from a non-excluded user gets its own grace period, starting when the enforcer first sees it
+2. Once the delay has passed, the stream is terminated with the termination message
+3. Streams started later are treated the same way — they play for the delay, then are stopped
+4. A Discord notification is sent if **Notify Discord** is on
 
 When maintenance mode is **disabled**:
 
-1. Normal streaming resumes immediately
-2. Discord notification sent (if configured)
+1. No further streams are terminated; pending grace periods are dropped
+2. A Discord notification is sent if **Notify Discord** is on
+
+Editing the message, delay or exclusions while maintenance is on does not send another notification — only turning it on or off does.
 
 <Aside>
-  The maintenance enforcer polls every 30 seconds to check compliance. Some players may not see the maintenance message immediately — there can be a brief delay before enforcement takes effect.
+  The maintenance enforcer polls every 30 seconds (and, with [Real-Time Sync](/docs/features/real-time-sync/) on, also runs when a server reports a session change). Some players may not see the maintenance message immediately — there can be a brief delay before enforcement takes effect.
 </Aside>
 
 ## Transcode Manager
@@ -118,7 +120,7 @@ Only the **encode** counts. A hardware *decode* feeding a software encode is sti
 
 ### Enforcement
 
-The enforcer checks active streams every 30 seconds. Sessions matching any enabled criterion are terminated after the configured delay.
+The enforcer checks active streams every 30 seconds. Sessions matching any enabled criterion are terminated after the configured delay. When a stream is caught by both maintenance mode and the transcode manager, the shorter of the two delays (and that feature's message) applies.
 
 <Aside type="caution">
   Enforcement depends on what your media server reports about each stream. Some player apps may not accurately report their status.
@@ -156,17 +158,17 @@ Set a single maintenance window with specific start and end dates/times.
 
 During a blackout window:
 
-- Active sessions are terminated after a configurable delay
-- Custom message displayed to users
-- User exclusions supported
-- Discord notification sent (if configured)
+- Sessions are stopped according to the schedule's action (below)
+- The schedule's termination message is shown to users
+- Excluded users are never stopped
+- No Discord notification is sent for blackouts
 
 ### Actions
 
 | Action | Description |
 |--------|-------------|
 | **Terminate Immediately** | Stop sessions as soon as the blackout starts |
-| **Warn Then Terminate** | Send a warning, then terminate after a configurable delay |
+| **Warn Then Terminate** | Send a warning, then terminate after a configurable delay (default: 30 seconds) |
 | **Block New Only** | Allow existing sessions to continue but block new playbacks |
 
 <Aside>

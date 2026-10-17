@@ -66,7 +66,7 @@ Configuration backups capture every column of the configuration tables, includin
 
 - **User accounts** — usernames, hashed passwords, Plex IDs/tokens, and SSO linkage (`ssoSubject`, `ssoProvider`, `ssoEnabled`)
 - **App settings** — schedules, notifications, theme, and the full SSO configuration (mode, OIDC issuer/client ID/client secret/scopes/username claim, forward-auth header names, master `ssoEnabled` toggle)
-- **Media servers, libraries, and integrations** (Sonarr, Radarr, Lidarr, Seerr)
+- **Media servers, libraries, and integrations** (Sonarr, Radarr, Lidarr, Seerr, Tracearr)
 - **Lifecycle rule sets and the Plex collections they feed, blackout schedules, preroll presets and schedules, saved queries**
 - **TRaSH Guide Sync assignments** (which custom formats, quality profiles, sizes and naming Librariarr manages on each Sonarr/Radarr instance)
 
@@ -90,7 +90,7 @@ Configure automatic backups in **Settings → General**:
 
 ### Retention
 
-Set how many backups to keep. Older backups are automatically deleted when the limit is reached. Default: **7** backups. A backup that fails part-way is not saved and does not count towards retention, so it never pushes out a good one.
+Set how many backups to keep (1–100). After each scheduled backup, the oldest backups beyond the limit are deleted — manual backups count towards the limit, but creating one manually does not prune. Default: **7** backups. A backup that fails part-way is not saved and does not count towards retention, so it never pushes out a good one.
 
 Scheduled backups are always **config-only** and use the saved encryption password (if set).
 

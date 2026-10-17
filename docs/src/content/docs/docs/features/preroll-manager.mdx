@@ -14,18 +14,20 @@ Presets store references to preroll media files on your server.
 
 ### Creating a Preset
 
-1. Navigate to **Tools → Preroll Manager**
-2. Click **Add Preset**
+1. Navigate to **Tools → Prerolls**
+2. Click **Save as Preset**
 3. Enter a **name** (e.g., "Holiday 2024", "Default Intro")
 4. Enter the **file path** to the preroll video on your server
-5. The path is validated server-side to confirm the file exists and is readable
+5. Click **Save** — the path is stored as entered; it is checked when you apply it (see below)
 
 ### Path Validation
 
-When you enter a preroll file path, Librariarr validates it in two ways:
+When you **Apply** a preroll path (from Quick Set, a preset, or **Apply Combined Preroll**), Librariarr checks each path in it — a combined path is split on `,` and `;` — in two ways:
 
 1. **Directory whitelisting** — The path must fall within an allowed directory. By default, the allowed prefixes are `/media`, `/data`, `/mnt`, and `/opt/prerolls`. You can customize this with the `PREROLL_ALLOWED_PATHS` environment variable (comma-separated list of directory prefixes).
 2. **Read-only file access check** — Librariarr verifies the file exists and is readable from inside the container. It only needs read access — preroll files are never modified.
+
+A path that fails either check opens a **File Not Found** warning listing it; you can cancel or **Continue** to apply it anyway (useful when the media server sees the file but Librariarr's container does not). Paths in presets and schedules are not checked when they are saved.
 
 <Aside type="tip">
   To enable path validation, mount your preroll files into the Librariarr container as a **read-only volume**. This gives Librariarr visibility to verify paths without granting write access to your media files.
@@ -77,10 +79,10 @@ Set a single window with specific start and end dates/times.
 
 #### Seasonal
 
-Use built-in holiday presets or define custom date ranges.
+Define an annual date range, or pick the **Holiday** schedule type to start from a built-in holiday.
 
-- **Holiday presets**: New Year, Valentine's Day, Easter, Halloween, Christmas, and more (dates auto-calculated)
-- **Custom**: Define your own annual date range
+- **Holiday**: New Year's Day, Valentine's Day, St. Patrick's Day, Easter, Mother's Day, Father's Day, Independence Day (US), Halloween, Thanksgiving (US), Christmas and New Year's Eve. Picking one pre-fills a fixed date range (for example, Easter is all of April and Christmas is December 1–26), which you can adjust; it is saved as a seasonal schedule
+- **Seasonal**: Define your own annual date range
 - A seasonal schedule repeats every year; the year in its dates is ignored
 
 ### Priority
@@ -104,7 +106,7 @@ The Preroll Manager includes a preset combination tool in the UI. Select multipl
 - **Sequential** (comma-separated) — play all selected prerolls in order
 - **Random** (semicolon-separated) — media server picks one at random
 
-The combined path can then be used in a schedule's preroll path field. This leverages your media server's native path separator support (Plex uses `;` for random and `,` for sequential).
+Click **Apply Combined Preroll** to set it on Plex now, or use the combined path in a schedule's preroll path field. This leverages your media server's native path separator support (Plex uses `;` for random and `,` for sequential).
 
 ## How It Works
 
@@ -113,14 +115,14 @@ The preroll enforcer checks every 30 seconds:
 1. Evaluates which preroll schedules are currently active
 2. Selects the highest-priority active schedule
 3. Sets that schedule's preroll path on the media server
-4. When no enabled schedule remains (the last one was deleted or turned off), clears the preroll it set
+4. When no schedule is active, clears the preroll — including when no enabled schedule remains (the last one was deleted or turned off) after it had set one
 
 The **Active** badge on the Preroll page uses the same rules, so it shows exactly the schedules the enforcer is applying.
 
 ## Limitations
 
 - **Plex**: Preroll support works by setting the preroll path via the Plex API. Requires Plex Pass for the preroll feature.
-- **Jellyfin/Emby**: Preroll support varies by server version and may require plugins or specific configuration.
+- **Jellyfin/Emby**: Not supported. The Preroll Manager only sets prerolls on enabled Plex servers; Jellyfin and Emby servers are ignored.
 - Changes to active prerolls take effect on the next playback start — currently playing content is not affected.
 
 <Aside type="caution">
