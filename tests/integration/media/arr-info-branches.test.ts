@@ -95,19 +95,6 @@ describe("GET /api/media/[id]/arr-info — music, tags and links", () => {
     return (await expectJson<{ matches: Match[] }>(await callRouteWithParams(GET, { id }))).matches;
   }
 
-  it("refuses another user's item with 403", async () => {
-    const stranger = await createTestUser({ username: "stranger" });
-    const server = await createTestServer(stranger.id);
-    const lib = await createTestLibrary(server.id);
-    const item = await createTestMediaItem(lib.id);
-    await createTestExternalId(item.id, "TMDB", "603");
-    await createTestRadarrInstance(userId);
-    const res = await callRouteWithParams(GET, { id: item.id });
-    expect(res.status).toBe(403);
-    expect(await res.json()).toEqual({ error: "Forbidden" });
-    expect(m.radarrMovie).not.toHaveBeenCalled();
-  });
-
   describe("music", () => {
     it("returns no matches for a track without an artist MusicBrainz id", async () => {
       const item = await createTestMediaItem(musicLibraryId, { type: "MUSIC" });

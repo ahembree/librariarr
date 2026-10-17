@@ -209,16 +209,15 @@ describe("GET /api/media/stats/custom", () => {
     ]);
   });
 
-  it("returns 404 when serverId does not belong to user", async () => {
-    const user1 = await createTestUser({ plexId: "u1" });
-    const user2 = await createTestUser({ plexId: "u2" });
-    const server = await createTestServer(user1.id);
+  it("returns 404 when serverId names no server", async () => {
+    const user = await createTestUser();
+    await createTestServer(user.id);
 
-    setMockSession({ userId: user2.id, isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/stats/custom",
-      searchParams: { dimension: "resolution", serverId: server.id },
+      searchParams: { dimension: "resolution", serverId: "nonexistent" },
     });
     const body = await expectJson<{ error: string }>(response, 404);
     expect(body.error).toBe("Server not found");

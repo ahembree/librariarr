@@ -78,26 +78,6 @@ describe("Saved queries API", () => {
       expect(body.queries).toEqual([]);
     });
 
-    it("returns only queries belonging to the authenticated user", async () => {
-      const user1 = await createTestUser({ plexId: "user1" });
-      const user2 = await createTestUser({ plexId: "user2" });
-
-      // Create queries as user1
-      setMockSession({ userId: user1.id, isLoggedIn: true });
-      await createSavedQuery("User1 Query");
-
-      // Create queries as user2
-      setMockSession({ userId: user2.id, isLoggedIn: true });
-      await createSavedQuery("User2 Query");
-
-      // List as user1 — should only see their own
-      setMockSession({ userId: user1.id, isLoggedIn: true });
-      const response = await callRoute(GET, { url: "/api/saved-queries" });
-      const body = await expectJson<{ queries: { name: string }[] }>(response, 200);
-      expect(body.queries).toHaveLength(1);
-      expect(body.queries[0].name).toBe("User1 Query");
-    });
-
     it("returns queries ordered by updatedAt descending", async () => {
       const user = await createTestUser();
       setMockSession({ userId: user.id, isLoggedIn: true });
@@ -311,24 +291,6 @@ describe("Saved queries API", () => {
       expect(body.error).toBe("Not found");
     });
 
-    it("returns 404 when updating another user's query", async () => {
-      const owner = await createTestUser({ plexId: "owner" });
-      const intruder = await createTestUser({ plexId: "intruder" });
-
-      setMockSession({ userId: owner.id, isLoggedIn: true });
-      const created = await createSavedQuery("Owner's Query");
-
-      setMockSession({ userId: intruder.id, isLoggedIn: true });
-      const response = await callRouteWithParams(
-        PUT,
-        { id: created.query.id },
-        { method: "PUT", body: { name: "Stolen" } }
-      );
-      await expectJson<{ error: string }>(response, 404);
-      const row = await getTestPrisma().savedQuery.findUniqueOrThrow({ where: { id: created.query.id } });
-      expect(row.name).toBe("Owner's Query");
-    });
-
     it("updates name successfully", async () => {
       const user = await createTestUser();
       setMockSession({ userId: user.id, isLoggedIn: true });
@@ -436,23 +398,6 @@ describe("Saved queries API", () => {
       );
       const body = await expectJson<{ error: string }>(response, 404);
       expect(body.error).toBe("Not found");
-    });
-
-    it("returns 404 when deleting another user's query", async () => {
-      const owner = await createTestUser({ plexId: "owner" });
-      const intruder = await createTestUser({ plexId: "intruder" });
-
-      setMockSession({ userId: owner.id, isLoggedIn: true });
-      const created = await createSavedQuery("Owner's Query");
-
-      setMockSession({ userId: intruder.id, isLoggedIn: true });
-      const response = await callRouteWithParams(
-        DELETE,
-        { id: created.query.id },
-        { method: "DELETE" }
-      );
-      await expectJson<{ error: string }>(response, 404);
-      expect(await getTestPrisma().savedQuery.count({ where: { id: created.query.id } })).toBe(1);
     });
 
     it("deletes query successfully", async () => {

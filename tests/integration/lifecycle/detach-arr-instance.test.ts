@@ -87,25 +87,19 @@ describe("detachDeletedArrInstance", () => {
     expect(warn).toHaveBeenCalledWith("Lifecycle", expect.stringContaining("detached 1 rule set"));
   });
 
-  it("leaves rule sets on other instances and other users alone", async () => {
+  it("leaves rule sets on other instances alone", async () => {
     const prisma = getTestPrisma();
     const user = await createTestUser();
-    const other = await createTestUser();
     const otherInstance = await createTestRuleSet(user.id, {
       actionEnabled: true, actionType: "DELETE_RADARR", arrInstanceId: "radarr-2",
     });
-    const otherUser = await createTestRuleSet(other.id, {
-      actionEnabled: true, actionType: "DELETE_RADARR", arrInstanceId: INSTANCE,
-    });
-    const otherUserAction = await action(other.id, "PENDING", INSTANCE);
 
     await prisma.$transaction((tx) => detachDeletedArrInstance(tx, user.id, INSTANCE, "Radarr"));
 
-    expect((await prisma.ruleSet.findUniqueOrThrow({ where: { id: otherInstance.id } })).arrInstanceId).toBe("radarr-2");
-    const ou = await prisma.ruleSet.findUniqueOrThrow({ where: { id: otherUser.id } });
-    expect(ou.arrInstanceId).toBe(INSTANCE);
-    expect(ou.actionEnabled).toBe(true);
-    expect(await prisma.lifecycleAction.findUnique({ where: { id: otherUserAction.id } })).not.toBeNull();
+    const row = await prisma.ruleSet.findUniqueOrThrow({ where: { id: otherInstance.id } });
+    expect(row.arrInstanceId).toBe("radarr-2");
+    expect(row.actionEnabled).toBe(true);
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it("logs nothing when nothing referenced the instance", async () => {

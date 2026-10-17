@@ -81,23 +81,6 @@ describe("Lifecycle Rules CRUD", () => {
       expect(body.ruleSets).toEqual([]);
     });
 
-    it("returns only the authenticated user's rule sets", async () => {
-      const user1 = await createTestUser({ plexId: "user1" });
-      const user2 = await createTestUser({ plexId: "user2" });
-
-      await createTestRuleSet(user1.id, { name: "User1 Rule", type: "MOVIE" });
-      await createTestRuleSet(user2.id, { name: "User2 Rule", type: "MOVIE" });
-
-      setMockSession({ isLoggedIn: true, userId: user1.id });
-
-      const response = await callRoute(GET, {
-        url: "/api/lifecycle/rules",
-      });
-      const body = await expectJson<{ ruleSets: { name: string }[] }>(response, 200);
-      expect(body.ruleSets).toHaveLength(1);
-      expect(body.ruleSets[0].name).toBe("User1 Rule");
-    });
-
     it("returns rule sets ordered by createdAt desc", async () => {
       const user = await createTestUser();
       const first = await createTestRuleSet(user.id, { name: "First Rule" });
@@ -463,24 +446,6 @@ describe("Lifecycle Rules CRUD", () => {
 
       await expectJson(response, 201);
     });
-
-    it("allows same name for different users", async () => {
-      const user1 = await createTestUser({ plexId: "u1" });
-      const user2 = await createTestUser({ plexId: "u2" });
-      const server2 = await createTestServer(user2.id);
-
-      await createTestRuleSet(user1.id, { name: "Shared Name", type: "MOVIE" });
-
-      setMockSession({ isLoggedIn: true, userId: user2.id });
-
-      const response = await callRoute(POST, {
-        url: "/api/lifecycle/rules",
-        method: "POST",
-        body: { name: "Shared Name", type: "MOVIE", rules: [dummyRule], serverIds: [server2.id] },
-      });
-
-      await expectJson(response, 201);
-    });
   });
 
   // ---- PUT /api/lifecycle/rules/[id] ----
@@ -628,26 +593,6 @@ describe("Lifecycle Rules CRUD", () => {
           url: "/api/lifecycle/rules/nonexistent-id",
           method: "PUT",
           body: { name: "Updated" },
-        }
-      );
-
-      await expectJson(response, 404);
-    });
-
-    it("returns 404 when updating another user's rule set", async () => {
-      const user1 = await createTestUser({ plexId: "owner" });
-      const user2 = await createTestUser({ plexId: "intruder" });
-      const ruleSet = await createTestRuleSet(user1.id, { name: "Private Rule" });
-
-      setMockSession({ isLoggedIn: true, userId: user2.id });
-
-      const response = await callRouteWithParams(
-        PUT,
-        { id: ruleSet.id },
-        {
-          url: `/api/lifecycle/rules/${ruleSet.id}`,
-          method: "PUT",
-          body: { name: "Stolen" },
         }
       );
 
@@ -947,25 +892,6 @@ describe("Lifecycle Rules CRUD", () => {
         { id: "nonexistent-id" },
         {
           url: "/api/lifecycle/rules/nonexistent-id",
-          method: "DELETE",
-        }
-      );
-
-      await expectJson(response, 404);
-    });
-
-    it("returns 404 when deleting another user's rule set", async () => {
-      const user1 = await createTestUser({ plexId: "owner" });
-      const user2 = await createTestUser({ plexId: "intruder" });
-      const ruleSet = await createTestRuleSet(user1.id, { name: "Not Yours" });
-
-      setMockSession({ isLoggedIn: true, userId: user2.id });
-
-      const response = await callRouteWithParams(
-        DELETE,
-        { id: ruleSet.id },
-        {
-          url: `/api/lifecycle/rules/${ruleSet.id}`,
           method: "DELETE",
         }
       );

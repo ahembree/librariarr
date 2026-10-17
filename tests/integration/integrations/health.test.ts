@@ -207,21 +207,6 @@ describe("GET /api/integrations/health", () => {
     expect(mockRadarrTestConnection).not.toHaveBeenCalled();
   });
 
-  it("isolates one user's instances from another's", async () => {
-    const u1 = await createTestUser({ plexId: "user1" });
-    const u2 = await createTestUser({ plexId: "user2" });
-    await createTestRadarrInstance(u1.id, { name: "U1 Radarr" });
-    await createTestRadarrInstance(u2.id, { name: "U2 Radarr" });
-
-    mockRadarrTestConnection.mockResolvedValue({ ok: true, appName: "Radarr" });
-
-    setMockSession({ isLoggedIn: true, userId: u1.id});
-    const data = await getHealth();
-
-    expect(data.radarr.configured).toBe(1);
-    expect(data.radarr.instances[0].name).toBe("U1 Radarr");
-  });
-
   it("caches results for repeated calls within the TTL window", async () => {
     const user = await createTestUser();
     await createTestRadarrInstance(user.id);

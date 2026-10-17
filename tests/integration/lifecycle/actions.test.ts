@@ -425,28 +425,6 @@ describe("Lifecycle Actions", () => {
       expect(body.groups[0].count).toBe(3);
     });
 
-    it("does not return other user's actions", async () => {
-      const user1 = await createTestUser({ plexId: "u1" });
-      const user2 = await createTestUser({ plexId: "u2" });
-
-      const server = await createTestServer(user1.id);
-      const library = await createTestLibrary(server.id, { type: "MOVIE" });
-      const item = await createTestMediaItem(library.id, { title: "Movie", type: "MOVIE" });
-      const ruleSet = await createTestRuleSet(user1.id, { name: "Rule" });
-
-      await createTestAction(user1.id, item.id, ruleSet.id);
-
-      setMockSession({ isLoggedIn: true, userId: user2.id });
-
-      const response = await callRoute(GET, {
-        url: "/api/lifecycle/actions",
-        searchParams: { status: "ALL" },
-      });
-
-      const body = await expectJson<{ groups: unknown[] }>(response, 200);
-      expect(body.groups).toHaveLength(0);
-    });
-
     it("names a series action by its show, and an action on one episode by show and SxxExx", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id);
@@ -734,30 +712,6 @@ describe("Lifecycle Actions", () => {
       await expectJson(response, 404);
     });
 
-    it("returns 404 when deleting another user's action", async () => {
-      const user1 = await createTestUser({ plexId: "owner" });
-      const user2 = await createTestUser({ plexId: "intruder" });
-
-      const server = await createTestServer(user1.id);
-      const library = await createTestLibrary(server.id, { type: "MOVIE" });
-      const item = await createTestMediaItem(library.id, { title: "Movie", type: "MOVIE" });
-      const ruleSet = await createTestRuleSet(user1.id, { name: "Rule" });
-      const action = await createTestAction(user1.id, item.id, ruleSet.id, { status: "FAILED" });
-
-      setMockSession({ isLoggedIn: true, userId: user2.id });
-
-      const response = await callRouteWithParams(
-        actionDelete,
-        { id: action.id },
-        {
-          url: `/api/lifecycle/actions/${action.id}`,
-          method: "DELETE",
-        }
-      );
-
-      await expectJson(response, 404);
-    });
-
     it("returns 400 when deleting a non-FAILED action", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id);
@@ -861,25 +815,6 @@ describe("Lifecycle Actions", () => {
       const prisma = getTestPrisma();
       expect(await prisma.ruleMatch.count({ where: { ruleSetId: ruleSet.id } })).toBe(0);
       expect(await prisma.lifecycleAction.count({ where: { ruleSetId: ruleSet.id, status: "PENDING" } })).toBe(0);
-    });
-
-    it("returns 404 for another user's rule set", async () => {
-      const user1 = await createTestUser({ plexId: "owner" });
-      const user2 = await createTestUser({ plexId: "intruder" });
-      const ruleSet = await createTestRuleSet(user1.id, {
-        name: "Private Rule",
-        actionType: "DO_NOTHING",
-      });
-
-      setMockSession({ isLoggedIn: true, userId: user2.id });
-
-      const response = await callRoute(executePost, {
-        url: "/api/lifecycle/actions/execute",
-        method: "POST",
-        body: { ruleSetId: ruleSet.id },
-      });
-
-      await expectJson(response, 404);
     });
 
     it("returns 400 when rule set has no action configured", async () => {

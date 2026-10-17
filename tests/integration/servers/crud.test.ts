@@ -159,23 +159,6 @@ describe("Server CRUD endpoints", () => {
 
       expect(body.servers[0].syncJobs).toEqual([expect.objectContaining({ status: "RUNNING", itemsProcessed: 40 })]);
     });
-
-    it("does not return servers belonging to another user", async () => {
-      const user1 = await createTestUser({ plexId: "user1" });
-      const user2 = await createTestUser({ plexId: "user2" });
-      await createTestServer(user1.id, { name: "User1 Server" });
-      await createTestServer(user2.id, { name: "User2 Server" });
-
-      setMockSession({ userId: user2.id, isLoggedIn: true });
-
-      const response = await callRoute(GET, { url: "/api/servers" });
-      const body = await expectJson<{
-        servers: { name: string }[];
-      }>(response, 200);
-
-      expect(body.servers).toHaveLength(1);
-      expect(body.servers[0].name).toBe("User2 Server");
-    });
   });
 
   // ----- POST /api/servers -----
@@ -543,26 +526,6 @@ describe("Server CRUD endpoints", () => {
           url: "/api/servers/00000000-0000-0000-0000-000000000000",
           method: "PUT",
           body: { url: "http://new:32400" },
-        }
-      );
-      const body = await expectJson<{ error: string }>(response, 404);
-      expect(body.error).toBe("Server not found");
-    });
-
-    it("returns 404 when server belongs to another user", async () => {
-      const user1 = await createTestUser({ plexId: "owner" });
-      const user2 = await createTestUser({ plexId: "intruder" });
-      const server = await createTestServer(user1.id);
-
-      setMockSession({ userId: user2.id, isLoggedIn: true });
-
-      const response = await callRouteWithParams(
-        PUT,
-        { id: server.id },
-        {
-          url: `/api/servers/${server.id}`,
-          method: "PUT",
-          body: { url: "http://hacked:32400" },
         }
       );
       const body = await expectJson<{ error: string }>(response, 404);

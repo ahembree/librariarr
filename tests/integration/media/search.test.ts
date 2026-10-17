@@ -264,27 +264,6 @@ describe("GET /api/media/search", () => {
     expect(body.items).toHaveLength(10);
   });
 
-  it("does not return items belonging to another user", async () => {
-    const user1 = await createTestUser({ plexId: "u1" });
-    const user2 = await createTestUser({ plexId: "u2" });
-    const server1 = await createTestServer(user1.id);
-    const lib1 = await createTestLibrary(server1.id, { type: "MOVIE" });
-
-    await createTestMediaItem(lib1.id, {
-      title: "Secret Movie",
-      type: "MOVIE",
-    });
-
-    setMockSession({ userId: user2.id, isLoggedIn: true });
-
-    const response = await callRoute(GET, {
-      url: "/api/media/search",
-      searchParams: { q: "Secret", type: "MOVIE" },
-    });
-    const body = await expectJson<{ items: unknown[] }>(response, 200);
-    expect(body.items).toHaveLength(0);
-  });
-
   // Scoped search used to group a fixed window of rows (100 episodes ordered
   // by the episode's own title, 200 tracks) in JS: a long show filled the
   // window, so another matching show never came back, and every count was the

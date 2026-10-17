@@ -104,9 +104,8 @@ describe("GET /api/media/series/grouped — sorts and show-level filters", () =>
     await episode("Charlie", 1, 2, { addedAt: new Date(now - 50 * DAY) });
   }
 
-  it("returns an empty list for a user with no servers", async () => {
-    const lonely = await createTestUser({ username: "lonely" });
-    setMockSession({ userId: lonely.id, isLoggedIn: true });
+  it("returns an empty list when the user has no servers", async () => {
+    await getTestPrisma().mediaServer.deleteMany();
     const body = await expectJson<{ series: unknown[]; pagination: { hasMore: boolean } }>(
       await callRoute(GET, { url: "/api/media/series/grouped" }),
     );

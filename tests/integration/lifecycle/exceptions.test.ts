@@ -89,20 +89,6 @@ describe("Lifecycle Exceptions API", () => {
       expect(body.exceptions[0].mediaItem.id).toBe(mediaItem.id);
     });
 
-    it("does not return exceptions belonging to another user", async () => {
-      const { user: user1 } = await createUserWithMediaItem();
-      const { user: user2, mediaItem: item2 } = await createUserWithMediaItem();
-
-      await prisma.lifecycleException.create({
-        data: { userId: user2.id, mediaItemId: item2.id },
-      });
-
-      setMockSession({ userId: user1.id, isLoggedIn: true });
-      const response = await callRoute(GET);
-      const body = await expectJson<{ exceptions: unknown[] }>(response, 200);
-      expect(body.exceptions).toHaveLength(0);
-    });
-
     it("filters by media item type when type param is provided", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id);
@@ -208,12 +194,11 @@ describe("Lifecycle Exceptions API", () => {
       expect(body.error).toBe("Validation failed");
     });
 
-    it("returns 404 when media item does not belong to user", async () => {
-      const { user: user1 } = await createUserWithMediaItem();
-      const { mediaItem: item2 } = await createUserWithMediaItem();
+    it("returns 404 when the media item does not exist", async () => {
+      const { user } = await createUserWithMediaItem();
 
-      setMockSession({ userId: user1.id, isLoggedIn: true });
-      const response = await callRoute(POST, { method: "POST", body: { mediaItemId: item2.id } });
+      setMockSession({ userId: user.id, isLoggedIn: true });
+      const response = await callRoute(POST, { method: "POST", body: { mediaItemId: "nonexistent" } });
       expect((await expectJson<{ error: string }>(response, 404)).error).toBe("Media item not found");
       expect(await prisma.lifecycleException.count()).toBe(0);
     });
@@ -519,19 +504,6 @@ describe("Lifecycle Exceptions API", () => {
       setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(DELETE, { id: "nonexistent" });
-      await expectJson(response, 404);
-    });
-
-    it("returns 404 when exception belongs to another user", async () => {
-      const { user: user1 } = await createUserWithMediaItem();
-      const { user: user2, mediaItem: item2 } = await createUserWithMediaItem();
-
-      const exception = await prisma.lifecycleException.create({
-        data: { userId: user2.id, mediaItemId: item2.id },
-      });
-
-      setMockSession({ userId: user1.id, isLoggedIn: true });
-      const response = await callRouteWithParams(DELETE, { id: exception.id });
       await expectJson(response, 404);
     });
 

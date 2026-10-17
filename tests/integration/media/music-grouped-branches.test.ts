@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
-import { cleanDatabase, disconnectTestDb } from "../../setup/test-db";
+import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
 import {
   callRoute,
@@ -88,9 +88,8 @@ describe("GET /api/media/music/grouped — sorts and offset", () => {
     expect(body.pagination.hasMore).toBe(false);
   });
 
-  it("returns an empty list for a user with no servers", async () => {
-    const lonely = await createTestUser({ username: "lonely" });
-    setMockSession({ userId: lonely.id, isLoggedIn: true });
+  it("returns an empty list when the user has no servers", async () => {
+    await getTestPrisma().mediaServer.deleteMany();
     expect(await names()).toEqual([]);
   });
 

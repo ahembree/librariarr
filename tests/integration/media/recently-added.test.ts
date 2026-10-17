@@ -254,52 +254,18 @@ describe("GET /api/media/recently-added", () => {
     expect(body.items[0].title).toBe("S1 Movie");
   });
 
-  it("returns 404 when serverId does not belong to user", async () => {
-    const user1 = await createTestUser({ plexId: "u1" });
-    const user2 = await createTestUser({ plexId: "u2" });
-    const server = await createTestServer(user1.id);
+  it("returns 404 when serverId names no server", async () => {
+    const user = await createTestUser();
+    await createTestServer(user.id);
 
-    setMockSession({ userId: user2.id, isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/recently-added",
-      searchParams: { serverId: server.id },
+      searchParams: { serverId: "nonexistent" },
     });
     const body = await expectJson<{ error: string }>(response, 404);
     expect(body.error).toBe("Server not found");
-  });
-
-  it("does not return items from other users' servers", async () => {
-    const user1 = await createTestUser({ plexId: "u1" });
-    const user2 = await createTestUser({ plexId: "u2" });
-    const server1 = await createTestServer(user1.id);
-    const server2 = await createTestServer(user2.id);
-    const lib1 = await createTestLibrary(server1.id);
-    const lib2 = await createTestLibrary(server2.id);
-
-    await createTestMediaItem(lib1.id, {
-      title: "User1 Movie",
-      type: "MOVIE",
-      addedAt: new Date(),
-    });
-    await createTestMediaItem(lib2.id, {
-      title: "User2 Movie",
-      type: "MOVIE",
-      addedAt: new Date(),
-      ratingKey: "u2-m",
-    });
-
-    setMockSession({ userId: user1.id, isLoggedIn: true });
-
-    const response = await callRoute(GET, {
-      url: "/api/media/recently-added",
-    });
-    const body = await expectJson<{
-      items: { title: string }[];
-    }>(response, 200);
-
-    expect(body.items).toHaveLength(1);
-    expect(body.items[0].title).toBe("User1 Movie");
   });
   it("collapses a season's episodes into one entry", async () => {
     const user = await createTestUser();

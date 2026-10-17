@@ -87,19 +87,6 @@ describe("Lidarr integration endpoints", () => {
       expect(body.instances).toHaveLength(1);
       expect(body.instances[0].name).toBe("My Lidarr");
     });
-
-    it("does not return instances belonging to another user", async () => {
-      const user1 = await createTestUser({ plexId: "user1" });
-      const user2 = await createTestUser({ plexId: "user2" });
-      await createTestLidarrInstance(user1.id, { name: "User1 Lidarr" });
-      await createTestLidarrInstance(user2.id, { name: "User2 Lidarr" });
-      setMockSession({ userId: user2.id, isLoggedIn: true });
-
-      const response = await callRoute(GET, { url: "/api/integrations/lidarr" });
-      const body = await expectJson<{ instances: { name: string }[] }>(response, 200);
-      expect(body.instances).toHaveLength(1);
-      expect(body.instances[0].name).toBe("User2 Lidarr");
-    });
   });
 
   // ----- POST /api/integrations/lidarr -----
@@ -247,21 +234,6 @@ describe("Lidarr integration endpoints", () => {
       expect(body.error).toBe("Not found");
     });
 
-    it("returns 404 when instance belongs to another user", async () => {
-      const user1 = await createTestUser({ plexId: "owner" });
-      const user2 = await createTestUser({ plexId: "intruder" });
-      const instance = await createTestLidarrInstance(user1.id);
-      setMockSession({ userId: user2.id, isLoggedIn: true });
-
-      const response = await callRouteWithParams(
-        PUT,
-        { id: instance.id },
-        { url: `/api/integrations/lidarr/${instance.id}`, method: "PUT", body: { name: "Hacked" } }
-      );
-      const body = await expectJson<{ error: string }>(response, 404);
-      expect(body.error).toBe("Not found");
-    });
-
     it("returns 400 when connection test fails on update", async () => {
       mockTestConnection.mockResolvedValue({ ok: false, error: "Timeout" });
 
@@ -334,21 +306,6 @@ describe("Lidarr integration endpoints", () => {
           url: "/api/integrations/lidarr/00000000-0000-0000-0000-000000000000",
           method: "DELETE",
         }
-      );
-      const body = await expectJson<{ error: string }>(response, 404);
-      expect(body.error).toBe("Not found");
-    });
-
-    it("returns 404 when deleting another user's instance", async () => {
-      const user1 = await createTestUser({ plexId: "owner" });
-      const user2 = await createTestUser({ plexId: "intruder" });
-      const instance = await createTestLidarrInstance(user1.id);
-      setMockSession({ userId: user2.id, isLoggedIn: true });
-
-      const response = await callRouteWithParams(
-        DELETE,
-        { id: instance.id },
-        { url: `/api/integrations/lidarr/${instance.id}`, method: "DELETE" }
       );
       const body = await expectJson<{ error: string }>(response, 404);
       expect(body.error).toBe("Not found");

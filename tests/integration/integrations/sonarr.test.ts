@@ -90,19 +90,6 @@ describe("Sonarr integration endpoints", () => {
       expect(body.instances).toHaveLength(1);
       expect(body.instances[0].name).toBe("My Sonarr");
     });
-
-    it("does not return instances belonging to another user", async () => {
-      const user1 = await createTestUser({ plexId: "user1" });
-      const user2 = await createTestUser({ plexId: "user2" });
-      await createTestSonarrInstance(user1.id, { name: "User1 Sonarr" });
-      await createTestSonarrInstance(user2.id, { name: "User2 Sonarr" });
-      setMockSession({ userId: user2.id, isLoggedIn: true });
-
-      const response = await callRoute(GET, { url: "/api/integrations/sonarr" });
-      const body = await expectJson<{ instances: { name: string }[] }>(response, 200);
-      expect(body.instances).toHaveLength(1);
-      expect(body.instances[0].name).toBe("User2 Sonarr");
-    });
   });
 
   // ----- POST /api/integrations/sonarr -----
@@ -250,21 +237,6 @@ describe("Sonarr integration endpoints", () => {
       expect(body.error).toBe("Not found");
     });
 
-    it("returns 404 when instance belongs to another user", async () => {
-      const user1 = await createTestUser({ plexId: "owner" });
-      const user2 = await createTestUser({ plexId: "intruder" });
-      const instance = await createTestSonarrInstance(user1.id);
-      setMockSession({ userId: user2.id, isLoggedIn: true });
-
-      const response = await callRouteWithParams(
-        PUT,
-        { id: instance.id },
-        { url: `/api/integrations/sonarr/${instance.id}`, method: "PUT", body: { name: "Hacked" } }
-      );
-      const body = await expectJson<{ error: string }>(response, 404);
-      expect(body.error).toBe("Not found");
-    });
-
     it("saves a rename while the instance is unreachable when the URL is unchanged", async () => {
       mockTestConnection.mockResolvedValue({ ok: false, error: "Timeout" });
       const user = await createTestUser();
@@ -360,21 +332,6 @@ describe("Sonarr integration endpoints", () => {
           url: "/api/integrations/sonarr/00000000-0000-0000-0000-000000000000",
           method: "DELETE",
         }
-      );
-      const body = await expectJson<{ error: string }>(response, 404);
-      expect(body.error).toBe("Not found");
-    });
-
-    it("returns 404 when deleting another user's instance", async () => {
-      const user1 = await createTestUser({ plexId: "owner" });
-      const user2 = await createTestUser({ plexId: "intruder" });
-      const instance = await createTestSonarrInstance(user1.id);
-      setMockSession({ userId: user2.id, isLoggedIn: true });
-
-      const response = await callRouteWithParams(
-        DELETE,
-        { id: instance.id },
-        { url: `/api/integrations/sonarr/${instance.id}`, method: "DELETE" }
       );
       const body = await expectJson<{ error: string }>(response, 404);
       expect(body.error).toBe("Not found");

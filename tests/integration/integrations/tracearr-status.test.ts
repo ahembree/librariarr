@@ -276,30 +276,6 @@ describe("GET /api/integrations/tracearr/status", () => {
     ]);
   });
 
-  it("excludes another user's mapped server", async () => {
-    const user = await createTestUser();
-    const other = await createTestUser({ plexId: "plex-other", username: "other" });
-
-    const mine = await createTestServer(user.id, { name: "Mine" });
-    await mapToTracearr(mine.id, "44444444-4444-4444-4444-444444444444");
-    const theirs = await createTestServer(other.id, { name: "Theirs" });
-    await mapToTracearr(theirs.id, "55555555-5555-5555-5555-555555555555");
-
-    const theirItem = await createItemFor(theirs.id, "Their Movie");
-    await createWatchRow({
-      mediaItemId: theirItem.id,
-      mediaServerId: theirs.id,
-      watchedAt: new Date("2025-02-02T00:00:00.000Z"),
-    });
-
-    setMockSession({ userId: user.id, isLoggedIn: true });
-
-    const response = await callRoute(GET, { url: STATUS_URL });
-    const body = await expectJson<{ servers: StatusRow[] }>(response);
-
-    expect(body.servers.map((s) => s.serverId)).toEqual([mine.id]);
-  });
-
   it("keeps each mapped server's rows to itself", async () => {
     const user = await createTestUser();
     // Names chosen so the response order (name asc) is deterministic.

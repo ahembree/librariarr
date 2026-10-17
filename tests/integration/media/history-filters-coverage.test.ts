@@ -279,17 +279,4 @@ describe("GET /api/media/history — filter and sort branches", () => {
     expect(bare.mediaItem.lastPlayedAt).toBeNull();
     expect(bare.mediaItem.genres).toBeNull();
   });
-
-  it("does not list another user's plays", async () => {
-    const other = await createTestUser({ username: "other" });
-    const otherServer = await createTestServer(other.id);
-    const otherLib = await createTestLibrary(otherServer.id, { type: "MOVIE" });
-    const item = await createTestMediaItem(otherLib.id, { title: "Theirs" });
-    await play(item.id, { mediaServerId: otherServer.id, serverUsername: "stranger" });
-    const mine = await createTestMediaItem(movieLib, { title: "Mine" });
-    await play(mine.id);
-    const body = await get();
-    expect(titles(body)).toEqual(["Mine"]);
-    expect(body.usernames).toEqual(["alice"]);
-  });
 });

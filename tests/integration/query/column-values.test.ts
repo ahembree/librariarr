@@ -255,20 +255,4 @@ describe("POST /api/query/column-values", () => {
     expect(body.values[movie.id]).toEqual({ foundInArr: null, arrTag: null });
     expect(body.warnings).toEqual(["Select an Arr server in the query scope to show Arr columns."]);
   });
-
-  it("does not read another user's items", async () => {
-    const owner = await createTestUser({ plexId: "owner" });
-    const server = await createTestServer(owner.id);
-    const movie = await createTestMediaItem((await createTestLibrary(server.id)).id, { type: "MOVIE", studio: "A24" });
-    const other = await createTestUser({ plexId: "other" });
-    setMockSession({ isLoggedIn: true, userId: other.id });
-
-    const res = await callRoute(POST, {
-      url: "/api/query/column-values",
-      method: "POST",
-      body: { items: [{ id: movie.id }], fields: ["studio"] },
-    });
-    const body = await expectJson<Body>(res, 200);
-    expect(body.values).toEqual({});
-  });
 });

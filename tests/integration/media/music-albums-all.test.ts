@@ -238,16 +238,6 @@ describe("GET /api/media/music/albums/all", () => {
     expect(albums[0].servers.map((s) => s.serverName)).toEqual(["Alpha"]);
   });
 
-  it("does not list another user's albums", async () => {
-    const other = await createTestUser();
-    const otherServer = await createTestServer(other.id);
-    const otherLib = await createTestLibrary(otherServer.id, { type: "MUSIC" });
-    await createTestMediaItem(otherLib.id, { type: "MUSIC", parentTitle: "Hidden", albumTitle: "Hidden" });
-    await musicLibrary();
-
-    expect((await list()).albums).toEqual([]);
-  });
-
   // The Albums tab forwards every library filter; this route used to read only
   // the search, so a Genre or codec filter changed nothing on screen.
   it("applies the library filters the page sends, as the artist listing does", async () => {

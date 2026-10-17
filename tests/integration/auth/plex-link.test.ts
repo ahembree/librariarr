@@ -161,41 +161,6 @@ describe("POST /api/auth/plex/link", () => {
     expect(linked.email).toBe("plexuser@example.com");
   });
 
-  it("returns 409 when Plex account is already linked to another user", async () => {
-    // Create two users; user2 already has the Plex ID
-    const user1 = await createTestUser({ plexId: "plex-user1" });
-    await createTestUser({ plexId: "99999", username: "other" });
-
-    setMockSession({ userId: user1.id, isLoggedIn: true, authenticatedAt: Date.now() });
-
-    mockCheckPlexPin.mockResolvedValue({
-      id: 12345,
-      code: "abc",
-      authToken: "tok123",
-    });
-    mockGetPlexUser.mockResolvedValue({
-      id: 99999,
-      uuid: "plex-uuid-123",
-      email: "plexuser@example.com",
-      username: "PlexUser",
-      authToken: "tok123",
-      thumb: "https://plex.tv/thumb.jpg",
-    });
-
-    const response = await callRoute(POST, {
-      url: "/api/auth/plex/link",
-      method: "POST",
-      body: { pinId: 12345 },
-    });
-    const body = await expectJson<{ error: string }>(response, 409);
-    expect(body.error).toBe(
-      "This Plex account is already linked to another user"
-    );
-    const unchanged = await prisma.user.findUniqueOrThrow({ where: { id: user1.id } });
-    expect(unchanged.plexId).toBe("plex-user1");
-    expect(unchanged.plexToken).toBe(user1.plexToken);
-  });
-
   it("returns 500 when checkPlexPin throws an error", async () => {
     const user = await createTestUser();
     setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
@@ -245,34 +210,5 @@ describe("POST /api/auth/plex/link", () => {
     const linked = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
     expect(linked.plexId).toBe("88888");
     expect(linked.plexToken).toBe("direct-token");
-  });
-
-  it("returns 409 when authToken Plex account is already linked to another user", async () => {
-    const user1 = await createTestUser({ plexId: "plex-user1" });
-    await createTestUser({ plexId: "88888", username: "other" });
-
-    setMockSession({ userId: user1.id, isLoggedIn: true, authenticatedAt: Date.now() });
-
-    mockGetPlexUser.mockResolvedValue({
-      id: 88888,
-      uuid: "plex-uuid-direct",
-      email: "direct@example.com",
-      username: "DirectUser",
-      authToken: "direct-token",
-      thumb: "https://plex.tv/thumb.jpg",
-    });
-
-    const response = await callRoute(POST, {
-      url: "/api/auth/plex/link",
-      method: "POST",
-      body: { authToken: "direct-token" },
-    });
-    const body = await expectJson<{ error: string }>(response, 409);
-    expect(body.error).toBe(
-      "This Plex account is already linked to another user"
-    );
-    const unchanged = await prisma.user.findUniqueOrThrow({ where: { id: user1.id } });
-    expect(unchanged.plexId).toBe("plex-user1");
-    expect(unchanged.plexToken).toBe(user1.plexToken);
   });
 });

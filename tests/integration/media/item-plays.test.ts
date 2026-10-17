@@ -80,14 +80,11 @@ describe("GET /api/media/[id]/plays", () => {
     await expectJson(await get(movie.id), 401);
   });
 
-  it("404s an item belonging to another owner rather than leaking its plays", async () => {
-    // The reason ownership is checked on the ITEM before any history is read: a
-    // bare `findUnique` by id would happily return someone else's watch history.
-    const { movie } = await fixture();
-    const intruder = await createTestUser({ username: "intruder" });
-    setMockSession({ isLoggedIn: true, userId: intruder.id });
+  it("404s an id that names no item", async () => {
+    const { user } = await fixture();
+    setMockSession({ isLoggedIn: true, userId: user.id });
 
-    const body = await expectJson<{ error: string }>(await get(movie.id), 404);
+    const body = await expectJson<{ error: string }>(await get("nonexistent"), 404);
     expect(body.error).toBe("Not found");
   });
 

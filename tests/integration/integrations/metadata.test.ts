@@ -140,16 +140,6 @@ describe("Integration metadata endpoints", () => {
       expect(await expectJson(response, 404)).toEqual({ error: "Instance not found" });
     });
 
-    it("returns 404 when accessing another user's instance", async () => {
-      const owner = await createTestUser({ plexId: "owner" });
-      const intruder = await createTestUser({ plexId: "intruder" });
-      const instance = await createTestLidarrInstance(owner.id);
-      setMockSession({ userId: intruder.id, isLoggedIn: true });
-
-      const response = await callRouteWithParams(LidarrMetadataGET, { id: instance.id });
-      expect(await expectJson(response, 404)).toEqual({ error: "Instance not found" });
-    });
-
     it("returns artists, tags, and quality profiles", async () => {
       const user = await createTestUser();
       const instance = await createTestLidarrInstance(user.id);
@@ -257,16 +247,6 @@ describe("Integration metadata endpoints", () => {
       const response = await callRouteWithParams(RadarrMetadataGET, {
         id: "00000000-0000-0000-0000-000000000000",
       });
-      expect(await expectJson(response, 404)).toEqual({ error: "Instance not found" });
-    });
-
-    it("returns 404 when accessing another user's instance", async () => {
-      const owner = await createTestUser({ plexId: "owner" });
-      const intruder = await createTestUser({ plexId: "intruder" });
-      const instance = await createTestRadarrInstance(owner.id);
-      setMockSession({ userId: intruder.id, isLoggedIn: true });
-
-      const response = await callRouteWithParams(RadarrMetadataGET, { id: instance.id });
       expect(await expectJson(response, 404)).toEqual({ error: "Instance not found" });
     });
 
@@ -412,16 +392,6 @@ describe("Integration metadata endpoints", () => {
       expect(await expectJson(response, 404)).toEqual({ error: "Instance not found" });
     });
 
-    it("returns 404 when accessing another user's instance", async () => {
-      const owner = await createTestUser({ plexId: "owner" });
-      const intruder = await createTestUser({ plexId: "intruder" });
-      const instance = await createTestSonarrInstance(owner.id);
-      setMockSession({ userId: intruder.id, isLoggedIn: true });
-
-      const response = await callRouteWithParams(SonarrMetadataGET, { id: instance.id });
-      expect(await expectJson(response, 404)).toEqual({ error: "Instance not found" });
-    });
-
     it("returns series, tags, quality profiles, and languages", async () => {
       const user = await createTestUser();
       const instance = await createTestSonarrInstance(user.id);
@@ -556,16 +526,6 @@ describe("Integration metadata endpoints", () => {
       const response = await callRouteWithParams(SeerrMetadataGET, {
         id: "00000000-0000-0000-0000-000000000000",
       });
-      expect(await expectJson(response, 404)).toEqual({ error: "Instance not found" });
-    });
-
-    it("returns 404 when accessing another user's instance", async () => {
-      const owner = await createTestUser({ plexId: "owner" });
-      const intruder = await createTestUser({ plexId: "intruder" });
-      const instance = await createTestSeerrInstance(owner.id);
-      setMockSession({ userId: intruder.id, isLoggedIn: true });
-
-      const response = await callRouteWithParams(SeerrMetadataGET, { id: instance.id });
       expect(await expectJson(response, 404)).toEqual({ error: "Instance not found" });
     });
 

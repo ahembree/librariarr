@@ -81,19 +81,6 @@ describe("Seerr integration endpoints", () => {
       expect(body.instances).toHaveLength(1);
       expect(body.instances[0].name).toBe("My Seerr");
     });
-
-    it("does not return instances belonging to another user", async () => {
-      const user1 = await createTestUser({ plexId: "user1" });
-      const user2 = await createTestUser({ plexId: "user2" });
-      await createTestSeerrInstance(user1.id, { name: "User1 Seerr" });
-      await createTestSeerrInstance(user2.id, { name: "User2 Seerr" });
-      setMockSession({ userId: user2.id, isLoggedIn: true });
-
-      const response = await callRoute(GET, { url: "/api/integrations/seerr" });
-      const body = await expectJson<{ instances: { name: string }[] }>(response, 200);
-      expect(body.instances).toHaveLength(1);
-      expect(body.instances[0].name).toBe("User2 Seerr");
-    });
   });
 
   // ----- POST /api/integrations/seerr -----
@@ -265,25 +252,6 @@ describe("Seerr integration endpoints", () => {
           url: "/api/integrations/seerr/00000000-0000-0000-0000-000000000000",
           method: "PUT",
           body: { name: "New" },
-        }
-      );
-      const body = await expectJson<{ error: string }>(response, 404);
-      expect(body.error).toBe("Not found");
-    });
-
-    it("returns 404 when trying to update another user's instance", async () => {
-      const user1 = await createTestUser({ plexId: "owner" });
-      const user2 = await createTestUser({ plexId: "intruder" });
-      const instance = await createTestSeerrInstance(user1.id);
-      setMockSession({ userId: user2.id, isLoggedIn: true });
-
-      const response = await callRouteWithParams(
-        PUT,
-        { id: instance.id },
-        {
-          url: `/api/integrations/seerr/${instance.id}`,
-          method: "PUT",
-          body: { name: "Hacked" },
         }
       );
       const body = await expectJson<{ error: string }>(response, 404);

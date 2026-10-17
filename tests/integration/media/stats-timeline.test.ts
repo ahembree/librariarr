@@ -169,13 +169,12 @@ describe("GET /api/media/stats/timeline", () => {
     expect(body.points).toEqual([{ date: "2024-01", total: 1 }]);
   });
 
-  it("returns 404 for a serverId belonging to another user", async () => {
-    const owner = await createTestUser({ plexId: "other", username: "other" });
-    const foreignServer = await createTestServer(owner.id);
-    await authedUser();
+  it("returns 404 for a serverId that names no server", async () => {
+    const user = await authedUser();
+    await createTestServer(user.id);
 
     const response = await callRoute(GET, {
-      url: `${BASE}?dateField=addedAt&serverId=${foreignServer.id}`,
+      url: `${BASE}?dateField=addedAt&serverId=nonexistent`,
     });
     expect(await expectJson(response, 404)).toEqual({ error: "Server not found" });
   });

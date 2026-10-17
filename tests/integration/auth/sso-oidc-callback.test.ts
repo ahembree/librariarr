@@ -523,36 +523,6 @@ describe("GET /api/auth/sso/oidc/callback", () => {
     expect(after.userId).toBe(user.id);
   });
 
-  it("redirects with conflict when another user already owns the sub+issuer", async () => {
-    const other = await createTestUser({ plexId: "p-other", username: "other" });
-    await prisma.user.update({
-      where: { id: other.id },
-      data: { ssoSubject: "taken-sub", ssoIssuer: ISSUER, ssoEnabled: true },
-    });
-    const me = await createTestUser({ plexId: "p-me", username: "me" });
-    await seedOidcSettings(me.id, { ssoEnabled: false });
-    setMockSession({
-      isLoggedIn: true,
-      userId: me.id,
-      oidcState: "s",
-      oidcVerifier: "v",
-      oidcFlow: "link",
-    });
-    setupSuccessfulExchange({ sub: "taken-sub" });
-
-    const res = await callRoute(GET, {
-      method: "GET",
-      searchParams: { code: "c", state: "s" },
-    });
-    const loc = new URL(res.headers.get("location")!);
-    expect(loc.searchParams.get("ssoLinkError")).toBe("conflict");
-
-    // No mutation — current user's row is untouched.
-    const refreshed = await prisma.user.findUnique({ where: { id: me.id } });
-    expect(refreshed?.ssoSubject).toBeNull();
-    expect(refreshed?.sessionVersion).toBe(me.sessionVersion);
-  });
-
   it("returns a link whose admin and settings were deleted mid-flow to settings with sso_not_configured", async () => {
     const me = await createTestUser();
     await seedOidcSettings(me.id, { ssoEnabled: false });
@@ -581,13 +551,14 @@ describe("GET /api/auth/sso/oidc/callback", () => {
   });
 
   it("hits the P2025 catch when only the linker's user row is gone but settings remain", async () => {
-    // Different shape of race from the test above: A different user owns
-    // the AppSettings row, but the session's userId points at a deleted
-    // admin. The route's settings load + isLinkFlow gate pass, but the
+    // Different shape of race from the test above: the admin was deleted and
+    // set up again while the link was at the IdP, so the AppSettings row
+    // belongs to the new admin row and the session's userId points at the
+    // deleted one. The route's settings load + isLinkFlow gate pass, but the
     // final user.update throws P2025. Verify the catch returns
     // session_lost (not a generic 500).
-    const other = await createTestUser({ plexId: "p-other", username: "other" });
-    await seedOidcSettings(other.id, { ssoEnabled: false });
+    const admin = await createTestUser();
+    await seedOidcSettings(admin.id, { ssoEnabled: false });
 
     setMockSession({
       isLoggedIn: true,

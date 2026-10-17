@@ -52,7 +52,7 @@ async function realJpeg() {
     .toBuffer();
 }
 
-describe("GET /api/media/[id]/image — ownership, roles, cache hits and failures", () => {
+describe("GET /api/media/[id]/image — roles, cache hits and failures", () => {
   let userId: string;
   let libraryId: string;
 
@@ -74,17 +74,6 @@ describe("GET /api/media/[id]/image — ownership, roles, cache hits and failure
   afterAll(async () => {
     await rm(cacheDir, { recursive: true, force: true });
     await disconnectTestDb();
-  });
-
-  it("refuses another user's item with 403", async () => {
-    const stranger = await createTestUser({ username: "stranger" });
-    const server = await createTestServer(stranger.id);
-    const lib = await createTestLibrary(server.id);
-    const item = await createTestMediaItem(lib.id, { thumbUrl: THUMB });
-    const res = await callRouteWithParams(GET, { id: item.id });
-    expect(res.status).toBe(403);
-    expect(await res.json()).toEqual({ error: "Forbidden" });
-    expect(mockFetchImage).not.toHaveBeenCalled();
   });
 
   describe("type=role", () => {

@@ -85,13 +85,15 @@ describe("executeQuery — paths", () => {
     await disconnectTestDb();
   });
 
-  it("returns nothing for a user with no servers, or a selection of servers they do not have", async () => {
+  it("returns nothing for a user with no servers", async () => {
     const user = await createTestUser();
     const none = await executeQuery(def(), user.id, 1, 50);
     expect(none).toEqual({ items: [], pagination: { page: 1, limit: 50, hasMore: false, total: 0 } });
+  });
 
-    const { user: other } = await seedMixed();
-    const wrong = await executeQuery(def({ serverIds: ["not-a-server"] }), other.id, 2, 10);
+  it("returns nothing for a selection of servers the user does not have", async () => {
+    const { user } = await seedMixed();
+    const wrong = await executeQuery(def({ serverIds: ["not-a-server"] }), user.id, 2, 10);
     expect(wrong).toEqual({ items: [], pagination: { page: 2, limit: 10, hasMore: false, total: 0 } });
   });
 

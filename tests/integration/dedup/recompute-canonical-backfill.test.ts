@@ -38,24 +38,18 @@ afterAll(async () => {
 });
 
 describe("backfillSeriesKeys(userId)", () => {
-  it("only fills SERIES rows on the given user's servers", async () => {
-    const userA = await createTestUser({ username: "a" });
-    const serverA = await createTestServer(userA.id);
-    const libA = await createTestLibrary(serverA.id, { type: "SERIES" });
-    // A second user row is not a supported state for the app; the ownership
-    // clause is what we are checking, so fake a second owner's server.
-    const userB = await prisma.user.create({ data: { plexId: "b", username: "b", email: "b@x", plexToken: "t" } });
-    const libB = await createTestLibrary((await createTestServer(userB.id)).id, { type: "SERIES" });
+  it("fills only SERIES rows", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const lib = await createTestLibrary(server.id, { type: "SERIES" });
 
-    const mine = await createTestMediaItem(libA.id, { type: "SERIES", parentTitle: "Mine", seriesKey: null, seasonNumber: 1, episodeNumber: 1 });
-    const theirs = await createTestMediaItem(libB.id, { type: "SERIES", parentTitle: "Theirs", seriesKey: null, seasonNumber: 1, episodeNumber: 1 });
-    // Movies never carry a series key, even on the user's own servers.
-    const movieLib = await createTestLibrary(serverA.id, { type: "MOVIE" });
+    const episode = await createTestMediaItem(lib.id, { type: "SERIES", parentTitle: "Mine", seriesKey: null, seasonNumber: 1, episodeNumber: 1 });
+    // Movies never carry a series key.
+    const movieLib = await createTestLibrary(server.id, { type: "MOVIE" });
     const movie = await createTestMediaItem(movieLib.id, { title: "Heat", seriesKey: null });
 
-    expect(await backfillSeriesKeys(userA.id)).toBe(1);
-    expect((await prisma.mediaItem.findUniqueOrThrow({ where: { id: mine.id } })).seriesKey).toBe("title:mine");
-    expect((await prisma.mediaItem.findUniqueOrThrow({ where: { id: theirs.id } })).seriesKey).toBeNull();
+    expect(await backfillSeriesKeys(user.id)).toBe(1);
+    expect((await prisma.mediaItem.findUniqueOrThrow({ where: { id: episode.id } })).seriesKey).toBe("title:mine");
     expect((await prisma.mediaItem.findUniqueOrThrow({ where: { id: movie.id } })).seriesKey).toBeNull();
   });
 });

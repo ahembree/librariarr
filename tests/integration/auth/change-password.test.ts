@@ -382,28 +382,6 @@ describe("POST /api/auth/local/change-password", () => {
     expect(updated?.passwordHash).toBeNull();
   });
 
-  it("returns 409 when new username is already taken by another user", async () => {
-    const user1 = await createTestUser({ plexId: "u1", username: "User1" });
-    const user2 = await createTestUser({ plexId: "u2", username: "User2" });
-    await prisma.user.update({
-      where: { id: user2.id },
-      data: { localUsername: "takenname" },
-    });
-
-    setMockSession({ userId: user1.id, isLoggedIn: true, authenticatedAt: Date.now() });
-
-    const response = await callRoute(POST, {
-      url: "/api/auth/local/change-password",
-      method: "POST",
-      body: { newUsername: "TakenName" },
-    });
-    const body = await expectJson<{ error: string }>(response, 409);
-    expect(body.error).toBe("Username is already taken");
-    const unchanged = await prisma.user.findUnique({ where: { id: user1.id } });
-    expect(unchanged?.localUsername).toBeNull();
-    expect(unchanged?.username).toBe("User1");
-  });
-
   it("changes both password and username at once", async () => {
     const user = await createTestUser({ username: "OldUser" });
     await prisma.user.update({

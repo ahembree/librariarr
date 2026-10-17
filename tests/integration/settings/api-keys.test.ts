@@ -519,20 +519,19 @@ describe("/api/settings/api-keys", () => {
     });
 
     it("an account without a password needs a login from the last window", async () => {
-      await login(Date.now() - RECENT_LOGIN_WINDOW_MS - 1000);
+      const user = await login(Date.now() - RECENT_LOGIN_WINDOW_MS - 1000);
       const stale = await expectJson<{ code: string; error: string }>(await create(body()), 403);
       expect(stale.code).toBe("reauth_required");
       expect(stale.error).toMatch(/confirm it's you/i);
       expect(await prisma.apiKey.count()).toBe(0);
 
       // A session with no login stamp at all (one from before the stamp existed).
-      const unstamped = await createTestUser();
-      setMockSession({ isLoggedIn: true, userId: unstamped.id});
+      setMockSession({ isLoggedIn: true, userId: user.id });
       const unstampedRefusal = await expectJson<{ code: string }>(await create(body()), 403);
       expect(unstampedRefusal.code).toBe("reauth_required");
       expect(await prisma.apiKey.count()).toBe(0);
 
-      await login(Date.now() - 1000);
+      setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() - 1000 });
       await expectJson(await create(body()), 201);
     });
 
@@ -640,9 +639,12 @@ describe("/api/settings/api-keys", () => {
     });
 
     it("stays quiet when the toggle is off, or no webhook is set", async () => {
-      await loginWithWebhook(false);
+      const user = await loginWithWebhook(false);
       await expectJson(await create({ name: "quiet", scopes: ["media:read"], expiresAt: null }), 201);
-      await login();
+      // Let the first notification read the settings before they change.
+      expect(pendingNotifications).toHaveLength(1);
+      await pendingNotifications[0];
+      await prisma.appSettings.delete({ where: { userId: user.id } });
       await expectJson(await create({ name: "no webhook", scopes: ["media:read"], expiresAt: null }), 201);
       // Both notifications ran to the end without sending anything.
       expect(pendingNotifications).toHaveLength(2);

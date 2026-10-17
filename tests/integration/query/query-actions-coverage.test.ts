@@ -79,7 +79,7 @@ describe("POST /api/query/actions — action configuration", () => {
     expect(body.error).toBe("Arr instance not found for this action type");
   });
 
-  it("refuses tag-only Do Nothing on an instance the user does not own", async () => {
+  it("refuses tag-only Do Nothing on an instance that does not exist", async () => {
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id });
     const body = await expectJson<{ error: string }>(

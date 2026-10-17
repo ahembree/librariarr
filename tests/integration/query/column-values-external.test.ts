@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
-import { cleanDatabase, disconnectTestDb } from "../../setup/test-db";
+import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import {
   createTestUser,
   createTestServer,
@@ -61,10 +61,10 @@ describe("computeQueryColumnValues — Arr and Seerr columns", () => {
     });
   });
 
-  it("returns nothing for a user with no servers", async () => {
-    const other = await createTestUser({ plexId: "other-plex", username: "other" });
+  it("returns nothing when the user has no enabled server", async () => {
     const item = await movie();
-    expect(await computeQueryColumnValues(other.id, { items: [{ id: item.id }], fields: ["studio"], serverIds: [] })).toEqual({
+    await getTestPrisma().mediaServer.update({ where: { id: serverId }, data: { enabled: false } });
+    expect(await computeQueryColumnValues(userId, { items: [{ id: item.id }], fields: ["studio"], serverIds: [] })).toEqual({
       values: {},
       warnings: [],
     });

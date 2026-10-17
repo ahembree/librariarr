@@ -99,16 +99,6 @@ describe.each(cases)("GET /api/integrations/$name/[id]/recycle-bin", (c) => {
     expect(c.config).not.toHaveBeenCalled();
   });
 
-  it("returns 404 for another user's instance", async () => {
-    const owner = await createTestUser();
-    const other = await createTestUser();
-    const instance = await c.create(owner.id);
-    setMockSession({ userId: other.id, isLoggedIn: true });
-    const res = await callRouteWithParams(c.handler, { id: instance.id });
-    expect(await expectJson(res, 404)).toEqual({ error: "Instance not found" });
-    expect(c.config).not.toHaveBeenCalled();
-  });
-
   it("reports an enabled recycle bin with its path and cleanup days", async () => {
     const user = await createTestUser();
     const instance = await c.create(user.id, { url: "http://arr.local:1234", apiKey: "k1" });

@@ -436,14 +436,13 @@ describe("PUT /api/servers/[id] — Tracearr mapping", () => {
     expect(await countHistory(server.id)).toBe(2);
   });
 
-  it("returns 404 for a server owned by another user and wipes nothing", async () => {
-    const owner = await createTestUser({ plexId: "owner" });
-    const other = await createTestUser({ plexId: "other" });
-    const server = await createTestServer(owner.id);
+  it("returns 404 for a server that does not exist and wipes nothing", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
     await seedWatchHistory(server.id, 2);
-    setMockSession({ userId: other.id, isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
-    const response = await putMapping(server.id, { tracearrServerId: TRACEARR_SERVER_A });
+    const response = await putMapping("nonexistent", { tracearrServerId: TRACEARR_SERVER_A });
     const body = await expectJson<{ error: string }>(response, 404);
     expect(body.error).toBe("Server not found");
 

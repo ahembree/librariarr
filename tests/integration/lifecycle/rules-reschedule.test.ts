@@ -94,24 +94,6 @@ describe("POST /api/lifecycle/rules/[id]/reschedule-actions", () => {
     expect((await expectJson<{ error: string }>(response, 404)).error).toBe("Not found");
   });
 
-  it("returns 404 for another user's rule set", async () => {
-    const user1 = await createTestUser({ plexId: "owner" });
-    const user2 = await createTestUser({ plexId: "intruder" });
-    const ruleSet = await createTestRuleSet(user1.id, { name: "Private" });
-
-    setMockSession({ isLoggedIn: true, userId: user2.id });
-
-    const response = await callRouteWithParams(
-      POST,
-      { id: ruleSet.id },
-      {
-        url: `/api/lifecycle/rules/${ruleSet.id}/reschedule-actions`,
-        method: "POST",
-      }
-    );
-    await expectJson(response, 404);
-  });
-
   it("reschedules PENDING actions using actionDelayDays", async () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id);

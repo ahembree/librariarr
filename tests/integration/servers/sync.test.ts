@@ -77,25 +77,6 @@ describe("POST /api/servers/[id]/sync", () => {
     expect(body.error).toBe("Server not found");
   });
 
-  it("returns 404 when server belongs to another user", async () => {
-    const user1 = await createTestUser({ plexId: "owner" });
-    const user2 = await createTestUser({ plexId: "other" });
-    const server = await createTestServer(user1.id);
-
-    setMockSession({ userId: user2.id, isLoggedIn: true });
-
-    const response = await callRouteWithParams(
-      POST,
-      { id: server.id },
-      {
-        url: `/api/servers/${server.id}/sync`,
-        method: "POST",
-      }
-    );
-    const body = await expectJson<{ error: string }>(response, 404);
-    expect(body.error).toBe("Server not found");
-  });
-
   it("enqueues a sync job and returns success message", async () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id);

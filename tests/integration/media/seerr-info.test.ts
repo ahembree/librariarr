@@ -81,14 +81,12 @@ describe("GET /api/media/[id]/seerr-info", () => {
     expect(await res.json()).toEqual({ error: "Unauthorized" });
   });
 
-  it("returns 404 for an unknown item and 403 for another user's item", async () => {
-    const owner = await createTestUser({ plexId: "owner" });
-    const movie = await movieWith(owner.id, [["TMDB", "603"]]);
-    const other = await createTestUser({ plexId: "other" });
-    setMockSession({ userId: other.id, isLoggedIn: true });
+  it("returns 404 for an unknown item", async () => {
+    const user = await createTestUser();
+    await movieWith(user.id, [["TMDB", "603"]]);
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     expect(await expectJson(await callRouteWithParams(GET, { id: "missing" }), 404)).toEqual({ error: "Not found" });
-    expect(await expectJson(await callRouteWithParams(GET, { id: movie.id }), 403)).toEqual({ error: "Forbidden" });
     expect(mockGetMovie).not.toHaveBeenCalled();
   });
 

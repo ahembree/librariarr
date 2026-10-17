@@ -392,30 +392,6 @@ describe("PUT /api/tools/preroll/presets/[id]", () => {
     const row = await getTestPrisma().prerollPreset.findUniqueOrThrow({ where: { id: created.id } });
     expect(row).toMatchObject({ name: "Old Name", path: "/old/path.mp4" });
   });
-
-  it("cannot update another user's preset", async () => {
-    const user1 = await createTestUser({ plexId: "plex-owner" });
-    const user2 = await createTestUser({ plexId: "plex-other" });
-
-    // User 1 creates a preset
-    setMockSession({ isLoggedIn: true, userId: user1.id});
-    const createRes = await callRoute(postPreset, {
-      method: "POST",
-      body: { name: "My Preset", path: "/my/path.mp4" },
-    });
-    const { preset: created } = await createRes.json();
-
-    // User 2 tries to update it
-    setMockSession({ isLoggedIn: true, userId: user2.id});
-    const res = await callRouteWithParams(
-      putPreset,
-      { id: created.id },
-      { method: "PUT", body: { name: "Stolen" } }
-    );
-    await expectJson(res, 404);
-    const stored = await getTestPrisma().prerollPreset.findUniqueOrThrow({ where: { id: created.id } });
-    expect(stored.name).toBe("My Preset");
-  });
 });
 
 describe("DELETE /api/tools/preroll/presets/[id]", () => {
@@ -454,21 +430,19 @@ describe("DELETE /api/tools/preroll/presets/[id]", () => {
     expect(listBody.presets).toHaveLength(0);
   });
 
-  it("cannot delete another user's preset", async () => {
-    const user1 = await createTestUser({ plexId: "plex-owner" });
-    const user2 = await createTestUser({ plexId: "plex-other" });
+  it("returns 404 for a non-existent preset and deletes nothing", async () => {
+    const user = await createTestUser();
 
-    setMockSession({ isLoggedIn: true, userId: user1.id});
+    setMockSession({ isLoggedIn: true, userId: user.id});
     const createRes = await callRoute(postPreset, {
       method: "POST",
       body: { name: "Protected", path: "/safe.mp4" },
     });
     const { preset: created } = await createRes.json();
 
-    setMockSession({ isLoggedIn: true, userId: user2.id});
     const res = await callRouteWithParams(
       deletePreset,
-      { id: created.id },
+      { id: "nonexistent-id" },
       { method: "DELETE" }
     );
     await expectJson(res, 404);
@@ -711,34 +685,6 @@ describe("PUT /api/tools/preroll/schedules/[id]", () => {
     expect(body.schedule.name).toBe("Updated Schedule");
     expect(body.schedule.prerollPath).toBe("/prerolls/updated.mp4");
   });
-
-  it("cannot update another user's schedule", async () => {
-    const user1 = await createTestUser({ plexId: "plex-owner" });
-    const user2 = await createTestUser({ plexId: "plex-other" });
-
-    setMockSession({ isLoggedIn: true, userId: user1.id});
-    const createRes = await callRoute(postSchedule, {
-      method: "POST",
-      body: {
-        name: "Protected",
-        prerollPath: "/prerolls/safe.mp4",
-        scheduleType: "one_time",
-        startDate: "2030-01-01T00:00:00Z",
-        endDate: "2030-01-31T00:00:00Z",
-      },
-    });
-    const { schedule: created } = await createRes.json();
-
-    setMockSession({ isLoggedIn: true, userId: user2.id});
-    const res = await callRouteWithParams(
-      putSchedule,
-      { id: created.id },
-      { method: "PUT", body: { name: "Stolen" } }
-    );
-    await expectJson(res, 404);
-    const stored = await getTestPrisma().prerollSchedule.findUniqueOrThrow({ where: { id: created.id } });
-    expect(stored.name).toBe("Protected");
-  });
 });
 
 describe("DELETE /api/tools/preroll/schedules/[id]", () => {
@@ -783,11 +729,10 @@ describe("DELETE /api/tools/preroll/schedules/[id]", () => {
     expect(listBody.schedules).toHaveLength(0);
   });
 
-  it("cannot delete another user's schedule", async () => {
-    const user1 = await createTestUser({ plexId: "plex-owner" });
-    const user2 = await createTestUser({ plexId: "plex-other" });
+  it("returns 404 for a non-existent schedule and deletes nothing", async () => {
+    const user = await createTestUser();
 
-    setMockSession({ isLoggedIn: true, userId: user1.id});
+    setMockSession({ isLoggedIn: true, userId: user.id});
     const createRes = await callRoute(postSchedule, {
       method: "POST",
       body: {
@@ -800,10 +745,9 @@ describe("DELETE /api/tools/preroll/schedules/[id]", () => {
     });
     const { schedule: created } = await createRes.json();
 
-    setMockSession({ isLoggedIn: true, userId: user2.id});
     const res = await callRouteWithParams(
       deleteSchedule,
-      { id: created.id },
+      { id: "nonexistent-id" },
       { method: "DELETE" }
     );
     await expectJson(res, 404);

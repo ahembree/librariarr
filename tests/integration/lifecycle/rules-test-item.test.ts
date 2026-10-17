@@ -206,28 +206,6 @@ describe("POST /api/lifecycle/rules/test-item", () => {
     expect((await expectJson<{ error: string }>(response, 404)).error).toBe("Media item not found");
   });
 
-  it("returns 404 for another user's media item", async () => {
-    const user1 = await createTestUser({ plexId: "owner" });
-    const user2 = await createTestUser({ plexId: "intruder" });
-    const server = await createTestServer(user1.id);
-    const library = await createTestLibrary(server.id, { type: "MOVIE" });
-    const item = await createTestMediaItem(library.id, { title: "Private Movie", type: "MOVIE" });
-
-    setMockSession({ isLoggedIn: true, userId: user2.id });
-
-    const response = await callRoute(POST, {
-      url: "/api/lifecycle/rules/test-item",
-      method: "POST",
-      body: {
-        rules: validRules,
-        type: "MOVIE",
-        mediaItemId: item.id,
-        serverIds: [server.id],
-      },
-    });
-    await expectJson(response, 404);
-  });
-
   it("returns match result for a valid item (matches=true)", async () => {
     mockEvaluateAllRulesInMemory.mockReturnValue(true);
 

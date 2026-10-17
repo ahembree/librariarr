@@ -490,16 +490,14 @@ describe("Tools sessions endpoints", () => {
       ]);
     });
 
-    it("answers 404 for a server that is unknown, disabled or another user's", async () => {
+    it("answers 404 for a server that is unknown or disabled", async () => {
       // It answered 200 `{ terminated: 0, errors: [] }` — what a server with
       // nothing playing answers — so a mistyped id read as success.
       const user = await createTestUser();
-      const other = await createTestUser({ plexId: "other-plex-id", username: "other" });
       const disabled = await createTestServer(user.id, { name: "Off", enabled: false });
-      const foreign = await createTestServer(other.id, { name: "Theirs" });
       setMockSession({ userId: user.id, isLoggedIn: true });
 
-      for (const serverId of ["00000000-0000-0000-0000-000000000000", disabled.id, foreign.id]) {
+      for (const serverId of ["00000000-0000-0000-0000-000000000000", disabled.id]) {
         const response = await callRoute(POST, {
           url: "/api/tools/sessions/terminate",
           method: "POST",

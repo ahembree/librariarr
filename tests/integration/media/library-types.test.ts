@@ -138,33 +138,6 @@ describe("GET /api/media/library-types", () => {
     expect(body).toEqual({ types: ["MOVIE"], allTypes: ["MOVIE"] });
   });
 
-  it("does not return types from other users' servers", async () => {
-    const user1 = await createTestUser({ plexId: "u1" });
-    const user2 = await createTestUser({ plexId: "u2" });
-    const server1 = await createTestServer(user1.id);
-    const server2 = await createTestServer(user2.id);
-
-    await createTestLibrary(server1.id, {
-      title: "Movies",
-      type: "MOVIE",
-      enabled: true,
-    });
-    await createTestLibrary(server2.id, {
-      title: "Music",
-      type: "MUSIC",
-      enabled: true,
-    });
-
-    setMockSession({ userId: user1.id, isLoggedIn: true });
-
-    const response = await callRoute(GET, {
-      url: "/api/media/library-types",
-    });
-    const body = await expectJson<{ types: string[]; allTypes: string[] }>(response, 200);
-
-    expect(body).toEqual({ types: ["MOVIE"], allTypes: ["MOVIE"] });
-  });
-
   it("aggregates types across multiple servers of the same user", async () => {
     const user = await createTestUser();
     const server1 = await createTestServer(user.id, { name: "Server1" });

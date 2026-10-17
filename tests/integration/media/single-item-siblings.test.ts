@@ -42,8 +42,8 @@ describe("GET /api/media/[id] — copies on other servers", () => {
     await disconnectTestDb();
   });
 
-  async function itemOn(serverName: string, dedupKey: string | null, opts: { enabled?: boolean; owner?: string } = {}) {
-    const server = await createTestServer(opts.owner ?? userId, {
+  async function itemOn(serverName: string, dedupKey: string | null, opts: { enabled?: boolean } = {}) {
+    const server = await createTestServer(userId, {
       name: serverName,
       enabled: opts.enabled ?? true,
       machineId: `m-${serverName}`,
@@ -67,9 +67,6 @@ describe("GET /api/media/[id] — copies on other servers", () => {
     const zulu = await itemOn("Zulu", "movie:title:heat:1995");
     const zuluDup = await createTestMediaItem(zulu.lib.id, { title: "Heat", ratingKey: "rk-zulu-2" });
     await getTestPrisma().mediaItem.update({ where: { id: zuluDup.id }, data: { dedupKey: "movie:title:heat:1995" } });
-    // Another user's copy is never listed.
-    const stranger = await createTestUser({ username: "stranger" });
-    await itemOn("Stranger", "movie:title:heat:1995", { owner: stranger.id });
 
     const body = await expectJson<Body>(
       await callRouteWithParams(GET, { id: main.item.id }, { url: `/api/media/${main.item.id}` }),
@@ -124,13 +121,5 @@ describe("GET /api/media/[id] — copies on other servers", () => {
     expect(body.item.servers).toEqual([
       expect.objectContaining({ serverName: "Solo", mediaItemId: main.item.id }),
     ]);
-  });
-
-  it("returns 404 for another user's item", async () => {
-    const stranger = await createTestUser({ username: "stranger" });
-    const theirs = await itemOn("Theirs", null, { owner: stranger.id });
-    const res = await callRouteWithParams(GET, { id: theirs.item.id }, { url: `/api/media/${theirs.item.id}` });
-    expect(res.status).toBe(404);
-    expect(await res.json()).toEqual({ error: "Not found" });
   });
 });

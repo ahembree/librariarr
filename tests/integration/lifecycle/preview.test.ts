@@ -190,53 +190,6 @@ describe("Lifecycle Rules Preview", () => {
       expect(body.error).toBe("Validation failed");
     });
 
-    it("does not return items from other user's servers", async () => {
-      const user1 = await createTestUser({ plexId: "u1" });
-      const user2 = await createTestUser({ plexId: "u2" });
-
-      const server1 = await createTestServer(user1.id);
-      const library1 = await createTestLibrary(server1.id, { type: "MOVIE" });
-      await createTestMediaItem(library1.id, {
-        title: "User1 Movie",
-        type: "MOVIE",
-        playCount: 0,
-      });
-
-      const server2 = await createTestServer(user2.id);
-      const library2 = await createTestLibrary(server2.id, { type: "MOVIE" });
-      await createTestMediaItem(library2.id, {
-        title: "User2 Movie",
-        type: "MOVIE",
-        playCount: 0,
-      });
-
-      setMockSession({ isLoggedIn: true, userId: user1.id });
-
-      const response = await callRoute(adHocPreviewPOST, {
-        url: "/api/lifecycle/rules/preview",
-        method: "POST",
-        body: {
-          type: "MOVIE",
-          serverIds: [server1.id],
-          rules: [
-            {
-              id: "r1",
-              field: "playCount",
-              operator: "equals",
-              value: 0,
-              condition: "AND",
-            },
-          ],
-        },
-      });
-
-      const { result: body } = await expectStreamResult<{ items: { title: string }[]; count: number }>(
-        response,
-      );
-      expect(body.count).toBe(1);
-      expect(body.items[0].title).toBe("User1 Movie");
-    });
-
     it("returns 400 when all rules are disabled (safety guard)", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id);

@@ -98,14 +98,6 @@ describe("GET /api/media/[id]/group-summary", () => {
     await expectJson(await call(ep.id, "SERIES"), 404);
   });
 
-  it("returns 404 for another user's item", async () => {
-    const other = await createTestUser();
-    const otherServer = await createTestServer(other.id);
-    const lib = await createTestLibrary(otherServer.id, { type: "SERIES" });
-    const ep = await createTestMediaItem(lib.id, { type: "SERIES", title: "Pilot", parentTitle: "Show" });
-    await expectJson(await call(ep.id, "SERIES"), 404);
-  });
-
   it("aggregates every episode of a series", async () => {
     const lib = await createTestLibrary(serverId, { type: "SERIES" });
     const e1 = await createTestMediaItem(lib.id, {

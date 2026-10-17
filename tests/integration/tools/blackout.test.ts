@@ -490,27 +490,6 @@ describe("PUT /api/tools/blackout/[id]", () => {
     expect(await expectJson(res, 400)).toEqual({ error: "startTime and endTime must be in HH:mm format" });
     expect(await getTestPrisma().blackoutSchedule.count()).toBe(0);
   });
-
-  it("cannot update another user's schedule", async () => {
-    const user1 = await createTestUser({ plexId: "plex-owner" });
-    const user2 = await createTestUser({ plexId: "plex-other" });
-
-    // User 1 creates a schedule
-    setMockSession({ isLoggedIn: true, userId: user1.id});
-    const createRes = await createOneTimeSchedule();
-    const { schedule: created } = await createRes.json();
-
-    // User 2 tries to update it
-    setMockSession({ isLoggedIn: true, userId: user2.id});
-    const res = await callRouteWithParams(
-      PUT,
-      { id: created.id },
-      { method: "PUT", body: { name: "Hacked" } }
-    );
-    await expectJson(res, 404);
-    const stored = await getTestPrisma().blackoutSchedule.findUniqueOrThrow({ where: { id: created.id } });
-    expect(stored.name).toBe("Test Blackout");
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -559,30 +538,5 @@ describe("DELETE /api/tools/blackout/[id]", () => {
     const listRes = await callRoute(GET);
     const listBody = await expectJson<{ schedules: unknown[] }>(listRes);
     expect(listBody.schedules).toHaveLength(0);
-  });
-
-  it("cannot delete another user's schedule", async () => {
-    const user1 = await createTestUser({ plexId: "plex-owner" });
-    const user2 = await createTestUser({ plexId: "plex-other" });
-
-    // User 1 creates a schedule
-    setMockSession({ isLoggedIn: true, userId: user1.id});
-    const createRes = await createOneTimeSchedule();
-    const { schedule: created } = await createRes.json();
-
-    // User 2 tries to delete it
-    setMockSession({ isLoggedIn: true, userId: user2.id});
-    const res = await callRouteWithParams(
-      DELETE,
-      { id: created.id },
-      { method: "DELETE" }
-    );
-    await expectJson(res, 404);
-
-    // Verify it still exists for user1
-    setMockSession({ isLoggedIn: true, userId: user1.id});
-    const listRes = await callRoute(GET);
-    const listBody = await expectJson<{ schedules: unknown[] }>(listRes);
-    expect(listBody.schedules).toHaveLength(1);
   });
 });

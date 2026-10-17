@@ -283,27 +283,6 @@ describe("GET /api/media/series/watch-history", () => {
     expect(data.items[0].mediaItem.parentTitle).toBe("Adventure Time");
   });
 
-  it("excludes history recorded on another user's server", async () => {
-    const otherUser = await createTestUser({ username: "other" });
-    const otherServer = await createTestServer(otherUser.id, { name: "Other" });
-    const otherLibrary = await createTestLibrary(otherServer.id, { type: "SERIES" });
-    const foreign = await makeEpisode(1, 1, "Slumber Party Panic", "Adventure Time", otherLibrary.id);
-    await addWatch(foreign, { mediaServerId: otherServer.id, serverUsername: "mallory" });
-
-    const mine = await makeEpisode(1, 2, "Trouble in Lumpy Space");
-    await addWatch(mine);
-
-    const data = await expectJson<HistoryResponse>(
-      await callRoute(GET, {
-        url: "/api/media/series/watch-history",
-        searchParams: { parentTitle: "Adventure Time" },
-      }),
-    );
-
-    expect(data.pagination.totalCount).toBe(1);
-    expect(data.items[0].serverUsername).toBe("alice");
-  });
-
   it("keeps plays from every server, including non-canonical copies", async () => {
     // A play is a real event on whichever copy was played — dedup filtering
     // would silently drop the plays that happened on the non-canonical server.

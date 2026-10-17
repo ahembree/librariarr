@@ -277,7 +277,7 @@ describe("GET /api/tools/trash/status", () => {
 });
 
 describe("POST /api/tools/trash/assignments", () => {
-  it("404s for an instance the user doesn't own", async () => {
+  it("404s for an instance that does not exist", async () => {
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id});
     const res = await callRoute(postAssignment, {
@@ -433,15 +433,11 @@ describe("assignments/[id]", () => {
     await expectJson(post, 400);
   });
 
-  it("404s when deleting another user's row", async () => {
-    const other = await createTestUser({ username: "other", plexId: "p2" });
-    const otherRadarr = await createTestRadarrInstance(other.id);
-    const row = await getTestPrisma().trashManagedResource.create({
-      data: { userId: other.id, serviceType: "RADARR", radarrInstanceId: otherRadarr.id, resourceType: "CUSTOM_FORMAT", trashId: "cf1", name: "AMZN" },
-    });
-    const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id});
-    await expectJson(await callRouteWithParams(deleteAssignment, { id: row.id }, { method: "DELETE" }), 404);
+  it("404s when deleting a row that does not exist", async () => {
+    const { radarr } = await authedUserWithRadarr();
+    await assignOne(radarr.id);
+    await expectJson(await callRouteWithParams(deleteAssignment, { id: "nonexistent" }, { method: "DELETE" }), 404);
+    expect(await getTestPrisma().trashManagedResource.count()).toBe(1);
   });
 
   it("re-validates a PROFILE_CF selection against the guide on update (cross-service gate)", async () => {

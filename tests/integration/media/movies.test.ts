@@ -246,28 +246,6 @@ describe("GET /api/media/movies", () => {
     expect(body.pagination.limit).toBe(100);
   });
 
-  it("does not return movies from other users' servers", async () => {
-    const user1 = await createTestUser({ plexId: "u1" });
-    const user2 = await createTestUser({ plexId: "u2" });
-    const server1 = await createTestServer(user1.id);
-    const server2 = await createTestServer(user2.id);
-    const lib1 = await createTestLibrary(server1.id);
-    const lib2 = await createTestLibrary(server2.id);
-
-    await createTestMediaItem(lib1.id, { title: "User1 Movie", type: "MOVIE" });
-    await createTestMediaItem(lib2.id, { title: "User2 Movie", type: "MOVIE" });
-
-    setMockSession({ userId: user1.id, isLoggedIn: true });
-
-    const response = await callRoute(GET, { url: "/api/media/movies" });
-    const body = await expectJson<{
-      items: { title: string }[];
-    }>(response, 200);
-
-    expect(body.items).toHaveLength(1);
-    expect(body.items[0].title).toBe("User1 Movie");
-  });
-
   it("includes library and server info in response", async () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id, { name: "Home Plex" });

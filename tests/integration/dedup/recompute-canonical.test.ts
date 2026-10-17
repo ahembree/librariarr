@@ -406,30 +406,6 @@ describe("backfillDedupKeys", () => {
     expect(refreshed!.dedupKey).toBe("movie:tmdb:12345");
   });
 
-  it("filters by userId when provided", async () => {
-    const user1 = await createTestUser({ username: "user1" });
-    const user2 = await createTestUser({ username: "user2" });
-    const server1 = await createTestServer(user1.id, { name: "Server 1" });
-    const server2 = await createTestServer(user2.id, { name: "Server 2" });
-    const lib1 = await createTestLibrary(server1.id, { type: "MOVIE" });
-    const lib2 = await createTestLibrary(server2.id, { type: "MOVIE" });
-
-    // Both users have items missing dedupKey
-    await createTestMediaItem(lib1.id, { title: "User1 Movie", type: "MOVIE", year: 2024 });
-    await createTestMediaItem(lib2.id, { title: "User2 Movie", type: "MOVIE", year: 2024 });
-
-    // Only backfill for user1
-    const updated = await backfillDedupKeys(user1.id);
-    expect(updated).toBe(1);
-
-    // User2's item should still have null dedupKey
-    const user2Items = await testPrisma.mediaItem.findMany({
-      where: { libraryId: lib2.id },
-      select: { dedupKey: true },
-    });
-    expect(user2Items[0].dedupKey).toBeNull();
-  });
-
   it("backfills series items correctly", async () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id, { name: "Server 1" });
@@ -526,10 +502,9 @@ describe("backfillDedupKeys", () => {
   });
 
   it("backfills all items when userId is not provided", async () => {
-    const user1 = await createTestUser({ username: "user1" });
-    const user2 = await createTestUser({ username: "user2" });
-    const server1 = await createTestServer(user1.id, { name: "Server 1" });
-    const server2 = await createTestServer(user2.id, { name: "Server 2" });
+    const user = await createTestUser();
+    const server1 = await createTestServer(user.id, { name: "Server 1" });
+    const server2 = await createTestServer(user.id, { name: "Server 2" });
     const lib1 = await createTestLibrary(server1.id, { type: "MOVIE" });
     const lib2 = await createTestLibrary(server2.id, { type: "MOVIE" });
 

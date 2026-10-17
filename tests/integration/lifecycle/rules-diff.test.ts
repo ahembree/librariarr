@@ -212,25 +212,6 @@ describe("POST /api/lifecycle/rules/[id]/diff", () => {
     expect((await expectJson<{ error: string }>(response, 404)).error).toBe("Not found");
   });
 
-  it("returns 404 for another user's rule set", async () => {
-    const user1 = await createTestUser({ plexId: "owner" });
-    const user2 = await createTestUser({ plexId: "intruder" });
-    const ruleSet = await createTestRuleSet(user1.id, { name: "Private" });
-
-    setMockSession({ isLoggedIn: true, userId: user2.id });
-
-    const response = await callRouteWithParams(
-      POST,
-      { id: ruleSet.id },
-      {
-        url: `/api/lifecycle/rules/${ruleSet.id}/diff`,
-        method: "POST",
-        body: { rules: validRules, type: "MOVIE", serverIds: ["s1"] },
-      }
-    );
-    await expectJson(response, 404);
-  });
-
   it("returns all existing matches as removed when no active rules", async () => {
     mockHasAnyActiveRules.mockReturnValue(false);
 

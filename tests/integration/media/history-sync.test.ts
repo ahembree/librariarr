@@ -6,7 +6,7 @@
  * server history and used to sit behind an indefinite spinner. The contract
  * this test pins down:
  *
- *  - Auth, validation and the ownership check happen BEFORE the stream opens,
+ *  - Auth, validation and the server lookup happen BEFORE the stream opens,
  *    so they still carry real 401/400/404 statuses. Once streaming starts the
  *    status is committed to 200 and failures are in-band.
  *  - One phase per server (`key` = server id, `label` = server name).
@@ -140,16 +140,10 @@ describe("POST /api/media/history/sync", () => {
     expect(mockSyncWatchHistory).not.toHaveBeenCalled();
   });
 
-  it("returns 404 for a server owned by another user", async () => {
-    const otherUser = await createTestUser({
-      username: "other",
-      email: "other@example.com",
-    });
-    const otherServer = await createTestServer(otherUser.id, { name: "Theirs" });
-
+  it("returns 404 for a server that does not exist", async () => {
     const response = await callRoute(POST, {
       method: "POST",
-      body: { serverId: otherServer.id },
+      body: { serverId: "nonexistent" },
     });
     const data = await expectJson<{ error: string }>(response, 404);
     expect(data.error).toBe("Server not found");

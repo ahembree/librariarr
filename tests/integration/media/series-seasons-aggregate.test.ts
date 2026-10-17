@@ -188,7 +188,7 @@ describe("GET /api/media/series/seasons — season aggregation", () => {
     expect(onB[0].servers.map((s) => s.serverName)).toEqual(["B"]);
   });
 
-  it("answers no seasons for a serverId the user does not own", async () => {
+  it("answers no seasons for an unknown serverId", async () => {
     const user = await createTestUser();
     setMockSession({ userId: user.id, isLoggedIn: true });
     const server = await createTestServer(user.id);

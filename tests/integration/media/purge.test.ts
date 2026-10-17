@@ -123,37 +123,6 @@ describe("DELETE /api/media/purge", () => {
     expect(remainingSeries).toBe(2);
   });
 
-  it("does not affect other user's items", async () => {
-    const prisma = getTestPrisma();
-    const user1 = await createTestUser({ plexId: "user1" });
-    const user2 = await createTestUser({ plexId: "user2" });
-
-    const server1 = await createTestServer(user1.id);
-    const server2 = await createTestServer(user2.id);
-
-    const lib1 = await createTestLibrary(server1.id, { type: "MOVIE" });
-    const lib2 = await createTestLibrary(server2.id, { type: "MOVIE" });
-
-    await createTestMediaItem(lib1.id, { title: "User1 Movie", type: "MOVIE" });
-    await createTestMediaItem(lib2.id, { title: "User2 Movie", type: "MOVIE" });
-
-    setMockSession({ isLoggedIn: true, userId: user1.id });
-
-    const response = await callRoute(DELETE, {
-      url: "/api/media/purge",
-      method: "DELETE",
-      searchParams: { type: "MOVIE" },
-    });
-    const body = await expectJson<{ deleted: number }>(response, 200);
-    expect(body.deleted).toBe(1);
-
-    // User2's movie should still exist
-    const user2Movies = await prisma.mediaItem.count({
-      where: { libraryId: lib2.id },
-    });
-    expect(user2Movies).toBe(1);
-  });
-
   it("recomputes canonical so the surviving duplicate stays visible after a per-library purge", async () => {
     const prisma = getTestPrisma();
     const { recomputeCanonical } = await import("@/lib/dedup/recompute-canonical");

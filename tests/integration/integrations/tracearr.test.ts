@@ -98,19 +98,6 @@ describe("Tracearr integration endpoints", () => {
       expect(body.instances[0].name).toBe("My Tracearr");
       expect(body.instances[0].apiKey).toBe(MASKED_VALUE);
     });
-
-    it("does not return instances belonging to another user", async () => {
-      const user1 = await createTestUser({ plexId: "user1" });
-      const user2 = await createTestUser({ plexId: "user2" });
-      await createTestTracearrInstance(user1.id, { name: "User1 Tracearr" });
-      await createTestTracearrInstance(user2.id, { name: "User2 Tracearr" });
-      setMockSession({ userId: user2.id, isLoggedIn: true });
-
-      const response = await callRoute(GET, { url: "/api/integrations/tracearr" });
-      const body = await expectJson<{ instances: { name: string }[] }>(response, 200);
-      expect(body.instances).toHaveLength(1);
-      expect(body.instances[0].name).toBe("User2 Tracearr");
-    });
   });
 
   // ----- POST /api/integrations/tracearr -----
@@ -262,30 +249,6 @@ describe("Tracearr integration endpoints", () => {
       );
       const body = await expectJson<{ error: string }>(response, 404);
       expect(body.error).toBe("Not found");
-    });
-
-    it("returns 404 when trying to update another user's instance", async () => {
-      const user1 = await createTestUser({ plexId: "owner" });
-      const user2 = await createTestUser({ plexId: "intruder" });
-      const instance = await createTestTracearrInstance(user1.id);
-      setMockSession({ userId: user2.id, isLoggedIn: true });
-
-      const response = await callRouteWithParams(
-        PUT,
-        { id: instance.id },
-        {
-          url: `/api/integrations/tracearr/${instance.id}`,
-          method: "PUT",
-          body: { name: "Hacked" },
-        }
-      );
-      const body = await expectJson<{ error: string }>(response, 404);
-      expect(body.error).toBe("Not found");
-
-      const stored = await getTestPrisma().tracearrInstance.findUnique({
-        where: { id: instance.id },
-      });
-      expect(stored?.name).toBe("Test Tracearr");
     });
 
     it("renames the instance without re-testing the connection", async () => {
@@ -475,16 +438,18 @@ describe("Tracearr integration endpoints", () => {
       expect(body.error).toBe("Unauthorized");
     });
 
-    it("returns 404 when trying to delete another user's instance", async () => {
-      const user1 = await createTestUser({ plexId: "owner" });
-      const user2 = await createTestUser({ plexId: "intruder" });
-      const instance = await createTestTracearrInstance(user1.id);
-      setMockSession({ userId: user2.id, isLoggedIn: true });
+    it("returns 404 for a non-existent instance and deletes nothing", async () => {
+      const user = await createTestUser();
+      await createTestTracearrInstance(user.id);
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(
         DELETE,
-        { id: instance.id },
-        { url: `/api/integrations/tracearr/${instance.id}`, method: "DELETE" }
+        { id: "00000000-0000-0000-0000-000000000000" },
+        {
+          url: "/api/integrations/tracearr/00000000-0000-0000-0000-000000000000",
+          method: "DELETE",
+        }
       );
       const body = await expectJson<{ error: string }>(response, 404);
       expect(body.error).toBe("Not found");
@@ -526,17 +491,15 @@ describe("Tracearr integration endpoints", () => {
       expect(body.error).toBe("Unauthorized");
     });
 
-    it("returns 404 when testing another user's instance", async () => {
-      const user1 = await createTestUser({ plexId: "owner" });
-      const user2 = await createTestUser({ plexId: "intruder" });
-      const instance = await createTestTracearrInstance(user1.id);
-      setMockSession({ userId: user2.id, isLoggedIn: true });
+    it("returns 404 for a non-existent instance", async () => {
+      const user = await createTestUser();
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(
         TEST_POST,
-        { id: instance.id },
+        { id: "00000000-0000-0000-0000-000000000000" },
         {
-          url: `/api/integrations/tracearr/${instance.id}/test-connection`,
+          url: "/api/integrations/tracearr/00000000-0000-0000-0000-000000000000/test-connection",
           method: "POST",
           body: {},
         }
@@ -675,16 +638,14 @@ describe("Tracearr integration endpoints", () => {
       expect(body.error).toBe("Unauthorized");
     });
 
-    it("returns 404 for another user's instance", async () => {
-      const user1 = await createTestUser({ plexId: "owner" });
-      const user2 = await createTestUser({ plexId: "intruder" });
-      const instance = await createTestTracearrInstance(user1.id);
-      setMockSession({ userId: user2.id, isLoggedIn: true });
+    it("returns 404 for a non-existent instance", async () => {
+      const user = await createTestUser();
+      setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(
         SERVERS_GET,
-        { id: instance.id },
-        { url: `/api/integrations/tracearr/${instance.id}/servers` }
+        { id: "00000000-0000-0000-0000-000000000000" },
+        { url: "/api/integrations/tracearr/00000000-0000-0000-0000-000000000000/servers" }
       );
       const body = await expectJson<{ error: string }>(response, 404);
       expect(body.error).toBe("Not found");

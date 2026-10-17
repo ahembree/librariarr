@@ -168,19 +168,18 @@ describe("GET /api/media/stats/cross-tab", () => {
     ]);
   });
 
-  it("returns 404 when serverId does not belong to user", async () => {
-    const user1 = await createTestUser({ plexId: "u1" });
-    const user2 = await createTestUser({ plexId: "u2" });
-    const server = await createTestServer(user1.id);
+  it("returns 404 when serverId names no server", async () => {
+    const user = await createTestUser();
+    await createTestServer(user.id);
 
-    setMockSession({ userId: user2.id, isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/stats/cross-tab",
       searchParams: {
         dimension1: "resolution",
         dimension2: "videoCodec",
-        serverId: server.id,
+        serverId: "nonexistent",
       },
     });
     const body = await expectJson<{ error: string }>(response, 404);

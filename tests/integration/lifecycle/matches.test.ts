@@ -162,37 +162,6 @@ describe("GET /api/lifecycle/rules/matches", () => {
     expect(oldMovies?.count).toBe(1);
   });
 
-  it("does not return matches from other user's rule sets", async () => {
-    const user1 = await createTestUser({ plexId: "u1" });
-    const user2 = await createTestUser({ plexId: "u2" });
-
-    const server1 = await createTestServer(user1.id);
-    const library1 = await createTestLibrary(server1.id, { type: "MOVIE" });
-    const item = await createTestMediaItem(library1.id, {
-      title: "User1 Movie",
-      type: "MOVIE",
-      playCount: 0,
-    });
-
-    const rs = await createTestRuleSet(user1.id, {
-      name: "User1 Rule",
-      type: "MOVIE",
-      enabled: true,
-      rules: [],
-    });
-
-    await createTestRuleMatch(rs.id, item.id, { id: item.id, title: "User1 Movie" });
-
-    setMockSession({ isLoggedIn: true, userId: user2.id });
-
-    const response = await callRoute(GET, {
-      url: "/api/lifecycle/rules/matches",
-    });
-
-    const body = await expectJson<{ ruleMatches: unknown[] }>(response, 200);
-    expect(body.ruleMatches).toHaveLength(0);
-  });
-
   it("includes ruleSet metadata in response", async () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id);

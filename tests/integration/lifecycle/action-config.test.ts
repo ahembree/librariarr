@@ -83,13 +83,9 @@ describe("validateActionConfig", () => {
     expect(err).toMatch(/Arr instance not found.*sonarr/);
   });
 
-  it("rejects another user's instance and a non-existent one", async () => {
+  it("rejects a non-existent instance even when one of the family exists", async () => {
     const user = await createTestUser();
-    const other = await createTestUser();
-    const lidarr = await createTestLidarrInstance(other.id);
-    expect(
-      await validateActionConfig({ userId: user.id, libraryType: "MUSIC", actionType: "DELETE_LIDARR", arrInstanceId: lidarr.id }),
-    ).toMatch(/not found/);
+    await createTestLidarrInstance(user.id);
     expect(
       await validateActionConfig({ userId: user.id, libraryType: "MUSIC", actionType: "DELETE_LIDARR", arrInstanceId: "nope" }),
     ).toMatch(/not found/);

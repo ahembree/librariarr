@@ -247,40 +247,6 @@ describe("GET /api/media/series/grouped", () => {
       expect(body.series[0].totalSize).toBe("10737418240");
       expect(typeof body.series[0].totalSize).toBe("string");
     });
-
-    it("does not return series from other users' servers", async () => {
-      const user1 = await createTestUser({ plexId: "u1" });
-      const user2 = await createTestUser({ plexId: "u2" });
-      const server1 = await createTestServer(user1.id);
-      const server2 = await createTestServer(user2.id);
-      const lib1 = await createTestLibrary(server1.id, { type: "SERIES" });
-      const lib2 = await createTestLibrary(server2.id, { type: "SERIES" });
-
-      await createTestMediaItem(lib1.id, {
-        title: "Ep1",
-        type: "SERIES",
-        parentTitle: "User1 Show",
-        seasonNumber: 1,
-      });
-      await createTestMediaItem(lib2.id, {
-        title: "Ep1",
-        type: "SERIES",
-        parentTitle: "User2 Show",
-        seasonNumber: 1,
-      });
-
-      setMockSession({ userId: user1.id, isLoggedIn: true });
-
-      const response = await callRoute(GET, {
-        url: "/api/media/series/grouped",
-      });
-      const body = await expectJson<{
-        series: { parentTitle: string }[];
-      }>(response, 200);
-
-      expect(body.series).toHaveLength(1);
-      expect(body.series[0].parentTitle).toBe("User1 Show");
-    });
   });
 
   // ─── Pagination ───

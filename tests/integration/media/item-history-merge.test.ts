@@ -61,23 +61,14 @@ describe("GET /api/media/[id]/history — per-user aggregation across copies", (
     await disconnectTestDb();
   });
 
-  async function copyOn(name: string, dedupKey: string | null, opts: { enabled?: boolean; owner?: string } = {}) {
+  async function copyOn(name: string, dedupKey: string | null, opts: { enabled?: boolean } = {}) {
     const url = `http://${name.toLowerCase()}:32400`;
-    const server = await createTestServer(opts.owner ?? userId, { name, url, enabled: opts.enabled ?? true });
+    const server = await createTestServer(userId, { name, url, enabled: opts.enabled ?? true });
     const lib = await createTestLibrary(server.id);
     const item = await createTestMediaItem(lib.id, { title: "Film" });
     if (dedupKey) await getTestPrisma().mediaItem.update({ where: { id: item.id }, data: { dedupKey } });
     return { url, item };
   }
-
-  it("refuses another user's item with 403", async () => {
-    const stranger = await createTestUser({ username: "stranger" });
-    const { item } = await copyOn("Theirs", null, { owner: stranger.id });
-    historyByUrl.set("http://theirs:32400", [{ username: "stranger", watchedAt: "2024-01-01T00:00:00.000Z" }]);
-    const res = await callRouteWithParams(GET, { id: item.id });
-    expect(res.status).toBe(403);
-    expect(await res.json()).toEqual({ error: "Forbidden" });
-  });
 
   it("counts each user's plays per server and keeps the latest date", async () => {
     const a = await copyOn("Alpha", null);
