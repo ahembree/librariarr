@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
-import { cleanDatabase, disconnectTestDb } from "../../setup/test-db";
+import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
 import { callRoute, expectJson, createTestUser } from "../../setup/test-helpers";
 
@@ -17,6 +17,9 @@ vi.mock("@/lib/logger", () => ({
 // Import route handlers AFTER mocks
 import { GET, PUT } from "@/app/api/settings/discord/route";
 import { MASKED_VALUE } from "@/lib/api/sanitize";
+
+const prisma = getTestPrisma();
+const storedSettings = (userId: string) => prisma.appSettings.findUnique({ where: { userId } });
 
 beforeEach(async () => {
   await cleanDatabase();
@@ -42,19 +45,17 @@ describe("GET /api/settings/discord", () => {
     setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(GET);
-    const body = await expectJson<{
-      webhookUrl: string;
-      webhookUsername: string;
-      webhookAvatarUrl: string;
-      notifyMaintenance: boolean;
-    }>(res);
+    const body = await expectJson(res);
 
-    expect(body.webhookUrl).toBe("");
-    expect(body.webhookUsername).toBe("");
-    expect(body.webhookAvatarUrl).toBe("");
-    expect(body.notifyMaintenance).toBe(false);
-    // On by default: a key created by someone else is what this reveals.
-    expect((body as { notifyApiKeys?: boolean }).notifyApiKeys).toBe(true);
+    expect(body).toEqual({
+      webhookUrl: "",
+      hasWebhookUrl: false,
+      webhookUsername: "",
+      webhookAvatarUrl: "",
+      notifyMaintenance: false,
+      // On by default: a key created by someone else is what this reveals.
+      notifyApiKeys: true,
+    });
   });
 
   it("round-trips the API key notification toggle", async () => {
@@ -71,13 +72,14 @@ describe("GET /api/settings/discord", () => {
     expect(body.notifyApiKeys).toBe(true);
 
     await expectJson(await callRoute(PUT, { method: "PUT", body: { notifyApiKeys: "yes" } }), 400);
+    expect((await storedSettings(user.id))?.discordNotifyApiKeys).toBe(true);
   });
 
   it("returns saved discord settings after PUT", async () => {
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id});
 
-    await callRoute(PUT, {
+    await expectJson(await callRoute(PUT, {
       method: "PUT",
       body: {
         webhookUrl: "https://discord.com/api/webhooks/123/abc",
@@ -85,7 +87,7 @@ describe("GET /api/settings/discord", () => {
         webhookAvatarUrl: "https://example.com/avatar.png",
         notifyMaintenance: true,
       },
-    });
+    }));
 
     const res = await callRoute(GET);
     const body = await expectJson<{
@@ -137,6 +139,23 @@ describe("PUT /api/settings/discord", () => {
     expect(body.webhookUsername).toBe("");
     expect(body.webhookAvatarUrl).toBe("");
     expect(body.notifyMaintenance).toBe(false);
+    // Stored as sent; only the response masks it.
+    expect((await storedSettings(user.id))?.discordWebhookUrl).toBe("https://discord.com/api/webhooks/999/xyz");
+  });
+
+  // The URL is where every notification is POSTed: only Discord, over https.
+  it.each([
+    ["another host", "https://evil.example/api/webhooks/999/xyz"],
+    ["a look-alike host", "https://discord.com.evil.example/api/webhooks/999/xyz"],
+    ["plain http", "http://discord.com/api/webhooks/999/xyz"],
+  ])("rejects a webhook URL on %s", async (_label, webhookUrl) => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id});
+
+    const res = await callRoute(PUT, { method: "PUT", body: { webhookUrl } });
+    const body = await expectJson<{ error: string; details: string[] }>(res, 400);
+    expect(body.details).toEqual(["webhookUrl: Must be a valid Discord webhook URL (https://discord.com/...)"]);
+    expect(await storedSettings(user.id)).toBeNull();
   });
 
   it("updates only provided fields (partial update)", async () => {
@@ -144,14 +163,14 @@ describe("PUT /api/settings/discord", () => {
     setMockSession({ isLoggedIn: true, userId: user.id});
 
     // Set initial values
-    await callRoute(PUT, {
+    await expectJson(await callRoute(PUT, {
       method: "PUT",
       body: {
         webhookUrl: "https://discord.com/api/webhooks/123/abc",
         webhookUsername: "Bot",
         notifyMaintenance: false,
       },
-    });
+    }));
 
     // Update only notifyMaintenance
     const res = await callRoute(PUT, {
@@ -169,14 +188,14 @@ describe("PUT /api/settings/discord", () => {
     expect((body as { hasWebhookUrl?: boolean }).hasWebhookUrl).toBe(true);
     expect(body.webhookUsername).toBe("Bot");
     expect(body.notifyMaintenance).toBe(true);
+    expect((await storedSettings(user.id))?.discordWebhookUrl).toBe("https://discord.com/api/webhooks/123/abc");
   });
 
   it("treats the echoed mask as 'keep the saved URL'", async () => {
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id});
-    await callRoute(PUT, {
-      method: "PUT",
-      body: { webhookUrl: "https://discord.com/api/webhooks/123/abc" },
+    await prisma.appSettings.create({
+      data: { userId: user.id, discordWebhookUrl: "https://discord.com/api/webhooks/123/abc" },
     });
 
     // The settings page round-trips whatever GET returned.
@@ -188,8 +207,7 @@ describe("PUT /api/settings/discord", () => {
     expect(body.webhookUrl).toBe(MASKED_VALUE);
     expect(body.webhookUsername).toBe("Bot");
 
-    const { getTestPrisma } = await import("../../setup/test-db");
-    const row = await getTestPrisma().appSettings.findUnique({ where: { userId: user.id } });
+    const row = await storedSettings(user.id);
     expect(row?.discordWebhookUrl).toBe("https://discord.com/api/webhooks/123/abc");
   });
 
@@ -198,9 +216,8 @@ describe("PUT /api/settings/discord", () => {
     setMockSession({ isLoggedIn: true, userId: user.id});
 
     // Set a webhook url first
-    await callRoute(PUT, {
-      method: "PUT",
-      body: { webhookUrl: "https://discord.com/api/webhooks/123/abc" },
+    await prisma.appSettings.create({
+      data: { userId: user.id, discordWebhookUrl: "https://discord.com/api/webhooks/123/abc" },
     });
 
     // Clear it
@@ -212,6 +229,8 @@ describe("PUT /api/settings/discord", () => {
 
     // Empty string clears to null, which is returned as ""
     expect(body.webhookUrl).toBe("");
+    expect((body as { hasWebhookUrl?: boolean }).hasWebhookUrl).toBe(false);
+    expect((await storedSettings(user.id))?.discordWebhookUrl).toBeNull();
   });
 
   it("accepts an empty body (all fields optional)", async () => {
@@ -240,7 +259,9 @@ describe("PUT /api/settings/discord", () => {
       method: "PUT",
       body: { notifyMaintenance: "yes" },
     });
-    const body = await expectJson<{ error: string }>(res, 400);
+    const body = await expectJson<{ error: string; details: string[] }>(res, 400);
     expect(body.error).toBe("Validation failed");
+    expect(body.details).toEqual(["notifyMaintenance: Invalid input: expected boolean, received string"]);
+    expect(await storedSettings(user.id)).toBeNull();
   });
 });

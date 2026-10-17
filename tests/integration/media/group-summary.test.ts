@@ -114,16 +114,19 @@ describe("GET /api/media/[id]/group-summary", () => {
       lastPlayedAt: new Date("2024-01-01T00:00:00Z"), addedAt: new Date("2023-01-01T00:00:00Z"),
       contentRating: "TV-14", genres: ["Drama"], year: 2010,
     });
-    await createTestMediaItem(lib.id, {
+    const e2 = await createTestMediaItem(lib.id, {
       type: "SERIES", parentTitle: "Show", title: "E2", seasonNumber: 1, episodeNumber: 2,
       resolution: "1080", fileSize: BigInt(200), playCount: 1,
       lastPlayedAt: new Date("2024-06-01T00:00:00Z"), addedAt: new Date("2023-02-01T00:00:00Z"),
       studio: "HBO",
     });
-    await createTestMediaItem(lib.id, {
+    const e3 = await createTestMediaItem(lib.id, {
       type: "SERIES", parentTitle: "Show", title: "E3", seasonNumber: 2, episodeNumber: 1,
-      resolution: "4k", fileSize: BigInt(300), playCount: 0,
+      resolution: "4k", fileSize: BigInt(300), playCount: 0, addedAt: new Date("2023-03-01T00:00:00Z"),
     });
+    // Only E1 carries a year, so the first non-null year is E1's whatever
+    // order the episodes are read in.
+    await getTestPrisma().mediaItem.updateMany({ where: { id: { in: [e2.id, e3.id] } }, data: { year: null } });
     // A different show must not leak in.
     await createTestMediaItem(lib.id, { type: "SERIES", parentTitle: "Other", title: "X", fileSize: BigInt(999) });
 
@@ -134,12 +137,12 @@ describe("GET /api/media/[id]/group-summary", () => {
     expect(body.fileSize).toBe("600");
     expect(body.playCount).toBe(3);
     expect(body.lastPlayedAt).toBe("2024-06-01T00:00:00.000Z");
+    expect(body.addedAt).toBe("2023-03-01T00:00:00.000Z");
     expect(body.contentRating).toBe("TV-14");
     expect(body.studio).toBe("HBO");
     expect(body.genres).toEqual(["Drama"]);
     expect(body.year).toBe(2010);
-    expect(Object.values(body.qualityCounts).reduce((a, b) => a + b, 0)).toBe(3);
-    expect(Object.keys(body.qualityCounts).length).toBe(2);
+    expect(body.qualityCounts).toEqual({ "1080P": 2, "4K": 1 });
     expect(body.servers.map((s) => s.serverId)).toEqual([serverId]);
   });
 
@@ -156,6 +159,7 @@ describe("GET /api/media/[id]/group-summary", () => {
     });
 
     const body = await expectJson<SeriesSummary>(await call(uk.id, "SERIES"), 200);
+    expect(body.title).toBe("The Office");
     expect(body.episodeCount).toBe(1);
     expect(body.fileSize).toBe("10");
   });
@@ -181,8 +185,8 @@ describe("GET /api/media/[id]/group-summary", () => {
     const b = await createTestMediaItem(lib2.id, {
       type: "SERIES", parentTitle: "Show", seriesKey: "tvdb:9", title: "E1", fileSize: BigInt(100),
     });
-    await prisma.mediaItem.update({ where: { id: a.id }, data: { dedupKey: "k", dedupCanonical: true } });
-    await prisma.mediaItem.update({ where: { id: b.id }, data: { dedupKey: "k", dedupCanonical: false } });
+    await prisma.mediaItem.update({ where: { id: a.id }, data: { dedupKey: "series:tvdb:9:s0e0", dedupCanonical: true } });
+    await prisma.mediaItem.update({ where: { id: b.id }, data: { dedupKey: "series:tvdb:9:s0e0", dedupCanonical: false } });
 
     const body = await expectJson<SeriesSummary>(await call(a.id, "SERIES"), 200);
     expect(body.episodeCount).toBe(1);
@@ -215,9 +219,10 @@ describe("GET /api/media/[id]/group-summary", () => {
     const lib = await createTestLibrary(serverId, { type: "SERIES" });
     const e1 = await createTestMediaItem(lib.id, { type: "SERIES", parentTitle: "Show", title: "E1" });
     const first = await expectJson<SeriesSummary>(await call(e1.id, "SERIES"), 200);
+    expect(first.episodeCount).toBe(1);
     await createTestMediaItem(lib.id, { type: "SERIES", parentTitle: "Show", title: "E2" });
     const second = await expectJson<SeriesSummary>(await call(e1.id, "SERIES"), 200);
-    expect(second.episodeCount).toBe(first.episodeCount);
+    expect(second.episodeCount).toBe(1);
 
     appCache.clear();
     const third = await expectJson<SeriesSummary>(await call(e1.id, "SERIES"), 200);

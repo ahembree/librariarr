@@ -142,6 +142,8 @@ describe("POST /api/lifecycle/rules/test-item", () => {
     const lib = await createTestLibrary(server.id, { type: "SERIES" });
     const ep = await createTestMediaItem(lib.id, { type: "SERIES", title: "Pilot", parentTitle: "Lost", seasonNumber: 1, episodeNumber: 1 });
     await createTestExternalId(ep.id, "TVDB", "73739");
+    const musicLib = await createTestLibrary(server.id, { type: "MUSIC" });
+    const track = await createTestMediaItem(musicLib.id, { type: "MUSIC", title: "Airbag", parentTitle: "Radiohead" });
     mockFetchSeerr.mockResolvedValue({ "TVDB:73739": { requested: true, requestCount: 2, requestDate: null, requestedBy: [], approvalDate: null, declineDate: null } });
     setMockSession({ isLoggedIn: true, userId: user.id });
 
@@ -152,6 +154,13 @@ describe("POST /api/lifecycle/rules/test-item", () => {
 
     expect(body.matches).toBe(true);
     expect(mockFetchSeerr).toHaveBeenCalledWith(user.id, "SERIES");
+
+    // Seerr data is never fetched for music: a Seerr criterion there is refused.
+    await expectJson(
+      await call({ type: "MUSIC", mediaItemId: track.id, serverIds: [server.id], rules: rule("seerrRequested", "equals", "true") }),
+      400,
+    );
+    expect(mockFetchSeerr).toHaveBeenCalledTimes(1);
   });
 
   it("aggregates a show's episodes: latest play, earliest add, newest air date, watched share", async () => {
@@ -160,9 +169,11 @@ describe("POST /api/lifecycle/rules/test-item", () => {
     const lib = await createTestLibrary(server.id, { type: "SERIES" });
     const mk = (n: number, season: number, o: Record<string, unknown>) =>
       createTestMediaItem(lib.id, { type: "SERIES", title: `Ep ${n}`, parentTitle: "Lost", seasonNumber: season, episodeNumber: n, ...o });
-    const e1 = await mk(1, 1, { playCount: 1, lastPlayedAt: new Date("2025-03-01"), addedAt: new Date("2024-01-02") });
+    // The tested episode (e1, S1E1) holds none of the extremes, so each
+    // aggregate below is only right if it is read across the whole show.
+    const e1 = await mk(1, 1, { playCount: 1, lastPlayedAt: new Date("2024-11-01"), addedAt: new Date("2024-03-01") });
     await mk(2, 1, { playCount: 0, addedAt: new Date("2024-01-01") });
-    await mk(1, 2, { playCount: 2, lastPlayedAt: new Date("2025-01-01"), addedAt: new Date("2024-06-01") });
+    await mk(1, 2, { playCount: 2, lastPlayedAt: new Date("2025-03-01"), addedAt: new Date("2024-06-01") });
     await mk(2, 2, { playCount: 0, lastPlayedAt: new Date("2024-12-01"), addedAt: new Date("2024-02-01") });
     const { getTestPrisma } = await import("../../setup/test-db");
     const prisma = getTestPrisma();
@@ -179,6 +190,12 @@ describe("POST /api/lifecycle/rules/test-item", () => {
             { id: "r1", field: "watchedEpisodePercentage", operator: "equals", value: 50, condition: "AND" },
             { id: "r2", field: "availableEpisodeCount", operator: "equals", value: 4, condition: "AND" },
             { id: "r3", field: "watchedEpisodeCount", operator: "equals", value: 2, condition: "AND" },
+            // Latest play is S2E1's 2025-03-01 (e1's own is 2024-11-01).
+            { id: "r4", field: "seriesLastPlayedAt", operator: "after", value: "2025-02-01", condition: "AND" },
+            // Earliest add is S1E2's 2024-01-01 (e1's own is 2024-03-01).
+            { id: "r5", field: "addedAt", operator: "before", value: "2024-02-01", condition: "AND" },
+            // Newest air date is season 2's 2008-05-01 (e1's own is 2004-09-22).
+            { id: "r6", field: "lastEpisodeAiredAt", operator: "after", value: "2008-01-01", condition: "AND" },
           ],
         }],
       }),
@@ -187,7 +204,8 @@ describe("POST /api/lifecycle/rules/test-item", () => {
 
     expect(body.matches).toBe(true);
     expect(body.item.title).toBe("Lost");
-    expect(Object.keys(body.actualValues).length).toBeGreaterThan(0);
+    expect(Object.keys(body.actualValues).sort()).toEqual(["r1", "r2", "r3", "r4", "r5", "r6"]);
+    expect(body.actualValues).toMatchObject({ r2: "4", r3: "2" });
   });
 
   it("aggregates an artist's tracks in music scope", async () => {
@@ -256,7 +274,7 @@ describe("POST /api/lifecycle/rules/[id]/diff", () => {
     );
 
     expect(mockFetchSeerr).toHaveBeenCalledWith(user.id, "SERIES");
-    expect(body.added).toHaveLength(1);
+    expect(body.added.map((a) => a.id)).toEqual([ep.id]);
   });
 
   it("diffs a music rule set in artist scope", async () => {
@@ -264,7 +282,7 @@ describe("POST /api/lifecycle/rules/[id]/diff", () => {
     const server = await createTestServer(user.id);
     const lib = await createTestLibrary(server.id, { type: "MUSIC" });
     const played = await createTestMediaItem(lib.id, { type: "MUSIC", title: "Yellow", parentTitle: "Coldplay", playCount: 5 });
-    await createTestMediaItem(lib.id, { type: "MUSIC", title: "Airbag", parentTitle: "Radiohead", playCount: 0 });
+    const unplayed = await createTestMediaItem(lib.id, { type: "MUSIC", title: "Airbag", parentTitle: "Radiohead", playCount: 0 });
     const ruleSet = await createTestRuleSet(user.id, { type: "MUSIC", seriesScope: true, serverIds: [server.id] });
     await createTestRuleMatch(ruleSet.id, played.id, { title: "Coldplay", memberIds: [played.id] });
     setMockSession({ isLoggedIn: true, userId: user.id });
@@ -274,7 +292,7 @@ describe("POST /api/lifecycle/rules/[id]/diff", () => {
       200,
     );
 
-    expect(body.added).toHaveLength(1);
+    expect(body.added.map((a) => a.id)).toEqual([unplayed.id]);
     expect(body.removed.map((r) => r.id)).toEqual([played.id]);
     expect(mockFetchSeerr).not.toHaveBeenCalled();
   });

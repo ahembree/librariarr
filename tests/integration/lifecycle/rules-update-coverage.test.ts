@@ -64,32 +64,48 @@ async function withPending() {
   return { user, server, item, ruleSet, action };
 }
 
+/** A refused update must leave the matches and the armed action in place. */
+async function expectUntouched(ruleSetId: string, actionId: string) {
+  expect(await prisma.ruleMatch.count({ where: { ruleSetId } })).toBe(1);
+  expect((await prisma.lifecycleAction.findUniqueOrThrow({ where: { id: actionId } })).status).toBe("PENDING");
+}
+
 describe("PUT /api/lifecycle/rules/[id]", () => {
   it("rejects an invalid body", async () => {
-    const { ruleSet } = await withPending();
-    await expectJson(await put(ruleSet.id, { actionDelayDays: -1 }), 400);
+    const { ruleSet, action } = await withPending();
+    const body = await expectJson<{ error: string; details: string[] }>(
+      await put(ruleSet.id, { actionDelayDays: -1 }),
+      400,
+    );
+    expect(body.error).toBe("Validation failed");
+    expect(body.details).toEqual([expect.stringMatching(/^actionDelayDays: /)]);
+    await expectUntouched(ruleSet.id, action.id);
   });
 
   it("refuses to arm a Change Quality Profile action with no target profile", async () => {
-    const { ruleSet } = await withPending();
+    const { ruleSet, action } = await withPending();
     const body = await expectJson<{ error: string }>(
       await put(ruleSet.id, { actionType: "CHANGE_QUALITY_PROFILE_RADARR", targetQualityProfileId: null }),
       400,
     );
     expect(body.error).toMatch(/target quality profile/);
     expect((await prisma.ruleSet.findUniqueOrThrow({ where: { id: ruleSet.id } })).actionType).toBe("DELETE_RADARR");
+    await expectUntouched(ruleSet.id, action.id);
   });
 
   it("refuses a collection that does not exist or is of another library type", async () => {
-    const { user, ruleSet } = await withPending();
+    const { user, ruleSet, action } = await withPending();
     expect((await expectJson<{ error: string }>(await put(ruleSet.id, { collectionId: "missing" }), 400)).error).toBe("Collection not found");
     const tv = await createTestCollection(user.id, { type: "SERIES" });
     expect((await expectJson<{ error: string }>(await put(ruleSet.id, { collectionId: tv.id }), 400)).error).toMatch(/does not match/);
+    expect((await prisma.ruleSet.findUniqueOrThrow({ where: { id: ruleSet.id } })).collectionId).toBeNull();
+    await expectUntouched(ruleSet.id, action.id);
   });
 
   it("answers 404 for a rule set that is not there, even when only flags are sent", async () => {
-    await withPending();
-    await expectJson(await put("missing", { enabled: true }), 404);
+    const { ruleSet, action } = await withPending();
+    expect((await expectJson<{ error: string }>(await put("missing", { enabled: true }), 404)).error).toBe("Not found");
+    await expectUntouched(ruleSet.id, action.id);
   });
 
   it("writes every field it was sent and, by default, clears matches and pending actions", async () => {
@@ -117,7 +133,8 @@ describe("PUT /api/lifecycle/rules/[id]", () => {
     );
 
     expect(body.ruleSet).toMatchObject({
-      name: "Renamed", actionDelayDays: 14, addImportExclusion: true, searchAfterAction: true,
+      name: "Renamed", rules: [dummyRule], seriesScope: false, enabled: true,
+      actionDelayDays: 14, addImportExclusion: true, searchAfterAction: true,
       addArrTags: ["leaving"], removeArrTags: ["keep"], collectionId: collection.id,
       discordNotifyOnAction: true, discordNotifyOnMatch: true, stickyMatches: true, serverIds: [server.id],
     });
@@ -149,8 +166,13 @@ describe("PUT /api/lifecycle/rules/[id]", () => {
 
   it("with clearMatches=false and nothing action-related, leaves PENDING actions untouched", async () => {
     const { ruleSet, action } = await withPending();
-    await expectJson(await put(ruleSet.id, { discordNotifyOnMatch: true }, { clearMatches: "false" }), 200);
+    const body = await expectJson<{ ruleSet: { discordNotifyOnMatch: boolean } }>(
+      await put(ruleSet.id, { discordNotifyOnMatch: true }, { clearMatches: "false" }),
+      200,
+    );
+    expect(body.ruleSet.discordNotifyOnMatch).toBe(true);
     const after = await prisma.lifecycleAction.findUniqueOrThrow({ where: { id: action.id } });
     expect(after.updatedAt.getTime()).toBe(action.updatedAt.getTime());
+    await expectUntouched(ruleSet.id, action.id);
   });
 });

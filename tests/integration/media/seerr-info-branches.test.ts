@@ -149,6 +149,8 @@ describe("GET /api/media/[id]/seerr-info — series, statuses, timeouts", () => 
       .mockResolvedValueOnce({ mediaInfo: { status: 5, requests: [] } })
       .mockResolvedValueOnce({});
     expect(await matches(ep.id)).toEqual([]);
+    // Both instances were asked; neither answer is a match.
+    expect(m.getTvShow).toHaveBeenCalledTimes(2);
   });
 
   it("skips a non-numeric TMDB id without calling Seerr", async () => {
@@ -216,8 +218,9 @@ describe("GET /api/media/[id]/seerr-info — series, statuses, timeouts", () => 
     expect(result.map((r) => r.instanceName)).toEqual(["Fast"]);
     expect(abortedSignal?.aborted).toBe(true);
     expect(m.warn).toHaveBeenCalledWith("Media", expect.stringContaining("Slow did not answer"));
-    // The cancellation the bound caused is not logged as a failure.
-    await new Promise((r) => setTimeout(r, 10));
+    // The cancellation the bound caused is not logged as a failure (flush the
+    // rejection the abort triggered before looking).
+    await new Promise((r) => setImmediate(r));
     expect(m.error).not.toHaveBeenCalled();
   });
 

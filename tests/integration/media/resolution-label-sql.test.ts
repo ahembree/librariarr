@@ -22,10 +22,12 @@ describe("resolutionLabelSql", () => {
     const prisma = getTestPrisma();
     const rows = await prisma.$queryRawUnsafe<{ input: string | null; label: string }[]>(
       `SELECT v AS input, ${resolutionLabelSql("v")} AS label
-         FROM unnest($1::text[]) AS v`,
+         FROM unnest($1::text[]) WITH ORDINALITY AS t(v, n)
+        ORDER BY n`,
       samples,
     );
-    expect(rows).toHaveLength(samples.length);
+    // Every sample reached the CASE unchanged, in order.
+    expect(rows.map((r) => r.input)).toEqual(samples);
     for (const row of rows) {
       expect({ input: row.input, label: row.label }).toEqual({
         input: row.input,

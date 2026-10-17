@@ -57,19 +57,19 @@ describe("GET /api/media/[id] — copies on other servers", () => {
   }
 
   it("lists every enabled server holding a copy, sorted by name, once per server", async () => {
-    const main = await itemOn("Mike", "heat-1995");
-    const alpha = await itemOn("Alpha", "heat-1995");
-    await itemOn("Disabled", "heat-1995", { enabled: false });
+    const main = await itemOn("Mike", "movie:title:heat:1995");
+    const alpha = await itemOn("Alpha", "movie:title:heat:1995");
+    await itemOn("Disabled", "movie:title:heat:1995", { enabled: false });
     // A second copy on the main server's own library does not add a server.
     const dup = await createTestMediaItem(main.lib.id, { title: "Heat", ratingKey: "rk-dup" });
-    await getTestPrisma().mediaItem.update({ where: { id: dup.id }, data: { dedupKey: "heat-1995" } });
+    await getTestPrisma().mediaItem.update({ where: { id: dup.id }, data: { dedupKey: "movie:title:heat:1995" } });
     // Another server with a second copy of its own: listed once.
-    const zulu = await itemOn("Zulu", "heat-1995");
+    const zulu = await itemOn("Zulu", "movie:title:heat:1995");
     const zuluDup = await createTestMediaItem(zulu.lib.id, { title: "Heat", ratingKey: "rk-zulu-2" });
-    await getTestPrisma().mediaItem.update({ where: { id: zuluDup.id }, data: { dedupKey: "heat-1995" } });
+    await getTestPrisma().mediaItem.update({ where: { id: zuluDup.id }, data: { dedupKey: "movie:title:heat:1995" } });
     // Another user's copy is never listed.
     const stranger = await createTestUser({ username: "stranger" });
-    await itemOn("Stranger", "heat-1995", { owner: stranger.id });
+    await itemOn("Stranger", "movie:title:heat:1995", { owner: stranger.id });
 
     const body = await expectJson<Body>(
       await callRouteWithParams(GET, { id: main.item.id }, { url: `/api/media/${main.item.id}` }),
@@ -84,7 +84,7 @@ describe("GET /api/media/[id] — copies on other servers", () => {
   });
 
   it("lists only its own server when no other copy exists", async () => {
-    const main = await itemOn("Solo", "unique-key");
+    const main = await itemOn("Solo", "movie:title:heat:1995");
     const body = await expectJson<Body>(
       await callRouteWithParams(GET, { id: main.item.id }, { url: `/api/media/${main.item.id}` }),
     );
@@ -99,5 +99,6 @@ describe("GET /api/media/[id] — copies on other servers", () => {
     const theirs = await itemOn("Theirs", null, { owner: stranger.id });
     const res = await callRouteWithParams(GET, { id: theirs.item.id }, { url: `/api/media/${theirs.item.id}` });
     expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: "Not found" });
   });
 });

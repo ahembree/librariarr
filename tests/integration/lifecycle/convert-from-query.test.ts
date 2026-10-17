@@ -246,5 +246,6 @@ describe("Convert query → lifecycle rule set", () => {
     });
     const errorBody = await expectJson<{ error: string }>(second, 409);
     expect(errorBody.error).toMatch(/already exists/i);
+    expect(await getTestPrisma().ruleSet.count({ where: { name: "Dup" } })).toBe(1);
   });
 });

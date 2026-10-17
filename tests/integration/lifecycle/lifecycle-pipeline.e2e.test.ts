@@ -105,6 +105,8 @@ describe("lifecycle pipeline (e2e)", () => {
     const executed = await prisma.lifecycleAction.findUnique({ where: { id: pending[0].id } });
     expect(executed?.status).toBe("COMPLETED");
     expect(executed?.executedAt).not.toBeNull();
+    // The executed match is consumed with it, in the same write.
+    expect(await prisma.ruleMatch.count({ where: { ruleSetId: ruleSet.id } })).toBe(0);
   });
 
   it("removes stale matches and cancels their pending actions on re-detection", async () => {

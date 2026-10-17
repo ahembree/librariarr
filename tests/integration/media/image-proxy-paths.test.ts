@@ -39,9 +39,12 @@ vi.mock("@/lib/media-server/health-cache", async (importOriginal) => ({
 
 import { GET } from "@/app/api/media/[id]/image/route";
 import { appCache } from "@/lib/cache/memory-cache";
+import { computeCacheKey } from "@/lib/image-cache/image-cache";
+import { CACHE_WIDTH_DEFAULT } from "@/lib/image-url";
 
 const THUMB = "/library/metadata/777/thumb/1";
-const ROLE_THUMB = "/library/metadata/777/thumb/role-0";
+// Plex stores a cast member's photo as an absolute plex.tv URL.
+const ROLE_THUMB = "https://metadata-static.plex.tv/a/people/2b1c4f0e9d8a7b6c5d4e3f2a1b0c9d8e.jpg";
 
 async function realJpeg() {
   return sharp({ create: { width: 32, height: 48, channels: 3, background: "#654321" } })
@@ -80,6 +83,7 @@ describe("GET /api/media/[id]/image — ownership, roles, cache hits and failure
     const item = await createTestMediaItem(lib.id, { thumbUrl: THUMB });
     const res = await callRouteWithParams(GET, { id: item.id });
     expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "Forbidden" });
     expect(mockFetchImage).not.toHaveBeenCalled();
   });
 
@@ -88,7 +92,13 @@ describe("GET /api/media/[id]/image — ownership, roles, cache hits and failure
       const item = await createTestMediaItem(libraryId, { thumbUrl: THUMB });
       await getTestPrisma().mediaItem.update({
         where: { id: item.id },
-        data: { roles: [{ tag: "Lead", thumb: ROLE_THUMB }, { tag: "Extra", thumb: null }] },
+        // The shape the sync stores: { tag (the actor), role (the character), thumb }.
+        data: {
+          roles: [
+            { tag: "Amy Adams", role: "Louise Banks", thumb: ROLE_THUMB },
+            { tag: "Mark O'Brien", role: "Captain Marks", thumb: null },
+          ],
+        },
       });
       return item;
     }
@@ -97,17 +107,19 @@ describe("GET /api/media/[id]/image — ownership, roles, cache hits and failure
       const item = await withRoles();
       const res = await callRouteWithParams(GET, { id: item.id }, { searchParams: { type: "role", index: "0" } });
       expect(res.status).toBe(200);
-      expect(mockFetchImage).toHaveBeenCalledWith(ROLE_THUMB, expect.any(Object));
+      expect(mockFetchImage).toHaveBeenCalledWith(ROLE_THUMB, { width: CACHE_WIDTH_DEFAULT });
     });
 
     it("answers 404 for an index out of range, a missing index or a role without a photo", async () => {
       const item = await withRoles();
       for (const index of ["5", "-1", "x", "1"]) {
         const res = await callRouteWithParams(GET, { id: item.id }, { searchParams: { type: "role", index } });
-        expect(res.status).toBe(404);
+        expect(res.status, `index=${index}`).toBe(404);
+        expect(await res.json()).toEqual({ error: "No thumbnail" });
       }
       const noIndex = await callRouteWithParams(GET, { id: item.id }, { searchParams: { type: "role" } });
       expect(noIndex.status).toBe(404);
+      expect(await noIndex.json()).toEqual({ error: "No thumbnail" });
       expect(mockFetchImage).not.toHaveBeenCalled();
     });
 
@@ -115,6 +127,8 @@ describe("GET /api/media/[id]/image — ownership, roles, cache hits and failure
       const item = await createTestMediaItem(libraryId, { thumbUrl: THUMB });
       const res = await callRouteWithParams(GET, { id: item.id }, { searchParams: { type: "role", index: "0" } });
       expect(res.status).toBe(404);
+      expect(await res.json()).toEqual({ error: "No thumbnail" });
+      expect(mockFetchImage).not.toHaveBeenCalled();
     });
   });
 
@@ -123,7 +137,7 @@ describe("GET /api/media/[id]/image — ownership, roles, cache hits and failure
     const first = await callRouteWithParams(GET, { id: item.id });
     expect(first.status).toBe(200);
     const etag = first.headers.get("etag")!;
-    expect(etag).toBeTruthy();
+    expect(etag).toBe(`"${computeCacheKey(libraryId, THUMB)}"`);
     await first.arrayBuffer();
 
     // Second request: served from the cache file, not the media server.
@@ -143,6 +157,8 @@ describe("GET /api/media/[id]/image — ownership, roles, cache hits and failure
     // A stale ETag still gets the image.
     const stale = await callRouteWithParams(GET, { id: item.id }, { headers: { "if-none-match": '"old"' } });
     expect(stale.status).toBe(200);
+    expect(stale.headers.get("etag")).toBe(etag);
+    expect(mockFetchImage).toHaveBeenCalledTimes(1);
   });
 
   it("answers 502 without a request when the server is marked unreachable", async () => {
@@ -164,6 +180,7 @@ describe("GET /api/media/[id]/image — ownership, roles, cache hits and failure
 
     const second = await callRouteWithParams(GET, { id: item.id });
     expect(second.status).toBe(502);
+    expect(await second.json()).toEqual({ error: "Failed to fetch image" });
     expect(mockFetchImage).toHaveBeenCalledTimes(1);
   });
 });

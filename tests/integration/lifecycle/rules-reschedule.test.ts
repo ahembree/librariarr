@@ -27,6 +27,13 @@ vi.mock("@/lib/logger", () => ({
 // Import AFTER mocks
 import { POST } from "@/app/api/lifecycle/rules/[id]/reschedule-actions/route";
 
+/** `from` plus `days` calendar days, as the route computes it. */
+function daysFrom(from: Date, days: number): number {
+  const d = new Date(from);
+  d.setDate(d.getDate() + days);
+  return d.getTime();
+}
+
 describe("POST /api/lifecycle/rules/[id]/reschedule-actions", () => {
   beforeEach(async () => {
     await cleanDatabase();
@@ -84,7 +91,7 @@ describe("POST /api/lifecycle/rules/[id]/reschedule-actions", () => {
         method: "POST",
       }
     );
-    await expectJson(response, 404);
+    expect((await expectJson<{ error: string }>(response, 404)).error).toBe("Not found");
   });
 
   it("returns 404 for another user's rule set", async () => {
@@ -133,6 +140,8 @@ describe("POST /api/lifecycle/rules/[id]/reschedule-actions", () => {
       }
     );
 
+    const afterCall = new Date();
+
     const body = await expectJson<{ updated: number }>(response, 200);
     expect(body.updated).toBe(1);
 
@@ -142,10 +151,11 @@ describe("POST /api/lifecycle/rules/[id]/reschedule-actions", () => {
     });
     expect(actions).toHaveLength(1);
 
-    const newScheduled = actions[0].scheduledFor;
-    // Should be roughly 7 days from now, not the old date
-    const expectedMin = new Date(beforeCall.getTime() + 6 * 24 * 60 * 60 * 1000);
-    expect(newScheduled.getTime()).toBeGreaterThan(expectedMin.getTime());
+    // 7 calendar days from the call (the route adds days on the local clock, so
+    // the bounds do too — a DST change in the window moves it by an hour).
+    const newScheduled = actions[0].scheduledFor.getTime();
+    expect(newScheduled).toBeGreaterThanOrEqual(daysFrom(beforeCall, 7));
+    expect(newScheduled).toBeLessThanOrEqual(daysFrom(afterCall, 7));
   });
 
   it("does not reschedule COMPLETED or FAILED actions", async () => {
@@ -242,16 +252,20 @@ describe("POST /api/lifecycle/rules/[id]/reschedule-actions", () => {
     });
     setMockSession({ isLoggedIn: true, userId: user.id });
 
+    const beforeCall = new Date();
     const response = await callRouteWithParams(
       POST,
       { id: ruleSet.id },
       { url: `/api/lifecycle/rules/${ruleSet.id}/reschedule-actions`, method: "POST" }
     );
+    const afterCall = new Date();
     expect((await expectJson<{ updated: number }>(response, 200)).updated).toBe(2);
 
     const after = await prisma.lifecycleAction.findUniqueOrThrow({ where: { id: show.id } });
     expect(after.scheduledFor.getTime()).toBe(heldUntil.getTime());
+    // The legacy episode snapshot gets the rule set's own one-day delay.
     const other = await prisma.lifecycleAction.findUniqueOrThrow({ where: { id: episode.id } });
-    expect(other.scheduledFor.getTime()).toBeLessThan(heldUntil.getTime() - 3 * DAY);
+    expect(other.scheduledFor.getTime()).toBeGreaterThanOrEqual(daysFrom(beforeCall, 1));
+    expect(other.scheduledFor.getTime()).toBeLessThanOrEqual(daysFrom(afterCall, 1));
   });
 });

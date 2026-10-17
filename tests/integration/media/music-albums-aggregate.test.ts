@@ -30,7 +30,13 @@ vi.mock("@/lib/cache/memory-cache", () => {
     invalidatePrefix: () => {},
     clear: () => {},
   };
-  return { MemoryCache: vi.fn(() => noopCache), appCache: noopCache };
+  return {
+    // A constructor mock needs `function`: Vitest 4 cannot `new` an arrow.
+    MemoryCache: vi.fn(function () {
+      return noopCache;
+    }),
+    appCache: noopCache,
+  };
 });
 
 import { GET } from "@/app/api/media/music/albums/route";
@@ -89,8 +95,9 @@ describe("GET /api/media/music/albums — album aggregation", () => {
       playCount: 4, lastPlayedAt: newer, addedAt: older, fileSize: BigInt(4), audioCodec: "mp3",
       summary: "About the album", genres: ["Rock"], studio: "Label", contentRating: "E",
     });
+    const newest = new Date("2024-06-01T00:00:00Z");
     const t3 = await createTestMediaItem(lib.id, {
-      type: "MUSIC", title: "Three", parentTitle: "Band", albumTitle: "ALBUM",
+      type: "MUSIC", title: "Three", parentTitle: "Band", albumTitle: "ALBUM", addedAt: newest,
     });
     await prisma.mediaItem.update({
       where: { id: t1.id },
@@ -133,7 +140,7 @@ describe("GET /api/media/music/albums — album aggregation", () => {
     expect(albums[0].rating).toBe(7);
     expect(albums[0].year).toBe(1999);
     // addedAt is the newest track's.
-    expect(new Date(albums[0].addedAt!).getTime()).toBeGreaterThanOrEqual(newer.getTime());
+    expect(albums[0].addedAt).toBe(newest.toISOString());
   });
 
   it("sorts albums by title and lists only canonical copies across two servers", async () => {
@@ -144,16 +151,21 @@ describe("GET /api/media/music/albums — album aggregation", () => {
     const l1 = await createTestLibrary(s1.id, { type: "MUSIC" });
     const l2 = await createTestLibrary(s2.id, { type: "MUSIC" });
     const prisma = getTestPrisma();
-    await createTestMediaItem(l1.id, { type: "MUSIC", title: "x", parentTitle: "Band", albumTitle: "Zeta" });
+    const canonical = await createTestMediaItem(l1.id, { type: "MUSIC", title: "x", parentTitle: "Band", albumTitle: "Zeta" });
     await createTestMediaItem(l1.id, { type: "MUSIC", title: "y", parentTitle: "Band", albumTitle: "Alpha" });
     const copy = await createTestMediaItem(l2.id, {
       type: "MUSIC", title: "x", parentTitle: "Band", albumTitle: "Zeta",
     });
-    await prisma.mediaItem.update({ where: { id: copy.id }, data: { dedupCanonical: false } });
+    // The same track on both servers: one dedupKey, server A's copy canonical.
+    await prisma.mediaItem.update({ where: { id: canonical.id }, data: { dedupKey: "music:band:x", dedupCanonical: true } });
+    await prisma.mediaItem.update({ where: { id: copy.id }, data: { dedupKey: "music:band:x", dedupCanonical: false } });
 
     const albums = await getAlbums({ parentTitle: "Band" });
     expect(albums.map((a) => a.albumTitle)).toEqual(["Alpha", "Zeta"]);
-    expect(albums.find((a) => a.albumTitle === "Zeta")!.trackCount).toBe(1);
+    const zeta = albums.find((a) => a.albumTitle === "Zeta")!;
+    expect(zeta.trackCount).toBe(1);
+    expect(zeta.mediaItemId).toBe(canonical.id);
+    expect(zeta.servers.map((s) => s.serverName)).toEqual(["A"]);
   });
 
   it("applies the common filters (play count and genre narrow the tracks counted)", async () => {
@@ -178,9 +190,7 @@ describe("GET /api/media/music/albums — album aggregation", () => {
     const jazz = await getAlbums({ parentTitle: "Band", genre: "jazz" });
     expect(jazz.map((a) => [a.albumTitle, a.trackCount])).toEqual([["A", 2]]);
   });
-});
 
-describe("GET /api/media/music/albums ordering", () => {
   it("takes the album's fields from its first track by track number", async () => {
     const user = await createTestUser();
     setMockSession({ userId: user.id, isLoggedIn: true });
@@ -197,6 +207,9 @@ describe("GET /api/media/music/albums ordering", () => {
     await prisma.mediaItem.update({ where: { id: t1.id }, data: { year: 2001 } });
 
     const albums = await getAlbums({ parentTitle: "Band" });
+    expect(albums).toHaveLength(1);
+    // Track 1 although it was stored second; with no album art it is also the linked track.
+    expect(albums[0].mediaItemId).toBe(t1.id);
     expect(albums[0].summary).toBe("from one");
     expect(albums[0].year).toBe(2001);
   });

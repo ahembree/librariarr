@@ -116,8 +116,9 @@ describe("stream language phase agreement", () => {
         userId, 1, 0,
       );
 
-      expect(query.items.map((i) => i.title as string).sort())
-        .toEqual(lifecycle.map((i) => i.title as string).sort());
+      const lifecycleTitles = lifecycle.map((i) => i.title as string).sort();
+      expect(lifecycleTitles).toEqual(["Has French Subs"]);
+      expect(query.items.map((i) => i.title as string).sort()).toEqual(lifecycleTitles);
     });
   }
 
@@ -142,12 +143,21 @@ describe("stream language phase agreement", () => {
 
   it("leaves codec fields on the plain semantics (no placeholder set)", async () => {
     // streamAudioCodec is not a language field: "no audio stream" genuinely has
-    // no codec equal to X, so the negated operator matches. Every seeded item
-    // has an eac3 audio stream, so none match "notEquals eac3".
-    const rule = { id: "r1", field: "streamAudioCodec", operator: "notEquals", value: "eac3", condition: "AND" };
-    const phase1Only = await evaluateLifecycleRules(group([rule]), "MOVIE", [serverId]);
-    const withPhase2 = await evaluateLifecycleRules(group([rule, FORCES_PHASE_2]), "MOVIE", [serverId]);
-    expect(phase1Only).toHaveLength(0);
-    expect(withPhase2).toHaveLength(0);
+    // no codec equal to X, so the negated operator matches it. Every seeded item
+    // has an eac3 audio stream, so only an item with no audio stream at all
+    // matches "notEquals eac3" — in both phases.
+    const library = await prisma.library.findFirstOrThrow({ where: { mediaServerId: serverId } });
+    const silent = await prisma.mediaItem.create({
+      data: { libraryId: library.id, ratingKey: "silent", type: "MOVIE", title: "Silent Film" },
+    });
+    try {
+      const rule = { id: "r1", field: "streamAudioCodec", operator: "notEquals", value: "eac3", condition: "AND" };
+      const phase1Only = await evaluateLifecycleRules(group([rule]), "MOVIE", [serverId]);
+      const withPhase2 = await evaluateLifecycleRules(group([rule, FORCES_PHASE_2]), "MOVIE", [serverId]);
+      expect(phase1Only.map((r) => r.title as string)).toEqual(["Silent Film"]);
+      expect(withPhase2.map((r) => r.title as string)).toEqual(["Silent Film"]);
+    } finally {
+      await prisma.mediaItem.delete({ where: { id: silent.id } });
+    }
   });
 });

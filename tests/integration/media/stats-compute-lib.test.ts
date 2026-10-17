@@ -178,8 +178,9 @@ describe("media stats compute (timeline, cross-tab, breakdown)", () => {
       await createTestMediaItem(musicLib, { type: "MUSIC", addedAt: new Date("2024-01-10T00:00:00Z") });
 
       const all = await computeTimeline({ ...base, breakdownMeta: codec, dateField: "addedAt", bin: "month", serverIds: [serverId] });
+      // The most frequent codec leads; the track is not charted at all.
       expect(all.series[0]).toBe("hevc");
-      expect(all.series).toHaveLength(4);
+      expect([...all.series].sort()).toEqual(["av1", "h264", "hevc", "vp9"]);
       expect(all.points[0].total).toBe(3);
 
       const top = await computeTimeline({ ...base, breakdownMeta: codec, topN: 1, dateField: "addedAt", bin: "month", serverIds: [serverId] });
@@ -236,8 +237,12 @@ describe("media stats compute (timeline, cross-tab, breakdown)", () => {
         { dim1: "hevc", dim2: "mkv", type: "MOVIE", _count: 1 },
         { dim1: "hevc", dim2: "mp4", type: "MOVIE", _count: 1 },
       ]);
+      // c (the h264 one) is not canonical.
       const deduped = await computeCrossTab(codec, container, [serverId], true);
-      expect(deduped.map((r) => r.dim1)).not.toContain("h264");
+      expect(sortRows(deduped)).toEqual([
+        { dim1: "hevc", dim2: "mkv", type: "MOVIE", _count: 1 },
+        { dim1: "hevc", dim2: "mp4", type: "MOVIE", _count: 1 },
+      ]);
     });
 
     it("cross-tabulates a mapped value against every genre of an item", async () => {
@@ -323,6 +328,8 @@ describe("media stats compute (timeline, cross-tab, breakdown)", () => {
         { value: "2023-05", type: "MOVIE", _count: 1 },
       ]);
       const played = await computeBreakdown(playedMonth, [serverId], false);
+      // Exactly these two rows; where the null label sorts is not the point here.
+      expect(played).toHaveLength(2);
       expect(played).toEqual(expect.arrayContaining([
         { value: "Never", type: "MOVIE", _count: 2 },
         { value: "2024-02", type: "MOVIE", _count: 1 },

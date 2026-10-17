@@ -98,9 +98,7 @@ describe("GET /api/media/recently-added", () => {
       total: number;
     }>(response, 200);
 
-    expect(body.items[0].title).toBe("Recent Movie");
-    expect(body.items[1].title).toBe("Mid Movie");
-    expect(body.items[2].title).toBe("Old Movie");
+    expect(body.items.map((i) => i.title)).toEqual(["Recent Movie", "Mid Movie", "Old Movie"]);
     expect(body.total).toBe(3);
   });
 
@@ -129,7 +127,8 @@ describe("GET /api/media/recently-added", () => {
       total: number;
     }>(response, 200);
 
-    expect(body.items).toHaveLength(2);
+    // The two newest.
+    expect(body.items.map((i) => i.title)).toEqual(["Movie 5", "Movie 4"]);
     expect(body.total).toBe(5);
   });
 
@@ -138,10 +137,16 @@ describe("GET /api/media/recently-added", () => {
     const server = await createTestServer(user.id);
     const lib = await createTestLibrary(server.id);
 
-    await createTestMediaItem(lib.id, {
-      title: "Test",
-      type: "MOVIE",
-      addedAt: new Date(),
+    // More movies than the cap, so the cap is what bounds the answer.
+    const base = Date.UTC(2024, 0, 1);
+    await getTestPrisma().mediaItem.createMany({
+      data: Array.from({ length: 55 }, (_, i) => ({
+        libraryId: lib.id,
+        ratingKey: `cap-${i}`,
+        title: `Movie ${i}`,
+        type: "MOVIE" as const,
+        addedAt: new Date(base + i * 86_400_000),
+      })),
     });
 
     setMockSession({ userId: user.id, isLoggedIn: true });
@@ -150,8 +155,10 @@ describe("GET /api/media/recently-added", () => {
       url: "/api/media/recently-added",
       searchParams: { limit: "999" },
     });
-    // Should not fail; response limit capped at 50 internally
-    expect(response.status).toBe(200);
+    const body = await expectJson<{ items: { title: string }[]; total: number }>(response, 200);
+    expect(body.items).toHaveLength(50);
+    expect(body.items[0].title).toBe("Movie 54");
+    expect(body.total).toBe(55);
   });
 
   it("filters by type when specified", async () => {
@@ -351,7 +358,7 @@ describe("GET /api/media/recently-added", () => {
       await callRoute(GET, { url: "/api/media/recently-added" }), 200);
 
     expect(body.items).toHaveLength(2);
-    expect(body.items.map((i) => i.seasonNumber).sort()).toEqual([26, 27]);
+    expect(body.items.map((i) => i.seasonNumber).sort((a, b) => a - b)).toEqual([26, 27]);
     expect(body.items.every((i) => i.memberCount === 2)).toBe(true);
   });
 
@@ -477,11 +484,14 @@ describe("GET /api/media/recently-added", () => {
     }
     setMockSession({ userId: user.id, isLoggedIn: true });
 
-    const body = await expectJson<{ items: { memberCount: number }[]; total: number }>(
+    const body = await expectJson<{ items: { memberCount: number; seasonNumber: number }[]; total: number }>(
       await callRoute(GET, { url: "/api/media/recently-added?limit=2" }), 200);
 
-    expect(body.items).toHaveLength(2);
-    expect(body.items.every((i) => i.memberCount === 10)).toBe(true);
+    // The two newest seasons, ten episodes each.
+    expect(body.items).toEqual([
+      expect.objectContaining({ seasonNumber: 1, memberCount: 10 }),
+      expect.objectContaining({ seasonNumber: 2, memberCount: 10 }),
+    ]);
     expect(body.total).toBe(3);
   });
   it("does not collapse a season whose seasonNumber is null", async () => {
@@ -500,7 +510,7 @@ describe("GET /api/media/recently-added", () => {
     setMockSession({ userId: user.id, isLoggedIn: true });
     const body = await expectJson<{ items: { memberCount: number }[] }>(
       await callRoute(GET, { url: "/api/media/recently-added" }), 200);
-    expect(body.items).toHaveLength(3);
+    expect(body.items.map((i) => i.memberCount)).toEqual([1, 1, 1]);
   });
 
   it("does not collapse an album with no artist", async () => {
@@ -517,7 +527,7 @@ describe("GET /api/media/recently-added", () => {
     setMockSession({ userId: user.id, isLoggedIn: true });
     const body = await expectJson<{ items: { memberCount: number }[] }>(
       await callRoute(GET, { url: "/api/media/recently-added" }), 200);
-    expect(body.items).toHaveLength(3);
+    expect(body.items.map((i) => i.memberCount)).toEqual([1, 1, 1]);
   });
 
   it("counts only the members added in the same batch, not the whole season", async () => {
@@ -540,10 +550,11 @@ describe("GET /api/media/recently-added", () => {
       addedAt: new Date(), ratingKey: "wk-8",
     });
     setMockSession({ userId: user.id, isLoggedIn: true });
-    const body = await expectJson<{ items: { memberCount: number }[] }>(
+    const body = await expectJson<{ items: { memberCount: number; episodeNumber: number }[] }>(
       await callRoute(GET, { url: "/api/media/recently-added" }), 200);
     expect(body.items).toHaveLength(1);
     expect(body.items[0].memberCount).toBe(1);
+    expect(body.items[0].episodeNumber).toBe(8);
   });
 
   it("ignores an unrecognized type instead of erroring", async () => {
@@ -555,9 +566,9 @@ describe("GET /api/media/recently-added", () => {
     // `type` reaches raw SQL; an unvalidated value was both an injection vector
     // and a 500. Anything unrecognized is treated as "no type filter".
     for (const bad of ["BOGUS", "MOVIE'; DROP TABLE \"MediaItem\"; --", ""]) {
-      const body = await expectJson<{ items: unknown[] }>(
+      const body = await expectJson<{ items: { title: string }[] }>(
         await callRoute(GET, { url: `/api/media/recently-added?type=${encodeURIComponent(bad)}` }), 200);
-      expect(Array.isArray(body.items)).toBe(true);
+      expect(body.items.map((i) => i.title), `type=${bad}`).toEqual(["M"]);
     }
     // The table is still there.
     expect(await getTestPrisma().mediaItem.count()).toBe(1);
@@ -577,7 +588,7 @@ describe("GET /api/media/recently-added", () => {
           addedAt: new Date(), ratingKey: `${tag}-${i}`,
         });
         await prisma.mediaItem.update({
-          where: { id: row.id }, data: { dedupCanonical: canonical, dedupKey: `dk-${i}` },
+          where: { id: row.id }, data: { dedupCanonical: canonical, dedupKey: `series:tvdb:42:s1e${i}` },
         });
       }
     }
@@ -700,6 +711,7 @@ describe("GET /api/media/recently-added", () => {
     const body = await expectJson<{ items: { id: string }[] }>(
       await callRoute(GET, { url: "/api/media/recently-added" }), 200);
 
+    expect(body.items).toHaveLength(1);
     expect(body.items[0].id).toBe(seasonArt.id);
   });
 

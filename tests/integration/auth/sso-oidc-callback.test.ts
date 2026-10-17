@@ -27,12 +27,19 @@ vi.mock("@/lib/sso/oidc-client", () => ({
   invalidateOidcDiscoveryCache: vi.fn(),
 }));
 
+// Reserved as the callback starts and given back when it signs someone in,
+// links or confirms (login-lockout.test.ts runs the real limiter).
+const { mockReserve, mockSucceeded } = vi.hoisted(() => {
+  const mockSucceeded = vi.fn();
+  return {
+    mockReserve: vi.fn(
+      (): { refused: Response } | { refused: null; succeeded: () => void } => ({ refused: null, succeeded: mockSucceeded }),
+    ),
+    mockSucceeded,
+  };
+});
 vi.mock("@/lib/rate-limit/rate-limiter", () => ({
-  checkAuthRateLimit: () => null,
-  peekAuthRateLimit: () => null,
-  reserveAuthAttempt: () => ({ refused: null, succeeded: () => {} }),
-  authRateLimiter: { check: () => ({ limited: false }) },
-  getClientIp: () => "127.0.0.1",
+  reserveAuthAttempt: mockReserve,
 }));
 
 vi.mock("@/lib/db", async () => {
@@ -94,7 +101,27 @@ describe("GET /api/auth/sso/oidc/callback", () => {
     await cleanDatabase();
     clearMockSession();
     vi.clearAllMocks();
+    // mockReset: a resolved or rejected value set by one test must not answer
+    // the next one's discovery, exchange or userinfo call.
+    for (const mock of [mockDiscover, mockExchange, mockFetchUserInfo]) mock.mockReset();
     mockResolveRedirectUri.mockReturnValue("http://localhost:3000/api/auth/sso/oidc/callback");
+    mockReserve.mockReturnValue({ refused: null, succeeded: mockSucceeded });
+  });
+
+  it("returns the limiter's 429 before reading any setting or calling the IdP", async () => {
+    const user = await createTestUser();
+    await seedOidcSettings(user.id);
+    setMockSession({ isLoggedIn: false, oidcState: "s", oidcVerifier: "v" });
+    mockReserve.mockReturnValue({
+      refused: Response.json({ error: "Too many attempts. Try again later." }, { status: 429 }),
+    });
+
+    const res = await callRoute(GET, { method: "GET", searchParams: { code: "c", state: "s" } });
+    expect(res.status).toBe(429);
+    expect(mockReserve).toHaveBeenCalledWith(expect.anything(), "sso-oidc-callback");
+    expect(mockDiscover).not.toHaveBeenCalled();
+    expect(mockExchange).not.toHaveBeenCalled();
+    expect(getMockSession().isLoggedIn).toBe(false);
   });
 
   afterAll(async () => {
@@ -154,21 +181,36 @@ describe("GET /api/auth/sso/oidc/callback", () => {
     expect(loc.searchParams.get("sso_error")).toBe("state_mismatch");
   });
 
+  // Everything else would sign the linked admin in: only the state check
+  // stands between a forged callback and a session.
   it("redirects with state_mismatch when state differs from session", async () => {
     const user = await createTestUser();
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { ssoSubject: "sub-123", ssoIssuer: ISSUER, ssoEnabled: true },
+    });
     await seedOidcSettings(user.id);
     setMockSession({
       isLoggedIn: false,
       oidcState: "expected-state",
       oidcVerifier: "verifier",
     });
+    setupSuccessfulExchange({ sub: "sub-123" });
 
     const res = await callRoute(GET, {
       method: "GET",
       searchParams: { code: "c", state: "wrong-state" },
     });
     const loc = new URL(res.headers.get("location")!);
+    expect(loc.pathname).toBe("/login");
     expect(loc.searchParams.get("sso_error")).toBe("state_mismatch");
+    expect(mockExchange).not.toHaveBeenCalled();
+    const session = getMockSession();
+    expect(session.isLoggedIn).toBe(false);
+    // Single-use: a failed attempt cannot be retried against the same handshake.
+    expect(session.oidcState).toBeUndefined();
+    expect(session.oidcVerifier).toBeUndefined();
+    expect(mockSucceeded).not.toHaveBeenCalled();
   });
 
   it("wipes transient handshake fields even when exchange fails", async () => {
@@ -181,10 +223,11 @@ describe("GET /api/auth/sso/oidc/callback", () => {
     });
     mockDiscover.mockRejectedValue(new Error("idp unreachable"));
 
-    await callRoute(GET, {
+    const res = await callRoute(GET, {
       method: "GET",
       searchParams: { code: "c", state: "expected-state" },
     });
+    expect(new URL(res.headers.get("location")!).searchParams.get("sso_error")).toBe("token_exchange_failed");
 
     const after = getMockSession();
     expect(after.oidcState).toBeUndefined();
@@ -215,6 +258,9 @@ describe("GET /api/auth/sso/oidc/callback", () => {
     });
     const loc = new URL(res.headers.get("location")!);
     expect(loc.searchParams.get("sso_error")).toBe("token_exchange_failed");
+    expect(mockFetchUserInfo).not.toHaveBeenCalled();
+    expect(getMockSession().isLoggedIn).toBe(false);
+    expect(mockSucceeded).not.toHaveBeenCalled();
   });
 
   // ── Login flow happy paths ──────────────────────────────────────────
@@ -242,11 +288,27 @@ describe("GET /api/auth/sso/oidc/callback", () => {
       searchParams: { code: "c", state: "s" },
     });
     expect(res.status).toBe(307);
-    expect(new URL(res.headers.get("location")!).pathname).toBe("/");
+    expect(res.headers.get("location")).toBe("http://localhost:3000/");
+
+    // The code is redeemed with the PKCE verifier this browser's handshake
+    // stored, against the configured client.
+    expect(mockExchange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        clientId: "client-id",
+        clientSecret: "client-secret",
+        code: "c",
+        codeVerifier: "v",
+        redirectUri: "http://localhost:3000/api/auth/sso/oidc/callback",
+      }),
+    );
+    expect(mockSucceeded).toHaveBeenCalledTimes(1);
 
     const session = getMockSession();
     expect(session.isLoggedIn).toBe(true);
     expect(session.userId).toBe(user.id);
+    expect(session.sessionVersion).toBe(user.sessionVersion);
+    expect(session.oidcState).toBeUndefined();
+    expect(session.oidcVerifier).toBeUndefined();
     // The Plex token stays in the User row, where server discovery reads it
     // (`getStoredPlexToken`); the cookie never carries it.
     expect("plexToken" in session).toBe(false);
@@ -266,6 +328,8 @@ describe("GET /api/auth/sso/oidc/callback", () => {
     });
     const loc = new URL(res.headers.get("location")!);
     expect(loc.searchParams.get("sso_error")).toBe("not_linked");
+    expect(getMockSession().isLoggedIn).toBe(false);
+    expect(mockSucceeded).not.toHaveBeenCalled();
   });
 
   it("rejects login when user matches but ssoEnabled is false", async () => {
@@ -284,6 +348,7 @@ describe("GET /api/auth/sso/oidc/callback", () => {
     });
     const loc = new URL(res.headers.get("location")!);
     expect(loc.searchParams.get("sso_error")).toBe("not_linked");
+    expect(getMockSession().isLoggedIn).toBe(false);
   });
 
   it("rejects when the matching row has a different issuer", async () => {
@@ -307,6 +372,10 @@ describe("GET /api/auth/sso/oidc/callback", () => {
     });
     const loc = new URL(res.headers.get("location")!);
     expect(loc.searchParams.get("sso_error")).toBe("not_linked");
+    expect(getMockSession().isLoggedIn).toBe(false);
+    // The other issuer's link is left as it was.
+    const unchanged = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
+    expect(unchanged.ssoIssuer).toBe("https://other-idp.example.com");
   });
 
   it("backfills ssoIssuer for legacy rows with null issuer", async () => {
@@ -319,10 +388,12 @@ describe("GET /api/auth/sso/oidc/callback", () => {
     setMockSession({ isLoggedIn: false, oidcState: "s", oidcVerifier: "v" });
     setupSuccessfulExchange({ sub: "legacy-sub" });
 
-    await callRoute(GET, {
+    const res = await callRoute(GET, {
       method: "GET",
       searchParams: { code: "c", state: "s" },
     });
+    expect(res.headers.get("location")).toBe("http://localhost:3000/");
+    expect(getMockSession()).toMatchObject({ isLoggedIn: true, userId: user.id });
 
     const refreshed = await prisma.user.findUnique({ where: { id: user.id } });
     expect(refreshed?.ssoIssuer).toBe(ISSUER);
@@ -384,7 +455,7 @@ describe("GET /api/auth/sso/oidc/callback", () => {
     });
     await seedOidcSettings(user.id, { oidcUsernameClaim: "name" });
     setMockSession({ isLoggedIn: false, oidcState: "s", oidcVerifier: "v" });
-    setupSuccessfulExchange({ sub: "s1", name: "Display Name" });
+    setupSuccessfulExchange({ sub: "s1", name: "Display Name", preferred_username: "not-this-one" });
 
     await callRoute(GET, {
       method: "GET",
@@ -479,9 +550,10 @@ describe("GET /api/auth/sso/oidc/callback", () => {
     // No mutation — current user's row is untouched.
     const refreshed = await prisma.user.findUnique({ where: { id: me.id } });
     expect(refreshed?.ssoSubject).toBeNull();
+    expect(refreshed?.sessionVersion).toBe(me.sessionVersion);
   });
 
-  it("redirects with session_lost when the linker's user row was deleted mid-flow", async () => {
+  it("returns a link whose admin and settings were deleted mid-flow to settings with sso_not_configured", async () => {
     const me = await createTestUser();
     await seedOidcSettings(me.id, { ssoEnabled: false });
     setMockSession({
@@ -653,8 +725,12 @@ describe("GET /api/auth/sso/oidc/callback", () => {
       method: "GET",
       searchParams: { code: "c", state: "s" },
     });
-    // Login flow → root, not /settings.
+    // Login flow → root, not /settings: the linked admin signs in, and no
+    // link is written (the version a link would bump is untouched).
     expect(new URL(res.headers.get("location")!).pathname).toBe("/");
+    expect(getMockSession()).toMatchObject({ isLoggedIn: true, userId: user.id });
+    const unchanged = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
+    expect(unchanged.sessionVersion).toBe(user.sessionVersion);
   });
   // ── Re-authentication flow (signed-in admin confirming identity) ──────
 
@@ -689,8 +765,10 @@ describe("GET /api/auth/sso/oidc/callback", () => {
 
       const session = getMockSession();
       expect(session.userId).toBe(user.id);
+      expect(session.isLoggedIn).toBe(true);
       expect(session.authenticatedAt).toBeGreaterThanOrEqual(before);
       expect(session.oidcFlow).toBeUndefined();
+      expect(mockSucceeded).toHaveBeenCalledTimes(1);
       // Nothing about the account changes.
       const refreshed = await prisma.user.findUnique({ where: { id: user.id } });
       expect(refreshed?.sessionVersion).toBe(user.sessionVersion);
@@ -728,6 +806,7 @@ describe("GET /api/auth/sso/oidc/callback", () => {
       expect(loc.pathname).toBe("/login/reauth");
       expect(loc.searchParams.get("error")).toBe("not_linked");
       expect(getMockSession().authenticatedAt).toBe(1);
+      expect(mockSucceeded).not.toHaveBeenCalled();
     });
 
     it("reports a vanished account to the popup page, not the login page", async () => {

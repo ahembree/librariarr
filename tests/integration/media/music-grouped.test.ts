@@ -33,7 +33,13 @@ vi.mock("@/lib/cache/memory-cache", () => {
     invalidatePrefix: () => {},
     clear: () => {},
   };
-  return { MemoryCache: vi.fn(() => noopCache), appCache: noopCache };
+  return {
+    // A constructor mock needs `function`: Vitest 4 cannot `new` an arrow.
+    MemoryCache: vi.fn(function () {
+      return noopCache;
+    }),
+    appCache: noopCache,
+  };
 });
 
 // Import route handler AFTER mocks
@@ -133,21 +139,20 @@ describe("GET /api/media/music/grouped", () => {
         }[];
       }>(response, 200);
 
-      expect(body.artists).toHaveLength(2);
+      // Sorted by artist name by default.
+      expect(body.artists.map((a) => a.parentTitle)).toEqual(["Pink Floyd", "Queen"]);
+      const [pf, queen] = body.artists;
 
-      const queen = body.artists.find((a) => a.parentTitle === "Queen");
-      expect(queen).toBeDefined();
-      expect(queen!.trackCount).toBe(2);
-      expect(queen!.albumCount).toBe(2);
+      expect(queen.trackCount).toBe(2);
+      expect(queen.albumCount).toBe(2);
       // 50MB + 10MB = 62914560
-      expect(queen!.totalSize).toBe("62914560");
-      expect(queen!.audioCodecCounts["FLAC"]).toBe(1);
-      expect(queen!.audioCodecCounts["MP3"]).toBe(1);
+      expect(queen.totalSize).toBe("62914560");
+      expect(queen.audioCodecCounts).toEqual({ FLAC: 1, MP3: 1 });
 
-      const pf = body.artists.find((a) => a.parentTitle === "Pink Floyd");
-      expect(pf).toBeDefined();
-      expect(pf!.trackCount).toBe(1);
-      expect(pf!.albumCount).toBe(1);
+      expect(pf.trackCount).toBe(1);
+      expect(pf.albumCount).toBe(1);
+      expect(pf.totalSize).toBe("73400320");
+      expect(pf.audioCodecCounts).toEqual({ FLAC: 1 });
     });
 
     it("does not include MOVIE or SERIES items in music grouping", async () => {
@@ -325,7 +330,7 @@ describe("GET /api/media/music/grouped", () => {
         pagination: { page: number; limit: number; hasMore: boolean };
       }>(response1, 200);
 
-      expect(body1.artists).toHaveLength(2);
+      expect(body1.artists.map((a) => a.parentTitle)).toEqual(["Adele", "Beatles"]);
       expect(body1.pagination.page).toBe(1);
       expect(body1.pagination.limit).toBe(2);
       expect(body1.pagination.hasMore).toBe(true);
@@ -340,7 +345,7 @@ describe("GET /api/media/music/grouped", () => {
         pagination: { page: number; limit: number; hasMore: boolean };
       }>(response2, 200);
 
-      expect(body2.artists).toHaveLength(2);
+      expect(body2.artists.map((a) => a.parentTitle)).toEqual(["Coldplay", "Drake"]);
       expect(body2.pagination.page).toBe(2);
       expect(body2.pagination.hasMore).toBe(true);
 
@@ -354,7 +359,7 @@ describe("GET /api/media/music/grouped", () => {
         pagination: { page: number; limit: number; hasMore: boolean };
       }>(response3, 200);
 
-      expect(body3.artists).toHaveLength(1);
+      expect(body3.artists.map((a) => a.parentTitle)).toEqual(["Eminem"]);
       expect(body3.pagination.hasMore).toBe(false);
     });
 
@@ -437,7 +442,9 @@ describe("GET /api/media/music/grouped", () => {
         pagination: { limit: number; hasMore: boolean };
       }>(response, 200);
 
-      expect(body.artists).toHaveLength(5);
+      expect(body.artists.map((a) => a.parentTitle)).toEqual([
+        "Artist 01", "Artist 02", "Artist 03", "Artist 04", "Artist 05",
+      ]);
       expect(body.pagination.limit).toBe(0);
       expect(body.pagination.hasMore).toBe(false);
     });
@@ -723,10 +730,10 @@ describe("GET /api/media/music/grouped", () => {
         artists: { parentTitle: string; trackCount: number }[];
       }>(response, 200);
 
-      expect(body.artists[0].parentTitle).toBe("Artist B");
-      expect(body.artists[0].trackCount).toBe(3);
-      expect(body.artists[1].parentTitle).toBe("Artist A");
-      expect(body.artists[1].trackCount).toBe(1);
+      expect(body.artists.map((a) => [a.parentTitle, a.trackCount])).toEqual([
+        ["Artist B", 3],
+        ["Artist A", 1],
+      ]);
     });
 
     it("sorts by albumCount ascending", async () => {
@@ -780,10 +787,10 @@ describe("GET /api/media/music/grouped", () => {
         artists: { parentTitle: string; albumCount: number }[];
       }>(response, 200);
 
-      expect(body.artists[0].parentTitle).toBe("Artist B");
-      expect(body.artists[0].albumCount).toBe(1);
-      expect(body.artists[1].parentTitle).toBe("Artist A");
-      expect(body.artists[1].albumCount).toBe(3);
+      expect(body.artists.map((a) => [a.parentTitle, a.albumCount])).toEqual([
+        ["Artist B", 1],
+        ["Artist A", 3],
+      ]);
     });
 
     it("sorts by totalSize ascending", async () => {
@@ -818,8 +825,10 @@ describe("GET /api/media/music/grouped", () => {
         artists: { parentTitle: string; totalSize: string }[];
       }>(response, 200);
 
-      expect(body.artists[0].parentTitle).toBe("Small Artist");
-      expect(body.artists[1].parentTitle).toBe("Big Artist");
+      expect(body.artists.map((a) => [a.parentTitle, a.totalSize])).toEqual([
+        ["Small Artist", "5242880"],
+        ["Big Artist", "10737418240"],
+      ]);
     });
   });
 
@@ -865,9 +874,8 @@ describe("GET /api/media/music/grouped", () => {
         }[];
       }>(response, 200);
 
-      const artist = body.artists[0];
-      expect(artist.audioCodecCounts["FLAC"]).toBe(2);
-      expect(artist.audioCodecCounts["MP3"]).toBe(1);
+      expect(body.artists).toHaveLength(1);
+      expect(body.artists[0].audioCodecCounts).toEqual({ FLAC: 2, MP3: 1 });
     });
   });
 
@@ -879,7 +887,7 @@ describe("GET /api/media/music/grouped", () => {
       const server = await createTestServer(user.id, { name: "Home Plex" });
       const lib = await createTestLibrary(server.id, { type: "MUSIC" });
 
-      await createTestMediaItem(lib.id, {
+      const track = await createTestMediaItem(lib.id, {
         title: "Track 1",
         type: "MUSIC",
         parentTitle: "Adele",
@@ -894,12 +902,13 @@ describe("GET /api/media/music/grouped", () => {
       const body = await expectJson<{
         artists: {
           parentTitle: string;
-          servers: { serverId: string; serverName: string }[];
+          servers: { serverId: string; serverName: string; serverType: string; mediaItemId: string }[];
         }[];
       }>(response, 200);
 
-      expect(body.artists[0].servers).toHaveLength(1);
-      expect(body.artists[0].servers[0].serverName).toBe("Home Plex");
+      expect(body.artists[0].servers).toEqual([
+        { serverId: server.id, serverName: "Home Plex", serverType: "PLEX", mediaItemId: track.id },
+      ]);
     });
   });
 
@@ -1032,10 +1041,10 @@ describe("GET /api/media/music/grouped", () => {
       const libA = await createTestLibrary(a.id, { type: "MUSIC" });
       const libB = await createTestLibrary(b.id, { type: "MUSIC" });
       const prisma = getTestPrisma();
-      const canonical = await createTestMediaItem(libA.id, { type: "MUSIC", parentTitle: "Sade", albumTitle: "Diamond Life" });
-      const copy = await createTestMediaItem(libB.id, { type: "MUSIC", parentTitle: "Sade", albumTitle: "Diamond Life" });
-      await prisma.mediaItem.update({ where: { id: canonical.id }, data: { dedupKey: "sade-1", dedupCanonical: true } });
-      await prisma.mediaItem.update({ where: { id: copy.id }, data: { dedupKey: "sade-1", dedupCanonical: false } });
+      const canonical = await createTestMediaItem(libA.id, { type: "MUSIC", title: "Smooth Operator", parentTitle: "Sade", albumTitle: "Diamond Life" });
+      const copy = await createTestMediaItem(libB.id, { type: "MUSIC", title: "Smooth Operator", parentTitle: "Sade", albumTitle: "Diamond Life" });
+      await prisma.mediaItem.update({ where: { id: canonical.id }, data: { dedupKey: "music:sade:smooth operator", dedupCanonical: true } });
+      await prisma.mediaItem.update({ where: { id: copy.id }, data: { dedupKey: "music:sade:smooth operator", dedupCanonical: false } });
       setMockSession({ userId: user.id, isLoggedIn: true });
 
       const [sade] = await artists();

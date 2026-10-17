@@ -55,14 +55,19 @@ describe("GET /api/settings/backup-schedule", () => {
     setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(GET);
-    const body = await expectJson<{
-      backupSchedule: string;
-      backupRetentionCount: number;
-      lastBackupAt: string | null;
-    }>(res);
-    expect(body.backupSchedule).toBe("DAILY");
-    expect(body.backupRetentionCount).toBe(10);
-    expect(body.lastBackupAt).toBeNull();
+    const body = await expectJson(res);
+    // Exactly the schedule fields: never the rest of the settings row (the
+    // backup passphrase lives there too).
+    expect(body).toEqual({ backupSchedule: "DAILY", backupRetentionCount: 10, lastBackupAt: null });
+  });
+
+  it("returns the defaults, creating the settings row, when none exists", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id});
+
+    const body = await expectJson(await callRoute(GET));
+    expect(body).toEqual({ backupSchedule: "DAILY", backupRetentionCount: 7, lastBackupAt: null });
+    expect(await prisma.appSettings.count()).toBe(1);
   });
 });
 
@@ -88,6 +93,7 @@ describe("PUT /api/settings/backup-schedule", () => {
     });
     const body = await expectJson<{ error: string }>(res, 400);
     expect(body.error).toContain("Invalid schedule");
+    expect(await prisma.appSettings.count()).toBe(0);
   });
 
   it("returns 400 for a cron expression the dispatcher cannot evaluate", async () => {
@@ -102,6 +108,31 @@ describe("PUT /api/settings/backup-schedule", () => {
     });
     const body = await expectJson<{ error: string }>(res, 400);
     expect(body.error).toContain("Invalid schedule");
+    expect(await prisma.appSettings.count()).toBe(0);
+  });
+
+  it("accepts a cron expression the dispatcher can evaluate", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id });
+
+    const res = await callRoute(PUT, {
+      method: "PUT",
+      body: { backupSchedule: "30 3 * * 1" },
+    });
+    const body = await expectJson<{ backupSchedule: string }>(res);
+    expect(body.backupSchedule).toBe("30 3 * * 1");
+    expect((await prisma.appSettings.findUnique({ where: { userId: user.id } }))?.backupSchedule).toBe("30 3 * * 1");
+  });
+
+  it.each([0, 101])("returns 400 for a retention count of %d", async (backupRetentionCount) => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id });
+
+    const res = await callRoute(PUT, { method: "PUT", body: { backupRetentionCount } });
+    const body = await expectJson<{ error: string; details: string[] }>(res, 400);
+    expect(body.details).toHaveLength(1);
+    expect(body.details[0]).toMatch(/^backupRetentionCount: /);
+    expect(await prisma.appSettings.count()).toBe(0);
   });
 
   it("updates backup schedule settings", async () => {
@@ -118,19 +149,26 @@ describe("PUT /api/settings/backup-schedule", () => {
     }>(res);
     expect(body.backupSchedule).toBe("WEEKLY");
     expect(body.backupRetentionCount).toBe(5);
+    const stored = await prisma.appSettings.findUnique({ where: { userId: user.id } });
+    expect(stored?.backupSchedule).toBe("WEEKLY");
+    expect(stored?.backupRetentionCount).toBe(5);
   });
 
-  it("returns updated schedule after PUT", async () => {
+  it("changes only the fields it is sent", async () => {
     const user = await createTestUser();
+    await prisma.appSettings.create({
+      data: { userId: user.id, backupSchedule: "DAILY", backupRetentionCount: 10 },
+    });
     setMockSession({ isLoggedIn: true, userId: user.id});
 
-    await callRoute(PUT, {
+    await expectJson(await callRoute(PUT, {
       method: "PUT",
       body: { backupSchedule: "EVERY_12H" },
-    });
+    }));
 
     const res = await callRoute(GET);
-    const body = await expectJson<{ backupSchedule: string }>(res);
+    const body = await expectJson<{ backupSchedule: string; backupRetentionCount: number }>(res);
     expect(body.backupSchedule).toBe("EVERY_12H");
+    expect(body.backupRetentionCount).toBe(10);
   });
 });

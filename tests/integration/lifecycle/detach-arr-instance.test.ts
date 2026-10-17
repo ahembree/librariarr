@@ -38,9 +38,14 @@ describe("detachDeletedArrInstance", () => {
 
     await prisma.$transaction((tx) => detachDeletedArrInstance(tx, user.id, INSTANCE, "Radarr"));
 
-    const ids = (await prisma.lifecycleAction.findMany({ select: { id: true } })).map((a) => a.id);
-    expect(ids).not.toContain(pending.id);
-    expect(ids).toEqual(expect.arrayContaining([completed.id, failed.id, otherInstance.id]));
+    const remaining = await prisma.lifecycleAction.findMany({ select: { id: true, status: true } });
+    expect(remaining.map((a) => a.id)).not.toContain(pending.id);
+    expect(remaining).toHaveLength(3);
+    expect(remaining).toEqual(expect.arrayContaining([
+      { id: completed.id, status: "COMPLETED" },
+      { id: failed.id, status: "FAILED" },
+      { id: otherInstance.id, status: "PENDING" },
+    ]));
   });
 
   it("turns off and detaches rule sets whose action uses the instance", async () => {
@@ -64,6 +69,7 @@ describe("detachDeletedArrInstance", () => {
       expect(row.arrInstanceId, rs.id).toBeNull();
       expect(row.actionEnabled, rs.id).toBe(false);
     }
+    expect(warn).toHaveBeenCalledWith("Lifecycle", expect.stringContaining("turned off the action of 4 rule set(s)"));
   });
 
   it("detaches but keeps enabled a Do Nothing rule set with no tags", async () => {

@@ -10,7 +10,7 @@
  * deduped `watchedByUsers` set so an artist matches when *any* track was
  * played by the user.
  */
-import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from "vitest";
 import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import type { LifecycleRuleGroup } from "@/lib/rules/types";
 
@@ -27,6 +27,7 @@ vi.mock("@/lib/logger", () => ({
 const { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope } =
   await import("@/lib/rules/lifecycle-engine");
 
+let userId: string;
 let serverId: string;
 let movieAliceId: string;
 let movieBobId: string;
@@ -39,6 +40,7 @@ beforeAll(async () => {
   const user = await prisma.user.create({
     data: { username: "test-watched-by-user", passwordHash: "x" },
   });
+  userId = user.id;
   const server = await prisma.mediaServer.create({
     data: {
       userId: user.id,
@@ -120,6 +122,7 @@ beforeAll(async () => {
   });
   const showAEpisodes = await prisma.mediaItem.findMany({
     where: { libraryId: seriesLib.id, parentTitle: "Show A" },
+    orderBy: { episodeNumber: "asc" },
   });
   // Show A: episode 1 watched by alice; episode 2 watched by bob.
   // Show B: nobody watched anything.
@@ -259,12 +262,32 @@ describe("evaluateMusicScope — watchedByUser aggregates across tracks", () => 
 // ---------------------------------------------------------------------------
 
 describe("watchedByUser ignores partial Tracearr plays", () => {
+  // Its own Tracearr-mapped server, so this block neither sees nor changes the
+  // movies the describes above assert on, whatever order the tests run in.
+  let tracearrServerId: string;
   let partialMovieId: string;
+
+  const titlesOnTracearrServer = async (rules: LifecycleRuleGroup[]) =>
+    (await evaluateLifecycleRules(rules, "MOVIE", [tracearrServerId])).map((i) => i.title).sort();
 
   beforeAll(async () => {
     const prisma = getTestPrisma();
-    const lib = await prisma.library.findFirstOrThrow({
-      where: { mediaServerId: serverId, type: "MOVIE" },
+    const server = await prisma.mediaServer.create({
+      data: {
+        userId,
+        name: "Tracearr-mapped",
+        type: "PLEX",
+        url: "http://tracearr-mapped:32400",
+        accessToken: "x",
+        machineId: "watched-by-user-tracearr",
+        tracearrServerId: "8d3f1c2a-6b4e-4f7d-9a10-2c5e7b9d1f34",
+        tracearrBackfillComplete: true,
+        watchHistorySyncedAt: new Date(),
+      },
+    });
+    tracearrServerId = server.id;
+    const lib = await prisma.library.create({
+      data: { mediaServerId: server.id, key: "1", title: "Movies", type: "MOVIE" },
     });
     const movie = await prisma.mediaItem.create({
       data: {
@@ -282,10 +305,10 @@ describe("watchedByUser ignores partial Tracearr plays", () => {
     await prisma.watchHistory.create({
       data: {
         mediaItemId: partialMovieId,
-        mediaServerId: serverId,
+        mediaServerId: tracearrServerId,
         serverUsername: "carol",
         source: "TRACEARR",
-        sourceEventId: "chain-partial",
+        sourceEventId: "0b7e4d21-3c9a-4e58-8f16-a2d4c6e8b031",
         watched: false,
         percentComplete: 4.1,
         state: "stopped",
@@ -293,18 +316,23 @@ describe("watchedByUser ignores partial Tracearr plays", () => {
     });
   });
 
+  beforeEach(async () => {
+    // Back to the partial play alone: one test adds a completed one.
+    await getTestPrisma().watchHistory.deleteMany({
+      where: { mediaServerId: tracearrServerId, watched: true },
+    });
+  });
+
   it("equals does not match a movie the user only started", async () => {
-    expect(await movieTitles(group("equals", "carol"))).toEqual([]);
+    expect(await titlesOnTracearrServer(group("equals", "carol"))).toEqual([]);
   });
 
   it("isNull still treats a partially-played movie as never watched", async () => {
-    expect(await movieTitles(group("isNull", ""))).toContain("Only Started By Carol");
+    expect(await titlesOnTracearrServer(group("isNull", ""))).toEqual(["Only Started By Carol"]);
   });
 
   it("notEquals includes a movie the user only started", async () => {
-    expect(await movieTitles(group("notEquals", "carol"))).toContain(
-      "Only Started By Carol",
-    );
+    expect(await titlesOnTracearrServer(group("notEquals", "carol"))).toEqual(["Only Started By Carol"]);
   });
 
   it("counts the same user's completed Tracearr play", async () => {
@@ -312,21 +340,18 @@ describe("watchedByUser ignores partial Tracearr plays", () => {
     await prisma.watchHistory.create({
       data: {
         mediaItemId: partialMovieId,
-        mediaServerId: serverId,
+        mediaServerId: tracearrServerId,
         serverUsername: "carol",
         source: "TRACEARR",
-        sourceEventId: "chain-complete",
+        sourceEventId: "5f2a9c7e-1d84-4b36-b0e9-7c3d5a1f8e62",
         watched: true,
         percentComplete: 99.2,
         state: "stopped",
       },
     });
 
-    expect(await movieTitles(group("equals", "carol"))).toEqual([
-      "Only Started By Carol",
-    ]);
-    expect(await movieTitles(group("isNull", ""))).not.toContain(
-      "Only Started By Carol",
-    );
+    expect(await titlesOnTracearrServer(group("equals", "carol"))).toEqual(["Only Started By Carol"]);
+    expect(await titlesOnTracearrServer(group("isNull", ""))).toEqual([]);
+    expect(await titlesOnTracearrServer(group("notEquals", "carol"))).toEqual([]);
   });
 });

@@ -73,25 +73,27 @@ describe("GET /api/media/[id]/history — per-user aggregation across copies", (
   it("refuses another user's item with 403", async () => {
     const stranger = await createTestUser({ username: "stranger" });
     const { item } = await copyOn("Theirs", null, { owner: stranger.id });
+    historyByUrl.set("http://theirs:32400", [{ username: "stranger", watchedAt: "2024-01-01T00:00:00.000Z" }]);
     const res = await callRouteWithParams(GET, { id: item.id });
     expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "Forbidden" });
   });
 
   it("counts each user's plays per server and keeps the latest date", async () => {
     const a = await copyOn("Alpha", null);
     historyByUrl.set(a.url, [
-      { username: "amy", watchedAt: "2024-01-01T00:00:00Z" },
-      { username: "amy", watchedAt: "2024-03-01T00:00:00Z" },
-      { username: "amy", watchedAt: "2024-02-01T00:00:00Z" },
+      { username: "amy", watchedAt: "2024-01-01T00:00:00.000Z" },
+      { username: "amy", watchedAt: "2024-03-01T00:00:00.000Z" },
+      { username: "amy", watchedAt: "2024-02-01T00:00:00.000Z" },
       { username: "amy", watchedAt: null },
       { username: "bob", watchedAt: null },
-      { username: "bob", watchedAt: "2023-05-05T00:00:00Z" },
+      { username: "bob", watchedAt: "2023-05-05T00:00:00.000Z" },
     ]);
     const body = await expectJson<Body>(await callRouteWithParams(GET, { id: a.item.id }));
     expect(body.serverHistories).toHaveLength(1);
     expect(body.serverHistories[0].users).toEqual([
-      { username: "amy", playCount: 4, lastPlayedAt: "2024-03-01T00:00:00Z" },
-      { username: "bob", playCount: 2, lastPlayedAt: "2023-05-05T00:00:00Z" },
+      { username: "amy", playCount: 4, lastPlayedAt: "2024-03-01T00:00:00.000Z" },
+      { username: "bob", playCount: 2, lastPlayedAt: "2023-05-05T00:00:00.000Z" },
     ]);
     expect(body.history).toEqual(body.serverHistories[0].users);
   });
@@ -102,23 +104,23 @@ describe("GET /api/media/[id]/history — per-user aggregation across copies", (
     const c = await copyOn("Charlie", "film-key");
     const d = await copyOn("Disabled", "film-key", { enabled: false });
     historyByUrl.set(a.url, [
-      { username: "amy", watchedAt: "2024-01-01T00:00:00Z" },
+      { username: "amy", watchedAt: "2024-01-01T00:00:00.000Z" },
       { username: "cat", watchedAt: null },
     ]);
     historyByUrl.set(b.url, [
-      { username: "amy", watchedAt: "2024-06-01T00:00:00Z" },
-      { username: "amy", watchedAt: "2024-05-01T00:00:00Z" },
-      { username: "cat", watchedAt: "2022-01-01T00:00:00Z" },
+      { username: "amy", watchedAt: "2024-06-01T00:00:00.000Z" },
+      { username: "amy", watchedAt: "2024-05-01T00:00:00.000Z" },
+      { username: "cat", watchedAt: "2022-01-01T00:00:00.000Z" },
       { username: "dan", watchedAt: null },
     ]);
     historyByUrl.set(c.url, new Error("server down"));
-    historyByUrl.set(d.url, [{ username: "ghost", watchedAt: "2025-01-01T00:00:00Z" }]);
+    historyByUrl.set(d.url, [{ username: "ghost", watchedAt: "2025-01-01T00:00:00.000Z" }]);
 
     const body = await expectJson<Body>(await callRouteWithParams(GET, { id: a.item.id }));
     expect(body.serverHistories.map((s) => s.serverName).sort()).toEqual(["Alpha", "Bravo"]);
     expect(body.history).toEqual([
-      { username: "amy", playCount: 3, lastPlayedAt: "2024-06-01T00:00:00Z" },
-      { username: "cat", playCount: 2, lastPlayedAt: "2022-01-01T00:00:00Z" },
+      { username: "amy", playCount: 3, lastPlayedAt: "2024-06-01T00:00:00.000Z" },
+      { username: "cat", playCount: 2, lastPlayedAt: "2022-01-01T00:00:00.000Z" },
       { username: "dan", playCount: 1, lastPlayedAt: null },
     ]);
     expect(apiLoggerWarn).toHaveBeenCalledWith(
@@ -131,9 +133,9 @@ describe("GET /api/media/[id]/history — per-user aggregation across copies", (
   it("keeps an earlier merged date when a later server's play is older", async () => {
     const a = await copyOn("Alpha", "k2");
     const b = await copyOn("Bravo", "k2");
-    historyByUrl.set(a.url, [{ username: "amy", watchedAt: "2024-09-01T00:00:00Z" }]);
-    historyByUrl.set(b.url, [{ username: "amy", watchedAt: "2020-01-01T00:00:00Z" }]);
+    historyByUrl.set(a.url, [{ username: "amy", watchedAt: "2024-09-01T00:00:00.000Z" }]);
+    historyByUrl.set(b.url, [{ username: "amy", watchedAt: "2020-01-01T00:00:00.000Z" }]);
     const body = await expectJson<Body>(await callRouteWithParams(GET, { id: b.item.id }));
-    expect(body.history).toEqual([{ username: "amy", playCount: 2, lastPlayedAt: "2024-09-01T00:00:00Z" }]);
+    expect(body.history).toEqual([{ username: "amy", playCount: 2, lastPlayedAt: "2024-09-01T00:00:00.000Z" }]);
   });
 });

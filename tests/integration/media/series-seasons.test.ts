@@ -32,7 +32,13 @@ vi.mock("@/lib/cache/memory-cache", () => {
     invalidatePrefix: () => {},
     clear: () => {},
   };
-  return { MemoryCache: vi.fn(() => noopCache), appCache: noopCache };
+  return {
+    // A constructor mock needs `function`: Vitest 4 cannot `new` an arrow.
+    MemoryCache: vi.fn(function () {
+      return noopCache;
+    }),
+    appCache: noopCache,
+  };
 });
 
 // Import route handler AFTER mocks
@@ -56,17 +62,6 @@ describe("GET /api/media/series/seasons", () => {
     });
     const body = await expectJson<{ error: string }>(response, 401);
     expect(body.error).toBe("Unauthorized");
-  });
-
-  it("returns 400 when parentTitle is missing", async () => {
-    const user = await createTestUser();
-    setMockSession({ userId: user.id, isLoggedIn: true });
-
-    const response = await callRoute(GET, {
-      url: "/api/media/series/seasons",
-    });
-    const body = await expectJson<{ error: string }>(response, 400);
-    expect(body.error).toBe("seriesKey or parentTitle is required");
   });
 
   it("returns empty seasons when user has no servers", async () => {
@@ -143,11 +138,13 @@ describe("GET /api/media/series/seasons", () => {
     expect(body.seasons[0].episodeCount).toBe(2);
     expect(body.seasons[0].totalSize).toBe("1100000000");
     expect(body.seasons[0].totalPlayCount).toBe(8);
+    expect(body.seasons[0].qualityCounts).toEqual({ "1080P": 2 });
 
     expect(body.seasons[1].seasonNumber).toBe(2);
     expect(body.seasons[1].episodeCount).toBe(1);
     expect(body.seasons[1].totalSize).toBe("2000000000");
     expect(body.seasons[1].totalPlayCount).toBe(1);
+    expect(body.seasons[1].qualityCounts).toEqual({ "4K": 1 });
   });
 
   it("does not include episodes from other series", async () => {
@@ -180,8 +177,7 @@ describe("GET /api/media/series/seasons", () => {
       seasons: { seasonNumber: number; episodeCount: number }[];
     }>(response, 200);
 
-    expect(body.seasons).toHaveLength(1);
-    expect(body.seasons[0].episodeCount).toBe(1);
+    expect(body.seasons.map((x) => [x.seasonNumber, x.episodeCount])).toEqual([[1, 1]]);
   });
 
   it("tracks quality counts per season", async () => {
@@ -225,9 +221,7 @@ describe("GET /api/media/series/seasons", () => {
     }>(response, 200);
 
     expect(body.seasons).toHaveLength(1);
-    const qc = body.seasons[0].qualityCounts;
-    // Should have 2 different resolution labels
-    expect(Object.keys(qc).length).toBe(2);
+    expect(body.seasons[0].qualityCounts).toEqual({ "1080P": 2, "4K": 1 });
   });
 
   it("tracks lastPlayed as the most recent across episodes", async () => {
@@ -318,7 +312,7 @@ describe("GET /api/media/series/seasons", () => {
 
     setMockSession({ userId: user.id, isLoggedIn: true });
 
-    const body = await expectJson<{ seasons: { seasonNumber: number }[] }>(
+    const body = await expectJson<{ seasons: { seasonNumber: number; episodeCount: number }[] }>(
       await callRoute(GET, {
         url: "/api/media/series/seasons",
         searchParams: { seriesKey: "tvdb:73244" },
@@ -326,7 +320,10 @@ describe("GET /api/media/series/seasons", () => {
       200,
     );
     // Only the US show's two seasons — the UK show's season 1 is not merged in.
-    expect(body.seasons.map((x) => x.seasonNumber).sort((a, b) => a - b)).toEqual([1, 9]);
+    expect(body.seasons.map((x) => [x.seasonNumber, x.episodeCount])).toEqual([
+      [1, 1],
+      [9, 1],
+    ]);
   });
 
   it("returns 400 when neither seriesKey nor parentTitle is given", async () => {

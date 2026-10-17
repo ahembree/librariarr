@@ -99,6 +99,8 @@ describe("GET /api/lifecycle/rules/matches", () => {
 
     expect(body.ruleMatches).toHaveLength(1);
     expect(body.ruleMatches[0].ruleSet.name).toBe("Enabled Rule");
+    expect(body.ruleMatches[0].count).toBe(1);
+    expect(body.ruleMatches[0].items).toHaveLength(1);
   });
 
   it("returns matches for multiple rule sets", async () => {
@@ -200,7 +202,7 @@ describe("GET /api/lifecycle/rules/matches", () => {
       type: "MOVIE",
     });
 
-    const collection = await createTestCollection(user.id, { name: "Test Col", type: "MOVIE" });
+    const collection = await createTestCollection(user.id, { name: "Test Col", type: "MOVIE", sort: "ACTION_DATE" });
     const rs = await createTestRuleSet(user.id, {
       name: "Metadata Test",
       type: "MOVIE",
@@ -240,6 +242,7 @@ describe("GET /api/lifecycle/rules/matches", () => {
     expect(rsMeta.actionEnabled).toBe(true);
     expect(rsMeta.actionType).toBe("DELETE_RADARR");
     expect(rsMeta.collectionName).toBe("Test Col");
+    expect(rsMeta.collectionSort).toBe("ACTION_DATE");
   });
 
   it("returns items with matchedCriteria array", async () => {
@@ -259,11 +262,15 @@ describe("GET /api/lifecycle/rules/matches", () => {
       rules: [{ id: "r1", field: "playCount", operator: "equals", value: 0, condition: "AND" }],
     });
 
-    // Store item data with matchedCriteria (simulating detectAndSaveMatches output)
+    // Store item data with matchedCriteria (the shape detectAndSaveMatches
+    // records — `getMatchedCriteriaForItems`' labelled criteria)
+    const matchedCriteria = [
+      { ruleId: "r1", field: "Play Count", operator: "=", value: "0", negate: false, actualValue: "0" },
+    ];
     await createTestRuleMatch(rs.id, item.id, {
       id: item.id,
       title: "Test Movie",
-      matchedCriteria: [{ field: "playCount", operator: "equals", value: 0 }],
+      matchedCriteria,
     });
 
     setMockSession({ isLoggedIn: true, userId: user.id });
@@ -280,8 +287,8 @@ describe("GET /api/lifecycle/rules/matches", () => {
 
     expect(body.ruleMatches).toHaveLength(1);
     expect(body.ruleMatches[0].items).toHaveLength(1);
-    // matchedCriteria should be an array
-    expect(Array.isArray(body.ruleMatches[0].items[0].matchedCriteria)).toBe(true);
+    expect(body.ruleMatches[0].items[0].title).toBe("Test Movie");
+    expect(body.ruleMatches[0].items[0].matchedCriteria).toEqual(matchedCriteria);
   });
 
   it("includes rule sets with no matches (count 0)", async () => {

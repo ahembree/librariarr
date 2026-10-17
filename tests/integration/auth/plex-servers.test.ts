@@ -62,7 +62,8 @@ describe("GET /api/auth/plex/servers", () => {
   beforeEach(async () => {
     await cleanDatabase();
     clearMockSession();
-    vi.clearAllMocks();
+    // mockReset: one test's `mockResolvedValue` must not answer the next.
+    mockGetPlexResources.mockReset();
   });
 
   afterAll(async () => {
@@ -201,9 +202,7 @@ describe("GET /api/auth/plex/servers", () => {
       servers: Array<{ name: string; clientIdentifier: string }>;
     }>(response, 200);
 
-    expect(body.servers).toHaveLength(2);
-    expect(body.servers.map((s) => s.name)).toContain("Primary Server");
-    expect(body.servers.map((s) => s.name)).toContain("Backup Server");
+    expect(body.servers.map((s) => s.clientIdentifier)).toEqual(["primary-001", "backup-002"]);
   });
 
   it("should return empty servers array when no owned servers exist", async () => {
@@ -237,11 +236,12 @@ describe("GET /api/auth/plex/servers", () => {
 
     mockGetPlexResources.mockResolvedValue([]);
 
-    await callRoute(GET, {
+    const response = await callRoute(GET, {
       url: "/api/auth/plex/servers",
       method: "GET",
     });
 
+    expect(await expectJson(response, 200)).toEqual({ servers: [] });
     expect(mockGetPlexResources).toHaveBeenCalledWith(plexToken);
   });
 
@@ -287,24 +287,17 @@ describe("GET /api/auth/plex/servers", () => {
       servers: Array<Record<string, unknown>>;
     }>(response, 200);
 
-    expect(body.servers).toHaveLength(1);
-    const returnedServer = body.servers[0];
-
-    // These fields should be present
-    expect(returnedServer).toHaveProperty("name", "Field Test Server");
-    expect(returnedServer).toHaveProperty("clientIdentifier", "field-001");
-    expect(returnedServer).toHaveProperty("product", "Plex Media Server");
-    expect(returnedServer).toHaveProperty("productVersion", "1.41.0");
-    expect(returnedServer).toHaveProperty("platform", "Windows");
-    expect(returnedServer).toHaveProperty("connections");
-
-    // These fields from the raw resource should NOT be present
-    expect(returnedServer).not.toHaveProperty("accessToken");
-    expect(returnedServer).not.toHaveProperty("device");
-    expect(returnedServer).not.toHaveProperty("provides");
-    expect(returnedServer).not.toHaveProperty("owned");
-    expect(returnedServer).not.toHaveProperty("publicAddress");
-    expect(returnedServer).not.toHaveProperty("httpsRequired");
-    expect(returnedServer).not.toHaveProperty("platformVersion");
+    // Exactly these fields: none of the raw resource's others (accessToken,
+    // device, provides, owned, publicAddress, httpsRequired, platformVersion).
+    expect(body.servers).toEqual([
+      {
+        name: "Field Test Server",
+        clientIdentifier: "field-001",
+        product: "Plex Media Server",
+        productVersion: "1.41.0",
+        platform: "Windows",
+        connections: server.connections,
+      },
+    ]);
   });
 });

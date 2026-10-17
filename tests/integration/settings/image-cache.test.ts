@@ -28,7 +28,10 @@ describe("GET /api/settings/image-cache", () => {
   beforeEach(async () => {
     await cleanDatabase();
     clearMockSession();
-    vi.clearAllMocks();
+    // mockReset: a resolved or rejected value set by one test must not
+    // answer the next one's call.
+    mockGetImageCacheStats.mockReset();
+    mockClearImageCache.mockReset();
   });
 
   afterAll(async () => {
@@ -38,6 +41,7 @@ describe("GET /api/settings/image-cache", () => {
   it("returns 401 when not authenticated", async () => {
     const res = await callRoute(GET);
     await expectJson(res, 401);
+    expect(mockGetImageCacheStats).not.toHaveBeenCalled();
   });
 
   it("returns cache stats", async () => {
@@ -48,8 +52,7 @@ describe("GET /api/settings/image-cache", () => {
 
     const res = await callRoute(GET);
     const body = await expectJson<{ fileCount: number; totalSize: number }>(res);
-    expect(body.fileCount).toBe(42);
-    expect(body.totalSize).toBe(1048576);
+    expect(body).toEqual({ fileCount: 42, totalSize: 1048576 });
     expect(mockGetImageCacheStats).toHaveBeenCalledOnce();
   });
 });
@@ -58,7 +61,10 @@ describe("DELETE /api/settings/image-cache", () => {
   beforeEach(async () => {
     await cleanDatabase();
     clearMockSession();
-    vi.clearAllMocks();
+    // mockReset: a resolved or rejected value set by one test must not
+    // answer the next one's call.
+    mockGetImageCacheStats.mockReset();
+    mockClearImageCache.mockReset();
   });
 
   afterAll(async () => {
@@ -68,6 +74,7 @@ describe("DELETE /api/settings/image-cache", () => {
   it("returns 401 when not authenticated", async () => {
     const res = await callRoute(DELETE, { method: "DELETE" });
     await expectJson(res, 401);
+    expect(mockClearImageCache).not.toHaveBeenCalled();
   });
 
   it("clears cache successfully", async () => {
@@ -78,7 +85,7 @@ describe("DELETE /api/settings/image-cache", () => {
 
     const res = await callRoute(DELETE, { method: "DELETE" });
     const body = await expectJson<{ success: boolean }>(res);
-    expect(body.success).toBe(true);
+    expect(body).toEqual({ success: true });
     expect(mockClearImageCache).toHaveBeenCalledOnce();
   });
 

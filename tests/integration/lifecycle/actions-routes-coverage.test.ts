@@ -50,8 +50,10 @@ beforeEach(async () => {
   await cleanDatabase();
   clearMockSession();
   vi.clearAllMocks();
-  mockExecuteAction.mockResolvedValue({});
-  mockSendDiscord.mockResolvedValue(undefined);
+  // mockReset, not only clear: a `…Once` a failed test never consumed must not
+  // leak into the next one.
+  mockExecuteAction.mockReset().mockResolvedValue({});
+  mockSendDiscord.mockReset().mockResolvedValue(undefined);
 });
 
 afterAll(async () => {
@@ -97,7 +99,7 @@ describe("GET /api/lifecycle/actions — history", () => {
     });
     setMockSession({ isLoggedIn: true, userId: user.id });
 
-    const body = await expectJson<{ groups: Array<{ ruleSet: { name: string; deleted?: boolean }; items: Array<{ mediaItem: { id: string | null; title: string; type: string } }> }> }>(
+    const body = await expectJson<{ groups: Array<{ ruleSet: { name: string; deleted?: boolean }; items: Array<{ scheduledFor: string; mediaItem: { id: string | null; title: string; type: string } }> }> }>(
       await callRoute(GET, { url: "/api/lifecycle/actions", searchParams: { status: "COMPLETED" } }),
       200,
     );
@@ -105,8 +107,13 @@ describe("GET /api/lifecycle/actions — history", () => {
     const gone = body.groups.find((g) => g.ruleSet.name === "Gone rule")!;
     expect(gone.ruleSet.deleted).toBe(true);
     expect(gone.items).toHaveLength(1); // deduped to the latest
+    expect(gone.items[0].scheduledFor).toBe(newer.toISOString());
+    expect(gone.items[0].mediaItem).toMatchObject({ id: item.id, title: "Heat" });
     const orphan = body.groups.find((g) => g.ruleSet.name === "Deleted Rule Set")!;
+    expect(orphan.ruleSet.deleted).toBe(true);
+    expect(orphan.items).toHaveLength(1);
     expect(orphan.items[0].mediaItem).toMatchObject({ id: null, title: "Vanished", type: "MOVIE" });
+    expect(body.groups).toHaveLength(2);
   });
 });
 
@@ -267,7 +274,7 @@ describe("POST /api/lifecycle/actions/execute — extra paths", () => {
     expect(mockSendDiscord.mock.calls[0][1].username).toBe("Librariarr");
   });
 
-  it("answers normally when the Discord lookup throws", async () => {
+  it("answers normally when sending the Discord notification fails", async () => {
     const { user, item } = await movieSetup();
     const ruleSet = await createTestRuleSet(user.id, { actionEnabled: true, actionType: "DO_NOTHING" });
     await prisma.ruleSet.update({ where: { id: ruleSet.id }, data: { discordNotifyOnAction: true } });
@@ -278,5 +285,6 @@ describe("POST /api/lifecycle/actions/execute — extra paths", () => {
     setMockSession({ isLoggedIn: true, userId: user.id });
 
     expect((await expectJson<{ failed: number }>(await exec({ ruleSetId: ruleSet.id, mediaItemIds: [item.id] }), 200)).failed).toBe(1);
+    expect(mockSendDiscord).toHaveBeenCalledTimes(1);
   });
 });

@@ -204,7 +204,8 @@ describe("Lifecycle Exceptions API", () => {
       setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(POST, { method: "POST", body: {} });
-      await expectJson(response, 400);
+      const body = await expectJson<{ error: string }>(response, 400);
+      expect(body.error).toBe("Validation failed");
     });
 
     it("returns 404 when media item does not belong to user", async () => {
@@ -213,7 +214,8 @@ describe("Lifecycle Exceptions API", () => {
 
       setMockSession({ userId: user1.id, isLoggedIn: true });
       const response = await callRoute(POST, { method: "POST", body: { mediaItemId: item2.id } });
-      await expectJson(response, 404);
+      expect((await expectJson<{ error: string }>(response, 404)).error).toBe("Media item not found");
+      expect(await prisma.lifecycleException.count()).toBe(0);
     });
 
     it("creates exception with valid data", async () => {
@@ -225,14 +227,13 @@ describe("Lifecycle Exceptions API", () => {
         body: { mediaItemId: mediaItem.id, reason: "User favorite" },
       });
       const body = await expectJson<{ exception: { id: string; reason: string } }>(response, 201);
-      expect(body.exception.id).toBeDefined();
       expect(body.exception.reason).toBe("User favorite");
 
       // Verify in DB
       const dbException = await prisma.lifecycleException.findUnique({
         where: { userId_mediaItemId: { userId: user.id, mediaItemId: mediaItem.id } },
       });
-      expect(dbException).not.toBeNull();
+      expect(dbException).toMatchObject({ id: body.exception.id, reason: "User favorite" });
     });
 
     it("upserts on duplicate (updates reason)", async () => {
@@ -240,7 +241,7 @@ describe("Lifecycle Exceptions API", () => {
       setMockSession({ userId: user.id, isLoggedIn: true });
 
       // First create
-      await callRoute(POST, { method: "POST", body: { mediaItemId: mediaItem.id, reason: "Original" } });
+      await expectJson(await callRoute(POST, { method: "POST", body: { mediaItemId: mediaItem.id, reason: "Original" } }), 201);
 
       // Upsert with new reason
       const response = await callRoute(POST, { method: "POST", body: { mediaItemId: mediaItem.id, reason: "Updated" } });
@@ -260,7 +261,7 @@ describe("Lifecycle Exceptions API", () => {
       await createTestRuleMatch(ruleSet.id, mediaItem.id);
 
       setMockSession({ userId: user.id, isLoggedIn: true });
-      await callRoute(POST, { method: "POST", body: { mediaItemId: mediaItem.id } });
+      await expectJson(await callRoute(POST, { method: "POST", body: { mediaItemId: mediaItem.id } }), 201);
 
       const matches = await prisma.ruleMatch.findMany({
         where: { mediaItemId: mediaItem.id },
@@ -277,14 +278,14 @@ describe("Lifecycle Exceptions API", () => {
           userId: user.id,
           mediaItemId: mediaItem.id,
           ruleSetId: ruleSet.id,
-          actionType: "DELETE",
+          actionType: "DELETE_RADARR",
           status: "PENDING",
           scheduledFor: new Date(Date.now() + 86400000),
         },
       });
 
       setMockSession({ userId: user.id, isLoggedIn: true });
-      await callRoute(POST, { method: "POST", body: { mediaItemId: mediaItem.id } });
+      await expectJson(await callRoute(POST, { method: "POST", body: { mediaItemId: mediaItem.id } }), 201);
 
       const action = await prisma.lifecycleAction.findFirst({
         where: { mediaItemId: mediaItem.id, userId: user.id },
@@ -324,7 +325,7 @@ describe("Lifecycle Exceptions API", () => {
       }
 
       setMockSession({ userId: user.id, isLoggedIn: true });
-      await callRoute(POST, { method: "POST", body: { mediaItemId: mediaItem.id } });
+      await expectJson(await callRoute(POST, { method: "POST", body: { mediaItemId: mediaItem.id } }), 201);
 
       const matches = await prisma.ruleMatch.findMany({ where: { ruleSetId: ruleSet.id } });
       expect(matches.map((m) => m.mediaItemId)).toEqual([unrelated.id]);
@@ -362,7 +363,7 @@ describe("Lifecycle Exceptions API", () => {
       });
 
       setMockSession({ userId: user.id, isLoggedIn: true });
-      await callRoute(POST, { method: "POST", body: { mediaItemId: b7.id } });
+      await expectJson(await callRoute(POST, { method: "POST", body: { mediaItemId: b7.id } }), 201);
 
       expect(await prisma.ruleMatch.count({ where: { ruleSetId: { in: [r1.id, r2.id] } } })).toBe(2);
       expect(await prisma.lifecycleAction.findUnique({ where: { id: action.id } })).not.toBeNull();
@@ -400,7 +401,7 @@ describe("Lifecycle Exceptions API", () => {
       }
 
       setMockSession({ userId: user.id, isLoggedIn: true });
-      await callRoute(POST, { method: "POST", body: { mediaItemId: b7.id } });
+      await expectJson(await callRoute(POST, { method: "POST", body: { mediaItemId: b7.id } }), 201);
 
       const left = await prisma.ruleMatch.findMany({ where: { ruleSetId: { in: [grouped.id, perEpisode.id] } } });
       expect(left.map((m) => [m.ruleSetId, m.mediaItemId]).sort()).toEqual(
@@ -429,7 +430,7 @@ describe("Lifecycle Exceptions API", () => {
       });
 
       setMockSession({ userId: user.id, isLoggedIn: true });
-      await callRoute(POST, { method: "POST", body: { mediaItemId: mediaItem.id } });
+      await expectJson(await callRoute(POST, { method: "POST", body: { mediaItemId: mediaItem.id } }), 201);
 
       const calls = mockRemoveItemFromCollections.mock.calls.map((c) => [c[3], c[5]]);
       expect(calls).toEqual(
@@ -488,7 +489,7 @@ describe("Lifecycle Exceptions API", () => {
           userId: user.id,
           mediaItemId: mediaItem.id,
           ruleSetId: ruleSet.id,
-          actionType: "DELETE",
+          actionType: "DELETE_RADARR",
           status: "COMPLETED",
           scheduledFor: new Date(),
           executedAt: new Date(),
@@ -496,7 +497,7 @@ describe("Lifecycle Exceptions API", () => {
       });
 
       setMockSession({ userId: user.id, isLoggedIn: true });
-      await callRoute(POST, { method: "POST", body: { mediaItemId: mediaItem.id } });
+      await expectJson(await callRoute(POST, { method: "POST", body: { mediaItemId: mediaItem.id } }), 201);
 
       const action = await prisma.lifecycleAction.findFirst({
         where: { mediaItemId: mediaItem.id, userId: user.id },
@@ -583,7 +584,7 @@ describe("Lifecycle Exceptions API", () => {
       const body = await expectJson<{ updated: number }>(response, 200);
       expect(body.updated).toBe(2);
       const rows = await prisma.lifecycleException.findMany({ where: { id: { in: realIds } } });
-      expect(rows.every((r) => r.reason === "new reason")).toBe(true);
+      expect(rows.map((r) => r.reason)).toEqual(["new reason", "new reason"]);
     });
 
     it("removes every exception of a row larger than a thousand ids", async () => {

@@ -30,7 +30,13 @@ vi.mock("@/lib/cache/memory-cache", () => {
     invalidatePrefix: () => {},
     clear: () => {},
   };
-  return { MemoryCache: vi.fn(() => noopCache), appCache: noopCache };
+  return {
+    // A constructor mock needs `function`: Vitest 4 cannot `new` an arrow.
+    MemoryCache: vi.fn(function () {
+      return noopCache;
+    }),
+    appCache: noopCache,
+  };
 });
 
 import { GET as moviesGET } from "@/app/api/media/movies/route";
@@ -97,16 +103,23 @@ describe("library table sort headers vs the flat list routes", () => {
       await disconnectTestDb();
     });
 
-    // Title order A, B, C is the reverse of dynamic-range order, so a fallback
-    // to title cannot pass.
+    // Title order A, B, C is the reverse of dynamic-range (video) and
+    // container (audio) order, so a fallback to title cannot pass.
     const seed = async (type: "MOVIE" | "SERIES" | "MUSIC") => {
       const server = await createTestServer(userId);
       const library = await createTestLibrary(server.id, { type });
-      const rows = [
-        { title: "A", dynamicRange: "SDR", container: "mp4" },
-        { title: "B", dynamicRange: "HDR10", container: "mkv" },
-        { title: "C", dynamicRange: "Dolby Vision", container: "flac" },
-      ];
+      const rows =
+        type === "MUSIC"
+          ? [
+              { title: "A", container: "mp3" },
+              { title: "B", container: "m4a" },
+              { title: "C", container: "flac" },
+            ]
+          : [
+              { title: "A", dynamicRange: "SDR" },
+              { title: "B", dynamicRange: "HDR10" },
+              { title: "C", dynamicRange: "Dolby Vision" },
+            ];
       for (const [i, row] of rows.entries()) {
         await createTestMediaItem(library.id, {
           type,
@@ -141,7 +154,7 @@ describe("library table sort headers vs the flat list routes", () => {
         url: "/api/media/music?sortBy=container&sortOrder=asc&page=1&limit=100",
       });
       const body = await expectJson<{ items: { container: string }[] }>(res, 200);
-      expect(body.items.map((i) => i.container)).toEqual(["flac", "mkv", "mp4"]);
+      expect(body.items.map((i) => i.container)).toEqual(["flac", "m4a", "mp3"]);
     });
   });
 });

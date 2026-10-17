@@ -147,8 +147,9 @@ describe("GET /api/media/search", () => {
       url: "/api/media/search",
       searchParams: { q: "Breaking", type: "SERIES" },
     });
-    const body = await expectJson<{ items: { title: string }[] }>(response, 200);
-    expect(body.items).toHaveLength(2);
+    const body = await expectJson<{ items: { title: string; scope: string }[] }>(response, 200);
+    expect(body.items.map((i) => i.title).sort()).toEqual(["Breaking Point", "Pilot"]);
+    expect(body.items.every((i) => i.scope === "individual")).toBe(true);
   });
 
   it("returns each episode's season and episode numbers, so it can be named by show and SxxExx", async () => {
@@ -207,7 +208,7 @@ describe("GET /api/media/search", () => {
     expect(body.items[0].itemCount).toBe(1);
   });
 
-  it("deduplicates by parentTitle when seriesScope=true", async () => {
+  it("collapses a show's episodes into one result when seriesScope=true", async () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id);
     const lib = await createTestLibrary(server.id, { type: "SERIES" });
@@ -234,9 +235,9 @@ describe("GET /api/media/search", () => {
       url: "/api/media/search",
       searchParams: { q: "Breaking", type: "SERIES", seriesScope: "true" },
     });
-    const body = await expectJson<{ items: unknown[] }>(response, 200);
-    // Deduplicated to 1 result
-    expect(body.items).toHaveLength(1);
+    const body = await expectJson<{ items: { title: string; itemCount: number }[] }>(response, 200);
+    // One result for the show, counting both episodes.
+    expect(body.items.map((i) => [i.title, i.itemCount])).toEqual([["Breaking Bad", 2]]);
   });
 
   it("limits results to 10 for non-seriesScope", async () => {
@@ -332,7 +333,8 @@ describe("GET /api/media/search", () => {
         data: [1, 2].map((e) => ({
           libraryId, ratingKey: `us-${e}`, type: "SERIES" as const, title: `US ${e}`,
           parentTitle: "The Office", seriesKey: "tvdb:73244", seasonNumber: 1, episodeNumber: e,
-          dedupKey: `office-us-1-${e}`,
+          // As computeDedupKey writes it for an episode: TVDB id + SxxExx.
+          dedupKey: `series:tvdb:73244:s1e${e}`,
         })),
       });
     }
@@ -348,8 +350,11 @@ describe("GET /api/media/search", () => {
       await callRoute(GET, { url: "/api/media/search", searchParams: { q: "office", type: "SERIES", seriesScope: "true" } }),
       200,
     );
-    expect(body.items.map((i) => i.itemCount).sort()).toEqual([1, 2]);
-    expect(body.items.every((i) => i.title === "The Office")).toBe(true);
+    // Same title, so the series key orders them: US (tvdb:73244), then UK.
+    expect(body.items.map((i) => [i.title, i.itemCount])).toEqual([
+      ["The Office", 2],
+      ["The Office", 1],
+    ]);
   });
 
   it("returns every matching artist with its real track count when musicScope=true", async () => {

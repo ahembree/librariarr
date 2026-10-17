@@ -73,14 +73,18 @@ describe("GET /api/auth/check-setup", () => {
     expect(body.localAuthEnabled).toBe(false);
   });
 
-  it("returns localAuthEnabled false when no users exist (skips AppSettings query)", async () => {
+  it("offers no sign-in method while setup is required (there is no admin to read settings from)", async () => {
     const response = await callRoute(GET, {
       url: "/api/auth/check-setup",
     });
-    const body = await expectJson<{ setupRequired: boolean; localAuthEnabled: boolean }>(response, 200);
-    expect(body.setupRequired).toBe(true);
-    // localAuthEnabled defaults to false when setupRequired is true
-    expect(body.localAuthEnabled).toBe(false);
+    const body = await expectJson(response, 200);
+    expect(body).toEqual({
+      setupRequired: true,
+      localAuthEnabled: false,
+      plexLoginEnabled: false,
+      ssoEnabled: false,
+      ssoMode: "OIDC",
+    });
   });
 });
 
@@ -134,20 +138,10 @@ describe("GET /api/auth/check-setup — SSO and Plex toggles", () => {
   });
 
   it("shows Plex login when both plexId is set and the toggle is on", async () => {
-    await createTestUser();
-    const prisma = getTestPrisma();
-    const settings = await prisma.appSettings.findFirst();
-    if (settings) {
-      await prisma.appSettings.update({
-        where: { id: settings.id },
-        data: { plexLoginEnabled: true },
-      });
-    } else {
-      const u = await prisma.user.findFirst();
-      await prisma.appSettings.create({
-        data: { userId: u!.id, plexLoginEnabled: true },
-      });
-    }
+    const user = await createTestUser();
+    await getTestPrisma().appSettings.create({
+      data: { userId: user.id, plexLoginEnabled: true },
+    });
 
     const body = await expectJson<CheckSetupBody>(
       await callRoute(GET, { url: "/api/auth/check-setup" })
@@ -370,29 +364,29 @@ describe("GET /api/auth/check-setup — SSO and Plex toggles", () => {
     const previous = process.env.FORWARD_AUTH_SECRET;
     process.env.FORWARD_AUTH_SECRET = "proxy-secret";
     try {
-    const prisma = getTestPrisma();
-    const user = await prisma.user.create({
-      data: {
-        username: "alice",
-        ssoSubject: "alice",
-        ssoIssuer: "forward-auth",
-        ssoEnabled: true,
-      },
-    });
-    await prisma.appSettings.create({
-      data: {
-        userId: user.id,
-        ssoEnabled: true,
-        ssoMode: "FORWARD_AUTH",
-        forwardAuthUserHeader: "Remote-User",
-      },
-    });
+      const prisma = getTestPrisma();
+      const user = await prisma.user.create({
+        data: {
+          username: "alice",
+          ssoSubject: "alice",
+          ssoIssuer: "forward-auth",
+          ssoEnabled: true,
+        },
+      });
+      await prisma.appSettings.create({
+        data: {
+          userId: user.id,
+          ssoEnabled: true,
+          ssoMode: "FORWARD_AUTH",
+          forwardAuthUserHeader: "Remote-User",
+        },
+      });
 
-    const body = await expectJson<CheckSetupBody>(
-      await callRoute(GET, { url: "/api/auth/check-setup" })
-    );
-    expect(body.ssoEnabled).toBe(true);
-    expect(body.ssoMode).toBe("FORWARD_AUTH");
+      const body = await expectJson<CheckSetupBody>(
+        await callRoute(GET, { url: "/api/auth/check-setup" })
+      );
+      expect(body.ssoEnabled).toBe(true);
+      expect(body.ssoMode).toBe("FORWARD_AUTH");
     } finally {
       if (previous === undefined) delete process.env.FORWARD_AUTH_SECRET;
       else process.env.FORWARD_AUTH_SECRET = previous;

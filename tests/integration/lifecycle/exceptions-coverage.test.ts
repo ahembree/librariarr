@@ -86,7 +86,7 @@ describe("POST /api/lifecycle/exceptions — bulk scopes", () => {
     setMockSession({ isLoggedIn: true, userId: user.id });
 
     const res = await post({ mediaItemId: a1.id, scope: "artist", reason: "favourite" });
-    expect(res.status).toBeLessThan(300);
+    expect(await expectJson(res, 201)).toEqual({ count: 2, scope: "artist" });
 
     const rows = await prisma.lifecycleException.findMany({ select: { mediaItemId: true, reason: true } });
     expect(rows.map((r) => r.mediaItemId).sort()).toEqual([a1.id, a2.id].sort());
@@ -101,7 +101,7 @@ describe("POST /api/lifecycle/exceptions — bulk scopes", () => {
     const otherAlbum = await track("Three", "Radiohead", "Kid A");
     setMockSession({ isLoggedIn: true, userId: user.id });
 
-    expect((await post({ mediaItemId: a2.id, scope: "album" })).status).toBeLessThan(300);
+    expect(await expectJson(await post({ mediaItemId: a2.id, scope: "album" }), 201)).toEqual({ count: 2, scope: "album" });
 
     const ids = (await prisma.lifecycleException.findMany({ select: { mediaItemId: true } })).map((r) => r.mediaItemId);
     expect(ids.sort()).toEqual([a1.id, a2.id].sort());
@@ -123,7 +123,7 @@ describe("POST /api/lifecycle/exceptions — bulk scopes", () => {
     });
     setMockSession({ isLoggedIn: true, userId: user.id });
 
-    expect((await post({ mediaItemId: rep.id, scope: "artist" })).status).toBeLessThan(300);
+    expect(await expectJson(await post({ mediaItemId: rep.id, scope: "artist" }), 201)).toEqual({ count: 2, scope: "artist" });
 
     expect(await prisma.ruleMatch.count({ where: { ruleSetId: ruleSet.id } })).toBe(0);
     expect(await prisma.lifecycleAction.count({ where: { status: "PENDING" } })).toBe(0);
@@ -144,11 +144,13 @@ describe("POST /api/lifecycle/exceptions — bulk scopes", () => {
     mockRemoveItemFromCollections.mockRejectedValueOnce(new Error("plex down"));
     setMockSession({ isLoggedIn: true, userId: user.id });
 
-    expect((await post({ mediaItemId: ep.id, scope: "series" })).status).toBeLessThan(300);
+    expect(await expectJson(await post({ mediaItemId: ep.id, scope: "series" }), 201)).toEqual({ count: 1, scope: "series" });
 
     // Series scope resolves the show by its title.
     expect(mockRemoveItemFromCollections).toHaveBeenCalledWith(user.id, "SERIES", "Leaving", ep.ratingKey, "Lost", lib.id);
+    expect(mockRemoveItemFromCollections).toHaveBeenCalledTimes(1);
     expect(await prisma.lifecycleException.count()).toBe(1);
+    expect(await prisma.ruleMatch.count({ where: { ruleSetId: ruleSet.id } })).toBe(0);
   });
 });
 
@@ -161,8 +163,16 @@ describe("bulk DELETE / PATCH", () => {
   it("validate the body", async () => {
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id });
-    await expectJson(await callRoute(BULK_DELETE, { url: "/api/lifecycle/exceptions", method: "DELETE", body: { ids: [] } }), 400);
-    await expectJson(await callRoute(BULK_PATCH, { url: "/api/lifecycle/exceptions", method: "PATCH", body: { nope: true } }), 400);
+    const del = await expectJson<{ error: string }>(
+      await callRoute(BULK_DELETE, { url: "/api/lifecycle/exceptions", method: "DELETE", body: { ids: [] } }),
+      400,
+    );
+    expect(del.error).toBe("Validation failed");
+    const patch = await expectJson<{ error: string }>(
+      await callRoute(BULK_PATCH, { url: "/api/lifecycle/exceptions", method: "PATCH", body: { nope: true } }),
+      400,
+    );
+    expect(patch.error).toBe("Validation failed");
   });
 
   it("clears the reason when PATCH sends none", async () => {

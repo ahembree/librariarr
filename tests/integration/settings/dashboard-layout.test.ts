@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
-import { cleanDatabase, disconnectTestDb } from "../../setup/test-db";
+import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
 import { callRoute, expectJson, createTestUser } from "../../setup/test-helpers";
 
@@ -15,6 +15,10 @@ vi.mock("@/lib/logger", () => ({
 }));
 
 import { GET, PUT } from "@/app/api/settings/dashboard-layout/route";
+
+const prisma = getTestPrisma();
+const storedLayout = async (userId: string) =>
+  (await prisma.appSettings.findUnique({ where: { userId } }))?.dashboardLayout;
 
 // A valid layout must have main, movies, series, music arrays with valid card entries
 const VALID_LAYOUT = {
@@ -60,7 +64,7 @@ describe("GET /api/settings/dashboard-layout", () => {
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id});
 
-    await callRoute(PUT, { method: "PUT", body: { layout: VALID_LAYOUT } });
+    await prisma.appSettings.create({ data: { userId: user.id, dashboardLayout: VALID_LAYOUT } });
 
     const res = await callRoute(GET);
     const body = await expectJson<{ layout: typeof VALID_LAYOUT }>(res);
@@ -94,6 +98,7 @@ describe("PUT /api/settings/dashboard-layout", () => {
     const res = await callRoute(PUT, { method: "PUT", body: { layout: VALID_LAYOUT } });
     const body = await expectJson<{ layout: typeof VALID_LAYOUT }>(res);
     expect(body.layout).toEqual(VALID_LAYOUT);
+    expect(await storedLayout(user.id)).toEqual(VALID_LAYOUT);
   });
 
   it("saves an empty layout (all tabs empty)", async () => {
@@ -103,6 +108,7 @@ describe("PUT /api/settings/dashboard-layout", () => {
     const res = await callRoute(PUT, { method: "PUT", body: { layout: EMPTY_LAYOUT } });
     const body = await expectJson<{ layout: typeof EMPTY_LAYOUT }>(res);
     expect(body.layout).toEqual(EMPTY_LAYOUT);
+    expect(await storedLayout(user.id)).toEqual(EMPTY_LAYOUT);
   });
 
   it("returns 400 for invalid layout structure (missing tabs)", async () => {
@@ -113,7 +119,9 @@ describe("PUT /api/settings/dashboard-layout", () => {
       method: "PUT",
       body: { layout: { main: [] } }, // missing movies, series, music
     });
-    await expectJson(res, 400);
+    const body = await expectJson<{ error: string }>(res, 400);
+    expect(body.error).toBe("Invalid dashboard layout");
+    expect(await storedLayout(user.id)).toBeUndefined();
   });
 
   it("returns 400 for invalid card id in layout", async () => {
@@ -131,7 +139,9 @@ describe("PUT /api/settings/dashboard-layout", () => {
         },
       },
     });
-    await expectJson(res, 400);
+    const body = await expectJson<{ error: string }>(res, 400);
+    expect(body.error).toBe("Invalid dashboard layout");
+    expect(await storedLayout(user.id)).toBeUndefined();
   });
 
   it("returns 400 for card placed in disallowed tab", async () => {
@@ -150,7 +160,33 @@ describe("PUT /api/settings/dashboard-layout", () => {
         },
       },
     });
-    await expectJson(res, 400);
+    const body = await expectJson<{ error: string }>(res, 400);
+    expect(body.error).toBe("Invalid dashboard layout");
+    expect(await storedLayout(user.id)).toBeUndefined();
+  });
+
+  it("returns 400 for a layout over 10,000 characters", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id});
+
+    const res = await callRoute(PUT, {
+      method: "PUT",
+      body: { layout: { ...EMPTY_LAYOUT, padding: "x".repeat(10_000) } },
+    });
+    const body = await expectJson<{ error: string; details: string[] }>(res, 400);
+    expect(body.details).toEqual(["layout: Layout data exceeds maximum size"]);
+    expect(await storedLayout(user.id)).toBeUndefined();
+  });
+
+  it("returns 400 for a layout that is not an object", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id});
+
+    const res = await callRoute(PUT, { method: "PUT", body: { layout: "not-an-object" } });
+    const body = await expectJson<{ error: string; details: string[] }>(res, 400);
+    expect(body.details).toHaveLength(1);
+    expect(body.details[0]).toMatch(/^layout: /);
+    expect(await storedLayout(user.id)).toBeUndefined();
   });
 
   it("returns 400 for missing layout field", async () => {
@@ -158,6 +194,8 @@ describe("PUT /api/settings/dashboard-layout", () => {
     setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(PUT, { method: "PUT", body: {} });
-    await expectJson(res, 400);
+    const body = await expectJson<{ error: string }>(res, 400);
+    expect(body.error).toBe("Validation failed");
+    expect(await storedLayout(user.id)).toBeUndefined();
   });
 });

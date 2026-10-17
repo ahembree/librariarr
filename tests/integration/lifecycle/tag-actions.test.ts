@@ -64,7 +64,8 @@ vi.mock("@/lib/lifecycle/actions", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/lifecycle/actions")>();
   return {
     ...actual,
-    executeAction: vi.fn().mockResolvedValue(undefined),
+    // The real one resolves to an ActionOutcome.
+    executeAction: vi.fn().mockResolvedValue({}),
     cleanupArrTags: vi.fn().mockResolvedValue(undefined),
   };
 });
@@ -325,7 +326,6 @@ describe("Lifecycle Tag Actions", () => {
         type: "MOVIE",
         actionType: "DO_NOTHING",
         addArrTags: ["stale"],
-        arrInstanceId: undefined as unknown as string,
       });
 
       setMockSession({ isLoggedIn: true, userId: user.id });
@@ -338,6 +338,9 @@ describe("Lifecycle Tag Actions", () => {
 
       const body = await expectJson<{ error: string }>(response, 400);
       expect(body.error).toContain("Arr instance");
+      const { executeAction } = await import("@/lib/lifecycle/actions");
+      expect(executeAction).not.toHaveBeenCalled();
+      expect(await getTestPrisma().lifecycleAction.count()).toBe(0);
     });
 
     it("allows DO_NOTHING without arrInstanceId when no tag operations", async () => {
@@ -398,14 +401,18 @@ describe("Lifecycle Tag Actions", () => {
 
       setMockSession({ isLoggedIn: true, userId: user.id });
 
-      await callRoute(executePost, {
-        url: "/api/lifecycle/actions/execute",
-        method: "POST",
-        body: {
-          ruleSetId: ruleSet.id,
-          mediaItemIds: [item.id],
-        },
-      });
+      const body = await expectJson<{ executed: number; failed: number }>(
+        await callRoute(executePost, {
+          url: "/api/lifecycle/actions/execute",
+          method: "POST",
+          body: {
+            ruleSetId: ruleSet.id,
+            mediaItemIds: [item.id],
+          },
+        }),
+        200,
+      );
+      expect(body).toMatchObject({ executed: 1, failed: 0 });
 
       expect(executeAction).toHaveBeenCalledOnce();
       const callArg = (executeAction as ReturnType<typeof vi.fn>).mock.calls[0][0];
@@ -436,14 +443,18 @@ describe("Lifecycle Tag Actions", () => {
 
       setMockSession({ isLoggedIn: true, userId: user.id });
 
-      await callRoute(executePost, {
-        url: "/api/lifecycle/actions/execute",
-        method: "POST",
-        body: {
-          ruleSetId: ruleSet.id,
-          mediaItemIds: [item.id],
-        },
-      });
+      const body = await expectJson<{ executed: number }>(
+        await callRoute(executePost, {
+          url: "/api/lifecycle/actions/execute",
+          method: "POST",
+          body: {
+            ruleSetId: ruleSet.id,
+            mediaItemIds: [item.id],
+          },
+        }),
+        200,
+      );
+      expect(body.executed).toBe(1);
 
       const prisma = getTestPrisma();
       const actions = await prisma.lifecycleAction.findMany({
@@ -549,16 +560,20 @@ describe("Lifecycle Tag Actions", () => {
       });
       setMockSession({ isLoggedIn: true, userId: user.id });
 
-      await callRouteWithParams(
-        deleteRuleSet,
-        { id: ruleSet.id },
-        {
-          url: `/api/lifecycle/rules/${ruleSet.id}`,
-          method: "DELETE",
-        }
+      await expectJson(
+        await callRouteWithParams(
+          deleteRuleSet,
+          { id: ruleSet.id },
+          {
+            url: `/api/lifecycle/rules/${ruleSet.id}`,
+            method: "DELETE",
+          }
+        ),
+        200,
       );
 
       expect(cleanupArrTags).not.toHaveBeenCalled();
+      expect(await getTestPrisma().ruleSet.findUnique({ where: { id: ruleSet.id } })).toBeNull();
     });
 
     it("does not call cleanupArrTags when rule has no addArrTags", async () => {
@@ -572,17 +587,21 @@ describe("Lifecycle Tag Actions", () => {
       });
       setMockSession({ isLoggedIn: true, userId: user.id });
 
-      await callRouteWithParams(
-        deleteRuleSet,
-        { id: ruleSet.id },
-        {
-          url: `/api/lifecycle/rules/${ruleSet.id}?cleanupTags=true`,
-          method: "DELETE",
-          searchParams: { cleanupTags: "true" },
-        }
+      await expectJson(
+        await callRouteWithParams(
+          deleteRuleSet,
+          { id: ruleSet.id },
+          {
+            url: `/api/lifecycle/rules/${ruleSet.id}?cleanupTags=true`,
+            method: "DELETE",
+            searchParams: { cleanupTags: "true" },
+          }
+        ),
+        200,
       );
 
       expect(cleanupArrTags).not.toHaveBeenCalled();
+      expect(await getTestPrisma().ruleSet.findUnique({ where: { id: ruleSet.id } })).toBeNull();
     });
 
     it("still deletes rule set when cleanupArrTags fails", async () => {

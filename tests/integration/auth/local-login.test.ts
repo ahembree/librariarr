@@ -51,6 +51,9 @@ describe("POST /api/auth/local/login", () => {
     await cleanDatabase();
     clearMockSession();
     vi.clearAllMocks();
+    // clearAllMocks keeps implementations: a test's `mockResolvedValue(true)`
+    // would otherwise answer every compare in the tests after it.
+    mockCompare.mockReset().mockResolvedValue(false);
     // Default: not rate limited
     mockPeek.mockReturnValue(null);
     mockReserve.mockReturnValue({ refused: null, succeeded: mockSucceeded });
@@ -66,8 +69,12 @@ describe("POST /api/auth/local/login", () => {
       method: "POST",
       body: {},
     });
-    const body = await expectJson<{ error: string }>(response, 400);
+    const body = await expectJson<{ error: string; details: string[] }>(response, 400);
     expect(body.error).toBe("Validation failed");
+    expect(body.details).toEqual([
+      "username: Invalid input: expected string, received undefined",
+      "password: Invalid input: expected string, received undefined",
+    ]);
   });
 
   it("returns 400 on empty username", async () => {
@@ -76,11 +83,17 @@ describe("POST /api/auth/local/login", () => {
       method: "POST",
       body: { username: "", password: "somepassword" },
     });
-    const body = await expectJson<{ error: string }>(response, 400);
+    const body = await expectJson<{ error: string; details: string[] }>(response, 400);
     expect(body.error).toBe("Validation failed");
+    expect(body.details).toEqual(["username: Username is required"]);
   });
 
   it("returns 401 when user is not found", async () => {
+    // Local login on, or the toggle gate answers before the lookup is reached.
+    await getTestPrisma().appSettings.create({
+      data: { userId: (await createTestUser()).id, localAuthEnabled: true },
+    });
+
     const response = await callRoute(POST, {
       url: "/api/auth/local/login",
       method: "POST",
@@ -108,8 +121,12 @@ describe("POST /api/auth/local/login", () => {
   });
 
   it("returns 401 when user has no password hash", async () => {
-    // Create a user without a passwordHash (Plex-only user)
-    await createTestUser({ username: "plexuser" });
+    // A local username but no passwordHash (a Plex/SSO-only account), with
+    // local login on so the lookup is what answers.
+    const prisma = getTestPrisma();
+    const user = await createTestUser({ username: "plexuser" });
+    await prisma.user.update({ where: { id: user.id }, data: { localUsername: "plexuser" } });
+    await prisma.appSettings.create({ data: { userId: user.id, localAuthEnabled: true } });
 
     const response = await callRoute(POST, {
       url: "/api/auth/local/login",
@@ -118,6 +135,11 @@ describe("POST /api/auth/local/login", () => {
     });
     const body = await expectJson<{ error: string }>(response, 401);
     expect(body.error).toBe("Invalid username or password");
+    // Answered like an unknown name: the dummy compare, never a sign-in.
+    expect(mockCompare).toHaveBeenCalledTimes(1);
+    expect(mockCompare).toHaveBeenCalledWith("password123", expect.stringMatching(/^\$2[aby]\$12\$/));
+    expect(mockSucceeded).not.toHaveBeenCalled();
+    expect(getMockSession().isLoggedIn).toBe(false);
   });
 
   it("returns 401 when password does not match", async () => {
@@ -183,9 +205,11 @@ describe("POST /api/auth/local/login", () => {
     expect(mockCompare).toHaveBeenCalledWith("correctpassword", "hashed_password");
     // A sign-in that succeeded is given back to the budget.
     expect(mockSucceeded).toHaveBeenCalledTimes(1);
+    const session = getMockSession();
+    expect(session).toMatchObject({ userId: user.id, isLoggedIn: true, sessionVersion: user.sessionVersion });
     // The cookie carries the identity only — never the Plex token (it stays
     // in the User row, see `SessionData`).
-    expect("plexToken" in getMockSession()).toBe(false);
+    expect("plexToken" in session).toBe(false);
   });
 
   it("handles case-insensitive username lookup", async () => {
@@ -211,6 +235,7 @@ describe("POST /api/auth/local/login", () => {
     });
     const body = await expectJson<{ authenticated: boolean }>(response, 200);
     expect(body.authenticated).toBe(true);
+    expect(getMockSession().userId).toBe(user.id);
   });
 
   it("returns 429 when rate limited, before reading the body", async () => {
@@ -221,10 +246,12 @@ describe("POST /api/auth/local/login", () => {
       )
     );
 
+    // A body that would fail validation: answered 429, not 400, so the
+    // limiter is consulted before the body is read.
     const response = await callRoute(POST, {
       url: "/api/auth/local/login",
       method: "POST",
-      body: { username: "anyuser", password: "anypassword" },
+      body: {},
     });
     const body = await expectJson<{ error: string }>(response, 429);
     expect(body.error).toBe("Too many attempts. Try again later.");
@@ -247,7 +274,8 @@ describe("POST /api/auth/local/login", () => {
   });
 
   it("does not reserve an attempt for a malformed body", async () => {
-    await callRoute(POST, { url: "/api/auth/local/login", method: "POST", body: {} });
+    const response = await callRoute(POST, { url: "/api/auth/local/login", method: "POST", body: {} });
+    await expectJson(response, 400);
     expect(mockReserve).not.toHaveBeenCalled();
   });
 

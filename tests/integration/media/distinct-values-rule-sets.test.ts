@@ -80,7 +80,15 @@ describe("distinct values after rule set changes", () => {
         body: {
           name: "Unwatched",
           type: "MOVIE",
-          rules: [{ id: "r1", field: "playCount", operator: "equals", value: 0, condition: "AND" }],
+          // The editor's shape: a top-level condition group with string values.
+          rules: [
+            {
+              id: "g1",
+              condition: "AND",
+              rules: [{ id: "r1", field: "playCount", operator: "equals", value: "0", condition: "AND" }],
+              groups: [],
+            },
+          ],
           serverIds: [server.id],
         },
       }),

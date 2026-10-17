@@ -26,7 +26,8 @@ describe("POST /api/lifecycle/stats/reset", () => {
 
   it("returns 401 without auth and writes nothing", async () => {
     const res = await POST();
-    await expectJson(res, 401);
+    const body = await expectJson<{ error: string }>(res, 401);
+    expect(body.error).toBe("Unauthorized");
     expect(await getTestPrisma().appSettings.count()).toBe(0);
   });
 
@@ -58,10 +59,13 @@ describe("POST /api/lifecycle/stats/reset", () => {
     });
     setMockSession({ userId: user.id, isLoggedIn: true });
 
+    const before = Date.now();
     const body = await expectJson<{ resetAt: string }>(await POST(), 200);
+    const after = Date.now();
     const row = await prisma.appSettings.findUnique({ where: { userId: user.id } });
     expect(row?.deletionStatsResetAt?.toISOString()).toBe(body.resetAt);
-    expect(row!.deletionStatsResetAt!.getTime()).toBeGreaterThan(Date.parse("2020-01-02"));
+    expect(row!.deletionStatsResetAt!.getTime()).toBeGreaterThanOrEqual(before);
+    expect(row!.deletionStatsResetAt!.getTime()).toBeLessThanOrEqual(after);
     expect(row?.maxAutoDeleteItems).toBe(42);
   });
 });

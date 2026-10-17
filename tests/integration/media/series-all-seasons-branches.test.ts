@@ -126,8 +126,8 @@ describe("GET /api/media/series/all-seasons — sorts, date filters, multi-serve
       type: "SERIES", title: "p1", parentTitle: "Shared", seasonNumber: 1, episodeNumber: 1,
       seriesKey: "tvdb:1",
     });
-    await prisma.mediaItem.update({ where: { id: a.id }, data: { dedupKey: "k1", dedupCanonical: true } });
-    await prisma.mediaItem.update({ where: { id: b.id }, data: { dedupKey: "k1", dedupCanonical: false } });
+    await prisma.mediaItem.update({ where: { id: a.id }, data: { dedupKey: "series:tvdb:1:s1e1", dedupCanonical: true } });
+    await prisma.mediaItem.update({ where: { id: b.id }, data: { dedupKey: "series:tvdb:1:s1e1", dedupCanonical: false } });
 
     const list = await seasons();
     expect(list).toHaveLength(1);

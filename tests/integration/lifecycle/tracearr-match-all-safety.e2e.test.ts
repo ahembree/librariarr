@@ -47,6 +47,8 @@
  */
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
+import { setMockSession, clearMockSession } from "../../setup/mock-session";
+import { callRoute, expectJson } from "../../setup/test-helpers";
 import type { LifecycleRuleGroup } from "@/lib/rules/types";
 
 vi.mock("@/lib/db", async () => {
@@ -68,6 +70,13 @@ const {
   invalidateServersWithoutWatchHistory,
   markWatchHistoryEstablished,
 } = await import("@/lib/media/watch-evidence");
+const { DELETE: purgeDelete } = await import("@/app/api/media/purge/route");
+
+/** Tracearr's server ids are UUIDs. */
+const TRACEARR_SERVER = "3f6c2b8e-9d41-4a7e-b5c0-1e2d3f4a5b6c";
+const TRACEARR_SERVER_NEW = "c71a0e94-5b2d-4f38-8e61-9a4b3c2d1e0f";
+
+let fixtureSeq = 0;
 
 const LIBRARY_SIZE = 6;
 
@@ -86,8 +95,9 @@ interface Fixture {
  */
 async function seedWatchedLibrary(): Promise<Fixture> {
   const prisma = getTestPrisma();
+  const n = ++fixtureSeq;
   const user = await prisma.user.create({
-    data: { username: `audit-${Math.random().toString(36).slice(2)}`, passwordHash: "x" },
+    data: { username: `audit-${n}`, passwordHash: "x" },
   });
   const server = await prisma.mediaServer.create({
     data: {
@@ -96,8 +106,8 @@ async function seedWatchedLibrary(): Promise<Fixture> {
       type: "PLEX",
       url: "http://plex:32400",
       accessToken: "x",
-      machineId: `audit-${Math.random().toString(36).slice(2)}`,
-      tracearrServerId: "trc-server",
+      machineId: `audit-${n}`,
+      tracearrServerId: TRACEARR_SERVER,
       tracearrBackfillComplete: true,
       // Established: a sync has determined what was played here. Without this
       // the server starts in the schema's own default — never synced — and the
@@ -174,6 +184,7 @@ async function matchCount(fx: Fixture, rules: LifecycleRuleGroup[]): Promise<num
 describe("Tracearr criteria cannot select the whole library", () => {
   beforeEach(async () => {
     await cleanDatabase();
+    clearMockSession();
   });
 
   afterAll(async () => {
@@ -192,7 +203,7 @@ describe("Tracearr criteria cannot select the whole library", () => {
     }> = [
       {
         name: "native → Tracearr: rows wiped, import not started",
-        apply: (fx) => switchWatchHistorySource(fx, { tracearrServerId: "trc-new" }),
+        apply: (fx) => switchWatchHistorySource(fx, { tracearrServerId: TRACEARR_SERVER_NEW }),
       },
       {
         name: "Tracearr → native (UNLINK): mapping nulled at the emptiest moment",
@@ -321,7 +332,7 @@ describe("Tracearr criteria cannot select the whole library", () => {
       // Over-refusing is its own hazard: it would silently stop lifecycle
       // management on servers whose history is complete and correct.
       const importing = await seedWatchedLibrary();
-      await switchWatchHistorySource(importing, { tracearrServerId: "trc-new" });
+      await switchWatchHistorySource(importing, { tracearrServerId: TRACEARR_SERVER_NEW });
 
       const healthy = await getTestPrisma().mediaServer.create({
         data: {
@@ -364,7 +375,7 @@ describe("Tracearr criteria cannot select the whole library", () => {
       });
       expect(before.every((i) => i.playCount > 0 && i.lastPlayedAt !== null)).toBe(true);
 
-      await switchWatchHistorySource(fx, { tracearrServerId: "trc-new" });
+      await switchWatchHistorySource(fx, { tracearrServerId: TRACEARR_SERVER_NEW });
       // The reconcile that ends every sync, now running against nothing.
       await reconcileWatchStateFromHistory(fx.serverId);
 
@@ -380,7 +391,7 @@ describe("Tracearr criteria cannot select the whole library", () => {
       // The six transitive fields, as the negative forms that would sweep the
       // library. All are evaluated AFTER the wipe.
       const fx = await seedWatchedLibrary();
-      await switchWatchHistorySource(fx, { tracearrServerId: "trc-new" });
+      await switchWatchHistorySource(fx, { tracearrServerId: TRACEARR_SERVER_NEW });
       await reconcileWatchStateFromHistory(fx.serverId);
 
       expect(await matchCount(fx, group("playCount", "equals", 0))).toBe(0);
@@ -414,10 +425,21 @@ describe("Tracearr criteria cannot select the whole library", () => {
 
       const rows = await prisma.mediaItem.findMany({
         where: { id: { in: fx.itemIds } },
-        select: { playCount: true, lastPlayedAt: true },
+        select: { id: true, playCount: true, lastPlayedAt: true },
       });
-      expect(rows.every((r) => r.playCount > 0)).toBe(true);
-      expect(rows.every((r) => r.lastPlayedAt !== null)).toBe(true);
+      const byId = new Map(rows.map((r) => [r.id, r]));
+      // The one item the walk reached moves forward to its newer play...
+      expect(byId.get(fx.itemIds[0])).toMatchObject({
+        playCount: 1,
+        lastPlayedAt: new Date("2025-08-01T00:00:00Z"),
+      });
+      // ...and every other item keeps exactly what it had.
+      for (const id of fx.itemIds.slice(1)) {
+        expect(byId.get(id)).toMatchObject({
+          playCount: 1,
+          lastPlayedAt: new Date("2025-06-01T00:00:00Z"),
+        });
+      }
     });
 
     it("never counts an abandoned Tracearr play as a watch", async () => {
@@ -461,7 +483,7 @@ describe("Tracearr criteria cannot select the whole library", () => {
       // A disabled server's items are not synced and its history is not read,
       // so it must not hold the whole install's rules hostage.
       const fx = await seedWatchedLibrary();
-      await switchWatchHistorySource(fx, { tracearrServerId: "trc-new" });
+      await switchWatchHistorySource(fx, { tracearrServerId: TRACEARR_SERVER_NEW });
       await getTestPrisma().mediaServer.update({
         where: { id: fx.serverId },
         data: { enabled: false },
@@ -505,7 +527,7 @@ describe("Tracearr criteria cannot select the whole library", () => {
       // An empty/absent `serverIds` means "all", which is also a rule set's own
       // default — it must stay broad rather than silently matching nothing.
       const fx = await seedWatchedLibrary();
-      await switchWatchHistorySource(fx, { tracearrServerId: "trc-new" });
+      await switchWatchHistorySource(fx, { tracearrServerId: TRACEARR_SERVER_NEW });
 
       const all = await checkWatchHistoryCompleteness(fx.userId);
       expect(all.complete).toBe(false);
@@ -524,18 +546,31 @@ describe("Tracearr criteria cannot select the whole library", () => {
   // detection run reads it as "nobody watched anything".
   describe("every bulk-destruction path marks the server un-evidenced", () => {
     it("a library purge does", async () => {
+      // The real route, so a purge that stopped withdrawing the marker fails here.
       const fx = await seedWatchedLibrary();
       const prisma = getTestPrisma();
+      setMockSession({ isLoggedIn: true, userId: fx.userId });
 
-      await prisma.mediaItem.deleteMany({ where: { libraryId: fx.libraryId } });
-      await invalidateWatchHistoryEvidence([fx.serverId]);
+      await expectJson(
+        await callRoute(purgeDelete, {
+          url: "/api/media/purge",
+          method: "DELETE",
+          searchParams: { libraryId: fx.libraryId },
+        }),
+        200,
+      );
 
+      expect(await prisma.mediaItem.count({ where: { libraryId: fx.libraryId } })).toBe(0);
+      expect(await prisma.watchHistory.count({ where: { mediaServerId: fx.serverId } })).toBe(0);
       await expect(
         checkWatchHistoryCompleteness(fx.userId, [fx.serverId]),
       ).resolves.toMatchObject({ complete: false });
+      // Tracearr still holds those plays: the archive walk starts over.
+      const server = await prisma.mediaServer.findUniqueOrThrow({ where: { id: fx.serverId } });
+      expect(server.tracearrBackfillComplete).toBe(false);
     });
 
-    it("a restore does, discovered from the rows rather than the operation", async () => {
+    it("the restore's sweep does, discovered from the rows rather than the operation", async () => {
       // Restore truncates everything and re-inserts servers from the file, so
       // the affected ids are not knowable up front — the marker is derived from
       // which servers end up holding no plays.
@@ -561,25 +596,24 @@ describe("Tracearr criteria cannot select the whole library", () => {
       ).resolves.toEqual({ complete: true });
     });
 
-    it("keeps the original timestamp when a server is marked twice", async () => {
-      // Idempotent on purpose: a second bulk operation must not slide the
-      // marker forward, or "how long has this been paused" becomes unreadable.
+    it("is idempotent: a second withdrawal finds nothing left to change", async () => {
+      // The marker is positive (when history was last established), so a
+      // withdrawal clears it; a second bulk operation touches only servers
+      // that still have one.
       const fx = await seedWatchedLibrary();
       const prisma = getTestPrisma();
 
-      await invalidateWatchHistoryEvidence([fx.serverId]);
+      expect(await invalidateWatchHistoryEvidence([fx.serverId])).toBe(1);
       const first = await prisma.mediaServer.findUniqueOrThrow({
         where: { id: fx.serverId },
         select: { watchHistorySyncedAt: true },
       });
+      expect(first.watchHistorySyncedAt).toBeNull();
 
-      await invalidateWatchHistoryEvidence([fx.serverId]);
-      const second = await prisma.mediaServer.findUniqueOrThrow({
-        where: { id: fx.serverId },
-        select: { watchHistorySyncedAt: true },
-      });
-
-      expect(second.watchHistorySyncedAt).toEqual(first.watchHistorySyncedAt);
+      expect(await invalidateWatchHistoryEvidence([fx.serverId])).toBe(0);
+      await expect(
+        checkWatchHistoryCompleteness(fx.userId, [fx.serverId]),
+      ).resolves.toMatchObject({ complete: false });
     });
   });
 

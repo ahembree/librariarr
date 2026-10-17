@@ -69,7 +69,7 @@ describe("scheduleActionsForRuleSet — re-schedule after a prior action (real D
     await prisma.lifecycleAction.create({
       data: {
         userId: user.id, mediaItemId: item.id, ruleSetId: ruleSet.id,
-        actionType: "SEARCH_RADARR", status: "COMPLETED",
+        actionType: "SEARCH_RADARR", status: "COMPLETED", arrInstanceId: "arr1",
         scheduledFor: new Date("2020-01-01T00:00:00Z"), executedAt: new Date("2020-01-02T00:00:00Z"),
       },
     });
@@ -81,6 +81,26 @@ describe("scheduleActionsForRuleSet — re-schedule after a prior action (real D
     expect(pending).toHaveLength(1);
     expect(pending[0].actionType).toBe("DELETE_RADARR");
     expect(pending[0].mediaItemId).toBe(item.id);
+  });
+
+  it("schedules a NEW non-destructive action type after another one completed (Search → Unmonitor)", async () => {
+    // Same instance and tags: only the type differs, and the new type has
+    // never run on the item. (A DELETE is re-schedulable regardless, so the
+    // test above cannot show the type taking part in the comparison.)
+    const { prisma, user, item, ruleSet } = await setup("UNMONITOR_RADARR");
+    await prisma.lifecycleAction.create({
+      data: {
+        userId: user.id, mediaItemId: item.id, ruleSetId: ruleSet.id,
+        actionType: "SEARCH_RADARR", status: "COMPLETED", arrInstanceId: "arr1",
+        scheduledFor: new Date("2020-01-01T00:00:00Z"), executedAt: new Date("2020-01-02T00:00:00Z"),
+      },
+    });
+    await prisma.ruleMatch.create({ data: { ruleSetId: ruleSet.id, mediaItemId: item.id, itemData: {} } });
+
+    await scheduleActionsForRuleSet(config(ruleSet.id, user.id, "UNMONITOR_RADARR"), [{ id: item.id, title: "Movie" }], new Map());
+
+    const pending = await prisma.lifecycleAction.findMany({ where: { ruleSetId: ruleSet.id, status: "PENDING" } });
+    expect(pending.map((a) => [a.actionType, a.mediaItemId])).toEqual([["UNMONITOR_RADARR", item.id]]);
   });
 
   it("does NOT schedule a second action of the SAME non-destructive type (loop prevention)", async () => {
@@ -109,7 +129,8 @@ describe("scheduleActionsForRuleSet — re-schedule after a prior action (real D
       data: {
         userId: user.id, mediaItemId: item.id, ruleSetId: ruleSet.id,
         actionType: "DO_NOTHING", status: "COMPLETED",
-        addArrTags: ["keep"], removeArrTags: [],
+        // Same instance as the new config, so only the tag set differs.
+        addArrTags: ["keep"], removeArrTags: [], arrInstanceId: "arr1",
         scheduledFor: new Date("2020-01-01T00:00:00Z"), executedAt: new Date("2020-01-02T00:00:00Z"),
       },
     });

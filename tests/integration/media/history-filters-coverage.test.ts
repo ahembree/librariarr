@@ -123,11 +123,11 @@ describe("GET /api/media/history — filter and sort branches", () => {
 
     expect(titles(await get({ deviceName: "Phone" }))).toEqual(["B"]);
     expect(titles(await get({ deviceName: "Phone|Laptop" }))).toEqual(["B", "C"]);
-    expect(titles(await get({ deviceName: "|" }))).toHaveLength(3);
+    expect(titles(await get({ deviceName: "|" }))).toEqual(["A", "B", "C"]);
 
     expect(titles(await get({ platform: "Web" }))).toEqual(["C"]);
     expect(titles(await get({ platform: "Roku|iOS" }))).toEqual(["A", "B"]);
-    expect(titles(await get({ platform: "|" }))).toHaveLength(3);
+    expect(titles(await get({ platform: "|" }))).toEqual(["A", "B", "C"]);
   });
 
   it("returns the sorted distinct filter values, skipping null devices and platforms", async () => {
@@ -167,7 +167,7 @@ describe("GET /api/media/history — filter and sort branches", () => {
     expect(titles(await get({ resolution: "4K|1080P" }))).toEqual(["HD", "UHD"]);
     // An unknown label falls through as the literal value, case-insensitively.
     expect(titles(await get({ resolution: "576" }))).toEqual(["Odd"]);
-    expect(titles(await get({ resolution: "|" }))).toHaveLength(3);
+    expect(titles(await get({ resolution: "|" }))).toEqual(["HD", "Odd", "UHD"]);
   });
 
   it("filters by dynamic range, video codec and audio codec (single and multi)", async () => {
@@ -184,14 +184,14 @@ describe("GET /api/media/history — filter and sort branches", () => {
 
     expect(titles(await get({ dynamicRange: "HDR10" }))).toEqual(["A"]);
     expect(titles(await get({ dynamicRange: "HDR10|Dolby Vision" }))).toEqual(["A", "B"]);
-    expect(titles(await get({ dynamicRange: "|" }))).toHaveLength(3);
+    expect(titles(await get({ dynamicRange: "|" }))).toEqual(["A", "B", "C"]);
     expect(titles(await get({ videoCodec: "av1" }))).toEqual(["B"]);
     expect(titles(await get({ videoCodec: "av1|h264" }))).toEqual(["B", "C"]);
-    expect(titles(await get({ videoCodec: "|" }))).toHaveLength(3);
+    expect(titles(await get({ videoCodec: "|" }))).toEqual(["A", "B", "C"]);
     expect(titles(await get({ audioCodec: "aac" }))).toEqual(["C"]);
     expect(titles(await get({ audioCodec: "aac|truehd" }))).toEqual(["A", "C"]);
     const empty = await get({ audioCodec: "|" });
-    expect(titles(empty)).toHaveLength(3);
+    expect(titles(empty)).toEqual(["A", "B", "C"]);
     expect(empty.pagination.totalCount).toBe(3);
   });
 
@@ -222,7 +222,7 @@ describe("GET /api/media/history — filter and sort branches", () => {
     expect(one.items[0].watchedAt).toBe("2024-07-01T00:00:00.000Z");
   });
 
-  it("sorts ascending with nulls last and keeps an ascending deep page plain", async () => {
+  it("sorts ascending with nulls last", async () => {
     const a = await createTestMediaItem(movieLib, { title: "A" });
     await play(a.id, { watchedAt: new Date("2024-02-01T00:00:00Z") });
     await play(a.id, { watchedAt: null });

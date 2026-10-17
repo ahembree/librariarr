@@ -69,15 +69,22 @@ type Match = {
 describe("GET /api/media/[id]/arr-info — music, tags and links", () => {
   let userId: string;
   let libraryId: string;
+  let seriesLibraryId: string;
+  let musicLibraryId: string;
 
   beforeEach(async () => {
     await cleanDatabase();
     clearMockSession();
     vi.clearAllMocks();
+    // clearAllMocks keeps implementations; drop each test's answers so none
+    // leaks into the next.
+    for (const mock of Object.values(m)) mock.mockReset();
     userId = (await createTestUser()).id;
     setMockSession({ userId, isLoggedIn: true });
     const server = await createTestServer(userId);
-    libraryId = (await createTestLibrary(server.id)).id;
+    libraryId = (await createTestLibrary(server.id, { type: "MOVIE" })).id;
+    seriesLibraryId = (await createTestLibrary(server.id, { type: "SERIES" })).id;
+    musicLibraryId = (await createTestLibrary(server.id, { type: "MUSIC" })).id;
   });
 
   afterAll(async () => {
@@ -93,20 +100,24 @@ describe("GET /api/media/[id]/arr-info — music, tags and links", () => {
     const server = await createTestServer(stranger.id);
     const lib = await createTestLibrary(server.id);
     const item = await createTestMediaItem(lib.id);
+    await createTestExternalId(item.id, "TMDB", "603");
+    await createTestRadarrInstance(userId);
     const res = await callRouteWithParams(GET, { id: item.id });
     expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "Forbidden" });
+    expect(m.radarrMovie).not.toHaveBeenCalled();
   });
 
   describe("music", () => {
     it("returns no matches for a track without an artist MusicBrainz id", async () => {
-      const item = await createTestMediaItem(libraryId, { type: "MUSIC" });
+      const item = await createTestMediaItem(musicLibraryId, { type: "MUSIC" });
       await createTestLidarrInstance(userId);
       expect(await matches(item.id)).toEqual([]);
       expect(m.lidarrArtist).not.toHaveBeenCalled();
     });
 
     it("matches the artist in Lidarr with its profile, tags and the browser link", async () => {
-      const item = await createTestMediaItem(libraryId, { type: "MUSIC" });
+      const item = await createTestMediaItem(musicLibraryId, { type: "MUSIC" });
       await createTestExternalId(item.id, "MUSICBRAINZ", "mbid-artist");
       const inst = await createTestLidarrInstance(userId, { name: "Lid" });
       await getTestPrisma().lidarrInstance.update({
@@ -133,7 +144,7 @@ describe("GET /api/media/[id]/arr-info — music, tags and links", () => {
     });
 
     it("skips the tag lookup for an untagged artist and reports an unknown profile as null", async () => {
-      const item = await createTestMediaItem(libraryId, { type: "MUSIC" });
+      const item = await createTestMediaItem(musicLibraryId, { type: "MUSIC" });
       await createTestExternalId(item.id, "MUSICBRAINZ", "mb2");
       await createTestLidarrInstance(userId, { url: "http://lidarr.lan:8686" });
       m.lidarrArtist.mockResolvedValue({ foreignArtistId: "mb2", qualityProfileId: 42, tags: [] });
@@ -146,12 +157,13 @@ describe("GET /api/media/[id]/arr-info — music, tags and links", () => {
     });
 
     it("returns nothing when Lidarr does not know the artist or fails", async () => {
-      const item = await createTestMediaItem(libraryId, { type: "MUSIC" });
+      const item = await createTestMediaItem(musicLibraryId, { type: "MUSIC" });
       await createTestExternalId(item.id, "MUSICBRAINZ", "mb3");
       await createTestLidarrInstance(userId, { name: "A" });
       await createTestLidarrInstance(userId, { name: "B" });
       m.lidarrArtist.mockResolvedValueOnce(null).mockRejectedValueOnce(new Error("lidarr down"));
       expect(await matches(item.id)).toEqual([]);
+      expect(m.lidarrArtist).toHaveBeenCalledTimes(2);
       expect(m.apiError).toHaveBeenCalledWith(
         "Media",
         expect.stringContaining("Lidarr"),
@@ -186,10 +198,11 @@ describe("GET /api/media/[id]/arr-info — music, tags and links", () => {
   });
 
   it("links a Sonarr series by id when it has no title slug, with labelled tags", async () => {
-    const item = await createTestMediaItem(libraryId, { type: "SERIES", parentTitle: "Show" });
+    const item = await createTestMediaItem(seriesLibraryId, { type: "SERIES", parentTitle: "Show" });
     await createTestExternalId(item.id, "TVDB", "81189");
     await createTestSonarrInstance(userId, { url: "http://sonarr.lan:8989" });
-    m.sonarrSeries.mockResolvedValue({ id: 17, titleSlug: null, qualityProfileId: 5, tags: [8] });
+    // titleSlug is optional on Sonarr's series resource.
+    m.sonarrSeries.mockResolvedValue({ id: 17, title: "Show", tvdbId: 81189, qualityProfileId: 5, tags: [8] });
     m.sonarrProfiles.mockResolvedValue([{ id: 5, name: "WEB" }]);
     m.sonarrTags.mockResolvedValue([{ id: 8, label: "ended" }]);
     const [match] = await matches(item.id);
@@ -203,7 +216,7 @@ describe("GET /api/media/[id]/arr-info — music, tags and links", () => {
   });
 
   it("returns nothing for a series without a TVDB id", async () => {
-    const item = await createTestMediaItem(libraryId, { type: "SERIES", parentTitle: "Show" });
+    const item = await createTestMediaItem(seriesLibraryId, { type: "SERIES", parentTitle: "Show" });
     await createTestSonarrInstance(userId);
     expect(await matches(item.id)).toEqual([]);
     expect(m.sonarrSeries).not.toHaveBeenCalled();

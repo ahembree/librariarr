@@ -49,8 +49,8 @@ describe("GET /api/auth/me", () => {
 
     const response = await callRoute(GET, { url: "/api/auth/me", method: "GET" });
     const body = await expectJson<MeResponse>(response, 200);
-    expect(body.username).toBe("ahembree");
-    expect(body.authMethod).toBe("Plex");
+    // Exactly the display fields: never the Plex token or any other credential.
+    expect(body).toEqual({ username: "ahembree", email: "test@example.com", authMethod: "Plex" });
   });
 
   it("labels a local-only admin as Local", async () => {
@@ -72,7 +72,12 @@ describe("GET /api/auth/me", () => {
     const user = await createTestUser({ username: "ssoadmin", plexId: "plex-2" });
     await prisma.user.update({
       where: { id: user.id },
-      data: { ssoEnabled: true, ssoProvider: "Authentik", ssoSubject: "sub", ssoIssuer: "iss" },
+      data: {
+        ssoEnabled: true,
+        ssoProvider: "Authentik",
+        ssoSubject: "8c3a3f0e-5b7d-4b8e-9f2a-1d6e4c2b7a90",
+        ssoIssuer: "https://auth.example.com/application/o/librariarr/",
+      },
     });
     setMockSession({ userId: user.id, isLoggedIn: true });
 

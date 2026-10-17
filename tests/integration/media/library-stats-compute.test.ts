@@ -41,14 +41,14 @@ describe("computeLibraryStats", () => {
   it("ranks top music artists by summed plays and attaches the most-played track's id and art", async () => {
     const { server, music } = await setup();
     const prisma = getTestPrisma();
-    const a1 = await createTestMediaItem(music.id, {
+    await createTestMediaItem(music.id, {
       type: "MUSIC", title: "Song A", parentTitle: "Artist A", albumTitle: "Album", playCount: 2,
     });
     const a2 = await createTestMediaItem(music.id, {
       type: "MUSIC", title: "Song B", parentTitle: "Artist A", albumTitle: "Album", playCount: 9,
     });
     await prisma.mediaItem.update({ where: { id: a2.id }, data: { parentThumbUrl: "/artist-a.jpg" } });
-    await createTestMediaItem(music.id, {
+    const b1 = await createTestMediaItem(music.id, {
       type: "MUSIC", title: "Song C", parentTitle: "Artist B", albumTitle: "Other", playCount: 3,
     });
     // Unplayed artist never appears.
@@ -58,11 +58,11 @@ describe("computeLibraryStats", () => {
 
     const stats = await computeLibraryStats([server.id], false);
 
+    // Artist A links to its most-played track (Song B), not its first one.
     expect(stats.topMusic).toEqual([
       { parentTitle: "Artist A", totalPlays: 11, mediaItemId: a2.id, thumbUrl: "/artist-a.jpg" },
-      expect.objectContaining({ parentTitle: "Artist B", totalPlays: 3, thumbUrl: null }),
+      { parentTitle: "Artist B", totalPlays: 3, mediaItemId: b1.id, thumbUrl: null },
     ]);
-    expect(stats.topMusic[0].mediaItemId).not.toBe(a1.id);
     expect(stats.musicCount).toBe(4);
     expect(stats.artistCount).toBe(3);
     expect(stats.albumCount).toBe(3);
@@ -73,8 +73,9 @@ describe("computeLibraryStats", () => {
     const prisma = getTestPrisma();
     const canon = await createTestMediaItem(movies.id, { title: "A", fileSize: BigInt(100), resolution: "4K" });
     const dupe = await createTestMediaItem(movies.id, { title: "A", fileSize: BigInt(50), resolution: "1080p" });
-    await prisma.mediaItem.update({ where: { id: canon.id }, data: { dedupCanonical: true } });
-    await prisma.mediaItem.update({ where: { id: dupe.id }, data: { dedupCanonical: false } });
+    // Two copies of one film: same dedupKey, one canonical.
+    await prisma.mediaItem.update({ where: { id: canon.id }, data: { dedupKey: "movie:title:a:2024", dedupCanonical: true } });
+    await prisma.mediaItem.update({ where: { id: dupe.id }, data: { dedupKey: "movie:title:a:2024", dedupCanonical: false } });
 
     const deduped = await computeLibraryStats([server.id], true);
     expect(deduped.movieCount).toBe(1);

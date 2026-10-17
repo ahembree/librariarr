@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
-import { cleanDatabase, disconnectTestDb } from "../../setup/test-db";
+import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
 import {
   callRoute,
@@ -32,7 +32,13 @@ vi.mock("@/lib/cache/memory-cache", () => {
     invalidatePrefix: () => {},
     clear: () => {},
   };
-  return { MemoryCache: vi.fn(() => noopCache), appCache: noopCache };
+  return {
+    // A constructor mock needs `function`: Vitest 4 cannot `new` an arrow.
+    MemoryCache: vi.fn(function () {
+      return noopCache;
+    }),
+    appCache: noopCache,
+  };
 });
 
 // Import route handler AFTER mocks
@@ -68,7 +74,7 @@ describe("GET /api/media/series/all-seasons", () => {
     expect(body.seasons).toEqual([]);
   });
 
-  it("groups episodes by parentTitle and seasonNumber", async () => {
+  it("groups episodes by show and season", async () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id);
     const lib = await createTestLibrary(server.id, { type: "SERIES" });
@@ -120,20 +126,21 @@ describe("GET /api/media/series/all-seasons", () => {
       }[];
     }>(response, 200);
 
-    expect(body.seasons).toHaveLength(2);
-
     // Default sort is by parentTitle then seasonNumber
-    const s1 = body.seasons.find((s) => s.seasonNumber === 1);
-    expect(s1).toBeDefined();
-    expect(s1!.parentTitle).toBe("Show A");
-    expect(s1!.episodeCount).toBe(2);
-    expect(s1!.totalSize).toBe("1100000000");
-    expect(s1!.totalPlayCount).toBe(4);
+    expect(body.seasons.map((s) => [s.parentTitle, s.seasonNumber])).toEqual([
+      ["Show A", 1],
+      ["Show A", 2],
+    ]);
+    const [s1, s2] = body.seasons;
+    expect(s1.episodeCount).toBe(2);
+    expect(s1.totalSize).toBe("1100000000");
+    expect(s1.totalPlayCount).toBe(4);
+    expect(s1.qualityCounts).toEqual({ "1080P": 2 });
 
-    const s2 = body.seasons.find((s) => s.seasonNumber === 2);
-    expect(s2).toBeDefined();
-    expect(s2!.episodeCount).toBe(1);
-    expect(s2!.totalSize).toBe("2000000000");
+    expect(s2.episodeCount).toBe(1);
+    expect(s2.totalSize).toBe("2000000000");
+    expect(s2.totalPlayCount).toBe(0);
+    expect(s2.qualityCounts).toEqual({ "4K": 1 });
   });
 
   it("filters by search query on parentTitle", async () => {
@@ -206,9 +213,10 @@ describe("GET /api/media/series/all-seasons", () => {
       seasons: { parentTitle: string; episodeCount: number }[];
     }>(response, 200);
 
-    expect(body.seasons).toHaveLength(2);
-    expect(body.seasons[0].episodeCount).toBe(3);
-    expect(body.seasons[1].episodeCount).toBe(1);
+    expect(body.seasons.map((s) => [s.parentTitle, s.episodeCount])).toEqual([
+      ["Show B", 3],
+      ["Show A", 1],
+    ]);
   });
 
   it("tracks quality counts per resolution", async () => {
@@ -243,9 +251,8 @@ describe("GET /api/media/series/all-seasons", () => {
     }>(response, 200);
 
     expect(body.seasons).toHaveLength(1);
-    const qc = body.seasons[0].qualityCounts;
     // normalizeResolutionLabel maps these to display labels
-    expect(Object.keys(qc).length).toBe(2);
+    expect(body.seasons[0].qualityCounts).toEqual({ "1080P": 1, "4K": 1 });
   });
 
   it("serializes totalSize as string", async () => {
@@ -297,9 +304,9 @@ describe("GET /api/media/series/all-seasons", () => {
     }>(await callRoute(GET, { url: "/api/media/series/all-seasons" }), 200);
 
     // Two season-1 rows — one per show — not one merged row.
-    const s1 = body.seasons.filter((x) => x.seasonNumber === 1);
-    expect(s1).toHaveLength(2);
-    expect(new Set(s1.map((x) => x.seriesKey))).toEqual(new Set(["tvdb:78107", "tvdb:73244"]));
+    expect(body.seasons).toHaveLength(2);
+    expect(body.seasons.every((x) => x.parentTitle === "The Office" && x.seasonNumber === 1)).toBe(true);
+    expect(body.seasons.map((x) => x.seriesKey).sort()).toEqual(["tvdb:73244", "tvdb:78107"]);
   });
 
   // The All Seasons tab forwards every library filter; this route used to read
@@ -350,10 +357,13 @@ describe("GET /api/media/series/all-seasons", () => {
       const lib = await createTestLibrary(server.id, { type: "SERIES" });
       await createTestMediaItem(lib.id, { type: "SERIES", parentTitle: "PAL Show", seasonNumber: 1, episodeNumber: 1, resolution: "576" });
       await createTestMediaItem(lib.id, { type: "SERIES", parentTitle: "HD Show", seasonNumber: 1, episodeNumber: 1, resolution: "1080" });
+      // Not analysed yet: its season's chip counts it as Other.
+      const raw = await createTestMediaItem(lib.id, { type: "SERIES", parentTitle: "Raw Show", seasonNumber: 1, episodeNumber: 1 });
+      await getTestPrisma().mediaItem.update({ where: { id: raw.id }, data: { resolution: null } });
       setMockSession({ userId: user.id, isLoggedIn: true });
 
       expect((await seasons("resolution=480P")).map((s) => s.parentTitle)).toEqual(["PAL Show"]);
-      expect(await seasons("resolution=Other")).toEqual([]);
+      expect((await seasons("resolution=Other")).map((s) => s.parentTitle)).toEqual(["Raw Show"]);
     });
 
     // The season's own latest play answers the date filter; it must not also be

@@ -47,6 +47,7 @@ describe("the setup budget (real limiter)", () => {
     await cleanDatabase();
     clearMockSession();
     delete process.env.TRUST_PROXY_HEADERS;
+    for (const mock of [mockHash, mockListBackups, mockRestoreBackup]) mock.mockReset();
     mockHash.mockResolvedValue("hashed");
     mockListBackups.mockResolvedValue([]);
     mockRestoreBackup.mockResolvedValue(undefined);
@@ -87,10 +88,21 @@ describe("the setup budget (real limiter)", () => {
       body: { username: "admin", password: "a-fine-password" },
     });
     expect(eleventh.status).toBe(429);
-    expect(eleventh.headers.get("Retry-After")).toBeTruthy();
-    // Refused before the hash, and before any restore.
+    // Seconds left in the 15-minute window the first request opened.
+    const retryAfter = Number(eleventh.headers.get("Retry-After"));
+    expect(retryAfter).toBeGreaterThan(0);
+    expect(retryAfter).toBeLessThanOrEqual(15 * 60);
+    // Refused before the hash, and the other two routes refused too.
     expect(mockHash).not.toHaveBeenCalled();
     expect((await callRoute(listGET, { method: "GET", headers: from("10.0.0.1") })).status).toBe(429);
+    const refusedRestore = await callRoute(restorePOST, {
+      method: "POST",
+      headers: from("10.0.0.1"),
+      body: { filename: "librariarr-backup-missing.json.gz" },
+    });
+    expect(refusedRestore.status).toBe(429);
+    expect(mockRestoreBackup).toHaveBeenCalledTimes(3);
+    expect(mockListBackups).toHaveBeenCalledTimes(4);
 
     // Another address still sets up.
     const ok = await callRoute(setupPOST, {

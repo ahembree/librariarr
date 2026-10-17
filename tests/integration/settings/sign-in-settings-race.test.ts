@@ -80,17 +80,17 @@ describe("settings writes that can turn password sign-in on", () => {
       for (let round = 0; round < 8; round++) {
         await cleanDatabase();
         await seed();
-        const statuses = (
-          await Promise.all([
-            callRoute(authPUT, { method: "PUT", body: { localAuthEnabled: true } }),
-            turnSsoOff[label](),
-          ])
-        ).map((r) => r.status);
+        const responses = await Promise.all([
+          callRoute(authPUT, { method: "PUT", body: { localAuthEnabled: true } }),
+          turnSsoOff[label](),
+        ]);
         const settings = await prisma.appSettings.findFirstOrThrow();
         expect(settings.localAuthEnabled && !settings.ssoEnabled).toBe(false);
         // One went through; the other, now turning the password on, was sent
         // to confirm it's you.
-        expect(statuses.sort()).toEqual([200, 403]);
+        expect(responses.map((r) => r.status).sort()).toEqual([200, 403]);
+        const refused = responses.find((r) => r.status === 403)!;
+        expect(((await refused.json()) as { code: string }).code).toBe("reauth_required");
       }
     },
   );

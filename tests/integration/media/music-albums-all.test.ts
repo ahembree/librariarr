@@ -30,7 +30,13 @@ vi.mock("@/lib/cache/memory-cache", () => {
     invalidatePrefix: () => {},
     clear: () => {},
   };
-  return { MemoryCache: vi.fn(() => noopCache), appCache: noopCache };
+  return {
+    // A constructor mock needs `function`: Vitest 4 cannot `new` an arrow.
+    MemoryCache: vi.fn(function () {
+      return noopCache;
+    }),
+    appCache: noopCache,
+  };
 });
 
 import { GET } from "@/app/api/media/music/albums/all/route";
@@ -83,6 +89,7 @@ describe("GET /api/media/music/albums/all", () => {
   it("returns 401 without auth", async () => {
     const response = await callRoute(GET, { url: "/api/media/music/albums/all" });
     expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ error: "Unauthorized" });
   });
 
   it("returns no albums for a user without servers", async () => {
@@ -100,7 +107,10 @@ describe("GET /api/media/music/albums/all", () => {
     await createTestMediaItem(lib.id, { type: "MUSIC", parentTitle: "Someone Else", albumTitle: "OK Computer", audioCodec: "flac" });
 
     const { albums } = await list();
-    expect(albums).toHaveLength(2);
+    expect(albums.map((a) => `${a.artistName} / ${a.albumTitle}`).sort()).toEqual([
+      "Radiohead / OK Computer",
+      "Someone Else / OK Computer",
+    ]);
     const ok = albums.find((a) => a.artistName === "Radiohead")!;
     expect(ok).toMatchObject({
       albumTitle: "OK Computer",
@@ -125,12 +135,14 @@ describe("GET /api/media/music/albums/all", () => {
 
   it("merges spellings that differ only in case or surrounding spaces", async () => {
     const { lib } = await musicLibrary();
-    await createTestMediaItem(lib.id, { type: "MUSIC", parentTitle: "Air", albumTitle: "Moon Safari" });
-    await createTestMediaItem(lib.id, { type: "MUSIC", parentTitle: "air ", albumTitle: " moon safari" });
+    await createTestMediaItem(lib.id, { type: "MUSIC", parentTitle: "Air", albumTitle: "Moon Safari", episodeNumber: 1 });
+    await createTestMediaItem(lib.id, { type: "MUSIC", parentTitle: "air ", albumTitle: " moon safari", episodeNumber: 2 });
 
     const { albums } = await list();
     expect(albums).toHaveLength(1);
     expect(albums[0].trackCount).toBe(2);
+    // Displayed as the linked track spells it — track 1 here.
+    expect(albums[0]).toMatchObject({ artistName: "Air", albumTitle: "Moon Safari" });
   });
 
   it("links the album to a track with album art and takes album-level fields from the first track that has them", async () => {
@@ -184,10 +196,10 @@ describe("GET /api/media/music/albums/all", () => {
     const libA = await createTestLibrary(a.id, { type: "MUSIC" });
     const libB = await createTestLibrary(b.id, { type: "MUSIC" });
     const prisma = getTestPrisma();
-    const canonical = await createTestMediaItem(libA.id, { type: "MUSIC", parentTitle: "Sade", albumTitle: "Diamond Life" });
-    const copy = await createTestMediaItem(libB.id, { type: "MUSIC", parentTitle: "Sade", albumTitle: "Diamond Life" });
-    await prisma.mediaItem.update({ where: { id: canonical.id }, data: { dedupKey: "sade-1", dedupCanonical: true } });
-    await prisma.mediaItem.update({ where: { id: copy.id }, data: { dedupKey: "sade-1", dedupCanonical: false } });
+    const canonical = await createTestMediaItem(libA.id, { type: "MUSIC", title: "Smooth Operator", parentTitle: "Sade", albumTitle: "Diamond Life" });
+    const copy = await createTestMediaItem(libB.id, { type: "MUSIC", title: "Smooth Operator", parentTitle: "Sade", albumTitle: "Diamond Life" });
+    await prisma.mediaItem.update({ where: { id: canonical.id }, data: { dedupKey: "music:sade:smooth operator", dedupCanonical: true } });
+    await prisma.mediaItem.update({ where: { id: copy.id }, data: { dedupKey: "music:sade:smooth operator", dedupCanonical: false } });
     setMockSession({ userId: user.id, isLoggedIn: true });
 
     const { albums } = await list();

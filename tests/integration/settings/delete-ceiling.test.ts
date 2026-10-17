@@ -15,10 +15,10 @@ vi.mock("@/lib/logger", () => ({
 
 import { GET, PUT } from "@/app/api/settings/delete-ceiling/route";
 
-const URL = "/api/settings/delete-ceiling";
+const ROUTE_URL = "/api/settings/delete-ceiling";
 
 async function put(body: unknown) {
-  return callRoute(PUT, { url: URL, method: "PUT", body });
+  return callRoute(PUT, { url: ROUTE_URL, method: "PUT", body });
 }
 
 describe("/api/settings/delete-ceiling", () => {
@@ -94,22 +94,36 @@ describe("/api/settings/delete-ceiling", () => {
       const user = await createTestUser();
       setMockSession({ userId: user.id, isLoggedIn: true });
       const res = await put(body);
-      const json = await expectJson<{ error: string }>(res, 400);
+      const json = await expectJson<{ error: string; details: string[] }>(res, 400);
       expect(json.error).toBe("Validation failed");
+      expect(json.details).toHaveLength(1);
+      expect(json.details[0]).toMatch(/^maxAutoDeleteItems: /);
       expect(await getTestPrisma().appSettings.count()).toBe(0);
+    });
+
+    // 0 almost certainly means "off": the form is told how to say that.
+    it("tells a zero apart from an empty field", async () => {
+      const user = await createTestUser();
+      setMockSession({ userId: user.id, isLoggedIn: true });
+      const json = await expectJson<{ details: string[] }>(await put({ maxAutoDeleteItems: 0 }), 400);
+      expect(json.details).toEqual([
+        "maxAutoDeleteItems: The limit must be at least 1 — leave it empty to disable it",
+      ]);
     });
 
     it("accepts the upper bound", async () => {
       const user = await createTestUser();
       setMockSession({ userId: user.id, isLoggedIn: true });
       await expectJson(await put({ maxAutoDeleteItems: 1_000_000 }), 200);
+      const row = await getTestPrisma().appSettings.findUnique({ where: { userId: user.id } });
+      expect(row?.maxAutoDeleteItems).toBe(1_000_000);
     });
 
     it("rejects malformed JSON", async () => {
       const user = await createTestUser();
       setMockSession({ userId: user.id, isLoggedIn: true });
       const { NextRequest } = await import("next/server");
-      const req = new NextRequest("http://localhost" + URL, {
+      const req = new NextRequest("http://localhost" + ROUTE_URL, {
         method: "PUT",
         body: "{not json",
         headers: { "content-type": "application/json" },

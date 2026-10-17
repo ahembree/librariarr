@@ -49,9 +49,9 @@ describe("GET /api/media/library-types", () => {
     const response = await callRoute(GET, {
       url: "/api/media/library-types",
     });
-    const body = await expectJson<{ types: string[] }>(response, 200);
+    const body = await expectJson<{ types: string[]; allTypes: string[] }>(response, 200);
 
-    expect(body.types).toEqual([]);
+    expect(body).toEqual({ types: [], allTypes: [] });
   });
 
   it("returns distinct enabled library types", async () => {
@@ -79,12 +79,10 @@ describe("GET /api/media/library-types", () => {
     const response = await callRoute(GET, {
       url: "/api/media/library-types",
     });
-    const body = await expectJson<{ types: string[] }>(response, 200);
+    const body = await expectJson<{ types: string[]; allTypes: string[] }>(response, 200);
 
-    expect(body.types).toHaveLength(3);
-    expect(body.types).toContain("MOVIE");
-    expect(body.types).toContain("SERIES");
-    expect(body.types).toContain("MUSIC");
+    expect([...body.types].sort()).toEqual(["MOVIE", "MUSIC", "SERIES"]);
+    expect([...body.allTypes].sort()).toEqual(["MOVIE", "MUSIC", "SERIES"]);
   });
 
   it("excludes disabled libraries", async () => {
@@ -107,11 +105,11 @@ describe("GET /api/media/library-types", () => {
     const response = await callRoute(GET, {
       url: "/api/media/library-types",
     });
-    const body = await expectJson<{ types: string[] }>(response, 200);
+    const body = await expectJson<{ types: string[]; allTypes: string[] }>(response, 200);
 
-    expect(body.types).toHaveLength(1);
-    expect(body.types).toContain("MOVIE");
-    expect(body.types).not.toContain("SERIES");
+    expect(body.types).toEqual(["MOVIE"]);
+    // `allTypes` still lists the disabled library's type.
+    expect([...body.allTypes].sort()).toEqual(["MOVIE", "SERIES"]);
   });
 
   it("returns distinct types even with multiple libraries of same type", async () => {
@@ -135,10 +133,9 @@ describe("GET /api/media/library-types", () => {
     const response = await callRoute(GET, {
       url: "/api/media/library-types",
     });
-    const body = await expectJson<{ types: string[] }>(response, 200);
+    const body = await expectJson<{ types: string[]; allTypes: string[] }>(response, 200);
 
-    expect(body.types).toHaveLength(1);
-    expect(body.types).toContain("MOVIE");
+    expect(body).toEqual({ types: ["MOVIE"], allTypes: ["MOVIE"] });
   });
 
   it("does not return types from other users' servers", async () => {
@@ -163,11 +160,9 @@ describe("GET /api/media/library-types", () => {
     const response = await callRoute(GET, {
       url: "/api/media/library-types",
     });
-    const body = await expectJson<{ types: string[] }>(response, 200);
+    const body = await expectJson<{ types: string[]; allTypes: string[] }>(response, 200);
 
-    expect(body.types).toHaveLength(1);
-    expect(body.types).toContain("MOVIE");
-    expect(body.types).not.toContain("MUSIC");
+    expect(body).toEqual({ types: ["MOVIE"], allTypes: ["MOVIE"] });
   });
 
   it("aggregates types across multiple servers of the same user", async () => {
@@ -191,10 +186,26 @@ describe("GET /api/media/library-types", () => {
     const response = await callRoute(GET, {
       url: "/api/media/library-types",
     });
-    const body = await expectJson<{ types: string[] }>(response, 200);
+    const body = await expectJson<{ types: string[]; allTypes: string[] }>(response, 200);
 
-    expect(body.types).toHaveLength(2);
-    expect(body.types).toContain("MOVIE");
-    expect(body.types).toContain("SERIES");
+    expect([...body.types].sort()).toEqual(["MOVIE", "SERIES"]);
+  });
+
+  it("ignores the libraries of a disabled server", async () => {
+    const user = await createTestUser();
+    const active = await createTestServer(user.id, { name: "Active" });
+    const disabled = await createTestServer(user.id, { name: "Disabled", enabled: false });
+
+    await createTestLibrary(active.id, { title: "Movies", type: "MOVIE", enabled: true });
+    await createTestLibrary(disabled.id, { title: "Music", type: "MUSIC", enabled: true });
+
+    setMockSession({ userId: user.id, isLoggedIn: true });
+
+    const response = await callRoute(GET, {
+      url: "/api/media/library-types",
+    });
+    const body = await expectJson<{ types: string[]; allTypes: string[] }>(response, 200);
+
+    expect(body).toEqual({ types: ["MOVIE"], allTypes: ["MOVIE"] });
   });
 });

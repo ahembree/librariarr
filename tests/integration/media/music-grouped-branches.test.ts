@@ -100,11 +100,15 @@ describe("GET /api/media/music/grouped — sorts and offset", () => {
   });
 
   it("takes an artist's summary from another track when the art track has none", async () => {
-    await track("Bjork", "Post", 1, { thumbUrl: "/art/1" });
+    const art = await track("Bjork", "Post", 1, { thumbUrl: "/art/1" });
     await track("Bjork", "Post", 2, { summary: "Icelandic." });
-    const body = await expectJson<{ artists: Artist[] }>(
+    const body = await expectJson<{ artists: (Artist & { mediaItemId: string; thumbUrl: string | null })[] }>(
       await callRoute(GET, { url: "/api/media/music/grouped" }),
     );
+    expect(body.artists).toHaveLength(1);
+    // The art track is the one linked; the blurb comes from track 2.
+    expect(body.artists[0].mediaItemId).toBe(art.id);
+    expect(body.artists[0].thumbUrl).toBe("/art/1");
     expect(body.artists[0].summary).toBe("Icelandic.");
   });
 });

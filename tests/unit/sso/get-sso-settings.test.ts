@@ -90,10 +90,14 @@ describe("getSsoSettings", () => {
 describe("getSsoSettings — the 'cannot be offered' log line", () => {
   const originalSecret = process.env.FORWARD_AUTH_SECRET;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     findFirstMock.mockReset();
-    mockLoggerError.mockClear();
     delete process.env.SSO_DISABLE_OVERRIDE;
+    // The latch is module state: re-arm it with a usable config, so what an
+    // earlier test logged cannot decide what this one sees.
+    findFirstMock.mockResolvedValue(FULL_ROW);
+    await getSsoSettings();
+    mockLoggerError.mockClear();
   });
 
   afterEach(() => {

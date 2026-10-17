@@ -30,7 +30,13 @@ vi.mock("@/lib/cache/memory-cache", () => {
     invalidatePrefix: () => {},
     clear: () => {},
   };
-  return { MemoryCache: vi.fn(() => noopCache), appCache: noopCache };
+  return {
+    // A constructor mock needs `function`: Vitest 4 cannot `new` an arrow.
+    MemoryCache: vi.fn(function () {
+      return noopCache;
+    }),
+    appCache: noopCache,
+  };
 });
 
 import { GET } from "@/app/api/media/series/seasons/route";
@@ -108,6 +114,7 @@ describe("GET /api/media/series/seasons — season aggregation", () => {
       episodeCount: 2,
       totalSize: "15",
       totalPlayCount: 5,
+      qualityCounts: { "1080P": 2 },
       mediaItemId: e2.id,
       lastPlayed: newer.toISOString(),
       addedAt: newer.toISOString(),
@@ -135,7 +142,7 @@ describe("GET /api/media/series/seasons — season aggregation", () => {
     });
     await createTestMediaItem(lib.id, {
       type: "SERIES", title: "E2", parentTitle: "Show", seasonNumber: 2, episodeNumber: 2,
-      summary: "Second", fileSize: BigInt(7),
+      summary: "Second", fileSize: BigInt(7), year: 2019,
     });
     await prisma.mediaItem.update({ where: { id: e1.id }, data: { fileSize: null, year: null } });
 
@@ -146,7 +153,8 @@ describe("GET /api/media/series/seasons — season aggregation", () => {
     // the first episode's, whatever order the rows sit in on disk (the UPDATE
     // above moved E1's row after E2's).
     expect(season.summary).toBe("First");
-    expect(season.year).toBe(2024);
+    // E1 has no year, so the first one carried is E2's.
+    expect(season.year).toBe(2019);
   });
 
   it("lists only canonical copies when two servers hold the show", async () => {
@@ -157,21 +165,26 @@ describe("GET /api/media/series/seasons — season aggregation", () => {
     const l1 = await createTestLibrary(s1.id, { type: "SERIES" });
     const l2 = await createTestLibrary(s2.id, { type: "SERIES" });
     const prisma = getTestPrisma();
-    await createTestMediaItem(l1.id, {
+    const canonical = await createTestMediaItem(l1.id, {
       type: "SERIES", title: "E1", parentTitle: "Show", seasonNumber: 1, episodeNumber: 1,
     });
     const copy = await createTestMediaItem(l2.id, {
       type: "SERIES", title: "E1", parentTitle: "Show", seasonNumber: 1, episodeNumber: 1,
     });
-    await prisma.mediaItem.update({ where: { id: copy.id }, data: { dedupCanonical: false } });
+    // The same episode on both servers; server A's copy is canonical.
+    await prisma.mediaItem.update({ where: { id: canonical.id }, data: { dedupKey: "series:show:s1e1", dedupCanonical: true } });
+    await prisma.mediaItem.update({ where: { id: copy.id }, data: { dedupKey: "series:show:s1e1", dedupCanonical: false } });
 
     const seasons = await getSeasons({ parentTitle: "Show" });
     expect(seasons).toHaveLength(1);
     expect(seasons[0].episodeCount).toBe(1);
+    expect(seasons[0].mediaItemId).toBe(canonical.id);
     expect(seasons[0].servers.map((s) => s.serverName)).toEqual(["A"]);
 
     // Narrowed to the second server, its own copy is listed even though it is not canonical.
     const onB = await getSeasons({ parentTitle: "Show", serverId: s2.id });
+    expect(onB).toHaveLength(1);
+    expect(onB[0].mediaItemId).toBe(copy.id);
     expect(onB[0].servers.map((s) => s.serverName)).toEqual(["B"]);
   });
 
@@ -200,9 +213,7 @@ describe("GET /api/media/series/seasons — season aggregation", () => {
     const seasons = await getSeasons({ parentTitle: "Show", seriesKey: "tvdb:1" });
     expect(seasons.map((s) => s.seasonNumber)).toEqual([3]);
   });
-});
 
-describe("GET /api/media/series/seasons ordering", () => {
   it("takes the season's fields from its lowest-numbered episode however the rows are stored", async () => {
     const user = await createTestUser();
     setMockSession({ userId: user.id, isLoggedIn: true });

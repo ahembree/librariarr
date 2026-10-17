@@ -32,7 +32,13 @@ vi.mock("@/lib/cache/memory-cache", () => {
     invalidatePrefix: () => {},
     clear: () => {},
   };
-  return { MemoryCache: vi.fn(() => noopCache), appCache: noopCache };
+  return {
+    // A constructor mock needs `function`: Vitest 4 cannot `new` an arrow.
+    MemoryCache: vi.fn(function () {
+      return noopCache;
+    }),
+    appCache: noopCache,
+  };
 });
 
 // Import route handler AFTER mocks
@@ -84,7 +90,7 @@ describe("GET /api/media/series/grouped", () => {
   // ─── Grouping ───
 
   describe("grouping", () => {
-    it("groups episodes by parentTitle with correct counts", async () => {
+    it("groups episodes by show with correct counts", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id);
       const lib = await createTestLibrary(server.id, { type: "SERIES" });
@@ -144,20 +150,19 @@ describe("GET /api/media/series/grouped", () => {
         }[];
       }>(response, 200);
 
-      expect(body.series).toHaveLength(2);
+      expect(body.series.map((s) => s.parentTitle)).toEqual(["Breaking Bad", "The Wire"]);
+      const [bb, wire] = body.series;
 
-      const bb = body.series.find((s) => s.parentTitle === "Breaking Bad");
-      expect(bb).toBeDefined();
-      expect(bb!.episodeCount).toBe(3);
-      expect(bb!.seasonCount).toBe(2);
+      expect(bb.episodeCount).toBe(3);
+      expect(bb.seasonCount).toBe(2);
       // 1GB + 1GB + 4GB = 6GB = 6442450944 bytes
-      expect(bb!.totalSize).toBe("6442450944");
+      expect(bb.totalSize).toBe("6442450944");
+      expect(bb.qualityCounts).toEqual({ "1080P": 2, "4K": 1 });
 
-      const wire = body.series.find((s) => s.parentTitle === "The Wire");
-      expect(wire).toBeDefined();
-      expect(wire!.episodeCount).toBe(1);
-      expect(wire!.seasonCount).toBe(1);
-      expect(wire!.qualityCounts["720P"]).toBe(1);
+      expect(wire.episodeCount).toBe(1);
+      expect(wire.seasonCount).toBe(1);
+      expect(wire.totalSize).toBe("536870912");
+      expect(wire.qualityCounts).toEqual({ "720P": 1 });
     });
 
     it("does not include MOVIE or MUSIC items in series grouping", async () => {
@@ -292,7 +297,7 @@ describe("GET /api/media/series/grouped", () => {
         pagination: { page: number; limit: number; hasMore: boolean };
       }>(response1, 200);
 
-      expect(body1.series).toHaveLength(2);
+      expect(body1.series.map((s) => s.parentTitle)).toEqual(["Alpha", "Bravo"]);
       expect(body1.pagination.page).toBe(1);
       expect(body1.pagination.limit).toBe(2);
       expect(body1.pagination.hasMore).toBe(true);
@@ -307,7 +312,7 @@ describe("GET /api/media/series/grouped", () => {
         pagination: { page: number; limit: number; hasMore: boolean };
       }>(response2, 200);
 
-      expect(body2.series).toHaveLength(2);
+      expect(body2.series.map((s) => s.parentTitle)).toEqual(["Charlie", "Delta"]);
       expect(body2.pagination.page).toBe(2);
       expect(body2.pagination.hasMore).toBe(true);
 
@@ -321,7 +326,7 @@ describe("GET /api/media/series/grouped", () => {
         pagination: { page: number; limit: number; hasMore: boolean };
       }>(response3, 200);
 
-      expect(body3.series).toHaveLength(1);
+      expect(body3.series.map((s) => s.parentTitle)).toEqual(["Echo"]);
       expect(body3.pagination.hasMore).toBe(false);
     });
 
@@ -408,7 +413,9 @@ describe("GET /api/media/series/grouped", () => {
         pagination: { limit: number; hasMore: boolean };
       }>(response, 200);
 
-      expect(body.series).toHaveLength(5);
+      expect(body.series.map((s) => s.parentTitle)).toEqual([
+        "Show 01", "Show 02", "Show 03", "Show 04", "Show 05",
+      ]);
       expect(body.pagination.limit).toBe(0);
       expect(body.pagination.hasMore).toBe(false);
     });
@@ -612,7 +619,7 @@ describe("GET /api/media/series/grouped", () => {
         expect(series.map((s) => s.parentTitle)).toEqual(["Drama Show"]);
         // Whole-show figures, not just the matching episode's.
         expect(series[0].episodeCount).toBe(3);
-        expect(series[0].qualityCounts).toMatchObject({ "4K": 1, "1080P": 2 });
+        expect(series[0].qualityCounts).toEqual({ "4K": 1, "1080P": 2 });
       });
 
       it("applies the common filters the library panel offers (genre)", async () => {
@@ -846,10 +853,10 @@ describe("GET /api/media/series/grouped", () => {
         series: { parentTitle: string; episodeCount: number }[];
       }>(response, 200);
 
-      expect(body.series[0].parentTitle).toBe("Show B");
-      expect(body.series[0].episodeCount).toBe(3);
-      expect(body.series[1].parentTitle).toBe("Show A");
-      expect(body.series[1].episodeCount).toBe(1);
+      expect(body.series.map((s) => [s.parentTitle, s.episodeCount])).toEqual([
+        ["Show B", 3],
+        ["Show A", 1],
+      ]);
     });
 
     it("sorts by totalSize ascending", async () => {
@@ -884,8 +891,10 @@ describe("GET /api/media/series/grouped", () => {
         series: { parentTitle: string; totalSize: string }[];
       }>(response, 200);
 
-      expect(body.series[0].parentTitle).toBe("Small Show");
-      expect(body.series[1].parentTitle).toBe("Big Show");
+      expect(body.series.map((s) => [s.parentTitle, s.totalSize])).toEqual([
+        ["Small Show", "536870912"],
+        ["Big Show", "10737418240"],
+      ]);
     });
   });
 
@@ -937,9 +946,8 @@ describe("GET /api/media/series/grouped", () => {
         }[];
       }>(response, 200);
 
-      const show = body.series[0];
-      expect(show.qualityCounts["1080P"]).toBe(2);
-      expect(show.qualityCounts["4K"]).toBe(1);
+      expect(body.series).toHaveLength(1);
+      expect(body.series[0].qualityCounts).toEqual({ "1080P": 2, "4K": 1 });
     });
   });
 
@@ -951,7 +959,7 @@ describe("GET /api/media/series/grouped", () => {
       const server = await createTestServer(user.id, { name: "Home Plex" });
       const lib = await createTestLibrary(server.id, { type: "SERIES" });
 
-      await createTestMediaItem(lib.id, {
+      const pilot = await createTestMediaItem(lib.id, {
         title: "Pilot",
         type: "SERIES",
         parentTitle: "Arrow",
@@ -967,12 +975,13 @@ describe("GET /api/media/series/grouped", () => {
       const body = await expectJson<{
         series: {
           parentTitle: string;
-          servers: { serverId: string; serverName: string }[];
+          servers: { serverId: string; serverName: string; serverType: string; mediaItemId: string }[];
         }[];
       }>(response, 200);
 
-      expect(body.series[0].servers).toHaveLength(1);
-      expect(body.series[0].servers[0].serverName).toBe("Home Plex");
+      expect(body.series[0].servers).toEqual([
+        { serverId: server.id, serverName: "Home Plex", serverType: "PLEX", mediaItemId: pilot.id },
+      ]);
     });
   });
 

@@ -111,10 +111,12 @@ describe.each([
     // Case-insensitive dedupe keeps the capitalised spelling.
     expect(v.audioLanguage).toEqual(["English", "spanish"]);
     expect(v.subtitleLanguage).toEqual(["French", "german"]);
-    expect(v.streamAudioCodec).toHaveLength(2);
-    expect((v.streamAudioCodec as string[]).map((c) => c.toLowerCase())).toEqual(["aac", "truehd"]);
+    // An upper-case first letter wins the dedupe, so the upper-cased duplicate
+    // is the spelling offered.
+    expect(v.streamAudioCodec).toEqual(["AAC", "TRUEHD"]);
 
-    expect(v.sqCodec).toEqual(expect.arrayContaining(["av1", "vp9"]));
+    expect(v.sqCodec).toEqual(["AAC", "av1", "TRUEHD", "vp9"]);
+    expect(v.sqLanguage).toEqual(["English", "French", "german", "spanish"]);
     expect(v.sqProfile).toEqual(["atmos", "high", "lc", "main"]);
     expect(v.sqLanguageCode).toEqual(["eng", "spa"]);
     expect(v.sqScanType).toEqual(["interlaced", "progressive"]);

@@ -20,7 +20,8 @@ function json(body: unknown, status = 200) {
 
 describe("password / Plex / proxy confirmations", () => {
   it("posts each proof to its own route and reports success", async () => {
-    const fetchMock = vi.fn(async () => json({ ok: true }));
+    // What each confirmation route answers on success.
+    const fetchMock = vi.fn(async () => json({ verified: true }));
     vi.stubGlobal("fetch", fetchMock);
 
     expect(await reauthWithPassword("hunter2")).toEqual({ ok: true });
@@ -36,12 +37,18 @@ describe("password / Plex / proxy confirmations", () => {
     expect(JSON.parse(String(calls[0][1].body))).toEqual({ password: "hunter2" });
     expect(JSON.parse(String(calls[1][1].body))).toEqual({ authToken: "plex-token" });
     expect(JSON.parse(String(calls[2][1].body))).toEqual({});
-    expect(calls[0][1].method).toBe("POST");
+    for (const [, init] of calls) {
+      expect(init.method).toBe("POST");
+      expect(init.headers).toEqual({ "Content-Type": "application/json" });
+    }
   });
 
   it("shows the server's error, or each route's fallback when the body has none", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => json({ error: "Wrong password" }, 403)));
-    expect(await reauthWithPassword("x")).toEqual({ ok: false, error: "Wrong password" });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => json({ error: "That password is not correct", code: "password_incorrect" }, 403)),
+    );
+    expect(await reauthWithPassword("x")).toEqual({ ok: false, error: "That password is not correct" });
 
     vi.stubGlobal("fetch", vi.fn(async () => new Response("not json", { status: 500 })));
     expect(await reauthWithPassword("x")).toEqual({ ok: false, error: "Couldn't confirm it's you" });
@@ -149,8 +156,17 @@ describe("reauthWithOidcPopup edge cases", () => {
     vi.useFakeTimers();
     const { popup, handlers } = setup(async () => json({ authorizationUrl: "https://idp.test/auth" }));
     const result = reauthWithOidcPopup();
+    let settled = false;
+    void result.then(() => {
+      settled = true;
+    });
     await vi.waitFor(() => expect(popup.location.href).toBe("https://idp.test/auth"));
-    await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+    // Still waiting just short of ten minutes…
+    await vi.advanceTimersByTimeAsync(10 * 60 * 1000 - 5_000);
+    expect(settled).toBe(false);
+    expect(popup.close).not.toHaveBeenCalled();
+    // …and given up once they have passed.
+    await vi.advanceTimersByTimeAsync(5_000);
     expect(await result).toEqual({ ok: false, error: "The SSO sign-in timed out. Try again." });
     expect(popup.close).toHaveBeenCalled();
     expect(handlers.size).toBe(0);

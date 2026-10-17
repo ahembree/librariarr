@@ -36,7 +36,12 @@ vi.mock("@/lib/cache/memory-cache", () => {
     invalidatePrefix: () => {},
     clear: () => {},
   };
-  return { MemoryCache: vi.fn(() => noopCache), appCache: noopCache };
+  return {
+    MemoryCache: vi.fn(function () {
+      return noopCache;
+    }),
+    appCache: noopCache,
+  };
 });
 
 // Import route handler AFTER mocks
@@ -121,20 +126,31 @@ describe("GET /api/media/history", () => {
       seasonNumber: 1,
       episodeNumber: 1,
     });
+    const movieLib = await createTestLibrary(serverId, { type: "MOVIE" });
+    const movie = await createTestMediaItem(movieLib.id, { type: "MOVIE", title: "Heat" });
+    const musicLib = await createTestLibrary(serverId, { type: "MUSIC" });
+    const track = await createTestMediaItem(musicLib.id, {
+      type: "MUSIC",
+      title: "Song",
+      parentTitle: "Artist",
+      albumTitle: "Album",
+    });
     await addWatch(episode.id);
+    await addWatch(movie.id);
+    await addWatch(track.id);
 
-    const series = await expectJson<HistoryResponse>(
-      await callRoute(GET, { url: "/api/media/history", searchParams: { type: "SERIES" } }),
-    );
-    expect(series.items).toHaveLength(1);
-    const either = await expectJson<HistoryResponse>(
-      await callRoute(GET, { url: "/api/media/history", searchParams: { type: "MOVIE|SERIES" } }),
-    );
-    expect(either.items).toHaveLength(1);
-    const movies = await expectJson<HistoryResponse>(
-      await callRoute(GET, { url: "/api/media/history", searchParams: { type: "MOVIE" } }),
-    );
-    expect(movies.items).toHaveLength(0);
+    const titlesFor = async (type: string) =>
+      (
+        await expectJson<HistoryResponse>(
+          await callRoute(GET, { url: "/api/media/history", searchParams: { type } }),
+        )
+      ).items
+        .map((i) => i.mediaItem.title)
+        .sort();
+
+    expect(await titlesFor("SERIES")).toEqual(["Pilot"]);
+    expect(await titlesFor("MOVIE")).toEqual(["Heat"]);
+    expect(await titlesFor("MOVIE|SERIES")).toEqual(["Heat", "Pilot"]);
   });
 
   it("matches the episode title", async () => {
@@ -194,10 +210,10 @@ describe("GET /api/media/history", () => {
       }),
     );
 
-    expect(data.items).toHaveLength(2);
-    expect(
-      data.items.every((i) => i.mediaItem.parentTitle === "Adventure Time"),
-    ).toBe(true);
+    expect(data.items.map((i) => i.mediaItem.title).sort()).toEqual([
+      "Slumber Party Panic",
+      "Trouble in Lumpy Space",
+    ]);
   });
 
   it("returns no rows for a non-matching search", async () => {
