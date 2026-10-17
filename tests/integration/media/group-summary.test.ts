@@ -146,6 +146,50 @@ describe("GET /api/media/[id]/group-summary", () => {
     expect(body.servers.map((s) => s.serverId)).toEqual([serverId]);
   });
 
+  // The fold keeps the FIRST row carrying each descriptive field, and the
+  // rows were read with no ORDER BY — heap order, i.e. here insertion order —
+  // so the summary showed whichever episode was stored first. Now: episode
+  // order (season, episode, id), as the series listing picks them.
+  it("takes descriptive fields from the first episode in episode order, not storage order", async () => {
+    const lib = await createTestLibrary(serverId, { type: "SERIES" });
+    const later = await createTestMediaItem(lib.id, {
+      type: "SERIES", parentTitle: "Show", title: "S2E1", seasonNumber: 2, episodeNumber: 1,
+      year: 2012, contentRating: "TV-MA", studio: "Late Studio", summary: "season two blurb", genres: ["Late"],
+    });
+    await createTestMediaItem(lib.id, {
+      type: "SERIES", parentTitle: "Show", title: "S1E2", seasonNumber: 1, episodeNumber: 2,
+      year: 2011, contentRating: "TV-PG", studio: "Mid Studio", summary: "episode two blurb", genres: ["Mid"],
+    });
+    await createTestMediaItem(lib.id, {
+      type: "SERIES", parentTitle: "Show", title: "S1E1", seasonNumber: 1, episodeNumber: 1,
+      year: 2010, contentRating: "TV-14", studio: "First Studio", summary: "pilot blurb", genres: ["First"],
+    });
+
+    const body = await expectJson<SeriesSummary>(await call(later.id, "SERIES"), 200);
+    expect(body).toMatchObject({
+      year: 2010, contentRating: "TV-14", studio: "First Studio", summary: "pilot blurb", genres: ["First"],
+    });
+  });
+
+  it("takes an artist's descriptive fields from the first track in album and track order", async () => {
+    const lib = await createTestLibrary(serverId, { type: "MUSIC" });
+    const later = await createTestMediaItem(lib.id, {
+      type: "MUSIC", parentTitle: "Artist", albumTitle: "B Album", title: "B1", seasonNumber: 1, episodeNumber: 1,
+      year: 2005, studio: "Later Label",
+    });
+    await createTestMediaItem(lib.id, {
+      type: "MUSIC", parentTitle: "Artist", albumTitle: "A Album", title: "A2", seasonNumber: 1, episodeNumber: 2,
+      year: 2001, studio: "Second Label",
+    });
+    await createTestMediaItem(lib.id, {
+      type: "MUSIC", parentTitle: "Artist", albumTitle: "A Album", title: "A1", seasonNumber: 1, episodeNumber: 1,
+      year: 2000, studio: "First Label",
+    });
+
+    const body = await expectJson<MusicSummary>(await call(later.id, "MUSIC"), 200);
+    expect(body).toMatchObject({ year: 2000, studio: "First Label" });
+  });
+
   it("keeps two same-titled shows apart by seriesKey", async () => {
     const lib = await createTestLibrary(serverId, { type: "SERIES" });
     const uk = await createTestMediaItem(lib.id, {

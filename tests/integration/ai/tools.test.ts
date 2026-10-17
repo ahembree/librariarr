@@ -68,6 +68,32 @@ describe("ai/tools", () => {
     ]);
   });
 
+  // The overview listed the stored spellings ("4k", "2160", "1080") where
+  // get_breakdown lists labels ("4K", "1080P"), so one resolution showed up
+  // as two rows and the two tools disagreed about the same library.
+  it("get_library_overview reports the resolutions and codecs get_breakdown reports", async () => {
+    const user = await createTestUser();
+    const server = await seedLibrary(user.id);
+    const lib = await createTestLibrary(server.id);
+    await createTestMediaItem(lib.id, { title: "C", resolution: "2160", videoCodec: "hevc" });
+    await createTestMediaItem(lib.id, { title: "D", resolution: "1080p", videoCodec: "h264" });
+    const music = await createTestLibrary(server.id, { type: "MUSIC" });
+    const track = await createTestMediaItem(music.id, { title: "T", type: "MUSIC" });
+    await getTestPrisma().mediaItem.update({ where: { id: track.id }, data: { resolution: null, videoCodec: null } });
+
+    const overview = (await tools.get("get_library_overview")!.execute(user.id, {})).data as any;
+    const breakdown = async (dimension: string) =>
+      ((await tools.get("get_breakdown")!.execute(user.id, { dimension })).data as any).rows;
+    const byValue = (a: any, b: any) => String(a.value).localeCompare(String(b.value));
+
+    expect([...overview.topResolutions].sort(byValue)).toEqual([
+      { value: "1080P", count: 2 },
+      { value: "4K", count: 2 },
+    ]);
+    expect([...overview.topResolutions].sort(byValue)).toEqual([...(await breakdown("resolution"))].sort(byValue));
+    expect([...overview.topVideoCodecs].sort(byValue)).toEqual([...(await breakdown("videoCodec"))].sort(byValue));
+  });
+
   it("get_breakdown rejects an unknown dimension", async () => {
     const user = await createTestUser();
     const res = await tools.get("get_breakdown")!.execute(user.id, { dimension: "bogus" });

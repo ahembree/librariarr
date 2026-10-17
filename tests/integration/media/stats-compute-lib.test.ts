@@ -327,13 +327,28 @@ describe("media stats compute (timeline, cross-tab, breakdown)", () => {
         { value: "2024-07", type: "MOVIE", _count: 1 },
         { value: "2023-05", type: "MOVIE", _count: 1 },
       ]);
-      const played = await computeBreakdown(playedMonth, [serverId], false);
-      // Exactly these two rows; where the null label sorts is not the point here.
-      expect(played).toHaveLength(2);
-      expect(played).toEqual(expect.arrayContaining([
-        { value: "Never", type: "MOVIE", _count: 2 },
+      // The null label sorts LAST: ordered by the label alone, "Never" (a
+      // letter) sorted above every dated bucket.
+      expect(await computeBreakdown(playedMonth, [serverId], false)).toEqual([
         { value: "2024-02", type: "MOVIE", _count: 1 },
-      ]));
+        { value: "Never", type: "MOVIE", _count: 2 },
+      ]);
+    });
+
+    it("orders date buckets newest first, the null label last and types within a bucket", async () => {
+      await movie("2024-01-05T00:00:00Z", { lastPlayedAt: new Date("2023-11-02T00:00:00Z") });
+      await movie("2024-01-05T00:00:00Z", { lastPlayedAt: new Date("2024-03-02T00:00:00Z") });
+      await movie("2024-01-05T00:00:00Z");
+      await createTestMediaItem(musicLib, { type: "MUSIC", addedAt: new Date("2024-01-05T00:00:00Z"), lastPlayedAt: new Date("2024-03-09T00:00:00Z") });
+      await createTestMediaItem(musicLib, { type: "MUSIC", addedAt: new Date("2024-01-05T00:00:00Z") });
+
+      expect(await computeBreakdown(playedMonth, [serverId], false)).toEqual([
+        { value: "2024-03", type: "MOVIE", _count: 1 },
+        { value: "2024-03", type: "MUSIC", _count: 1 },
+        { value: "2023-11", type: "MOVIE", _count: 1 },
+        { value: "Never", type: "MOVIE", _count: 1 },
+        { value: "Never", type: "MUSIC", _count: 1 },
+      ]);
     });
 
     it("buckets numbers and unnests genres under dedup", async () => {

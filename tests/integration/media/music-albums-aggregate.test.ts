@@ -213,4 +213,73 @@ describe("GET /api/media/music/albums — album aggregation", () => {
     expect(albums[0].summary).toBe("from one");
     expect(albums[0].year).toBe(2001);
   });
+
+  // The artist listing groups by LOWER(TRIM(parentTitle)), so "Air" and
+  // "air " are one artist there; this route matched the exact spelling it
+  // was handed and dropped the other spelling's tracks from the artist page.
+  it("lists every spelling the artist listing merges into the artist", async () => {
+    const user = await createTestUser();
+    setMockSession({ userId: user.id, isLoggedIn: true });
+    const server = await createTestServer(user.id);
+    const lib = await createTestLibrary(server.id, { type: "MUSIC" });
+    await createTestMediaItem(lib.id, { type: "MUSIC", title: "La Femme d'Argent", parentTitle: "Air", albumTitle: "Moon Safari" });
+    await createTestMediaItem(lib.id, { type: "MUSIC", title: "Sexy Boy", parentTitle: "air ", albumTitle: "Moon Safari" });
+    await createTestMediaItem(lib.id, { type: "MUSIC", title: "Cherry Blossom Girl", parentTitle: " AIR", albumTitle: "Talkie Walkie" });
+    // Not the same artist: the key is the whole trimmed name.
+    await createTestMediaItem(lib.id, { type: "MUSIC", title: "Other", parentTitle: "Air Supply", albumTitle: "Lost in Love" });
+
+    for (const parentTitle of ["Air", "air ", "AIR"]) {
+      const albums = await getAlbums({ parentTitle });
+      expect(albums.map((a) => [a.albumTitle, a.trackCount]), parentTitle).toEqual([
+        ["Moon Safari", 2],
+        ["Talkie Walkie", 1],
+      ]);
+    }
+    // A LIKE wildcard in the name is a literal, not a pattern.
+    expect(await getAlbums({ parentTitle: "A_r" })).toEqual([]);
+  });
+
+  // The fold reassigned the link on EVERY track with album art, so the album
+  // opened its LAST such track; the album listing links the first.
+  it("links the album to its first track with album art", async () => {
+    const user = await createTestUser();
+    setMockSession({ userId: user.id, isLoggedIn: true });
+    const server = await createTestServer(user.id);
+    const lib = await createTestLibrary(server.id, { type: "MUSIC" });
+    const prisma = getTestPrisma();
+    const tracks = [];
+    for (const n of [1, 2, 3]) {
+      tracks.push(await createTestMediaItem(lib.id, {
+        type: "MUSIC", title: `T${n}`, parentTitle: "Band", albumTitle: "Album", seasonNumber: 1, episodeNumber: n,
+      }));
+    }
+    await prisma.mediaItem.updateMany({
+      where: { id: { in: [tracks[1].id, tracks[2].id] } },
+      data: { parentThumbUrl: "/album.jpg" },
+    });
+
+    const [album] = await getAlbums({ parentTitle: "Band" });
+    expect(album.mediaItemId).toBe(tracks[1].id);
+  });
+
+  // Track order is disc (seasonNumber) then track number, as the album
+  // listing reads it: ordering by track number alone put disc 2's first track
+  // ahead of disc 1's second.
+  it("reads tracks in disc order before track order", async () => {
+    const user = await createTestUser();
+    setMockSession({ userId: user.id, isLoggedIn: true });
+    const server = await createTestServer(user.id);
+    const lib = await createTestLibrary(server.id, { type: "MUSIC" });
+    await createTestMediaItem(lib.id, {
+      type: "MUSIC", title: "D2T1", parentTitle: "Band", albumTitle: "Double", seasonNumber: 2, episodeNumber: 1,
+      summary: "from disc two", year: 2002,
+    });
+    const first = await createTestMediaItem(lib.id, {
+      type: "MUSIC", title: "D1T2", parentTitle: "Band", albumTitle: "Double", seasonNumber: 1, episodeNumber: 2,
+      summary: "from disc one", year: 2001,
+    });
+
+    const [album] = await getAlbums({ parentTitle: "Band" });
+    expect(album).toMatchObject({ mediaItemId: first.id, summary: "from disc one", year: 2001 });
+  });
 });

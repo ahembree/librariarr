@@ -234,6 +234,11 @@ async function queryDateBucket(
   const safeNullLabel = escapeSqlLiteral(nullLabel);
   const format = granularity === "month" ? "YYYY-MM" : "YYYY";
   const dedupClause = dedupEnabled ? `AND mi."dedupCanonical" = true` : "";
+  // Newest bucket first, the null label ("Never Played", "Unknown") LAST:
+  // ordered by the label alone it sorted first, letters after digits. The
+  // cards and the AI re-sort by count with a stable sort, so this is the order
+  // of equal counts. The group whose dates are all NULL is the null label's —
+  // ORDER BY cannot use the "value" alias inside an expression.
   return prisma.$queryRawUnsafe<BreakdownRow[]>(
     `SELECT
        CASE
@@ -248,7 +253,7 @@ async function queryDateBucket(
        ${dedupClause}
        ${typeClause}
      GROUP BY "value", mi.type
-     ORDER BY "value" DESC`,
+     ORDER BY MAX(mi."${dbField}") IS NULL, "value" DESC, "type"`,
     serverIds
   );
 }

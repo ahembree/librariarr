@@ -321,6 +321,10 @@ export async function GET(request: NextRequest) {
   // row in a subquery pinned with `OFFSET 0`; inlined, the planner substitutes
   // the regex CASE into each of the six FILTER clauses and evaluates it six
   // times per row.
+  //
+  // `ORDER BY group_key`: the list is sorted below with a stable sort, so this
+  // is the order of ties — shows with equal episode counts, or two same-titled
+  // shows — and a page boundary falls in the same place on every request.
   const [groups, representatives, groupServerPresence] = await Promise.all([
     prisma.$queryRawUnsafe<SeriesGroupRow[]>(
       `SELECT
@@ -370,7 +374,8 @@ export async function GET(request: NextRequest) {
         ${scope}
         OFFSET 0
       ) items
-      GROUP BY group_key`,
+      GROUP BY group_key
+      ORDER BY group_key`,
       ...params,
     ),
     // One row per show: show art wins over any server preference (a poster on

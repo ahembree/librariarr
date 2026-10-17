@@ -83,6 +83,38 @@ describe("GET /api/media/[id] — copies on other servers", () => {
     expect(body.playServers.find((p) => p.serverName === "Mike")!.machineId).toBe("m-Mike");
   });
 
+  // One entry per server, the first copy read winning — and the copies were
+  // read with no ORDER BY, so storage order decided which copy's rating key
+  // the play link opened. Now the oldest copy, as the grouped listings pick
+  // it. Both storage orders, since an unordered read may follow either.
+  it("lists the oldest copy when another server holds two", async () => {
+    const main = await itemOn("Mike", "movie:title:heat:1995");
+    const prisma = getTestPrisma();
+    const secondCopy = async (lib: { id: string }, ratingKey: string, createdAt?: Date) => {
+      const copy = await createTestMediaItem(lib.id, { title: "Heat", ratingKey });
+      await prisma.mediaItem.update({
+        where: { id: copy.id },
+        data: { dedupKey: "movie:title:heat:1995", ...(createdAt ? { createdAt } : {}) },
+      });
+      return copy;
+    };
+    // Yankee: the older copy is stored first.
+    const yankee = await itemOn("Yankee", "movie:title:heat:1995");
+    await prisma.mediaItem.update({ where: { id: yankee.item.id }, data: { createdAt: new Date("2000-01-01T00:00:00Z") } });
+    await secondCopy(yankee.lib, "rk-yankee-newer");
+    // Zulu: the older copy is stored second.
+    const zulu = await itemOn("Zulu", "movie:title:heat:1995");
+    const zuluOlder = await secondCopy(zulu.lib, "rk-zulu-older", new Date("2000-01-01T00:00:00Z"));
+
+    const body = await expectJson<Body>(
+      await callRouteWithParams(GET, { id: main.item.id }, { url: `/api/media/${main.item.id}` }),
+    );
+    expect(body.item.servers.find((s) => s.serverName === "Yankee")!.mediaItemId).toBe(yankee.item.id);
+    expect(body.playServers.find((p) => p.serverName === "Yankee")!.ratingKey).toBe("rk-Yankee");
+    expect(body.item.servers.find((s) => s.serverName === "Zulu")!.mediaItemId).toBe(zuluOlder.id);
+    expect(body.playServers.find((p) => p.serverName === "Zulu")!.ratingKey).toBe("rk-zulu-older");
+  });
+
   it("lists only its own server when no other copy exists", async () => {
     const main = await itemOn("Solo", "movie:title:heat:1995");
     const body = await expectJson<Body>(

@@ -93,12 +93,19 @@ describe("get_library_overview", () => {
       movieCount: 2, seriesCount: 1, seasonCount: 3, episodeCount: 10,
       artistCount: 0, albumCount: 0, musicCount: 0,
       totalSize: "3500000000", movieSize: BigInt(2_000_000_000), seriesSize: null, musicSize: undefined,
+      // Raw stored values, as computeLibraryStats returns them for the dashboard.
       qualityBreakdown: [
         { resolution: "1080", type: "MOVIE", _count: 2 },
-        { resolution: "1080", type: "SERIES", _count: 5 },
+        { resolution: "1080p", type: "SERIES", _count: 5 },
+        { resolution: "4k", type: "MOVIE", _count: 3 },
+        { resolution: "2160", type: "SERIES", _count: 1 },
         { resolution: null, type: "SERIES", _count: 1 },
+        { resolution: null, type: "MUSIC", _count: 40 },
       ],
-      videoCodecBreakdown: [{ videoCodec: "hevc", type: "MOVIE", _count: 2 }],
+      videoCodecBreakdown: [
+        { videoCodec: "hevc", type: "MOVIE", _count: 2 },
+        { videoCodec: null, type: "MUSIC", _count: 40 },
+      ],
       genreBreakdown: Array.from({ length: 12 }, (_, i) => ({ value: `G${i}`, _count: 12 - i })),
       topMovies: [{ title: "Heat", playCount: 4 }],
       topSeries: [{ parentTitle: "Lost", totalPlays: 9 }],
@@ -108,7 +115,14 @@ describe("get_library_overview", () => {
     expect(m.computeLibraryStats).toHaveBeenCalledWith(["s1"], false);
     expect(data.counts).toEqual({ movies: 2, series: 1, seasons: 3, episodes: 10, artists: 0, albums: 0, tracks: 0 });
     expect(data.storageGB).toEqual({ total: 3.5, movies: 2, series: 0, music: 0 });
-    expect(data.topResolutions).toEqual([{ value: "1080", count: 7 }, { value: "Unknown", count: 1 }]);
+    // Labelled as get_breakdown labels the same dimensions: one row per
+    // resolution label whatever its stored spelling, and no music tracks
+    // counted as an "Unknown" resolution or video codec.
+    expect(data.topResolutions).toEqual([
+      { value: "1080P", count: 7 },
+      { value: "4K", count: 4 },
+      { value: "Unknown", count: 1 },
+    ]);
     expect(data.topVideoCodecs).toEqual([{ value: "hevc", count: 2 }]);
     // The ten largest of twelve, in the order the stats came back.
     expect(data.topGenres).toEqual(Array.from({ length: 10 }, (_, i) => ({ value: `G${i}`, count: 12 - i })));

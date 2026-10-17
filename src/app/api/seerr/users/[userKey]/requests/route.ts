@@ -165,11 +165,12 @@ async function resolveUserRequests(
   });
   const serverIds = servers.map((s) => s.id);
 
-  // Movies: tmdbId -> matched MediaItem
-  const movieMap = new Map<
-    number,
-    { id: string; title: string; year: number | null; dedupKey: string | null }
-  >();
+  // Movies: tmdbId -> the MediaItem a request links to. Watch correlation
+  // reads EVERY canonical item's dedupKey (`movieDedupToTmdb`), not only the
+  // linked one's, exactly as `request-stats.ts` does: two editions of one film
+  // share a TMDB id, and a play of the second made the stats card count the
+  // request watched while this list called it unwatched.
+  const movieMap = new Map<number, { id: string; title: string; year: number | null }>();
   const movieDedupToTmdb = new Map<string, number>();
   if (tmdbIds.size > 0 && serverIds.length > 0) {
     const movies = await prisma.mediaItem.findMany({
@@ -186,16 +187,16 @@ async function resolveUserRequests(
         dedupKey: true,
         externalIds: { where: { source: "TMDB" }, select: { externalId: true } },
       },
+      // Which edition a request links to is the first one kept below.
+      orderBy: { id: "asc" },
     });
     for (const m of movies) {
       const tmdbStr = m.externalIds[0]?.externalId;
       if (!tmdbStr) continue;
       const tmdb = Number(tmdbStr);
       if (!Number.isFinite(tmdb)) continue;
-      if (!movieMap.has(tmdb)) {
-        movieMap.set(tmdb, { id: m.id, title: m.title, year: m.year, dedupKey: m.dedupKey });
-        if (m.dedupKey) movieDedupToTmdb.set(m.dedupKey, tmdb);
-      }
+      if (!movieMap.has(tmdb)) movieMap.set(tmdb, { id: m.id, title: m.title, year: m.year });
+      if (m.dedupKey) movieDedupToTmdb.set(m.dedupKey, tmdb);
     }
   }
 

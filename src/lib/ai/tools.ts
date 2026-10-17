@@ -43,6 +43,23 @@ function gb(bytesStr: string | bigint | null | undefined): number {
 
 type BreakdownRow = { value: string | null; type: string; _count: number };
 
+/**
+ * The library stats' raw per-(value, type) rows labelled as `get_breakdown`
+ * labels the same dimension: through its value map (stored "4k" and "2160"
+ * are both "4K", which the overview listed as two resolutions) and without
+ * the types it excludes (every music track counted as an "Unknown"
+ * resolution). The dashboard normalizes these rows itself, so the stats keep
+ * their raw values and the overview applies the dimension here.
+ */
+function asDimensionRows(dimensionId: string, rows: BreakdownRow[]): BreakdownRow[] {
+  const meta = getDimensionMeta(dimensionId);
+  if (!meta) return rows;
+  const excluded = new Set<string>(meta.excludeTypes ?? []);
+  return rows
+    .filter((r) => !excluded.has(r.type))
+    .map((r) => (meta.valueMapFn ? { ...r, value: meta.valueMapFn(r.value) } : r));
+}
+
 /** Sum a per-(value,type) breakdown into per-value totals, top N desc. */
 function aggregateByValue(rows: BreakdownRow[], mediaType: string | undefined, topN: number) {
   const totals = new Map<string, number>();
@@ -93,12 +110,12 @@ const getLibraryOverview: AiTool = {
         music: gb(stats.musicSize),
       },
       topResolutions: aggregateByValue(
-        stats.qualityBreakdown.map((r) => ({ value: r.resolution, type: r.type, _count: r._count })),
+        asDimensionRows("resolution", stats.qualityBreakdown.map((r) => ({ value: r.resolution, type: r.type, _count: r._count }))),
         undefined,
         8,
       ),
       topVideoCodecs: aggregateByValue(
-        stats.videoCodecBreakdown.map((r) => ({ value: r.videoCodec, type: r.type, _count: r._count })),
+        asDimensionRows("videoCodec", stats.videoCodecBreakdown.map((r) => ({ value: r.videoCodec, type: r.type, _count: r._count }))),
         undefined,
         8,
       ),

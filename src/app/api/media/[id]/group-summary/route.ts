@@ -118,6 +118,17 @@ async function computeGroupSummary(
         },
       },
     },
+    // The fold below keeps the FIRST row carrying each descriptive field, so
+    // the rows need a fixed order — unordered, Postgres returned them in heap
+    // order and an UPDATE could change which episode's year or rating the
+    // summary showed. The grouped listings' order: episode order for a show,
+    // album then track order for an artist (discs in seasonNumber), then id.
+    orderBy: [
+      ...(type === "MUSIC" ? [{ albumTitle: { sort: "asc" as const, nulls: "last" as const } }] : []),
+      { seasonNumber: { sort: "asc", nulls: "last" } },
+      { episodeNumber: { sort: "asc", nulls: "last" } },
+      { id: "asc" },
+    ],
   });
 
   // Server presence — keyed the same way getServerPresenceByGroup groups:

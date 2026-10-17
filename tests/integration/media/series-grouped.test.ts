@@ -44,6 +44,25 @@ vi.mock("@/lib/cache/memory-cache", () => {
 // Import route handler AFTER mocks
 import { GET } from "@/app/api/media/series/grouped/route";
 
+/**
+ * Rows of a raw statement with no top-level ORDER BY come back reversed. SQL
+ * promises no order there; that today's plan happens to emit GROUP BY output
+ * in key order is exactly what a pageable route must not lean on.
+ */
+function reverseUnorderedRawRows() {
+  const prisma = getTestPrisma();
+  const original = prisma.$queryRawUnsafe.bind(prisma);
+  return vi.spyOn(prisma, "$queryRawUnsafe").mockImplementation((async (sql: string, ...values: unknown[]) => {
+    const rows: unknown = await original(sql, ...values);
+    let topLevel = sql;
+    for (let prev = ""; prev !== topLevel; ) {
+      prev = topLevel;
+      topLevel = topLevel.replace(/\([^()]*\)/g, "");
+    }
+    return /\bORDER BY\b/i.test(topLevel) || !Array.isArray(rows) ? rows : [...rows].reverse();
+  }) as unknown as typeof prisma.$queryRawUnsafe);
+}
+
 describe("GET /api/media/series/grouped", () => {
   beforeEach(async () => {
     await cleanDatabase();
@@ -1023,6 +1042,41 @@ describe("GET /api/media/series/grouped", () => {
       expect(byKey.get("tvdb:73244")!.seasonCount).toBe(2);
       // Both still display "The Office".
       expect(body.series.every((s) => s.parentTitle === "The Office")).toBe(true);
+    });
+
+    // Rows tying on the sort (here: the title) used to come back in whatever
+    // order the GROUP BY produced, so a page boundary between same-titled shows
+    // could move between requests. The aggregate is ordered by seriesKey and
+    // the sort is stable, so ties are in seriesKey order and pages tile.
+    it("orders shows that tie on the sort by seriesKey, so pages do not shuffle", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const lib = await createTestLibrary(server.id, { type: "SERIES" });
+      for (const key of ["tvdb:300", "tvdb:100", "tvdb:400", "tvdb:200"]) {
+        await createTestMediaItem(lib.id, {
+          title: "Pilot", type: "SERIES", parentTitle: "Battlestar Galactica",
+          seriesKey: key, seasonNumber: 1, episodeNumber: 1,
+        });
+      }
+      setMockSession({ userId: user.id, isLoggedIn: true });
+
+      const keys = async (searchParams: Record<string, string>) =>
+        (await expectJson<{ series: { seriesKey: string }[] }>(
+          await callRoute(GET, { url: "/api/media/series/grouped", searchParams }),
+          200,
+        )).series.map((s) => s.seriesKey);
+
+      const expected = ["tvdb:100", "tvdb:200", "tvdb:300", "tvdb:400"];
+      const spy = reverseUnorderedRawRows();
+      try {
+        expect(await keys({ limit: "0" })).toEqual(expected);
+        expect(await keys({ limit: "0", sortBy: "episodeCount", sortOrder: "desc" })).toEqual(expected);
+        const paged: string[] = [];
+        for (let page = 1; page <= 4; page++) paged.push(...(await keys({ limit: "1", page: String(page) })));
+        expect(paged).toEqual(expected);
+      } finally {
+        spy.mockRestore();
+      }
     });
 
     it("keeps the same show on two servers as one row (cross-server merge)", async () => {

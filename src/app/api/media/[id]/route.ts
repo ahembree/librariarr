@@ -82,6 +82,11 @@ export async function GET(
           },
         },
       },
+      // One entry per server, the first copy kept: with two copies on one
+      // server, an unordered read let heap order pick which copy's rating key
+      // the play link opens. The oldest copy, as the grouped listings'
+      // presence (`getServerPresenceByGroup`) picks it, then id.
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     });
 
     const seenServerIds = new Set([ms.id]);

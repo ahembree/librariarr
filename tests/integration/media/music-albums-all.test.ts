@@ -40,6 +40,7 @@ vi.mock("@/lib/cache/memory-cache", () => {
 });
 
 import { GET } from "@/app/api/media/music/albums/all/route";
+import { MAX_GROUPED_LIST_LIMIT } from "@/lib/api/pagination";
 
 interface Album {
   albumTitle: string;
@@ -187,6 +188,35 @@ describe("GET /api/media/music/albums/all", () => {
     const second = await list("limit=2&page=2&sortBy=albumTitle");
     expect(second.albums.map((a) => a.albumTitle)).toEqual(["Talkie Walkie"]);
     expect(second.pagination.hasMore).toBe(false);
+  });
+
+  // The route read `limit` with a bare parseInt: `limit=-1` sliced to nothing
+  // and said `hasMore: true` forever, nothing capped a page, and `offset` (the
+  // documented way to page, and what `limit=0` progressive loading sends) was
+  // ignored. It now parses through `parseListPagination`, like the artists.
+  it("clamps the page size and honours offset, as the other list routes do", async () => {
+    const { lib } = await musicLibrary();
+    for (const album of ["Bloom", "Heaven", "Talkie Walkie"]) {
+      await createTestMediaItem(lib.id, { type: "MUSIC", parentTitle: "Artist", albumTitle: album });
+    }
+    const titles = (body: AlbumsBody) => body.albums.map((a) => a.albumTitle);
+
+    const negative = await list("limit=-1&sortBy=albumTitle");
+    expect(titles(negative)).toEqual(["Bloom"]);
+    expect(negative.pagination).toEqual({ page: 1, limit: 1, hasMore: true });
+
+    const huge = await list("limit=100000&sortBy=albumTitle");
+    expect(titles(huge)).toEqual(["Bloom", "Heaven", "Talkie Walkie"]);
+    expect(huge.pagination).toEqual({ page: 1, limit: MAX_GROUPED_LIST_LIMIT, hasMore: false });
+
+    const byOffset = await list("limit=1&offset=1&sortBy=albumTitle");
+    expect(titles(byOffset)).toEqual(["Heaven"]);
+    expect(byOffset.pagination.hasMore).toBe(true);
+
+    // `limit=0` is everything after an explicit offset.
+    const rest = await list("limit=0&offset=1&sortBy=albumTitle");
+    expect(titles(rest)).toEqual(["Heaven", "Talkie Walkie"]);
+    expect(rest.pagination).toEqual({ page: 1, limit: 0, hasMore: false });
   });
 
   it("counts only the canonical copy across servers", async () => {

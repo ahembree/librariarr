@@ -44,6 +44,25 @@ vi.mock("@/lib/cache/memory-cache", () => {
 // Import route handler AFTER mocks
 import { GET } from "@/app/api/media/series/all-seasons/route";
 
+/**
+ * Rows of a raw statement with no top-level ORDER BY come back reversed. SQL
+ * promises no order there; that today's plan happens to emit GROUP BY output
+ * in key order is exactly what a pageable route must not lean on.
+ */
+function reverseUnorderedRawRows() {
+  const prisma = getTestPrisma();
+  const original = prisma.$queryRawUnsafe.bind(prisma);
+  return vi.spyOn(prisma, "$queryRawUnsafe").mockImplementation((async (sql: string, ...values: unknown[]) => {
+    const rows: unknown = await original(sql, ...values);
+    let topLevel = sql;
+    for (let prev = ""; prev !== topLevel; ) {
+      prev = topLevel;
+      topLevel = topLevel.replace(/\([^()]*\)/g, "");
+    }
+    return /\bORDER BY\b/i.test(topLevel) || !Array.isArray(rows) ? rows : [...rows].reverse();
+  }) as unknown as typeof prisma.$queryRawUnsafe);
+}
+
 describe("GET /api/media/series/all-seasons", () => {
   beforeEach(async () => {
     await cleanDatabase();
@@ -307,6 +326,46 @@ describe("GET /api/media/series/all-seasons", () => {
     expect(body.seasons).toHaveLength(2);
     expect(body.seasons.every((x) => x.parentTitle === "The Office" && x.seasonNumber === 1)).toBe(true);
     expect(body.seasons.map((x) => x.seriesKey).sort()).toEqual(["tvdb:73244", "tvdb:78107"]);
+  });
+
+  // Seasons tying on the sort — two same-titled shows' Season 1 — came back in
+  // whatever order the GROUP BY produced. The aggregate is ordered by
+  // seriesKey + season and the sort is stable, so the tie order is fixed.
+  it("orders seasons that tie on the sort by seriesKey", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const lib = await createTestLibrary(server.id, { type: "SERIES" });
+    for (const key of ["tvdb:300", "tvdb:100", "tvdb:400", "tvdb:200"]) {
+      for (const season of [2, 1]) {
+        await createTestMediaItem(lib.id, {
+          title: "Pilot", type: "SERIES", parentTitle: "The Office",
+          seriesKey: key, seasonNumber: season, episodeNumber: 1,
+        });
+      }
+    }
+    setMockSession({ userId: user.id, isLoggedIn: true });
+
+    const rows = async (searchParams: Record<string, string>) =>
+      (await expectJson<{ seasons: { seriesKey: string; seasonNumber: number }[] }>(
+        await callRoute(GET, { url: "/api/media/series/all-seasons", searchParams }),
+        200,
+      )).seasons.map((s) => `${s.seriesKey}/${s.seasonNumber}`);
+
+    const spy = reverseUnorderedRawRows();
+    try {
+      // Title ties fall back to the season number, then to seriesKey.
+      expect(await rows({})).toEqual([
+        "tvdb:100/1", "tvdb:200/1", "tvdb:300/1", "tvdb:400/1",
+        "tvdb:100/2", "tvdb:200/2", "tvdb:300/2", "tvdb:400/2",
+      ]);
+      // Every season ties on its episode count: seriesKey, then season.
+      expect(await rows({ sortBy: "episodeCount", sortOrder: "desc" })).toEqual([
+        "tvdb:100/1", "tvdb:100/2", "tvdb:200/1", "tvdb:200/2",
+        "tvdb:300/1", "tvdb:300/2", "tvdb:400/1", "tvdb:400/2",
+      ]);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   // The All Seasons tab forwards every library filter; this route used to read

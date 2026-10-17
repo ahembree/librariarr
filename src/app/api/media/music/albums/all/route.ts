@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { jsonResponse } from "@/lib/api/json-response";
+import { MAX_GROUPED_LIST_LIMIT, parseListPagination } from "@/lib/api/pagination";
 import { prisma } from "@/lib/db";
 import { escapeLike } from "@/lib/filters/escape-like";
 import { applyCommonFilters } from "@/lib/filters/build-where";
@@ -55,12 +56,14 @@ export async function GET(request: NextRequest) {
   const search = searchParams.get("search");
   const sortBy = searchParams.get("sortBy") || "albumTitle";
   const sortOrder = searchParams.get("sortOrder") || "asc";
-  const limitParam = searchParams.get("limit");
-  const pageParam = searchParams.get("page");
+  // The shared parser, as on the artist listing beside it: this route read
+  // `limit` with a bare parseInt, so `limit=-1` sliced to nothing and answered
+  // `hasMore: true` forever, nothing capped a page, and `offset` was ignored.
+  const { page, limit, skip } = parseListPagination(searchParams, { maxLimit: MAX_GROUPED_LIST_LIMIT });
 
   const sf = await resolveServerFilter(session.userId!, serverId, "MUSIC");
   if (!sf) {
-    return NextResponse.json({ albums: [], pagination: { page: 1, limit: 50, hasMore: false } });
+    return NextResponse.json({ albums: [], pagination: { page, limit, hasMore: false } });
   }
 
   // Aggregated in SQL, like the artist and series listings: this loaded every
@@ -230,25 +233,12 @@ export async function GET(request: NextRequest) {
     }
   });
 
-  // Pagination
-  const parsedLimit = limitParam !== null ? parseInt(limitParam, 10) : 50;
-  const limit = Number.isNaN(parsedLimit) ? 50 : parsedLimit;
-  const page = pageParam !== null ? Math.max(1, parseInt(pageParam, 10) || 1) : 1;
-
-  if (limit === 0) {
-    return jsonResponse(request, {
-      albums,
-      pagination: { page: 1, limit: 0, hasMore: false },
-    });
+  if (limit > 0) {
+    const fetched = albums.slice(skip, skip + limit + 1);
+    const hasMore = fetched.length > limit;
+    if (hasMore) fetched.pop();
+    return jsonResponse(request, { albums: fetched, pagination: { page, limit, hasMore } });
   }
-
-  const start = (page - 1) * limit;
-  const fetched = albums.slice(start, start + limit + 1);
-  const hasMore = fetched.length > limit;
-  if (hasMore) fetched.pop();
-
-  return jsonResponse(request, {
-    albums: fetched,
-    pagination: { page, limit, hasMore },
-  });
+  // `limit=0` is everything — after an explicit `offset`, as on the flat lists.
+  return jsonResponse(request, { albums: albums.slice(skip), pagination: { page, limit, hasMore: false } });
 }

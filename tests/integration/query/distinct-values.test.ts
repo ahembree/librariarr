@@ -298,5 +298,37 @@ describe("GET /api/query/distinct-values", () => {
       expect(body.watchedByUser).toEqual(["alice", "bob"]);
     });
 
+    // A `watchedByUser` rule matches only completed plays (COMPLETED_PLAY_FILTER
+    // in Phase 1, completedPlaySql in Phase 2), so a user whose only rows are
+    // partial Tracearr plays was offered as a value no rule could ever match.
+    it("offers only users with a completed play", async () => {
+      const { getTestPrisma } = await import("../../setup/test-db");
+      const prisma = getTestPrisma();
+      const user = await createTestUser();
+      setMockSession({ userId: user.id, isLoggedIn: true });
+      const server = await createTestServer(user.id);
+      const lib = await createTestLibrary(server.id);
+      const item = await createTestMediaItem(lib.id, { title: "A", type: "MOVIE" });
+      const tracearr = (id: string, serverUsername: string, watched: boolean) => ({
+        mediaItemId: item.id, mediaServerId: server.id, serverUsername, watchedAt: new Date("2024-03-01T20:00:00Z"),
+        source: "TRACEARR", sourceEventId: id, watched,
+      });
+      await prisma.watchHistory.createMany({
+        data: [
+          // A native row: `watched` is null and it counts.
+          { mediaItemId: item.id, mediaServerId: server.id, serverUsername: "alice", watchedAt: new Date("2024-03-01T20:00:00Z") },
+          tracearr("e1", "bob", true),
+          tracearr("e2", "bob", false),
+          // Only ever abandoned partway.
+          tracearr("e3", "carol", false),
+          tracearr("e4", "carol", false),
+        ],
+      });
+
+      const response = await callRoute(GET, { url: "/api/query/distinct-values" });
+      const body = await expectJson<{ watchedByUser: string[] }>(response, 200);
+      expect(body.watchedByUser).toEqual(["alice", "bob"]);
+    });
+
   });
 });

@@ -117,6 +117,25 @@ describe("Saved queries API", () => {
       const body = await expectJson<{ queries: { name: string }[] }>(response, 200);
       expect(body.queries.map((q) => q.name)).toEqual(["Second", "First", "Third"]);
     });
+
+    // Ordered by `updatedAt` alone, two queries saved in the same millisecond
+    // came back in whatever order Postgres read them and could swap between
+    // loads; `id` makes the order total.
+    it("orders queries with the same updatedAt by id", async () => {
+      const user = await createTestUser();
+      setMockSession({ userId: user.id, isLoggedIn: true });
+      // One shared timestamp, stored in descending id order — the order an
+      // unordered tie came back in.
+      const prisma = getTestPrisma();
+      const at = new Date("2024-05-01T12:00:00Z");
+      for (const id of ["sq-c", "sq-b", "sq-a"]) {
+        await prisma.savedQuery.create({ data: { id, userId: user.id, name: id, query: makeQuery(), updatedAt: at } });
+      }
+
+      const response = await callRoute(GET, { url: "/api/saved-queries" });
+      const body = await expectJson<{ queries: { id: string }[] }>(response, 200);
+      expect(body.queries.map((q) => q.id)).toEqual(["sq-a", "sq-b", "sq-c"]);
+    });
   });
 
   // ===== POST /api/saved-queries =====

@@ -340,6 +340,53 @@ describe("GET /api/seerr/users/[userKey]/requests", () => {
     expect(body.requests[0].watch.watched).toBe(true);
   });
 
+  // Two canonical items can share a TMDB id (two editions with different
+  // dedupKeys). The drill-down checked plays against the FIRST item's dedupKey
+  // only, while `request-stats.ts` — the card it drills into — checks every
+  // item's: a play of the second edition read as watched on the card and
+  // unwatched here.
+  it("counts a play of any edition of the requested movie as watched, like the stats card", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const library = await createTestLibrary(server.id, { type: "MOVIE" });
+    const prisma = getTestPrisma();
+    const editions = [];
+    for (const [title, dedupKey] of [["Blade Runner", "blade-runner-theatrical"], ["Blade Runner (Final Cut)", "blade-runner-final-cut"]]) {
+      const movie = await createTestMediaItem(library.id, { type: "MOVIE", title });
+      await prisma.mediaItem.update({ where: { id: movie.id }, data: { dedupKey, dedupCanonical: true } });
+      await createTestExternalId(movie.id, "TMDB", "78");
+      editions.push(movie);
+    }
+    // Only the edition stored second was played.
+    await prisma.watchHistory.create({
+      data: {
+        mediaItemId: editions[1].id,
+        mediaServerId: server.id,
+        serverUsername: "alice",
+        watchedAt: new Date("2024-06-01T20:00:00Z"),
+      },
+    });
+
+    await createTestSeerrInstance(user.id);
+    setMockSession({ userId: user.id, isLoggedIn: true });
+    mockGetRequests.mockResolvedValue({
+      pageInfo: { page: 1, pages: 1, results: 1 },
+      results: [makeRequest(1, "movie", { id: 1, username: "alice", plexUsername: "alice" }, { tmdbId: 78 })],
+    });
+
+    const body = await expectJson<{
+      requests: { mediaItem: { id: string } | null; watch: { watched: boolean } }[];
+    }>(await callRouteWithParams(GET, { userKey: "alice" }), 200);
+    expect(body.requests).toHaveLength(1);
+    expect(editions.map((e) => e.id)).toContain(body.requests[0].mediaItem?.id);
+    expect(body.requests[0].watch.watched).toBe(true);
+
+    // The card this list drills into agrees.
+    const { getSeerrRequestStats } = await import("@/lib/seerr/request-stats");
+    const stats = await getSeerrRequestStats(user.id);
+    expect(stats.users.find((u) => u.userKey === "alice")).toMatchObject({ movieCount: 1, moviesWatched: 1 });
+  });
+
   it("does not count an abandoned Tracearr play as watched", async () => {
     // `request-stats.ts` computes the aggregate "watched" counts over this same
     // table for this same user WITH `COMPLETED_PLAY_FILTER`. Without it here, a
