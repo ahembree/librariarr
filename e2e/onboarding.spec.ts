@@ -27,10 +27,11 @@ const PLEX_SERVER = {
 /** No server exists yet, and the account holds no Plex token until `linked()`. */
 async function stubServers(page: Page) {
   let linked = false;
+  // The route answers 401 for an account with no Plex account linked.
   await page.route(isPath("/api/auth/plex/servers"), (route) =>
     linked
       ? route.fulfill({ json: { servers: [PLEX_SERVER] } })
-      : route.fulfill({ status: 400, json: { error: "No Plex token" } }),
+      : route.fulfill({ status: 401, json: { error: "Unauthorized" } }),
   );
   return { link: () => { linked = true; } };
 }
@@ -49,11 +50,14 @@ test.describe("onboarding — Jellyfin", () => {
       creates.push(route.request());
       return route.fulfill({ status: 201, json: { server: { id: "srv-jf" } } });
     });
-    await page.route(isPath("/api/servers/srv-jf/libraries"), (route) =>
-      route.fulfill({
-        json: { libraries: [{ key: "lib-1", title: "Films", type: "movie", enabled: true, exists: false }] },
-      }),
-    );
+    // A server just created has no stored libraries: each is new and off.
+    const libraryReads: Request[] = [];
+    await page.route(isPath("/api/servers/srv-jf/libraries"), (route) => {
+      libraryReads.push(route.request());
+      return route.fulfill({
+        json: { libraries: [{ key: "f137a2dd21bbc1b99aa5c0f6bf02a805", title: "Films", type: "MOVIE", enabled: false, exists: false }] },
+      });
+    });
 
     await page.goto("/onboarding");
     await page.getByRole("button", { name: /Jellyfin/ }).click();
@@ -74,6 +78,8 @@ test.describe("onboarding — Jellyfin", () => {
     await page.getByRole("button", { name: "Select Libraries" }).click();
     await expect(page.getByText("Films")).toBeVisible();
     expect(creates).toHaveLength(1);
+    // The libraries are read from the server that was just created.
+    expect(libraryReads).toHaveLength(1);
     expect(creates[0].postDataJSON()).toMatchObject({
       name: "Living Room",
       url: "http://jellyfin.lan:8096",
@@ -135,7 +141,7 @@ test.describe("onboarding — Plex linked during onboarding", () => {
     );
     await page.route(isPath("/api/auth/plex/link"), (route) => {
       servers.link();
-      return route.fulfill({ json: { linked: true } });
+      return route.fulfill({ json: { linked: true, plexUsername: "e2e-plex-user" } });
     });
 
     await page.goto("/onboarding");

@@ -48,8 +48,17 @@ test.describe("reauth popup landing page", () => {
     const popup = await context.newPage();
     await popup.goto("/login/reauth?pending=1");
     await expect(popup.getByText(/Connecting to your sign-in provider/i)).toBeVisible();
-    await popup.waitForTimeout(500);
-    expect(await page.evaluate(() => (window as unknown as { __reports: unknown[] }).__reports)).toEqual([]);
+    // The pending text is also what the server renders, so it does not show the
+    // page has run; wait for the page to go quiet, then let a second popup
+    // report. The listener hearing that one, and only that one, shows it works
+    // and that the pending page sent nothing.
+    await popup.waitForLoadState("networkidle");
+    const sentinel = await context.newPage();
+    await sentinel.goto("/login/reauth?status=ok&nonce=after-pending");
+
+    await expect
+      .poll(() => page.evaluate(() => (window as unknown as { __reports: unknown[] }).__reports))
+      .toEqual([{ type: TYPE, ok: true, nonce: "after-pending" }]);
   });
 
   test("a script-opened popup reports to its opener and closes itself", async ({ page }) => {
@@ -65,7 +74,9 @@ test.describe("reauth popup landing page", () => {
     const popupPromise = page.waitForEvent("popup");
     await page.evaluate(() => window.open("/login/reauth?status=ok&nonce=opener-1", "reauth"));
     const popup = await popupPromise;
-    await popup.waitForEvent("close");
+    // Polled rather than awaited as an event: the page may close itself before
+    // a `close` listener could be attached.
+    await expect.poll(() => popup.isClosed()).toBe(true);
 
     await expect
       .poll(() => page.evaluate(() => (window as unknown as { __opener: unknown[] }).__opener))

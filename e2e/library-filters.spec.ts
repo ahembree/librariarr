@@ -14,20 +14,33 @@ import { test, expect, type Page } from "@playwright/test";
 
 const isPath = (path: string) => (url: URL) => url.pathname === path;
 
+/** One row of `/api/media/series/grouped` (single server: the presence is that server). */
 function show(parentTitle: string, seriesKey: string) {
+  const mediaItemId = `mi-${seriesKey}`;
   return {
     parentTitle,
     seriesKey,
-    mediaItemId: `mi-${seriesKey}`,
+    mediaItemId,
     episodeCount: 10,
     seasonCount: 1,
-    totalSize: "0",
+    totalSize: "21474836480",
     lastPlayed: null,
-    addedAt: null,
+    addedAt: "2024-03-01T12:00:00.000Z",
+    watchedEpisodeCount: 0,
+    watchedEpisodePercentage: 0,
+    lastEpisodeAiredAt: "2008-03-09T00:00:00.000Z",
+    isWatchlisted: false,
     qualityCounts: { "1080P": 10 },
-    servers: [],
+    thumbUrl: null,
+    servers: [{ serverId: "srv-1", serverName: "Plex", serverType: "PLEX", mediaItemId }],
     summary: null,
-    genres: null,
+    genres: ["Drama"],
+    studio: null,
+    contentRating: "TV-MA",
+    rating: null,
+    ratingImage: null,
+    audienceRating: null,
+    audienceRatingImage: null,
     year: 2008,
   };
 }
@@ -52,7 +65,9 @@ test.describe("library — Series page filters", () => {
         json: {
           // The route's answer for the search, whatever its titles say: the
           // page must list it as given rather than filter it again.
-          series: search ? [show("Server Answer", "tvdb:1")] : [show("Unfiltered One", "tvdb:2"), show("Unfiltered Two", "tvdb:3")],
+          series: search
+            ? [show("Server Answer", "tvdb:81189")]
+            : [show("Unfiltered One", "tvdb:79168"), show("Unfiltered Two", "tvdb:73255")],
           pagination: { page: 1, limit: 0, hasMore: false },
         },
       });
@@ -74,6 +89,21 @@ test.describe("library — Series page filters", () => {
 });
 
 test.describe("library — filters each listing offers", () => {
+  /**
+   * Searches the open panel for `label` and asserts it is not offered. The
+   * search first shows `control`, a filter this listing does offer, and the
+   * absence is checked only once `control` has gone under the new search —
+   * checked straight after typing, it would pass before the panel redrew.
+   */
+  async function expectNotOffered(page: Page, label: string, control: string, path: string) {
+    const search = page.getByPlaceholder("Search filters...");
+    await search.fill(control);
+    await expect(page.getByText(control, { exact: true }), path).toBeVisible();
+    await search.fill(label);
+    await expect(page.getByText(control, { exact: true }), path).toHaveCount(0);
+    await expect(page.getByText(label, { exact: true }), path).toHaveCount(0);
+  }
+
   test("the show-level filters are offered on the Series tab only", async ({ page }) => {
     await page.goto("/library/series");
     await searchFilterPanel(page, "Episode Count");
@@ -81,15 +111,24 @@ test.describe("library — filters each listing offers", () => {
 
     for (const path of ["/library/series/seasons", "/library/series/episodes"]) {
       await page.goto(path);
-      await searchFilterPanel(page, "Episode Count");
-      await expect(page.getByText("Episode Count", { exact: true }), path).toHaveCount(0);
+      await searchFilterPanel(page, "Play Count");
+      await expectNotOffered(page, "Episode Count", "Play Count", path);
     }
   });
 
   test("the track-count filters are offered on Movies only", async ({ page }) => {
+    // Content Rating is drawn from the same answer as the track counts, so its
+    // presence shows the values have arrived — before that the track-count
+    // section would be missing on Movies too.
     await page.route(isPath("/api/media/distinct-values"), (route) =>
       route.fulfill({
-        json: { audioStreamCountMin: 1, audioStreamCountMax: 4, subtitleStreamCountMin: 0, subtitleStreamCountMax: 3 },
+        json: {
+          contentRating: ["PG-13", "R"],
+          audioStreamCountMin: 1,
+          audioStreamCountMax: 4,
+          subtitleStreamCountMin: 0,
+          subtitleStreamCountMax: 3,
+        },
       }),
     );
 
@@ -99,8 +138,8 @@ test.describe("library — filters each listing offers", () => {
 
     for (const path of ["/library/series/episodes", "/library/music/tracks"]) {
       await page.goto(path);
-      await searchFilterPanel(page, "Audio Tracks");
-      await expect(page.getByText("Audio Tracks", { exact: true }), path).toHaveCount(0);
+      await searchFilterPanel(page, "Content Rating");
+      await expectNotOffered(page, "Audio Tracks", "Content Rating", path);
     }
   });
 });

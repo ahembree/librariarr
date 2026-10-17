@@ -14,6 +14,8 @@ test.describe("security headers", () => {
     const csp = headers["content-security-policy"] ?? "";
     for (const directive of [
       "default-src 'self'",
+      // The production policy: inline scripts (Next's bootstrap), never eval.
+      "script-src 'self' 'unsafe-inline'",
       "frame-ancestors 'none'",
       "object-src 'none'",
       "base-uri 'self'",
@@ -25,6 +27,7 @@ test.describe("security headers", () => {
     expect(headers["x-content-type-options"]).toBe("nosniff");
     expect(headers["x-frame-options"]).toBe("DENY");
     expect(headers["referrer-policy"]).toBe("strict-origin-when-cross-origin");
+    expect(headers["permissions-policy"]).toBe("camera=(), microphone=(), geolocation=()");
     expect(headers["x-powered-by"]).toBeUndefined();
   });
 
@@ -38,6 +41,9 @@ test.describe("security headers", () => {
     test(`${path.split("?")[0]} is served under a policy that runs nothing`, async ({ request }) => {
       const res = await request.get(path);
       expect(res.headers()["content-security-policy"]).toBe("default-src 'none'; sandbox");
+      // The later entry replaces only the policy; the catch-all's other
+      // headers still apply to these paths.
+      expect(res.headers()["x-content-type-options"]).toBe("nosniff");
     });
   }
 });

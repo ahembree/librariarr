@@ -27,40 +27,48 @@ test.describe("events from background work reach the page", () => {
     await cleanupUnreachableServer(LATE_SERVER);
   });
 
-  /** Resolves with the first `type` event the page's own stream delivers for the server. */
-  function waitForStreamEvent(page: Page, type: string, serverId: string, timeoutMs: number) {
-    return page.evaluate(
+  /**
+   * Opens a stream of the page's own and returns once it is subscribed — the
+   * route subscribes to the event bus before it sends `connected`. The
+   * returned function resolves with whether a `type` event for the server
+   * arrived within `timeoutMs`.
+   */
+  async function listenForStreamEvent(page: Page, type: string, serverId: string, timeoutMs: number) {
+    await page.evaluate(
       ({ type, serverId, timeoutMs }) =>
-        new Promise<boolean>((resolve) => {
+        new Promise<void>((subscribed) => {
           const source = new EventSource("/api/events/stream");
-          const timer = setTimeout(() => {
-            source.close();
-            resolve(false);
-          }, timeoutMs);
-          source.addEventListener(type, (event) => {
-            const data = JSON.parse((event as MessageEvent).data) as { serverId?: string };
-            if (data.serverId !== serverId) return;
-            clearTimeout(timer);
-            source.close();
-            resolve(true);
+          (window as unknown as { __streamEvent: Promise<boolean> }).__streamEvent = new Promise<boolean>((resolve) => {
+            const finish = (seen: boolean) => {
+              clearTimeout(timer);
+              source.close();
+              subscribed();
+              resolve(seen);
+            };
+            const timer = setTimeout(() => finish(false), timeoutMs);
+            source.addEventListener("connected", () => subscribed(), { once: true });
+            source.addEventListener(type, (event) => {
+              const data = JSON.parse((event as MessageEvent).data) as { serverId?: string };
+              if (data.serverId === serverId) finish(true);
+            });
           });
         }),
       { type, serverId, timeoutMs },
     );
+    return () => page.evaluate(() => (window as unknown as { __streamEvent: Promise<boolean> }).__streamEvent);
   }
 
   test("a sync's failure, announced by the job worker, arrives on the event stream", async ({ page, baseURL }) => {
     await page.goto("/settings#servers");
     // `sync:started` is announced by the route as well; `sync:failed` only by
     // the run in the worker.
-    const failed = waitForStreamEvent(page, "sync:failed", UNREACHABLE_SERVER.id, 60_000);
-    // Let the stream open before the run can finish.
-    await page.waitForTimeout(1_000);
+    // Subscribed before the sync is requested, so the run cannot finish first.
+    const failed = await listenForStreamEvent(page, "sync:failed", UNREACHABLE_SERVER.id, 60_000);
     const res = await page.request.post(`/api/servers/${UNREACHABLE_SERVER.id}/sync`, {
       headers: { Origin: baseURL! },
     });
     expect(res.ok()).toBe(true);
-    expect(await failed).toBe(true);
+    expect(await failed()).toBe(true);
   });
 
   test("a server's connection state, from the realtime manager, reaches the page and its Settings line", async ({ page }) => {
@@ -71,10 +79,9 @@ test.describe("events from background work reach the page", () => {
     // reconcile (at most a minute) and the connection is refused at once, so
     // its first `server-status` can only arrive over the stream — the page's
     // 60s fallback poll cannot stand in for a lost push here.
-    const pushed = waitForStreamEvent(page, "server-status", LATE_SERVER.id, 100_000);
-    await page.waitForTimeout(1_000);
+    const pushed = await listenForStreamEvent(page, "server-status", LATE_SERVER.id, 100_000);
     await seedUnreachableServer(LATE_SERVER);
-    expect(await pushed).toBe(true);
+    expect(await pushed()).toBe(true);
 
     // The page refetches on that same push.
     await expect(

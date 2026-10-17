@@ -14,8 +14,18 @@ const isPath = (path: string) => (url: URL) => url.pathname === path;
 
 test.describe("tools — AI Analysis", () => {
   test.beforeEach(async ({ page }) => {
+    // The GET route's shape: the key itself is never sent, only whether one is stored.
     await page.route(isPath("/api/settings/ai"), (route) =>
-      route.fulfill({ json: { enabled: true, provider: "openai-compatible", baseUrl: "http://llm.lan", model: "test-model" } }),
+      route.fulfill({
+        json: {
+          enabled: true,
+          provider: "openai-compatible",
+          baseUrl: "http://llm.lan:11434/v1",
+          model: "llama3.1:8b",
+          apiKey: "",
+          hasApiKey: false,
+        },
+      }),
     );
   });
 
@@ -43,21 +53,32 @@ test.describe("tools — AI Analysis", () => {
       await expect(page.getByText(`answer ${i}`, { exact: true })).toBeVisible();
     }
 
+    expect(requests).toHaveLength(21);
+    // 41 turns by then (20 questions, 20 answers, the 21st question): the
+    // newest 40 open on "answer 1", which is dropped so the history starts on
+    // a user turn — 39 turns, "question 2" through "question 21".
     const last = requests.at(-1)!.postDataJSON() as { messages: { role: string; content: string }[] };
-    expect(last.messages.length).toBeLessThanOrEqual(40);
-    expect(last.messages[0].role).toBe("user");
+    expect(last.messages).toHaveLength(39);
+    expect(last.messages[0]).toEqual({ role: "user", content: "question 2" });
+    expect(last.messages[1]).toEqual({ role: "assistant", content: "answer 2" });
     expect(last.messages.at(-1)).toEqual({ role: "user", content: "question 21" });
   });
 
   test("a validation refusal names what was wrong", async ({ page }) => {
     await page.route(isPath("/api/ai/chat"), (route) =>
-      route.fulfill({ status: 400, json: { error: "Validation failed", details: ["messages.0.content: Too big"] } }),
+      // validateRequest's detail format: `<path>: <zod message>`.
+      route.fulfill({
+        status: 400,
+        json: { error: "Validation failed", details: ["messages.0.content: Too big: expected string to have <=8000 characters"] },
+      }),
     );
 
     await page.goto("/tools/ai");
     const box = page.getByRole("textbox");
     await box.fill("how many movies?");
     await box.press("Enter");
-    await expect(page.getByText(/Validation failed — messages\.0\.content: Too big/)).toBeVisible();
+    await expect(
+      page.getByText("Validation failed — messages.0.content: Too big: expected string to have <=8000 characters"),
+    ).toBeVisible();
   });
 });

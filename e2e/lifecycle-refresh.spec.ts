@@ -17,6 +17,7 @@ import { test, expect, type Page, type Route } from "@playwright/test";
 
 const isPath = (path: string) => (url: URL) => url.pathname === path;
 
+/** A rule set as `/api/lifecycle/rules/matches` lists it (with its collection). */
 function ruleSet(overrides: Record<string, unknown> = {}) {
   return {
     id: "rs-leaving",
@@ -32,6 +33,7 @@ function ruleSet(overrides: Record<string, unknown> = {}) {
     addArrTags: [],
     removeArrTags: [],
     collectionName: "Leaving Soon",
+    collectionSort: "ALPHABETICAL",
     ...overrides,
   };
 }
@@ -48,7 +50,7 @@ async function quietEvents(page: Page) {
     route.fulfill({
       status: 200,
       headers: { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" },
-      body: "retry: 600000\n\nevent: connected\ndata: {}\n\n",
+      body: `retry: 600000\n\nevent: connected\ndata: ${JSON.stringify({ timestamp: Date.now() })}\n\n`,
     }),
   );
 }
@@ -62,12 +64,14 @@ test.describe("lifecycle — matches after a run", () => {
         matchesGets++;
         return route.fulfill({ json: { ruleMatches: [{ ruleSet: ruleSet(), items: [], count: 0 }] } });
       });
-      // Detection's result rows: the same rule set without the page-only fields.
+      // Detection's result rows (`{ ruleMatches, skipped }`): the same rule set
+      // without the listing-only collection fields.
       await page.route(isPath("/api/lifecycle/rules/run"), (route) => {
-        const detectionRow = ruleSet();
-        delete (detectionRow as Record<string, unknown>).collectionName;
+        const detectionRow: Record<string, unknown> = ruleSet();
+        delete detectionRow.collectionName;
+        delete detectionRow.collectionSort;
         return route.fulfill({
-          json: { success: true, ruleMatches: [{ ruleSet: detectionRow, items: [], count: 0 }], skipped: [] },
+          json: { ruleMatches: [{ ruleSet: detectionRow, items: [], count: 0 }], skipped: [] },
         });
       });
 
@@ -117,10 +121,10 @@ test.describe("lifecycle — matches after overlapping runs", () => {
     });
     await page.route(isPath("/api/lifecycle/rules/run"), async (route) => {
       const { ruleSetId } = route.request().postDataJSON() as { ruleSetId: string };
-      if (ruleSetId !== "rs-b") return route.fulfill({ json: { success: true, ruleMatches: [], skipped: [] } });
+      if (ruleSetId !== "rs-b") return route.fulfill({ json: { ruleMatches: [], skipped: [] } });
       await new Promise((resolve) => setTimeout(resolve, 400));
       bReturned = true;
-      await route.fulfill({ json: { success: true, ruleMatches: [], skipped: [] } });
+      await route.fulfill({ json: { ruleMatches: [], skipped: [] } });
     });
 
     await page.goto("/lifecycle/matches");
@@ -138,6 +142,8 @@ test.describe("lifecycle — matches after overlapping runs", () => {
     // The stale read lands after the newer one, and must be dropped.
     await expect.poll(() => staleDelivered, { timeout: 10_000 }).toBe(true);
     expect(reads).toBeGreaterThanOrEqual(3);
+    // Nothing on the page changes when a stale answer is dropped, so give it
+    // a moment to (not) apply what it has just received before looking.
     await page.waitForTimeout(500);
     await expect(page.getByText("Collection: B After")).toBeVisible();
     await expect(page.getByText("Collection: B Before")).toHaveCount(0);
@@ -187,6 +193,7 @@ test.describe("lifecycle — stale responses", () => {
 
     // The Pending answer arrives after the Completed one …
     await expect.poll(() => pendingDelivered, { timeout: 10_000 }).toBe(true);
+    // Dropping it changes nothing on screen: a moment to (not) apply it.
     await page.waitForTimeout(500);
     // … and is ignored.
     await expect(page.getByText("Stale Pending Rule")).toHaveCount(0);
@@ -216,15 +223,19 @@ test.describe("lifecycle — stale responses", () => {
     await expect(page.getByText(/no exceptions/i)).toBeVisible();
 
     await expect.poll(() => moviesDelivered, { timeout: 10_000 }).toBe(true);
+    // Dropping it changes nothing on screen: a moment to (not) apply it.
     await page.waitForTimeout(500);
     await expect(page.getByText("Stale Movie Title")).toHaveCount(0);
     await expect(page.getByText(/no exceptions/i)).toBeVisible();
   });
 });
 
-function exception(id: string, mediaItem: Record<string, unknown>) {
+/** A row of `GET /api/lifecycle/exceptions`: the exception plus its item's selected fields. */
+function exception(id: string, mediaItem: Record<string, unknown> & { id: string }) {
   return {
     id,
+    userId: "user-1",
+    mediaItemId: mediaItem.id,
     reason: null,
     createdAt: "2026-01-01T00:00:00.000Z",
     mediaItem: {

@@ -1,3 +1,4 @@
+import type { APIRequestContext } from "@playwright/test";
 import { Client } from "pg";
 
 /**
@@ -11,6 +12,10 @@ import { Client } from "pg";
  * IDs are fixed and namespaced ("e2e-seed-*") so seeding is idempotent and
  * cleanup is exact. Enum values are inlined as SQL literals (not bound params)
  * because a bound text param will not implicitly cast to a Postgres enum column.
+ * Column values are spelled the way the sync stores them (Plex's lower-case
+ * codecs and resolution, `computeDedupKey`'s keys, series-level TVDB ids on
+ * every episode), and every seeded server points at 127.0.0.1:1, which
+ * refuses at once instead of waiting on a DNS lookup.
  */
 
 const SERVER_ID = "e2e-seed-server";
@@ -39,6 +44,21 @@ async function withClient<T>(fn: (c: Client) => Promise<T>): Promise<T> {
   }
 }
 
+/**
+ * The seed writes straight to Postgres, past the app's in-memory caches, which
+ * a sync would have dropped. A spec reading a cached answer (the filter facets
+ * are cached for 5 minutes, and an earlier spec loaded them over the empty
+ * database) drops them the way the app itself does: by saving a setting that
+ * changes every listing — the dedup toggle, saved unchanged.
+ */
+export async function dropAppCaches(request: APIRequestContext): Promise<void> {
+  const current = await request.get("/api/settings/dedup");
+  if (!current.ok()) throw new Error(`GET /api/settings/dedup answered ${current.status()}`);
+  const { dedupStats } = (await current.json()) as { dedupStats: boolean };
+  const saved = await request.put("/api/settings/dedup", { data: { dedupStats } });
+  if (!saved.ok()) throw new Error(`PUT /api/settings/dedup answered ${saved.status()}`);
+}
+
 /** Remove any previously seeded rows. Deleting the library cascades its items. */
 export async function cleanupSeed(): Promise<void> {
   await withClient(async (c) => {
@@ -60,7 +80,7 @@ export async function seedMovieLibrary(): Promise<void> {
     await c.query(
       `INSERT INTO "MediaServer"
          (id, "userId", type, name, url, "accessToken", enabled, "createdAt", "updatedAt")
-       VALUES ($1, $2, 'PLEX', $3, 'http://seed.local:32400', 'e2e-seed-token', true, NOW(), NOW())`,
+       VALUES ($1, $2, 'PLEX', $3, 'http://127.0.0.1:1', 'e2e-seed-token', true, NOW(), NOW())`,
       [SERVER_ID, userId, SEED.serverName],
     );
 
@@ -76,7 +96,7 @@ export async function seedMovieLibrary(): Promise<void> {
          (id, "libraryId", "ratingKey", title, year, type, resolution, "videoCodec",
           "audioCodec", "dynamicRange", "fileSize", duration, summary, "addedAt",
           "dedupKey", "createdAt", "updatedAt")
-       VALUES ($1, $2, 'e2e-rk-1', $3, $4, 'MOVIE', '4K', 'HEVC', 'AAC', 'HDR10',
+       VALUES ($1, $2, 'e2e-rk-1', $3, $4, 'MOVIE', '4k', 'hevc', 'aac', 'HDR10',
                2147483648, 7200000, 'A seeded movie for E2E tests.', NOW(),
                'movie:title:e2e seed movie:2021', NOW(), NOW())`,
       [SEED.movieId, MOVIE_LIB_ID, SEED.movieTitle, SEED.movieYear],
@@ -188,8 +208,15 @@ export async function seedGroupedLibraries(): Promise<void> {
         [
           ep.id, SERIES_LIB_ID, `${ep.id}-rk`, ep.title, GROUPED_SEED.showTitle,
           GROUPED_SEED.seriesKey, ep.season, ep.episode,
-          `episode:${GROUPED_SEED.seriesKey}:${ep.season}:${ep.episode}`,
+          `series:${GROUPED_SEED.seriesKey}:s${ep.season}e${ep.episode}`,
         ],
+      );
+      // The show's TVDB id, which the sync stores on every episode and
+      // derives `seriesKey` from.
+      await c.query(
+        `INSERT INTO "MediaItemExternalId" (id, "mediaItemId", source, "externalId")
+         VALUES ($1, $2, 'TVDB', $3)`,
+        [`${ep.id}-tvdb`, ep.id, GROUPED_SEED.seriesKey.replace(/^tvdb:/, "")],
       );
     }
 
@@ -199,11 +226,12 @@ export async function seedGroupedLibraries(): Promise<void> {
            (id, "libraryId", "ratingKey", title, "parentTitle", "albumTitle", "episodeNumber",
             year, type, "audioCodec", "fileSize", duration, "addedAt", "dedupKey",
             "createdAt", "updatedAt")
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 2019, 'MUSIC', 'FLAC', 31457280, 240000,
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 2019, 'MUSIC', 'flac', 31457280, 240000,
                  NOW(), $8, NOW(), NOW())`,
         [
           track.id, MUSIC_LIB_ID, `${track.id}-rk`, track.title, GROUPED_SEED.artistTitle,
-          GROUPED_SEED.albumTitle, track.number, `track:${track.id}`,
+          GROUPED_SEED.albumTitle, track.number,
+          `music:${GROUPED_SEED.artistTitle.toLowerCase()}:${track.title.toLowerCase()}`,
         ],
       );
     }

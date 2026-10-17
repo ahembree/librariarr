@@ -11,7 +11,9 @@ test.describe("dashboard", () => {
     await expect(
       page.getByRole("heading", { name: /good (morning|afternoon|evening)/i }).first(),
     ).toBeVisible();
-    await expect(page.getByText(/lifecycle pipeline/i).first()).toBeVisible();
+    // The zone's own heading: the subtitle above it also says "lifecycle
+    // pipeline", so a text match would pass with the zone gone.
+    await expect(page.getByRole("heading", { name: "Lifecycle pipeline", exact: true })).toBeVisible();
   });
 
   test("lifecycle pipeline shows the empty state with a create link", async ({ page }) => {

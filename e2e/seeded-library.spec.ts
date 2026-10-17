@@ -1,5 +1,5 @@
-import { test, expect } from "@playwright/test";
-import { seedMovieLibrary, cleanupSeed, SEED } from "./seed";
+import { test, expect, type Page } from "@playwright/test";
+import { seedMovieLibrary, cleanupSeed, dropAppCaches, SEED } from "./seed";
 
 /**
  * Data-dependent views: with a real server + library + movie seeded directly
@@ -7,6 +7,14 @@ import { seedMovieLibrary, cleanupSeed, SEED } from "./seed";
  * settings server list all render the populated state. Seeding is contained to
  * this file (seed before, clean up after) so every other spec keeps its empty DB.
  */
+/** Ctrl+K, again until the palette opens: a press before hydration is lost. */
+async function openPalette(page: Page) {
+  await expect(async () => {
+    await page.keyboard.press("Control+k");
+    await expect(page.getByRole("dialog")).toBeVisible({ timeout: 1_000 });
+  }).toPass();
+}
+
 test.describe("populated library", () => {
   test.beforeAll(async () => {
     await seedMovieLibrary();
@@ -36,7 +44,7 @@ test.describe("populated library", () => {
 
   test("the command palette finds the seeded movie and navigates to it", async ({ page }) => {
     await page.goto("/library/movies");
-    await page.keyboard.press("Control+k");
+    await openPalette(page);
     await page
       .getByPlaceholder(/search movies, series, artists, albums/i)
       .fill("E2E Seed");
@@ -69,9 +77,16 @@ test.describe("populated library", () => {
   });
 
   test("the filters panel opens with the seeded library's facets", async ({ page }) => {
+    await dropAppCaches(page.request);
     await page.goto("/library/movies");
+    await expect(page.getByText(SEED.movieTitle).first()).toBeVisible();
     await page.getByRole("button", { name: /^Filters$/i }).click();
     await expect(page.getByText(/narrow down your library/i)).toBeVisible();
+
+    // The Video Codec facet lists the seeded movie's codec.
+    await page.getByPlaceholder("Search filters...").fill("Video Codec");
+    await page.getByRole("button", { name: "Video Codec", exact: true }).click();
+    await expect(page.getByRole("option", { name: "hevc", exact: true })).toBeVisible();
   });
 
   test("a query column scrolled under the pinned ones cannot be grabbed through them", async ({ page }) => {
@@ -88,14 +103,20 @@ test.describe("populated library", () => {
       const heads = [...document.querySelectorAll<HTMLElement>("table thead th")];
       const pinned = heads.filter((th) => getComputedStyle(th).position === "sticky");
       const firstUnpinned = heads[pinned.length];
-      container.scrollLeft = firstUnpinned.getBoundingClientRect().width + 12;
+      const wanted = Math.round(firstUnpinned.getBoundingClientRect().width + 12);
+      container.scrollLeft = wanted;
       const lastPinned = pinned[pinned.length - 1].getBoundingClientRect();
       return {
         x: lastPinned.right - 14,
         y: lastPinned.top + lastPinned.height / 2,
         lastPinned: pinned[pinned.length - 1].textContent,
+        wanted,
+        scrolled: container.scrollLeft,
       };
     });
+    // The table really scrolled that far — a scroll the browser clamped short
+    // would leave nothing under the pinned header and prove nothing.
+    expect(Math.abs(probe.scrolled - probe.wanted)).toBeLessThanOrEqual(1);
     const hit = await page.evaluate(
       ({ x, y }) => document.elementFromPoint(x, y)?.closest("th")?.textContent ?? null,
       probe,
@@ -118,6 +139,7 @@ test.describe("populated library", () => {
     await page.getByPlaceholder("Value").first().fill(SEED.movieTitle);
     await page.getByRole("button", { name: /Run Query/ }).click();
     await expect(page.getByText(SEED.movieTitle).first()).toBeVisible();
+    // An absence: give a request the card view should not make time to go out.
     await page.waitForTimeout(1000);
     expect(requests).toHaveLength(0);
 
@@ -130,7 +152,10 @@ test.describe("populated library", () => {
   test("settings lists the seeded media server", async ({ page }) => {
     await page.goto("/settings");
     await page.getByRole("tab", { name: /^Media Servers$/i }).click();
-    await expect(page.getByText(SEED.serverName).first()).toBeVisible();
-    await expect(page.getByText(/no media servers connected/i)).toHaveCount(0);
+    // Scoped to the tab's panel: the shell's "… is unreachable" banner and
+    // toast name the server too (its address listens nowhere).
+    const panel = page.locator("#settings-panel-servers");
+    await expect(panel.getByText(SEED.serverName).first()).toBeVisible();
+    await expect(panel.getByText(/no media servers connected/i)).toHaveCount(0);
   });
 });
