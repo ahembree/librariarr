@@ -19,7 +19,7 @@ function req(id: number, type: "movie" | "tv" = "movie"): SeerrRequest {
 function listClient(initial: SeerrRequest[], mutate?: (list: SeerrRequest[], call: number) => void) {
   const list = [...initial];
   let call = 0;
-  const getRequests = vi.fn(async ({ take, skip }: Params, _options?: unknown) => {
+  const getRequests = vi.fn<(params: Params, options?: unknown) => Promise<unknown>>(async ({ take, skip }) => {
     mutate?.(list, call++);
     return { pageInfo: { page: 1, pages: 1, results: list.length }, results: list.slice(skip, skip + take) };
   });

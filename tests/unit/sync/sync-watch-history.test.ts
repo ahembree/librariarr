@@ -32,22 +32,24 @@ const {
     // The importer's result shape: a count, plus whether the archive walk is
     // still owed. Typed params rather than a bare `vi.fn()` so the options
     // object this file asserts on is a real, checked argument.
-    mockSyncTracearr: vi.fn(
-      async (
-        _serverId: string,
-        _options?: {
+    mockSyncTracearr: vi.fn<
+      (
+        serverId: string,
+        options?: {
           onProgress?: unknown;
           signal?: AbortSignal;
           passes?: "forward" | "backfill" | "both";
           deadlineMs?: number;
         },
-      ) => ({ count: 7, backfillPending: false }),
-    ),
+      ) => Promise<{ count: number; backfillPending: boolean }>
+    >(async () => ({ count: 7, backfillPending: false })),
     mockIsJobRetrying: vi.fn(async () => false),
-    mockEnqueueJob: vi.fn(
-      async (_identifier: string, _payload: unknown, _spec?: unknown) => true,
+    mockEnqueueJob: vi.fn<(identifier: string, payload: unknown, spec?: unknown) => Promise<boolean>>(
+      async () => true,
     ),
-    mockEmitUpdated: vi.fn(async (_serverId: string, _meta?: Record<string, unknown>) => {}),
+    mockEmitUpdated: vi.fn<(serverId: string, meta?: Record<string, unknown>) => Promise<void>>(
+      async () => {},
+    ),
   };
 });
 

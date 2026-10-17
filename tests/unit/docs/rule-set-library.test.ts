@@ -35,7 +35,8 @@ describe("docs rule set library", () => {
     // minus its version marker, plus a target. The export's `collection*`
     // keys are not schema fields (a rule set references a collection by
     // `collectionId`), so the schema strips them.
-    const { version: _version, ...payload } = ruleSet;
+    const payload: Record<string, unknown> = { ...ruleSet };
+    delete payload.version;
     const result = ruleSetCreateSchema.safeParse({ ...payload, serverIds: ["server"] });
     expect(result.success, JSON.stringify(result.error?.issues)).toBe(true);
   });

@@ -12,9 +12,9 @@ const mockSeerrClient = vi.hoisted(() => ({
 }));
 
 const mockAppCache = vi.hoisted(() => ({
-  getOrSet: vi.fn(
-    <T>(_key: string, compute: () => Promise<T>, _ttl?: number, _opts?: unknown) => compute()
-  ),
+  getOrSet: vi.fn<
+    <T>(key: string, compute: () => Promise<T>, ttl?: number, opts?: unknown) => Promise<T>
+  >((_key, compute) => compute()),
   invalidate: vi.fn(),
 }));
 
