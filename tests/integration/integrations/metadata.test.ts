@@ -287,10 +287,14 @@ describe("Integration metadata endpoints", () => {
       ]);
       mockRadarrGetQualityProfiles.mockResolvedValue([{ id: 1, name: "HD-1080p" }]);
       mockRadarrGetTags.mockResolvedValue([{ id: 2, label: "action" }]);
+      // Radarr's /language list as served: Unknown plus the quality-profile
+      // pseudo-languages Any (-1) and Original (-2).
       mockRadarrGetLanguages.mockResolvedValue([
         { id: 0, name: "Unknown" },
         { id: 2, name: "French" },
         { id: 1, name: "English" },
+        { id: -1, name: "Any" },
+        { id: -2, name: "Original" },
       ]);
 
       const response = await callRouteWithParams(RadarrMetadataGET, { id: instance.id });
@@ -309,7 +313,8 @@ describe("Integration metadata endpoints", () => {
       });
       expect(body.tags).toEqual([{ id: 2, label: "action" }]);
       expect(body.qualityProfiles).toEqual([{ id: 1, name: "HD-1080p" }]);
-      // "Unknown" should be filtered out, remaining sorted alphabetically
+      // Only real languages — no title's original language is Unknown, Any or
+      // Original — sorted alphabetically.
       expect(body.languages).toEqual(["English", "French"]);
     });
 
@@ -436,10 +441,13 @@ describe("Integration metadata endpoints", () => {
         { id: 1, label: "drama" },
         { id: 3, label: "hbo" },
       ]);
+      // Sonarr's /language list as served: Unknown plus the quality-profile
+      // pseudo-language Original (-2).
       mockSonarrGetLanguages.mockResolvedValue([
         { id: 0, name: "Unknown" },
         { id: 3, name: "Spanish" },
         { id: 1, name: "English" },
+        { id: -2, name: "Original" },
       ]);
 
       const response = await callRouteWithParams(SonarrMetadataGET, { id: instance.id });
@@ -461,7 +469,7 @@ describe("Integration metadata endpoints", () => {
         { id: 3, label: "hbo" },
       ]);
       expect(body.qualityProfiles).toEqual([{ id: 2, name: "Ultra-HD" }]);
-      // "Unknown" filtered, rest sorted
+      // Only real languages (no Unknown or Original), sorted
       expect(body.languages).toEqual(["English", "Spanish"]);
     });
 

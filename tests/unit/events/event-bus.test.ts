@@ -1,5 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
 
+const { mockLogger } = vi.hoisted(() => ({
+  mockLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
+vi.mock("@/lib/logger", () => ({ logger: mockLogger }));
+
 // The module exports only the singleton (pinned to globalThis), so every test
 // uses it and removes the subscriptions it added.
 const createEventBus = () => import("@/lib/events/event-bus");
@@ -89,8 +94,9 @@ describe("AppEventBus", () => {
     unsub2();
   });
 
-  it("emit never throws even if a listener throws", async () => {
+  it("a listener that throws neither breaks emit nor costs later listeners the event", async () => {
     const { eventBus } = await createEventBus();
+    mockLogger.error.mockClear();
     const badListener = vi.fn(() => {
       throw new Error("listener error");
     });
@@ -98,14 +104,25 @@ describe("AppEventBus", () => {
     const unsub1 = eventBus.subscribe(badListener);
     const unsub2 = eventBus.subscribe(goodListener);
 
-    // EventEmitter calls listeners synchronously and stops at one that throws;
-    // emit() catches it, so the route or job that emitted carries on.
+    // EventEmitter stops at the first listener that throws, so without
+    // per-listener isolation the one subscribed after it never heard the event.
     expect(() => {
       eventBus.emit({ type: "sync:completed", userId: "user1" });
     }).not.toThrow();
     expect(badListener).toHaveBeenCalledTimes(1);
+    expect(goodListener).toHaveBeenCalledTimes(1);
+    expect(goodListener).toHaveBeenCalledWith(expect.objectContaining({ type: "sync:completed", userId: "user1" }));
+    expect(mockLogger.error).toHaveBeenCalledTimes(1);
+    expect(mockLogger.error).toHaveBeenCalledWith("Events", expect.stringContaining("sync:completed"), {
+      error: "listener error",
+    });
 
+    // Still isolated on the next event, and unsubscribing still removes it.
     unsub1();
+    eventBus.emit({ type: "server:changed", userId: "user1" });
+    expect(badListener).toHaveBeenCalledTimes(1);
+    expect(goodListener).toHaveBeenCalledTimes(2);
+
     unsub2();
   });
 

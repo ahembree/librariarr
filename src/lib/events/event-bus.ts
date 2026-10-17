@@ -1,4 +1,5 @@
 import { EventEmitter } from "events";
+import { logger } from "@/lib/logger";
 
 export type AppEventType =
   | "sync:started"
@@ -100,9 +101,21 @@ class AppEventBus {
   }
 
   subscribe(listener: AppEventListener): () => void {
-    this.emitter.on(EVENT_KEY, listener);
+    // EventEmitter calls listeners in turn and stops at the first that throws,
+    // so one broken subscriber (the realtime manager, an SSE stream) would
+    // silently cost every subscriber after it the event. Each is isolated.
+    const isolated: AppEventListener = (event) => {
+      try {
+        listener(event);
+      } catch (error) {
+        logger.error("Events", `A "${event.type}" listener threw; the other listeners still received it`, {
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    };
+    this.emitter.on(EVENT_KEY, isolated);
     return () => {
-      this.emitter.removeListener(EVENT_KEY, listener);
+      this.emitter.removeListener(EVENT_KEY, isolated);
     };
   }
 

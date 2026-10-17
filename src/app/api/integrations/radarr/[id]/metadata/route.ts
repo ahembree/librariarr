@@ -64,8 +64,12 @@ export async function GET(
     movies: movieLookup,
     tags: tags.map((t) => ({ id: t.id, label: t.label })),
     qualityProfiles: qualityProfiles.map((p) => ({ id: p.id, name: p.name })),
+    // The values Original Language is matched against: real languages only.
+    // /language also lists Unknown (id 0) and the quality-profile
+    // pseudo-languages Any (-1) and Original (-2); no title's original
+    // language is Any or Original, so a rule picking one matched nothing.
     languages: languages
-      .filter((l) => l.name && l.name !== "Unknown")
+      .filter((l) => l.name && l.id > 0)
       .map((l) => l.name)
       .sort((a, b) => a.localeCompare(b)),
     // Distinct downloaded-file quality names present in the library, for the

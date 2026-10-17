@@ -112,6 +112,12 @@ export interface ConditionField {
    * ungated.
    */
   readsPlayActivity?: boolean;
+  /**
+   * A calendar day rather than an instant (release, premiere and air dates):
+   * stored as that day's UTC midnight, so it must be displayed in UTC — read in
+   * local time it shows the day before anywhere west of UTC.
+   */
+  dateOnly?: boolean;
 }
 
 export interface ConditionOperatorDef {

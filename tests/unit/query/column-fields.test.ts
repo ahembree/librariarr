@@ -67,6 +67,30 @@ describe("formatColumnValue", () => {
     expect(formatColumnValue(dateDef, "garbage")).toBe("-");
   });
 
+  // A release or air date is a calendar day the sync and the Arr apps store as
+  // UTC midnight; in the viewer's local time it read as the day before
+  // anywhere west of UTC.
+  it.each(["UTC", "America/Los_Angeles", "Pacific/Kiritimati"])(
+    "shows a date-only field's stored day in %s, an instant on the local calendar",
+    (tz) => {
+      const origTZ = process.env.TZ;
+      process.env.TZ = tz;
+      try {
+        expect(formatColumnValue(def("arrInCinemasDate"), "2023-01-01T00:00:00Z")).toBe("Jan 1, 2023");
+        expect(formatColumnValue(def("arrReleaseDate"), "2023-04-05T00:00:00Z")).toBe("Apr 5, 2023");
+        expect(formatColumnValue(def("arrFirstAired"), "2008-01-20T00:00:00Z")).toBe("Jan 20, 2008");
+        expect(formatColumnValue(def("originallyAvailableAt"), new Date("2010-07-16").toISOString())).toBe("Jul 16, 2010");
+        expect(formatColumnValue(def("lastEpisodeAiredAt"), "2013-09-29T00:00:00.000Z")).toBe("Sep 29, 2013");
+        expect(formatColumnValue(def("arrInCinemasDate"), "garbage")).toBe("-");
+        // An instant stays on the viewer's calendar.
+        expect(formatColumnValue(def("arrDateAdded"), new Date(2024, 2, 5, 12).toISOString())).toBe("Mar 5, 2024");
+      } finally {
+        if (origTZ === undefined) delete process.env.TZ;
+        else process.env.TZ = origTZ;
+      }
+    },
+  );
+
   it("formats bytes, minutes and percentages by field", () => {
     expect(formatColumnValue(def("arrSizeOnDisk"), 1024 * 1024)).toBe("1.0 MB");
     expect(formatColumnValue(def("arrRuntime"), 95)).toBe("95 min");

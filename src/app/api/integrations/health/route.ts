@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { appCache } from "@/lib/cache/memory-cache";
+import { INTEGRATIONS_HEALTH_CACHE_KEY } from "@/lib/cache/invalidate";
 import { SonarrClient } from "@/lib/arr/sonarr-client";
 import { RadarrClient } from "@/lib/arr/radarr-client";
 import { LidarrClient } from "@/lib/arr/lidarr-client";
@@ -13,8 +14,8 @@ import { sanitizeErrorDetail } from "@/lib/api/sanitize";
  *
  * Used by the rule editor, query page, pending actions, and rule matches
  * pages to surface a warning when a rule references an integration that is
- * configured but currently unreachable. Cached for 30s per user to avoid
- * pinging integrations on every page load.
+ * configured but currently unreachable. Cached for 30s to avoid pinging
+ * integrations on every page load.
  */
 
 const HEALTH_TTL_MS = 30_000;
@@ -125,7 +126,6 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const fresh = url.searchParams.get("fresh") === "1";
 
-  const cacheKey = `integrations:health:${session.userId}`;
   const empty: IntegrationsHealth = {
     sonarr: emptyType(),
     radarr: emptyType(),
@@ -134,11 +134,11 @@ export async function GET(request: Request) {
     arrAnyReachable: false,
   };
 
-  if (fresh) appCache.invalidate(cacheKey);
+  if (fresh) appCache.invalidate(INTEGRATIONS_HEALTH_CACHE_KEY);
 
   let health: IntegrationsHealth;
   try {
-    health = await appCache.getOrSet(cacheKey, () => computeHealth(session.userId!), HEALTH_TTL_MS);
+    health = await appCache.getOrSet(INTEGRATIONS_HEALTH_CACHE_KEY, () => computeHealth(session.userId!), HEALTH_TTL_MS);
   } catch {
     // If everything blew up (DB error, etc.), don't 500 — return an empty
     // shape so the UI can fall back to the existing "not configured" path.

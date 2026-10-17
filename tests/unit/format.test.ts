@@ -5,6 +5,7 @@ import {
   formatDuration,
   formatDurationClock,
   formatDate,
+  formatDateOnly,
   formatRelativeDate,
   formatUntil,
 } from "@/lib/format";
@@ -216,6 +217,43 @@ describe("formatDate", () => {
 
   it("formats another date correctly", () => {
     expect(formatDate(new Date(2023, 11, 25, 12).toISOString())).toBe("December 25, 2023");
+  });
+});
+
+describe("formatDateOnly", () => {
+  const origTZ = process.env.TZ;
+  afterEach(() => {
+    if (origTZ === undefined) delete process.env.TZ;
+    else process.env.TZ = origTZ;
+  });
+
+  // A release date is a calendar day the sync stores as UTC midnight
+  // (`new Date("2010-07-16")`); read in local time it was the day before
+  // anywhere west of UTC.
+  it.each(["UTC", "America/Los_Angeles", "Pacific/Kiritimati", "Asia/Kolkata"])(
+    "shows the stored calendar day in %s",
+    (tz) => {
+      process.env.TZ = tz;
+      const stored = new Date("2010-07-16");
+      expect(formatDateOnly(stored.toISOString())).toBe("July 16, 2010");
+      expect(formatDateOnly(stored)).toBe("July 16, 2010");
+      expect(formatDateOnly("2010-07-16", "-", "short")).toBe("Jul 16, 2010");
+      expect(formatDateOnly("2023-01-01T00:00:00Z", "-", "short")).toBe("Jan 1, 2023");
+    },
+  );
+
+  it("keeps formatDate on the local calendar for real instants", () => {
+    process.env.TZ = "America/Los_Angeles";
+    // 03:00 UTC on the 16th is the evening of the 15th in Los Angeles.
+    expect(formatDate("2010-07-16T03:00:00Z")).toBe("July 15, 2010");
+  });
+
+  it("returns the fallback for a missing or unreadable value", () => {
+    expect(formatDateOnly(null)).toBe("-");
+    expect(formatDateOnly(undefined)).toBe("-");
+    expect(formatDateOnly("")).toBe("-");
+    expect(formatDateOnly(null, "Never")).toBe("Never");
+    expect(formatDateOnly("not a date", "N/A")).toBe("N/A");
   });
 });
 

@@ -93,6 +93,49 @@ describe("IntegrationError", () => {
     expect(ie.detail).toBe("Invalid API key");
   });
 
+  // OpenAI-compatible servers and Anthropic put the reason one level down.
+  it.each([
+    [
+      "OpenAI",
+      { error: { message: "Incorrect API key provided: sk-****1234.", type: "invalid_request_error", param: null, code: "invalid_api_key" } },
+      "Incorrect API key provided: sk-****1234.",
+    ],
+    ["Anthropic", { type: "error", error: { type: "authentication_error", message: "invalid x-api-key" } }, "invalid x-api-key"],
+  ])("includes the detail %s nests under `error.message`", (_name, data, expected) => {
+    const err = makeAxiosError({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      config: { url: "/chat/completions" } as any,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      response: { status: 401, data } as any,
+    });
+    const ie = new IntegrationError("AI", err);
+    expect(ie.detail).toBe(expected);
+    expect(ie.message).toBe(`AI HTTP 401: ${expected} (/chat/completions)`);
+  });
+
+  it("prefers a top-level message, and ignores a nested error with no usable message", () => {
+    const both = makeAxiosError({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      response: { status: 400, data: { message: "top", error: { message: "nested" } } } as any,
+    });
+    expect(new IntegrationError("Seerr", both).detail).toBe("top");
+    for (const error of [{ type: "x" }, { message: 42 }, { message: "  " }, null]) {
+      const err = makeAxiosError({
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        response: { status: 500, data: { error } } as any,
+      });
+      expect(new IntegrationError("AI", err).detail).toBeNull();
+    }
+  });
+
+  it("truncates a long nested message to 200 characters", () => {
+    const err = makeAxiosError({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      response: { status: 400, data: { error: { message: "y".repeat(500) } } } as any,
+    });
+    expect(new IntegrationError("AI", err).detail).toHaveLength(200);
+  });
+
   it("includes short text bodies as detail", () => {
     const err = makeAxiosError({
       // eslint-disable-next-line @typescript-eslint/no-explicit-any

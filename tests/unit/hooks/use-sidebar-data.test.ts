@@ -18,6 +18,7 @@ vi.mock("next/navigation", () => ({ useRouter: () => ({ push: mocks.push }) }));
 vi.mock("sonner", () => ({ toast: { error: mocks.toastError, success: mocks.toastSuccess } }));
 
 import { useSidebarData } from "@/hooks/use-sidebar-data";
+import { getPageMeta } from "@/lib/nav/page-meta";
 
 type Responses = Record<string, unknown>;
 const fetchMock = vi.fn();
@@ -66,6 +67,18 @@ describe("useSidebarData", () => {
     expect(nav.map((g) => g.label)).toEqual(["Overview", "Library", "Lifecycle", "Tools", "System"]);
     expect(items(nav, "Library")).toEqual(["Movies", "Series", "Music", "History", "Query"]);
     expect(items(nav, "Lifecycle")).toEqual(["Rules", "Rule Matches", "Pending Actions", "Exceptions"]);
+  });
+
+  it("names every page in the top bar's breadcrumb exactly as the sidebar does", async () => {
+    const { result } = renderHook(() => useSidebarData());
+    await waitFor(() => expect(result.current.user).not.toBeNull());
+    const links = result.current.navigation.flatMap((g) =>
+      g.items.map((i) => ({ href: i.href, meta: { group: g.label, title: i.name } })),
+    );
+    expect(links.length).toBeGreaterThan(10);
+    for (const { href, meta } of links) {
+      expect({ href, meta: getPageMeta(href) }).toEqual({ href, meta });
+    }
   });
 
   it("drops a library type nobody has and warns on a known type with no enabled library", async () => {

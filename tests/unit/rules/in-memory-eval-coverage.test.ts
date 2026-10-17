@@ -372,15 +372,16 @@ describe("stream-query groups in memory", () => {
   });
 });
 
-// Dates are displayed as the server's local calendar day, so the fixtures are
-// local noon: the same day in every timezone (a UTC midnight is the previous
-// day west of UTC).
+// Instants (added, requested) are displayed as the server's local calendar
+// day, so those fixtures are local noon: the same day in every timezone (a UTC
+// midnight is the previous day west of UTC). Date-only fields (release, air
+// dates) arrive as UTC midnight and are displayed in UTC.
 const localNoon = (y: number, m: number, d: number) => new Date(y, m - 1, d, 12).toISOString();
 
 const arrMeta: ArrMetadata = {
   arrId: 1, tags: ["keep"], qualityProfile: "HD", monitored: true, rating: 7, tmdbRating: null, rtCriticRating: 80,
   dateAdded: localNoon(2024, 1, 1), path: "/m/a", sizeOnDisk: 1536 * MB, originalLanguage: null, releaseDate: null,
-  inCinemasDate: localNoon(2023, 1, 1), runtime: 120, qualityName: "Bluray", qualityCutoffMet: true, customFormatScore: 5,
+  inCinemasDate: "2023-01-01T00:00:00Z", runtime: 120, qualityName: "Bluray", qualityCutoffMet: true, customFormatScore: 5,
   downloadDate: null, firstAired: null, seasonCount: 2, episodeCount: null, status: "ended", ended: false, seriesType: null,
   hasUnaired: null, monitoredSeasonCount: 1, monitoredEpisodeCount: 4,
 };
@@ -545,6 +546,48 @@ describe("getMatchedCriteriaForItems", () => {
     ]);
     expect(crit[2].actualValue).toBe("1536 MB");
   });
+
+  // Every date operator compares UTC days, and a release or air date is a
+  // calendar day stored as UTC midnight. Formatted in the server's local time,
+  // "In Cinemas Date = 2023-01-01" matched and then explained itself as
+  // "Dec 31, 2022" on any server west of UTC.
+  it.each(["UTC", "America/Los_Angeles", "Pacific/Kiritimati"])(
+    "shows a matched date-only field as the UTC day the rule compared (%s)",
+    (tz) => {
+      const origTZ = process.env.TZ;
+      process.env.TZ = tz;
+      try {
+        const movieRules = [group([
+          rule("arrInCinemasDate", "equals", "2023-01-01"),
+          rule("arrReleaseDate", "equals", "2023-04-05"),
+          rule("originallyAvailableAt", "equals", "2010-07-16"),
+        ])];
+        const movie = { id: "m", originallyAvailableAt: new Date("2010-07-16"), externalIds: [{ source: "TMDB", externalId: "7" }] };
+        const movieMeta = { ...arrMeta, inCinemasDate: "2023-01-01T00:00:00Z", releaseDate: "2023-04-05T00:00:00Z" };
+        const crit = getMatchedCriteriaForItems([movie], movieRules, "MOVIE", { "7": movieMeta }).get("m")!;
+        expect(crit.map((c) => [c.ruleId, c.actualValue])).toEqual([
+          ["arrInCinemasDate-equals", "Jan 1, 2023"],
+          ["arrReleaseDate-equals", "Apr 5, 2023"],
+          ["originallyAvailableAt-equals", "Jul 16, 2010"],
+        ]);
+
+        const seriesRules = [group([
+          rule("arrFirstAired", "equals", "2008-01-20"),
+          rule("lastEpisodeAiredAt", "equals", "2013-09-29"),
+        ])];
+        const show = { id: "s", lastEpisodeAiredAt: "2013-09-29T00:00:00.000Z", externalIds: [{ source: "TVDB", externalId: "9" }] };
+        const showMeta = { ...arrMeta, firstAired: "2008-01-20T00:00:00Z" };
+        const seriesCrit = getMatchedCriteriaForItems([show], seriesRules, "SERIES", { "9": showMeta }).get("s")!;
+        expect(seriesCrit.map((c) => [c.ruleId, c.actualValue])).toEqual([
+          ["arrFirstAired-equals", "Jan 20, 2008"],
+          ["lastEpisodeAiredAt-equals", "Sep 29, 2013"],
+        ]);
+      } finally {
+        if (origTZ === undefined) delete process.env.TZ;
+        else process.env.TZ = origTZ;
+      }
+    },
+  );
 
   it("reports a matched stream-query group as one criterion", () => {
     const sqGroup = group(

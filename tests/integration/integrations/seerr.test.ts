@@ -38,6 +38,7 @@ import { GET, POST } from "@/app/api/integrations/seerr/route";
 import { PUT, DELETE } from "@/app/api/integrations/seerr/[id]/route";
 import { POST as TEST_POST } from "@/app/api/integrations/seerr/test/route";
 import { appCache } from "@/lib/cache/memory-cache";
+import { INTEGRATIONS_HEALTH_CACHE_KEY } from "@/lib/cache/invalidate";
 
 describe("Seerr integration endpoints", () => {
   beforeEach(async () => {
@@ -456,7 +457,7 @@ describe("Seerr integration endpoints", () => {
       setMockSession({ userId: user.id, isLoggedIn: true });
       appCache.set("seerr-request-stats", { configured: true });
       appCache.set("seerr-user-requests:alice", { requests: [] });
-      appCache.set(`integrations:health:${user.id}`, { ok: true });
+      appCache.set(INTEGRATIONS_HEALTH_CACHE_KEY, { ok: true });
 
       await callRouteWithParams(
         DELETE,
@@ -466,7 +467,7 @@ describe("Seerr integration endpoints", () => {
 
       expect(appCache.get("seerr-request-stats")).toBeUndefined();
       expect(appCache.get("seerr-user-requests:alice")).toBeUndefined();
-      expect(appCache.get(`integrations:health:${user.id}`)).toBeUndefined();
+      expect(appCache.get(INTEGRATIONS_HEALTH_CACHE_KEY)).toBeUndefined();
     });
   });
 

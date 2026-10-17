@@ -12,6 +12,10 @@ describe("getPageMeta", () => {
     expect(getPageMeta("/lifecycle/rules")).toEqual({ group: "Lifecycle", title: "Rules" });
     expect(getPageMeta("/lifecycle/matches")).toEqual({ group: "Lifecycle", title: "Rule Matches" });
     expect(getPageMeta("/tools/preroll")).toEqual({ group: "Tools", title: "Prerolls" });
+    // The sidebar names these "TRaSH Sync" and "AI Analysis"; unmapped, the
+    // breadcrumb fell back to "Librariarr › Trash" / "Librariarr › Ai".
+    expect(getPageMeta("/tools/trash")).toEqual({ group: "Tools", title: "TRaSH Sync" });
+    expect(getPageMeta("/tools/ai")).toEqual({ group: "Tools", title: "AI Analysis" });
     expect(getPageMeta("/settings")).toEqual({ group: "System", title: "Settings" });
     expect(getPageMeta("/system/logs")).toEqual({ group: "System", title: "Logs" });
   });

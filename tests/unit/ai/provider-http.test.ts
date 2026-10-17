@@ -90,6 +90,27 @@ describe("provider HTTP setup", () => {
     expect(anthropic).toEqual({ ok: false, error: "AI HTTP 401: Unauthorized (/v1/messages)" });
   });
 
+  // The two providers' real error bodies nest the reason under `error`; the
+  // Test button must show it, not only the status.
+  it("reports each provider's own reason from its nested error body", async () => {
+    const fail = (data: unknown) =>
+      adapter.mockImplementationOnce(async (config: InternalAxiosRequestConfig) => {
+        throw new AxiosError("Request failed with status code 401", "ERR_BAD_REQUEST", config, null, {
+          data, status: 401, statusText: "Unauthorized", headers: {}, config,
+        });
+      });
+    fail({ error: { message: "Incorrect API key provided.", type: "invalid_request_error", param: null, code: "invalid_api_key" } });
+    expect(await createProvider(OPENAI).testConnection()).toEqual({
+      ok: false,
+      error: "AI HTTP 401: Incorrect API key provided. (/chat/completions)",
+    });
+    fail({ type: "error", error: { type: "authentication_error", message: "invalid x-api-key" } });
+    expect(await createProvider(ANTHROPIC).testConnection()).toEqual({
+      ok: false,
+      error: "AI HTTP 401: invalid x-api-key (/v1/messages)",
+    });
+  });
+
   it("passes a non-axios failure through unchanged and reports a non-Error as a generic failure", async () => {
     adapter.mockImplementationOnce(async () => {
       throw "boom";

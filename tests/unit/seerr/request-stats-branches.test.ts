@@ -62,7 +62,9 @@ describe("invalidateSeerrCaches", () => {
     invalidateSeerrCaches();
     expect(mockAppCache.invalidate).toHaveBeenCalledWith("seerr-request-stats");
     expect(mockAppCache.invalidatePrefix).toHaveBeenCalledWith(USER_REQUESTS_CACHE_PREFIX);
-    expect(mockAppCache.invalidatePrefix).toHaveBeenCalledWith("integrations:health:");
+    // The health route's one key (single admin), not a per-user prefix.
+    expect(mockAppCache.invalidate).toHaveBeenCalledWith("integrations:health");
+    expect(mockAppCache.invalidatePrefix).not.toHaveBeenCalledWith("integrations:health:");
   });
 });
 

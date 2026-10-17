@@ -66,8 +66,12 @@ export async function GET(
     series: seriesLookup,
     tags: tags.map((t) => ({ id: t.id, label: t.label })),
     qualityProfiles: qualityProfiles.map((p) => ({ id: p.id, name: p.name })),
+    // The values Original Language is matched against: real languages only.
+    // /language also lists Unknown (id 0) and the quality-profile
+    // pseudo-language Original (-2; Radarr also has Any, -1); no series'
+    // original language is Original, so a rule picking it matched nothing.
     languages: languages
-      .filter((l) => l.name && l.name !== "Unknown")
+      .filter((l) => l.name && l.id > 0)
       .map((l) => l.name)
       .sort((a, b) => a.localeCompare(b)),
     // Distinct values present in the library for the enumerable arrStatus /

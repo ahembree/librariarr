@@ -54,6 +54,8 @@ vi.mock("@/lib/seerr/seerr-client", async (importOriginal) => ({
 
 import { GET } from "@/app/api/integrations/health/route";
 import { appCache } from "@/lib/cache/memory-cache";
+import { INTEGRATIONS_HEALTH_CACHE_KEY } from "@/lib/cache/invalidate";
+import { invalidateSeerrCaches } from "@/lib/seerr/request-stats";
 import type { IntegrationsHealth } from "@/app/api/integrations/health/route";
 
 beforeEach(async () => {
@@ -232,6 +234,28 @@ describe("GET /api/integrations/health", () => {
     await callRoute(GET);
 
     expect(mockRadarrTestConnection).toHaveBeenCalledTimes(1);
+  });
+
+  // Single admin: one cached answer, under the one key the Seerr instance
+  // routes drop (invalidateSeerrCaches) — a per-user key is against the
+  // single-user model and lets the two drift apart.
+  it("caches its answer under the single shared key the Seerr routes drop", async () => {
+    const user = await createTestUser();
+    await createTestSeerrInstance(user.id, { name: "Seerr" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
+    mockSeerrTestConnection.mockResolvedValue({ ok: false, error: "down" });
+
+    const first = await getHealth();
+    expect(appCache.get(INTEGRATIONS_HEALTH_CACHE_KEY)).toEqual(first);
+    expect(appCache.get(`${INTEGRATIONS_HEALTH_CACHE_KEY}:${user.id}`)).toBeUndefined();
+
+    invalidateSeerrCaches();
+    expect(appCache.get(INTEGRATIONS_HEALTH_CACHE_KEY)).toBeUndefined();
+
+    mockSeerrTestConnection.mockResolvedValue({ ok: true, appName: "Seerr" });
+    const second = await getHealth();
+    expect(mockSeerrTestConnection).toHaveBeenCalledTimes(2);
+    expect(second.seerr.reachable).toBe(1);
   });
 
   it("re-checks every instance when asked for fresh=1, bypassing the cached answer", async () => {
