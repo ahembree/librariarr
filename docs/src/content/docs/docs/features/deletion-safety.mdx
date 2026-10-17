@@ -41,19 +41,19 @@ Every rule has a **Preview** panel. As you build the rule, it shows you exactly 
 
 If the preview shows more items than you expected, **stop and adjust the rule**. Don't save yet.
 
-### "Action enabled" is a separate switch
+### "Enable lifecycle action" is a separate switch
 
 Rule sets have two different toggles:
 
-- **Enabled** — turns detection on or off. When off, no matches are tracked.
-- **Action enabled** — when off, matches are still detected and shown to you, but **no deletions are ever scheduled**, no matter how the rules are configured.
+- **Enabled** — turns detection on or off. When off, the rule set is not evaluated and its pending actions are cancelled.
+- **Enable lifecycle action** — when off, matches are still detected and shown to you, but **no deletions are ever scheduled**, no matter how the rules are configured. Turning it off cancels the rule set's pending actions straight away.
 
-This means you can build a rule, save it, watch which items it matches over a few detection cycles, and only then arm it by turning **Action enabled** on.
+This means you can build a rule, save it, watch which items it matches over a few detection cycles, and only then arm it by turning **Enable lifecycle action** on.
 
 <Aside type="caution">
-  Saving any change to a rule set clears its current list of matched items. This is on purpose — it prevents stale matches from sticking around after you've changed the rule. If you save and want to see the matches again, click **Re-evaluate** in the Rule Matches view.
+  When you save a change to an existing rule set's rules, the editor asks how to handle its matches. **Save and re-detect** first shows a **Match Changes Preview** (matches retained, new and removed), and **Confirm and Save** then runs detection for the rule set at once: items that no longer match are dropped and their pending actions cancelled. **Save only** keeps the current matches until the next scheduled detection run. A change to the action settings alone (type, delay, tags and so on) is saved without the prompt, and the new settings are copied onto the actions already pending.
 
-  The trade-off is that the match list is always a snapshot of the most recent detection run, not a long-lived record. If you want to keep a record before saving, take a screenshot.
+  One change always clears the matches and cancels the pending actions: picking a different *arr server on a rule set whose rules use *arr fields, since those criteria were read from the old instance.
 </Aside>
 
 ### Recycle bin requirement for destructive actions
@@ -79,14 +79,16 @@ The acknowledgement is remembered per *arr instance for the duration of your ses
 
 The structural validator that runs on every save guarantees:
 
-- Each rule has both a `field` and an `operator`, both as non-empty strings.
+- Each rule has both a `field` and an `operator`, both as strings.
 - Each rule group has a `condition` of `"AND"` or `"OR"` and an array of rules.
 - Stream-query groups declare a valid `streamType` (`audio`, `video`, or `subtitle`).
 - The serialized rule set is at most 50 KB and at most 100 top-level rules.
+- No rule uses a field that can never have a value for the rule set's library type (for example a Sonarr season count on a movie rule set, or any Seerr field on a music rule set).
+- The action belongs to the right *arr family for the library type, its *arr instance exists, and a **Change Quality Profile** action names a target profile.
 
 A rule set that fails any of these checks is rejected with an HTTP 400 error and never reaches the database.
 
-The validator does **not** check that operator values or field names are recognized by the engine — a rule with a typo'd operator like `"equlas"` will be saved successfully. That class of error is caught later, by the engine's safety net at detection time (see [Check 3 below](#check-3--a-final-safety-net-for-unrecognized-rules)).
+The validator does **not** check that operator names, or field names it has never heard of, are recognized by the engine — a rule with a typo'd operator like `"equlas"` will be saved successfully. That class of error is caught later, by the engine's safety net at detection time (see [Check 3 below](#check-3--a-final-safety-net-for-unrecognized-rules)).
 
 ## Layer 2 — When matches are detected
 
@@ -110,6 +112,8 @@ There's a related trap on the outside-system side itself: fields like `foundInAr
 
 Detection therefore refuses to evaluate a rule set whose *arr or Seerr fields have no enabled instance behind them. The rule set is skipped with a warning in System Logs, its existing matches are left untouched, and previews return an error rather than a whole-library match list. An unreachable instance is skipped for that cycle for the same reason — and so is a Seerr request list that can't be read in full, since every request it missed would read as "never requested". Manually executing or retrying the actions of a music rule set with Seerr criteria is refused too. Seerr fields are rejected outright on music rule sets, where Seerr data can never exist; a music rule set that already carries them is **disarmed** — matches cleared, pending actions cancelled.
 
+Play history is the third outside dependency, and it fails the same way. Until a server's watch history has been synced, every item on it looks never watched, so *Play Count = 0* or *Last Played more than 180 days ago* would match the whole library. A rule set that reads play activity — *Watched By User*, *Play Count*, *Last Played*, and the series rollups built on them — is therefore skipped while any server it targets has no established play history: it has never completed a watch-history sync, its history was just cleared (a purge, a restore, a change of watch-history source), or a [Tracearr](/docs/integrations/tracearr/) import is still backfilling. Previews return an error naming the server, and the rule editor shows a **"Play history not established yet"** warning.
+
 The same refusal applies to ad-hoc **Query page actions**: running an action on results whose Arr/Seerr criteria couldn't actually be evaluated (no Arr server selected for the action's media type, no enabled Seerr instance, or Seerr criteria on music) is blocked with an explanatory error before anything runs.
 
 ### Check 3 — A final safety net for unrecognized rules
@@ -126,7 +130,7 @@ In all of these cases, **the engine refuses to match anything** rather than risk
 
 ### When the in-memory pass also runs
 
-Some rule sets have an additional in-memory verification pass after the database query. It runs whenever the rule set contains any of: a wildcard pattern (`*` or `?`), an Arr-dependent field, a Seerr-dependent field, a cross-system field, a stream-count field, or a stream-query computed field. In those cases, every candidate the database returns is re-checked against every rule in memory before being marked as a match.
+Some rule sets have an additional in-memory verification pass after the database query. It runs whenever the rule set contains any of: a wildcard pattern (`*` or `?`), an Arr-dependent field, a Seerr-dependent field, a cross-system field, a stream-count field, a stream-query computed field, a resolution rule, a list field (genre, label or country), or a series-aggregate field. In those cases, every candidate the database returns is re-checked against every rule in memory before being marked as a match.
 
 For rule sets that only use simple database-expressible fields (resolution, year, file size, dates, play count, etc.), the database query alone is the final answer — there is no second pass, because the database has already enforced every condition exactly. Defenses 1–3 above are what guarantees this is safe.
 
@@ -143,7 +147,7 @@ The delay gives you time to:
 - Open the **Pending Actions** page and see what's queued up.
 - Add items you want to keep to the **Lifecycle Exceptions** list.
 - Disable or edit the rule if it matched things it shouldn't have.
-- Receive a Discord notification (if you've configured one) when actions are scheduled.
+- Receive a Discord notification (if you've turned on **Send Discord notification on match changes**) when items enter or leave the match list.
 
 Setting the delay to 0 disables this safety window entirely. Don't do that until you've run the rule for at least one full cycle with a delay and verified it's matching what you expect.
 
@@ -167,9 +171,9 @@ The trade-off is intentional. With sticky off (the default), a brief change in y
   Turn on **Sticky matches** only when you're sure you want it. The most common reason to enable it is play-count-based rules, where you don't want a single quick replay during the action delay to cancel a deletion. For example: a rule like "delete movies with 0 plays added more than 365 days ago" will, by default, drop an item out of the match list (and cancel its pending deletion) the moment someone watches it during the cooling-off period. If you'd rather the deletion proceed once the item has been flagged — on the basis that you'd already decided to remove it — turn sticky matches on. If you'd rather a last-minute play save the item, leave it off.
 </Aside>
 
-### Editing a rule starts everything over
+### Editing a rule re-checks its matches
 
-If you edit a rule at all — even something innocuous like the action type or the delay — the existing matches and pending actions for that rule are wiped, and the next detection run rebuilds the list from scratch. This is what the caution in Layer 1 is about. The cost is that you have to **Re-evaluate** to see the matches again. The benefit is that no leftover state from before your edit can result in an unintended deletion.
+When you change a rule's conditions, its matches are re-checked against the new rules — at once with **Save and re-detect**, or on the next scheduled detection run with **Save only** (see the caution in Layer 1). Items the edited rule no longer selects lose their match and their pending action, unless **Sticky matches** is on, in which case only **Re-evaluate** on the Rule Matches page drops them. Changing the delay asks whether to reschedule the actions already pending to the new delay from today. Switching the *arr server of a rule set that uses *arr criteria wipes its matches and pending actions outright, so nothing judged against the old instance survives.
 
 ### Lifecycle Exceptions are honored at every step
 
@@ -247,7 +251,21 @@ This is why the save-time acknowledgement matters and why we recommend treating 
 
 ### One failure doesn't cascade into many
 
-Each individual action runs independently. If one fails — because *arr is down, the network blipped, the title check failed, anything — that single failure is recorded with an error message in the **Pending Actions** page (the action moves to "Failed" status), logged to System Logs, optionally announced via Discord, and **does not affect the other actions in the same run**. There's no retry that could quietly turn a transient failure into a persistent one. Failed actions sit there until you decide what to do with them.
+Each individual action runs independently. If one fails — the network blipped, the title check failed, anything — that single failure is recorded with an error message in the **Pending Actions** page (the action moves to "Failed" status), logged to System Logs, optionally announced via Discord, and **does not affect the other actions in the same run**. A failed action is never re-run on its own; it sits there until you decide what to do with it.
+
+The one exception is an *arr instance that is down altogether (the connection is refused, or a lookup goes unanswered after its retries). Rather than wait through the same timeout for every item, a scheduled run leaves that instance's remaining actions pending for the next run, and a manual **Execute** fails them with the same error without contacting the instance again.
+
+### Runs never overlap
+
+The same item can't be acted on twice at once. **Execute All** on a rule set, a per-item **Execute**, a **Retry**, and each action of a scheduled run claim what they act on first; a request that overlaps one already running is refused ("already running"), and a scheduled run leaves a claimed action pending for its next pass. A Query-page action and a rule set's actions never run at the same time, since they can reach the same *arr record through different copies. Before each scheduled action is sent, it is re-read: one that was cancelled, rescheduled, re-configured or protected by a new exception since the run started is left alone.
+
+### One action per *arr record
+
+When a rule set targets several servers, the copies of one title (same TMDB, TVDB or MusicBrainz id) are merged into one match with a chip per server, so one *arr record gets one action, not one per copy. On a music rule set evaluated per track, an artist-level action (such as **Delete from Lidarr**) is scheduled once per artist rather than once per track. Before **Delete from Lidarr** removes an artist, Librariarr also asks Lidarr whether any other MusicBrainz id the same artist name carries in your library is the same artist, and refuses if so.
+
+### An optional ceiling on each run
+
+Under **Settings → General → Delete without asking, up to N items per run** you can cap how many items one run may delete across all rule sets. A run over the limit deletes nothing: its actions stay on the Pending page for you to execute there. It applies to scheduled runs, **Execute** on the Pending page, and Query-page actions. There is no limit by default. See [Limiting how much one run can delete](/docs/features/lifecycle-rules/#limiting-how-much-one-run-can-delete).
 
 ## Through the API
 
@@ -275,9 +293,9 @@ Add the affected items to **Lifecycle Exceptions**. There are three ways to do t
 - From the **Rule Matches** page — find the matched item and use the per-row Add to Exceptions button.
 - From the **Lifecycle Exceptions** page directly — click **Add Exception** and search for the item.
 
-On the next scheduled run, or the next time you click Execute:
+As soon as you add the exception:
 
-- Any pending action on that item is cancelled before it runs (and logged to System Logs).
+- Any pending action on that item (or another server's copy of it) is cancelled, and the scheduled run and **Execute** check the exception list again before acting.
 - The item is excluded from future detection, so the rule won't match it again even if it would otherwise.
 - The rule's match list and all the other pending actions are unaffected.
 
@@ -285,14 +303,14 @@ Use this when only a few items are wrong, or when you want to keep the rule runn
 
 ### Option B — Stop deletions for the entire rule set
 
-Open the rule set, turn **Action enabled** off, click Save. This:
+Open the rule set, turn **Enable lifecycle action** off, click Save. This:
 
 - Cancels every pending action for that rule set immediately.
 - Stops new pending actions from being created on the next detection runs.
 - Refuses any manual execution of the rule set's action, including through the [public API](/docs/advanced/api/), until you turn it back on.
-- Also wipes the current match list as a side effect of saving (if you want a record of what matched, take a screenshot first).
+- Keeps the match list, so you can still see what the rule selects.
 
-You can turn **Action enabled** back on later when you've fixed the rule. The next detection run will rebuild the match list from scratch.
+You can turn **Enable lifecycle action** back on later when you've fixed the rule. The next detection run schedules actions for the matches again, each with the full delay.
 
 Use this when you want to halt the entire rule set while you investigate.
 
@@ -302,7 +320,7 @@ Same as Option B, but turn **Enabled** off as well. The rule set is now ignored 
 
 ### Option D — Fix the rule so the unintended items no longer match
 
-If you've identified a logic error in the rule, edit it and save. The existing match list and pending actions are cleared by the save (Layer 1's safety choice), and the next detection run re-evaluates with your corrected rule. Items that no longer match the corrected rule simply aren't picked up.
+If you've identified a logic error in the rule, edit it and choose **Save and re-detect**. The Match Changes Preview shows which items the corrected rule drops before you confirm, and confirming re-runs detection: items that no longer match lose their match and their pending action (on a rule set with **Sticky matches** on, click **Re-evaluate** on the Rule Matches page as well).
 
 ### Recovering files that have already been deleted
 
