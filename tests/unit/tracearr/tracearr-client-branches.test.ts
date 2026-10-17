@@ -298,11 +298,77 @@ describe("TracearrClient (branch coverage)", () => {
       });
     });
 
-    it("stops at a repeated cursor", async () => {
-      const page = { data: { data: [], meta: { nextCursor: "same", pageSize: MAX_PAGE_SIZE } } };
-      mockAxiosInstance.get.mockResolvedValueOnce(page).mockResolvedValueOnce(page);
-      await client.getServerAccountNames("srv");
+    // A walk cut short must hand back NO names, never the part it read: the
+    // importer refuses to write on an empty map, but a partial one passes that
+    // gate and every unread user's plays land under Tracearr's identity label
+    // for good.
+    function usersPage(names: Array<[string, string]>, nextCursor: string | null) {
+      return {
+        data: {
+          data: [
+            {
+              accounts: names.map(([id, username]) => ({
+                server_id: "srv",
+                server_user_id: id,
+                username,
+              })),
+            },
+          ],
+          meta: { nextCursor, pageSize: MAX_PAGE_SIZE },
+        },
+      };
+    }
+
+    it("returns no names when the cursor repeats", async () => {
+      mockAxiosInstance.get
+        .mockResolvedValueOnce(usersPage([["u1", "alice"]], "same"))
+        .mockResolvedValueOnce(usersPage([["u2", "bob"]], "same"));
+      const names = await client.getServerAccountNames("srv");
+      expect(names.size).toBe(0);
       expect(mockAxiosInstance.get).toHaveBeenCalledTimes(2);
+      expect(vi.mocked(logger.warn).mock.calls[0][1]).toMatch(/repeated cursor/);
+    });
+
+    it("returns no names when a later page carries no data array", async () => {
+      mockAxiosInstance.get
+        .mockResolvedValueOnce(usersPage([["u1", "alice"]], "n1"))
+        .mockResolvedValueOnce({ data: { meta: { nextCursor: null, pageSize: MAX_PAGE_SIZE } } });
+      const names = await client.getServerAccountNames("srv");
+      expect(names.size).toBe(0);
+      expect(mockAxiosInstance.get).toHaveBeenCalledTimes(2);
+    });
+
+    it("returns no names when the page cap cuts a walk that still has pages", async () => {
+      let call = 0;
+      mockAxiosInstance.get.mockImplementation(async () => {
+        call++;
+        return usersPage([[`u${call}`, `user${call}`]], `c${call}`);
+      });
+      const names = await client.getServerAccountNames("srv");
+      expect(names.size).toBe(0);
+      // The cap is a runaway guard: it stops asking, and says why.
+      expect(mockAxiosInstance.get).toHaveBeenCalledTimes(50);
+      expect(vi.mocked(logger.warn).mock.calls[0][1]).toMatch(/50-page cap/);
+    });
+
+    it("returns no names when aborted part-way through the walk", async () => {
+      const ac = new AbortController();
+      mockAxiosInstance.get.mockImplementationOnce(async () => {
+        ac.abort();
+        return usersPage([["u1", "alice"]], "n1");
+      });
+      const names = await client.getServerAccountNames("srv", { signal: ac.signal });
+      expect(names.size).toBe(0);
+      expect(mockAxiosInstance.get).toHaveBeenCalledTimes(1);
+    });
+
+    it("returns every page's names when the walk reaches the end", async () => {
+      mockAxiosInstance.get
+        .mockResolvedValueOnce(usersPage([["u1", "alice"]], "n1"))
+        .mockResolvedValueOnce(usersPage([["u2", "bob"]], null));
+      const names = await client.getServerAccountNames("srv");
+      expect([...names.entries()]).toEqual([["u1", "alice"], ["u2", "bob"]]);
+      expect(logger.warn).not.toHaveBeenCalled();
     });
   });
 });

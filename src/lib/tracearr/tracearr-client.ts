@@ -740,8 +740,25 @@ export class TracearrClient {
     const seenCursors = new Set<string>();
     let cursor: string | undefined;
 
-    for (let page = 0; page < USER_PAGE_CAP; page++) {
-      if (signal?.aborted) break;
+    // A walk that does not reach the last page returns an EMPTY map, never the
+    // part it read. Callers refuse to import on an empty map, but a partial one
+    // passes that check and files every unread user's plays under Tracearr's
+    // identity label — rows nothing re-delivers, so the wrong name is permanent.
+    const cutShort = (reason: string) => {
+      logger.warn(
+        "Tracearr",
+        `User walk for server ${serverId} ${reason} — returning no account names ` +
+          `rather than a partial map`,
+        { serverId, accountsRead: names.size },
+      );
+      return new Map<string, string>();
+    };
+
+    for (let page = 0; ; page++) {
+      if (signal?.aborted) return new Map();
+      if (page >= USER_PAGE_CAP) {
+        return cutShort(`hit the ${USER_PAGE_CAP}-page cap with pages left`);
+      }
 
       // Sent as a string because the schema accepts `boolean | string` and our
       // param bag is string|number — axios serialises either identically.
@@ -757,7 +774,11 @@ export class TracearrClient {
         { maxRetries: BULK_RATE_LIMIT_MAX_RETRIES, signal },
       );
 
-      for (const identity of data?.data ?? []) {
+      if (!Array.isArray(data?.data)) {
+        return cutShort(`got a page with no \`data\` array (page ${page + 1})`);
+      }
+
+      for (const identity of data.data) {
         for (const account of identity?.accounts ?? []) {
           // One Tracearr instance aggregates many servers; an account on a
           // different one would map a stranger's id onto this server.
@@ -768,13 +789,12 @@ export class TracearrClient {
         }
       }
 
-      const next = data?.meta?.nextCursor ?? null;
-      if (!next || seenCursors.has(next)) break;
+      const next = data.meta?.nextCursor ?? null;
+      if (!next) return names;
+      if (seenCursors.has(next)) return cutShort(`repeated cursor "${next}"`);
       seenCursors.add(next);
       cursor = next;
     }
-
-    return names;
   }
 
   /** Sleep that resolves early when `signal` aborts, so a cancel is immediate. */

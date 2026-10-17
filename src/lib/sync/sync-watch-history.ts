@@ -8,6 +8,7 @@ import {
   type WatchHistoryProgressReporter,
 } from "@/lib/sync/watch-history-progress";
 import type { MediaServerType } from "@/generated/prisma/client";
+import type { DetailedWatchHistoryEntry } from "@/lib/media-server/types";
 import { enqueueJob, isJobRetrying } from "@/lib/jobs/client";
 import { TASK_TRACEARR_BACKFILL, MAIN_QUEUE } from "@/lib/jobs/constants";
 import { markWatchHistoryEstablished } from "@/lib/media/watch-evidence";
@@ -312,7 +313,7 @@ export async function syncWatchHistory(
   );
 
   if (incrementalSince) {
-    const count = await appendNewEntries(serverId, entries, incrementalSince);
+    const count = await appendNewEntries(serverId, server.name, entries, incrementalSince);
     await markHistoryEstablished(serverId);
     logger.info(
       "WatchHistory",
@@ -350,18 +351,15 @@ export async function syncWatchHistory(
 
   // Build a lookup from ratingKey -> mediaItemId for this server's items
   const mediaItems = await prisma.$queryRawUnsafe<
-    { id: string; ratingKey: string }[]
+    { id: string; ratingKey: string; libraryKey: string }[]
   >(
-    `SELECT mi."id", mi."ratingKey" FROM "MediaItem" mi
+    `SELECT mi."id", mi."ratingKey", l."key" AS "libraryKey" FROM "MediaItem" mi
      JOIN "Library" l ON mi."libraryId" = l."id"
      WHERE l."mediaServerId"=$1`,
     serverId
   );
 
-  const ratingKeyToId = new Map<string, string>();
-  for (const item of mediaItems) {
-    ratingKeyToId.set(item.ratingKey, item.id);
-  }
+  const resolver = ratingKeyResolver(mediaItems);
 
   // Dedupe entries in memory before inserting. There is no DB unique constraint
   // on WatchHistory (intentional), so identical play events from the source
@@ -417,7 +415,7 @@ export async function syncWatchHistory(
       const batch = dedupedEntries.slice(i, i + BATCH_SIZE);
       const rows: NativeRow[] = [];
       for (const entry of batch) {
-        const mediaItemId = ratingKeyToId.get(entry.ratingKey);
+        const mediaItemId = resolver.resolve(entry);
         if (!mediaItemId) continue;
         rows.push({ mediaItemId, entry });
       }
@@ -448,6 +446,7 @@ export async function syncWatchHistory(
 
   await markHistoryEstablished(serverId);
 
+  warnAmbiguousSkipped(resolver.ambiguousSkipped, server.name);
   logger.info(
     "WatchHistory",
     `Synced ${insertedCount} watch history entries for "${server.name}" ` +
@@ -523,13 +522,8 @@ async function resolveIncrementalSince(serverId: string): Promise<Date | null> {
  */
 async function appendNewEntries(
   serverId: string,
-  entries: Array<{
-    ratingKey: string;
-    username: string;
-    watchedAt: string | null;
-    deviceName: string | null;
-    platform: string | null;
-  }>,
+  serverName: string,
+  entries: DetailedWatchHistoryEntry[],
   since: Date
 ): Promise<number> {
   // Fail closed on the server's filter: a play older than `since` in the
@@ -544,14 +538,16 @@ async function appendNewEntries(
   if (dated.length === 0) return 0;
 
   const ratingKeys = [...new Set(dated.map((e) => e.ratingKey))];
-  const mediaItems = await prisma.$queryRawUnsafe<{ id: string; ratingKey: string }[]>(
-    `SELECT mi."id", mi."ratingKey" FROM "MediaItem" mi
+  const mediaItems = await prisma.$queryRawUnsafe<
+    { id: string; ratingKey: string; libraryKey: string }[]
+  >(
+    `SELECT mi."id", mi."ratingKey", l."key" AS "libraryKey" FROM "MediaItem" mi
      JOIN "Library" l ON mi."libraryId" = l."id"
      WHERE l."mediaServerId" = $1 AND mi."ratingKey" = ANY($2::text[])`,
     serverId,
     ratingKeys
   );
-  const ratingKeyToId = new Map(mediaItems.map((m) => [m.ratingKey, m.id]));
+  const resolver = ratingKeyResolver(mediaItems);
 
   // The read-then-append runs under the same per-server lock as the full
   // replace. That one runs in a request (the History page's Refresh), outside
@@ -575,7 +571,7 @@ async function appendNewEntries(
 
     const fresh: NativeRow[] = [];
     for (const entry of dated) {
-      const mediaItemId = ratingKeyToId.get(entry.ratingKey);
+      const mediaItemId = resolver.resolve(entry);
       if (!mediaItemId) continue;
       const key = `${mediaItemId}|${entry.username}|${new Date(entry.watchedAt!).toISOString()}`;
       if (seen.has(key)) continue;
@@ -587,8 +583,54 @@ async function appendNewEntries(
     for (let i = 0; i < fresh.length; i += BATCH_SIZE) {
       inserted += await insertNativeRows(tx, serverId, fresh.slice(i, i + BATCH_SIZE));
     }
+    warnAmbiguousSkipped(resolver.ambiguousSkipped, serverName);
     return inserted;
   }, TX_OPTIONS);
+}
+
+/**
+ * Places a history entry on one of the server's `MediaItem`s by rating key.
+ *
+ * A rating key is unique only within a library (`@@unique([libraryId,
+ * ratingKey])`), so one server can hold the same key in two. A plain
+ * key → id map let whichever row came last take every play for that key —
+ * plays filed on the wrong item, feeding the monotonic `playCount` /
+ * `lastPlayedAt` that never walk back. An ambiguous key is placed by the
+ * library section the entry names (Plex history carries one) and otherwise
+ * skipped, as the incremental item sync and the Tracearr join do.
+ */
+function ratingKeyResolver(items: { id: string; ratingKey: string; libraryKey: string }[]) {
+  const byKey = new Map<string, { id: string; libraryKey: string }[]>();
+  for (const item of items) {
+    const list = byKey.get(item.ratingKey);
+    if (list) list.push(item);
+    else byKey.set(item.ratingKey, [item]);
+  }
+  const ambiguousSkipped = new Set<string>();
+  return {
+    resolve(entry: Pick<DetailedWatchHistoryEntry, "ratingKey" | "librarySectionId">): string | undefined {
+      const candidates = byKey.get(entry.ratingKey);
+      if (!candidates) return undefined;
+      if (candidates.length === 1) return candidates[0].id;
+      // `Library.key` is unique per server, so at most one candidate matches.
+      const inSection = entry.librarySectionId
+        ? candidates.find((c) => c.libraryKey === entry.librarySectionId)
+        : undefined;
+      if (!inSection) ambiguousSkipped.add(entry.ratingKey);
+      return inSection?.id;
+    },
+    ambiguousSkipped,
+  };
+}
+
+function warnAmbiguousSkipped(ratingKeys: Set<string>, serverName: string): void {
+  if (ratingKeys.size === 0) return;
+  logger.warn(
+    "WatchHistory",
+    `Skipped plays for ${ratingKeys.size} rating key(s) on "${serverName}" that more than one ` +
+      `library holds, where the play named none of those libraries`,
+    { ratingKeys: [...ratingKeys].slice(0, 20) }
+  );
 }
 
 type RawWriter = Pick<typeof prisma, "$executeRawUnsafe">;

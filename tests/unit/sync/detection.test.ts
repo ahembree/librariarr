@@ -27,16 +27,21 @@ describe("detectDynamicRangeFromFilename", () => {
     expect(detectDynamicRangeFromFilename("/movies/Movie.2024.HDR10P.mkv")).toBe("HDR10+");
   });
 
-  // KNOWN SOURCE BUG: the literal "HDR10+" tag (TRaSH naming writes
-  // "[HDR10+]") is read as plain HDR10 — the trailing `\b` in
-  // HDR10_PLUS_PATTERN cannot match after "+", which is not a word character.
-  // Marked `fails` so it asserts the correct value and flags itself once the
-  // pattern is fixed; it must then become an ordinary `it`.
-  it.fails("detects the literal HDR10+ tag", () => {
+  // TRaSH naming writes "[HDR10+]"; "+" is not a word character, so a
+  // pattern ending in `\b` read the literal tag as plain HDR10.
+  it("detects the literal HDR10+ tag", () => {
     expect(detectDynamicRangeFromFilename("/movies/Movie.2024.HDR10+.mkv")).toBe("HDR10+");
     expect(
       detectDynamicRangeFromFilename("/movies/Movie (2024) [Bluray-2160p][HDR10+][TrueHD Atmos 7.1].mkv"),
     ).toBe("HDR10+");
+    expect(detectDynamicRangeFromFilename("/movies/Movie 2024 HDR10+")).toBe("HDR10+");
+    expect(detectDynamicRangeFromFilename("/movies/Movie.2024.HDR10.+.mkv")).toBe("HDR10+");
+  });
+
+  it("does not read HDR10 followed by other text as HDR10+", () => {
+    expect(detectDynamicRangeFromFilename("/movies/Movie.2024.HDR10.Remux.mkv")).toBe("HDR10");
+    expect(detectDynamicRangeFromFilename("/movies/Movie [HDR10][DTS-HD MA].mkv")).toBe("HDR10");
+    expect(detectDynamicRangeFromFilename("/movies/Movie.2024.HDR10.Proper.mkv")).toBe("HDR10");
   });
 
   it("detects HDR10", () => {

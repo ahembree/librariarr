@@ -1183,6 +1183,22 @@ describe("PlexClient", () => {
       expect(historyCall[0]).toBe("/status/sessions/history/all");
     });
 
+    it("carries the play's library section, which places a rating key two libraries hold", async () => {
+      mockAxiosInstance.get
+        .mockResolvedValueOnce(emptyContainer) // /accounts
+        .mockResolvedValueOnce(emptyContainer) // /devices
+        .mockResolvedValueOnce(
+          page([
+            { ratingKey: "1", viewedAt: 1700000000, librarySectionID: 2 },
+            { ratingKey: "1", viewedAt: 1700000060, librarySectionID: "3" },
+          ]),
+        );
+
+      const entries = await client.getDetailedWatchHistory();
+
+      expect(entries.map((e) => e.librarySectionId)).toEqual(["2", "3"]);
+    });
+
     it("fails instead of filing every play under \"Unknown\" when /accounts cannot be read", async () => {
       // Every play is attributed through the account map. Answering a failed
       // `/accounts` with an empty map made the native full replace rewrite the

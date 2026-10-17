@@ -453,6 +453,78 @@ describe("backfillDedupKeys", () => {
     expect(items[0].dedupKey).toBe("series:breaking bad:s1e1");
   });
 
+  // The sync keys an episode on its stored series-level TVDB id
+  // (`computeDedupKey` in buildRowParams); a backfill that read external ids
+  // for movies only wrote the title form instead, so a backfilled copy and a
+  // synced copy of the same episode never deduped.
+  it("keys a series episode on its stored TVDB id, as the sync does", async () => {
+    const user = await createTestUser();
+    const server1 = await createTestServer(user.id, { name: "Server 1" });
+    const server2 = await createTestServer(user.id, { name: "Server 2" });
+    const lib1 = await createTestLibrary(server1.id, { type: "SERIES" });
+    const lib2 = await createTestLibrary(server2.id, { type: "SERIES" });
+
+    // Synced copy: the key the sync wrote for an episode of TVDB show 81189.
+    const synced = await createTestMediaItem(lib1.id, {
+      title: "Pilot",
+      type: "SERIES",
+      parentTitle: "Breaking Bad",
+      seasonNumber: 1,
+      episodeNumber: 1,
+    });
+    await createTestExternalId(synced.id, "TVDB", "81189");
+    await testPrisma.mediaItem.update({
+      where: { id: synced.id },
+      data: { dedupKey: "series:tvdb:81189:s1e1" },
+    });
+
+    // Legacy copy on the other server, titled differently, same stored id.
+    const legacy = await createTestMediaItem(lib2.id, {
+      title: "Pilot",
+      type: "SERIES",
+      parentTitle: "Breaking Bad (2008)",
+      seasonNumber: 1,
+      episodeNumber: 1,
+    });
+    await createTestExternalId(legacy.id, "TVDB", "81189");
+    await createTestExternalId(legacy.id, "TMDB", "1396");
+
+    expect(await backfillDedupKeys(user.id)).toBe(1);
+
+    const refreshed = await testPrisma.mediaItem.findUniqueOrThrow({
+      where: { id: legacy.id },
+      select: { dedupKey: true },
+    });
+    expect(refreshed.dedupKey).toBe("series:tvdb:81189:s1e1");
+
+    await recomputeCanonical(user.id);
+    const canonical = await testPrisma.mediaItem.count({
+      where: { id: { in: [synced.id, legacy.id] }, dedupCanonical: true },
+    });
+    expect(canonical).toBe(1);
+  });
+
+  it("keys a track on artist and title whatever external ids it stores, as the sync does", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id, { name: "Server 1" });
+    const lib = await createTestLibrary(server.id, { type: "MUSIC" });
+
+    const track = await createTestMediaItem(lib.id, {
+      title: "Paranoid Android",
+      type: "MUSIC",
+      parentTitle: "Radiohead",
+    });
+    await createTestExternalId(track.id, "MUSICBRAINZ", "a74b1b7f-71a5-4011-9441-d0b5e4122711");
+
+    expect(await backfillDedupKeys(user.id)).toBe(1);
+
+    const refreshed = await testPrisma.mediaItem.findUniqueOrThrow({
+      where: { id: track.id },
+      select: { dedupKey: true },
+    });
+    expect(refreshed.dedupKey).toBe("music:radiohead:paranoid android");
+  });
+
   it("backfills all items when userId is not provided", async () => {
     const user1 = await createTestUser({ username: "user1" });
     const user2 = await createTestUser({ username: "user2" });

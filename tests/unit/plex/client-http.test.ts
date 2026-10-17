@@ -675,8 +675,69 @@ describe("getWatchlistGuids", () => {
   });
 
   it("returns an empty set for an empty watchlist", async () => {
-    vi.spyOn(axios, "get").mockResolvedValue({ data: {} });
+    // plex.tv's own answer for an account with nothing watchlisted.
+    vi.spyOn(axios, "get").mockResolvedValue({ data: { MediaContainer: { offset: 0, size: 0, totalSize: 0 } } });
     expect(await new PlexClient("http://plex", "tok").getWatchlistGuids()).toEqual(new Set());
+  });
+
+  // The sync clears `isWatchlisted` on every item missing from the set, so a
+  // truncated answer must read as unknown (null), never as a shorter list.
+  // It used to be one 10,000-item request with no paging.
+  /** A watchlist of `total` items that plex.tv serves `cap` at a time. */
+  function servePagedWatchlist(total: number, cap: number, opts: { reportTotal?: boolean } = {}) {
+    const items = Array.from({ length: total }, (_, i) => ({ ratingKey: `w${i}`, Guid: [{ id: `tmdb://${i}` }] }));
+    return vi.spyOn(axios, "get").mockImplementation(async (_url, config) => {
+      const params = (config?.params ?? {}) as Record<string, number>;
+      const start = params["X-Plex-Container-Start"] ?? 0;
+      const size = Math.min(params["X-Plex-Container-Size"] ?? 50, cap);
+      const page = items.slice(start, start + size);
+      return {
+        data: {
+          MediaContainer: {
+            offset: start,
+            size: page.length,
+            ...(opts.reportTotal === false ? {} : { totalSize: total }),
+            Metadata: page,
+          },
+        },
+      };
+    });
+  }
+
+  it("pages until totalSize when plex.tv caps the page", async () => {
+    const spy = servePagedWatchlist(5, 2);
+    const guids = await new PlexClient("http://plex", "tok").getWatchlistGuids();
+    expect(guids).toEqual(new Set(["tmdb://0", "tmdb://1", "tmdb://2", "tmdb://3", "tmdb://4"]));
+    expect(spy.mock.calls.map((c) => (c[1]?.params as Record<string, number>)["X-Plex-Container-Start"])).toEqual([0, 2, 4]);
+  });
+
+  it("pages past a full page when no total is reported, ending on the short one", async () => {
+    const spy = servePagedWatchlist(130, 1000, { reportTotal: false });
+    const guids = await new PlexClient("http://plex", "tok").getWatchlistGuids();
+    expect(guids?.size).toBe(130);
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns null when the pages stop before totalSize", async () => {
+    vi.spyOn(axios, "get")
+      .mockResolvedValueOnce({
+        data: { MediaContainer: { offset: 0, totalSize: 3, Metadata: [{ Guid: [{ id: "tmdb://1" }] }] } },
+      })
+      .mockResolvedValueOnce({ data: { MediaContainer: { offset: 1, totalSize: 3, Metadata: [] } } });
+    expect(await new PlexClient("http://plex", "tok").getWatchlistGuids()).toBeNull();
+    expect(logger.warn).toHaveBeenCalledWith("Plex", expect.stringContaining("stopped at 1 of 3 items"));
+  });
+
+  it("returns null when plex.tv ignores the start offset", async () => {
+    vi.spyOn(axios, "get").mockResolvedValue({
+      data: { MediaContainer: { offset: 0, totalSize: 3, Metadata: [{ Guid: [{ id: "tmdb://1" }] }] } },
+    });
+    expect(await new PlexClient("http://plex", "tok").getWatchlistGuids()).toBeNull();
+  });
+
+  it("returns null for an answer that is not a MediaContainer", async () => {
+    vi.spyOn(axios, "get").mockResolvedValue({ data: "<html>Sign in</html>" });
+    expect(await new PlexClient("http://plex", "tok").getWatchlistGuids()).toBeNull();
   });
 
   it("returns null (not an empty set) on a non-Error failure", async () => {

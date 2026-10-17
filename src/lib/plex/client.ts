@@ -17,6 +17,7 @@ import type {
   PlexSession,
 } from "./types";
 import type { MediaServerClient, LibraryItemType } from "@/lib/media-server/client";
+import type { DetailedWatchHistoryEntry } from "@/lib/media-server/types";
 import { MediaItemNotFoundError } from "@/lib/media-server/client";
 import { isMediaItem } from "@/lib/media-server/item-types";
 import { normalizeResolutionFromDimensions } from "@/lib/resolution";
@@ -35,6 +36,26 @@ interface PlexClientOptions {
  * request-line limit.
  */
 const COLLECTION_ITEM_BATCH_SIZE = 50;
+
+// plex.tv's watchlist pages like any MediaContainer. Kept modest: a page at or
+// under the server's own cap is never cut short, so a short page still means
+// the end when no `totalSize` comes back.
+const WATCHLIST_PAGE_SIZE = 100;
+// Runaway backstop only (100,000 items), never reachable by a real watchlist.
+const WATCHLIST_MAX_PAGES = 1000;
+
+/**
+ * An incomplete watchlist answer reads as unknown, never as a shorter list:
+ * the sync clears `isWatchlisted` on every item missing from the set, so a
+ * truncated set clears the flag on everything past the cut.
+ */
+function watchlistUnknown(reason: string): null {
+  logger.warn(
+    "Plex",
+    `The plex.tv watchlist answer was incomplete (${reason}) — stored watchlist flags are kept unchanged this sync`,
+  );
+  return null;
+}
 
 function buildCollectionUri(machineId: string, ratingKeys: string[]): string {
   return `server://${machineId}/com.plexapp.plugins.library/library/metadata/${ratingKeys.join(",")}`;
@@ -489,22 +510,8 @@ export class PlexClient implements MediaServerClient {
   /** `getDetailedWatchHistory({ since })` filters server-side via `viewedAt>=`. */
   readonly supportsHistorySince = true;
 
-  async getDetailedWatchHistory(options?: { since?: Date }): Promise<
-    Array<{
-      ratingKey: string;
-      username: string;
-      watchedAt: string | null;
-      deviceName: string | null;
-      platform: string | null;
-    }>
-  > {
-    const entries: Array<{
-      ratingKey: string;
-      username: string;
-      watchedAt: string | null;
-      deviceName: string | null;
-      platform: string | null;
-    }> = [];
+  async getDetailedWatchHistory(options?: { since?: Date }): Promise<DetailedWatchHistoryEntry[]> {
+    const entries: DetailedWatchHistoryEntry[] = [];
 
     try {
       // The STRICT account lookup. Every play is attributed through this map,
@@ -548,6 +555,11 @@ export class PlexClient implements MediaServerClient {
             ? deviceMap.get(entry.deviceID as number)
             : undefined;
 
+          // The section the play came from: a rating key is unique only
+          // within a library, so this places a play whose key two libraries
+          // of this server hold.
+          const section = entry.librarySectionID;
+
           entries.push({
             ratingKey: key,
             username,
@@ -556,6 +568,7 @@ export class PlexClient implements MediaServerClient {
               : null,
             deviceName: device?.name ?? null,
             platform: device?.platform ?? null,
+            ...(section != null && section !== "" ? { librarySectionId: String(section) } : {}),
           });
         }
       }, options?.since);
@@ -1045,29 +1058,66 @@ export class PlexClient implements MediaServerClient {
    * failed fetch made every plex.tv outage, timeout or expired token clear
    * the flag on every item the sync touched, and with it the "Is Watchlisted"
    * rule/query criterion. The caller carries the stored flags forward instead.
+   * An incomplete answer — pages that stop before `totalSize`, an offset the
+   * server ignored, a body that is not a MediaContainer — is null for the same
+   * reason: it used to be one 10,000-item request with no paging, so a capped
+   * page cleared the flag on every item past the cap.
    */
   async getWatchlistGuids(): Promise<Set<string> | null> {
     const guids = new Set<string>();
+    let start = 0;
     try {
-      const response = await axios.get(
-        "https://metadata.provider.plex.tv/library/sections/watchlist/all",
-        {
-          headers: {
-            "X-Plex-Token": this.token,
-            Accept: "application/json",
-          },
-          params: {
-            "X-Plex-Container-Start": 0,
-            "X-Plex-Container-Size": 10000,
-          },
-          timeout: 30000,
+      for (let page = 0; ; page++) {
+        if (page >= WATCHLIST_MAX_PAGES) {
+          return watchlistUnknown(`still had items after ${WATCHLIST_MAX_PAGES} pages`);
         }
-      );
-      const items = response.data?.MediaContainer?.Metadata ?? [];
-      for (const item of items) {
-        const itemGuids = item.Guid ?? [];
-        for (const guid of itemGuids) {
-          if (guid.id) guids.add(guid.id);
+        const response = await axios.get(
+          "https://metadata.provider.plex.tv/library/sections/watchlist/all",
+          {
+            headers: {
+              "X-Plex-Token": this.token,
+              Accept: "application/json",
+            },
+            params: {
+              "X-Plex-Container-Start": start,
+              "X-Plex-Container-Size": WATCHLIST_PAGE_SIZE,
+            },
+            timeout: 30000,
+          }
+        );
+        // Anything but a MediaContainer (a proxy's HTML page, an error
+        // document) is not "nothing is watchlisted".
+        const container = response.data?.MediaContainer;
+        if (!container || typeof container !== "object") {
+          return watchlistUnknown("plex.tv answered without a MediaContainer");
+        }
+        // A server that ignored the start offset hands back page one again.
+        if (typeof container.offset === "number" && container.offset !== start) {
+          return watchlistUnknown(`asked for offset ${start}, got ${container.offset}`);
+        }
+        const items: Array<{ Guid?: Array<{ id?: string }> }> = Array.isArray(container.Metadata)
+          ? container.Metadata
+          : [];
+        for (const item of items) {
+          const itemGuids = item?.Guid ?? [];
+          for (const guid of itemGuids) {
+            if (guid?.id) guids.add(guid.id);
+          }
+        }
+        start += items.length;
+
+        // Same end rule as the history pager: a short page ends the walk only
+        // when no total is reported or the total is reached. A page cut short
+        // before the total is an incomplete answer, and reading it as complete
+        // would clear the flag on every item past the cut.
+        const total = typeof container.totalSize === "number" ? container.totalSize : null;
+        if (total != null) {
+          if (start >= total) return guids;
+          if (items.length === 0) {
+            return watchlistUnknown(`stopped at ${start} of ${total} items`);
+          }
+        } else if (items.length < WATCHLIST_PAGE_SIZE) {
+          return guids;
         }
       }
     } catch (error) {
@@ -1076,6 +1126,5 @@ export class PlexClient implements MediaServerClient {
       });
       return null;
     }
-    return guids;
   }
 }

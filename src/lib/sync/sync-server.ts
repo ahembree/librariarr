@@ -32,7 +32,9 @@ import { writeArtistMbids } from "@/lib/sync/artist-mbid";
 
 // Dynamic range patterns (order matters — check most specific first)
 const DV_PATTERN = /\b(dv|dovi|dolby[. ]?vision)\b/i;
-const HDR10_PLUS_PATTERN = /\b(hdr10(?:p(?:lus)?|[. ]?\+))\b/i;
+// No trailing \b after "+": "+" is not a word character, so a boundary there
+// would never match "HDR10+" before "." or "]" and the tag read as plain HDR10.
+const HDR10_PLUS_PATTERN = /\b(hdr10(?:p(?:lus)?\b|[. ]?\+))/i;
 const HDR10_PATTERN = /\b(hdr[. ]?10)\b/i;
 const HLG_PATTERN = /\bhlg\b/i;
 const PQ_PATTERN = /\b(pq|smpte[. ]?2084)\b/i;
