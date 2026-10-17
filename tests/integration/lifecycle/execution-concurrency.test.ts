@@ -60,6 +60,9 @@ import { executeLifecycleActions } from "@/lib/lifecycle/processor";
 import {
   tryBeginExecute,
   endExecute,
+  queryExecuteKey,
+  tryBeginQueryExecution,
+  endQueryExecution,
   _resetExecuteInFlightForTesting,
 } from "@/lib/lifecycle/execute-in-flight";
 import { reserveApiDestructive, resetApiDestructiveBudget } from "@/lib/api-keys/destructive-budget";
@@ -329,6 +332,36 @@ describe("scheduled execution while the actions change under it", () => {
     expect((await prisma.lifecycleAction.findUnique({ where: { id: actionFor(second.id).id } }))?.status).toBe(
       "PENDING",
     );
+  });
+
+  it("leaves every action pending while an ad-hoc query action runs for the user", async () => {
+    // The query can act on another copy or track of the same Arr record, which
+    // no item lock would see, so the two never run together.
+    const { user } = await dueDeletes();
+    expect(tryBeginExecute(queryExecuteKey(user.id))).toBe(true);
+    try {
+      await executeLifecycleActions(user.id);
+    } finally {
+      endExecute(queryExecuteKey(user.id));
+    }
+
+    expect(mockExecuteAction).not.toHaveBeenCalled();
+    expect(await prisma.lifecycleAction.count({ where: { status: "PENDING" } })).toBe(2);
+  });
+
+  it("refuses an ad-hoc query action while an action runs, and releases the user after", async () => {
+    const { user } = await dueDeletes(1);
+    let queryWhileRunning: string | undefined;
+    mockExecuteAction.mockImplementationOnce(async () => {
+      queryWhileRunning = tryBeginQueryExecution(user.id);
+      return {};
+    });
+
+    await executeLifecycleActions(user.id);
+
+    expect(queryWhileRunning).toBe("rule-set-running");
+    expect(tryBeginQueryExecution(user.id)).toBe("claimed");
+    endQueryExecution(user.id);
   });
 
   it("holds each item against a manual Execute while it runs, and releases it after", async () => {

@@ -467,7 +467,7 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
     }
   }
 
-  async getDetailedWatchHistory(): Promise<
+  async getDetailedWatchHistory(options?: { signal?: AbortSignal }): Promise<
     Array<{
       ratingKey: string;
       username: string;
@@ -485,9 +485,10 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
     }> = [];
 
     try {
+      const signal = options?.signal;
       const usersRes = await this.client.get<
         Array<{ Id: string; Name: string }>
-      >("/Users");
+      >("/Users", { signal });
       const users = usersRes.data || [];
 
       const pageSize = 1000;
@@ -497,6 +498,7 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
           // Page through this user's played items — a single Limit:10000 would
           // hard-truncate users with more than 10k plays.
           while (true) {
+            signal?.throwIfAborted();
             const itemsRes = await this.client.get<{
               Items: Array<{
                 Id: string;
@@ -514,6 +516,7 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
                 StartIndex: startIndex,
                 Limit: pageSize,
               },
+              signal,
             });
 
             const items = itemsRes.data.Items || [];

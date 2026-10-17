@@ -14,11 +14,17 @@ import { UnreachableInstances } from "@/lib/lifecycle/unreachable-instances";
 import { actionHonorsMemberIds, isDestructiveActionType } from "@/lib/lifecycle/action-types";
 import { checkDeleteCeiling } from "@/lib/lifecycle/delete-ceiling";
 import { reserveApiDestructive, type ApiDestructiveReservation } from "@/lib/api-keys/destructive-budget";
-import { tryBeginExecute, endExecute } from "@/lib/lifecycle/execute-in-flight";
+import {
+  tryBeginExecute,
+  endExecute,
+  tryBeginRuleSetExecution,
+  endRuleSetExecution,
+} from "@/lib/lifecycle/execute-in-flight";
 import {
   findExceptedItemIds,
   findExceptionProtectedGroups,
-  protectionKey,
+  isGroupProtected,
+  hasProtectionGroup,
   isWholeRecordDestructiveAction,
   type ProtectionTarget,
 } from "@/lib/lifecycle/exception-guard";
@@ -627,7 +633,7 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
   const wholeRecordTargetsByUser = new Map<string, ProtectionTarget[]>();
   for (const a of pendingActions) {
     if (!a.mediaItem || !isWholeRecordDestructiveAction(a.actionType)) continue;
-    if (!protectionKey(a.mediaItem)) continue;
+    if (!hasProtectionGroup(a.mediaItem)) continue;
     const targets = wholeRecordTargetsByUser.get(a.userId) ?? [];
     targets.push(a.mediaItem);
     wholeRecordTargetsByUser.set(a.userId, targets);
@@ -819,14 +825,16 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
     // MATCHED episodes/tracks. A whole-record destructive action destroys the
     // entire series/artist — including siblings the rule never matched — so an
     // exception on ANY item of the same group must also refuse the action.
-    // The group is `protectionKey` — `seriesKey` for a series, so an exception
-    // filed under another server's title for the same show still counts.
+    // The group is keyed as the guard keys it (`isGroupProtected`) —
+    // `seriesKey` for a series, so an exception filed under another server's
+    // title for the same show still counts, and the MusicBrainz id for an
+    // artist, so a same-named different artist's exception does not.
     // (Protected groups are batch-resolved before the loop.)
-    const groupKey = protectionKey(mediaItem);
+    const protectedGroups = protectedGroupsByUser.get(action.userId);
     if (
       isWholeRecordDestructiveAction(action.actionType) &&
-      groupKey &&
-      protectedGroupsByUser.get(action.userId)?.has(groupKey)
+      protectedGroups &&
+      isGroupProtected(protectedGroups, mediaItem)
     ) {
       await prisma.lifecycleAction.deleteMany({ where: { id: action.id } });
       logger.warn("Lifecycle", `Cancelled whole-record action ${action.id} on "${target}" — an episode/track of it is excluded via lifecycle exception and a ${action.actionType} cannot exclude it`);
@@ -920,6 +928,9 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
   // retry budget against a dead instance on the serial MAIN_QUEUE.
   const unreachable = new UnreachableInstances();
   const deferredByInstance = new Map<string, number>();
+  // Actions left because an ad-hoc query action was running: logged once,
+  // not once per action — a query run can span the whole of pass 2.
+  let leftForQuery = 0;
   for (const { action, mediaItem, filteredMatchedIds } of executable) {
     // Held by the ceiling: leave it PENDING and untouched so the Pending page
     // can execute it after review. Only destructive actions are held — an
@@ -948,8 +959,10 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
     // that claim the row is re-read: an action that is gone, no longer due,
     // or changed in any way since the load (`updatedAt`), or whose item or
     // members gained an exception, is left for the next run, whose pass 1
-    // judges it as it is now. The ad-hoc query route claims its own scope and
-    // is not serialised against this, as it never was against the others.
+    // judges it as it is now. An ad-hoc query action running for the user
+    // leaves it for the next run too (`tryBeginRuleSetExecution`): the query
+    // can act on another copy or track of the same Arr record, which no item
+    // lock sees.
     const title = actionTargetTitle({ ...action, matchedMediaItemIds: filteredMatchedIds, mediaItem, memberEpisodes: runningEpisodes });
     const lockScope = action.ruleSetId!;
     const lockItems = [mediaItem.id];
@@ -959,6 +972,12 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
     };
     if (!tryBeginExecute(lockScope, lockItems)) {
       skip(`a manual execution of it is running for rule set "${action.ruleSet?.name ?? action.ruleSetId}"`);
+      continue;
+    }
+    if (!tryBeginRuleSetExecution(action.userId)) {
+      endExecute(lockScope, lockItems);
+      leftForQuery += 1;
+      if (apiReservation && isDestructiveActionType(action.actionType)) apiReservation.release(1);
       continue;
     }
     try {
@@ -985,6 +1004,7 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
       }
       await runAction(action, mediaItem, filteredMatchedIds);
     } finally {
+      endRuleSetExecution(action.userId);
       endExecute(lockScope, lockItems);
     }
   }
@@ -1007,8 +1027,8 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
     if (filed === 0) return false;
     if ((await findExceptedItemIds(uid, [mediaItem.id, ...memberIds])).size > 0) return true;
     if (!isWholeRecordDestructiveAction(actionType)) return false;
-    const key = protectionKey(mediaItem);
-    return !!key && (await findExceptionProtectedGroups(uid, [mediaItem])).has(key);
+    if (!hasProtectionGroup(mediaItem)) return false;
+    return isGroupProtected(await findExceptionProtectedGroups(uid, [mediaItem]), mediaItem);
   }
 
   async function runAction(
@@ -1116,6 +1136,13 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
       }
 
     }
+  }
+
+  if (leftForQuery > 0) {
+    logger.info(
+      "Lifecycle",
+      `Left ${leftForQuery} action(s) for the next run — an ad-hoc query action was running`,
+    );
   }
 
   for (const [instanceId, count] of deferredByInstance) {

@@ -9,7 +9,7 @@ import { MOVIE_ACTION_TYPES, SERIES_ACTION_TYPES, MUSIC_ACTION_TYPES, actionHono
 import {
   findExceptedItemIds,
   findExceptionProtectedGroups,
-  protectionKey,
+  isGroupProtected,
   isWholeRecordDestructiveAction,
 } from "@/lib/lifecycle/exception-guard";
 import { arrFamilyLabel } from "@/lib/lifecycle/fetch-arr-metadata";
@@ -17,7 +17,7 @@ import { hasEnabledSeerrInstances } from "@/lib/lifecycle/fetch-seerr-metadata";
 import { hasArrRules, hasSeerrRules, hasPlayActivityRules } from "@/lib/conditions/helpers";
 import { checkWatchHistoryCompleteness } from "@/lib/lifecycle/evaluability";
 import { checkDeleteCeilingForRun } from "@/lib/lifecycle/delete-ceiling";
-import { tryBeginExecute, endExecute, queryExecuteKey } from "@/lib/lifecycle/execute-in-flight";
+import { beginQueryExecution, endQueryExecution } from "@/lib/lifecycle/execute-in-flight";
 import { eventBus } from "@/lib/events/event-bus";
 import type { ConditionGroup } from "@/lib/conditions/types";
 import { validateRequest, queryActionSchema } from "@/lib/validation";
@@ -245,11 +245,22 @@ export async function POST(request: NextRequest) {
   // requests, so one key per user refuses only a genuinely concurrent second
   // run (a double-click, or a second tab) and never a legitimate batch. Held
   // until the stream's run finishes, which is when the last Arr call has
-  // returned. See `execute-in-flight.ts`.
-  const executeKey = queryExecuteKey(userId);
-  if (!tryBeginExecute(executeKey)) {
+  // returned. Rule-set executions (Execute, force-retry, the scheduled
+  // executor) are kept apart from it too: they can act on the same Arr records
+  // through other rows. See `execute-in-flight.ts`.
+  // A lifecycle execution in progress is waited for (bounded), not refused:
+  // the page sends a large selection as sequential batches, and refusing one
+  // of them because the scheduled executor was mid-action stopped the run
+  // part-way.
+  const claim = await beginQueryExecution(userId);
+  if (claim !== "claimed") {
     return NextResponse.json(
-      { error: "A query action is already running — wait for it to finish" },
+      {
+        error:
+          claim === "query-running"
+            ? "A query action is already running — wait for it to finish"
+            : "A lifecycle execution is running — try again when it finishes",
+      },
       { status: 409 },
     );
   }
@@ -266,7 +277,7 @@ export async function POST(request: NextRequest) {
         try {
           return await runQueryAction(emit);
         } finally {
-          endExecute(executeKey);
+          endQueryExecution(userId);
         }
       },
       { signal: request.signal },
@@ -274,7 +285,7 @@ export async function POST(request: NextRequest) {
   } catch (err) {
     // Only reachable if the stream itself failed to start — the run's own
     // `finally` never ran, so the key would otherwise leak for the process.
-    endExecute(executeKey);
+    endQueryExecution(userId);
     throw err;
   }
 
@@ -503,13 +514,11 @@ export async function POST(request: NextRequest) {
       const protectedGroups = await findExceptionProtectedGroups(userId, items);
       if (protectedGroups.size > 0) {
         const before = items.length;
-        // `protectionKey` on both sides — see the guard: SERIES identity is
+        // Keyed as the guard keys it (`isGroupProtected`): SERIES identity is
         // `seriesKey`, so an exception filed under another server's title for
-        // the same show still protects this copy.
-        items = items.filter((i) => {
-          const key = protectionKey(i);
-          return !key || !protectedGroups.has(key);
-        });
+        // the same show still protects this copy, and a same-named artist with
+        // a different MusicBrainz id does not.
+        items = items.filter((i) => !isGroupProtected(protectedGroups, i));
         if (items.length < before) {
           skipped += before - items.length;
           logger.warn("Lifecycle", `Ad-hoc ${actionType}: skipped ${before - items.length} whole-record target(s) — an episode/track of the series/artist is excluded via lifecycle exception`);

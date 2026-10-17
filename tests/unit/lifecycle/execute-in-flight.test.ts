@@ -1,8 +1,13 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   tryBeginExecute,
   endExecute,
   queryExecuteKey,
+  tryBeginRuleSetExecution,
+  endRuleSetExecution,
+  tryBeginQueryExecution,
+  beginQueryExecution,
+  endQueryExecution,
   _resetExecuteInFlightForTesting,
 } from "@/lib/lifecycle/execute-in-flight";
 
@@ -118,6 +123,63 @@ describe("lifecycle execute single-flight registry", () => {
       endExecute("rs-1", ["b"]);
       expect(running("rs-1")).toBe(false);
       expect(tryBeginExecute("rs-1")).toBe(true);
+    });
+  });
+
+  describe("query runs and rule-set runs exclude each other", () => {
+    it("refuses a query run while a rule-set run is in progress for the user", () => {
+      expect(tryBeginRuleSetExecution("u1")).toBe(true);
+      expect(tryBeginQueryExecution("u1")).toBe("rule-set-running");
+      endRuleSetExecution("u1");
+      expect(tryBeginQueryExecution("u1")).toBe("claimed");
+    });
+
+    it("refuses a rule-set run while a query run is in progress for the user", () => {
+      expect(tryBeginQueryExecution("u1")).toBe("claimed");
+      expect(tryBeginRuleSetExecution("u1")).toBe(false);
+      expect(tryBeginQueryExecution("u1")).toBe("query-running");
+      endQueryExecution("u1");
+      expect(tryBeginRuleSetExecution("u1")).toBe(true);
+    });
+
+    it("never makes two rule-set runs refuse each other, and counts both", () => {
+      expect(tryBeginRuleSetExecution("u1")).toBe(true);
+      expect(tryBeginRuleSetExecution("u1")).toBe(true);
+      endRuleSetExecution("u1");
+      expect(tryBeginQueryExecution("u1")).toBe("rule-set-running");
+      endRuleSetExecution("u1");
+      expect(tryBeginQueryExecution("u1")).toBe("claimed");
+    });
+
+    it("keeps users apart", () => {
+      expect(tryBeginRuleSetExecution("u1")).toBe(true);
+      expect(tryBeginQueryExecution("u2")).toBe("claimed");
+    });
+  });
+
+  describe("beginQueryExecution", () => {
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+
+    it("waits for running rule-set executions instead of refusing", async () => {
+      expect(tryBeginRuleSetExecution("u1")).toBe(true);
+      const claim = beginQueryExecution("u1", 5_000);
+      await vi.advanceTimersByTimeAsync(1_000);
+      endRuleSetExecution("u1");
+      await vi.advanceTimersByTimeAsync(500);
+      expect(await claim).toBe("claimed");
+    });
+
+    it("gives up after the wait", async () => {
+      expect(tryBeginRuleSetExecution("u1")).toBe(true);
+      const claim = beginQueryExecution("u1", 1_000);
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(await claim).toBe("rule-set-running");
+    });
+
+    it("answers another query run at once", async () => {
+      expect(tryBeginQueryExecution("u1")).toBe("claimed");
+      expect(await beginQueryExecution("u1", 5_000)).toBe("query-running");
     });
   });
 });

@@ -9,7 +9,7 @@ import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
 import { logger } from "@/lib/logger";
 import { syncCollectionById, syncAllCollections } from "@/lib/lifecycle/collections";
 import { describePlexError } from "@/lib/plex/errors";
-import { findExceptedItemIds, findExceptionProtectedGroups, protectionKey } from "@/lib/lifecycle/exception-guard";
+import { findExceptedItemIds, findExceptionProtectedGroups, isGroupProtected, type ProtectionTarget } from "@/lib/lifecycle/exception-guard";
 import type { Prisma } from "@/generated/prisma/client";
 import { arrExternalIdsOf, arrIdSourceFor, copyIdsOf, copyRank, crossServerCopyKeys, groupsTracksByArtist } from "@/lib/lifecycle/cross-server-copies";
 import { identityFingerprint } from "@/lib/lifecycle/match-identity";
@@ -398,16 +398,19 @@ export async function detectAndSaveMatches(
     // (representative episode/track id, `title` = the series/artist name).
     // Exceptions are stored against individual episodes/tracks, so the group
     // is excluded when ANY of its episodes/tracks carries one — on any server,
-    // keyed through `protectionKey` (the series' `seriesKey`, the normalized
-    // artist name). Matching the exact `parentTitle` on the rule set's servers
-    // missed an exception filed on another server's copy of the show whenever
-    // the two servers titled it differently ("The Office" vs "The Office (US)").
+    // keyed as the guard keys it (`isGroupProtected`: the series' `seriesKey`;
+    // the normalized artist name, told apart from a same-named artist by its
+    // MusicBrainz id). Matching the exact `parentTitle` on the rule set's
+    // servers missed an exception filed on another server's copy of the show
+    // whenever the two servers titled it differently ("The Office" vs "The
+    // Office (US)").
     const targets = enrichedItems.map((item) => ({
       item,
       target: {
         parentTitle: (item.title as string | null) ?? null,
         seriesKey: (item.seriesKey as string | null | undefined) ?? null,
         type: ruleSet.type,
+        externalIds: (item.externalIds as ProtectionTarget["externalIds"]) ?? null,
       },
     }));
     const protectedGroups = await findExceptionProtectedGroups(
@@ -417,10 +420,7 @@ export async function detectAndSaveMatches(
     if (protectedGroups.size > 0) {
       const beforeCount = enrichedItems.length;
       const filtered = targets
-        .filter(({ target }) => {
-          const key = protectionKey(target);
-          return !key || !protectedGroups.has(key);
-        })
+        .filter(({ target }) => !isGroupProtected(protectedGroups, target))
         .map(({ item }) => item);
       if (filtered.length < beforeCount) {
         logger.info("Lifecycle", `Filtered ${beforeCount - filtered.length} excluded items from rule set "${ruleSet.name}"`);

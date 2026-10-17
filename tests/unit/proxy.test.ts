@@ -141,3 +141,21 @@ describe("proxy — page auth gate", () => {
     }
   });
 });
+
+describe("proxy — page Content-Security-Policy", () => {
+  it("sends a page a policy with a fresh nonce, and hands Next.js the same policy on the request", () => {
+    const res = proxy(req("http://localhost:3000/login"));
+    const csp = res.headers.get("content-security-policy") ?? "";
+    expect(csp).toMatch(/script-src 'self' 'nonce-[A-Za-z0-9+/=]+' 'strict-dynamic'/);
+    // Next.js reads the nonce from the REQUEST's header to stamp its scripts.
+    expect(res.headers.get("x-middleware-request-content-security-policy")).toBe(csp);
+    const again = proxy(req("http://localhost:3000/login")).headers.get("content-security-policy");
+    expect(again).not.toBe(csp);
+  });
+
+  it("leaves API responses to next.config.ts", () => {
+    const res = proxy(req("http://localhost:3000/api/health"));
+    expect(res.headers.get("content-security-policy")).toBeNull();
+  });
+});
+

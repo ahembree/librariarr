@@ -1477,9 +1477,9 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
       // Stop has to reach this phase too: it can run for minutes, and nothing
       // else checks the flag while it does, so a Stop pressed here used to be
       // ignored outright and the run finished COMPLETED. The Tracearr importer
-      // stops at its next page, keeping what it wrote; the native path rolls
-      // its full-replace transaction back at its next write batch (its fetch
-      // cannot be interrupted), so the previous history stays intact.
+      // stops at its next page, keeping what it wrote; the native path aborts
+      // its fetch mid-request, or rolls its full-replace transaction back at
+      // its next write batch, so the previous history stays intact.
       const cancelWatch = watchForCancel(cancelRequested);
       try {
         const { count: whCount } = await syncWatchHistory(serverId, undefined, cancelWatch.signal);

@@ -1,19 +1,16 @@
 import type { NextConfig } from "next";
 import { createRequire } from "module";
+import { buildCsp } from "./src/lib/security/csp";
 
 const require = createRequire(import.meta.url);
 const packageJson = require("./package.json");
 
-// `'unsafe-eval'` is only needed by the development runtime (React Refresh /
-// source-map eval). The production bundle never calls eval, so shipping the
-// directive there only widened what an XSS could do. `'unsafe-inline'` for
-// scripts remains: Next.js emits inline bootstrap scripts, and dropping it
-// requires per-request nonces (a proxy-generated nonce + `'strict-dynamic'`),
-// which forces every page dynamic — a follow-up, not a header tweak.
-const scriptSrc =
-  process.env.NODE_ENV === "development"
-    ? "script-src 'self' 'unsafe-inline' 'unsafe-eval'"
-    : "script-src 'self' 'unsafe-inline'";
+// Pages get their Content-Security-Policy from `src/proxy.ts`, with a nonce
+// per request (see `src/lib/security/csp.ts`); the proxy's header replaces
+// this one there (`e2e/security-headers.spec.ts` reads which one arrives).
+// This nonce-less form covers every other response — API JSON, and the files
+// the proxy's matcher skips (icons, the manifest, static chunks).
+const fallbackCsp = buildCsp({ dev: process.env.NODE_ENV === "development" });
 
 const nextConfig: NextConfig = {
   output: "standalone",
@@ -34,27 +31,7 @@ const nextConfig: NextConfig = {
             key: "Permissions-Policy",
             value: "camera=(), microphone=(), geolocation=()",
           },
-          {
-            key: "Content-Security-Policy",
-            value: [
-              "default-src 'self'",
-              scriptSrc,
-              "style-src 'self' 'unsafe-inline'",
-              "img-src 'self' data: blob: https:",
-              "font-src 'self'",
-              "connect-src 'self' https://plex.tv https://app.plex.tv",
-              "frame-ancestors 'none'",
-              // Not covered by default-src: without these an injected <base>
-              // could re-point every relative URL, an injected <form> could
-              // post to another origin, and <object>/<embed> would load
-              // same-origin plugin content. The app uses none of them (SSO
-              // starts from a link, Plex from a popup, every form submits via
-              // fetch).
-              "object-src 'none'",
-              "base-uri 'self'",
-              "form-action 'self'",
-            ].join("; "),
-          },
+          { key: "Content-Security-Policy", value: fallbackCsp },
         ],
       },
       // Artwork proxies return bytes a media server sent, content type and

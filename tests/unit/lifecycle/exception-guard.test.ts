@@ -8,8 +8,12 @@ vi.mock("@/lib/db", () => ({ prisma: mockPrisma }));
 
 import {
   findExceptionProtectedGroups,
+  hasProtectionGroup,
+  protectionKeys,
+  isGroupProtected,
   protectionKey,
   isWholeRecordDestructiveAction,
+  type ProtectionTarget,
 } from "@/lib/lifecycle/exception-guard";
 
 describe("isWholeRecordDestructiveAction", () => {
@@ -59,7 +63,7 @@ describe("protectionKey", () => {
     );
   });
 
-  it("keys music on the artist title — there is no artist-identity column", () => {
+  it("keys music on the artist title (`protectionKeys` adds the MusicBrainz id)", () => {
     expect(protectionKey({ parentTitle: "Boards of Canada", type: "MUSIC" })).toBe("MUSIC:title:boards of canada");
     expect(protectionKey({ parentTitle: "boards of canada", type: "MUSIC" })).toBe("MUSIC:title:boards of canada");
   });
@@ -130,14 +134,21 @@ describe("findExceptionProtectedGroups", () => {
         userId: "u1",
         mediaItem: {
           OR: [
-            { parentTitle: { in: ["Protected Show"] } },
+            { parentTitle: { in: ["Protected Show"], mode: "insensitive" } },
             { seriesKey: { in: ["tvdb:1"] } },
           ],
           type: { in: ["SERIES"] },
         },
       },
       select: {
-        mediaItem: { select: { parentTitle: true, seriesKey: true, type: true } },
+        mediaItem: {
+          select: {
+            parentTitle: true,
+            seriesKey: true,
+            type: true,
+            externalIds: { where: { source: "MUSICBRAINZ" }, select: { source: true, externalId: true } },
+          },
+        },
       },
     });
   });
@@ -164,5 +175,81 @@ describe("findExceptionProtectedGroups", () => {
       { parentTitle: "Show", seriesKey: "tvdb:9", type: "SERIES" },
     ]);
     expect(result.size).toBe(0);
+  });
+});
+
+describe("isGroupProtected — artists", () => {
+  // Two different artists named "Nirvana": the Seattle band and the 1960s UK
+  // one, with their MusicBrainz artist ids.
+  const SEATTLE = "5b11f4ce-a62d-471e-81fc-a69a8278c7da";
+  const UK = "9282c8b4-ca0b-4c6b-b7e3-4f7762dfc4d6";
+  const track = (parentTitle: string | null, mbid?: string): ProtectionTarget => ({
+    parentTitle,
+    type: "MUSIC",
+    externalIds: mbid ? [{ source: "MUSICBRAINZ", externalId: mbid }] : [],
+  });
+  const protectedBy = (exceptions: ProtectionTarget[], target: ProtectionTarget) =>
+    isGroupProtected(new Set<string>(exceptions.flatMap(protectionKeys)), target);
+
+  it("protects on the same title even when the ids differ — never under-blocks", () => {
+    // Two ids under one name may be two artists or one artist under a merged
+    // id Lidarr resolves to the same record; only the first is safe to delete.
+    expect(protectedBy([track("Nirvana", UK)], track("Nirvana", SEATTLE))).toBe(true);
+  });
+
+  it("protects the same artist, whatever the title's case or spacing", () => {
+    expect(protectedBy([track(" nirvana ", SEATTLE)], track("Nirvana", SEATTLE))).toBe(true);
+  });
+
+  it("protects the same artist spelled differently on another server", () => {
+    // Lidarr deletes the artist by id, so the id is the identity.
+    expect(protectedBy([track("Beyonce", "mbid-b")], track("Beyoncé", "mbid-b"))).toBe(true);
+  });
+
+  it("protects on the title when either side has no id", () => {
+    expect(protectedBy([track("Nirvana")], track("Nirvana", SEATTLE))).toBe(true);
+    expect(protectedBy([track("Nirvana", UK)], track("Nirvana"))).toBe(true);
+    expect(protectedBy([track("Nirvana")], track("Nirvana"))).toBe(true);
+  });
+
+  it("is false for another title with no shared id", () => {
+    expect(protectedBy([track("Bush", "mbid-bush")], track("Nirvana", SEATTLE))).toBe(false);
+    expect(protectedBy([track("Bush")], track("Nirvana"))).toBe(false);
+  });
+
+  it("guards a track with an id but no artist title", () => {
+    const untitled = track(null, SEATTLE);
+    expect(hasProtectionGroup(untitled)).toBe(true);
+    expect(protectedBy([track("Nirvana", SEATTLE)], untitled)).toBe(true);
+    expect(hasProtectionGroup(track(null))).toBe(false);
+  });
+
+  it("looks exceptions up by the targets' artist ids as well as their titles, titles case-insensitively", async () => {
+    mockPrisma.lifecycleException.findMany.mockResolvedValue([]);
+    await findExceptionProtectedGroups("u1", [track("Beyoncé", "mbid-b")]);
+    expect(mockPrisma.lifecycleException.findMany.mock.lastCall![0].where.mediaItem.OR).toEqual([
+      { parentTitle: { in: ["Beyoncé"], mode: "insensitive" } },
+      { type: "MUSIC", externalIds: { some: { source: "MUSICBRAINZ", externalId: { in: ["mbid-b"] } } } },
+    ]);
+  });
+
+  it("finds an exception filed on the artist under another spelling by its id", async () => {
+    mockPrisma.lifecycleException.findMany.mockResolvedValue([
+      { mediaItem: { parentTitle: "Beyonce", seriesKey: null, type: "MUSIC", externalIds: [{ source: "MUSICBRAINZ", externalId: "mbid-b" }] } },
+    ]);
+    const target = track("Beyoncé", "mbid-b");
+    expect(isGroupProtected(await findExceptionProtectedGroups("u1", [target]), target)).toBe(true);
+  });
+});
+
+describe("isGroupProtected — series and movies", () => {
+  it("matches a series on its protection key", () => {
+    const set = new Set(protectionKeys({ parentTitle: "The Office (US)", seriesKey: "tvdb:73244", type: "SERIES" }));
+    expect(isGroupProtected(set, { parentTitle: "The Office", seriesKey: "tvdb:73244", type: "SERIES" })).toBe(true);
+    expect(isGroupProtected(set, { parentTitle: "The Office", seriesKey: "tvdb:78107", type: "SERIES" })).toBe(false);
+  });
+
+  it("is false for an item with no group", () => {
+    expect(isGroupProtected(new Set(["MOVIE:title:x"]), { parentTitle: null, type: "MOVIE" })).toBe(false);
   });
 });

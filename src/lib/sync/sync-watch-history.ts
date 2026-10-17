@@ -96,7 +96,8 @@ export async function syncWatchHistory(
   onProgress?: WatchHistoryProgressReporter,
   /**
    * Cancels the sync. Threaded straight into the Tracearr importer (which stops
-   * between pages) and checked between the native path's write batches.
+   * between pages), into the native path's fetch (which rejects mid-request),
+   * and checked between the native path's write batches.
    */
   signal?: AbortSignal,
   options: WatchHistorySyncOptions = {}
@@ -294,10 +295,17 @@ export async function syncWatchHistory(
 
   let entries: Awaited<ReturnType<typeof client.getDetailedWatchHistory>>;
   try {
-    entries = await client.getDetailedWatchHistory(
-      incrementalSince ? { since: incrementalSince } : undefined
-    );
+    entries = await client.getDetailedWatchHistory({
+      ...(incrementalSince ? { since: incrementalSince } : {}),
+      signal,
+    });
   } catch (error) {
+    // Cancelled during the fetch: nothing has been written, so stop the same
+    // way a cancel during the write loop does (thrown — the callers treat it
+    // as a Stop, not as an unreachable server).
+    if (signal?.aborted) {
+      throw new Error("Watch history sync cancelled");
+    }
     logger.warn(
       "WatchHistory",
       `Skipping watch history sync for "${server.name}" — fetch failed; leaving existing history intact`,

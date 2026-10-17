@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db";
 import { actionHonorsMemberIds, isDestructiveActionType } from "@/lib/lifecycle/action-types";
 import { seriesKeyFromTitle } from "@/lib/media/series-key";
+import { artistMbidOf, type ArtistExternalIdLike } from "@/lib/media/artist-key";
 
 type MediaType = "MOVIE" | "SERIES" | "MUSIC";
 const VALID_TYPES: readonly MediaType[] = ["MOVIE", "SERIES", "MUSIC"];
@@ -20,22 +21,26 @@ export interface ProtectionTarget {
   /** `MediaItem.seriesKey` — set on SERIES rows, null on movies/tracks. */
   seriesKey?: string | null;
   type: string;
+  /**
+   * The row's external ids. Read for MUSIC only, for the artist's MusicBrainz
+   * id; a track passed without them is guarded by its title alone.
+   */
+  externalIds?: ReadonlyArray<ArtistExternalIdLike> | null;
 }
 
 /**
- * The group a whole-record action destroys, as the guard's lookup key. Both
- * halves of the guard — the exception lookup and the caller's check — go
- * through this so they cannot key on different things.
+ * The group a whole-record action destroys, keyed by title (or `seriesKey`),
+ * or null for an item with none (a movie — its own exception row is checked
+ * directly by every caller).
  *
  * SERIES keys on `seriesKey`, not `parentTitle`: the same show on two servers
  * can carry two titles under one TVDB id, and keyed on the title an exception on
  * one copy did not protect the other from a delete of the whole Sonarr series.
  * The fallback for a row with no key is `seriesKeyFromTitle`, the same string
  * `computeSeriesKey` derives, so a legacy row still collides with a backfilled
- * one. MUSIC keeps the normalized artist title (there is no artist-identity
- * column), namespaced by type so a same-named show and artist cannot cross.
- * Null for an item with no group (a movie — its own exception row is checked
- * directly by every caller).
+ * one. MUSIC keys on the normalized artist title, namespaced by type so a
+ * same-named show and artist cannot cross; `protectionKeys` adds its
+ * MusicBrainz id.
  */
 export function protectionKey(item: ProtectionTarget): string | null {
   const key =
@@ -43,6 +48,43 @@ export function protectionKey(item: ProtectionTarget): string | null {
     (item.parentTitle ? seriesKeyFromTitle(item.parentTitle) : null);
   return key ? `${item.type}:${key}` : null;
 }
+
+/**
+ * Every key a group is known by. An artist is known by its normalized title
+ * AND by its MusicBrainz id, and an exception protects a target that shares
+ * EITHER: the same id under another spelling is the one Lidarr artist, and the
+ * same title is protected whatever the ids say. Telling two same-named artists
+ * apart by id here would under-block whenever one artist carries two ids — an
+ * id MusicBrainz has merged, which Lidarr resolves to the same artist — and
+ * under-blocking deletes protected media, while over-blocking only skips a
+ * delete. Empty for an item with no group.
+ */
+export function protectionKeys(item: ProtectionTarget): string[] {
+  const key = protectionKey(item);
+  const keys = key ? [key] : [];
+  if (item.type === MUSIC) {
+    const mbid = artistMbidOf(item.externalIds);
+    if (mbid) keys.push(`${MUSIC}:mbid:${mbid}`);
+  }
+  return keys;
+}
+
+/** Whether the item belongs to a group a whole-record action destroys. */
+export function hasProtectionGroup(item: ProtectionTarget): boolean {
+  return protectionKeys(item).length > 0;
+}
+
+/**
+ * Whether a whole-record action on `target` would destroy an excepted item:
+ * `protectedSet` is what `findExceptionProtectedGroups` (or `protectionKeys`
+ * over a set of excepted items) returned. False for an item with no group.
+ */
+export function isGroupProtected(protectedSet: ReadonlySet<string>, target: ProtectionTarget): boolean {
+  if (protectedSet.size === 0) return false;
+  return protectionKeys(target).some((k) => protectedSet.has(k));
+}
+
+const MUSIC = "MUSIC";
 
 /**
  * Exception inviolability for whole-record destructive actions.
@@ -53,10 +95,10 @@ export function protectionKey(item: ProtectionTarget): string | null {
  * which therefore never enter the member list. An exception on such a
  * non-matching sibling would be silently destroyed.
  *
- * Returns the `protectionKey`s for which ANY item of the same group carries a
- * `LifecycleException`; callers look their own targets up through
- * `protectionKey`. Over-blocking on the title fallback is deliberate — it only
- * skips a delete (logged) — while under-blocking destroys protected content.
+ * Returns the protection keys of every exception in the targets' groups;
+ * callers test each target with `isGroupProtected`. Over-blocking on the title
+ * fallback is deliberate — it only skips a delete (logged) — while
+ * under-blocking destroys protected content.
  */
 export async function findExceptionProtectedGroups(
   userId: string,
@@ -64,37 +106,56 @@ export async function findExceptionProtectedGroups(
 ): Promise<Set<string>> {
   const parents = [...new Set(items.map((i) => i.parentTitle).filter((t): t is string => !!t))];
   const seriesKeys = [...new Set(items.map((i) => i.seriesKey).filter((k): k is string => !!k))];
-  if (parents.length === 0 && seriesKeys.length === 0) return new Set();
+  const artistMbids = [
+    ...new Set(
+      items
+        .filter((i) => i.type === MUSIC)
+        .map((i) => artistMbidOf(i.externalIds))
+        .filter((m): m is string => !!m),
+    ),
+  ];
+  if (parents.length === 0 && seriesKeys.length === 0 && artistMbids.length === 0) return new Set();
   const types = [...new Set(items.map((i) => i.type))].filter(
     (t): t is MediaType => (VALID_TYPES as readonly string[]).includes(t),
   );
 
-  // Search both columns: `parentTitle` alone misses an exception filed under the
-  // other server's title for the same show, `seriesKey` alone misses one on a
-  // row that predates the column. Each hit is then re-keyed through
-  // `protectionKey`, so a same-titled DIFFERENT show comes back under its own
-  // key and never matches the caller's.
+  // Search every column a group can be found by: `parentTitle` alone misses an
+  // exception filed under the other server's title for the same show (or
+  // artist, by its MusicBrainz id), `seriesKey` alone misses one on a row that
+  // predates the column. Each hit is then re-keyed, so a same-titled DIFFERENT
+  // show comes back under its own key and never matches the caller's.
   const exceptions = await prisma.lifecycleException.findMany({
     where: {
       userId,
       mediaItem: {
         OR: [
-          ...(parents.length > 0 ? [{ parentTitle: { in: parents } }] : []),
+          // Case-insensitively, as the keys compare: an exception filed under
+          // "nirvana" on one server protects "Nirvana" on another.
+          ...(parents.length > 0 ? [{ parentTitle: { in: parents, mode: "insensitive" as const } }] : []),
           ...(seriesKeys.length > 0 ? [{ seriesKey: { in: seriesKeys } }] : []),
+          ...(artistMbids.length > 0
+            ? [{
+                type: MUSIC as MediaType,
+                externalIds: { some: { source: "MUSICBRAINZ", externalId: { in: artistMbids } } },
+              }]
+            : []),
         ],
         ...(types.length > 0 ? { type: { in: types } } : {}),
       },
     },
     select: {
-      mediaItem: { select: { parentTitle: true, seriesKey: true, type: true } },
+      mediaItem: {
+        select: {
+          parentTitle: true,
+          seriesKey: true,
+          type: true,
+          externalIds: { where: { source: "MUSICBRAINZ" }, select: { source: true, externalId: true } },
+        },
+      },
     },
   });
 
-  return new Set(
-    exceptions
-      .map((e) => protectionKey(e.mediaItem))
-      .filter((k): k is string => !!k),
-  );
+  return new Set(exceptions.flatMap((e) => protectionKeys(e.mediaItem)));
 }
 
 /**

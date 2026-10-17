@@ -565,3 +565,16 @@ describe("configureRetry marking the server unreachable", () => {
     expect(mockAxios.requestMock).not.toHaveBeenCalled();
   });
 });
+
+describe("configureRetry and a cancelled request", () => {
+  it("rethrows it untouched: never retried, never marking the server unreachable", async () => {
+    const mockAxios = createMockAxios();
+    const onTerminalNetworkError = vi.fn();
+    configureRetry(mockAxios.instance, "Test", { warn: vi.fn() }, { onTerminalNetworkError });
+
+    const cancelled = makeAxiosError({ code: "ERR_CANCELED", message: "canceled" });
+    await expect(mockAxios.triggerError(cancelled)).rejects.toBe(cancelled);
+    expect(onTerminalNetworkError).not.toHaveBeenCalled();
+    expect(mockAxios.requestMock).not.toHaveBeenCalled();
+  });
+});

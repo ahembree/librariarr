@@ -326,8 +326,8 @@ export class PlexClient implements MediaServerClient {
   }
 
   /** `/accounts` as a map, throwing on a failed or unrecognisable response. */
-  private async fetchAccounts(): Promise<Map<number, string>> {
-    const response = await this.client.get("/accounts");
+  private async fetchAccounts(signal?: AbortSignal): Promise<Map<number, string>> {
+    const response = await this.client.get("/accounts", { signal });
     const container = response.data?.MediaContainer;
     if (!container || typeof container !== "object") {
       throw new Error("Unrecognized Plex /accounts response (no MediaContainer)");
@@ -409,6 +409,7 @@ export class PlexClient implements MediaServerClient {
   private async forEachHistoryPage(
     onPage: (metadata: Array<Record<string, unknown>>) => void,
     since?: Date,
+    signal?: AbortSignal,
   ): Promise<void> {
     const PAGE_SIZE = 5000;
     let start = 0;
@@ -424,12 +425,14 @@ export class PlexClient implements MediaServerClient {
       : "/status/sessions/history/all";
 
     while (true) {
+      signal?.throwIfAborted();
       const response = await this.client.get(path, {
         params: {
           sort: "viewedAt:desc",
           "X-Plex-Container-Start": start,
           "X-Plex-Container-Size": PAGE_SIZE,
         },
+        signal,
       });
       const container = response.data?.MediaContainer ?? {};
       const metadata: Array<Record<string, unknown>> = container.Metadata || [];
@@ -493,9 +496,9 @@ export class PlexClient implements MediaServerClient {
     return counts;
   }
 
-  async getDevices(): Promise<Map<number, { name: string; platform: string }>> {
+  async getDevices(signal?: AbortSignal): Promise<Map<number, { name: string; platform: string }>> {
     try {
-      const response = await this.client.get("/devices");
+      const response = await this.client.get("/devices", { signal });
       const devices = response.data.MediaContainer.Device || [];
       const map = new Map<number, { name: string; platform: string }>();
       for (const device of devices) {
@@ -510,7 +513,7 @@ export class PlexClient implements MediaServerClient {
   /** `getDetailedWatchHistory({ since })` filters server-side via `viewedAt>=`. */
   readonly supportsHistorySince = true;
 
-  async getDetailedWatchHistory(options?: { since?: Date }): Promise<DetailedWatchHistoryEntry[]> {
+  async getDetailedWatchHistory(options?: { since?: Date; signal?: AbortSignal }): Promise<DetailedWatchHistoryEntry[]> {
     const entries: DetailedWatchHistoryEntry[] = [];
 
     try {
@@ -528,8 +531,8 @@ export class PlexClient implements MediaServerClient {
       // "fetch failed — leave the stored history intact" path. Devices stay
       // lenient: they only label a row.
       const [accountMap, deviceMap] = await Promise.all([
-        this.fetchAccounts(),
-        this.getDevices(),
+        this.fetchAccounts(options?.signal),
+        this.getDevices(options?.signal),
       ]);
 
       await this.forEachHistoryPage((metadata) => {
@@ -571,7 +574,7 @@ export class PlexClient implements MediaServerClient {
             ...(section != null && section !== "" ? { librarySectionId: String(section) } : {}),
           });
         }
-      }, options?.since);
+      }, options?.since, options?.signal);
     } catch (error) {
       // Re-throw so the caller can tell a fetch failure apart from a genuinely
       // empty history. The watch-history sync does a destructive full-replace;

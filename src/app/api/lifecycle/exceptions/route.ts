@@ -8,7 +8,8 @@ import {
   exceptionBulkUpdateSchema,
 } from "@/lib/validation";
 import { removeItemFromCollections } from "@/lib/lifecycle/collections";
-import { protectionKey } from "@/lib/lifecycle/exception-guard";
+import { protectionKeys, isGroupProtected } from "@/lib/lifecycle/exception-guard";
+import { artistMbidOf } from "@/lib/media/artist-key";
 import type { Prisma } from "@/generated/prisma/client";
 
 export async function GET(request: NextRequest) {
@@ -121,6 +122,7 @@ export async function POST(request: NextRequest) {
       type: true,
       seriesKey: true,
       dedupKey: true,
+      externalIds: { where: { source: "MUSICBRAINZ" }, select: { source: true, externalId: true } },
     },
   });
 
@@ -175,7 +177,14 @@ export async function POST(request: NextRequest) {
 
   const relatedItems = await prisma.mediaItem.findMany({
     where: bulkWhere,
-    select: { id: true, dedupKey: true, parentTitle: true, seriesKey: true, type: true },
+    select: {
+      id: true,
+      dedupKey: true,
+      parentTitle: true,
+      seriesKey: true,
+      type: true,
+      externalIds: { where: { source: "MUSICBRAINZ" }, select: { source: true, externalId: true } },
+    },
   });
 
   const mediaItemIds = relatedItems.map((item) => item.id);
@@ -232,6 +241,8 @@ interface ExcludedItem {
   parentTitle: string | null;
   seriesKey: string | null;
   type: string;
+  /** The artist's MusicBrainz id, for a track (see `isGroupProtected`). */
+  externalIds: Array<{ source: string; externalId: string }>;
 }
 
 /**
@@ -246,7 +257,7 @@ interface ExcludedItem {
  *   item's own rows left that match and its armed action in place;
  * - in grouped-scope (seriesScope) rule sets, the match of the whole show or
  *   artist, which detection drops when ANY of its items carries an exception,
- *   on any server (`protectionKey`) — deleted in that rule set only;
+ *   on any server (`isGroupProtected`) — deleted in that rule set only;
  * - their entries in Plex collections.
  *
  * A per-episode match whose group merely lists the item as another server's
@@ -263,13 +274,17 @@ async function disarmExcludedItems(userId: string, items: ExcludedItem[]): Promi
       : [];
   const affected = new Set([...items.map((i) => i.id), ...twins.map((t) => t.id)]);
 
-  const groupKeys = new Set(
-    items
-      .map((i) => protectionKey({ parentTitle: i.parentTitle, seriesKey: i.seriesKey, type: i.type }))
-      .filter((k): k is string => !!k),
-  );
+  const groupKeys = new Set(items.flatMap((i) => protectionKeys(i)));
   const parents = [...new Set(items.map((i) => i.parentTitle).filter((t): t is string => !!t))];
   const seriesKeys = [...new Set(items.map((i) => i.seriesKey).filter((k): k is string => !!k))];
+  const artistMbids = [
+    ...new Set(
+      items
+        .filter((i) => i.type === "MUSIC")
+        .map((i) => artistMbidOf(i.externalIds))
+        .filter((m): m is string => !!m),
+    ),
+  ];
 
   const candidates = await prisma.ruleMatch.findMany({
     where: {
@@ -282,8 +297,11 @@ async function disarmExcludedItems(userId: string, items: ExcludedItem[]): Promi
                 ruleSet: { userId, seriesScope: true, type: { in: ["SERIES" as const, "MUSIC" as const] } },
                 mediaItem: {
                   OR: [
-                    ...(parents.length > 0 ? [{ parentTitle: { in: parents } }] : []),
+                    ...(parents.length > 0 ? [{ parentTitle: { in: parents, mode: "insensitive" as const } }] : []),
                     ...(seriesKeys.length > 0 ? [{ seriesKey: { in: seriesKeys } }] : []),
+                    ...(artistMbids.length > 0
+                      ? [{ externalIds: { some: { source: "MUSICBRAINZ", externalId: { in: artistMbids } } } }]
+                      : []),
                   ],
                 },
               },
@@ -295,7 +313,7 @@ async function disarmExcludedItems(userId: string, items: ExcludedItem[]): Promi
       ruleSetId: true,
       mediaItemId: true,
       itemData: true,
-      mediaItem: { select: { parentTitle: true, seriesKey: true } },
+      mediaItem: { select: { parentTitle: true, seriesKey: true, externalIds: { where: { source: "MUSICBRAINZ" }, select: { source: true, externalId: true } } } },
       ruleSet: {
         select: {
           type: true,
@@ -305,19 +323,19 @@ async function disarmExcludedItems(userId: string, items: ExcludedItem[]): Promi
       },
     },
   });
-  // Re-keyed through protectionKey: the title/seriesKey probe above also finds
-  // a same-titled DIFFERENT show, which the exception does not protect.
+  // Re-keyed as detection keys it (`isGroupProtected`): the title/seriesKey
+  // probe above also finds a same-titled DIFFERENT show, which the exception
+  // does not protect.
   const groupHits = candidates.filter(
     (m) =>
       !affected.has(m.mediaItemId) &&
       m.ruleSet.seriesScope &&
-      groupKeys.has(
-        protectionKey({
-          parentTitle: m.mediaItem.parentTitle,
-          seriesKey: m.mediaItem.seriesKey,
-          type: m.ruleSet.type,
-        }) ?? "",
-      ),
+      isGroupProtected(groupKeys, {
+        parentTitle: m.mediaItem.parentTitle,
+        seriesKey: m.mediaItem.seriesKey,
+        type: m.ruleSet.type,
+        externalIds: m.mediaItem.externalIds,
+      }),
   );
   const matches = [...candidates.filter((m) => affected.has(m.mediaItemId)), ...groupHits];
   const pairs = groupHits.map((m) => ({ ruleSetId: m.ruleSetId, mediaItemId: m.mediaItemId }));

@@ -164,6 +164,61 @@ describe("lifecycle engine scopes", () => {
       expect([...(res[0].memberIds as string[])].sort()).toEqual([t1.id, t2.id].sort());
       expect(await evaluateMusicScope(rules, [server.id])).toEqual([]);
     });
+
+    describe("same-named artists", () => {
+      // Two different artists called "Nirvana" in one library, told apart by
+      // their MusicBrainz artist ids. Grouped by title they were one artist:
+      // the UK band's unplayed tracks and the Seattle band's played ones
+      // aggregated together, and a whole-artist delete chose one of them.
+      async function seedNirvanas(opts: { untagged?: boolean } = {}) {
+        const user = await createTestUser();
+        const server = await createTestServer(user.id);
+        const lib = await createTestLibrary(server.id, { type: "MUSIC" });
+        const prisma = getTestPrisma();
+        const mb = (id: string, mbid: string) =>
+          prisma.mediaItemExternalId.create({ data: { mediaItemId: id, source: "MUSICBRAINZ", externalId: mbid } });
+        const seattle = await createTestMediaItem(lib.id, { type: "MUSIC", title: "Lithium", parentTitle: "Nirvana", playCount: 40 });
+        const uk = await createTestMediaItem(lib.id, { type: "MUSIC", title: "Rainbow Chaser", parentTitle: "Nirvana", playCount: 0 });
+        await mb(seattle.id, "mb-seattle");
+        await mb(uk.id, "mb-uk");
+        const untagged = opts.untagged
+          ? await createTestMediaItem(lib.id, { type: "MUSIC", title: "Untagged", parentTitle: "Nirvana", playCount: 0 })
+          : null;
+        return { server, seattle, uk, untagged };
+      }
+
+      it("aggregates each artist on its own", async () => {
+        const { server, seattle, uk } = await seedNirvanas();
+        const res = await evaluateMusicScope([group([rule("playCount", "equals", 0)])], [server.id]);
+        expect(res).toHaveLength(1);
+        expect(res[0].memberIds).toEqual([uk.id]);
+        expect(res[0].id).toBe(uk.id);
+        expect(res[0].memberIds).not.toContain(seattle.id);
+      });
+
+      it("keeps the title whole when a track carries no id", async () => {
+        const { server, seattle, uk, untagged } = await seedNirvanas({ untagged: true });
+        const res = await evaluateMusicScope([group([rule("title", "equals", "Nirvana")])], [server.id]);
+        expect(res).toHaveLength(1);
+        expect([...(res[0].memberIds as string[])].sort()).toEqual([seattle.id, uk.id, untagged!.id].sort());
+      });
+
+      it("keeps one artist together when only some of its tracks carry the id", async () => {
+        const user = await createTestUser();
+        const server = await createTestServer(user.id);
+        const lib = await createTestLibrary(server.id, { type: "MUSIC" });
+        const prisma = getTestPrisma();
+        const tagged = await createTestMediaItem(lib.id, { type: "MUSIC", title: "A", parentTitle: "Band", playCount: 5 });
+        const untagged = await createTestMediaItem(lib.id, { type: "MUSIC", title: "B", parentTitle: "Band", playCount: 0 });
+        await prisma.mediaItemExternalId.create({ data: { mediaItemId: tagged.id, source: "MUSICBRAINZ", externalId: "mb-band" } });
+        // Played through its tagged album: a "never played" rule must not
+        // match a partial artist made of the untagged one.
+        expect(await evaluateMusicScope([group([rule("playCount", "equals", 0)])], [server.id])).toEqual([]);
+        const all = await evaluateMusicScope([group([rule("title", "equals", "Band")])], [server.id]);
+        expect(all).toHaveLength(1);
+        expect([...(all[0].memberIds as string[])].sort()).toEqual([tagged.id, untagged.id].sort());
+      });
+    });
   });
 
   describe("evaluateLifecycleRules", () => {

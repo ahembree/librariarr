@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { getExternalBaseUrl, isTrustedMutationOrigin } from "@/lib/url";
+import { buildCsp, generateNonce } from "@/lib/security/csp";
 
 const SAFE_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 
@@ -33,7 +34,22 @@ export function proxy(request: NextRequest) {
     return NextResponse.redirect(new URL("/login", getExternalBaseUrl(request)));
   }
 
-  return NextResponse.next();
+  return withPageCsp(request);
+}
+
+/**
+ * A page request, with a fresh script nonce. Next.js reads the nonce from the
+ * REQUEST's `Content-Security-Policy` header and stamps it on every script it
+ * renders; the response carries the same policy to the browser. See
+ * `src/lib/security/csp.ts`.
+ */
+function withPageCsp(request: NextRequest): NextResponse {
+  const csp = buildCsp({ nonce: generateNonce(), dev: process.env.NODE_ENV === "development" });
+  const requestHeaders = new Headers(request.headers);
+  requestHeaders.set("Content-Security-Policy", csp);
+  const response = NextResponse.next({ request: { headers: requestHeaders } });
+  response.headers.set("Content-Security-Policy", csp);
+  return response;
 }
 
 export const config = {

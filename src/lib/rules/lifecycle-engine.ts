@@ -38,6 +38,7 @@ import { resolveSeriesKey } from "@/lib/media/series-key";
 import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
 import { DATE_ONLY_FIELDS } from "@/lib/conditions/fields";
 import { formatDateOnly } from "@/lib/format";
+import { artistMbidOf, splitArtistGroupByMbid } from "@/lib/media/artist-key";
 
 const STREAM_LANG_CODEC_FIELDS = new Set(["audioLanguage", "subtitleLanguage", "streamAudioCodec"]);
 const STREAM_LANGUAGE_FIELDS = new Set(["audioLanguage", "subtitleLanguage"]);
@@ -2411,16 +2412,25 @@ export async function evaluateMusicScope(
     },
   });
 
-  // Group tracks by artist (parentTitle + libraryId)
-  const artistMap = new Map<string, typeof allTracks>();
+  // Group tracks by artist (parentTitle + libraryId), then split a title that
+  // provably names several artists — two or more MusicBrainz artist ids — so
+  // same-named artists are not aggregated (and deleted) as one. See
+  // `splitArtistGroupByMbid` for why a title with one id is never split.
+  const titleGroups = new Map<string, typeof allTracks>();
   for (const track of allTracks) {
     const key = `${track.libraryId}::${track.parentTitle ?? track.libraryId}`;
-    const group = artistMap.get(key);
+    const group = titleGroups.get(key);
     if (group) {
       group.push(track);
     } else {
-      artistMap.set(key, [track]);
+      titleGroups.set(key, [track]);
     }
+  }
+  const artistMap = new Map<string, typeof allTracks>();
+  for (const [key, tracks] of titleGroups) {
+    splitArtistGroupByMbid(tracks, (t) => artistMbidOf(t.externalIds)).forEach((group, i) => {
+      artistMap.set(`${key}::${i}`, group);
+    });
   }
 
   // Aggregate each artist into a single record for rule evaluation

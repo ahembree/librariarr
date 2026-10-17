@@ -413,6 +413,21 @@ describe("getDetailedWatchHistory", () => {
     expect(logger.warn).toHaveBeenCalledWith("Jellyfin", 'Skipping watch history for user "Gone" (HTTP 404)');
   });
 
+  it("rejects once its signal fires instead of returning a partial history", async () => {
+    const controller = new AbortController();
+    const url = await serve((_req, u) => {
+      if (u.pathname === "/Users") {
+        controller.abort();
+        return { body: [{ Id: "u1", Name: "Ann" }] };
+      }
+      return { body: { Items: [{ Id: "a", UserData: { PlayCount: 1 } }] } };
+    });
+    await expect(
+      new JellyfinClient(url, "t").getDetailedWatchHistory({ signal: controller.signal }),
+    ).rejects.toThrow();
+    expect(requests.some((r) => r.path === "/Users/u1/Items")).toBe(false);
+  });
+
   it("rethrows a failure to list users so the caller keeps stored history", async () => {
     const url = await serve(() => ({ status: 401, body: {} }));
     await expect(new JellyfinClient(url, "t").getDetailedWatchHistory()).rejects.toThrow(/401/);

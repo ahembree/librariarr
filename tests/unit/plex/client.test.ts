@@ -297,7 +297,7 @@ describe("PlexClient", () => {
       });
       const result = await client.getAccounts();
       expect(result).toEqual(new Map([[1, "Admin"], [2, "User1"]]));
-      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/accounts");
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/accounts", { signal: undefined });
     });
 
     it("stays lenient on error, for the views that only decorate a name", async () => {
@@ -1181,6 +1181,31 @@ describe("PlexClient", () => {
         String(c[0]).startsWith("/status/sessions/history/all"),
       )!;
       expect(historyCall[0]).toBe("/status/sessions/history/all");
+    });
+
+    it("passes the cancel signal to every request it makes", async () => {
+      mockAxiosInstance.get
+        .mockResolvedValueOnce(emptyContainer) // /accounts
+        .mockResolvedValueOnce(emptyContainer) // /devices
+        .mockResolvedValueOnce(page([{ ratingKey: "1", viewedAt: 1700000000 }]));
+      const signal = new AbortController().signal;
+
+      await client.getDetailedWatchHistory({ signal });
+
+      for (const [, config] of mockAxiosInstance.get.mock.calls) expect(config.signal).toBe(signal);
+    });
+
+    it("stops before the next page once the signal has fired", async () => {
+      const controller = new AbortController();
+      mockAxiosInstance.get
+        .mockResolvedValueOnce(emptyContainer)
+        .mockImplementationOnce(async () => {
+          controller.abort();
+          return emptyContainer;
+        });
+
+      await expect(client.getDetailedWatchHistory({ signal: controller.signal })).rejects.toThrow();
+      expect(mockAxiosInstance.get.mock.calls.some((c) => String(c[0]).startsWith("/status/sessions/history/all"))).toBe(false);
     });
 
     it("carries the play's library section, which places a rating key two libraries hold", async () => {

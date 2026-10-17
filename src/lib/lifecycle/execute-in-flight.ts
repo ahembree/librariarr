@@ -40,6 +40,19 @@
  * whole-artist delete) meet the same record in sequence too, which this lock
  * never covered.
  *
+ * The ad-hoc query route and the rule-set paths (the two routes above and the
+ * scheduled executor's pass 2) are also kept apart, as WHOLE runs: a query
+ * action acts on whatever rows the query returned, which can be any copy or
+ * track of a title a rule set's PENDING action is stored against, so no item
+ * id lock can tell that the two would send the same Arr call. A query run
+ * holds `query:<userId>` whole; every rule-set run counts itself in
+ * `ruleSetRuns` (`tryBeginRuleSetExecution`), refused while a query run holds
+ * the scope. A query run arriving while rule-set runs are counted WAITS for
+ * them (`beginQueryExecution`, bounded) instead of failing: the Query page
+ * sends a large selection as sequential batches, releasing the claim between
+ * them, and the scheduled executor claims per action, so refusing outright
+ * stopped a long query run part-way whenever a scheduled run overlapped it.
+
  * In-process on purpose: a lock that dies with the process is a lock whose
  * holder is no longer running. Pinned to `globalThis` unconditionally, the
  * same way as `eventBus` and the realtime self-write registry — the routes
@@ -60,12 +73,18 @@ interface ScopeHolders {
 
 const globalForExecute = globalThis as unknown as {
   lifecycleExecuteInFlightScopes: Map<string, ScopeHolders> | undefined;
+  lifecycleRuleSetRuns: Map<string, number> | undefined;
 };
 
 /** Scopes with an execution running right now. */
 const inFlight: Map<string, ScopeHolders> =
   globalForExecute.lifecycleExecuteInFlightScopes ?? new Map<string, ScopeHolders>();
 globalForExecute.lifecycleExecuteInFlightScopes = inFlight;
+
+/** Rule-set executions running right now, per user (see the header). */
+const ruleSetRuns: Map<string, number> =
+  globalForExecute.lifecycleRuleSetRuns ?? new Map<string, number>();
+globalForExecute.lifecycleRuleSetRuns = ruleSetRuns;
 
 /** The lock key for an ad-hoc query action run — one per user, not per request. */
 export function queryExecuteKey(userId: string): string {
@@ -113,4 +132,65 @@ export function endExecute(scope: string, itemIds?: readonly string[]): void {
 /** Test-only: release every scope. */
 export function _resetExecuteInFlightForTesting(): void {
   inFlight.clear();
+  ruleSetRuns.clear();
+}
+
+/**
+ * Count a rule-set execution for `userId` (see the header): refused — false —
+ * while an ad-hoc query action runs for the user. Take it AFTER the rule-set
+ * claim and release it with `endRuleSetExecution` before that one, from the
+ * same `finally`.
+ */
+export function tryBeginRuleSetExecution(userId: string): boolean {
+  if (inFlight.get(queryExecuteKey(userId))?.whole) return false;
+  ruleSetRuns.set(userId, (ruleSetRuns.get(userId) ?? 0) + 1);
+  return true;
+}
+
+/** Release what `tryBeginRuleSetExecution` counted. */
+export function endRuleSetExecution(userId: string): void {
+  const n = (ruleSetRuns.get(userId) ?? 0) - 1;
+  if (n > 0) ruleSetRuns.set(userId, n);
+  else ruleSetRuns.delete(userId);
+}
+
+export type QueryExecutionClaim = "claimed" | "query-running" | "rule-set-running";
+
+/**
+ * Claim the user's query scope for an ad-hoc query action: refused while
+ * another query action runs, or while any rule-set execution is counted.
+ */
+export function tryBeginQueryExecution(userId: string): QueryExecutionClaim {
+  const key = queryExecuteKey(userId);
+  const held = inFlight.get(key);
+  if (held && (held.whole || held.items.size > 0)) return "query-running";
+  if ((ruleSetRuns.get(userId) ?? 0) > 0) return "rule-set-running";
+  return tryBeginExecute(key) ? "claimed" : "query-running";
+}
+
+/** How long a query action waits for running rule-set executions. */
+export const QUERY_EXECUTION_WAIT_MS = 60_000;
+const QUERY_EXECUTION_POLL_MS = 250;
+
+/**
+ * `tryBeginQueryExecution`, waiting up to `waitMs` while rule-set executions
+ * are running (the scheduled executor holds its count for one action at a
+ * time). Another query action is answered at once: that is a second tab or a
+ * double-click, not a run to wait behind.
+ */
+export async function beginQueryExecution(
+  userId: string,
+  waitMs: number = QUERY_EXECUTION_WAIT_MS,
+): Promise<QueryExecutionClaim> {
+  const deadline = Date.now() + waitMs;
+  for (;;) {
+    const claim = tryBeginQueryExecution(userId);
+    if (claim !== "rule-set-running" || Date.now() >= deadline) return claim;
+    await new Promise((resolve) => setTimeout(resolve, QUERY_EXECUTION_POLL_MS));
+  }
+}
+
+/** Release what `beginQueryExecution`/`tryBeginQueryExecution` claimed. */
+export function endQueryExecution(userId: string): void {
+  endExecute(queryExecuteKey(userId));
 }

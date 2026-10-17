@@ -109,6 +109,13 @@ export function configureRetry(
       throw error;
     }
 
+    // A request the caller aborted (its `signal` fired) says nothing about the
+    // server: never retried, and never marking it unreachable, or a Stop
+    // pressed mid-fetch would fail the next 45s of requests to that server.
+    if (error.code === "ERR_CANCELED") {
+      throw error;
+    }
+
     // Mark unreachable on the *first* network error, not just after retries are
     // exhausted. The retry will go through the request interceptor and short-circuit
     // via the breaker, so concurrent in-flight requests fail at ~15s (single timeout)

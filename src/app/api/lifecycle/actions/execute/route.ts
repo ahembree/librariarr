@@ -4,13 +4,18 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { executeActionsForItems } from "@/lib/lifecycle/run-actions";
 import { checkDeleteCeiling } from "@/lib/lifecycle/delete-ceiling";
-import { tryBeginExecute, endExecute } from "@/lib/lifecycle/execute-in-flight";
+import {
+  tryBeginExecute,
+  endExecute,
+  tryBeginRuleSetExecution,
+  endRuleSetExecution,
+} from "@/lib/lifecycle/execute-in-flight";
 import { validateRequest, actionExecuteSchema } from "@/lib/validation";
 import { actionHonorsMemberIds, isDestructiveActionType } from "@/lib/lifecycle/action-types";
 import {
   findExceptedItemIds,
   findExceptionProtectedGroups,
-  protectionKey,
+  isGroupProtected,
   isWholeRecordDestructiveAction,
 } from "@/lib/lifecycle/exception-guard";
 import { sendDiscordNotification, buildFailureSummaryEmbed } from "@/lib/discord/client";
@@ -104,9 +109,19 @@ export async function POST(request: NextRequest) {
       { status: 409 }
     );
   }
+  // Kept apart from an ad-hoc query action, which can act on another copy or
+  // track of the same Arr record (see `execute-in-flight.ts`).
+  if (!tryBeginRuleSetExecution(session.userId!)) {
+    endExecute(ruleSet.id, lockedItems);
+    return NextResponse.json(
+      { error: "A query action is running — wait for it to finish" },
+      { status: 409 }
+    );
+  }
   try {
     return await executeRuleSet(session, ruleSet, mediaItemIds);
   } finally {
+    endRuleSetExecution(session.userId!);
     endExecute(ruleSet.id, lockedItems);
   }
 }
@@ -335,13 +350,11 @@ async function executeRuleSet(
     const protectedGroups = await findExceptionProtectedGroups(session.userId!, items);
     if (protectedGroups.size > 0) {
       const before = items.length;
-      // `protectionKey` on both sides — see the guard: SERIES identity is
+      // Keyed as the guard keys it (`isGroupProtected`): SERIES identity is
       // `seriesKey`, so an exception filed under another server's title for the
-      // same show still protects this copy.
-      items = items.filter((i) => {
-        const key = protectionKey(i);
-        return !key || !protectedGroups.has(key);
-      });
+      // same show still protects this copy, and a same-named artist with a
+      // different MusicBrainz id does not.
+      items = items.filter((i) => !isGroupProtected(protectedGroups, i));
       if (items.length < before) {
         logger.warn("Lifecycle", `Skipped ${before - items.length} whole-record ${ruleSet.actionType} target(s) for rule set "${ruleSet.id}" — an episode/track of the series/artist is excluded via lifecycle exception`);
       }
