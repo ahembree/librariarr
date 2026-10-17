@@ -110,14 +110,15 @@ describe("GET /api/events/stream — the SSE body", () => {
     expect(await readChunk(r)).toBe(": heartbeat\n\n");
 
     vi.advanceTimersByTime(3_600_000);
-    // Heartbeats queued before the lifetime cap fired, then the stream closes.
+    // Heartbeats queued before the lifetime cap fired — one every 30s from the
+    // 60s mark through the hour mark itself — then the stream closes.
     let chunk: string | null;
     let heartbeats = 0;
     while ((chunk = await readChunk(r)) !== null) {
       expect(chunk).toBe(": heartbeat\n\n");
       heartbeats++;
     }
-    expect(heartbeats).toBeGreaterThan(0);
+    expect(heartbeats).toBe(119);
     expect(eventBus.listenerCount).toBe(before);
 
     // Nothing is sent once the stream has been torn down.

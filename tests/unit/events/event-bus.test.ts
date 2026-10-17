@@ -1,17 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
 
-// Re-create a fresh instance for each test by importing the class directly
-// rather than using the singleton (which persists across tests via globalThis)
-const createEventBus = async () => {
-  // Dynamic import to get the module
-  const mod = await import("@/lib/events/event-bus");
-  return mod;
-};
+// The module exports only the singleton (pinned to globalThis), so every test
+// uses it and removes the subscriptions it added.
+const createEventBus = () => import("@/lib/events/event-bus");
 
 describe("AppEventBus", () => {
-  // Since the singleton lives on globalThis, we test via the exported eventBus
-  // Each test should clean up its subscriptions
-
   it("delivers events to subscribers", async () => {
     const { eventBus } = await createEventBus();
     const listener = vi.fn();
@@ -105,12 +98,12 @@ describe("AppEventBus", () => {
     const unsub1 = eventBus.subscribe(badListener);
     const unsub2 = eventBus.subscribe(goodListener);
 
-    // emit wraps in try-catch, but EventEmitter calls listeners synchronously
-    // If the first listener throws, the second may not be called
-    // The important thing is that emit() itself doesn't throw
+    // EventEmitter calls listeners synchronously and stops at one that throws;
+    // emit() catches it, so the route or job that emitted carries on.
     expect(() => {
       eventBus.emit({ type: "sync:completed", userId: "user1" });
     }).not.toThrow();
+    expect(badListener).toHaveBeenCalledTimes(1);
 
     unsub1();
     unsub2();

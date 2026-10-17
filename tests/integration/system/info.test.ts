@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from "vitest";
 import { cleanDatabase, disconnectTestDb } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
 import {
@@ -43,6 +43,11 @@ describe("GET /api/system/info", () => {
     clearMockSession();
     vi.clearAllMocks();
     mockCheckForUpdate.mockResolvedValue(UPDATE);
+    vi.stubEnv("NEXT_PUBLIC_APP_VERSION", "1.0.0");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   afterAll(async () => {
@@ -72,9 +77,10 @@ describe("GET /api/system/info", () => {
       };
     }>(response, 200);
 
-    expect(body.appVersion).toBeDefined();
-    expect(body.latestMigration).toBeDefined();
-    expect(body.databaseSize).toBeDefined();
+    expect(body.appVersion).toBe("1.0.0");
+    // The test database is built with `prisma db push`, which records no migrations.
+    expect(body.latestMigration).toBe("N/A (db push)");
+    expect(body.databaseSize).toMatch(/^\d+ (bytes|kB|MB|GB)$/);
     expect(body.stats.mediaItems).toBe(0);
     expect(body.stats.enabledLibraries).toBe(0);
     expect(body.stats.totalLibraries).toBe(0);
@@ -127,7 +133,7 @@ describe("GET /api/system/info", () => {
     const body = await expectJson<{ appVersion: string; updateInfo?: unknown }>(response, 200);
 
     expect(mockCheckForUpdate).not.toHaveBeenCalled();
-    expect(body.appVersion).toBeDefined();
+    expect(body.appVersion).toBe("1.0.0");
     expect(body).not.toHaveProperty("updateInfo");
   });
 
@@ -139,7 +145,6 @@ describe("GET /api/system/info", () => {
     const body = await expectJson<{ databaseSize: string }>(response, 200);
 
     // pg_size_pretty returns strings like "8192 kB" or "7 MB"
-    expect(typeof body.databaseSize).toBe("string");
-    expect(body.databaseSize.length).toBeGreaterThan(0);
+    expect(body.databaseSize).toMatch(/^\d+ (bytes|kB|MB|GB)$/);
   });
 });

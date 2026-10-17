@@ -29,15 +29,33 @@ describe("GET /api/system/changelog", () => {
   });
 
   it("returns 401 without auth and never calls GitHub", async () => {
-    await expectJson(await GET(), 401);
+    expect(await expectJson(await GET(), 401)).toEqual({ error: "Unauthorized" });
     expect(mockFetchChangelog).not.toHaveBeenCalled();
   });
 
   it("returns the release notes", async () => {
     const user = await createTestUser();
     setMockSession({ userId: user.id, isLoggedIn: true });
+    // The shape `fetchChangelog` returns, newest first.
     const notes = [
-      { version: "1.2.0", name: "v1.2.0", body: "Fixes", publishedAt: "2026-01-01T00:00:00Z", url: "https://x" },
+      {
+        version: "1.2.0",
+        name: "v1.2.0",
+        body: "### Bug Fixes\n\n* **sync:** keep play counts monotonic ([1a2b3c4](https://github.com/ahembree/librariarr/commit/1a2b3c4))",
+        url: "https://github.com/ahembree/librariarr/releases/tag/v1.2.0",
+        publishedAt: "2026-01-01T00:00:00Z",
+        isCurrent: false,
+        isLatest: true,
+      },
+      {
+        version: "1.1.0",
+        name: "v1.1.0",
+        body: "### Features\n\n* add stream manager",
+        url: "https://github.com/ahembree/librariarr/releases/tag/v1.1.0",
+        publishedAt: "2025-12-01T00:00:00Z",
+        isCurrent: true,
+        isLatest: false,
+      },
     ];
     mockFetchChangelog.mockResolvedValue(notes);
     const body = await expectJson<{ notes: unknown[] }>(await GET(), 200);

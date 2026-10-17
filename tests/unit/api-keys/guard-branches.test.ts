@@ -28,6 +28,7 @@ import { _resetVerifiedApiKeysForTesting, authenticateApiKey, withApiKey } from 
 import { apiKeyLookupPrefix, newApiKey } from "@/lib/api-keys/keys";
 import {
   apiKeyCredentialFailureLimiter,
+  apiKeyFailureLogLimiter,
   apiKeyRequestLimiter,
   apiKeyUnknownLookupFloor,
   apiKeyVerificationFloor,
@@ -87,6 +88,10 @@ beforeEach(() => {
   table.clear();
   _resetVerifiedApiKeysForTesting();
   clearFloors();
+  // Failure counts and the shared failure-log budget outlive a test.
+  storeOf(apiKeyCredentialFailureLimiter).clear();
+  storeOf(apiKeyFailureLogLimiter).clear();
+  storeOf(apiKeyRequestLimiter).clear();
   serveTable();
   m.updateMany.mockResolvedValue({ count: 1 });
 });
@@ -126,10 +131,11 @@ describe("failures", () => {
     expect(r.ok === false && r.response.status).toBe(429);
     if (!r.ok) expect(Number(r.response.headers.get("retry-after"))).toBeGreaterThan(0);
     expect(m.findMany.mock.calls.length).toBe(lookups);
-    // The credential failed repeatedly but is logged at WARN once; the rest at DEBUG.
-    const warns = m.warn.mock.calls.filter(([, msg]) => String(msg).startsWith("Rejected an API request"));
-    expect(warns.length).toBeLessThanOrEqual(1);
-    expect(m.debug).toHaveBeenCalled();
+    // The credential failed 20 times but is logged at WARN once; the rest at
+    // DEBUG, and the refused 21st attempt is not a failure to log at all.
+    const rejected = (calls: unknown[][]) => calls.filter(([, msg]) => String(msg).startsWith("Rejected an API request"));
+    expect(rejected(m.warn.mock.calls)).toHaveLength(1);
+    expect(rejected(m.debug.mock.calls)).toHaveLength(apiKeyCredentialFailureLimiter.maxAttempts - 1);
   });
 
   it("fails closed with 503 when the key lookup throws", async () => {
@@ -148,7 +154,10 @@ describe("failures", () => {
     const second = await authenticateApiKey(request({ "x-api-key": key }), null);
     for (const r of [first, second]) {
       expect(r.ok === false && r.response.status).toBe(429);
-      if (!r.ok) expect(Number(r.response.headers.get("retry-after"))).toBeGreaterThanOrEqual(1);
+      if (!r.ok) {
+        expect(Number(r.response.headers.get("retry-after"))).toBeGreaterThanOrEqual(1);
+        expect(await r.response.json()).toEqual({ error: "Too many requests. Try again later." });
+      }
     }
     const warns = m.warn.mock.calls.filter(([, msg]) => String(msg).includes("went over"));
     expect(warns).toHaveLength(1);

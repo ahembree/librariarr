@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import { cleanDatabase, disconnectTestDb } from "../../setup/test-db";
-import { setMockSession, clearMockSession } from "../../setup/mock-session";
+import { setMockSession, clearMockSession, getMockSession } from "../../setup/mock-session";
 import {
   callRoute,
   expectJson,
@@ -20,10 +20,19 @@ vi.mock("@/lib/logger", () => ({
 }));
 
 // Mock backup service
-const mockRestoreBackup = vi.hoisted(() => vi.fn());
+const { mockRestoreBackup, mockClearImageCache } = vi.hoisted(() => ({
+  mockRestoreBackup: vi.fn(),
+  mockClearImageCache: vi.fn(),
+}));
 
 vi.mock("@/lib/backup/backup-service", () => ({
   restoreBackup: mockRestoreBackup,
+}));
+
+// A successful restore clears the on-disk artwork cache; the real one would
+// empty the host's /config/cache/images.
+vi.mock("@/lib/image-cache/image-cache", () => ({
+  clearImageCache: mockClearImageCache,
 }));
 
 // Import route handler AFTER mocks
@@ -43,6 +52,7 @@ describe("POST /api/backup/restore", () => {
     await cleanDatabase();
     clearMockSession();
     vi.clearAllMocks();
+    mockClearImageCache.mockResolvedValue(undefined);
   });
 
   afterAll(async () => {
@@ -53,10 +63,26 @@ describe("POST /api/backup/restore", () => {
     const response = await callRoute(POST, {
       url: "/api/backup/restore",
       method: "POST",
-      body: { filename: "backup.json.gz" },
+      body: { filename: "librariarr-backup-2024-01-01T03-00-00.json.gz" },
     });
     const body = await expectJson<{ error: string }>(response, 401);
     expect(body.error).toBe("Unauthorized");
+    expect(mockRestoreBackup).not.toHaveBeenCalled();
+  });
+
+  it("returns 403 reauth_required for a sign-in older than 15 minutes, without restoring", async () => {
+    const user = await createTestUser();
+    setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() - 16 * 60_000 });
+
+    const response = await callRoute(POST, {
+      url: "/api/backup/restore",
+      method: "POST",
+      body: { filename: "librariarr-backup-2024-01-01T03-00-00.json.gz" },
+    });
+    const body = await expectJson<{ error: string; code: string }>(response, 403);
+    expect(body.code).toBe("reauth_required");
+    expect(body.error).toMatch(/^Restoring a backup needs a sign-in from the last 15 minutes\./);
+    expect(mockRestoreBackup).not.toHaveBeenCalled();
   });
 
   it("returns 400 when filename is missing", async () => {
@@ -68,8 +94,11 @@ describe("POST /api/backup/restore", () => {
       method: "POST",
       body: {},
     });
-    const body = await expectJson<{ error: string }>(response, 400);
+    const body = await expectJson<{ error: string; details: string[] }>(response, 400);
     expect(body.error).toBe("Validation failed");
+    expect(body.details).toHaveLength(1);
+    expect(body.details[0]).toMatch(/^filename: /);
+    expect(mockRestoreBackup).not.toHaveBeenCalled();
   });
 
   it("returns 400 when filename is empty string", async () => {
@@ -81,8 +110,10 @@ describe("POST /api/backup/restore", () => {
       method: "POST",
       body: { filename: "" },
     });
-    const body = await expectJson<{ error: string }>(response, 400);
+    const body = await expectJson<{ error: string; details: string[] }>(response, 400);
     expect(body.error).toBe("Validation failed");
+    expect(body.details).toEqual(["filename: Filename is required"]);
+    expect(mockRestoreBackup).not.toHaveBeenCalled();
   });
 
   it("streams progress and complete events on successful restore", async () => {
@@ -95,13 +126,15 @@ describe("POST /api/backup/restore", () => {
         _passphrase: string | undefined,
         onProgress: (progress: Record<string, unknown>) => void
       ) => {
-        onProgress({ phase: "truncate", message: "Truncating tables..." });
+        onProgress({ phase: "truncate", message: "Clearing existing data..." });
         onProgress({
           phase: "restore",
-          message: "Restoring User table...",
-          table: "User",
+          message: "Restoring user (1 rows)...",
+          table: "user",
           tableIndex: 1,
           tableCount: 5,
+          rowsInserted: 0,
+          totalRows: 1,
         });
       }
     );
@@ -109,7 +142,7 @@ describe("POST /api/backup/restore", () => {
     const response = await callRoute(POST, {
       url: "/api/backup/restore",
       method: "POST",
-      body: { filename: "backup-2024-01-01.json.gz" },
+      body: { filename: "librariarr-backup-2024-01-01T03-00-00.json.gz" },
     });
 
     expect(response.status).toBe(200);
@@ -118,16 +151,24 @@ describe("POST /api/backup/restore", () => {
     expect(response.headers.get("X-Accel-Buffering")).toBe("no");
 
     const events = await readNdjsonStream(response);
-    expect(events).toHaveLength(3);
-    expect(events[0]).toMatchObject({ type: "progress", phase: "truncate" });
-    expect(events[1]).toMatchObject({
-      type: "progress",
-      phase: "restore",
-      table: "User",
-      tableIndex: 1,
-      tableCount: 5,
-    });
-    expect(events[2]).toMatchObject({ type: "complete" });
+    expect(events).toEqual([
+      { type: "progress", phase: "truncate", message: "Clearing existing data..." },
+      {
+        type: "progress",
+        phase: "restore",
+        message: "Restoring user (1 rows)...",
+        table: "user",
+        tableIndex: 1,
+        tableCount: 5,
+        rowsInserted: 0,
+        totalRows: 1,
+      },
+      { type: "complete" },
+    ]);
+    // The restored rows replaced the artwork's items, and the restore revoked
+    // every session — this one included, so its cookie is cleared.
+    expect(mockClearImageCache).toHaveBeenCalledOnce();
+    expect(getMockSession()).toMatchObject({ isLoggedIn: false, userId: undefined });
   });
 
   it("passes passphrase to restoreBackup when provided", async () => {
@@ -139,14 +180,14 @@ describe("POST /api/backup/restore", () => {
     const response = await callRoute(POST, {
       url: "/api/backup/restore",
       method: "POST",
-      body: { filename: "backup.json.gz.enc", passphrase: "my-secret-pass" },
+      body: { filename: "librariarr-backup-2024-01-01T03-00-00.json.gz.enc", passphrase: "my-secret-pass" },
     });
 
     expect(response.status).toBe(200);
     await readNdjsonStream(response); // consume the stream
 
     expect(mockRestoreBackup).toHaveBeenCalledWith(
-      "backup.json.gz.enc",
+      "librariarr-backup-2024-01-01T03-00-00.json.gz.enc",
       "my-secret-pass",
       expect.any(Function)
     );
@@ -161,14 +202,14 @@ describe("POST /api/backup/restore", () => {
     const response = await callRoute(POST, {
       url: "/api/backup/restore",
       method: "POST",
-      body: { filename: "backup.json.gz" },
+      body: { filename: "librariarr-backup-2024-01-01T03-00-00.json.gz" },
     });
 
     expect(response.status).toBe(200);
     await readNdjsonStream(response);
 
     expect(mockRestoreBackup).toHaveBeenCalledWith(
-      "backup.json.gz",
+      "librariarr-backup-2024-01-01T03-00-00.json.gz",
       undefined,
       expect.any(Function)
     );
@@ -179,25 +220,24 @@ describe("POST /api/backup/restore", () => {
     setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
     mockRestoreBackup.mockRejectedValue(
-      new Error("Invalid backup file format")
+      new Error("Decryption failed — wrong passphrase or corrupted backup")
     );
 
     const response = await callRoute(POST, {
       url: "/api/backup/restore",
       method: "POST",
-      body: { filename: "backup.json.gz" },
+      body: { filename: "librariarr-backup-2024-01-01T03-00-00.json.gz" },
     });
 
     expect(response.status).toBe(200);
 
     const events = await readNdjsonStream(response);
-    const errorEvent = events.find(
-      (e) => (e as { type: string }).type === "error"
-    );
-    expect(errorEvent).toMatchObject({
-      type: "error",
-      message: "Invalid backup file format",
-    });
+    expect(events).toEqual([
+      { type: "error", message: "Decryption failed — wrong passphrase or corrupted backup" },
+    ]);
+    // A failed restore leaves the session and the artwork cache alone.
+    expect(mockClearImageCache).not.toHaveBeenCalled();
+    expect(getMockSession()).toMatchObject({ isLoggedIn: true, userId: user.id });
   });
 
   it("streams generic error when non-Error is thrown", async () => {
@@ -209,19 +249,13 @@ describe("POST /api/backup/restore", () => {
     const response = await callRoute(POST, {
       url: "/api/backup/restore",
       method: "POST",
-      body: { filename: "backup.json.gz" },
+      body: { filename: "librariarr-backup-2024-01-01T03-00-00.json.gz" },
     });
 
     expect(response.status).toBe(200);
 
     const events = await readNdjsonStream(response);
-    const errorEvent = events.find(
-      (e) => (e as { type: string }).type === "error"
-    );
-    expect(errorEvent).toMatchObject({
-      type: "error",
-      message: "Restore failed",
-    });
+    expect(events).toEqual([{ type: "error", message: "Restore failed" }]);
   });
 
   it("streams progress events before error when restore partially succeeds", async () => {
@@ -234,27 +268,28 @@ describe("POST /api/backup/restore", () => {
         _passphrase: string | undefined,
         onProgress: (progress: { phase: string; message: string }) => void
       ) => {
-        onProgress({ phase: "decrypt", message: "Decrypting backup..." });
-        onProgress({ phase: "truncate", message: "Truncating tables..." });
-        throw new Error("Failed to restore MediaServer table");
+        onProgress({ phase: "decrypt", message: "Reading and decompressing backup..." });
+        onProgress({ phase: "truncate", message: "Clearing existing data..." });
+        throw new Error("Failed to restore table mediaServer: Unique constraint failed on the fields: (`id`)");
       }
     );
 
     const response = await callRoute(POST, {
       url: "/api/backup/restore",
       method: "POST",
-      body: { filename: "backup.json.gz.enc", passphrase: "test-pass" },
+      body: { filename: "librariarr-backup-2024-01-01T03-00-00.json.gz.enc", passphrase: "test-pass" },
     });
 
     expect(response.status).toBe(200);
 
     const events = await readNdjsonStream(response);
-    expect(events).toHaveLength(3);
-    expect(events[0]).toMatchObject({ type: "progress", phase: "decrypt" });
-    expect(events[1]).toMatchObject({ type: "progress", phase: "truncate" });
-    expect(events[2]).toMatchObject({
-      type: "error",
-      message: "Failed to restore MediaServer table",
-    });
+    expect(events).toEqual([
+      { type: "progress", phase: "decrypt", message: "Reading and decompressing backup..." },
+      { type: "progress", phase: "truncate", message: "Clearing existing data..." },
+      {
+        type: "error",
+        message: "Failed to restore table mediaServer: Unique constraint failed on the fields: (`id`)",
+      },
+    ]);
   });
 });

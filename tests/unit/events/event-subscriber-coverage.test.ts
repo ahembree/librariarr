@@ -55,19 +55,24 @@ describe("app event catalogue", () => {
 
   it("parses the AppEventType union", () => {
     // Guards the regex above: if the union's shape changes so that nothing
-    // parses, every other assertion here would vacuously pass.
+    // parses, every other assertion here would vacuously pass. The first and
+    // the last member (no `|` after it, then `;`) both have to come through.
     expect(types.length).toBeGreaterThan(5);
+    expect(types[0]).toBe("sync:started");
+    expect(types.at(-1)).toBe("session-changed");
     expect(types).toContain("sync:completed");
+    expect(new Set(types).size).toBe(types.length);
   });
 
-  it.each(types)("%s has at least one client subscriber", (type) => {
-    if (SERVER_ONLY.has(type)) return;
+  it.each(types.filter((type) => !SERVER_ONLY.has(type)))("%s has at least one client subscriber", (type) => {
     expect(sources).toContain(`useRealtime("${type}"`);
   });
 
   it("has no SERVER_ONLY entry that is not a real event type", () => {
-    for (const type of SERVER_ONLY) {
-      expect(types).toContain(type);
-    }
+    expect([...SERVER_ONLY].filter((type) => !types.includes(type))).toEqual([]);
+  });
+
+  it("has no SERVER_ONLY entry that a component subscribes to after all", () => {
+    expect([...SERVER_ONLY].filter((type) => sources.includes(`useRealtime("${type}"`))).toEqual([]);
   });
 });

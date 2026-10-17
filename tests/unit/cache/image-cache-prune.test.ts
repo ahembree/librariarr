@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, utimesSync, existsSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, utimesSync, existsSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -24,13 +24,13 @@ function writeWebp(name: string, ageMs: number) {
 describe("pruneImageCache", () => {
   beforeEach(() => {
     cacheDir = mkdtempSync(path.join(tmpdir(), "librariarr-imgcache-"));
-    process.env.IMAGE_CACHE_DIR = cacheDir;
+    vi.stubEnv("IMAGE_CACHE_DIR", cacheDir);
     vi.resetModules();
   });
 
   afterEach(() => {
     rmSync(cacheDir, { recursive: true, force: true });
-    delete process.env.IMAGE_CACHE_DIR;
+    vi.unstubAllEnvs();
   });
 
   it("deletes images older than the TTL and keeps fresh ones", async () => {
@@ -43,6 +43,11 @@ describe("pruneImageCache", () => {
     expect(removed).toBe(1);
     expect(existsSync(stale)).toBe(false);
     expect(existsSync(fresh)).toBe(true);
+    // The stored counters are rebuilt from what is left on disk.
+    expect(JSON.parse(readFileSync(path.join(cacheDir, "_stats.json"), "utf8"))).toEqual({
+      fileCount: 1,
+      totalSize: "fake-webp".length,
+    });
   });
 
   it("removes nothing when all entries are fresh", async () => {
@@ -51,5 +56,7 @@ describe("pruneImageCache", () => {
     const { removed } = await pruneImageCache();
     expect(removed).toBe(0);
     expect(existsSync(fresh)).toBe(true);
+    // Nothing pruned, nothing rewritten.
+    expect(existsSync(path.join(cacheDir, "_stats.json"))).toBe(false);
   });
 });

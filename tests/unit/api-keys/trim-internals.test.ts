@@ -159,9 +159,11 @@ describe("withoutServerInternals", () => {
     }));
     expect(JSON.stringify({ servers: big }).length).toBeGreaterThan(MIN_COMPRESS_BYTES);
     const seen: Array<string | null> = [];
+    const seenKeys: Array<string | null> = [];
     const handlerEncodings: Array<string | null> = [];
     const wrapped = withoutServerInternals(async (req: NextRequest) => {
       seen.push(req.headers.get("accept-encoding"));
+      seenKeys.push(req.headers.get("x-api-key"));
       const inner = await jsonResponse(req, { servers: big });
       handlerEncodings.push(inner.headers.get("content-encoding"));
       return inner;
@@ -169,6 +171,8 @@ describe("withoutServerInternals", () => {
 
     const gz = await wrapped(request({ "accept-encoding": "gzip", "x-api-key": "kept" }));
     expect(seen).toEqual([null]);
+    // Every other header reaches the handler as sent.
+    expect(seenKeys).toEqual(["kept"]);
     expect(handlerEncodings).toEqual([null]);
     expect(gz.headers.get("content-encoding")).toBe("gzip");
     const body = JSON.parse(gunzipSync(new Uint8Array(await gz.arrayBuffer())).toString("utf8")) as { servers: Record<string, unknown>[] };

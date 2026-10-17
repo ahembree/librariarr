@@ -110,10 +110,11 @@ describe("get_library_overview", () => {
     expect(data.storageGB).toEqual({ total: 3.5, movies: 2, series: 0, music: 0 });
     expect(data.topResolutions).toEqual([{ value: "1080", count: 7 }, { value: "Unknown", count: 1 }]);
     expect(data.topVideoCodecs).toEqual([{ value: "hevc", count: 2 }]);
-    expect(data.topGenres).toHaveLength(10);
+    // The ten largest of twelve, in the order the stats came back.
+    expect(data.topGenres).toEqual(Array.from({ length: 10 }, (_, i) => ({ value: `G${i}`, count: 12 - i })));
     expect(data.topPlayedMovies).toEqual([{ title: "Heat", plays: 4 }]);
     expect(data.topPlayedSeries).toEqual([{ title: "Lost", plays: 9 }]);
-    expect(result.evidence).toMatchObject({ tool: "get_library_overview", kind: "overview" });
+    expect(result.evidence).toEqual({ tool: "get_library_overview", kind: "overview", title: "Library overview", data });
   });
 });
 

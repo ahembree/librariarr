@@ -26,8 +26,8 @@ import { createProvider } from "@/lib/ai/provider";
 import { IntegrationError } from "@/lib/integration-error";
 import type { AiConfig } from "@/lib/ai/types";
 
-const OPENAI: AiConfig = { provider: "openai-compatible", baseUrl: "http://llm/v1", apiKey: "", model: "m" };
-const ANTHROPIC: AiConfig = { provider: "anthropic", baseUrl: "https://api.test", apiKey: "sk", model: "c" };
+const OPENAI: AiConfig = { provider: "openai-compatible", baseUrl: "http://ollama:11434/v1", apiKey: "", model: "llama3.1:8b" };
+const ANTHROPIC: AiConfig = { provider: "anthropic", baseUrl: "https://api.anthropic.com", apiKey: "sk-ant-test", model: "claude-sonnet-4-5" };
 
 function respond(data: unknown) {
   adapter.mockImplementationOnce(async (config: InternalAxiosRequestConfig): Promise<AxiosResponse> => ({
@@ -53,20 +53,24 @@ describe("provider HTTP setup", () => {
   it("sends no Authorization header to a keyless OpenAI-compatible endpoint", () => {
     createProvider(OPENAI);
     expect(created[0].headers).toEqual({ "Content-Type": "application/json" });
-    expect(created[0].baseURL).toBe("http://llm/v1");
+    expect(created[0].baseURL).toBe("http://ollama:11434/v1");
   });
 
   it("sends a bearer key when one is configured, and Anthropic's own headers", () => {
     createProvider({ ...OPENAI, apiKey: "secret" });
     createProvider(ANTHROPIC);
     expect(created[0].headers).toMatchObject({ Authorization: "Bearer secret" });
-    expect(created[1].headers).toMatchObject({ "x-api-key": "sk", "anthropic-version": "2023-06-01" });
+    expect(created[1].headers).toEqual({
+      "Content-Type": "application/json",
+      "x-api-key": "sk-ant-test",
+      "anthropic-version": "2023-06-01",
+    });
   });
 
   it("turns an HTTP failure into an IntegrationError and reports it from testConnection", async () => {
     adapter.mockImplementation(async (config: InternalAxiosRequestConfig) => {
       throw new AxiosError("Request failed with status code 401", "ERR_BAD_REQUEST", config, null, {
-        data: { error: "bad key" },
+        data: { error: "Unauthorized" },
         status: 401,
         statusText: "Unauthorized",
         headers: {},
@@ -74,15 +78,16 @@ describe("provider HTTP setup", () => {
       });
     });
     const client = createProvider(OPENAI);
-    await expect(client.chat([{ role: "user", content: "q" }], [])).rejects.toBeInstanceOf(IntegrationError);
+    const failure = client.chat([{ role: "user", content: "q" }], []);
+    await expect(failure).rejects.toBeInstanceOf(IntegrationError);
+    await expect(failure).rejects.toThrow("AI HTTP 401: Unauthorized (/chat/completions)");
 
     const result = await client.testConnection();
-    expect(result.ok).toBe(false);
-    expect(result.error).toEqual(expect.any(String));
+    expect(result).toEqual({ ok: false, error: "AI HTTP 401: Unauthorized (/chat/completions)" });
     expect(lastRequest().config.timeout).toBe(30_000);
 
     const anthropic = await createProvider(ANTHROPIC).testConnection();
-    expect(anthropic.ok).toBe(false);
+    expect(anthropic).toEqual({ ok: false, error: "AI HTTP 401: Unauthorized (/v1/messages)" });
   });
 
   it("passes a non-axios failure through unchanged and reports a non-Error as a generic failure", async () => {
@@ -99,7 +104,7 @@ describe("provider HTTP setup", () => {
 
   it("reports the model on a successful Anthropic test", async () => {
     respond({ content: [] });
-    expect(await createProvider(ANTHROPIC).testConnection()).toEqual({ ok: true, model: "c" });
+    expect(await createProvider(ANTHROPIC).testConnection()).toEqual({ ok: true, model: "claude-sonnet-4-5" });
     expect(lastRequest().url).toBe("/v1/messages");
   });
 });

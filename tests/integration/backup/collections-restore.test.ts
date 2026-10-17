@@ -62,7 +62,7 @@ describe("backup restore — collections and TRaSH assignments", () => {
         serviceType: "SONARR",
         sonarrInstanceId: sonarr.id,
         resourceType: "CUSTOM_FORMAT",
-        trashId: "abc123",
+        trashId: "47435ece6b99a0b477caf360e79ba0bb",
         name: "x265 (HD)",
       },
     });
@@ -74,9 +74,17 @@ describe("backup restore — collections and TRaSH assignments", () => {
     expect(restoredRuleSet.collectionId).toBe(collection.id);
     const restoredCollection = await prisma.collection.findUniqueOrThrow({ where: { id: collection.id } });
     expect(restoredCollection.name).toBe("Leaving soon");
+    expect(await prisma.collection.count()).toBe(1);
     const managed = await prisma.trashManagedResource.findMany();
     expect(managed).toHaveLength(1);
-    expect(managed[0]).toMatchObject({ trashId: "abc123", sonarrInstanceId: sonarr.id });
+    expect(managed[0]).toMatchObject({
+      userId: user.id,
+      serviceType: "SONARR",
+      sonarrInstanceId: sonarr.id,
+      resourceType: "CUSTOM_FORMAT",
+      trashId: "47435ece6b99a0b477caf360e79ba0bb",
+      name: "x265 (HD)",
+    });
   });
 
   it("still restores an older backup that has no collection table, detaching the rule set", async () => {

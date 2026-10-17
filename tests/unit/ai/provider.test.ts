@@ -21,15 +21,15 @@ import type { AiConfig, AiMessage } from "@/lib/ai/types";
 
 const OPENAI: AiConfig = {
   provider: "openai-compatible",
-  baseUrl: "http://x/v1",
-  apiKey: "k",
-  model: "gpt-test",
+  baseUrl: "https://api.openai.com/v1",
+  apiKey: "sk-test",
+  model: "gpt-4o-mini",
 };
 const ANTHROPIC: AiConfig = {
   provider: "anthropic",
   baseUrl: "https://api.anthropic.com",
-  apiKey: "sk-ant",
-  model: "claude-test",
+  apiKey: "sk-ant-test",
+  model: "claude-sonnet-4-5",
 };
 
 beforeEach(() => mockPost.mockReset());
@@ -43,7 +43,7 @@ describe("ai/provider — OpenAI-compatible", () => {
             message: {
               content: "hello",
               tool_calls: [
-                { id: "c1", function: { name: "get_breakdown", arguments: '{"dimension":"resolution"}' } },
+                { id: "c1", type: "function", function: { name: "get_breakdown", arguments: '{"dimension":"resolution"}' } },
               ],
             },
           },
@@ -63,22 +63,31 @@ describe("ai/provider — OpenAI-compatible", () => {
 
     const [url, body] = mockPost.mock.calls[0];
     expect(url).toBe("/chat/completions");
-    expect(body.model).toBe("gpt-test");
-    expect(body.tools[0].function.name).toBe("get_breakdown");
-    expect(body.tool_choice).toBe("auto");
+    expect(body).toEqual({
+      model: "gpt-4o-mini",
+      messages: [{ role: "user", content: "q" }],
+      max_tokens: 1500,
+      tools: [
+        {
+          type: "function",
+          function: { name: "get_breakdown", description: "d", parameters: { type: "object" } },
+        },
+      ],
+      tool_choice: "auto",
+    });
   });
 
   it("tolerates malformed tool-call arguments", async () => {
     mockPost.mockResolvedValue({
-      data: { choices: [{ message: { content: "", tool_calls: [{ id: "c1", function: { name: "x", arguments: "not-valid-json" } }] } }] },
+      data: { choices: [{ message: { content: "", tool_calls: [{ id: "c1", type: "function", function: { name: "x", arguments: "not-valid-json" } }] } }] },
     });
     const result = await createProvider(OPENAI).chat([{ role: "user", content: "q" }], []);
-    expect(result.toolCalls[0].arguments).toEqual({});
+    expect(result.toolCalls).toEqual([{ id: "c1", name: "x", arguments: {} }]);
   });
 
   it("testConnection returns ok on success and error on failure", async () => {
     mockPost.mockResolvedValueOnce({ data: {} });
-    expect(await createProvider(OPENAI).testConnection()).toEqual({ ok: true, model: "gpt-test" });
+    expect(await createProvider(OPENAI).testConnection()).toEqual({ ok: true, model: "gpt-4o-mini" });
     mockPost.mockRejectedValueOnce(new Error("refused"));
     expect(await createProvider(OPENAI).testConnection()).toEqual({ ok: false, error: "refused" });
   });
@@ -90,7 +99,7 @@ describe("ai/provider — Anthropic", () => {
       data: {
         content: [
           { type: "text", text: "ok" },
-          { type: "tool_use", id: "t1", name: "get_cross_tab", input: { dimension1: "a", dimension2: "b" } },
+          { type: "tool_use", id: "toolu_01", name: "get_cross_tab", input: { dimension1: "resolution", dimension2: "videoCodec" } },
         ],
       },
     });
@@ -102,12 +111,17 @@ describe("ai/provider — Anthropic", () => {
 
     expect(result.content).toBe("ok");
     expect(result.toolCalls).toEqual([
-      { id: "t1", name: "get_cross_tab", arguments: { dimension1: "a", dimension2: "b" } },
+      { id: "toolu_01", name: "get_cross_tab", arguments: { dimension1: "resolution", dimension2: "videoCodec" } },
     ]);
 
     const [url, body] = mockPost.mock.calls[0];
     expect(url).toBe("/v1/messages");
-    expect(body.tools[0].input_schema).toEqual({ type: "object" });
+    expect(body).toEqual({
+      model: "claude-sonnet-4-5",
+      max_tokens: 1500,
+      messages: [{ role: "user", content: [{ type: "text", text: "q" }] }],
+      tools: [{ name: "get_cross_tab", description: "d", input_schema: { type: "object" } }],
+    });
   });
 
   it("maps system + merges consecutive tool results into one user turn", async () => {
@@ -127,8 +141,10 @@ describe("ai/provider — Anthropic", () => {
     // user(text), assistant(tool_use), user([tool_result, tool_result])
     expect(body.messages).toHaveLength(3);
     expect(body.messages[0]).toEqual({ role: "user", content: [{ type: "text", text: "q" }] });
-    expect(body.messages[1].role).toBe("assistant");
-    expect(body.messages[1].content[0]).toEqual({ type: "tool_use", id: "tc1", name: "x", input: {} });
+    expect(body.messages[1]).toEqual({
+      role: "assistant",
+      content: [{ type: "tool_use", id: "tc1", name: "x", input: {} }],
+    });
     expect(body.messages[2].role).toBe("user");
     expect(body.messages[2].content).toEqual([
       { type: "tool_result", tool_use_id: "tc1", content: "res1" },

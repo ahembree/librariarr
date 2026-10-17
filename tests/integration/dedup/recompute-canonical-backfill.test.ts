@@ -40,7 +40,8 @@ afterAll(async () => {
 describe("backfillSeriesKeys(userId)", () => {
   it("only fills SERIES rows on the given user's servers", async () => {
     const userA = await createTestUser({ username: "a" });
-    const libA = await createTestLibrary((await createTestServer(userA.id)).id, { type: "SERIES" });
+    const serverA = await createTestServer(userA.id);
+    const libA = await createTestLibrary(serverA.id, { type: "SERIES" });
     // A second user row is not a supported state for the app; the ownership
     // clause is what we are checking, so fake a second owner's server.
     const userB = await prisma.user.create({ data: { plexId: "b", username: "b", email: "b@x", plexToken: "t" } });
@@ -48,10 +49,14 @@ describe("backfillSeriesKeys(userId)", () => {
 
     const mine = await createTestMediaItem(libA.id, { type: "SERIES", parentTitle: "Mine", seriesKey: null, seasonNumber: 1, episodeNumber: 1 });
     const theirs = await createTestMediaItem(libB.id, { type: "SERIES", parentTitle: "Theirs", seriesKey: null, seasonNumber: 1, episodeNumber: 1 });
+    // Movies never carry a series key, even on the user's own servers.
+    const movieLib = await createTestLibrary(serverA.id, { type: "MOVIE" });
+    const movie = await createTestMediaItem(movieLib.id, { title: "Heat", seriesKey: null });
 
     expect(await backfillSeriesKeys(userA.id)).toBe(1);
     expect((await prisma.mediaItem.findUniqueOrThrow({ where: { id: mine.id } })).seriesKey).toBe("title:mine");
     expect((await prisma.mediaItem.findUniqueOrThrow({ where: { id: theirs.id } })).seriesKey).toBeNull();
+    expect((await prisma.mediaItem.findUniqueOrThrow({ where: { id: movie.id } })).seriesKey).toBeNull();
   });
 });
 
@@ -106,18 +111,23 @@ describe("runBackfillIfNeeded", () => {
 
     const [o, n, e] = await Promise.all([older, newer, ep].map((r) => prisma.mediaItem.findUniqueOrThrow({ where: { id: r.id } })));
     expect(e.seriesKey).toBe("title:lost");
-    expect(o.dedupKey).not.toBeNull();
-    expect(o.dedupKey).toBe(n.dedupKey);
+    expect(o.dedupKey).toBe("movie:tmdb:949");
+    expect(n.dedupKey).toBe("movie:tmdb:949");
     expect(o.dedupCanonical).toBe(true);
     expect(n.dedupCanonical).toBe(false);
-    expect(e.dedupKey).not.toBeNull();
-    expect(mockLogger.info).toHaveBeenCalledWith("Sync", expect.stringContaining("Backfilled 3 dedupKey(s)"));
+    expect(e.dedupKey).toBe("series:lost:s1e1");
+    expect(e.dedupCanonical).toBe(true);
+    expect(mockLogger.info).toHaveBeenCalledWith("Sync", "Backfilled 1 seriesKey(s)");
+    expect(mockLogger.info).toHaveBeenCalledWith("Sync", "Backfilled 3 dedupKey(s)");
   });
 
   it("logs and swallows a failure rather than crashing startup", async () => {
     const spy = vi.spyOn(prisma, "$queryRaw").mockRejectedValueOnce(new Error("db down"));
-    await expect(runBackfillIfNeeded()).resolves.toBeUndefined();
-    expect(mockLogger.error).toHaveBeenCalledWith("Sync", "Dedup backfill failed", { error: "Error: db down" });
-    spy.mockRestore();
+    try {
+      await expect(runBackfillIfNeeded()).resolves.toBeUndefined();
+      expect(mockLogger.error).toHaveBeenCalledWith("Sync", "Dedup backfill failed", { error: "Error: db down" });
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

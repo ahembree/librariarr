@@ -47,9 +47,11 @@ describe("ai/tools", () => {
     await seedLibrary(user.id);
     const res = await tools.get("get_library_overview")!.execute(user.id, {});
     const data = res.data as any;
-    expect(data.counts.movies).toBe(2);
-    expect(data.storageGB.total).toBeGreaterThan(0);
-    expect(res.evidence?.kind).toBe("overview");
+    expect(data.counts).toEqual({ movies: 2, series: 0, seasons: 0, episodes: 0, artists: 0, albums: 0, tracks: 0 });
+    // 5 GB + 2 GB, in decimal gigabytes.
+    expect(data.storageGB).toEqual({ total: 7, movies: 7, series: 0, music: 0 });
+    expect(data.topPlayedMovies).toEqual([{ title: "B", plays: 3 }]);
+    expect(res.evidence).toEqual({ tool: "get_library_overview", kind: "overview", title: "Library overview", data });
   });
 
   it("get_breakdown by resolution returns normalized values", async () => {
@@ -58,13 +60,19 @@ describe("ai/tools", () => {
     const res = await tools.get("get_breakdown")!.execute(user.id, { dimension: "resolution" });
     const data = res.data as any;
     expect(data.dimension).toBe("Resolution");
-    expect(data.rows.map((r: any) => r.value)).toContain("4K");
+    // The stored "4k" / "1080" are reported as the labels the UI shows.
+    const byValue = (a: any, b: any) => String(a.value).localeCompare(String(b.value));
+    expect([...data.rows].sort(byValue)).toEqual([
+      { value: "1080P", count: 1 },
+      { value: "4K", count: 1 },
+    ]);
   });
 
   it("get_breakdown rejects an unknown dimension", async () => {
     const user = await createTestUser();
     const res = await tools.get("get_breakdown")!.execute(user.id, { dimension: "bogus" });
-    expect((res.data as any).error).toContain("Unknown dimension");
+    expect((res.data as any).error).toMatch(/^Unknown dimension\. Valid: resolution, videoCodec, /);
+    expect(res.evidence).toBeUndefined();
   });
 
   it("get_cross_tab returns resolution × codec combinations", async () => {
@@ -77,7 +85,11 @@ describe("ai/tools", () => {
     const data = res.data as any;
     expect(data.dimension1).toBe("Resolution");
     expect(data.dimension2).toBe("Video Codec");
-    expect(data.rows.length).toBeGreaterThan(0);
+    const byDim1 = (a: any, b: any) => String(a.dim1).localeCompare(String(b.dim1));
+    expect([...data.rows].sort(byDim1)).toEqual([
+      { dim1: "1080P", dim2: "h264", count: 1 },
+      { dim1: "4K", dim2: "hevc", count: 1 },
+    ]);
   });
 
   it("search_media filters items and rejects Arr-only fields", async () => {
@@ -94,7 +106,8 @@ describe("ai/tools", () => {
     const bad = await tools.get("search_media")!.execute(user.id, {
       filters: [{ field: "arrMonitored", operator: "equals", value: "true" }],
     });
-    expect((bad.data as any).error).toContain("not available");
+    expect((bad.data as any).error).toMatch(/^Field "arrMonitored" is not available\./);
+    expect(bad.evidence).toBeUndefined();
   });
 
   it("search_media collapses multi-server duplicates by dedupKey", async () => {
@@ -144,6 +157,6 @@ describe("ai/tools", () => {
   it("returns a no-servers note when nothing is connected", async () => {
     const user = await createTestUser();
     const res = await tools.get("get_breakdown")!.execute(user.id, { dimension: "resolution" });
-    expect((res.data as any).note).toContain("No media servers");
+    expect(res.data).toEqual({ note: "No media servers are connected yet, so there's nothing to analyze." });
   });
 });

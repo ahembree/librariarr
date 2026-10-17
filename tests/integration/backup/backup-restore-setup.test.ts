@@ -35,6 +35,7 @@ vi.mock("@/lib/rate-limit/rate-limiter", () => ({
 
 // Import route handler AFTER mocks
 import { POST } from "@/app/api/backup/restore-setup/route";
+import type { RestoreProgress } from "@/lib/backup/backup-service";
 
 // Helper to read NDJSON stream into parsed events
 async function readNdjsonStream(response: Response): Promise<unknown[]> {
@@ -62,10 +63,11 @@ describe("POST /api/backup/restore-setup", () => {
     const response = await callRoute(POST, {
       url: "/api/backup/restore-setup",
       method: "POST",
-      body: { filename: "backup.json.gz" },
+      body: { filename: "librariarr-backup-2024-01-01T03-00-00.json.gz" },
     });
     const body = await expectJson<{ error: string }>(response, 403);
     expect(body.error).toBe("Setup already completed");
+    expect(mockRestoreBackup).not.toHaveBeenCalled();
   });
 
   it("returns 400 when filename is missing", async () => {
@@ -74,8 +76,11 @@ describe("POST /api/backup/restore-setup", () => {
       method: "POST",
       body: {},
     });
-    const body = await expectJson<{ error: string }>(response, 400);
+    const body = await expectJson<{ error: string; details: string[] }>(response, 400);
     expect(body.error).toBe("Validation failed");
+    expect(body.details).toHaveLength(1);
+    expect(body.details[0]).toMatch(/^filename: /);
+    expect(mockRestoreBackup).not.toHaveBeenCalled();
   });
 
   it("returns 400 when body is empty string filename", async () => {
@@ -84,8 +89,10 @@ describe("POST /api/backup/restore-setup", () => {
       method: "POST",
       body: { filename: "" },
     });
-    const body = await expectJson<{ error: string }>(response, 400);
+    const body = await expectJson<{ error: string; details: string[] }>(response, 400);
     expect(body.error).toBe("Validation failed");
+    expect(body.details).toEqual(["filename: Filename is required"]);
+    expect(mockRestoreBackup).not.toHaveBeenCalled();
   });
 
   it("streams progress and complete events on successful restore", async () => {
@@ -93,17 +100,17 @@ describe("POST /api/backup/restore-setup", () => {
       async (
         _filename: string,
         _passphrase: string | undefined,
-        onProgress: (progress: { phase: string; message: string }) => void
+        onProgress: (progress: RestoreProgress) => void
       ) => {
-        onProgress({ phase: "truncate", message: "Truncating tables..." });
-        onProgress({ phase: "restore", message: "Restoring User table..." });
+        onProgress({ phase: "truncate", message: "Clearing existing data..." });
+        onProgress({ phase: "restore", message: "Restoring user (1 rows)...", table: "user", tableIndex: 1, tableCount: 23, rowsInserted: 0, totalRows: 1 });
       }
     );
 
     const response = await callRoute(POST, {
       url: "/api/backup/restore-setup",
       method: "POST",
-      body: { filename: "backup-2024-01-01.json.gz" },
+      body: { filename: "librariarr-backup-2024-01-01T03-00-00.json.gz" },
     });
 
     expect(response.status).toBe(200);
@@ -111,10 +118,20 @@ describe("POST /api/backup/restore-setup", () => {
     expect(response.headers.get("Cache-Control")).toBe("no-cache");
 
     const events = await readNdjsonStream(response);
-    expect(events).toHaveLength(3);
-    expect(events[0]).toMatchObject({ type: "progress", phase: "truncate" });
-    expect(events[1]).toMatchObject({ type: "progress", phase: "restore" });
-    expect(events[2]).toMatchObject({ type: "complete" });
+    expect(events).toEqual([
+      { type: "progress", phase: "truncate", message: "Clearing existing data..." },
+      {
+        type: "progress",
+        phase: "restore",
+        message: "Restoring user (1 rows)...",
+        table: "user",
+        tableIndex: 1,
+        tableCount: 23,
+        rowsInserted: 0,
+        totalRows: 1,
+      },
+      { type: "complete" },
+    ]);
   });
 
   it("passes passphrase to restoreBackup", async () => {
@@ -123,38 +140,35 @@ describe("POST /api/backup/restore-setup", () => {
     const response = await callRoute(POST, {
       url: "/api/backup/restore-setup",
       method: "POST",
-      body: { filename: "backup.json.gz.enc", passphrase: "my-secret" },
+      body: { filename: "librariarr-backup-2024-01-01T03-00-00.json.gz.enc", passphrase: "my-secret" },
     });
 
     expect(response.status).toBe(200);
     await readNdjsonStream(response); // consume the stream
 
     expect(mockRestoreBackup).toHaveBeenCalledWith(
-      "backup.json.gz.enc",
+      "librariarr-backup-2024-01-01T03-00-00.json.gz.enc",
       "my-secret",
       expect.any(Function)
     );
   });
 
   it("streams error event when restore fails", async () => {
-    mockRestoreBackup.mockRejectedValue(new Error("Decryption failed"));
+    mockRestoreBackup.mockRejectedValue(new Error("Decryption failed — wrong passphrase or corrupted backup"));
 
     const response = await callRoute(POST, {
       url: "/api/backup/restore-setup",
       method: "POST",
-      body: { filename: "backup.json.gz.enc" },
+      body: { filename: "librariarr-backup-2024-01-01T03-00-00.json.gz.enc" },
     });
 
     expect(response.status).toBe(200);
 
+    // An error ends the stream: no "complete" after it.
     const events = await readNdjsonStream(response);
-    const errorEvent = events.find(
-      (e) => (e as { type: string }).type === "error"
-    );
-    expect(errorEvent).toMatchObject({
-      type: "error",
-      message: "Decryption failed",
-    });
+    expect(events).toEqual([
+      { type: "error", message: "Decryption failed — wrong passphrase or corrupted backup" },
+    ]);
   });
 
   it("streams generic error when non-Error is thrown", async () => {
@@ -163,19 +177,13 @@ describe("POST /api/backup/restore-setup", () => {
     const response = await callRoute(POST, {
       url: "/api/backup/restore-setup",
       method: "POST",
-      body: { filename: "backup.json.gz" },
+      body: { filename: "librariarr-backup-2024-01-01T03-00-00.json.gz" },
     });
 
     expect(response.status).toBe(200);
 
     const events = await readNdjsonStream(response);
-    const errorEvent = events.find(
-      (e) => (e as { type: string }).type === "error"
-    );
-    expect(errorEvent).toMatchObject({
-      type: "error",
-      message: "Restore failed",
-    });
+    expect(events).toEqual([{ type: "error", message: "Restore failed" }]);
   });
 
   it("does not require authentication (setup endpoint)", async () => {
@@ -185,9 +193,15 @@ describe("POST /api/backup/restore-setup", () => {
     const response = await callRoute(POST, {
       url: "/api/backup/restore-setup",
       method: "POST",
-      body: { filename: "backup.json.gz" },
+      body: { filename: "librariarr-backup-2024-01-01T03-00-00.json.gz" },
     });
 
     expect(response.status).toBe(200);
+    expect(await readNdjsonStream(response)).toEqual([{ type: "complete" }]);
+    expect(mockRestoreBackup).toHaveBeenCalledWith(
+      "librariarr-backup-2024-01-01T03-00-00.json.gz",
+      undefined,
+      expect.any(Function)
+    );
   });
 });

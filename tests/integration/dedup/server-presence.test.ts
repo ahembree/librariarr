@@ -31,6 +31,13 @@ import {
 
 const testPrisma = getTestPrisma();
 
+// One teardown for the whole file: disconnecting at the end of the first
+// describe would leave the second running on a closed client.
+afterAll(async () => {
+  await cleanDatabase();
+  await disconnectTestDb();
+});
+
 /** Helper to create a media item and then set its dedupKey via direct update. */
 async function createItemWithDedupKey(
   libraryId: string,
@@ -51,11 +58,6 @@ describe("getServerPresenceByDedupKey", () => {
     clearMockSession();
   });
 
-  afterAll(async () => {
-    await cleanDatabase();
-    await disconnectTestDb();
-  });
-
   it("returns empty map for empty array", async () => {
     const result = await getServerPresenceByDedupKey([], []);
     expect(result.size).toBe(0);
@@ -65,19 +67,16 @@ describe("getServerPresenceByDedupKey", () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id, { name: "Plex 1" });
     const lib = await createTestLibrary(server.id, { type: "MOVIE" });
-    await createItemWithDedupKey(lib.id, "movie:tmdb:123", {
+    const matrix = await createItemWithDedupKey(lib.id, "movie:tmdb:603", {
       title: "The Matrix",
       type: "MOVIE",
     });
 
-    const result = await getServerPresenceByDedupKey(["movie:tmdb:123"], [server.id]);
+    const result = await getServerPresenceByDedupKey(["movie:tmdb:603"], [server.id]);
     expect(result.size).toBe(1);
-    expect(result.has("movie:tmdb:123")).toBe(true);
-
-    const servers = result.get("movie:tmdb:123")!;
-    expect(servers).toHaveLength(1);
-    expect(servers[0].serverName).toBe("Plex 1");
-    expect(servers[0].serverId).toBe(server.id);
+    expect(result.get("movie:tmdb:603")).toEqual([
+      { serverId: server.id, serverName: "Plex 1", serverType: "PLEX", mediaItemId: matrix.id },
+    ]);
   });
 
   it("shows all server presences for items with same dedupKey from different servers", async () => {
@@ -132,14 +131,14 @@ describe("getServerPresenceByDedupKey", () => {
 
     // Item without dedupKey (default null)
     await createTestMediaItem(lib.id, { title: "No Key Movie", type: "MOVIE" });
-    await createItemWithDedupKey(lib.id, "movie:tmdb:100", {
+    const keyed = await createItemWithDedupKey(lib.id, "movie:tmdb:100", {
       title: "Keyed Movie",
       type: "MOVIE",
     });
 
     const result = await getServerPresenceByDedupKey(["movie:tmdb:100"], [server.id]);
-    expect(result.size).toBe(1);
-    expect(result.has("movie:tmdb:100")).toBe(true);
+    expect([...result.keys()]).toEqual(["movie:tmdb:100"]);
+    expect(result.get("movie:tmdb:100")!.map((s) => s.mediaItemId)).toEqual([keyed.id]);
   });
 
   it("excludes servers not in the provided serverIds (filtered/disabled)", async () => {
@@ -188,11 +187,6 @@ describe("getServerPresenceByGroup", () => {
     clearMockSession();
   });
 
-  afterAll(async () => {
-    await cleanDatabase();
-    await disconnectTestDb();
-  });
-
   it("returns empty map for empty serverIds", async () => {
     const result = await getServerPresenceByGroup("SERIES", []);
     expect(result.size).toBe(0);
@@ -204,21 +198,21 @@ describe("getServerPresenceByGroup", () => {
     const lib = await createTestLibrary(server.id, { type: "SERIES" });
 
     await createTestMediaItem(lib.id, {
-      title: "S01E01",
+      title: "Pilot",
       type: "SERIES",
       parentTitle: "Breaking Bad",
       seasonNumber: 1,
       episodeNumber: 1,
     });
     await createTestMediaItem(lib.id, {
-      title: "S01E02",
+      title: "Cat's in the Bag...",
       type: "SERIES",
       parentTitle: "Breaking Bad",
       seasonNumber: 1,
       episodeNumber: 2,
     });
     await createTestMediaItem(lib.id, {
-      title: "S01E01",
+      title: "The Target",
       type: "SERIES",
       parentTitle: "The Wire",
       seasonNumber: 1,
@@ -239,14 +233,14 @@ describe("getServerPresenceByGroup", () => {
     const lib2 = await createTestLibrary(server2.id, { type: "SERIES" });
 
     await createTestMediaItem(lib1.id, {
-      title: "S01E01",
+      title: "Pilot",
       type: "SERIES",
       parentTitle: "Breaking Bad",
       seasonNumber: 1,
       episodeNumber: 1,
     });
     await createTestMediaItem(lib2.id, {
-      title: "S01E01",
+      title: "Pilot",
       type: "SERIES",
       parentTitle: "Breaking Bad",
       seasonNumber: 1,
@@ -271,14 +265,14 @@ describe("getServerPresenceByGroup", () => {
     const lib2 = await createTestLibrary(server2.id, { type: "SERIES" });
 
     await createTestMediaItem(lib1.id, {
-      title: "S01E01",
+      title: "The Target",
       type: "SERIES",
       parentTitle: "The Wire",
       seasonNumber: 1,
       episodeNumber: 1,
     });
     await createTestMediaItem(lib2.id, {
-      title: "S01E01",
+      title: "The Target",
       type: "SERIES",
       parentTitle: "The Wire",
       seasonNumber: 1,
@@ -302,14 +296,14 @@ describe("getServerPresenceByGroup", () => {
     const lib2 = await createTestLibrary(server2.id, { type: "SERIES" });
 
     await createTestMediaItem(lib1.id, {
-      title: "S01E01",
+      title: "Pilot",
       type: "SERIES",
       parentTitle: "Show A",
       seasonNumber: 1,
       episodeNumber: 1,
     });
     await createTestMediaItem(lib2.id, {
-      title: "S01E01",
+      title: "Pilot",
       type: "SERIES",
       parentTitle: "Show B",
       seasonNumber: 1,

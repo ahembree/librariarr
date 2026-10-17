@@ -110,7 +110,7 @@ describe("stream count filters", () => {
   it("combines one type's conditions with its logic parameter, as the filter panel sends it", async () => {
     // The panel offers AND/OR per condition set; OR was ignored and
     // `eq:1|gte:3` matched nothing.
-    const { itemA, itemB, itemC, ids } = await setupMediaWithStreams();
+    const { itemA, itemB, ids } = await setupMediaWithStreams();
     expect(await matching(ids, { audioStreamCountConditions: "eq:1|gte:3", audioStreamCountLogic: "or" })).toEqual(
       [itemA.id, itemB.id].sort(),
     );
@@ -124,7 +124,6 @@ describe("stream count filters", () => {
         subtitleStreamCountLogic: "or",
       }),
     ).toEqual([itemA.id]);
-    expect(itemC.id).toBeTruthy();
   });
 
   it("counts an item with no stream rows at all as 0 tracks", async () => {
@@ -136,9 +135,12 @@ describe("stream count filters", () => {
 
   it("only answers for the ids it is given", async () => {
     const { itemA, itemC } = await setupMediaWithStreams();
+    // Item A (3 audio tracks) satisfies the condition too, but was not asked about.
     expect(await matching([itemC.id], { audioStreamCountConditions: "gte:2" })).toEqual([itemC.id]);
+    expect(await matching([itemA.id, itemC.id], { audioStreamCountConditions: "gte:2" })).toEqual(
+      [itemA.id, itemC.id].sort(),
+    );
     expect(await matching([], { audioStreamCountConditions: "gte:2" })).toEqual([]);
-    expect(itemA.id).toBeTruthy();
   });
 
   it("clamps a count past the integer range instead of failing the query", async () => {

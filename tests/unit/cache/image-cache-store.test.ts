@@ -34,7 +34,7 @@ function fileFor(key: string): string {
 
 beforeEach(async () => {
   cacheDir = mkdtempSync(path.join(tmpdir(), "librariarr-imgstore-"));
-  process.env.IMAGE_CACHE_DIR = cacheDir;
+  vi.stubEnv("IMAGE_CACHE_DIR", cacheDir);
   vi.resetModules();
   // The module pins its state to globalThis; start every test with a fresh one.
   delete (globalThis as Record<string, unknown>).imageCacheState;
@@ -43,7 +43,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   rmSync(cacheDir, { recursive: true, force: true });
-  delete process.env.IMAGE_CACHE_DIR;
+  vi.unstubAllEnvs();
 });
 
 describe("cacheImage", () => {
@@ -92,7 +92,11 @@ describe("cacheImage", () => {
     utimesSync(fileFor(cacheKey), EIGHT_DAYS_AGO, EIGHT_DAYS_AGO);
     await ic.cacheImage(LIB, "/same", fetchFn);
     expect(fetchFn).toHaveBeenCalledTimes(2);
-    expect(statsOnDisk()).toEqual(before);
+    // Stats updates are queued one after another, so once a later miss has been
+    // counted, any update the replacement queued has landed too.
+    const other = await ic.cacheImage(LIB, "/other", async () => ({ data: await png(70, 40), contentType: "image/png" }));
+    await vi.waitFor(() => expect(statsOnDisk()?.fileCount).toBe(2));
+    expect(statsOnDisk()).toEqual({ fileCount: 2, totalSize: before!.totalSize + other.data.length });
   });
 
   it("shares one fetch between concurrent misses for the same key", async () => {
@@ -218,7 +222,7 @@ describe("getImageCacheStats", () => {
   it("reports zero when the cache directory cannot be created", async () => {
     const blocker = path.join(cacheDir, "file-not-dir");
     writeFileSync(blocker, "x");
-    process.env.IMAGE_CACHE_DIR = path.join(blocker, "cache");
+    vi.stubEnv("IMAGE_CACHE_DIR", path.join(blocker, "cache"));
     vi.resetModules();
     delete (globalThis as Record<string, unknown>).imageCacheState;
     const blocked = await import("@/lib/image-cache/image-cache");

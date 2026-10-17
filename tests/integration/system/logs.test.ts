@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
-import { cleanDatabase, disconnectTestDb } from "../../setup/test-db";
+import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
 import {
   callRoute,
@@ -82,7 +82,8 @@ describe("System logs endpoints", () => {
         pages: number;
       }>(response, 200);
 
-      expect(body.logs).toHaveLength(2);
+      // Newest first.
+      expect(body.logs.map((l) => l.message)).toEqual(["log message 4", "log message 3"]);
       expect(body.total).toBe(5);
       expect(body.page).toBe(1);
       expect(body.pages).toBe(3);
@@ -123,9 +124,10 @@ describe("System logs endpoints", () => {
         url: "/api/system/logs",
         searchParams: { level: "ERROR,WARN" },
       });
-      const body = await expectJson<{ logs: unknown[]; total: number }>(response, 200);
+      const body = await expectJson<{ logs: { level: string }[]; total: number }>(response, 200);
 
       expect(body.total).toBe(2);
+      expect(body.logs.map((l) => l.level).sort()).toEqual(["ERROR", "WARN"]);
     });
 
     it("filters by category", async () => {
@@ -177,9 +179,34 @@ describe("System logs endpoints", () => {
         url: "/api/system/logs",
         searchParams: { search: "server" },
       });
-      const body = await expectJson<{ logs: unknown[]; total: number }>(response, 200);
+      const body = await expectJson<{ logs: { message: string }[]; total: number }>(response, 200);
 
       expect(body.total).toBe(2);
+      expect(body.logs.map((l) => l.message).sort()).toEqual([
+        "Server started successfully",
+        "server shutdown initiated",
+      ]);
+    });
+
+    it("searches for % and _ literally, not as wildcards", async () => {
+      const user = await createTestUser();
+      setMockSession({ userId: user.id, isLoggedIn: true });
+
+      await createTestLogEntry({ message: "Backfill 100% complete" });
+      await createTestLogEntry({ message: "Database connection established" });
+      await createTestLogEntry({ message: "Synced library_42" });
+
+      const percent = await expectJson<{ logs: { message: string }[]; total: number }>(
+        await callRoute(GET, { url: "/api/system/logs", searchParams: { search: "%" } }),
+        200
+      );
+      expect(percent.logs.map((l) => l.message)).toEqual(["Backfill 100% complete"]);
+
+      const underscore = await expectJson<{ logs: { message: string }[]; total: number }>(
+        await callRoute(GET, { url: "/api/system/logs", searchParams: { search: "y_4" } }),
+        200
+      );
+      expect(underscore.logs.map((l) => l.message)).toEqual(["Synced library_42"]);
     });
 
     it("returns second page", async () => {
@@ -194,9 +221,9 @@ describe("System logs endpoints", () => {
         url: "/api/system/logs",
         searchParams: { limit: "2", page: "2" },
       });
-      const body = await expectJson<{ logs: unknown[]; page: number }>(response, 200);
+      const body = await expectJson<{ logs: { message: string }[]; page: number }>(response, 200);
 
-      expect(body.logs).toHaveLength(2);
+      expect(body.logs.map((l) => l.message)).toEqual(["log 2", "log 1"]);
       expect(body.page).toBe(2);
     });
 
@@ -204,16 +231,25 @@ describe("System logs endpoints", () => {
       const user = await createTestUser();
       setMockSession({ userId: user.id, isLoggedIn: true });
 
-      await createTestLogEntry({ message: "test" });
+      await getTestPrisma().logEntry.createMany({
+        data: Array.from({ length: 501 }, (_, i) => ({
+          level: "INFO" as const,
+          category: "BACKEND" as const,
+          source: "test",
+          message: `log ${i}`,
+        })),
+      });
 
       const response = await callRoute(GET, {
         url: "/api/system/logs",
         searchParams: { limit: "9999" },
       });
-      const body = await expectJson<{ logs: unknown[]; total: number }>(response, 200);
+      const body = await expectJson<{ logs: unknown[]; total: number; pages: number }>(response, 200);
 
-      // Should not error, just clamp
-      expect(body.total).toBe(1);
+      // Clamped to 500 a page rather than answering with all 501.
+      expect(body.logs).toHaveLength(500);
+      expect(body.total).toBe(501);
+      expect(body.pages).toBe(2);
     });
   });
 
@@ -248,9 +284,8 @@ describe("System logs endpoints", () => {
       const response = await callRoute(SOURCES_GET, { url: "/api/system/logs/sources" });
       const body = await expectJson<{ sources: string[]; categories: string[] }>(response, 200);
 
-      expect(body.sources).toHaveLength(2);
-      expect(body.sources).toContain("scheduler");
-      expect(body.sources).toContain("sync-engine");
+      // Each source once, alphabetically.
+      expect(body.sources).toEqual(["scheduler", "sync-engine"]);
       expect(body.categories).toEqual(["BACKEND", "API", "DB"]);
     });
   });

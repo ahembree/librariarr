@@ -106,12 +106,15 @@ describe("encrypted backups round-trip through real AES-GCM", () => {
 });
 
 describe("restoreBackup file formats and failures", () => {
-  it("restores a plain .json backup and frees large tables", async () => {
+  it("restores a plain .json backup a hundred rows at a time", async () => {
     const logs = Array.from({ length: 1001 }, (_, i) => ({ id: `l${i}` }));
     writeBackup("librariarr-backup-plain.json", backupJson({ logEntry: logs }));
     await restoreBackup("librariarr-backup-plain.json");
-    // 1001 rows go in batches of 100.
-    expect(model("logEntry").createMany).toHaveBeenCalledTimes(11);
+    // 1001 rows go in batches of 100, in order.
+    const calls = model("logEntry").createMany.mock.calls as Array<[{ data: Array<{ id: string }> }]>;
+    expect(calls).toHaveLength(11);
+    expect(calls.map(([arg]) => arg.data.length)).toEqual([...Array(10).fill(100), 1]);
+    expect(calls[10][0].data).toEqual([{ id: "l1000" }]);
   });
 
   it("names the table that failed and rolls the restore back", async () => {
@@ -149,7 +152,9 @@ describe("listBackups without sidecars", () => {
     });
     // No metadata in the file: falls back to the file's mtime and no tables.
     expect(byName["librariarr-backup-b.json"].tables).toEqual({});
-    expect(Number.isNaN(Date.parse(byName["librariarr-backup-b.json"].createdAt))).toBe(false);
+    expect(byName["librariarr-backup-b.json"].createdAt).toBe(
+      fs.statSync(path.join(backupDir, "librariarr-backup-b.json")).mtime.toISOString(),
+    );
 
     const sidecar = JSON.parse(fs.readFileSync(path.join(backupDir, "librariarr-backup-a.json.gz.meta.json"), "utf-8"));
     expect(sidecar).toEqual({ createdAt: "2024-01-01T00:00:00.000Z", tables: { user: 1 }, encrypted: false, configOnly: true });
@@ -185,5 +190,8 @@ describe("createBackup on disk", () => {
     expect(stat.mode & 0o777).toBe(0o600);
     const meta = JSON.parse(fs.readFileSync(path.join(backupDir, `${filename}.meta.json`), "utf-8"));
     expect(meta).toMatchObject({ encrypted: false, configOnly: false });
+    // Every table is read for a full backup; the mocked database holds none of them.
+    expect(Object.values(meta.tables as Record<string, number>).every((n) => n === 0)).toBe(true);
+    expect(Object.keys(meta.tables)).toContain("mediaItem");
   });
 });

@@ -18,15 +18,25 @@ describe("chatHistoryForRequest", () => {
   // until a reload.
   it("keeps a long conversation within the chat route's limit", () => {
     const sent = chatHistoryForRequest(conversation(41));
-    expect(sent.length).toBeLessThanOrEqual(MAX_CHAT_MESSAGES);
+    // The last 40 turns, less the assistant turn that would open them.
+    expect(sent).toHaveLength(MAX_CHAT_MESSAGES - 1);
+    expect(sent[0]).toEqual({ role: "user", content: "turn 2" });
     expect(aiChatSchema.safeParse({ messages: sent }).success).toBe(true);
     // The newest question is always the last turn sent.
     expect(sent.at(-1)).toEqual({ role: "user", content: "turn 40" });
   });
 
   it("starts the window on a user turn", () => {
-    const sent = chatHistoryForRequest(conversation(42));
-    expect(sent[0].role).toBe("user");
+    // The last 40 of 43 turns open with an assistant turn ("turn 3"), which the
+    // native Anthropic API refuses; the window starts at the next question.
+    const sent = chatHistoryForRequest(conversation(43));
+    expect(sent[0]).toEqual({ role: "user", content: "turn 4" });
+    expect(sent).toHaveLength(39);
+    expect(sent.at(-1)).toEqual({ role: "user", content: "turn 42" });
+  });
+
+  it("sends nothing when there is no user turn to start from", () => {
+    expect(chatHistoryForRequest([{ role: "assistant", content: "Hello! Ask me about your library." }])).toEqual([]);
   });
 
   it("cuts an over-long turn to the content limit instead of failing the request", () => {
@@ -40,7 +50,14 @@ describe("chatHistoryForRequest", () => {
   });
 
   it("drops empty turns, which the route refuses", () => {
-    expect(chatHistoryForRequest([{ role: "assistant", content: "  " }, { role: "user", content: "hi" }])).toEqual([
+    expect(
+      chatHistoryForRequest([
+        { role: "user", content: "q" },
+        { role: "assistant", content: "  " },
+        { role: "user", content: "hi" },
+      ]),
+    ).toEqual([
+      { role: "user", content: "q" },
       { role: "user", content: "hi" },
     ]);
   });

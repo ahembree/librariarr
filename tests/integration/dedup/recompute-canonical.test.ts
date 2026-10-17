@@ -36,15 +36,17 @@ import {
 
 const testPrisma = getTestPrisma();
 
+// One teardown for the whole file: disconnecting at the end of the first
+// describe would leave the second running on a closed client.
+afterAll(async () => {
+  await cleanDatabase();
+  await disconnectTestDb();
+});
+
 describe("recomputeCanonical", () => {
   beforeEach(async () => {
     await cleanDatabase();
     clearMockSession();
-  });
-
-  afterAll(async () => {
-    await cleanDatabase();
-    await disconnectTestDb();
   });
 
   it("marks exactly one item per dedupKey group as canonical", async () => {
@@ -66,11 +68,11 @@ describe("recomputeCanonical", () => {
     // Set same dedupKey on both items
     await testPrisma.mediaItem.update({
       where: { id: item1.id },
-      data: { dedupKey: "movie:tmdb:100" },
+      data: { dedupKey: "movie:tmdb:603" },
     });
     await testPrisma.mediaItem.update({
       where: { id: item2.id },
-      data: { dedupKey: "movie:tmdb:100" },
+      data: { dedupKey: "movie:tmdb:603" },
     });
 
     await recomputeCanonical(user.id);
@@ -108,11 +110,11 @@ describe("recomputeCanonical", () => {
 
     await testPrisma.mediaItem.update({
       where: { id: item1.id },
-      data: { dedupKey: "movie:tmdb:200" },
+      data: { dedupKey: "movie:tmdb:27205" },
     });
     await testPrisma.mediaItem.update({
       where: { id: item2.id },
-      data: { dedupKey: "movie:tmdb:200" },
+      data: { dedupKey: "movie:tmdb:27205" },
     });
 
     // Set server2 as preferred — even though item1 is older, server2 should win
@@ -289,19 +291,30 @@ describe("recomputeCanonical", () => {
 
     await testPrisma.mediaItem.update({
       where: { id: movieA1.id },
-      data: { dedupKey: "movie:tmdb:aaa" },
+      data: { dedupKey: "movie:tmdb:1001" },
     });
     await testPrisma.mediaItem.update({
       where: { id: movieA2.id },
-      data: { dedupKey: "movie:tmdb:aaa" },
+      data: { dedupKey: "movie:tmdb:1001" },
     });
     await testPrisma.mediaItem.update({
       where: { id: movieB1.id },
-      data: { dedupKey: "movie:tmdb:bbb" },
+      data: { dedupKey: "movie:tmdb:1002" },
     });
     await testPrisma.mediaItem.update({
       where: { id: movieB2.id },
-      data: { dedupKey: "movie:tmdb:bbb" },
+      data: { dedupKey: "movie:tmdb:1002" },
+    });
+
+    // Group B's copy on server 2 is the older one, so each group picks a
+    // different server — a pick made across groups could not satisfy both.
+    await testPrisma.mediaItem.update({
+      where: { id: movieA2.id },
+      data: { createdAt: new Date(Date.now() + 1000) },
+    });
+    await testPrisma.mediaItem.update({
+      where: { id: movieB1.id },
+      data: { createdAt: new Date(Date.now() + 1000) },
     });
 
     await recomputeCanonical(user.id);
@@ -318,6 +331,8 @@ describe("recomputeCanonical", () => {
     const groupBCanonical = [b1!.dedupCanonical, b2!.dedupCanonical].filter(Boolean).length;
     expect(groupACanonical).toBe(1);
     expect(groupBCanonical).toBe(1);
+    expect(a1!.dedupCanonical).toBe(true);
+    expect(b2!.dedupCanonical).toBe(true);
   });
 });
 
@@ -325,11 +340,6 @@ describe("backfillDedupKeys", () => {
   beforeEach(async () => {
     await cleanDatabase();
     clearMockSession();
-  });
-
-  afterAll(async () => {
-    await cleanDatabase();
-    await disconnectTestDb();
   });
 
   it("returns 0 when no items are missing dedupKey", async () => {
@@ -370,7 +380,6 @@ describe("backfillDedupKeys", () => {
       where: { id: item.id },
       select: { dedupKey: true },
     });
-    expect(refreshed!.dedupKey).not.toBeNull();
     // Title-based key for movies without external IDs
     expect(refreshed!.dedupKey).toBe("movie:title:missing key:2023");
   });
@@ -385,7 +394,7 @@ describe("backfillDedupKeys", () => {
       type: "MOVIE",
       year: 2024,
     });
-    await createTestExternalId(item.id, "tmdb", "12345");
+    await createTestExternalId(item.id, "TMDB", "12345");
 
     const updated = await backfillDedupKeys(user.id);
     expect(updated).toBe(1);
@@ -462,6 +471,9 @@ describe("backfillDedupKeys", () => {
     const allItems = await testPrisma.mediaItem.findMany({
       select: { dedupKey: true },
     });
-    expect(allItems.every((i) => i.dedupKey !== null)).toBe(true);
+    expect(allItems.map((i) => i.dedupKey).sort()).toEqual([
+      "movie:title:movie a:2024",
+      "movie:title:movie b:2024",
+    ]);
   });
 });

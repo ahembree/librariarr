@@ -24,13 +24,13 @@ function writeVariant(cacheKey: string) {
 describe("invalidateCachedUrls", () => {
   beforeEach(() => {
     cacheDir = mkdtempSync(path.join(tmpdir(), "librariarr-imginval-"));
-    process.env.IMAGE_CACHE_DIR = cacheDir;
+    vi.stubEnv("IMAGE_CACHE_DIR", cacheDir);
     vi.resetModules();
   });
 
   afterEach(() => {
     rmSync(cacheDir, { recursive: true, force: true });
-    delete process.env.IMAGE_CACHE_DIR;
+    vi.unstubAllEnvs();
   });
 
   it("removes every width variant of the artwork, not just the default", async () => {
@@ -67,9 +67,11 @@ describe("invalidateCachedUrls", () => {
     const { CACHE_WIDTH_GRID } = await import("@/lib/image-url");
 
     const other = writeVariant(computeCacheKey(LIB, "/library/metadata/777/thumb", CACHE_WIDTH_GRID));
+    const target = writeVariant(computeCacheKey(LIB, "/library/metadata/12345/thumb", CACHE_WIDTH_GRID));
 
     await invalidateCachedUrls(LIB, [null, undefined, "/library/metadata/12345/thumb"]);
 
+    expect(existsSync(target)).toBe(false);
     expect(existsSync(other)).toBe(true);
   });
 

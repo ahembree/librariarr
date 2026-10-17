@@ -1,4 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import path from "path";
 import { gzipSync, gunzipSync } from "zlib";
 
 // ---------------------------------------------------------------------------
@@ -338,8 +339,10 @@ describe("restoreBackup", () => {
     mockFs.readFile.mockResolvedValue(Buffer.from("fake"));
 
     await expect(restoreBackup("librariarr-backup-2024-01-01T00-00-00.json.gz.enc")).rejects.toThrow(
-      "encrypted",
+      "This backup is encrypted — a passphrase is required to restore it",
     );
+    // Refused before the file is even read.
+    expect(mockFs.readFile).not.toHaveBeenCalled();
   });
 
   it("restores from an unencrypted gzipped backup", async () => {
@@ -356,11 +359,15 @@ describe("restoreBackup", () => {
 
     await restoreBackup("librariarr-backup-2024-01-01T00-00-00.json.gz", undefined, onProgress);
 
-    // Should call progress for decrypt, truncate, restore, complete
+    // decrypt, truncate, then the one table's start and its single batch, then complete
     const phases = onProgress.mock.calls.map((c) => c[0].phase);
-    expect(phases).toContain("decrypt");
-    expect(phases).toContain("truncate");
-    expect(phases).toContain("complete");
+    expect(phases).toEqual(["decrypt", "truncate", "restore", "restore", "complete"]);
+    expect(onProgress.mock.calls[3][0]).toMatchObject({
+      table: "user",
+      rowsInserted: 1,
+      totalRows: 1,
+      message: "Restoring user (1/1)...",
+    });
 
     // Should have attempted to create user records
     expect(mockPrismaModels.user.createMany).toHaveBeenCalledWith(
@@ -476,7 +483,7 @@ describe("restoreBackup", () => {
           {
             id: "la1",
             ruleSetId: "rs1",
-            actionType: "DELETE_FILES_RADARR",
+            actionType: "UNMONITOR_DELETE_FILES_RADARR",
             searchAfterDelete: true,
           },
         ],
@@ -557,9 +564,17 @@ describe("listBackups", () => {
     mockFs.readFile.mockRejectedValue(new Error("not found"));
 
     const result = await listBackups();
-    expect(result).toHaveLength(1);
-    expect(result[0].encrypted).toBe(true);
-    expect(result[0].tables).toEqual({});
+    expect(result).toEqual([
+      {
+        filename: "librariarr-backup-2024-01-01T00-00-00.json.gz.enc",
+        // Unreadable without the passphrase: dated by the file itself.
+        createdAt: new Date("2024-01-01").toISOString(),
+        size: 2048,
+        tables: {},
+        encrypted: true,
+        configOnly: undefined,
+      },
+    ]);
   });
 
   it("sorts backups newest first", async () => {
@@ -583,9 +598,10 @@ describe("listBackups", () => {
     });
 
     const result = await listBackups();
-    expect(result).toHaveLength(2);
-    expect(result[0].filename).toContain("2024-06-15");
-    expect(result[1].filename).toContain("2024-01-01");
+    expect(result.map((b) => b.filename)).toEqual([
+      "librariarr-backup-2024-06-15T12-00-00.json.gz",
+      "librariarr-backup-2024-01-01T00-00-00.json.gz",
+    ]);
   });
 
   it("handles readdir failure gracefully", async () => {
@@ -656,13 +672,23 @@ describe("pruneBackups", () => {
     // Keep only 1 — should delete 2 oldest
     const deleted = await pruneBackups(1);
     expect(deleted).toBe(2);
+    // Each pruned backup goes with its sidecar; the newest is kept.
+    const unlinked = mockFs.unlink.mock.calls.map(([p]) => path.basename(p as string)).sort();
+    expect(unlinked).toEqual([
+      "librariarr-backup-2024-01-01T00-00-00.json.gz",
+      "librariarr-backup-2024-01-01T00-00-00.json.gz.meta.json",
+      "librariarr-backup-2024-02-01T00-00-00.json.gz",
+      "librariarr-backup-2024-02-01T00-00-00.json.gz.meta.json",
+    ]);
   });
 });
 
 describe("getBackupFilePath", () => {
   it("returns path for valid filename", () => {
     const result = getBackupFilePath("librariarr-backup-2024-01-01T00-00-00.json.gz");
-    expect(result).toContain("librariarr-backup-2024-01-01T00-00-00.json.gz");
+    expect(result).toBe(
+      path.join(process.env.BACKUP_DIR || "/config/backups", "librariarr-backup-2024-01-01T00-00-00.json.gz"),
+    );
   });
 
   it("returns null for invalid filename", () => {
@@ -677,8 +703,21 @@ describe("getBackupFilePath", () => {
 });
 
 describe("getBackupPassphrase", () => {
-  beforeEach(() => {
+  let original: unknown;
+
+  beforeEach(async () => {
     vi.clearAllMocks();
+    const { prisma } = await import("@/lib/db");
+    original = (prisma as unknown as Record<string, unknown>).appSettings;
+  });
+
+  // The tests swap the delegate for one with `findFirst`; put it back so no
+  // other test sees it.
+  afterEach(async () => {
+    const { prisma } = await import("@/lib/db");
+    (prisma as unknown as Record<string, unknown>).appSettings = original;
+    mockPrismaModels.appSettings.findMany.mockReset();
+    mockPrismaModels.appSettings.findMany.mockResolvedValue([]);
   });
 
   it("returns passphrase from settings", async () => {
