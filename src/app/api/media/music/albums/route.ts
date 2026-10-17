@@ -27,9 +27,23 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ albums: [] });
   }
 
+  // The artist as the artist listing groups it — `LOWER(TRIM(parentTitle))`,
+  // the key `getServerPresenceByGroup` uses too — not the exact spelling: an
+  // artist merged from "Air" and "air " listed one album set, and opening it
+  // here matched only the spelling passed in and dropped the other's tracks.
+  // Resolved to the stored spellings so the where stays an exact `in`.
+  const spellings = await prisma.$queryRaw<{ parentTitle: string }[]>`
+    SELECT DISTINCT mi."parentTitle"
+    FROM "MediaItem" mi
+    JOIN "Library" l ON mi."libraryId" = l.id
+    WHERE mi.type = 'MUSIC'::"LibraryType"
+      AND l."mediaServerId" = ANY(${sf.serverIds}::text[])
+      AND LOWER(TRIM(mi."parentTitle")) = LOWER(TRIM(${parentTitle}))
+  `;
+
   const where: Prisma.MediaItemWhereInput = {
     type: "MUSIC",
-    parentTitle,
+    parentTitle: { in: spellings.map((r) => r.parentTitle) },
     library: { mediaServerId: { in: sf.serverIds } },
     ...(!sf.isSingleServer && { dedupCanonical: true }),
   };
@@ -68,6 +82,16 @@ export async function GET(request: NextRequest) {
         },
       },
     },
+    // The fold below keeps the FIRST track carrying each field (summary, year,
+    // rating, the linked item), so the rows need a fixed order: unordered,
+    // Postgres returned them in heap order and an UPDATE could change which
+    // track's values an album showed. Track order as the album listing reads
+    // it: disc (seasonNumber), then track number (episodeNumber), then id.
+    orderBy: [
+      { seasonNumber: { sort: "asc", nulls: "last" } },
+      { episodeNumber: { sort: "asc", nulls: "last" } },
+      { id: "asc" },
+    ],
   });
 
   // Group by album title (canonical items are already deduped)
@@ -79,6 +103,8 @@ export async function GET(request: NextRequest) {
       totalSize: bigint;
       audioCodecCounts: Record<string, number>;
       mediaItemId: string;
+      /** Whether `mediaItemId` is a track with album art. */
+      hasArt: boolean;
       totalPlayCount: number;
       lastPlayed: Date | null;
       addedAt: Date | null;
@@ -106,6 +132,7 @@ export async function GET(request: NextRequest) {
         totalSize: BigInt(0),
         audioCodecCounts: {},
         mediaItemId: item.id,
+        hasArt: false,
         totalPlayCount: 0,
         lastPlayed: null,
         addedAt: null,
@@ -140,8 +167,12 @@ export async function GET(request: NextRequest) {
     const codec = item.audioCodec ? item.audioCodec.toUpperCase() : "Unknown";
     albumGroup.audioCodecCounts[codec] = (albumGroup.audioCodecCounts[codec] || 0) + 1;
 
-    if (item.parentThumbUrl) {
+    // The first track with album art (the page asks for it with
+    // `?type=parent`), else the first track — as the album listing picks it.
+    // Reassigning on every track with art linked the LAST one instead.
+    if (item.parentThumbUrl && !albumGroup.hasArt) {
       albumGroup.mediaItemId = item.id;
+      albumGroup.hasArt = true;
     }
 
     if (!albumGroup.summary && item.summary) albumGroup.summary = item.summary;

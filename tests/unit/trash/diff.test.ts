@@ -18,11 +18,12 @@ describe("diffValues", () => {
     expect(d2).toEqual([{ path: "b", before: 2, after: undefined, kind: "removed" }]);
   });
 
-  it("treats a null 'before' (create) as everything added", () => {
+  it("reports a create (null 'before') as one whole-value entry at the root", () => {
+    // sync.ts passes `null` for a resource the app does not have yet.
     const d = diffValues(null, { name: "AMZN", score: 5 });
-    expect(d).toHaveLength(1);
-    expect(d[0].kind).toBe("changed");
-    expect(d[0].path).toBe("(root)");
+    expect(d).toEqual([
+      { path: "(root)", before: null, after: { name: "AMZN", score: 5 }, kind: "changed" },
+    ]);
   });
 
   it("keys array-of-object paths by the element's name, not its index", () => {

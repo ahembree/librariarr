@@ -26,8 +26,8 @@ export async function GET(
 
   const { id } = await params;
 
-  const item = await prisma.mediaItem.findUnique({
-    where: { id },
+  const item = await prisma.mediaItem.findFirst({
+    where: { id, library: { mediaServer: { userId: session.userId } } },
     include: {
       library: {
         include: { mediaServer: true },
@@ -41,10 +41,6 @@ export async function GET(
 
   if (!item.library.mediaServer) {
     return NextResponse.json({ error: "Server not found" }, { status: 404 });
-  }
-
-  if (item.library.mediaServer.userId !== session.userId) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
   // Find all copies of this item across servers (via dedupKey)

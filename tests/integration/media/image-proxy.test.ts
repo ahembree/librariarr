@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
-import { rm, readdir } from "node:fs/promises";
+import { rm, stat } from "node:fs/promises";
+import path from "node:path";
 import sharp from "sharp";
 import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
@@ -34,17 +35,9 @@ vi.mock("@/lib/media-server/factory", () => ({
   createMediaServerClient: vi.fn(() => ({ fetchImage: mockFetchImage })),
 }));
 
-vi.mock("axios", () => ({
-  default: {
-    get: vi.fn().mockResolvedValue({
-      data: Buffer.from("fake-image-data"),
-      headers: { "content-type": "image/jpeg" },
-    }),
-  },
-}));
-
 import { GET } from "@/app/api/media/[id]/image/route";
 import { computeCacheKey } from "@/lib/image-cache/image-cache";
+import { appCache } from "@/lib/cache/memory-cache";
 import {
   CACHE_WIDTH_ART,
   CACHE_WIDTH_DEFAULT,
@@ -62,6 +55,8 @@ describe("GET /api/media/[id]/image", () => {
   beforeEach(async () => {
     await cleanDatabase();
     clearMockSession();
+    // The route keeps item metadata and fetch failures in the in-process cache.
+    appCache.clear();
     // Now that the cache is genuinely written, it survives between tests and
     // the shared THUMB would be served from disk — start every test cold.
     await rm(cacheDir, { recursive: true, force: true });
@@ -94,11 +89,13 @@ describe("GET /api/media/[id]/image", () => {
     clearMockSession();
     const response = await callRouteWithParams(GET, { id: "any" });
     expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ error: "Unauthorized" });
   });
 
   it("returns 404 for non-existent item", async () => {
     const response = await callRouteWithParams(GET, { id: "nonexistent" });
     expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: "Not found" });
   });
 
   it("returns 404 when item has no thumbnail", async () => {
@@ -106,6 +103,8 @@ describe("GET /api/media/[id]/image", () => {
     // item has no thumbUrl set by default
     const response = await callRouteWithParams(GET, { id: item.id });
     expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: "No thumbnail" });
+    expect(mockFetchImage).not.toHaveBeenCalled();
   });
 
   describe("width selection", () => {
@@ -178,8 +177,11 @@ describe("GET /api/media/[id]/image", () => {
       const item = await createTestMediaItem(libraryId, { thumbUrl: THUMB });
       await callRouteWithParams(GET, { id: item.id }, { searchParams: { w: String(CACHE_WIDTH_GRID) } });
 
-      const shards = await readdir(cacheDir).catch(() => []);
-      expect(shards.length).toBeGreaterThan(0);
+      // <dir>/<key[0:2]>/<key[2:4]>/<key>.webp, as the cache lays it out.
+      const key = computeCacheKey(libraryId, THUMB, CACHE_WIDTH_GRID);
+      const file = path.join(cacheDir, key.slice(0, 2), key.slice(2, 4), `${key}.webp`);
+      expect((await stat(file)).size).toBeGreaterThan(0);
+      expect((await sharp(file).metadata()).format).toBe("webp");
     });
 
     it("caches each width as a separate file, so a second width still fetches", async () => {

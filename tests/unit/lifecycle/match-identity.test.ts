@@ -55,14 +55,16 @@ describe("matchIdentityChange", () => {
     const snapshot = { title: "Paranoid Android", parentTitle: "Radiohead" };
     expect(matchIdentityChange(snapshot, row({ title: "Paranoid Android", parentTitle: "Radiohead" }), "MUSIC")).toBeNull();
     expect(matchIdentityChange(snapshot, row({ title: "Karma Police", parentTitle: "Radiohead" }), "MUSIC")).toMatch(/is now "Radiohead — Karma Police"/);
-    expect(matchIdentityChange(snapshot, row({ title: "Paranoid Android", parentTitle: "Someone Else" }), "MUSIC")).not.toBeNull();
+    expect(matchIdentityChange(snapshot, row({ title: "Paranoid Android", parentTitle: "Someone Else" }), "MUSIC")).toBe(
+      '"Radiohead — Paranoid Android" is now "Someone Else — Paranoid Android"',
+    );
   });
 
   it("compares a grouped artist match against the track's artist, by MusicBrainz id too", () => {
-    const snapshot = { title: "Radiohead", parentTitle: null, externalIds: [{ source: "MUSICBRAINZ", externalId: "a74b1b7f" }] };
-    const track = row({ title: "Creep", parentTitle: "Radiohead", externalIds: [{ source: "MUSICBRAINZ", externalId: "a74b1b7f" }] });
+    const snapshot = { title: "Radiohead", parentTitle: null, externalIds: [{ source: "MUSICBRAINZ", externalId: "a74b1b7f-71a5-4011-9441-d0b5e4122711" }] };
+    const track = row({ title: "Creep", parentTitle: "Radiohead", externalIds: [{ source: "MUSICBRAINZ", externalId: "a74b1b7f-71a5-4011-9441-d0b5e4122711" }] });
     expect(matchIdentityChange(snapshot, track, "MUSIC")).toBeNull();
-    expect(matchIdentityChange(snapshot, { ...track, externalIds: [{ source: "MUSICBRAINZ", externalId: "zzz" }] }, "MUSIC")).toMatch(/MUSICBRAINZ id changed/);
+    expect(matchIdentityChange(snapshot, { ...track, externalIds: [{ source: "MUSICBRAINZ", externalId: "9c9f1380-2516-4fc9-a3e6-f9f61941d090" }] }, "MUSIC")).toMatch(/MUSICBRAINZ id changed/);
   });
 
   it("only compares the id the Arr family resolves by", () => {

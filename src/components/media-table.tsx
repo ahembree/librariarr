@@ -30,7 +30,7 @@ import { HoverCard, HoverCardTrigger, HoverCardContent } from "@/components/ui/h
 import type { MediaListItem } from "@/lib/types";
 import { ServerChips } from "@/components/server-chips";
 import { useColumnResize } from "@/hooks/use-column-resize";
-import { formatFileSize, formatDuration, formatDate } from "@/lib/format";
+import { formatFileSize, formatDuration, formatDate, formatDateOnly } from "@/lib/format";
 import { formatEpisodeCode } from "@/lib/media/display-title";
 
 /**
@@ -367,7 +367,7 @@ function buildColumns(getHex: (category: ChipColorCategory, value: string) => st
     defaultVisible: false,
     defaultWidth: 100,
     render: (item) => (
-      <span className="text-muted-foreground">{formatDate(item.originallyAvailableAt)}</span>
+      <span className="text-muted-foreground">{formatDateOnly(item.originallyAvailableAt)}</span>
     ),
   },
   {

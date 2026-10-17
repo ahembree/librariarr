@@ -129,7 +129,8 @@ function unique() {
 
 export async function createTestUser(
   overrides?: Partial<{
-    plexId: string;
+    /** `null` for an account with no Plex link (a local or SSO-only admin). */
+    plexId: string | null;
     /** `null` for an account with no Plex token stored (a local or SSO-only admin). */
     plexToken: string | null;
     username: string;
@@ -139,7 +140,7 @@ export async function createTestUser(
   const prisma = getTestPrisma();
   return prisma.user.create({
     data: {
-      plexId: overrides?.plexId ?? `plex-${unique()}`,
+      plexId: overrides && "plexId" in overrides ? overrides.plexId : `plex-${unique()}`,
       plexToken: overrides && "plexToken" in overrides ? overrides.plexToken : "test-plex-token",
       username: overrides?.username ?? "testuser",
       email: overrides?.email ?? "test@example.com",
@@ -255,11 +256,14 @@ export async function createTestMediaItem(
       libraryId,
       ratingKey: overrides?.ratingKey ?? `rk-${unique()}`,
       title: overrides?.title ?? "Test Movie",
+      // The sync always writes a sort title, falling back to the title.
+      titleSort: overrides?.title ?? "Test Movie",
       year: overrides?.year ?? 2024,
       type: overrides?.type ?? "MOVIE",
       summary: overrides?.summary,
       thumbUrl: overrides?.thumbUrl,
-      resolution: overrides?.resolution ?? "1080p",
+      // What Plex stores for a 1080p file (normalizeResolutionLabel → "1080P").
+      resolution: overrides?.resolution ?? "1080",
       videoCodec: overrides?.videoCodec ?? "h264",
       audioCodec: overrides?.audioCodec ?? "aac",
       dynamicRange: overrides?.dynamicRange ?? "SDR",
@@ -413,7 +417,7 @@ export async function createTestLidarrInstance(
 
 export async function createTestSeerrInstance(
   userId: string,
-  overrides?: Partial<{ name: string; url: string; apiKey: string; type: string; enabled: boolean }>
+  overrides?: Partial<{ name: string; url: string; apiKey: string; enabled: boolean }>
 ) {
   const prisma = getTestPrisma();
   return prisma.seerrInstance.create({

@@ -80,6 +80,10 @@ describe("excepted representative promotion", () => {
       const firstAction = await prisma.lifecycleAction.findMany({ where: { ruleSetId: ruleSet.id, status: "PENDING" } });
       expect(firstMatch).toHaveLength(1);
       expect(firstAction).toHaveLength(1);
+      // The excepted representative is replaced by the LOWEST remaining member
+      // id, never whichever row the engine happened to return first.
+      expect(firstMatch[0].mediaItemId).toBe(sorted[1].id);
+      expect(firstAction[0].mediaItemId).toBe(sorted[1].id);
 
       // A sync rewrites the promoted episode's row (e.g. a metadata refresh):
       // Postgres writes a new tuple version, so it moves in the scan order.

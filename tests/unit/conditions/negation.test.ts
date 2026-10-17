@@ -124,7 +124,7 @@ describe("pushDownGroupNegation — structure", () => {
   it("maps stream-query NOT onto the quantifier (any ↔ none), leaving 'all' alone", () => {
     const sq = (quantifier: "any" | "none" | "all" | undefined) =>
       pushDownGroupNegation([
-        makeGroup([makeRule({ field: "streamAudioCodec", operator: "equals", value: "aac" })], {
+        makeGroup([makeRule({ field: "sqCodec", operator: "equals", value: "aac" })], {
           negate: true,
           streamQuery: { streamType: "audio", ...(quantifier ? { quantifier } : {}) },
         }),
@@ -214,12 +214,7 @@ describe("group-level NOT — in-memory evaluation", () => {
   });
 
   it("double group negation is identity", () => {
-    const base = (negate: boolean) => [
-      makeGroup([makeRule({ field: "playCount", operator: "equals", value: "0" })], {
-        groups: [],
-        negate,
-      }),
-    ];
+    const base = [makeGroup([makeRule({ field: "playCount", operator: "equals", value: "0" })])];
     // NOT(NOT(group)) via nesting
     const doubled = [
       makeGroup([], {
@@ -229,12 +224,10 @@ describe("group-level NOT — in-memory evaluation", () => {
         ],
       }),
     ];
-    expect(evaluateAllRulesInMemory(doubled, unwatchedSd)).toBe(
-      evaluateAllRulesInMemory(base(false), unwatchedSd),
-    );
-    expect(evaluateAllRulesInMemory(doubled, watchedHd)).toBe(
-      evaluateAllRulesInMemory(base(false), watchedHd),
-    );
+    expect(evaluateAllRulesInMemory(base, unwatchedSd)).toBe(true);
+    expect(evaluateAllRulesInMemory(base, watchedHd)).toBe(false);
+    expect(evaluateAllRulesInMemory(doubled, unwatchedSd)).toBe(true);
+    expect(evaluateAllRulesInMemory(doubled, watchedHd)).toBe(false);
   });
 });
 
@@ -268,8 +261,8 @@ describe("group-level NOT — Phase 1 WHERE equivalence", () => {
         { negate: false },
       ),
     ];
-    expect(buildGroupConditions(negated, stubRuleToWhere)).toEqual(
-      buildGroupConditions(manual, stubRuleToWhere),
-    );
+    const expected = { OR: [{ "x:equals:1:NOT": true }, { "y:greaterThan:2:NOT": true }] };
+    expect(buildGroupConditions(negated, stubRuleToWhere)).toEqual(expected);
+    expect(buildGroupConditions(manual, stubRuleToWhere)).toEqual(expected);
   });
 });

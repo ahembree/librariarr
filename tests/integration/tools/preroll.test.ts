@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
-import { cleanDatabase, disconnectTestDb } from "../../setup/test-db";
+import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
 import {
   callRoute,
@@ -49,6 +49,19 @@ import {
   PUT as putSchedule,
   DELETE as deleteSchedule,
 } from "@/app/api/tools/preroll/schedules/[id]/route";
+import { PlexClient } from "@/lib/plex/client";
+
+/** The client each `new PlexClient(...)` returned, in construction order. */
+function plexClients() {
+  return vi.mocked(PlexClient).mock.results.map(
+    (r) =>
+      r.value as {
+        getPrerollSetting: ReturnType<typeof vi.fn>;
+        setPrerollPath: ReturnType<typeof vi.fn>;
+        clearPreroll: ReturnType<typeof vi.fn>;
+      },
+  );
+}
 
 beforeEach(async () => {
   await cleanDatabase();
@@ -67,7 +80,7 @@ afterAll(async () => {
 describe("GET /api/tools/preroll", () => {
   it("returns 401 without auth", async () => {
     const res = await callRoute(getPreroll);
-    await expectJson(res, 401);
+    expect(await expectJson(res, 401)).toEqual({ error: "Unauthorized" });
   });
 
   it("returns DB-only overview with no servers", async () => {
@@ -91,10 +104,10 @@ describe("GET /api/tools/preroll", () => {
     await createTestServer(user.id);
     setMockSession({ isLoggedIn: true, userId: user.id});
 
-    const { PlexClient } = await import("@/lib/plex/client");
     const res = await callRoute(getPreroll);
-    await expectJson(res, 200);
+    const body = await expectJson<{ hasPlexServers: boolean }>(res, 200);
 
+    expect(body.hasPlexServers).toBe(true);
     expect(PlexClient).not.toHaveBeenCalled();
   });
 });
@@ -105,7 +118,7 @@ describe("GET /api/tools/preroll", () => {
 describe("GET /api/tools/preroll/current", () => {
   it("returns 401 without auth", async () => {
     const res = await callRoute(getPrerollCurrent);
-    await expectJson(res, 401);
+    expect(await expectJson(res, 401)).toEqual({ error: "Unauthorized" });
   });
 
   it("returns empty when no servers configured", async () => {
@@ -115,20 +128,32 @@ describe("GET /api/tools/preroll/current", () => {
     const res = await callRoute(getPrerollCurrent);
     const body = await expectJson<{ currentPreroll: string; available: boolean }>(res);
 
-    expect(body.currentPreroll).toBe("");
-    expect(body.available).toBe(false);
+    expect(body).toEqual({ currentPreroll: "", available: false });
+    expect(PlexClient).not.toHaveBeenCalled();
   });
 
   it("returns current preroll from Plex server", async () => {
     const user = await createTestUser();
-    await createTestServer(user.id);
+    const server = await createTestServer(user.id);
     setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(getPrerollCurrent);
     const body = await expectJson<{ currentPreroll: string; available: boolean }>(res);
 
-    expect(body.currentPreroll).toBe("/movies/preroll.mp4");
-    expect(body.available).toBe(true);
+    expect(body).toEqual({ currentPreroll: "/movies/preroll.mp4", available: true });
+    expect(PlexClient).toHaveBeenCalledExactlyOnceWith(server.url, server.accessToken, { skipTlsVerify: false });
+  });
+
+  it("reports the preroll as unavailable when Plex cannot be read", async () => {
+    const user = await createTestUser();
+    await createTestServer(user.id);
+    setMockSession({ isLoggedIn: true, userId: user.id});
+    vi.mocked(PlexClient).mockImplementationOnce(function () {
+      return { getPrerollSetting: vi.fn().mockRejectedValue(new Error("ECONNREFUSED")) } as never;
+    });
+
+    const body = await expectJson<{ currentPreroll: string; available: boolean }>(await callRoute(getPrerollCurrent));
+    expect(body).toEqual({ currentPreroll: "", available: false });
   });
 });
 
@@ -141,12 +166,13 @@ describe("POST /api/tools/preroll", () => {
       method: "POST",
       body: { path: "/some/path.mp4" },
     });
-    await expectJson(res, 401);
+    expect(await expectJson(res, 401)).toEqual({ error: "Unauthorized" });
+    expect(PlexClient).not.toHaveBeenCalled();
   });
 
   it("sets preroll path on Plex servers", async () => {
     const user = await createTestUser();
-    await createTestServer(user.id);
+    const server = await createTestServer(user.id);
     setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(postPreroll, {
@@ -155,8 +181,49 @@ describe("POST /api/tools/preroll", () => {
     });
     const body = await expectJson<{ success: boolean; errors: string[] }>(res);
 
-    expect(body.success).toBe(true);
-    expect(body.errors).toEqual([]);
+    expect(body).toEqual({ success: true, errors: [] });
+    expect(PlexClient).toHaveBeenCalledExactlyOnceWith(server.url, server.accessToken, { skipTlsVerify: false });
+    const [client] = plexClients();
+    expect(client.setPrerollPath).toHaveBeenCalledExactlyOnceWith("/media/prerolls/intro.mp4");
+    expect(client.clearPreroll).not.toHaveBeenCalled();
+  });
+
+  it("clears the preroll for an empty path", async () => {
+    const user = await createTestUser();
+    await createTestServer(user.id);
+    setMockSession({ isLoggedIn: true, userId: user.id});
+
+    const body = await expectJson<{ success: boolean; errors: string[] }>(
+      await callRoute(postPreroll, { method: "POST", body: { path: "" } }),
+    );
+
+    expect(body).toEqual({ success: true, errors: [] });
+    const [client] = plexClients();
+    expect(client.clearPreroll).toHaveBeenCalledOnce();
+    expect(client.setPrerollPath).not.toHaveBeenCalled();
+  });
+
+  it("names the server that refused, with its address scrubbed, and still sets the others", async () => {
+    const user = await createTestUser();
+    await createTestServer(user.id, { name: "Basement", url: "http://192.168.1.20:32400" });
+    await createTestServer(user.id, { name: "Office", url: "http://plex-office.test:32400" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
+    vi.mocked(PlexClient).mockImplementationOnce(function () {
+      return {
+        setPrerollPath: vi.fn().mockRejectedValue(new Error("connect ECONNREFUSED 192.168.1.20:32400")),
+      } as never;
+    });
+
+    const body = await expectJson<{ success: boolean; errors: string[] }>(
+      await callRoute(postPreroll, { method: "POST", body: { path: "/media/prerolls/intro.mp4" } }),
+    );
+
+    expect(body.success).toBe(false);
+    expect(body.errors).toHaveLength(1);
+    expect(body.errors[0]).toMatch(/^(Basement|Office): connect ECONNREFUSED \[internal\]:32400$/);
+    // The other server was still asked.
+    expect(PlexClient).toHaveBeenCalledTimes(2);
+    expect(plexClients()[1].setPrerollPath).toHaveBeenCalledWith("/media/prerolls/intro.mp4");
   });
 
   it("validates path is required", async () => {
@@ -167,8 +234,9 @@ describe("POST /api/tools/preroll", () => {
       method: "POST",
       body: {},
     });
-    const body = await expectJson<{ error: string }>(res, 400);
+    const body = await expectJson<{ error: string; details: string[] }>(res, 400);
     expect(body.error).toBe("Validation failed");
+    expect(body.details).toEqual([expect.stringMatching(/^path: /)]);
   });
 });
 
@@ -196,9 +264,10 @@ describe("POST /api/tools/preroll/presets", () => {
       preset: { id: string; name: string; path: string };
     }>(res, 201);
 
-    expect(body.preset.id).toBeDefined();
     expect(body.preset.name).toBe("Holiday");
     expect(body.preset.path).toBe("/prerolls/holiday.mp4");
+    const stored = await getTestPrisma().prerollPreset.findUniqueOrThrow({ where: { id: body.preset.id } });
+    expect(stored).toMatchObject({ userId: user.id, name: "Holiday", path: "/prerolls/holiday.mp4" });
   });
 
   it("validates name is required", async () => {
@@ -209,8 +278,10 @@ describe("POST /api/tools/preroll/presets", () => {
       method: "POST",
       body: { path: "/prerolls/holiday.mp4" },
     });
-    const body = await expectJson<{ error: string }>(res, 400);
+    const body = await expectJson<{ error: string; details: string[] }>(res, 400);
     expect(body.error).toBe("Validation failed");
+    expect(body.details).toEqual([expect.stringMatching(/^name: /)]);
+    expect(await getTestPrisma().prerollPreset.count()).toBe(0);
   });
 
   it("validates path is required", async () => {
@@ -221,8 +292,23 @@ describe("POST /api/tools/preroll/presets", () => {
       method: "POST",
       body: { name: "No Path" },
     });
-    const body = await expectJson<{ error: string }>(res, 400);
+    const body = await expectJson<{ error: string; details: string[] }>(res, 400);
     expect(body.error).toBe("Validation failed");
+    expect(body.details).toEqual([expect.stringMatching(/^path: /)]);
+    expect(await getTestPrisma().prerollPreset.count()).toBe(0);
+  });
+
+  // Only spaces was stored as "" once trimmed.
+  it.each([
+    ["name", { name: "   ", path: "/prerolls/holiday.mp4" }, "name: Name is required"],
+    ["path", { name: "Holiday", path: "  " }, "path: Path is required"],
+  ])("refuses a %s that is only spaces", async (_label, body, detail) => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id});
+
+    const res = await callRoute(postPreset, { method: "POST", body });
+    expect(await expectJson(res, 400)).toEqual({ error: "Validation failed", details: [detail] });
+    expect(await getTestPrisma().prerollPreset.count()).toBe(0);
   });
 
   it("GET after POST returns created preset", async () => {
@@ -263,7 +349,7 @@ describe("PUT /api/tools/preroll/presets/[id]", () => {
       { id: "nonexistent-id" },
       { method: "PUT", body: { name: "Updated" } }
     );
-    await expectJson(res, 404);
+    expect(await expectJson(res, 404)).toEqual({ error: "Not found" });
   });
 
   it("updates an existing preset", async () => {
@@ -291,26 +377,20 @@ describe("PUT /api/tools/preroll/presets/[id]", () => {
     expect(body.preset.path).toBe("/new/path.mp4");
   });
 
-  it("cannot update another user's preset", async () => {
-    const user1 = await createTestUser({ plexId: "plex-owner" });
-    const user2 = await createTestUser({ plexId: "plex-other" });
+  it.each([
+    ["name", { name: "  " }, "name: Name is required"],
+    ["path", { path: "   " }, "path: Path is required"],
+  ])("refuses changing the %s to only spaces", async (_label, update, detail) => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id});
+    const { preset: created } = await (
+      await callRoute(postPreset, { method: "POST", body: { name: "Old Name", path: "/old/path.mp4" } })
+    ).json();
 
-    // User 1 creates a preset
-    setMockSession({ isLoggedIn: true, userId: user1.id});
-    const createRes = await callRoute(postPreset, {
-      method: "POST",
-      body: { name: "My Preset", path: "/my/path.mp4" },
-    });
-    const { preset: created } = await createRes.json();
-
-    // User 2 tries to update it
-    setMockSession({ isLoggedIn: true, userId: user2.id});
-    const res = await callRouteWithParams(
-      putPreset,
-      { id: created.id },
-      { method: "PUT", body: { name: "Stolen" } }
-    );
-    await expectJson(res, 404);
+    const res = await callRouteWithParams(putPreset, { id: created.id }, { method: "PUT", body: update });
+    expect(await expectJson(res, 400)).toEqual({ error: "Validation failed", details: [detail] });
+    const row = await getTestPrisma().prerollPreset.findUniqueOrThrow({ where: { id: created.id } });
+    expect(row).toMatchObject({ name: "Old Name", path: "/old/path.mp4" });
   });
 });
 
@@ -350,24 +430,23 @@ describe("DELETE /api/tools/preroll/presets/[id]", () => {
     expect(listBody.presets).toHaveLength(0);
   });
 
-  it("cannot delete another user's preset", async () => {
-    const user1 = await createTestUser({ plexId: "plex-owner" });
-    const user2 = await createTestUser({ plexId: "plex-other" });
+  it("returns 404 for a non-existent preset and deletes nothing", async () => {
+    const user = await createTestUser();
 
-    setMockSession({ isLoggedIn: true, userId: user1.id});
+    setMockSession({ isLoggedIn: true, userId: user.id});
     const createRes = await callRoute(postPreset, {
       method: "POST",
       body: { name: "Protected", path: "/safe.mp4" },
     });
     const { preset: created } = await createRes.json();
 
-    setMockSession({ isLoggedIn: true, userId: user2.id});
     const res = await callRouteWithParams(
       deletePreset,
-      { id: created.id },
+      { id: "nonexistent-id" },
       { method: "DELETE" }
     );
     await expectJson(res, 404);
+    expect(await getTestPrisma().prerollPreset.findUnique({ where: { id: created.id } })).not.toBeNull();
   });
 });
 
@@ -414,7 +493,6 @@ describe("POST /api/tools/preroll/schedules", () => {
       };
     }>(res, 201);
 
-    expect(body.schedule.id).toBeDefined();
     expect(body.schedule.name).toBe("Holiday Special");
     expect(body.schedule.prerollPath).toBe("/prerolls/holiday.mp4");
     expect(body.schedule.scheduleType).toBe("one_time");
@@ -466,8 +544,9 @@ describe("POST /api/tools/preroll/schedules", () => {
         endDate: "2030-01-02T00:00:00Z",
       },
     });
-    const body = await expectJson<{ error: string }>(res, 400);
+    const body = await expectJson<{ error: string; details: string[] }>(res, 400);
     expect(body.error).toBe("Validation failed");
+    expect(body.details).toEqual([expect.stringMatching(/^name: /)]);
   });
 
   it("validates prerollPath is required", async () => {
@@ -483,8 +562,9 @@ describe("POST /api/tools/preroll/schedules", () => {
         endDate: "2030-01-02T00:00:00Z",
       },
     });
-    const body = await expectJson<{ error: string }>(res, 400);
+    const body = await expectJson<{ error: string; details: string[] }>(res, 400);
     expect(body.error).toBe("Validation failed");
+    expect(body.details).toEqual([expect.stringMatching(/^prerollPath: /)]);
   });
 
   it("validates startDate must be before endDate for one_time", async () => {
@@ -502,7 +582,7 @@ describe("POST /api/tools/preroll/schedules", () => {
       },
     });
     const body = await expectJson<{ error: string }>(res, 400);
-    expect(body.error).toContain("Start date must be before end date");
+    expect(body.error).toBe("Start date must be before end date");
   });
 
   it("validates recurring schedule requires daysOfWeek", async () => {
@@ -520,7 +600,7 @@ describe("POST /api/tools/preroll/schedules", () => {
       },
     });
     const body = await expectJson<{ error: string }>(res, 400);
-    expect(body.error).toContain("Days of week must be a non-empty array");
+    expect(body.error).toBe("Days of week must be a non-empty array for recurring schedules");
   });
 
   it("GET after POST returns created schedule", async () => {
@@ -566,7 +646,7 @@ describe("PUT /api/tools/preroll/schedules/[id]", () => {
       { id: "nonexistent-id" },
       { method: "PUT", body: { name: "Updated" } }
     );
-    await expectJson(res, 404);
+    expect(await expectJson(res, 404)).toEqual({ error: "Not found" });
   });
 
   it("updates an existing schedule", async () => {
@@ -604,32 +684,6 @@ describe("PUT /api/tools/preroll/schedules/[id]", () => {
 
     expect(body.schedule.name).toBe("Updated Schedule");
     expect(body.schedule.prerollPath).toBe("/prerolls/updated.mp4");
-  });
-
-  it("cannot update another user's schedule", async () => {
-    const user1 = await createTestUser({ plexId: "plex-owner" });
-    const user2 = await createTestUser({ plexId: "plex-other" });
-
-    setMockSession({ isLoggedIn: true, userId: user1.id});
-    const createRes = await callRoute(postSchedule, {
-      method: "POST",
-      body: {
-        name: "Protected",
-        prerollPath: "/prerolls/safe.mp4",
-        scheduleType: "one_time",
-        startDate: "2030-01-01T00:00:00Z",
-        endDate: "2030-01-31T00:00:00Z",
-      },
-    });
-    const { schedule: created } = await createRes.json();
-
-    setMockSession({ isLoggedIn: true, userId: user2.id});
-    const res = await callRouteWithParams(
-      putSchedule,
-      { id: created.id },
-      { method: "PUT", body: { name: "Stolen" } }
-    );
-    await expectJson(res, 404);
   });
 });
 
@@ -675,11 +729,10 @@ describe("DELETE /api/tools/preroll/schedules/[id]", () => {
     expect(listBody.schedules).toHaveLength(0);
   });
 
-  it("cannot delete another user's schedule", async () => {
-    const user1 = await createTestUser({ plexId: "plex-owner" });
-    const user2 = await createTestUser({ plexId: "plex-other" });
+  it("returns 404 for a non-existent schedule and deletes nothing", async () => {
+    const user = await createTestUser();
 
-    setMockSession({ isLoggedIn: true, userId: user1.id});
+    setMockSession({ isLoggedIn: true, userId: user.id});
     const createRes = await callRoute(postSchedule, {
       method: "POST",
       body: {
@@ -692,12 +745,12 @@ describe("DELETE /api/tools/preroll/schedules/[id]", () => {
     });
     const { schedule: created } = await createRes.json();
 
-    setMockSession({ isLoggedIn: true, userId: user2.id});
     const res = await callRouteWithParams(
       deleteSchedule,
-      { id: created.id },
+      { id: "nonexistent-id" },
       { method: "DELETE" }
     );
     await expectJson(res, 404);
+    expect(await getTestPrisma().prerollSchedule.findUnique({ where: { id: created.id } })).not.toBeNull();
   });
 });

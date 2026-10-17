@@ -125,5 +125,14 @@ describe("a library-page Sync over several libraries", () => {
     await run(2);
     expect(await prisma.mediaItem.count({ where: { ratingKey: "m3" } })).toBe(0);
     expect(await activeRows()).toEqual([]);
+
+    // The first library finished; the running second one honoured the flag;
+    // the queued third was ended by Stop itself and never ran.
+    const status = async (index: number) =>
+      (await prisma.syncJob.findUniqueOrThrow({ where: { id: jobs[index].syncJobId } })).status;
+    expect(await status(0)).toBe("COMPLETED");
+    expect(await status(1)).toBe("CANCELLED");
+    expect(await status(2)).toBe("CANCELLED");
+    expect(await prisma.mediaItem.count({ where: { ratingKey: "m1" } })).toBe(1);
   });
 });

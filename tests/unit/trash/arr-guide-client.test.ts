@@ -46,17 +46,17 @@ describe("GuideArrClient", () => {
     mockAxiosInstance.get.mockResolvedValueOnce({ data: [{ id: 1, name: "x", specifications: [] }] });
     const cfs = await client.getCustomFormats();
     expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v3/customformat");
-    expect(cfs[0].id).toBe(1);
+    expect(cfs).toEqual([{ id: 1, name: "x", specifications: [] }]);
   });
 
   it("creates a custom format", async () => {
-    mockAxiosInstance.post.mockResolvedValueOnce({ data: { id: 5 } });
+    mockAxiosInstance.post.mockResolvedValueOnce({ data: { id: 5, name: "x", specifications: [] } });
     const r = await client.createCustomFormat({ name: "x", specifications: [] });
     expect(mockAxiosInstance.post).toHaveBeenCalledWith("/api/v3/customformat", {
       name: "x",
       specifications: [],
     });
-    expect(r.id).toBe(5);
+    expect(r).toEqual({ id: 5, name: "x", specifications: [] });
   });
 
   it("updates a custom format, injecting the id into the body", async () => {
@@ -71,7 +71,7 @@ describe("GuideArrClient", () => {
 
   it("fetches the quality profile schema", async () => {
     mockAxiosInstance.get.mockResolvedValueOnce({ data: { items: [] } });
-    await client.getQualityProfileSchema();
+    expect(await client.getQualityProfileSchema()).toEqual({ items: [] });
     expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v3/qualityprofile/schema");
   });
 

@@ -5,24 +5,30 @@ import { invalidateMediaCaches, invalidateRuleSetNameCaches } from "@/lib/cache/
 describe("invalidateMediaCaches", () => {
   it("invalidates every media-derived cache prefix", () => {
     const spy = vi.spyOn(appCache, "invalidatePrefix");
-    invalidateMediaCaches();
-    const prefixes = spy.mock.calls.map((c) => c[0]);
-    for (const p of [
-      "server-filter:",
-      "distinct-values",
-      "query-distinct-values",
-      "stats:",
-      "group-summary:",
-      "cross-tab:",
-      "custom-stats:",
-      "timeline:",
-      "watch-history-filters:",
-      "recently-added:",
-      "query-action-live:",
-    ]) {
-      expect(prefixes).toContain(p);
+    try {
+      invalidateMediaCaches();
+      const prefixes = spy.mock.calls.map((c) => c[0]);
+      // Exactly the documented set (CLAUDE.md, "In-Memory Cache"): a prefix
+      // dropped from the list is a stale-listing bug.
+      expect([...prefixes].sort()).toEqual(
+        [
+          "server-filter:",
+          "distinct-values",
+          "query-distinct-values",
+          "stats:",
+          "group-summary:",
+          "cross-tab:",
+          "custom-stats:",
+          "timeline:",
+          "watch-history-filters:",
+          "recently-added:",
+          "image-meta:",
+          "query-action-live:",
+        ].sort(),
+      );
+    } finally {
+      spy.mockRestore();
     }
-    spy.mockRestore();
   });
 
   it("drops matching entries but leaves unrelated keys intact", () => {

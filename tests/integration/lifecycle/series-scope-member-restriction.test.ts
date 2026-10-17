@@ -29,9 +29,6 @@ vi.mock("@/lib/logger", () => ({
 
 import { evaluateSeriesScope } from "@/lib/rules/lifecycle-engine";
 
-// availableEpisodeCount (aggregate, forces the series path) AND year=2020
-// (per-episode). The aggregate evaluates `year` against the representative
-// episode, so the series matches when the representative is 2020.
 // availableEpisodeCount > 2 — a pure series-aggregate rule, evaluated per
 // aggregated series. Used to prove two same-titled shows are aggregated apart.
 const episodeCountRule: LifecycleRuleGroup[] = [
@@ -45,6 +42,9 @@ const episodeCountRule: LifecycleRuleGroup[] = [
   },
 ];
 
+// availableEpisodeCount (aggregate, forces the series path) AND year=2020
+// (per-episode). The aggregate evaluates `year` against the representative
+// episode, so the series matches when the representative is 2020.
 const mixedRule: LifecycleRuleGroup[] = [
   {
     id: "g1",

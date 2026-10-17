@@ -83,11 +83,25 @@ async function computeGroupSummary(
   // For multi-server, restrict to canonical copies to avoid double-counting
   // episodes/size/playCount across duplicate items. SERIES matches by identity
   // (`seriesKey`) when the representative has one; MUSIC (and a keyless legacy
-  // SERIES row) matches by the artist/series title.
+  // SERIES row) matches by the artist/series title — ignoring case and
+  // surrounding spaces, as the artist list and getServerPresenceByGroup group
+  // it, so an artist merged from "Air" and "air " sums every track.
+  const spellings = seriesKey
+    ? []
+    : (
+        await prisma.$queryRaw<{ parentTitle: string }[]>`
+          SELECT DISTINCT mi."parentTitle"
+          FROM "MediaItem" mi
+          JOIN "Library" l ON mi."libraryId" = l.id
+          WHERE mi.type = ${type}::"LibraryType"
+            AND l."mediaServerId" = ANY(${serverIds}::text[])
+            AND LOWER(TRIM(mi."parentTitle")) = LOWER(TRIM(${parentTitle}))
+        `
+      ).map((r) => r.parentTitle);
   const items = await prisma.mediaItem.findMany({
     where: {
       type,
-      ...(seriesKey ? { seriesKey } : { parentTitle }),
+      ...(seriesKey ? { seriesKey } : { parentTitle: { in: spellings } }),
       library: { mediaServerId: { in: serverIds } },
       ...(isSingleServer ? {} : { dedupCanonical: true }),
     },
@@ -118,6 +132,17 @@ async function computeGroupSummary(
         },
       },
     },
+    // The fold below keeps the FIRST row carrying each descriptive field, so
+    // the rows need a fixed order — unordered, Postgres returned them in heap
+    // order and an UPDATE could change which episode's year or rating the
+    // summary showed. The grouped listings' order: episode order for a show,
+    // album then track order for an artist (discs in seasonNumber), then id.
+    orderBy: [
+      ...(type === "MUSIC" ? [{ albumTitle: { sort: "asc" as const, nulls: "last" as const } }] : []),
+      { seasonNumber: { sort: "asc", nulls: "last" } },
+      { episodeNumber: { sort: "asc", nulls: "last" } },
+      { id: "asc" },
+    ],
   });
 
   // Server presence — keyed the same way getServerPresenceByGroup groups:

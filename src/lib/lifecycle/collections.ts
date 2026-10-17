@@ -41,6 +41,17 @@ export interface CollectionContribution {
 
 const normTitle = (s: string) => s.trim().toLowerCase();
 
+/**
+ * A Plex library's shows by normalized title — how a series-scope match finds
+ * its show. Shared by the sync that adds a show to a collection and the
+ * exclusion that removes it, so a show found for the one is found for the other.
+ */
+function seriesKeysByTitle(plexSeries: Array<{ title: string; ratingKey: string }>): Map<string, string> {
+  const byTitle = new Map<string, string>();
+  for (const s of plexSeries) byTitle.set(normTitle(s.title), s.ratingKey);
+  return byTitle;
+}
+
 interface PendingActionForOrder {
   scheduledFor: Date;
   ruleSetId: string | null;
@@ -225,8 +236,7 @@ export async function syncCollection(
           plexSeries = await client.getLibraryItems(library.key);
           plexItemsCache?.set(library.key, plexSeries);
         }
-        seriesKeyByTitle = new Map();
-        for (const s of plexSeries) seriesKeyByTitle.set(normTitle(s.title), s.ratingKey);
+        seriesKeyByTitle = seriesKeysByTitle(plexSeries);
       }
 
       // Union of desired rating keys for THIS library across all contributions.
@@ -507,12 +517,14 @@ export async function removeItemFromCollections(
 
       let ratingKeyToRemove = itemRatingKey;
 
-      // For series-scope rules, resolve the series-level ratingKey by title
+      // For series-scope rules, resolve the series-level ratingKey by title —
+      // matched as the sync matched it when adding the show; an exact compare
+      // missed a show stored "the office" that Plex calls "The Office".
       if (seriesTitle) {
         const plexSeries = await client.getLibraryItems(library.key);
-        const match = plexSeries.find((s) => s.title === seriesTitle);
-        if (!match) continue;
-        ratingKeyToRemove = match.ratingKey;
+        const showKey = seriesKeysByTitle(plexSeries).get(normTitle(seriesTitle));
+        if (!showKey) continue;
+        ratingKeyToRemove = showKey;
       }
 
       // Check if item is actually in the collection before removing

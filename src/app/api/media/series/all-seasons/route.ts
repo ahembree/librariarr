@@ -164,6 +164,9 @@ export async function GET(request: NextRequest) {
         AND l."mediaServerId" = ANY($1::text[])
         ${filters.join("\n        ")}`;
 
+  // `ORDER BY "seriesKey", "seasonNumber"`: the list is sorted below with a
+  // stable sort, so this orders its ties — two same-titled shows' Season 1,
+  // or seasons of equal size — the same way on every request.
   const [rows, representatives] = await Promise.all([
     prisma.$queryRawUnsafe<SeasonRow[]>(
       `SELECT
@@ -213,7 +216,8 @@ export async function GET(request: NextRequest) {
         ${scope}
         OFFSET 0
       ) items
-      GROUP BY "seriesKey", "seasonNumber"`,
+      GROUP BY "seriesKey", "seasonNumber"
+      ORDER BY "seriesKey", "seasonNumber"`,
       ...params,
     ),
     // One row per season: prefer a row that carries season art (the tile

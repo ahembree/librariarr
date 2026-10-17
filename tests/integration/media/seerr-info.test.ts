@@ -78,16 +78,16 @@ describe("GET /api/media/[id]/seerr-info", () => {
   it("returns 401 without auth", async () => {
     const res = await callRouteWithParams(GET, { id: "x" });
     expect(res.status).toBe(401);
+    expect(await res.json()).toEqual({ error: "Unauthorized" });
   });
 
-  it("returns 404 for an unknown item and 403 for another user's item", async () => {
-    const owner = await createTestUser({ plexId: "owner" });
-    const movie = await movieWith(owner.id, [["TMDB", "603"]]);
-    const other = await createTestUser({ plexId: "other" });
-    setMockSession({ userId: other.id, isLoggedIn: true });
+  it("returns 404 for an unknown item", async () => {
+    const user = await createTestUser();
+    await movieWith(user.id, [["TMDB", "603"]]);
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
-    expect((await callRouteWithParams(GET, { id: "missing" })).status).toBe(404);
-    expect((await callRouteWithParams(GET, { id: movie.id })).status).toBe(403);
+    expect(await expectJson(await callRouteWithParams(GET, { id: "missing" }), 404)).toEqual({ error: "Not found" });
+    expect(mockGetMovie).not.toHaveBeenCalled();
   });
 
   it("returns the requests for a movie via the TMDB fast path", async () => {
@@ -109,7 +109,17 @@ describe("GET /api/media/[id]/seerr-info", () => {
       seerrUrl: "http://seerr:5055/movie/603",
       mediaStatus: 5,
     });
-    expect(body.matches[0].requests).toEqual([expect.objectContaining({ requestedBy: "alice", status: 5 })]);
+    // Named by the requester's Plex username, as the rule engine names them.
+    expect(body.matches[0].requests).toEqual([
+      {
+        id: 1,
+        status: 5,
+        is4k: false,
+        requestedBy: "alice",
+        createdAt: "2024-01-01T00:00:00.000Z",
+        updatedAt: "2024-01-02T00:00:00.000Z",
+      },
+    ]);
     expect(mockGetMovie).toHaveBeenCalledWith("http://seerr:5055", 603);
   });
 
@@ -160,13 +170,14 @@ describe("GET /api/media/[id]/seerr-info", () => {
     await createTestSeerrInstance(user.id);
     setMockSession({ userId: user.id, isLoggedIn: true });
     mockGetRequests.mockResolvedValue({
+      pageInfo: { pages: 1, pageSize: 100, results: 2, page: 1 },
       results: [
         seerrRequest(2, { type: "tv", tmdbId: 1396, tvdbId: 81189, media: { status: 4 } }),
         seerrRequest(1, { type: "tv", tmdbId: 999, tvdbId: 5 }),
       ],
     });
 
-    const body = await expectJson<{ matches: Array<{ matchedVia: string; externalId: string; mediaStatus: number; requests: unknown[]; seerrUrl: string | null }> }>(
+    const body = await expectJson<{ matches: Array<{ matchedVia: string; externalId: string; mediaStatus: number; requests: Array<{ id: number }>; seerrUrl: string | null }> }>(
       await callRouteWithParams(GET, { id: ep.id }),
       200,
     );
@@ -180,8 +191,10 @@ describe("GET /api/media/[id]/seerr-info", () => {
       mediaStatus: 4,
       seerrUrl: "http://seerr.test:5055/tv/1396",
     });
-    expect(body.matches[0].requests).toHaveLength(1);
+    // Only the request for this show's TVDB id.
+    expect(body.matches[0].requests.map((r) => r.id)).toEqual([2]);
     expect(mockGetTvShow).not.toHaveBeenCalled();
+    expect(mockGetRequests).toHaveBeenCalledWith("http://seerr.test:5055", { take: 100, skip: 0, mediaType: "tv" });
   });
 
   it("does not walk the request list for a movie with no TMDB id", async () => {

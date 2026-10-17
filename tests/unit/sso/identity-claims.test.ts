@@ -76,8 +76,10 @@ describe("sanitizeEmail", () => {
   });
 
   it("rejects values longer than the cap", () => {
-    const longLocal = "a".repeat(248);
-    expect(sanitizeEmail(`${longLocal}@x.co`)).toBe(`${longLocal}@x.co`);
-    expect(sanitizeEmail(`${"a".repeat(255)}@x.co`)).toBeUndefined();
+    // 256 characters is the most kept; one more is refused, not truncated.
+    const atCap = `${"a".repeat(251)}@x.co`;
+    expect(atCap).toHaveLength(256);
+    expect(sanitizeEmail(atCap)).toBe(atCap);
+    expect(sanitizeEmail(`${"a".repeat(252)}@x.co`)).toBeUndefined();
   });
 });

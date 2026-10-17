@@ -77,25 +77,6 @@ describe("POST /api/servers/[id]/sync", () => {
     expect(body.error).toBe("Server not found");
   });
 
-  it("returns 404 when server belongs to another user", async () => {
-    const user1 = await createTestUser({ plexId: "owner" });
-    const user2 = await createTestUser({ plexId: "other" });
-    const server = await createTestServer(user1.id);
-
-    setMockSession({ userId: user2.id, isLoggedIn: true });
-
-    const response = await callRouteWithParams(
-      POST,
-      { id: server.id },
-      {
-        url: `/api/servers/${server.id}/sync`,
-        method: "POST",
-      }
-    );
-    const body = await expectJson<{ error: string }>(response, 404);
-    expect(body.error).toBe("Server not found");
-  });
-
   it("enqueues a sync job and returns success message", async () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id);
@@ -113,21 +94,23 @@ describe("POST /api/servers/[id]/sync", () => {
     const body = await expectJson<{ message: string }>(response, 200);
 
     expect(body.message).toBe("Sync started");
-    expect(mockEnqueueJob).toHaveBeenCalledWith(
+    const row = await getTestPrisma().syncJob.findFirstOrThrow({ where: { mediaServerId: server.id } });
+    expect(mockEnqueueJob).toHaveBeenCalledExactlyOnceWith(
       TASK_SYNC_SERVER,
       {
         serverId: server.id,
         libraryKey: undefined,
         trigger: "manual sync request for this server",
-        syncJobId: expect.any(String),
+        syncJobId: row.id,
       },
       // Ahead of background work already queued (Tracearr backfill slices,
       // watch-history refreshes): someone is waiting on this one.
-      expect.objectContaining({
+      {
         jobKey: `sync:${server.id}`,
         queueName: MAIN_QUEUE,
+        maxAttempts: 3,
         priority: REQUESTED_SYNC_PRIORITY,
-      }),
+      },
     );
   });
 
@@ -159,7 +142,6 @@ describe("POST /api/servers/[id]/sync", () => {
   });
 
   it("returns 409 when a sync is already running for the server", async () => {
-    const { getTestPrisma } = await import("../../setup/test-db");
     const testPrisma = getTestPrisma();
 
     const user = await createTestUser();
@@ -183,10 +165,10 @@ describe("POST /api/servers/[id]/sync", () => {
     const body = await expectJson<{ error: string }>(response, 409);
     expect(body.error).toBe("A sync is already running for this server");
     expect(mockEnqueueJob).not.toHaveBeenCalled();
+    expect(await testPrisma.syncJob.count()).toBe(1);
   });
 
   it("returns 409 when a sync is pending for the server", async () => {
-    const { getTestPrisma } = await import("../../setup/test-db");
     const testPrisma = getTestPrisma();
 
     const user = await createTestUser();
@@ -210,6 +192,7 @@ describe("POST /api/servers/[id]/sync", () => {
     const body = await expectJson<{ error: string }>(response, 409);
     expect(body.error).toBe("A sync is already running for this server");
     expect(mockEnqueueJob).not.toHaveBeenCalled();
+    expect(await testPrisma.syncJob.count()).toBe(1);
   });
 
   it("scopes the enqueued job to a specific library when provided", async () => {
@@ -238,8 +221,31 @@ describe("POST /api/servers/[id]/sync", () => {
         trigger: "manual sync request for this server",
         syncJobId: expect.any(String),
       },
-      expect.objectContaining({ jobKey: `sync:${server.id}:lib-key`, queueName: MAIN_QUEUE }),
+      {
+        jobKey: `sync:${server.id}:lib-key`,
+        queueName: MAIN_QUEUE,
+        maxAttempts: 3,
+        priority: REQUESTED_SYNC_PRIORITY,
+      },
     );
+  });
+
+  it("refuses a library key that is not on this server", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const other = await createTestServer(user.id, { name: "Other" });
+    await createTestLibrary(other.id, { key: "lib-elsewhere", title: "Movies" });
+    setMockSession({ userId: user.id, isLoggedIn: true });
+
+    const response = await callRouteWithParams(
+      POST,
+      { id: server.id },
+      { url: `/api/servers/${server.id}/sync`, method: "POST", body: { libraryKey: "lib-elsewhere" } },
+    );
+    const body = await expectJson<{ error: string }>(response, 400);
+    expect(body.error).toBe("Library not found on this server");
+    expect(mockEnqueueJob).not.toHaveBeenCalled();
+    expect(await getTestPrisma().syncJob.count()).toBe(0);
   });
 
   it("refuses a malformed body instead of syncing every library", async () => {
@@ -264,7 +270,8 @@ describe("POST /api/servers/[id]/sync", () => {
         method: "POST",
         body,
       });
-      await expectJson<{ error: string }>(response, 400);
+      const refused = await expectJson<{ error: string }>(response, 400);
+      expect(refused.error).toBe("Validation failed");
     }
     const invalidJson = await POST(
       new NextRequest(`http://localhost:3000/api/servers/${server.id}/sync`, {
@@ -274,11 +281,11 @@ describe("POST /api/servers/[id]/sync", () => {
       }),
       { params: Promise.resolve({ id: server.id }) },
     );
-    expect(invalidJson.status).toBe(400);
+    expect(await expectJson<{ error: string }>(invalidJson, 400)).toEqual({ error: "Invalid JSON in request body" });
     expect(mockEnqueueJob).not.toHaveBeenCalled();
     expect(await getTestPrisma().syncJob.count()).toBe(0);
 
-    // No body, and an empty object, still sync every enabled library.
+    // An empty object, like no body at all, still syncs every enabled library.
     await expectJson(await callRouteWithParams(POST, { id: server.id }, { url: `/api/servers/${server.id}/sync`, method: "POST", body: {} }), 200);
     expect(mockEnqueueJob).toHaveBeenCalledWith(
       TASK_SYNC_SERVER,

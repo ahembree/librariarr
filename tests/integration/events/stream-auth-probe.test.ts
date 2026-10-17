@@ -60,16 +60,16 @@ describe("GET /api/events/stream — auth probe (HEAD)", () => {
     const user = await createTestUser();
     setMockSession({ userId: user.id, isLoggedIn: true });
 
-    const started = Date.now();
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const res = await Promise.race([
       HEAD(),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("HEAD did not resolve — it opened a stream")), 2000),
-      ),
-    ]);
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("HEAD did not resolve — it opened a stream")), 2000);
+      }),
+    ]).finally(() => clearTimeout(timer));
 
     expect(res.status).toBe(200);
-    expect(res.headers.get("Content-Type")).not.toBe("text/event-stream");
-    expect(Date.now() - started).toBeLessThan(2000);
+    expect(res.headers.get("Content-Type")).toBeNull();
+    expect(res.body).toBeNull();
   });
 });

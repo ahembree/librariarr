@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
-import { clearMockSession } from "../../setup/mock-session";
+import { clearMockSession, getMockSession } from "../../setup/mock-session";
 import { callRoute, expectJson, createTestUser } from "../../setup/test-helpers";
 
 // file deepcode ignore HardcodedNonCryptoSecret/test: Test file with hardcoded values to run validation tests
@@ -25,13 +25,22 @@ vi.mock("@/lib/plex/auth", () => ({
   getPlexUser: mockGetPlexUser,
 }));
 
-// Mock rate limiter
+// Mock rate limiter. A bare Plex token signs in, so the route is charged like
+// the local login: reserved before the token is checked and given back on a
+// sign-in that succeeds (login-lockout.test.ts runs the real limiter).
+const { mockPeek, mockReserve, mockSucceeded } = vi.hoisted(() => {
+  const mockSucceeded = vi.fn();
+  return {
+    mockPeek: vi.fn((): Response | null => null),
+    mockReserve: vi.fn(
+      (): { refused: Response } | { refused: null; succeeded: () => void } => ({ refused: null, succeeded: mockSucceeded }),
+    ),
+    mockSucceeded,
+  };
+});
 vi.mock("@/lib/rate-limit/rate-limiter", () => ({
-  checkAuthRateLimit: () => null,
-  peekAuthRateLimit: () => null,
-  reserveAuthAttempt: () => ({ refused: null, succeeded: () => {} }),
-  authRateLimiter: { check: () => ({ limited: false }) },
-  getClientIp: () => "127.0.0.1",
+  peekAuthRateLimit: mockPeek,
+  reserveAuthAttempt: mockReserve,
 }));
 
 // Import route handler AFTER mocks
@@ -42,6 +51,9 @@ describe("POST /api/auth/plex/token", () => {
     await cleanDatabase();
     clearMockSession();
     mockGetPlexUser.mockReset();
+    vi.clearAllMocks();
+    mockPeek.mockReturnValue(null);
+    mockReserve.mockReturnValue({ refused: null, succeeded: mockSucceeded });
   });
 
   afterAll(async () => {
@@ -71,6 +83,7 @@ describe("POST /api/auth/plex/token", () => {
 
     expect(body.authenticated).toBe(true);
     expect(body.user.username).toBe("newplexuser");
+    expect(mockGetPlexUser).toHaveBeenCalledWith("plex-auth-token");
 
     // Verify user was created in the database
     const prisma = getTestPrisma();
@@ -78,9 +91,21 @@ describe("POST /api/auth/plex/token", () => {
       where: { plexId: "99001" },
     });
     expect(dbUser).not.toBeNull();
+    expect(dbUser!.id).toBe(body.user.id);
     expect(dbUser!.username).toBe("newplexuser");
     expect(dbUser!.email).toBe("newuser@example.com");
     expect(dbUser!.plexToken).toBe("plex-auth-token");
+    // The settings row is created with the admin (local login off: they
+    // signed up with Plex).
+    const settings = await prisma.appSettings.findUnique({ where: { userId: dbUser!.id } });
+    expect(settings?.localAuthEnabled).toBe(false);
+
+    // Signed in, and the budget given back. The token stays in the User row,
+    // never in the cookie.
+    const session = getMockSession();
+    expect(session).toMatchObject({ userId: dbUser!.id, isLoggedIn: true, sessionVersion: 0 });
+    expect("plexToken" in session).toBe(false);
+    expect(mockSucceeded).toHaveBeenCalledTimes(1);
   });
 
   it("should update an existing user on re-authentication", async () => {
@@ -127,6 +152,15 @@ describe("POST /api/auth/plex/token", () => {
     // No duplicate users
     const userCount = await prisma.user.count();
     expect(userCount).toBe(1);
+
+    const session = getMockSession();
+    expect(session).toMatchObject({
+      userId: existingUser.id,
+      isLoggedIn: true,
+      sessionVersion: existingUser.sessionVersion,
+    });
+    expect("plexToken" in session).toBe(false);
+    expect(mockSucceeded).toHaveBeenCalledTimes(1);
   });
 
   it("should return 403 when Plex account is not linked to admin", async () => {
@@ -149,7 +183,13 @@ describe("POST /api/auth/plex/token", () => {
     });
 
     const body = await expectJson<{ error: string }>(response, 403);
-    expect(body.error).toContain("not linked to the admin user");
+    expect(body.error).toBe(
+      "This Plex account is not linked to the admin user. Use Settings > Authentication to link your Plex account.",
+    );
+    // Single admin: no second user, no sign-in, and the attempt stays charged.
+    expect(await getTestPrisma().user.count()).toBe(1);
+    expect(getMockSession().isLoggedIn).toBe(false);
+    expect(mockSucceeded).not.toHaveBeenCalled();
   });
 
   it("should return 500 when getPlexUser throws", async () => {
@@ -172,8 +212,47 @@ describe("POST /api/auth/plex/token", () => {
       body: {},
     });
 
-    const body = await expectJson<{ error: string }>(response, 400);
+    const body = await expectJson<{ error: string; details: string[] }>(response, 400);
     expect(body.error).toBe("Validation failed");
+    expect(body.details).toEqual(["authToken: Invalid input: expected string, received undefined"]);
+    // A malformed body is not an attempt.
+    expect(mockReserve).not.toHaveBeenCalled();
+    expect(mockGetPlexUser).not.toHaveBeenCalled();
+  });
+
+  it("returns the limiter's 429 without asking plex.tv who the token belongs to", async () => {
+    mockPeek.mockReturnValue(
+      Response.json({ error: "Too many attempts. Try again later." }, { status: 429, headers: { "Retry-After": "60" } }),
+    );
+
+    const response = await callRoute(POST, {
+      url: "/api/auth/plex/token",
+      method: "POST",
+      body: { authToken: "plex-auth-token" },
+    });
+
+    const body = await expectJson<{ error: string }>(response, 429);
+    expect(body.error).toBe("Too many attempts. Try again later.");
+    expect(response.headers.get("Retry-After")).toBe("60");
+    expect(mockReserve).not.toHaveBeenCalled();
+    expect(mockGetPlexUser).not.toHaveBeenCalled();
+  });
+
+  it("returns 429 when the attempt cannot be reserved, without checking the token", async () => {
+    await createTestUser({ plexId: "77001" });
+    mockReserve.mockReturnValue({
+      refused: Response.json({ error: "Too many attempts. Try again later." }, { status: 429 }),
+    });
+
+    const response = await callRoute(POST, {
+      url: "/api/auth/plex/token",
+      method: "POST",
+      body: { authToken: "plex-auth-token" },
+    });
+
+    await expectJson(response, 429);
+    expect(mockGetPlexUser).not.toHaveBeenCalled();
+    expect(getMockSession().isLoggedIn).toBe(false);
   });
 
   // ── plexLoginEnabled gate ─────────────────────────────────────────
@@ -204,7 +283,12 @@ describe("POST /api/auth/plex/token", () => {
       body: { authToken: "tok" },
     });
     const body = await expectJson<{ error: string }>(response, 403);
-    expect(body.error).toMatch(/Plex login is disabled/);
+    expect(body.error).toBe("Plex login is disabled by the administrator.");
+    // Refused before the account is touched or anyone is signed in.
+    const unchanged = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
+    expect(unchanged.plexToken).toBe(user.plexToken);
+    expect(getMockSession().isLoggedIn).toBe(false);
+    expect(mockSucceeded).not.toHaveBeenCalled();
   });
 
   it("allows login when plexLoginEnabled=false but SSO_DISABLE_OVERRIDE is set", async () => {
@@ -233,48 +317,12 @@ describe("POST /api/auth/plex/token", () => {
         method: "POST",
         body: { authToken: "tok2" },
       });
-      await expectJson<{ authenticated: boolean }>(response, 200);
+      const body = await expectJson<{ authenticated: boolean; user: { id: string } }>(response, 200);
+      expect(body.user.id).toBe(user.id);
+      expect(getMockSession()).toMatchObject({ userId: user.id, isLoggedIn: true });
     } finally {
       if (original === undefined) delete process.env.SSO_DISABLE_OVERRIDE;
       else process.env.SSO_DISABLE_OVERRIDE = original;
     }
-  });
-
-  it("allows first-user setup even when no AppSettings exists yet", async () => {
-    // initialCount === 0 short-circuits the plexLoginEnabled check.
-    mockGetPlexUser.mockResolvedValue({
-      id: 55003,
-      uuid: "uuid-55003",
-      email: "u3@example.com",
-      username: "u3",
-      authToken: "tok3",
-      thumb: "",
-    });
-
-    const response = await callRoute(POST, {
-      url: "/api/auth/plex/token",
-      method: "POST",
-      body: { authToken: "tok3" },
-    });
-    await expectJson<{ authenticated: boolean }>(response, 200);
-  });
-
-  it("should call getPlexUser with the provided auth token", async () => {
-    mockGetPlexUser.mockResolvedValue({
-      id: 10001,
-      uuid: "uuid-10001",
-      email: "test@example.com",
-      username: "testuser",
-      authToken: "specific-token-xyz",
-      thumb: "https://plex.tv/thumb.png",
-    });
-
-    await callRoute(POST, {
-      url: "/api/auth/plex/token",
-      method: "POST",
-      body: { authToken: "specific-token-xyz" },
-    });
-
-    expect(mockGetPlexUser).toHaveBeenCalledWith("specific-token-xyz");
   });
 });

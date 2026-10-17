@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useSyncExternalStore } from "react";
 import { Film, Tv, Music } from "lucide-react";
 import { LifecycleRulePage } from "@/components/lifecycle-rule-page";
 import { MOVIE_ACTION_TYPES, SERIES_ACTION_TYPES, MUSIC_ACTION_TYPES } from "@/lib/lifecycle/action-types";
 import { TabNav, type TabNavItem } from "@/components/tab-nav";
+import { readUrlHash, replaceUrlHash, subscribeToUrlHash } from "@/lib/url-hash";
 
 type RuleTab = "movies" | "series" | "music";
 
@@ -14,24 +15,29 @@ const TABS: TabNavItem<RuleTab>[] = [
   { value: "music", label: "Music", icon: Music },
 ];
 
-function getInitialTab(): RuleTab {
-  if (typeof window === "undefined") return "movies";
-  const hash = window.location.hash.replace("#", "") as RuleTab;
-  if (["movies", "series", "music"].includes(hash)) return hash;
-  return "movies";
+/** The tab a URL hash names, or null for no hash or one that names none. */
+function tabFromHash(hash: string): RuleTab | null {
+  const tab = hash.slice(1);
+  return TABS.some((t) => t.value === tab) ? (tab as RuleTab) : null;
 }
 
+/** Server snapshot for the URL hash: the server never sees it. */
+const noUrlHash = () => "";
+
 export default function LifecycleRulesPage() {
-  const [activeTab, setActiveTab] = useState<RuleTab>(getInitialTab);
+  // The open tab IS the URL hash — see `src/lib/url-hash.ts` for why it is
+  // read through a store rather than once on mount (a query converted to a
+  // rule set lands here as /lifecycle/rules?ruleSet=…#series).
+  const urlHash = useSyncExternalStore(subscribeToUrlHash, readUrlHash, noUrlHash);
+  const activeTab: RuleTab = tabFromHash(urlHash) ?? "movies";
   const [availableTypes, setAvailableTypes] = useState<string[]>([]);
 
-  // Ensure hash is always in the URL for consistency
+  // A URL naming no tab is pointed at the Movies tab it shows — read live,
+  // since on a client-side navigation the store has not yet re-read the hash
+  // the router just wrote.
   useEffect(() => {
-    const hash = window.location.hash.replace("#", "");
-    if (!hash) {
-      window.history.replaceState(null, "", `#${activeTab}`);
-    }
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!tabFromHash(readUrlHash())) replaceUrlHash("#movies");
+  }, [urlHash]);
 
   useEffect(() => {
     fetch("/api/media/library-types")
@@ -43,10 +49,7 @@ export default function LifecycleRulesPage() {
       .catch(() => {});
   }, []);
 
-  const handleTabChange = useCallback((tab: RuleTab) => {
-    setActiveTab(tab);
-    window.history.replaceState(null, "", `#${tab}`);
-  }, []);
+  const handleTabChange = useCallback((tab: RuleTab) => replaceUrlHash(`#${tab}`), []);
 
   // Filter tabs to only show available media types (once loaded)
   const visibleTabs = availableTypes.length > 0

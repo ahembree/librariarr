@@ -12,7 +12,9 @@ export async function GET() {
 
   const queries = await prisma.savedQuery.findMany({
     where: { userId: session.userId! },
-    orderBy: { updatedAt: "desc" },
+    // `id` breaks ties: two queries saved in the same millisecond otherwise
+    // came back in either order and swapped places in the list between loads.
+    orderBy: [{ updatedAt: "desc" }, { id: "asc" }],
     select: {
       id: true,
       name: true,

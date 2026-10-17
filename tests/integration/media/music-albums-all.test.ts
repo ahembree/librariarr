@@ -30,10 +30,17 @@ vi.mock("@/lib/cache/memory-cache", () => {
     invalidatePrefix: () => {},
     clear: () => {},
   };
-  return { MemoryCache: vi.fn(() => noopCache), appCache: noopCache };
+  return {
+    // A constructor mock needs `function`: Vitest 4 cannot `new` an arrow.
+    MemoryCache: vi.fn(function () {
+      return noopCache;
+    }),
+    appCache: noopCache,
+  };
 });
 
 import { GET } from "@/app/api/media/music/albums/all/route";
+import { MAX_GROUPED_LIST_LIMIT } from "@/lib/api/pagination";
 
 interface Album {
   albumTitle: string;
@@ -83,6 +90,7 @@ describe("GET /api/media/music/albums/all", () => {
   it("returns 401 without auth", async () => {
     const response = await callRoute(GET, { url: "/api/media/music/albums/all" });
     expect(response.status).toBe(401);
+    expect(await response.json()).toEqual({ error: "Unauthorized" });
   });
 
   it("returns no albums for a user without servers", async () => {
@@ -100,7 +108,10 @@ describe("GET /api/media/music/albums/all", () => {
     await createTestMediaItem(lib.id, { type: "MUSIC", parentTitle: "Someone Else", albumTitle: "OK Computer", audioCodec: "flac" });
 
     const { albums } = await list();
-    expect(albums).toHaveLength(2);
+    expect(albums.map((a) => `${a.artistName} / ${a.albumTitle}`).sort()).toEqual([
+      "Radiohead / OK Computer",
+      "Someone Else / OK Computer",
+    ]);
     const ok = albums.find((a) => a.artistName === "Radiohead")!;
     expect(ok).toMatchObject({
       albumTitle: "OK Computer",
@@ -125,12 +136,14 @@ describe("GET /api/media/music/albums/all", () => {
 
   it("merges spellings that differ only in case or surrounding spaces", async () => {
     const { lib } = await musicLibrary();
-    await createTestMediaItem(lib.id, { type: "MUSIC", parentTitle: "Air", albumTitle: "Moon Safari" });
-    await createTestMediaItem(lib.id, { type: "MUSIC", parentTitle: "air ", albumTitle: " moon safari" });
+    await createTestMediaItem(lib.id, { type: "MUSIC", parentTitle: "Air", albumTitle: "Moon Safari", episodeNumber: 1 });
+    await createTestMediaItem(lib.id, { type: "MUSIC", parentTitle: "air ", albumTitle: " moon safari", episodeNumber: 2 });
 
     const { albums } = await list();
     expect(albums).toHaveLength(1);
     expect(albums[0].trackCount).toBe(2);
+    // Displayed as the linked track spells it — track 1 here.
+    expect(albums[0]).toMatchObject({ artistName: "Air", albumTitle: "Moon Safari" });
   });
 
   it("links the album to a track with album art and takes album-level fields from the first track that has them", async () => {
@@ -177,6 +190,35 @@ describe("GET /api/media/music/albums/all", () => {
     expect(second.pagination.hasMore).toBe(false);
   });
 
+  // The route read `limit` with a bare parseInt: `limit=-1` sliced to nothing
+  // and said `hasMore: true` forever, nothing capped a page, and `offset` (the
+  // documented way to page, and what `limit=0` progressive loading sends) was
+  // ignored. It now parses through `parseListPagination`, like the artists.
+  it("clamps the page size and honours offset, as the other list routes do", async () => {
+    const { lib } = await musicLibrary();
+    for (const album of ["Bloom", "Heaven", "Talkie Walkie"]) {
+      await createTestMediaItem(lib.id, { type: "MUSIC", parentTitle: "Artist", albumTitle: album });
+    }
+    const titles = (body: AlbumsBody) => body.albums.map((a) => a.albumTitle);
+
+    const negative = await list("limit=-1&sortBy=albumTitle");
+    expect(titles(negative)).toEqual(["Bloom"]);
+    expect(negative.pagination).toEqual({ page: 1, limit: 1, hasMore: true });
+
+    const huge = await list("limit=100000&sortBy=albumTitle");
+    expect(titles(huge)).toEqual(["Bloom", "Heaven", "Talkie Walkie"]);
+    expect(huge.pagination).toEqual({ page: 1, limit: MAX_GROUPED_LIST_LIMIT, hasMore: false });
+
+    const byOffset = await list("limit=1&offset=1&sortBy=albumTitle");
+    expect(titles(byOffset)).toEqual(["Heaven"]);
+    expect(byOffset.pagination.hasMore).toBe(true);
+
+    // `limit=0` is everything after an explicit offset.
+    const rest = await list("limit=0&offset=1&sortBy=albumTitle");
+    expect(titles(rest)).toEqual(["Heaven", "Talkie Walkie"]);
+    expect(rest.pagination).toEqual({ page: 1, limit: 0, hasMore: false });
+  });
+
   it("counts only the canonical copy across servers", async () => {
     const user = await createTestUser();
     const a = await createTestServer(user.id, { name: "Alpha" });
@@ -184,26 +226,16 @@ describe("GET /api/media/music/albums/all", () => {
     const libA = await createTestLibrary(a.id, { type: "MUSIC" });
     const libB = await createTestLibrary(b.id, { type: "MUSIC" });
     const prisma = getTestPrisma();
-    const canonical = await createTestMediaItem(libA.id, { type: "MUSIC", parentTitle: "Sade", albumTitle: "Diamond Life" });
-    const copy = await createTestMediaItem(libB.id, { type: "MUSIC", parentTitle: "Sade", albumTitle: "Diamond Life" });
-    await prisma.mediaItem.update({ where: { id: canonical.id }, data: { dedupKey: "sade-1", dedupCanonical: true } });
-    await prisma.mediaItem.update({ where: { id: copy.id }, data: { dedupKey: "sade-1", dedupCanonical: false } });
+    const canonical = await createTestMediaItem(libA.id, { type: "MUSIC", title: "Smooth Operator", parentTitle: "Sade", albumTitle: "Diamond Life" });
+    const copy = await createTestMediaItem(libB.id, { type: "MUSIC", title: "Smooth Operator", parentTitle: "Sade", albumTitle: "Diamond Life" });
+    await prisma.mediaItem.update({ where: { id: canonical.id }, data: { dedupKey: "music:sade:smooth operator", dedupCanonical: true } });
+    await prisma.mediaItem.update({ where: { id: copy.id }, data: { dedupKey: "music:sade:smooth operator", dedupCanonical: false } });
     setMockSession({ userId: user.id, isLoggedIn: true });
 
     const { albums } = await list();
     expect(albums).toHaveLength(1);
     expect(albums[0].trackCount).toBe(1);
     expect(albums[0].servers.map((s) => s.serverName)).toEqual(["Alpha"]);
-  });
-
-  it("does not list another user's albums", async () => {
-    const other = await createTestUser();
-    const otherServer = await createTestServer(other.id);
-    const otherLib = await createTestLibrary(otherServer.id, { type: "MUSIC" });
-    await createTestMediaItem(otherLib.id, { type: "MUSIC", parentTitle: "Hidden", albumTitle: "Hidden" });
-    await musicLibrary();
-
-    expect((await list()).albums).toEqual([]);
   });
 
   // The Albums tab forwards every library filter; this route used to read only

@@ -53,6 +53,7 @@ vi.mock("@/lib/plex/auth", async (importOriginal) => ({
 import { GET, POST } from "@/app/api/servers/route";
 import { PUT } from "@/app/api/servers/[id]/route";
 import { PlexClient } from "@/lib/plex/client";
+import { MASKED_VALUE } from "@/lib/api/sanitize";
 import { getTestPrisma } from "../../setup/test-db";
 
 /** Where each PlexClient was pointed, and with which token. */
@@ -66,7 +67,7 @@ describe("Server CRUD endpoints", () => {
     await cleanDatabase();
     clearMockSession();
     vi.clearAllMocks();
-    mockTestConnection.mockResolvedValue({ ok: true, name: "Test Server" });
+    mockTestConnection.mockResolvedValue({ ok: true, serverName: "Test Server" });
     mockGetLibraries.mockResolvedValue([]);
   });
 
@@ -158,23 +159,6 @@ describe("Server CRUD endpoints", () => {
 
       expect(body.servers[0].syncJobs).toEqual([expect.objectContaining({ status: "RUNNING", itemsProcessed: 40 })]);
     });
-
-    it("does not return servers belonging to another user", async () => {
-      const user1 = await createTestUser({ plexId: "user1" });
-      const user2 = await createTestUser({ plexId: "user2" });
-      await createTestServer(user1.id, { name: "User1 Server" });
-      await createTestServer(user2.id, { name: "User2 Server" });
-
-      setMockSession({ userId: user2.id, isLoggedIn: true });
-
-      const response = await callRoute(GET, { url: "/api/servers" });
-      const body = await expectJson<{
-        servers: { name: string }[];
-      }>(response, 200);
-
-      expect(body.servers).toHaveLength(1);
-      expect(body.servers[0].name).toBe("User2 Server");
-    });
   });
 
   // ----- POST /api/servers -----
@@ -190,17 +174,34 @@ describe("Server CRUD endpoints", () => {
       expect(body.error).toBe("Unauthorized");
     });
 
-    it("returns 400 when url or accessToken is missing", async () => {
+    it("returns 400 when url is missing", async () => {
       const user = await createTestUser();
       setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(POST, {
         url: "/api/servers",
         method: "POST",
-        body: { name: "No URL" },
+        body: { name: "No URL", accessToken: "tok" },
       });
-      const body = await expectJson<{ error: string }>(response, 400);
+      const body = await expectJson<{ error: string; details: string[] }>(response, 400);
       expect(body.error).toBe("Validation failed");
+      expect(body.details).toEqual([expect.stringMatching(/^url: /)]);
+      expect(await getTestPrisma().mediaServer.count()).toBe(0);
+    });
+
+    it("returns 400 when there is neither an access token nor a machine id to look one up by", async () => {
+      const user = await createTestUser();
+      setMockSession({ userId: user.id, isLoggedIn: true });
+
+      const response = await callRoute(POST, {
+        url: "/api/servers",
+        method: "POST",
+        body: { name: "No token", url: "http://plex:32400" },
+      });
+      const body = await expectJson<{ error: string; details: string[] }>(response, 400);
+      expect(body.error).toBe("Validation failed");
+      expect(body.details).toEqual(["accessToken: Access token is required"]);
+      expect(mockTestConnection).not.toHaveBeenCalled();
     });
 
     it("returns 400 when URL lacks http/https protocol", async () => {
@@ -216,8 +217,27 @@ describe("Server CRUD endpoints", () => {
           accessToken: "tok",
         },
       });
-      const body = await expectJson<{ error: string }>(response, 400);
+      const body = await expectJson<{ error: string; details: string[] }>(response, 400);
       expect(body.error).toBe("Validation failed");
+      expect(body.details).toEqual(["url: URL must start with http:// or https://"]);
+    });
+
+    // `createMediaServerClient` throws for a type it cannot build, which was a 500.
+    it("returns 400 for a server type the app cannot talk to", async () => {
+      const user = await createTestUser();
+      setMockSession({ userId: user.id, isLoggedIn: true });
+
+      const response = await callRoute(POST, {
+        url: "/api/servers",
+        method: "POST",
+        body: { name: "Kodi", url: "http://kodi:8080", accessToken: "tok", type: "KODI" },
+      });
+      expect(await expectJson(response, 400)).toEqual({
+        error: "Validation failed",
+        details: ["type: Server type must be PLEX, JELLYFIN or EMBY"],
+      });
+      expect(mockTestConnection).not.toHaveBeenCalled();
+      expect(await getTestPrisma().mediaServer.count()).toBe(0);
     });
 
     it("returns 400 when Plex connection test fails", async () => {
@@ -242,8 +262,10 @@ describe("Server CRUD endpoints", () => {
         response,
         400
       );
-      expect(body.error).toContain("Failed to connect");
+      expect(body.error).toBe("Failed to connect to server");
       expect(body.detail).toBe("Connection refused");
+      // Nothing is saved for a server that could not be reached.
+      expect(await getTestPrisma().mediaServer.count()).toBe(0);
     });
 
     it("creates a new server on success", async () => {
@@ -261,13 +283,25 @@ describe("Server CRUD endpoints", () => {
           machineId: "machine-1",
         },
       });
-      const body = await expectJson<{ server: { id: string; name: string } }>(
+      const body = await expectJson<{ server: { id: string; name: string; accessToken: string } }>(
         response,
         201
       );
 
       expect(body.server.name).toBe("New Server");
-      expect(body.server.id).toBeDefined();
+      expect(body.server.accessToken).toBe(MASKED_VALUE);
+      // Tested against the address and token it was given before being saved.
+      expect(plexClientTargets()).toEqual([{ url: "http://plex:32400", token: "my-token" }]);
+      const stored = await getTestPrisma().mediaServer.findUniqueOrThrow({ where: { id: body.server.id } });
+      expect(stored).toMatchObject({
+        userId: user.id,
+        type: "PLEX",
+        name: "New Server",
+        url: "http://plex:32400",
+        accessToken: "my-token",
+        machineId: "machine-1",
+        tlsSkipVerify: false,
+      });
     });
 
     it("updates existing server when machineId matches", async () => {
@@ -299,6 +333,10 @@ describe("Server CRUD endpoints", () => {
       expect(body.server.id).toBe(existing.id);
       expect(body.server.name).toBe("Updated Name");
       expect(body.server.url).toBe("http://new:32400");
+      // Updated in place — no second row for the same machine.
+      const rows = await getTestPrisma().mediaServer.findMany();
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ id: existing.id, url: "http://new:32400", accessToken: "new-token" });
     });
 
     it("invalidates media caches when a server is created", async () => {
@@ -314,7 +352,7 @@ describe("Server CRUD endpoints", () => {
       // resolveServerFilter caches `isSingleServer`, which decides whether the
       // media listings filter to dedupCanonical. Adding a server flips it, and
       // without this the pre-add answer stood until the cache TTL expired.
-      expect(mockInvalidateMediaCaches).toHaveBeenCalled();
+      expect(mockInvalidateMediaCaches).toHaveBeenCalledOnce();
     });
 
     it("invalidates media caches when an existing server is re-pointed", async () => {
@@ -329,7 +367,7 @@ describe("Server CRUD endpoints", () => {
       });
 
       // The cached server-filter result carries the server's name.
-      expect(mockInvalidateMediaCaches).toHaveBeenCalled();
+      expect(mockInvalidateMediaCaches).toHaveBeenCalledOnce();
     });
   });
 
@@ -368,7 +406,7 @@ describe("Server CRUD endpoints", () => {
       expect(mockGetPlexResources).toHaveBeenCalledWith("account-token");
       expect(plexClientTargets()).toEqual([{ url: "http://10.0.0.5:32400", token: "resolved-server-token" }]);
       // Masked in the response, stored in full.
-      expect(body.server.accessToken).not.toBe("resolved-server-token");
+      expect(body.server.accessToken).toBe(MASKED_VALUE);
       const stored = await getTestPrisma().mediaServer.findUniqueOrThrow({ where: { id: body.server.id } });
       expect(stored.accessToken).toBe("resolved-server-token");
     });
@@ -401,8 +439,10 @@ describe("Server CRUD endpoints", () => {
         method: "POST",
         body: { name: "Home", url: "http://10.0.0.5:32400", machineId: "machine-1" },
       });
-      await expectJson(response, 404);
+      const body = await expectJson<{ error: string }>(response, 404);
+      expect(body.error).toBe("That server is not one of the Plex servers this account owns");
       expect(plexClientTargets()).toEqual([]);
+      expect(await getTestPrisma().mediaServer.count()).toBe(0);
     });
 
     // Checked before the recent sign-in: confirming who you are cannot supply
@@ -432,7 +472,8 @@ describe("Server CRUD endpoints", () => {
         });
 
       mockGetPlexResources.mockRejectedValueOnce(new Error("plex.tv down"));
-      await expectJson(await add(), 502);
+      const failed = await expectJson<{ error: string }>(await add(), 502);
+      expect(failed.error).toBe("Failed to fetch servers from Plex");
 
       mockGetPlexResources.mockResolvedValueOnce([{ ...ownedServer, accessToken: undefined }]);
       const noToken = await expectJson<{ error: string }>(await add(), 502);
@@ -450,8 +491,9 @@ describe("Server CRUD endpoints", () => {
         method: "POST",
         body: { name: "Jelly", url: "http://jelly:8096", machineId: "jf-1", type: "JELLYFIN" },
       });
-      const body = await expectJson<{ error: string }>(response, 400);
+      const body = await expectJson<{ error: string; details: string[] }>(response, 400);
       expect(body.error).toBe("Validation failed");
+      expect(body.details).toEqual(["accessToken: Access token is required"]);
       expect(mockGetPlexResources).not.toHaveBeenCalled();
     });
   });
@@ -490,26 +532,6 @@ describe("Server CRUD endpoints", () => {
       expect(body.error).toBe("Server not found");
     });
 
-    it("returns 404 when server belongs to another user", async () => {
-      const user1 = await createTestUser({ plexId: "owner" });
-      const user2 = await createTestUser({ plexId: "intruder" });
-      const server = await createTestServer(user1.id);
-
-      setMockSession({ userId: user2.id, isLoggedIn: true });
-
-      const response = await callRouteWithParams(
-        PUT,
-        { id: server.id },
-        {
-          url: `/api/servers/${server.id}`,
-          method: "PUT",
-          body: { url: "http://hacked:32400" },
-        }
-      );
-      const body = await expectJson<{ error: string }>(response, 404);
-      expect(body.error).toBe("Server not found");
-    });
-
     it("returns 400 when URL lacks http/https protocol", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id);
@@ -524,8 +546,9 @@ describe("Server CRUD endpoints", () => {
           body: { url: "plex.local:32400" },
         }
       );
-      const body = await expectJson<{ error: string }>(response, 400);
+      const body = await expectJson<{ error: string; details: string[] }>(response, 400);
       expect(body.error).toBe("Validation failed");
+      expect(body.details).toEqual(["url: URL must start with http:// or https://"]);
     });
 
     it("returns 400 when Plex connection test fails for new URL", async () => {
@@ -535,7 +558,7 @@ describe("Server CRUD endpoints", () => {
       });
 
       const user = await createTestUser();
-      const server = await createTestServer(user.id);
+      const server = await createTestServer(user.id, { url: "http://plex.test:32400" });
       setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
 
       const response = await callRouteWithParams(
@@ -547,8 +570,11 @@ describe("Server CRUD endpoints", () => {
           body: { url: "http://bad:32400" },
         }
       );
-      const body = await expectJson<{ error: string }>(response, 400);
-      expect(body.error).toContain("Failed to connect");
+      const body = await expectJson<{ error: string; detail: string }>(response, 400);
+      expect(body).toEqual({ error: "Failed to connect to server", detail: "Timeout" });
+      // The unreachable URL is not saved.
+      const stored = await getTestPrisma().mediaServer.findUniqueOrThrow({ where: { id: server.id } });
+      expect(stored.url).toBe("http://plex.test:32400");
     });
 
     it("updates the server URL successfully", async () => {
@@ -572,6 +598,10 @@ describe("Server CRUD endpoints", () => {
       }>(response, 200);
 
       expect(body.server.url).toBe("http://new:32400");
+      // Tested at the new address before it was saved.
+      expect(plexClientTargets()).toEqual([{ url: "http://new:32400", token: server.accessToken }]);
+      const stored = await getTestPrisma().mediaServer.findUniqueOrThrow({ where: { id: server.id } });
+      expect(stored.url).toBe("http://new:32400");
     });
 
     it("updates tlsSkipVerify without testing connection when URL is unchanged", async () => {
@@ -597,6 +627,8 @@ describe("Server CRUD endpoints", () => {
       expect(body.server.tlsSkipVerify).toBe(true);
       // Connection test should NOT have been called when no URL change
       expect(mockTestConnection).not.toHaveBeenCalled();
+      const stored = await getTestPrisma().mediaServer.findUniqueOrThrow({ where: { id: server.id } });
+      expect(stored).toMatchObject({ url: "http://keep:32400", tlsSkipVerify: true });
     });
 
     // The stored token goes wherever the URL points — the connection test,

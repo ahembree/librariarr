@@ -97,16 +97,20 @@ test.describe("dashboard custom cards", () => {
       (url) => url.pathname === "/api/media/stats/cross-tab",
       (route) => {
         calls++;
+        // Resolution comes back as its display bin, as `computeCrossTab` maps it.
         return calls === 1
           ? route.fulfill({
-              json: { rows: [{ dim1: "1080", dim2: "h264", type: "MOVIE", _count: 42 }] },
+              json: { rows: [{ dim1: "1080P", dim2: "h264", type: "MOVIE", _count: 42 }] },
             })
           : route.fulfill({ status: 500, json: { error: "boom" } });
       },
     );
     await page.goto("/");
-    await expect(page.getByText("Resolution vs Video Codec")).toBeVisible();
-    await expect(page.getByText("Couldn't load this chart")).toHaveCount(0);
+    const card = page.locator('[data-slot="card"]', { hasText: "custom chart" });
+    await expect(card.getByText("Resolution vs Video Codec")).toBeVisible();
+    // The first load drew the heatmap (its gradient legend renders only with cells).
+    await expect(card.getByText("High", { exact: true })).toBeVisible();
+    await expect(card.getByText("Couldn't load this chart")).toHaveCount(0);
 
     await page.getByRole("button", { name: "Edit chart settings" }).click();
     const dialog = page.getByRole("dialog");
@@ -114,7 +118,10 @@ test.describe("dashboard custom cards", () => {
     await page.getByRole("option", { name: "Audio Codec", exact: true }).click();
     await dialog.getByRole("button", { name: "Save" }).click();
 
-    await expect(page.getByText("Resolution vs Audio Codec")).toBeVisible();
-    await expect(page.getByText("Couldn't load this chart")).toBeVisible();
+    await expect(card.getByText("Resolution vs Audio Codec")).toBeVisible();
+    await expect(card.getByText("Couldn't load this chart")).toBeVisible();
+    // …and the previous config's heatmap is gone with it.
+    await expect(card.getByText("High", { exact: true })).toHaveCount(0);
+    expect(calls).toBe(2);
   });
 });

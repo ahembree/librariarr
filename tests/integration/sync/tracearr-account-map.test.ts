@@ -62,6 +62,8 @@ function play(id: string, ratingKey: string, startedAt: Date) {
     tmdb_id: null, imdb_id: null, tvdb_id: null,
     started_at: startedAt.toISOString(),
     stopped_at: new Date(startedAt.getTime() + 3_600_000).toISOString(),
+    // Watch time and runtime in ms; Tracearr sends the int64 ones as strings.
+    duration_ms: 3_600_000, progress_ms: "3600000", total_duration_ms: "3600000",
     watched: true, percent_complete: 100, segment_count: 1,
     user: { id: "x", server_user_id: "u1", username: "Nick W" },
   };

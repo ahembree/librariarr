@@ -82,7 +82,7 @@ const FIELD_TO_META_KEY: Record<string, keyof ArrMetadata | null> = {
 const fullMovie = {
   id: 1, tmdbId: 100, tags: [], qualityProfileId: 1, monitored: true,
   ratings: { imdb: { value: 8 }, tmdb: { value: 7 }, rottenTomatoes: { value: 90 } },
-  added: "2024-01-01", path: "/m", sizeOnDisk: 1000, originalLanguage: { name: "English" },
+  added: "2024-01-01", path: "/m", sizeOnDisk: 1000, originalLanguage: { id: 1, name: "English" },
   digitalRelease: "2024-02-01", physicalRelease: "2024-03-01", inCinemas: "2024-01-15",
   runtime: 120, hasFile: true,
   movieFile: { quality: { quality: { name: "Bluray-1080p" } }, dateAdded: "2024-02-02", qualityCutoffNotMet: false },
@@ -91,10 +91,15 @@ const fullMovie = {
 const fullSeries = {
   id: 1, tvdbId: 200, tags: [], qualityProfileId: 1, monitored: true,
   ratings: { votes: 100, value: 9 },
-  added: "2023-01-01", path: "/s", statistics: { sizeOnDisk: 2000, seasonCount: 3, episodeCount: 30 },
-  originalLanguage: { name: "English" }, firstAired: "2020-01-01", status: "continuing",
+  added: "2023-01-01", path: "/s",
+  statistics: { sizeOnDisk: 2000, seasonCount: 3, episodeCount: 30, totalEpisodeCount: 30, episodeFileCount: 30 },
+  originalLanguage: { id: 1, name: "English" }, firstAired: "2020-01-01", status: "continuing",
   ended: false, seriesType: "standard", nextAiring: "2025-01-01",
-  seasons: [{ monitored: true, statistics: { episodeCount: 10 } }],
+  seasons: [1, 2, 3].map((seasonNumber) => ({
+    seasonNumber,
+    monitored: true,
+    statistics: { episodeCount: 10, episodeFileCount: 10, totalEpisodeCount: 10 },
+  })),
 };
 const fullArtist = {
   id: 1, foreignArtistId: "mb-1", tags: [], qualityProfileId: 1, monitored: true,

@@ -110,13 +110,32 @@ describe("GET /api/tools/users", () => {
     });
     const body = await expectJson<{ users: string[] }>(response, 200);
 
-    // Should contain owner, friends, and session users, sorted
-    expect(body.users).toContain("admin");
-    expect(body.users).toContain("friend1");
-    expect(body.users).toContain("friend2");
-    expect(body.users).toContain("viewer1");
-    // Sorted alphabetically
-    expect(body.users).toEqual([...body.users].sort());
+    // Owner, friends and session users, sorted
+    expect(body.users).toEqual(["admin", "friend1", "friend2", "viewer1"]);
+    expect(mockGetPlexFriends).toHaveBeenCalledExactlyOnceWith("plex-tok");
+  });
+
+  it("lists a name once however many sources report it", async () => {
+    const user = await createTestUser({ username: "admin", plexToken: "plex-tok" });
+    await createTestServer(user.id);
+    setMockSession({ userId: user.id, isLoggedIn: true });
+    mockGetPlexFriends.mockResolvedValue(["alice"]);
+    mockListUsernames.mockResolvedValue(["admin", "alice"]);
+    mockGetSessions.mockResolvedValue([
+      {
+        sessionId: "s1",
+        userId: "u2",
+        username: "alice",
+        userThumb: "",
+        title: "Movie",
+        type: "movie",
+        player: { product: "Plex Web", platform: "Chrome", state: "playing", address: "10.0.0.2", local: true },
+        session: { bandwidth: 8000, location: "lan" },
+      },
+    ]);
+
+    const body = await expectJson<{ users: string[] }>(await callRoute(GET, { url: "/api/tools/users" }), 200);
+    expect(body.users).toEqual(["admin", "alice"]);
   });
 
   it("handles server connection errors gracefully", async () => {
@@ -127,7 +146,8 @@ describe("GET /api/tools/users", () => {
     await createTestServer(user.id, { name: "Bad Server" });
     setMockSession({ userId: user.id, isLoggedIn: true });
 
-    // Server throws error
+    // An unreachable server fails both lookups.
+    mockListUsernames.mockRejectedValue(new Error("Connection refused"));
     mockGetSessions.mockRejectedValue(new Error("Connection refused"));
     mockGetPlexFriends.mockResolvedValue([]);
 
@@ -137,7 +157,29 @@ describe("GET /api/tools/users", () => {
     const body = await expectJson<{ users: string[] }>(response, 200);
 
     // Should still return the owner username
-    expect(body.users).toContain("admin");
+    expect(body.users).toEqual(["admin"]);
+  });
+
+  it("still offers whoever is streaming when the account list cannot be read", async () => {
+    const user = await createTestUser({ username: "admin", plexToken: "plex-tok" });
+    await createTestServer(user.id);
+    setMockSession({ userId: user.id, isLoggedIn: true });
+    mockListUsernames.mockRejectedValue(new Error("Request failed with status code 500"));
+    mockGetSessions.mockResolvedValue([
+      {
+        sessionId: "s1",
+        userId: "u3",
+        username: "streaming_now",
+        userThumb: "",
+        title: "Movie",
+        type: "movie",
+        player: { product: "Plex Web", platform: "Chrome", state: "playing", address: "10.0.0.3", local: true },
+        session: { bandwidth: 8000, location: "lan" },
+      },
+    ]);
+
+    const body = await expectJson<{ users: string[] }>(await callRoute(GET, { url: "/api/tools/users" }), 200);
+    expect(body.users).toEqual(["admin", "streaming_now"]);
   });
   it("lists all Jellyfin users, not just those currently streaming", async () => {
     const user = await createTestUser({ username: "admin" });
@@ -162,8 +204,8 @@ describe("GET /api/tools/users", () => {
     const response = await callRoute(GET, { url: "/api/tools/users" });
     const body = await expectJson<{ users: string[] }>(response, 200);
 
-    expect(mockListUsernames).toHaveBeenCalled();
-    expect(body.users).toEqual(expect.arrayContaining(["admin", "alice", "bob"]));
+    expect(mockListUsernames).toHaveBeenCalledOnce();
+    expect(body.users).toEqual(["admin", "alice", "bob"]);
   });
 
   it("lists all Plex accounts, not just those currently streaming", async () => {
@@ -197,15 +239,8 @@ describe("GET /api/tools/users", () => {
     const response = await callRoute(GET, { url: "/api/tools/users" });
     const body = await expectJson<{ users: string[] }>(response, 200);
 
-    expect(mockListUsernames).toHaveBeenCalled();
+    expect(mockListUsernames).toHaveBeenCalledOnce();
     // Offline past streamers AND the live one are all offered for exclusion.
-    expect(body.users).toEqual(
-      expect.arrayContaining([
-        "admin",
-        "past_viewer",
-        "another_viewer",
-        "live_viewer",
-      ])
-    );
+    expect(body.users).toEqual(["admin", "another_viewer", "live_viewer", "past_viewer"]);
   });
 });

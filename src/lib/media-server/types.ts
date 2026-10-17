@@ -319,4 +319,10 @@ export interface DetailedWatchHistoryEntry {
   watchedAt: string | null;
   deviceName: string | null;
   platform: string | null;
+  /**
+   * The library section the played item sat in, where the server reports one
+   * (Plex history does). A rating key is unique only within a library, so this
+   * is what places a play when one server holds the same key in two.
+   */
+  librarySectionId?: string | null;
 }

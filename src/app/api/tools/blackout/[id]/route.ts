@@ -66,6 +66,20 @@ export async function PUT(
     }
   }
 
+  // A partial edit of a one-time schedule's dates is checked against the date
+  // it leaves in place: on its own it could store an unparseable date (a 500
+  // at the write) or an end before the start (a window that never opens).
+  if (scheduleType === undefined && effectiveType === "one_time" && (startDate != null || endDate != null)) {
+    const start = startDate != null ? new Date(startDate) : existing.startDate;
+    const end = endDate != null ? new Date(endDate) : existing.endDate;
+    if ((start && isNaN(start.getTime())) || (end && isNaN(end.getTime()))) {
+      return NextResponse.json({ error: "startDate and endDate must be valid dates" }, { status: 400 });
+    }
+    if (start && end && start >= end) {
+      return NextResponse.json({ error: "startDate must be before endDate" }, { status: 400 });
+    }
+  }
+
   // A partial edit that changes daysOfWeek must not leave an empty set.
   if (scheduleType === undefined && daysOfWeek !== undefined) {
     if (!Array.isArray(daysOfWeek) || daysOfWeek.length === 0) {

@@ -32,6 +32,7 @@ vi.mock("@/lib/media-server/factory", () => ({
 
 // Import route handler AFTER mocks
 import { GET } from "@/app/api/tools/sessions/image/route";
+import { createMediaServerClient } from "@/lib/media-server/factory";
 
 describe("GET /api/tools/sessions/image", () => {
   beforeEach(async () => {
@@ -83,7 +84,12 @@ describe("GET /api/tools/sessions/image", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("Content-Type")).toBe("image/png");
     expect(response.headers.get("Cache-Control")).toBe("private, max-age=86400");
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(imageData);
     expect(mockFetchImage).toHaveBeenCalledWith("/library/metadata/1234/thumb/1690000000");
+    // Fetched through the stored server's own client, never a URL from the request.
+    expect(createMediaServerClient).toHaveBeenCalledExactlyOnceWith("PLEX", server.url, server.accessToken, {
+      skipTlsVerify: false,
+    });
   });
 
   it("proxies a Jellyfin session's artwork", async () => {
@@ -97,7 +103,38 @@ describe("GET /api/tools/sessions/image", () => {
       searchParams: { serverId: server.id, path: "/Items/0123456789abcdef0123456789abcdef/Images/Primary" },
     });
     expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toBe("image/jpeg");
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(Buffer.from([1]));
+    expect(mockFetchImage).toHaveBeenCalledWith("/Items/0123456789abcdef0123456789abcdef/Images/Primary");
   });
+
+  it("returns 404 for a server that does not exist", async () => {
+    const user = await createTestUser();
+    setMockSession({ userId: user.id, isLoggedIn: true });
+
+    const response = await callRoute(GET, {
+      url: "/api/tools/sessions/image",
+      searchParams: { serverId: "no-such-server", path: "/library/metadata/1234/thumb/1" },
+    });
+    expect(await expectJson(response, 404)).toEqual({ error: "Server not found" });
+    expect(mockFetchImage).not.toHaveBeenCalled();
+  });
+
+  it.each(["https://attacker.example/x.png", "//attacker.example/x.png", "library/metadata/1/thumb"])(
+    "refuses the non-relative path %s before looking the server up",
+    async (path) => {
+      const user = await createTestUser();
+      setMockSession({ userId: user.id, isLoggedIn: true });
+
+      const response = await callRoute(GET, {
+        url: "/api/tools/sessions/image",
+        searchParams: { serverId: "any-server", path },
+      });
+      // A 400 rather than the unknown server's 404: the path is refused first.
+      expect(await expectJson(response, 400)).toEqual({ error: "Invalid path" });
+      expect(mockFetchImage).not.toHaveBeenCalled();
+    },
+  );
 
   // The fetch carries the server's admin token and the body goes back as-is:
   // any other path would let a session cookie read the server's API, and

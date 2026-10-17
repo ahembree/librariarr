@@ -24,16 +24,16 @@ vi.mock("@/lib/logger", () => ({
 
 // Import route handlers AFTER mocks
 import { GET } from "@/app/api/media/music/route";
-import { GET as GET_GROUPED } from "@/app/api/media/music/grouped/route";
+
+// File-level, so the second suite below still has its connection.
+afterAll(async () => {
+  await disconnectTestDb();
+});
 
 describe("Music endpoints", () => {
   beforeEach(async () => {
     await cleanDatabase();
     clearMockSession();
-  });
-
-  afterAll(async () => {
-    await disconnectTestDb();
   });
 
   // ----- GET /api/media/music (tracks) -----
@@ -125,7 +125,7 @@ describe("Music endpoints", () => {
       }>(response, 200);
 
       expect(body.items).toHaveLength(1);
-      expect(body.items[0].parentTitle).toBe("Queen");
+      expect(body.items[0]).toMatchObject({ title: "Track 1", parentTitle: "Queen" });
     });
 
     it("filters by albumTitle", async () => {
@@ -159,7 +159,7 @@ describe("Music endpoints", () => {
       }>(response, 200);
 
       expect(body.items).toHaveLength(1);
-      expect(body.items[0].albumTitle).toBe("Album One");
+      expect(body.items[0]).toMatchObject({ title: "Track A", albumTitle: "Album One" });
     });
 
     it("searches across title, parentTitle, and albumTitle", async () => {
@@ -167,18 +167,26 @@ describe("Music endpoints", () => {
       const server = await createTestServer(user.id);
       const lib = await createTestLibrary(server.id, { type: "MUSIC" });
 
+      // One match through each searched field.
       await createTestMediaItem(lib.id, {
         title: "Bohemian Rhapsody",
         type: "MUSIC",
         parentTitle: "Queen",
-        albumTitle: "Opera",
+        albumTitle: "A Night at the Opera",
         audioCodec: "flac",
       });
       await createTestMediaItem(lib.id, {
-        title: "Something",
+        title: "Killer Queen",
         type: "MUSIC",
-        parentTitle: "Queen Bee",
-        albumTitle: "Debut",
+        parentTitle: "Some Cover Band",
+        albumTitle: "Covers",
+        audioCodec: "mp3",
+      });
+      await createTestMediaItem(lib.id, {
+        title: "No One Knows",
+        type: "MUSIC",
+        parentTitle: "QOTSA",
+        albumTitle: "Songs for the Deaf (Queens Edition)",
         audioCodec: "mp3",
       });
       await createTestMediaItem(lib.id, {
@@ -199,7 +207,11 @@ describe("Music endpoints", () => {
         items: { title: string }[];
       }>(response, 200);
 
-      expect(body.items).toHaveLength(2);
+      expect(body.items.map((i) => i.title).sort()).toEqual([
+        "Bohemian Rhapsody",
+        "Killer Queen",
+        "No One Knows",
+      ]);
     });
 
     it("serializes BigInt fileSize to string", async () => {
@@ -226,191 +238,6 @@ describe("Music endpoints", () => {
       expect(typeof body.items[0].fileSize).toBe("string");
     });
   });
-
-  // ----- GET /api/media/music/grouped -----
-
-  describe("GET /api/media/music/grouped", () => {
-    it("returns 401 without auth", async () => {
-      const response = await callRoute(GET_GROUPED, {
-        url: "/api/media/music/grouped",
-      });
-      const body = await expectJson<{ error: string }>(response, 401);
-      expect(body.error).toBe("Unauthorized");
-    });
-
-    it("returns empty artists list when no data", async () => {
-      const user = await createTestUser();
-      setMockSession({ userId: user.id, isLoggedIn: true });
-
-      const response = await callRoute(GET_GROUPED, {
-        url: "/api/media/music/grouped",
-      });
-      const body = await expectJson<{ artists: unknown[] }>(response, 200);
-
-      expect(body.artists).toEqual([]);
-    });
-
-    it("groups tracks by artist with correct counts", async () => {
-      const user = await createTestUser();
-      const server = await createTestServer(user.id);
-      const lib = await createTestLibrary(server.id, { type: "MUSIC" });
-
-      // Queen: 2 tracks, 2 albums
-      await createTestMediaItem(lib.id, {
-        title: "Bohemian Rhapsody",
-        type: "MUSIC",
-        parentTitle: "Queen",
-        albumTitle: "A Night at the Opera",
-        audioCodec: "flac",
-        fileSize: BigInt("52428800"),
-      });
-      await createTestMediaItem(lib.id, {
-        title: "We Will Rock You",
-        type: "MUSIC",
-        parentTitle: "Queen",
-        albumTitle: "News of the World",
-        audioCodec: "mp3",
-        fileSize: BigInt("10485760"),
-      });
-
-      // Pink Floyd: 1 track
-      await createTestMediaItem(lib.id, {
-        title: "Comfortably Numb",
-        type: "MUSIC",
-        parentTitle: "Pink Floyd",
-        albumTitle: "The Wall",
-        audioCodec: "flac",
-        fileSize: BigInt("73400320"),
-      });
-
-      setMockSession({ userId: user.id, isLoggedIn: true });
-
-      const response = await callRoute(GET_GROUPED, {
-        url: "/api/media/music/grouped",
-      });
-      const body = await expectJson<{
-        artists: {
-          parentTitle: string;
-          trackCount: number;
-          albumCount: number;
-          totalSize: string;
-          audioCodecCounts: Record<string, number>;
-        }[];
-      }>(response, 200);
-
-      expect(body.artists).toHaveLength(2);
-
-      const queen = body.artists.find((a) => a.parentTitle === "Queen");
-      expect(queen).toBeDefined();
-      expect(queen!.trackCount).toBe(2);
-      expect(queen!.albumCount).toBe(2);
-      expect(queen!.totalSize).toBe("62914560"); // 50MB + 10MB
-      expect(queen!.audioCodecCounts["FLAC"]).toBe(1);
-      expect(queen!.audioCodecCounts["MP3"]).toBe(1);
-
-      const pf = body.artists.find((a) => a.parentTitle === "Pink Floyd");
-      expect(pf).toBeDefined();
-      expect(pf!.trackCount).toBe(1);
-      expect(pf!.albumCount).toBe(1);
-    });
-
-    it("supports search by artist name", async () => {
-      const user = await createTestUser();
-      const server = await createTestServer(user.id);
-      const lib = await createTestLibrary(server.id, { type: "MUSIC" });
-
-      await createTestMediaItem(lib.id, {
-        title: "Track",
-        type: "MUSIC",
-        parentTitle: "Queen",
-        audioCodec: "flac",
-      });
-      await createTestMediaItem(lib.id, {
-        title: "Track",
-        type: "MUSIC",
-        parentTitle: "Pink Floyd",
-        audioCodec: "flac",
-        ratingKey: "pf-1",
-      });
-
-      setMockSession({ userId: user.id, isLoggedIn: true });
-
-      const response = await callRoute(GET_GROUPED, {
-        url: "/api/media/music/grouped",
-        searchParams: { search: "queen" },
-      });
-      const body = await expectJson<{
-        artists: { parentTitle: string }[];
-      }>(response, 200);
-
-      expect(body.artists).toHaveLength(1);
-      expect(body.artists[0].parentTitle).toBe("Queen");
-    });
-
-    it("supports sorting by trackCount desc", async () => {
-      const user = await createTestUser();
-      const server = await createTestServer(user.id);
-      const lib = await createTestLibrary(server.id, { type: "MUSIC" });
-
-      // Artist A: 1 track
-      await createTestMediaItem(lib.id, {
-        title: "Track",
-        type: "MUSIC",
-        parentTitle: "Artist A",
-        audioCodec: "mp3",
-      });
-
-      // Artist B: 3 tracks
-      for (let i = 1; i <= 3; i++) {
-        await createTestMediaItem(lib.id, {
-          title: `Track ${i}`,
-          type: "MUSIC",
-          parentTitle: "Artist B",
-          audioCodec: "flac",
-          ratingKey: `ab-${i}`,
-        });
-      }
-
-      setMockSession({ userId: user.id, isLoggedIn: true });
-
-      const response = await callRoute(GET_GROUPED, {
-        url: "/api/media/music/grouped",
-        searchParams: { sortBy: "trackCount", sortOrder: "desc" },
-      });
-      const body = await expectJson<{
-        artists: { parentTitle: string; trackCount: number }[];
-      }>(response, 200);
-
-      expect(body.artists[0].parentTitle).toBe("Artist B");
-      expect(body.artists[0].trackCount).toBe(3);
-    });
-
-    it("serializes totalSize as string (BigInt)", async () => {
-      const user = await createTestUser();
-      const server = await createTestServer(user.id);
-      const lib = await createTestLibrary(server.id, { type: "MUSIC" });
-
-      await createTestMediaItem(lib.id, {
-        title: "Track",
-        type: "MUSIC",
-        parentTitle: "Artist",
-        audioCodec: "flac",
-        fileSize: BigInt("5368709120"),
-      });
-
-      setMockSession({ userId: user.id, isLoggedIn: true });
-
-      const response = await callRoute(GET_GROUPED, {
-        url: "/api/media/music/grouped",
-      });
-      const body = await expectJson<{
-        artists: { totalSize: string }[];
-      }>(response, 200);
-
-      expect(body.artists[0].totalSize).toBe("5368709120");
-      expect(typeof body.artists[0].totalSize).toBe("string");
-    });
-  });
 });
 
 describe("/api/media/music progressive loading", () => {
@@ -424,6 +251,9 @@ describe("/api/media/music progressive loading", () => {
       await createTestMediaItem(lib.id, {
         title: `Item ${String(i).padStart(2, "0")}`,
         type: "MUSIC",
+        parentTitle: "Artist",
+        albumTitle: "Album",
+        episodeNumber: i,
         ratingKey: `rk-off-${i}`,
         summary: "Prose that would ride along on every row.",
       });
@@ -461,8 +291,8 @@ describe("/api/media/music progressive loading", () => {
       await callRoute(GET, { url: "/api/media/music", searchParams: { limit: "0" } }),
       200,
     );
-    expect(body.items.length).toBeGreaterThan(0);
-    expect(body.items[0]).not.toHaveProperty("summary");
-    expect(body.items[0]).toHaveProperty("title");
+    expect(body.items).toHaveLength(5);
+    for (const item of body.items) expect(item).not.toHaveProperty("summary");
+    expect(body.items[0]).toHaveProperty("title", "Item 01");
   });
 });

@@ -79,7 +79,8 @@ describe("computeSeriesKey", () => {
       parentTitle: "The Office",
       externalIds: [{ source: "TVDB", id: "73244" }],
     });
-    expect(uk).not.toBe(us);
+    expect(uk).toBe("tvdb:78107");
+    expect(us).toBe("tvdb:73244");
   });
 
   it("merges the same show across servers via a shared TVDB id", () => {
@@ -91,7 +92,8 @@ describe("computeSeriesKey", () => {
       parentTitle: "battlestar galactica ", // different spelling/case on the other server
       externalIds: [{ source: "TVDB", id: "73545" }],
     });
-    expect(plex).toBe(jellyfin);
+    expect(plex).toBe("tvdb:73545");
+    expect(jellyfin).toBe(plex);
   });
 
   it("returns null when there is neither a title nor an id", () => {

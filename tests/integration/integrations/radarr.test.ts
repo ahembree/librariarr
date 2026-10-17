@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
+import { MASKED_VALUE } from "@/lib/api/sanitize";
 import {
   callRoute,
   callRouteWithParams,
@@ -57,7 +58,7 @@ describe("Radarr integration endpoints", () => {
     await cleanDatabase();
     clearMockSession();
     vi.clearAllMocks();
-    mockTestConnection.mockResolvedValue({ ok: true, appName: "Radarr", version: "5.0" });
+    mockTestConnection.mockResolvedValue({ ok: true, appName: "Radarr", version: "5.14.0.9383" });
     mockGetMovies.mockResolvedValue([]);
     mockGetQualityProfiles.mockResolvedValue([{ id: 1, name: "HD-1080p" }]);
     mockGetTags.mockResolvedValue([{ id: 1, label: "test-tag" }]);
@@ -96,19 +97,6 @@ describe("Radarr integration endpoints", () => {
       expect(body.instances).toHaveLength(1);
       expect(body.instances[0].name).toBe("My Radarr");
     });
-
-    it("does not return instances belonging to another user", async () => {
-      const user1 = await createTestUser({ plexId: "user1" });
-      const user2 = await createTestUser({ plexId: "user2" });
-      await createTestRadarrInstance(user1.id, { name: "User1 Radarr" });
-      await createTestRadarrInstance(user2.id, { name: "User2 Radarr" });
-      setMockSession({ userId: user2.id, isLoggedIn: true });
-
-      const response = await callRoute(GET, { url: "/api/integrations/radarr" });
-      const body = await expectJson<{ instances: { name: string }[] }>(response, 200);
-      expect(body.instances).toHaveLength(1);
-      expect(body.instances[0].name).toBe("User2 Radarr");
-    });
   });
 
   // ----- POST /api/integrations/radarr -----
@@ -134,7 +122,10 @@ describe("Radarr integration endpoints", () => {
         method: "POST",
         body: { url: "http://radarr:7878", apiKey: "key" },
       });
-      expect(res1.status).toBe(400);
+      expect(await expectJson(res1, 400)).toEqual({
+        error: "Validation failed",
+        details: [expect.stringMatching(/^name: /)],
+      });
 
       // Missing url
       const res2 = await callRoute(POST, {
@@ -142,7 +133,10 @@ describe("Radarr integration endpoints", () => {
         method: "POST",
         body: { name: "Radarr", apiKey: "key" },
       });
-      expect(res2.status).toBe(400);
+      expect(await expectJson(res2, 400)).toEqual({
+        error: "Validation failed",
+        details: [expect.stringMatching(/^url: /)],
+      });
 
       // Missing apiKey
       const res3 = await callRoute(POST, {
@@ -150,7 +144,13 @@ describe("Radarr integration endpoints", () => {
         method: "POST",
         body: { name: "Radarr", url: "http://radarr:7878" },
       });
-      expect(res3.status).toBe(400);
+      expect(await expectJson(res3, 400)).toEqual({
+        error: "Validation failed",
+        details: [expect.stringMatching(/^apiKey: /)],
+      });
+
+      expect(mockTestConnection).not.toHaveBeenCalled();
+      expect(await getTestPrisma().radarrInstance.count()).toBe(0);
     });
 
     it("returns 400 when connection test fails", async () => {
@@ -165,8 +165,8 @@ describe("Radarr integration endpoints", () => {
         body: { name: "Bad Radarr", url: "http://bad:7878", apiKey: "key" },
       });
       const body = await expectJson<{ error: string; detail: string }>(response, 400);
-      expect(body.error).toContain("Failed to connect to Radarr");
-      expect(body.detail).toBe("Connection refused");
+      expect(body).toEqual({ error: "Failed to connect to Radarr", detail: "Connection refused" });
+      expect(await getTestPrisma().radarrInstance.count()).toBe(0);
     });
 
     it("creates a new instance on success", async () => {
@@ -185,7 +185,19 @@ describe("Radarr integration endpoints", () => {
       );
       expect(body.instance.name).toBe("My Radarr");
       expect(body.instance.url).toBe("http://radarr:7878");
-      expect(body.instance.id).toBeDefined();
+      // The stored key never goes back to the browser.
+      expect(body.instance).toMatchObject({ apiKey: MASKED_VALUE });
+      expect(mockTestConnection).toHaveBeenCalledTimes(1);
+
+      const stored = await getTestPrisma().radarrInstance.findUnique({ where: { id: body.instance.id } });
+      expect(stored).toMatchObject({
+        userId: user.id,
+        name: "My Radarr",
+        url: "http://radarr:7878",
+        apiKey: "test-key",
+        externalUrl: null,
+        enabled: true,
+      });
     });
 
     it("strips trailing slashes from url", async () => {
@@ -232,21 +244,6 @@ describe("Radarr integration endpoints", () => {
       expect(body.error).toBe("Not found");
     });
 
-    it("returns 404 when instance belongs to another user", async () => {
-      const user1 = await createTestUser({ plexId: "owner" });
-      const user2 = await createTestUser({ plexId: "intruder" });
-      const instance = await createTestRadarrInstance(user1.id);
-      setMockSession({ userId: user2.id, isLoggedIn: true });
-
-      const response = await callRouteWithParams(
-        PUT,
-        { id: instance.id },
-        { url: `/api/integrations/radarr/${instance.id}`, method: "PUT", body: { name: "Hacked" } }
-      );
-      const body = await expectJson<{ error: string }>(response, 404);
-      expect(body.error).toBe("Not found");
-    });
-
     it("returns 400 when connection test fails on update", async () => {
       mockTestConnection.mockResolvedValue({ ok: false, error: "Timeout" });
 
@@ -263,8 +260,11 @@ describe("Radarr integration endpoints", () => {
           body: { url: "http://bad:7878" },
         }
       );
-      const body = await expectJson<{ error: string }>(response, 400);
-      expect(body.error).toContain("Failed to connect to Radarr");
+      const body = await expectJson<{ error: string; detail: string }>(response, 400);
+      expect(body).toEqual({ error: "Failed to connect to Radarr", detail: "Timeout" });
+
+      const stored = await getTestPrisma().radarrInstance.findUnique({ where: { id: instance.id } });
+      expect(stored!.url).toBe(instance.url);
     });
 
     it("updates instance fields successfully", async () => {
@@ -284,6 +284,11 @@ describe("Radarr integration endpoints", () => {
       const body = await expectJson<{ instance: { name: string; url: string } }>(response, 200);
       expect(body.instance.name).toBe("Updated Radarr");
       expect(body.instance.url).toBe("http://new-radarr:7878");
+      // A new URL is tested before it is saved.
+      expect(mockTestConnection).toHaveBeenCalledTimes(1);
+
+      const stored = await getTestPrisma().radarrInstance.findUnique({ where: { id: instance.id } });
+      expect(stored).toMatchObject({ name: "Updated Radarr", url: "http://new-radarr:7878" });
     });
   });
 
@@ -311,21 +316,6 @@ describe("Radarr integration endpoints", () => {
           url: "/api/integrations/radarr/00000000-0000-0000-0000-000000000000",
           method: "DELETE",
         }
-      );
-      const body = await expectJson<{ error: string }>(response, 404);
-      expect(body.error).toBe("Not found");
-    });
-
-    it("returns 404 when deleting another user's instance", async () => {
-      const user1 = await createTestUser({ plexId: "owner" });
-      const user2 = await createTestUser({ plexId: "intruder" });
-      const instance = await createTestRadarrInstance(user1.id);
-      setMockSession({ userId: user2.id, isLoggedIn: true });
-
-      const response = await callRouteWithParams(
-        DELETE,
-        { id: instance.id },
-        { url: `/api/integrations/radarr/${instance.id}`, method: "DELETE" }
       );
       const body = await expectJson<{ error: string }>(response, 404);
       expect(body.error).toBe("Not found");
@@ -436,9 +426,13 @@ describe("Radarr integration endpoints", () => {
         { id: instance.id },
         { url: `/api/integrations/radarr/${instance.id}/recycle-bin` }
       );
-      const body = await expectJson<{ enabled: boolean; arrUrl: string }>(response, 200);
-      expect(body.enabled).toBe(true);
-      expect(body.arrUrl).toBe("https://radarr.example.com");
+      const body = await expectJson(response, 200);
+      expect(body).toEqual({
+        enabled: true,
+        path: "/recycle",
+        cleanupDays: 7,
+        arrUrl: "https://radarr.example.com",
+      });
     });
 
     it("falls back to the API URL without an external URL, including on failure", async () => {
@@ -452,9 +446,8 @@ describe("Radarr integration endpoints", () => {
         { id: instance.id },
         { url: `/api/integrations/radarr/${instance.id}/recycle-bin` }
       );
-      const body = await expectJson<{ enabled: null; arrUrl: string }>(response, 200);
-      expect(body.enabled).toBeNull();
-      expect(body.arrUrl).toBe("http://radarr:7878");
+      const body = await expectJson(response, 200);
+      expect(body).toEqual({ enabled: null, error: "down", arrUrl: "http://radarr:7878" });
     });
   });
 
@@ -480,14 +473,21 @@ describe("Radarr integration endpoints", () => {
         method: "POST",
         body: { apiKey: "key" },
       });
-      expect(res1.status).toBe(400);
+      expect(await expectJson(res1, 400)).toEqual({
+        error: "Validation failed",
+        details: [expect.stringMatching(/^url: /)],
+      });
 
       const res2 = await callRoute(TEST_POST, {
         url: "/api/integrations/radarr/test",
         method: "POST",
         body: { url: "http://radarr:7878" },
       });
-      expect(res2.status).toBe(400);
+      expect(await expectJson(res2, 400)).toEqual({
+        error: "Validation failed",
+        details: [expect.stringMatching(/^apiKey: /)],
+      });
+      expect(mockTestConnection).not.toHaveBeenCalled();
     });
 
     it("returns connection test result on success", async () => {
@@ -564,28 +564,40 @@ describe("Radarr integration endpoints", () => {
 
       mockGetMovies.mockResolvedValue([
         {
-          tmdbId: 55555,
-          tags: [1],
+          id: 12,
+          title: "Arrival",
+          year: 2016,
+          tmdbId: 329865,
+          imdbId: "tt2543164",
           qualityProfileId: 1,
           monitored: true,
-          ratings: { imdb: { value: 7.2 } },
+          path: "/movies/Arrival (2016)",
+          hasFile: true,
+          movieFileId: 40,
+          sizeOnDisk: 8_412_345_678,
+          tags: [1],
+          ratings: {
+            imdb: { votes: 780_412, value: 7.9, type: "user" },
+            tmdb: { votes: 18_211, value: 7.6, type: "user" },
+          },
+          movieFile: { quality: { quality: { name: "Bluray-1080p" } } },
+          status: "released",
         },
       ]);
 
       const response = await callRouteWithParams(METADATA_GET, { id: instance.id });
-      const body = await expectJson<{
-        movies: Record<string, { tags: string[]; qualityProfile: string; monitored: boolean; rating: number | null }>;
-        tags: { id: number; label: string }[];
-        qualityProfiles: { id: number; name: string }[];
-      }>(response, 200);
+      const body = await expectJson(response, 200);
 
-      expect(body.movies["55555"]).toBeDefined();
-      expect(body.movies["55555"].tags).toEqual(["test-tag"]);
-      expect(body.movies["55555"].qualityProfile).toBe("HD-1080p");
-      expect(body.movies["55555"].monitored).toBe(true);
-      expect(body.movies["55555"].rating).toBe(7.2);
-      expect(body.tags).toHaveLength(1);
-      expect(body.qualityProfiles).toHaveLength(1);
+      expect(body).toEqual({
+        movies: {
+          "329865": { tags: ["test-tag"], qualityProfile: "HD-1080p", monitored: true, rating: 7.9 },
+        },
+        tags: [{ id: 1, label: "test-tag" }],
+        qualityProfiles: [{ id: 1, name: "HD-1080p" }],
+        languages: ["English"],
+        qualityNames: ["Bluray-1080p"],
+        statuses: ["released"],
+      });
     });
   });
 });

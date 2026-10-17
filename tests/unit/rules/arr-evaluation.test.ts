@@ -45,13 +45,13 @@ const oldDate = new Date();
 oldDate.setDate(oldDate.getDate() - 60);
 
 // Standard items keyed by external ID source
-const tmdbId = "tmdb-100";
+const tmdbId = "603";
 const movieItems = [{ id: "m1", externalIds: [{ source: "TMDB", externalId: tmdbId }] }];
 
-const tvdbId = "tvdb-200";
+const tvdbId = "81189";
 const seriesItems = [{ id: "s1", externalIds: [{ source: "TVDB", externalId: tvdbId }] }];
 
-const mbId = "mb-300";
+const mbId = "a74b1b7f-71a5-4011-9441-d0b5e4122711";
 const musicItems = [{ id: "mu1", externalIds: [{ source: "MUSICBRAINZ", externalId: mbId }] }];
 
 // ===========================================================================
@@ -65,7 +65,7 @@ describe("arrTag (text array)", () => {
   it("equals matches when tag exists (case-insensitive)", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrTag", operator: "equals", value: "upgrade" })])];
     const result = matched(movieItems, rules, "MOVIE", arrData);
-    expect(result.get("m1")!.length).toBeGreaterThan(0);
+    expect(result.get("m1")).toHaveLength(1);
   });
 
   it("equals does not match absent tag", () => {
@@ -77,7 +77,7 @@ describe("arrTag (text array)", () => {
   it("notEquals matches when tag is absent", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrTag", operator: "notEquals", value: "missing" })])];
     const result = matched(movieItems, rules, "MOVIE", arrData);
-    expect(result.get("m1")!.length).toBeGreaterThan(0);
+    expect(result.get("m1")).toHaveLength(1);
   });
 
   it("notEquals does not match when tag exists", () => {
@@ -89,7 +89,7 @@ describe("arrTag (text array)", () => {
   it("contains matches an exact tag from the selected list", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrTag", operator: "contains", value: "Upgrade" })])];
     const result = matched(movieItems, rules, "MOVIE", arrData);
-    expect(result.get("m1")!.length).toBeGreaterThan(0);
+    expect(result.get("m1")).toHaveLength(1);
   });
 
   it("contains is list membership, not substring (does not match partial)", () => {
@@ -102,7 +102,7 @@ describe("arrTag (text array)", () => {
   it("contains supports pipe-separated multi-select", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrTag", operator: "contains", value: "missing|keep" })])];
     const result = matched(movieItems, rules, "MOVIE", arrData);
-    expect(result.get("m1")!.length).toBeGreaterThan(0);
+    expect(result.get("m1")).toHaveLength(1);
   });
 
   it("notContains excludes when any selected tag is present", () => {
@@ -114,13 +114,13 @@ describe("arrTag (text array)", () => {
   it("notContains keeps items whose tags are not in the selected list", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrTag", operator: "notContains", value: "missing" })])];
     const result = matched(movieItems, rules, "MOVIE", arrData);
-    expect(result.get("m1")!.length).toBeGreaterThan(0);
+    expect(result.get("m1")).toHaveLength(1);
   });
 
   it("matchesWildcard matches with pattern", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrTag", operator: "matchesWildcard", value: "4K-*" })])];
     const result = matched(movieItems, rules, "MOVIE", arrData);
-    expect(result.get("m1")!.length).toBeGreaterThan(0);
+    expect(result.get("m1")).toHaveLength(1);
   });
 
   it("notMatchesWildcard does not match when pattern matches", () => {
@@ -154,7 +154,7 @@ describe("arrQualityProfile (text)", () => {
   it("equals matches case-insensitively", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrQualityProfile", operator: "equals", value: "ultra-hd" })])];
     const result = matched(movieItems, rules, "MOVIE", arrData);
-    expect(result.get("m1")!.length).toBeGreaterThan(0);
+    expect(result.get("m1")).toHaveLength(1);
   });
 
   it("equals does not match different profile", () => {
@@ -166,7 +166,7 @@ describe("arrQualityProfile (text)", () => {
   it("notEquals matches different profile", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrQualityProfile", operator: "notEquals", value: "SD" })])];
     const result = matched(movieItems, rules, "MOVIE", arrData);
-    expect(result.get("m1")!.length).toBeGreaterThan(0);
+    expect(result.get("m1")).toHaveLength(1);
   });
 
   it("notEquals does not match same profile", () => {
@@ -178,7 +178,7 @@ describe("arrQualityProfile (text)", () => {
   it("contains matches an exact profile name from the selected list", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrQualityProfile", operator: "contains", value: "Ultra-HD" })])];
     const result = matched(movieItems, rules, "MOVIE", arrData);
-    expect(result.get("m1")!.length).toBeGreaterThan(0);
+    expect(result.get("m1")).toHaveLength(1);
   });
 
   it("contains is list membership, not substring", () => {
@@ -192,7 +192,7 @@ describe("arrQualityProfile (text)", () => {
   it("contains supports pipe-separated multi-select", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrQualityProfile", operator: "contains", value: "SD|Ultra-HD" })])];
     const result = matched(movieItems, rules, "MOVIE", arrData);
-    expect(result.get("m1")!.length).toBeGreaterThan(0);
+    expect(result.get("m1")).toHaveLength(1);
   });
 
   it("notContains excludes when profile is in the selected list", () => {
@@ -204,7 +204,7 @@ describe("arrQualityProfile (text)", () => {
   it("notContains keeps items whose profile is not in the selected list", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrQualityProfile", operator: "notContains", value: "bluray" })])];
     const result = matched(movieItems, rules, "MOVIE", arrData);
-    expect(result.get("m1")!.length).toBeGreaterThan(0);
+    expect(result.get("m1")).toHaveLength(1);
   });
 
   // Regression: user-reported bug where selecting "Default" also matched "Default New".
@@ -219,7 +219,7 @@ describe("arrQualityProfile (text)", () => {
     const defaultMeta: ArrDataMap = { [tmdbId]: makeArrMeta({ qualityProfile: "Default" }) };
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrQualityProfile", operator: "contains", value: "Default" })])];
     const result = matched(movieItems, rules, "MOVIE", defaultMeta);
-    expect(result.get("m1")!.length).toBeGreaterThan(0);
+    expect(result.get("m1")).toHaveLength(1);
   });
 
   // Safety: unconfigured contains/notContains rules (empty value list) must
@@ -252,7 +252,7 @@ describe("arrQualityProfile (text)", () => {
   it("matchesWildcard matches", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrQualityProfile", operator: "matchesWildcard", value: "Ultra*" })])];
     const result = matched(movieItems, rules, "MOVIE", arrData);
-    expect(result.get("m1")!.length).toBeGreaterThan(0);
+    expect(result.get("m1")).toHaveLength(1);
   });
 
   it("notMatchesWildcard does not match when pattern matches", () => {
@@ -271,7 +271,7 @@ describe("arrMonitored (boolean)", () => {
     const arrData: ArrDataMap = { [tmdbId]: makeArrMeta({ monitored: true }) };
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrMonitored", operator: "equals", value: "true" })])];
     const result = matched(movieItems, rules, "MOVIE", arrData);
-    expect(result.get("m1")!.length).toBeGreaterThan(0);
+    expect(result.get("m1")).toHaveLength(1);
   });
 
   it("equals true does not match unmonitored item", () => {
@@ -285,14 +285,14 @@ describe("arrMonitored (boolean)", () => {
     const arrData: ArrDataMap = { [tmdbId]: makeArrMeta({ monitored: false }) };
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrMonitored", operator: "notEquals", value: "true" })])];
     const result = matched(movieItems, rules, "MOVIE", arrData);
-    expect(result.get("m1")!.length).toBeGreaterThan(0);
+    expect(result.get("m1")).toHaveLength(1);
   });
 
   it("notEquals false matches monitored item", () => {
     const arrData: ArrDataMap = { [tmdbId]: makeArrMeta({ monitored: true }) };
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrMonitored", operator: "notEquals", value: "false" })])];
     const result = matched(movieItems, rules, "MOVIE", arrData);
-    expect(result.get("m1")!.length).toBeGreaterThan(0);
+    expect(result.get("m1")).toHaveLength(1);
   });
 });
 
@@ -306,32 +306,32 @@ describe("arrRating (numeric, nullable)", () => {
 
   it("equals matches exact value", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrRating", operator: "equals", value: 7.5 })])];
-    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
+    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(1);
   });
 
   it("notEquals matches different value", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrRating", operator: "notEquals", value: 5 })])];
-    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
+    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(1);
   });
 
   it("greaterThan matches", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrRating", operator: "greaterThan", value: 7 })])];
-    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
+    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(1);
   });
 
   it("greaterThanOrEqual matches at boundary", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrRating", operator: "greaterThanOrEqual", value: 7.5 })])];
-    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
+    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(1);
   });
 
   it("lessThan matches", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrRating", operator: "lessThan", value: 8 })])];
-    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
+    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(1);
   });
 
   it("lessThanOrEqual matches at boundary", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrRating", operator: "lessThanOrEqual", value: 7.5 })])];
-    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
+    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(1);
   });
 
   it("returns false when rating is null", () => {
@@ -346,7 +346,7 @@ describe("arrTmdbRating (numeric, nullable)", () => {
 
   it("greaterThan matches", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrTmdbRating", operator: "greaterThan", value: 8 })])];
-    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
+    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(1);
   });
 
   it("lessThanOrEqual does not match above value", () => {
@@ -365,7 +365,7 @@ describe("arrRtCriticRating (numeric, nullable)", () => {
 
   it("greaterThanOrEqual matches", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrRtCriticRating", operator: "greaterThanOrEqual", value: 90 })])];
-    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
+    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(1);
   });
 
   it("equals does not match different value", () => {
@@ -390,12 +390,12 @@ describe("arrSizeOnDisk (numeric, bytes→MB)", () => {
 
   it("equals matches when value in MB matches converted size", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrSizeOnDisk", operator: "equals", value: 500 })])];
-    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
+    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(1);
   });
 
   it("greaterThan matches when size exceeds threshold", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrSizeOnDisk", operator: "greaterThan", value: 400 })])];
-    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
+    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(1);
   });
 
   it("greaterThan does not match when size is below", () => {
@@ -405,17 +405,17 @@ describe("arrSizeOnDisk (numeric, bytes→MB)", () => {
 
   it("lessThan matches when size is below threshold", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrSizeOnDisk", operator: "lessThan", value: 600 })])];
-    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
+    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(1);
   });
 
   it("lessThanOrEqual matches at exact boundary", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrSizeOnDisk", operator: "lessThanOrEqual", value: 500 })])];
-    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
+    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(1);
   });
 
   it("notEquals matches different size", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrSizeOnDisk", operator: "notEquals", value: 999 })])];
-    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
+    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(1);
   });
 
   it("returns false when sizeOnDisk is null", () => {
@@ -434,7 +434,7 @@ describe("arrRuntime (numeric, nullable)", () => {
 
   it("greaterThan matches", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrRuntime", operator: "greaterThan", value: 90 })])];
-    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
+    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(1);
   });
 
   it("lessThan does not match when value is below runtime", () => {
@@ -444,7 +444,7 @@ describe("arrRuntime (numeric, nullable)", () => {
 
   it("equals matches exact value", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrRuntime", operator: "equals", value: 120 })])];
-    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
+    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(1);
   });
 
   it("returns false when null", () => {
@@ -458,12 +458,12 @@ describe("arrSeasonCount (numeric, nullable)", () => {
 
   it("greaterThanOrEqual matches", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrSeasonCount", operator: "greaterThanOrEqual", value: 5 })])];
-    expect(matched(seriesItems, rules, "SERIES", arrData).get("s1")!.length).toBeGreaterThan(0);
+    expect(matched(seriesItems, rules, "SERIES", arrData).get("s1")).toHaveLength(1);
   });
 
   it("lessThan matches", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrSeasonCount", operator: "lessThan", value: 10 })])];
-    expect(matched(seriesItems, rules, "SERIES", arrData).get("s1")!.length).toBeGreaterThan(0);
+    expect(matched(seriesItems, rules, "SERIES", arrData).get("s1")).toHaveLength(1);
   });
 
   it("returns false when null", () => {
@@ -477,7 +477,7 @@ describe("arrEpisodeCount (numeric, nullable)", () => {
 
   it("equals matches exact value", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrEpisodeCount", operator: "equals", value: 50 })])];
-    expect(matched(seriesItems, rules, "SERIES", arrData).get("s1")!.length).toBeGreaterThan(0);
+    expect(matched(seriesItems, rules, "SERIES", arrData).get("s1")).toHaveLength(1);
   });
 
   it("greaterThan does not match when below", () => {
@@ -496,12 +496,12 @@ describe("arrMonitoredSeasonCount (numeric, nullable)", () => {
 
   it("lessThanOrEqual matches at boundary", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrMonitoredSeasonCount", operator: "lessThanOrEqual", value: 3 })])];
-    expect(matched(seriesItems, rules, "SERIES", arrData).get("s1")!.length).toBeGreaterThan(0);
+    expect(matched(seriesItems, rules, "SERIES", arrData).get("s1")).toHaveLength(1);
   });
 
   it("notEquals matches different value", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrMonitoredSeasonCount", operator: "notEquals", value: 10 })])];
-    expect(matched(seriesItems, rules, "SERIES", arrData).get("s1")!.length).toBeGreaterThan(0);
+    expect(matched(seriesItems, rules, "SERIES", arrData).get("s1")).toHaveLength(1);
   });
 
   it("returns false when null", () => {
@@ -515,7 +515,7 @@ describe("arrMonitoredEpisodeCount (numeric, nullable)", () => {
 
   it("greaterThan matches", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrMonitoredEpisodeCount", operator: "greaterThan", value: 20 })])];
-    expect(matched(seriesItems, rules, "SERIES", arrData).get("s1")!.length).toBeGreaterThan(0);
+    expect(matched(seriesItems, rules, "SERIES", arrData).get("s1")).toHaveLength(1);
   });
 
   it("equals does not match different value", () => {
@@ -539,12 +539,12 @@ describe("arrDateAdded (date, nullable)", () => {
 
   it("before matches when date is before value", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrDateAdded", operator: "before", value: "2024-12-01" })])];
-    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
+    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(1);
   });
 
   it("after matches when date is after value", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrDateAdded", operator: "after", value: "2024-01-01" })])];
-    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
+    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(1);
   });
 
   it("after does not match when date is before value", () => {
@@ -554,12 +554,12 @@ describe("arrDateAdded (date, nullable)", () => {
 
   it("equals matches same calendar day", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrDateAdded", operator: "equals", value: "2024-06-15" })])];
-    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
+    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(1);
   });
 
   it("notEquals matches different day", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrDateAdded", operator: "notEquals", value: "2024-01-01" })])];
-    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
+    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(1);
   });
 
   it("notEquals does not match same day", () => {
@@ -570,7 +570,7 @@ describe("arrDateAdded (date, nullable)", () => {
   it("inLastDays matches recent date", () => {
     const recentArr: ArrDataMap = { [tmdbId]: makeArrMeta({ dateAdded: recentDate.toISOString() }) };
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrDateAdded", operator: "inLastDays", value: 10 })])];
-    expect(matched(movieItems, rules, "MOVIE", recentArr).get("m1")!.length).toBeGreaterThan(0);
+    expect(matched(movieItems, rules, "MOVIE", recentArr).get("m1")).toHaveLength(1);
   });
 
   it("inLastDays does not match old date", () => {
@@ -582,7 +582,7 @@ describe("arrDateAdded (date, nullable)", () => {
   it("notInLastDays matches old date", () => {
     const oldArr: ArrDataMap = { [tmdbId]: makeArrMeta({ dateAdded: oldDate.toISOString() }) };
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrDateAdded", operator: "notInLastDays", value: 30 })])];
-    expect(matched(movieItems, rules, "MOVIE", oldArr).get("m1")!.length).toBeGreaterThan(0);
+    expect(matched(movieItems, rules, "MOVIE", oldArr).get("m1")).toHaveLength(1);
   });
 
   it("notInLastDays does not match recent date", () => {
@@ -602,7 +602,7 @@ describe("arrReleaseDate (date, nullable)", () => {
 
   it("before matches", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrReleaseDate", operator: "before", value: "2024-01-01" })])];
-    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
+    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(1);
   });
 
   it("after does not match when date is before", () => {
@@ -612,7 +612,7 @@ describe("arrReleaseDate (date, nullable)", () => {
 
   it("equals matches same day", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrReleaseDate", operator: "equals", value: "2023-07-04" })])];
-    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
+    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(1);
   });
 
   it("returns false when null", () => {
@@ -626,12 +626,12 @@ describe("arrInCinemasDate (date, nullable)", () => {
 
   it("after matches when date is after value", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrInCinemasDate", operator: "after", value: "2023-01-01" })])];
-    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
+    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(1);
   });
 
   it("notEquals matches different day", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrInCinemasDate", operator: "notEquals", value: "2023-06-15" })])];
-    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
+    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(1);
   });
 
   it("returns false when null", () => {
@@ -645,18 +645,18 @@ describe("arrDownloadDate (date, nullable)", () => {
 
   it("before matches", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrDownloadDate", operator: "before", value: "2024-06-01" })])];
-    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
+    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(1);
   });
 
   it("equals matches same day", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrDownloadDate", operator: "equals", value: "2024-02-20" })])];
-    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
+    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(1);
   });
 
   it("inLastDays matches recent download", () => {
     const recentArr: ArrDataMap = { [tmdbId]: makeArrMeta({ downloadDate: recentDate.toISOString() }) };
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrDownloadDate", operator: "inLastDays", value: 10 })])];
-    expect(matched(movieItems, rules, "MOVIE", recentArr).get("m1")!.length).toBeGreaterThan(0);
+    expect(matched(movieItems, rules, "MOVIE", recentArr).get("m1")).toHaveLength(1);
   });
 
   it("returns false when null", () => {
@@ -670,7 +670,7 @@ describe("arrFirstAired (date, nullable)", () => {
 
   it("before matches", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrFirstAired", operator: "before", value: "2021-01-01" })])];
-    expect(matched(seriesItems, rules, "SERIES", arrData).get("s1")!.length).toBeGreaterThan(0);
+    expect(matched(seriesItems, rules, "SERIES", arrData).get("s1")).toHaveLength(1);
   });
 
   it("after does not match when date is before value", () => {
@@ -680,7 +680,7 @@ describe("arrFirstAired (date, nullable)", () => {
 
   it("notInLastDays matches old date", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrFirstAired", operator: "notInLastDays", value: 30 })])];
-    expect(matched(seriesItems, rules, "SERIES", arrData).get("s1")!.length).toBeGreaterThan(0);
+    expect(matched(seriesItems, rules, "SERIES", arrData).get("s1")).toHaveLength(1);
   });
 
   it("returns false when null", () => {
@@ -697,7 +697,7 @@ describe("arrQualityCutoffMet (boolean, nullable)", () => {
   it("equals true matches when cutoff is met", () => {
     const arrData: ArrDataMap = { [tmdbId]: makeArrMeta({ qualityCutoffMet: true }) };
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrQualityCutoffMet", operator: "equals", value: "true" })])];
-    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
+    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(1);
   });
 
   it("equals true does not match when cutoff is not met", () => {
@@ -709,7 +709,7 @@ describe("arrQualityCutoffMet (boolean, nullable)", () => {
   it("notEquals true matches when cutoff is not met", () => {
     const arrData: ArrDataMap = { [tmdbId]: makeArrMeta({ qualityCutoffMet: false }) };
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrQualityCutoffMet", operator: "notEquals", value: "true" })])];
-    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
+    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(1);
   });
 
   it("returns false when null", () => {
@@ -722,30 +722,30 @@ describe("arrCustomFormatScore (number, nullable)", () => {
   it("greaterThanOrEqual matches when the score meets the threshold", () => {
     const arrData: ArrDataMap = { [tmdbId]: makeArrMeta({ customFormatScore: 150 }) };
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrCustomFormatScore", operator: "greaterThanOrEqual", value: 100 })])];
-    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
+    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(1);
   });
 
   it("lessThan matches negative scores below the threshold", () => {
     const arrData: ArrDataMap = { [tmdbId]: makeArrMeta({ customFormatScore: -50 }) };
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrCustomFormatScore", operator: "lessThan", value: 0 })])];
-    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
+    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(1);
   });
 
   it("equals matches a zero score (no `|| null` truthiness bug)", () => {
     const arrData: ArrDataMap = { [tmdbId]: makeArrMeta({ customFormatScore: 0 }) };
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrCustomFormatScore", operator: "equals", value: 0 })])];
-    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
+    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(1);
   });
 
   it("between matches a score inside the range", () => {
     const arrData: ArrDataMap = { [tmdbId]: makeArrMeta({ customFormatScore: 75 }) };
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrCustomFormatScore", operator: "between", value: "50,100" })])];
-    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
+    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(1);
   });
 
   it("isNull matches when the movie has no file (null score)", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrCustomFormatScore", operator: "isNull", value: "" })])];
-    expect(matched(movieItems, rules, "MOVIE", { [tmdbId]: makeArrMeta() }).get("m1")!.length).toBeGreaterThan(0);
+    expect(matched(movieItems, rules, "MOVIE", { [tmdbId]: makeArrMeta() }).get("m1")).toHaveLength(1);
   });
 
   it("comparison returns no match when the score is null", () => {
@@ -758,13 +758,13 @@ describe("arrEnded (boolean, nullable)", () => {
   it("equals true matches ended series", () => {
     const arrData: ArrDataMap = { [tvdbId]: makeArrMeta({ ended: true }) };
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrEnded", operator: "equals", value: "true" })])];
-    expect(matched(seriesItems, rules, "SERIES", arrData).get("s1")!.length).toBeGreaterThan(0);
+    expect(matched(seriesItems, rules, "SERIES", arrData).get("s1")).toHaveLength(1);
   });
 
   it("notEquals false matches ended series", () => {
     const arrData: ArrDataMap = { [tvdbId]: makeArrMeta({ ended: true }) };
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrEnded", operator: "notEquals", value: "false" })])];
-    expect(matched(seriesItems, rules, "SERIES", arrData).get("s1")!.length).toBeGreaterThan(0);
+    expect(matched(seriesItems, rules, "SERIES", arrData).get("s1")).toHaveLength(1);
   });
 
   it("returns false when null", () => {
@@ -777,13 +777,13 @@ describe("arrHasUnaired (boolean, nullable)", () => {
   it("equals true matches when has unaired", () => {
     const arrData: ArrDataMap = { [tvdbId]: makeArrMeta({ hasUnaired: true }) };
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrHasUnaired", operator: "equals", value: "true" })])];
-    expect(matched(seriesItems, rules, "SERIES", arrData).get("s1")!.length).toBeGreaterThan(0);
+    expect(matched(seriesItems, rules, "SERIES", arrData).get("s1")).toHaveLength(1);
   });
 
   it("equals false matches when no unaired", () => {
     const arrData: ArrDataMap = { [tvdbId]: makeArrMeta({ hasUnaired: false }) };
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrHasUnaired", operator: "equals", value: "false" })])];
-    expect(matched(seriesItems, rules, "SERIES", arrData).get("s1")!.length).toBeGreaterThan(0);
+    expect(matched(seriesItems, rules, "SERIES", arrData).get("s1")).toHaveLength(1);
   });
 
   it("returns false when null", () => {
@@ -802,22 +802,22 @@ describe("arrPath (text, nullable)", () => {
 
   it("equals matches exact path (case-insensitive)", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrPath", operator: "equals", value: "/movies/action/the matrix (1999)" })])];
-    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
+    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(1);
   });
 
   it("notEquals matches different path", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrPath", operator: "notEquals", value: "/movies/comedy" })])];
-    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
+    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(1);
   });
 
   it("contains matches substring", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrPath", operator: "contains", value: "matrix" })])];
-    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
+    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(1);
   });
 
   it("matchesWildcard matches pattern", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrPath", operator: "matchesWildcard", value: "/movies/*/The*" })])];
-    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
+    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(1);
   });
 
   it("returns false when null", () => {
@@ -831,22 +831,22 @@ describe("arrOriginalLanguage (text, nullable)", () => {
 
   it("equals matches case-insensitively", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrOriginalLanguage", operator: "equals", value: "english" })])];
-    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
+    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(1);
   });
 
   it("notEquals matches different language", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrOriginalLanguage", operator: "notEquals", value: "french" })])];
-    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
+    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(1);
   });
 
   it("contains (multi-select) matches an exact language from the selected list", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrOriginalLanguage", operator: "contains", value: "english" })])];
-    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
+    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(1);
   });
 
   it("notContains keeps items whose language is not in the selected list", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrOriginalLanguage", operator: "notContains", value: "french" })])];
-    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
+    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(1);
   });
 
   it("returns false when null", () => {
@@ -860,17 +860,17 @@ describe("arrQualityName (text, nullable)", () => {
 
   it("equals matches", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrQualityName", operator: "equals", value: "bluray-2160p remux" })])];
-    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
+    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(1);
   });
 
   it("contains (multi-select) matches an exact quality name from the selected list", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrQualityName", operator: "contains", value: "Bluray-2160p Remux" })])];
-    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
+    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(1);
   });
 
   it("matchesWildcard matches", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrQualityName", operator: "matchesWildcard", value: "Bluray*Remux" })])];
-    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")!.length).toBeGreaterThan(0);
+    expect(matched(movieItems, rules, "MOVIE", arrData).get("m1")).toHaveLength(1);
   });
 
   it("returns false when null", () => {
@@ -884,22 +884,22 @@ describe("arrStatus (text, nullable)", () => {
 
   it("equals matches", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrStatus", operator: "equals", value: "continuing" })])];
-    expect(matched(seriesItems, rules, "SERIES", arrData).get("s1")!.length).toBeGreaterThan(0);
+    expect(matched(seriesItems, rules, "SERIES", arrData).get("s1")).toHaveLength(1);
   });
 
   it("notEquals matches different status", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrStatus", operator: "notEquals", value: "ended" })])];
-    expect(matched(seriesItems, rules, "SERIES", arrData).get("s1")!.length).toBeGreaterThan(0);
+    expect(matched(seriesItems, rules, "SERIES", arrData).get("s1")).toHaveLength(1);
   });
 
   it("contains (multi-select) matches an exact status from the selected list", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrStatus", operator: "contains", value: "continuing" })])];
-    expect(matched(seriesItems, rules, "SERIES", arrData).get("s1")!.length).toBeGreaterThan(0);
+    expect(matched(seriesItems, rules, "SERIES", arrData).get("s1")).toHaveLength(1);
   });
 
   it("matchesWildcard matches", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrStatus", operator: "matchesWildcard", value: "Cont*" })])];
-    expect(matched(seriesItems, rules, "SERIES", arrData).get("s1")!.length).toBeGreaterThan(0);
+    expect(matched(seriesItems, rules, "SERIES", arrData).get("s1")).toHaveLength(1);
   });
 
   it("returns false when null", () => {
@@ -913,22 +913,22 @@ describe("arrSeriesType (text, nullable)", () => {
 
   it("equals matches", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrSeriesType", operator: "equals", value: "standard" })])];
-    expect(matched(seriesItems, rules, "SERIES", arrData).get("s1")!.length).toBeGreaterThan(0);
+    expect(matched(seriesItems, rules, "SERIES", arrData).get("s1")).toHaveLength(1);
   });
 
   it("notEquals matches different type", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrSeriesType", operator: "notEquals", value: "anime" })])];
-    expect(matched(seriesItems, rules, "SERIES", arrData).get("s1")!.length).toBeGreaterThan(0);
+    expect(matched(seriesItems, rules, "SERIES", arrData).get("s1")).toHaveLength(1);
   });
 
   it("contains (multi-select) matches an exact series type from the selected list", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrSeriesType", operator: "contains", value: "standard" })])];
-    expect(matched(seriesItems, rules, "SERIES", arrData).get("s1")!.length).toBeGreaterThan(0);
+    expect(matched(seriesItems, rules, "SERIES", arrData).get("s1")).toHaveLength(1);
   });
 
   it("matchesWildcard matches", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrSeriesType", operator: "matchesWildcard", value: "St?ndard" })])];
-    expect(matched(seriesItems, rules, "SERIES", arrData).get("s1")!.length).toBeGreaterThan(0);
+    expect(matched(seriesItems, rules, "SERIES", arrData).get("s1")).toHaveLength(1);
   });
 
   it("returns false when null", () => {
@@ -946,14 +946,16 @@ describe("External ID source by type", () => {
     const arrData: ArrDataMap = { [tvdbId]: makeArrMeta({ monitored: true }) };
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrMonitored", operator: "equals", value: "true" })])];
     const result = matched(seriesItems, rules, "SERIES", arrData);
-    expect(result.get("s1")!.length).toBeGreaterThan(0);
+    expect(result.get("s1")).toHaveLength(1);
   });
 
   it("SERIES does not use TMDB for arr lookup", () => {
-    // arrData keyed by TMDB ID should not match for series items that only have TVDB
+    // A series item carrying only a TMDB id must not resolve against an
+    // entry keyed by that id: Sonarr's map is keyed by TVDB id.
+    const tmdbOnly = [{ id: "s1", externalIds: [{ source: "TMDB", externalId: tmdbId }] }];
     const arrData: ArrDataMap = { [tmdbId]: makeArrMeta({ monitored: true }) };
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrMonitored", operator: "equals", value: "true" })])];
-    const result = matched(seriesItems, rules, "SERIES", arrData);
+    const result = matched(tmdbOnly, rules, "SERIES", arrData);
     expect(result.get("s1")).toHaveLength(0);
   });
 
@@ -961,13 +963,14 @@ describe("External ID source by type", () => {
     const arrData: ArrDataMap = { [mbId]: makeArrMeta({ monitored: true }) };
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrMonitored", operator: "equals", value: "true" })])];
     const result = matched(musicItems, rules, "MUSIC", arrData);
-    expect(result.get("mu1")!.length).toBeGreaterThan(0);
+    expect(result.get("mu1")).toHaveLength(1);
   });
 
   it("MUSIC does not use TMDB for arr lookup", () => {
+    const tmdbOnly = [{ id: "mu1", externalIds: [{ source: "TMDB", externalId: tmdbId }] }];
     const arrData: ArrDataMap = { [tmdbId]: makeArrMeta({ monitored: true }) };
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrMonitored", operator: "equals", value: "true" })])];
-    const result = matched(musicItems, rules, "MUSIC", arrData);
+    const result = matched(tmdbOnly, rules, "MUSIC", arrData);
     expect(result.get("mu1")).toHaveLength(0);
   });
 
@@ -975,7 +978,7 @@ describe("External ID source by type", () => {
     const arrData: ArrDataMap = { [tmdbId]: makeArrMeta({ monitored: true }) };
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrMonitored", operator: "equals", value: "true" })])];
     const result = matched(movieItems, rules, "MOVIE", arrData);
-    expect(result.get("m1")!.length).toBeGreaterThan(0);
+    expect(result.get("m1")).toHaveLength(1);
   });
 });
 
@@ -1031,7 +1034,7 @@ describe("Negate flag on arr fields", () => {
   it("negate inverts arrMonitored equals false → true (item is monitored)", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrMonitored", operator: "equals", value: "false", negate: true })])];
     const result = matched(movieItems, rules, "MOVIE", arrData);
-    expect(result.get("m1")!.length).toBeGreaterThan(0);
+    expect(result.get("m1")).toHaveLength(1);
   });
 
   it("negate inverts arrRating greaterThan", () => {
@@ -1053,7 +1056,7 @@ describe("Negate flag on arr fields", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "arrTag", operator: "equals", value: "Delete", negate: true })])];
     const result = matched(movieItems, rules, "MOVIE", tagData);
     // "Delete" not in tags → false, negate → true
-    expect(result.get("m1")!.length).toBeGreaterThan(0);
+    expect(result.get("m1")).toHaveLength(1);
   });
 
   it("negate on arrQualityCutoffMet", () => {
@@ -1092,7 +1095,7 @@ describe("foundInArr (boolean presence check)", () => {
   it("equals true matches when item has Arr metadata", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "foundInArr", operator: "equals", value: "true" })])];
     const result = matched(movieItems, rules, "MOVIE", arrData);
-    expect(result.get("m1")!.length).toBeGreaterThan(0);
+    expect(result.get("m1")).toHaveLength(1);
   });
 
   it("equals true does NOT match when item has no Arr metadata", () => {
@@ -1104,7 +1107,7 @@ describe("foundInArr (boolean presence check)", () => {
   it("equals false matches when item has no Arr metadata", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "foundInArr", operator: "equals", value: "false" })])];
     const result = matched(movieItems, rules, "MOVIE", {});
-    expect(result.get("m1")!.length).toBeGreaterThan(0);
+    expect(result.get("m1")).toHaveLength(1);
   });
 
   it("equals false does NOT match when item has Arr metadata", () => {
@@ -1122,7 +1125,7 @@ describe("foundInArr (boolean presence check)", () => {
   it("notEquals true matches when item has no Arr metadata", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "foundInArr", operator: "notEquals", value: "true" })])];
     const result = matched(movieItems, rules, "MOVIE", {});
-    expect(result.get("m1")!.length).toBeGreaterThan(0);
+    expect(result.get("m1")).toHaveLength(1);
   });
 
   it("negate inverts the result", () => {
@@ -1136,21 +1139,21 @@ describe("foundInArr (boolean presence check)", () => {
     const seriesArrData: ArrDataMap = { [tvdbId]: meta };
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "foundInArr", operator: "equals", value: "true" })])];
     const result = matched(seriesItems, rules, "SERIES", seriesArrData);
-    expect(result.get("s1")!.length).toBeGreaterThan(0);
+    expect(result.get("s1")).toHaveLength(1);
   });
 
   it("works for music items via MUSICBRAINZ", () => {
     const musicArrData: ArrDataMap = { [mbId]: meta };
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "foundInArr", operator: "equals", value: "true" })])];
     const result = matched(musicItems, rules, "MUSIC", musicArrData);
-    expect(result.get("mu1")!.length).toBeGreaterThan(0);
+    expect(result.get("mu1")).toHaveLength(1);
   });
 
   it("item without external IDs is not found in Arr", () => {
     const noExternalIdItems = [{ id: "n1", externalIds: [] }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "foundInArr", operator: "equals", value: "false" })])];
     const result = matched(noExternalIdItems, rules, "MOVIE", arrData);
-    expect(result.get("n1")!.length).toBeGreaterThan(0);
+    expect(result.get("n1")).toHaveLength(1);
   });
 });
 
@@ -1200,7 +1203,7 @@ describe("Arr null field is fail-closed across operators and negate", () => {
   });
 
   it("isNull still matches a null field, and NOT(isNull) does not", () => {
-    expect(matched(movieItems, [makeGroup([makeRule({ field: "arrQualityName", operator: "isNull", value: "" })])], "MOVIE", nullData).get("m1")!.length).toBeGreaterThan(0);
+    expect(matched(movieItems, [makeGroup([makeRule({ field: "arrQualityName", operator: "isNull", value: "" })])], "MOVIE", nullData).get("m1")).toHaveLength(1);
     noMatch(makeRule({ field: "arrQualityName", operator: "isNull", value: "", negate: true }));
   });
 });
@@ -1223,7 +1226,7 @@ describe("arrTag isNull / isNotNull (list emptiness)", () => {
     (matched(movieItems, [makeGroup([rule])], "MOVIE", data).get("m1") ?? []).length;
 
   it("isNull matches an item in Arr that carries no tags", () => {
-    expect(count(makeRule({ field: "arrTag", operator: "isNull", value: "" }), untagged)).toBeGreaterThan(0);
+    expect(count(makeRule({ field: "arrTag", operator: "isNull", value: "" }), untagged)).toBe(1);
   });
 
   it("isNull does not match a tagged item", () => {
@@ -1231,7 +1234,7 @@ describe("arrTag isNull / isNotNull (list emptiness)", () => {
   });
 
   it("isNotNull matches a tagged item", () => {
-    expect(count(makeRule({ field: "arrTag", operator: "isNotNull", value: "" }), tagged)).toBeGreaterThan(0);
+    expect(count(makeRule({ field: "arrTag", operator: "isNotNull", value: "" }), tagged)).toBe(1);
   });
 
   it("isNotNull does not match an untagged item", () => {
@@ -1239,9 +1242,9 @@ describe("arrTag isNull / isNotNull (list emptiness)", () => {
   });
 
   it("negate inverts both operators (they stay each other's complement)", () => {
-    expect(count(makeRule({ field: "arrTag", operator: "isNull", value: "", negate: true }), tagged)).toBeGreaterThan(0);
+    expect(count(makeRule({ field: "arrTag", operator: "isNull", value: "", negate: true }), tagged)).toBe(1);
     expect(count(makeRule({ field: "arrTag", operator: "isNull", value: "", negate: true }), untagged)).toBe(0);
-    expect(count(makeRule({ field: "arrTag", operator: "isNotNull", value: "", negate: true }), untagged)).toBeGreaterThan(0);
+    expect(count(makeRule({ field: "arrTag", operator: "isNotNull", value: "", negate: true }), untagged)).toBe(1);
   });
 
   it("stays fail-closed for an item that is not in Arr at all", () => {
@@ -1261,14 +1264,14 @@ describe("arrQualityProfile / arrMonitored isNull / isNotNull (always present)",
     (matched(movieItems, [makeGroup([rule])], "MOVIE", d).get("m1") ?? []).length;
 
   it("arrQualityProfile uses empty-string semantics, like other non-nullable text", () => {
-    expect(count(makeRule({ field: "arrQualityProfile", operator: "isNotNull", value: "" }), data)).toBeGreaterThan(0);
+    expect(count(makeRule({ field: "arrQualityProfile", operator: "isNotNull", value: "" }), data)).toBe(1);
     expect(count(makeRule({ field: "arrQualityProfile", operator: "isNull", value: "" }), data)).toBe(0);
-    expect(count(makeRule({ field: "arrQualityProfile", operator: "isNull", value: "" }), blankProfile)).toBeGreaterThan(0);
+    expect(count(makeRule({ field: "arrQualityProfile", operator: "isNull", value: "" }), blankProfile)).toBe(1);
   });
 
   it("arrMonitored is non-nullable: isNull matches nothing, isNotNull matches every item in Arr", () => {
     expect(count(makeRule({ field: "arrMonitored", operator: "isNull", value: "" }), data)).toBe(0);
-    expect(count(makeRule({ field: "arrMonitored", operator: "isNotNull", value: "" }), data)).toBeGreaterThan(0);
+    expect(count(makeRule({ field: "arrMonitored", operator: "isNotNull", value: "" }), data)).toBe(1);
   });
 
   it("both stay fail-closed for an item that is not in Arr", () => {
@@ -1286,17 +1289,17 @@ describe("foundInArr isNull / isNotNull (presence check)", () => {
   // The valueless operators carry no value, so the equals/notEquals path
   // coerced them to `boolVal = false` and BOTH read as "not found in Arr".
   it("isNotNull means found in Arr", () => {
-    expect(count(makeRule({ field: "foundInArr", operator: "isNotNull", value: "" }), inArr)).toBeGreaterThan(0);
+    expect(count(makeRule({ field: "foundInArr", operator: "isNotNull", value: "" }), inArr)).toBe(1);
     expect(count(makeRule({ field: "foundInArr", operator: "isNotNull", value: "" }), {})).toBe(0);
   });
 
   it("isNull means absent from Arr", () => {
-    expect(count(makeRule({ field: "foundInArr", operator: "isNull", value: "" }), {})).toBeGreaterThan(0);
+    expect(count(makeRule({ field: "foundInArr", operator: "isNull", value: "" }), {})).toBe(1);
     expect(count(makeRule({ field: "foundInArr", operator: "isNull", value: "" }), inArr)).toBe(0);
   });
 
   it("negate inverts them", () => {
-    expect(count(makeRule({ field: "foundInArr", operator: "isNull", value: "", negate: true }), inArr)).toBeGreaterThan(0);
-    expect(count(makeRule({ field: "foundInArr", operator: "isNotNull", value: "", negate: true }), {})).toBeGreaterThan(0);
+    expect(count(makeRule({ field: "foundInArr", operator: "isNull", value: "", negate: true }), inArr)).toBe(1);
+    expect(count(makeRule({ field: "foundInArr", operator: "isNotNull", value: "", negate: true }), {})).toBe(1);
   });
 });

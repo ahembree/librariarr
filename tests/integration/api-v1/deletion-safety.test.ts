@@ -234,13 +234,14 @@ describe("deletion safety of the public API", () => {
 
       const missing = await expectJson<{ details: string[] }>(await execute(key, { ruleSetId: ruleSet.id }), 400);
       expect(missing.details).toEqual(["mediaItemIds: mediaItemIds is required: name every item to act on"]);
-      for (const body of [
-        { ruleSetId: ruleSet.id, mediaItemIds: [] },
-        { ruleSetId: ruleSet.id, mediaItemIds: null },
+      for (const [body, detail] of [
+        [{ ruleSetId: ruleSet.id, mediaItemIds: [] }, "mediaItemIds: mediaItemIds is required: name every item to act on"],
+        [{ ruleSetId: ruleSet.id, mediaItemIds: null }, "mediaItemIds: mediaItemIds is required: name every item to act on"],
         // Unknown fields are refused, not ignored: there is no "all" switch.
-        { ruleSetId: ruleSet.id, mediaItemIds: ["x"], all: true },
-      ]) {
-        await expectJson(await execute(key, body), 400);
+        [{ ruleSetId: ruleSet.id, mediaItemIds: ["x"], all: true }, 'Unrecognized key: "all"'],
+      ] as const) {
+        const refused = await expectJson<{ details: string[] }>(await execute(key, body), 400);
+        expect(refused.details.join("\n")).toContain(detail);
       }
       expect(mockExecuteAction).not.toHaveBeenCalled();
       expect(await prisma.ruleMatch.count({ where: { ruleSetId: ruleSet.id } })).toBe(3);
@@ -296,7 +297,11 @@ describe("deletion safety of the public API", () => {
       expect(mockExecuteAction.mock.calls[0][0].mediaItem.id).toBe(items[0].id);
 
       // Nothing that is a match of this rule set: nothing at all.
-      await expectJson(await execute(key, { ruleSetId: ruleSet.id, mediaItemIds: [unmatched.id] }), 400);
+      const none = await expectJson<{ error: string }>(
+        await execute(key, { ruleSetId: ruleSet.id, mediaItemIds: [unmatched.id] }),
+        400,
+      );
+      expect(none.error).toBe("None of the provided items are matches for this rule set");
       expect(mockExecuteAction).toHaveBeenCalledTimes(1);
     });
 
@@ -306,8 +311,16 @@ describe("deletion safety of the public API", () => {
       const actionsOff = await matchedMovies(user.id, library.id, 1, { actionEnabled: false });
       const key = await executeKey(user.id);
 
-      await expectJson(await execute(key, { ruleSetId: disabled.ruleSet.id, mediaItemIds: [disabled.items[0].id] }), 400);
-      await expectJson(await execute(key, { ruleSetId: actionsOff.ruleSet.id, mediaItemIds: [actionsOff.items[0].id] }), 400);
+      const refusedDisabled = await expectJson<{ error: string }>(
+        await execute(key, { ruleSetId: disabled.ruleSet.id, mediaItemIds: [disabled.items[0].id] }),
+        400,
+      );
+      expect(refusedDisabled.error).toBe("Rule set is disabled — enable it before executing actions");
+      const refusedOff = await expectJson<{ error: string }>(
+        await execute(key, { ruleSetId: actionsOff.ruleSet.id, mediaItemIds: [actionsOff.items[0].id] }),
+        400,
+      );
+      expect(refusedOff.error).toBe("Actions are turned off for this rule set — turn them on before executing");
       expect(mockExecuteAction).not.toHaveBeenCalled();
     });
 
@@ -317,7 +330,11 @@ describe("deletion safety of the public API", () => {
       await prisma.lifecycleException.create({ data: { userId: user.id, mediaItemId: items[0].id } });
       const key = await executeKey(user.id);
 
-      await expectJson(await execute(key, { ruleSetId: ruleSet.id, mediaItemIds: [items[0].id] }), 400);
+      const body = await expectJson<{ error: string }>(
+        await execute(key, { ruleSetId: ruleSet.id, mediaItemIds: [items[0].id] }),
+        400,
+      );
+      expect(body.error).toBe("All selected items are excluded from lifecycle actions");
       expect(mockExecuteAction).not.toHaveBeenCalled();
     });
 
@@ -438,7 +455,11 @@ describe("deletion safety of the public API", () => {
       const { ruleSet, items } = await matchedMovies(user.id, library.id, 3);
       const key = await executeKey(user.id);
 
-      await expectJson(await execute(key, { ruleSetId: ruleSet.id, mediaItemIds: items.map((i) => i.id) }), 400);
+      const body = await expectJson<{ error: string }>(
+        await execute(key, { ruleSetId: ruleSet.id, mediaItemIds: items.map((i) => i.id) }),
+        400,
+      );
+      expect(body.error).toMatch(/^This run would delete 3 item\(s\), above the configured limit of 2\./);
       expect(mockExecuteAction).not.toHaveBeenCalled();
       expect(reserveApiDestructive(0)).toMatchObject({ ok: true, remaining: 100 });
     });
@@ -512,7 +533,8 @@ describe("deletion safety of the public API", () => {
       const rows = await exceptions(user.id, library.id, 26);
       const key = await executeKey(user.id);
 
-      await expectJson(await removeMany(key, rows.map((r) => r.id)), 400);
+      const refused = await expectJson<{ details: string[] }>(await removeMany(key, rows.map((r) => r.id)), 400);
+      expect(refused.details).toEqual(["ids: At most 25 IDs per API request"]);
       expect(await prisma.lifecycleException.count()).toBe(26);
 
       const body = await expectJson<{ deleted: number }>(await removeMany(key, rows.slice(0, 25).map((r) => r.id)), 200);

@@ -242,6 +242,14 @@ describe("callers of recent-login-guarded routes", () => {
     );
   });
 
+  // An exemption for a route that no longer asks for a recent sign-in (or was
+  // renamed) is dead weight that would silently cover whatever takes its key.
+  it("lists exemptions only for methods of routes that are guarded", () => {
+    const guardedKeys = new Set(routes.flatMap((r) => [...r.guarded].map((m) => triggerKey(m, r.path))));
+    const exemptions = [...Object.keys(CAN_TRIGGER), ...Object.keys(CONFIRMS_INLINE)];
+    expect(exemptions.filter((key) => !guardedKeys.has(key))).toEqual([]);
+  });
+
   it("sends every call that can be refused for an old sign-in through fetchWithReauth", () => {
     const unwrapped = calls.flatMap((call) => {
       if (call.wrapped) return [];

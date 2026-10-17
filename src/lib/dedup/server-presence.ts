@@ -25,6 +25,9 @@ export async function getServerPresenceByDedupKey(
       dedupKey: { in: dedupKeys },
       library: { mediaServerId: { in: serverIds } },
     },
+    // A server holding two copies lists the oldest, as getServerPresenceByGroup
+    // does — unordered, which copy's id a badge linked to was arbitrary.
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     select: {
       id: true,
       dedupKey: true,
@@ -57,9 +60,9 @@ export async function getServerPresenceByDedupKey(
     }
   }
 
-  // Sort servers alphabetically within each group
+  // Sort servers alphabetically within each group (two same-named servers by id)
   for (const servers of map.values()) {
-    servers.sort((a, b) => a.serverName.localeCompare(b.serverName));
+    servers.sort((a, b) => a.serverName.localeCompare(b.serverName) || a.serverId.localeCompare(b.serverId));
   }
 
   return map;
@@ -100,7 +103,7 @@ export async function getServerPresenceByGroup(
      JOIN "MediaServer" ms ON l."mediaServerId" = ms.id
      WHERE mi.type = $1::"LibraryType" AND ${notNullCol} IS NOT NULL
        AND l."mediaServerId" = ANY($2::text[])
-     ORDER BY ${groupKeyExpr}, ms.id, mi."createdAt" ASC`,
+     ORDER BY ${groupKeyExpr}, ms.id, mi."createdAt" ASC, mi.id`,
     type,
     serverIds,
   );
@@ -122,7 +125,7 @@ export async function getServerPresenceByGroup(
   }
 
   for (const servers of map.values()) {
-    servers.sort((a, b) => a.serverName.localeCompare(b.serverName));
+    servers.sort((a, b) => a.serverName.localeCompare(b.serverName) || a.serverId.localeCompare(b.serverId));
   }
 
   return map;

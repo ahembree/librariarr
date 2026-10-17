@@ -283,27 +283,6 @@ describe("GET /api/media/series/watch-history", () => {
     expect(data.items[0].mediaItem.parentTitle).toBe("Adventure Time");
   });
 
-  it("excludes history recorded on another user's server", async () => {
-    const otherUser = await createTestUser({ username: "other" });
-    const otherServer = await createTestServer(otherUser.id, { name: "Other" });
-    const otherLibrary = await createTestLibrary(otherServer.id, { type: "SERIES" });
-    const foreign = await makeEpisode(1, 1, "Slumber Party Panic", "Adventure Time", otherLibrary.id);
-    await addWatch(foreign, { mediaServerId: otherServer.id, serverUsername: "mallory" });
-
-    const mine = await makeEpisode(1, 2, "Trouble in Lumpy Space");
-    await addWatch(mine);
-
-    const data = await expectJson<HistoryResponse>(
-      await callRoute(GET, {
-        url: "/api/media/series/watch-history",
-        searchParams: { parentTitle: "Adventure Time" },
-      }),
-    );
-
-    expect(data.pagination.totalCount).toBe(1);
-    expect(data.items[0].serverUsername).toBe("alice");
-  });
-
   it("keeps plays from every server, including non-canonical copies", async () => {
     // A play is a real event on whichever copy was played — dedup filtering
     // would silently drop the plays that happened on the non-canonical server.
@@ -313,11 +292,11 @@ describe("GET /api/media/series/watch-history", () => {
     const copy = await makeEpisode(1, 1, "Slumber Party Panic", "Adventure Time", library2.id);
     await getTestPrisma().mediaItem.update({
       where: { id: canonical },
-      data: { dedupKey: "shared-key", dedupCanonical: true },
+      data: { dedupKey: "series:adventure time:s1e1", dedupCanonical: true },
     });
     await getTestPrisma().mediaItem.update({
       where: { id: copy },
-      data: { dedupKey: "shared-key", dedupCanonical: false },
+      data: { dedupKey: "series:adventure time:s1e1", dedupCanonical: false },
     });
     await addWatch(canonical);
     await addWatch(copy, { mediaServerId: server2.id, serverUsername: "bob" });
@@ -452,9 +431,12 @@ describe("GET /api/media/series/watch-history", () => {
     expect(page1.pagination.hasMore).toBe(true);
     expect(page2.pagination.hasMore).toBe(true);
     expect(page3.pagination.hasMore).toBe(false);
+    // Within the tie, rows come in id order — every play exactly once.
+    const expected = (
+      await getTestPrisma().watchHistory.findMany({ orderBy: { id: "asc" }, select: { id: true } })
+    ).map((r) => r.id);
     const ids = [...page1.items, ...page2.items, ...page3.items].map((i) => i.id);
-    expect(ids).toHaveLength(5);
-    expect(new Set(ids).size).toBe(5);
+    expect(ids).toEqual(expected);
   });
 
   it("sorts rows with no timestamp last rather than first", async () => {

@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import { SETTINGS_TABS } from "./constants";
 
 /**
- * Settings is a single page with seven role="tab" sections. Each tab must be
+ * Settings is a single page with eight role="tab" sections. Each tab must be
  * reachable and render its panel; a saved appearance change must round-trip;
  * and the key empty-state controls for an unconfigured install must be present.
  */
@@ -29,7 +29,8 @@ test.describe("settings", () => {
     // Accent swatches are title-labelled buttons; the selected one shows a check.
     // exact: true avoids matching e.g. the "Reset to defaults" button.
     const violet = page.getByRole("button", { name: "Violet", exact: true });
-    await Promise.all([savedPut(), violet.click()]);
+    const [saved] = await Promise.all([savedPut(), violet.click()]);
+    expect(saved.ok()).toBe(true);
     await expect(violet.locator("svg")).toBeVisible();
 
     // The saved accent is re-fetched on load, so it survives a reload.
@@ -40,7 +41,8 @@ test.describe("settings", () => {
 
     // Reset to the default accent so other specs see a clean baseline.
     const defaultSwatch = page.getByRole("button", { name: "Default", exact: true });
-    await Promise.all([savedPut(), defaultSwatch.click()]);
+    const [reset] = await Promise.all([savedPut(), defaultSwatch.click()]);
+    expect(reset.ok()).toBe(true);
     await expect(defaultSwatch.locator("svg")).toBeVisible();
   });
 

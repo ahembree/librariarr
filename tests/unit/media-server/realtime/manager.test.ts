@@ -79,11 +79,16 @@ type ServerRow = RealtimeServerConfig;
 const jfServer: ServerRow = { id: "j1", name: "JF", type: "JELLYFIN", url: "http://jf", accessToken: "t", tlsSkipVerify: false, userId: "user-1" };
 const plexServer: ServerRow = { id: "p1", name: "Plex", type: "PLEX", url: "http://plex", accessToken: "t", tlsSkipVerify: false, userId: "user-1" };
 
+// Every manager a test builds, so its connections and timers are torn down
+// before the fake clock goes away.
+const managers: RealtimeManager[] = [];
+
 async function setup(servers: ServerRow[], enabled = true) {
   h.appSettings.findFirst.mockResolvedValue({ realtimeSync: enabled });
   h.mediaServer.findMany.mockResolvedValue(servers);
   const { factory, sockets } = makeFactory();
   const mgr = new RealtimeManager(factory);
+  managers.push(mgr);
   await mgr.reconcile();
   return { mgr, sockets };
 }
@@ -96,7 +101,10 @@ describe("RealtimeManager", () => {
     h.enqueueJob.mockResolvedValue(true);
     h.runEnforcerTick.mockResolvedValue(undefined);
   });
-  afterEach(() => vi.useRealTimers());
+  afterEach(() => {
+    for (const mgr of managers.splice(0)) mgr.stopAll();
+    vi.useRealTimers();
+  });
 
   it("opens one connection per enabled server, including multiple of the same type", async () => {
     const { mgr, sockets } = await setup([
@@ -237,10 +245,11 @@ describe("RealtimeManager", () => {
     sockets[0].fireMessage({ MessageType: "LibraryChanged", Data: { ItemsAdded: many } });
     vi.advanceTimersByTime(30_000);
     // The payload names the trigger, so the full sync it starts logs WHY it ran.
-    expect(h.enqueueJob).toHaveBeenCalledWith(
+    expect(h.enqueueJob).toHaveBeenCalledExactlyOnceWith(
       TASK_SYNC_SERVER,
-      { serverId: "j1", trigger: expect.stringContaining("150 changed item(s) exceeds the 100-item") },
-      expect.objectContaining({ jobKey: "sync:j1" }),
+      { serverId: "j1", trigger: "realtime library change: 150 changed item(s) exceeds the 100-item incremental limit" },
+      // The scheduler's jobKey, so a realtime full sync dedupes with a queued one.
+      { jobKey: "sync:j1", queueName: MAIN_QUEUE, maxAttempts: 3 },
     );
     expect(h.enqueueJob.mock.calls.some((c) => c[0] === TASK_SYNC_INCREMENTAL)).toBe(false);
   });
@@ -299,12 +308,23 @@ describe("RealtimeManager", () => {
     });
   });
 
-  it("carries no session data on the bridged event", async () => {
-    const { sockets } = await setup([jfServer]);
+  it("carries no session data on the bridged event, even when the frame had some", async () => {
+    const { sockets } = await setup([plexServer]);
     sockets[0].fireOpen();
+    vi.advanceTimersByTime(2000); // past the bridge's floor, so the next change bridges at once
+    h.appEmit.mockClear();
 
-    const event = h.appEmit.mock.calls.map((c) => c[0]).find((e) => e.type === "session-changed");
-    expect(Object.keys(event.meta)).toEqual(["serverId"]);
+    sockets[0].fireMessage({
+      NotificationContainer: {
+        type: "playing",
+        PlaySessionStateNotification: [
+          { sessionKey: "7", ratingKey: "12345", key: "/library/metadata/12345", viewOffset: 61000, state: "paused" },
+        ],
+      },
+    });
+
+    const sessionEvents = h.appEmit.mock.calls.map((c) => c[0]).filter((e) => e.type === "session-changed");
+    expect(sessionEvents).toEqual([{ type: "session-changed", userId: "user-1", meta: { serverId: "p1" } }]);
   });
 
   it("throttles bridged session changes, so a busy server cannot flood open tabs", async () => {
@@ -330,26 +350,32 @@ describe("RealtimeManager", () => {
     const statusEvents = h.appEmit.mock.calls
       .map((c) => c[0])
       .filter((e) => e.type === "server-status");
-    expect(statusEvents).toHaveLength(1);
-    expect(statusEvents[0].meta).toMatchObject({
-      serverId: "j1",
-      serverName: "JF",
-      connected: true,
-    });
+    // "connecting" (emitted on the way in) is never bridged — only the
+    // terminal state is.
+    expect(statusEvents).toEqual([
+      { type: "server-status", userId: "user-1", meta: { serverId: "j1", serverName: "JF", connected: true } },
+    ]);
   });
 
   it("does not re-emit server-status for a repeated identical state", async () => {
     // A server that is simply down produces a status event per failed reconnect
     // attempt; the browser must not get one event per attempt.
     const { sockets } = await setup([jfServer]);
-    sockets[0].fireOpen();
-    sockets[0].fireOpen();
-    sockets[0].fireOpen();
+    sockets[0].fireOpen(); // connected
+    sockets[0].fireClose(); // disconnected
+    // Two failed reconnect attempts (1s, then 2s backoff), each going
+    // connecting → disconnected on the connection.
+    vi.advanceTimersByTime(1_000);
+    sockets[1].fireClose();
+    vi.advanceTimersByTime(2_000);
+    sockets[2].fireClose();
+    expect(sockets).toHaveLength(3);
 
-    const statusEvents = h.appEmit.mock.calls
+    const bridged = h.appEmit.mock.calls
       .map((c) => c[0])
-      .filter((e) => e.type === "server-status");
-    expect(statusEvents).toHaveLength(1);
+      .filter((e) => e.type === "server-status")
+      .map((e) => e.meta.connected);
+    expect(bridged).toEqual([true, false]);
   });
 
   // ── Self-write suppression ──────────────────────────────────────────
@@ -364,19 +390,19 @@ describe("RealtimeManager", () => {
 
   it("ignores library changes that echo librariarr's own collection writes", async () => {
     const { sockets } = await setup([plexServer]);
-    markSelfWrites("p1", ["col-1", "m1", "m2"]);
+    markSelfWrites("p1", ["300000", "200001", "200002"]);
     sockets[0].fireMessage(plexTimeline([
-      { sectionID: "1", itemID: "col-1", type: 18, state: 5 },
-      { sectionID: "1", itemID: "m1", type: 1, state: 5 },
-      { sectionID: "1", itemID: "m2", type: 1, state: 5 },
+      { sectionID: "1", itemID: "300000", type: 18, state: 5 },
+      { sectionID: "1", itemID: "200001", type: 1, state: 5 },
+      { sectionID: "1", itemID: "200002", type: 1, state: 5 },
       // A real change arriving in the same window is still applied.
-      { sectionID: "1", itemID: "m3", type: 1, state: 5 },
+      { sectionID: "1", itemID: "200003", type: 1, state: 5 },
     ]));
     vi.advanceTimersByTime(30_000);
     expect(h.enqueueJob).toHaveBeenCalledTimes(1);
     expect(h.enqueueJob).toHaveBeenCalledWith(
       TASK_SYNC_INCREMENTAL,
-      { serverId: "p1", changedIds: ["m3"], removedIds: [] },
+      { serverId: "p1", changedIds: ["200003"], removedIds: [] },
       expect.objectContaining({ queueName: MAIN_QUEUE }),
     );
   });
@@ -385,10 +411,10 @@ describe("RealtimeManager", () => {
     // The user-visible bug: detection → collection sync → 150 tagged members →
     // "150 changed items exceeds 100" → whole-server sync, off schedule.
     const { sockets } = await setup([plexServer]);
-    const members = Array.from({ length: 150 }, (_, i) => `m${i}`);
-    markSelfWrites("p1", ["col-1", ...members]);
+    const members = Array.from({ length: 150 }, (_, i) => String(200_000 + i));
+    markSelfWrites("p1", ["300000", ...members]);
     sockets[0].fireMessage(plexTimeline([
-      { sectionID: "1", itemID: "col-1", type: 18, state: 5 },
+      { sectionID: "1", itemID: "300000", type: 18, state: 5 },
       ...members.map((id) => ({ sectionID: "1", itemID: id, type: 1, state: 5 })),
     ]));
     vi.advanceTimersByTime(30_000);
@@ -397,9 +423,9 @@ describe("RealtimeManager", () => {
 
   it("logs one summary line for a burst of suppressed echoes, not one per frame", async () => {
     const { sockets } = await setup([plexServer]);
-    markSelfWrites("p1", ["m1", "m2", "m3"]);
+    markSelfWrites("p1", ["200001", "200002", "200003"]);
     // Plex sends one frame per tagged member.
-    for (const id of ["m1", "m2", "m3"]) {
+    for (const id of ["200001", "200002", "200003"]) {
       sockets[0].fireMessage(plexTimeline([{ sectionID: "1", itemID: id, type: 1, state: 5 }]));
     }
     vi.advanceTimersByTime(30_000);
@@ -407,23 +433,24 @@ describe("RealtimeManager", () => {
       .mocked(logger.info)
       .mock.calls.map((c) => String(c[1]))
       .filter((m) => m.includes("echo"));
-    expect(lines).toHaveLength(1);
-    expect(lines[0]).toContain("Ignored 3 library change(s)");
-    expect(lines[0]).toContain('"Plex"');
+    expect(lines).toEqual([
+      'Ignored 3 library change(s) on server "Plex" that echo librariarr\'s own Plex collection writes — ' +
+        "not a media change, nothing to sync",
+    ]);
   });
 
   it("never suppresses a deletion, even for a marked item", async () => {
     // Nothing librariarr writes deletes media, and a row left alive for media
     // that is gone is the worse failure — so a deletion frame always goes through.
     const { sockets } = await setup([plexServer]);
-    markSelfWrites("p1", ["m1"]);
+    markSelfWrites("p1", ["200001"]);
     sockets[0].fireMessage(plexTimeline([
-      { sectionID: "1", itemID: "m1", type: 1, state: 9, metadataState: "deleted" },
+      { sectionID: "1", itemID: "200001", type: 1, state: 9, metadataState: "deleted" },
     ]));
     vi.advanceTimersByTime(30_000);
     expect(h.enqueueJob).toHaveBeenCalledWith(
       TASK_SYNC_INCREMENTAL,
-      { serverId: "p1", changedIds: ["m1"], removedIds: [] },
+      { serverId: "p1", changedIds: ["200001"], removedIds: [] },
       expect.objectContaining({ queueName: MAIN_QUEUE }),
     );
   });
@@ -435,12 +462,12 @@ describe("RealtimeManager", () => {
       plexServer,
       { id: "p2", name: "Plex B", type: "PLEX", url: "http://b", accessToken: "t", tlsSkipVerify: false, userId: "user-1" },
     ]);
-    markSelfWrites("p1", ["m1"]);
-    sockets[1].fireMessage(plexTimeline([{ sectionID: "1", itemID: "m1", type: 1, state: 5 }]));
+    markSelfWrites("p1", ["200001"]);
+    sockets[1].fireMessage(plexTimeline([{ sectionID: "1", itemID: "200001", type: 1, state: 5 }]));
     vi.advanceTimersByTime(30_000);
     expect(h.enqueueJob).toHaveBeenCalledWith(
       TASK_SYNC_INCREMENTAL,
-      { serverId: "p2", changedIds: ["m1"], removedIds: [] },
+      { serverId: "p2", changedIds: ["200001"], removedIds: [] },
       expect.objectContaining({ queueName: MAIN_QUEUE }),
     );
   });
@@ -449,27 +476,27 @@ describe("RealtimeManager", () => {
     // Same rule as an id-less event: an echo contributes nothing, so it must
     // not hold a real change hostage for as long as a collection sync writes.
     const { sockets } = await setup([plexServer]);
-    markSelfWrites("p1", ["m1"]);
-    sockets[0].fireMessage(plexTimeline([{ sectionID: "1", itemID: "real", type: 1, state: 5 }]));
+    markSelfWrites("p1", ["200001"]);
+    sockets[0].fireMessage(plexTimeline([{ sectionID: "1", itemID: "200100", type: 1, state: 5 }]));
     vi.advanceTimersByTime(4_000);
-    sockets[0].fireMessage(plexTimeline([{ sectionID: "1", itemID: "m1", type: 1, state: 5 }]));
+    sockets[0].fireMessage(plexTimeline([{ sectionID: "1", itemID: "200001", type: 1, state: 5 }]));
     vi.advanceTimersByTime(1_500); // 5.5s after the real change
     expect(h.enqueueJob).toHaveBeenCalledWith(
       TASK_SYNC_INCREMENTAL,
-      { serverId: "p1", changedIds: ["real"], removedIds: [] },
+      { serverId: "p1", changedIds: ["200100"], removedIds: [] },
       expect.objectContaining({ queueName: MAIN_QUEUE }),
     );
   });
 
   it("a mark expires, so a later real change to the same item is applied", async () => {
     const { sockets } = await setup([plexServer]);
-    markSelfWrites("p1", ["m1"]);
+    markSelfWrites("p1", ["200001"]);
     vi.advanceTimersByTime(SELF_WRITE_TTL_MS + 1);
-    sockets[0].fireMessage(plexTimeline([{ sectionID: "1", itemID: "m1", type: 1, state: 5 }]));
+    sockets[0].fireMessage(plexTimeline([{ sectionID: "1", itemID: "200001", type: 1, state: 5 }]));
     vi.advanceTimersByTime(30_000);
     expect(h.enqueueJob).toHaveBeenCalledWith(
       TASK_SYNC_INCREMENTAL,
-      { serverId: "p1", changedIds: ["m1"], removedIds: [] },
+      { serverId: "p1", changedIds: ["200001"], removedIds: [] },
       expect.objectContaining({ queueName: MAIN_QUEUE }),
     );
   });

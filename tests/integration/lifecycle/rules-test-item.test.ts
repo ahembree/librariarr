@@ -87,7 +87,7 @@ describe("POST /api/lifecycle/rules/test-item", () => {
     await disconnectTestDb();
   });
 
-  const validRules = [{ field: "playCount", operator: "equals", value: 0 }];
+  const validRules = [{ id: "r1", field: "playCount", operator: "equals", value: 0, condition: "AND" }];
 
   it("returns 400 when rules use Arr criteria and no enabled Arr instance exists (match-all guard)", async () => {
     const user = await createTestUser();
@@ -103,7 +103,7 @@ describe("POST /api/lifecycle/rules/test-item", () => {
       url: "/api/lifecycle/rules/test-item",
       method: "POST",
       body: {
-        rules: [{ field: "foundInArr", operator: "equals", value: "false" }],
+        rules: [{ id: "r1", field: "foundInArr", operator: "equals", value: "false", condition: "AND" }],
         type: "MOVIE",
         mediaItemId: item.id,
         serverIds: [server.id],
@@ -203,37 +203,11 @@ describe("POST /api/lifecycle/rules/test-item", () => {
         serverIds: ["s1"],
       },
     });
-    await expectJson(response, 404);
-  });
-
-  it("returns 404 for another user's media item", async () => {
-    const user1 = await createTestUser({ plexId: "owner" });
-    const user2 = await createTestUser({ plexId: "intruder" });
-    const server = await createTestServer(user1.id);
-    const library = await createTestLibrary(server.id, { type: "MOVIE" });
-    const item = await createTestMediaItem(library.id, { title: "Private Movie", type: "MOVIE" });
-
-    setMockSession({ isLoggedIn: true, userId: user2.id });
-
-    const response = await callRoute(POST, {
-      url: "/api/lifecycle/rules/test-item",
-      method: "POST",
-      body: {
-        rules: validRules,
-        type: "MOVIE",
-        mediaItemId: item.id,
-        serverIds: [server.id],
-      },
-    });
-    await expectJson(response, 404);
+    expect((await expectJson<{ error: string }>(response, 404)).error).toBe("Media item not found");
   });
 
   it("returns match result for a valid item (matches=true)", async () => {
     mockEvaluateAllRulesInMemory.mockReturnValue(true);
-    const criteriaMap = new Map([["item-id", [{ field: "playCount", operator: "equals", value: "0" }]]]);
-    const actualMap = new Map([["item-id", new Map([["playCount", "0"]])]]);
-    mockGetMatchedCriteriaForItems.mockReturnValue(criteriaMap);
-    mockGetActualValuesForAllRules.mockReturnValue(actualMap);
 
     const user = await createTestUser();
     const server = await createTestServer(user.id);
@@ -244,11 +218,9 @@ describe("POST /api/lifecycle/rules/test-item", () => {
       playCount: 0,
     });
 
-    // Update maps with actual item ID
-    criteriaMap.clear();
-    criteriaMap.set(item.id, [{ field: "playCount", operator: "equals", value: "0" }]);
-    actualMap.clear();
-    actualMap.set(item.id, new Map([["playCount", "0"]]));
+    const criterion = { ruleId: "r1", field: "Play Count", operator: "=", value: "0", negate: false };
+    mockGetMatchedCriteriaForItems.mockReturnValue(new Map([[item.id, [criterion]]]));
+    mockGetActualValuesForAllRules.mockReturnValue(new Map([[item.id, new Map([["r1", "0"]])]]));
 
     setMockSession({ isLoggedIn: true, userId: user.id });
 
@@ -271,6 +243,8 @@ describe("POST /api/lifecycle/rules/test-item", () => {
     }>(response, 200);
 
     expect(body.matches).toBe(true);
+    expect(body.matchedCriteria).toEqual([criterion]);
+    expect(body.actualValues).toEqual({ r1: "0" });
     expect(body.item.id).toBe(item.id);
     expect(body.item.title).toBe("Test Movie");
   });

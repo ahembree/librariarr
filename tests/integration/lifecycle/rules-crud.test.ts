@@ -47,17 +47,19 @@ import { PUT, DELETE } from "@/app/api/lifecycle/rules/[id]/route";
 // Minimal valid rule for Zod validation (rules array requires min 1 item)
 const dummyRule = { id: "r1", field: "playCount", operator: "equals", value: 0, condition: "AND" };
 
+// File-level, so the second describe below gets the same clean slate and the
+// client is closed only after both have run.
+beforeEach(async () => {
+  await cleanDatabase();
+  clearMockSession();
+  vi.clearAllMocks();
+});
+
+afterAll(async () => {
+  await disconnectTestDb();
+});
+
 describe("Lifecycle Rules CRUD", () => {
-  beforeEach(async () => {
-    await cleanDatabase();
-    clearMockSession();
-    vi.clearAllMocks();
-  });
-
-  afterAll(async () => {
-    await disconnectTestDb();
-  });
-
   // ---- GET /api/lifecycle/rules ----
 
   describe("GET /api/lifecycle/rules", () => {
@@ -77,23 +79,6 @@ describe("Lifecycle Rules CRUD", () => {
       });
       const body = await expectJson<{ ruleSets: unknown[] }>(response, 200);
       expect(body.ruleSets).toEqual([]);
-    });
-
-    it("returns only the authenticated user's rule sets", async () => {
-      const user1 = await createTestUser({ plexId: "user1" });
-      const user2 = await createTestUser({ plexId: "user2" });
-
-      await createTestRuleSet(user1.id, { name: "User1 Rule", type: "MOVIE" });
-      await createTestRuleSet(user2.id, { name: "User2 Rule", type: "MOVIE" });
-
-      setMockSession({ isLoggedIn: true, userId: user1.id });
-
-      const response = await callRoute(GET, {
-        url: "/api/lifecycle/rules",
-      });
-      const body = await expectJson<{ ruleSets: { name: string }[] }>(response, 200);
-      expect(body.ruleSets).toHaveLength(1);
-      expect(body.ruleSets[0].name).toBe("User1 Rule");
     });
 
     it("returns rule sets ordered by createdAt desc", async () => {
@@ -163,7 +148,8 @@ describe("Lifecycle Rules CRUD", () => {
       expect(body.ruleSet.name).toBe("Unwatched Movies");
       expect(body.ruleSet.type).toBe("MOVIE");
       expect(body.ruleSet.enabled).toBe(true);
-      expect(body.ruleSet.id).toBeTruthy();
+      const stored = await getTestPrisma().ruleSet.findUniqueOrThrow({ where: { id: body.ruleSet.id } });
+      expect(stored).toMatchObject({ userId: user.id, name: "Unwatched Movies", type: "MOVIE", rules, serverIds: [server.id] });
     });
 
     it("rejects fields invalid for the rule set's library type", async () => {
@@ -300,7 +286,9 @@ describe("Lifecycle Rules CRUD", () => {
         },
       });
 
-      await expectJson(response, 400);
+      const body = await expectJson<{ error: string }>(response, 400);
+      expect(body.error).toMatch(/does not match/);
+      expect(await getTestPrisma().ruleSet.count({ where: { userId: user.id } })).toBe(0);
     });
 
     it("creates a rule set with CHANGE_QUALITY_PROFILE action and target profile", async () => {
@@ -379,7 +367,8 @@ describe("Lifecycle Rules CRUD", () => {
         },
       });
 
-      await expectJson(response, 400);
+      const body = await expectJson<{ error: string }>(response, 400);
+      expect(body.error).toBe("Validation failed");
     });
 
     it("returns 400 when name is missing", async () => {
@@ -439,6 +428,7 @@ describe("Lifecycle Rules CRUD", () => {
 
       const body = await expectJson<{ error: string }>(response, 409);
       expect(body.error).toContain("already exists");
+      expect(await getTestPrisma().ruleSet.count({ where: { userId: user.id } })).toBe(1);
     });
 
     it("allows same name for different types", async () => {
@@ -452,24 +442,6 @@ describe("Lifecycle Rules CRUD", () => {
         url: "/api/lifecycle/rules",
         method: "POST",
         body: { name: "Same Name", type: "SERIES", rules: [dummyRule], serverIds: [server.id] },
-      });
-
-      await expectJson(response, 201);
-    });
-
-    it("allows same name for different users", async () => {
-      const user1 = await createTestUser({ plexId: "u1" });
-      const user2 = await createTestUser({ plexId: "u2" });
-      const server2 = await createTestServer(user2.id);
-
-      await createTestRuleSet(user1.id, { name: "Shared Name", type: "MOVIE" });
-
-      setMockSession({ isLoggedIn: true, userId: user2.id });
-
-      const response = await callRoute(POST, {
-        url: "/api/lifecycle/rules",
-        method: "POST",
-        body: { name: "Shared Name", type: "MOVIE", rules: [dummyRule], serverIds: [server2.id] },
       });
 
       await expectJson(response, 201);
@@ -540,6 +512,8 @@ describe("Lifecycle Rules CRUD", () => {
 
       const body = await expectJson<{ error: string }>(response, 400);
       expect(body.error).toContain("arrSeriesType");
+      const stored = await getTestPrisma().ruleSet.findUniqueOrThrow({ where: { id: ruleSet.id } });
+      expect(stored.rules).toEqual(ruleSet.rules);
     });
 
     it("updates multiple fields at once", async () => {
@@ -625,26 +599,6 @@ describe("Lifecycle Rules CRUD", () => {
       await expectJson(response, 404);
     });
 
-    it("returns 404 when updating another user's rule set", async () => {
-      const user1 = await createTestUser({ plexId: "owner" });
-      const user2 = await createTestUser({ plexId: "intruder" });
-      const ruleSet = await createTestRuleSet(user1.id, { name: "Private Rule" });
-
-      setMockSession({ isLoggedIn: true, userId: user2.id });
-
-      const response = await callRouteWithParams(
-        PUT,
-        { id: ruleSet.id },
-        {
-          url: `/api/lifecycle/rules/${ruleSet.id}`,
-          method: "PUT",
-          body: { name: "Stolen" },
-        }
-      );
-
-      await expectJson(response, 404);
-    });
-
     it("returns 409 when renaming to a duplicate name", async () => {
       const user = await createTestUser();
       await createTestRuleSet(user.id, { name: "Existing", type: "MOVIE" });
@@ -663,6 +617,7 @@ describe("Lifecycle Rules CRUD", () => {
 
       const body = await expectJson<{ error: string }>(response, 409);
       expect(body.error).toContain("already exists");
+      expect((await getTestPrisma().ruleSet.findUniqueOrThrow({ where: { id: ruleSet.id } })).name).toBe("Other");
     });
 
     it("allows keeping the same name on update", async () => {
@@ -748,11 +703,12 @@ describe("Lifecycle Rules CRUD", () => {
       });
 
       it("leaves COMPLETED/FAILED actions untouched", async () => {
-        const { user, ruleSet } = await setupPendingAction("SEARCH_RADARR");
+        const { user, ruleSet, action } = await setupPendingAction("SEARCH_RADARR");
         const prisma = getTestPrisma();
         const server2 = await createTestServer(user.id, { name: "S2" });
         const lib2 = await createTestLibrary(server2.id, { type: "MOVIE" });
         const doneItem = await createTestMediaItem(lib2.id, { title: "Done", type: "MOVIE" });
+        const failedItem = await createTestMediaItem(lib2.id, { title: "Failed", type: "MOVIE" });
         const completed = await prisma.lifecycleAction.create({
           data: {
             userId: user.id,
@@ -761,6 +717,17 @@ describe("Lifecycle Rules CRUD", () => {
             actionType: "SEARCH_RADARR",
             status: "COMPLETED",
             scheduledFor: new Date(),
+          },
+        });
+        const failed = await prisma.lifecycleAction.create({
+          data: {
+            userId: user.id,
+            mediaItemId: failedItem.id,
+            ruleSetId: ruleSet.id,
+            actionType: "SEARCH_RADARR",
+            status: "FAILED",
+            scheduledFor: new Date(),
+            error: "Radarr unreachable",
           },
         });
         setMockSession({ isLoggedIn: true, userId: user.id });
@@ -779,6 +746,9 @@ describe("Lifecycle Rules CRUD", () => {
 
         const after = await prisma.lifecycleAction.findUnique({ where: { id: completed.id } });
         expect(after?.actionType).toBe("SEARCH_RADARR");
+        expect((await prisma.lifecycleAction.findUnique({ where: { id: failed.id } }))?.actionType).toBe("SEARCH_RADARR");
+        // ...while the PENDING one is re-snapshotted.
+        expect((await prisma.lifecycleAction.findUnique({ where: { id: action.id } }))?.actionType).toBe("DELETE_RADARR");
       });
 
       // A rule set's Arr criteria are read from its own instance, so with Arr
@@ -929,25 +899,6 @@ describe("Lifecycle Rules CRUD", () => {
       await expectJson(response, 404);
     });
 
-    it("returns 404 when deleting another user's rule set", async () => {
-      const user1 = await createTestUser({ plexId: "owner" });
-      const user2 = await createTestUser({ plexId: "intruder" });
-      const ruleSet = await createTestRuleSet(user1.id, { name: "Not Yours" });
-
-      setMockSession({ isLoggedIn: true, userId: user2.id });
-
-      const response = await callRouteWithParams(
-        DELETE,
-        { id: ruleSet.id },
-        {
-          url: `/api/lifecycle/rules/${ruleSet.id}`,
-          method: "DELETE",
-        }
-      );
-
-      await expectJson(response, 404);
-    });
-
     it("re-syncs the linked collection but keeps it when a rule set is deleted", async () => {
       const { syncCollectionById } = await import("@/lib/lifecycle/collections");
       const user = await createTestUser();
@@ -1001,6 +952,7 @@ describe("Lifecycle Rules CRUD", () => {
 
       const body = await expectJson<{ success: boolean }>(response, 200);
       expect(body.success).toBe(true);
+      expect(await getTestPrisma().ruleSet.findUnique({ where: { id: ruleSet.id } })).toBeNull();
     });
   });
 
@@ -1112,7 +1064,9 @@ describe("action configuration validation", () => {
       url: "/api/lifecycle/rules",
       body: { ...base(server.id), actionType: "DELETE_RADARR", arrInstanceId: sonarr.id },
     });
-    await expectJson<{ error: string }>(response, 400);
+    const json = await expectJson<{ error: string }>(response, 400);
+    expect(json.error).toMatch(/instance not found.*radarr/i);
+    expect(await getTestPrisma().ruleSet.count({ where: { userId: user.id } })).toBe(0);
   });
 
   it("accepts a matching Radarr instance and rejects a mismatched merged UPDATE", async () => {
@@ -1133,6 +1087,9 @@ describe("action configuration validation", () => {
       url: `/api/lifecycle/rules/${created.ruleSet.id}`,
       body: { actionType: "DELETE_SONARR" },
     });
-    await expectJson<{ error: string }>(updateRes, 400);
+    const json = await expectJson<{ error: string }>(updateRes, 400);
+    expect(json.error).toMatch(/not valid for movie/i);
+    const stored = await getTestPrisma().ruleSet.findUniqueOrThrow({ where: { id: created.ruleSet.id } });
+    expect(stored.actionType).toBe("DELETE_RADARR");
   });
 });

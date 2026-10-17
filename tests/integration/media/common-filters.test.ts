@@ -71,6 +71,10 @@ describe("common media filters", () => {
       await createTestMediaStream(es.id, { streamType: 2, language: "Spanish" });
       await createTestMediaStream(en.id, { streamType: 3, language: "English" });
 
+      // The real values match, so an empty answer below is the escaping.
+      expect(await titles("/api/media/movies?audioLanguage=English")).toEqual(["English Film"]);
+      expect(await titles("/api/media/movies?subtitleLanguage=English")).toEqual(["English Film"]);
+
       expect(await titles("/api/media/movies?audioLanguage=%25")).toEqual([]);
       expect(await titles("/api/media/movies?subtitleLanguage=Engl_sh")).toEqual([]);
       expect(await titles("/api/media/movies?audioLanguage=%25|Engl_sh")).toEqual([]);
@@ -141,19 +145,42 @@ describe("common media filters", () => {
       }
 
       const genre = "genre=SCI-FI";
-      const count = async (
+      // The names each listing returned, sorted: a count alone would pass a
+      // listing that returned the wrong rows.
+      const names = async (
         handler: Parameters<typeof callRoute>[0],
         url: string,
         key: string,
-      ) => (await expectJson<Record<string, unknown[]>>(await callRoute(handler, { url }), 200))[key].length;
+        field: string,
+      ) =>
+        (await expectJson<Record<string, Record<string, unknown>[]>>(await callRoute(handler, { url }), 200))[key]
+          .map((row) => String(row[field]))
+          .sort();
 
-      expect(await count(seriesGET, `/api/media/series?${genre}`, "items")).toBe(2);
-      expect(await count(seriesGroupedGET, `/api/media/series/grouped?${genre}`, "series")).toBe(2);
-      expect(await count(allSeasonsGET, `/api/media/series/all-seasons?${genre}`, "seasons")).toBe(2);
-      expect(await count(musicGET, `/api/media/music?${genre}`, "items")).toBe(3);
-      expect(await count(musicGroupedGET, `/api/media/music/grouped?${genre}`, "artists")).toBe(2);
-      expect(await count(albumsGET, `/api/media/music/albums?parentTitle=Ann&${genre}`, "albums")).toBe(2);
-      expect(await count(allAlbumsGET, `/api/media/music/albums/all?limit=0&${genre}`, "albums")).toBe(3);
+      expect(await names(seriesGET, `/api/media/series?${genre}`, "items", "parentTitle")).toEqual(["Alpha", "Beta"]);
+      expect(await names(seriesGroupedGET, `/api/media/series/grouped?${genre}`, "series", "parentTitle")).toEqual([
+        "Alpha",
+        "Beta",
+      ]);
+      expect(await names(allSeasonsGET, `/api/media/series/all-seasons?${genre}`, "seasons", "parentTitle")).toEqual([
+        "Alpha",
+        "Beta",
+      ]);
+      expect(await names(musicGET, `/api/media/music?${genre}`, "items", "albumTitle")).toEqual([
+        "First",
+        "Second",
+        "Third",
+      ]);
+      expect(await names(musicGroupedGET, `/api/media/music/grouped?${genre}`, "artists", "parentTitle")).toEqual([
+        "Ann",
+        "Bob",
+      ]);
+      expect(
+        await names(albumsGET, `/api/media/music/albums?parentTitle=Ann&${genre}`, "albums", "albumTitle"),
+      ).toEqual(["First", "Second"]);
+      expect(
+        await names(allAlbumsGET, `/api/media/music/albums/all?limit=0&${genre}`, "albums", "albumTitle"),
+      ).toEqual(["First", "Second", "Third"]);
     });
   });
 });

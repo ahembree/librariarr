@@ -1,9 +1,21 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ssoConfigSchema,
   ssoLinkSchema,
   ssoTestSchema,
 } from "@/lib/validation";
+
+// The issuer rule reads OIDC_ALLOW_INSECURE_HTTP; these tests assume it unset.
+beforeEach(() => {
+  vi.stubEnv("OIDC_ALLOW_INSECURE_HTTP", "");
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
+/** `path: message` for each issue of a failed parse. */
+const issuesOf = (result: { error?: { issues: Array<{ path: PropertyKey[]; message: string }> } }) =>
+  result.error?.issues.map((i) => `${i.path.join(".")}: ${i.message}`);
 
 describe("ssoConfigSchema", () => {
   it("accepts the empty object (partial updates allowed)", () => {
@@ -44,6 +56,7 @@ describe("ssoConfigSchema", () => {
       oidcIssuer: "idp.example.com/auth",
     });
     expect(result.success).toBe(false);
+    expect(issuesOf(result)).toContain("oidcIssuer: Issuer must be a URL starting with https://");
   });
 
   it("accepts an empty-string issuer (used to clear the field)", () => {
@@ -67,6 +80,7 @@ describe("ssoConfigSchema", () => {
   it("rejects scopes missing 'openid'", () => {
     const result = ssoConfigSchema.safeParse({ oidcScopes: "profile email" });
     expect(result.success).toBe(false);
+    expect(issuesOf(result)).toEqual(["oidcScopes: Scopes must include 'openid'"]);
   });
 
   it("accepts scopes containing 'openid' in any position", () => {
@@ -113,7 +127,8 @@ describe("ssoTestSchema", () => {
     ).toBe(true);
     const lan = ssoTestSchema.safeParse({ oidcIssuer: "http://idp.lan:9000" });
     expect(lan.success).toBe(false);
-    expect(JSON.stringify(lan.error?.issues)).toMatch(/https/);
+    expect(issuesOf(lan)).toHaveLength(1);
+    expect(issuesOf(lan)?.[0]).toMatch(/^oidcIssuer: Issuer must use https:\/\//);
     expect(ssoConfigSchema.safeParse({ oidcIssuer: "http://idp.lan:9000" }).success).toBe(false);
     expect(ssoConfigSchema.safeParse({ oidcIssuer: "http://127.0.0.1:9000" }).success).toBe(true);
   });

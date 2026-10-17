@@ -55,3 +55,10 @@ export function invalidateRuleSetNameCaches(): void {
   appCache.invalidate("distinct-values");
   appCache.invalidate("query-distinct-values");
 }
+
+/**
+ * `/api/integrations/health`'s cached answer. One key, not one per user: the
+ * app has a single admin. Kept here so the route that caches it and the
+ * routes that drop it (`invalidateSeerrCaches`) cannot name different keys.
+ */
+export const INTEGRATIONS_HEALTH_CACHE_KEY = "integrations:health";

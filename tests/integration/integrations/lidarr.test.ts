@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
-import { cleanDatabase, disconnectTestDb } from "../../setup/test-db";
+import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
+import { MASKED_VALUE } from "@/lib/api/sanitize";
 import {
   callRoute,
   callRouteWithParams,
@@ -48,7 +49,7 @@ describe("Lidarr integration endpoints", () => {
     await cleanDatabase();
     clearMockSession();
     vi.clearAllMocks();
-    mockTestConnection.mockResolvedValue({ ok: true, appName: "Lidarr", version: "2.0" });
+    mockTestConnection.mockResolvedValue({ ok: true, appName: "Lidarr", version: "2.9.6.4552" });
     mockGetArtists.mockResolvedValue([]);
     mockGetQualityProfiles.mockResolvedValue([{ id: 1, name: "Lossless" }]);
     mockGetTags.mockResolvedValue([{ id: 1, label: "test-tag" }]);
@@ -86,19 +87,6 @@ describe("Lidarr integration endpoints", () => {
       expect(body.instances).toHaveLength(1);
       expect(body.instances[0].name).toBe("My Lidarr");
     });
-
-    it("does not return instances belonging to another user", async () => {
-      const user1 = await createTestUser({ plexId: "user1" });
-      const user2 = await createTestUser({ plexId: "user2" });
-      await createTestLidarrInstance(user1.id, { name: "User1 Lidarr" });
-      await createTestLidarrInstance(user2.id, { name: "User2 Lidarr" });
-      setMockSession({ userId: user2.id, isLoggedIn: true });
-
-      const response = await callRoute(GET, { url: "/api/integrations/lidarr" });
-      const body = await expectJson<{ instances: { name: string }[] }>(response, 200);
-      expect(body.instances).toHaveLength(1);
-      expect(body.instances[0].name).toBe("User2 Lidarr");
-    });
   });
 
   // ----- POST /api/integrations/lidarr -----
@@ -124,7 +112,10 @@ describe("Lidarr integration endpoints", () => {
         method: "POST",
         body: { url: "http://lidarr:8686", apiKey: "key" },
       });
-      expect(res1.status).toBe(400);
+      expect(await expectJson(res1, 400)).toEqual({
+        error: "Validation failed",
+        details: [expect.stringMatching(/^name: /)],
+      });
 
       // Missing url
       const res2 = await callRoute(POST, {
@@ -132,7 +123,10 @@ describe("Lidarr integration endpoints", () => {
         method: "POST",
         body: { name: "Lidarr", apiKey: "key" },
       });
-      expect(res2.status).toBe(400);
+      expect(await expectJson(res2, 400)).toEqual({
+        error: "Validation failed",
+        details: [expect.stringMatching(/^url: /)],
+      });
 
       // Missing apiKey
       const res3 = await callRoute(POST, {
@@ -140,7 +134,13 @@ describe("Lidarr integration endpoints", () => {
         method: "POST",
         body: { name: "Lidarr", url: "http://lidarr:8686" },
       });
-      expect(res3.status).toBe(400);
+      expect(await expectJson(res3, 400)).toEqual({
+        error: "Validation failed",
+        details: [expect.stringMatching(/^apiKey: /)],
+      });
+
+      expect(mockTestConnection).not.toHaveBeenCalled();
+      expect(await getTestPrisma().lidarrInstance.count()).toBe(0);
     });
 
     it("returns 400 when connection test fails", async () => {
@@ -155,8 +155,8 @@ describe("Lidarr integration endpoints", () => {
         body: { name: "Bad Lidarr", url: "http://bad:8686", apiKey: "key" },
       });
       const body = await expectJson<{ error: string; detail: string }>(response, 400);
-      expect(body.error).toContain("Failed to connect to Lidarr");
-      expect(body.detail).toBe("Connection refused");
+      expect(body).toEqual({ error: "Failed to connect to Lidarr", detail: "Connection refused" });
+      expect(await getTestPrisma().lidarrInstance.count()).toBe(0);
     });
 
     it("creates a new instance on success", async () => {
@@ -175,7 +175,19 @@ describe("Lidarr integration endpoints", () => {
       );
       expect(body.instance.name).toBe("My Lidarr");
       expect(body.instance.url).toBe("http://lidarr:8686");
-      expect(body.instance.id).toBeDefined();
+      // The stored key never goes back to the browser.
+      expect(body.instance).toMatchObject({ apiKey: MASKED_VALUE });
+      expect(mockTestConnection).toHaveBeenCalledTimes(1);
+
+      const stored = await getTestPrisma().lidarrInstance.findUnique({ where: { id: body.instance.id } });
+      expect(stored).toMatchObject({
+        userId: user.id,
+        name: "My Lidarr",
+        url: "http://lidarr:8686",
+        apiKey: "test-key",
+        externalUrl: null,
+        enabled: true,
+      });
     });
 
     it("strips trailing slashes from url", async () => {
@@ -222,21 +234,6 @@ describe("Lidarr integration endpoints", () => {
       expect(body.error).toBe("Not found");
     });
 
-    it("returns 404 when instance belongs to another user", async () => {
-      const user1 = await createTestUser({ plexId: "owner" });
-      const user2 = await createTestUser({ plexId: "intruder" });
-      const instance = await createTestLidarrInstance(user1.id);
-      setMockSession({ userId: user2.id, isLoggedIn: true });
-
-      const response = await callRouteWithParams(
-        PUT,
-        { id: instance.id },
-        { url: `/api/integrations/lidarr/${instance.id}`, method: "PUT", body: { name: "Hacked" } }
-      );
-      const body = await expectJson<{ error: string }>(response, 404);
-      expect(body.error).toBe("Not found");
-    });
-
     it("returns 400 when connection test fails on update", async () => {
       mockTestConnection.mockResolvedValue({ ok: false, error: "Timeout" });
 
@@ -253,8 +250,11 @@ describe("Lidarr integration endpoints", () => {
           body: { url: "http://bad:8686" },
         }
       );
-      const body = await expectJson<{ error: string }>(response, 400);
-      expect(body.error).toContain("Failed to connect to Lidarr");
+      const body = await expectJson<{ error: string; detail: string }>(response, 400);
+      expect(body).toEqual({ error: "Failed to connect to Lidarr", detail: "Timeout" });
+
+      const stored = await getTestPrisma().lidarrInstance.findUnique({ where: { id: instance.id } });
+      expect(stored!.url).toBe(instance.url);
     });
 
     it("updates instance fields successfully", async () => {
@@ -274,6 +274,11 @@ describe("Lidarr integration endpoints", () => {
       const body = await expectJson<{ instance: { name: string; url: string } }>(response, 200);
       expect(body.instance.name).toBe("Updated Lidarr");
       expect(body.instance.url).toBe("http://new-lidarr:8686");
+      // A new URL is tested before it is saved.
+      expect(mockTestConnection).toHaveBeenCalledTimes(1);
+
+      const stored = await getTestPrisma().lidarrInstance.findUnique({ where: { id: instance.id } });
+      expect(stored).toMatchObject({ name: "Updated Lidarr", url: "http://new-lidarr:8686" });
     });
   });
 
@@ -301,21 +306,6 @@ describe("Lidarr integration endpoints", () => {
           url: "/api/integrations/lidarr/00000000-0000-0000-0000-000000000000",
           method: "DELETE",
         }
-      );
-      const body = await expectJson<{ error: string }>(response, 404);
-      expect(body.error).toBe("Not found");
-    });
-
-    it("returns 404 when deleting another user's instance", async () => {
-      const user1 = await createTestUser({ plexId: "owner" });
-      const user2 = await createTestUser({ plexId: "intruder" });
-      const instance = await createTestLidarrInstance(user1.id);
-      setMockSession({ userId: user2.id, isLoggedIn: true });
-
-      const response = await callRouteWithParams(
-        DELETE,
-        { id: instance.id },
-        { url: `/api/integrations/lidarr/${instance.id}`, method: "DELETE" }
       );
       const body = await expectJson<{ error: string }>(response, 404);
       expect(body.error).toBe("Not found");
@@ -363,14 +353,21 @@ describe("Lidarr integration endpoints", () => {
         method: "POST",
         body: { apiKey: "key" },
       });
-      expect(res1.status).toBe(400);
+      expect(await expectJson(res1, 400)).toEqual({
+        error: "Validation failed",
+        details: [expect.stringMatching(/^url: /)],
+      });
 
       const res2 = await callRoute(TEST_POST, {
         url: "/api/integrations/lidarr/test",
         method: "POST",
         body: { url: "http://lidarr:8686" },
       });
-      expect(res2.status).toBe(400);
+      expect(await expectJson(res2, 400)).toEqual({
+        error: "Validation failed",
+        details: [expect.stringMatching(/^apiKey: /)],
+      });
+      expect(mockTestConnection).not.toHaveBeenCalled();
     });
 
     it("returns connection test result on success", async () => {
@@ -447,28 +444,35 @@ describe("Lidarr integration endpoints", () => {
 
       mockGetArtists.mockResolvedValue([
         {
-          foreignArtistId: "artist-abc-123",
-          tags: [1],
+          id: 7,
+          artistName: "Radiohead",
+          foreignArtistId: "a74b1b7f-71a5-4011-9441-d0b5e4122711",
           qualityProfileId: 1,
+          metadataProfileId: 1,
           monitored: true,
-          ratings: { value: 9.1 },
+          path: "/music/Radiohead",
+          tags: [1],
+          ratings: { votes: 412, value: 9.1 },
+          status: "continuing",
         },
       ]);
 
       const response = await callRouteWithParams(METADATA_GET, { id: instance.id });
-      const body = await expectJson<{
-        artists: Record<string, { tags: string[]; qualityProfile: string; monitored: boolean; rating: number | null }>;
-        tags: { id: number; label: string }[];
-        qualityProfiles: { id: number; name: string }[];
-      }>(response, 200);
+      const body = await expectJson(response, 200);
 
-      expect(body.artists["artist-abc-123"]).toBeDefined();
-      expect(body.artists["artist-abc-123"].tags).toEqual(["test-tag"]);
-      expect(body.artists["artist-abc-123"].qualityProfile).toBe("Lossless");
-      expect(body.artists["artist-abc-123"].monitored).toBe(true);
-      expect(body.artists["artist-abc-123"].rating).toBe(9.1);
-      expect(body.tags).toHaveLength(1);
-      expect(body.qualityProfiles).toHaveLength(1);
+      expect(body).toEqual({
+        artists: {
+          "a74b1b7f-71a5-4011-9441-d0b5e4122711": {
+            tags: ["test-tag"],
+            qualityProfile: "Lossless",
+            monitored: true,
+            rating: 9.1,
+          },
+        },
+        tags: [{ id: 1, label: "test-tag" }],
+        qualityProfiles: [{ id: 1, name: "Lossless" }],
+        statuses: ["continuing"],
+      });
     });
   });
 });

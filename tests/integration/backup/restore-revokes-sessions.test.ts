@@ -155,10 +155,17 @@ describe("restore vs session revocation", () => {
     const current = await signIn(rotateSession, user.id);
     expect((await getSession()).isLoggedIn).toBe(true);
 
+    // The new version is one past the largest of the file's (0), the one in
+    // use (4) and the seconds since 2024 — the floor no earlier cookie reaches.
+    const secondsSince2024 = () => Math.floor((Date.now() - Date.UTC(2024, 0, 1)) / 1000);
+    const floorBefore = secondsSince2024();
     await restoreBackup(filename);
+    const floorAfter = secondsSince2024();
 
     const restored = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
     expect(restored.sessionVersion).toBeGreaterThan(4);
+    expect(restored.sessionVersion).toBeGreaterThanOrEqual(floorBefore + 1);
+    expect(restored.sessionVersion).toBeLessThanOrEqual(floorAfter + 1);
     store.jar.set(COOKIE, current);
     expect((await getSession()).isLoggedIn).toBe(false);
 

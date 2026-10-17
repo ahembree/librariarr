@@ -13,32 +13,25 @@ export function getTestPrisma(): PrismaClient {
   return _prisma;
 }
 
+let appTables: string | null = null;
+
 /**
- * Delete all data from tables in reverse-dependency order.
+ * Empty every application table. The list is read from the database once, so
+ * a model added later is cleaned without anyone remembering to list it here —
+ * the hand-kept list had missed SystemConfig (which nothing cascades to, so
+ * the Plex client id leaked from one test into the next), TracearrInstance,
+ * Collection, RuleMatch, LifecycleException and WatchHistory.
  */
 export async function cleanDatabase() {
   const prisma = getTestPrisma();
-  await prisma.trashManagedResource.deleteMany();
-  await prisma.lifecycleAction.deleteMany();
-  await prisma.logEntry.deleteMany();
-  await prisma.mediaStream.deleteMany();
-  await prisma.mediaItemExternalId.deleteMany();
-  await prisma.mediaItem.deleteMany();
-  await prisma.syncJob.deleteMany();
-  await prisma.library.deleteMany();
-  await prisma.ruleSet.deleteMany();
-  await prisma.sonarrInstance.deleteMany();
-  await prisma.radarrInstance.deleteMany();
-  await prisma.lidarrInstance.deleteMany();
-  await prisma.blackoutSchedule.deleteMany();
-  await prisma.prerollSchedule.deleteMany();
-  await prisma.prerollPreset.deleteMany();
-  await prisma.savedQuery.deleteMany();
-  await prisma.seerrInstance.deleteMany();
-  await prisma.appSettings.deleteMany();
-  await prisma.apiKey.deleteMany();
-  await prisma.mediaServer.deleteMany();
-  await prisma.user.deleteMany();
+  if (appTables === null) {
+    const rows = await prisma.$queryRaw<{ tablename: string }[]>`
+      SELECT tablename FROM pg_tables
+      WHERE schemaname = 'public' AND tablename <> '_prisma_migrations'
+      ORDER BY tablename`;
+    appTables = rows.map((r) => `"public"."${r.tablename}"`).join(", ");
+  }
+  await prisma.$executeRawUnsafe(`TRUNCATE TABLE ${appTables} CASCADE`);
 }
 
 export async function disconnectTestDb() {

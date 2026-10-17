@@ -41,10 +41,14 @@ describe("GET/PUT /api/settings/ai", () => {
   it("returns defaults when nothing is saved", async () => {
     await login();
     const body = await expectJson<any>(await callRoute(GET));
-    expect(body.enabled).toBe(false);
-    expect(body.provider).toBe("openai-compatible");
-    expect(body.apiKey).toBe("");
-    expect(body.hasApiKey).toBe(false);
+    expect(body).toEqual({
+      enabled: false,
+      provider: "openai-compatible",
+      baseUrl: "",
+      model: "",
+      apiKey: "",
+      hasApiKey: false,
+    });
   });
 
   it("saves settings and masks the key on the way out", async () => {
@@ -64,7 +68,7 @@ describe("GET/PUT /api/settings/ai", () => {
     expect(got.hasApiKey).toBe(true);
 
     // Re-saving with the mask must NOT overwrite the stored key.
-    await callRoute(PUT, { method: "PUT", body: { baseUrl: "", apiKey: MASK, model: "claude-y" } });
+    await expectJson(await callRoute(PUT, { method: "PUT", body: { baseUrl: "", apiKey: MASK, model: "claude-y" } }));
     const raw = await getTestPrisma().appSettings.findUnique({ where: { userId: user.id } });
     expect(raw?.aiApiKey).toBe("secret");
     expect(raw?.aiModel).toBe("claude-y");
@@ -85,29 +89,40 @@ describe("GET/PUT /api/settings/ai", () => {
     }
     const raw = await getTestPrisma().appSettings.findUnique({ where: { userId: user.id } });
     expect(raw?.aiBaseUrl).toBe("https://api.openai.com/v1");
+    expect(raw?.aiApiKey).toBe("secret");
 
     // A key of the caller's own goes with the new URL; so does a recent sign-in.
     await expectJson(await callRoute(PUT, { method: "PUT", body: { baseUrl: "https://other.example/v1", apiKey: "new-key" } }), 200);
     setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() });
     await expectJson(await callRoute(PUT, { method: "PUT", body: { baseUrl: "https://third.example/v1", apiKey: MASK } }), 200);
+    const saved = await getTestPrisma().appSettings.findUnique({ where: { userId: user.id } });
+    expect(saved?.aiBaseUrl).toBe("https://third.example/v1");
+    expect(saved?.aiApiKey).toBe("new-key");
   });
 
   it("clears the key with an empty string", async () => {
     const user = await login();
-    await callRoute(PUT, { method: "PUT", body: { model: "m", apiKey: "k" } });
-    await callRoute(PUT, { method: "PUT", body: { apiKey: "" } });
+    await expectJson(await callRoute(PUT, { method: "PUT", body: { model: "m", apiKey: "k" } }));
+    expect((await getTestPrisma().appSettings.findUnique({ where: { userId: user.id } }))?.aiApiKey).toBe("k");
+    const body = await expectJson<any>(await callRoute(PUT, { method: "PUT", body: { apiKey: "" } }));
+    expect(body.hasApiKey).toBe(false);
     const raw = await getTestPrisma().appSettings.findUnique({ where: { userId: user.id } });
     expect(raw?.aiApiKey).toBeNull();
   });
 
   it("rejects enabling without a model", async () => {
-    await login();
+    const user = await login();
     const body = await expectJson<any>(await callRoute(PUT, { method: "PUT", body: { enabled: true } }), 400);
-    expect(body.error).toContain("model");
+    expect(body.error).toBe("Set a model before enabling the AI assistant.");
+    expect(await getTestPrisma().appSettings.findUnique({ where: { userId: user.id } })).toBeNull();
   });
 
   it("rejects an invalid provider", async () => {
-    await login();
-    await expectJson(await callRoute(PUT, { method: "PUT", body: { provider: "gemini" } }), 400);
+    const user = await login();
+    const body = await expectJson<any>(await callRoute(PUT, { method: "PUT", body: { provider: "gemini" } }), 400);
+    expect(body.error).toBe("Validation failed");
+    expect(body.details).toHaveLength(1);
+    expect(body.details[0]).toMatch(/^provider: /);
+    expect(await getTestPrisma().appSettings.findUnique({ where: { userId: user.id } })).toBeNull();
   });
 });

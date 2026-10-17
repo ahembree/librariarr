@@ -100,6 +100,10 @@ function makeAction(overrides: Partial<ActionRecord> = {}): ActionRecord {
 }
 
 describe("extractActionError", () => {
+  beforeEach(() => {
+    vi.mocked(axios.isAxiosError).mockReturnValue(false);
+  });
+
   it("returns message from Error instance", () => {
     expect(extractActionError(new Error("something broke"))).toBe("something broke");
   });
@@ -164,13 +168,14 @@ describe("extractActionError", () => {
 
 describe("executeAction", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     vi.mocked(axios.isAxiosError).mockReturnValue(false);
   });
 
   it("handles DO_NOTHING action type without calling any client", async () => {
     const action = makeAction({ actionType: "DO_NOTHING", addArrTags: [], removeArrTags: [] });
-    await executeAction(action);
+    await expect(executeAction(action)).resolves.toEqual({});
+    expect(mockPrisma.radarrInstance.findUnique).not.toHaveBeenCalled();
     expect(mockRadarrClient.deleteMovie).not.toHaveBeenCalled();
     expect(mockSonarrClient.deleteSeries).not.toHaveBeenCalled();
   });
@@ -485,15 +490,20 @@ describe("executeAction", () => {
     mockRadarrClient.getTags.mockResolvedValue([{ id: 1, label: "existing" }]);
     mockRadarrClient.createTag.mockResolvedValue({ id: 2, label: "new-tag" });
     mockRadarrClient.updateMovie.mockResolvedValue({});
+    mockRadarrClient.deleteMovie.mockResolvedValue(undefined);
 
     await executeAction(makeAction({
-      actionType: "DO_NOTHING",
+      actionType: "DELETE_RADARR",
       addArrTags: ["new-tag"],
       removeArrTags: ["existing"],
     }));
 
     expect(mockRadarrClient.createTag).toHaveBeenCalledWith("new-tag");
     expect(mockRadarrClient.updateMovie).toHaveBeenCalledWith(1, { tags: [2] });
+    expect(mockRadarrClient.deleteMovie).toHaveBeenCalledWith(1, true, false);
+    expect(mockRadarrClient.updateMovie.mock.invocationCallOrder[0]).toBeLessThan(
+      mockRadarrClient.deleteMovie.mock.invocationCallOrder[0],
+    );
   });
 
   it("executes MONITOR_DELETE_FILES_RADARR — re-monitors then deletes files", async () => {
@@ -555,10 +565,12 @@ describe("executeAction", () => {
       },
     });
 
-    await executeAction(action);
+    const outcome = await executeAction(action);
 
     expect(mockSonarrClient.updateSeries).toHaveBeenCalledWith(2, { monitored: false });
     expect(mockSonarrClient.deleteEpisodeFiles).toHaveBeenCalledWith([10, 11]);
+    // E03 (file 12) did not match and is left alone.
+    expect(outcome).toEqual({ deletedMemberIds: ["ep1", "ep2"] });
   });
 
   describe("Sonarr episode-file correlation", () => {
@@ -628,9 +640,10 @@ describe("executeAction", () => {
         { id: 502, seasonNumber: 1, episodeNumber: 2, episodeFileId: 2, airDate: "2019-01-08" },
       ]);
 
-      await executeAction(sonarrAction("DELETE_FILES_SONARR", ["ep30", "ep2"]));
+      const outcome = await executeAction(sonarrAction("DELETE_FILES_SONARR", ["ep30", "ep2"]));
 
       expect(mockSonarrClient.deleteEpisodeFiles).toHaveBeenCalledWith([2]);
+      expect(outcome.deletedMemberIds).toEqual(["ep2"]);
     });
 
     it("fails rather than reporting success when no matched episode exists in Sonarr", async () => {
@@ -947,7 +960,7 @@ describe("executeAction", () => {
       { id: 3, albumId: 11, trackFileId: 103, title: "Song One", hasFile: true },
     ]);
 
-    await executeAction(makeAction({
+    const outcome = await executeAction(makeAction({
       actionType: "DELETE_FILES_LIDARR",
       matchedMediaItemIds: ["track-1"],
       mediaItem: {
@@ -958,6 +971,7 @@ describe("executeAction", () => {
 
     // Only the matched track's file is deleted; deleteArtist is never called.
     expect(mockLidarrClient.deleteTrackFiles).toHaveBeenCalledWith([101]);
+    expect(outcome.deletedMemberIds).toEqual(["track-1"]);
     expect(mockLidarrClient.deleteArtist).not.toHaveBeenCalled();
   });
 
@@ -1132,7 +1146,7 @@ describe("executeAction", () => {
     expect(steps).toEqual(["Search for New Copy (Radarr)"]);
   });
 
-  it("DELETE_FILES_LIDARR refuses to delete when no matched track correlates to a Lidarr file", async () => {
+  it("DELETE_FILES_LIDARR deletes nothing when its track no longer exists", async () => {
     mockPrisma.lidarrInstance.findUnique.mockResolvedValue({
       id: "arr1", url: "http://lidarr", apiKey: "key", enabled: true,
     });
@@ -1144,7 +1158,7 @@ describe("executeAction", () => {
     mockLidarrClient.getAlbums.mockResolvedValue([]);
     mockLidarrClient.getTracks.mockResolvedValue([]);
 
-    await executeAction(makeAction({
+    const outcome = await executeAction(makeAction({
       actionType: "DELETE_FILES_LIDARR",
       matchedMediaItemIds: [],
       mediaItem: {
@@ -1153,7 +1167,13 @@ describe("executeAction", () => {
       },
     }));
 
+    // A track-scope action names no members: its own item is the track.
+    expect(mockPrisma.mediaItem.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: { in: ["item1"] }, type: "MUSIC" } }),
+    );
     // Conservative: skip rather than wipe the whole artist.
+    expect(outcome.deletedMemberIds).toEqual([]);
+    expect(mockLidarrClient.getTracks).not.toHaveBeenCalled();
     expect(mockLidarrClient.deleteTrackFiles).not.toHaveBeenCalled();
     expect(mockLidarrClient.deleteArtist).not.toHaveBeenCalled();
   });
@@ -1161,7 +1181,7 @@ describe("executeAction", () => {
 
 describe("cleanupArrTags", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
   });
 
   it("does nothing when tagLabels is empty", async () => {

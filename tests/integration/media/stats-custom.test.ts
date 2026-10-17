@@ -32,7 +32,13 @@ vi.mock("@/lib/cache/memory-cache", () => {
     invalidatePrefix: () => {},
     clear: () => {},
   };
-  return { MemoryCache: vi.fn(() => noopCache), appCache: noopCache };
+  return {
+    // A constructor mock needs `function`: Vitest 4 cannot `new` an arrow.
+    MemoryCache: vi.fn(function () {
+      return noopCache;
+    }),
+    appCache: noopCache,
+  };
 });
 
 // Import route handler AFTER mocks
@@ -111,7 +117,7 @@ describe("GET /api/media/stats/custom", () => {
     await createTestMediaItem(lib.id, {
       title: "Movie C",
       type: "MOVIE",
-      videoCodec: "h265",
+      videoCodec: "hevc",
     });
 
     setMockSession({ userId: user.id, isLoggedIn: true });
@@ -124,16 +130,11 @@ describe("GET /api/media/stats/custom", () => {
       breakdown: { value: string | null; type: string; _count: number }[];
     }>(response, 200);
 
-    expect(body.breakdown.length).toBeGreaterThan(0);
-
-    const h264 = body.breakdown.find((b) => b.value === "h264");
-    expect(h264).toBeDefined();
-    expect(h264!._count).toBe(2);
-    expect(h264!.type).toBe("MOVIE");
-
-    const h265 = body.breakdown.find((b) => b.value === "h265");
-    expect(h265).toBeDefined();
-    expect(h265!._count).toBe(1);
+    // Most common first.
+    expect(body.breakdown).toEqual([
+      { value: "h264", type: "MOVIE", _count: 2 },
+      { value: "hevc", type: "MOVIE", _count: 1 },
+    ]);
   });
 
   it("returns breakdown for a value_map dimension (resolution)", async () => {
@@ -168,16 +169,11 @@ describe("GET /api/media/stats/custom", () => {
       breakdown: { value: string | null; type: string; _count: number }[];
     }>(response, 200);
 
-    expect(body.breakdown.length).toBeGreaterThan(0);
-
     // value_map normalizes resolution labels
-    const res4k = body.breakdown.find((b) => b.value === "4K");
-    expect(res4k).toBeDefined();
-    expect(res4k!._count).toBe(1);
-
-    const res1080 = body.breakdown.find((b) => b.value === "1080P");
-    expect(res1080).toBeDefined();
-    expect(res1080!._count).toBe(2);
+    expect([...body.breakdown].sort((a, b) => String(a.value).localeCompare(String(b.value)))).toEqual([
+      { value: "1080P", type: "MOVIE", _count: 2 },
+      { value: "4K", type: "MOVIE", _count: 1 },
+    ]);
   });
 
   it("returns breakdown for a json_unnest dimension (genre)", async () => {
@@ -206,27 +202,22 @@ describe("GET /api/media/stats/custom", () => {
       breakdown: { value: string; type: string; _count: number }[];
     }>(response, 200);
 
-    expect(body.breakdown.length).toBeGreaterThan(0);
-
-    const action = body.breakdown.find((b) => b.value === "Action");
-    expect(action).toBeDefined();
-    expect(action!._count).toBe(2);
-
-    const scifi = body.breakdown.find((b) => b.value === "Sci-Fi");
-    expect(scifi).toBeDefined();
-    expect(scifi!._count).toBe(1);
+    expect([...body.breakdown].sort((a, b) => a.value.localeCompare(b.value))).toEqual([
+      { value: "Action", type: "MOVIE", _count: 2 },
+      { value: "Comedy", type: "MOVIE", _count: 1 },
+      { value: "Sci-Fi", type: "MOVIE", _count: 1 },
+    ]);
   });
 
-  it("returns 404 when serverId does not belong to user", async () => {
-    const user1 = await createTestUser({ plexId: "u1" });
-    const user2 = await createTestUser({ plexId: "u2" });
-    const server = await createTestServer(user1.id);
+  it("returns 404 when serverId names no server", async () => {
+    const user = await createTestUser();
+    await createTestServer(user.id);
 
-    setMockSession({ userId: user2.id, isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/stats/custom",
-      searchParams: { dimension: "resolution", serverId: server.id },
+      searchParams: { dimension: "resolution", serverId: "nonexistent" },
     });
     const body = await expectJson<{ error: string }>(response, 404);
     expect(body.error).toBe("Server not found");
@@ -247,7 +238,7 @@ describe("GET /api/media/stats/custom", () => {
     await createTestMediaItem(lib2.id, {
       title: "S2 Movie",
       type: "MOVIE",
-      videoCodec: "h265",
+      videoCodec: "hevc",
       ratingKey: "s2m1",
     });
 
@@ -261,9 +252,7 @@ describe("GET /api/media/stats/custom", () => {
       breakdown: { value: string | null; type: string; _count: number }[];
     }>(response, 200);
 
-    expect(body.breakdown).toHaveLength(1);
-    expect(body.breakdown[0].value).toBe("h264");
-    expect(body.breakdown[0]._count).toBe(1);
+    expect(body.breakdown).toEqual([{ value: "h264", type: "MOVIE", _count: 1 }]);
   });
 
   it("returns breakdown across multiple media types", async () => {
@@ -296,11 +285,11 @@ describe("GET /api/media/stats/custom", () => {
       breakdown: { value: string; type: string; _count: number }[];
     }>(response, 200);
 
-    // Should have mkv entries for both MOVIE and SERIES types
-    const mkvRows = body.breakdown.filter((b) => b.value === "mkv");
-    expect(mkvRows).toHaveLength(2);
-    const types = mkvRows.map((r) => r.type).sort();
-    expect(types).toEqual(["MOVIE", "SERIES"]);
+    // One mkv row per type.
+    expect([...body.breakdown].sort((a, b) => a.type.localeCompare(b.type))).toEqual([
+      { value: "mkv", type: "MOVIE", _count: 1 },
+      { value: "mkv", type: "SERIES", _count: 1 },
+    ]);
   });
 
   it("leaves out the types a dimension does not apply to (excludeTypes)", async () => {

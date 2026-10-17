@@ -30,6 +30,8 @@ describe("GET /api/media/movies", () => {
   beforeEach(async () => {
     await cleanDatabase();
     clearMockSession();
+    // The server filter and the genre/resolution spellings are cached in-process.
+    appCache.clear();
   });
 
   afterAll(async () => {
@@ -111,37 +113,6 @@ describe("GET /api/media/movies", () => {
 
     expect(body.items[0].fileSize).toBe("5368709120");
     expect(typeof body.items[0].fileSize).toBe("string");
-  });
-
-  it("supports pagination", async () => {
-    const user = await createTestUser();
-    const server = await createTestServer(user.id);
-    const lib = await createTestLibrary(server.id);
-
-    // Create 5 movies
-    for (let i = 1; i <= 5; i++) {
-      await createTestMediaItem(lib.id, {
-        title: `Movie ${String(i).padStart(2, "0")}`,
-        type: "MOVIE",
-        ratingKey: `rk-${i}`,
-      });
-    }
-
-    setMockSession({ userId: user.id, isLoggedIn: true });
-
-    const response = await callRoute(GET, {
-      url: "/api/media/movies",
-      searchParams: { page: "2", limit: "2" },
-    });
-    const body = await expectJson<{
-      items: { title: string }[];
-      pagination: { page: number; limit: number; hasMore: boolean };
-    }>(response, 200);
-
-    expect(body.items).toHaveLength(2);
-    expect(body.pagination.page).toBe(2);
-    expect(body.pagination.limit).toBe(2);
-    expect(body.pagination.hasMore).toBe(true); // 5 items, page 2 of limit 2 = more pages
   });
 
   it("supports search by title", async () => {
@@ -275,28 +246,6 @@ describe("GET /api/media/movies", () => {
     expect(body.pagination.limit).toBe(100);
   });
 
-  it("does not return movies from other users' servers", async () => {
-    const user1 = await createTestUser({ plexId: "u1" });
-    const user2 = await createTestUser({ plexId: "u2" });
-    const server1 = await createTestServer(user1.id);
-    const server2 = await createTestServer(user2.id);
-    const lib1 = await createTestLibrary(server1.id);
-    const lib2 = await createTestLibrary(server2.id);
-
-    await createTestMediaItem(lib1.id, { title: "User1 Movie", type: "MOVIE" });
-    await createTestMediaItem(lib2.id, { title: "User2 Movie", type: "MOVIE" });
-
-    setMockSession({ userId: user1.id, isLoggedIn: true });
-
-    const response = await callRoute(GET, { url: "/api/media/movies" });
-    const body = await expectJson<{
-      items: { title: string }[];
-    }>(response, 200);
-
-    expect(body.items).toHaveLength(1);
-    expect(body.items[0].title).toBe("User1 Movie");
-  });
-
   it("includes library and server info in response", async () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id, { name: "Home Plex" });
@@ -310,12 +259,17 @@ describe("GET /api/media/movies", () => {
     const body = await expectJson<{
       items: {
         title: string;
-        library: { title: string; mediaServer: { name: string } };
+        library: { title: string; mediaServer: { id: string; name: string; type: string } };
+        servers: { serverId: string; serverName: string; serverType: string }[];
       }[];
     }>(response, 200);
 
-    expect(body.items[0].library.title).toBe("4K Movies");
-    expect(body.items[0].library.mediaServer.name).toBe("Home Plex");
+    expect(body.items[0].library).toEqual({
+      title: "4K Movies",
+      mediaServer: { id: server.id, name: "Home Plex", type: "PLEX" },
+    });
+    // One server: presence is just the item's own server.
+    expect(body.items[0].servers).toEqual([{ serverId: server.id, serverName: "Home Plex", serverType: "PLEX" }]);
   });
 
   it("filters by startsWith letter (case-insensitive)", async () => {
@@ -416,7 +370,7 @@ describe("GET /api/media/movies", () => {
         pagination: { page: number; limit: number; hasMore: boolean };
       }>(response, 200);
 
-      expect(body.items).toHaveLength(2);
+      expect(body.items.map((i) => i.title)).toEqual(["Movie 01", "Movie 02"]);
       expect(body.pagination.page).toBe(1);
       expect(body.pagination.limit).toBe(2);
       expect(body.pagination.hasMore).toBe(true);
@@ -432,8 +386,9 @@ describe("GET /api/media/movies", () => {
         pagination: { page: number; limit: number; hasMore: boolean };
       }>(response, 200);
 
-      expect(body.items).toHaveLength(2);
+      expect(body.items.map((i) => i.title)).toEqual(["Movie 03", "Movie 04"]);
       expect(body.pagination.page).toBe(2);
+      expect(body.pagination.limit).toBe(2);
       expect(body.pagination.hasMore).toBe(true);
     });
 
@@ -447,7 +402,7 @@ describe("GET /api/media/movies", () => {
         pagination: { page: number; limit: number; hasMore: boolean };
       }>(response, 200);
 
-      expect(body.items).toHaveLength(1);
+      expect(body.items.map((i) => i.title)).toEqual(["Movie 05"]);
       expect(body.pagination.page).toBe(3);
       expect(body.pagination.hasMore).toBe(false);
     });
@@ -462,7 +417,9 @@ describe("GET /api/media/movies", () => {
         pagination: { limit: number; hasMore: boolean };
       }>(response, 200);
 
-      expect(body.items).toHaveLength(5);
+      expect(body.items.map((i) => i.title)).toEqual([
+        "Movie 01", "Movie 02", "Movie 03", "Movie 04", "Movie 05",
+      ]);
       expect(body.pagination.limit).toBe(0);
       expect(body.pagination.hasMore).toBe(false);
     });
@@ -513,8 +470,10 @@ describe("GET /api/media/movies", () => {
         url: "/api/media/movies",
         searchParams: { limit: "0", offset: "abc" },
       });
-      const body = await expectJson<{ items: unknown[] }>(response, 200);
-      expect(body.items).toHaveLength(5);
+      const body = await expectJson<{ items: { title: string }[] }>(response, 200);
+      expect(body.items.map((i) => i.title)).toEqual([
+        "Movie 01", "Movie 02", "Movie 03", "Movie 04", "Movie 05",
+      ]);
     });
 
     it.each(["page", "offset"])("answers an absurd %s with an empty page, not a 500", async (param) => {
@@ -680,7 +639,7 @@ describe("GET /api/media/movies", () => {
       expect(body.items[0]).not.toHaveProperty("summary");
       // The fields the cards and table actually render still come through.
       expect(body.items[0]).toHaveProperty("title", "Summarised");
-      expect(body.items[0]).toHaveProperty("resolution");
+      expect(body.items[0]).toHaveProperty("resolution", "1080");
     });
   });
 

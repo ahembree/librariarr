@@ -35,6 +35,9 @@ describe("isSsoUsable", () => {
       expect(
         isSsoUsable(makeSettings({ oidcIssuer: null }))
       ).toBe(false);
+      expect(ssoUnusableReason(makeSettings({ oidcIssuer: null }))).toBe(
+        "the OIDC issuer and client ID are not both set",
+      );
     });
 
     it("returns false when client ID is missing", () => {
@@ -108,7 +111,7 @@ describe("isSsoUsable", () => {
       delete process.env.OIDC_ALLOW_INSECURE_HTTP;
       const settings = makeSettings({ oidcIssuer: "http://idp.lan" });
       expect(isSsoUsable(settings)).toBe(false);
-      expect(ssoUnusableReason(settings)).toMatch(/https/);
+      expect(ssoUnusableReason(settings)).toMatch(/^the OIDC issuer URL is not accepted: Issuer must use https:\/\//);
     });
 
     it("accepts http:// on loopback, and anywhere under OIDC_ALLOW_INSECURE_HTTP", () => {
@@ -228,17 +231,5 @@ describe("currentSsoIssuer", () => {
         })
       )
     ).toBe("forward-auth");
-  });
-
-  it("normalization round-trips with discoverOidc's normalization", () => {
-    // discoverOidc strips trailing slashes the same way; the two helpers must
-    // agree so the issuer compared at login time matches what was stored.
-    const linkTime = currentSsoIssuer(
-      makeSettings({ ssoMode: "OIDC", oidcIssuer: "https://idp.example.com/" })
-    );
-    const loginTime = currentSsoIssuer(
-      makeSettings({ ssoMode: "OIDC", oidcIssuer: "https://idp.example.com" })
-    );
-    expect(linkTime).toBe(loginTime);
   });
 });

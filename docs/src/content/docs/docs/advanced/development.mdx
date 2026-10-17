@@ -111,6 +111,7 @@ Tests use **Vitest** with a real PostgreSQL test database (`librariarr_test`), a
 ### Test Structure
 
 - **`tests/unit/`** — Pure logic tests (rules engine, filters, sync detection, formatting, caching, validation schemas)
+- **`tests/unit/hooks/`** — React hook tests, run under `happy-dom` (`// @vitest-environment happy-dom` at the top of each file) with `renderHook` from `@testing-library/react`
 - **`tests/integration/`** — API route handler tests against a real database with mocked external services
 
 ## Tech Stack

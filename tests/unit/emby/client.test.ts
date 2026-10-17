@@ -52,10 +52,14 @@ vi.mock("@/lib/media-server/health-cache", () => ({
 }));
 
 import { EmbyClient } from "@/lib/emby/client";
+import { ITEM_FIELDS } from "@/lib/media-server/jellyfin-base";
 
 describe("EmbyClient", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // clearAllMocks keeps queued `mockResolvedValueOnce` answers; one a failed
+    // test left unconsumed would answer the next test's first request.
+    mockFakeClient.get.mockReset();
     requestInterceptors.length = 0;
   });
 
@@ -80,7 +84,7 @@ describe("EmbyClient", () => {
     new EmbyClient("http://emby:8096", "emby-token");
 
     requestInterceptors[0]({ headers: {}, method: "get", url: "/Items" });
-    expect(logger.debug).toHaveBeenCalledWith("Emby", expect.stringContaining("GET /Items"));
+    expect(logger.debug).toHaveBeenCalledWith("Emby", "GET /Items");
   });
 
   describe("getItemMetadata", () => {
@@ -100,7 +104,7 @@ describe("EmbyClient", () => {
       expect(mockFakeClient.get).toHaveBeenNthCalledWith(
         2,
         "/Users/user-1/Items/abc",
-        { params: { Fields: expect.any(String) } },
+        { params: { Fields: ITEM_FIELDS } },
       );
       // normalizeItem maps Jellyfin/Emby shape → MediaMetadataItem.
       expect(result.ratingKey).toBe("abc");
@@ -132,7 +136,7 @@ describe("EmbyClient", () => {
       expect(mockFakeClient.get).toHaveBeenNthCalledWith(
         3,
         "/Users/u-admin/Items/xyz",
-        { params: { Fields: expect.any(String) } },
+        { params: { Fields: ITEM_FIELDS } },
       );
       expect(result.title).toBe("Dune");
     });
@@ -160,20 +164,13 @@ describe("EmbyClient", () => {
 
       const entries = await client.getWatchHistory("item-1");
 
-      // 2 (Alice) + 1 (Bob) = 3 entries
-      expect(entries).toHaveLength(3);
-      // First entry has a timestamp; sorted so Bob's newer play is first.
-      expect(entries[0]).toEqual({
-        username: "Bob",
-        watchedAt: "2024-03-01T00:00:00.000Z",
-      });
-      // Alice's first play carries her LastPlayedDate; the second is null.
-      const aliceEntries = entries.filter((e) => e.username === "Alice");
-      expect(aliceEntries).toHaveLength(2);
-      expect(aliceEntries.map((e) => e.watchedAt).sort()).toEqual([
-        "2024-01-02T00:00:00.000Z",
-        null,
-      ].sort());
+      // 2 (Alice) + 1 (Bob) = 3 entries: only a user's first play carries
+      // their LastPlayedDate, and undated plays sort last.
+      expect(entries).toEqual([
+        { username: "Bob", watchedAt: "2024-03-01T00:00:00.000Z" },
+        { username: "Alice", watchedAt: "2024-01-02T00:00:00.000Z" },
+        { username: "Alice", watchedAt: null },
+      ]);
 
       expect(mockFakeClient.get).toHaveBeenNthCalledWith(1, "/Users");
       expect(mockFakeClient.get).toHaveBeenNthCalledWith(2, "/Users/u1/Items/item-1");

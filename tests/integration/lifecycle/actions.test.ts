@@ -65,7 +65,8 @@ vi.mock("@/lib/lifecycle/actions", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/lifecycle/actions")>();
   return {
     ...actual,
-    executeAction: vi.fn().mockResolvedValue(undefined),
+    // The real one resolves to an ActionOutcome.
+    executeAction: vi.fn().mockResolvedValue({}),
   };
 });
 
@@ -89,6 +90,10 @@ describe("Lifecycle Actions", () => {
     await cleanDatabase();
     clearMockSession();
     vi.clearAllMocks();
+    // Reset, not only clear: a `…Once` a failed test never consumed must not
+    // reach the next test.
+    const { executeAction } = await import("@/lib/lifecycle/actions");
+    vi.mocked(executeAction).mockReset().mockResolvedValue({});
   });
 
   afterAll(async () => {
@@ -230,7 +235,7 @@ describe("Lifecycle Actions", () => {
       });
       // As detection stores a show: the show as the title, no parent.
       await createTestRuleMatch(seriesRules.id, ep.id, { id: ep.id, title: "The Wire", parentTitle: null, memberIds: [ep.id] });
-      await createTestRuleMatch(movieRules.id, film.id);
+      const filmMatch = await createTestRuleMatch(movieRules.id, film.id);
       setMockSession({ isLoggedIn: true, userId: user.id });
 
       const response = await callRoute(GET, { url: "/api/lifecycle/actions" });
@@ -240,8 +245,11 @@ describe("Lifecycle Actions", () => {
       const show = body.groups.find((g) => g.ruleSet.id === seriesRules.id)!.items[0];
       expect(show.estimated).toBe(true);
       expect(new Date(show.scheduledFor).getTime()).toBe(heldUntil.getTime());
+      // The movie's estimate is its detection plus the rule set's one-day delay.
       const movie = body.groups.find((g) => g.ruleSet.id === movieRules.id)!.items[0];
-      expect(new Date(movie.scheduledFor).getTime()).toBeLessThan(heldUntil.getTime() - 3 * DAY);
+      const expected = new Date(filmMatch.detectedAt);
+      expected.setDate(expected.getDate() + 1);
+      expect(new Date(movie.scheduledFor).getTime()).toBe(expected.getTime());
     });
 
     it("suppresses the estimated row when a completed action of the SAME type already ran", async () => {
@@ -417,28 +425,6 @@ describe("Lifecycle Actions", () => {
       expect(body.groups[0].count).toBe(3);
     });
 
-    it("does not return other user's actions", async () => {
-      const user1 = await createTestUser({ plexId: "u1" });
-      const user2 = await createTestUser({ plexId: "u2" });
-
-      const server = await createTestServer(user1.id);
-      const library = await createTestLibrary(server.id, { type: "MOVIE" });
-      const item = await createTestMediaItem(library.id, { title: "Movie", type: "MOVIE" });
-      const ruleSet = await createTestRuleSet(user1.id, { name: "Rule" });
-
-      await createTestAction(user1.id, item.id, ruleSet.id);
-
-      setMockSession({ isLoggedIn: true, userId: user2.id });
-
-      const response = await callRoute(GET, {
-        url: "/api/lifecycle/actions",
-        searchParams: { status: "ALL" },
-      });
-
-      const body = await expectJson<{ groups: unknown[] }>(response, 200);
-      expect(body.groups).toHaveLength(0);
-    });
-
     it("names a series action by its show, and an action on one episode by show and SxxExx", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id);
@@ -596,8 +582,6 @@ describe("Lifecycle Actions", () => {
     });
   });
 
-  // ---- DELETE /api/lifecycle/actions/[id] (remove failed action) ----
-
   describe("GET /api/lifecycle/actions — scheduled and estimated rows", () => {
     interface Item {
       id: string;
@@ -667,6 +651,8 @@ describe("Lifecycle Actions", () => {
     });
   });
 
+  // ---- DELETE /api/lifecycle/actions/[id] (remove failed action) ----
+
   describe("DELETE /api/lifecycle/actions/[id]", () => {
     it("returns 401 without auth", async () => {
       const response = await callRouteWithParams(
@@ -726,30 +712,6 @@ describe("Lifecycle Actions", () => {
       await expectJson(response, 404);
     });
 
-    it("returns 404 when deleting another user's action", async () => {
-      const user1 = await createTestUser({ plexId: "owner" });
-      const user2 = await createTestUser({ plexId: "intruder" });
-
-      const server = await createTestServer(user1.id);
-      const library = await createTestLibrary(server.id, { type: "MOVIE" });
-      const item = await createTestMediaItem(library.id, { title: "Movie", type: "MOVIE" });
-      const ruleSet = await createTestRuleSet(user1.id, { name: "Rule" });
-      const action = await createTestAction(user1.id, item.id, ruleSet.id, { status: "FAILED" });
-
-      setMockSession({ isLoggedIn: true, userId: user2.id });
-
-      const response = await callRouteWithParams(
-        actionDelete,
-        { id: action.id },
-        {
-          url: `/api/lifecycle/actions/${action.id}`,
-          method: "DELETE",
-        }
-      );
-
-      await expectJson(response, 404);
-    });
-
     it("returns 400 when deleting a non-FAILED action", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id);
@@ -773,6 +735,7 @@ describe("Lifecycle Actions", () => {
 
       const body = await expectJson<{ error: string }>(response, 400);
       expect(body.error).toContain("failed");
+      expect((await getTestPrisma().lifecycleAction.findUnique({ where: { id: action.id } }))?.status).toBe("PENDING");
     });
   });
 
@@ -832,7 +795,6 @@ describe("Lifecycle Actions", () => {
           {
             id: "g1",
             condition: "AND",
-            operator: "AND",
             rules: [{ id: "r1", field: "seerrRequested", operator: "equals", value: "false", condition: "AND", enabled: true }],
             groups: [],
           },
@@ -855,31 +817,12 @@ describe("Lifecycle Actions", () => {
       expect(await prisma.lifecycleAction.count({ where: { ruleSetId: ruleSet.id, status: "PENDING" } })).toBe(0);
     });
 
-    it("returns 404 for another user's rule set", async () => {
-      const user1 = await createTestUser({ plexId: "owner" });
-      const user2 = await createTestUser({ plexId: "intruder" });
-      const ruleSet = await createTestRuleSet(user1.id, {
-        name: "Private Rule",
-        actionType: "DO_NOTHING",
-      });
-
-      setMockSession({ isLoggedIn: true, userId: user2.id });
-
-      const response = await callRoute(executePost, {
-        url: "/api/lifecycle/actions/execute",
-        method: "POST",
-        body: { ruleSetId: ruleSet.id },
-      });
-
-      await expectJson(response, 404);
-    });
-
     it("returns 400 when rule set has no action configured", async () => {
       const user = await createTestUser();
       const ruleSet = await createTestRuleSet(user.id, {
         actionEnabled: true,
         name: "No Action",
-        actionType: undefined as unknown as string,
+        // actionType left unset: stored as null.
       });
 
       setMockSession({ isLoggedIn: true, userId: user.id });
@@ -900,7 +843,7 @@ describe("Lifecycle Actions", () => {
         actionEnabled: true,
         name: "Missing Arr",
         actionType: "DELETE_RADARR",
-        arrInstanceId: undefined as unknown as string,
+        // arrInstanceId left unset: stored as null.
       });
 
       setMockSession({ isLoggedIn: true, userId: user.id });
@@ -1045,14 +988,18 @@ describe("Lifecycle Actions", () => {
 
       setMockSession({ isLoggedIn: true, userId: user.id });
 
-      await callRoute(executePost, {
-        url: "/api/lifecycle/actions/execute",
-        method: "POST",
-        body: {
-          ruleSetId: ruleSet.id,
-          mediaItemIds: [item.id],
-        },
-      });
+      const body = await expectJson<{ executed: number }>(
+        await callRoute(executePost, {
+          url: "/api/lifecycle/actions/execute",
+          method: "POST",
+          body: {
+            ruleSetId: ruleSet.id,
+            mediaItemIds: [item.id],
+          },
+        }),
+        200,
+      );
+      expect(body.executed).toBe(1);
 
       const prisma = getTestPrisma();
       const actions = await prisma.lifecycleAction.findMany({
@@ -1087,11 +1034,16 @@ describe("Lifecycle Actions", () => {
 
       setMockSession({ isLoggedIn: true, userId: user.id });
 
-      await callRoute(executePost, {
-        url: "/api/lifecycle/actions/execute",
-        method: "POST",
-        body: { ruleSetId: ruleSet.id, mediaItemIds: [item.id] },
-      });
+      expect(
+        (await expectJson<{ executed: number }>(
+          await callRoute(executePost, {
+            url: "/api/lifecycle/actions/execute",
+            method: "POST",
+            body: { ruleSetId: ruleSet.id, mediaItemIds: [item.id] },
+          }),
+          200,
+        )).executed,
+      ).toBe(1);
 
       const prisma = getTestPrisma();
       const actions = await prisma.lifecycleAction.findMany({
@@ -1121,11 +1073,16 @@ describe("Lifecycle Actions", () => {
       });
 
       setMockSession({ isLoggedIn: true, userId: user.id });
-      await callRoute(executePost, {
-        url: "/api/lifecycle/actions/execute",
-        method: "POST",
-        body: { ruleSetId: ruleSet.id, mediaItemIds: [episode.id] },
-      });
+      expect(
+        (await expectJson<{ executed: number }>(
+          await callRoute(executePost, {
+            url: "/api/lifecycle/actions/execute",
+            method: "POST",
+            body: { ruleSetId: ruleSet.id, mediaItemIds: [episode.id] },
+          }),
+          200,
+        )).executed,
+      ).toBe(1);
 
       const [record] = await getTestPrisma().lifecycleAction.findMany({ where: { userId: user.id } });
       expect(record).toMatchObject({
@@ -1462,12 +1419,14 @@ describe("Lifecycle Actions", () => {
       await getTestPrisma().lifecycleException.create({ data: { userId: user.id, mediaItemId: e2.id } });
 
       setMockSession({ isLoggedIn: true, userId: user.id });
-      await expectJson(
+      const body = await expectJson<{ error: string }>(
         await callRouteWithParams(actionRetry, { id: action.id }, { url: `/api/lifecycle/actions/${action.id}`, method: "POST" }),
         400,
       );
+      expect(body.error).toMatch(/exception/i);
       const { executeAction } = await import("@/lib/lifecycle/actions");
       expect(executeAction).not.toHaveBeenCalled();
+      expect((await getTestPrisma().lifecycleAction.findUnique({ where: { id: action.id } }))?.status).toBe("FAILED");
     });
 
     it("retries a FAILED action when no exception exists", async () => {
@@ -1484,9 +1443,12 @@ describe("Lifecycle Actions", () => {
         url: `/api/lifecycle/actions/${action.id}`,
         method: "POST",
       });
-      expect(response.status).toBeLessThan(300);
+      await expectJson(response, 200);
       const { executeAction } = await import("@/lib/lifecycle/actions");
       expect(executeAction).toHaveBeenCalledTimes(1);
+      const retried = await getTestPrisma().lifecycleAction.findUniqueOrThrow({ where: { id: action.id } });
+      expect(retried.status).toBe("COMPLETED");
+      expect(retried.executedAt).not.toBeNull();
     });
 
     it("refuses to retry when the rule set is disabled", async () => {
@@ -1527,7 +1489,6 @@ describe("Lifecycle Actions", () => {
           {
             id: "g1",
             condition: "AND",
-            operator: "AND",
             rules: [{ id: "r1", field: "seerrRequested", operator: "equals", value: "false", condition: "AND", enabled: true }],
             groups: [],
           },

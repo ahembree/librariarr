@@ -1,7 +1,7 @@
 import { CONDITION_FIELDS } from "@/lib/conditions/fields";
 import { CONDITION_SECTIONS } from "@/lib/conditions/sections";
 import type { ConditionField } from "@/lib/conditions/types";
-import { formatBytesNum } from "@/lib/format";
+import { formatBytesNum, formatDateOnly } from "@/lib/format";
 
 /**
  * Client-safe registry of the Query page's criterion columns. Every field a
@@ -55,6 +55,9 @@ export function formatColumnValue(def: ConditionField, value: QueryColumnValue |
   if (Array.isArray(value)) return value.length > 0 ? value.join(", ") : "-";
   if (typeof value === "boolean") return value ? "Yes" : "No";
   if (def.type === "date") {
+    // A release/air date is a calendar day stored as UTC midnight: in the
+    // viewer's local time it read as the day before west of UTC.
+    if (def.dateOnly) return formatDateOnly(String(value), "-", "short");
     const d = new Date(String(value));
     return isNaN(d.getTime())
       ? "-"

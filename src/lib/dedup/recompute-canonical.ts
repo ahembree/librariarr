@@ -151,15 +151,19 @@ export async function backfillDedupKeys(userId?: string): Promise<number> {
       break;
     }
 
-    // For movies, fetch external IDs in bulk
-    const movieIds = items
-      .filter((i) => i.type === "MOVIE")
+    // External ids for every type whose key reads them — movies (TMDB/IMDB)
+    // and episodes (the stored series-level TVDB). Loading them for movies alone
+    // gave a backfilled episode `series:<title>:sXeY` where the sync writes
+    // `series:tvdb:<id>:sXeY`, so the two copies never deduped. Track keys read
+    // no external id.
+    const keyedIds = items
+      .filter((i) => i.type === "MOVIE" || i.type === "SERIES")
       .map((i) => i.id);
 
     const externalIds =
-      movieIds.length > 0
+      keyedIds.length > 0
         ? await prisma.mediaItemExternalId.findMany({
-            where: { mediaItemId: { in: movieIds } },
+            where: { mediaItemId: { in: keyedIds } },
             select: { mediaItemId: true, source: true, externalId: true },
           })
         : [];

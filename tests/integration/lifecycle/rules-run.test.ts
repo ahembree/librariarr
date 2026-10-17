@@ -31,6 +31,11 @@ vi.mock("@/lib/logger", () => ({
 // Import route handler AFTER mocks
 import { POST } from "@/app/api/lifecycle/rules/run/route";
 
+/** One rule in one group, the shape the rule editor saves. */
+const rulesOf = (field: string, operator: string, value: string) => [
+  { id: "g1", condition: "AND", groups: [], rules: [{ id: "r1", field, operator, value, condition: "AND" }] },
+];
+
 describe("POST /api/lifecycle/rules/run", () => {
   beforeEach(async () => {
     await cleanDatabase();
@@ -68,7 +73,10 @@ describe("POST /api/lifecycle/rules/run", () => {
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id });
 
-    const mockResult = [{ ruleSetId: "rs-1", matchCount: 5 }];
+    // runDetection's own shape: one entry per rule set it evaluated.
+    const mockResult = [
+      { ruleSet: { id: "rs-1", name: "Unwatched" }, items: [{ id: "item1", title: "Movie 1" }], count: 1 },
+    ];
     mockRunDetection.mockResolvedValue(mockResult);
 
     const response = await callRoute(POST, {
@@ -76,10 +84,13 @@ describe("POST /api/lifecycle/rules/run", () => {
       method: "POST",
       body: { ruleSetId: "rs-1" },
     });
-    const body = await expectJson<{ ruleMatches: unknown[] }>(response, 200);
+    const body = await expectJson<{ ruleMatches: unknown[]; skipped: unknown[] }>(response, 200);
 
     expect(mockRunDetection).toHaveBeenCalledWith(user.id, "rs-1", false, expect.any(Array));
     expect(body.ruleMatches).toEqual(mockResult);
+    expect(body.skipped).toEqual([]);
+    // Collections are synced from this run's results.
+    expect(mockSyncCollectionsAfterDetection).toHaveBeenCalledWith(user.id, "rs-1", mockResult);
   });
 
   it("calls runDetection with fullReEval when specified", async () => {
@@ -232,7 +243,7 @@ describe("POST /api/lifecycle/rules/run", () => {
       // an in-flight Tracearr backfill leaves behind.
       const server = await createTestServer(user.id, { watchHistorySyncedAt: null });
       const ruleSet = await createTestRuleSet(user.id, {
-        rules: [{ field: "playCount", operator: "equals", value: "0" }],
+        rules: rulesOf("playCount", "equals", "0"),
         serverIds: [server.id],
       });
 
@@ -245,6 +256,8 @@ describe("POST /api/lifecycle/rules/run", () => {
       });
       const body = await expectJson<{ skipped: Array<{ ruleSetId: string; name: string; reason: string }> }>(response, 200);
 
+      expect(body.skipped).toHaveLength(1);
+      expect(body.skipped[0]).toMatchObject({ ruleSetId: ruleSet.id, name: ruleSet.name });
       expect(body.skipped[0]?.reason).toMatch(/play activity/i);
       expect(body.skipped[0]?.reason).toMatch(/no established play history/i);
     });
@@ -256,7 +269,7 @@ describe("POST /api/lifecycle/rules/run", () => {
       const server = await createTestServer(user.id);
       const ruleSet = await createTestRuleSet(user.id, {
         enabled: false,
-        rules: [{ field: "playCount", operator: "equals", value: "0" }],
+        rules: rulesOf("playCount", "equals", "0"),
         serverIds: [server.id],
       });
 
@@ -268,7 +281,9 @@ describe("POST /api/lifecycle/rules/run", () => {
         body: { ruleSetId: ruleSet.id },
       });
       const body = await expectJson<{ skipped: Array<{ ruleSetId: string; name: string; reason: string }> }>(response, 200);
-      expect(body.skipped[0]?.reason).toMatch(/disabled/i);
+      expect(body.skipped).toEqual([
+        { ruleSetId: ruleSet.id, name: ruleSet.name, reason: "The rule set is disabled." },
+      ]);
     });
 
     it("explains a rule set whose selected servers are all disabled", async () => {
@@ -277,7 +292,7 @@ describe("POST /api/lifecycle/rules/run", () => {
 
       const server = await createTestServer(user.id, { enabled: false });
       const ruleSet = await createTestRuleSet(user.id, {
-        rules: [{ field: "playCount", operator: "equals", value: "0" }],
+        rules: rulesOf("playCount", "equals", "0"),
         serverIds: [server.id],
       });
 
@@ -289,7 +304,9 @@ describe("POST /api/lifecycle/rules/run", () => {
         body: { ruleSetId: ruleSet.id },
       });
       const body = await expectJson<{ skipped: Array<{ ruleSetId: string; name: string; reason: string }> }>(response, 200);
-      expect(body.skipped[0]?.reason).toMatch(/enabled/i);
+      expect(body.skipped).toEqual([
+        { ruleSetId: ruleSet.id, name: ruleSet.name, reason: "None of the rule set's selected servers are enabled." },
+      ]);
     });
 
     // The reason is only derived for a rule set the caller NAMED and that is
@@ -342,12 +359,12 @@ describe("POST /api/lifecycle/rules/run", () => {
       const server = await createTestServer(user.id, { watchHistorySyncedAt: null });
       const paused = await createTestRuleSet(user.id, {
         name: "Stale movies",
-        rules: [{ field: "lastPlayedAt", operator: "lt", value: "2020-01-01" }],
+        rules: rulesOf("lastPlayedAt", "before", "2020-01-01"),
         serverIds: [server.id],
       });
       const evaluated = await createTestRuleSet(user.id, {
         name: "Big files",
-        rules: [{ field: "fileSize", operator: "gt", value: "1000" }],
+        rules: rulesOf("fileSize", "greaterThan", "1000"),
         serverIds: [server.id],
       });
 
@@ -379,7 +396,7 @@ describe("POST /api/lifecycle/rules/run", () => {
       const server = await createTestServer(user.id);
       const failing = await createTestRuleSet(user.id, {
         name: "Unrequested",
-        rules: [{ field: "fileSize", operator: "gt", value: "1000" }],
+        rules: rulesOf("fileSize", "greaterThan", "1000"),
         serverIds: [server.id],
       });
 

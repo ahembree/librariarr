@@ -2,10 +2,10 @@ import { test, expect, type Page } from "@playwright/test";
 
 /**
  * Dashboard rendering details that only show in a real browser: card labels,
- * fill-bar colours past the palette, the Integrations tile's refresh, and the
- * Recently Added shelf retrying artwork when a tile's representative changes.
- * Data routes are stubbed; the saved layout is stubbed and saves swallowed so
- * nothing leaks into the shared e2e database.
+ * fill-bar colours past the palette, and the Integrations tile's refresh.
+ * (The Recently Added artwork retry lives in dashboard-refresh.spec, which owns
+ * the event stream it needs.) Data routes are stubbed; the saved layout is
+ * stubbed and saves swallowed so nothing leaks into the shared e2e database.
  */
 
 const isPath = (path: string) => (url: URL) => url.pathname === path;
@@ -80,23 +80,36 @@ test.describe("dashboard insights", () => {
   test("the Integrations tile re-checks health without an event", async ({ page }) => {
     await page.clock.install();
     let reachable = 1;
-    await page.route(isPath("/api/integrations/health"), (route) =>
-      route.fulfill({
+    let healthChecks = 0;
+    // The route's shape (`IntegrationsHealth`): one Sonarr instance.
+    await page.route(isPath("/api/integrations/health"), (route) => {
+      healthChecks++;
+      return route.fulfill({
         json: {
-          sonarr: { configured: 1, reachable, instances: [{ id: "s", name: "Sonarr", reachable: reachable === 1 }] },
+          sonarr: {
+            configured: 1,
+            reachable,
+            instances: [
+              { id: "sonarr-1", name: "Sonarr", reachable: reachable === 1, error: reachable === 1 ? null : "Connection refused" },
+            ],
+          },
           radarr: { configured: 0, reachable: 0, instances: [] },
           lidarr: { configured: 0, reachable: 0, instances: [] },
           seerr: { configured: 0, reachable: 0, instances: [] },
+          arrAnyReachable: reachable === 1,
         },
-      }),
-    );
+      });
+    });
     await page.goto("/");
     const tile = page.locator('a[href="/settings#integrations"]');
     await expect(tile).toContainText("1/1 reachable");
+    const checksBefore = healthChecks;
 
     reachable = 0;
     await page.clock.fastForward(61_000);
     await expect(tile).toContainText("0/1 reachable");
     await expect(tile).toContainText("down: Sonarr");
+    // One more check: the poll, not a reload of the page.
+    expect(healthChecks).toBe(checksBefore + 1);
   });
 });

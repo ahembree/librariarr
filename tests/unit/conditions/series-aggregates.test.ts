@@ -22,7 +22,7 @@ function ep(overrides: Partial<AggregableEpisode> & { id: string; parentTitle: s
 }
 
 describe("aggregateEpisodesIntoSeries", () => {
-  it("groups episodes by libraryId+parentTitle into one record per series", () => {
+  it("groups episodes per library by series (the title when they carry no seriesKey or ids)", () => {
     const episodes: AggregableEpisode[] = [
       ep({ id: "e1", parentTitle: "Show A", libraryId: "L1" }),
       ep({ id: "e2", parentTitle: "Show A", libraryId: "L1" }),
@@ -30,9 +30,11 @@ describe("aggregateEpisodesIntoSeries", () => {
       ep({ id: "e4", parentTitle: "Show A", libraryId: "L2" }),
     ];
     const result = aggregateEpisodesIntoSeries(episodes);
-    expect(result).toHaveLength(3);
-    const showALib1 = result.find((s) => s.title === "Show A" && s.memberIds.includes("e1"));
-    expect(showALib1?.memberIds.sort()).toEqual(["e1", "e2"]);
+    expect(result.map((s) => [s.libraryId, s.title, [...s.memberIds].sort()]).sort()).toEqual([
+      ["L1", "Show A", ["e1", "e2"]],
+      ["L1", "Show B", ["e3"]],
+      ["L2", "Show A", ["e4"]],
+    ]);
   });
 
   it("splits two same-titled shows with different seriesKeys within a library", () => {
@@ -141,7 +143,32 @@ describe("aggregateEpisodesIntoSeries", () => {
       ep({ id: "e2", parentTitle: "S", libraryId: "L", streams: [{ codec: "aac" }] }),
     ];
     const [series] = aggregateEpisodesIntoSeries(episodes, { includeStreams: true });
-    expect(series.allStreams).toHaveLength(2);
+    expect(series.allStreams).toEqual([{ codec: "h264" }, { codec: "aac" }]);
+    // Not asked for, not carried.
+    expect(aggregateEpisodesIntoSeries(episodes)[0].allStreams).toBeUndefined();
+  });
+
+  it("collects the distinct users who played any episode, keeping their casing", () => {
+    const episodes: AggregableEpisode[] = [
+      ep({ id: "e1", parentTitle: "S", libraryId: "L", watchHistory: [{ serverUsername: "Alice" }, { serverUsername: null }] }),
+      ep({ id: "e2", parentTitle: "S", libraryId: "L", watchHistory: [{ serverUsername: "Alice" }, { serverUsername: "bob" }] }),
+      ep({ id: "e3", parentTitle: "S", libraryId: "L" }),
+    ];
+    const [series] = aggregateEpisodesIntoSeries(episodes);
+    expect(series.watchedByUsers).toEqual(["Alice", "bob"]);
+  });
+
+  it("takes the earliest addedAt for the show and the latest for lastEpisodeAddedAt", () => {
+    const first = new Date("2023-05-01T00:00:00.000Z");
+    const latest = new Date("2025-02-01T00:00:00.000Z");
+    const episodes: AggregableEpisode[] = [
+      ep({ id: "e1", parentTitle: "S", libraryId: "L", addedAt: latest }),
+      ep({ id: "e2", parentTitle: "S", libraryId: "L", addedAt: first }),
+      ep({ id: "e3", parentTitle: "S", libraryId: "L" }),
+    ];
+    const [series] = aggregateEpisodesIntoSeries(episodes);
+    expect(series.addedAt).toEqual(first);
+    expect(series.lastEpisodeAddedAt).toEqual(latest);
   });
 });
 
@@ -179,6 +206,9 @@ describe("serializeSeriesAggregateForEval", () => {
     const [series] = aggregateEpisodesIntoSeries(episodes);
     const item = serializeSeriesAggregateForEval(series);
     expect(item.lastPlayedAt).toBe("2025-03-15T12:00:00.000Z");
+    expect(item.addedAt).toBe("2025-03-15T12:00:00.000Z");
+    expect(item.lastEpisodeAddedAt).toBe("2025-03-15T12:00:00.000Z");
+    expect(item.lastEpisodeAiredAt).toBeNull();
   });
 
   it("exposes seriesLastPlayedAt as MAX(lastPlayedAt) across all episodes", () => {

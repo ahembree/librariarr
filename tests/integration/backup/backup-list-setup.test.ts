@@ -56,9 +56,12 @@ describe("GET /api/backup/list-setup", () => {
     });
     const body = await expectJson<{ error: string }>(response, 403);
     expect(body.error).toBe("Setup already completed");
+    // The listing is never even read once an admin exists.
+    expect(mockListBackups).not.toHaveBeenCalled();
   });
 
-  it("returns empty backup list when no users and no backups exist", async () => {
+  it("returns an empty list, without a session, when no users and no backups exist", async () => {
+    // No session: the endpoint serves the setup screen, before anyone can sign in.
     const response = await callRoute(GET, {
       url: "/api/backup/list-setup",
     });
@@ -67,33 +70,32 @@ describe("GET /api/backup/list-setup", () => {
   });
 
   it("returns backup list when no users exist", async () => {
-    mockListBackups.mockResolvedValue([
+    // The shape `listBackups` returns: sidecar metadata plus the file's size.
+    const backups = [
       {
-        filename: "backup-2024-01-01.json.gz",
-        size: 12345,
-        createdAt: "2024-01-01T00:00:00.000Z",
-      },
-      {
-        filename: "backup-2024-01-02.json.gz.enc",
+        filename: "librariarr-backup-2024-01-02T03-00-00.json.gz.enc",
+        createdAt: "2024-01-02T03:00:00.000Z",
         size: 67890,
-        createdAt: "2024-01-02T00:00:00.000Z",
+        tables: { user: 1, appSettings: 1, mediaServer: 2 },
+        encrypted: true,
+        configOnly: true,
       },
-    ]);
+      {
+        filename: "librariarr-backup-2024-01-01T03-00-00.json.gz",
+        createdAt: "2024-01-01T03:00:00.000Z",
+        size: 12345,
+        tables: { user: 1, appSettings: 1, mediaServer: 2, mediaItem: 1500 },
+        encrypted: false,
+        configOnly: false,
+      },
+    ];
+    mockListBackups.mockResolvedValue(backups);
 
     const response = await callRoute(GET, {
       url: "/api/backup/list-setup",
     });
     const body = await expectJson<{ backups: unknown[] }>(response, 200);
-    expect(body.backups).toHaveLength(2);
+    expect(body.backups).toEqual(backups);
     expect(mockListBackups).toHaveBeenCalledOnce();
-  });
-
-  it("does not require authentication (setup endpoint)", async () => {
-    // No session set - should still work when no users exist
-    const response = await callRoute(GET, {
-      url: "/api/backup/list-setup",
-    });
-    const body = await expectJson<{ backups: unknown[] }>(response, 200);
-    expect(body.backups).toEqual([]);
   });
 });

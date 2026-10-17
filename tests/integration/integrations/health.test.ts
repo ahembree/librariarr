@@ -54,6 +54,8 @@ vi.mock("@/lib/seerr/seerr-client", async (importOriginal) => ({
 
 import { GET } from "@/app/api/integrations/health/route";
 import { appCache } from "@/lib/cache/memory-cache";
+import { INTEGRATIONS_HEALTH_CACHE_KEY } from "@/lib/cache/invalidate";
+import { invalidateSeerrCaches } from "@/lib/seerr/request-stats";
 import type { IntegrationsHealth } from "@/app/api/integrations/health/route";
 
 beforeEach(async () => {
@@ -76,7 +78,7 @@ async function getHealth(): Promise<IntegrationsHealth> {
 describe("GET /api/integrations/health", () => {
   it("returns 401 without auth", async () => {
     const res = await callRoute(GET);
-    await expectJson(res, 401);
+    expect(await expectJson(res, 401)).toEqual({ error: "Unauthorized" });
   });
 
   it("returns empty health when no integrations are configured", async () => {
@@ -96,24 +98,36 @@ describe("GET /api/integrations/health", () => {
 
   it("reports reachable=true when all configured instances respond ok", async () => {
     const user = await createTestUser();
-    await createTestRadarrInstance(user.id, { name: "My Radarr" });
-    await createTestSonarrInstance(user.id, { name: "My Sonarr" });
-    await createTestSeerrInstance(user.id, { name: "My Seerr" });
+    const radarr = await createTestRadarrInstance(user.id, { name: "My Radarr" });
+    const sonarr = await createTestSonarrInstance(user.id, { name: "My Sonarr" });
+    const seerr = await createTestSeerrInstance(user.id, { name: "My Seerr" });
     setMockSession({ isLoggedIn: true, userId: user.id});
 
-    mockRadarrTestConnection.mockResolvedValue({ ok: true, appName: "Radarr" });
-    mockSonarrTestConnection.mockResolvedValue({ ok: true, appName: "Sonarr" });
-    mockSeerrTestConnection.mockResolvedValue({ ok: true, appName: "Overseerr" });
+    mockRadarrTestConnection.mockResolvedValue({ ok: true, appName: "Radarr", version: "5.14.0.9383" });
+    mockSonarrTestConnection.mockResolvedValue({ ok: true, appName: "Sonarr", version: "4.0.11.2680" });
+    mockSeerrTestConnection.mockResolvedValue({ ok: true, appName: "Seerr" });
 
     const data = await getHealth();
 
-    expect(data.sonarr.configured).toBe(1);
-    expect(data.sonarr.reachable).toBe(1);
-    expect(data.radarr.configured).toBe(1);
-    expect(data.radarr.reachable).toBe(1);
-    expect(data.seerr.configured).toBe(1);
-    expect(data.seerr.reachable).toBe(1);
-    expect(data.arrAnyReachable).toBe(true);
+    expect(data).toEqual({
+      sonarr: {
+        configured: 1,
+        reachable: 1,
+        instances: [{ id: sonarr.id, name: "My Sonarr", reachable: true, error: null }],
+      },
+      radarr: {
+        configured: 1,
+        reachable: 1,
+        instances: [{ id: radarr.id, name: "My Radarr", reachable: true, error: null }],
+      },
+      lidarr: { configured: 0, reachable: 0, instances: [] },
+      seerr: {
+        configured: 1,
+        reachable: 1,
+        instances: [{ id: seerr.id, name: "My Seerr", reachable: true, error: null }],
+      },
+      arrAnyReachable: true,
+    });
   });
 
   it("reports unreachable instance with the error message", async () => {
@@ -193,21 +207,6 @@ describe("GET /api/integrations/health", () => {
     expect(mockRadarrTestConnection).not.toHaveBeenCalled();
   });
 
-  it("isolates one user's instances from another's", async () => {
-    const u1 = await createTestUser({ plexId: "user1" });
-    const u2 = await createTestUser({ plexId: "user2" });
-    await createTestRadarrInstance(u1.id, { name: "U1 Radarr" });
-    await createTestRadarrInstance(u2.id, { name: "U2 Radarr" });
-
-    mockRadarrTestConnection.mockResolvedValue({ ok: true, appName: "Radarr" });
-
-    setMockSession({ isLoggedIn: true, userId: u1.id});
-    const data = await getHealth();
-
-    expect(data.radarr.configured).toBe(1);
-    expect(data.radarr.instances[0].name).toBe("U1 Radarr");
-  });
-
   it("caches results for repeated calls within the TTL window", async () => {
     const user = await createTestUser();
     await createTestRadarrInstance(user.id);
@@ -220,5 +219,45 @@ describe("GET /api/integrations/health", () => {
     await callRoute(GET);
 
     expect(mockRadarrTestConnection).toHaveBeenCalledTimes(1);
+  });
+
+  // Single admin: one cached answer, under the one key the Seerr instance
+  // routes drop (invalidateSeerrCaches) — a per-user key is against the
+  // single-user model and lets the two drift apart.
+  it("caches its answer under the single shared key the Seerr routes drop", async () => {
+    const user = await createTestUser();
+    await createTestSeerrInstance(user.id, { name: "Seerr" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
+    mockSeerrTestConnection.mockResolvedValue({ ok: false, error: "down" });
+
+    const first = await getHealth();
+    expect(appCache.get(INTEGRATIONS_HEALTH_CACHE_KEY)).toEqual(first);
+    expect(appCache.get(`${INTEGRATIONS_HEALTH_CACHE_KEY}:${user.id}`)).toBeUndefined();
+
+    invalidateSeerrCaches();
+    expect(appCache.get(INTEGRATIONS_HEALTH_CACHE_KEY)).toBeUndefined();
+
+    mockSeerrTestConnection.mockResolvedValue({ ok: true, appName: "Seerr" });
+    const second = await getHealth();
+    expect(mockSeerrTestConnection).toHaveBeenCalledTimes(2);
+    expect(second.seerr.reachable).toBe(1);
+  });
+
+  it("re-checks every instance when asked for fresh=1, bypassing the cached answer", async () => {
+    const user = await createTestUser();
+    await createTestRadarrInstance(user.id, { name: "My Radarr" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
+
+    mockRadarrTestConnection.mockResolvedValueOnce({ ok: false, error: "down" });
+    const first = await getHealth();
+    expect(first.radarr.reachable).toBe(0);
+
+    mockRadarrTestConnection.mockResolvedValueOnce({ ok: true, appName: "Radarr" });
+    const res = await callRoute(GET, { url: "/api/integrations/health?fresh=1" });
+    const fresh = await expectJson<IntegrationsHealth>(res, 200);
+
+    expect(mockRadarrTestConnection).toHaveBeenCalledTimes(2);
+    expect(fresh.radarr.reachable).toBe(1);
+    expect(fresh.arrAnyReachable).toBe(true);
   });
 });

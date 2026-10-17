@@ -26,7 +26,7 @@ const KEY = {
 
 function settings(overrides: Record<string, unknown> = {}) {
   return {
-    discordWebhookUrl: "https://discord.com/api/webhooks/1/abc",
+    discordWebhookUrl: "https://discord.com/api/webhooks/123456789012345678/Xk2pQr9sT4uVw7yZ",
     discordWebhookUsername: null,
     discordWebhookAvatarUrl: "https://example.com/a.png",
     discordNotifyApiKeys: true,
@@ -46,7 +46,7 @@ describe("notifyApiKeyChange", () => {
     expect(m.findUnique).toHaveBeenCalledWith(expect.objectContaining({ where: { userId: "user-1" } }));
     expect(m.send).toHaveBeenCalledTimes(1);
     const [url, payload] = m.send.mock.calls[0];
-    expect(url).toBe("https://discord.com/api/webhooks/1/abc");
+    expect(url).toBe("https://discord.com/api/webhooks/123456789012345678/Xk2pQr9sT4uVw7yZ");
     expect(payload).toMatchObject({
       username: "Librariarr",
       avatar_url: "https://example.com/a.png",
@@ -76,12 +76,17 @@ describe("notifyApiKeyChange", () => {
   it("never throws — a failed lookup or send is logged and swallowed", async () => {
     m.findUnique.mockRejectedValue(new Error("db down"));
     await expect(notifyApiKeyChange("user-1", "created", KEY)).resolves.toBeUndefined();
-    expect(m.warn).toHaveBeenCalledWith("Auth", expect.stringMatching(/Discord notification/), {
+    expect(m.warn).toHaveBeenCalledWith("Auth", "Could not send the Discord notification for an API key created", {
       error: "Error: db down",
     });
+    expect(m.send).not.toHaveBeenCalled();
 
     m.findUnique.mockResolvedValue(settings());
     m.send.mockRejectedValue(new Error("discord down"));
     await expect(notifyApiKeyChange("user-1", "deleted", KEY)).resolves.toBeUndefined();
+    expect(m.send).toHaveBeenCalledTimes(1);
+    expect(m.warn).toHaveBeenLastCalledWith("Auth", "Could not send the Discord notification for an API key deleted", {
+      error: "Error: discord down",
+    });
   });
 });

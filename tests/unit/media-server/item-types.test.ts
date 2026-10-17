@@ -3,6 +3,7 @@ import {
   isMediaItem,
   isItemForLibraryType,
   partitionMediaItems,
+  canBelongToSyncedLibrary,
   NON_MEDIA_ITEM_TYPES,
 } from "@/lib/media-server/item-types";
 
@@ -14,8 +15,17 @@ describe("isMediaItem", () => {
     }
   );
 
-  it.each([...NON_MEDIA_ITEM_TYPES])("rejects container type %s", (type) => {
+  // Listed literally rather than iterated from NON_MEDIA_ITEM_TYPES, so
+  // dropping a type from the deny-list fails here instead of shrinking the
+  // test with it. Collections and box sets have their own tests below.
+  it.each(["playlist", "folder", "collectionfolder", "userview"])("rejects container type %s", (type) => {
     expect(isMediaItem({ type })).toBe(false);
+  });
+
+  it("denies exactly the known container types", () => {
+    expect([...NON_MEDIA_ITEM_TYPES].sort()).toEqual(
+      ["boxset", "collection", "collectionfolder", "folder", "playlist", "userview"],
+    );
   });
 
   it("rejects a Plex collection", () => {
@@ -119,5 +129,28 @@ describe("partitionMediaItems", () => {
 
   it("handles an empty page", () => {
     expect(partitionMediaItems([])).toEqual({ media: [], skipped: 0 });
+  });
+});
+
+describe("canBelongToSyncedLibrary", () => {
+  it.each(["movie", "show", "season", "episode", "artist", "album", "track", "Episode"])(
+    "allows %s to escalate an unknown section to a full sync",
+    (type) => {
+      expect(canBelongToSyncedLibrary({ type })).toBe(true);
+    }
+  );
+
+  it.each(["photo", "clip", "collection", "musicvideo"])(
+    "refuses %s — no synced library type holds it, so a full sync could never create its section",
+    (type) => {
+      // An allow-list on purpose: a Plex Photos section never gets a Library
+      // row, so escalating for a photo would loop a full sync per photo.
+      expect(canBelongToSyncedLibrary({ type })).toBe(false);
+    }
+  );
+
+  it("allows an item with no type — a gap in the response, not evidence", () => {
+    expect(canBelongToSyncedLibrary({})).toBe(true);
+    expect(canBelongToSyncedLibrary({ type: "" })).toBe(true);
   });
 });

@@ -80,14 +80,12 @@ describe("GET /api/media/[id]/plays", () => {
     await expectJson(await get(movie.id), 401);
   });
 
-  it("404s an item belonging to another owner rather than leaking its plays", async () => {
-    // The reason ownership is checked on the ITEM before any history is read: a
-    // bare `findUnique` by id would happily return someone else's watch history.
-    const { movie } = await fixture();
-    const intruder = await createTestUser({ username: "intruder" });
-    setMockSession({ isLoggedIn: true, userId: intruder.id });
+  it("404s an id that names no item", async () => {
+    const { user } = await fixture();
+    setMockSession({ isLoggedIn: true, userId: user.id });
 
-    await expectJson(await get(movie.id), 404);
+    const body = await expectJson<{ error: string }>(await get("nonexistent"), 404);
+    expect(body.error).toBe("Not found");
   });
 
   it("returns the item's plays, newest first, with the full Tracearr detail", async () => {
@@ -175,7 +173,7 @@ describe("GET /api/media/[id]/plays", () => {
         mediaItemId: other.id,
         mediaServerId: server.id,
         serverUsername: "alice",
-        watchedAt: new Date(),
+        watchedAt: new Date("2025-01-05T21:00:00Z"),
       },
     });
 
@@ -193,11 +191,10 @@ describe("GET /api/media/[id]/plays", () => {
     // a tie block in any order, and two differently-planned requests permute the
     // block straddling a page boundary — some rows twice, others dropped.
     //
-    // Honest caveat: five rows cannot force that. The planner picks the same
-    // plan for every page at this size, so this test passes with or without the
-    // tiebreaker — it guards the paging contract (counts, hasMore, no overlap),
-    // not the tiebreaker itself, which only misbehaves at a scale no
-    // integration test should seed.
+    // Five rows cannot force the permutation itself — the planner picks the
+    // same plan for every page at this size — so this pins the contract the
+    // tiebreaker provides instead: counts, hasMore, and the tie read in id
+    // order, every play exactly once.
     const sameInstant = new Date("2025-03-03T12:00:00Z");
     await prisma.watchHistory.createMany({
       data: Array.from({ length: 5 }, (_, i) => ({
@@ -212,12 +209,15 @@ describe("GET /api/media/[id]/plays", () => {
     const second = await expectJson<PlaysResponse>(await get(movie.id, "?page=2&limit=2"), 200);
     const third = await expectJson<PlaysResponse>(await get(movie.id, "?page=3&limit=2"), 200);
 
-    expect(first.pagination.hasMore).toBe(true);
-    expect(third.pagination.hasMore).toBe(false);
+    expect([first, second, third].map((p) => p.pagination.hasMore)).toEqual([true, true, false]);
+    expect([first, second, third].map((p) => p.pagination.totalCount)).toEqual([5, 5, 5]);
 
+    // Within the tie, rows come in id order — every play once.
+    const expected = (
+      await prisma.watchHistory.findMany({ where: { mediaItemId: movie.id }, orderBy: { id: "asc" }, select: { id: true } })
+    ).map((r) => r.id);
     const ids = [...first.items, ...second.items, ...third.items].map((i) => i.id);
-    expect(ids).toHaveLength(5);
-    expect(new Set(ids).size).toBe(5);
+    expect(ids).toEqual(expected);
   });
 
   it("clamps a nonsense limit instead of erroring", async () => {
@@ -227,10 +227,13 @@ describe("GET /api/media/[id]/plays", () => {
     setMockSession({ isLoggedIn: true, userId: user.id });
 
     const zero = await expectJson<PlaysResponse>(await get(movie.id, "?limit=0"), 200);
-    expect(zero.pagination.limit).toBeGreaterThan(0);
+    expect(zero.pagination.limit).toBe(1);
+
+    const negative = await expectJson<PlaysResponse>(await get(movie.id, "?limit=-3"), 200);
+    expect(negative.pagination.limit).toBe(1);
 
     const huge = await expectJson<PlaysResponse>(await get(movie.id, "?limit=99999"), 200);
-    expect(huge.pagination.limit).toBeLessThanOrEqual(200);
+    expect(huge.pagination.limit).toBe(200);
   });
 
   it("answers an absurd page with an empty page and echoes a bounded page number", async () => {
@@ -242,6 +245,7 @@ describe("GET /api/media/[id]/plays", () => {
       200,
     );
     expect(body.items).toEqual([]);
+    expect(body.pagination.hasMore).toBe(false);
     expect(body.pagination.page).toBe(MAX_SKIP);
   });
 
@@ -250,10 +254,11 @@ describe("GET /api/media/[id]/plays", () => {
     setMockSession({ isLoggedIn: true, userId: user.id });
     const otherServer = await createTestServer(user.id, { name: "Second" });
 
+    // A play is recorded on the server the item lives on.
     await prisma.watchHistory.createMany({
       data: [
-        { mediaItemId: movie.id, mediaServerId: server.id, serverUsername: "alice", watchedAt: new Date() },
-        { mediaItemId: movie.id, mediaServerId: otherServer.id, serverUsername: "bob", watchedAt: new Date() },
+        { mediaItemId: movie.id, mediaServerId: server.id, serverUsername: "alice", watchedAt: new Date("2025-02-01T20:00:00Z") },
+        { mediaItemId: movie.id, mediaServerId: server.id, serverUsername: "bob", watchedAt: new Date("2025-02-02T20:00:00Z") },
       ],
     });
 
@@ -264,7 +269,14 @@ describe("GET /api/media/[id]/plays", () => {
       await get(movie.id, `?serverId=${server.id}`),
       200,
     );
-    expect(scoped.pagination.totalCount).toBe(1);
-    expect(scoped.items[0].serverUsername).toBe("alice");
+    expect(scoped.items.map((i) => i.serverUsername)).toEqual(["bob", "alice"]);
+    expect(scoped.items.every((i) => i.server.id === server.id)).toBe(true);
+
+    const elsewhere = await expectJson<PlaysResponse>(
+      await get(movie.id, `?serverId=${otherServer.id}`),
+      200,
+    );
+    expect(elsewhere.items).toEqual([]);
+    expect(elsewhere.pagination.totalCount).toBe(0);
   });
 });

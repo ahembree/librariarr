@@ -55,11 +55,16 @@ const CATALOG = {
 vi.mock("@/lib/trash/catalog", () => ({ fetchTrashCatalog: vi.fn(async () => CATALOG) }));
 
 import { runTrashSync } from "@/lib/trash/sync";
+import { trashCfHash } from "@/lib/trash/signature";
+import type { TrashCustomFormat } from "@/lib/trash/types";
 
 const INST = { serviceType: "RADARR" as const, id: "r1", name: "R", url: "http://r", apiKey: "k", enabled: true };
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // clearAllMocks keeps implementations: a stub one test installs (a profile
+  // list, a naming config, a rejection) must not answer the next test's reads.
+  for (const fn of Object.values(clientMock)) fn.mockReset();
   prismaMock.trashManagedResource.findMany.mockResolvedValue([]);
   clientMock.getCustomFormats.mockResolvedValue([]);
   clientMock.getQualityDefinitions.mockResolvedValue([
@@ -77,7 +82,10 @@ describe("runTrashSync", () => {
     });
     expect(report.dryRun).toBe(true);
     expect(report.items[0].action).toBe("CREATE");
-    expect(report.items[0].diff.length).toBeGreaterThan(0);
+    // A create is previewed as the whole new definition.
+    expect(report.items[0].diff).toEqual([
+      expect.objectContaining({ path: "(root)", before: null, kind: "changed" }),
+    ]);
     expect(clientMock.createCustomFormat).not.toHaveBeenCalled();
     expect(prismaMock.trashManagedResource.updateMany).not.toHaveBeenCalled();
   });
@@ -92,6 +100,9 @@ describe("runTrashSync", () => {
       items: [{ resourceType: "CUSTOM_FORMAT", trashId: "cf1" }],
     });
     expect(report.items[0].action).toBe("UPDATE");
+    // A preview writes nothing.
+    expect(clientMock.updateCustomFormat).not.toHaveBeenCalled();
+    expect(clientMock.createCustomFormat).not.toHaveBeenCalled();
   });
 
   it("never writes the selection back (an edit saved during the sync survives)", async () => {
@@ -101,6 +112,13 @@ describe("runTrashSync", () => {
     clientMock.getNamingConfig.mockResolvedValue({ id: 1, standardMovieFormat: "old", movieFolderFormat: "old" });
     clientMock.updateNamingConfig.mockResolvedValue({});
     await runTrashSync("u1", INST, { dryRun: false });
+    // Only the selected file format is applied; the folder format is untouched.
+    expect(clientMock.updateNamingConfig).toHaveBeenCalledWith({
+      id: 1,
+      standardMovieFormat: "{Movie CleanTitle} {Quality Full}",
+      movieFolderFormat: "old",
+    });
+    expect(prismaMock.trashManagedResource.updateMany).toHaveBeenCalledTimes(1);
     const call = prismaMock.trashManagedResource.updateMany.mock.calls[0][0] as { data: Record<string, unknown> };
     expect(call.data).not.toHaveProperty("selection");
   });
@@ -113,12 +131,14 @@ describe("runTrashSync", () => {
     expect(report.items[0].action).toBe("CREATE");
     expect(report.items[0].applied).toBe(true);
     expect(clientMock.createCustomFormat).toHaveBeenCalledTimes(1);
-    expect(prismaMock.trashManagedResource.updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: { id: "row1", userId: "u1" },
-        data: expect.objectContaining({ arrId: 500 }),
-      }),
-    );
+    expect(prismaMock.trashManagedResource.updateMany).toHaveBeenCalledWith({
+      where: { id: "row1", userId: "u1" },
+      data: {
+        arrId: 500,
+        lastSyncHash: trashCfHash(CATALOG.customFormats[0] as TrashCustomFormat),
+        lastSyncedAt: expect.any(Date),
+      },
+    });
   });
 
   it("apply with items only writes the matching managed rows (per-item sync)", async () => {
@@ -150,7 +170,10 @@ describe("runTrashSync", () => {
           { resourceType: "CUSTOM_FORMAT", trashId: "cf2" },
         ],
       });
-      expect(report.items.map((i) => i.action)).toEqual(["ERROR", "ERROR"]);
+      expect(report.items.map((i) => [i.action, i.error])).toEqual([
+        ["ERROR", "Radarr HTTP 503"],
+        ["ERROR", "Radarr HTTP 503"],
+      ]);
       expect(clientMock.getCustomFormats).toHaveBeenCalledTimes(1);
     } finally {
       CATALOG.customFormats.pop();
@@ -204,7 +227,10 @@ describe("runTrashSync", () => {
     ]);
     clientMock.getQualityProfiles.mockResolvedValue([]);
     const report = await runTrashSync("u1", INST, { dryRun: false });
-    expect(report.items[0].action).toBe("SKIP");
+    expect(report.items[0]).toMatchObject({
+      action: "SKIP",
+      warnings: ['Quality profile "Ghost" was not found on this instance.'],
+    });
     expect(clientMock.updateQualityProfile).not.toHaveBeenCalled();
   });
 
@@ -214,7 +240,10 @@ describe("runTrashSync", () => {
     ]);
     clientMock.getNamingConfig.mockResolvedValue({ id: 1, standardMovieFormat: "old", movieFolderFormat: "old" });
     const report = await runTrashSync("u1", INST, { dryRun: true });
-    expect(report.items[0].action).toBe("SKIP");
+    expect(report.items[0]).toMatchObject({
+      action: "SKIP",
+      warnings: ["No naming variants selected — choose which formats to apply first."],
+    });
   });
 
   it("finds a managed custom format renamed upstream by its recorded id instead of creating a duplicate", async () => {

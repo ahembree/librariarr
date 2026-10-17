@@ -7,13 +7,15 @@ const item = (id: string, over: Record<string, unknown> = {}) => ({
 
 describe("collapseActionItems", () => {
   it("keeps one copy of a movie per TMDB id, and every movie without one", () => {
-    const { items } = collapseActionItems("MOVIE", [
+    const { items, members } = collapseActionItems("MOVIE", [
       item("a", { externalIds: [{ source: "TMDB", externalId: "1" }] }),
       item("b", { externalIds: [{ source: "TMDB", externalId: "1" }] }),
       item("c"),
       item("d"),
     ], new Map());
     expect(items.map((i) => i.id)).toEqual(["a", "c", "d"]);
+    // A movie action names no members: nothing to merge.
+    expect(members.size).toBe(0);
   });
 
   it("merges a show's members across copies and episodes", () => {
@@ -35,5 +37,6 @@ describe("collapseActionItems", () => {
     ], new Map());
     expect(items.map((i) => i.id)).toEqual(["t1", "t3"]);
     expect(members.get("t1")).toEqual(["t1", "t2"]);
+    expect(members.get("t3")).toEqual(["t3"]);
   });
 });

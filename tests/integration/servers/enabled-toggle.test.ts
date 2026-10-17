@@ -38,21 +38,12 @@ vi.mock("@/lib/cache/memory-cache", () => ({
   },
 }));
 
-const { mockSyncMediaServer } = vi.hoisted(() => ({
-  mockSyncMediaServer: vi.fn(),
-}));
-
-vi.mock("@/lib/sync/sync-server", () => ({
-  syncMediaServer: mockSyncMediaServer,
-  detectDynamicRangeFromFilename: vi.fn(),
-  detectAudioProfileFromFilename: vi.fn(),
-}));
-
 // Import route handlers AFTER mocks
 import { GET } from "@/app/api/servers/route";
 import { PUT } from "@/app/api/servers/[id]/route";
 import { POST as SyncPOST } from "@/app/api/servers/[id]/sync/route";
 import { GET as LibraryTypesGET } from "@/app/api/media/library-types/route";
+import { createMediaServerClient } from "@/lib/media-server/factory";
 
 describe("Server enable/disable toggle", () => {
   const prisma = getTestPrisma();
@@ -61,7 +52,6 @@ describe("Server enable/disable toggle", () => {
     await cleanDatabase();
     clearMockSession();
     vi.clearAllMocks();
-    mockSyncMediaServer.mockResolvedValue(undefined);
   });
 
   afterAll(async () => {
@@ -101,6 +91,8 @@ describe("Server enable/disable toggle", () => {
       );
       const body = await expectJson<{ server: { id: string; enabled: boolean } }>(response, 200);
       expect(body.server.enabled).toBe(true);
+      const updated = await prisma.mediaServer.findUnique({ where: { id: server.id } });
+      expect(updated!.enabled).toBe(true);
     });
 
     it("restarts the Tracearr archive walk when disabling with deleteData", async () => {
@@ -112,9 +104,10 @@ describe("Server enable/disable toggle", () => {
         tracearrBackfillComplete: true,
       });
       const library = await createTestLibrary(server.id);
-      await createTestMediaItem(library.id);
+      const item = await createTestMediaItem(library.id);
       setMockSession({ userId: user.id, isLoggedIn: true });
 
+      const before = Date.now();
       const response = await callRouteWithParams(
         PUT,
         { id: server.id },
@@ -127,8 +120,14 @@ describe("Server enable/disable toggle", () => {
       await expectJson(response, 200);
 
       const updated = await prisma.mediaServer.findUnique({ where: { id: server.id } });
+      expect(updated!.enabled).toBe(false);
       expect(updated!.tracearrBackfillComplete).toBe(false);
-      expect(updated!.tracearrBackfillCursorAt).toBeInstanceOf(Date);
+      // The walk restarts from the newest play: the cursor is moved to now.
+      expect(updated!.tracearrBackfillCursorAt!.getTime()).toBeGreaterThanOrEqual(before);
+      expect(updated!.tracearrBackfillCursorAt!.getTime()).toBeLessThanOrEqual(Date.now());
+      // The purge itself, and the evidence it took with it.
+      expect(await prisma.mediaItem.findUnique({ where: { id: item.id } })).toBeNull();
+      expect(updated!.watchHistorySyncedAt).toBeNull();
     });
 
     it("skips connection test when disabling", async () => {
@@ -145,6 +144,9 @@ describe("Server enable/disable toggle", () => {
       );
       const body = await expectJson<{ server: { id: string; enabled: boolean } }>(response, 200);
       expect(body.server.enabled).toBe(false);
+      expect(createMediaServerClient).not.toHaveBeenCalled();
+      const updated = await prisma.mediaServer.findUnique({ where: { id: server.id } });
+      expect(updated).toMatchObject({ enabled: false, url: "http://bad-url.invalid" });
     });
   });
 
@@ -183,7 +185,8 @@ describe("Server enable/disable toggle", () => {
       );
       const body = await expectJson<{ error: string }>(response, 400);
       expect(body.error).toBe("Cannot sync a disabled server");
-      expect(mockSyncMediaServer).not.toHaveBeenCalled();
+      // Nothing was queued: no sync row was opened for it.
+      expect(await prisma.syncJob.count()).toBe(0);
     });
   });
 
@@ -201,10 +204,9 @@ describe("Server enable/disable toggle", () => {
       setMockSession({ userId: user.id, isLoggedIn: true });
 
       const response = await callRoute(LibraryTypesGET, { url: "/api/media/library-types" });
-      const body = await expectJson<{ types: string[] }>(response, 200);
+      const body = await expectJson<{ types: string[]; allTypes: string[] }>(response, 200);
 
-      expect(body.types).toContain("MOVIE");
-      expect(body.types).not.toContain("MUSIC");
+      expect(body).toEqual({ types: ["MOVIE"], allTypes: ["MOVIE"] });
     });
   });
 });

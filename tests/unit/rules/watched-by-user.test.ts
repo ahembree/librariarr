@@ -137,9 +137,9 @@ describe("watchedByUser Phase 2 evaluation (individual items)", () => {
   it("equals matches items watched by that user (case-insensitive)", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "watchedByUser", operator: "equals", value: "ALICE" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
     expect(result.get("2")).toHaveLength(0);
-    expect(result.get("3")!.length).toBeGreaterThan(0);
+    expect(result.get("3")).toHaveLength(1);
     expect(result.get("4")).toHaveLength(0);
   });
 
@@ -147,17 +147,17 @@ describe("watchedByUser Phase 2 evaluation (individual items)", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "watchedByUser", operator: "notEquals", value: "alice" })])];
     const result = matched(items, rules);
     expect(result.get("1")).toHaveLength(0);
-    expect(result.get("2")!.length).toBeGreaterThan(0);
+    expect(result.get("2")).toHaveLength(1);
     expect(result.get("3")).toHaveLength(0);
-    expect(result.get("4")!.length).toBeGreaterThan(0);
+    expect(result.get("4")).toHaveLength(1);
   });
 
   it("contains with multi-select matches any of the listed users", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "watchedByUser", operator: "contains", value: "alice|carol" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
     expect(result.get("2")).toHaveLength(0);
-    expect(result.get("3")!.length).toBeGreaterThan(0);
+    expect(result.get("3")).toHaveLength(1);
     expect(result.get("4")).toHaveLength(0);
   });
 
@@ -165,15 +165,15 @@ describe("watchedByUser Phase 2 evaluation (individual items)", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "watchedByUser", operator: "notContains", value: "alice|carol" })])];
     const result = matched(items, rules);
     expect(result.get("1")).toHaveLength(0);
-    expect(result.get("2")!.length).toBeGreaterThan(0);
+    expect(result.get("2")).toHaveLength(1);
     expect(result.get("3")).toHaveLength(0);
-    expect(result.get("4")!.length).toBeGreaterThan(0);
+    expect(result.get("4")).toHaveLength(1);
   });
 
   it("isNotNull matches items with any watch history", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "watchedByUser", operator: "isNotNull", value: "" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
     expect(result.get("4")).toHaveLength(0);
   });
 
@@ -181,15 +181,15 @@ describe("watchedByUser Phase 2 evaluation (individual items)", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "watchedByUser", operator: "isNull", value: "" })])];
     const result = matched(items, rules);
     expect(result.get("1")).toHaveLength(0);
-    expect(result.get("4")!.length).toBeGreaterThan(0);
+    expect(result.get("4")).toHaveLength(1);
   });
 
   it("negate inverts equals", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "watchedByUser", operator: "equals", value: "alice", negate: true })])];
     const result = matched(items, rules);
     expect(result.get("1")).toHaveLength(0);
-    expect(result.get("2")!.length).toBeGreaterThan(0);
-    expect(result.get("4")!.length).toBeGreaterThan(0);
+    expect(result.get("2")).toHaveLength(1);
+    expect(result.get("4")).toHaveLength(1);
   });
 });
 
@@ -207,7 +207,7 @@ describe("watchedByUser Phase 2 evaluation (series/music aggregate)", () => {
   it("equals reads from watchedByUsers array on aggregates", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "watchedByUser", operator: "equals", value: "alice" })])];
     const result = matched(items, rules);
-    expect(result.get("s1")!.length).toBeGreaterThan(0);
+    expect(result.get("s1")).toHaveLength(1);
     expect(result.get("s2")).toHaveLength(0);
     expect(result.get("s3")).toHaveLength(0);
   });
@@ -215,8 +215,8 @@ describe("watchedByUser Phase 2 evaluation (series/music aggregate)", () => {
   it("contains multi-select on aggregates", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "watchedByUser", operator: "contains", value: "alice|carol" })])];
     const result = matched(items, rules);
-    expect(result.get("s1")!.length).toBeGreaterThan(0);
-    expect(result.get("s2")!.length).toBeGreaterThan(0);
+    expect(result.get("s1")).toHaveLength(1);
+    expect(result.get("s2")).toHaveLength(1);
     expect(result.get("s3")).toHaveLength(0);
   });
 
@@ -224,7 +224,7 @@ describe("watchedByUser Phase 2 evaluation (series/music aggregate)", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "watchedByUser", operator: "isNull", value: "" })])];
     const result = matched(items, rules);
     expect(result.get("s1")).toHaveLength(0);
-    expect(result.get("s3")!.length).toBeGreaterThan(0);
+    expect(result.get("s3")).toHaveLength(1);
   });
 
   it("aggregated watchedByUsers takes precedence over raw watchHistory if both present", () => {
@@ -238,7 +238,7 @@ describe("watchedByUser Phase 2 evaluation (series/music aggregate)", () => {
       watchHistory: [{ serverUsername: "bob" }],
     }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "watchedByUser", operator: "equals", value: "alice" })])];
-    expect(matched(mixed, rules).get("m1")!.length).toBeGreaterThan(0);
+    expect(matched(mixed, rules).get("m1")).toHaveLength(1);
   });
 });
 

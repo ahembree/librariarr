@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
-import { cleanDatabase, disconnectTestDb } from "../../setup/test-db";
+import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
 import {
   callRoute,
@@ -77,7 +77,7 @@ async function createRecurringSchedule(overrides?: Record<string, unknown>) {
 describe("GET /api/tools/blackout", () => {
   it("returns 401 without auth", async () => {
     const res = await callRoute(GET);
-    await expectJson(res, 401);
+    expect(await expectJson(res, 401)).toEqual({ error: "Unauthorized" });
   });
 
   it("returns empty list initially", async () => {
@@ -97,8 +97,8 @@ describe("GET /api/tools/blackout", () => {
     await createRecurringSchedule();
 
     const res = await callRoute(GET);
-    const body = await expectJson<{ schedules: unknown[] }>(res);
-    expect(body.schedules).toHaveLength(2);
+    const body = await expectJson<{ schedules: { name: string }[] }>(res);
+    expect(body.schedules.map((s) => s.name).sort()).toEqual(["Recurring Blackout", "Test Blackout"]);
   });
 });
 
@@ -108,7 +108,8 @@ describe("GET /api/tools/blackout", () => {
 describe("POST /api/tools/blackout", () => {
   it("returns 401 without auth", async () => {
     const res = await createOneTimeSchedule();
-    await expectJson(res, 401);
+    expect(await expectJson(res, 401)).toEqual({ error: "Unauthorized" });
+    expect(await getTestPrisma().blackoutSchedule.count()).toBe(0);
   });
 
   it("creates a one_time blackout schedule", async () => {
@@ -131,12 +132,22 @@ describe("POST /api/tools/blackout", () => {
       };
     }>(res, 201);
 
-    expect(body.schedule.id).toBeDefined();
-    expect(body.schedule.name).toBe("New Year Blackout");
-    expect(body.schedule.scheduleType).toBe("one_time");
-    expect(body.schedule.action).toBe("terminate_immediate");
-    expect(body.schedule.message).toBe("Maintenance window");
-    expect(body.schedule.delay).toBe(60);
+    expect(body.schedule).toMatchObject({
+      name: "New Year Blackout",
+      scheduleType: "one_time",
+      startDate: "2030-01-01T00:00:00.000Z",
+      endDate: "2030-01-02T00:00:00.000Z",
+      daysOfWeek: null,
+      startTime: null,
+      endTime: null,
+      action: "terminate_immediate",
+      message: "Maintenance window",
+      delay: 60,
+      enabled: true,
+      excludedUsers: [],
+    });
+    const stored = await getTestPrisma().blackoutSchedule.findUniqueOrThrow({ where: { id: body.schedule.id } });
+    expect(stored.userId).toBe(user.id);
   });
 
   it("creates a recurring blackout schedule", async () => {
@@ -156,12 +167,19 @@ describe("POST /api/tools/blackout", () => {
       };
     }>(res, 201);
 
-    expect(body.schedule.name).toBe("Recurring Blackout");
-    expect(body.schedule.scheduleType).toBe("recurring");
-    expect(body.schedule.daysOfWeek).toEqual([1, 3, 5]);
-    expect(body.schedule.startTime).toBe("02:00");
-    expect(body.schedule.endTime).toBe("06:00");
-    expect(body.schedule.action).toBe("warn_then_terminate");
+    expect(body.schedule).toMatchObject({
+      name: "Recurring Blackout",
+      scheduleType: "recurring",
+      startDate: null,
+      endDate: null,
+      daysOfWeek: [1, 3, 5],
+      startTime: "02:00",
+      endTime: "06:00",
+      action: "warn_then_terminate",
+      // The column defaults stand in for what the request left out.
+      message: "Stream terminated due to scheduled blackout period.",
+      delay: 30,
+    });
   });
 
   it("validates required name field", async () => {
@@ -177,8 +195,21 @@ describe("POST /api/tools/blackout", () => {
         action: "terminate_immediate",
       },
     });
-    const body = await expectJson<{ error: string }>(res, 400);
+    const body = await expectJson<{ error: string; details: string[] }>(res, 400);
     expect(body.error).toBe("Validation failed");
+    expect(body.details).toEqual([expect.stringMatching(/^name: /)]);
+    expect(await getTestPrisma().blackoutSchedule.count()).toBe(0);
+  });
+
+  // A name that is only spaces was stored as "" once trimmed.
+  it("refuses a name that is only spaces", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id});
+
+    const res = await createOneTimeSchedule({ name: "   " });
+    const body = await expectJson<{ error: string; details: string[] }>(res, 400);
+    expect(body).toEqual({ error: "Validation failed", details: ["name: Name is required"] });
+    expect(await getTestPrisma().blackoutSchedule.count()).toBe(0);
   });
 
   it("validates required action field", async () => {
@@ -194,8 +225,9 @@ describe("POST /api/tools/blackout", () => {
         endDate: "2030-01-02T00:00:00Z",
       },
     });
-    const body = await expectJson<{ error: string }>(res, 400);
+    const body = await expectJson<{ error: string; details: string[] }>(res, 400);
     expect(body.error).toBe("Validation failed");
+    expect(body.details).toEqual([expect.stringMatching(/^action: /)]);
   });
 
   it("validates one_time requires startDate and endDate", async () => {
@@ -211,7 +243,8 @@ describe("POST /api/tools/blackout", () => {
       },
     });
     const body = await expectJson<{ error: string }>(res, 400);
-    expect(body.error).toContain("startDate and endDate are required");
+    expect(body.error).toBe("startDate and endDate are required for one_time schedules");
+    expect(await getTestPrisma().blackoutSchedule.count()).toBe(0);
   });
 
   it("validates one_time startDate must be before endDate", async () => {
@@ -223,7 +256,8 @@ describe("POST /api/tools/blackout", () => {
       endDate: "2030-01-01T00:00:00Z",
     });
     const body = await expectJson<{ error: string }>(res, 400);
-    expect(body.error).toContain("startDate must be before endDate");
+    expect(body.error).toBe("startDate must be before endDate");
+    expect(await getTestPrisma().blackoutSchedule.count()).toBe(0);
   });
 
   it("validates recurring requires daysOfWeek", async () => {
@@ -241,7 +275,7 @@ describe("POST /api/tools/blackout", () => {
       },
     });
     const body = await expectJson<{ error: string }>(res, 400);
-    expect(body.error).toContain("daysOfWeek must be a non-empty array");
+    expect(body.error).toBe("daysOfWeek must be a non-empty array for recurring schedules");
   });
 
   it("validates recurring requires startTime and endTime", async () => {
@@ -258,7 +292,7 @@ describe("POST /api/tools/blackout", () => {
       },
     });
     const body = await expectJson<{ error: string }>(res, 400);
-    expect(body.error).toContain("startTime and endTime are required");
+    expect(body.error).toBe("startTime and endTime are required for recurring schedules");
   });
 
   it("validates recurring time format must be HH:mm", async () => {
@@ -277,20 +311,21 @@ describe("POST /api/tools/blackout", () => {
       },
     });
     const body = await expectJson<{ error: string }>(res, 400);
-    expect(body.error).toContain("HH:mm format");
+    expect(body.error).toBe("startTime and endTime must be in HH:mm format");
   });
 
   it("creates schedule with optional excludedUsers", async () => {
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id});
 
+    // Media-server usernames, as sessions report them.
     const res = await createOneTimeSchedule({
-      excludedUsers: ["user-1", "user-2"],
+      excludedUsers: ["alice", "bob"],
     });
     const body = await expectJson<{
       schedule: { excludedUsers: string[] };
     }>(res, 201);
-    expect(body.schedule.excludedUsers).toEqual(["user-1", "user-2"]);
+    expect(body.schedule.excludedUsers).toEqual(["alice", "bob"]);
   });
 });
 
@@ -304,7 +339,7 @@ describe("PUT /api/tools/blackout/[id]", () => {
       { id: "nonexistent" },
       { method: "PUT", body: { name: "Updated" } }
     );
-    await expectJson(res, 401);
+    expect(await expectJson(res, 401)).toEqual({ error: "Unauthorized" });
   });
 
   it("returns 404 for non-existent schedule", async () => {
@@ -316,7 +351,7 @@ describe("PUT /api/tools/blackout/[id]", () => {
       { id: "nonexistent-id" },
       { method: "PUT", body: { name: "Updated" } }
     );
-    await expectJson(res, 404);
+    expect(await expectJson(res, 404)).toEqual({ error: "Schedule not found" });
   });
 
   it("updates an existing schedule", async () => {
@@ -343,10 +378,26 @@ describe("PUT /api/tools/blackout/[id]", () => {
       }
     );
     const body = await expectJson<{
-      schedule: { name: string; action: string };
+      schedule: { name: string; action: string; startDate: string; endDate: string };
     }>(res);
-    expect(body.schedule.name).toBe("Updated Blackout");
-    expect(body.schedule.action).toBe("block_new_only");
+    expect(body.schedule).toMatchObject({
+      name: "Updated Blackout",
+      action: "block_new_only",
+      startDate: "2030-06-01T00:00:00.000Z",
+      endDate: "2030-06-02T00:00:00.000Z",
+    });
+  });
+
+  it("refuses renaming a schedule to only spaces", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id});
+    const { schedule: created } = await (await createOneTimeSchedule()).json();
+
+    const res = await callRouteWithParams(PUT, { id: created.id }, { method: "PUT", body: { name: "  " } });
+    const body = await expectJson<{ error: string; details: string[] }>(res, 400);
+    expect(body).toEqual({ error: "Validation failed", details: ["name: Name is required"] });
+    const row = await getTestPrisma().blackoutSchedule.findUniqueOrThrow({ where: { id: created.id } });
+    expect(row.name).toBe("Test Blackout");
   });
 
   it("toggling enabled (partial body) preserves a one_time schedule's dates", async () => {
@@ -367,8 +418,8 @@ describe("PUT /api/tools/blackout/[id]", () => {
     }>(res);
     expect(body.schedule.enabled).toBe(false);
     // CRITICAL: a partial toggle must NOT wipe the schedule's date definition.
-    expect(body.schedule.startDate).not.toBeNull();
-    expect(body.schedule.endDate).not.toBeNull();
+    expect(body.schedule.startDate).toBe("2030-01-01T00:00:00.000Z");
+    expect(body.schedule.endDate).toBe("2030-01-02T00:00:00.000Z");
   });
 
   it("toggling enabled (partial body) preserves a recurring schedule's times", async () => {
@@ -426,7 +477,9 @@ describe("PUT /api/tools/blackout/[id]", () => {
       { id: created.id },
       { method: "PUT", body: { startTime: "27:00" } }
     );
-    await expectJson(res, 400);
+    expect(await expectJson(res, 400)).toEqual({ error: "startTime must be in HH:mm format" });
+    const stored = await getTestPrisma().blackoutSchedule.findUniqueOrThrow({ where: { id: created.id } });
+    expect(stored.startTime).toBe("02:00");
   });
 
   it("rejects an out-of-range time on create", async () => {
@@ -434,26 +487,8 @@ describe("PUT /api/tools/blackout/[id]", () => {
     setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await createRecurringSchedule({ startTime: "24:00", endTime: "25:61" });
-    await expectJson(res, 400);
-  });
-
-  it("cannot update another user's schedule", async () => {
-    const user1 = await createTestUser({ plexId: "plex-owner" });
-    const user2 = await createTestUser({ plexId: "plex-other" });
-
-    // User 1 creates a schedule
-    setMockSession({ isLoggedIn: true, userId: user1.id});
-    const createRes = await createOneTimeSchedule();
-    const { schedule: created } = await createRes.json();
-
-    // User 2 tries to update it
-    setMockSession({ isLoggedIn: true, userId: user2.id});
-    const res = await callRouteWithParams(
-      PUT,
-      { id: created.id },
-      { method: "PUT", body: { name: "Hacked" } }
-    );
-    await expectJson(res, 404);
+    expect(await expectJson(res, 400)).toEqual({ error: "startTime and endTime must be in HH:mm format" });
+    expect(await getTestPrisma().blackoutSchedule.count()).toBe(0);
   });
 });
 
@@ -467,7 +502,7 @@ describe("DELETE /api/tools/blackout/[id]", () => {
       { id: "nonexistent" },
       { method: "DELETE" }
     );
-    await expectJson(res, 401);
+    expect(await expectJson(res, 401)).toEqual({ error: "Unauthorized" });
   });
 
   it("returns 404 for non-existent schedule", async () => {
@@ -479,7 +514,7 @@ describe("DELETE /api/tools/blackout/[id]", () => {
       { id: "nonexistent-id" },
       { method: "DELETE" }
     );
-    await expectJson(res, 404);
+    expect(await expectJson(res, 404)).toEqual({ error: "Schedule not found" });
   });
 
   it("deletes an existing schedule", async () => {
@@ -503,30 +538,5 @@ describe("DELETE /api/tools/blackout/[id]", () => {
     const listRes = await callRoute(GET);
     const listBody = await expectJson<{ schedules: unknown[] }>(listRes);
     expect(listBody.schedules).toHaveLength(0);
-  });
-
-  it("cannot delete another user's schedule", async () => {
-    const user1 = await createTestUser({ plexId: "plex-owner" });
-    const user2 = await createTestUser({ plexId: "plex-other" });
-
-    // User 1 creates a schedule
-    setMockSession({ isLoggedIn: true, userId: user1.id});
-    const createRes = await createOneTimeSchedule();
-    const { schedule: created } = await createRes.json();
-
-    // User 2 tries to delete it
-    setMockSession({ isLoggedIn: true, userId: user2.id});
-    const res = await callRouteWithParams(
-      DELETE,
-      { id: created.id },
-      { method: "DELETE" }
-    );
-    await expectJson(res, 404);
-
-    // Verify it still exists for user1
-    setMockSession({ isLoggedIn: true, userId: user1.id});
-    const listRes = await callRoute(GET);
-    const listBody = await expectJson<{ schedules: unknown[] }>(listRes);
-    expect(listBody.schedules).toHaveLength(1);
   });
 });

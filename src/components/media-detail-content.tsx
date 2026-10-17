@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/carousel";
 import { IntegrationsSection } from "@/components/integrations-section";
 import { ServerChips } from "@/components/server-chips";
-import { formatFileSize, formatDuration, formatDate } from "@/lib/format";
+import { formatFileSize, formatDuration, formatDate, formatDateOnly } from "@/lib/format";
 import { SERVER_TYPE_STYLES, DEFAULT_SERVER_STYLE } from "@/lib/server-styles";
 import { FadeImage } from "@/components/ui/fade-image";
 import type { MediaItemWithRelations } from "@/lib/types";
@@ -580,7 +580,7 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
                 }
               />
               <DetailRow label="Last Played" value={formatDate(merged.lastPlayedAt, "Never")} />
-              {merged.originallyAvailableAt && <DetailRow label="Released" value={formatDate(merged.originallyAvailableAt)} />}
+              {merged.originallyAvailableAt && <DetailRow label="Released" value={formatDateOnly(merged.originallyAvailableAt)} />}
               <DetailRow label="Added" value={formatDate(merged.addedAt)} />
             </div>
           </section>

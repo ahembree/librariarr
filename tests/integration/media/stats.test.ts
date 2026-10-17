@@ -32,7 +32,13 @@ vi.mock("@/lib/cache/memory-cache", () => {
     invalidatePrefix: () => {},
     clear: () => {},
   };
-  return { MemoryCache: vi.fn(() => noopCache), appCache: noopCache };
+  return {
+    // A constructor mock needs `function`: Vitest 4 cannot `new` an arrow.
+    MemoryCache: vi.fn(function () {
+      return noopCache;
+    }),
+    appCache: noopCache,
+  };
 });
 
 // Import route handler AFTER mocks
@@ -210,13 +216,11 @@ describe("GET /api/media/stats", () => {
       }[];
     }>(response, 200);
 
-    expect(body.qualityBreakdown).toHaveLength(2);
-
-    const q4k = body.qualityBreakdown.find((q) => q.resolution === "4k");
-    expect(q4k?._count).toBe(1);
-
-    const q1080 = body.qualityBreakdown.find((q) => q.resolution === "1080p");
-    expect(q1080?._count).toBe(2);
+    // Raw stored values, ordered by value then type.
+    expect(body.qualityBreakdown).toEqual([
+      { _count: 2, resolution: "1080p", type: "MOVIE" },
+      { _count: 1, resolution: "4k", type: "MOVIE" },
+    ]);
   });
 
   it("returns top movies by play count", async () => {
@@ -323,15 +327,11 @@ describe("GET /api/media/stats", () => {
       genreBreakdown: { value: string; type: string; _count: number }[];
     }>(response, 200);
 
-    expect(body.genreBreakdown.length).toBeGreaterThan(0);
-
-    const action = body.genreBreakdown.find((g) => g.value === "Action");
-    expect(action).toBeDefined();
-    expect(action!._count).toBe(2);
-
-    const scifi = body.genreBreakdown.find((g) => g.value === "Sci-Fi");
-    expect(scifi).toBeDefined();
-    expect(scifi!._count).toBe(1);
+    expect(body.genreBreakdown.map((g) => `${g.value}:${g.type}:${g._count}`).sort()).toEqual([
+      "Action:MOVIE:2",
+      "Comedy:MOVIE:1",
+      "Sci-Fi:MOVIE:1",
+    ]);
   });
 
   it("filters stats by serverId", async () => {
@@ -368,16 +368,15 @@ describe("GET /api/media/stats", () => {
     expect(body.totalSize).toBe("1073741824");
   });
 
-  it("returns 404 when serverId does not belong to user", async () => {
-    const user1 = await createTestUser({ plexId: "u1" });
-    const user2 = await createTestUser({ plexId: "u2" });
-    const server = await createTestServer(user1.id);
+  it("returns 404 when serverId names no server", async () => {
+    const user = await createTestUser();
+    await createTestServer(user.id);
 
-    setMockSession({ userId: user2.id, isLoggedIn: true });
+    setMockSession({ userId: user.id, isLoggedIn: true });
 
     const response = await callRoute(GET, {
       url: "/api/media/stats",
-      searchParams: { serverId: server.id },
+      searchParams: { serverId: "nonexistent" },
     });
     const body = await expectJson<{ error: string }>(response, 404);
     expect(body.error).toBe("Server not found");
@@ -480,16 +479,19 @@ describe("GET /api/media/stats", () => {
         await prisma.mediaItem.update({ where: { id: item.id }, data: { ...data, dedupCanonical: canonical } });
         return item;
       };
-      // "Alien" on both servers, canonical on A. "Heat" only on B.
+      // "Alien" on both servers (one dedupKey), canonical on A. "Heat" only on B.
       await movie(moviesA.id, "Alien", true, {
+        dedupKey: "movie:tmdb:348",
         fileSize: BigInt(1000), duration: 100, resolution: "4K", videoCodec: "hevc", audioCodec: "truehd",
         contentRating: "R", dynamicRange: "HDR10", audioChannels: 8, genres: ["Horror", "Sci-Fi"],
       });
       await movie(moviesB.id, "Alien", false, {
+        dedupKey: "movie:tmdb:348",
         fileSize: BigInt(400), duration: 100, resolution: "1080p", videoCodec: "h264", audioCodec: "aac",
         contentRating: "R", dynamicRange: "SDR", audioChannels: 2, genres: ["Horror", "Sci-Fi"],
       });
       await movie(moviesB.id, "Heat", true, {
+        dedupKey: "movie:tmdb:949",
         fileSize: BigInt(700), duration: 170, resolution: "1080p", videoCodec: "h264", audioCodec: null,
         contentRating: null, dynamicRange: "SDR", audioChannels: 6, genres: ["Crime"],
       });

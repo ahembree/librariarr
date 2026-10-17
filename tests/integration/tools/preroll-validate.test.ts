@@ -59,8 +59,10 @@ describe("POST /api/tools/preroll/validate-path", () => {
       method: "POST",
       body: {},
     });
-    const body = await expectJson<{ error: string }>(response, 400);
+    const body = await expectJson<{ error: string; details: string[] }>(response, 400);
     expect(body.error).toBe("Validation failed");
+    expect(body.details).toEqual([expect.stringMatching(/^path: /)]);
+    expect(mockAccess).not.toHaveBeenCalled();
   });
 
   it("returns exists:true for accessible path", async () => {
@@ -75,7 +77,9 @@ describe("POST /api/tools/preroll/validate-path", () => {
       body: { path: "/media/preroll.mp4" },
     });
     const body = await expectJson<{ exists: boolean }>(response, 200);
-    expect(body.exists).toBe(true);
+    expect(body).toEqual({ exists: true });
+    // Checked for readability, as the media server will need to read it.
+    expect(mockAccess).toHaveBeenCalledExactlyOnceWith("/media/preroll.mp4", 4);
   });
 
   it("returns exists:false for inaccessible path", async () => {
@@ -90,6 +94,28 @@ describe("POST /api/tools/preroll/validate-path", () => {
       body: { path: "/media/missing.mp4" },
     });
     const body = await expectJson<{ exists: boolean }>(response, 200);
-    expect(body.exists).toBe(false);
+    expect(body).toEqual({ exists: false });
+  });
+
+  // The route probes the app's own filesystem, so it answers only for the
+  // directories prerolls are kept in — never "does /etc/shadow exist".
+  it.each([
+    ["a path outside every allowed directory", "/etc/passwd"],
+    ["a sibling sharing an allowed prefix", "/media-secret/preroll.mp4"],
+    ["a traversal out of an allowed directory", "/media/../etc/passwd"],
+    ["a relative path", "prerolls/intro.mp4"],
+  ])("refuses %s without touching the filesystem", async (_label, path) => {
+    const user = await createTestUser();
+    setMockSession({ userId: user.id, isLoggedIn: true });
+    mockAccess.mockResolvedValue(undefined);
+
+    const response = await callRoute(POST, {
+      url: "/api/tools/preroll/validate-path",
+      method: "POST",
+      body: { path },
+    });
+    const body = await expectJson<{ error: string }>(response, 400);
+    expect(body).toEqual({ error: "Path is outside allowed directories" });
+    expect(mockAccess).not.toHaveBeenCalled();
   });
 });

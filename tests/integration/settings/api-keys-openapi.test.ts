@@ -32,6 +32,13 @@ describe("the OpenAPI document", () => {
 
   it("is cookie-session only on the settings route", async () => {
     await expectJson(await callRoute(GET), 401);
+    // An API key is not a session here.
+    const user = await createTestUser();
+    const { key } = await createTestApiKey(user.id, { scopes: ["system:read"] });
+    await expectJson(
+      await callRoute(GET, { url: "/api/settings/api-keys/openapi", headers: { authorization: `Bearer ${key}` } }),
+      401,
+    );
   });
 
   // The in-app Swagger viewer: behind a proxy that terminates TLS without
@@ -86,7 +93,7 @@ describe("the OpenAPI document", () => {
       200,
     );
     expect(doc.paths["/openapi.json"]).toBeDefined();
-    // Tooling reads this one; it keeps the absolute address.
-    expect(doc.servers[0].url).toMatch(/^https?:\/\/.+\/api\/v1$/);
+    // Tooling reads this one; it keeps the absolute address it was asked on.
+    expect(doc.servers).toEqual([{ url: "http://localhost:3000/api/v1" }]);
   });
 });

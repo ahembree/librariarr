@@ -50,7 +50,10 @@ describe("POST /api/query/column-values", () => {
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id });
     const res = await callRoute(POST, { url: "/api/query/column-values", method: "POST", body: { items: [], fields: [] } });
-    await expectJson(res, 400);
+    const body = await expectJson<{ error: string; details: string[] }>(res, 400);
+    expect(body.error).toBe("Validation failed");
+    expect(body.details).toHaveLength(1);
+    expect(body.details[0]).toMatch(/^fields: /);
   });
 
   it("returns values for a movie's criteria", async () => {
@@ -212,7 +215,10 @@ describe("POST /api/query/column-values", () => {
     setMockSession({ isLoggedIn: true, userId: user.id });
     const items = Array.from({ length: MAX_COLUMN_VALUE_ITEMS + 1 }, (_, i) => ({ id: `i${i}` }));
     const res = await callRoute(POST, { url: "/api/query/column-values", method: "POST", body: { items, fields: ["studio"] } });
-    await expectJson(res, 400);
+    const body = await expectJson<{ error: string; details: string[] }>(res, 400);
+    expect(body.error).toBe("Validation failed");
+    expect(body.details).toHaveLength(1);
+    expect(body.details[0]).toMatch(/^items: /);
   });
 
   it("returns nothing for another server than the query's selection, or for a disabled server", async () => {
@@ -231,7 +237,7 @@ describe("POST /api/query/column-values", () => {
       body: { items: [{ id: ma.id }, { id: mb.id }, { id: mo.id }], fields: ["studio"], serverIds: [a.id] },
     });
     const body = await expectJson<Body>(res, 200);
-    expect(Object.keys(body.values)).toEqual([ma.id]);
+    expect(body.values).toEqual({ [ma.id]: { studio: "X" } });
   });
 
   it("warns instead of guessing when an Arr column has no Arr server selected", async () => {
@@ -247,22 +253,6 @@ describe("POST /api/query/column-values", () => {
     });
     const body = await expectJson<Body>(res, 200);
     expect(body.values[movie.id]).toEqual({ foundInArr: null, arrTag: null });
-    expect(body.warnings).toHaveLength(1);
-  });
-
-  it("does not read another user's items", async () => {
-    const owner = await createTestUser({ plexId: "owner" });
-    const server = await createTestServer(owner.id);
-    const movie = await createTestMediaItem((await createTestLibrary(server.id)).id, { type: "MOVIE", studio: "A24" });
-    const other = await createTestUser({ plexId: "other" });
-    setMockSession({ isLoggedIn: true, userId: other.id });
-
-    const res = await callRoute(POST, {
-      url: "/api/query/column-values",
-      method: "POST",
-      body: { items: [{ id: movie.id }], fields: ["studio"] },
-    });
-    const body = await expectJson<Body>(res, 200);
-    expect(body.values).toEqual({});
+    expect(body.warnings).toEqual(["Select an Arr server in the query scope to show Arr columns."]);
   });
 });

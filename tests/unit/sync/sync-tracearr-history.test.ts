@@ -14,7 +14,6 @@ const {
   mockFindOldestPlayAt,
   mockListServers,
   mockGetServerAccountNames,
-  mockInvalidateWatchHistoryEvidence,
   mockEventBus,
   mockBuildIndex,
   mockResolve,
@@ -37,7 +36,6 @@ const {
   mockFindOldestPlayAt: vi.fn(),
   mockListServers: vi.fn(),
   mockGetServerAccountNames: vi.fn(),
-  mockInvalidateWatchHistoryEvidence: vi.fn(),
   mockEventBus: { emit: vi.fn() },
   mockBuildIndex: vi.fn(),
   mockResolve: vi.fn(),
@@ -50,10 +48,6 @@ vi.mock("@/lib/db", () => ({
 }));
 
 vi.mock("@/lib/events/event-bus", () => ({ eventBus: mockEventBus }));
-
-vi.mock("@/lib/media/watch-evidence", () => ({
-  invalidateWatchHistoryEvidence: mockInvalidateWatchHistoryEvidence,
-}));
 
 vi.mock("@/lib/logger", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -100,8 +94,9 @@ const DAY_MS = 24 * HOUR_MS;
 function historyRecord(
   overrides: Partial<TracearrHistoryRecord> = {},
 ): TracearrHistoryRecord {
+  const id = overrides.id ?? "chain-1";
   return {
-    id: "chain-1",
+    id,
     server_id: TRACEARR_SERVER_ID,
     server_name: "Plex",
     server_type: "plex",
@@ -163,10 +158,12 @@ function historyRecord(
     grandparent_rating_key: null,
     library_id: null,
     genres: null,
-    reference_id: "chain-1",
+    // The documented chain key, which Tracearr currently sets equal to `id`.
+    reference_id: id,
+    // Bridged by the default account map below — the healthy case.
     user: {
       id: "user-1",
-      server_user_id: "1",
+      server_user_id: "srv-user-1",
       username: "bob",
       thumb_url: null,
       avatar_url: null,
@@ -251,6 +248,7 @@ function storedRows(options: {
     tracearrServerId: TRACEARR_SERVER_ID,
     tracearrBackfillComplete: options.backfillComplete,
     tracearrOldestPlayAt: options.oldestPlayAt ?? null,
+    tracearrBackfillCursorAt: null,
     userId: "user-1",
   });
 }
@@ -307,6 +305,7 @@ describe("syncTracearrHistory", () => {
       // server — `undefined` would skip the measurement branch for a reason
       // that never occurs in production.
       tracearrOldestPlayAt: null,
+      tracearrBackfillCursorAt: null,
       userId: "user-1",
     });
     mockPrisma.tracearrInstance.findMany.mockResolvedValue([
@@ -645,6 +644,7 @@ describe("syncTracearrHistory", () => {
         backfillPending: false,
       });
       expect(insertCalls().length).toBe(1);
+      expect(summaryLog()).toContain("0 new, 1 updated");
     });
 
     it("stores the mapped columns, tagging provenance as TRACEARR", async () => {
@@ -658,7 +658,9 @@ describe("syncTracearrHistory", () => {
       const params = insertCalls()[0].slice(1);
       expect(params).toContain("TRACEARR");
       expect(params).toContain("chain-1");
-      expect(params).toContain("bob");
+      // The account name the map bridges to, not Tracearr's identity label.
+      expect(params).toContain("weingart");
+      expect(params).not.toContain("bob");
       expect(params).toContain("Living Room TV");
       // `started_at` → `watchedAt`, the chain's stable start.
       expect(params).toContainEqual(new Date("2025-07-01T20:00:00.000Z"));
@@ -714,6 +716,11 @@ describe("syncTracearrHistory", () => {
         backfillPending: false,
       });
       expect(insertCalls().length).toBe(1);
+      const params = insertCalls()[0].slice(1);
+      expect(params).toContain("chain-2");
+      expect(params).toContain("item-2");
+      expect(params).not.toContain("chain-1");
+      expect(summaryLog()).toContain("1 unresolved");
     });
 
     it("skips a record belonging to another Tracearr server", async () => {
@@ -1373,7 +1380,10 @@ describe("syncTracearrHistory", () => {
         // The cursor rides along in the SAME write: how far the walk reached is
         // recorded whether or not anything was storable, which is what stops a
         // stretch of unimportable history from being re-walked forever.
-        data: expect.objectContaining({ tracearrBackfillComplete: true }),
+        data: expect.objectContaining({
+          tracearrBackfillComplete: true,
+          tracearrBackfillCursorAt: new Date("2025-07-01T20:00:00.000Z"),
+        }),
       });
     });
 
@@ -1496,9 +1506,6 @@ describe("syncTracearrHistory", () => {
       // An exhausted FORWARD pass says nothing about the archive, so it must not
       // re-write the flag either (a no-op write here would be harmless, but a
       // forward pass being allowed to SET it would not be).
-      // A stopped walk still records the cursor (how far it reached), which is
-      // what stops the next slice re-walking the same pages. What it must never
-      // do is claim the archive is fully imported.
       expect(mockPrisma.mediaServer.updateMany).not.toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({ tracearrBackfillComplete: true }),
@@ -1556,7 +1563,10 @@ describe("syncTracearrHistory", () => {
         // The cursor rides along in the SAME write: how far the walk reached is
         // recorded whether or not anything was storable, which is what stops a
         // stretch of unimportable history from being re-walked forever.
-        data: expect.objectContaining({ tracearrBackfillComplete: true }),
+        data: expect.objectContaining({
+          tracearrBackfillComplete: true,
+          tracearrBackfillCursorAt: new Date("2025-07-01T20:00:00.000Z"),
+        }),
       });
     });
 
@@ -1671,9 +1681,6 @@ describe("syncTracearrHistory", () => {
       // The decisive one. A forward walk that runs out of pages has seen an hour
       // of history, not the archive — letting it set the flag would strand every
       // older play exactly the way the single-watermark import did.
-      // A stopped walk still records the cursor (how far it reached), which is
-      // what stops the next slice re-walking the same pages. What it must never
-      // do is claim the archive is fully imported.
       expect(mockPrisma.mediaServer.updateMany).not.toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({ tracearrBackfillComplete: true }),
@@ -1713,7 +1720,14 @@ describe("syncTracearrHistory", () => {
     it("marks the backfill complete when a backfill pass exhausts the keyset", async () => {
       storedRows({ min: MIN, max: MAX, backfillComplete: false });
       mockGetHistoryPage.mockResolvedValueOnce({
-        records: [historyRecord({ id: "chain-old" })],
+        // Older than the oldest stored play: the backfill asks for `until = MIN`.
+        records: [
+          historyRecord({
+            id: "chain-old",
+            started_at: "2021-02-14T19:30:00.000Z",
+            stopped_at: "2021-02-14T21:45:00.000Z",
+          }),
+        ],
         nextCursor: null,
       });
 
@@ -1733,7 +1747,10 @@ describe("syncTracearrHistory", () => {
         // The cursor rides along in the SAME write: how far the walk reached is
         // recorded whether or not anything was storable, which is what stops a
         // stretch of unimportable history from being re-walked forever.
-        data: expect.objectContaining({ tracearrBackfillComplete: true }),
+        data: expect.objectContaining({
+          tracearrBackfillComplete: true,
+          tracearrBackfillCursorAt: new Date("2021-02-14T19:30:00.000Z"),
+        }),
       });
     });
 
@@ -1986,9 +2003,7 @@ describe("syncTracearrHistory", () => {
       // run on every sync, by every caller. Bolting ~19 probes onto it would
       // charge the whole install for a number only the queued backfill reads.
       expect(mockFindOldestPlayAt).not.toHaveBeenCalled();
-      // A stopped walk still records the cursor (how far it reached), which is
-      // what stops the next slice re-walking the same pages. What it must never
-      // do is claim the archive is fully imported.
+      // ...and, walking no archive, it never claims the archive is imported.
       expect(mockPrisma.mediaServer.updateMany).not.toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({ tracearrBackfillComplete: true }),
@@ -2016,7 +2031,14 @@ describe("syncTracearrHistory", () => {
       storedRows({ min: MIN, max: MAX, backfillComplete: false, oldestPlayAt: null });
       mockFindOldestPlayAt.mockRejectedValue(new Error("ECONNRESET"));
       mockGetHistoryPage.mockResolvedValueOnce({
-        records: [historyRecord({ id: "chain-old" })],
+        // Older than the oldest stored play: the backfill asks for `until = MIN`.
+        records: [
+          historyRecord({
+            id: "chain-old",
+            started_at: "2021-02-14T19:30:00.000Z",
+            stopped_at: "2021-02-14T21:45:00.000Z",
+          }),
+        ],
         nextCursor: null,
       });
 
@@ -2044,7 +2066,10 @@ describe("syncTracearrHistory", () => {
         // The cursor rides along in the SAME write: how far the walk reached is
         // recorded whether or not anything was storable, which is what stops a
         // stretch of unimportable history from being re-walked forever.
-        data: expect.objectContaining({ tracearrBackfillComplete: true }),
+        data: expect.objectContaining({
+          tracearrBackfillComplete: true,
+          tracearrBackfillCursorAt: new Date("2021-02-14T19:30:00.000Z"),
+        }),
       });
       expect(mockPrisma.mediaServer.updateMany).not.toHaveBeenCalledWith(
         expect.objectContaining({
@@ -2433,7 +2458,7 @@ describe("syncTracearrHistory", () => {
     // monitor, or a freshly-installed Tracearr with no retained history.
     //
     // Declaring completion there is worse than never completing: the mapping
-    // change already wiped the server's native history, so clearing
+    // change already wiped the server's native history, so setting
     // `watchHistorySyncedAt` hands the evaluability guard a clean bill of
     // health for an empty relation, and `watchedByUser` negatives go on to
     // match the entire library.
@@ -2616,7 +2641,8 @@ describe("syncTracearrHistory", () => {
 
       expect(mockGetHistoryPage).not.toHaveBeenCalled();
       expect(insertCalls()).toHaveLength(0);
-      expect(mockInvalidateWatchHistoryEvidence).not.toHaveBeenCalled();
+      // No state write at all: the marker is neither withdrawn nor re-stamped.
+      expect(mockPrisma.mediaServer.updateMany).not.toHaveBeenCalled();
     });
 
     it("treats an EMPTY map like a failed one", async () => {
@@ -2656,7 +2682,12 @@ describe("syncTracearrHistory", () => {
         syncTracearrHistory("server-1", { passes: "forward" }),
       ).resolves.toMatchObject({ count: 1 });
 
-      expect(mockInvalidateWatchHistoryEvidence).not.toHaveBeenCalled();
+      // The departed user's fallback name does not count against the run: the
+      // marker is re-stamped, never withdrawn.
+      const markerWrites = mockPrisma.mediaServer.updateMany.mock.calls
+        .map((call) => (call[0] as { data: Record<string, unknown> }).data)
+        .filter((data) => "watchHistorySyncedAt" in data);
+      expect(markerWrites).toEqual([{ watchHistorySyncedAt: expect.any(Date) }]);
     });
   });
 
@@ -2689,7 +2720,6 @@ describe("syncTracearrHistory", () => {
 
       await syncTracearrHistory("server-1", { passes: "forward" });
 
-      expect(mockInvalidateWatchHistoryEvidence).not.toHaveBeenCalled();
       const writes = markerWrites();
       expect(writes).toHaveLength(1);
       expect(writes[0].data.watchHistorySyncedAt).toBeInstanceOf(Date);
@@ -2823,7 +2853,12 @@ describe("syncTracearrHistory", () => {
 
       // The join index and the span measurement run first and can take a
       // while; the card should appear when the run starts, not a page later.
-      expect(emitsBeforeFirstPage).toBeGreaterThan(0);
+      expect(emitsBeforeFirstPage).toBe(1);
+      expect(mockEventBus.emit.mock.calls[0][0]).toEqual({
+        type: "tracearr:import-progress",
+        userId: "user-1",
+        meta: { serverId: "server-1" },
+      });
     });
   });
 
@@ -2839,20 +2874,35 @@ describe("syncTracearrHistory", () => {
         max: new Date("2025-07-10T12:00:00.000Z"),
         backfillComplete: true,
       });
-      mockGetHistoryPage.mockResolvedValueOnce({
-        records: [historyRecord({ id: "chain-1" })],
-        nextCursor: null,
+      // The page takes longer than the throttle window, so its own emit is due.
+      let clock = Date.now();
+      const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => clock);
+      mockGetHistoryPage.mockImplementationOnce(async () => {
+        clock += 5_000;
+        return { records: [historyRecord({ id: "chain-1" })], nextCursor: null };
       });
 
-      await syncTracearrHistory("server-1", { passes: "forward" });
+      try {
+        await syncTracearrHistory("server-1", { passes: "forward" });
+      } finally {
+        nowSpy.mockRestore();
+      }
 
-      expect(mockEventBus.emit).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: "tracearr:import-progress",
-          userId: "user-1",
-          meta: { serverId: "server-1" },
-        }),
+      const progress = mockEventBus.emit.mock.calls
+        .map((call, index) => ({ event: call[0], order: mockEventBus.emit.mock.invocationCallOrder[index] }))
+        .filter(({ event }) => (event as { type: string }).type === "tracearr:import-progress");
+      // The run's start, the committed page, and the terminal update — every
+      // one addressed to the owner, carrying the server and no figures.
+      expect(progress.map(({ event }) => event)).toEqual(
+        Array(3).fill({ type: "tracearr:import-progress", userId: "user-1", meta: { serverId: "server-1" } }),
       );
+      const insertOrder = mockPrisma.$executeRawUnsafe.mock.invocationCallOrder[
+        mockPrisma.$executeRawUnsafe.mock.calls.findIndex((args) =>
+          (args[0] as string).includes('INSERT INTO "WatchHistory"'),
+        )
+      ];
+      // The page's emit follows its write, so a refetch reads committed rows.
+      expect(progress[1].order).toBeGreaterThan(insertOrder);
     });
 
     it("emits per page as the walk proceeds, not only once at the end", async () => {
@@ -2867,9 +2917,14 @@ describe("syncTracearrHistory", () => {
       });
       let clock = Date.now();
       const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => clock);
+      let page = 0;
       mockGetHistoryPage.mockImplementation(async () => {
         clock += 5_000; // past IMPORT_PROGRESS_THROTTLE_MS
-        return { records: [historyRecord({ id: `chain-${clock}` })], nextCursor: null };
+        page++;
+        return {
+          records: [historyRecord({ id: `chain-${page}` })],
+          nextCursor: page < 3 ? `cursor-${page}` : null,
+        };
       });
 
       try {
@@ -2881,7 +2936,9 @@ describe("syncTracearrHistory", () => {
       const progress = mockEventBus.emit.mock.calls.filter(
         (c) => (c[0] as { type: string }).type === "tracearr:import-progress",
       );
-      expect(progress.length).toBeGreaterThan(1);
+      expect(mockGetHistoryPage).toHaveBeenCalledTimes(3);
+      // The start and the terminal update alone would be 2; one per page on top.
+      expect(progress).toHaveLength(5);
     });
 
     it("throttles, so a long walk cannot flood every listening client", async () => {
@@ -2912,8 +2969,9 @@ describe("syncTracearrHistory", () => {
       const progress = mockEventBus.emit.mock.calls.filter(
         (c) => (c[0] as { type: string }).type === "tracearr:import-progress",
       );
-      expect(mockGetHistoryPage.mock.calls.length).toBeGreaterThanOrEqual(8);
-      expect(progress.length).toBeLessThanOrEqual(2);
+      expect(mockGetHistoryPage.mock.calls.length).toBe(8);
+      // Only the two unthrottled ones: the run's start and its terminal update.
+      expect(progress).toHaveLength(2);
     });
 
     it("always emits a final update, even when the throttle swallowed the last page", async () => {
@@ -2925,14 +2983,31 @@ describe("syncTracearrHistory", () => {
         max: new Date("2025-07-10T12:00:00.000Z"),
         backfillComplete: true,
       });
-      mockGetHistoryPage.mockResolvedValueOnce({ records: [], nextCursor: null });
+      // The clock holds still, so the page's own emit falls inside the window
+      // the run's start just opened.
+      const frozen = Date.now();
+      const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => frozen);
+      mockGetHistoryPage.mockResolvedValueOnce({
+        records: [historyRecord({ id: "chain-1" })],
+        nextCursor: null,
+      });
+      // Whether the run still reads as live at each emit.
+      const liveAtEmit: boolean[] = [];
+      mockEventBus.emit.mockImplementation(() => {
+        liveAtEmit.push(getTracearrImportActivity("server-1") !== null);
+      });
 
-      await syncTracearrHistory("server-1", { passes: "forward" });
+      try {
+        await syncTracearrHistory("server-1", { passes: "forward" });
+      } finally {
+        nowSpy.mockRestore();
+        mockEventBus.emit.mockReset();
+      }
 
-      const progress = mockEventBus.emit.mock.calls.filter(
-        (c) => (c[0] as { type: string }).type === "tracearr:import-progress",
-      );
-      expect(progress.length).toBeGreaterThanOrEqual(1);
+      // Start (live) and the terminal update, sent once the live entry is
+      // cleared so the refetch it triggers no longer reports the run as running.
+      expect(liveAtEmit).toEqual([true, false]);
+      expect(insertCalls()).toHaveLength(1);
     });
   });
 
@@ -2951,6 +3026,17 @@ describe("syncTracearrHistory", () => {
     function storedParams() {
       const call = insertCalls()[0];
       return call.slice(1) as unknown[];
+    }
+
+    /** The value the first INSERT writes into one column of its first row. */
+    function storedColumn(column: string): unknown {
+      const sql = insertCalls()[0][0] as string;
+      const columns = sql
+        .slice(sql.indexOf("(") + 1, sql.indexOf(")"))
+        .split(",")
+        .map((name) => name.trim().replace(/"/g, ""));
+      expect(columns).toContain(column);
+      return storedParams()[columns.indexOf(column)];
     }
 
     it("stores progress_ms and total_duration_ms when sent as strings", async () => {
@@ -2973,9 +3059,9 @@ describe("syncTracearrHistory", () => {
 
       await syncTracearrHistory("server-1", { passes: "forward" });
 
-      const params = storedParams();
-      expect(params).toContain(110500);
-      expect(params).toContain(126000);
+      expect(storedColumn("progressMs")).toBe(110500);
+      expect(storedColumn("totalDurationMs")).toBe(126000);
+      expect(storedColumn("durationMs")).toBe(126406);
     });
 
     it("still accepts the plain-number shape every other field uses", async () => {
@@ -2990,7 +3076,7 @@ describe("syncTracearrHistory", () => {
       });
 
       await syncTracearrHistory("server-1", { passes: "forward" });
-      expect(storedParams()).toContain(4242);
+      expect(storedColumn("progressMs")).toBe(4242);
     });
 
     it("refuses an empty string rather than storing it as zero", async () => {
@@ -3010,8 +3096,8 @@ describe("syncTracearrHistory", () => {
 
       await syncTracearrHistory("server-1", { passes: "forward" });
 
-      const params = storedParams();
-      expect(params).not.toContain(0);
+      expect(storedColumn("progressMs")).toBeNull();
+      expect(storedColumn("totalDurationMs")).toBeNull();
     });
   });
 

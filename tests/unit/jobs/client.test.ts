@@ -28,10 +28,14 @@ vi.mock("@/lib/logger", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: m.warn, error: m.error },
 }));
 
+import { Pool } from "pg";
 import { enqueueJob, getJobsPool, isJobRetrying, queuedSyncJobIds, releaseJobsClient } from "@/lib/jobs/client";
 
 describe("jobs client", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    // The pool and the worker utils are module singletons: release them so
+    // every test starts from a cold client, whatever ran before it.
+    await releaseJobsClient();
     vi.clearAllMocks();
   });
 
@@ -39,6 +43,8 @@ describe("jobs client", () => {
     const a = getJobsPool();
     const b = getJobsPool();
     expect(a).toBe(b);
+    expect(Pool).toHaveBeenCalledTimes(1);
+    expect(Pool).toHaveBeenCalledWith({ connectionString: process.env.DATABASE_URL, max: 4 });
     // error + connect handlers attached
     expect(poolOn).toHaveBeenCalledWith("error", expect.any(Function));
     expect(poolOn).toHaveBeenCalledWith("connect", expect.any(Function));
@@ -55,7 +61,7 @@ describe("jobs client", () => {
   it("logs enqueue errors and resolves false (never throws)", async () => {
     addJob.mockRejectedValueOnce(new Error("db down"));
     await expect(enqueueJob("task-c", {})).resolves.toBe(false);
-    expect(error).toHaveBeenCalledWith("Jobs", expect.stringContaining("task-c"), expect.any(Object));
+    expect(error).toHaveBeenCalledWith("Jobs", 'Failed to enqueue job "task-c"', { error: "Error: db down" });
   });
 
   describe("a keyed enqueue replacing a queued job", () => {
@@ -80,6 +86,7 @@ describe("jobs client", () => {
 
     it("leaves the spec alone when nothing is queued under the key", async () => {
       await enqueueJob("sync-server", {}, { jobKey: "sync:s1" });
+      expect(poolQuery).toHaveBeenCalledWith(expect.stringContaining("graphile_worker.jobs"), ["sync:s1"]);
       expect(addJob).toHaveBeenCalledWith("sync-server", {}, { jobKey: "sync:s1" });
     });
 
@@ -92,7 +99,9 @@ describe("jobs client", () => {
       poolQuery.mockRejectedValueOnce(new Error("no such relation"));
       await expect(enqueueJob("sync-server", {}, { jobKey: "sync:s1" })).resolves.toBe(true);
       expect(addJob).toHaveBeenCalledWith("sync-server", {}, { jobKey: "sync:s1" });
-      expect(warn).toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith("Jobs", 'Could not read the queued priority for "sync:s1"', {
+        error: "Error: no such relation",
+      });
     });
   });
 
@@ -117,7 +126,9 @@ describe("jobs client", () => {
     it("answers false when the lookup fails, so the caller enqueues as before", async () => {
       poolQuery.mockRejectedValueOnce(new Error("no such relation"));
       await expect(isJobRetrying("k")).resolves.toBe(false);
-      expect(warn).toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith("Jobs", 'Could not read the retry state of "k"', {
+        error: "Error: no such relation",
+      });
     });
   });
 
@@ -145,7 +156,9 @@ describe("jobs client", () => {
     it("answers null when the lookup fails, so the caller does not guess", async () => {
       poolQuery.mockRejectedValueOnce(new Error("no such relation"));
       await expect(queuedSyncJobIds(["k"])).resolves.toBeNull();
-      expect(warn).toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith("Jobs", "Could not read the queued sync jobs", {
+        error: "Error: no such relation",
+      });
     });
   });
 

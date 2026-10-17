@@ -9,13 +9,32 @@ describe("normalizePlexMessage", () => {
       {
         NotificationContainer: {
           type: "playing",
-          PlaySessionStateNotification: [{ sessionKey: "1", state: "playing", viewOffset: 1000 }],
+          PlaySessionStateNotification: [
+            {
+              sessionKey: "1",
+              clientIdentifier: "6tdtnxzkmzrwnpkf4rx2c1xd",
+              guid: "plex://movie/5d776b59ad5437001f79c6f8",
+              ratingKey: "12345",
+              url: "",
+              key: "/library/metadata/12345",
+              viewOffset: 1000,
+              playQueueItemID: 4321,
+              state: "playing",
+            },
+          ],
         },
       },
       ctx,
     );
-    expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({ kind: "session-changed", serverId: "s1", serverType: "PLEX" });
+    expect(events).toEqual([
+      {
+        kind: "session-changed",
+        serverId: "s1",
+        serverType: "PLEX",
+        at: expect.any(Number),
+        detail: { sessionKey: "1", state: "playing", key: "/library/metadata/12345", viewOffset: 1000 },
+      },
+    ]);
   });
 
   it("adds watch-changed when a play stops", () => {

@@ -19,8 +19,6 @@ function jsonResponse(body: unknown, ok = true, status = 200): Response {
   } as unknown as Response;
 }
 
-const ORIGINAL_VERSION = process.env.NEXT_PUBLIC_APP_VERSION;
-
 /** Let a background refresh's callbacks run. */
 const settle = () => new Promise((resolve) => setImmediate(resolve));
 
@@ -30,23 +28,19 @@ describe("update-checker fetch behavior", () => {
     // Clear stored lookups so checkForUpdate/fetchChangelog don't bleed between tests.
     resetVersionLookups();
     vi.stubGlobal("fetch", vi.fn());
-    process.env.NEXT_PUBLIC_APP_VERSION = "1.2.0";
+    vi.stubEnv("NEXT_PUBLIC_APP_VERSION", "1.2.0");
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
     vi.useRealTimers();
     resetVersionLookups();
-    if (ORIGINAL_VERSION === undefined) {
-      delete process.env.NEXT_PUBLIC_APP_VERSION;
-    } else {
-      process.env.NEXT_PUBLIC_APP_VERSION = ORIGINAL_VERSION;
-    }
   });
 
   describe("checkForUpdate", () => {
     it("returns a no-op result when the version is unknown (no fetch)", async () => {
-      process.env.NEXT_PUBLIC_APP_VERSION = "unknown";
+      vi.stubEnv("NEXT_PUBLIC_APP_VERSION", "unknown");
       const fetchMock = vi.mocked(fetch);
 
       const result = await checkForUpdate();
@@ -64,7 +58,7 @@ describe("update-checker fetch behavior", () => {
       vi.mocked(fetch).mockResolvedValueOnce(
         jsonResponse({
           tag_name: "v1.3.0",
-          html_url: "https://github.com/ahembree/librariarr/releases/v1.3.0",
+          html_url: "https://github.com/ahembree/librariarr/releases/tag/v1.3.0",
           name: "Release 1.3.0",
         }),
       );
@@ -75,9 +69,16 @@ describe("update-checker fetch behavior", () => {
       expect(result.latestVersion).toBe("1.3.0");
       expect(result.updateAvailable).toBe(true);
       expect(result.releaseUrl).toBe(
-        "https://github.com/ahembree/librariarr/releases/v1.3.0",
+        "https://github.com/ahembree/librariarr/releases/tag/v1.3.0",
       );
       expect(result.releaseName).toBe("Release 1.3.0");
+      // The latest release, asked for as the app itself.
+      expect(fetch).toHaveBeenCalledWith(
+        "https://api.github.com/repos/ahembree/librariarr/releases/latest",
+        expect.objectContaining({
+          headers: { Accept: "application/vnd.github.v3+json", "User-Agent": "Librariarr/1.2.0" },
+        }),
+      );
     });
 
     it("strips a leading v from the tag name", async () => {
@@ -259,7 +260,7 @@ describe("update-checker fetch behavior", () => {
 
   describe("fetchChangelog", () => {
     it("returns an empty array when the version is unknown (no fetch)", async () => {
-      process.env.NEXT_PUBLIC_APP_VERSION = "unknown";
+      vi.stubEnv("NEXT_PUBLIC_APP_VERSION", "unknown");
       const fetchMock = vi.mocked(fetch);
 
       const notes = await fetchChangelog();
@@ -297,11 +298,18 @@ describe("update-checker fetch behavior", () => {
       const notes = await fetchChangelog();
 
       expect(notes.map((n) => n.version)).toEqual(["1.3.0", "1.2.0", "1.1.0"]);
-      expect(notes[0].isLatest).toBe(true);
-      expect(notes[1].isLatest).toBe(false);
+      expect(notes.map((n) => n.isLatest)).toEqual([true, false, false]);
       // 1.2.0 equals current
-      expect(notes[1].isCurrent).toBe(true);
-      expect(notes[0].isCurrent).toBe(false);
+      expect(notes.map((n) => n.isCurrent)).toEqual([false, true, false]);
+      expect(notes[0]).toEqual({
+        version: "1.3.0",
+        name: "1.3.0",
+        body: "new",
+        url: "u3",
+        publishedAt: "2024-03-01T00:00:00Z",
+        isCurrent: false,
+        isLatest: true,
+      });
     });
 
     it("skips draft releases and entries with no version tag", async () => {
@@ -328,7 +336,10 @@ describe("update-checker fetch behavior", () => {
       vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(releases));
 
       const notes = await fetchChangelog();
-      expect(notes.length).toBe(10);
+      // The ten newest, newest first.
+      expect(notes.map((n) => n.version)).toEqual(
+        Array.from({ length: 10 }, (_, i) => `1.${24 - i}.0`),
+      );
     });
 
     it("falls back to created_at when published_at is missing and empty url default", async () => {
@@ -396,10 +407,7 @@ describe("update-checker fetch behavior", () => {
       );
 
       const notes = await fetchChangelog();
-      const lines = notes[0].body.split("\n");
-      const fixBugLines = lines.filter((l) => l.includes("fix bug"));
-      expect(fixBugLines.length).toBe(1);
-      expect(lines).toContain("* other change");
+      expect(notes[0].body).toBe("* fix bug (12c2d85)\n* other change");
     });
   });
 
@@ -407,7 +415,8 @@ describe("update-checker fetch behavior", () => {
     it("removes duplicate list lines differing only by short hash", () => {
       const body = "* fix thing (12c2d85)\n* fix thing (deadbee)";
       const result = deduplicateReleaseBody(body);
-      expect(result.split("\n").length).toBe(1);
+      // The first occurrence is the one kept.
+      expect(result).toBe("* fix thing (12c2d85)");
     });
 
     it("removes duplicates with markdown-linked hash format", () => {
@@ -415,29 +424,25 @@ describe("update-checker fetch behavior", () => {
         "* fix thing ([12c2d85](https://github.com/x/y/commit/12c2d85))\n" +
         "* fix thing ([deadbee](https://github.com/x/y/commit/deadbee))";
       const result = deduplicateReleaseBody(body);
-      expect(result.split("\n").length).toBe(1);
+      expect(result).toBe("* fix thing ([12c2d85](https://github.com/x/y/commit/12c2d85))");
     });
 
     it("preserves non-list lines (headers, blanks) as-is", () => {
       const body = "## Header\n\n* item a (1234567)\n* item a (89abcde)\ntrailing text";
       const result = deduplicateReleaseBody(body);
-      const lines = result.split("\n");
-      expect(lines).toContain("## Header");
-      expect(lines).toContain("");
-      expect(lines).toContain("trailing text");
-      expect(lines.filter((l) => l.includes("item a")).length).toBe(1);
+      expect(result).toBe("## Header\n\n* item a (1234567)\ntrailing text");
     });
 
     it("supports both * and - list markers", () => {
       const body = "- fix x (1234567)\n- fix x (89abcde)";
       const result = deduplicateReleaseBody(body);
-      expect(result.split("\n").length).toBe(1);
+      expect(result).toBe("- fix x (1234567)");
     });
 
     it("keeps distinct entries", () => {
       const body = "* fix a (1234567)\n* fix b (89abcde)";
       const result = deduplicateReleaseBody(body);
-      expect(result.split("\n").length).toBe(2);
+      expect(result).toBe(body);
     });
   });
 });

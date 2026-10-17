@@ -23,8 +23,13 @@ test.describe("lifecycle — rules", () => {
   test("switching to the Series tab activates it", async ({ page }) => {
     await page.goto("/lifecycle/rules");
     const series = page.getByRole("tab", { name: "Series", exact: true });
-    await series.click();
-    await expect(series).toHaveAttribute("aria-selected", "true");
+    // The tabs are server-rendered, so a click before hydration does nothing;
+    // selecting the tab again is harmless.
+    await expect(async () => {
+      await series.click();
+      await expect(series).toHaveAttribute("aria-selected", "true", { timeout: 1_000 });
+    }).toPass();
+    await expect(page).toHaveURL(/#series$/);
     await expect(page.getByPlaceholder(/rule set name/i)).toBeVisible();
   });
 });

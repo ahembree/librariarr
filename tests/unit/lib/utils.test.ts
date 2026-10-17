@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { cn, generateId, getLetterForTitle } from "@/lib/utils";
 
 describe("cn", () => {
@@ -36,11 +36,20 @@ describe("cn", () => {
   });
 });
 
+const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
 describe("generateId", () => {
-  it("returns a non-empty string", () => {
-    const id = generateId();
-    expect(typeof id).toBe("string");
-    expect(id.length).toBeGreaterThan(0);
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("builds a v4 UUID from getRandomValues where randomUUID is unavailable", () => {
+    // Older browsers, and any page served over plain HTTP: randomUUID needs a
+    // secure context, getRandomValues does not.
+    vi.stubGlobal("crypto", { getRandomValues: (bytes: Uint8Array) => bytes.fill(0xff) });
+    expect(generateId()).toBe("ffffffff-ffff-4fff-bfff-ffffffffffff");
+    vi.stubGlobal("crypto", { getRandomValues: (bytes: Uint8Array) => bytes.fill(0) });
+    expect(generateId()).toBe("00000000-0000-4000-8000-000000000000");
   });
 
   it("returns unique values across calls", () => {
@@ -50,10 +59,7 @@ describe("generateId", () => {
 
   it("produces a UUID-shaped value in a crypto-enabled environment", () => {
     // Node test environment has the Web Crypto API, so output should be a v4-ish UUID.
-    const id = generateId();
-    expect(id).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
-    );
+    expect(generateId()).toMatch(UUID_V4);
   });
 });
 

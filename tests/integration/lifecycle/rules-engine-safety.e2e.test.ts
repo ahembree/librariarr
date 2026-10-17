@@ -75,9 +75,10 @@ async function matchCount(rules: LifecycleRuleGroup[]) {
 
 describe("Rule engine — match-all safety (E2E against real Postgres)", () => {
   it("baseline: a valid rule that should match items actually does", async () => {
+    // Even-indexed items are Warner Bros.
     expect(await matchCount(group([
       { id: "r", field: "studio", operator: "equals", value: "Warner Bros", condition: "AND" },
-    ]))).toBeGreaterThan(0);
+    ]))).toBe(SEED_COUNT / 2);
   });
 
   it("baseline: the library has the seeded items", async () => {
@@ -243,12 +244,13 @@ describe("Rule engine — match-all safety (E2E against real Postgres)", () => {
       ]))).toBe(SEED_COUNT / 2);
     });
 
-    it("title contains 'Movie' (non-enumerable, free text) DOES substring-match", async () => {
+    it("title contains 'ovie 1' (non-enumerable, free text) DOES substring-match", async () => {
       // The fix only changed semantics for enumerable fields. Free-text fields
-      // like title still do substring matching as before.
+      // like title still do substring matching as before: "Movie 1" and
+      // "Movie 10".."Movie 19".
       expect(await matchCount(group([
-        { id: "r", field: "title", operator: "contains", value: "Movie", condition: "AND" },
-      ]))).toBe(SEED_COUNT);
+        { id: "r", field: "title", operator: "contains", value: "ovie 1", condition: "AND" },
+      ]))).toBe(11);
     });
   });
 });

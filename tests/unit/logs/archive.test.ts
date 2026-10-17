@@ -1,5 +1,13 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from "vitest";
 import { gunzipSync } from "zlib";
+
+// LOG_ARCHIVE_DIR is read at module evaluation, so pin it before the import
+// below (vi.hoisted runs first) rather than depend on the shell's environment.
+const { previousArchiveDir } = vi.hoisted(() => {
+  const previousArchiveDir = process.env.LOG_ARCHIVE_DIR;
+  process.env.LOG_ARCHIVE_DIR = "/config/logs";
+  return { previousArchiveDir };
+});
 
 const { mockPrisma, mockLogger, mockFs } = vi.hoisted(() => ({
   mockPrisma: {
@@ -27,10 +35,13 @@ vi.mock("fs/promises", () => ({ default: mockFs, ...mockFs }));
 
 import { archiveLogs } from "@/lib/logs/archive";
 
-// LOG_ARCHIVE_DIR is read at module-eval (before this file's body runs, since
-// ESM imports are hoisted), so the module uses the default. fs is fully mocked,
-// so no real path is touched — we just assert against the computed default.
+// fs is fully mocked, so no real path is touched.
 const ARCHIVE_DIR = "/config/logs";
+
+afterAll(() => {
+  if (previousArchiveDir === undefined) delete process.env.LOG_ARCHIVE_DIR;
+  else process.env.LOG_ARCHIVE_DIR = previousArchiveDir;
+});
 
 describe("archiveLogs", () => {
   beforeEach(() => {
@@ -52,6 +63,10 @@ describe("archiveLogs", () => {
     await archiveLogs();
 
     expect(mockFs.mkdir).toHaveBeenCalledWith(ARCHIVE_DIR, { recursive: true });
+    // "Before today" is before UTC midnight of the pinned day.
+    expect(mockPrisma.logEntry.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { createdAt: { lt: new Date("2026-06-13T00:00:00.000Z") } } }),
+    );
     expect(mockFs.writeFile).not.toHaveBeenCalled();
     expect(mockPrisma.logEntry.deleteMany).not.toHaveBeenCalled();
   });
@@ -84,9 +99,12 @@ describe("archiveLogs", () => {
     expect(text).toContain('"id": "l1"');
     expect(text).toContain("uh oh");
 
-    // Rows removed after archiving.
+    // Rows removed after archiving: exactly that UTC day.
+    expect(mockPrisma.logEntry.deleteMany).toHaveBeenCalledTimes(1);
     expect(mockPrisma.logEntry.deleteMany).toHaveBeenCalledWith({
-      where: { createdAt: { gte: expect.any(Date), lt: expect.any(Date) } },
+      where: {
+        createdAt: { gte: new Date("2026-06-12T00:00:00.000Z"), lt: new Date("2026-06-13T00:00:00.000Z") },
+      },
     });
     expect(mockLogger.info).toHaveBeenCalledWith(
       "LogArchive",
@@ -131,16 +149,33 @@ describe("archiveLogs", () => {
     mockPrisma.logEntry.findFirst.mockResolvedValue(null);
     // Prune reads the directory.
     mockFs.readdir.mockResolvedValue([
-      "logs-2020-01-01.tar.gz", // very old → should be pruned
+      "logs-2020-01-01.tar.gz", // very old → pruned
+      "logs-2026-06-05.tar.gz", // 8 days old → pruned
+      "logs-2026-06-06.tar.gz", // 7 days old, the cutoff day → kept
       "logs-2026-06-13.tar.gz", // today → kept
       "not-an-archive.txt", // ignored
     ]);
 
     await archiveLogs();
 
-    // Old archive pruned; recent one kept.
-    expect(mockFs.unlink).toHaveBeenCalledWith(`${ARCHIVE_DIR}/logs-2020-01-01.tar.gz`);
-    expect(mockFs.unlink).not.toHaveBeenCalledWith(`${ARCHIVE_DIR}/logs-2026-06-13.tar.gz`);
+    expect(mockFs.unlink.mock.calls.map(([file]) => file)).toEqual([
+      `${ARCHIVE_DIR}/logs-2020-01-01.tar.gz`,
+      `${ARCHIVE_DIR}/logs-2026-06-05.tar.gz`,
+    ]);
+  });
+
+  it("prunes by the configured retention", async () => {
+    mockPrisma.appSettings.findFirst.mockResolvedValue({ logRetentionDays: 30 });
+    mockPrisma.logEntry.findFirst.mockResolvedValue(null);
+    mockFs.readdir.mockResolvedValue([
+      "logs-2026-05-13.tar.gz", // 31 days old → pruned
+      "logs-2026-05-14.tar.gz", // 30 days old → kept
+      "logs-2026-06-05.tar.gz", // would go under the 7-day default → kept
+    ]);
+
+    await archiveLogs();
+
+    expect(mockFs.unlink.mock.calls.map(([file]) => file)).toEqual([`${ARCHIVE_DIR}/logs-2026-05-13.tar.gz`]);
   });
 
   it("prunes nothing when the archive directory cannot be read", async () => {

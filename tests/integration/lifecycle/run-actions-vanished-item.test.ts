@@ -76,9 +76,17 @@ describe("executeActionsForItems when an item's row vanishes mid-call", () => {
     // Both items were sent to the Arr app...
     expect(executeActionMock).toHaveBeenCalledTimes(2);
     // ...and both runs are in the history.
-    expect(result?.executed).toBe(2);
-    expect(await prisma.lifecycleAction.count({ where: { status: "COMPLETED" } })).toBe(2);
+    expect(result).toMatchObject({ executed: 2, failed: 0 });
+    // The vanished item's row is recorded without its dangling item link.
+    const completed = await prisma.lifecycleAction.findMany({
+      where: { status: "COMPLETED" }, orderBy: { mediaItemTitle: "asc" },
+    });
+    expect(completed.map((a) => [a.mediaItemTitle, a.mediaItemId])).toEqual([
+      ["First", null],
+      ["Second", second.id],
+    ]);
   });
+
   it("records a failure on a vanished item and carries on", async () => {
     const prisma = getTestPrisma();
     const user = await createTestUser();
@@ -106,7 +114,11 @@ describe("executeActionsForItems when an item's row vanishes mid-call", () => {
     );
 
     expect(result).toMatchObject({ executed: 1, failed: 1 });
+    expect(executeActionMock).toHaveBeenCalledTimes(2);
     const failed = await prisma.lifecycleAction.findFirstOrThrow({ where: { status: "FAILED" } });
     expect(failed).toMatchObject({ mediaItemId: null, mediaItemTitle: "First" });
+    expect(failed.error).toContain("timed out");
+    const completed = await prisma.lifecycleAction.findMany({ where: { status: "COMPLETED" } });
+    expect(completed.map((a) => [a.mediaItemTitle, a.mediaItemId])).toEqual([["Second", second.id]]);
   });
 });

@@ -66,6 +66,15 @@ export async function GET(request: NextRequest) {
         },
       },
     },
+    // The fold below keeps the FIRST episode carrying each field (summary, year,
+    // rating, the linked item), so the rows need a fixed order: unordered,
+    // Postgres returned them in heap order and an UPDATE could change which
+    // episode's values a season showed.
+    orderBy: [
+      { seasonNumber: { sort: "asc", nulls: "last" } },
+      { episodeNumber: { sort: "asc", nulls: "last" } },
+      { id: "asc" },
+    ],
   });
 
   // Group by season number (canonical items are already deduped)

@@ -109,8 +109,10 @@ describe("Cross-engine: query vs converted lifecycle rule set", () => {
     const library = await createTestLibrary(server.id, { type: "MOVIE" });
     setMockSession({ isLoggedIn: true, userId: user.id });
 
+    // Stored as the media server reports it ("1080", "sd", "4k"); the rule
+    // values are the labels the rule builder offers ("1080P", "SD", "4K").
     // Match A: 1080p
-    const match1 = await createTestMediaItem(library.id, { title: "A", resolution: "1080p" });
+    const match1 = await createTestMediaItem(library.id, { title: "A", resolution: "1080" });
     // Match B: SD
     const match2 = await createTestMediaItem(library.id, { title: "B", resolution: "sd" });
     // Not match: 4K
@@ -124,8 +126,8 @@ describe("Cross-engine: query vs converted lifecycle rule set", () => {
           id: "g1",
           condition: "AND",
           rules: [
-            { id: "r1", field: "resolution", operator: "equals", value: "1080p", condition: "OR" },
-            { id: "r2", field: "resolution", operator: "equals", value: "sd", condition: "OR" },
+            { id: "r1", field: "resolution", operator: "equals", value: "1080P", condition: "OR" },
+            { id: "r2", field: "resolution", operator: "equals", value: "SD", condition: "OR" },
           ],
           groups: [],
         },
@@ -204,7 +206,7 @@ describe("Cross-engine: query vs converted lifecycle rule set", () => {
 
     // Match: 2010+ AND (4K OR 1080p)
     const match1 = await createTestMediaItem(library.id, { title: "A", year: 2020, resolution: "4k" });
-    const match2 = await createTestMediaItem(library.id, { title: "B", year: 2015, resolution: "1080p" });
+    const match2 = await createTestMediaItem(library.id, { title: "B", year: 2015, resolution: "1080" });
     // Not match: 2010+ but SD
     await createTestMediaItem(library.id, { title: "C", year: 2020, resolution: "sd" });
     // Not match: too old, even at 4K
@@ -225,8 +227,8 @@ describe("Cross-engine: query vs converted lifecycle rule set", () => {
               id: "g2",
               condition: "AND",
               rules: [
-                { id: "r2", field: "resolution", operator: "equals", value: "4k", condition: "OR" },
-                { id: "r3", field: "resolution", operator: "equals", value: "1080p", condition: "OR" },
+                { id: "r2", field: "resolution", operator: "equals", value: "4K", condition: "OR" },
+                { id: "r3", field: "resolution", operator: "equals", value: "1080P", condition: "OR" },
               ],
               groups: [],
             },

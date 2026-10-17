@@ -43,6 +43,8 @@ describe("isSyncRequestSettled", () => {
 
   it("is not settled when the server has no job yet, or is not in the list", () => {
     expect(isSyncRequestSettled(request(), servers(null))).toBe(false);
-    expect(isSyncRequestSettled(request({ serverId: "srv-2" }), servers(null))).toBe(false);
+    // Another server's finished run must not end this request.
+    const otherServersRun = { status: "COMPLETED", startedAt: "2026-09-25T12:03:00.000Z" };
+    expect(isSyncRequestSettled(request({ serverId: "srv-2" }), servers(otherServersRun))).toBe(false);
   });
 });

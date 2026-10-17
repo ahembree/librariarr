@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 
 interface UsePanelResizeOptions {
   storageKey: string;
@@ -25,7 +25,10 @@ function loadStoredWidth(key: string): number | null {
   if (typeof window === "undefined") return null;
   try {
     const raw = localStorage.getItem(key);
-    return raw ? Number(raw) : null;
+    if (!raw) return null;
+    const width = Number(raw);
+    // A corrupt value ("abc") read as NaN and rendered a panel with no width.
+    return Number.isFinite(width) ? width : null;
   } catch {
     return null;
   }
@@ -45,15 +48,30 @@ export function usePanelResize({
   minWidth,
   maxWidth,
 }: UsePanelResizeOptions): UsePanelResizeReturn {
-  const [width, setWidth] = useState<number>(
-    () => loadStoredWidth(storageKey) ?? defaultWidth,
-  );
+  // A stored width outside today's bounds (saved before they changed) is
+  // clamped on load, as a drag would clamp it.
+  const [width, setWidth] = useState<number>(() => {
+    const stored = loadStoredWidth(storageKey);
+    return stored == null ? defaultWidth : Math.min(maxWidth, Math.max(minWidth, stored));
+  });
   const [isDragging, setIsDragging] = useState(false);
 
   const dragRef = useRef<{
     startX: number;
     startWidth: number;
   } | null>(null);
+  // Ends the drag in progress, if any: detaches its document listeners and
+  // restores the body styles. Also run on unmount, since a panel closed
+  // mid-drag never sees its mouseup and would leave the page unselectable.
+  const endDragRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => () => {
+    const end = endDragRef.current;
+    if (!end) return;
+    endDragRef.current = null;
+    dragRef.current = null;
+    end();
+  }, []);
 
   const handleDragMove = useCallback(
     (clientX: number) => {
@@ -92,14 +110,21 @@ export function usePanelResize({
       const onTouchMove = (e: TouchEvent) => {
         if (e.touches[0]) handleDragMove(e.touches[0].clientX);
       };
-      const onEnd = () => {
-        handleDragEnd();
+      const detach = () => {
         document.removeEventListener("mousemove", onMouseMove);
         document.removeEventListener("mouseup", onEnd);
         document.removeEventListener("touchmove", onTouchMove);
         document.removeEventListener("touchend", onEnd);
         document.removeEventListener("touchcancel", onEnd);
+        document.body.style.userSelect = "";
+        document.body.style.cursor = "";
       };
+      const onEnd = () => {
+        handleDragEnd();
+        detach();
+        if (endDragRef.current === detach) endDragRef.current = null;
+      };
+      endDragRef.current = detach;
 
       document.addEventListener("mousemove", onMouseMove);
       document.addEventListener("mouseup", onEnd);

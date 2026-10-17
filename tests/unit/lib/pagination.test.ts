@@ -25,17 +25,17 @@ describe("parseListPagination", () => {
   });
 
   it("treats limit=0 as no limit", () => {
-    expect(parseListPagination(params({ limit: "0" }))).toMatchObject({ limit: 0, skip: 0 });
+    expect(parseListPagination(params({ limit: "0" }))).toEqual({ page: 1, limit: 0, skip: 0 });
   });
 
   it("lets an explicit offset override the page-derived skip", () => {
     // This is what makes progressive loading work: fetch the first screenful,
     // then everything after it without refetching.
-    expect(parseListPagination(params({ limit: "0", offset: "100" }))).toMatchObject({
-      limit: 0, skip: 100,
+    expect(parseListPagination(params({ limit: "0", offset: "100" }))).toEqual({
+      page: 1, limit: 0, skip: 100,
     });
-    expect(parseListPagination(params({ page: "5", limit: "20", offset: "7" }))).toMatchObject({
-      skip: 7,
+    expect(parseListPagination(params({ page: "5", limit: "20", offset: "7" }))).toEqual({
+      page: 5, limit: 20, skip: 7,
     });
   });
 
@@ -58,8 +58,10 @@ describe("parseListPagination", () => {
     expect(parseListPagination(params({ limit: "abc" })).limit).toBe(50);
   });
 
-  it("ignores a malformed or negative offset", () => {
+  it("ignores a malformed offset and floors a negative one at the first row", () => {
     expect(parseListPagination(params({ page: "2", limit: "10", offset: "abc" })).skip).toBe(10);
+    // An explicit offset still overrides the page; a negative one reads as 0.
+    expect(parseListPagination(params({ page: "2", limit: "10", offset: "-5" })).skip).toBe(0);
     expect(parseListPagination(params({ limit: "0", offset: "-5" })).skip).toBe(0);
   });
 

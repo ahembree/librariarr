@@ -99,7 +99,8 @@ describe("Lifecycle Rules Preview", () => {
         body: { type: "MOVIE" },
       });
 
-      await expectJson(response, 400);
+      const err = await expectJson<{ error: string }>(response, 400);
+      expect(err.error).toBe("Validation failed");
     });
 
     it("returns 400 when type is missing", async () => {
@@ -112,7 +113,8 @@ describe("Lifecycle Rules Preview", () => {
         body: { rules: [] },
       });
 
-      await expectJson(response, 400);
+      const err = await expectJson<{ error: string }>(response, 400);
+      expect(err.error).toBe("Validation failed");
     });
 
     it("returns 400 when rules is not an array", async () => {
@@ -125,7 +127,8 @@ describe("Lifecycle Rules Preview", () => {
         body: { rules: "invalid", type: "MOVIE" },
       });
 
-      await expectJson(response, 400);
+      const err = await expectJson<{ error: string }>(response, 400);
+      expect(err.error).toBe("Validation failed");
     });
 
     it("evaluates ad-hoc rules and returns matching items", async () => {
@@ -185,53 +188,6 @@ describe("Lifecycle Rules Preview", () => {
 
       const body = await expectJson<{ error: string }>(response, 400);
       expect(body.error).toBe("Validation failed");
-    });
-
-    it("does not return items from other user's servers", async () => {
-      const user1 = await createTestUser({ plexId: "u1" });
-      const user2 = await createTestUser({ plexId: "u2" });
-
-      const server1 = await createTestServer(user1.id);
-      const library1 = await createTestLibrary(server1.id, { type: "MOVIE" });
-      await createTestMediaItem(library1.id, {
-        title: "User1 Movie",
-        type: "MOVIE",
-        playCount: 0,
-      });
-
-      const server2 = await createTestServer(user2.id);
-      const library2 = await createTestLibrary(server2.id, { type: "MOVIE" });
-      await createTestMediaItem(library2.id, {
-        title: "User2 Movie",
-        type: "MOVIE",
-        playCount: 0,
-      });
-
-      setMockSession({ isLoggedIn: true, userId: user1.id });
-
-      const response = await callRoute(adHocPreviewPOST, {
-        url: "/api/lifecycle/rules/preview",
-        method: "POST",
-        body: {
-          type: "MOVIE",
-          serverIds: [server1.id],
-          rules: [
-            {
-              id: "r1",
-              field: "playCount",
-              operator: "equals",
-              value: 0,
-              condition: "AND",
-            },
-          ],
-        },
-      });
-
-      const { result: body } = await expectStreamResult<{ items: { title: string }[]; count: number }>(
-        response,
-      );
-      expect(body.count).toBe(1);
-      expect(body.items[0].title).toBe("User1 Movie");
     });
 
     it("returns 400 when all rules are disabled (safety guard)", async () => {
@@ -296,11 +252,6 @@ describe("Lifecycle Rules Preview", () => {
     });
   });
 
-  // ---- Safety guard tests for saved rule preview ----
-
-  // Arr/Seerr rules evaluated with no enabled instance behind them would
-  // preview the ENTIRE library as matching ("foundInArr = false" goes
-  // vacuously true) — the routes must refuse instead.
   describe("series-aggregate rules with series scope off", () => {
     // Detection routes such a rule set through the series aggregate (members
     // restricted to the matching episodes); the preview evaluated it per
@@ -356,6 +307,9 @@ describe("Lifecycle Rules Preview", () => {
     });
   });
 
+  // Arr/Seerr rules evaluated with no enabled instance behind them would
+  // preview the ENTIRE library as matching ("foundInArr = false" goes
+  // vacuously true) — the routes must refuse instead.
   describe("no-enabled-instance match-all guard", () => {
     it("ad-hoc preview evaluates Arr rules normally once an enabled instance exists", async () => {
       const user = await createTestUser();
@@ -379,8 +333,9 @@ describe("Lifecycle Rules Preview", () => {
 
       // Instance exists (mocked client returns an empty Radarr library), so
       // "not found in Arr" legitimately matches the unmanaged item.
-      const { result: body } = await expectStreamResult<{ count: number }>(response);
+      const { result: body } = await expectStreamResult<{ count: number; items: Array<{ title: string }> }>(response);
       expect(body.count).toBe(1);
+      expect(body.items.map((i) => i.title)).toEqual(["Unmanaged Movie"]);
     });
 
     it("reads Arr criteria from the rule set's own instance, not another one", async () => {
@@ -510,7 +465,7 @@ describe("Lifecycle Rules Preview", () => {
         url: "/api/lifecycle/rules/preview",
         method: "POST",
         body: {
-          rules: [{ field: "playCount", operator: "equals", value: "0" }],
+          rules: [{ id: "r1", field: "playCount", operator: "equals", value: "0", condition: "AND" }],
           type: "MOVIE",
           serverIds: [server.id],
         },
@@ -534,7 +489,7 @@ describe("Lifecycle Rules Preview", () => {
         url: "/api/lifecycle/rules/preview",
         method: "POST",
         body: {
-          rules: [{ field: "foundInArr", operator: "equals", value: "false" }],
+          rules: [{ id: "r1", field: "foundInArr", operator: "equals", value: "false", condition: "AND" }],
           type: "MOVIE",
           serverIds: [server.id],
         },
@@ -561,7 +516,7 @@ describe("Lifecycle Rules Preview", () => {
         url: "/api/lifecycle/rules/preview",
         method: "POST",
         body: {
-          rules: [{ field: "playCount", operator: "equals", value: "0" }],
+          rules: [{ id: "r1", field: "playCount", operator: "equals", value: "0", condition: "AND" }],
           type: "MOVIE",
           serverIds: [server.id],
         },
@@ -572,7 +527,7 @@ describe("Lifecycle Rules Preview", () => {
         response,
         () => {},
       );
-      expect(result.items.map((i) => i.title)).toContain("Unwatched Film");
+      expect(result.items.map((i) => i.title)).toEqual(["Unwatched Film"]);
     });
   });
 });

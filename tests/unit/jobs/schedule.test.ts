@@ -9,16 +9,17 @@ import { getSystemTimezone, presetToCron, isScheduleDue, isValidSchedule } from 
 // getSystemTimezone
 // ---------------------------------------------------------------------------
 
-describe("getSystemTimezone", () => {
-  const origTZ = process.env.TZ;
+const origTZ = process.env.TZ;
+function restoreTZ() {
+  if (origTZ !== undefined) {
+    process.env.TZ = origTZ;
+  } else {
+    delete process.env.TZ;
+  }
+}
 
-  beforeEach(() => {
-    if (origTZ !== undefined) {
-      process.env.TZ = origTZ;
-    } else {
-      delete process.env.TZ;
-    }
-  });
+describe("getSystemTimezone", () => {
+  afterEach(restoreTZ);
 
   it("returns TZ env var when set", () => {
     process.env.TZ = "America/New_York";
@@ -27,9 +28,7 @@ describe("getSystemTimezone", () => {
 
   it("falls back to Intl timezone when TZ is not set", () => {
     delete process.env.TZ;
-    const tz = getSystemTimezone();
-    expect(typeof tz).toBe("string");
-    expect(tz.length).toBeGreaterThan(0);
+    expect(getSystemTimezone()).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
   });
 });
 
@@ -83,6 +82,7 @@ describe("isScheduleDue", () => {
   beforeEach(() => {
     process.env.TZ = "UTC";
   });
+  afterEach(restoreTZ);
 
   it("is never due for MANUAL", () => {
     expect(isScheduleDue("MANUAL", null, new Date(), "00:00")).toBe(false);
@@ -127,6 +127,9 @@ describe("isScheduleDue", () => {
     process.env.TZ = "CET-1CEST,M3.5.0,M10.5.0/3";
     expect(isScheduleDue("DAILY", null, new Date(), "03:00")).toBe(false);
     expect(log.error).toHaveBeenCalledTimes(1);
+    expect(String(log.error.mock.calls[0][1])).toContain(
+      'Schedule "DAILY" cannot be evaluated in timezone "CET-1CEST,M3.5.0,M10.5.0/3"',
+    );
   });
 });
 
@@ -153,14 +156,10 @@ function simulateDispatcher(schedule: string, time: string, from: string, to: st
 }
 
 describe("isScheduleDue across daylight saving changes (America/New_York)", () => {
-  const origTZ = process.env.TZ;
   beforeEach(() => {
     process.env.TZ = "America/New_York";
   });
-  afterEach(() => {
-    if (origTZ !== undefined) process.env.TZ = origTZ;
-    else delete process.env.TZ;
-  });
+  afterEach(restoreTZ);
 
   it("runs a 01:30 daily schedule once on the night 01:30 happens twice", () => {
     // 2026-11-01: 01:30 local is 05:30Z (EDT) and again 06:30Z (EST).

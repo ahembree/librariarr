@@ -51,6 +51,16 @@ describe("runJobNow", () => {
 
       expect(await runJobNow("u1", "sync", SOURCE)).toEqual({ ok: true, jobs: 1 });
 
+      expect(m.userFindUnique).toHaveBeenCalledWith({ where: { id: "u1" }, include: { mediaServers: true } });
+      // "Already syncing" means a RUNNING or a still-queued PENDING row.
+      expect(m.syncJobFindFirst).toHaveBeenCalledWith({
+        where: { mediaServerId: "s3", status: { in: ["RUNNING", "PENDING"] } },
+        select: { id: true },
+      });
+      // The disabled server is never even checked.
+      expect(m.syncJobFindFirst).not.toHaveBeenCalledWith(
+        expect.objectContaining({ where: expect.objectContaining({ mediaServerId: "s2" }) }),
+      );
       expect(m.enqueueJob).toHaveBeenCalledTimes(1);
       expect(m.enqueueJob).toHaveBeenCalledWith(
         TASK_SYNC_SERVER,
@@ -100,6 +110,11 @@ describe("runJobNow", () => {
       m.syncJobFindFirst.mockResolvedValue({ id: "busy" });
       expect(await runJobNow("u1", "sync", SOURCE)).toEqual({ ok: true, jobs: 0 });
       expect(m.enqueueJob).not.toHaveBeenCalled();
+      // Nothing failed to enqueue, so the window counts as run.
+      expect(m.appSettingsUpdate).toHaveBeenCalledWith({
+        where: { userId: "u1" },
+        data: { lastScheduledSync: expect.any(Date) },
+      });
     });
   });
 
@@ -136,6 +151,10 @@ describe("runJobNow", () => {
       { userId: "u1" },
       { jobKey: "detection:u1", queueName: MAIN_QUEUE, maxAttempts: 2 },
     );
+    expect(m.appSettingsUpdate).toHaveBeenCalledWith({
+      where: { userId: "u1" },
+      data: { lastScheduledLifecycleDetection: expect.any(Date) },
+    });
   });
 
   it.each(["detection", "execution"] as const)("%s: reports a failed enqueue without stamping", async (job) => {

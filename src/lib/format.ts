@@ -100,6 +100,27 @@ export function formatDate(date: string | null, fallback: string = "-"): string 
 }
 
 /**
+ * Format a calendar date — a release, premiere or air date — for display:
+ * "July 16, 2010" (`month: "short"` → "Jul 16, 2010").
+ *
+ * These are days, not instants: the sync stores Plex's "2010-07-16" as
+ * `new Date("2010-07-16")`, UTC midnight, and the Arr apps send theirs as UTC
+ * midnight too, so `formatDate`'s local-time reading showed the day before
+ * anywhere west of UTC. Read in UTC, it is the stored day in every timezone.
+ * Real instants (added, last played) keep `formatDate`.
+ */
+export function formatDateOnly(
+  date: string | number | Date | null | undefined,
+  fallback: string = "-",
+  month: "long" | "short" = "long",
+): string {
+  if (date === null || date === undefined || date === "") return fallback;
+  const d = new Date(date);
+  if (isNaN(d.getTime())) return fallback;
+  return d.toLocaleDateString("en-US", { year: "numeric", month, day: "numeric", timeZone: "UTC" });
+}
+
+/**
  * Format a future date string as a compact countdown: "in 3m", "in 3h",
  * "in 2d", "in 1w". Returns "now" for past or imminent (<1 minute) dates
  * and "-" for null (e.g. manual-only schedules).

@@ -167,7 +167,9 @@ describe("rotateSession (real iron-session)", () => {
     mockFindUnique.mockResolvedValue({ sessionVersion: 1 });
     const readBack = await getSession();
     expect(readBack.userId).toBe("user-2");
+    expect(readBack.isLoggedIn).toBe(true);
     expect(readBack.oidcState).toBeUndefined();
+    expect(readBack.oidcVerifier).toBeUndefined();
   });
 
   it("is not interchangeable with destroy-then-write on one session object", async () => {

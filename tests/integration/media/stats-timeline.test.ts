@@ -51,16 +51,17 @@ describe("GET /api/media/stats/timeline", () => {
 
   it("returns 401 when not authenticated", async () => {
     const response = await callRoute(GET, { url: `${BASE}?dateField=addedAt` });
-    await expectJson(response, 401);
+    expect(await expectJson(response, 401)).toEqual({ error: "Unauthorized" });
   });
 
   it("returns 400 for a missing or invalid dateField", async () => {
     await authedUser();
-    await expectJson(await callRoute(GET, { url: BASE }), 400);
-    await expectJson(
-      await callRoute(GET, { url: `${BASE}?dateField=createdAt` }),
-      400,
-    );
+    expect(await expectJson(await callRoute(GET, { url: BASE }), 400)).toEqual({
+      error: "Invalid or missing dateField",
+    });
+    expect(
+      await expectJson(await callRoute(GET, { url: `${BASE}?dateField=createdAt` }), 400),
+    ).toEqual({ error: "Invalid or missing dateField" });
   });
 
   it("returns 400 for an invalid bin", async () => {
@@ -68,7 +69,7 @@ describe("GET /api/media/stats/timeline", () => {
     const response = await callRoute(GET, {
       url: `${BASE}?dateField=addedAt&bin=decade`,
     });
-    await expectJson(response, 400);
+    expect(await expectJson(response, 400)).toEqual({ error: "Invalid bin" });
   });
 
   it("returns 400 for an invalid measure", async () => {
@@ -76,7 +77,7 @@ describe("GET /api/media/stats/timeline", () => {
     const response = await callRoute(GET, {
       url: `${BASE}?dateField=addedAt&measure=bytes`,
     });
-    await expectJson(response, 400);
+    expect(await expectJson(response, 400)).toEqual({ error: "Invalid measure" });
   });
 
   // The type used to be spliced into the SQL as a quote-doubled literal; it is
@@ -86,7 +87,7 @@ describe("GET /api/media/stats/timeline", () => {
     const response = await callRoute(GET, {
       url: `${BASE}?dateField=addedAt&type=${encodeURIComponent(type)}`,
     });
-    await expectJson(response, 400);
+    expect(await expectJson(response, 400)).toEqual({ error: "Invalid type" });
   });
 
   it("returns empty points when the user has no servers", async () => {
@@ -147,14 +148,18 @@ describe("GET /api/media/stats/timeline", () => {
   it("filters by media type", async () => {
     const user = await authedUser();
     const server = await createTestServer(user.id);
-    const library = await createTestLibrary(server.id);
+    const library = await createTestLibrary(server.id, { type: "MOVIE" });
+    const shows = await createTestLibrary(server.id, { type: "SERIES" });
     await createTestMediaItem(library.id, {
       addedAt: new Date("2024-01-15T12:00:00Z"),
       type: "MOVIE",
     });
-    await createTestMediaItem(library.id, {
+    await createTestMediaItem(shows.id, {
       addedAt: new Date("2024-01-16T12:00:00Z"),
       type: "SERIES",
+      parentTitle: "Show",
+      seasonNumber: 1,
+      episodeNumber: 1,
     });
 
     const response = await callRoute(GET, {
@@ -164,15 +169,14 @@ describe("GET /api/media/stats/timeline", () => {
     expect(body.points).toEqual([{ date: "2024-01", total: 1 }]);
   });
 
-  it("returns 404 for a serverId belonging to another user", async () => {
-    const owner = await createTestUser({ plexId: "other", username: "other" });
-    const foreignServer = await createTestServer(owner.id);
-    await authedUser();
+  it("returns 404 for a serverId that names no server", async () => {
+    const user = await authedUser();
+    await createTestServer(user.id);
 
     const response = await callRoute(GET, {
-      url: `${BASE}?dateField=addedAt&serverId=${foreignServer.id}`,
+      url: `${BASE}?dateField=addedAt&serverId=nonexistent`,
     });
-    await expectJson(response, 404);
+    expect(await expectJson(response, 404)).toEqual({ error: "Server not found" });
   });
 
   it("scopes results to the requested server", async () => {
@@ -196,12 +200,21 @@ describe("GET /api/media/stats/timeline", () => {
     const user = await createTestUser();
     setMockSession({ userId: user.id, isLoggedIn: true });
 
-    for (const breakdown of ["genre", "countries", "audioLanguage", "subtitleLanguage", "lastPlayedAt"]) {
+    for (const [breakdown, label] of [
+      ["genre", "Genre"],
+      ["countries", "Countries"],
+      ["audioLanguage", "Audio Language"],
+      ["subtitleLanguage", "Subtitle Language"],
+      ["lastPlayedAt", "Last Played"],
+    ]) {
       const response = await callRoute(GET, {
         url: "/api/media/stats/timeline",
         searchParams: { dateField: "addedAt", breakdown },
       });
-      await expectJson(response, 400);
+      // Refused as uncolourable — not as an unknown dimension.
+      expect(await expectJson(response, 400), breakdown).toEqual({
+        error: `Cannot break a timeline down by ${label}`,
+      });
     }
   });
 
@@ -274,13 +287,12 @@ describe("GET /api/media/stats/timeline", () => {
     }
 
     // direct and value_map — the breakdown categories video dimensions use.
-    for (const breakdown of ["videoCodec", "resolution"]) {
+    for (const [breakdown, value] of [["videoCodec", "h264"], ["resolution", "1080P"]]) {
       const body = await expectJson<TimelineBody>(
         await callRoute(GET, { url: `${BASE}?dateField=addedAt&breakdown=${breakdown}` }),
         200,
       );
-      expect(body.series, breakdown).toHaveLength(1);
-      expect(body.series, breakdown).not.toContain("Unknown");
+      expect(body.series, breakdown).toEqual([value]);
       expect(body.points.map((p) => p.total), breakdown).toEqual([1]);
     }
 

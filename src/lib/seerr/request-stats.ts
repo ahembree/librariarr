@@ -12,6 +12,7 @@ import {
   type SeerrShowRef,
 } from "@/lib/seerr/library-match";
 import { appCache } from "@/lib/cache/memory-cache";
+import { INTEGRATIONS_HEALTH_CACHE_KEY } from "@/lib/cache/invalidate";
 import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
 import { logger } from "@/lib/logger";
 
@@ -92,7 +93,7 @@ export async function getSeerrRequestStats(
 export function invalidateSeerrCaches(): void {
   appCache.invalidate(STATS_CACHE_KEY);
   appCache.invalidatePrefix(USER_REQUESTS_CACHE_PREFIX);
-  appCache.invalidatePrefix("integrations:health:");
+  appCache.invalidate(INTEGRATIONS_HEALTH_CACHE_KEY);
 }
 
 async function computeSeerrRequestStats(

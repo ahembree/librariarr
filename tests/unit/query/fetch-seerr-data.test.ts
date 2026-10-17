@@ -55,7 +55,7 @@ describe("fetchSeerrDataForQuery", () => {
           type: "movie",
           media: { tmdbId: 550, tvdbId: null },
           requestedBy: { plexUsername: "john", username: null, email: null },
-          createdAt: "2024-01-15", updatedAt: "2024-01-16", status: 2,
+          createdAt: "2024-01-15T09:30:00.000Z", updatedAt: "2024-01-16T18:05:00.000Z", status: 2,
         },
       ],
       pageInfo: { page: 1, pages: 1, results: 1 },
@@ -63,9 +63,17 @@ describe("fetchSeerrDataForQuery", () => {
 
     const result = await fetchSeerrDataForQuery("u1", ["MOVIE"]);
 
-    expect(result.MOVIE["TMDB:550"]).toBeDefined();
-    expect(result.MOVIE["TMDB:550"].requestCount).toBe(1);
-    expect(result.MOVIE["TMDB:550"].approvalDate).toBe("2024-01-16");
+    expect(result.MOVIE).toEqual({
+      "TMDB:550": {
+        requested: true,
+        requestCount: 1,
+        requestDate: "2024-01-15T09:30:00.000Z",
+        requestedBy: ["john"],
+        // APPROVED: updatedAt is the approval timestamp.
+        approvalDate: "2024-01-16T18:05:00.000Z",
+        declineDate: null,
+      },
+    });
     // Someone is waiting on the query page: the first page fails fast.
     expect(mockGetRequests).toHaveBeenCalledWith("http://o", { take: 100, skip: 0, mediaType: "movie" }, { retry: false });
   });

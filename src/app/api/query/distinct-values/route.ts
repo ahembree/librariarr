@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { jsonResponse } from "@/lib/api/json-response";
 import { prisma } from "@/lib/db";
+import { Prisma } from "@/generated/prisma/client";
+import { completedPlaySql } from "@/lib/media/watch-completion";
 import { appCache } from "@/lib/cache/memory-cache";
 import { normalizeResolutionLabel } from "@/lib/resolution";
 
@@ -141,6 +143,9 @@ export async function GET(request: NextRequest) {
     // Distinct server usernames from per-user watch history for the
     // `watchedByUser` field. Scoped via the user→server join to mirror the
     // ruleSets query above; under single-user this matches every server.
+    // Only users with a COMPLETED play: the rule matches on that predicate in
+    // both phases, so a user whose only rows are partial Tracearr plays was
+    // offered as a value no rule could ever match.
     prisma.$queryRaw<{ serverUsername: string }[]>`
       SELECT DISTINCT wh."serverUsername" AS "serverUsername"
       FROM "WatchHistory" wh
@@ -148,6 +153,7 @@ export async function GET(request: NextRequest) {
       WHERE ms."userId" = ${session.userId}
         AND wh."serverUsername" IS NOT NULL
         AND wh."serverUsername" != ''
+        AND ${Prisma.raw(completedPlaySql("wh"))}
       ORDER BY wh."serverUsername" ASC
     `,
   ]);

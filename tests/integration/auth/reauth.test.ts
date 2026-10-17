@@ -16,9 +16,10 @@ vi.mock("@/lib/sso/oidc-client", async (importOriginal) => ({
   resolveRedirectUri: () => "http://localhost:3000/api/auth/sso/oidc/callback",
 }));
 
-const { mockPeek, mockReserve, mockSucceeded } = vi.hoisted(() => {
+const { mockCheckAuthRateLimit, mockPeek, mockReserve, mockSucceeded } = vi.hoisted(() => {
   const mockSucceeded = vi.fn();
   return {
+    mockCheckAuthRateLimit: vi.fn((): Response | null => null),
     mockPeek: vi.fn((): Response | null => null),
     mockReserve: vi.fn(
       (): { refused: Response } | { refused: null; succeeded: () => void } => ({ refused: null, succeeded: mockSucceeded }),
@@ -28,7 +29,7 @@ const { mockPeek, mockReserve, mockSucceeded } = vi.hoisted(() => {
 });
 vi.mock("@/lib/rate-limit/rate-limiter", () => ({
   PASSWORD_CONFIRM_BUCKET: "password-confirm",
-  checkAuthRateLimit: () => null,
+  checkAuthRateLimit: mockCheckAuthRateLimit,
   peekAuthRateLimit: mockPeek,
   reserveAuthAttempt: mockReserve,
 }));
@@ -52,6 +53,17 @@ import { POST as passwordPOST } from "@/app/api/auth/reauth/password/route";
 const prisma = getTestPrisma();
 const ISSUER = "https://idp.example.com";
 const STALE = 1;
+const TOO_MANY = () => Response.json({ error: "Too many attempts. Try again later." }, { status: 429 });
+
+/** What `getPlexUser` answers for a plex.tv account. */
+const plexAccount = (id: number, username: string) => ({
+  id,
+  uuid: `uuid-${id}`,
+  email: `${username}@example.com`,
+  username,
+  authToken: `token-${id}`,
+  thumb: `https://plex.tv/users/uuid-${id}/avatar`,
+});
 
 async function signIn(overrides: Parameters<typeof createTestUser>[0] = {}) {
   const user = await createTestUser(overrides);
@@ -64,6 +76,10 @@ describe("/api/auth/reauth/*", () => {
     await cleanDatabase();
     clearMockSession();
     vi.clearAllMocks();
+    // mockReset: a `mockResolvedValue` from one test must not answer the next.
+    mockGetPlexUser.mockReset();
+    mockDiscover.mockReset();
+    mockCheckAuthRateLimit.mockReturnValue(null);
     mockPeek.mockReturnValue(null);
     mockReserve.mockReturnValue({ refused: null, succeeded: mockSucceeded });
   });
@@ -83,10 +99,13 @@ describe("/api/auth/reauth/*", () => {
 
     it("stamps the sign-in time for the linked Plex account", async () => {
       const user = await signIn({ plexId: "4242" });
-      mockGetPlexUser.mockResolvedValue({ id: 4242, username: "me", email: "me@example.com" });
+      mockGetPlexUser.mockResolvedValue(plexAccount(4242, "me"));
       const before = Date.now();
 
-      await expectJson(await call({ authToken: "fresh" }), 200);
+      expect(await expectJson(await call({ authToken: "fresh" }), 200)).toEqual({ verified: true });
+      expect(mockGetPlexUser).toHaveBeenCalledWith("fresh");
+      expect(mockReserve).toHaveBeenCalledWith(expect.anything(), "plex-reauth");
+      expect(mockSucceeded).toHaveBeenCalledTimes(1);
 
       const session = getMockSession();
       expect(session.authenticatedAt).toBeGreaterThanOrEqual(before);
@@ -99,18 +118,33 @@ describe("/api/auth/reauth/*", () => {
 
     it("refuses a different Plex account", async () => {
       const user = await signIn({ plexId: "4242" });
-      mockGetPlexUser.mockResolvedValue({ id: 999, username: "other", email: "o@example.com" });
+      mockGetPlexUser.mockResolvedValue(plexAccount(999, "other"));
 
-      await expectJson(await call({ authToken: "other" }), 403);
+      const body = await expectJson<{ error: string }>(await call({ authToken: "other" }), 403);
+      expect(body.error).toMatch(/different account than the one linked/);
       expect(getMockSession().authenticatedAt).toBe(STALE);
+      // A failed confirmation stays charged.
+      expect(mockSucceeded).not.toHaveBeenCalled();
       const refreshed = await prisma.user.findUnique({ where: { id: user.id } });
-      expect(refreshed?.plexToken).not.toBe("other");
+      expect(refreshed?.plexToken).toBe(user.plexToken);
     });
 
     it("refuses a token Plex rejects", async () => {
       await signIn({ plexId: "4242" });
-      mockGetPlexUser.mockRejectedValue(new Error("401"));
-      await expectJson(await call({ authToken: "bad" }), 401);
+      mockGetPlexUser.mockRejectedValue(new Error("Request failed with status code 401"));
+      const body = await expectJson<{ error: string }>(await call({ authToken: "bad" }), 401);
+      expect(body.error).toBe("Plex sign-in failed");
+      expect(getMockSession().authenticatedAt).toBe(STALE);
+      expect(mockSucceeded).not.toHaveBeenCalled();
+    });
+
+    it("stops before asking plex.tv when the attempt cannot be reserved", async () => {
+      await signIn({ plexId: "4242" });
+      mockReserve.mockReturnValue({ refused: TOO_MANY() });
+      mockGetPlexUser.mockResolvedValue(plexAccount(4242, "me"));
+
+      await expectJson(await call({ authToken: "fresh" }), 429);
+      expect(mockGetPlexUser).not.toHaveBeenCalled();
       expect(getMockSession().authenticatedAt).toBe(STALE);
     });
 
@@ -119,9 +153,10 @@ describe("/api/auth/reauth/*", () => {
     it("refuses while Plex sign-in is turned off", async () => {
       const user = await signIn({ plexId: "4242" });
       await prisma.appSettings.create({ data: { userId: user.id, plexLoginEnabled: false } });
-      mockGetPlexUser.mockResolvedValue({ id: 4242, username: "me", email: "me@example.com" });
+      mockGetPlexUser.mockResolvedValue(plexAccount(4242, "me"));
 
-      await expectJson(await call({ authToken: "fresh" }), 400);
+      const body = await expectJson<{ error: string }>(await call({ authToken: "fresh" }), 400);
+      expect(body.error).toBe("Plex sign-in is not available for this account");
       expect(mockGetPlexUser).not.toHaveBeenCalled();
       expect(getMockSession().authenticatedAt).toBe(STALE);
     });
@@ -129,13 +164,16 @@ describe("/api/auth/reauth/*", () => {
     it("refuses an account with no linked Plex", async () => {
       const user = await signIn();
       await prisma.user.update({ where: { id: user.id }, data: { plexId: null } });
-      await expectJson(await call({ authToken: "t" }), 400);
+      const body = await expectJson<{ error: string }>(await call({ authToken: "t" }), 400);
+      expect(body.error).toBe("Plex sign-in is not available for this account");
       expect(mockGetPlexUser).not.toHaveBeenCalled();
     });
 
     it("validates the body", async () => {
       await signIn();
-      await expectJson(await call({}), 400);
+      const body = await expectJson<{ error: string }>(await call({}), 400);
+      expect(body.error).toBe("Validation failed");
+      expect(mockGetPlexUser).not.toHaveBeenCalled();
     });
   });
 
@@ -171,9 +209,14 @@ describe("/api/auth/reauth/*", () => {
 
       const { authorizationUrl } = await expectJson<{ authorizationUrl: string }>(await call(), 200);
       const url = new URL(authorizationUrl);
+      expect(`${url.origin}${url.pathname}`).toBe(`${ISSUER}/auth`);
       expect(url.searchParams.get("prompt")).toBe("login");
+      expect(url.searchParams.get("client_id")).toBe("client");
+      expect(url.searchParams.get("redirect_uri")).toBe("http://localhost:3000/api/auth/sso/oidc/callback");
+      expect(url.searchParams.get("code_challenge_method")).toBe("S256");
       const session = getMockSession();
       expect(session.oidcFlow).toBe("reauth");
+      expect(session.oidcVerifier).toEqual(expect.any(String));
       expect(url.searchParams.get("state")).toBe(session.oidcState);
       // The attempt's nonce rides in the state, so the popup's report reaches
       // that attempt only.
@@ -186,7 +229,20 @@ describe("/api/auth/reauth/*", () => {
       const user = await signIn();
       await seedOidc(user.id);
       await prisma.user.update({ where: { id: user.id }, data: { ssoSubject: null } });
-      await expectJson(await call(), 400);
+      const body = await expectJson<{ error: string }>(await call(), 400);
+      expect(body.error).toBe("SSO sign-in is not available for this account");
+      expect(mockDiscover).not.toHaveBeenCalled();
+      expect(getMockSession().oidcFlow).toBeUndefined();
+    });
+
+    it("returns the limiter's 429 without starting a handshake", async () => {
+      const user = await signIn();
+      await seedOidc(user.id);
+      mockCheckAuthRateLimit.mockReturnValue(TOO_MANY());
+
+      await expectJson(await call(), 429);
+      expect(mockCheckAuthRateLimit).toHaveBeenCalledWith(expect.anything(), "sso-oidc-reauth");
+      expect(mockDiscover).not.toHaveBeenCalled();
       expect(getMockSession().oidcFlow).toBeUndefined();
     });
 
@@ -201,7 +257,9 @@ describe("/api/auth/reauth/*", () => {
 
     it("refuses when OIDC is not configured", async () => {
       await signIn();
-      await expectJson(await call(), 400);
+      const body = await expectJson<{ error: string }>(await call(), 400);
+      expect(body.error).toBe("SSO sign-in is not available for this account");
+      expect(getMockSession().oidcFlow).toBeUndefined();
     });
   });
 
@@ -241,8 +299,18 @@ describe("/api/auth/reauth/*", () => {
       const user = await signIn();
       await seedForward(user.id);
       const before = Date.now();
-      await expectJson(await call({ "Remote-User": "alice" }), 200);
+      expect(await expectJson(await call({ "Remote-User": "alice" }), 200)).toEqual({ verified: true });
       expect(getMockSession().authenticatedAt).toBeGreaterThanOrEqual(before);
+      expect(mockSucceeded).toHaveBeenCalledTimes(1);
+    });
+
+    it("stops before reading the header when the attempt cannot be reserved", async () => {
+      const user = await signIn();
+      await seedForward(user.id);
+      mockReserve.mockReturnValue({ refused: TOO_MANY() });
+
+      await expectJson(await call({ "Remote-User": "alice" }), 429);
+      expect(getMockSession().authenticatedAt).toBe(STALE);
     });
 
     it("refuses another subject or a missing header", async () => {
@@ -251,6 +319,7 @@ describe("/api/auth/reauth/*", () => {
       await expectJson(await call({ "Remote-User": "mallory" }), 403);
       await expectJson(await call(), 403);
       expect(getMockSession().authenticatedAt).toBe(STALE);
+      expect(mockSucceeded).not.toHaveBeenCalled();
     });
 
     it("requires the proxy secret the proxy was configured with", async () => {
@@ -276,7 +345,9 @@ describe("/api/auth/reauth/*", () => {
 
     it("refuses when forward-auth is not configured", async () => {
       await signIn();
-      await expectJson(await call({ "Remote-User": "alice" }), 400);
+      const body = await expectJson<{ error: string }>(await call({ "Remote-User": "alice" }), 400);
+      expect(body.error).toBe("SSO sign-in is not available for this account");
+      expect(getMockSession().authenticatedAt).toBe(STALE);
     });
   });
   describe("POST /api/auth/reauth/password", () => {
@@ -318,7 +389,7 @@ describe("/api/auth/reauth/*", () => {
     it("stamps the sign-in time for the right password", async () => {
       await signInWithPassword();
       const before = Date.now();
-      await expectJson(await call({ password: PASSWORD }), 200);
+      expect(await expectJson(await call({ password: PASSWORD }), 200)).toEqual({ verified: true });
       expect(getMockSession().authenticatedAt).toBeGreaterThanOrEqual(before);
       // Charged up front and given back: a right password costs nothing.
       expect(mockReserve).toHaveBeenCalledTimes(1);
@@ -340,27 +411,39 @@ describe("/api/auth/reauth/*", () => {
     it("stops before comparing when the attempt cannot be reserved", async () => {
       await signInWithPassword();
       const compare = vi.spyOn(bcrypt, "compare");
-      mockReserve.mockReturnValue({
-        refused: new Response(JSON.stringify({ error: "Too many attempts" }), { status: 429 }),
-      });
-      expect((await call({ password: PASSWORD })).status).toBe(429);
-      expect(compare).not.toHaveBeenCalled();
-      expect(getMockSession().authenticatedAt).toBe(STALE);
-      expect(mockSucceeded).not.toHaveBeenCalled();
-      compare.mockRestore();
+      try {
+        mockReserve.mockReturnValue({ refused: TOO_MANY() });
+        expect((await call({ password: PASSWORD })).status).toBe(429);
+        expect(compare).not.toHaveBeenCalled();
+        expect(getMockSession().authenticatedAt).toBe(STALE);
+        expect(mockSucceeded).not.toHaveBeenCalled();
+      } finally {
+        compare.mockRestore();
+      }
     });
 
     it("stops before checking once the limiter says so", async () => {
       await signInWithPassword();
-      mockPeek.mockReturnValue(new Response(JSON.stringify({ error: "Too many attempts" }), { status: 429 }));
-      expect((await call({ password: PASSWORD })).status).toBe(429);
-      expect(getMockSession().authenticatedAt).toBe(STALE);
+      const compare = vi.spyOn(bcrypt, "compare");
+      try {
+        mockPeek.mockReturnValue(TOO_MANY());
+        expect((await call({ password: PASSWORD })).status).toBe(429);
+        expect(mockPeek).toHaveBeenCalledWith(expect.anything(), "password-confirm");
+        expect(mockReserve).not.toHaveBeenCalled();
+        expect(compare).not.toHaveBeenCalled();
+        expect(getMockSession().authenticatedAt).toBe(STALE);
+      } finally {
+        compare.mockRestore();
+      }
     });
 
     it("refuses an account with no password, and an empty one", async () => {
       await signIn();
-      await expectJson(await call({ password: PASSWORD }), 400);
-      await expectJson(await call({ password: "" }), 400);
+      const noPassword = await expectJson<{ error: string }>(await call({ password: PASSWORD }), 400);
+      expect(noPassword.error).toBe("This account has no password");
+      const empty = await expectJson<{ error: string }>(await call({ password: "" }), 400);
+      expect(empty.error).toBe("Validation failed");
+      expect(mockReserve).not.toHaveBeenCalled();
       expect(getMockSession().authenticatedAt).toBe(STALE);
     });
   });

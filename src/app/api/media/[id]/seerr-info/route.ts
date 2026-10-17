@@ -97,20 +97,15 @@ export async function GET(
 
   const { id } = await params;
 
-  const item = await prisma.mediaItem.findUnique({
-    where: { id },
+  const item = await prisma.mediaItem.findFirst({
+    where: { id, library: { mediaServer: { userId: session.userId } } },
     include: {
       externalIds: true,
-      library: { include: { mediaServer: true } },
     },
   });
 
   if (!item) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
-  }
-
-  if (!item.library.mediaServer || item.library.mediaServer.userId !== session.userId) {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
   const empty: SeerrInfoResponse = { matches: [] };

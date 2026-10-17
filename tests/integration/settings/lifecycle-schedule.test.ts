@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
-import { cleanDatabase, disconnectTestDb } from "../../setup/test-db";
+import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
 import { callRoute, expectJson, createTestUser } from "../../setup/test-helpers";
 
@@ -15,6 +15,9 @@ vi.mock("@/lib/logger", () => ({
 }));
 
 import { GET, PUT } from "@/app/api/settings/lifecycle-schedule/route";
+
+const prisma = getTestPrisma();
+const storedSettings = (userId: string) => prisma.appSettings.findUnique({ where: { userId } });
 
 describe("GET /api/settings/lifecycle-schedule", () => {
   beforeEach(async () => {
@@ -37,28 +40,30 @@ describe("GET /api/settings/lifecycle-schedule", () => {
     setMockSession({ isLoggedIn: true, userId: user.id});
 
     const res = await callRoute(GET);
-    const body = await expectJson<{
-      lifecycleDetectionSchedule: string;
-      lastScheduledLifecycleDetection: unknown;
-      lifecycleExecutionSchedule: string;
-      lastScheduledLifecycleExecution: unknown;
-    }>(res);
-    expect(body.lifecycleDetectionSchedule).toBeDefined();
-    expect(body.lifecycleExecutionSchedule).toBeDefined();
+    const body = await expectJson(res);
+    expect(body).toEqual({
+      lifecycleDetectionSchedule: "EVERY_6H",
+      lastScheduledLifecycleDetection: null,
+      lifecycleExecutionSchedule: "EVERY_6H",
+      lastScheduledLifecycleExecution: null,
+    });
+    // The settings row is created on first read.
+    expect(await storedSettings(user.id)).not.toBeNull();
   });
 
   it("returns saved schedule", async () => {
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id});
 
-    await callRoute(PUT, {
-      method: "PUT",
-      body: { lifecycleDetectionSchedule: "DAILY" },
+    const lastRun = new Date(Date.now() - 60 * 60 * 1000);
+    await prisma.appSettings.create({
+      data: { userId: user.id, lifecycleDetectionSchedule: "DAILY", lastScheduledLifecycleDetection: lastRun },
     });
 
     const res = await callRoute(GET);
-    const body = await expectJson<{ lifecycleDetectionSchedule: string }>(res);
+    const body = await expectJson<{ lifecycleDetectionSchedule: string; lastScheduledLifecycleDetection: string }>(res);
     expect(body.lifecycleDetectionSchedule).toBe("DAILY");
+    expect(body.lastScheduledLifecycleDetection).toBe(lastRun.toISOString());
   });
 });
 
@@ -87,10 +92,11 @@ describe("PUT /api/settings/lifecycle-schedule", () => {
 
     const res = await callRoute(PUT, {
       method: "PUT",
-      body: { lifecycleDetectionSchedule: "EVERY_6H" },
+      body: { lifecycleDetectionSchedule: "EVERY_12H" },
     });
     const body = await expectJson<{ lifecycleDetectionSchedule: string }>(res);
-    expect(body.lifecycleDetectionSchedule).toBe("EVERY_6H");
+    expect(body.lifecycleDetectionSchedule).toBe("EVERY_12H");
+    expect((await storedSettings(user.id))?.lifecycleDetectionSchedule).toBe("EVERY_12H");
   });
 
   it("updates execution schedule with preset value", async () => {
@@ -103,6 +109,10 @@ describe("PUT /api/settings/lifecycle-schedule", () => {
     });
     const body = await expectJson<{ lifecycleExecutionSchedule: string }>(res);
     expect(body.lifecycleExecutionSchedule).toBe("WEEKLY");
+    const stored = await storedSettings(user.id);
+    expect(stored?.lifecycleExecutionSchedule).toBe("WEEKLY");
+    // The other schedule is left as it was.
+    expect(stored?.lifecycleDetectionSchedule).toBe("EVERY_6H");
   });
 
   it("updates both schedules at once", async () => {
@@ -122,6 +132,22 @@ describe("PUT /api/settings/lifecycle-schedule", () => {
     }>(res);
     expect(body.lifecycleDetectionSchedule).toBe("EVERY_12H");
     expect(body.lifecycleExecutionSchedule).toBe("DAILY");
+  });
+
+  it("accepts MANUAL for both schedules", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id});
+
+    await expectJson(await callRoute(PUT, {
+      method: "PUT",
+      body: { lifecycleDetectionSchedule: "MANUAL", lifecycleExecutionSchedule: "MANUAL" },
+    }));
+
+    const body = await expectJson<{ lifecycleDetectionSchedule: string; lifecycleExecutionSchedule: string }>(
+      await callRoute(GET),
+    );
+    expect(body.lifecycleDetectionSchedule).toBe("MANUAL");
+    expect(body.lifecycleExecutionSchedule).toBe("MANUAL");
   });
 
   it("accepts valid cron expression", async () => {
@@ -146,6 +172,20 @@ describe("PUT /api/settings/lifecycle-schedule", () => {
     });
     const body = await expectJson<{ error: string }>(res, 400);
     expect(body.error).toContain("Invalid detection schedule");
+    expect(await storedSettings(user.id)).toBeNull();
+  });
+
+  it("writes neither schedule when one of the two is invalid", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id});
+
+    const res = await callRoute(PUT, {
+      method: "PUT",
+      body: { lifecycleDetectionSchedule: "DAILY", lifecycleExecutionSchedule: "not-a-cron" },
+    });
+    const body = await expectJson<{ error: string }>(res, 400);
+    expect(body.error).toContain("Invalid execution schedule");
+    expect(await storedSettings(user.id)).toBeNull();
   });
 
   it("returns 400 for invalid execution schedule", async () => {
@@ -158,6 +198,7 @@ describe("PUT /api/settings/lifecycle-schedule", () => {
     });
     const body = await expectJson<{ error: string }>(res, 400);
     expect(body.error).toContain("Invalid execution schedule");
+    expect(await storedSettings(user.id)).toBeNull();
   });
 
   it("returns 400 for a cron expression the dispatcher cannot evaluate", async () => {
@@ -172,6 +213,7 @@ describe("PUT /api/settings/lifecycle-schedule", () => {
       const body = await expectJson<{ error: string }>(res, 400);
       expect(body.error).toContain("Invalid execution schedule");
     }
+    expect(await storedSettings(user.id)).toBeNull();
   });
 
   it("returns 400 when no schedule is provided", async () => {

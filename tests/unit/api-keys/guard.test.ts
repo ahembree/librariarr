@@ -26,6 +26,9 @@ import {
 import { generateApiKey, hashApiKey, newApiKey } from "@/lib/api-keys/keys";
 import { FULL_LISTING_REQUEST_COST } from "@/lib/api-keys/limits";
 import {
+  RateLimiter,
+  apiKeyCredentialFailureLimiter,
+  apiKeyFailureLogLimiter,
   apiKeyRequestLimiter,
   apiKeyUnknownLookupFloor,
   apiKeyVerificationFloor,
@@ -88,6 +91,29 @@ async function addKey(
   serveTable();
   return generated;
 }
+
+/**
+ * Forget every count a limiter holds. Their windows outlive any one test: the
+ * failure-log budget is shared by every credential, so the unknown-key flood
+ * below would otherwise turn a later test's WARN line into DEBUG, and every
+ * test charges the same "key-1" against the per-key request budget.
+ */
+function resetLimiter(limiter: RateLimiter) {
+  (limiter as unknown as { store: Map<string, unknown> }).store.clear();
+}
+
+beforeEach(() => {
+  _resetVerifiedApiKeysForTesting();
+  for (const limiter of [
+    apiKeyCredentialFailureLimiter,
+    apiKeyFailureLogLimiter,
+    apiKeyRequestLimiter,
+    apiKeyUnknownLookupFloor,
+    apiKeyVerificationFloor,
+  ]) {
+    resetLimiter(limiter);
+  }
+});
 
 /** A table holding exactly one key, "key-1"; returns its plaintext. */
 async function storedKey(overrides: Partial<{ scopes: string[]; expiresAt: Date | null; lastUsedAt: Date | null }> = {}) {
@@ -261,7 +287,7 @@ describe("authenticateApiKey", () => {
 
   it("does not touch the database for a malformed key", async () => {
     const result = await authenticateApiKey(request({ authorization: "Bearer lbr_short" }), null);
-    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.response.status).toBe(401);
     expect(m.findMany).not.toHaveBeenCalled();
     expect(m.findUnique).not.toHaveBeenCalled();
   });
@@ -299,7 +325,10 @@ describe("authenticateApiKey", () => {
     const key = await storedKey({ expiresAt: new Date(Date.now() - 1) });
     const result = await authenticateApiKey(request({ "x-api-key": key }), null);
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.response.status).toBe(401);
+    if (!result.ok) {
+      expect(result.response.status).toBe(401);
+      expect(await result.response.json()).toEqual({ error: "API key has expired" });
+    }
   });
 
   it("skips the last-used write while the recorded use is under a minute old", async () => {
@@ -348,8 +377,12 @@ describe("authenticateApiKey", () => {
       }),
       null,
     );
-    const logged = JSON.stringify(m.warn.mock.calls);
-    expect(logged).toContain("an unknown address");
+    // Whatever level the failure lands at, the forged text never reaches it.
+    const logged = JSON.stringify([...m.warn.mock.calls, ...m.debug.mock.calls]);
+    expect(m.warn).toHaveBeenCalledWith(
+      "API",
+      expect.stringMatching(/^Rejected an API request from an unknown address: unknown key lbr_\w{6}… \(deleted, or never issued\)$/),
+    );
     expect(logged).not.toContain("FAKE");
   });
 });

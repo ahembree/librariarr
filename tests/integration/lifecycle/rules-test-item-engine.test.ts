@@ -86,31 +86,45 @@ describe("POST /api/lifecycle/rules/test-item — real engine", () => {
 
   it("ignores a partial Tracearr play, as detection does", async () => {
     const user = await createTestUser();
-    const server = await createTestServer(user.id);
+    // A Tracearr-mapped server whose archive walk has finished.
+    const server = await createTestServer(user.id, {
+      tracearrServerId: "5b0d7f8e-2c41-4f0a-9d3e-7a1c6b2e9f40",
+      tracearrBackfillComplete: true,
+    });
     const library = await createTestLibrary(server.id, { type: "MOVIE" });
     const movie = await createTestMediaItem(library.id, { title: "Sampled Film", type: "MOVIE" });
-    await prisma.watchHistory.create({
-      data: {
-        mediaItemId: movie.id,
-        mediaServerId: server.id,
-        serverUsername: "bob",
-        watchedAt: new Date("2026-01-01T00:00:00Z"),
-        source: "TRACEARR",
-        sourceEventId: "chain-1",
-        watched: false,
-        percentComplete: 4,
-      },
+    await prisma.watchHistory.createMany({
+      data: [
+        {
+          // bob sampled 4% and stopped.
+          mediaItemId: movie.id,
+          mediaServerId: server.id,
+          serverUsername: "bob",
+          watchedAt: new Date("2026-01-01T00:00:00Z"),
+          source: "TRACEARR",
+          sourceEventId: "0f6c2a51-8e3b-4d7a-b9c2-1e5f4a3d2c10",
+          watched: false,
+          percentComplete: 4,
+        },
+        {
+          // carol finished it — the control that the rule answers at all.
+          mediaItemId: movie.id,
+          mediaServerId: server.id,
+          serverUsername: "carol",
+          watchedAt: new Date("2026-01-02T00:00:00Z"),
+          source: "TRACEARR",
+          sourceEventId: "9a2e7c13-4b6d-4f81-a0e5-3c8b7d6f5e21",
+          watched: true,
+          percentComplete: 98,
+        },
+      ],
     });
     setMockSession({ isLoggedIn: true, userId: user.id });
 
-    expect(
-      await testItem({
-        type: "MOVIE",
-        mediaItemId: movie.id,
-        serverIds: [server.id],
-        rules: group("watchedByUser", "equals", "bob"),
-      }),
-    ).toBe(false);
+    const base = { type: "MOVIE", mediaItemId: movie.id, serverIds: [server.id] };
+    expect(await testItem({ ...base, rules: group("watchedByUser", "equals", "bob") })).toBe(false);
+    expect(await testItem({ ...base, rules: group("watchedByUser", "notEquals", "bob") })).toBe(true);
+    expect(await testItem({ ...base, rules: group("watchedByUser", "equals", "carol") })).toBe(true);
   });
 
   it("aggregates watchedByUser across a show's episodes in series scope", async () => {

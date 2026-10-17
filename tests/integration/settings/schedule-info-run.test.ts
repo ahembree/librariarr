@@ -58,15 +58,26 @@ describe("POST /api/settings/schedule-info/run", () => {
   it("returns 401 without auth", async () => {
     const res = await callRoute(POST, { method: "POST", body: { job: "sync" } });
     await expectJson(res, 401);
+    expect(mockEnqueueJob).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 for an unknown job", async () => {
+    await setup();
+    const res = await callRoute(POST, { method: "POST", body: { job: "backup" } });
+    const body = await expectJson<{ error: string; details: string[] }>(res, 400);
+    expect(body.details).toHaveLength(1);
+    expect(body.details[0]).toMatch(/^job: /);
+    expect(mockEnqueueJob).not.toHaveBeenCalled();
   });
 
   it("enqueues a sync job for every enabled server (multi-server)", async () => {
     const user = await setup();
     const s1 = await createTestServer(user.id, { name: "Server 1" });
     const s2 = await createTestServer(user.id, { name: "Server 2" });
+    const before = Date.now();
 
     const res = await callRoute(POST, { method: "POST", body: { job: "sync" } });
-    await expectJson<{ ok: boolean }>(res, 200);
+    expect(await expectJson(res, 200)).toEqual({ queued: true });
 
     // Both servers enqueued — one is not abandoned because of the other.
     expect(mockEnqueueJob).toHaveBeenCalledTimes(2);
@@ -79,7 +90,7 @@ describe("POST /api/settings/schedule-info/run", () => {
     }
 
     const settings = await prisma.appSettings.findUnique({ where: { userId: user.id } });
-    expect(settings?.lastScheduledSync).not.toBeNull();
+    expect(settings?.lastScheduledSync?.getTime()).toBeGreaterThanOrEqual(before);
   });
 
   it("skips disabled servers and servers with an active sync, still updates lastRun", async () => {
@@ -123,31 +134,47 @@ describe("POST /api/settings/schedule-info/run", () => {
   it("enqueues lifecycle detection and stamps lastScheduledLifecycleDetection", async () => {
     const user = await setup();
 
+    const before = Date.now();
     const res = await callRoute(POST, { method: "POST", body: { job: "detection" } });
-    await expectJson(res, 200);
+    expect(await expectJson(res, 200)).toEqual({ queued: true });
 
+    expect(mockEnqueueJob).toHaveBeenCalledTimes(1);
     expect(mockEnqueueJob).toHaveBeenCalledWith(
       TASK_LIFECYCLE_DETECTION,
       { userId: user.id },
       expect.objectContaining({ jobKey: `detection:${user.id}`, queueName: MAIN_QUEUE }),
     );
     const settings = await prisma.appSettings.findUnique({ where: { userId: user.id } });
-    expect(settings?.lastScheduledLifecycleDetection).not.toBeNull();
+    expect(settings?.lastScheduledLifecycleDetection?.getTime()).toBeGreaterThanOrEqual(before);
   });
 
   it("enqueues lifecycle execution and stamps lastScheduledLifecycleExecution", async () => {
     const user = await setup();
 
+    const before = Date.now();
     const res = await callRoute(POST, { method: "POST", body: { job: "execution" } });
-    await expectJson(res, 200);
+    expect(await expectJson(res, 200)).toEqual({ queued: true });
 
+    // Destructive Arr actions: queued once, never retried as a whole job.
+    expect(mockEnqueueJob).toHaveBeenCalledTimes(1);
     expect(mockEnqueueJob).toHaveBeenCalledWith(
       TASK_LIFECYCLE_EXECUTION,
       { userId: user.id },
-      expect.objectContaining({ jobKey: `execution:${user.id}`, queueName: MAIN_QUEUE }),
+      expect.objectContaining({ jobKey: `execution:${user.id}`, queueName: MAIN_QUEUE, maxAttempts: 1 }),
     );
     const settings = await prisma.appSettings.findUnique({ where: { userId: user.id } });
-    expect(settings?.lastScheduledLifecycleExecution).not.toBeNull();
+    expect(settings?.lastScheduledLifecycleExecution?.getTime()).toBeGreaterThanOrEqual(before);
+  });
+
+  it("reports an execution job that could not be queued, leaving the watermark alone", async () => {
+    const user = await setup();
+    mockEnqueueJob.mockResolvedValueOnce(false);
+
+    const res = await callRoute(POST, { method: "POST", body: { job: "execution" } });
+    const body = await expectJson<{ error: string }>(res, 500);
+    expect(body.error).toBe("Failed to enqueue execution job");
+    const settings = await prisma.appSettings.findUnique({ where: { userId: user.id } });
+    expect(settings?.lastScheduledLifecycleExecution).toBeNull();
   });
 
   it("returns 500 when enqueueing a lifecycle job throws", async () => {
@@ -156,7 +183,7 @@ describe("POST /api/settings/schedule-info/run", () => {
 
     const res = await callRoute(POST, { method: "POST", body: { job: "detection" } });
     const body = await expectJson<{ error: string }>(res, 500);
-    expect(body.error).toContain("Job failed");
+    expect(body.error).toBe("Job failed: Error: boom");
 
     // Timestamp not advanced because the enqueue failed.
     const settings = await prisma.appSettings.findUnique({ where: { userId: user.id } });

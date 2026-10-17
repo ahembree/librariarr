@@ -48,9 +48,11 @@ describe("PUT /api/settings/scheduled-job-time", () => {
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id });
 
-    await callRoute(PUT, { method: "PUT", body: { scheduledJobTime: "03:30" } });
+    await getTestPrisma().appSettings.create({ data: { userId: user.id, scheduledJobTime: "03:30" } });
     const res = await callRoute(PUT, { method: "PUT", body: { scheduledJobTime: "22:15" } });
     expect((await expectJson<{ scheduledJobTime: string }>(res)).scheduledJobTime).toBe("22:15");
+    const stored = await getTestPrisma().appSettings.findUnique({ where: { userId: user.id } });
+    expect(stored?.scheduledJobTime).toBe("22:15");
   });
 
   it.each(["24:00", "9:00", "12:60", "noon"])("rejects %s with 400", async (value) => {
@@ -58,6 +60,8 @@ describe("PUT /api/settings/scheduled-job-time", () => {
     setMockSession({ isLoggedIn: true, userId: user.id });
 
     const res = await callRoute(PUT, { method: "PUT", body: { scheduledJobTime: value } });
-    await expectJson(res, 400);
+    const body = await expectJson<{ error: string; details: string[] }>(res, 400);
+    expect(body.details).toEqual(["scheduledJobTime: Must be in HH:MM format (24-hour)"]);
+    expect(await getTestPrisma().appSettings.count()).toBe(0);
   });
 });

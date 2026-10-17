@@ -33,7 +33,7 @@ beforeEach(async () => {
   vi.resetModules();
   cookies.mockReset();
   findUnique.mockReset();
-  process.env.SESSION_SECRET = "api-key-session-secret-long-enough-for-iron!!";
+  vi.stubEnv("SESSION_SECRET", "api-key-session-secret-long-enough-for-iron!!");
   vi.doMock("next/headers", () => ({ cookies, headers: async () => new Map() }));
   vi.doMock("@/lib/db", () => ({ prisma: { user: { findUnique } } }));
   vi.doMock("@/lib/logger", () => ({
@@ -44,6 +44,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   vi.doUnmock("next/headers");
   vi.doUnmock("@/lib/db");
   vi.doUnmock("@/lib/logger");
@@ -59,9 +60,15 @@ describe("getSession under an API key (real module)", () => {
     expect(findUnique).not.toHaveBeenCalled();
   });
 
-  it("refuses to save the session", async () => {
+  it("refuses to save, destroy or change the session", async () => {
     const result = await principal.runAsApiKey(KEY, () => session.getSession());
     await expect(result.save()).rejects.toThrow(/no cookie session/);
+    expect(() => result.destroy()).toThrow(/no cookie session/);
+    // Frozen: a handler writing a field fails loudly instead of being ignored.
+    expect(() => {
+      (result as { userId?: string }).userId = "someone-else";
+    }).toThrow(TypeError);
+    expect(result.userId).toBe("user-1");
   });
 
   it("refuses the cookie primitives the login flows use", async () => {
@@ -81,6 +88,8 @@ describe("getSession under an API key (real module)", () => {
     });
     const result = await session.getSession();
     expect(cookies).toHaveBeenCalled();
+    // An empty cookie jar: nobody is signed in.
     expect(result.isLoggedIn).toBeFalsy();
+    expect(result.userId).toBeUndefined();
   });
 });

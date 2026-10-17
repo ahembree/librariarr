@@ -50,11 +50,19 @@ vi.mock("@/lib/media-server/health-cache", () => ({
   ServerUnreachableError: class ServerUnreachableError extends Error {},
 }));
 
+import https from "https";
+import axios from "axios";
 import { JellyfinClient } from "@/lib/jellyfin/client";
+
+/** Recognises the axios-shaped errors these tests throw, as the real guard would. */
+const realisticIsAxiosError = (e: unknown) => !!(e as { isAxiosError?: boolean } | null)?.isAxiosError;
 
 describe("JellyfinClient", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // clearAllMocks keeps implementations, so a test that swaps this one in
+    // must not leak it into the next.
+    vi.mocked(axios.isAxiosError).mockImplementation(() => false);
     requestInterceptors.length = 0;
   });
 
@@ -75,9 +83,9 @@ describe("JellyfinClient", () => {
     const config = { headers: {} as Record<string, string> };
     requestInterceptors[0](config);
 
-    expect(config.headers.Authorization).toContain('MediaBrowser');
-    expect(config.headers.Authorization).toContain('Token="jf-token"');
-    expect(config.headers.Authorization).toContain('Client="Librariarr"');
+    expect(config.headers.Authorization).toBe(
+      'MediaBrowser Client="Librariarr", Device="Server", DeviceId="librariarr", Version="1.0.0", Token="jf-token"',
+    );
   });
 
   it("does not create a TLS-skipping agent by default", () => {
@@ -89,7 +97,8 @@ describe("JellyfinClient", () => {
   it("configures a TLS-skipping agent when skipTlsVerify is set", () => {
     new JellyfinClient("https://jellyfin:8096", "jf-token", { skipTlsVerify: true });
     const config = (mockAxiosCreate.mock.calls[0] as unknown[])[0] as { httpsAgent?: unknown };
-    expect(config.httpsAgent).toBeDefined();
+    expect(config.httpsAgent).toBeInstanceOf(https.Agent);
+    expect((config.httpsAgent as https.Agent).options.rejectUnauthorized).toBe(false);
   });
 
   it("uses 'Jellyfin' as the log prefix via the request debug log", async () => {
@@ -97,7 +106,7 @@ describe("JellyfinClient", () => {
     new JellyfinClient("http://jellyfin:8096", "jf-token");
 
     requestInterceptors[0]({ headers: {}, method: "get", url: "/Items" });
-    expect(logger.debug).toHaveBeenCalledWith("Jellyfin", expect.stringContaining("GET /Items"));
+    expect(logger.debug).toHaveBeenCalledWith("Jellyfin", "GET /Items");
   });
 
   describe("fetchImage", () => {
@@ -555,11 +564,12 @@ describe("JellyfinClient", () => {
         };
       });
       const item = await client.getItemMetadata("track-1");
-      expect(item.Guid).toEqual(expect.arrayContaining([
+      // The album artist wins over the track artist: it is the id Lidarr keys
+      // the artist by.
+      expect(item.Guid).toEqual([
         { id: "mbid://1a2b3c4d-1111-2222-3333-444455556666" },
         { id: "musicbrainz://0383dadf-2a4e-4d10-a46a-e9e041da8eb3" },
-      ]));
-      expect(item.Guid).not.toContainEqual({ id: "musicbrainz://99999999-9999-9999-9999-999999999999" });
+      ]);
     });
   });
 
@@ -589,24 +599,28 @@ describe("JellyfinClient", () => {
       expect(params?.IsPlayed).toBe(true);
     });
 
-    it("rethrows a transient per-user failure so the caller keeps its stored history", async () => {
+    it.each([
+      ["a dropped connection", Object.assign(new Error("socket hang up"), { isAxiosError: true, code: "ECONNRESET" })],
+      [
+        "a 503",
+        Object.assign(new Error("Request failed with status code 503"), { isAxiosError: true, response: { status: 503 } }),
+      ],
+    ])("rethrows a transient per-user failure (%s) so the caller keeps its stored history", async (_label, error) => {
       // Swallowing it handed the caller a PARTIAL history that the native
       // watch-history sync then committed with a destructive full replace,
       // deleting every play this user's pages never delivered.
+      vi.mocked(axios.isAxiosError).mockImplementation(realisticIsAxiosError);
       const { client } = newClient({
         u1: async () => played("m1"),
-        u2: async () => { throw new Error("socket hang up"); },
+        u2: async () => { throw error; },
       });
-      await expect(client.getDetailedWatchHistory()).rejects.toThrow("socket hang up");
+      await expect(client.getDetailedWatchHistory()).rejects.toBe(error);
     });
 
     it("skips a user the key cannot read (403) and keeps the others", async () => {
       // A permanent condition: failing the whole scan for it would block every
       // history sync on the server.
-      const { default: axios } = await import("axios");
-      vi.mocked(axios.isAxiosError).mockImplementation(
-        (e: unknown) => !!(e as { isAxiosError?: boolean })?.isAxiosError,
-      );
+      vi.mocked(axios.isAxiosError).mockImplementation(realisticIsAxiosError);
       const { client } = newClient({
         u1: async () => played("m1"),
         u2: async () => { throw Object.assign(new Error("forbidden"), { isAxiosError: true, response: { status: 403 } }); },
@@ -615,9 +629,10 @@ describe("JellyfinClient", () => {
 
       const entries = await client.getDetailedWatchHistory();
 
-      expect(entries.map((e) => e.username)).toEqual(["Alice"]);
-      expect(logger.warn).toHaveBeenCalledWith("Jellyfin", expect.stringContaining('user "Bob" (HTTP 403)'));
-      vi.mocked(axios.isAxiosError).mockImplementation(() => false);
+      expect(entries).toEqual([
+        { ratingKey: "m1", username: "Alice", watchedAt: "2024-01-02T00:00:00.000Z", deviceName: null, platform: null },
+      ]);
+      expect(logger.warn).toHaveBeenCalledWith("Jellyfin", 'Skipping watch history for user "Bob" (HTTP 403)');
     });
   });
 });

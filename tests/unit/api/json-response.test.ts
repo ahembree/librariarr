@@ -140,9 +140,17 @@ describe("stringifyYielding", () => {
   });
 
   it("does not look past three levels", async () => {
-    // Deeper lists are serialised whole — still the same output.
-    const body = { a: [{ b: [{ c: rows(STRINGIFY_SLICE_ROWS + 1) }] }] };
-    expect(await stringifyYielding(body)).toBe(JSON.stringify(body));
+    // Deeper lists are serialised whole, in one call — still the same output,
+    // but nothing queued gets to run before it finishes.
+    const order: string[] = [];
+    setImmediate(() => order.push("queued"));
+    const body = { a: [{ b: [{ c: rows(STRINGIFY_SLICE_ROWS * 2) }] }] };
+    const text = await stringifyYielding(body);
+    order.push("done");
+    expect(text).toBe(JSON.stringify(body));
+    expect(order).toEqual(["done"]);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(order).toEqual(["done", "queued"]);
   });
 });
 

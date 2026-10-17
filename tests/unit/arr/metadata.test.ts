@@ -10,29 +10,64 @@ const tagMap = new Map<number, string>([[10, "keep"], [20, "archive"]]);
 describe("mapRadarrMovie", () => {
   it("maps ratings, tags, quality, and customFormatScore; leaves series fields null", () => {
     const movie = {
-      id: 5, tmdbId: 100, qualityProfileId: 1, monitored: true, tags: [10, 20],
-      ratings: { imdb: { value: 8.1 }, tmdb: { value: 7.2 }, rottenTomatoes: { value: 90 } },
-      added: "2024-01-01", path: "/movies/x", sizeOnDisk: 2048, originalLanguage: { id: 1, name: "English" },
-      digitalRelease: "2024-02-01", physicalRelease: "2024-03-01", inCinemas: "2024-01-10",
-      runtime: 120, status: "released",
+      id: 5, title: "Dune", year: 2021, tmdbId: 438631, qualityProfileId: 1, monitored: true, tags: [10, 20],
+      ratings: {
+        imdb: { votes: 812_000, value: 8.1, type: "user" },
+        tmdb: { votes: 12_400, value: 7.2, type: "user" },
+        rottenTomatoes: { votes: 0, value: 90, type: "user" },
+      },
+      added: "2024-01-01T09:15:00Z", path: "/movies/Dune (2021)", sizeOnDisk: 15_032_385_536,
+      hasFile: true, movieFileId: 77,
+      originalLanguage: { id: 1, name: "English" },
+      digitalRelease: "2021-10-22T00:00:00Z", physicalRelease: "2022-01-11T00:00:00Z", inCinemas: "2021-09-15T00:00:00Z",
+      runtime: 155, status: "released",
       // qualityCutoffNotMet is nested on the movieFile (MovieFileResource), not the movie.
-      movieFile: { quality: { quality: { name: "Bluray-1080p" } }, dateAdded: "2024-02-02", customFormatScore: 150, qualityCutoffNotMet: false },
+      movieFile: {
+        quality: { quality: { name: "Bluray-1080p" } },
+        dateAdded: "2024-01-02T03:04:05Z",
+        customFormatScore: 150,
+        qualityCutoffNotMet: false,
+      },
     } as RadarrMovie;
 
-    expect(mapRadarrMovie(movie, profileMap, tagMap)).toMatchObject({
+    expect(mapRadarrMovie(movie, profileMap, tagMap)).toEqual({
       arrId: 5,
-      qualityProfile: "HD-1080p",
       tags: ["keep", "archive"],
+      qualityProfile: "HD-1080p",
       monitored: true,
       rating: 8.1,
       tmdbRating: 7.2,
-      rtCriticRating: 9, // 90 / 10
+      rtCriticRating: 9, // 90% on Rotten Tomatoes, on the rules' 0-10 scale
+      dateAdded: "2024-01-01T09:15:00Z",
+      path: "/movies/Dune (2021)",
+      sizeOnDisk: 15_032_385_536,
+      originalLanguage: "English",
+      // The digital release is preferred over the physical one.
+      releaseDate: "2021-10-22T00:00:00Z",
+      inCinemasDate: "2021-09-15T00:00:00Z",
+      runtime: 155,
       qualityName: "Bluray-1080p",
       qualityCutoffMet: true, // !qualityCutoffNotMet
       customFormatScore: 150,
+      downloadDate: "2024-01-02T03:04:05Z",
+      firstAired: null,
       seasonCount: null,
+      episodeCount: null,
+      status: "released",
+      ended: null,
+      seriesType: null,
+      hasUnaired: null,
       monitoredSeasonCount: null,
+      monitoredEpisodeCount: null,
     });
+  });
+
+  it("falls back to the physical release date when there is no digital one", () => {
+    const movie = {
+      id: 6, tmdbId: 27205, qualityProfileId: 1, monitored: true, tags: [],
+      physicalRelease: "2010-12-07T00:00:00Z",
+    } as unknown as RadarrMovie;
+    expect(mapRadarrMovie(movie, profileMap, tagMap).releaseDate).toBe("2010-12-07T00:00:00Z");
   });
 
   it("reads qualityCutoffMet from the nested movieFile, not the top-level movie", () => {
@@ -88,32 +123,47 @@ describe("mapRadarrMovie", () => {
 describe("mapSonarrSeries", () => {
   it("maps season/episode stats and leaves movie-only fields null", () => {
     const series = {
-      id: 7, tvdbId: 200, qualityProfileId: 1, monitored: true, tags: [10],
-      ratings: { votes: 500, value: 9 }, added: "2023-01-01", path: "/tv/x",
-      statistics: { sizeOnDisk: 5000, seasonCount: 3, episodeCount: 30 },
-      originalLanguage: { id: 1, name: "English" }, firstAired: "2020-01-01", status: "continuing",
-      ended: false, seriesType: "standard", nextAiring: "2025-01-01",
+      id: 7, title: "Severance", tvdbId: 371980, qualityProfileId: 1, monitored: true, tags: [10],
+      ratings: { votes: 500, value: 9 }, added: "2023-01-01T08:00:00Z", path: "/tv/Severance",
+      statistics: { sizeOnDisk: 52_000_000_000, seasonCount: 3, episodeCount: 30, totalEpisodeCount: 30, episodeFileCount: 18 },
+      originalLanguage: { id: 1, name: "English" }, firstAired: "2022-02-17T00:00:00Z", status: "continuing",
+      ended: false, seriesType: "standard", nextAiring: "2025-01-17T02:00:00Z",
       seasons: [
-        { seasonNumber: 1, monitored: true, statistics: { episodeCount: 10, totalEpisodeCount: 10 } },
-        { seasonNumber: 2, monitored: false, statistics: { episodeCount: 8, totalEpisodeCount: 8 } },
-        { seasonNumber: 3, monitored: false, statistics: { episodeCount: 12, totalEpisodeCount: 12 } },
+        { seasonNumber: 1, monitored: true, statistics: { episodeCount: 10, totalEpisodeCount: 10, episodeFileCount: 10 } },
+        { seasonNumber: 2, monitored: false, statistics: { episodeCount: 8, totalEpisodeCount: 8, episodeFileCount: 8 } },
+        { seasonNumber: 3, monitored: false, statistics: { episodeCount: 12, totalEpisodeCount: 12, episodeFileCount: 0 } },
       ],
     } as unknown as SonarrSeries;
 
-    expect(mapSonarrSeries(series, profileMap, tagMap)).toMatchObject({
+    expect(mapSonarrSeries(series, profileMap, tagMap)).toEqual({
       arrId: 7,
-      seasonCount: 3,
-      episodeCount: 30,
-      hasUnaired: true, // nextAiring present
-      monitoredSeasonCount: 1,
-      monitoredEpisodeCount: 10, // only the monitored season's episodes
-      customFormatScore: null,
-      qualityName: null,
-      runtime: null,
+      tags: ["keep"],
+      qualityProfile: "HD-1080p",
+      monitored: true,
       // Sonarr's flat rating maps to `rating`; no per-source TMDB/RT rating.
       rating: 9,
       tmdbRating: null,
       rtCriticRating: null,
+      dateAdded: "2023-01-01T08:00:00Z",
+      path: "/tv/Severance",
+      sizeOnDisk: 52_000_000_000,
+      originalLanguage: "English",
+      releaseDate: null,
+      inCinemasDate: null,
+      runtime: null,
+      qualityName: null,
+      qualityCutoffMet: null,
+      customFormatScore: null,
+      downloadDate: null,
+      firstAired: "2022-02-17T00:00:00Z",
+      seasonCount: 3,
+      episodeCount: 30,
+      status: "continuing",
+      ended: false,
+      seriesType: "standard",
+      hasUnaired: true, // nextAiring present
+      monitoredSeasonCount: 1,
+      monitoredEpisodeCount: 10, // only the monitored season's episodes
     });
   });
 });
@@ -163,20 +213,41 @@ describe("mapSonarrSeries counts", () => {
 describe("mapLidarrArtist", () => {
   it("maps artist fields and leaves movie/series-only fields null", () => {
     const artist = {
-      id: 9, foreignArtistId: "mb-1", qualityProfileId: 1, monitored: true, tags: [20],
-      ratings: { value: 7 }, added: "2024-01-01", path: "/music/x",
-      statistics: { sizeOnDisk: 3000 }, status: "continuing",
-    } as unknown as LidarrArtist;
+      id: 9, artistName: "Radiohead", foreignArtistId: "a74b1b7f-71a5-4011-9441-d0b5e4122711",
+      qualityProfileId: 1, metadataProfileId: 1, monitored: true, tags: [20],
+      ratings: { votes: 41, value: 7 }, added: "2024-01-01T10:00:00Z", path: "/music/Radiohead",
+      statistics: { albumCount: 9, trackCount: 101, trackFileCount: 101, sizeOnDisk: 3_221_225_472 },
+      status: "continuing",
+    } as LidarrArtist;
 
-    expect(mapLidarrArtist(artist, profileMap, tagMap)).toMatchObject({
+    expect(mapLidarrArtist(artist, profileMap, tagMap)).toEqual({
       arrId: 9,
-      rating: 7,
-      qualityProfile: "HD-1080p",
       tags: ["archive"],
+      qualityProfile: "HD-1080p",
+      monitored: true,
+      rating: 7,
       tmdbRating: null,
+      rtCriticRating: null,
+      dateAdded: "2024-01-01T10:00:00Z",
+      path: "/music/Radiohead",
+      sizeOnDisk: 3_221_225_472,
+      originalLanguage: null,
+      releaseDate: null,
+      inCinemasDate: null,
+      runtime: null,
+      qualityName: null,
+      qualityCutoffMet: null,
       customFormatScore: null,
+      downloadDate: null,
+      firstAired: null,
       seasonCount: null,
-      sizeOnDisk: 3000,
+      episodeCount: null,
+      status: "continuing",
+      ended: null,
+      seriesType: null,
+      hasUnaired: null,
+      monitoredSeasonCount: null,
+      monitoredEpisodeCount: null,
     });
   });
 });

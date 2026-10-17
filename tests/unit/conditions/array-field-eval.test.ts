@@ -79,21 +79,26 @@ describe("cross-engine parity for JSON-array fields", () => {
     return (getMatchedCriteriaForItems([item], rules, "MOVIE").get("1")?.length ?? 0) > 0;
   }
 
-  const cases: Array<[string, string, string]> = [
-    ["genre", "equals", "Action"],
-    ["genre", "equals", "action"],        // case-insensitive → both true (used to diverge)
-    ["genre", "contains", "Sci-Fi"],
-    ["genre", "contains", "SCI-FI"],      // case-insensitive → both true (used to diverge)
-    ["genre", "notContains", "action"],   // case-insensitive → both false (used to diverge)
-    ["genre", "matchesWildcard", "sci*"], // case-insensitive wildcard → both true
-    ["country", "equals", "France"],
-    ["country", "equals", "france"],      // case-insensitive → both true (used to diverge)
-    ["country", "contains", "france|japan"],
+  // Each case names the result both engines must reach, so two engines that
+  // agreed on the wrong answer would still fail.
+  const cases: Array<[string, string, string, boolean]> = [
+    ["genre", "equals", "Action", true],
+    ["genre", "equals", "action", true],        // case-insensitive (used to diverge)
+    ["genre", "equals", "Drama", false],
+    ["genre", "contains", "Sci-Fi", true],
+    ["genre", "contains", "SCI-FI", true],      // case-insensitive (used to diverge)
+    ["genre", "notContains", "action", false],  // case-insensitive (used to diverge)
+    ["genre", "matchesWildcard", "sci*", true], // case-insensitive wildcard
+    ["country", "equals", "France", true],
+    ["country", "equals", "france", true],      // case-insensitive (used to diverge)
+    ["country", "contains", "france|japan", true],
+    ["country", "contains", "japan|italy", false],
   ];
 
-  for (const [field, operator, value] of cases) {
-    it(`${field} ${operator} "${value}" agrees across engines`, () => {
-      expect(lifecycleMatches(field, operator, value)).toBe(queryMatches(field, operator, value));
+  for (const [field, operator, value, expected] of cases) {
+    it(`${field} ${operator} "${value}" is ${expected} in both engines`, () => {
+      expect(queryMatches(field, operator, value)).toBe(expected);
+      expect(lifecycleMatches(field, operator, value)).toBe(expected);
     });
   }
 });

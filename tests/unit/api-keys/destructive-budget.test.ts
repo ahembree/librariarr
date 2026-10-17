@@ -24,6 +24,9 @@ describe("the public API's destructive budget", () => {
   it("refuses a request over the per-request cap outright, and charges nothing", () => {
     const r = reserveApiDestructive(API_DESTRUCTIVE_PER_REQUEST + 1, T0);
     expect(r).toMatchObject({ ok: false, status: 400 });
+    expect(r).not.toHaveProperty("retryAfterSeconds");
+    if (r.ok) throw new Error("expected a refusal");
+    expect(r.error).toMatch(/^This would delete or unprotect 26 items; an API request may do that to at most 25\./);
     expect(reserveApiDestructive(0, T0)).toMatchObject({ ok: true, remaining: API_DESTRUCTIVE_PER_HOUR });
   });
 
@@ -36,7 +39,10 @@ describe("the public API's destructive budget", () => {
     // The first spend (at T0) is the one that has to age out.
     if (refused.ok || refused.status !== 429) throw new Error("expected a 429");
     expect(refused.retryAfterSeconds).toBe((API_DESTRUCTIVE_WINDOW_MS - 5 * 60_000) / 1000);
-    expect(refused.error).toMatch(/0 remain/);
+    expect(refused.error).toBe(
+      "API keys may delete or unprotect at most 100 items per hour; 0 remain and this needs 1. " +
+        "Nothing was changed. Retry in 55 minute(s), or do it from Librariarr itself.",
+    );
   });
 
   it("refuses a request that would cross the limit, even when some budget remains", () => {

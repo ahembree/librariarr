@@ -18,6 +18,7 @@ vi.mock("axios", () => ({
 }));
 
 import { fetchTrashCatalog, catalogHasResource, deriveCategories } from "@/lib/trash/catalog";
+import { treeUrl, rawUrl } from "@/lib/trash/constants";
 import { appCache } from "@/lib/cache/memory-cache";
 import type { TrashCatalog } from "@/lib/trash/types";
 
@@ -64,10 +65,18 @@ describe("fetchTrashCatalog", () => {
     // bad.json has no trash_id/specifications and is filtered out.
     expect(cat.customFormats.map((c) => c.name)).toEqual(["AMZN"]);
     expect(cat.qualityProfiles.map((p) => p.name)).toEqual(["HD"]);
-    expect(cat.qualitySize?.type).toBe("movie");
-    expect(cat.naming).not.toBeNull();
-    // Sonarr files are not pulled into the radarr catalog.
-    expect(cat.customFormats.some((c) => c.name === "other")).toBe(false);
+    expect(cat.qualitySize).toEqual({ trash_id: "qs", type: "movie", qualities: [] });
+    expect(cat.naming).toEqual({ folder: {}, file: {} });
+    // One tree listing, then each Radarr guide file from the raw CDN — Sonarr
+    // files (and the `cf` directory entry) are never requested.
+    const urls = mockGet.mock.calls.map((c) => c[0] as string);
+    expect(urls[0]).toBe(treeUrl());
+    expect(urls.slice(1).sort()).toEqual(
+      tree.tree
+        .filter((e) => e.type === "blob" && e.path.startsWith("docs/json/radarr/"))
+        .map((e) => rawUrl(e.path))
+        .sort(),
+    );
     // cf-groups become categories mapping to their custom-format trash_ids.
     expect(cat.cfGroups).toHaveLength(1);
     expect(cat.cfGroups[0].name).toBe("[Audio] Audio Formats");
@@ -85,7 +94,8 @@ describe("fetchTrashCatalog", () => {
     await fetchTrashCatalog("RADARR");
     const before = mockGet.mock.calls.length;
     await fetchTrashCatalog("RADARR", { force: true });
-    expect(mockGet.mock.calls.length).toBeGreaterThan(before);
+    // The whole build again: the tree and every file.
+    expect(mockGet.mock.calls.length).toBe(2 * before);
   });
 });
 

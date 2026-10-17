@@ -34,12 +34,20 @@ import { GET } from "@/app/api/tools/sessions/stream/route";
 import { createMediaServerClient } from "@/lib/media-server/factory";
 // Same singleton the route subscribes to (bus.ts is one module regardless of import path).
 import { realtimeBus } from "@/lib/media-server/realtime/bus";
+import { _resetFirstSeen } from "@/lib/media-server/session-first-seen";
 
 describe("GET /api/tools/sessions/stream", () => {
   beforeEach(async () => {
     await cleanDatabase();
     clearMockSession();
     vi.clearAllMocks();
+    // clearAllMocks keeps implementations, so a test's own client would
+    // otherwise answer every later test's polls.
+    vi.mocked(createMediaServerClient).mockImplementation(function () {
+      return { getSessions: vi.fn().mockResolvedValue([]) } as never;
+    });
+    // First-seen stamps are process-wide; start each stream from a clean map.
+    _resetFirstSeen();
   });
 
   afterAll(async () => {
@@ -65,6 +73,8 @@ describe("GET /api/tools/sessions/stream", () => {
     expect(response.status).toBe(200);
     expect(response.headers.get("Content-Type")).toBe("text/event-stream");
     expect(response.headers.get("Cache-Control")).toBe("no-cache, no-transform");
+    // Without it nginx buffers the stream and nothing arrives until it closes.
+    expect(response.headers.get("X-Accel-Buffering")).toBe("no");
 
     // Cancel the stream to clean up
     if (response.body) {
@@ -81,23 +91,20 @@ describe("GET /api/tools/sessions/stream", () => {
     });
 
     expect(response.status).toBe(200);
-    expect(response.body).toBeDefined();
     expect(response.body).toBeInstanceOf(ReadableStream);
 
     // Read the initial data from the stream
     const reader = response.body!.getReader();
-    const { value, done } = await reader.read();
+    try {
+      const { value, done } = await reader.read();
 
-    // Should receive an initial SSE event (sessions data)
-    expect(done).toBe(false);
-    expect(value).toBeDefined();
-
-    const text = new TextDecoder().decode(value);
-    expect(text).toContain("event: sessions");
-    expect(text).toContain("data:");
-
-    // Cancel the reader to clean up
-    await reader.cancel();
+      // The first poll is always sent, even with nothing playing (and here
+      // there is no server to ask).
+      expect(done).toBe(false);
+      expect(new TextDecoder().decode(value)).toBe('event: sessions\ndata: {"sessions":[]}\n\n');
+    } finally {
+      await reader.cancel();
+    }
   });
 
   it("pushes an update when a realtime session event fires", async () => {
@@ -183,7 +190,6 @@ describe("GET /api/tools/sessions/stream", () => {
     // The server drops out for one poll, then comes back.
     failNextPoll = true;
     realtimeBus.emit({ kind: "session-changed", serverId: "x", serverType: "PLEX", at: Date.now() });
-    await new Promise((r) => setTimeout(r, 20));
     // Second event lands inside the realtime throttle, so this poll is the
     // trailing one ~2s later — by then the server is answering again.
     realtimeBus.emit({ kind: "session-changed", serverId: "x", serverType: "PLEX", at: Date.now() });

@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { createMediaServerClient } from "@/lib/media-server/factory";
 import {
   runEnforcerTick,
+  processPrerollSchedules,
   sessionMatchesCriteria,
   isBlackoutActive,
   _resetForTesting,
@@ -36,7 +37,7 @@ vi.mock("@/lib/media-server/factory", () => ({
 // _resetForTesting() clears module-level state between tests.
 // ---------------------------------------------------------------------------
 
-describe("initializeMaintenanceEnforcer", () => {
+describe("maintenance mode (runEnforcerTick)", () => {
   beforeEach(() => {
     _resetForTesting();
     vi.clearAllMocks();
@@ -426,12 +427,8 @@ describe("sessionMatchesCriteria", () => {
     width: 1920,
     height: 1080,
   });
-  const directPlay4K = makeSession({
-    videoDecision: "directplay",
-    audioDecision: "directplay",
-    width: 3840,
-    height: 2160,
-  });
+  // A direct play carries no transcode session at all, on every server type.
+  const directPlay4K = makeSession({ width: 3840, height: 2160 });
 
   describe("fourKTranscoding", () => {
     const criteria = { ...NO_CRITERIA, fourKTranscoding: true };
@@ -851,6 +848,11 @@ describe("pending terminations vs. server availability", () => {
     await runEnforcerTick();
 
     expect(terminate).not.toHaveBeenCalled();
+
+    // ...and that fresh countdown does run out.
+    vi.setSystemTime(new Date(2026, 0, 5, 12, 2, 1));
+    await runEnforcerTick();
+    expect(terminate).toHaveBeenCalledExactlyOnceWith("sess1", "Down for maintenance");
   });
 });
 
@@ -1150,8 +1152,6 @@ describe("4K criterion against a downscaled transcode", () => {
 // multi-version 4K, unreachable-server snapshots, warn message, preroll cache
 // ---------------------------------------------------------------------------
 
-import { processPrerollSchedules } from "@/lib/maintenance/enforcer";
-
 function transcodeOnlySettings(criteria: Record<string, boolean>, overrides: Record<string, unknown> = {}) {
   return [
     {
@@ -1238,8 +1238,10 @@ describe("enforcer: stale grace timer on re-match", () => {
 });
 
 describe("enforcer: block_new_only device & unreachable", () => {
-  const NOW = Date.now();
   function blackout(action: string) {
+    // A window open around the moment the test runs, read at call time so a
+    // slow run cannot drift outside it.
+    const NOW = Date.now();
     return [
       {
         id: "sched1",
@@ -1277,13 +1279,13 @@ describe("enforcer: block_new_only device & unreachable", () => {
   it("terminates a grandfathered device that switches to a new item", async () => {
     vi.mocked(prisma.blackoutSchedule.findMany).mockResolvedValue(blackout("block_new_only"));
     // Jellyfin session id is device-stable; only the item (ratingKey) changes.
-    let ratingKey = "itemA";
+    let ratingKey = "2c1f4d0e9a8b4c3d8e7f6a5b4c3d2e1f";
     const terminate = vi.fn().mockResolvedValue(undefined);
     vi.mocked(createMediaServerClient).mockReturnValue({
       getSessions: vi.fn(() =>
         Promise.resolve([
           {
-            sessionId: "device-1",
+            sessionId: "f0b5a9c7e3d14b8a9c2e6d7f1a3b5c8e",
             ratingKey,
             username: "bob",
             title: "Playing",
@@ -1297,12 +1299,12 @@ describe("enforcer: block_new_only device & unreachable", () => {
       clearPreroll: vi.fn(),
     } as unknown as ReturnType<typeof createMediaServerClient>);
 
-    await runEnforcerTick(); // snapshot device-1::itemA
+    await runEnforcerTick(); // snapshot <device>::<item A>
     expect(terminate).not.toHaveBeenCalled();
 
-    ratingKey = "itemB"; // same device, new playback
+    ratingKey = "3d2e1f0a9b8c4d3e8f7a6b5c4d3e2f1a"; // same device, new playback
     await runEnforcerTick();
-    expect(terminate).toHaveBeenCalledWith("device-1", "Blackout");
+    expect(terminate).toHaveBeenCalledExactlyOnceWith("f0b5a9c7e3d14b8a9c2e6d7f1a3b5c8e", "Blackout");
   });
 
   it("does not snapshot an empty set when the server is unreachable at window open", async () => {
@@ -1350,8 +1352,9 @@ describe("enforcer: multi-version 4K resolution", () => {
       getSessions: vi.fn().mockResolvedValue([
         {
           sessionId: "sess1",
-          ratingKey: "rk1",
-          mediaId: "media-1080",
+          ratingKey: "53912",
+          // The Plex Media id of the version being played.
+          mediaId: "98123",
           username: "bob",
           title: "Movie",
           mediaWidth: 568,
@@ -1374,13 +1377,13 @@ describe("enforcer: multi-version 4K resolution", () => {
       transcodeOnlySettings({ anyTranscoding: false, videoTranscoding: false, audioTranscoding: false, fourKTranscoding: true, remoteTranscoding: false })
     );
     // DB (item-level) says 4k, but the SELECTED version is 1080p.
-    vi.mocked(prisma.mediaItem.findMany).mockResolvedValue([{ ratingKey: "rk1", resolution: "4k" }] as never);
-    const perVersion = vi.fn().mockResolvedValue(new Map([["media-1080", "1080"], ["media-4k", "4k"]]));
+    vi.mocked(prisma.mediaItem.findMany).mockResolvedValue([{ ratingKey: "53912", resolution: "4k" }] as never);
+    const perVersion = vi.fn().mockResolvedValue(new Map([["98123", "1080"], ["98124", "4k"]]));
     const terminate = fourKSession(perVersion);
 
     await runEnforcerTick();
 
-    expect(perVersion).toHaveBeenCalledWith("rk1");
+    expect(perVersion).toHaveBeenCalledWith("53912");
     expect(terminate).not.toHaveBeenCalled();
   });
 
@@ -1388,8 +1391,8 @@ describe("enforcer: multi-version 4K resolution", () => {
     vi.mocked(prisma.appSettings.findMany).mockResolvedValue(
       transcodeOnlySettings({ anyTranscoding: false, videoTranscoding: false, audioTranscoding: false, fourKTranscoding: true, remoteTranscoding: false })
     );
-    vi.mocked(prisma.mediaItem.findMany).mockResolvedValue([{ ratingKey: "rk1", resolution: "1080" }] as never);
-    const perVersion = vi.fn().mockResolvedValue(new Map([["media-1080", "4k"]]));
+    vi.mocked(prisma.mediaItem.findMany).mockResolvedValue([{ ratingKey: "53912", resolution: "1080" }] as never);
+    const perVersion = vi.fn().mockResolvedValue(new Map([["98123", "4k"]]));
     const terminate = fourKSession(perVersion);
 
     await runEnforcerTick();
@@ -1401,7 +1404,7 @@ describe("enforcer: multi-version 4K resolution", () => {
     vi.mocked(prisma.appSettings.findMany).mockResolvedValue(
       transcodeOnlySettings({ anyTranscoding: false, videoTranscoding: false, audioTranscoding: false, fourKTranscoding: true, remoteTranscoding: false })
     );
-    vi.mocked(prisma.mediaItem.findMany).mockResolvedValue([{ ratingKey: "rk1", resolution: "4k" }] as never);
+    vi.mocked(prisma.mediaItem.findMany).mockResolvedValue([{ ratingKey: "53912", resolution: "4k" }] as never);
     const perVersion = vi.fn().mockRejectedValue(new Error("boom"));
     const terminate = fourKSession(perVersion);
 
@@ -1413,7 +1416,6 @@ describe("enforcer: multi-version 4K resolution", () => {
 });
 
 describe("enforcer: warn_then_terminate sends a warning", () => {
-  const NOW = Date.now();
   beforeEach(() => {
     _resetForTesting();
     vi.clearAllMocks();
@@ -1424,6 +1426,7 @@ describe("enforcer: warn_then_terminate sends a warning", () => {
   });
 
   it("calls notifySession at warn time when the server supports it", async () => {
+    const NOW = Date.now();
     vi.mocked(prisma.blackoutSchedule.findMany).mockResolvedValue([
       {
         id: "sched1", userId: "user1", name: "BO", enabled: true,

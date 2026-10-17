@@ -87,6 +87,16 @@ Use built-in holiday presets or define custom date ranges.
 
 Each schedule has a priority value. When multiple schedules are active simultaneously, the highest-priority schedule's preroll path is used.
 
+### Overlapping Schedules
+
+Saving an enabled schedule that would be active at the same time as another enabled schedule is refused, and the error names the schedule it collides with:
+
+- **One-time and seasonal** schedules conflict when their dates overlap. A seasonal schedule is compared on its month and day in every year, so a seasonal December window conflicts with a one-time schedule in any December.
+- **Recurring** schedules conflict when their weekly windows overlap. An overnight window counts on the day it starts and runs into the next morning, so Monday 22:00–06:00 conflicts with a Tuesday 05:00 window but not with a Monday 05:00 one.
+- Windows that only touch (one ends at the minute the other starts) do not conflict.
+- A recurring schedule is not compared with one-time or seasonal ones; when they are active together, priority decides.
+- A schedule saved disabled is not checked until it is enabled.
+
 ### Combining Presets
 
 The Preroll Manager includes a preset combination tool in the UI. Select multiple presets and combine their paths using:

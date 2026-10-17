@@ -62,8 +62,10 @@ describe("termination logging", () => {
 
   it("falls back when the session was never seen", () => {
     logTermination(base);
-    expect(vi.mocked(logger.info).mock.calls[0][1]).toContain('"unknown user"');
-    expect(vi.mocked(logger.info).mock.calls[0][1]).toContain("unknown media");
+    expect(vi.mocked(logger.info).mock.calls[0][1]).toBe(
+      'Terminated session for "unknown user" on "My Plex" — unknown media (session s1) ' +
+        "(trigger: manual, reason: Going down for maintenance)"
+    );
   });
 
   it("treats an empty username as unknown", () => {
@@ -82,6 +84,8 @@ describe("termination logging", () => {
   });
 
   it("keeps a failure message readable when the detail was scrubbed away", () => {
-    expect(terminationFailureMessage(base, undefined)).toContain("unknown error");
+    expect(terminationFailureMessage(base, undefined)).toBe(
+      'Failed to terminate session for "unknown user" on "My Plex" — unknown media (session s1): unknown error'
+    );
   });
 });

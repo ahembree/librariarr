@@ -3,7 +3,11 @@ import bcrypt from "bcryptjs";
 import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
 import { callRoute, createTestUser } from "../../setup/test-helpers";
-import { authGlobalRateLimiter, authRateLimiter } from "@/lib/rate-limit/rate-limiter";
+import {
+  _resetKnownAddressesForTesting,
+  authGlobalRateLimiter,
+  authRateLimiter,
+} from "@/lib/rate-limit/rate-limiter";
 
 // file deepcode ignore NoHardcodedPasswords/test: test file
 
@@ -61,6 +65,8 @@ describe("the password-confirmation budget", () => {
     for (const limiter of [authRateLimiter, authGlobalRateLimiter]) {
       (limiter as unknown as { store: Map<string, unknown> }).store.clear();
     }
+    // A right password remembers the address, exempting it from the floor.
+    _resetKnownAddressesForTesting();
   });
 
   afterAll(async () => {

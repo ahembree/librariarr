@@ -37,6 +37,10 @@ export function usePlexOAuth({ onSuccess, onError }: UsePlexOAuthOptions): UsePl
   const popupRef = useRef<Window | null>(null);
   const isAuthenticatedRef = useRef(false);
   const pollFnRef = useRef<(() => void) | null>(null);
+  // Bumped by every start and every cancel. An attempt that sees a different
+  // value after an await was cancelled (or replaced) meanwhile, and must not
+  // go on to open Plex, poll, or sign anyone in.
+  const attemptRef = useRef(0);
 
   // Stable ref for callbacks so the polling closure always sees the latest
   const onSuccessRef = useRef(onSuccess);
@@ -63,6 +67,7 @@ export function usePlexOAuth({ onSuccess, onError }: UsePlexOAuthOptions): UsePl
 
   const cancel = useCallback(() => {
     if (isAuthenticatedRef.current) return;
+    attemptRef.current++;
     cleanup();
     try { popupRef.current?.close(); } catch {}
     setIsLoading(false);
@@ -91,6 +96,8 @@ export function usePlexOAuth({ onSuccess, onError }: UsePlexOAuthOptions): UsePl
     setError(null);
     setAuthUrl(null);
     isAuthenticatedRef.current = false;
+    const attempt = ++attemptRef.current;
+    const superseded = () => attempt !== attemptRef.current;
 
     try {
       // Open popup to our local loading page first (same-origin = reliable reference)
@@ -104,6 +111,10 @@ export function usePlexOAuth({ onSuccess, onError }: UsePlexOAuthOptions): UsePl
         body: JSON.stringify({}),
       });
 
+      // Cancelled while the PIN was being created: `cancel()` already closed
+      // the popup and reset the state, so there is nothing left to do.
+      if (superseded()) return;
+
       if (!response.ok) {
         try { popup?.close(); } catch {}
         const data = await response.json().catch(() => ({}));
@@ -113,6 +124,7 @@ export function usePlexOAuth({ onSuccess, onError }: UsePlexOAuthOptions): UsePl
       }
 
       const data = await response.json();
+      if (superseded()) return;
       setAuthUrl(data.authUrl);
 
       // Navigate the popup/tab to Plex auth page
@@ -153,6 +165,9 @@ export function usePlexOAuth({ onSuccess, onError }: UsePlexOAuthOptions): UsePl
           });
           const pin = await res.json();
 
+          // A poll already in flight when the flow was cancelled must not sign in.
+          if (superseded()) return;
+
           if (pin.authToken) {
             cleanup();
             isAuthenticatedRef.current = true;
@@ -185,6 +200,7 @@ export function usePlexOAuth({ onSuccess, onError }: UsePlexOAuthOptions): UsePl
         cancel();
       }, POLL_TIMEOUT);
     } catch {
+      if (superseded()) return;
       setIsLoading(false);
       handleError("Failed to start Plex authentication");
     }

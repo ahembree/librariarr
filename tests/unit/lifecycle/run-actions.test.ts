@@ -46,7 +46,7 @@ const item = (n: number) => ({
   externalIds: [],
 });
 
-function hostDown(status: number | null) {
+function radarrReadError(status: number | null) {
   return new IntegrationError("Radarr", {
     // A read: only a read has been through the retries, so only a read's
     // timeout says the host is down (see isHostLevelFailure).
@@ -65,13 +65,15 @@ describe("executeActionsForItems", () => {
 
   it("fails the remaining items at once when the Arr instance is down, without asking it again", async () => {
     // Each attempt against a dead instance costs the client's whole retry budget.
-    m.executeAction.mockRejectedValue(hostDown(null));
+    m.executeAction.mockRejectedValue(radarrReadError(null));
 
     const result = await executeActionsForItems("u1", [item(1), item(2), item(3)], CONFIG, new Map(), HISTORY);
 
     expect(m.executeAction).toHaveBeenCalledTimes(1);
     expect(result.failed).toBe(3);
     expect(result.executed).toBe(0);
+    // The two never sent are reported as such (the public API refunds them).
+    expect(result.notAttempted).toBe(2);
     // Every item still gets its FAILED history row, carrying the host error.
     expect(m.prisma.lifecycleAction.create).toHaveBeenCalledTimes(3);
     for (const f of result.failures) expect(f.error).toMatch(/Radarr unreachable/);
@@ -89,18 +91,37 @@ describe("executeActionsForItems", () => {
     const result = await executeActionsForItems("u1", [item(1), item(2), item(3)], CONFIG, new Map(), HISTORY);
 
     expect(m.executeAction).toHaveBeenCalledTimes(3);
-    expect(result).toMatchObject({ executed: 2, failed: 1 });
+    expect(result).toMatchObject({ executed: 2, failed: 1, notAttempted: 0 });
   });
 
   it("keeps going after an item-specific failure", async () => {
     m.executeAction
-      .mockRejectedValueOnce(hostDown(404))
+      .mockRejectedValueOnce(radarrReadError(404))
       .mockResolvedValue(undefined);
 
     const result = await executeActionsForItems("u1", [item(1), item(2), item(3)], CONFIG, new Map(), HISTORY);
 
     expect(m.executeAction).toHaveBeenCalledTimes(3);
-    expect(result).toMatchObject({ executed: 2, failed: 1 });
+    expect(result).toMatchObject({ executed: 2, failed: 1, notAttempted: 0 });
+    expect(result.failures.map((f) => f.title)).toEqual(["Movie 1"]);
+  });
+
+  it("still records a failure whose item was purged mid-run, and carries on", async () => {
+    // The item's row went while its Arr call ran: the FAILED row's foreign key
+    // no longer resolves, so it is written without its links.
+    m.executeAction.mockRejectedValueOnce(radarrReadError(404)).mockResolvedValue(undefined);
+    m.prisma.lifecycleAction.create.mockRejectedValueOnce(new Error("Foreign key constraint violated"));
+
+    const result = await executeActionsForItems("u1", [item(1), item(2)], CONFIG, new Map(), HISTORY);
+
+    expect(result).toMatchObject({ executed: 1, failed: 1 });
+    expect(m.prisma.lifecycleAction.create).toHaveBeenNthCalledWith(1, {
+      data: expect.objectContaining({ mediaItemId: "m1", status: "FAILED" }),
+    });
+    expect(m.prisma.lifecycleAction.create).toHaveBeenNthCalledWith(2, {
+      data: expect.objectContaining({ mediaItemId: null, ruleSetId: null, status: "FAILED", mediaItemTitle: "Movie 1" }),
+    });
+    expect(m.executeAction).toHaveBeenCalledTimes(2);
   });
 
   describe("naming a series item", () => {

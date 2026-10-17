@@ -50,36 +50,60 @@ async function serve(script: Script[]): Promise<{ url: string; hits: () => numbe
   return { url: `http://127.0.0.1:${port}`, hits: () => hits, methods };
 }
 
+const SEERR_EMPTY_PAGE = { pageInfo: { pages: 0, pageSize: 1, results: 0, page: 1 }, results: [] };
+const TRACEARR_HEALTH = { status: "ok", version: "2.1.0", timestamp: "2026-01-01T00:00:00.000Z", servers: [] };
+const TRACEARR_EMPTY_HISTORY = { data: [], meta: { nextCursor: null, pageSize: 100 } };
+
 const CLIENTS: Array<{
   name: string;
   /** An idempotent read that throws on failure. */
   read: (url: string) => Promise<unknown>;
+  /** What that read's endpoint answers when it succeeds (here, with nothing in it). */
+  okBody: unknown;
   /** The settings "Test" probe (the TRaSH guide client has none). */
   test?: (url: string) => Promise<{ ok: boolean }>;
 }> = [
-  { name: "Radarr", read: (u) => new RadarrClient(u, "k").getMovies(), test: (u) => new RadarrClient(u, "k").testConnection() },
-  { name: "Sonarr", read: (u) => new SonarrClient(u, "k").getSeries(), test: (u) => new SonarrClient(u, "k").testConnection() },
-  { name: "Lidarr", read: (u) => new LidarrClient(u, "k").getArtists(), test: (u) => new LidarrClient(u, "k").testConnection() },
+  {
+    name: "Radarr",
+    read: (u) => new RadarrClient(u, "k").getMovies(),
+    okBody: [],
+    test: (u) => new RadarrClient(u, "k").testConnection(),
+  },
+  {
+    name: "Sonarr",
+    read: (u) => new SonarrClient(u, "k").getSeries(),
+    okBody: [],
+    test: (u) => new SonarrClient(u, "k").testConnection(),
+  },
+  {
+    name: "Lidarr",
+    read: (u) => new LidarrClient(u, "k").getArtists(),
+    okBody: [],
+    test: (u) => new LidarrClient(u, "k").testConnection(),
+  },
   {
     name: "Seerr",
     read: (u) => new SeerrClient(u, "k").getRequests({ take: 1, skip: 0 }),
+    okBody: SEERR_EMPTY_PAGE,
     test: (u) => new SeerrClient(u, "k").testConnection(),
   },
   {
     name: "Tracearr",
     read: (u) => new TracearrClient(u, "k").getHealth(),
+    okBody: TRACEARR_HEALTH,
     test: (u) => new TracearrClient(u, "k").testConnection(),
   },
   {
     name: "TRaSH guide client",
     read: (u) => new GuideArrClient(u, "k", "RADARR").getCustomFormats(),
+    okBody: [],
   },
 ];
 
-describe.each(CLIENTS)("$name client retry", ({ read }) => {
+describe.each(CLIENTS)("$name client retry", ({ read, okBody }) => {
   it("retries a transient 503 on a GET and succeeds", async () => {
-    const { url, hits } = await serve([{ status: 503 }, { status: 200 }]);
-    await expect(read(url)).resolves.toBeDefined();
+    const { url, hits } = await serve([{ status: 503 }, { status: 200, body: okBody }]);
+    await expect(read(url)).resolves.toEqual(okBody);
     expect(hits()).toBe(2);
   });
 
@@ -131,7 +155,7 @@ describe("Tracearr 429 handling alongside transport retries", () => {
   it("still retries a 429 on the history walk (IntegrationError keeps the status)", async () => {
     const { url, hits } = await serve([
       { status: 429, headers: { "Retry-After": "1" } },
-      { status: 200, body: { data: [], meta: { nextCursor: null } } },
+      { status: 200, body: TRACEARR_EMPTY_HISTORY },
     ]);
     const page = await new TracearrClient(url, "k").getHistoryPage("server-1");
     expect(page).toEqual({ records: [], nextCursor: null });
@@ -141,9 +165,10 @@ describe("Tracearr 429 handling alongside transport retries", () => {
   it("retries a transient 503 on the history walk", async () => {
     const { url, hits } = await serve([
       { status: 503 },
-      { status: 200, body: { data: [], meta: { nextCursor: null } } },
+      { status: 200, body: TRACEARR_EMPTY_HISTORY },
     ]);
-    await new TracearrClient(url, "k").getHistoryPage("server-1");
+    const page = await new TracearrClient(url, "k").getHistoryPage("server-1");
+    expect(page).toEqual({ records: [], nextCursor: null });
     expect(hits()).toBe(2);
   });
 });

@@ -84,7 +84,7 @@ function stubSortAndVisibility() {
 
 describe("syncCollection", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
   });
 
   it("creates a new collection when none exists", async () => {
@@ -163,7 +163,10 @@ describe("syncCollection", () => {
 
     await syncCollection(makeCollection(), []);
 
+    expect(mockPlexClient.removeCollectionItem).toHaveBeenCalledWith("col1", "rk_old");
     expect(mockPlexClient.deleteCollection).toHaveBeenCalledWith("col1");
+    // A deleted collection gets no sort or visibility writes.
+    expect(mockPlexClient.editCollectionSortTitle).not.toHaveBeenCalled();
   });
 
   it("skips when no collection exists and no items to add", async () => {
@@ -321,8 +324,8 @@ describe("syncCollection", () => {
 
     // Two rule sets feed the collection; the soonest deletion (rk1, rsB) sorts first.
     mockPrisma.lifecycleAction.findMany.mockResolvedValue([
-      { scheduledFor: new Date("2025-01-10"), ruleSetId: "rsA", mediaItem: { ratingKey: "rk2", parentTitle: null, title: "Movie 2" } },
-      { scheduledFor: new Date("2025-01-05"), ruleSetId: "rsB", mediaItem: { ratingKey: "rk1", parentTitle: null, title: "Movie 1" } },
+      { scheduledFor: new Date("2025-01-10"), ruleSetId: "rsA", mediaItemId: "m2", mediaItem: { ratingKey: "rk2", parentTitle: null, title: "Movie 2" } },
+      { scheduledFor: new Date("2025-01-05"), ruleSetId: "rsB", mediaItemId: "m1", mediaItem: { ratingKey: "rk1", parentTitle: null, title: "Movie 1" } },
     ]);
 
     await syncCollection(makeCollection({ sort: "ACTION_DATE" }), [
@@ -330,9 +333,17 @@ describe("syncCollection", () => {
       contribution([{ libraryId: "lib1", ratingKey: "rk1", title: "Movie 1", parentTitle: null }], { ruleSetId: "rsB" }),
     ]);
 
+    // One query pools the pending actions of every contributing rule set.
+    expect(mockPrisma.lifecycleAction.findMany).toHaveBeenCalledTimes(1);
+    expect(mockPrisma.lifecycleAction.findMany.mock.calls[0][0].where).toEqual({
+      ruleSetId: { in: ["rsA", "rsB"] },
+      status: "PENDING",
+    });
     expect(mockPlexClient.editCollectionSort).toHaveBeenCalledWith("col1", 2);
-    expect(mockPlexClient.moveCollectionItem).toHaveBeenCalledWith("col1", "rk1", undefined);
-    expect(mockPlexClient.moveCollectionItem).toHaveBeenCalledWith("col1", "rk2", "rk1");
+    expect(mockPlexClient.moveCollectionItem.mock.calls).toEqual([
+      ["col1", "rk1", undefined],
+      ["col1", "rk2", "rk1"],
+    ]);
   });
 
   it("syncs visibility settings", async () => {
@@ -381,13 +392,20 @@ describe("syncCollection", () => {
       ]),
     ]);
 
-    expect(mockPlexClient.createCollection).toHaveBeenCalled();
+    // lib1 failed and was logged; lib2 still got its collection.
+    expect(logger.error).toHaveBeenCalledWith(
+      "Lifecycle",
+      'Failed to sync collection "Test Collection" for library lib1',
+      expect.any(Object),
+    );
+    expect(mockPlexClient.createCollection).toHaveBeenCalledTimes(1);
+    expect(mockPlexClient.createCollection).toHaveBeenCalledWith("2", "Test Collection", "machine1", ["rk2"], 1);
   });
 });
 
 describe("syncCollectionById", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
   });
 
   it("builds contributions from persisted matches and syncs", async () => {
@@ -487,7 +505,7 @@ describe("syncCollectionById", () => {
 
 describe("syncAllCollections", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
   });
 
   it("syncs each of the user's collections", async () => {
@@ -508,7 +526,7 @@ describe("syncAllCollections", () => {
 
 describe("removePlexCollection", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
   });
 
   it("removes collection from all user libraries", async () => {
@@ -552,7 +570,7 @@ describe("removePlexCollection", () => {
 
 describe("renameCollectionInPlex", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
   });
 
   it("renames the matching collection across libraries", async () => {
@@ -586,7 +604,7 @@ describe("self-write marks (realtime echo suppression)", () => {
   // instead of re-fetching the members — or, past 100 of them, escalating to a
   // whole-server sync straight after a detection run.
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     _resetSelfWritesForTesting();
   });
 

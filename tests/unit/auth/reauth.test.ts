@@ -182,7 +182,9 @@ describe("reauthRequired", () => {
       methods: string[];
     };
     expect(body.methods).toEqual([]);
-    expect(body.error).toMatch(/sign out, sign back in/i);
+    expect(body.error).toBe(
+      "Setting a password needs a sign-in from the last 15 minutes. Sign out, sign back in, then try again.",
+    );
   });
 
   // Under SSO, nothing to confirm with means SSO does not recognise the link
@@ -199,14 +201,23 @@ describe("reauthRequired", () => {
       methods: string[];
     };
     expect(body.methods).toEqual([]);
-    expect(body.error).toMatch(/don't sign out/i);
+    expect(body.error).toMatch(/^Turning off SSO needs a sign-in from the last 15 minutes\. Don't sign out/);
     expect(body.error).toMatch(/SSO_DISABLE_OVERRIDE/);
+    expect(body.error).not.toMatch(/Sign out, sign back in/);
   });
 });
 
 describe("reauthNonceFromState", () => {
   it("reads the attempt nonce after the last dot", () => {
     expect(reauthNonceFromState("randomPart.attempt-nonce-0123456789")).toBe("attempt-nonce-0123456789");
+    expect(reauthNonceFromState("a.b.attempt-nonce-0123456789")).toBe("attempt-nonce-0123456789");
+  });
+
+  it("takes a nonce of 16 to 64 characters, as the start route accepts", () => {
+    expect(reauthNonceFromState(`r.${"n".repeat(16)}`)).toBe("n".repeat(16));
+    expect(reauthNonceFromState(`r.${"n".repeat(64)}`)).toBe("n".repeat(64));
+    expect(reauthNonceFromState(`r.${"n".repeat(15)}`)).toBeUndefined();
+    expect(reauthNonceFromState(`r.${"n".repeat(65)}`)).toBeUndefined();
   });
 
   it("finds none in a plain state, a malformed nonce, or no state", () => {

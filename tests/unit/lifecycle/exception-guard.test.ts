@@ -37,29 +37,31 @@ describe("protectionKey", () => {
   it("keys a series on seriesKey, not its title", () => {
     // The whole point. A DELETE_SONARR removes the Sonarr series, so the guard
     // has to recognise the same show under whatever title each server gave it.
-    const uk = protectionKey({ parentTitle: "The Office", seriesKey: "tvdb:73244", type: "SERIES" });
-    const us = protectionKey({ parentTitle: "The Office (US)", seriesKey: "tvdb:73244", type: "SERIES" });
-    expect(uk).toBe(us);
+    // The US show (TVDB 73244), titled differently on each of two servers.
+    const serverA = protectionKey({ parentTitle: "The Office", seriesKey: "tvdb:73244", type: "SERIES" });
+    const serverB = protectionKey({ parentTitle: "The Office (US)", seriesKey: "tvdb:73244", type: "SERIES" });
+    expect(serverA).toBe("SERIES:tvdb:73244");
+    expect(serverB).toBe("SERIES:tvdb:73244");
   });
 
   it("separates two different shows that share a title", () => {
-    const a = protectionKey({ parentTitle: "The Office", seriesKey: "tvdb:73244", type: "SERIES" });
-    const b = protectionKey({ parentTitle: "The Office", seriesKey: "tvdb:78107", type: "SERIES" });
-    expect(a).not.toBe(b);
+    // The US (73244) and UK (78107) shows.
+    expect(protectionKey({ parentTitle: "The Office", seriesKey: "tvdb:73244", type: "SERIES" })).toBe("SERIES:tvdb:73244");
+    expect(protectionKey({ parentTitle: "The Office", seriesKey: "tvdb:78107", type: "SERIES" })).toBe("SERIES:tvdb:78107");
   });
 
   it("falls back to the same title key a keyless row would compute", () => {
     // `seriesKeyFromTitle`, so a row that predates the `seriesKey` column still
     // collides with a backfilled one whose key came from the same title.
-    expect(protectionKey({ parentTitle: " The Show ", seriesKey: null, type: "SERIES" })).toBe(
-      protectionKey({ parentTitle: "the show", seriesKey: "title:the show", type: "SERIES" }),
+    expect(protectionKey({ parentTitle: " The Show ", seriesKey: null, type: "SERIES" })).toBe("SERIES:title:the show");
+    expect(protectionKey({ parentTitle: "the show", seriesKey: "title:the show", type: "SERIES" })).toBe(
+      "SERIES:title:the show",
     );
   });
 
   it("keys music on the artist title — there is no artist-identity column", () => {
-    expect(protectionKey({ parentTitle: "Boards of Canada", type: "MUSIC" })).toBe(
-      protectionKey({ parentTitle: "boards of canada", type: "MUSIC" }),
-    );
+    expect(protectionKey({ parentTitle: "Boards of Canada", type: "MUSIC" })).toBe("MUSIC:title:boards of canada");
+    expect(protectionKey({ parentTitle: "boards of canada", type: "MUSIC" })).toBe("MUSIC:title:boards of canada");
   });
 
   it("namespaces by type so a same-named show and artist never cross", () => {
@@ -98,9 +100,7 @@ describe("findExceptionProtectedGroups", () => {
       { parentTitle: "The Office", seriesKey: "tvdb:73244", type: "SERIES" },
     ]);
 
-    expect(
-      result.has(protectionKey({ parentTitle: "The Office", seriesKey: "tvdb:73244", type: "SERIES" })!),
-    ).toBe(true);
+    expect(result).toEqual(new Set(["SERIES:tvdb:73244"]));
   });
 
   it("does not let a same-titled DIFFERENT show block one", async () => {
@@ -115,6 +115,7 @@ describe("findExceptionProtectedGroups", () => {
     const result = await findExceptionProtectedGroups("u1", [target]);
 
     expect(result.has(protectionKey(target)!)).toBe(false);
+    expect(result).toEqual(new Set(["SERIES:tvdb:71173"]));
   });
 
   it("searches both columns so a keyless legacy exception still matches", async () => {

@@ -44,10 +44,18 @@ const m = vi.hoisted(() => ({
   },
   appSettings: { findFirst: vi.fn().mockResolvedValue(null) },
   lifecycleAction: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
+  recoverHistoryForNewItems: vi.fn(),
+  emitWatchHistoryUpdated: vi.fn(),
 }));
 const { syncTracearrHistory, enqueueJob, invalidateMediaCaches, logger } = m;
 
 vi.mock("@/lib/sync/sync-tracearr-history", () => ({ syncTracearrHistory: m.syncTracearrHistory }));
+vi.mock("@/lib/sync/tracearr-backfill-additions", () => ({
+  recoverHistoryForNewItems: m.recoverHistoryForNewItems,
+}));
+vi.mock("@/lib/sync/watch-history-events", () => ({
+  emitWatchHistoryUpdated: m.emitWatchHistoryUpdated,
+}));
 vi.mock("@/lib/sync/sync-server", () => ({ syncMediaServer: m.syncMediaServer }));
 vi.mock("@/lib/sync/sync-watch-history", () => ({ syncWatchHistory: m.syncWatchHistory }));
 vi.mock("@/lib/sync/sync-incremental", () => ({ syncMediaServerItems: m.syncMediaServerItems }));
@@ -107,6 +115,8 @@ describe("tracearr-backfill task", () => {
     vi.clearAllMocks();
     enqueueJob.mockResolvedValue(true);
     syncTracearrHistory.mockResolvedValue({ count: 0, backfillPending: false });
+    m.recoverHistoryForNewItems.mockResolvedValue({ checked: 0, imported: 0 });
+    m.emitWatchHistoryUpdated.mockResolvedValue(undefined);
   });
 
   it("gives way to a requested sync that is waiting in the queue", async () => {
@@ -145,11 +155,15 @@ describe("tracearr-backfill task", () => {
     await expect(predicate()).resolves.toBe(false);
 
     // Bounded in time: a row whose job was lost must not shrink every later
-    // slice to a single page forever.
+    // slice to a single page forever. The window is the last hour.
+    const before = Date.now();
+    await predicate();
+    const after = Date.now();
     const where = m.syncJob.findFirst.mock.calls.at(-1)?.[0]?.where;
     expect(where.status).toBe("PENDING");
     expect(where.startedAt.gte).toBeInstanceOf(Date);
-    expect(Date.now() - where.startedAt.gte.getTime()).toBeGreaterThanOrEqual(59 * 60_000);
+    expect(where.startedAt.gte.getTime()).toBeGreaterThanOrEqual(before - 60 * 60_000);
+    expect(where.startedAt.gte.getTime()).toBeLessThanOrEqual(after - 60 * 60_000);
   });
 
   it("stops the watch even when the slice throws", async () => {
@@ -215,9 +229,8 @@ describe("tracearr-backfill task", () => {
     expect(enqueueJob).not.toHaveBeenCalled();
     expect(logger.info).toHaveBeenCalledWith(
       "Jobs",
-      expect.stringContaining("complete"),
+      `Tracearr backfill for server ${SERVER_ID} is complete (37 row(s) this slice)`,
     );
-    expect(logger.info).toHaveBeenCalledWith("Jobs", expect.stringContaining(SERVER_ID));
   });
 
   it("invalidates media caches whether or not more history remains", async () => {
@@ -231,6 +244,44 @@ describe("tracearr-backfill task", () => {
     syncTracearrHistory.mockResolvedValue({ count: 12, backfillPending: false });
     await runBackfill();
     expect(invalidateMediaCaches).toHaveBeenCalledOnce();
+  });
+
+  it("runs the re-added-item recovery only once the archive walk is complete", async () => {
+    syncTracearrHistory.mockResolvedValue({ count: 500, backfillPending: true, backfillOutcome: "stopped" });
+    await runBackfill();
+    // The walk owns the slice and the rate limit while it is unfinished.
+    expect(m.recoverHistoryForNewItems).not.toHaveBeenCalled();
+
+    vi.clearAllMocks();
+    syncTracearrHistory.mockResolvedValue({ count: 0, backfillPending: false });
+    await runBackfill();
+    expect(m.recoverHistoryForNewItems).toHaveBeenCalledWith(SERVER_ID);
+  });
+
+  it("keeps a slice whose recovery pass fails, logging it instead", async () => {
+    syncTracearrHistory.mockResolvedValue({ count: 3, backfillPending: false });
+    m.recoverHistoryForNewItems.mockRejectedValueOnce(new Error("tracearr 503"));
+
+    // The slice's rows are committed; failing the job would re-run all of it.
+    await expect(runBackfill()).resolves.toBeUndefined();
+    expect(logger.warn).toHaveBeenCalledWith(
+      "Jobs",
+      `Tracearr history recovery for recently added items on server ${SERVER_ID} failed`,
+      { error: "Error: tracearr 503" },
+    );
+    expect(invalidateMediaCaches).toHaveBeenCalledOnce();
+  });
+
+  it("tells open pages the plays moved, once per slice", async () => {
+    syncTracearrHistory.mockResolvedValue({ count: 250, backfillPending: true, backfillOutcome: "stopped" });
+
+    await runBackfill();
+
+    expect(m.emitWatchHistoryUpdated).toHaveBeenCalledTimes(1);
+    expect(m.emitWatchHistoryUpdated).toHaveBeenCalledWith(SERVER_ID, {
+      imported: 250,
+      backfillPending: true,
+    });
   });
 
   it("propagates a failure so graphile-worker retries, without stacking a duplicate job", async () => {
@@ -273,6 +324,11 @@ describe("tracearr-backfill task", () => {
       await runBackfill();
 
       expect(enqueueJob).toHaveBeenCalledTimes(1);
+      expect(enqueueJob).toHaveBeenCalledWith(
+        TASK_TRACEARR_BACKFILL,
+        { serverId: SERVER_ID },
+        { jobKey: `tracearr-backfill:${SERVER_ID}`, queueName: MAIN_QUEUE, maxAttempts: 3 },
+      );
     });
 
     it("does not re-enqueue when Tracearr holds no history for the mapping", async () => {

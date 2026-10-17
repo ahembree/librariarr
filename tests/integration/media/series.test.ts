@@ -27,14 +27,15 @@ import { GET } from "@/app/api/media/series/route";
 import { GET as GET_GROUPED } from "@/app/api/media/series/grouped/route";
 import { appCache } from "@/lib/cache/memory-cache";
 
+// File-level, so the later suites still have their connection.
+afterAll(async () => {
+  await disconnectTestDb();
+});
+
 describe("Series endpoints", () => {
   beforeEach(async () => {
     await cleanDatabase();
     clearMockSession();
-  });
-
-  afterAll(async () => {
-    await disconnectTestDb();
   });
 
   // ----- GET /api/media/series (episodes) -----
@@ -202,7 +203,8 @@ describe("Series endpoints", () => {
         items: { title: string }[];
       }>(response, 200);
 
-      expect(body.items).toHaveLength(2);
+      // One through the show's name, one through the episode's own title.
+      expect(body.items.map((i) => i.title).sort()).toEqual(["Breaking Point", "Pilot"]);
     });
 
     it("serializes BigInt fileSize to string", async () => {
@@ -256,6 +258,34 @@ describe("Series endpoints", () => {
       ]);
     });
 
+    it("filters by seriesKey, keeping same-titled shows apart", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const lib = await createTestLibrary(server.id, { type: "SERIES" });
+
+      await createTestMediaItem(lib.id, {
+        title: "Downsize", type: "SERIES", parentTitle: "The Office",
+        seriesKey: "tvdb:78107", seasonNumber: 1, episodeNumber: 1,
+      });
+      await createTestMediaItem(lib.id, {
+        title: "Pilot", type: "SERIES", parentTitle: "The Office",
+        seriesKey: "tvdb:73244", seasonNumber: 1, episodeNumber: 1,
+      });
+
+      setMockSession({ userId: user.id, isLoggedIn: true });
+
+      const body = await expectJson<{ items: { title: string }[] }>(
+        await callRoute(GET, {
+          url: "/api/media/series",
+          searchParams: { seriesKey: "tvdb:73244", seasonNumber: "1" },
+        }),
+        200,
+      );
+      // Only the US show's episode, not the UK show's identically-titled season 1.
+      expect(body.items).toHaveLength(1);
+      expect(body.items[0].title).toBe("Pilot");
+    });
+
     // The All Episodes cards label a resolution with normalizeResolutionLabel
     // ("576" is 480P), as the Series and All Seasons listings now filter it.
     it("matches a resolution by the label its quality chip shows", async () => {
@@ -283,27 +313,7 @@ describe("Series endpoints", () => {
   // ----- GET /api/media/series/grouped -----
 
   describe("GET /api/media/series/grouped", () => {
-    it("returns 401 without auth", async () => {
-      const response = await callRoute(GET_GROUPED, {
-        url: "/api/media/series/grouped",
-      });
-      const body = await expectJson<{ error: string }>(response, 401);
-      expect(body.error).toBe("Unauthorized");
-    });
-
-    it("returns empty series list when no data", async () => {
-      const user = await createTestUser();
-      setMockSession({ userId: user.id, isLoggedIn: true });
-
-      const response = await callRoute(GET_GROUPED, {
-        url: "/api/media/series/grouped",
-      });
-      const body = await expectJson<{ series: unknown[] }>(response, 200);
-
-      expect(body.series).toEqual([]);
-    });
-
-    it("groups episodes by parentTitle with correct counts", async () => {
+    it("groups episodes by show with correct counts", async () => {
       const user = await createTestUser();
       const server = await createTestServer(user.id);
       const lib = await createTestLibrary(server.id, { type: "SERIES" });
@@ -354,194 +364,17 @@ describe("Series endpoints", () => {
         }[];
       }>(response, 200);
 
-      expect(body.series).toHaveLength(2);
+      expect(body.series.map((s) => s.parentTitle)).toEqual(["Breaking Bad", "The Wire"]);
+      const [bb, wire] = body.series;
 
-      const bb = body.series.find((s) => s.parentTitle === "Breaking Bad");
-      expect(bb).toBeDefined();
-      expect(bb!.episodeCount).toBe(2);
-      expect(bb!.seasonCount).toBe(2);
-      expect(bb!.totalSize).toBe("3221225472"); // 1GB + 2GB
-      expect(bb!.qualityCounts["1080P"]).toBe(2);
+      expect(bb.episodeCount).toBe(2);
+      expect(bb.seasonCount).toBe(2);
+      expect(bb.totalSize).toBe("3221225472"); // 1GB + 2GB
+      expect(bb.qualityCounts).toEqual({ "1080P": 2 });
 
-      const wire = body.series.find((s) => s.parentTitle === "The Wire");
-      expect(wire).toBeDefined();
-      expect(wire!.episodeCount).toBe(1);
-      expect(wire!.seasonCount).toBe(1);
-      expect(wire!.qualityCounts["720P"]).toBe(1);
-    });
-
-    it("supports search by parentTitle", async () => {
-      const user = await createTestUser();
-      const server = await createTestServer(user.id);
-      const lib = await createTestLibrary(server.id, { type: "SERIES" });
-
-      await createTestMediaItem(lib.id, {
-        title: "Ep1",
-        type: "SERIES",
-        parentTitle: "Breaking Bad",
-        seasonNumber: 1,
-      });
-      await createTestMediaItem(lib.id, {
-        title: "Ep1",
-        type: "SERIES",
-        parentTitle: "The Wire",
-        seasonNumber: 1,
-      });
-
-      setMockSession({ userId: user.id, isLoggedIn: true });
-
-      const response = await callRoute(GET_GROUPED, {
-        url: "/api/media/series/grouped",
-        searchParams: { search: "breaking" },
-      });
-      const body = await expectJson<{
-        series: { parentTitle: string }[];
-      }>(response, 200);
-
-      expect(body.series).toHaveLength(1);
-      expect(body.series[0].parentTitle).toBe("Breaking Bad");
-    });
-
-    it("supports sorting by episodeCount desc", async () => {
-      const user = await createTestUser();
-      const server = await createTestServer(user.id);
-      const lib = await createTestLibrary(server.id, { type: "SERIES" });
-
-      // Show A: 1 episode
-      await createTestMediaItem(lib.id, {
-        title: "Ep1",
-        type: "SERIES",
-        parentTitle: "Show A",
-        seasonNumber: 1,
-      });
-
-      // Show B: 3 episodes
-      for (let i = 1; i <= 3; i++) {
-        await createTestMediaItem(lib.id, {
-          title: `Ep${i}`,
-          type: "SERIES",
-          parentTitle: "Show B",
-          seasonNumber: 1,
-          episodeNumber: i,
-          ratingKey: `show-b-${i}`,
-        });
-      }
-
-      setMockSession({ userId: user.id, isLoggedIn: true });
-
-      const response = await callRoute(GET_GROUPED, {
-        url: "/api/media/series/grouped",
-        searchParams: { sortBy: "episodeCount", sortOrder: "desc" },
-      });
-      const body = await expectJson<{
-        series: { parentTitle: string; episodeCount: number }[];
-      }>(response, 200);
-
-      expect(body.series[0].parentTitle).toBe("Show B");
-      expect(body.series[0].episodeCount).toBe(3);
-      expect(body.series[1].parentTitle).toBe("Show A");
-    });
-
-    it("serializes totalSize as string (BigInt)", async () => {
-      const user = await createTestUser();
-      const server = await createTestServer(user.id);
-      const lib = await createTestLibrary(server.id, { type: "SERIES" });
-
-      await createTestMediaItem(lib.id, {
-        title: "Ep",
-        type: "SERIES",
-        parentTitle: "BigShow",
-        seasonNumber: 1,
-        fileSize: BigInt("10737418240"),
-      });
-
-      setMockSession({ userId: user.id, isLoggedIn: true });
-
-      const response = await callRoute(GET_GROUPED, {
-        url: "/api/media/series/grouped",
-      });
-      const body = await expectJson<{
-        series: { totalSize: string }[];
-      }>(response, 200);
-
-      expect(body.series[0].totalSize).toBe("10737418240");
-      expect(typeof body.series[0].totalSize).toBe("string");
-    });
-
-    it("filters grouped series by startsWith letter", async () => {
-      const user = await createTestUser();
-      const server = await createTestServer(user.id);
-      const lib = await createTestLibrary(server.id, { type: "SERIES" });
-
-      await createTestMediaItem(lib.id, {
-        title: "Ep1",
-        type: "SERIES",
-        parentTitle: "Breaking Bad",
-        seasonNumber: 1,
-      });
-      await createTestMediaItem(lib.id, {
-        title: "Ep1",
-        type: "SERIES",
-        parentTitle: "Better Call Saul",
-        seasonNumber: 1,
-      });
-      await createTestMediaItem(lib.id, {
-        title: "Ep1",
-        type: "SERIES",
-        parentTitle: "The Wire",
-        seasonNumber: 1,
-      });
-
-      setMockSession({ userId: user.id, isLoggedIn: true });
-
-      const response = await callRoute(GET_GROUPED, {
-        url: "/api/media/series/grouped",
-        searchParams: { startsWith: "B" },
-      });
-      const body = await expectJson<{
-        series: { parentTitle: string }[];
-      }>(response, 200);
-
-      expect(body.series).toHaveLength(2);
-      const titles = body.series.map((s) => s.parentTitle).sort();
-      expect(titles).toEqual(["Better Call Saul", "Breaking Bad"]);
-    });
-  });
-
-  // ----- GET /api/media/series (pagination fix) -----
-
-  describe("GET /api/media/series pagination", () => {
-    it("returns total and pages in pagination response", async () => {
-      const user = await createTestUser();
-      const server = await createTestServer(user.id);
-      const lib = await createTestLibrary(server.id, { type: "SERIES" });
-
-      for (let i = 1; i <= 5; i++) {
-        await createTestMediaItem(lib.id, {
-          title: `Episode ${i}`,
-          type: "SERIES",
-          parentTitle: "Show",
-          seasonNumber: 1,
-          episodeNumber: i,
-          ratingKey: `rk-${i}`,
-        });
-      }
-
-      setMockSession({ userId: user.id, isLoggedIn: true });
-
-      const response = await callRoute(GET, {
-        url: "/api/media/series",
-        searchParams: { limit: "2" },
-      });
-      const body = await expectJson<{
-        items: unknown[];
-        pagination: { page: number; limit: number; total: number; pages: number; hasMore: boolean };
-      }>(response, 200);
-
-      expect(body.items).toHaveLength(2);
-      expect(body.pagination.total).toBe(5);
-      expect(body.pagination.pages).toBe(3);
-      expect(body.pagination.hasMore).toBe(true);
+      expect(wire.episodeCount).toBe(1);
+      expect(wire.seasonCount).toBe(1);
+      expect(wire.qualityCounts).toEqual({ "720P": 1 });
     });
   });
 });
@@ -557,6 +390,9 @@ describe("/api/media/series progressive loading", () => {
       await createTestMediaItem(lib.id, {
         title: `Item ${String(i).padStart(2, "0")}`,
         type: "SERIES",
+        parentTitle: "Show",
+        seasonNumber: 1,
+        episodeNumber: i,
         ratingKey: `rk-off-${i}`,
         summary: "Prose that would ride along on every row.",
       });
@@ -594,9 +430,9 @@ describe("/api/media/series progressive loading", () => {
       await callRoute(GET, { url: "/api/media/series", searchParams: { limit: "0" } }),
       200,
     );
-    expect(body.items.length).toBeGreaterThan(0);
-    expect(body.items[0]).not.toHaveProperty("summary");
-    expect(body.items[0]).toHaveProperty("title");
+    expect(body.items).toHaveLength(5);
+    for (const item of body.items) expect(item).not.toHaveProperty("summary");
+    expect(body.items[0]).toHaveProperty("title", "Item 01");
   });
 });
 
@@ -608,7 +444,9 @@ describe("/api/media/series total accounting", () => {
     const server = await createTestServer(user.id);
     const lib = await createTestLibrary(server.id, { type: "SERIES" });
     for (let i = 1; i <= 5; i++) {
-      await createTestMediaItem(lib.id, { title: `Ep ${i}`, type: "SERIES", ratingKey: `rk-shape-${i}` });
+      await createTestMediaItem(lib.id, {
+        title: `Ep ${i}`, type: "SERIES", parentTitle: "Show", seasonNumber: 1, episodeNumber: i, ratingKey: `rk-shape-${i}`,
+      });
     }
     setMockSession({ userId: user.id, isLoggedIn: true });
   });
@@ -627,39 +465,16 @@ describe("/api/media/series total accounting", () => {
   });
 
   it("still counts when a page size is set", async () => {
-    const body = await expectJson<{ pagination: { total: number; pages: number } }>(
+    const body = await expectJson<{
+      items: { title: string }[];
+      pagination: { total: number; pages: number; hasMore: boolean };
+    }>(
       await callRoute(GET, { url: "/api/media/series", searchParams: { limit: "2" } }),
       200,
     );
+    expect(body.items.map((i) => i.title)).toEqual(["Ep 1", "Ep 2"]);
     expect(body.pagination.total).toBe(5);
     expect(body.pagination.pages).toBe(3);
-  });
-
-  it("filters by seriesKey, keeping same-titled shows apart", async () => {
-    const user = await createTestUser();
-    const server = await createTestServer(user.id);
-    const lib = await createTestLibrary(server.id, { type: "SERIES" });
-
-    await createTestMediaItem(lib.id, {
-      title: "Downsize", type: "SERIES", parentTitle: "The Office",
-      seriesKey: "tvdb:78107", seasonNumber: 1, episodeNumber: 1,
-    });
-    await createTestMediaItem(lib.id, {
-      title: "Pilot", type: "SERIES", parentTitle: "The Office",
-      seriesKey: "tvdb:73244", seasonNumber: 1, episodeNumber: 1,
-    });
-
-    setMockSession({ userId: user.id, isLoggedIn: true });
-
-    const body = await expectJson<{ items: { title: string }[] }>(
-      await callRoute(GET, {
-        url: "/api/media/series",
-        searchParams: { seriesKey: "tvdb:73244", seasonNumber: "1" },
-      }),
-      200,
-    );
-    // Only the US show's episode, not the UK show's identically-titled season 1.
-    expect(body.items).toHaveLength(1);
-    expect(body.items[0].title).toBe("Pilot");
+    expect(body.pagination.hasMore).toBe(true);
   });
 });

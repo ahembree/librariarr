@@ -31,11 +31,11 @@ vi.mock("@/lib/plex/auth", () => ({
   PLEX_VERSION: "0.1.0",
 }));
 
-// Mock rate limiter
+// Mock rate limiter: the route only starts a flow, so it is charged on every
+// call (see `checkAuthRateLimit`). The real limiter's state would persist.
+const mockCheckAuthRateLimit = vi.hoisted(() => vi.fn((): Response | null => null));
 vi.mock("@/lib/rate-limit/rate-limiter", () => ({
-  checkAuthRateLimit: () => null,
-  authRateLimiter: { check: () => ({ limited: false }) },
-  getClientIp: () => "127.0.0.1",
+  checkAuthRateLimit: mockCheckAuthRateLimit,
 }));
 
 // Import route handler AFTER mocks
@@ -45,7 +45,9 @@ describe("POST /api/auth/plex/init", () => {
   beforeEach(async () => {
     await cleanDatabase();
     clearMockSession();
-    vi.clearAllMocks();
+    // mockReset: a `mockResolvedValue` set by one test must not answer the next.
+    for (const mock of [mockCreatePlexPin, mockGetPlexAuthUrl, mockGetPlexClientId]) mock.mockReset();
+    mockCheckAuthRateLimit.mockReset().mockReturnValue(null);
   });
 
   afterAll(async () => {
@@ -53,15 +55,21 @@ describe("POST /api/auth/plex/init", () => {
   });
 
   it("should return pin data, auth URL, and client credentials on success", async () => {
-    const expiresAt = new Date(Date.now() + 300000).toISOString();
+    const expiresAt = new Date(Date.now() + 1800000).toISOString();
+    // The shape plex.tv answers `POST /api/v2/pins` (strong) with.
     mockCreatePlexPin.mockResolvedValue({
-      id: 12345,
+      id: 1854039224,
       code: "test-code-abc",
+      product: "Librariarr",
+      clientIdentifier: "test-client-id",
+      expiresIn: 1800,
+      createdAt: new Date().toISOString(),
       expiresAt,
+      authToken: null,
     });
     mockGetPlexClientId.mockResolvedValue("test-client-id");
     mockGetPlexAuthUrl.mockResolvedValue(
-      "https://app.plex.tv/auth#?clientID=test&code=test-code-abc"
+      "https://app.plex.tv/auth#?clientID=test-client-id&code=test-code-abc"
     );
 
     const response = await callRoute(POST, {
@@ -79,17 +87,37 @@ describe("POST /api/auth/plex/init", () => {
       expiresAt: string;
     }>(response, 200);
 
-    expect(body.pinId).toBe(12345);
-    expect(body.code).toBe("test-code-abc");
-    expect(body.clientId).toBe("test-client-id");
-    expect(body.product).toBe("Librariarr");
-    expect(body.version).toBe("0.1.0");
-    expect(body.authUrl).toBe(
-      "https://app.plex.tv/auth#?clientID=test&code=test-code-abc"
-    );
-    expect(body.expiresAt).toBe(expiresAt);
+    expect(body).toEqual({
+      pinId: 1854039224,
+      code: "test-code-abc",
+      clientId: "test-client-id",
+      product: "Librariarr",
+      version: "0.1.0",
+      authUrl: "https://app.plex.tv/auth#?clientID=test-client-id&code=test-code-abc",
+      expiresAt,
+    });
     expect(mockCreatePlexPin).toHaveBeenCalledOnce();
     expect(mockGetPlexAuthUrl).toHaveBeenCalledWith("test-code-abc");
+    expect(mockCheckAuthRateLimit).toHaveBeenCalledWith(expect.anything(), "plex-init");
+  });
+
+  it("returns the limiter's 429 without asking plex.tv for a PIN", async () => {
+    mockCheckAuthRateLimit.mockReturnValue(
+      Response.json(
+        { error: "Too many attempts. Try again later." },
+        { status: 429, headers: { "Retry-After": "60" } },
+      ),
+    );
+
+    const response = await callRoute(POST, {
+      url: "/api/auth/plex/init",
+      method: "POST",
+    });
+
+    const body = await expectJson<{ error: string }>(response, 429);
+    expect(body.error).toBe("Too many attempts. Try again later.");
+    expect(response.headers.get("Retry-After")).toBe("60");
+    expect(mockCreatePlexPin).not.toHaveBeenCalled();
   });
 
   it("should return 500 when createPlexPin throws", async () => {
@@ -107,9 +135,14 @@ describe("POST /api/auth/plex/init", () => {
 
   it("should return 500 when getPlexAuthUrl throws", async () => {
     mockCreatePlexPin.mockResolvedValue({
-      id: 99999,
+      id: 1854039225,
       code: "some-code",
-      expiresAt: new Date().toISOString(),
+      product: "Librariarr",
+      clientIdentifier: "test-client-id",
+      expiresIn: 1800,
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 1800000).toISOString(),
+      authToken: null,
     });
     mockGetPlexClientId.mockResolvedValue("test-client-id");
     mockGetPlexAuthUrl.mockRejectedValue(new Error("Missing client identifier"));
@@ -122,23 +155,5 @@ describe("POST /api/auth/plex/init", () => {
     const body = await expectJson<{ error: string }>(response, 500);
 
     expect(body.error).toBe("Failed to initialize Plex authentication");
-  });
-
-  it("should pass the pin code to getPlexAuthUrl", async () => {
-    const pinCode = "unique-pin-code-xyz";
-    mockCreatePlexPin.mockResolvedValue({
-      id: 11111,
-      code: pinCode,
-      expiresAt: new Date().toISOString(),
-    });
-    mockGetPlexClientId.mockResolvedValue("test-client-id");
-    mockGetPlexAuthUrl.mockResolvedValue("https://app.plex.tv/auth#?code=" + pinCode);
-
-    await callRoute(POST, {
-      url: "/api/auth/plex/init",
-      method: "POST",
-    });
-
-    expect(mockGetPlexAuthUrl).toHaveBeenCalledWith(pinCode);
   });
 });

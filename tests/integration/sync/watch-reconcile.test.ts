@@ -77,10 +77,11 @@ async function addTracearrPlay(
   });
 }
 
-async function setup() {
+/** One server with one library; the items created in it default to movies. */
+async function setup(type: "MOVIE" | "SERIES" = "MOVIE") {
   const user = await createTestUser();
   const server = await createTestServer(user.id, { name: "Plex" });
-  const library = await createTestLibrary(server.id, { type: "SERIES" });
+  const library = await createTestLibrary(server.id, { type });
   return { user, server, library };
 }
 
@@ -95,7 +96,7 @@ describe("watch-reconcile", () => {
 
   describe("reconcileWatchStateFromHistory", () => {
     it("moves lastPlayedAt forward when another user's play is newer than the admin's", async () => {
-      const { server, library } = await setup();
+      const { server, library } = await setup("SERIES");
       // The admin's own metadata says "watched 2 years ago" — that is what the
       // item sync writes, because Plex viewCount/lastViewedAt is per-account.
       const episode = await createTestMediaItem(library.id, {
@@ -114,8 +115,8 @@ describe("watch-reconcile", () => {
 
       const after = await prisma.mediaItem.findUniqueOrThrow({ where: { id: episode.id } });
       expect(after.lastPlayedAt?.getTime()).toBe(daysAgo(60).getTime());
-      // Two known plays: the admin's (counted in playCount) is not in the
-      // server's retained history, so the greater of the two wins.
+      // The admin's play (already in playCount) is not in the server's retained
+      // history, so the count stays the greater of the two: 1, not 1 + 1.
       expect(after.playCount).toBe(1);
     });
 
@@ -177,7 +178,7 @@ describe("watch-reconcile", () => {
     it("only touches the given server's items", async () => {
       const { user, server, library } = await setup();
       const otherServer = await createTestServer(user.id, { name: "Other" });
-      const otherLibrary = await createTestLibrary(otherServer.id, { type: "SERIES" });
+      const otherLibrary = await createTestLibrary(otherServer.id, { type: "MOVIE" });
 
       const mine = await createTestMediaItem(library.id, { playCount: 0 });
       const theirs = await createTestMediaItem(otherLibrary.id, { playCount: 0 });
@@ -187,8 +188,11 @@ describe("watch-reconcile", () => {
       const updated = await reconcileWatchStateFromHistory(server.id);
       expect(updated).toBe(1);
 
+      const touched = await prisma.mediaItem.findUniqueOrThrow({ where: { id: mine.id } });
+      expect(touched.lastPlayedAt?.getTime()).toBe(daysAgo(3).getTime());
       const untouched = await prisma.mediaItem.findUniqueOrThrow({ where: { id: theirs.id } });
       expect(untouched.lastPlayedAt).toBeNull();
+      expect(untouched.playCount).toBe(0);
     });
   });
 
@@ -257,7 +261,7 @@ describe("watch-reconcile", () => {
     it("does not leak another server's plays for the same ratingKey", async () => {
       const { user, server, library } = await setup();
       const otherServer = await createTestServer(user.id, { name: "Other" });
-      const otherLibrary = await createTestLibrary(otherServer.id, { type: "SERIES" });
+      const otherLibrary = await createTestLibrary(otherServer.id, { type: "MOVIE" });
       const mine = await createTestMediaItem(library.id, { ratingKey: "shared-rk" });
       const theirs = await createTestMediaItem(otherLibrary.id, { ratingKey: "shared-rk" });
 

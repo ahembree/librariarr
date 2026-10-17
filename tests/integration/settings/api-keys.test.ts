@@ -27,13 +27,31 @@ vi.mock("@/lib/discord/client", async (importOriginal) => ({
   sendDiscordNotification: mockSendDiscord,
 }));
 
+// The routes fire the notification without awaiting it; the real function,
+// with each call's promise kept so a test can wait for it to finish.
+const { pendingNotifications } = vi.hoisted(() => ({ pendingNotifications: [] as Promise<void>[] }));
+vi.mock("@/lib/api-keys/notify", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/api-keys/notify")>();
+  return {
+    notifyApiKeyChange: (...args: Parameters<typeof actual.notifyApiKeyChange>) => {
+      const sent = actual.notifyApiKeyChange(...args);
+      pendingNotifications.push(sent);
+      return sent;
+    },
+  };
+});
+
 import { GET, POST } from "@/app/api/settings/api-keys/route";
 import { DELETE } from "@/app/api/settings/api-keys/[id]/route";
 import { GET as meGET } from "@/app/api/v1/me/route";
 import { API_KEY_PATTERN, verifyApiKey } from "@/lib/api-keys/keys";
 import { MAX_API_KEYS } from "@/lib/api-keys/manage";
 import { RECENT_LOGIN_WINDOW_MS } from "@/lib/auth/recent-login";
-import { authGlobalRateLimiter, authRateLimiter } from "@/lib/rate-limit/rate-limiter";
+import {
+  _resetKnownAddressesForTesting,
+  authGlobalRateLimiter,
+  authRateLimiter,
+} from "@/lib/rate-limit/rate-limiter";
 import { READ_ONLY_SCOPES } from "@/lib/api-keys/scopes";
 
 const prisma = getTestPrisma();
@@ -77,6 +95,7 @@ describe("/api/settings/api-keys", () => {
     await cleanDatabase();
     clearMockSession();
     vi.clearAllMocks();
+    pendingNotifications.length = 0;
   });
 
   afterAll(async () => {
@@ -102,13 +121,25 @@ describe("/api/settings/api-keys", () => {
       const { key } = await createTestApiKey(user.id, {
         scopes: ["media:read", "sync:write", "lifecycle:execute", "streams:write"],
       });
-      const res = await callRoute(GET, { headers: { authorization: `Bearer ${key}` } });
-      await expectJson(res, 401);
+      const auth = { authorization: `Bearer ${key}` };
+      await expectJson(await callRoute(GET, { headers: auth }), 401);
+      await expectJson(
+        await callRoute(POST, {
+          url: "/api/settings/api-keys",
+          method: "POST",
+          headers: auth,
+          body: { name: "minted by a key", scopes: ["media:read"], expiresAt: null },
+        }),
+        401,
+      );
+      const { row } = await createTestApiKey(user.id, { name: "other" });
+      await expectJson(await callRouteWithParams(DELETE, { id: row.id }, { method: "DELETE", headers: auth }), 401);
+      expect(await prisma.apiKey.count()).toBe(2);
     });
   });
 
   describe("POST", () => {
-    it("returns the key exactly once and stores only its SHA-256", async () => {
+    it("returns the key exactly once and stores only a salted scrypt hash of it", async () => {
       const user = await login();
       const res = await create({ name: "Home Assistant", scopes: ["media:read"], expiresAt: inDays(30) });
       expect(res.headers.get("cache-control")).toBe("no-store");
@@ -186,22 +217,40 @@ describe("/api/settings/api-keys", () => {
       await login();
       const res = await create({ name: "Past", scopes: ["media:read"], expiresAt: inDays(-1) });
       const body = await expectJson<{ error: string }>(res, 400);
-      expect(body.error).toMatch(/future/);
+      expect(body.error).toBe("The expiration date must be in the future");
       expect(await prisma.apiKey.count()).toBe(0);
     });
 
+    const FORBIDDEN_NAME =
+      "name: Name cannot contain control characters, direction overrides or invisible characters";
     it.each([
-      ["an unknown scope", { name: "x", scopes: ["media:write"], expiresAt: null }],
-      ["no scopes", { name: "x", scopes: [], expiresAt: null }],
-      ["an empty name", { name: "   ", scopes: ["media:read"], expiresAt: null }],
-      ["a name over 64 characters", { name: "x".repeat(65), scopes: ["media:read"], expiresAt: null }],
-      ["a newline in the name", { name: "ok\nFAKE LOG LINE", scopes: ["media:read"], expiresAt: null }],
-      ["a right-to-left override in the name", { name: "Dash\u202Eboard", scopes: ["media:read"], expiresAt: null }],
-      ["a malformed expiry", { name: "x", scopes: ["media:read"], expiresAt: "next tuesday" }],
-      ["a missing expiry", { name: "x", scopes: ["media:read"] }],
-    ])("rejects %s", async (_label, payload) => {
+      ["an unknown scope", { name: "x", scopes: ["media:write"], expiresAt: null }, /^scopes\.0: /],
+      ["no scopes", { name: "x", scopes: [], expiresAt: null }, "scopes: Choose at least one scope"],
+      ["an empty name", { name: "   ", scopes: ["media:read"], expiresAt: null }, "name: Name is required"],
+      [
+        "a name over 64 characters",
+        { name: "x".repeat(65), scopes: ["media:read"], expiresAt: null },
+        "name: Name must be 64 characters or fewer",
+      ],
+      ["a newline in the name", { name: "ok\nFAKE LOG LINE", scopes: ["media:read"], expiresAt: null }, FORBIDDEN_NAME],
+      [
+        "a right-to-left override in the name",
+        { name: "Dash\u202Eboard", scopes: ["media:read"], expiresAt: null },
+        FORBIDDEN_NAME,
+      ],
+      [
+        "a malformed expiry",
+        { name: "x", scopes: ["media:read"], expiresAt: "next tuesday" },
+        "expiresAt: Expiration must be an ISO 8601 date-time",
+      ],
+      ["a missing expiry", { name: "x", scopes: ["media:read"] }, /^expiresAt: /],
+    ])("rejects %s", async (_label, payload, detail) => {
       await login();
-      await expectJson<{ error: string }>(await create(payload), 400);
+      const body = await expectJson<{ error: string; details: string[] }>(await create(payload), 400);
+      expect(body.error).toBe("Validation failed");
+      expect(body.details).toHaveLength(1);
+      if (typeof detail === "string") expect(body.details[0]).toBe(detail);
+      else expect(body.details[0]).toMatch(detail);
       expect(await prisma.apiKey.count()).toBe(0);
     });
 
@@ -221,7 +270,8 @@ describe("/api/settings/api-keys", () => {
         await create({ name: "Same", scopes: ["system:read"], expiresAt: null }),
         409,
       );
-      expect(body.error).toMatch(/already exists/);
+      expect(body.error).toBe("An API key with this name already exists");
+      expect(await prisma.apiKey.count()).toBe(1);
     });
 
     it("surfaces an unexpected database error instead of reporting a name clash", async () => {
@@ -243,7 +293,10 @@ describe("/api/settings/api-keys", () => {
         await create({ name: "one too many", scopes: ["media:read"], expiresAt: null }),
         400,
       );
-      expect(body.error).toMatch(String(MAX_API_KEYS));
+      expect(body.error).toBe(
+        `You can have at most ${MAX_API_KEYS} API keys. Delete one you no longer use first.`,
+      );
+      expect(await prisma.apiKey.count()).toBe(MAX_API_KEYS);
     });
 
     it("holds the cap when requests race for the last slots", async () => {
@@ -261,9 +314,10 @@ describe("/api/settings/api-keys", () => {
     it("lists keys newest first with last-use details", async () => {
       const user = await login();
       const older = await createTestApiKey(user.id, { name: "Older" });
+      const lastUsedAt = new Date(Date.now() - 5_000);
       await prisma.apiKey.update({
         where: { id: older.row.id },
-        data: { createdAt: new Date(Date.now() - 60_000), lastUsedAt: new Date(), lastUsedIp: "10.0.0.5" },
+        data: { createdAt: new Date(Date.now() - 60_000), lastUsedAt, lastUsedIp: "10.0.0.5" },
       });
       await createTestApiKey(user.id, { name: "Newer" });
 
@@ -272,7 +326,12 @@ describe("/api/settings/api-keys", () => {
       const body = await expectJson<{ apiKeys: ApiKeyDto[] }>(res, 200);
       expect(body.apiKeys.map((k) => k.name)).toEqual(["Newer", "Older"]);
       expect(body.apiKeys[1].lastUsedIp).toBe("10.0.0.5");
-      expect(body.apiKeys[1].lastUsedAt).not.toBeNull();
+      expect(body.apiKeys[1].lastUsedAt).toBe(lastUsedAt.toISOString());
+      expect(body.apiKeys[0].lastUsedAt).toBeNull();
+      // The public fields only — never the hash.
+      expect(Object.keys(body.apiKeys[0]).sort()).toEqual(
+        ["createdAt", "expiresAt", "id", "lastUsedAt", "lastUsedIp", "name", "prefix", "scopes"],
+      );
     });
 
     it("returns an empty list when there are no keys", async () => {
@@ -301,7 +360,11 @@ describe("/api/settings/api-keys", () => {
       const user = await login();
       const { row } = await createTestApiKey(user.id);
       await expectJson(await callRouteWithParams(DELETE, { id: row.id }, { method: "DELETE" }), 200);
-      await expectJson(await callRouteWithParams(DELETE, { id: row.id }, { method: "DELETE" }), 404);
+      const again = await expectJson<{ error: string }>(
+        await callRouteWithParams(DELETE, { id: row.id }, { method: "DELETE" }),
+        404,
+      );
+      expect(again.error).toBe("API key not found");
       await expectJson(await callRouteWithParams(DELETE, { id: "nope" }, { method: "DELETE" }), 404);
     });
 
@@ -323,6 +386,7 @@ describe("/api/settings/api-keys", () => {
       const kept = await createTestApiKey(user.id, { name: "kept" });
       await expectJson(await callRouteWithParams(DELETE, { id: doomed.row.id }, { method: "DELETE" }), 200);
       await expectJson(await callMe(kept.key), 200);
+      expect((await prisma.apiKey.findMany({ select: { name: true } })).map((k) => k.name)).toEqual(["kept"]);
     });
   });
 
@@ -335,6 +399,8 @@ describe("/api/settings/api-keys", () => {
 
     afterEach(() => {
       for (const store of stores()) store.clear();
+      // A right password remembers the address, exempting it from the floor.
+      _resetKnownAddressesForTesting();
     });
 
     /** A password and password sign-in on, unless `settings` say otherwise. */
@@ -377,7 +443,10 @@ describe("/api/settings/api-keys", () => {
       }
       const limited = await create(body({ currentPassword: PASSWORD }));
       expect(limited.status).toBe(429);
-      expect(limited.headers.get("retry-after")).toBeTruthy();
+      // Seconds left in the 15-minute window the first wrong password opened.
+      const retryAfter = Number(limited.headers.get("retry-after"));
+      expect(retryAfter).toBeGreaterThan(0);
+      expect(retryAfter).toBeLessThanOrEqual(15 * 60);
       expect(await prisma.apiKey.count()).toBe(0);
     });
 
@@ -442,21 +511,27 @@ describe("/api/settings/api-keys", () => {
       for (let i = 0; i < 12; i++) {
         await expectJson(await create(body({ name: `k${i}`, currentPassword: PASSWORD })), 201);
       }
+      // …and the ten guesses are all still there afterwards.
+      for (let i = 0; i < 10; i++) {
+        await expectJson(await create(body({ name: "wrong", currentPassword: "nope" })), 403);
+      }
+      expect((await create(body({ name: "late", currentPassword: PASSWORD }))).status).toBe(429);
     });
 
     it("an account without a password needs a login from the last window", async () => {
-      await login(Date.now() - RECENT_LOGIN_WINDOW_MS - 1000);
+      const user = await login(Date.now() - RECENT_LOGIN_WINDOW_MS - 1000);
       const stale = await expectJson<{ code: string; error: string }>(await create(body()), 403);
       expect(stale.code).toBe("reauth_required");
       expect(stale.error).toMatch(/confirm it's you/i);
       expect(await prisma.apiKey.count()).toBe(0);
 
       // A session with no login stamp at all (one from before the stamp existed).
-      const unstamped = await createTestUser();
-      setMockSession({ isLoggedIn: true, userId: unstamped.id});
-      expect((await create(body())).status).toBe(403);
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const unstampedRefusal = await expectJson<{ code: string }>(await create(body()), 403);
+      expect(unstampedRefusal.code).toBe("reauth_required");
+      expect(await prisma.apiKey.count()).toBe(0);
 
-      await login(Date.now() - 1000);
+      setMockSession({ isLoggedIn: true, userId: user.id, authenticatedAt: Date.now() - 1000 });
       await expectJson(await create(body()), 201);
     });
 
@@ -564,11 +639,16 @@ describe("/api/settings/api-keys", () => {
     });
 
     it("stays quiet when the toggle is off, or no webhook is set", async () => {
-      await loginWithWebhook(false);
+      const user = await loginWithWebhook(false);
       await expectJson(await create({ name: "quiet", scopes: ["media:read"], expiresAt: null }), 201);
-      await login();
+      // Let the first notification read the settings before they change.
+      expect(pendingNotifications).toHaveLength(1);
+      await pendingNotifications[0];
+      await prisma.appSettings.delete({ where: { userId: user.id } });
       await expectJson(await create({ name: "no webhook", scopes: ["media:read"], expiresAt: null }), 201);
-      await new Promise((r) => setTimeout(r, 50));
+      // Both notifications ran to the end without sending anything.
+      expect(pendingNotifications).toHaveLength(2);
+      await Promise.all(pendingNotifications);
       expect(mockSendDiscord).not.toHaveBeenCalled();
     });
 

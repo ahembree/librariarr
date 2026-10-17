@@ -21,19 +21,23 @@ describe("IntegrationError", () => {
     const err = makeAxiosError({
       code: "ECONNREFUSED",
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      config: { url: "/api/v3/movie" } as any,
+      config: { url: "/api/v3/movie", method: "get" } as any,
     });
     const ie = new IntegrationError("Radarr", err);
     expect(ie.message).toBe("Radarr unreachable (/api/v3/movie): ECONNREFUSED");
     expect(ie.status).toBeNull();
     expect(ie.code).toBe("ECONNREFUSED");
     expect(ie.service).toBe("Radarr");
+    expect(ie.url).toBe("/api/v3/movie");
+    expect(ie.method).toBe("GET");
   });
 
   it("falls back to ERR when no code is present", () => {
     const err = makeAxiosError({ message: "boom" });
     const ie = new IntegrationError("Sonarr", err);
     expect(ie.message).toBe("Sonarr unreachable: ERR");
+    expect(ie.code).toBe("ERR");
+    expect(ie.method).toBeNull();
   });
 
   it("formats HTTP errors with status and url", () => {
@@ -54,8 +58,7 @@ describe("IntegrationError", () => {
       response: { status: 400, data: { message: "Movie not found" } } as any,
     });
     const ie = new IntegrationError("Radarr", err);
-    expect(ie.message).toContain("HTTP 400");
-    expect(ie.message).toContain("Movie not found");
+    expect(ie.message).toBe("Radarr HTTP 400: Movie not found");
     expect(ie.detail).toBe("Movie not found");
   });
 
@@ -76,7 +79,9 @@ describe("IntegrationError", () => {
       "'Movie Title' must not be empty.",
     ]);
     expect(ie.detail).toBe("This exclusion has already been added.; 'Movie Title' must not be empty.");
-    expect(ie.message).toContain("This exclusion has already been added.");
+    expect(ie.message).toBe(
+      "Radarr HTTP 400: This exclusion has already been added.; 'Movie Title' must not be empty.",
+    );
   });
 
   it("includes detail from JSON body's `error` field", () => {
@@ -86,6 +91,49 @@ describe("IntegrationError", () => {
     });
     const ie = new IntegrationError("Sonarr", err);
     expect(ie.detail).toBe("Invalid API key");
+  });
+
+  // OpenAI-compatible servers and Anthropic put the reason one level down.
+  it.each([
+    [
+      "OpenAI",
+      { error: { message: "Incorrect API key provided: sk-****1234.", type: "invalid_request_error", param: null, code: "invalid_api_key" } },
+      "Incorrect API key provided: sk-****1234.",
+    ],
+    ["Anthropic", { type: "error", error: { type: "authentication_error", message: "invalid x-api-key" } }, "invalid x-api-key"],
+  ])("includes the detail %s nests under `error.message`", (_name, data, expected) => {
+    const err = makeAxiosError({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      config: { url: "/chat/completions" } as any,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      response: { status: 401, data } as any,
+    });
+    const ie = new IntegrationError("AI", err);
+    expect(ie.detail).toBe(expected);
+    expect(ie.message).toBe(`AI HTTP 401: ${expected} (/chat/completions)`);
+  });
+
+  it("prefers a top-level message, and ignores a nested error with no usable message", () => {
+    const both = makeAxiosError({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      response: { status: 400, data: { message: "top", error: { message: "nested" } } } as any,
+    });
+    expect(new IntegrationError("Seerr", both).detail).toBe("top");
+    for (const error of [{ type: "x" }, { message: 42 }, { message: "  " }, null]) {
+      const err = makeAxiosError({
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        response: { status: 500, data: { error } } as any,
+      });
+      expect(new IntegrationError("AI", err).detail).toBeNull();
+    }
+  });
+
+  it("truncates a long nested message to 200 characters", () => {
+    const err = makeAxiosError({
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      response: { status: 400, data: { error: { message: "y".repeat(500) } } } as any,
+    });
+    expect(new IntegrationError("AI", err).detail).toHaveLength(200);
   });
 
   it("includes short text bodies as detail", () => {
@@ -115,7 +163,7 @@ describe("IntegrationError", () => {
       response: { status: 400, data: { message: longMsg } } as any,
     });
     const ie = new IntegrationError("Radarr", err);
-    expect(ie.detail!.length).toBe(200);
+    expect(ie.detail).toBe("x".repeat(200));
   });
 
   it("preserves the original AxiosError as `cause`", () => {

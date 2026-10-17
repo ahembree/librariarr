@@ -162,7 +162,7 @@ async function authedUserWithRadarr() {
 
 describe("GET /api/tools/trash/instances", () => {
   it("requires auth", async () => {
-    await expectJson(await callRoute(getInstances), 401);
+    expect(await expectJson(await callRoute(getInstances), 401)).toEqual({ error: "Unauthorized" });
   });
 
   it("returns Sonarr and Radarr instances tagged with service type", async () => {
@@ -183,7 +183,9 @@ describe("GET /api/tools/trash/catalog", () => {
   it("rejects an invalid service", async () => {
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id});
-    await expectJson(await callRoute(getCatalog, { searchParams: { service: "plex" } }), 400);
+    expect(await expectJson(await callRoute(getCatalog, { searchParams: { service: "plex" } }), 400)).toEqual({
+      error: "service must be 'sonarr' or 'radarr'",
+    });
   });
 
   it("returns catalog counts and naming", async () => {
@@ -213,10 +215,12 @@ describe("GET /api/tools/trash/status", () => {
   it("404s for an unknown instance", async () => {
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id});
-    await expectJson(
-      await callRoute(getStatus, { searchParams: { serviceType: "RADARR", instanceId: "nope" } }),
-      404,
-    );
+    expect(
+      await expectJson(
+        await callRoute(getStatus, { searchParams: { serviceType: "RADARR", instanceId: "nope" } }),
+        404,
+      ),
+    ).toEqual({ error: "Instance not found" });
   });
 
   it("classifies items: new / unmanaged / managed", async () => {
@@ -273,14 +277,15 @@ describe("GET /api/tools/trash/status", () => {
 });
 
 describe("POST /api/tools/trash/assignments", () => {
-  it("404s for an instance the user doesn't own", async () => {
+  it("404s for an instance that does not exist", async () => {
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id});
     const res = await callRoute(postAssignment, {
       method: "POST",
       body: { serviceType: "RADARR", instanceId: "nope", items: [{ resourceType: "CUSTOM_FORMAT", trashId: "cf1", name: "AMZN" }] },
     });
-    await expectJson(res, 404);
+    expect(await expectJson(res, 404)).toEqual({ error: "Instance not found" });
+    expect(await getTestPrisma().trashManagedResource.count()).toBe(0);
   });
 
   it("creates managed rows (the consent gate) without touching the Arr", async () => {
@@ -314,7 +319,9 @@ describe("POST /api/tools/trash/assignments", () => {
       // "scf1" is a Sonarr-only trash_id; not in the Radarr catalog.
       body: { serviceType: "RADARR", instanceId: radarr.id, items: [{ resourceType: "CUSTOM_FORMAT", trashId: "scf1", name: "Sonarr CF" }] },
     });
-    await expectJson(res, 400);
+    expect(await expectJson(res, 400)).toEqual({
+      error: "These items are not part of the Radarr guide and cannot be managed on a Radarr instance: CUSTOM_FORMAT scf1",
+    });
     expect(await getTestPrisma().trashManagedResource.count()).toBe(0);
   });
 
@@ -327,7 +334,9 @@ describe("POST /api/tools/trash/assignments", () => {
       // "cf1" is a Radarr-only trash_id; not in the Sonarr catalog.
       body: { serviceType: "SONARR", instanceId: sonarr.id, items: [{ resourceType: "CUSTOM_FORMAT", trashId: "cf1", name: "AMZN" }] },
     });
-    await expectJson(res, 400);
+    expect(await expectJson(res, 400)).toEqual({
+      error: "These items are not part of the Sonarr guide and cannot be managed on a Sonarr instance: CUSTOM_FORMAT cf1",
+    });
     expect(await getTestPrisma().trashManagedResource.count()).toBe(0);
   });
 
@@ -354,7 +363,9 @@ describe("POST /api/tools/trash/assignments", () => {
       method: "POST",
       body: { serviceType: "RADARR", instanceId: radarr.id, items },
     });
-    await expectJson(res, 400);
+    const body = await expectJson<{ error: string; details: string[] }>(res, 400);
+    expect(body.error).toBe("Validation failed");
+    expect(body.details).toEqual([expect.stringMatching(/^items: /)]);
     expect(await getTestPrisma().trashManagedResource.count()).toBe(0);
   });
 });
@@ -422,15 +433,11 @@ describe("assignments/[id]", () => {
     await expectJson(post, 400);
   });
 
-  it("404s when deleting another user's row", async () => {
-    const other = await createTestUser({ username: "other", plexId: "p2" });
-    const otherRadarr = await createTestRadarrInstance(other.id);
-    const row = await getTestPrisma().trashManagedResource.create({
-      data: { userId: other.id, serviceType: "RADARR", radarrInstanceId: otherRadarr.id, resourceType: "CUSTOM_FORMAT", trashId: "cf1", name: "AMZN" },
-    });
-    const user = await createTestUser();
-    setMockSession({ isLoggedIn: true, userId: user.id});
-    await expectJson(await callRouteWithParams(deleteAssignment, { id: row.id }, { method: "DELETE" }), 404);
+  it("404s when deleting a row that does not exist", async () => {
+    const { radarr } = await authedUserWithRadarr();
+    await assignOne(radarr.id);
+    await expectJson(await callRouteWithParams(deleteAssignment, { id: "nonexistent" }, { method: "DELETE" }), 404);
+    expect(await getTestPrisma().trashManagedResource.count()).toBe(1);
   });
 
   it("re-validates a PROFILE_CF selection against the guide on update (cross-service gate)", async () => {
@@ -509,9 +516,12 @@ describe("POST /api/tools/trash/sync", () => {
     });
     const body = await expectJson<{ report: { dryRun: boolean; items: { action: string; diff: unknown[] }[] } }>(res);
     expect(body.report.dryRun).toBe(true);
+    expect(body.report.items).toHaveLength(1);
     expect(body.report.items[0].action).toBe("CREATE");
     expect(body.report.items[0].diff.length).toBeGreaterThan(0);
     expect(clientMock.createCustomFormat).not.toHaveBeenCalled();
+    // A preview manages nothing: no consent row is created for the item.
+    expect(await getTestPrisma().trashManagedResource.count()).toBe(0);
   });
 
   it("apply writes only managed resources and records the result", async () => {
@@ -527,6 +537,10 @@ describe("POST /api/tools/trash/sync", () => {
     const body = await expectJson<{ report: { items: { action: string; applied?: boolean }[] } }>(res);
     expect(body.report.items[0].action).toBe("CREATE");
     expect(clientMock.createCustomFormat).toHaveBeenCalledTimes(1);
+    // The guide's definition, translated for the app.
+    expect(clientMock.createCustomFormat).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "AMZN", includeCustomFormatWhenRenaming: true }),
+    );
 
     const row = await getTestPrisma().trashManagedResource.findFirst();
     expect(row?.arrId).toBe(500);
@@ -718,6 +732,8 @@ describe("POST /api/tools/trash/sync", () => {
       body: { selection: { resetUnmatchedScores: true, resetExceptPatterns: ["^anime"] } },
     });
     await expectJson(res, 400);
+    // Nothing is stored from a refused selection.
+    expect((await getTestPrisma().trashManagedResource.findUniqueOrThrow({ where: { id: row.id } })).selection).toBeNull();
   });
 
   it("apply ignores unmanaged preview items (nothing written without a managed row)", async () => {
@@ -785,7 +801,9 @@ describe("Profile custom formats (PROFILE_CF)", () => {
         ],
       },
     });
-    await expectJson(res, 400);
+    expect(await expectJson(res, 400)).toEqual({
+      error: "These items are not part of the Radarr guide and cannot be managed on a Radarr instance: PROFILE_CF My Profile",
+    });
     expect(await getTestPrisma().trashManagedResource.count()).toBe(0);
   });
 

@@ -114,7 +114,9 @@ describe("copyRank", () => {
 });
 
 describe("track-scope music", () => {
-  const track = (id: string, dedupKey: string | null) => ({ ...withIds(id, "MUSICBRAINZ", "artist-1"), dedupKey });
+  // Every track stores its ARTIST's MusicBrainz id (Massive Attack's here).
+  const ARTIST_MBID = "10adbe5e-a2c0-4bf3-8249-2b4cbf6e6ca8";
+  const track = (id: string, dedupKey: string | null) => ({ ...withIds(id, "MUSICBRAINZ", ARTIST_MBID), dedupKey });
 
   it("folds an artist's tracks only for an artist-level action", () => {
     const base = { type: "MUSIC" as const, trackScope: true, actionArmed: true };
@@ -128,21 +130,30 @@ describe("track-scope music", () => {
   });
 
   it("keys a track by its own identity, not its artist's id, for a track file delete", async () => {
+    // a1 and b1 are two servers' copies of one track; a2 is another track.
     const keys = await crossServerCopyKeys(
-      [track("a1", "music:x:one"), track("a2", "music:x:two"), track("b1", "music:x:one"), track("nokey", null)],
+      [
+        track("a1", "music:massive attack:teardrop"),
+        track("a2", "music:massive attack:angel"),
+        track("b1", "music:massive attack:teardrop"),
+        track("nokey", null),
+      ],
       { type: "MUSIC", serverCount: 2, actionArmed: true, trackScope: true, actionType: "DELETE_FILES_LIDARR" },
     );
-    expect(keys.get("a1")).toBe(keys.get("b1"));
-    expect(keys.get("a1")).not.toBe(keys.get("a2"));
-    expect(keys.has("nokey")).toBe(false);
+    expect(keys).toEqual(
+      new Map([
+        ["a1", `${ARTIST_MBID}:music:massive attack:teardrop`],
+        ["a2", `${ARTIST_MBID}:music:massive attack:angel`],
+        ["b1", `${ARTIST_MBID}:music:massive attack:teardrop`],
+      ]),
+    );
   });
 
   it("keys every track by its artist for an artist-level action, on one server too", async () => {
     const keys = await crossServerCopyKeys(
-      [track("a1", "music:x:one"), track("a2", "music:x:two")],
+      [track("a1", "music:massive attack:teardrop"), track("a2", "music:massive attack:angel")],
       { type: "MUSIC", serverCount: 1, actionArmed: true, trackScope: true, actionType: "DELETE_LIDARR" },
     );
-    expect(keys.get("a1")).toBe("artist-1");
-    expect(keys.get("a2")).toBe("artist-1");
+    expect(keys).toEqual(new Map([["a1", ARTIST_MBID], ["a2", ARTIST_MBID]]));
   });
 });

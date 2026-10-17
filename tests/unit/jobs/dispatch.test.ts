@@ -69,6 +69,43 @@ describe("dispatchScheduledJobs", () => {
     expect(appSettings.update).not.toHaveBeenCalled();
   });
 
+  it("evaluates each schedule against its own watermark and the configured time", async () => {
+    const lastSync = new Date("2026-03-01T03:00:00Z");
+    const lastDetection = new Date("2026-03-02T04:00:00Z");
+    const lastExecution = new Date("2026-03-03T05:00:00Z");
+    const lastBackup = new Date("2026-03-04T06:00:00Z");
+    isScheduleDue.mockReturnValue(false);
+    appSettings.findMany.mockResolvedValue([
+      settingsRow({
+        syncSchedule: "EVERY_6H",
+        lastScheduledSync: lastSync,
+        lifecycleDetectionSchedule: "DAILY",
+        lastScheduledLifecycleDetection: lastDetection,
+        lifecycleExecutionSchedule: "WEEKLY",
+        lastScheduledLifecycleExecution: lastExecution,
+        scheduledJobTime: "02:30",
+      }),
+    ]);
+    appSettings.findFirst.mockResolvedValue({
+      id: "settings-1",
+      backupSchedule: "EVERY_12H",
+      lastBackupAt: lastBackup,
+      scheduledJobTime: "02:30",
+    });
+
+    await dispatchScheduledJobs();
+
+    // One instant for the whole tick, so every schedule is judged at the same moment.
+    const now = isScheduleDue.mock.calls[0][2];
+    expect(now).toBeInstanceOf(Date);
+    expect(isScheduleDue.mock.calls).toEqual([
+      ["EVERY_6H", lastSync, now, "02:30"],
+      ["DAILY", lastDetection, now, "02:30"],
+      ["WEEKLY", lastExecution, now, "02:30"],
+      ["EVERY_12H", lastBackup, now, "02:30"],
+    ]);
+  });
+
   it("enqueues sync only for enabled servers and advances the timestamp", async () => {
     // First call (sync) true, the rest false.
     isScheduleDue
@@ -87,7 +124,7 @@ describe("dispatchScheduledJobs", () => {
     expect(enqueueJob).toHaveBeenCalledWith(
       TASK_SYNC_SERVER,
       { serverId: "server-1", trigger: "scheduled sync" },
-      expect.objectContaining({ jobKey: "sync:server-1", queueName: MAIN_QUEUE }),
+      { jobKey: "sync:server-1", queueName: MAIN_QUEUE, maxAttempts: 3 },
     );
   });
 
@@ -104,14 +141,20 @@ describe("dispatchScheduledJobs", () => {
     expect(enqueueJob).toHaveBeenCalledWith(
       TASK_LIFECYCLE_DETECTION,
       { userId: "user-1" },
-      expect.objectContaining({ jobKey: "detection:user-1", queueName: MAIN_QUEUE }),
+      { jobKey: "detection:user-1", queueName: MAIN_QUEUE, maxAttempts: 2 },
     );
     // Execution must not auto-retry destructive Arr actions.
     expect(enqueueJob).toHaveBeenCalledWith(
       TASK_LIFECYCLE_EXECUTION,
       { userId: "user-1" },
-      expect.objectContaining({ jobKey: "execution:user-1", queueName: MAIN_QUEUE, maxAttempts: 1 }),
+      { jobKey: "execution:user-1", queueName: MAIN_QUEUE, maxAttempts: 1 },
     );
+    expect(enqueueJob).toHaveBeenCalledTimes(2);
+    // Each watermark advances on its own, and the sync's (not due) does not.
+    expect(appSettings.update.mock.calls.map((c) => c[0])).toEqual([
+      { where: { id: "settings-1" }, data: { lastScheduledLifecycleDetection: expect.any(Date) } },
+      { where: { id: "settings-1" }, data: { lastScheduledLifecycleExecution: expect.any(Date) } },
+    ]);
   });
 
   it("enqueues a backup when the backup schedule is due", async () => {
@@ -139,12 +182,14 @@ describe("dispatchScheduledJobs", () => {
     expect(enqueueJob).toHaveBeenCalledWith(
       TASK_SCHEDULED_BACKUP,
       {},
-      expect.objectContaining({ jobKey: "scheduled-backup", queueName: MAIN_QUEUE }),
+      { jobKey: "scheduled-backup", queueName: MAIN_QUEUE, maxAttempts: 3 },
     );
   });
 
   it("does not enqueue a backup when the schedule is MANUAL", async () => {
-    isScheduleDue.mockReturnValue(false);
+    // Every other schedule is due, so only the MANUAL check can keep the
+    // backup out — a not-due answer would hide its absence.
+    isScheduleDue.mockReturnValue(true);
     appSettings.findMany.mockResolvedValue([settingsRow()]);
     appSettings.findFirst.mockResolvedValue({
       backupSchedule: "MANUAL",
@@ -154,6 +199,10 @@ describe("dispatchScheduledJobs", () => {
 
     await dispatchScheduledJobs();
 
+    expect(enqueueJob).toHaveBeenCalled();
     expect(enqueueJob).not.toHaveBeenCalledWith(TASK_SCHEDULED_BACKUP, expect.anything(), expect.anything());
+    expect(appSettings.update).not.toHaveBeenCalledWith(
+      expect.objectContaining({ data: { lastBackupAt: expect.any(Date) } }),
+    );
   });
 });

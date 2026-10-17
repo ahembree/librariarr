@@ -28,11 +28,18 @@ import { GET as meGET } from "@/app/api/v1/me/route";
 import { GET as serversGET } from "@/app/api/v1/servers/route";
 import { GET as moviesGET } from "@/app/api/v1/media/movies/route";
 import { POST as cancelPOST } from "@/app/api/v1/sync/cancel/route";
-import { withApiKey } from "@/lib/api-keys/guard";
+import { _resetVerifiedApiKeysForTesting, withApiKey } from "@/lib/api-keys/guard";
 import { getSession } from "@/lib/auth/session";
 import { newApiKey } from "@/lib/api-keys/keys";
 import { MASKED_VALUE } from "@/lib/api/sanitize";
-import { apiKeyRequestLimiter } from "@/lib/rate-limit/rate-limiter";
+import {
+  RateLimiter,
+  apiKeyCredentialFailureLimiter,
+  apiKeyFailureLogLimiter,
+  apiKeyRequestLimiter,
+  apiKeyUnknownLookupFloor,
+  apiKeyVerificationFloor,
+} from "@/lib/rate-limit/rate-limiter";
 
 const prisma = getTestPrisma();
 
@@ -45,11 +52,30 @@ function withKey(key: string, ip = freshIp()) {
   return { authorization: `Bearer ${key}`, "x-forwarded-for": ip };
 }
 
+/**
+ * Forget every count a limiter holds. Their windows (up to 15 minutes) outlive
+ * any one test, and the WARN budget for failures is shared by every client — a
+ * flood in one test would otherwise silence the log line another test expects.
+ */
+function resetLimiter(limiter: RateLimiter) {
+  (limiter as unknown as { store: Map<string, unknown> }).store.clear();
+}
+
 describe("/api/v1 authentication guard", () => {
   beforeEach(async () => {
     await cleanDatabase();
     clearMockSession();
     vi.clearAllMocks();
+    _resetVerifiedApiKeysForTesting();
+    for (const limiter of [
+      apiKeyCredentialFailureLimiter,
+      apiKeyFailureLogLimiter,
+      apiKeyRequestLimiter,
+      apiKeyUnknownLookupFloor,
+      apiKeyVerificationFloor,
+    ]) {
+      resetLimiter(limiter);
+    }
   });
 
   afterAll(async () => {
@@ -134,7 +160,8 @@ describe("/api/v1 authentication guard", () => {
       const res = await callRoute(meGET, {
         headers: { authorization: `Bearer ${a.key}`, "x-api-key": b.key, "x-forwarded-for": freshIp() },
       });
-      await expectJson(res, 400);
+      const body = await expectJson<{ error: string }>(res, 400);
+      expect(body.error).toBe("The Authorization and X-Api-Key headers carry different keys. Send one.");
     });
 
     it.each(["api_key", "apikey", "apiKey", "access_token"])(
@@ -162,7 +189,9 @@ describe("/api/v1 authentication guard", () => {
 
     it("401 for a well-formed key that was never issued", async () => {
       const res = await callRoute(meGET, { headers: withKey(newApiKey()) });
-      await expectJson(res, 401);
+      expect(res.headers.get("www-authenticate")).toBe('Bearer realm="Librariarr", error="invalid_token"');
+      const body = await expectJson<{ error: string }>(res, 401);
+      expect(body.error).toBe("Invalid API key");
     });
 
     it("401 for an expired key", async () => {
@@ -186,7 +215,10 @@ describe("/api/v1 authentication guard", () => {
         'Bearer realm="Librariarr", error="insufficient_scope", scope="servers:read"',
       );
       const body = await expectJson<{ error: string; requiredScope: string }>(res, 403);
-      expect(body.requiredScope).toBe("servers:read");
+      expect(body).toEqual({
+        error: 'This API key does not have the "servers:read" scope',
+        requiredScope: "servers:read",
+      });
     });
 
     it("logs a scope refusal at WARN once per key and scope, not on every retry", async () => {
@@ -210,14 +242,16 @@ describe("/api/v1 authentication guard", () => {
         body: { serverId: "anything" },
         headers: withKey(key),
       });
-      await expectJson(res, 403);
+      const body = await expectJson<{ requiredScope: string }>(res, 403);
+      expect(body.requiredScope).toBe("sync:write");
     });
 
     it("grants nothing for a stored scope this version does not know", async () => {
       const user = await createTestUser();
       const { key, row } = await createTestApiKey(user.id);
       await prisma.apiKey.update({ where: { id: row.id }, data: { scopes: ["servers:*"] } });
-      await expectJson(await callRoute(serversGET, { headers: withKey(key) }), 403);
+      const body = await expectJson<{ requiredScope: string }>(await callRoute(serversGET, { headers: withKey(key) }), 403);
+      expect(body.requiredScope).toBe("servers:read");
     });
 
     it("reports only the scopes it grants — never one this version does not know", async () => {
@@ -239,7 +273,7 @@ describe("/api/v1 authentication guard", () => {
       const findMany = vi.spyOn(prisma.apiKey, "findMany").mockRejectedValueOnce(new Error("db down"));
       try {
         const body = await expectJson<{ error: string }>(await callRoute(meGET, { headers: withKey(key) }), 503);
-        expect(body.error).not.toMatch(/db down/);
+        expect(body.error).toBe("Authentication is temporarily unavailable");
       } finally {
         findMany.mockRestore();
       }
@@ -249,7 +283,7 @@ describe("/api/v1 authentication guard", () => {
       const findUnique = vi.spyOn(prisma.apiKey, "findUnique").mockRejectedValueOnce(new Error("db down"));
       try {
         const body = await expectJson<{ error: string }>(await callRoute(meGET, { headers: withKey(key) }), 503);
-        expect(body.error).not.toMatch(/db down/);
+        expect(body.error).toBe("Authentication is temporarily unavailable");
       } finally {
         findUnique.mockRestore();
       }
@@ -403,11 +437,12 @@ describe("/api/v1 authentication guard", () => {
       // The same address, straight after the flood.
       await expectJson(await callRoute(meGET, { headers: withKey(goodKey, ip) }), 200);
 
-      // 600 distinct failures, but at most the window's WARN budget reaches the
-      // log table; the rest are DEBUG (not persisted unless LOG_DEBUG=true).
+      // 600 distinct failures, but only the window's WARN budget (50) reaches the
+      // log table — the last of them saying so; the rest are DEBUG (not
+      // persisted unless LOG_DEBUG=true).
       const warnings = apiLogger.warn.mock.calls.filter(([, msg]) => String(msg).includes("Rejected an API request"));
-      expect(warnings.length).toBeLessThanOrEqual(50);
-      expect(warnings.some(([, msg]) => String(msg).includes("go to DEBUG"))).toBe(true);
+      expect(warnings).toHaveLength(50);
+      expect(warnings.filter(([, msg]) => String(msg).includes("go to DEBUG"))).toEqual([warnings[49]]);
     });
 
     it("keeps valid keys working for everyone when every client shares one address", async () => {

@@ -1,17 +1,15 @@
 import { describe, it, expect, vi } from "vitest";
 
-// Re-create a fresh instance for each test by importing the class directly
-// rather than using the singleton (which persists across tests via globalThis)
-const createEventBus = async () => {
-  // Dynamic import to get the module
-  const mod = await import("@/lib/events/event-bus");
-  return mod;
-};
+const { mockLogger } = vi.hoisted(() => ({
+  mockLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+}));
+vi.mock("@/lib/logger", () => ({ logger: mockLogger }));
+
+// The module exports only the singleton (pinned to globalThis), so every test
+// uses it and removes the subscriptions it added.
+const createEventBus = () => import("@/lib/events/event-bus");
 
 describe("AppEventBus", () => {
-  // Since the singleton lives on globalThis, we test via the exported eventBus
-  // Each test should clean up its subscriptions
-
   it("delivers events to subscribers", async () => {
     const { eventBus } = await createEventBus();
     const listener = vi.fn();
@@ -96,8 +94,9 @@ describe("AppEventBus", () => {
     unsub2();
   });
 
-  it("emit never throws even if a listener throws", async () => {
+  it("a listener that throws neither breaks emit nor costs later listeners the event", async () => {
     const { eventBus } = await createEventBus();
+    mockLogger.error.mockClear();
     const badListener = vi.fn(() => {
       throw new Error("listener error");
     });
@@ -105,14 +104,25 @@ describe("AppEventBus", () => {
     const unsub1 = eventBus.subscribe(badListener);
     const unsub2 = eventBus.subscribe(goodListener);
 
-    // emit wraps in try-catch, but EventEmitter calls listeners synchronously
-    // If the first listener throws, the second may not be called
-    // The important thing is that emit() itself doesn't throw
+    // EventEmitter stops at the first listener that throws, so without
+    // per-listener isolation the one subscribed after it never heard the event.
     expect(() => {
       eventBus.emit({ type: "sync:completed", userId: "user1" });
     }).not.toThrow();
+    expect(badListener).toHaveBeenCalledTimes(1);
+    expect(goodListener).toHaveBeenCalledTimes(1);
+    expect(goodListener).toHaveBeenCalledWith(expect.objectContaining({ type: "sync:completed", userId: "user1" }));
+    expect(mockLogger.error).toHaveBeenCalledTimes(1);
+    expect(mockLogger.error).toHaveBeenCalledWith("Events", expect.stringContaining("sync:completed"), {
+      error: "listener error",
+    });
 
+    // Still isolated on the next event, and unsubscribing still removes it.
     unsub1();
+    eventBus.emit({ type: "server:changed", userId: "user1" });
+    expect(badListener).toHaveBeenCalledTimes(1);
+    expect(goodListener).toHaveBeenCalledTimes(2);
+
     unsub2();
   });
 

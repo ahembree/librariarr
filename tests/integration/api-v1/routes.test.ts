@@ -169,18 +169,36 @@ describe("/api/v1 endpoints", () => {
 
   describe.each(ROUTES)("$label", (route) => {
     it("401 without a key", async () => {
-      await expectJson(await call(route, {}), 401);
+      const res = await call(route, {});
+      expect(res.headers.get("www-authenticate")).toBe('Bearer realm="Librariarr"');
+      expect(await expectJson(res, 401)).toEqual({ error: "API key required" });
     });
 
-    it.skipIf(route.scope === null)("403 for a key with every scope but this one", async () => {
-      const user = await setupUser();
-      const { key } = await createTestApiKey(user.id, { scopes: everythingBut(route.scope!) });
-      const body = await expectJson<{ requiredScope: string }>(
-        await call(route, { authorization: `Bearer ${key}` }),
-        403,
-      );
-      expect(body.requiredScope).toBe(route.scope);
-    });
+    const { scope } = route;
+    if (scope === null) {
+      // Introspection answers any valid key — even one holding no scope at all,
+      // which can do nothing else.
+      it("accepts a key holding no scopes at all", async () => {
+        const user = await setupUser();
+        const { key, row } = await createTestApiKey(user.id, { scopes: [] });
+        expect(row.scopes).toEqual([]);
+        const res = await call(route, { authorization: `Bearer ${key}` });
+        expect(res.status).toBe(route.status);
+      });
+    } else {
+      it("403 for a key with every scope but this one", async () => {
+        const user = await setupUser();
+        const { key } = await createTestApiKey(user.id, { scopes: everythingBut(scope) });
+        const res = await call(route, { authorization: `Bearer ${key}` });
+        expect(res.headers.get("www-authenticate")).toBe(
+          `Bearer realm="Librariarr", error="insufficient_scope", scope="${scope}"`,
+        );
+        expect(await expectJson(res, 403)).toEqual({
+          error: `This API key does not have the "${scope}" scope`,
+          requiredScope: scope,
+        });
+      });
+    }
 
     it(`runs the handler as the key's owner (→ ${route.status})`, async () => {
       const user = await setupUser();
@@ -337,21 +355,27 @@ describe("/api/v1 endpoints", () => {
 
     it("POST /jobs/detection and /jobs/execution queue their lifecycle jobs", async () => {
       const user = await setupUser();
-      const { key } = await createTestApiKey(user.id, { scopes: ["lifecycle:write", "lifecycle:execute"] });
+      const { key } = await createTestApiKey(user.id, { name: "n8n", scopes: ["lifecycle:write", "lifecycle:execute"] });
 
-      await expectJson(await call(ROUTES.find((r) => r.label === "POST /jobs/detection")!, { authorization: `Bearer ${key}` }), 202);
+      expect(
+        await expectJson(await call(ROUTES.find((r) => r.label === "POST /jobs/detection")!, { authorization: `Bearer ${key}` }), 202),
+      ).toEqual({ queued: true, jobs: 1 });
       expect(mockEnqueueJob).toHaveBeenCalledWith(
         TASK_LIFECYCLE_DETECTION,
         { userId: user.id },
         expect.objectContaining({ jobKey: `detection:${user.id}` }),
       );
+      const afterDetection = await prisma.appSettings.findUniqueOrThrow({ where: { userId: user.id } });
+      expect(afterDetection.lastScheduledLifecycleDetection).not.toBeNull();
 
-      await expectJson(await call(ROUTES.find((r) => r.label === "POST /jobs/execution")!, { authorization: `Bearer ${key}` }), 202);
+      expect(
+        await expectJson(await call(ROUTES.find((r) => r.label === "POST /jobs/execution")!, { authorization: `Bearer ${key}` }), 202),
+      ).toEqual({ queued: true, jobs: 1 });
       // Its own job key and the key's name in the payload: the run is held by
       // the API's destructive limits, and never rewrites a scheduled run.
       expect(mockEnqueueJob).toHaveBeenCalledWith(
         TASK_LIFECYCLE_EXECUTION,
-        { userId: user.id, viaApiKey: expect.any(String) },
+        { userId: user.id, viaApiKey: "n8n" },
         expect.objectContaining({ jobKey: `execution-api:${user.id}`, maxAttempts: 1 }),
       );
       // ...and it is not the scheduled run, so the schedule's watermark stays put.
@@ -373,7 +397,7 @@ describe("/api/v1 endpoints", () => {
       expect(settings.lastScheduledSync).toBeNull();
     });
 
-    it("POST /jobs/* reports a failed enqueue as 500", async () => {
+    it("POST /jobs/detection reports a failed enqueue as 500 and leaves the watermark alone", async () => {
       const user = await setupUser();
       const { key } = await createTestApiKey(user.id, { scopes: ["lifecycle:write"] });
       mockEnqueueJob.mockResolvedValueOnce(false);
@@ -381,7 +405,9 @@ describe("/api/v1 endpoints", () => {
         await call(ROUTES.find((r) => r.label === "POST /jobs/detection")!, { authorization: `Bearer ${key}` }),
         500,
       );
-      expect(body.error).toMatch(/enqueue/);
+      expect(body.error).toBe("Failed to enqueue detection job");
+      const settings = await prisma.appSettings.findUniqueOrThrow({ where: { userId: user.id } });
+      expect(settings.lastScheduledLifecycleDetection).toBeNull();
     });
 
     it("lifecycle:write can add an exception; only lifecycle:execute can remove one", async () => {
@@ -396,7 +422,7 @@ describe("/api/v1 endpoints", () => {
         { authorization: `Bearer ${writer.key}` },
         { body: { mediaItemId: movie.id, reason: "Family favourite" } },
       );
-      expect(created.status).toBeLessThan(300);
+      await expectJson(created, 201);
       const exception = await prisma.lifecycleException.findFirstOrThrow({ where: { mediaItemId: movie.id } });
       expect(exception.reason).toBe("Family favourite");
 
@@ -412,7 +438,9 @@ describe("/api/v1 endpoints", () => {
       expect(await prisma.lifecycleException.count()).toBe(1);
 
       const executor = await createTestApiKey(user.id, { name: "executor", scopes: ["lifecycle:execute"] });
-      await expectJson(await call({ ...deleteById, params: { id: exception.id } }, { authorization: `Bearer ${executor.key}` }), 200);
+      expect(
+        await expectJson(await call({ ...deleteById, params: { id: exception.id } }, { authorization: `Bearer ${executor.key}` }), 200),
+      ).toEqual({ success: true });
       expect(await prisma.lifecycleException.count()).toBe(0);
     });
 
@@ -428,6 +456,7 @@ describe("/api/v1 endpoints", () => {
       expect(body).toMatchObject({ enabled: true, message: "Back soon" });
       const settings = await prisma.appSettings.findUniqueOrThrow({ where: { userId: user.id } });
       expect(settings.maintenanceMode).toBe(true);
+      expect(settings.maintenanceMessage).toBe("Back soon");
     });
 
     it("PUT /tools/maintenance cannot change who is exempt or whether Discord is told", async () => {
@@ -444,7 +473,8 @@ describe("/api/v1 endpoints", () => {
         const refused = await expectJson<{ details: string[] }>(await put({ enabled: true, ...extra }), 400);
         expect(refused.details.join("\n")).toContain(`Unrecognized key: "${Object.keys(extra)[0]}"`);
       }
-      await expectJson(await put({ enabled: true, message: "x".repeat(501) }), 400);
+      const tooLong = await expectJson<{ details: string[] }>(await put({ enabled: true, message: "x".repeat(501) }), 400);
+      expect(tooLong.details.join("\n")).toContain("Message must be 500 characters or fewer");
 
       const untouched = await prisma.appSettings.findUniqueOrThrow({ where: { userId: user.id } });
       expect(untouched).toMatchObject({

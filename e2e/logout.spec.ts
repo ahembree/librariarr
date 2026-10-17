@@ -6,29 +6,31 @@ import { ADMIN } from "./constants";
  * admin (it bumps `sessionVersion`), including the saved `admin.json` state
  * the other specs reuse — which is why this spec lives in its own Playwright
  * project (`chromium-logout`) that depends on all the others and so runs
- * last. If local auth is enabled, we also verify logging back in.
+ * last. Local auth was enabled by the first-run setup, so logging back in with
+ * the admin's password must work.
  */
-test("logout returns to the login page and local login works", async ({ page }) => {
+test("logout revokes the session and local login works again", async ({ page, playwright, baseURL }) => {
   await page.goto("/");
   await expect(page).not.toHaveURL(/\/login/);
+  // The cookie as it was before logging out: what a copy of it would carry.
+  const before = await page.context().storageState();
 
-  // The logout control lives in the shell (sidebar/topbar). It may be a button
-  // or a link; match by accessible name.
-  const logout = page
-    .getByRole("button", { name: /log ?out|sign ?out/i })
-    .or(page.getByRole("link", { name: /log ?out|sign ?out/i }))
-    .first();
-  await logout.click();
-
+  // The chip names the admin once the shell has hydrated and fetched
+  // /api/auth/me — before that a click on the server-rendered button is lost.
+  await expect(page.getByRole("link", { name: /e2eadmin/i })).toBeVisible();
+  // The logout control is the user chip's "Logout" button in the sidebar.
+  await page.getByRole("button", { name: "Logout", exact: true }).click();
   await expect(page).toHaveURL(/\/login/, { timeout: 15_000 });
 
-  // Local login round-trip (only if the username field is present).
-  const username = page.locator("#username");
-  if (await username.isVisible().catch(() => false)) {
-    await username.fill(ADMIN.username);
-    await page.locator("#password").fill(ADMIN.password);
-    await page.getByRole("button", { name: /^sign in$/i }).click();
-    await page.waitForURL((url) => !url.pathname.startsWith("/login"), { timeout: 15_000 });
-    await expect(page).not.toHaveURL(/\/login/);
-  }
+  // Revoked, not just forgotten: the old cookie no longer signs anyone in.
+  const stale = await playwright.request.newContext({ baseURL, storageState: before });
+  expect((await stale.get("/api/auth/me")).status()).toBe(401);
+  await stale.dispose();
+
+  await expect(page.locator("#username")).toBeVisible();
+  await page.locator("#username").fill(ADMIN.username);
+  await page.locator("#password").fill(ADMIN.password);
+  await page.getByRole("button", { name: /^sign in$/i }).click();
+  await page.waitForURL((url) => !url.pathname.startsWith("/login"), { timeout: 15_000 });
+  await expect(page).not.toHaveURL(/\/login/);
 });

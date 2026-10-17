@@ -57,6 +57,10 @@ describe("cross-system fields on grouped records", () => {
         type: "SERIES", title: `Ep ${n}`, parentTitle: "Favourite Show", seasonNumber: 1, episodeNumber: n, playCount: 0,
       }));
     }
+    // Control: an unwatched show Keep did not match, which the rule set must select.
+    await createTestMediaItem(library.id, {
+      type: "SERIES", title: "Pilot", parentTitle: "Unkept Show", seasonNumber: 1, episodeNumber: 1, playCount: 0,
+    });
     const repId = eps.map((e) => e.id).sort()[0];
 
     // "Keep" (series scope) matched the show — stored on its representative.
@@ -81,9 +85,9 @@ describe("cross-system fields on grouped records", () => {
       [server.id],
     );
 
-    expect(items.map((i) => i.title)).toEqual([]);
-    const stored = await getTestPrisma().ruleMatch.count({ where: { ruleSetId: cleanup.id } });
-    expect(stored).toBe(0);
+    expect(items.map((i) => i.title)).toEqual(["Unkept Show"]);
+    const stored = await getTestPrisma().ruleMatch.findMany({ where: { ruleSetId: cleanup.id } });
+    expect(stored.map((m) => (m.itemData as { title: string }).title)).toEqual(["Unkept Show"]);
   });
 
   it("reports a series-scope cross-system rule among the matched criteria it matched on", async () => {
@@ -157,6 +161,8 @@ describe("cross-system fields on grouped records", () => {
         type: "SERIES", title: `Ep ${n}`, parentTitle: "Queued Show", seasonNumber: 1, episodeNumber: n,
       }));
     }
+    // Control: a show nothing is pending on.
+    await createTestMediaItem(library.id, { type: "SERIES", title: "Pilot", parentTitle: "Free Show", seasonNumber: 1, episodeNumber: 1 });
     const repId = eps.map((e) => e.id).sort()[0];
     const other = await createTestRuleSet(user.id, { name: "Other", type: "SERIES" });
     await getTestPrisma().lifecycleAction.create({
@@ -172,13 +178,14 @@ describe("cross-system fields on grouped records", () => {
       { ...rs, type: "SERIES", rules, seriesScope: true, serverIds: [server.id] } as never,
       [server.id],
     );
-    expect(items.map((i) => i.title)).toEqual([]);
+    expect(items.map((i) => i.title)).toEqual(["Free Show"]);
   });
   it("control: the same rule on a MOVIE rule set (per-item path) excludes the kept movie", async () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id);
     const library = await createTestLibrary(server.id, { type: "MOVIE" });
     const movie = await createTestMediaItem(library.id, { type: "MOVIE", title: "Favourite Movie", playCount: 0 });
+    const unkept = await createTestMediaItem(library.id, { type: "MOVIE", title: "Other Movie", playCount: 0 });
     const keep = await createTestRuleSet(user.id, { name: "Keep", type: "MOVIE", serverIds: [server.id] });
     await createTestRuleMatch(keep.id, movie.id, { id: movie.id, title: "Favourite Movie" });
     const rules: LifecycleRuleGroup[] = [{
@@ -193,7 +200,7 @@ describe("cross-system fields on grouped records", () => {
       { ...rs, type: "MOVIE", rules, seriesScope: false, serverIds: [server.id] } as never,
       [server.id],
     );
-    expect(items).toEqual([]);
+    expect(items.map((i) => i.id)).toEqual([unkept.id]);
   });
 
   it("query page (grouped series view) does not list a show 'Keep' matched for 'NOT Matched By Rule Set = Keep'", async () => {
@@ -206,6 +213,10 @@ describe("cross-system fields on grouped records", () => {
         type: "SERIES", title: `Ep ${n}`, parentTitle: "Favourite Show", seasonNumber: 1, episodeNumber: n, playCount: 0,
       }));
     }
+    // Control: a show Keep did not match.
+    await createTestMediaItem(library.id, {
+      type: "SERIES", title: "Pilot", parentTitle: "Other Show", seasonNumber: 1, episodeNumber: 1, playCount: 0,
+    });
     const repId = eps.map((e) => e.id).sort()[0];
     const keep = await createTestRuleSet(user.id, { name: "Keep", type: "SERIES", seriesScope: true, serverIds: [server.id] });
     await createTestRuleMatch(keep.id, repId, { id: repId, title: "Favourite Show", parentTitle: null, memberIds: eps.map((e) => e.id) });
@@ -217,7 +228,7 @@ describe("cross-system fields on grouped records", () => {
         rules: [{ id: "r", field: "matchedByRuleSet", operator: "equals", value: "Keep", condition: "AND", negate: true }],
       }] as never,
     }, user.id, 1, 0);
-    expect(result.items.map((i) => i.title)).toEqual([]);
+    expect(result.items.map((i) => i.title)).toEqual(["Other Show"]);
   });
   it("per-episode scope: episodes of a show 'Keep' matched (stored on its representative) also read as kept", async () => {
     const user = await createTestUser();
@@ -229,6 +240,10 @@ describe("cross-system fields on grouped records", () => {
         type: "SERIES", title: `Ep ${n}`, parentTitle: "Favourite Show", seasonNumber: 1, episodeNumber: n, playCount: 0,
       }));
     }
+    // Control: an unwatched episode of a show Keep did not match.
+    await createTestMediaItem(library.id, {
+      type: "SERIES", title: "Pilot", parentTitle: "Other Show", seasonNumber: 1, episodeNumber: 1, playCount: 0,
+    });
     const sorted = [...eps].sort((a, b) => a.id.localeCompare(b.id));
     // The representative episode was watched, so the cleanup group below does not include it.
     await getTestPrisma().mediaItem.update({ where: { id: sorted[0].id }, data: { playCount: 1 } });
@@ -250,7 +265,7 @@ describe("cross-system fields on grouped records", () => {
       { ...rs, type: "SERIES", rules, seriesScope: false, serverIds: [server.id] } as never,
       [server.id],
     );
-    expect(items.map((i) => i.title)).toEqual([]);
+    expect(items.map((i) => i.title)).toEqual(["Other Show"]);
   });
   it("series scope forced by an aggregate field: each episode is judged on its own cross-system values", async () => {
     // seriesScope off, but a series-aggregate field routes detection through
@@ -327,6 +342,7 @@ describe("cross-system fields on grouped records", () => {
     const server = await createTestServer(user.id);
     const library = await createTestLibrary(server.id, { type: "MOVIE" });
     const movie = await createTestMediaItem(library.id, { type: "MOVIE", title: "Favourite Movie" });
+    const unkept = await createTestMediaItem(library.id, { type: "MOVIE", title: "Other Movie" });
     const keep = await createTestRuleSet(user.id, { name: "Keep", type: "MOVIE", serverIds: [server.id] });
     await createTestRuleMatch(keep.id, movie.id, { id: movie.id, title: "Favourite Movie" });
     const rules = [{
@@ -335,15 +351,19 @@ describe("cross-system fields on grouped records", () => {
     }];
 
     setMockSession({ isLoggedIn: true, userId: user.id });
-    const body = await expectJson<{ matches: boolean }>(
-      await callRoute(testItemPost, {
-        url: "/api/lifecycle/rules/test-item",
-        method: "POST",
-        body: { rules, type: "MOVIE", mediaItemId: movie.id, serverIds: [server.id] },
-      }),
-      200,
-    );
-    expect(body.matches).toBe(false);
+    const testOne = async (mediaItemId: string) =>
+      (
+        await expectJson<{ matches: boolean }>(
+          await callRoute(testItemPost, {
+            url: "/api/lifecycle/rules/test-item",
+            method: "POST",
+            body: { rules, type: "MOVIE", mediaItemId, serverIds: [server.id] },
+          }),
+          200,
+        )
+      ).matches;
+    expect(await testOne(movie.id)).toBe(false);
+    expect(await testOne(unkept.id)).toBe(true);
   });
 
   it("counts a grouped match's members as matched by its rule set", async () => {
@@ -442,11 +462,15 @@ describe("cross-system fields on grouped records", () => {
     const user = await createTestUser();
     const server = await createTestServer(user.id);
     const library = await createTestLibrary(server.id, { type: "SERIES" });
+    const server2 = await createTestServer(user.id);
+    const library2 = await createTestLibrary(server2.id, { type: "SERIES" });
+    // Each title (dedupKey) on both servers: even ids on the first, odd on the second.
     await prisma.$executeRawUnsafe(
       `INSERT INTO "MediaItem" ("id","libraryId","ratingKey","title","type","dedupKey","updatedAt")
-       SELECT 'ep-' || n, $1, 'rk-' || n, 'E' || n, 'SERIES', 'key-' || (n / 2), now()
+       SELECT 'ep-' || n, CASE WHEN n % 2 = 0 THEN $1 ELSE $2 END, 'rk-' || n, 'E' || n, 'SERIES', 'key-' || (n / 2), now()
          FROM generate_series(0, 39999) AS n`,
       library.id,
+      library2.id,
     );
     const other = await createTestRuleSet(user.id, { name: "Other", type: "SERIES" });
     await prisma.lifecycleAction.create({
@@ -461,7 +485,7 @@ describe("cross-system fields on grouped records", () => {
 
     expect(cross.get("ep-0")?.serverCount).toBe(2);
     expect(cross.get("ep-100")?.hasPendingAction).toBe(true);
-    // ep-101 is the same title (same dedupKey) as ep-100, backed by the one Arr record.
+    // ep-101 is the same title (same dedupKey) as ep-100 on the other server, backed by the one Arr record.
     expect(cross.get("ep-101")?.hasPendingAction).toBe(true);
     expect(cross.get("ep-102")?.hasPendingAction).toBe(false);
   });
@@ -626,6 +650,8 @@ describe("cross-system fields on grouped records", () => {
     for (let n = 1; n <= 2; n++) {
       tracks.push(await createTestMediaItem(library.id, { type: "MUSIC", title: `Song ${n}`, parentTitle: "Kept Artist", playCount: 0 }));
     }
+    // Control: an artist Keep did not match.
+    await createTestMediaItem(library.id, { type: "MUSIC", title: "Track", parentTitle: "Other Artist", playCount: 0 });
     const repId = tracks.map((t) => t.id).sort()[0];
     const keep = await createTestRuleSet(user.id, { name: "Keep", type: "MUSIC", seriesScope: true, serverIds: [server.id] });
     await createTestRuleMatch(keep.id, repId, { id: repId, title: "Kept Artist", parentTitle: null, memberIds: tracks.map((t) => t.id) });
@@ -641,7 +667,7 @@ describe("cross-system fields on grouped records", () => {
       { ...rs, type: "MUSIC", rules, seriesScope: true, serverIds: [server.id] } as never,
       [server.id],
     );
-    expect(items).toEqual([]);
+    expect(items.map((i) => i.title)).toEqual(["Other Artist"]);
   });
 
   it("Test Media answers a series-scope cross-system rule as detection does", async () => {

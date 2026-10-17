@@ -68,6 +68,13 @@ type Handler = (request: NextRequest, context: { params: Promise<Record<string, 
 /** Every stored path lives under this directory, so one substring check finds any of them. */
 const STORAGE = "/srv/private-media";
 
+// One teardown for the whole file: disconnecting at the end of the first
+// describe would leave the second running on a closed client.
+afterAll(async () => {
+  await cleanDatabase();
+  await disconnectTestDb();
+});
+
 /**
  * A read key sees a media server's library, never its disk. `/media/{id}` was
  * trimmed of `filePath` when the API was added; this pins the same rule on every
@@ -79,11 +86,6 @@ describe("/api/v1 read endpoints never return a media file path", () => {
     await cleanDatabase();
     clearMockSession();
     vi.clearAllMocks();
-  });
-
-  afterAll(async () => {
-    await cleanDatabase();
-    await disconnectTestDb();
   });
 
   async function seed() {
@@ -247,6 +249,7 @@ describe("/api/v1 read endpoints never return a media file path", () => {
       url: "/api/v1/tools/sessions",
       headers: { authorization: `Bearer ${key}` },
     });
+    expect(res.status).toBe(200);
     const body = (await res.json()) as { sessions: Array<Record<string, unknown>> };
     expect(body.sessions).toHaveLength(1);
     const [stream] = body.sessions;
@@ -266,6 +269,7 @@ describe("/api/v1 read endpoints never return a media file path", () => {
       url: "/api/v1/lifecycle/rules/matches",
       headers: { authorization: `Bearer ${key}` },
     });
+    expect(res.status).toBe(200);
     const text = await res.text();
     expect(text).not.toContain(STORAGE);
     expect(text).toContain(movie.id);
@@ -283,11 +287,6 @@ describe("/api/v1/lifecycle/actions redacts stored error text", () => {
     await cleanDatabase();
     clearMockSession();
     vi.clearAllMocks();
-  });
-
-  afterAll(async () => {
-    await cleanDatabase();
-    await disconnectTestDb();
   });
 
   it("returns a legacy FAILED action's error without the internal address or path", async () => {

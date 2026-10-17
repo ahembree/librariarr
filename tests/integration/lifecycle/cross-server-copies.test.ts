@@ -83,15 +83,17 @@ async function twoServerMovie() {
   return { user, s1, s2, l1, l2, a, b, ruleSet };
 }
 
+// File-level: the client is shared by every describe below, so it is closed
+// once they have all run rather than after the first one.
+afterAll(async () => {
+  await cleanDatabase();
+  await disconnectTestDb();
+});
+
 describe("cross-server copies of one title", () => {
   beforeEach(async () => {
     await cleanDatabase();
     vi.clearAllMocks();
-  });
-
-  afterAll(async () => {
-    await cleanDatabase();
-    await disconnectTestDb();
   });
 
   it("matches the title once, recording the other copy", async () => {
@@ -237,7 +239,7 @@ describe("track-scope music", () => {
       const t = await createTestMediaItem(libraryId, {
         type: "MUSIC", title: `Song ${n}`, parentTitle: "The Artist", albumTitle: "Album", episodeNumber: n, playCount: 0,
       });
-      await createTestExternalId(t.id, "MUSICBRAINZ", "artist-mbid-1");
+      await createTestExternalId(t.id, "MUSICBRAINZ", "a74b1b7f-71a5-4011-9441-d0b5e4122711");
       await prisma.mediaItem.update({ where: { id: t.id }, data: { dedupKey: `music:the artist:song ${n}` } });
       return t;
     };

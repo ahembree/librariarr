@@ -90,22 +90,33 @@ describe("Integration enable/disable toggle", () => {
       );
       const body = await expectJson<{ instance: { id: string; enabled: boolean } }>(response, 200);
       expect(body.instance.enabled).toBe(true);
+
+      const updated = await prisma.sonarrInstance.findUnique({ where: { id: instance.id } });
+      expect(updated!.enabled).toBe(true);
     });
 
-    it("skips connection test when disabling", async () => {
+    it("skips connection test when disabling, even with a new API key", async () => {
       const user = await createTestUser();
       const instance = await createTestSonarrInstance(user.id);
       setMockSession({ userId: user.id, isLoggedIn: true });
 
-      // Disable without triggering connection test
+      // A new key on an enabled instance would be tested; disabling skips it.
       const response = await callRouteWithParams(
         SonarrPUT,
         { id: instance.id },
-        { url: `/api/integrations/sonarr/${instance.id}`, method: "PUT", body: { enabled: false } }
+        {
+          url: `/api/integrations/sonarr/${instance.id}`,
+          method: "PUT",
+          body: { enabled: false, apiKey: "rotated-api-key" },
+        }
       );
       const body = await expectJson<{ instance: { id: string; enabled: boolean } }>(response, 200);
       expect(body.instance.enabled).toBe(false);
       expect(mockTestConnection).not.toHaveBeenCalled();
+
+      const updated = await prisma.sonarrInstance.findUnique({ where: { id: instance.id } });
+      expect(updated!.enabled).toBe(false);
+      expect(updated!.apiKey).toBe("rotated-api-key");
     });
 
     it("returns disabled instances in GET", async () => {
@@ -137,6 +148,9 @@ describe("Integration enable/disable toggle", () => {
       );
       const body = await expectJson<{ instance: { id: string; enabled: boolean } }>(response, 200);
       expect(body.instance.enabled).toBe(false);
+
+      const updated = await prisma.seerrInstance.findUnique({ where: { id: instance.id } });
+      expect(updated!.enabled).toBe(false);
     });
 
     it("returns disabled Seerr instances in GET", async () => {
@@ -148,6 +162,8 @@ describe("Integration enable/disable toggle", () => {
       const response = await callRoute(SeerrGET, { url: "/api/integrations/seerr" });
       const body = await expectJson<{ instances: { name: string; enabled: boolean }[] }>(response, 200);
       expect(body.instances).toHaveLength(2);
+      expect(body.instances.find((i) => i.name === "Active")!.enabled).toBe(true);
+      expect(body.instances.find((i) => i.name === "Inactive")!.enabled).toBe(false);
     });
   });
 });

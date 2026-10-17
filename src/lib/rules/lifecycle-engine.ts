@@ -36,6 +36,8 @@ import { buildGroupConditions, buildGroupConditionsPreFilter } from "@/lib/condi
 import { Prisma } from "@/generated/prisma/client";
 import { resolveSeriesKey } from "@/lib/media/series-key";
 import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
+import { DATE_ONLY_FIELDS } from "@/lib/conditions/fields";
+import { formatDateOnly } from "@/lib/format";
 
 const STREAM_LANG_CODEC_FIELDS = new Set(["audioLanguage", "subtitleLanguage", "streamAudioCodec"]);
 const STREAM_LANGUAGE_FIELDS = new Set(["audioLanguage", "subtitleLanguage"]);
@@ -1534,11 +1536,15 @@ function getActualValueForField(
   arrMeta?: ArrMetadata,
   seerrMeta?: SeerrMetadata,
 ): string | null {
-  // Helper to format dates nicely
+  // Helper to format dates nicely. A date-only field (release, premiere, air
+  // date) is a calendar day stored as UTC midnight, and the date operators
+  // compare UTC days, so it is shown in UTC: in the server's local time a
+  // matched "In Cinemas Date equals 2023-01-01" read "Dec 31, 2022" west of UTC.
   const fmtDate = (v: unknown): string | null => {
     if (!v) return null;
     const d = new Date(v as string);
     if (isNaN(d.getTime())) return null;
+    if (DATE_ONLY_FIELDS.has(field)) return formatDateOnly(d, "N/A", "short");
     return d.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
   };
 

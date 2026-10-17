@@ -52,6 +52,11 @@ describe("loadLocalShows", () => {
       { source: "TVDB", externalId: { in: ["100"] } },
       { source: "TMDB", externalId: { in: ["200", "300"] } },
     ]);
+    // First-aired order: the representative episode is the show's first.
+    expect(mockPrisma.mediaItem.findMany.mock.calls[0][0].orderBy).toEqual([
+      { seasonNumber: "asc" },
+      { episodeNumber: "asc" },
+    ]);
   });
 
   it("omits the TVDB filter when no request carries a TVDB id", async () => {
