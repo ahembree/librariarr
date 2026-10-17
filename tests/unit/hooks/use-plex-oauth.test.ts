@@ -41,7 +41,10 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-const pinCalls = () => fetchMock.mock.calls.filter(([url]) => String(url).startsWith("https://plex.tv"));
+// The PIN polls: requests to plex.tv itself, compared by host (the app's own
+// routes are relative and resolve to the placeholder base).
+const pinCalls = () =>
+  fetchMock.mock.calls.filter(([url]) => new URL(String(url), "http://app.invalid").host === "plex.tv");
 const tick = (ms: number) => act(async () => {
   await vi.advanceTimersByTimeAsync(ms);
 });
