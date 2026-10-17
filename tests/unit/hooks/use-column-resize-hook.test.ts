@@ -42,17 +42,37 @@ function touchEvent(type: string, clientX?: number) {
 }
 
 function stored(): Record<string, number> | null {
-  const raw = localStorage.getItem(KEY);
+  const raw = realStorage.getItem(KEY);
   return raw ? JSON.parse(raw) : null;
 }
 
+/** The document's own storage, captured before any test stubs the global. */
+const realStorage = localStorage;
+
+/**
+ * Swap the global `localStorage` for one that delegates to the real storage
+ * except where overridden. A `vi.spyOn(localStorage, …)` on happy-dom's
+ * Storage is not undone by `restoreAllMocks`, so a throwing spy leaked into
+ * whichever test ran next; a stubbed global is undone by `unstubAllGlobals`.
+ */
+function stubStorage(overrides: Partial<Pick<Storage, "getItem" | "setItem">>) {
+  vi.stubGlobal("localStorage", {
+    getItem: (key: string) => realStorage.getItem(key),
+    setItem: (key: string, value: string) => realStorage.setItem(key, value),
+    removeItem: (key: string) => realStorage.removeItem(key),
+    clear: () => realStorage.clear(),
+    ...overrides,
+  });
+}
+
 beforeEach(() => {
-  localStorage.clear();
+  realStorage.clear();
   document.body.style.userSelect = "";
   document.body.style.cursor = "";
 });
 
 afterEach(() => {
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
@@ -184,7 +204,8 @@ describe("useColumnResize", () => {
     act(() => {
       document.dispatchEvent(new MouseEvent("mouseup"));
     });
-    const setItem = vi.spyOn(localStorage, "setItem");
+    const setItem = vi.fn((key: string, value: string) => realStorage.setItem(key, value));
+    stubStorage({ setItem });
     act(() => {
       document.dispatchEvent(new MouseEvent("mouseup"));
     });
@@ -199,7 +220,8 @@ describe("useColumnResize", () => {
     expect(result.current.resizingColumnId).toBe("year");
     act(() => mouseMove(20));
     expect(result.current.columnWidths).toEqual({ title: 200, year: 100 });
-    const setItem = vi.spyOn(localStorage, "setItem");
+    const setItem = vi.fn((key: string, value: string) => realStorage.setItem(key, value));
+    stubStorage({ setItem });
     act(() => {
       document.dispatchEvent(new MouseEvent("mouseup"));
     });
@@ -227,21 +249,26 @@ describe("useColumnResize", () => {
   });
 
   it("keeps working when localStorage throws on read and write", () => {
-    vi.spyOn(localStorage, "getItem").mockImplementation(() => {
+    const getItem = vi.fn((): string | null => {
       throw new Error("blocked");
     });
-    vi.spyOn(localStorage, "setItem").mockImplementation(() => {
+    const setItem = vi.fn((): void => {
       throw new Error("quota");
     });
+    stubStorage({ getItem, setItem });
     const { result } = renderHook(() => useColumnResize({ columns: COLUMNS, storageKey: KEY }));
+    expect(getItem).toHaveBeenCalledWith(KEY);
     expect(result.current.columnWidths.title).toBe(200);
     act(() => result.current.getResizeProps("title").onMouseDown(mouseDownEvent(0).e));
     act(() => mouseMove(25));
     act(() => {
       document.dispatchEvent(new MouseEvent("mouseup"));
     });
+    expect(setItem).toHaveBeenCalledTimes(1);
     expect(result.current.columnWidths.title).toBe(225);
+    expect(result.current.resizingColumnId).toBeNull();
     act(() => result.current.getResizeProps("title").onDoubleClick());
+    expect(setItem).toHaveBeenCalledTimes(2);
     expect(result.current.columnWidths.title).toBe(200);
   });
 });

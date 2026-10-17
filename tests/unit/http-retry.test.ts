@@ -68,6 +68,7 @@ describe("configureRetry", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.useRealTimers();
   });
 
@@ -302,48 +303,27 @@ describe("configureRetry", () => {
 
   describe("max retries behavior", () => {
     it("retries up to 3 times then throws", async () => {
-      const errors = [
-        makeAxiosError({ code: "ECONNRESET" }),
-        makeAxiosError({ code: "ECONNRESET" }),
-        makeAxiosError({ code: "ECONNRESET" }),
-      ];
-
-      // Each retry call returns a new rejection
-      mockAxios.requestMock
-        .mockRejectedValueOnce(errors[1])
-        .mockRejectedValueOnce(errors[2]);
-
-      // Configure a fresh interceptor that chains through for retry calls
       const mockAxios2 = createMockAxios();
       const log2 = { warn: vi.fn() };
       configureRetry(mockAxios2.instance, "Retry", log2);
 
-      // Simulate: first error handled by interceptor, interceptor calls instance.request
-      // which also fails, so the interceptor is called again for the retry attempt
-      // We need to simulate the full chain properly.
-
-      // Simpler approach: track retry count via the config metadata
+      // Every retry goes back through instance.request, which fails again and
+      // re-enters the interceptor with the same config (where the count lives).
       const sharedConfig = { method: "get" } as InternalAxiosRequestConfig;
-      const makeChainedError = () => {
-        const err = makeAxiosError({ code: "ECONNRESET" });
-        err.config = sharedConfig;
-        return err;
-      };
+      const retryErrors: AxiosError[] = [];
+      mockAxios2.requestMock.mockImplementation(async (config: InternalAxiosRequestConfig) => {
+        const err = new Error("ECONNRESET") as AxiosError;
+        err.code = "ECONNRESET";
+        err.isAxiosError = true;
+        err.config = config;
+        err.response = undefined;
+        err.toJSON = () => ({});
+        retryErrors.push(err);
+        return mockAxios2.triggerError(err);
+      });
 
-      // Mock request to keep failing with retryable errors
-      mockAxios2.requestMock
-        .mockImplementation(async (config: InternalAxiosRequestConfig) => {
-          const err = new Error("ECONNRESET") as AxiosError;
-          err.code = "ECONNRESET";
-          err.isAxiosError = true;
-          err.config = config;
-          err.response = undefined;
-          err.toJSON = () => ({});
-          // The interceptor is called again for each retry
-          return mockAxios2.triggerError(err);
-        });
-
-      const firstError = makeChainedError();
+      const firstError = makeAxiosError({ code: "ECONNRESET" });
+      firstError.config = sharedConfig;
 
       const promise = mockAxios2.triggerError(firstError).catch((e: unknown) => e);
 
@@ -353,9 +333,10 @@ describe("configureRetry", () => {
       await vi.advanceTimersByTimeAsync(3000);
 
       const result = await promise;
-      expect(result).toBeInstanceOf(Error);
-      expect(log2.warn).toHaveBeenCalledTimes(3);
       expect(mockAxios2.requestMock).toHaveBeenCalledTimes(3);
+      expect(log2.warn).toHaveBeenCalledTimes(3);
+      // The last attempt's failure is what the caller sees.
+      expect(result).toBe(retryErrors[2]);
     });
 
     it("succeeds on second retry after first retry fails", async () => {
@@ -446,8 +427,6 @@ describe("configureRetry", () => {
       await promise;
 
       expect(delays).toEqual([1000, 2000, 3000]);
-
-      vi.restoreAllMocks();
     });
   });
 
@@ -478,20 +457,27 @@ describe("configureRetry", () => {
 
       const sharedConfig = { method: "get" } as InternalAxiosRequestConfig;
 
-      // First retry succeeds immediately
-      mockAxios2.requestMock.mockResolvedValue({ data: "ok" });
+      // The first retry fails again, the second succeeds.
+      let calls = 0;
+      mockAxios2.requestMock.mockImplementation(async (config: InternalAxiosRequestConfig) => {
+        if (++calls === 1) {
+          const err = makeAxiosError({ code: "ECONNRESET" });
+          err.config = config;
+          return mockAxios2.triggerError(err);
+        }
+        return { data: "ok" };
+      });
 
       const error = makeAxiosError({ code: "ECONNRESET" });
       error.config = sharedConfig;
 
       const promise = mockAxios2.triggerError(error);
       await vi.advanceTimersByTimeAsync(1000);
+      await vi.advanceTimersByTimeAsync(2000);
       await promise;
 
-      expect(log2.warn).toHaveBeenCalledWith(
-        "DynamicPrefix-1",
-        expect.stringContaining("attempt 1/3"),
-      );
+      expect(log2.warn).toHaveBeenNthCalledWith(1, "DynamicPrefix-1", expect.stringContaining("attempt 1/3"));
+      expect(log2.warn).toHaveBeenNthCalledWith(2, "DynamicPrefix-2", expect.stringContaining("attempt 2/3"));
     });
   });
 
@@ -561,5 +547,21 @@ describe("configureRetry marking the server unreachable", () => {
     Object.assign(artwork.config as InternalAxiosRequestConfig, { ...NO_BREAKER_MARK, ...NO_RETRY });
     await expect(mockAxios.triggerError(artwork)).rejects.toBe(artwork);
     expect(onTerminalNetworkError).toHaveBeenCalledTimes(1);
+
+    // An HTTP answer, even a 5xx, proves the server is reachable.
+    const answered = makeAxiosError({ response: { status: 500 } });
+    await expect(mockAxios.triggerError(answered)).rejects.toBe(answered);
+    expect(onTerminalNetworkError).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes a circuit-breaker rejection through without retrying or marking again", async () => {
+    const mockAxios = createMockAxios();
+    const onTerminalNetworkError = vi.fn();
+    configureRetry(mockAxios.instance, "Test", { warn: vi.fn() }, { onTerminalNetworkError });
+
+    const breaker = makeAxiosError({ code: "SERVER_UNREACHABLE", message: "Server http://192.168.1.10:32400 is unreachable" });
+    await expect(mockAxios.triggerError(breaker)).rejects.toBe(breaker);
+    expect(onTerminalNetworkError).not.toHaveBeenCalled();
+    expect(mockAxios.requestMock).not.toHaveBeenCalled();
   });
 });

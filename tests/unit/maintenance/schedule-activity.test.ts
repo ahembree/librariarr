@@ -71,6 +71,9 @@ describe("recurring overnight windows", () => {
     // The page checked Saturday against [5] and showed it inactive.
     expect(isPrerollWindowActive(fridayNight, saturday(3))).toBe(true);
     expect(isBlackoutWindowActive(fridayNight, saturday(3))).toBe(true);
+    // ...and closes at the end time on the day after.
+    expect(isPrerollWindowActive(fridayNight, saturday(6, 1))).toBe(false);
+    expect(isBlackoutWindowActive(fridayNight, saturday(6, 1))).toBe(false);
   });
 
   it("is not active in the small hours of Friday itself", () => {

@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { progressStreamResponse } from "@/lib/progress/stream";
 
 async function readLines(response: Response): Promise<Array<Record<string, unknown>>> {
@@ -28,7 +28,7 @@ describe("progressStreamResponse", () => {
 
     const events = await readLines(response);
     expect(events.map((e) => e.type)).toEqual(["plan", "phase", "phase", "result"]);
-    expect(events[2]).toMatchObject({ type: "phase", key: "b", fraction: 0.5 });
+    expect(events[2]).toEqual({ type: "phase", key: "b", fraction: 0.5 });
     expect(events[3]).toEqual({ type: "result", result: { items: [1, 2, 3] } });
   });
 
@@ -50,5 +50,50 @@ describe("progressStreamResponse", () => {
     });
     const events = await readLines(response);
     expect(events).toEqual([{ type: "error", message: "Request failed" }]);
+  });
+
+  describe("cancellation", () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it("aborts the task's signal at the lifetime cap and sends no error line for it", async () => {
+      vi.useFakeTimers();
+      let seen: AbortSignal | undefined;
+      const response = progressStreamResponse(
+        (_emit, signal) =>
+          new Promise((_resolve, reject) => {
+            seen = signal;
+            signal.addEventListener("abort", () => reject(new Error("aborted")));
+          }),
+        { maxLifetimeMs: 1_000 },
+      );
+      const read = readLines(response);
+      await vi.advanceTimersByTimeAsync(999);
+      expect(seen?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(seen?.aborted).toBe(true);
+      // Nobody is left to read an error, so the stream just ends.
+      expect(await read).toEqual([]);
+    });
+
+    it("aborts the task's signal when the request's signal aborts", async () => {
+      const request = new AbortController();
+      let seen: AbortSignal | undefined;
+      const response = progressStreamResponse(
+        (_emit, signal) =>
+          new Promise((_resolve, reject) => {
+            seen = signal;
+            signal.addEventListener("abort", () => reject(new Error("aborted")));
+          }),
+        { signal: request.signal },
+      );
+      const read = readLines(response);
+      await Promise.resolve();
+      expect(seen?.aborted).toBe(false);
+      request.abort();
+      expect(seen?.aborted).toBe(true);
+      expect(await read).toEqual([]);
+    });
   });
 });

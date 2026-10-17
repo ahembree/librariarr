@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
-import { cleanDatabase, disconnectTestDb } from "../../setup/test-db";
+import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
+import { MASKED_VALUE } from "@/lib/api/sanitize";
 import {
   callRoute,
   callRouteWithParams,
@@ -50,7 +51,7 @@ describe("Sonarr integration endpoints", () => {
     await cleanDatabase();
     clearMockSession();
     vi.clearAllMocks();
-    mockTestConnection.mockResolvedValue({ ok: true, appName: "Sonarr", version: "4.0" });
+    mockTestConnection.mockResolvedValue({ ok: true, appName: "Sonarr", version: "4.0.11.2680" });
     mockGetSeries.mockResolvedValue([]);
     mockGetQualityProfiles.mockResolvedValue([{ id: 1, name: "HD-1080p" }]);
     mockGetTags.mockResolvedValue([{ id: 1, label: "test-tag" }]);
@@ -127,7 +128,10 @@ describe("Sonarr integration endpoints", () => {
         method: "POST",
         body: { url: "http://sonarr:8989", apiKey: "key" },
       });
-      expect(res1.status).toBe(400);
+      expect(await expectJson(res1, 400)).toEqual({
+        error: "Validation failed",
+        details: [expect.stringMatching(/^name: /)],
+      });
 
       // Missing url
       const res2 = await callRoute(POST, {
@@ -135,7 +139,10 @@ describe("Sonarr integration endpoints", () => {
         method: "POST",
         body: { name: "Sonarr", apiKey: "key" },
       });
-      expect(res2.status).toBe(400);
+      expect(await expectJson(res2, 400)).toEqual({
+        error: "Validation failed",
+        details: [expect.stringMatching(/^url: /)],
+      });
 
       // Missing apiKey
       const res3 = await callRoute(POST, {
@@ -143,7 +150,13 @@ describe("Sonarr integration endpoints", () => {
         method: "POST",
         body: { name: "Sonarr", url: "http://sonarr:8989" },
       });
-      expect(res3.status).toBe(400);
+      expect(await expectJson(res3, 400)).toEqual({
+        error: "Validation failed",
+        details: [expect.stringMatching(/^apiKey: /)],
+      });
+
+      expect(mockTestConnection).not.toHaveBeenCalled();
+      expect(await getTestPrisma().sonarrInstance.count()).toBe(0);
     });
 
     it("returns 400 when connection test fails", async () => {
@@ -158,8 +171,8 @@ describe("Sonarr integration endpoints", () => {
         body: { name: "Bad Sonarr", url: "http://bad:8989", apiKey: "key" },
       });
       const body = await expectJson<{ error: string; detail: string }>(response, 400);
-      expect(body.error).toContain("Failed to connect to Sonarr");
-      expect(body.detail).toBe("Connection refused");
+      expect(body).toEqual({ error: "Failed to connect to Sonarr", detail: "Connection refused" });
+      expect(await getTestPrisma().sonarrInstance.count()).toBe(0);
     });
 
     it("creates a new instance on success", async () => {
@@ -178,7 +191,19 @@ describe("Sonarr integration endpoints", () => {
       );
       expect(body.instance.name).toBe("My Sonarr");
       expect(body.instance.url).toBe("http://sonarr:8989");
-      expect(body.instance.id).toBeDefined();
+      // The stored key never goes back to the browser.
+      expect(body.instance).toMatchObject({ apiKey: MASKED_VALUE });
+      expect(mockTestConnection).toHaveBeenCalledTimes(1);
+
+      const stored = await getTestPrisma().sonarrInstance.findUnique({ where: { id: body.instance.id } });
+      expect(stored).toMatchObject({
+        userId: user.id,
+        name: "My Sonarr",
+        url: "http://sonarr:8989",
+        apiKey: "test-key",
+        externalUrl: null,
+        enabled: true,
+      });
     });
 
     it("strips trailing slashes from url", async () => {
@@ -258,6 +283,9 @@ describe("Sonarr integration endpoints", () => {
       const body = await expectJson<{ instance: { name: string } }>(response, 200);
       expect(body.instance.name).toBe("Renamed");
       expect(mockTestConnection).not.toHaveBeenCalled();
+
+      const stored = await getTestPrisma().sonarrInstance.findUnique({ where: { id: instance.id } });
+      expect(stored).toMatchObject({ name: "Renamed", url: instance.url });
     });
 
     it("returns 400 when connection test fails on update", async () => {
@@ -276,8 +304,11 @@ describe("Sonarr integration endpoints", () => {
           body: { url: "http://bad:8989" },
         }
       );
-      const body = await expectJson<{ error: string }>(response, 400);
-      expect(body.error).toContain("Failed to connect to Sonarr");
+      const body = await expectJson<{ error: string; detail: string }>(response, 400);
+      expect(body).toEqual({ error: "Failed to connect to Sonarr", detail: "Timeout" });
+
+      const stored = await getTestPrisma().sonarrInstance.findUnique({ where: { id: instance.id } });
+      expect(stored!.url).toBe(instance.url);
     });
 
     it("updates instance fields successfully", async () => {
@@ -297,6 +328,11 @@ describe("Sonarr integration endpoints", () => {
       const body = await expectJson<{ instance: { name: string; url: string } }>(response, 200);
       expect(body.instance.name).toBe("Updated Sonarr");
       expect(body.instance.url).toBe("http://new-sonarr:8989");
+      // A new URL is tested before it is saved.
+      expect(mockTestConnection).toHaveBeenCalledTimes(1);
+
+      const stored = await getTestPrisma().sonarrInstance.findUnique({ where: { id: instance.id } });
+      expect(stored).toMatchObject({ name: "Updated Sonarr", url: "http://new-sonarr:8989" });
     });
   });
 
@@ -386,14 +422,21 @@ describe("Sonarr integration endpoints", () => {
         method: "POST",
         body: { apiKey: "key" },
       });
-      expect(res1.status).toBe(400);
+      expect(await expectJson(res1, 400)).toEqual({
+        error: "Validation failed",
+        details: [expect.stringMatching(/^url: /)],
+      });
 
       const res2 = await callRoute(TEST_POST, {
         url: "/api/integrations/sonarr/test",
         method: "POST",
         body: { url: "http://sonarr:8989" },
       });
-      expect(res2.status).toBe(400);
+      expect(await expectJson(res2, 400)).toEqual({
+        error: "Validation failed",
+        details: [expect.stringMatching(/^apiKey: /)],
+      });
+      expect(mockTestConnection).not.toHaveBeenCalled();
     });
 
     it("returns connection test result on success", async () => {
@@ -470,28 +513,34 @@ describe("Sonarr integration endpoints", () => {
 
       mockGetSeries.mockResolvedValue([
         {
-          tvdbId: 12345,
-          tags: [1],
+          id: 3,
+          title: "Severance",
+          year: 2022,
+          tvdbId: 371980,
+          imdbId: "tt11280740",
           qualityProfileId: 1,
           monitored: true,
-          ratings: { votes: 200, value: 8.5 },
+          path: "/tv/Severance",
+          tags: [1],
+          ratings: { votes: 2_150, value: 8.5 },
+          status: "continuing",
+          seriesType: "standard",
         },
       ]);
 
       const response = await callRouteWithParams(METADATA_GET, { id: instance.id });
-      const body = await expectJson<{
-        series: Record<string, { tags: string[]; qualityProfile: string; monitored: boolean; rating: number | null }>;
-        tags: { id: number; label: string }[];
-        qualityProfiles: { id: number; name: string }[];
-      }>(response, 200);
+      const body = await expectJson(response, 200);
 
-      expect(body.series["12345"]).toBeDefined();
-      expect(body.series["12345"].tags).toEqual(["test-tag"]);
-      expect(body.series["12345"].qualityProfile).toBe("HD-1080p");
-      expect(body.series["12345"].monitored).toBe(true);
-      expect(body.series["12345"].rating).toBe(8.5);
-      expect(body.tags).toHaveLength(1);
-      expect(body.qualityProfiles).toHaveLength(1);
+      expect(body).toEqual({
+        series: {
+          "371980": { tags: ["test-tag"], qualityProfile: "HD-1080p", monitored: true, rating: 8.5 },
+        },
+        tags: [{ id: 1, label: "test-tag" }],
+        qualityProfiles: [{ id: 1, name: "HD-1080p" }],
+        languages: ["English"],
+        statuses: ["continuing"],
+        seriesTypes: ["standard"],
+      });
     });
   });
 });

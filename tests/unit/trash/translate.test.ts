@@ -45,12 +45,19 @@ describe("custom format translation", () => {
 
   it("builds an Arr custom-format payload and preserves id when updating", () => {
     const created = trashCfToArr(amzn);
-    expect(created.id).toBeUndefined();
-    expect(created.includeCustomFormatWhenRenaming).toBe(true);
-    expect(created.specifications[0].fields).toEqual([{ name: "value", value: "\\bamzn\\b" }]);
+    expect(created).toEqual({
+      name: "AMZN",
+      includeCustomFormatWhenRenaming: true,
+      specifications: [
+        { name: "Amazon", implementation: "ReleaseTitleSpecification", negate: false, required: true, fields: [{ name: "value", value: "\\bamzn\\b" }] },
+        { name: "WEBDL", implementation: "SourceSpecification", negate: false, required: false, fields: [{ name: "value", value: 7 }] },
+      ],
+    });
+    // No id on a create; the trash_id never reaches the app.
+    expect(created).not.toHaveProperty("id");
 
     const updated = trashCfToArr(amzn, 42);
-    expect(updated.id).toBe(42);
+    expect(updated).toEqual({ ...created, id: 42 });
   });
 
   it("produces an id-agnostic comparable that matches between guide and Arr shapes", () => {
@@ -122,7 +129,9 @@ describe("custom format translation", () => {
     };
     const after = cfComparable(payload);
     const before = projectManagedFields(cfComparable(arr), after);
-    expect(diffValues(before, after).length).toBeGreaterThan(0);
+    expect(diffValues(before, after)).toEqual([
+      { path: "specifications.Japanese Language.fields.value", before: 99, after: 8, kind: "changed" },
+    ]);
   });
 
   it("finds an Arr custom format by name (case-insensitive fallback)", () => {
@@ -363,13 +372,17 @@ describe("quality profile builder", () => {
       ["cf-x", { trash_id: "cf-x", name: "Ghost CF", trash_scores: { default: 50 }, specifications: [] }],
     ]);
     const { warnings } = buildQualityProfile(t, schema, "RADARR", map);
-    expect(warnings.some((w) => w.includes("Ghost CF"))).toBe(true);
+    expect(warnings).toEqual([
+      'Custom format "Ghost CF" (score 50) is not present in this instance — manage & sync it to apply its score.',
+    ]);
   });
 
   it("warns and falls back when the cutoff is unknown", () => {
     const t: TrashQualityProfile = { ...trash, cutoff: "Nonexistent" };
     const { payload, warnings } = buildQualityProfile(t, schema, "RADARR", cfMap);
-    expect(warnings.some((w) => w.includes("Cutoff"))).toBe(true);
+    expect(warnings).toEqual([
+      'Cutoff "Nonexistent" not found in profile — using highest allowed quality.',
+    ]);
     // Falls back to the highest allowed quality (Bluray-1080p).
     expect(payload.cutoff).toBe(7);
   });
@@ -409,9 +422,13 @@ describe("quality profile builder", () => {
         it.name === "WEB 1080p" ? { ...it, items: [it.items[0]] } : it,
       ),
     };
+    const dropped = group!.items[1].quality!.name;
     expect(
-      diffValues(profileComparable(changedMembership, "RADARR"), profileComparable(payload, "RADARR")).length,
-    ).toBeGreaterThan(0);
+      diffValues(profileComparable(changedMembership, "RADARR"), profileComparable(payload, "RADARR")),
+    ).toEqual([
+      // Restoring the dropped member is the one change; the kept one is untouched.
+      { path: `qualities[WEB 1080p].members[${dropped}]`, before: undefined, after: { name: dropped }, kind: "added" },
+    ]);
   });
 
   it("honors the profile's declared score set (not just default)", () => {
@@ -444,8 +461,12 @@ describe("quality profile builder", () => {
 
   it("warns (does not silently substitute) when a named language can't be resolved", () => {
     const t: TrashQualityProfile = { ...trash, language: "French" };
-    const { warnings } = buildQualityProfile(t, schema, "RADARR", cfMap, undefined, []);
-    expect(warnings.some((w) => w.includes("French"))).toBe(true);
+    const { payload, warnings } = buildQualityProfile(t, schema, "RADARR", cfMap, undefined, []);
+    expect(warnings).toEqual([
+      'Language "French" could not be resolved on this instance — keeping the profile\'s existing language.',
+    ]);
+    // A new profile has no existing language to keep: the schema default stands.
+    expect(payload.language).toEqual({ id: -1, name: "Any" });
   });
 
   it("keeps the existing profile's language when a named language can't be resolved", () => {

@@ -78,7 +78,7 @@ describe("useCardSize", () => {
     const { result } = renderHook(() => useCardSize());
     expect(result.current.cardWidth).toBe(100);
     expect(result.current.columns).toBe(2);
-    expect(result.current.landscapeGridStyle.gridTemplateColumns).toContain("140px");
+    expect(result.current.landscapeGridStyle.gridTemplateColumns).toBe("repeat(auto-fill, minmax(140px, 1fr))");
     act(() => result.current.setSize("small"));
     expect(result.current.cardWidth).toBe(80);
     // (327 + 16) / (80 + 16) = 3.57
@@ -126,5 +126,7 @@ describe("useCardSize", () => {
     const { result } = renderHook(() => useCardSize());
     expect(result.current.size).toBe("medium");
     expect(() => act(() => result.current.setSize("large"))).not.toThrow();
+    // Nothing could be stored, so the snapshot still reads the default.
+    expect(result.current.size).toBe("medium");
   });
 });

@@ -219,8 +219,11 @@ describe("ServerRealtimeConnection — lifecycle edges", () => {
     const sentAtClose = socket.sent.length;
     socket.fireClose();
     vi.advanceTimersByTime(30_000 * 3 - 1000);
-    // Only the reconnected socket (never opened) exists; the old one got nothing more.
+    // The old socket got nothing more, and neither did its replacement — still
+    // connecting, which a surviving interval would have sent KeepAlives to.
     expect(socket.sent).toHaveLength(sentAtClose);
+    expect(sockets).toHaveLength(2);
+    expect(sockets[1].sent).toEqual([]);
   });
 
   it("passes non-Sessions Jellyfin frames through the normalizer every time", () => {
@@ -228,7 +231,13 @@ describe("ServerRealtimeConnection — lifecycle edges", () => {
     const socket = sockets[0];
     socket.fireOpen();
     events.length = 0;
-    const frame = { MessageType: "UserDataChanged", Data: { UserDataList: [{ ItemId: "a" }] } };
+    const frame = {
+      MessageType: "UserDataChanged",
+      Data: {
+        UserId: "6c1e2d3f4a5b4c6d8e9f0a1b2c3d4e5f",
+        UserDataList: [{ ItemId: "2c1f4d0e9a8b4c3d8e7f6a5b4c3d2e1f", Played: true, PlayCount: 1, Key: "2c1f4d0e9a8b4c3d8e7f6a5b4c3d2e1f" }],
+      },
+    };
     socket.fireMessage(frame);
     socket.fireMessage(frame);
     const watch = events.filter((e) => e.kind === "watch-changed");

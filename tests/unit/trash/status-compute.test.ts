@@ -114,8 +114,11 @@ describe("resolveInstance", () => {
 
   it("resolves a Radarr instance", async () => {
     mockPrisma.radarrInstance.findFirst.mockResolvedValue(row);
-    const r = await resolveInstance("u1", "RADARR", "i");
-    expect(r?.serviceType).toBe("RADARR");
+    await expect(resolveInstance("u1", "RADARR", "i")).resolves.toEqual({
+      serviceType: "RADARR", id: "i", name: "N", url: "http://u", apiKey: "a", enabled: false,
+    });
+    expect(mockPrisma.radarrInstance.findFirst).toHaveBeenCalledWith({ where: { id: "i", userId: "u1" } });
+    expect(mockPrisma.sonarrInstance.findFirst).not.toHaveBeenCalled();
   });
 
   it("returns null when not found", async () => {
@@ -134,6 +137,9 @@ describe("listGuideInstances", () => {
       { serviceType: "SONARR", id: "s", name: "S", enabled: true },
       { serviceType: "RADARR", id: "r", name: "R", enabled: false },
     ]);
+    const query = { where: { userId: "u1" }, orderBy: { createdAt: "desc" } };
+    expect(mockPrisma.sonarrInstance.findMany).toHaveBeenCalledWith(query);
+    expect(mockPrisma.radarrInstance.findMany).toHaveBeenCalledWith(query);
   });
 });
 

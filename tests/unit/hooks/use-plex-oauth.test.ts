@@ -129,13 +129,14 @@ describe("usePlexOAuth", () => {
   });
 
   it("reports the server's error when init fails and closes the popup", async () => {
-    fetchMock.mockImplementationOnce(async () => ({ ok: false, json: async () => ({ error: "Too many requests" }) }));
+    // The init route's rate-limit refusal.
+    fetchMock.mockImplementationOnce(async () => ({ ok: false, status: 429, json: async () => ({ error: "Too many attempts. Try again later." }) }));
     const { result, onError } = setup();
     await act(async () => {
       await result.current.startAuth();
     });
-    expect(result.current.error).toBe("Too many requests");
-    expect(onError).toHaveBeenCalledWith("Too many requests");
+    expect(result.current.error).toBe("Too many attempts. Try again later.");
+    expect(onError).toHaveBeenCalledWith("Too many attempts. Try again later.");
     expect(popup.close).toHaveBeenCalled();
     expect(result.current.isLoading).toBe(false);
     expect(pinCalls()).toHaveLength(0);
@@ -224,11 +225,23 @@ describe("usePlexOAuth", () => {
       await result.current.startAuth();
     });
     const polls = pinCalls().length;
-    Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
-    await act(async () => {
-      document.dispatchEvent(new Event("visibilitychange"));
-    });
-    expect(pinCalls()).toHaveLength(polls + 1);
+    try {
+      // Going to the background does not poll.
+      Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
+      await act(async () => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      expect(pinCalls()).toHaveLength(polls);
+
+      Object.defineProperty(document, "visibilityState", { value: "visible", configurable: true });
+      await act(async () => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      expect(pinCalls()).toHaveLength(polls + 1);
+    } finally {
+      // Drop the own property so the document's real getter applies again.
+      delete (document as unknown as Record<string, unknown>).visibilityState;
+    }
   });
 
   it("stops every timer on unmount", async () => {

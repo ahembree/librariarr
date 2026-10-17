@@ -110,6 +110,8 @@ describe("useCardDisplay", () => {
   });
 
   it("keeps other library types' preferences when one type changes", () => {
+    // Fake timers so the debounced PUT this schedules cannot fire into a later test.
+    vi.useFakeTimers();
     localStorage.setItem(KEY, JSON.stringify({ MUSIC: { badges: { audioCodecs: false }, metadata: {}, servers: true } }));
     const { result } = renderHook(() => useCardDisplay("MOVIE"));
     act(() => result.current.setVisible("metadata", "year", false));

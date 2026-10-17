@@ -127,7 +127,7 @@ describe("health-cache circuit breaker", () => {
       expect(err.code).toBe("SERVER_UNREACHABLE");
       expect(err.name).toBe("ServerUnreachableError");
       expect(err.baseURL).toBe("http://plex:32400");
-      expect(err.message).toContain("ECONNREFUSED");
+      expect(err.message).toBe("Server http://plex:32400 is unreachable (last error: ECONNREFUSED)");
       expect(err).toBeInstanceOf(Error);
     });
 

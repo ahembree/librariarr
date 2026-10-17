@@ -103,10 +103,17 @@ describe("ServerRealtimeConnection", () => {
     expect(statuses).toContainEqual(["s2", "connecting"]);
 
     sockets[0].fireOpen();
-    expect(sockets[0].sent).toContain(JSON.stringify({ MessageType: "SessionsStart", Data: "0,1500" }));
-    expect(statuses.at(-1)).toEqual(["s2", "connected"]);
-    expect(events.some((e) => e.kind === "session-changed")).toBe(true);
-    expect(events.some((e) => e.kind === "server-status" && e.status === "connected")).toBe(true);
+    expect(sockets[0].sent).toEqual([JSON.stringify({ MessageType: "SessionsStart", Data: "0,1500" })]);
+    expect(statuses).toEqual([
+      ["s2", "connecting"],
+      ["s2", "connected"],
+    ]);
+    expect(events.map((e) => [e.kind, e.status ?? e.detail?.reason])).toEqual([
+      ["server-status", "connecting"],
+      ["server-status", "connected"],
+      // The initial refresh, so the current sessions are read at once.
+      ["session-changed", "connected"],
+    ]);
   });
 
   it("sends no subscription for Plex", () => {
@@ -178,13 +185,15 @@ describe("ServerRealtimeConnection", () => {
     jf.sockets[0].fireOpen();
     jf.sockets[0].sent.length = 0;
     vi.advanceTimersByTime(30_000);
-    expect(jf.sockets[0].sent).toContain(JSON.stringify({ MessageType: "KeepAlive" }));
+    expect(jf.sockets[0].sent).toEqual([JSON.stringify({ MessageType: "KeepAlive" })]);
 
     const plex = makeFactory();
     new ServerRealtimeConnection(plexConfig, callbacks(), plex.factory).start();
     plex.sockets[0].fireOpen();
     vi.advanceTimersByTime(30_000);
-    expect(plex.sockets[0].pings).toBeGreaterThanOrEqual(1);
+    expect(plex.sockets[0].pings).toBe(1);
+    // Plex keeps alive with a protocol ping, never a JSON frame.
+    expect(plex.sockets[0].sent).toEqual([]);
   });
 
   it("reconnects with exponential backoff after a close", () => {

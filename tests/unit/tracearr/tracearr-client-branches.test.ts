@@ -28,7 +28,7 @@ import { IntegrationError } from "@/lib/integration-error";
 import { logger } from "@/lib/logger";
 
 const HISTORY_URL = "/api/v2/public/history";
-const HEALTH = { status: "ok", version: "1.9.0", timestamp: "x", servers: [] };
+const HEALTH = { status: "ok", version: "2.0.0", timestamp: "2026-09-03T12:00:00.000Z", servers: [] };
 
 function axiosFailure(status: number | null, headers: Record<string, string> = {}): AxiosError {
   const error = new Error(
@@ -138,8 +138,14 @@ describe("TracearrClient (branch coverage)", () => {
         .mockResolvedValueOnce({ data: HEALTH })
         .mockResolvedValueOnce(historyBody([]));
       const r = await client.testConnection();
-      expect(r).toEqual({ ok: true, version: "1.9.0", serverCount: 0 });
-      expect(mockAxiosInstance.get.mock.calls[1][1].params).toEqual({ pageSize: 1 });
+      expect(r).toEqual({ ok: true, version: "2.0.0", serverCount: 0 });
+      // Both probes skip the transport retries (NO_RETRY): a Test button
+      // reports the first failure instead of waiting out four timeouts.
+      expect(mockAxiosInstance.get.mock.calls[0]).toEqual(["/api/v1/public/health", { __noRetry: true }]);
+      expect(mockAxiosInstance.get.mock.calls[1]).toEqual([
+        HISTORY_URL,
+        { params: { pageSize: 1 }, signal: undefined, __noRetry: true },
+      ]);
     });
   });
 
@@ -256,18 +262,44 @@ describe("TracearrClient (branch coverage)", () => {
       expect(mockAxiosInstance.get).not.toHaveBeenCalled();
     });
 
-    it("tolerates malformed pages, identities and accounts", async () => {
+    it("skips malformed identities and accounts, and follows the cursor", async () => {
       mockAxiosInstance.get
-        .mockResolvedValueOnce({ data: { data: [null, { accounts: null }, { accounts: [null, { server_id: "srv", server_user_id: "", username: "x" }, { server_id: "srv", server_user_id: "u1", username: "" }, { server_id: "srv", server_user_id: "u2", username: "bob" }] }], meta: { nextCursor: "n1" } } })
-        .mockResolvedValueOnce({ data: null });
+        .mockResolvedValueOnce({
+          data: {
+            data: [
+              null,
+              { accounts: null },
+              {
+                accounts: [
+                  null,
+                  { server_id: "srv", server_user_id: "", username: "x" },
+                  { server_id: "srv", server_user_id: "u1", username: "" },
+                  { server_id: "srv", server_user_id: "u2", username: "bob" },
+                ],
+              },
+            ],
+            meta: { nextCursor: "n1", pageSize: MAX_PAGE_SIZE },
+          },
+        })
+        .mockResolvedValueOnce({
+          data: {
+            data: [{ accounts: [{ server_id: "srv", server_user_id: "u3", username: "carol" }] }],
+            meta: { nextCursor: null, pageSize: MAX_PAGE_SIZE },
+          },
+        });
       const names = await client.getServerAccountNames("srv");
-      expect([...names.entries()]).toEqual([["u2", "bob"]]);
+      expect([...names.entries()]).toEqual([["u2", "bob"], ["u3", "carol"]]);
       expect(mockAxiosInstance.get).toHaveBeenCalledTimes(2);
-      expect(mockAxiosInstance.get.mock.calls[1][1].params.cursor).toBe("n1");
+      expect(mockAxiosInstance.get.mock.calls[0][1].params).toEqual({ pageSize: MAX_PAGE_SIZE, include_removed: "true" });
+      expect(mockAxiosInstance.get.mock.calls[1][1].params).toEqual({
+        pageSize: MAX_PAGE_SIZE,
+        include_removed: "true",
+        cursor: "n1",
+      });
     });
 
     it("stops at a repeated cursor", async () => {
-      const page = { data: { data: [], meta: { nextCursor: "same" } } };
+      const page = { data: { data: [], meta: { nextCursor: "same", pageSize: MAX_PAGE_SIZE } } };
       mockAxiosInstance.get.mockResolvedValueOnce(page).mockResolvedValueOnce(page);
       await client.getServerAccountNames("srv");
       expect(mockAxiosInstance.get).toHaveBeenCalledTimes(2);

@@ -76,7 +76,7 @@ describe("usePlexOAuth cancellation", () => {
     });
     act(() => result.current.cancel());
     await act(async () => {
-      init.resolve({ ok: false, json: async () => ({ error: "boom" }) });
+      init.resolve({ ok: false, json: async () => ({ error: "Failed to initialize Plex authentication" }) });
       await started;
     });
     expect(onError).not.toHaveBeenCalled();

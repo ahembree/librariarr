@@ -2,6 +2,9 @@ import { describe, it, expect } from "vitest";
 import { NextRequest } from "next/server";
 import { proxy } from "@/proxy";
 
+// Shaped like a real key: "lbr_" and 43 base62 characters.
+const API_KEY = "lbr_4fQ9xZb2Lk7mN1pR8sT3vW6yC0dE5gH2jK9qX4zA7bD";
+
 function req(url: string, init?: { method?: string; headers?: Record<string, string>; cookie?: boolean }) {
   const headers = new Headers(init?.headers ?? {});
   if (init?.cookie) headers.set("cookie", "librariarr_session=sealed");
@@ -93,7 +96,7 @@ describe("proxy — public API (/api/v1)", () => {
     const res = proxy(
       req("http://localhost:3000/api/v1/jobs/sync", {
         method,
-        headers: { host: "localhost:3000", authorization: "Bearer lbr_x" },
+        headers: { host: "localhost:3000", authorization: `Bearer ${API_KEY}` },
       })
     );
     expect(res.headers.get("x-middleware-next")).toBe("1");
@@ -103,7 +106,7 @@ describe("proxy — public API (/api/v1)", () => {
     const res = proxy(
       req("http://localhost:3000/api/v1/tools/maintenance", {
         method: "PUT",
-        headers: { host: "localhost:3000", origin: "http://evil.example", authorization: "Bearer lbr_x" },
+        headers: { host: "localhost:3000", origin: "http://evil.example", authorization: `Bearer ${API_KEY}` },
       })
     );
     expect(res.status).toBe(403);
@@ -130,8 +133,11 @@ describe("proxy — page auth gate", () => {
     expect(res.headers.get("x-middleware-next")).toBe("1");
   });
 
-  it("does not redirect the login page itself", () => {
-    const res = proxy(req("http://localhost:3000/login", { headers: { host: "localhost:3000" } }));
-    expect(res.headers.get("x-middleware-next")).toBe("1");
+  it("does not redirect the login or onboarding pages", () => {
+    for (const path of ["/login", "/login/reauth", "/onboarding"]) {
+      const res = proxy(req(`http://localhost:3000${path}`, { headers: { host: "localhost:3000" } }));
+      expect(res.headers.get("x-middleware-next"), path).toBe("1");
+      expect(res.headers.get("location"), path).toBeNull();
+    }
   });
 });

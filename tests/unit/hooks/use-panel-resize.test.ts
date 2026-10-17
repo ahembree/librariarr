@@ -115,13 +115,14 @@ describe("usePanelResize", () => {
     expect(localStorage.getItem("panel-w")).toBe("400");
   });
 
-  it("a second mouseup after the drag ended is a no-op", () => {
+  it("a mouseup after the drag ended (here by touchcancel) is a no-op", () => {
     const { result } = renderHook(() => usePanelResize(OPTS));
     act(() => result.current.resizeHandleProps.onMouseDown(mouseDown(100).e));
     act(() => {
       document.dispatchEvent(new Event("touchcancel"));
     });
     expect(result.current.isDragging).toBe(false);
+    expect(localStorage.getItem("panel-w")).toBe("400");
     localStorage.removeItem("panel-w");
     act(() => {
       document.dispatchEvent(new MouseEvent("mouseup"));

@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { renderHook, waitFor } from "@testing-library/react";
+import { renderHook, waitFor, act } from "@testing-library/react";
 import {
   useIntegrationsHealth,
   deriveIntegrationsStatus,
@@ -16,10 +16,20 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
 const inst = (id: string, reachable: boolean) => ({ id, name: `name-${id}`, reachable, error: reachable ? null : "down" });
+
+const EMPTY_TYPE = { configured: 0, reachable: 0, instances: [] };
+const EMPTY_HEALTH: IntegrationsHealth = {
+  sonarr: EMPTY_TYPE,
+  radarr: EMPTY_TYPE,
+  lidarr: EMPTY_TYPE,
+  seerr: EMPTY_TYPE,
+  arrAnyReachable: false,
+};
 
 const HEALTH: IntegrationsHealth = {
   sonarr: { configured: 2, reachable: 1, instances: [inst("s1", true), inst("s2", false)] },
@@ -42,28 +52,32 @@ describe("useIntegrationsHealth", () => {
   });
 
   it("keeps the empty snapshot on a non-OK response", async () => {
-    fetchMock.mockResolvedValue({ ok: false, json: async () => HEALTH });
+    const json = vi.fn(async () => ({ error: "Unauthorized" }));
+    fetchMock.mockResolvedValue({ ok: false, status: 401, json });
     const { result } = renderHook(() => useIntegrationsHealth());
     await waitFor(() => expect(result.current.loading).toBe(false));
-    expect(result.current.health.radarr.configured).toBe(0);
+    expect(result.current.health).toEqual(EMPTY_HEALTH);
+    expect(json).not.toHaveBeenCalled();
   });
 
   it("stops loading on a network error", async () => {
     fetchMock.mockRejectedValue(new Error("offline"));
     const { result } = renderHook(() => useIntegrationsHealth());
     await waitFor(() => expect(result.current.loading).toBe(false));
-    expect(result.current.health.arrAnyReachable).toBe(false);
+    expect(result.current.health).toEqual(EMPTY_HEALTH);
   });
 
-  it("ignores a response that lands after unmount", async () => {
+  it("settles quietly when the response lands after unmount", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     let resolve!: (v: unknown) => void;
     fetchMock.mockReturnValue(new Promise((r) => (resolve = r)));
     const { result, unmount } = renderHook(() => useIntegrationsHealth());
     unmount();
-    resolve({ ok: true, json: async () => HEALTH });
-    await new Promise((r) => setTimeout(r, 0));
-    expect(result.current.loading).toBe(true);
-    expect(result.current.health.arrAnyReachable).toBe(false);
+    await act(async () => {
+      resolve({ ok: true, json: async () => HEALTH });
+    });
+    expect(result.current).toEqual({ health: EMPTY_HEALTH, loading: true });
+    expect(consoleError).not.toHaveBeenCalled();
   });
 });
 

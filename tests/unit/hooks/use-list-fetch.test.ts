@@ -1,6 +1,5 @@
 // @vitest-environment happy-dom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { StrictMode, createElement, type ReactNode } from "react";
 import { renderHook, act } from "@testing-library/react";
 import { useListFetch } from "@/hooks/use-list-fetch";
 
@@ -90,9 +89,13 @@ describe("useListFetch", () => {
 
   it("fetches exactly once on a Strict Mode mount", async () => {
     const fetchList = vi.fn();
-    const wrapper = ({ children }: { children: ReactNode }) => createElement(StrictMode, null, children);
-    renderHook(() => useListFetch(fetchList), { wrapper });
+    // `reactStrictMode` makes StrictMode the root, so the effect really runs,
+    // cleans up and runs again; a <StrictMode> passed as `wrapper` sits under
+    // the root and does not double-invoke effects.
+    renderHook(() => useListFetch(fetchList), { reactStrictMode: true });
     await flushMicrotasks();
+    // In the microtask, not after a debounce the second effect run started.
+    expect(fetchList).toHaveBeenCalledTimes(1);
     act(() => {
       vi.advanceTimersByTime(1000);
     });

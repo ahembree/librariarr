@@ -80,7 +80,8 @@ describe("wsSocketFactory", () => {
     const sock = wsSocketFactory(`ws://127.0.0.1:${port}/socket`, { rejectUnauthorized: false });
     const errP = new Promise<Error>((resolve) => sock.onError(resolve));
     const codeP = new Promise<number>((resolve) => sock.onClose((c) => resolve(c)));
-    expect(await errP).toBeInstanceOf(Error);
+    // Nothing listens on the port any more, so the TCP connect is refused.
+    expect(await errP).toMatchObject({ code: "ECONNREFUSED" });
     expect(await codeP).toBe(1006);
   });
 

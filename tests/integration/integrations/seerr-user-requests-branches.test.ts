@@ -113,11 +113,18 @@ describe("GET /api/seerr/users/[userKey]/requests — partial walks, fallbacks, 
   it("reports a partial answer when an instance cannot be read, and does not cache it", async () => {
     await createTestSeerrInstance(userId, { name: "Good", url: "http://good:5055" });
     await createTestSeerrInstance(userId, { name: "Bad", url: "http://bad:5055" });
-    m.requestsByUrl.set("http://good:5055", [request(1, "movie", { username: "bob" }, { tmdbId: 1 })]);
+    m.getMovie.mockRejectedValue(new Error("down"));
+    m.requestsByUrl.set("http://good:5055", [
+      request(1, "movie", { username: "bob" }, { tmdbId: 949 }),
+      request(2, "movie", { username: "alice" }, { tmdbId: 680 }),
+    ]);
     m.requestsByUrl.set("http://bad:5055", new Error("ECONNREFUSED"));
 
     const first = await get();
-    expect(first).toEqual({ user: null, partial: true, requests: [] });
+    // The readable instance's requests are still listed, flagged as partial.
+    expect(first.partial).toBe(true);
+    expect(first.user).toEqual({ seerrUsername: "alice", plexUsername: null, avatar: null });
+    expect(first.requests.map((r) => r.seerrId)).toEqual([2]);
     expect(m.warn).toHaveBeenCalledWith(
       "Seerr",
       expect.stringContaining("Bad"),
@@ -142,11 +149,20 @@ describe("GET /api/seerr/users/[userKey]/requests — partial walks, fallbacks, 
     m.getMovie.mockRejectedValue(new Error("nope"));
     m.requestsByUrl.set("http://s:5055", [
       request(1, "movie", { username: "alice", plexUsername: null, avatar: null }, { tmdbId: 11 }),
-      request(2, "movie", { username: "Alice B", plexUsername: "alice", avatar: "/a.png" }, { tmdbId: 12 }),
+      request(
+        2,
+        "movie",
+        { username: "Alice B", plexUsername: "alice", avatar: "https://plex.tv/users/0f3a9c1e2b4d5a6f/avatar?c=1718000000" },
+        { tmdbId: 12 },
+      ),
     ]);
     const body = await get();
-    expect(body.user).toEqual({ seerrUsername: "alice", plexUsername: "alice", avatar: "/a.png" });
-    expect(body.requests.every((r) => r.watch.correlatable)).toBe(true);
+    expect(body.user).toEqual({
+      seerrUsername: "alice",
+      plexUsername: "alice",
+      avatar: "https://plex.tv/users/0f3a9c1e2b4d5a6f/avatar?c=1718000000",
+    });
+    expect(body.requests.map((r) => r.watch.correlatable)).toEqual([true, true]);
   });
 
   it("labels requests Seerr cannot describe with placeholders", async () => {
@@ -230,16 +246,32 @@ describe("GET /api/seerr/users/[userKey]/requests — partial walks, fallbacks, 
       eps.push(ep);
     }
     // alice watched episodes 1 and 2 (twice for 1); bob watched 3; one play of 3
-    // by alice was abandoned and does not count.
-    for (const [ep, who, watched] of [
+    // by alice was abandoned and does not count. Native rows carry no completion
+    // verdict (`watched` null); Tracearr rows carry one.
+    const plays = [
       [eps[0], "alice", null],
       [eps[0], "alice", null],
       [eps[1], "alice", true],
       [eps[2], "bob", null],
       [eps[2], "alice", false],
-    ] as const) {
+    ] as const;
+    for (const [i, [ep, who, watched]] of plays.entries()) {
       await prisma.watchHistory.create({
-        data: { mediaItemId: ep.id, mediaServerId: server.id, serverUsername: who, watched },
+        data: {
+          mediaItemId: ep.id,
+          mediaServerId: server.id,
+          serverUsername: who,
+          watchedAt: new Date(Date.UTC(2024, 5, 1 + i, 20)),
+          ...(watched === null
+            ? {}
+            : {
+                source: "TRACEARR",
+                sourceEventId: `0b6f2d1c-4a3e-4f5b-9c8d-7e6f5a4b3c2${i}`,
+                watched,
+                state: "stopped",
+                percentComplete: watched ? 97 : 12,
+              }),
+        },
       });
     }
     await createTestSeerrInstance(userId, { url: "http://s:5055" });
@@ -258,13 +290,13 @@ describe("GET /api/seerr/users/[userKey]/requests — partial walks, fallbacks, 
     const server = await createTestServer(userId);
     const lib = await createTestLibrary(server.id, { type: "SERIES" });
     const ep = await createTestMediaItem(lib.id, {
-      type: "SERIES", title: "E1", parentTitle: "Dark", seasonNumber: 1, episodeNumber: 1, seriesKey: "tvdb:1",
+      type: "SERIES", title: "E1", parentTitle: "Dark", seasonNumber: 1, episodeNumber: 1, seriesKey: "tvdb:334824",
     });
     await getTestPrisma().mediaItem.update({ where: { id: ep.id }, data: { dedupKey: "dark-1" } });
-    await createTestExternalId(ep.id, "TVDB", "1");
+    await createTestExternalId(ep.id, "TVDB", "334824");
     await createTestSeerrInstance(userId, { url: "http://s:5055" });
     m.requestsByUrl.set("http://s:5055", [
-      request(1, "tv", { username: "alice", plexUsername: "alice" }, { tmdbId: 5, tvdbId: 1 }),
+      request(1, "tv", { username: "alice", plexUsername: "alice" }, { tmdbId: 70523, tvdbId: 334824 }),
     ]);
     const [show] = (await get()).requests;
     expect(show.watch).toEqual({ correlatable: true, watched: false, episodesWatched: 0, episodesAvailable: 1 });

@@ -42,7 +42,8 @@ afterAll(async () => {
 
 describe("GET /api/tools/realtime/status", () => {
   it("returns 401 when not authenticated", async () => {
-    await expectJson(await callRoute(GET), 401);
+    expect(await expectJson(await callRoute(GET), 401)).toEqual({ error: "Unauthorized" });
+    expect(getStatuses).not.toHaveBeenCalled();
   });
 
   it("lists every enabled server with its live connection state", async () => {

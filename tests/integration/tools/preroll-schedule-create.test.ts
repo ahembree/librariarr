@@ -92,14 +92,19 @@ describe("POST /api/tools/preroll/schedules — validation and conflicts", () =>
     const res = await post({ ...RECURRING, name: "Saturday night", daysOfWeek: [6], startTime: "22:00", endTime: "02:00" });
     const json = await expectJson<{ error: string; conflictingSchedule: { id: string; name: string } }>(res, 409);
     expect(json.error).toBe("Schedule conflicts with existing schedule");
-    expect(json.conflictingSchedule).toMatchObject({ id: first.schedule.id, name: "Weekend" });
+    expect(json.conflictingSchedule).toEqual({ id: first.schedule.id, name: "Weekend" });
     expect(await getTestPrisma().prerollSchedule.count()).toBe(1);
   });
 
   it("refuses overlapping one-time date ranges", async () => {
-    await expectJson(await post(ONE_TIME), 201);
+    const first = await expectJson<{ schedule: { id: string } }>(await post(ONE_TIME), 201);
     const res = await post({ ...ONE_TIME, name: "Overlap", startDate: "2026-12-26T00:00:00Z", endDate: "2027-01-02T00:00:00Z" });
-    await expectJson(res, 409);
+    const json = await expectJson<{ error: string; conflictingSchedule: { id: string; name: string } }>(res, 409);
+    expect(json).toEqual({
+      error: "Schedule conflicts with existing schedule",
+      conflictingSchedule: { id: first.schedule.id, name: "Holiday" },
+    });
+    expect(await getTestPrisma().prerollSchedule.count()).toBe(1);
   });
 
   it("trims name and path, stores only the fields of its type, and applies defaults", async () => {

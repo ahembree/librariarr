@@ -26,12 +26,13 @@ describe("SeerrDataMapBuilder", () => {
     const b = new SeerrDataMapBuilder("MOVIE");
     [1, 2, 3, 4, 5].forEach((status) => b.add(r({ tmdbId: status, status })));
     const map = b.build();
-    expect(map["TMDB:1"].approvalDate).toBeNull();
-    expect(map["TMDB:2"].approvalDate).not.toBeNull();
-    expect(map["TMDB:3"].approvalDate).toBeNull();
-    expect(map["TMDB:3"].declineDate).not.toBeNull();
-    expect(map["TMDB:4"].approvalDate).not.toBeNull();
-    expect(map["TMDB:5"].approvalDate).not.toBeNull();
+    // updatedAt is the only approval (or decline) timestamp Seerr exposes.
+    const updatedAt = "2024-01-02T00:00:00.000Z";
+    expect(map["TMDB:1"]).toMatchObject({ approvalDate: null, declineDate: null });
+    expect(map["TMDB:2"]).toMatchObject({ approvalDate: updatedAt, declineDate: null });
+    expect(map["TMDB:3"]).toMatchObject({ approvalDate: null, declineDate: updatedAt });
+    expect(map["TMDB:4"]).toMatchObject({ approvalDate: updatedAt, declineDate: null });
+    expect(map["TMDB:5"]).toMatchObject({ approvalDate: updatedAt, declineDate: null });
   });
 
   it("keeps the most recent request, approval and decline dates", () => {
@@ -39,10 +40,16 @@ describe("SeerrDataMapBuilder", () => {
     b.add(r({ tmdbId: 9, status: 5, createdAt: "2021-01-01T00:00:00.000Z", updatedAt: "2021-01-05T00:00:00.000Z" }));
     b.add(r({ tmdbId: 9, status: 5, createdAt: "2026-09-01T00:00:00.000Z", updatedAt: "2026-09-02T00:00:00.000Z" }));
     b.add(r({ tmdbId: 9, status: 2, createdAt: "2023-01-01T00:00:00.000Z", updatedAt: "2023-01-02T00:00:00.000Z" }));
+    b.add(r({ tmdbId: 9, status: 3, createdAt: "2022-01-01T00:00:00.000Z", updatedAt: "2022-01-03T00:00:00.000Z" }));
     const m = b.build()["TMDB:9"];
-    expect(m.requestCount).toBe(3);
-    expect(m.requestDate).toBe("2026-09-01T00:00:00.000Z");
-    expect(m.approvalDate).toBe("2026-09-02T00:00:00.000Z");
+    expect(m).toEqual({
+      requested: true,
+      requestCount: 4,
+      requestedBy: ["u"],
+      requestDate: "2026-09-01T00:00:00.000Z",
+      approvalDate: "2026-09-02T00:00:00.000Z",
+      declineDate: "2022-01-03T00:00:00.000Z",
+    });
   });
 
   it("ignores tvdbId for movies and keys TV by TMDB with a TVDB alias", () => {

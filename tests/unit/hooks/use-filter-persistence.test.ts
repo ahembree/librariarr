@@ -40,10 +40,10 @@ describe("useFilterPersistence", () => {
   });
 
   it("reads storage once, so savedFilters keeps its identity across renders", () => {
-    sessionStorage.setItem(KEY, JSON.stringify({ a: "1" }));
+    sessionStorage.setItem(KEY, JSON.stringify({ genre: "Drama" }));
     const { result, rerender } = renderHook(() => useFilterPersistence(KEY));
     const first = result.current.savedFilters;
-    sessionStorage.setItem(KEY, JSON.stringify({ a: "2" }));
+    sessionStorage.setItem(KEY, JSON.stringify({ genre: "Comedy" }));
     rerender();
     expect(result.current.savedFilters).toBe(first);
   });
@@ -56,8 +56,8 @@ describe("useFilterPersistence", () => {
 
   it("persists non-empty filters and removes the key for empty ones", () => {
     const { result } = renderHook(() => useFilterPersistence(KEY));
-    result.current.persistFilters({ genre: "Drama", year: "gte:2020" });
-    expect(JSON.parse(sessionStorage.getItem(KEY)!)).toEqual({ genre: "Drama", year: "gte:2020" });
+    result.current.persistFilters({ genre: "Drama", yearConditions: "gte:2020", yearLogic: "and" });
+    expect(JSON.parse(sessionStorage.getItem(KEY)!)).toEqual({ genre: "Drama", yearConditions: "gte:2020", yearLogic: "and" });
     result.current.persistFilters({});
     expect(sessionStorage.getItem(KEY)).toBeNull();
   });
@@ -66,6 +66,7 @@ describe("useFilterPersistence", () => {
     vi.stubGlobal("sessionStorage", throwingStorage);
     const { result } = renderHook(() => useFilterPersistence(KEY));
     expect(result.current.savedFilters).toEqual({});
-    expect(() => result.current.persistFilters({ a: "b" })).not.toThrow();
+    expect(() => result.current.persistFilters({ genre: "Drama" })).not.toThrow();
+    expect(() => result.current.persistFilters({})).not.toThrow();
   });
 });

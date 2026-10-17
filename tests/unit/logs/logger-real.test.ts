@@ -71,6 +71,9 @@ describe("logger (real module)", () => {
     createMock.mockRejectedValue(new Error("db down"));
     await expect(logger.error("X", "msg")).resolves.toBeUndefined();
     await flush();
+    // The write was attempted and failed without a second report or an
+    // unhandled rejection (which would fail the run).
+    expect(createMock).toHaveBeenCalledTimes(1);
     expect(error).toHaveBeenCalledTimes(1);
   });
 });

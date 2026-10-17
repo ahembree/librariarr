@@ -21,19 +21,23 @@ describe("IntegrationError", () => {
     const err = makeAxiosError({
       code: "ECONNREFUSED",
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      config: { url: "/api/v3/movie" } as any,
+      config: { url: "/api/v3/movie", method: "get" } as any,
     });
     const ie = new IntegrationError("Radarr", err);
     expect(ie.message).toBe("Radarr unreachable (/api/v3/movie): ECONNREFUSED");
     expect(ie.status).toBeNull();
     expect(ie.code).toBe("ECONNREFUSED");
     expect(ie.service).toBe("Radarr");
+    expect(ie.url).toBe("/api/v3/movie");
+    expect(ie.method).toBe("GET");
   });
 
   it("falls back to ERR when no code is present", () => {
     const err = makeAxiosError({ message: "boom" });
     const ie = new IntegrationError("Sonarr", err);
     expect(ie.message).toBe("Sonarr unreachable: ERR");
+    expect(ie.code).toBe("ERR");
+    expect(ie.method).toBeNull();
   });
 
   it("formats HTTP errors with status and url", () => {
@@ -54,8 +58,7 @@ describe("IntegrationError", () => {
       response: { status: 400, data: { message: "Movie not found" } } as any,
     });
     const ie = new IntegrationError("Radarr", err);
-    expect(ie.message).toContain("HTTP 400");
-    expect(ie.message).toContain("Movie not found");
+    expect(ie.message).toBe("Radarr HTTP 400: Movie not found");
     expect(ie.detail).toBe("Movie not found");
   });
 
@@ -76,7 +79,9 @@ describe("IntegrationError", () => {
       "'Movie Title' must not be empty.",
     ]);
     expect(ie.detail).toBe("This exclusion has already been added.; 'Movie Title' must not be empty.");
-    expect(ie.message).toContain("This exclusion has already been added.");
+    expect(ie.message).toBe(
+      "Radarr HTTP 400: This exclusion has already been added.; 'Movie Title' must not be empty.",
+    );
   });
 
   it("includes detail from JSON body's `error` field", () => {
@@ -115,7 +120,7 @@ describe("IntegrationError", () => {
       response: { status: 400, data: { message: longMsg } } as any,
     });
     const ie = new IntegrationError("Radarr", err);
-    expect(ie.detail!.length).toBe(200);
+    expect(ie.detail).toBe("x".repeat(200));
   });
 
   it("preserves the original AxiosError as `cause`", () => {

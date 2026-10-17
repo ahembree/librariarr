@@ -102,7 +102,11 @@ describe("blackout terminate_immediate", () => {
     await runEnforcerTick();
     expect(c.terminateSession).toHaveBeenCalledWith("s1", DEFAULT_BLACKOUT_MSG);
     expect(c.terminateSession).toHaveBeenCalledWith("s2", DEFAULT_BLACKOUT_MSG);
-    expect(vi.mocked(logger.error)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(logger.error)).toHaveBeenCalledExactlyOnceWith(
+      "Streams",
+      'Failed to terminate session for "carol" on "Main" — Movie (session s2): Error: gone',
+      { error: "Error: gone" },
+    );
   });
 
   it("spares excluded users", async () => {
@@ -145,7 +149,11 @@ describe("blackout warn_then_terminate", () => {
     await runEnforcerTick();
     expect(notifySession).toHaveBeenCalledWith("s1", "Closing");
     expect(c.terminateSession).not.toHaveBeenCalled();
-    await vi.waitFor(() => expect(vi.mocked(logger.debug)).toHaveBeenCalledWith("Enforcer", 'Blackout "Night": could not send warning', expect.any(Object)));
+    await vi.waitFor(() =>
+      expect(vi.mocked(logger.debug)).toHaveBeenCalledWith("Enforcer", 'Blackout "Night": could not send warning', {
+        error: "Error: no toast",
+      }),
+    );
 
     vi.setSystemTime(new Date("2030-01-01T12:00:11Z"));
     await runEnforcerTick();
@@ -192,10 +200,11 @@ describe("blackout warn_then_terminate", () => {
     expect(c.terminateSession).toHaveBeenCalledTimes(1);
 
     // Re-arm, then end the window: the pending entry is dropped.
-    await runEnforcerTick();
+    await runEnforcerTick(); // s1 pending again from 62s
     setBlackouts([{ ...schedule, endDate: new Date(t0 + 61_000) }]);
     await runEnforcerTick();
     setBlackouts([schedule]);
+    vi.setSystemTime(t0 + 93_000); // an entry kept from 62s would now be overdue
     await runEnforcerTick();
     expect(c.terminateSession).toHaveBeenCalledTimes(1);
   });
@@ -286,7 +295,15 @@ describe("maintenance loop edge cases", () => {
     vi.setSystemTime(t0);
     vi.mocked(prisma.appSettings.findMany).mockResolvedValue([maintenance({ maintenanceDelay: 10 })] as never);
     // A blackout entry is pending at the same time: the maintenance prune must skip it.
-    setBlackouts([blackout({ action: "warn_then_terminate", delay: 600, excludedUsers: [] })]);
+    setBlackouts([
+      blackout({
+        action: "warn_then_terminate",
+        delay: 600,
+        excludedUsers: [],
+        startDate: new Date(t0 - 60_000),
+        endDate: new Date(t0 + 3_600_000),
+      }),
+    ]);
     const getSessions = vi.fn().mockResolvedValue([session("s1")]);
     const terminateSession = vi.fn().mockResolvedValue(undefined);
     client({ getSessions, terminateSession });
@@ -300,11 +317,20 @@ describe("maintenance loop edge cases", () => {
     expect(terminateSession).not.toHaveBeenCalled();
 
     vi.mocked(prisma.appSettings.findMany).mockResolvedValue([]);
+    vi.setSystemTime(t0 + 12_000);
     await runEnforcerTick(); // maintenance off → maint entries dropped
     vi.mocked(prisma.appSettings.findMany).mockResolvedValue([maintenance({ maintenanceDelay: 10 })] as never);
-    vi.setSystemTime(t0 + 15_000);
+    vi.setSystemTime(t0 + 22_000); // an entry kept from 11s would now be overdue
     await runEnforcerTick(); // fresh timer again
     expect(terminateSession).not.toHaveBeenCalled();
+
+    // Neither maintenance prune touched the blackout's entry (re-armed at 11s,
+    // when s1 came back): with maintenance off it fires exactly 600s later,
+    // where an entry restarted at 12s or 22s would still be waiting.
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue([]);
+    vi.setSystemTime(t0 + 611_000);
+    await runEnforcerTick();
+    expect(terminateSession).toHaveBeenCalledExactlyOnceWith("s1", DEFAULT_BLACKOUT_MSG);
   });
 
   it("logs a failed tick and lets the next one run", async () => {

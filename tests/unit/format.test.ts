@@ -207,19 +207,15 @@ describe("formatDate", () => {
     expect(formatDate("", "Unknown")).toBe("Unknown");
   });
 
+  // formatDate renders the instant on the viewer's local calendar (always in
+  // en-US), so the inputs are built from local noon: the expected day then
+  // holds in every timezone.
   it("formats an ISO date string", () => {
-    // Use a UTC date to avoid timezone issues
-    const result = formatDate("2024-01-15T00:00:00.000Z");
-    // The exact output depends on the system locale, but should contain "January" and "2024"
-    expect(result).toContain("2024");
-    expect(result).toContain("January");
+    expect(formatDate(new Date(2024, 0, 15, 12).toISOString())).toBe("January 15, 2024");
   });
 
   it("formats another date correctly", () => {
-    const result = formatDate("2023-12-25T12:00:00.000Z");
-    expect(result).toContain("December");
-    expect(result).toContain("2023");
-    expect(result).toContain("25");
+    expect(formatDate(new Date(2023, 11, 25, 12).toISOString())).toBe("December 25, 2023");
   });
 });
 

@@ -27,6 +27,7 @@ vi.mock("@/lib/media-server/factory", () => ({
 
 import { GET } from "@/app/api/tools/sessions/stream/route";
 import { realtimeBus } from "@/lib/media-server/realtime/bus";
+import { _resetFirstSeen } from "@/lib/media-server/session-first-seen";
 
 // Captured before fake timers replace it: drain() needs a real macrotask turn.
 const setImmediateReal = globalThis.setImmediate;
@@ -93,6 +94,8 @@ describe("GET /api/tools/sessions/stream — timers and throttling", () => {
     setMockSession({ userId: "user-1", isLoggedIn: true });
     findMany.mockReset().mockResolvedValue([SERVER]);
     getSessions.mockReset().mockResolvedValue([playing("s-1")]);
+    // First-seen stamps are process-wide; start each stream from a clean map.
+    _resetFirstSeen();
   });
 
   afterEach(() => {
@@ -105,7 +108,8 @@ describe("GET /api/tools/sessions/stream — timers and throttling", () => {
 
     await vi.advanceTimersByTimeAsync(5000);
     expect(getSessions).toHaveBeenCalledTimes(2);
-    expect(await drain()).not.toContain("event: sessions");
+    // Unchanged: nothing at all is written (the heartbeat is 30s away).
+    expect(await drain()).toBe("");
 
     getSessions.mockResolvedValue([playing("s-1", 60_000)]);
     await vi.advanceTimersByTimeAsync(5000);

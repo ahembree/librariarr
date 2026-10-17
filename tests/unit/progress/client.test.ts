@@ -51,6 +51,7 @@ describe("consumeProgressStream", () => {
     const result = await consumeProgressStream<string>(response, onProgress);
 
     expect(result).toBe("done");
+    expect(onProgress).toHaveBeenCalledTimes(1);
     expect(onProgress).toHaveBeenCalledWith({ type: "phase", key: "a" });
   });
 

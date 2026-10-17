@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
+import { randomUUID } from "node:crypto";
 import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
 import {
@@ -62,7 +63,7 @@ const STATUS_URL = "/api/integrations/tracearr/status";
 async function mapToTracearr(
   serverId: string,
   tracearrServerId: string,
-  opts: { backfillComplete?: boolean; oldestPlayAt?: Date | null } = {}
+  opts: { backfillComplete?: boolean; oldestPlayAt?: Date | null; backfillCursorAt?: Date | null } = {}
 ) {
   const prisma = getTestPrisma();
   return prisma.mediaServer.update({
@@ -71,6 +72,7 @@ async function mapToTracearr(
       tracearrServerId,
       tracearrBackfillComplete: opts.backfillComplete ?? false,
       tracearrOldestPlayAt: opts.oldestPlayAt ?? null,
+      tracearrBackfillCursorAt: opts.backfillCursorAt ?? null,
     },
   });
 }
@@ -82,26 +84,26 @@ async function createItemFor(serverId: string, title: string) {
 }
 
 /**
- * Seed one imported play. `sourceEventId` is unique per (server, event), which
- * mirrors the importer's dedup constraint — reusing an id across servers is
- * legal and is what the "two mapped servers" case relies on.
+ * Seed one play. An imported (TRACEARR) row carries Tracearr's chain id — a
+ * uuid, unique per (server, event) under the importer's dedup constraint — and
+ * a NATIVE row carries none.
  */
 async function createWatchRow(opts: {
   mediaItemId: string;
   mediaServerId: string;
   watchedAt: Date | null;
-  source?: string;
-  sourceEventId?: string | null;
+  source?: "NATIVE" | "TRACEARR";
 }) {
   const prisma = getTestPrisma();
+  const source = opts.source ?? "TRACEARR";
   return prisma.watchHistory.create({
     data: {
       mediaItemId: opts.mediaItemId,
       mediaServerId: opts.mediaServerId,
       serverUsername: "viewer",
       watchedAt: opts.watchedAt,
-      source: opts.source ?? "TRACEARR",
-      sourceEventId: opts.sourceEventId ?? null,
+      source,
+      sourceEventId: source === "TRACEARR" ? randomUUID() : null,
     },
   });
 }
@@ -142,12 +144,11 @@ describe("GET /api/integrations/tracearr/status", () => {
     const oldest = new Date("2024-03-06T03:50:09.000Z");
     const middle = new Date("2025-01-01T12:00:00.000Z");
     const newest = new Date("2026-09-03T18:55:34.377Z");
-    for (const [i, watchedAt] of [oldest, middle, newest].entries()) {
+    for (const watchedAt of [oldest, middle, newest]) {
       await createWatchRow({
         mediaItemId: item.id,
         mediaServerId: server.id,
         watchedAt,
-        sourceEventId: `evt-${i}`,
       });
     }
 
@@ -201,13 +202,15 @@ describe("GET /api/integrations/tracearr/status", () => {
     });
     try {
       const body = await expectJson<{ servers: StatusRow[] }>(await callRoute(GET, { url: STATUS_URL }));
-      expect(body.servers[0].activeImport).toMatchObject({
+      // Exactly the run's public counters — the owning userId stays internal.
+      expect(body.servers[0].activeImport).toEqual({
         pass: "forward",
+        startedAt: run.entry.startedAt,
         pages: 2,
         imported: 140,
         oldestReached: "2025-07-10T11:00:00.000Z",
       });
-      expect(body.servers[0].activeImport).not.toHaveProperty("userId");
+      expect(body.servers[0].backfillComplete).toBe(true);
     } finally {
       endTracearrImport(run);
     }
@@ -257,10 +260,20 @@ describe("GET /api/integrations/tracearr/status", () => {
     const response = await callRoute(GET, { url: STATUS_URL });
     const body = await expectJson<{ servers: StatusRow[] }>(response);
 
-    expect(body.servers).toHaveLength(1);
-    expect(body.servers[0].importedCount).toBe(0);
-    expect(body.servers[0].oldestImported).toBeNull();
-    expect(body.servers[0].newestImported).toBeNull();
+    expect(body.servers).toEqual([
+      {
+        serverId: server.id,
+        serverName: "Fresh",
+        tracearrServerId: "33333333-3333-3333-3333-333333333333",
+        backfillComplete: false,
+        importedCount: 0,
+        oldestImported: null,
+        newestImported: null,
+        oldestPlayAt: null,
+        backfillFraction: null,
+        activeImport: null,
+      },
+    ]);
   });
 
   it("excludes another user's mapped server", async () => {
@@ -277,7 +290,6 @@ describe("GET /api/integrations/tracearr/status", () => {
       mediaItemId: theirItem.id,
       mediaServerId: theirs.id,
       watchedAt: new Date("2025-02-02T00:00:00.000Z"),
-      sourceEventId: "their-evt",
     });
 
     setMockSession({ userId: user.id, isLoggedIn: true });
@@ -308,7 +320,6 @@ describe("GET /api/integrations/tracearr/status", () => {
         mediaItemId: alphaItem.id,
         mediaServerId: alpha.id,
         watchedAt: new Date(Date.UTC(2024, 0, 1 + i)),
-        sourceEventId: `alpha-${i}`,
       });
     }
     for (let i = 0; i < 5; i++) {
@@ -316,7 +327,6 @@ describe("GET /api/integrations/tracearr/status", () => {
         mediaItemId: bravoItem.id,
         mediaServerId: bravo.id,
         watchedAt: new Date(Date.UTC(2026, 0, 1 + i)),
-        sourceEventId: `bravo-${i}`,
       });
     }
 
@@ -361,12 +371,11 @@ describe("GET /api/integrations/tracearr/status", () => {
       oldestPlayAt,
     });
     const item = await createItemFor(server.id, "Mid Walk");
-    for (const [i, watchedAt] of [oldestImported, newestImported].entries()) {
+    for (const watchedAt of [oldestImported, newestImported]) {
       await createWatchRow({
         mediaItemId: item.id,
         mediaServerId: server.id,
         watchedAt,
-        sourceEventId: `walk-${i}`,
       });
     }
 
@@ -379,6 +388,32 @@ describe("GET /api/integrations/tracearr/status", () => {
     // Serialised like every other instant on this surface.
     expect(body.servers[0].oldestPlayAt).toBe(oldestPlayAt.toISOString());
     expect(body.servers[0].backfillFraction).toBeCloseTo(0.3, 10);
+  });
+
+  it("measures progress by the walk's cursor when the server records one", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id, { name: "Restarted" });
+
+    // A purge restarted the walk (cursor moved to the newest play) while the
+    // surviving rows still reach back to the far edge: the bar starts over at 0
+    // instead of reading full off those rows.
+    const oldestPlayAt = new Date(Date.UTC(2026, 0, 1));
+    const newestImported = new Date(Date.UTC(2026, 0, 11));
+    await mapToTracearr(server.id, "dddddddd-dddd-dddd-dddd-dddddddddddd", {
+      oldestPlayAt,
+      backfillCursorAt: newestImported,
+    });
+    const item = await createItemFor(server.id, "Survived The Purge");
+    for (const watchedAt of [oldestPlayAt, newestImported]) {
+      await createWatchRow({ mediaItemId: item.id, mediaServerId: server.id, watchedAt });
+    }
+
+    setMockSession({ userId: user.id, isLoggedIn: true });
+
+    const body = await expectJson<{ servers: StatusRow[] }>(await callRoute(GET, { url: STATUS_URL }));
+
+    expect(body.servers[0].oldestImported).toBe(oldestPlayAt.toISOString());
+    expect(body.servers[0].backfillFraction).toBe(0);
   });
 
   it("clamps to 1 when an imported play predates the measured oldest play", async () => {
@@ -395,13 +430,11 @@ describe("GET /api/integrations/tracearr/status", () => {
       mediaItemId: item.id,
       mediaServerId: server.id,
       watchedAt: new Date(Date.UTC(2026, 0, 1)),
-      sourceEventId: "overshot-old",
     });
     await createWatchRow({
       mediaItemId: item.id,
       mediaServerId: server.id,
       watchedAt: new Date(Date.UTC(2026, 0, 20)),
-      sourceEventId: "overshot-new",
     });
 
     setMockSession({ userId: user.id, isLoggedIn: true });
@@ -426,7 +459,6 @@ describe("GET /api/integrations/tracearr/status", () => {
       mediaItemId: item.id,
       mediaServerId: server.id,
       watchedAt: only,
-      sourceEventId: "single-evt",
     });
 
     setMockSession({ userId: user.id, isLoggedIn: true });
@@ -449,7 +481,6 @@ describe("GET /api/integrations/tracearr/status", () => {
       mediaItemId: item.id,
       mediaServerId: server.id,
       watchedAt: new Date(Date.UTC(2026, 1, 2)),
-      sourceEventId: "unmeasured-evt",
     });
 
     setMockSession({ userId: user.id, isLoggedIn: true });

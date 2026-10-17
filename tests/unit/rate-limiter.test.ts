@@ -1,4 +1,4 @@
-import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, it, expect, vi, beforeEach } from "vitest";
 import {
   RateLimiter,
   getClientIp,
@@ -12,6 +12,17 @@ import {
   isKnownAddress,
   _resetKnownAddressesForTesting,
 } from "@/lib/rate-limit/rate-limiter";
+
+// Every client-address assertion below assumes forwarded headers are trusted
+// (the default); a TRUST_PROXY_HEADERS=false in the shell must not change them.
+const shellTrustProxyHeaders = process.env.TRUST_PROXY_HEADERS;
+beforeAll(() => {
+  delete process.env.TRUST_PROXY_HEADERS;
+});
+afterAll(() => {
+  if (shellTrustProxyHeaders === undefined) delete process.env.TRUST_PROXY_HEADERS;
+  else process.env.TRUST_PROXY_HEADERS = shellTrustProxyHeaders;
+});
 
 describe("RateLimiter", () => {
   let limiter: RateLimiter;
@@ -76,16 +87,21 @@ describe("RateLimiter", () => {
   it("cleanup removes expired entries", () => {
     vi.useFakeTimers();
     try {
-      limiter.check("user1");
-      limiter.check("user2");
+      // An expired entry reads as a fresh window whether or not it was swept,
+      // so observe the sweep through capacity: two slots, "old" first.
+      const small = new RateLimiter(1, 60_000, 2);
+      small.check("old");
+      small.check("user1");
 
       vi.advanceTimersByTime(61_000);
-      limiter.cleanup();
-
-      // After cleanup and window expiry, requests should be fresh
-      const result = limiter.check("user1");
-      expect(result.limited).toBe(false);
-      expect(result.remaining).toBe(2);
+      // "old" starts a new window in its own slot and is refused in it.
+      small.check("old");
+      expect(small.check("old").limited).toBe(true);
+      // "user1" has expired; the sweep frees its slot...
+      small.cleanup();
+      // ...so a new key fits without evicting "old", the oldest slot.
+      small.check("new");
+      expect(small.peek("old").limited).toBe(true);
     } finally {
       vi.useRealTimers();
     }

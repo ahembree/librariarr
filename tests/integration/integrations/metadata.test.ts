@@ -137,7 +137,7 @@ describe("Integration metadata endpoints", () => {
       const response = await callRouteWithParams(LidarrMetadataGET, {
         id: "00000000-0000-0000-0000-000000000000",
       });
-      await expectJson<{ error: string }>(response, 404);
+      expect(await expectJson(response, 404)).toEqual({ error: "Instance not found" });
     });
 
     it("returns 404 when accessing another user's instance", async () => {
@@ -147,7 +147,7 @@ describe("Integration metadata endpoints", () => {
       setMockSession({ userId: intruder.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(LidarrMetadataGET, { id: instance.id });
-      await expectJson<{ error: string }>(response, 404);
+      expect(await expectJson(response, 404)).toEqual({ error: "Instance not found" });
     });
 
     it("returns artists, tags, and quality profiles", async () => {
@@ -157,11 +157,15 @@ describe("Integration metadata endpoints", () => {
 
       mockLidarrGetArtists.mockResolvedValue([
         {
-          foreignArtistId: "mb-123",
-          tags: [1],
+          id: 1,
+          artistName: "Daft Punk",
+          foreignArtistId: "056e4f3e-d505-4dad-8ec1-d04f521cbb56",
           qualityProfileId: 1,
+          metadataProfileId: 1,
           monitored: true,
-          ratings: { value: 8.5 },
+          path: "/music/Daft Punk",
+          tags: [1],
+          ratings: { votes: 96, value: 8.5 },
         },
       ]);
       mockLidarrGetQualityProfiles.mockResolvedValue([{ id: 1, name: "Lossless" }]);
@@ -174,7 +178,7 @@ describe("Integration metadata endpoints", () => {
         qualityProfiles: { id: number; name: string }[];
       }>(response, 200);
 
-      expect(body.artists["mb-123"]).toEqual({
+      expect(body.artists["056e4f3e-d505-4dad-8ec1-d04f521cbb56"]).toEqual({
         tags: ["favorite"],
         qualityProfile: "Lossless",
         monitored: true,
@@ -190,7 +194,7 @@ describe("Integration metadata endpoints", () => {
       setMockSession({ userId: user.id, isLoggedIn: true });
 
       mockLidarrGetArtists.mockResolvedValue([
-        { foreignArtistId: "mb-1", tags: [99], qualityProfileId: 1, monitored: false, ratings: null },
+        { foreignArtistId: "cc197bad-dc9c-440d-a5b5-d52ba2e14234", tags: [99], qualityProfileId: 1, monitored: false },
       ]);
       mockLidarrGetQualityProfiles.mockResolvedValue([{ id: 1, name: "Any" }]);
       mockLidarrGetTags.mockResolvedValue([]);
@@ -200,7 +204,7 @@ describe("Integration metadata endpoints", () => {
         artists: Record<string, { tags: string[] }>;
       }>(response, 200);
 
-      expect(body.artists["mb-1"].tags).toEqual(["99"]);
+      expect(body.artists["cc197bad-dc9c-440d-a5b5-d52ba2e14234"].tags).toEqual(["99"]);
     });
 
     it("derives distinct artist statuses for the enumerable arrStatus field", async () => {
@@ -209,11 +213,11 @@ describe("Integration metadata endpoints", () => {
       setMockSession({ userId: user.id, isLoggedIn: true });
 
       mockLidarrGetArtists.mockResolvedValue([
-        { foreignArtistId: "mb-1", tags: [], qualityProfileId: 1, monitored: true, status: "continuing" },
-        { foreignArtistId: "mb-2", tags: [], qualityProfileId: 1, monitored: true, status: "ended" },
+        { foreignArtistId: "a74b1b7f-71a5-4011-9441-d0b5e4122711", tags: [], qualityProfileId: 1, monitored: true, status: "continuing" },
+        { foreignArtistId: "b10bbbfc-cf9e-42e0-be17-e2c3e1d2600d", tags: [], qualityProfileId: 1, monitored: true, status: "ended" },
         // Duplicate dedupes; the artist with no status is filtered out.
-        { foreignArtistId: "mb-3", tags: [], qualityProfileId: 1, monitored: true, status: "continuing" },
-        { foreignArtistId: "mb-4", tags: [], qualityProfileId: 1, monitored: false },
+        { foreignArtistId: "056e4f3e-d505-4dad-8ec1-d04f521cbb56", tags: [], qualityProfileId: 1, monitored: true, status: "continuing" },
+        { foreignArtistId: "cc197bad-dc9c-440d-a5b5-d52ba2e14234", tags: [], qualityProfileId: 1, monitored: false },
       ]);
       mockLidarrGetQualityProfiles.mockResolvedValue([{ id: 1, name: "Lossless" }]);
 
@@ -221,6 +225,19 @@ describe("Integration metadata endpoints", () => {
       const body = await expectJson<{ statuses: string[] }>(response, 200);
 
       expect(body.statuses).toEqual(["continuing", "ended"]);
+    });
+
+    it("returns 502 with the address scrubbed when Lidarr cannot be reached", async () => {
+      const user = await createTestUser();
+      const instance = await createTestLidarrInstance(user.id);
+      setMockSession({ userId: user.id, isLoggedIn: true });
+
+      mockLidarrGetArtists.mockRejectedValue(new Error("connect ECONNREFUSED 192.168.1.20:8686"));
+
+      const response = await callRouteWithParams(LidarrMetadataGET, { id: instance.id });
+      expect(await expectJson(response, 502)).toEqual({
+        error: "connect ECONNREFUSED [internal]:8686",
+      });
     });
   });
 
@@ -240,7 +257,7 @@ describe("Integration metadata endpoints", () => {
       const response = await callRouteWithParams(RadarrMetadataGET, {
         id: "00000000-0000-0000-0000-000000000000",
       });
-      await expectJson<{ error: string }>(response, 404);
+      expect(await expectJson(response, 404)).toEqual({ error: "Instance not found" });
     });
 
     it("returns 404 when accessing another user's instance", async () => {
@@ -250,7 +267,7 @@ describe("Integration metadata endpoints", () => {
       setMockSession({ userId: intruder.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(RadarrMetadataGET, { id: instance.id });
-      await expectJson<{ error: string }>(response, 404);
+      expect(await expectJson(response, 404)).toEqual({ error: "Instance not found" });
     });
 
     it("returns movies, tags, quality profiles, and languages", async () => {
@@ -264,16 +281,16 @@ describe("Integration metadata endpoints", () => {
           tags: [2],
           qualityProfileId: 1,
           monitored: true,
-          ratings: { imdb: { value: 8.8 } },
+          ratings: { imdb: { votes: 2_400_000, value: 8.8, type: "user" } },
           status: "released",
         },
       ]);
       mockRadarrGetQualityProfiles.mockResolvedValue([{ id: 1, name: "HD-1080p" }]);
       mockRadarrGetTags.mockResolvedValue([{ id: 2, label: "action" }]);
       mockRadarrGetLanguages.mockResolvedValue([
-        { id: 1, name: "English" },
+        { id: 0, name: "Unknown" },
         { id: 2, name: "French" },
-        { id: 3, name: "Unknown" },
+        { id: 1, name: "English" },
       ]);
 
       const response = await callRouteWithParams(RadarrMetadataGET, { id: instance.id });
@@ -356,6 +373,19 @@ describe("Integration metadata endpoints", () => {
 
       expect(body.qualityNames).toEqual(["Bluray-1080p", "WEBDL-2160p"]);
     });
+
+    it("returns 502 with the address scrubbed when Radarr cannot be reached", async () => {
+      const user = await createTestUser();
+      const instance = await createTestRadarrInstance(user.id);
+      setMockSession({ userId: user.id, isLoggedIn: true });
+
+      mockRadarrGetTags.mockRejectedValue(new Error("connect ECONNREFUSED 192.168.1.20:7878"));
+
+      const response = await callRouteWithParams(RadarrMetadataGET, { id: instance.id });
+      expect(await expectJson(response, 502)).toEqual({
+        error: "connect ECONNREFUSED [internal]:7878",
+      });
+    });
   });
 
   // ===== Sonarr metadata =====
@@ -374,7 +404,7 @@ describe("Integration metadata endpoints", () => {
       const response = await callRouteWithParams(SonarrMetadataGET, {
         id: "00000000-0000-0000-0000-000000000000",
       });
-      await expectJson<{ error: string }>(response, 404);
+      expect(await expectJson(response, 404)).toEqual({ error: "Instance not found" });
     });
 
     it("returns 404 when accessing another user's instance", async () => {
@@ -384,7 +414,7 @@ describe("Integration metadata endpoints", () => {
       setMockSession({ userId: intruder.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(SonarrMetadataGET, { id: instance.id });
-      await expectJson<{ error: string }>(response, 404);
+      expect(await expectJson(response, 404)).toEqual({ error: "Instance not found" });
     });
 
     it("returns series, tags, quality profiles, and languages", async () => {
@@ -407,9 +437,9 @@ describe("Integration metadata endpoints", () => {
         { id: 3, label: "hbo" },
       ]);
       mockSonarrGetLanguages.mockResolvedValue([
-        { id: 1, name: "English" },
-        { id: 2, name: "Unknown" },
+        { id: 0, name: "Unknown" },
         { id: 3, name: "Spanish" },
+        { id: 1, name: "English" },
       ]);
 
       const response = await callRouteWithParams(SonarrMetadataGET, { id: instance.id });
@@ -426,7 +456,10 @@ describe("Integration metadata endpoints", () => {
         monitored: true,
         rating: 9.3,
       });
-      expect(body.tags).toHaveLength(2);
+      expect(body.tags).toEqual([
+        { id: 1, label: "drama" },
+        { id: 3, label: "hbo" },
+      ]);
       expect(body.qualityProfiles).toEqual([{ id: 2, name: "Ultra-HD" }]);
       // "Unknown" filtered, rest sorted
       expect(body.languages).toEqual(["English", "Spanish"]);
@@ -484,6 +517,19 @@ describe("Integration metadata endpoints", () => {
 
       expect(body.series["999"].rating).toBeNull();
     });
+
+    it("returns 502 with the address scrubbed when Sonarr cannot be reached", async () => {
+      const user = await createTestUser();
+      const instance = await createTestSonarrInstance(user.id);
+      setMockSession({ userId: user.id, isLoggedIn: true });
+
+      mockSonarrGetQualityProfiles.mockRejectedValue(new Error("connect ECONNREFUSED 192.168.1.20:8989"));
+
+      const response = await callRouteWithParams(SonarrMetadataGET, { id: instance.id });
+      expect(await expectJson(response, 502)).toEqual({
+        error: "connect ECONNREFUSED [internal]:8989",
+      });
+    });
   });
 
   // ===== Seerr metadata =====
@@ -502,7 +548,7 @@ describe("Integration metadata endpoints", () => {
       const response = await callRouteWithParams(SeerrMetadataGET, {
         id: "00000000-0000-0000-0000-000000000000",
       });
-      await expectJson<{ error: string }>(response, 404);
+      expect(await expectJson(response, 404)).toEqual({ error: "Instance not found" });
     });
 
     it("returns 404 when accessing another user's instance", async () => {
@@ -512,7 +558,7 @@ describe("Integration metadata endpoints", () => {
       setMockSession({ userId: intruder.id, isLoggedIn: true });
 
       const response = await callRouteWithParams(SeerrMetadataGET, { id: instance.id });
-      await expectJson<{ error: string }>(response, 404);
+      expect(await expectJson(response, 404)).toEqual({ error: "Instance not found" });
     });
 
     it("returns sorted unique users", async () => {
@@ -521,19 +567,22 @@ describe("Integration metadata endpoints", () => {
       setMockSession({ userId: user.id, isLoggedIn: true });
 
       mockSeerrGetUsers.mockResolvedValue({
-        pageInfo: { pages: 1, page: 1, results: 3 },
+        pageInfo: { pages: 1, page: 1, results: 4 },
         results: [
           { id: 1, email: "z@test.com", username: "zuser", plexUsername: "PlexZed" },
           { id: 2, email: "a@test.com", username: "auser", plexUsername: "PlexAlpha" },
           { id: 3, email: "m@test.com", username: "muser" },
+          // A local user named like a Plex user resolves to the same name once.
+          { id: 4, email: "zed@test.com", username: "PlexZed" },
         ],
       });
 
       const response = await callRouteWithParams(SeerrMetadataGET, { id: instance.id });
       const body = await expectJson<{ users: string[] }>(response, 200);
 
-      // plexUsername takes priority, sorted alphabetically
+      // plexUsername takes priority, sorted alphabetically, each name once
       expect(body.users).toEqual(["muser", "PlexAlpha", "PlexZed"]);
+      expect(mockSeerrGetUsers).toHaveBeenCalledTimes(1);
     });
 
     it("deduplicates users across pages", async () => {
@@ -541,31 +590,33 @@ describe("Integration metadata endpoints", () => {
       const instance = await createTestSeerrInstance(user.id);
       setMockSession({ userId: user.id, isLoggedIn: true });
 
-      // First call returns full page (length === take), second returns partial
+      // A full first page (length === take) asks for the next one. A user added
+      // between the two requests shifts the offset list, so the second page
+      // repeats a user the first already returned. pageInfo.results is Seerr's
+      // total user count, not the page's.
       mockSeerrGetUsers
         .mockResolvedValueOnce({
-          pageInfo: { pages: 2, page: 1, results: 100 },
+          pageInfo: { pages: 1, page: 1, results: 100 },
           results: Array.from({ length: 100 }, (_, i) => ({
-            id: i,
+            id: i + 1,
             email: `u${i}@test.com`,
             username: `user${i}`,
           })),
         })
         .mockResolvedValueOnce({
-          pageInfo: { pages: 2, page: 2, results: 1 },
-          results: [
-            // Duplicate of first page user
-            { id: 0, email: "u0@test.com", username: "user0" },
-          ],
+          pageInfo: { pages: 2, page: 2, results: 101 },
+          results: [{ id: 100, email: "u99@test.com", username: "user99" }],
         });
 
       const response = await callRouteWithParams(SeerrMetadataGET, { id: instance.id });
       const body = await expectJson<{ users: string[] }>(response, 200);
 
-      // 100 unique users (duplicate removed)
-      expect(body.users).toHaveLength(100);
-      // Sorted alphabetically
-      expect(body.users[0]).toBe("user0");
+      expect(mockSeerrGetUsers).toHaveBeenNthCalledWith(1, { take: 100, skip: 0 });
+      expect(mockSeerrGetUsers).toHaveBeenNthCalledWith(2, { take: 100, skip: 100 });
+      // 100 unique users (duplicate removed), sorted
+      expect(body.users).toEqual(
+        Array.from({ length: 100 }, (_, i) => `user${i}`).sort((a, b) => a.localeCompare(b)),
+      );
     });
 
     it("returns empty users array when no users exist", async () => {
@@ -592,7 +643,7 @@ describe("Integration metadata endpoints", () => {
       mockSeerrGetUsers.mockResolvedValue({
         pageInfo: { pages: 1, page: 1, results: 1 },
         results: [
-          { id: 1, email: "fallback@test.com", username: "" },
+          { id: 1, email: "fallback@test.com", username: null, plexUsername: null },
         ],
       });
 
@@ -600,6 +651,19 @@ describe("Integration metadata endpoints", () => {
       const body = await expectJson<{ users: string[] }>(response, 200);
 
       expect(body.users).toEqual(["fallback@test.com"]);
+    });
+
+    it("returns 502 with the address scrubbed when Seerr cannot be reached", async () => {
+      const user = await createTestUser();
+      const instance = await createTestSeerrInstance(user.id);
+      setMockSession({ userId: user.id, isLoggedIn: true });
+
+      mockSeerrGetUsers.mockRejectedValue(new Error("connect ECONNREFUSED 192.168.1.20:5055"));
+
+      const response = await callRouteWithParams(SeerrMetadataGET, { id: instance.id });
+      expect(await expectJson(response, 502)).toEqual({
+        error: "connect ECONNREFUSED [internal]:5055",
+      });
     });
   });
 });

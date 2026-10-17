@@ -21,7 +21,7 @@ import { RealtimeManager } from "@/lib/media-server/realtime/manager";
 import { _resetSelfWritesForTesting } from "@/lib/media-server/realtime/self-writes";
 import type { RealtimeSocket, SocketFactory } from "@/lib/media-server/realtime/socket";
 import type { RealtimeEvent, RealtimeServerConfig } from "@/lib/media-server/realtime/types";
-import { TASK_SYNC_INCREMENTAL, TASK_SYNC_SERVER, TASK_SYNC_WATCH_HISTORY } from "@/lib/jobs/constants";
+import { MAIN_QUEUE, TASK_SYNC_INCREMENTAL, TASK_SYNC_SERVER, TASK_SYNC_WATCH_HISTORY } from "@/lib/jobs/constants";
 
 // Edge paths of the manager the main suite does not reach: failing settings /
 // server reads, a reconcile requested mid-reconcile, a failed enforcer tick,
@@ -108,7 +108,7 @@ describe("RealtimeManager — settings and reconcile failures", () => {
     expect(mgr.getStatuses()).toEqual([]);
     expect(logger.debug).toHaveBeenCalledWith(
       "Realtime",
-      expect.stringContaining("treating as disabled"),
+      "Could not read realtime setting; treating as disabled",
       { error: "Error: db down" },
     );
   });
@@ -176,11 +176,12 @@ describe("RealtimeManager — side-effect edges", () => {
     mgr.stopAll();
   });
 
-  it("drops a throttled session bridge whose server was removed before it fired", async () => {
+  it("bridges no session change for a server it does not manage", async () => {
     const { f } = factory();
     const mgr = new RealtimeManager(f);
     await mgr.reconcile();
-    // First trigger fires on the leading edge; the second is held for the trailing edge.
+    // Neither the leading-edge run nor the trailing one has a connection to
+    // name the owner from, so neither reaches the browser.
     handle(mgr, { kind: "session-changed", serverId: "orphan" });
     handle(mgr, { kind: "session-changed", serverId: "orphan" });
     vi.advanceTimersByTime(5_000);
@@ -213,7 +214,7 @@ describe("RealtimeManager — side-effect edges", () => {
     expect(h.enqueueJob).toHaveBeenCalledWith(
       TASK_SYNC_INCREMENTAL,
       { serverId: "other", changedIds: [], removedIds: ["r1"] },
-      expect.any(Object),
+      { queueName: MAIN_QUEUE, maxAttempts: 3 },
     );
     mgr.stopAll();
   });
@@ -228,12 +229,12 @@ describe("RealtimeManager — side-effect edges", () => {
     sockets[0].fire({ MessageType: "LibraryChanged", Data: { ItemsAdded: Array.from({ length: 150 }, (_, i) => `b${i}`) } });
     sockets[0].fire({ MessageType: "UserDataChanged" });
     vi.advanceTimersByTime(6 * 60_000);
-    await vi.waitFor(() => {
-      const tasks = h.enqueueJob.mock.calls.map((c) => c[0]);
-      expect(tasks).toContain(TASK_SYNC_SERVER);
-      expect(tasks).toContain(TASK_SYNC_WATCH_HISTORY);
-    });
-    await Promise.resolve();
+    expect(h.enqueueJob.mock.calls.map((c) => c[0]).sort()).toEqual(
+      [TASK_SYNC_SERVER, TASK_SYNC_WATCH_HISTORY].sort(),
+    );
+    // The manager's `.then` was attached to each of these promises first, so
+    // once they have all settled here its handlers have run.
+    await Promise.all(h.enqueueJob.mock.results.map((r) => r.value));
     expect(logger.info).not.toHaveBeenCalledWith("Realtime", expect.stringContaining("Enqueued"));
     mgr.stopAll();
   });

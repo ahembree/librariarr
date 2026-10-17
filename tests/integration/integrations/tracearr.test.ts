@@ -46,9 +46,10 @@ import { PUT, DELETE } from "@/app/api/integrations/tracearr/[id]/route";
 import { POST as TEST_POST } from "@/app/api/integrations/tracearr/[id]/test-connection/route";
 import { GET as SERVERS_GET } from "@/app/api/integrations/tracearr/[id]/servers/route";
 
+// `HealthResponse.servers[]` (Tracearr v1 public API), every field required.
 const TRACEARR_SERVERS = [
-  { id: "11111111-1111-1111-1111-111111111111", name: "Plex", type: "plex", online: true, activeStreams: 2 },
-  { id: "22222222-2222-2222-2222-222222222222", name: "Jelly", type: "jellyfin", online: false, activeStreams: 0 },
+  { id: "11111111-1111-1111-1111-111111111111", name: "Plex", type: "plex", online: true, historical: false, activeStreams: 2 },
+  { id: "22222222-2222-2222-2222-222222222222", name: "Jelly", type: "jellyfin", online: false, historical: false, activeStreams: 0 },
 ];
 
 describe("Tracearr integration endpoints", () => {
@@ -135,7 +136,10 @@ describe("Tracearr integration endpoints", () => {
         method: "POST",
         body: { url: "http://tracearr:3000", apiKey: "key" },
       });
-      expect(res1.status).toBe(400);
+      expect(await expectJson(res1, 400)).toEqual({
+        error: "Validation failed",
+        details: [expect.stringMatching(/^name: /)],
+      });
 
       // URL without an http(s) scheme
       const res2 = await callRoute(POST, {
@@ -143,7 +147,10 @@ describe("Tracearr integration endpoints", () => {
         method: "POST",
         body: { name: "Tracearr", url: "tracearr:3000", apiKey: "key" },
       });
-      expect(res2.status).toBe(400);
+      expect(await expectJson(res2, 400)).toEqual({
+        error: "Validation failed",
+        details: ["url: URL must start with http:// or https://"],
+      });
 
       // Empty apiKey
       const res3 = await callRoute(POST, {
@@ -151,9 +158,13 @@ describe("Tracearr integration endpoints", () => {
         method: "POST",
         body: { name: "Tracearr", url: "http://tracearr:3000", apiKey: "" },
       });
-      expect(res3.status).toBe(400);
+      expect(await expectJson(res3, 400)).toEqual({
+        error: "Validation failed",
+        details: ["apiKey: API key is required"],
+      });
 
       expect(mockTestConnection).not.toHaveBeenCalled();
+      expect(await getTestPrisma().tracearrInstance.count()).toBe(0);
     });
 
     it("creates the instance after passing the connection test, masking the key in the response", async () => {
@@ -194,8 +205,10 @@ describe("Tracearr integration endpoints", () => {
         method: "POST",
         body: { name: "Slashy", url: "http://tracearr:3000///", apiKey: "key" },
       });
-      const body = await expectJson<{ instance: { url: string } }>(response, 201);
+      const body = await expectJson<{ instance: { id: string; url: string } }>(response, 201);
       expect(body.instance.url).toBe("http://tracearr:3000");
+      const stored = await getTestPrisma().tracearrInstance.findUnique({ where: { id: body.instance.id } });
+      expect(stored?.url).toBe("http://tracearr:3000");
     });
 
     it("returns 400 and persists nothing when the connection test fails", async () => {
@@ -292,6 +305,8 @@ describe("Tracearr integration endpoints", () => {
       const body = await expectJson<{ instance: { name: string } }>(response, 200);
       expect(body.instance.name).toBe("Updated Tracearr");
       expect(mockTestConnection).not.toHaveBeenCalled();
+      const stored = await getTestPrisma().tracearrInstance.findUnique({ where: { id: instance.id } });
+      expect(stored?.name).toBe("Updated Tracearr");
     });
 
     it("renames while Tracearr is down when the form re-sends the unchanged URL", async () => {
@@ -315,6 +330,8 @@ describe("Tracearr integration endpoints", () => {
       const body = await expectJson<{ instance: { name: string } }>(response, 200);
       expect(body.instance.name).toBe("Renamed");
       expect(mockTestConnection).not.toHaveBeenCalled();
+      const stored = await getTestPrisma().tracearrInstance.findUnique({ where: { id: instance.id } });
+      expect(stored).toMatchObject({ name: "Renamed", url: instance.url, apiKey: instance.apiKey });
     });
 
     it("keeps the stored apiKey when the masked value is echoed back", async () => {
@@ -387,6 +404,10 @@ describe("Tracearr integration endpoints", () => {
       const body = await expectJson<{ instance: { url: string } }>(response, 200);
       expect(body.instance.url).toBe("http://new-tracearr:3000");
       expect(mockTestConnection).toHaveBeenCalledTimes(1);
+      // Tested with the stored key at the new URL — the recent sign-in allows it.
+      expect(clientArgs).toEqual([{ url: "http://new-tracearr:3000/", apiKey: instance.apiKey }]);
+      const stored = await getTestPrisma().tracearrInstance.findUnique({ where: { id: instance.id } });
+      expect(stored?.url).toBe("http://new-tracearr:3000");
     });
 
     it("skips the connection test when disabling the instance", async () => {
@@ -410,6 +431,8 @@ describe("Tracearr integration endpoints", () => {
       expect(body.instance.enabled).toBe(false);
       expect(body.instance.url).toBe("http://unreachable:3000");
       expect(mockTestConnection).not.toHaveBeenCalled();
+      const stored = await getTestPrisma().tracearrInstance.findUnique({ where: { id: instance.id } });
+      expect(stored).toMatchObject({ enabled: false, url: "http://unreachable:3000" });
     });
 
     it("returns 400 when the connection re-test fails", async () => {
@@ -563,7 +586,7 @@ describe("Tracearr integration endpoints", () => {
           body: { url: "http://other-tracearr:3000", apiKey: MASKED_VALUE },
         }
       );
-      await expectJson<{ ok: boolean }>(response, 200);
+      expect(await expectJson(response, 200)).toEqual({ ok: true, version: "2.0.0", serverCount: 2 });
       expect(clientArgs).toEqual([
         { url: "http://other-tracearr:3000", apiKey: "trr_pub_stored" },
       ]);
@@ -583,14 +606,17 @@ describe("Tracearr integration endpoints", () => {
           body: { apiKey: "trr_pub_typed" },
         }
       );
-      await expectJson<{ ok: boolean }>(response, 200);
+      expect(await expectJson(response, 200)).toEqual({ ok: true, version: "2.0.0", serverCount: 2 });
       expect(clientArgs).toEqual([
         { url: "http://tracearr.test:3000", apiKey: "trr_pub_typed" },
       ]);
     });
 
-    it("returns the failed test result verbatim", async () => {
-      mockTestConnection.mockResolvedValue({ ok: false, error: "Unauthorized (401)" });
+    it("returns the failed test result", async () => {
+      mockTestConnection.mockResolvedValue({
+        ok: false,
+        error: "Tracearr HTTP 401: Invalid API key (/api/v1/public/health)",
+      });
 
       const user = await createTestUser();
       const instance = await createTestTracearrInstance(user.id);
@@ -606,8 +632,33 @@ describe("Tracearr integration endpoints", () => {
         }
       );
       const body = await expectJson<{ ok: boolean; error: string }>(response, 200);
-      expect(body.ok).toBe(false);
-      expect(body.error).toBe("Unauthorized (401)");
+      expect(body).toEqual({
+        ok: false,
+        error: "Tracearr HTTP 401: Invalid API key (/api/v1/public/health)",
+      });
+    });
+
+    it("scrubs a private address from a failed test's error", async () => {
+      mockTestConnection.mockResolvedValue({
+        ok: false,
+        error: "connect ECONNREFUSED 10.0.0.12:3000",
+      });
+
+      const user = await createTestUser();
+      const instance = await createTestTracearrInstance(user.id);
+      setMockSession({ userId: user.id, isLoggedIn: true });
+
+      const response = await callRouteWithParams(
+        TEST_POST,
+        { id: instance.id },
+        {
+          url: `/api/integrations/tracearr/${instance.id}/test-connection`,
+          method: "POST",
+          body: {},
+        }
+      );
+      const body = await expectJson<{ ok: boolean; error: string }>(response, 200);
+      expect(body).toEqual({ ok: false, error: "connect ECONNREFUSED [internal]:3000" });
     });
   });
 
@@ -658,7 +709,9 @@ describe("Tracearr integration endpoints", () => {
     });
 
     it("returns 400 with a readable detail when the client throws", async () => {
-      mockListServers.mockRejectedValue(new Error("Tracearr: connect ECONNREFUSED"));
+      mockListServers.mockRejectedValue(
+        new Error("Tracearr unreachable (/api/v1/public/health): ECONNREFUSED"),
+      );
 
       const user = await createTestUser();
       const instance = await createTestTracearrInstance(user.id);
@@ -670,8 +723,10 @@ describe("Tracearr integration endpoints", () => {
         { url: `/api/integrations/tracearr/${instance.id}/servers` }
       );
       const body = await expectJson<{ error: string; detail: string }>(response, 400);
-      expect(body.error).toBe("Failed to query Tracearr");
-      expect(body.detail).toBe("Tracearr: connect ECONNREFUSED");
+      expect(body).toEqual({
+        error: "Failed to query Tracearr",
+        detail: "Tracearr unreachable (/api/v1/public/health): ECONNREFUSED",
+      });
     });
   });
 });

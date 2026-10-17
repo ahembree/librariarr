@@ -37,6 +37,11 @@ let PLEX_VERSION: string;
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  // clearAllMocks keeps queued `mock*Once` answers, which would otherwise leak
+  // into the next test if one went unconsumed.
+  mockPrisma.systemConfig.upsert.mockReset();
+  mockAxiosGet.mockReset();
+  mockAxiosPost.mockReset();
   // Reset module to clear cachedClientId
   vi.resetModules();
 
@@ -72,7 +77,11 @@ describe("Plex Auth", () => {
       expect(result).toBe("test-uuid-123");
       expect(mockPrisma.systemConfig.upsert).toHaveBeenCalledWith({
         where: { id: "singleton" },
-        create: expect.objectContaining({ id: "singleton" }),
+        // A fresh random UUID, kept only when no row exists yet.
+        create: {
+          id: "singleton",
+          plexClientId: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/),
+        },
         update: {},
       });
     });
@@ -95,8 +104,8 @@ describe("Plex Auth", () => {
       expect(PLEX_PRODUCT).toBe("Librariarr");
     });
 
-    it("exports version string", () => {
-      expect(PLEX_VERSION).toBeTruthy();
+    it("exports a semver version string", () => {
+      expect(PLEX_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
     });
   });
 
@@ -105,7 +114,18 @@ describe("Plex Auth", () => {
       mockPrisma.systemConfig.upsert.mockResolvedValueOnce({
         plexClientId: "client-id",
       });
-      const pinData = { id: 123, code: "ABC123", authToken: null };
+      const pinData = {
+        id: 1841672635,
+        code: "8tbrcb4zyk6gdqvbqakr3wtzb",
+        product: "Librariarr",
+        trusted: false,
+        clientIdentifier: "client-id",
+        expiresIn: 1800,
+        createdAt: "2026-10-16T12:00:00Z",
+        expiresAt: "2026-10-16T12:30:00Z",
+        authToken: null,
+        newRegistration: null,
+      };
       mockAxiosPost.mockResolvedValueOnce({ data: pinData });
 
       const result = await createPlexPin();
@@ -113,12 +133,14 @@ describe("Plex Auth", () => {
       expect(mockAxiosPost).toHaveBeenCalledWith(
         "https://plex.tv/api/v2/pins",
         { strong: true },
-        expect.objectContaining({
-          headers: expect.objectContaining({
+        {
+          headers: {
             "X-Plex-Product": "Librariarr",
+            "X-Plex-Version": PLEX_VERSION,
             "X-Plex-Client-Identifier": "client-id",
-          }),
-        })
+            Accept: "application/json",
+          },
+        }
       );
     });
   });
@@ -168,14 +190,15 @@ describe("Plex Auth", () => {
 
       const result = await getPlexUser("auth-token-123");
       expect(result).toEqual(userData);
-      expect(mockAxiosGet).toHaveBeenCalledWith(
-        "https://plex.tv/api/v2/user",
-        expect.objectContaining({
-          headers: expect.objectContaining({
-            "X-Plex-Token": "auth-token-123",
-          }),
-        })
-      );
+      expect(mockAxiosGet).toHaveBeenCalledWith("https://plex.tv/api/v2/user", {
+        headers: {
+          "X-Plex-Product": "Librariarr",
+          "X-Plex-Version": PLEX_VERSION,
+          "X-Plex-Client-Identifier": "client-id",
+          Accept: "application/json",
+          "X-Plex-Token": "auth-token-123",
+        },
+      });
     });
   });
 
@@ -297,10 +320,11 @@ describe("Plex Auth", () => {
       });
 
       const url = await getPlexAuthUrl("PIN-CODE");
-      expect(url).toContain("https://app.plex.tv/auth#?");
-      expect(url).toContain("clientID=my-client-id");
-      expect(url).toContain("code=PIN-CODE");
-      expect(url).toContain("context%5Bdevice%5D%5Bproduct%5D=Librariarr");
+      expect(url).toBe(
+        "https://app.plex.tv/auth#?clientID=my-client-id&code=PIN-CODE" +
+          "&context%5Bdevice%5D%5Bproduct%5D=Librariarr" +
+          `&context%5Bdevice%5D%5Bversion%5D=${PLEX_VERSION}`,
+      );
     });
   });
 });

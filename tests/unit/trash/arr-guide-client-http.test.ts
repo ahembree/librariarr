@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 
@@ -23,6 +23,10 @@ interface Hit {
 
 let server: http.Server | null = null;
 let hits: Hit[] = [];
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
 
 afterEach(async () => {
   await new Promise<void>((resolve) => (server ? server.close(() => resolve()) : resolve()));
@@ -74,12 +78,22 @@ describe("GuideArrClient over HTTP", () => {
   });
 
   it("converts a failed request into an IntegrationError named for the service", async () => {
-    const url = await serve(400, () => [{ errorMessage: "Name must be unique" }]);
+    // The validation-failure array every *arr 400 answers with.
+    const url = await serve(400, () => [
+      { propertyName: "Name", errorMessage: "Must be unique.", attemptedValue: "x", severity: "error" },
+    ]);
     const c = new GuideArrClient(url, "k", "SONARR");
     const err = await c.createCustomFormat({ name: "x", specifications: [] }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(IntegrationError);
-    expect((err as IntegrationError).service).toBe("Sonarr");
-    expect((err as IntegrationError).status).toBe(400);
+    expect(err).toMatchObject({
+      service: "Sonarr",
+      status: 400,
+      method: "POST",
+      validationMessages: ["Must be unique."],
+      message: "Sonarr HTTP 400: Must be unique. (/api/v3/customformat)",
+    });
+    // A write that the app refused is not retried.
+    expect(hits).toHaveLength(1);
     expect(logger.debug).toHaveBeenCalledWith(
       "Sonarr",
       expect.stringMatching(/^ERROR 400 \/api\/v3\/customformat \(\d+ms\)$/),

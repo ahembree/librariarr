@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
-import { cleanDatabase, disconnectTestDb } from "../../setup/test-db";
+import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
+import { MASKED_VALUE } from "@/lib/api/sanitize";
 import {
   callRoute,
   callRouteWithParams,
@@ -43,7 +44,8 @@ describe("Seerr integration endpoints", () => {
     await cleanDatabase();
     clearMockSession();
     vi.clearAllMocks();
-    mockTestConnection.mockResolvedValue({ ok: true });
+    // SeerrClient.testConnection answers this shape for a real Seerr instance.
+    mockTestConnection.mockResolvedValue({ ok: true, appName: "Seerr" });
   });
 
   afterAll(async () => {
@@ -116,7 +118,10 @@ describe("Seerr integration endpoints", () => {
         method: "POST",
         body: { url: "http://seerr:5055", apiKey: "key" },
       });
-      expect(res1.status).toBe(400);
+      expect(await expectJson(res1, 400)).toEqual({
+        error: "Validation failed",
+        details: [expect.stringMatching(/^name: /)],
+      });
 
       // Missing url
       const res2 = await callRoute(POST, {
@@ -124,7 +129,10 @@ describe("Seerr integration endpoints", () => {
         method: "POST",
         body: { name: "Seerr", apiKey: "key" },
       });
-      expect(res2.status).toBe(400);
+      expect(await expectJson(res2, 400)).toEqual({
+        error: "Validation failed",
+        details: [expect.stringMatching(/^url: /)],
+      });
 
       // Missing apiKey
       const res3 = await callRoute(POST, {
@@ -132,7 +140,13 @@ describe("Seerr integration endpoints", () => {
         method: "POST",
         body: { name: "Seerr", url: "http://seerr:5055" },
       });
-      expect(res3.status).toBe(400);
+      expect(await expectJson(res3, 400)).toEqual({
+        error: "Validation failed",
+        details: [expect.stringMatching(/^apiKey: /)],
+      });
+
+      expect(mockTestConnection).not.toHaveBeenCalled();
+      expect(await getTestPrisma().seerrInstance.count()).toBe(0);
     });
 
     it("creates instance successfully after passing connection test", async () => {
@@ -154,7 +168,19 @@ describe("Seerr integration endpoints", () => {
       }>(response, 201);
       expect(body.instance.name).toBe("My Seerr");
       expect(body.instance.url).toBe("http://seerr:5055");
-      expect(body.instance.id).toBeDefined();
+      // The stored key never goes back to the browser.
+      expect(body.instance).toMatchObject({ apiKey: MASKED_VALUE });
+      expect(mockTestConnection).toHaveBeenCalledTimes(1);
+
+      const stored = await getTestPrisma().seerrInstance.findUnique({ where: { id: body.instance.id } });
+      expect(stored).toMatchObject({
+        userId: user.id,
+        name: "My Seerr",
+        url: "http://seerr:5055",
+        apiKey: "test-key",
+        externalUrl: null,
+        enabled: true,
+      });
     });
 
     it("stores a normalized external URL, and none when blank", async () => {
@@ -186,7 +212,11 @@ describe("Seerr integration endpoints", () => {
         method: "POST",
         body: { name: "C", url: "http://seerr3:5055", apiKey: "k", externalUrl: "not a url" },
       });
-      expect(invalid.status).toBe(400);
+      expect(await expectJson(invalid, 400)).toMatchObject({
+        error: "Validation failed",
+        details: [expect.stringMatching(/^externalUrl: /)],
+      });
+      expect(await getTestPrisma().seerrInstance.count()).toBe(2);
     });
 
     it("returns error when connection test fails", async () => {
@@ -205,8 +235,8 @@ describe("Seerr integration endpoints", () => {
         },
       });
       const body = await expectJson<{ error: string; detail: string }>(response, 400);
-      expect(body.error).toContain("Failed to connect");
-      expect(body.detail).toBe("Connection refused");
+      expect(body).toEqual({ error: "Failed to connect to Seerr", detail: "Connection refused" });
+      expect(await getTestPrisma().seerrInstance.count()).toBe(0);
     });
   });
 
@@ -276,6 +306,11 @@ describe("Seerr integration endpoints", () => {
       const body = await expectJson<{ instance: { name: string; url: string } }>(response, 200);
       expect(body.instance.name).toBe("Updated Seerr");
       expect(body.instance.url).toBe("http://new-seerr:5055");
+      // A new URL is tested before it is saved.
+      expect(mockTestConnection).toHaveBeenCalledTimes(1);
+
+      const stored = await getTestPrisma().seerrInstance.findUnique({ where: { id: instance.id } });
+      expect(stored).toMatchObject({ name: "Updated Seerr", url: "http://new-seerr:5055" });
     });
 
     it("sets and clears the external URL without touching other fields", async () => {
@@ -307,6 +342,11 @@ describe("Seerr integration endpoints", () => {
         200,
       );
       expect(cleared.instance.externalUrl).toBeNull();
+
+      // No URL or key changed, so nothing was tested.
+      expect(mockTestConnection).not.toHaveBeenCalled();
+      const stored = await getTestPrisma().seerrInstance.findUnique({ where: { id: instance.id } });
+      expect(stored).toMatchObject({ name: "Renamed", url: instance.url, externalUrl: null });
     });
 
     it("saves a rename and a new external URL while the instance is unreachable", async () => {
@@ -329,6 +369,13 @@ describe("Seerr integration endpoints", () => {
       const body = await expectJson<{ instance: { name: string; externalUrl: string } }>(response, 200);
       expect(body.instance).toMatchObject({ name: "Renamed", externalUrl: "https://requests.example.com" });
       expect(mockTestConnection).not.toHaveBeenCalled();
+
+      const stored = await getTestPrisma().seerrInstance.findUnique({ where: { id: instance.id } });
+      expect(stored).toMatchObject({
+        name: "Renamed",
+        url: instance.url,
+        externalUrl: "https://requests.example.com",
+      });
     });
 
     it("returns error when connection test fails on update", async () => {
@@ -347,8 +394,11 @@ describe("Seerr integration endpoints", () => {
           body: { url: "http://bad:5055" },
         }
       );
-      const body = await expectJson<{ error: string }>(response, 400);
-      expect(body.error).toContain("Failed to connect");
+      const body = await expectJson<{ error: string; detail: string }>(response, 400);
+      expect(body).toEqual({ error: "Failed to connect", detail: "Timeout" });
+
+      const stored = await getTestPrisma().seerrInstance.findUnique({ where: { id: instance.id } });
+      expect(stored!.url).toBe(instance.url);
     });
   });
 
@@ -442,14 +492,21 @@ describe("Seerr integration endpoints", () => {
         method: "POST",
         body: { apiKey: "key" },
       });
-      expect(res1.status).toBe(400);
+      expect(await expectJson(res1, 400)).toEqual({
+        error: "Validation failed",
+        details: [expect.stringMatching(/^url: /)],
+      });
 
       const res2 = await callRoute(TEST_POST, {
         url: "/api/integrations/seerr/test",
         method: "POST",
         body: { url: "http://seerr:5055" },
       });
-      expect(res2.status).toBe(400);
+      expect(await expectJson(res2, 400)).toEqual({
+        error: "Validation failed",
+        details: [expect.stringMatching(/^apiKey: /)],
+      });
+      expect(mockTestConnection).not.toHaveBeenCalled();
     });
 
     it("returns test result", async () => {
@@ -461,8 +518,22 @@ describe("Seerr integration endpoints", () => {
         method: "POST",
         body: { url: "http://seerr:5055", apiKey: "test-key" },
       });
-      const body = await expectJson<{ ok: boolean }>(response, 200);
-      expect(body.ok).toBe(true);
+      const body = await expectJson(response, 200);
+      expect(body).toEqual({ ok: true, appName: "Seerr" });
+    });
+
+    it("scrubs a private address from a failed test's error", async () => {
+      mockTestConnection.mockResolvedValue({ ok: false, error: "connect ECONNREFUSED 192.168.1.20:5055" });
+      const user = await createTestUser();
+      setMockSession({ userId: user.id, isLoggedIn: true });
+
+      const response = await callRoute(TEST_POST, {
+        url: "/api/integrations/seerr/test",
+        method: "POST",
+        body: { url: "http://192.168.1.20:5055", apiKey: "test-key" },
+      });
+      const body = await expectJson(response, 200);
+      expect(body).toEqual({ ok: false, error: "connect ECONNREFUSED [internal]:5055" });
     });
   });
 });

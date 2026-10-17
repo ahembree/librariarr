@@ -39,11 +39,13 @@ vi.mock("@/lib/seerr/seerr-client", async (importOriginal) => ({
 import { GET } from "@/app/api/seerr/request-stats/route";
 import { invalidateSeerrCaches } from "@/lib/seerr/request-stats";
 
+// Seerr is TMDB-based: every request's media carries a tmdbId, and a TV
+// request's tvdbId may be null.
 function makeRequest(
   id: number,
   type: "movie" | "tv",
   requestedBy: { id: number; username: string; plexUsername?: string | null },
-  media: { tmdbId?: number; tvdbId?: number | null }
+  media: { tmdbId: number; tvdbId?: number | null }
 ) {
   return {
     id,
@@ -51,7 +53,7 @@ function makeRequest(
     status: 2,
     media: {
       id,
-      tmdbId: media.tmdbId ?? 0,
+      tmdbId: media.tmdbId,
       tvdbId: media.tvdbId ?? null,
       status: 5,
       createdAt: "2024-01-01T00:00:00Z",
@@ -63,7 +65,7 @@ function makeRequest(
       id: requestedBy.id,
       email: `${requestedBy.username}@test.com`,
       username: requestedBy.username,
-      plexUsername: requestedBy.plexUsername ?? undefined,
+      plexUsername: requestedBy.plexUsername ?? null,
     },
     modifiedBy: null,
     is4k: false,
@@ -78,6 +80,8 @@ describe("GET /api/seerr/request-stats", () => {
     await cleanDatabase();
     clearMockSession();
     vi.clearAllMocks();
+    // The stats are cached for a minute under one key; start every test cold.
+    invalidateSeerrCaches();
     mockGetUsers.mockResolvedValue({ pageInfo: { page: 1, pages: 1, results: 0 }, results: [] });
     mockGetRequests.mockResolvedValue({
       pageInfo: { page: 1, pages: 1, results: 0 },
@@ -91,64 +95,113 @@ describe("GET /api/seerr/request-stats", () => {
 
   it("returns 401 without auth", async () => {
     const res = await callRoute(GET);
-    expect(res.status).toBe(401);
+    expect(await expectJson(res, 401)).toEqual({ error: "Unauthorized" });
+    expect(mockGetRequests).not.toHaveBeenCalled();
   });
 
   it("returns configured=false when user has no Seerr instances", async () => {
     const user = await createTestUser();
     setMockSession({ userId: user.id, isLoggedIn: true });
-    invalidateSeerrCaches();
 
-    const body = await expectJson<{ configured: boolean; users: unknown[] }>(
-      await callRoute(GET),
-      200
-    );
-    expect(body.configured).toBe(false);
-    expect(body.users).toEqual([]);
+    const body = await expectJson(await callRoute(GET), 200);
+    expect(body).toEqual({
+      configured: false,
+      partial: false,
+      users: [],
+      totals: {
+        requestCount: 0,
+        movieCount: 0,
+        seriesCount: 0,
+        moviesWatched: 0,
+        episodesWatched: 0,
+        episodesAvailable: 0,
+      },
+    });
+    expect(mockGetRequests).not.toHaveBeenCalled();
   });
 
   it("aggregates requests by user with content types", async () => {
     const user = await createTestUser();
     await createTestSeerrInstance(user.id);
     setMockSession({ userId: user.id, isLoggedIn: true });
-    invalidateSeerrCaches();
 
     mockGetRequests.mockResolvedValueOnce({
       pageInfo: { page: 1, pages: 1, results: 3 },
       results: [
         makeRequest(1, "movie", { id: 1, username: "alice", plexUsername: "alice" }, { tmdbId: 100 }),
-        makeRequest(2, "tv", { id: 1, username: "alice", plexUsername: "alice" }, { tvdbId: 200 }),
+        makeRequest(2, "tv", { id: 1, username: "alice", plexUsername: "alice" }, { tmdbId: 1396, tvdbId: 200 }),
         makeRequest(3, "movie", { id: 2, username: "bob", plexUsername: "bob" }, { tmdbId: 101 }),
       ],
     });
 
-    const body = await expectJson<{
-      configured: boolean;
-      users: {
-        userKey: string;
-        seerrUsername: string;
-        requestCount: number;
-        movieCount: number;
-        seriesCount: number;
-        correlatable: boolean;
-      }[];
-    }>(await callRoute(GET), 200);
+    const body = await expectJson(await callRoute(GET), 200);
 
-    expect(body.configured).toBe(true);
-    expect(body.users).toHaveLength(2);
-    const alice = body.users.find((u) => u.seerrUsername === "alice");
-    const bob = body.users.find((u) => u.seerrUsername === "bob");
-    expect(alice).toMatchObject({ requestCount: 2, movieCount: 1, seriesCount: 1, correlatable: true });
-    expect(bob).toMatchObject({ requestCount: 1, movieCount: 1, seriesCount: 0, correlatable: true });
+    const nothingInLibrary = {
+      avatar: null,
+      moviesWatched: 0,
+      seriesWithAnyEpisodeWatched: 0,
+      episodesWatched: 0,
+      episodesAvailable: 0,
+      correlatable: true,
+    };
     // Sorted by requestCount desc
-    expect(body.users[0].seerrUsername).toBe("alice");
+    expect(body).toEqual({
+      configured: true,
+      partial: false,
+      users: [
+        {
+          ...nothingInLibrary,
+          userKey: "alice",
+          seerrUsername: "alice",
+          plexUsername: "alice",
+          requestCount: 2,
+          movieCount: 1,
+          seriesCount: 1,
+          distinctSeriesCount: 1,
+        },
+        {
+          ...nothingInLibrary,
+          userKey: "bob",
+          seerrUsername: "bob",
+          plexUsername: "bob",
+          requestCount: 1,
+          movieCount: 1,
+          seriesCount: 0,
+          distinctSeriesCount: 0,
+        },
+      ],
+      totals: {
+        requestCount: 3,
+        movieCount: 2,
+        seriesCount: 1,
+        moviesWatched: 0,
+        episodesWatched: 0,
+        episodesAvailable: 0,
+      },
+    });
   });
 
   it("marks user as not correlatable when plexUsername is missing", async () => {
     const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const library = await createTestLibrary(server.id, { type: "MOVIE" });
+    const movie = await createTestMediaItem(library.id, { type: "MOVIE", title: "Requested Movie" });
+    const prisma = getTestPrisma();
+    await prisma.mediaItem.update({ where: { id: movie.id }, data: { dedupKey: "movie-dedup-carol" } });
+    await createTestExternalId(movie.id, "TMDB", "100");
+    // A media-server account that happens to share the local Seerr username is
+    // NOT the requester: with no plexUsername/jellyfinUsername there is no
+    // account to correlate, so this play must not be credited.
+    await prisma.watchHistory.create({
+      data: {
+        mediaItemId: movie.id,
+        mediaServerId: server.id,
+        serverUsername: "carol",
+        watchedAt: new Date("2024-06-01T20:00:00Z"),
+      },
+    });
     await createTestSeerrInstance(user.id);
     setMockSession({ userId: user.id, isLoggedIn: true });
-    invalidateSeerrCaches();
 
     mockGetRequests.mockResolvedValueOnce({
       pageInfo: { page: 1, pages: 1, results: 1 },
@@ -156,12 +209,16 @@ describe("GET /api/seerr/request-stats", () => {
     });
 
     const body = await expectJson<{
-      users: { seerrUsername: string; correlatable: boolean; moviesWatched: number }[];
+      users: { seerrUsername: string; plexUsername: string | null; correlatable: boolean; moviesWatched: number }[];
     }>(await callRoute(GET), 200);
 
     expect(body.users).toHaveLength(1);
-    expect(body.users[0].correlatable).toBe(false);
-    expect(body.users[0].moviesWatched).toBe(0);
+    expect(body.users[0]).toMatchObject({
+      seerrUsername: "carol",
+      plexUsername: null,
+      correlatable: false,
+      moviesWatched: 0,
+    });
   });
 
   it("correlates movie requests with watch history", async () => {
@@ -181,13 +238,12 @@ describe("GET /api/seerr/request-stats", () => {
         mediaItemId: movie.id,
         mediaServerId: server.id,
         serverUsername: "alice",
-        watchedAt: new Date("2024-06-01"),
+        watchedAt: new Date("2024-06-01T20:00:00Z"),
       },
     });
 
     await createTestSeerrInstance(user.id);
     setMockSession({ userId: user.id, isLoggedIn: true });
-    invalidateSeerrCaches();
 
     mockGetRequests.mockResolvedValueOnce({
       pageInfo: { page: 1, pages: 1, results: 2 },
@@ -210,6 +266,7 @@ describe("GET /api/seerr/request-stats", () => {
 
     expect(body.users[0].movieCount).toBe(2);
     expect(body.users[0].moviesWatched).toBe(1);
+    expect(body.users[0].correlatable).toBe(true);
   });
 
   it("does not count an abandoned Tracearr play as a watched movie", async () => {
@@ -238,24 +295,24 @@ describe("GET /api/seerr/request-stats", () => {
           mediaItemId: finished.id,
           mediaServerId: server.id,
           serverUsername: "alice",
-          watchedAt: new Date("2024-06-01"),
+          watchedAt: new Date("2024-06-01T20:00:00Z"),
         },
         {
           mediaItemId: abandoned.id,
           mediaServerId: server.id,
           serverUsername: "alice",
-          watchedAt: new Date("2024-06-02"),
+          watchedAt: new Date("2024-06-02T20:00:00Z"),
           source: "TRACEARR",
-          sourceEventId: "chain-abandoned-movie",
+          sourceEventId: "3f6c2a8e-5b1d-4c7a-9e0f-1a2b3c4d5e6f",
           watched: false,
           percentComplete: 9,
+          state: "stopped",
         },
       ],
     });
 
     await createTestSeerrInstance(user.id);
     setMockSession({ userId: user.id, isLoggedIn: true });
-    invalidateSeerrCaches();
 
     mockGetRequests.mockResolvedValueOnce({
       pageInfo: { page: 1, pages: 1, results: 2 },
@@ -287,6 +344,8 @@ describe("GET /api/seerr/request-stats", () => {
           type: "SERIES",
           title: `Ep${n}`,
           parentTitle: "Half Finished Show",
+          // The sync keys a show with a TVDB id by it (see series-key.ts).
+          seriesKey: "tvdb:200",
           seasonNumber: 1,
           episodeNumber: n,
         })
@@ -307,27 +366,29 @@ describe("GET /api/seerr/request-stats", () => {
           mediaItemId: episodes[0].id,
           mediaServerId: server.id,
           serverUsername: "alice",
+          watchedAt: new Date("2024-06-01T20:00:00Z"),
         },
         {
           mediaItemId: episodes[1].id,
           mediaServerId: server.id,
           serverUsername: "alice",
+          watchedAt: new Date("2024-06-02T20:00:00Z"),
           source: "TRACEARR",
-          sourceEventId: "chain-abandoned-episode",
+          sourceEventId: "8d1e4b2c-7f3a-4e6b-a5c9-0b1c2d3e4f5a",
           watched: false,
           percentComplete: 15,
+          state: "stopped",
         },
       ],
     });
 
     await createTestSeerrInstance(user.id);
     setMockSession({ userId: user.id, isLoggedIn: true });
-    invalidateSeerrCaches();
 
     mockGetRequests.mockResolvedValueOnce({
       pageInfo: { page: 1, pages: 1, results: 1 },
       results: [
-        makeRequest(1, "tv", { id: 1, username: "alice", plexUsername: "alice" }, { tvdbId: 200 }),
+        makeRequest(1, "tv", { id: 1, username: "alice", plexUsername: "alice" }, { tmdbId: 1396, tvdbId: 200 }),
       ],
     });
 
@@ -358,6 +419,7 @@ describe("GET /api/seerr/request-stats", () => {
         type: "SERIES",
         title: "Ep1",
         parentTitle: "Test Series",
+        seriesKey: "tvdb:200",
         seasonNumber: 1,
         episodeNumber: 1,
       }),
@@ -365,6 +427,7 @@ describe("GET /api/seerr/request-stats", () => {
         type: "SERIES",
         title: "Ep2",
         parentTitle: "Test Series",
+        seriesKey: "tvdb:200",
         seasonNumber: 1,
         episodeNumber: 2,
       }),
@@ -372,6 +435,7 @@ describe("GET /api/seerr/request-stats", () => {
         type: "SERIES",
         title: "Ep3",
         parentTitle: "Test Series",
+        seriesKey: "tvdb:200",
         seasonNumber: 1,
         episodeNumber: 3,
       }),
@@ -401,12 +465,11 @@ describe("GET /api/seerr/request-stats", () => {
 
     await createTestSeerrInstance(user.id);
     setMockSession({ userId: user.id, isLoggedIn: true });
-    invalidateSeerrCaches();
 
     mockGetRequests.mockResolvedValueOnce({
       pageInfo: { page: 1, pages: 1, results: 1 },
       results: [
-        makeRequest(1, "tv", { id: 1, username: "alice", plexUsername: "alice" }, { tvdbId: 200 }),
+        makeRequest(1, "tv", { id: 1, username: "alice", plexUsername: "alice" }, { tmdbId: 1396, tvdbId: 200 }),
       ],
     });
 
@@ -430,7 +493,6 @@ describe("GET /api/seerr/request-stats", () => {
     const user = await createTestUser();
     await createTestSeerrInstance(user.id);
     setMockSession({ userId: user.id, isLoggedIn: true });
-    invalidateSeerrCaches();
 
     // Newest-first listing of 101 requests. Pages overlap by 10 rows (skip 0,
     // then 90) and the overlap is deduped by request id.
@@ -438,10 +500,13 @@ describe("GET /api/seerr/request-stats", () => {
       ...Array.from({ length: 100 }, (_, i) =>
         makeRequest(500 - i, "movie", { id: 1, username: "alice", plexUsername: "alice" }, { tmdbId: 1000 + i })
       ),
-      makeRequest(1, "tv", { id: 1, username: "alice", plexUsername: "alice" }, { tvdbId: 999 }),
+      makeRequest(1, "tv", { id: 1, username: "alice", plexUsername: "alice" }, { tmdbId: 5000, tvdbId: 999 }),
     ];
     mockGetRequests.mockImplementation(({ take, skip }: { take: number; skip: number }) =>
-      Promise.resolve({ pageInfo: { page: 1, pages: 2, results: 101 }, results: all.slice(skip, skip + take) })
+      Promise.resolve({
+        pageInfo: { page: Math.ceil(skip / take) + 1, pages: Math.ceil(all.length / take), results: all.length },
+        results: all.slice(skip, skip + take),
+      })
     );
 
     const body = await expectJson<{ users: { requestCount: number; movieCount: number; seriesCount: number }[] }>(
@@ -450,6 +515,10 @@ describe("GET /api/seerr/request-stats", () => {
     );
 
     expect(mockGetRequests).toHaveBeenCalledTimes(2);
+    expect(mockGetRequests.mock.calls.map(([params]) => params)).toEqual([
+      { take: 100, skip: 0 },
+      { take: 100, skip: 90 },
+    ]);
     expect(body.users[0].requestCount).toBe(101);
     expect(body.users[0].movieCount).toBe(100);
     expect(body.users[0].seriesCount).toBe(1);

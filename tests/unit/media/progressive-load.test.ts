@@ -4,12 +4,13 @@ import { fetchListProgressively, FIRST_CHUNK_SIZE } from "@/lib/media/progressiv
 const item = (id: number) => ({ id: `i${id}` });
 
 /** Queue of responses, consumed in request order; records the URLs requested. */
-function stubFetch(responses: Array<{ ok?: boolean; body?: unknown }>) {
+function stubFetch(responses: Array<{ status?: number; body?: unknown }>) {
   const urls: string[] = [];
   const fn = vi.fn(async (url: string) => {
     urls.push(url);
-    const next = responses.shift() ?? { ok: true, body: { items: [] } };
-    return { ok: next.ok ?? true, json: async () => next.body } as Response;
+    const next = responses.shift() ?? { body: { items: [] } };
+    const status = next.status ?? 200;
+    return { ok: status >= 200 && status < 300, status, json: async () => next.body } as Response;
   });
   vi.stubGlobal("fetch", fn);
   return urls;
@@ -118,10 +119,19 @@ describe("fetchListProgressively", () => {
     expect(chunks).toEqual([true]);
   });
 
-  it("falls back to a short page when the endpoint omits hasMore", async () => {
-    const urls = stubFetch([{ body: { items: [item(1)] } }]);
+  it("falls back to the page length when the endpoint omits hasMore", async () => {
+    // A short page is everything.
+    const shortUrls = stubFetch([{ body: { items: [item(1)] } }]);
     await fetchListProgressively("/api/media/movies", new URLSearchParams(), () => {});
-    expect(urls).toHaveLength(1);
+    expect(shortUrls).toHaveLength(1);
+
+    // A full page may have more behind it.
+    const first = Array.from({ length: FIRST_CHUNK_SIZE }, (_, i) => item(i));
+    const fullUrls = stubFetch([{ body: { items: first } }, { body: { items: [item(1000)] } }]);
+    const chunks: boolean[] = [];
+    await fetchListProgressively("/api/media/movies", new URLSearchParams(), (_, done) => chunks.push(done));
+    expect(fullUrls).toHaveLength(2);
+    expect(chunks).toEqual([false, true]);
   });
 
   it("treats an empty first pass as done", async () => {
@@ -135,11 +145,11 @@ describe("fetchListProgressively", () => {
   });
 
   it("throws when the first pass fails, without emitting", async () => {
-    stubFetch([{ ok: false, body: {} }]);
+    stubFetch([{ status: 500, body: { error: "Failed to fetch movies" } }]);
     const onChunk = vi.fn();
     await expect(
       fetchListProgressively("/api/media/movies", new URLSearchParams(), onChunk),
-    ).rejects.toThrow();
+    ).rejects.toThrow("HTTP 500");
     expect(onChunk).not.toHaveBeenCalled();
   });
 
@@ -147,15 +157,15 @@ describe("fetchListProgressively", () => {
     const first = Array.from({ length: FIRST_CHUNK_SIZE }, (_, i) => item(i));
     stubFetch([
       { body: { items: first, pagination: { hasMore: true } } },
-      { ok: false, body: {} },
+      { status: 503, body: {} },
     ]);
 
     const onChunk = vi.fn();
     await expect(
       fetchListProgressively("/api/media/movies", new URLSearchParams(), onChunk),
-    ).rejects.toThrow();
+    ).rejects.toThrow("HTTP 503");
     // The user still has a usable list rather than an empty page.
     expect(onChunk).toHaveBeenCalledTimes(1);
-    expect(onChunk.mock.calls[0][1]).toBe(false);
+    expect(onChunk).toHaveBeenCalledWith(first, false);
   });
 });

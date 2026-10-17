@@ -82,7 +82,7 @@ describe("useSidebarData", () => {
     const { result } = renderHook(() => useSidebarData());
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/media/library-types"));
     await act(async () => {});
-    expect(items(result.current.navigation, "Library")).toContain("Music");
+    expect(items(result.current.navigation, "Library")).toEqual(["Movies", "Series", "Music", "History", "Query"]);
   });
 
   it("refetches library types on server:changed and sync:completed", async () => {
@@ -117,7 +117,12 @@ describe("useSidebarData", () => {
   });
 
   it("badges the stream count and refreshes it on session-changed and server-status", async () => {
-    sessionsQueue = [{ sessions: [1, 2] }, { sessions: [1, 2, 3] }, { sessions: [] }];
+    const session = (sessionId: string) => ({ sessionId, title: "Inception", username: "alice" });
+    sessionsQueue = [
+      { sessions: [session("a"), session("b")] },
+      { sessions: [session("a"), session("b"), session("c")] },
+      { sessions: [] },
+    ];
     const { result } = renderHook(() => useSidebarData());
     const streams = () => result.current.navigation.find((g) => g.label === "Tools")!.items[0].badge;
     await waitFor(() => expect(streams()).toBe(2));

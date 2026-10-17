@@ -48,6 +48,11 @@ describe("sanitize", () => {
     expect(result.oidcClientSecret).toBe("••••••••");
   });
 
+  it("masks aiApiKey field", () => {
+    const result = sanitize({ aiProvider: "anthropic", aiApiKey: "sk-ant-api03-secret" });
+    expect(result).toEqual({ aiProvider: "anthropic", aiApiKey: "••••••••" });
+  });
+
   it("does not mask sensitive fields when value is null", () => {
     const result = sanitize({ accessToken: null, apiKey: null });
     expect(result.accessToken).toBe(null);
@@ -101,6 +106,13 @@ describe("sanitize", () => {
     expect(sanitize({})).toEqual({});
   });
 
+  it("stops at a circular reference instead of recursing forever", () => {
+    const server: Record<string, unknown> = { name: "Plex", accessToken: "secret" };
+    server.self = server;
+    const result = sanitize(server);
+    expect(result).toEqual({ name: "Plex", accessToken: "••••••••", self: "[circular]" });
+  });
+
   it("handles deeply nested arrays and objects", () => {
     const input = {
       items: [{ servers: [{ accessToken: "deep-secret" }] }],
@@ -147,6 +159,17 @@ describe("sanitizeErrorDetail", () => {
   it("strips 172.16-31.x.x private IPs", () => {
     const result = sanitizeErrorDetail("Host 172.16.0.1 unreachable");
     expect(result).toBe("Host [internal] unreachable");
+  });
+
+  it("strips only the private 172.16-31 range, not its neighbours", () => {
+    expect(sanitizeErrorDetail("Host 172.31.255.1 unreachable")).toBe("Host [internal] unreachable");
+    expect(sanitizeErrorDetail("Host 172.15.0.1 unreachable")).toBe("Host 172.15.0.1 unreachable");
+    expect(sanitizeErrorDetail("Host 172.32.0.1 unreachable")).toBe("Host 172.32.0.1 unreachable");
+  });
+
+  it("strips link-local and unspecified IPv4 addresses", () => {
+    expect(sanitizeErrorDetail("Bound to 169.254.10.20")).toBe("Bound to [internal]");
+    expect(sanitizeErrorDetail("Listening on 0.0.0.0:32400")).toBe("Listening on [internal]:32400");
   });
 
   it("strips 192.168.x.x private IPs", () => {

@@ -41,9 +41,11 @@ describe("validateRequest / validateOptionalRequest", () => {
     expect(await bad.error!.json()).toEqual({ error: "Invalid JSON in request body" });
 
     const invalid = await validateRequest(post("{}"), syncCancelSchema);
+    expect(invalid.error?.status).toBe(400);
     const body = await invalid.error!.json();
     expect(body.error).toBe("Validation failed");
-    expect(Array.isArray(body.details)).toBe(true);
+    // One "<path>: <message>" line per issue.
+    expect(body.details).toEqual([expect.stringMatching(/^serverId: /)]);
 
     const ok = await validateRequest(post('{"serverId":"s"}'), syncCancelSchema);
     expect(ok.data).toEqual({ serverId: "s" });
@@ -55,6 +57,7 @@ describe("validateRequest / validateOptionalRequest", () => {
     expect(await bad.error!.json()).toEqual({ error: "Invalid JSON in request body" });
     const strict = await validateOptionalRequest(post('{"librarykey":"1"}'), serverSyncSchema);
     expect(strict.error?.status).toBe(400);
+    expect((await strict.error!.json()).error).toBe("Validation failed");
     expect((await validateOptionalRequest(post('{"libraryKey":"1"}'), serverSyncSchema)).data).toEqual({
       libraryKey: "1",
     });
@@ -174,8 +177,11 @@ describe("server schemas", () => {
     const jf = serverAddSchema.safeParse({ url: "http://p", machineId: "m", type: "JELLYFIN" });
     expect(jf.success).toBe(false);
     expect(jf.error?.issues[0].path).toEqual(["accessToken"]);
-    expect(serverAddSchema.safeParse({ url: "http://p", machineId: "" }).success).toBe(false);
-    expect(serverAddSchema.safeParse({ url: "p", accessToken: "t" }).success).toBe(false);
+    expect(serverAddSchema.safeParse({ url: "http://p", machineId: "" }).error?.issues.map((i) => i.path)).toEqual([
+      ["accessToken"],
+    ]);
+    const noScheme = serverAddSchema.safeParse({ url: "p", accessToken: "t" });
+    expect(noScheme.error?.issues.map((i) => i.message)).toEqual(["URL must start with http:// or https://"]);
   });
 
   it("normalises the Tracearr mapping on an edit", () => {
@@ -186,11 +192,11 @@ describe("server schemas", () => {
   });
 
   it("validates edit and test URLs", () => {
-    expect(serverEditSchema.safeParse({ url: "x" }).success).toBe(false);
+    expect(serverEditSchema.safeParse({ url: "x" }).error?.issues[0].path).toEqual(["url"]);
     expect(serverEditSchema.safeParse({ externalUrl: null }).success).toBe(true);
     const ext = serverEditSchema.safeParse({ externalUrl: "plex.lan" });
     expect(ext.error?.issues[0].message).toBe("External URL must start with http:// or https://");
-    expect(serverTestSchema.safeParse({ url: "x", accessToken: "t", type: "PLEX" }).success).toBe(false);
+    expect(serverTestSchema.safeParse({ url: "x", accessToken: "t", type: "PLEX" }).error?.issues[0].path).toEqual(["url"]);
     expect(serverTestSchema.safeParse({ url: "http://x", accessToken: "t", type: "PLEX" }).success).toBe(true);
   });
 });

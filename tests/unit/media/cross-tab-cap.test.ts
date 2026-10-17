@@ -10,8 +10,12 @@ describe("capPerType", () => {
       { dim1: "m", dim2: "x", type: "MUSIC", _count: 1 },
     ];
     const out = capPerType(rows);
-    expect(out.filter((r) => r.type === "MOVIE")).toHaveLength(MAX_ROWS_PER_TYPE);
-    expect(out.filter((r) => r.type === "MUSIC")).toHaveLength(1);
+    const movies = out.filter((r) => r.type === "MOVIE");
+    expect(movies).toHaveLength(MAX_ROWS_PER_TYPE);
+    // The rows arrive ranked, so the cap drops the tail.
+    expect(movies[0].dim1).toBe("a0");
+    expect(movies.at(-1)!.dim1).toBe(`a${MAX_ROWS_PER_TYPE - 1}`);
+    expect(out.filter((r) => r.type === "MUSIC")).toEqual([{ dim1: "m", dim2: "x", type: "MUSIC", _count: 1 }]);
   });
 
   it("keeps the first rows of each type in order", () => {

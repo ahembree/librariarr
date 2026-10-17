@@ -76,7 +76,7 @@ async function getHealth(): Promise<IntegrationsHealth> {
 describe("GET /api/integrations/health", () => {
   it("returns 401 without auth", async () => {
     const res = await callRoute(GET);
-    await expectJson(res, 401);
+    expect(await expectJson(res, 401)).toEqual({ error: "Unauthorized" });
   });
 
   it("returns empty health when no integrations are configured", async () => {
@@ -96,24 +96,36 @@ describe("GET /api/integrations/health", () => {
 
   it("reports reachable=true when all configured instances respond ok", async () => {
     const user = await createTestUser();
-    await createTestRadarrInstance(user.id, { name: "My Radarr" });
-    await createTestSonarrInstance(user.id, { name: "My Sonarr" });
-    await createTestSeerrInstance(user.id, { name: "My Seerr" });
+    const radarr = await createTestRadarrInstance(user.id, { name: "My Radarr" });
+    const sonarr = await createTestSonarrInstance(user.id, { name: "My Sonarr" });
+    const seerr = await createTestSeerrInstance(user.id, { name: "My Seerr" });
     setMockSession({ isLoggedIn: true, userId: user.id});
 
-    mockRadarrTestConnection.mockResolvedValue({ ok: true, appName: "Radarr" });
-    mockSonarrTestConnection.mockResolvedValue({ ok: true, appName: "Sonarr" });
-    mockSeerrTestConnection.mockResolvedValue({ ok: true, appName: "Overseerr" });
+    mockRadarrTestConnection.mockResolvedValue({ ok: true, appName: "Radarr", version: "5.14.0.9383" });
+    mockSonarrTestConnection.mockResolvedValue({ ok: true, appName: "Sonarr", version: "4.0.11.2680" });
+    mockSeerrTestConnection.mockResolvedValue({ ok: true, appName: "Seerr" });
 
     const data = await getHealth();
 
-    expect(data.sonarr.configured).toBe(1);
-    expect(data.sonarr.reachable).toBe(1);
-    expect(data.radarr.configured).toBe(1);
-    expect(data.radarr.reachable).toBe(1);
-    expect(data.seerr.configured).toBe(1);
-    expect(data.seerr.reachable).toBe(1);
-    expect(data.arrAnyReachable).toBe(true);
+    expect(data).toEqual({
+      sonarr: {
+        configured: 1,
+        reachable: 1,
+        instances: [{ id: sonarr.id, name: "My Sonarr", reachable: true, error: null }],
+      },
+      radarr: {
+        configured: 1,
+        reachable: 1,
+        instances: [{ id: radarr.id, name: "My Radarr", reachable: true, error: null }],
+      },
+      lidarr: { configured: 0, reachable: 0, instances: [] },
+      seerr: {
+        configured: 1,
+        reachable: 1,
+        instances: [{ id: seerr.id, name: "My Seerr", reachable: true, error: null }],
+      },
+      arrAnyReachable: true,
+    });
   });
 
   it("reports unreachable instance with the error message", async () => {
@@ -220,5 +232,23 @@ describe("GET /api/integrations/health", () => {
     await callRoute(GET);
 
     expect(mockRadarrTestConnection).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-checks every instance when asked for fresh=1, bypassing the cached answer", async () => {
+    const user = await createTestUser();
+    await createTestRadarrInstance(user.id, { name: "My Radarr" });
+    setMockSession({ isLoggedIn: true, userId: user.id});
+
+    mockRadarrTestConnection.mockResolvedValueOnce({ ok: false, error: "down" });
+    const first = await getHealth();
+    expect(first.radarr.reachable).toBe(0);
+
+    mockRadarrTestConnection.mockResolvedValueOnce({ ok: true, appName: "Radarr" });
+    const res = await callRoute(GET, { url: "/api/integrations/health?fresh=1" });
+    const fresh = await expectJson<IntegrationsHealth>(res, 200);
+
+    expect(mockRadarrTestConnection).toHaveBeenCalledTimes(2);
+    expect(fresh.radarr.reachable).toBe(1);
+    expect(fresh.arrAnyReachable).toBe(true);
   });
 });

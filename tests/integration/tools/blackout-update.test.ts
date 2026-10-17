@@ -70,7 +70,10 @@ async function errorOf(res: Response) {
 describe("PUT /api/tools/blackout/[id] validation", () => {
   it("rejects a body that fails the schema", async () => {
     const s = await oneTime();
-    await expectJson(await put(s.id, { delay: -1 }), 400);
+    const body = await expectJson<{ error: string; details: string[] }>(await put(s.id, { delay: -1 }), 400);
+    expect(body.error).toBe("Validation failed");
+    expect(body.details).toEqual([expect.stringMatching(/^delay: /)]);
+    expect((await prisma.blackoutSchedule.findUniqueOrThrow({ where: { id: s.id } })).delay).toBe(30);
   });
 
   it("names the malformed startTime", async () => {
@@ -83,6 +86,9 @@ describe("PUT /api/tools/blackout/[id] validation", () => {
     expect(await errorOf(await put(s.id, { scheduleType: "one_time", startDate: "2030-01-01" }))).toBe(
       "startDate and endDate are required for one_time schedules",
     );
+    // Refused whole: the schedule is still the recurring one it was.
+    const row = await prisma.blackoutSchedule.findUniqueOrThrow({ where: { id: s.id } });
+    expect(row).toMatchObject({ scheduleType: "recurring", startDate: null, startTime: "02:00" });
   });
 
   it("rejects unparseable dates", async () => {
@@ -115,6 +121,7 @@ describe("PUT /api/tools/blackout/[id] validation", () => {
     const s = await recurring();
     expect(await errorOf(await put(s.id, { daysOfWeek: [] }))).toBe("daysOfWeek must be a non-empty array");
     expect(await errorOf(await put(s.id, { daysOfWeek: null }))).toBe("daysOfWeek must be a non-empty array");
+    expect((await prisma.blackoutSchedule.findUniqueOrThrow({ where: { id: s.id } })).daysOfWeek).toEqual([1, 3]);
   });
 });
 

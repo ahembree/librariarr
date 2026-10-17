@@ -68,7 +68,10 @@ function put(id: string, body: Record<string, unknown>) {
 describe("PUT /api/tools/preroll/schedules/[id] validation", () => {
   it("rejects a body that fails the schema", async () => {
     const s = await oneTime();
-    await expectJson(await put(s.id, { scheduleType: "monthly" }), 400);
+    const body = await expectJson<{ error: string; details: string[] }>(await put(s.id, { scheduleType: "monthly" }), 400);
+    expect(body.error).toBe("Validation failed");
+    expect(body.details).toEqual([expect.stringMatching(/^scheduleType: /)]);
+    expect((await prisma.prerollSchedule.findUniqueOrThrow({ where: { id: s.id } })).scheduleType).toBe("one_time");
   });
 
   it("requires both dates when switching a recurring schedule to one_time", async () => {
@@ -95,7 +98,8 @@ describe("PUT /api/tools/preroll/schedules/[id] validation", () => {
   it("rejects an empty days-of-week list", async () => {
     const s = await recurring();
     const body = await expectJson<{ error: string }>(await put(s.id, { daysOfWeek: [] }), 400);
-    expect(body.error).toMatch(/non-empty array/);
+    expect(body.error).toBe("Days of week must be a non-empty array for recurring schedules");
+    expect((await prisma.prerollSchedule.findUniqueOrThrow({ where: { id: s.id } })).daysOfWeek).toEqual([0, 6]);
   });
 
   it("rejects day values outside 0-6 stored on the row", async () => {
@@ -140,6 +144,9 @@ describe("PUT /api/tools/preroll/schedules/[id] conflicts and writes", () => {
     );
     expect(body.error).toBe("Schedule conflicts with existing schedule");
     expect(body.conflictingSchedule.name).toBe("Existing");
+    // Refused, so the dates are what they were.
+    const row = await prisma.prerollSchedule.findUniqueOrThrow({ where: { id: other.id } });
+    expect(row.startDate?.toISOString()).toBe("2031-01-10T00:00:00.000Z");
   });
 
   it("does not conflict with itself and skips conflict detection when disabled", async () => {
@@ -151,7 +158,12 @@ describe("PUT /api/tools/preroll/schedules/[id] conflicts and writes", () => {
     expect(ok.schedule.name).toBe("Still off");
 
     // Enabling it now conflicts with the first.
-    await expectJson(await put(overlapping.id, { enabled: true }), 409);
+    const refused = await expectJson<{ conflictingSchedule: { name: string } }>(
+      await put(overlapping.id, { enabled: true }),
+      409,
+    );
+    expect(refused.conflictingSchedule.name).toBe("Existing");
+    expect((await prisma.prerollSchedule.findUniqueOrThrow({ where: { id: overlapping.id } })).enabled).toBe(false);
   });
 
   it("writes every provided field, trimming name and path", async () => {

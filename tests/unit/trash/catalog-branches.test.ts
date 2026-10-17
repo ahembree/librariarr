@@ -18,7 +18,7 @@ vi.mock("axios", () => ({
 
 import { fetchTrashCatalog, catalogHasResource } from "@/lib/trash/catalog";
 import { appCache } from "@/lib/cache/memory-cache";
-import type { ResourceType, TrashCatalog } from "@/lib/trash/types";
+import type { TrashCatalog } from "@/lib/trash/types";
 
 function serve(tree: unknown, files: Record<string, unknown>) {
   mockGet.mockImplementation((url: string) => {
@@ -181,7 +181,8 @@ describe("catalogHasResource edge cases", () => {
     expect(catalogHasResource(cat, "QUALITY_DEFINITION", "qs1")).toBe(true);
   });
 
-  it("rejects an unknown resource type", () => {
-    expect(catalogHasResource(empty, "PROFILE_CF" as ResourceType, "x")).toBe(false);
+  it("rejects PROFILE_CF, which names a profile rather than a guide item", () => {
+    // The assignment route validates a PROFILE_CF overlay by its custom formats.
+    expect(catalogHasResource(empty, "PROFILE_CF", "x")).toBe(false);
   });
 });

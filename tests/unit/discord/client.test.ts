@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 vi.mock("@/lib/logger", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -16,7 +16,12 @@ import {
 
 describe("sendDiscordNotification", () => {
   beforeEach(() => {
-    vi.restoreAllMocks();
+    vi.mocked(logger.warn).mockClear();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
 
   it("sends POST to webhook URL and returns ok on 2xx", async () => {
@@ -39,22 +44,17 @@ describe("sendDiscordNotification", () => {
   });
 
   it("returns error when webhook returns non-2xx", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn().mockResolvedValue({
-        ok: false,
-        status: 429,
-        text: () => Promise.resolve("Rate limited"),
-      }),
-    );
+    const body = '{"message": "Invalid Webhook Token", "code": 50027}';
+    const mockFetch = vi.fn().mockResolvedValue(new Response(body, { status: 401 }));
+    vi.stubGlobal("fetch", mockFetch);
 
     const result = await sendDiscordNotification("https://discord.com/api/webhooks/123/abc", {
       content: "Hello!",
     });
 
-    expect(result.ok).toBe(false);
-    expect(result.error).toContain("429");
-    expect(result.error).toContain("Rate limited");
+    expect(result).toEqual({ ok: false, error: `Discord webhook returned 401: ${body}` });
+    // Only a 429 is retried.
+    expect(mockFetch).toHaveBeenCalledTimes(1);
   });
 
   it("returns error when response.text() rejects", async () => {
@@ -71,9 +71,7 @@ describe("sendDiscordNotification", () => {
       content: "Hello!",
     });
 
-    expect(result.ok).toBe(false);
-    expect(result.error).toContain("500");
-    expect(result.error).toContain("Unknown error");
+    expect(result).toEqual({ ok: false, error: "Discord webhook returned 500: Unknown error" });
   });
 
   it("returns error when fetch throws", async () => {
@@ -108,45 +106,60 @@ describe("sendDiscordNotification", () => {
     new Response(JSON.stringify(body), { status: 429, headers: { "content-type": "application/json", ...headers } });
 
   it("retries once after the wait a 429's retry_after asks for, and delivers", async () => {
+    vi.useFakeTimers();
     const mockFetch = vi
       .fn()
       .mockResolvedValueOnce(rateLimited({ message: "You are being rate limited.", retry_after: 0.05, global: false }))
       .mockResolvedValueOnce(new Response(null, { status: 204 }));
     vi.stubGlobal("fetch", mockFetch);
 
-    const result = await sendDiscordNotification(WEBHOOK, { content: "Hello!" });
+    const pending = sendDiscordNotification(WEBHOOK, { content: "Hello!" });
+    await vi.advanceTimersByTimeAsync(49);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
 
-    expect(result).toEqual({ ok: true });
+    expect(await pending).toEqual({ ok: true });
     expect(mockFetch).toHaveBeenCalledTimes(2);
+    expect(logger.warn).not.toHaveBeenCalled();
   });
 
-  it("falls back to the Retry-After header when the 429 body carries no retry_after", async () => {
+  it("falls back to the Retry-After header (in seconds) when the 429 body carries no retry_after", async () => {
+    vi.useFakeTimers();
     const mockFetch = vi
       .fn()
-      .mockResolvedValueOnce(rateLimited({ message: "slow down" }, { "retry-after": "0" }))
+      .mockResolvedValueOnce(rateLimited({ message: "You are being rate limited.", global: false }, { "retry-after": "1" }))
       .mockResolvedValueOnce(new Response(null, { status: 204 }));
     vi.stubGlobal("fetch", mockFetch);
 
-    expect(await sendDiscordNotification(WEBHOOK, { content: "Hello!" })).toEqual({ ok: true });
+    const pending = sendDiscordNotification(WEBHOOK, { content: "Hello!" });
+    await vi.advanceTimersByTimeAsync(999);
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+
+    expect(await pending).toEqual({ ok: true });
     expect(mockFetch).toHaveBeenCalledTimes(2);
   });
 
   it("does not hold the caller for a long rate limit, and retries only once", async () => {
-    const long = vi.fn().mockResolvedValue(rateLimited({ retry_after: 30, global: true }));
+    vi.useFakeTimers();
+    const long = vi.fn().mockResolvedValue(rateLimited({ message: "You are being rate limited.", retry_after: 30, global: true }));
     vi.stubGlobal("fetch", long);
     expect((await sendDiscordNotification(WEBHOOK, { content: "Hello!" })).ok).toBe(false);
     expect(long).toHaveBeenCalledTimes(1);
 
-    const repeated = vi.fn().mockImplementation(async () => rateLimited({ retry_after: 0.01 }));
+    const repeated = vi
+      .fn()
+      .mockImplementation(async () => rateLimited({ message: "You are being rate limited.", retry_after: 0.01, global: false }));
     vi.stubGlobal("fetch", repeated);
-    const result = await sendDiscordNotification(WEBHOOK, { content: "Hello!" });
+    const pending = sendDiscordNotification(WEBHOOK, { content: "Hello!" });
+    await vi.advanceTimersByTimeAsync(10);
+    const result = await pending;
     expect(result.ok).toBe(false);
-    expect(result.error).toContain("429");
+    expect(result.error).toMatch(/^Discord webhook returned 429: /);
     expect(repeated).toHaveBeenCalledTimes(2);
   });
 
   it("logs an undelivered notification at WARN, without the webhook URL", async () => {
-    vi.mocked(logger.warn).mockClear();
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response('{"message": "Unknown Webhook", "code": 10015}', { status: 404 })));
 
     const result = await sendDiscordNotification(WEBHOOK, { content: "Hello!" });
@@ -167,17 +180,24 @@ describe("buildSuccessSummaryEmbed", () => {
   });
 
   it("builds embed with correct structure for single item", () => {
-    const embed = buildSuccessSummaryEmbed("My Rule", "DELETE_RADARR", ["Movie A"]);
+    vi.useFakeTimers({ now: new Date("2026-03-01T12:00:00.000Z") });
+    try {
+      const embed = buildSuccessSummaryEmbed("My Rule", "DELETE_RADARR", ["Movie A"]);
 
-    expect(embed.title).toBe("1 Action Completed");
-    expect(embed.description).toContain("1 lifecycle action completed");
-    expect(embed.color).toBe(0x22c55e);
-    expect(embed.fields).toBeDefined();
-    expect(embed.fields!.find((f) => f.name === "Rule")?.value).toBe("My Rule");
-    expect(embed.fields!.find((f) => f.name === "Action")?.value).toBe("Delete from Radarr");
-    expect(embed.fields!.find((f) => f.name === "Completed")?.value).toBe("1");
-    expect(embed.footer?.text).toBe("Librariarr Lifecycle");
-    expect(embed.timestamp).toBeDefined();
+      expect(embed.title).toBe("1 Action Completed");
+      expect(embed.description).toBe("1 lifecycle action completed successfully.");
+      expect(embed.color).toBe(0x22c55e);
+      expect(embed.fields).toEqual([
+        { name: "Rule", value: "My Rule", inline: true },
+        { name: "Action", value: "Delete from Radarr", inline: true },
+        { name: "Completed", value: "1", inline: true },
+        { name: "Items", value: "• Movie A" },
+      ]);
+      expect(embed.footer?.text).toBe("Librariarr Lifecycle");
+      expect(embed.timestamp).toBe("2026-03-01T12:00:00.000Z");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("pluralizes title for multiple items", () => {
@@ -239,14 +259,15 @@ describe("buildMatchChangeEmbed", () => {
     expect(embed.fields!.find((f) => f.name === "New Matches")?.value).toBe("3");
     expect(embed.fields!.find((f) => f.name === "Removed Matches")?.value).toBe("2");
     expect(embed.fields!.find((f) => f.name === "Type")?.value).toBe("MOVIE");
-    expect(embed.fields!.find((f) => f.name === "Added Items")).toBeDefined();
-    expect(embed.fields!.find((f) => f.name === "Removed Items")).toBeDefined();
+    expect(embed.description).toBe("3 new matches found, 2 matches removed.");
+    expect(embed.fields!.find((f) => f.name === "Added Items")?.value).toBe("• A\n• B\n• C");
+    expect(embed.fields!.find((f) => f.name === "Removed Items")?.value).toBe("• D\n• E");
   });
 
   it("builds description for adds only", () => {
     const embed = buildMatchChangeEmbed("Rule", 1, 0, "SERIES");
     expect(embed.description).toBe("1 new match found.");
-    expect(embed.fields!.find((f) => f.name === "New Matches")).toBeDefined();
+    expect(embed.fields!.find((f) => f.name === "New Matches")?.value).toBe("1");
     expect(embed.fields!.find((f) => f.name === "Removed Matches")).toBeUndefined();
   });
 
@@ -254,7 +275,7 @@ describe("buildMatchChangeEmbed", () => {
     const embed = buildMatchChangeEmbed("Rule", 0, 5, "MUSIC");
     expect(embed.description).toBe("5 matches removed.");
     expect(embed.fields!.find((f) => f.name === "New Matches")).toBeUndefined();
-    expect(embed.fields!.find((f) => f.name === "Removed Matches")).toBeDefined();
+    expect(embed.fields!.find((f) => f.name === "Removed Matches")?.value).toBe("5");
   });
 
   it("uses singular form for 1 added match", () => {
@@ -279,16 +300,16 @@ describe("buildMaintenanceEmbed", () => {
     const embed = buildMaintenanceEmbed(true, "System upgrade in progress");
 
     expect(embed.title).toBe("Maintenance Mode Enabled");
-    expect(embed.description).toContain("activated");
-    expect(embed.description).toContain("System upgrade in progress");
+    expect(embed.description).toBe(
+      "Server maintenance mode has been activated.\n\nMessage: System upgrade in progress",
+    );
     expect(embed.color).toBe(0xf59e0b);
     expect(embed.footer?.text).toBe("Librariarr Maintenance");
   });
 
   it("builds enabled embed without message", () => {
     const embed = buildMaintenanceEmbed(true);
-    expect(embed.description).toContain("activated");
-    expect(embed.description).not.toContain("Message:");
+    expect(embed.description).toBe("Server maintenance mode has been activated.");
   });
 
   it("builds disabled embed with green color", () => {
@@ -319,7 +340,7 @@ describe("buildApiKeyEmbed", () => {
       { name: "Expires", value: "2030-01-01T00:00:00.000Z", inline: true },
     ]);
     expect(embed.footer?.text).toBe("Librariarr API Keys");
-    expect(embed.timestamp).toBeTruthy();
+    expect(new Date(embed.timestamp!).toISOString()).toBe(embed.timestamp);
   });
 
   it("reports a never-expiring key as such", () => {
@@ -330,7 +351,11 @@ describe("buildApiKeyEmbed", () => {
   it("announces a deleted key with its name and prefix only", () => {
     const embed = buildApiKeyEmbed("deleted", key);
     expect(embed.title).toBe("API Key Deleted");
-    expect(embed.fields?.map((f) => f.name)).toEqual(["Name", "Key"]);
+    expect(embed.fields).toEqual([
+      { name: "Name", value: "Home Assistant", inline: true },
+      { name: "Key", value: "lbr_Ab3xYz…", inline: true },
+    ]);
+    expect(embed.color).toBe(0x6b7280);
     expect(embed.color).not.toBe(buildApiKeyEmbed("created", key).color);
   });
 });

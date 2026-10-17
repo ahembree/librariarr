@@ -79,12 +79,10 @@ describe("interceptors", () => {
 
   it("logs a failed request with its status", async () => {
     const url = await serve(() => ({ status: 403, body: {} }));
-    await expect(new PlexClient(url, "t").getCollections("1")).rejects.toThrow();
-    expect(logger.debug).toHaveBeenCalledWith(
-      "Plex",
-      "ERROR 403 /library/sections/1/collections",
-      expect.objectContaining({ message: expect.any(String) }),
-    );
+    await expect(new PlexClient(url, "t").getCollections("1")).rejects.toThrow("Request failed with status code 403");
+    expect(logger.debug).toHaveBeenCalledWith("Plex", "ERROR 403 /library/sections/1/collections", {
+      message: "Request failed with status code 403",
+    });
   });
 });
 
@@ -137,10 +135,14 @@ describe("getItemMediaResolutions", () => {
       }),
     );
     const map = await new PlexClient(url, "t").getItemMediaResolutions("9");
-    expect(map.get("2")).toBe("720");
-    expect(map.has("3")).toBe(false);
-    expect(map.size).toBe(2);
-    expect(map.get("1")).not.toBe("1080");
+    // Version 1's file is 2160p whatever its label says; version 3 reports
+    // nothing usable and the id-less version cannot be keyed.
+    expect(map).toEqual(
+      new Map([
+        ["1", "4k"],
+        ["2", "720"],
+      ]),
+    );
   });
 
   it("returns an empty map for an item with no Media", async () => {
@@ -182,7 +184,7 @@ describe("getWatchHistory", () => {
   });
 
   it("returns [] when the item has no history", async () => {
-    const url = await serve((u) => (u.pathname === "/accounts" ? mc({}) : mc({})));
+    const url = await serve(() => mc({}));
     expect(await new PlexClient(url, "t").getWatchHistory("5")).toEqual([]);
   });
 });
@@ -284,34 +286,34 @@ describe("history paging", () => {
 describe("collections", () => {
   it("getCollectionItems returns [] for an empty collection", async () => {
     const url = await serve(() => mc({}));
-    expect(await new PlexClient(url, "t").getCollectionItems("c1")).toEqual([]);
-    expect(requests[0].path).toBe("/library/collections/c1/items");
+    expect(await new PlexClient(url, "t").getCollectionItems("48211")).toEqual([]);
+    expect(requests[0].path).toBe("/library/collections/48211/items");
   });
 
   it("moveCollectionItem sends after only when given", async () => {
     const url = await serve(() => mc({}));
     const c = new PlexClient(url, "t");
-    await c.moveCollectionItem("c1", "i1", "i0");
-    await c.moveCollectionItem("c1", "i2");
+    await c.moveCollectionItem("48211", "5311", "5310");
+    await c.moveCollectionItem("48211", "5312");
     expect(requests.map((r) => [r.method, r.path, r.query.get("after")])).toEqual([
-      ["PUT", "/library/collections/c1/items/i1/move", "i0"],
-      ["PUT", "/library/collections/c1/items/i2/move", null],
+      ["PUT", "/library/collections/48211/items/5311/move", "5310"],
+      ["PUT", "/library/collections/48211/items/5312/move", null],
     ]);
   });
 
   it("edits a collection's sort title and its sort order", async () => {
     const url = await serve(() => mc({}));
     const c = new PlexClient(url, "t");
-    await c.editCollectionSortTitle("2", "c1", "!Leaving");
-    await c.editCollectionSort("c1", 1);
+    await c.editCollectionSortTitle("2", "48211", "!Leaving");
+    await c.editCollectionSort("48211", 1);
     expect(requests[0].path).toBe("/library/sections/2/all");
     expect(Object.fromEntries(requests[0].query)).toEqual({
       type: "18",
-      id: "c1",
+      id: "48211",
       "titleSort.value": "!Leaving",
       "titleSort.locked": "1",
     });
-    expect(requests[1].path).toBe("/library/metadata/c1/prefs");
+    expect(requests[1].path).toBe("/library/metadata/48211/prefs");
     expect(requests[1].query.get("collectionSort")).toBe("1");
   });
 
@@ -326,28 +328,28 @@ describe("collections", () => {
 
     it("reads the exact hub identifier first", async () => {
       const url = await hubServer([
-        { identifier: "other.c1", promotedToOwnHome: true },
-        { identifier: "custom.collection.2.c1", promotedToSharedHome: 1, promotedToRecommended: 0 },
+        { identifier: "other.48211", promotedToOwnHome: true },
+        { identifier: "custom.collection.2.48211", promotedToSharedHome: 1, promotedToRecommended: 0 },
       ]);
-      expect(await new PlexClient(url, "t").getCollectionVisibility("2", "c1")).toEqual({
-        identifier: "custom.collection.2.c1",
+      expect(await new PlexClient(url, "t").getCollectionVisibility("2", "48211")).toEqual({
+        identifier: "custom.collection.2.48211",
         home: false,
         shared: true,
         recommended: false,
       });
-      expect(requests[0].query.get("metadataItemId")).toBe("c1");
+      expect(requests[0].query.get("metadataItemId")).toBe("48211");
     });
 
     it("falls back to a hub whose identifier ends in the rating key", async () => {
-      const url = await hubServer([{ identifier: "custom.collection.9.c1", promotedToOwnHome: true }]);
-      expect((await new PlexClient(url, "t").getCollectionVisibility("2", "c1")).identifier).toBe(
-        "custom.collection.9.c1",
+      const url = await hubServer([{ identifier: "custom.collection.9.48211", promotedToOwnHome: true }]);
+      expect((await new PlexClient(url, "t").getCollectionVisibility("2", "48211")).identifier).toBe(
+        "custom.collection.9.48211",
       );
     });
 
     it("reports no hub when none matches or the container has no Hub", async () => {
       const url = await hubServer(undefined);
-      expect(await new PlexClient(url, "t").getCollectionVisibility("2", "c1")).toEqual({
+      expect(await new PlexClient(url, "t").getCollectionVisibility("2", "48211")).toEqual({
         identifier: null,
         home: false,
         shared: false,
@@ -356,19 +358,19 @@ describe("collections", () => {
     });
 
     it("deletes an existing hub when every promotion is turned off", async () => {
-      const url = await hubServer([{ identifier: "custom.collection.2.c1" }]);
-      await new PlexClient(url, "t").updateCollectionVisibility("2", "c1", false, false, false);
+      const url = await hubServer([{ identifier: "custom.collection.2.48211" }]);
+      await new PlexClient(url, "t").updateCollectionVisibility("2", "48211", false, false, false);
       expect(requests.map((r) => `${r.method} ${r.path}`)).toEqual([
         "GET /hubs/sections/2/manage",
-        "DELETE /hubs/sections/2/manage/custom.collection.2.c1",
+        "DELETE /hubs/sections/2/manage/custom.collection.2.48211",
       ]);
     });
 
     it("zeroes every promotion when the server refuses the DELETE", async () => {
-      const url = await hubServer([{ identifier: "custom.collection.2.c1" }], { deleteStatus: 405 });
-      await new PlexClient(url, "t").updateCollectionVisibility("2", "c1", false, false, false);
+      const url = await hubServer([{ identifier: "custom.collection.2.48211" }], { deleteStatus: 405 });
+      await new PlexClient(url, "t").updateCollectionVisibility("2", "48211", false, false, false);
       const put = requests.find((r) => r.method === "PUT")!;
-      expect(put.path).toBe("/hubs/sections/2/manage/custom.collection.2.c1");
+      expect(put.path).toBe("/hubs/sections/2/manage/custom.collection.2.48211");
       expect(Object.fromEntries(put.query)).toEqual({
         promotedToOwnHome: "0",
         promotedToSharedHome: "0",
@@ -377,8 +379,8 @@ describe("collections", () => {
     });
 
     it("updates an existing hub with the wanted promotions", async () => {
-      const url = await hubServer([{ identifier: "custom.collection.2.c1" }]);
-      await new PlexClient(url, "t").updateCollectionVisibility("2", "c1", true, false, true);
+      const url = await hubServer([{ identifier: "custom.collection.2.48211" }]);
+      await new PlexClient(url, "t").updateCollectionVisibility("2", "48211", true, false, true);
       const put = requests.find((r) => r.method === "PUT")!;
       expect(Object.fromEntries(put.query)).toEqual({
         promotedToOwnHome: "1",
@@ -389,16 +391,16 @@ describe("collections", () => {
 
     it("creates a hub when none exists and a promotion is wanted", async () => {
       const url = await hubServer([]);
-      await new PlexClient(url, "t").updateCollectionVisibility("2", "c1", false, true, false);
+      await new PlexClient(url, "t").updateCollectionVisibility("2", "48211", false, true, false);
       const post = requests.find((r) => r.method === "POST")!;
       expect(post.path).toBe("/hubs/sections/2/manage");
-      expect(post.query.get("metadataItemId")).toBe("c1");
+      expect(post.query.get("metadataItemId")).toBe("48211");
       expect(post.query.get("promotedToSharedHome")).toBe("1");
     });
 
     it("does nothing when there is no hub and no promotion is wanted", async () => {
       const url = await hubServer([]);
-      await new PlexClient(url, "t").updateCollectionVisibility("2", "c1", false, false, false);
+      await new PlexClient(url, "t").updateCollectionVisibility("2", "48211", false, false, false);
       expect(requests.map((r) => r.method)).toEqual(["GET"]);
     });
   });
@@ -655,7 +657,10 @@ describe("testConnection", () => {
     const url = await serve(() => undefined);
     await new Promise<void>((resolve) => server!.close(() => resolve()));
     server = null;
-    expect((await new PlexClient(url, "t").testConnection()).error).toMatch(/^Connection refused/);
+    expect(await new PlexClient(url, "t").testConnection()).toEqual({
+      ok: false,
+      error: "Connection refused - server may be offline or unreachable from this network",
+    });
   });
 });
 
@@ -677,6 +682,10 @@ describe("getWatchlistGuids", () => {
   it("returns null (not an empty set) on a non-Error failure", async () => {
     vi.spyOn(axios, "get").mockRejectedValue("nope");
     expect(await new PlexClient("http://plex", "tok").getWatchlistGuids()).toBeNull();
-    expect(logger.warn).toHaveBeenCalledWith("Plex", expect.any(String), { error: "Unknown error" });
+    expect(logger.warn).toHaveBeenCalledWith(
+      "Plex",
+      "Failed to fetch the plex.tv watchlist — stored watchlist flags are kept unchanged this sync",
+      { error: "Unknown error" },
+    );
   });
 });

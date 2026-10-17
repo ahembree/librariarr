@@ -47,11 +47,12 @@ describe("useLocalStorage", () => {
 
   it("follows a storage event from another tab for its own key only", () => {
     const { result } = renderHook(() => useLocalStorage("ls-tab", "a"));
+    // Another tab wrote the key; this tab hears of it only through the event.
     localStorage.setItem("ls-tab", "b");
     act(() => {
       window.dispatchEvent(new StorageEvent("storage", { key: "unrelated" }));
     });
-    // Snapshot is re-read on any render, so check via the matching event.
+    expect(result.current[0]).toBe("a");
     act(() => {
       window.dispatchEvent(new StorageEvent("storage", { key: "ls-tab" }));
     });
@@ -59,13 +60,17 @@ describe("useLocalStorage", () => {
   });
 
   it("removes its storage listener on unmount", () => {
+    const add = vi.spyOn(window, "addEventListener");
     const remove = vi.spyOn(window, "removeEventListener");
     const { unmount } = renderHook(() => useLocalStorage("ls-unmount", "a"));
+    const added = add.mock.calls.filter(([type]) => type === "storage").map(([, fn]) => fn);
+    expect(added).toHaveLength(1);
     unmount();
-    expect(remove).toHaveBeenCalledWith("storage", expect.any(Function));
+    const removed = remove.mock.calls.filter(([type]) => type === "storage").map(([, fn]) => fn);
+    expect(removed).toEqual(added);
   });
 
-  it("keeps working in memory when storage throws", () => {
+  it("does not throw when storage throws, and keeps showing the default", () => {
     vi.stubGlobal("localStorage", throwingStorage);
     const { result } = renderHook(() => useLocalStorage<string>("ls-broken", "fallback"));
     expect(result.current[0]).toBe("fallback");

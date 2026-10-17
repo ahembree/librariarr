@@ -161,9 +161,12 @@ describe("useTableAlphabet", () => {
 
   it("removes the scroll listener on unmount", () => {
     const el = scrollEl();
+    const add = vi.spyOn(el, "addEventListener");
     const remove = vi.spyOn(el, "removeEventListener");
     const { unmount } = renderHook(() => useTableAlphabet({ items: ITEMS, scrollElement: el }));
+    expect(add).toHaveBeenCalledTimes(1);
+    const listener = add.mock.calls[0][1];
     unmount();
-    expect(remove).toHaveBeenCalledWith("scroll", expect.any(Function));
+    expect(remove).toHaveBeenCalledWith("scroll", listener);
   });
 });

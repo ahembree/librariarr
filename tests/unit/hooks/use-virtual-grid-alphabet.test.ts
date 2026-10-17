@@ -133,8 +133,11 @@ describe("useVirtualGridAlphabet", () => {
     const enabled = renderHook(() =>
       useVirtualGridAlphabet({ items: ITEMS, columns: 3, virtualizer: asV(v), scrollElement: el }),
     );
+    expect(add).toHaveBeenCalledTimes(1);
     expect(add).toHaveBeenCalledWith("scroll", expect.any(Function), { passive: true });
+    const listener = add.mock.calls[0][1];
+    expect(remove).not.toHaveBeenCalled();
     enabled.unmount();
-    expect(remove).toHaveBeenCalledWith("scroll", expect.any(Function));
+    expect(remove).toHaveBeenCalledWith("scroll", listener);
   });
 });

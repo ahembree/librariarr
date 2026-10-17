@@ -71,8 +71,10 @@ describe("a connection test while the server is marked unreachable", () => {
 
       const result = await createClient(type, url, "token", { skipTlsVerify: true }).testConnection();
 
-      expect(result).toMatchObject({ ok: true, serverName: "Living Room" });
-      expect(hits()).toBeGreaterThan(0);
+      expect(result).toEqual({ ok: true, serverName: "Living Room" });
+      // Plex reads `/`; Jellyfin/Emby read the public info, then the
+      // authenticated one to check the key.
+      expect(hits()).toBe(type === "PLEX" ? 1 : 2);
     });
   }
 
@@ -91,7 +93,7 @@ describe("a connection test while the server is marked unreachable", () => {
     const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
     const createClient = await markedDownByTheWorker(url);
 
-    for (const type of ["PLEX", "JELLYFIN"] as const) {
+    for (const type of ["PLEX", "JELLYFIN", "EMBY"] as const) {
       hits = 0;
       expect((await createClient(type, url, "token").testConnection()).ok).toBe(false);
       expect(hits).toBe(1);

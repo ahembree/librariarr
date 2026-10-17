@@ -59,7 +59,10 @@ describe("SeerrClient", () => {
 
   describe("testConnection", () => {
     it("returns ok on successful connection", async () => {
-      mockAxiosInstance.get.mockResolvedValueOnce({ data: { applicationTitle: "Seerr" } });
+      // An excerpt of GET /api/v1/settings/main (MainSettings).
+      mockAxiosInstance.get.mockResolvedValueOnce({
+        data: { applicationTitle: "Seerr", applicationUrl: "", localLogin: true, mediaServerType: 1 },
+      });
       const result = await client.testConnection();
       expect(result).toEqual({ ok: true, appName: "Seerr" });
       // The connection test opts out of transport retries (NO_RETRY).
@@ -67,13 +70,16 @@ describe("SeerrClient", () => {
     });
 
     it("rejects a 2xx that is not Seerr settings (auth-proxy login page, other app)", async () => {
+      const notSeerr = {
+        ok: false,
+        error: "The URL did not return Seerr settings — check the URL, and that any auth proxy lets /api through",
+      };
       mockAxiosInstance.get.mockResolvedValueOnce({ data: "<!doctype html><title>Sign in</title>" });
-      const html = await client.testConnection();
-      expect(html.ok).toBe(false);
-      expect(html.error).toMatch(/did not return Seerr settings/);
+      expect(await client.testConnection()).toEqual(notSeerr);
 
-      mockAxiosInstance.get.mockResolvedValueOnce({ data: { version: "4.0" } });
-      expect((await client.testConnection()).ok).toBe(false);
+      // Another app's JSON (here an *arr system status) is not Seerr either.
+      mockAxiosInstance.get.mockResolvedValueOnce({ data: { appName: "Radarr", version: "5.14.0.9383" } });
+      expect(await client.testConnection()).toEqual(notSeerr);
     });
 
     it("returns error on network failure", async () => {
@@ -128,18 +134,18 @@ describe("SeerrClient", () => {
 
   describe("getMovie", () => {
     it("fetches movie details by tmdb id", async () => {
-      const movie = { id: 12345, title: "Test Movie" };
+      const movie = { id: 603, title: "The Matrix", releaseDate: "1999-03-31", posterPath: "/f89U3ADr1oiB1s9GkdPOEpXUk5H.jpg" };
       mockAxiosInstance.get.mockResolvedValueOnce({ data: movie });
-      const result = await client.getMovie(12345);
+      const result = await client.getMovie(603);
       expect(result).toEqual(movie);
-      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v1/movie/12345", undefined);
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v1/movie/603", undefined);
     });
   });
 
   describe("per-call options", () => {
     it("passes a cancel signal and a retry opt-out through to the request", async () => {
       const controller = new AbortController();
-      mockAxiosInstance.get.mockResolvedValue({ data: {} });
+      for (let call = 0; call < 3; call++) mockAxiosInstance.get.mockResolvedValueOnce({ data: {} });
 
       await client.getMovie(1, { signal: controller.signal });
       expect(mockAxiosInstance.get).toHaveBeenLastCalledWith("/api/v1/movie/1", { signal: controller.signal });
@@ -158,11 +164,11 @@ describe("SeerrClient", () => {
 
   describe("getTvShow", () => {
     it("fetches tv show details by tmdb id", async () => {
-      const show = { id: 67890, name: "Test Show" };
+      const show = { id: 1396, name: "Breaking Bad", firstAirDate: "2008-01-20", posterPath: "/ztkUQFLlC19CCMYHW9o1zWhJRNq.jpg" };
       mockAxiosInstance.get.mockResolvedValueOnce({ data: show });
-      const result = await client.getTvShow(67890);
+      const result = await client.getTvShow(1396);
       expect(result).toEqual(show);
-      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v1/tv/67890", undefined);
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v1/tv/1396", undefined);
     });
   });
 
@@ -185,6 +191,7 @@ describe("SeerrClient", () => {
       mockAxiosInstance.get.mockResolvedValueOnce({ data: response });
       const result = await client.getUsers();
       expect(result).toEqual(response);
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith("/api/v1/user", { params: undefined });
     });
   });
 });

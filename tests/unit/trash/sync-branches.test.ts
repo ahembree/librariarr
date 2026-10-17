@@ -80,6 +80,8 @@ function managedRows(rows: Record<string, unknown>[]) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // clearAllMocks keeps implementations; start every client stub from nothing.
+  for (const fn of Object.values(clientMock)) fn.mockReset();
   catalogRef.current = baseCatalog("SONARR");
   managedRows([]);
   prismaMock.trashManagedResource.updateMany.mockResolvedValue({ count: 1 });
@@ -122,7 +124,11 @@ describe("runTrashSync — skips and no-ops", () => {
       dryRun: true,
       items: [{ resourceType: "QUALITY_DEFINITION", trashId: "qs1" }],
     });
-    expect(report.items[0].action).toBe("SKIP");
+    expect(report.items[0]).toMatchObject({
+      action: "SKIP",
+      warnings: ["Quality sizes are no longer in the guide."],
+    });
+    expect(clientMock.updateQualityDefinitions).not.toHaveBeenCalled();
   });
 
   it("reports NOOP and writes nothing to the app when everything already matches, but still stamps rows", async () => {
@@ -261,7 +267,10 @@ describe("runTrashSync — quality profiles and overlays", () => {
       dryRun: true,
       items: [{ resourceType: "PROFILE_CF", trashId: "NoId", selection: { formats: [] } }],
     });
-    expect(report.items[0]).toMatchObject({ action: "SKIP" });
+    expect(report.items[0]).toMatchObject({
+      action: "SKIP",
+      warnings: ['Quality profile "NoId" was not found on this instance.'],
+    });
   });
 });
 

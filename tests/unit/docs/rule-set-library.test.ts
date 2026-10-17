@@ -32,8 +32,9 @@ describe("docs rule set library", () => {
 
   it.each(ruleSets.map((r) => [r.name, r] as const))("%s saves through the rule set create schema", (_name, ruleSet) => {
     // What the editor sends once the reader has picked a server: the export
-    // minus its version marker, plus a target. Collection settings go
-    // through their own fields and are not part of this payload.
+    // minus its version marker, plus a target. The export's `collection*`
+    // keys are not schema fields (a rule set references a collection by
+    // `collectionId`), so the schema strips them.
     const { version: _version, ...payload } = ruleSet;
     const result = ruleSetCreateSchema.safeParse({ ...payload, serverIds: ["server"] });
     expect(result.success, JSON.stringify(result.error?.issues)).toBe(true);

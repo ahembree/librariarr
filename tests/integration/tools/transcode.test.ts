@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
-import { cleanDatabase, disconnectTestDb } from "../../setup/test-db";
+import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
 import {
   callRoute,
@@ -62,10 +62,14 @@ describe("Tools transcode manager endpoints", () => {
         criteria: Record<string, boolean>;
       }>(response, 200);
 
-      expect(body.enabled).toBe(false);
-      expect(body.message).toBe("");
-      expect(body.delay).toBe(30);
-      expect(body.criteria).toEqual(DEFAULT_CRITERIA);
+      expect(body).toEqual({
+        enabled: false,
+        message: "",
+        delay: 30,
+        criteria: DEFAULT_CRITERIA,
+        excludedUsers: [],
+        exemptHardware: false,
+      });
     });
 
     it("returns saved settings", async () => {
@@ -89,6 +93,7 @@ describe("Tools transcode manager endpoints", () => {
           message: "Transcoding not allowed",
           delay: 15,
           criteria: customCriteria,
+          excludedUsers: ["alice"],
         },
       });
 
@@ -100,10 +105,14 @@ describe("Tools transcode manager endpoints", () => {
         criteria: Record<string, boolean>;
       }>(response, 200);
 
-      expect(body.enabled).toBe(true);
-      expect(body.message).toBe("Transcoding not allowed");
-      expect(body.delay).toBe(15);
-      expect(body.criteria).toEqual(customCriteria);
+      expect(body).toEqual({
+        enabled: true,
+        message: "Transcoding not allowed",
+        delay: 15,
+        criteria: customCriteria,
+        excludedUsers: ["alice"],
+        exemptHardware: false,
+      });
     });
   });
 
@@ -315,7 +324,10 @@ describe("Tools transcode manager endpoints", () => {
         body: { enabled: true, message: "x", exemptHardware: "yes" },
       });
 
-      expect(response.status).toBe(400);
+      const body = await expectJson<{ error: string; details: string[] }>(response, 400);
+      expect(body.error).toBe("Validation failed");
+      expect(body.details).toEqual([expect.stringMatching(/^exemptHardware: /)]);
+      expect(await getTestPrisma().appSettings.count()).toBe(0);
     });
   });
 });

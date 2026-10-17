@@ -51,7 +51,9 @@ describe("instrumentation register()", () => {
 
   it("finishes the orphaned-sync cleanup before starting the worker", async () => {
     cleanup.mockImplementation(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      // Yield past every pending microtask: an un-awaited cleanup would let
+      // the worker start first.
+      await new Promise((resolve) => setImmediate(resolve));
       order.push("cleanup");
     });
 

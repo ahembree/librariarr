@@ -198,7 +198,7 @@ describe("buildQualityProfile edge cases", () => {
   it("falls back to the highest allowed quality for an unknown cutoff, or the top quality when none is allowed", () => {
     const allowed = buildQualityProfile(profile({ cutoff: "Remux" }), schema(), "SONARR", catalog);
     expect(allowed.payload.cutoff).toBe(3);
-    expect(allowed.warnings[0]).toMatch(/Cutoff "Remux" not found/);
+    expect(allowed.warnings).toEqual(['Cutoff "Remux" not found in profile — using highest allowed quality.']);
 
     const groupAllowed = buildQualityProfile(
       profile({ cutoff: "Remux", items: [{ name: "Group", allowed: true, items: ["Bluray-1080p"] }] }),
@@ -248,7 +248,9 @@ describe("buildQualityProfile edge cases", () => {
     // sqp/default score (0); Custom was reset then overridden.
     expect(scores).toEqual({ x265: 9, Repack: 0, Custom: 77 });
     expect(missingFormats).toEqual(["Missing"]);
-    expect(warnings.some((w) => w.includes('"Missing" (score 10)'))).toBe(true);
+    expect(warnings).toEqual([
+      'Custom format "Missing" (score 10) is not present in this instance — manage & sync it to apply its score.',
+    ]);
     expect(payload.id).toBe(42);
   });
 
@@ -280,7 +282,9 @@ describe("buildQualityProfile edge cases", () => {
     expect(lang("french").payload.language).toEqual({ id: 2, name: "French" });
     const bad = lang("Klingon");
     expect(bad.payload.language).toEqual({ id: 1, name: "English" });
-    expect(bad.warnings[0]).toMatch(/Language "Klingon" could not be resolved/);
+    expect(bad.warnings).toEqual([
+      'Language "Klingon" could not be resolved on this instance — keeping the profile\'s existing language.',
+    ]);
 
     const noSchemaLang = buildQualityProfile(profile(), schema({ language: undefined }), "RADARR", catalog);
     expect(noSchemaLang.payload).not.toHaveProperty("language");

@@ -185,6 +185,10 @@ describe("useScrollRestoration — restoring", () => {
     const { result } = renderHook(() => useScrollRestoration(KEY, true));
     expect(() => result.current.markChildNavigation()).not.toThrow();
     scroll(100);
-    expect(() => act(() => vi.advanceTimersByTime(150))).not.toThrow();
+    expect(() =>
+      act(() => {
+        vi.advanceTimersByTime(150);
+      }),
+    ).not.toThrow();
   });
 });

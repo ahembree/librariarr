@@ -30,7 +30,8 @@ describe("useServers", () => {
       ok: true,
       json: async () => ({
         servers: [
-          { id: "1", name: "Plex", type: "PLEX", url: "http://x", accessToken: "secret" },
+          // The route masks credentials; the hook keeps only what pickers need.
+          { id: "1", name: "Plex", type: "PLEX", url: "http://192.168.1.10:32400", accessToken: "••••••••" },
           { id: "2", name: "Jelly", type: "JELLYFIN", enabled: false },
         ],
       }),
@@ -63,14 +64,17 @@ describe("useServers", () => {
     await waitFor(() => expect(result.current.servers).toHaveLength(1));
     await act(async () => realtime.handlers.get("server:changed")!());
     await act(async () => realtime.handlers.get("server:changed")!());
-    expect(result.current.servers).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(result.current.servers).toEqual([{ id: "1", name: "A", type: "PLEX", enabled: true }]);
   });
 
   it("treats a body with no servers key as an empty list", async () => {
-    fetchMock.mockResolvedValue({ ok: true, json: async () => ({}) });
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ servers: [{ id: "1", name: "A", type: "PLEX" }] }) });
+    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({}) });
     const { result } = renderHook(() => useServers());
-    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
-    await act(async () => {});
+    await waitFor(() => expect(result.current.servers).toHaveLength(1));
+    await act(async () => realtime.handlers.get("server:changed")!());
+    expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(result.current.servers).toEqual([]);
   });
 

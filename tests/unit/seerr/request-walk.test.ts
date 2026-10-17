@@ -38,6 +38,14 @@ describe("walkSeerrRequests", () => {
     expect(getRequests.mock.calls.map((c) => c[0].skip)).toEqual([0, 90, 180]);
   });
 
+  it("reports progress against the server's count, ending at 1", async () => {
+    const { client } = listClient(newestFirst(250));
+    const fractions: number[] = [];
+    await walkSeerrRequests(client, { instanceName: "S", onProgress: (f) => fractions.push(f) }, () => {});
+    // Rows covered after each advance: 100 of 250, then 190, then the end.
+    expect(fractions).toEqual([100 / 250, 190 / 250, 1]);
+  });
+
   it("fails fast on the first page only when asked to", async () => {
     // An interactive caller learns about a dead instance after one timeout;
     // pages after the first keep their retries — the instance just answered.
@@ -108,7 +116,8 @@ describe("walkSeerrRequests", () => {
     });
     const seen = new Set<number>();
     await walkSeerrRequests(client, { instanceName: "S" }, (r) => seen.add(r.id));
-    for (let id = 1; id <= 247; id++) expect(seen.has(id)).toBe(true);
+    // The deleted three were read on page 1; every other row once the list shifted.
+    expect([...seen].sort((a, b) => a - b)).toEqual(Array.from({ length: 250 }, (_, i) => i + 1));
   });
 
   it("throws when more rows vanish than the overlap can absorb", async () => {
@@ -165,6 +174,7 @@ describe("walkSeerrRequests", () => {
     );
     expect(seen).toEqual([3, 1]);
     expect(getRequests).toHaveBeenCalledTimes(2);
+    expect(getRequests.mock.calls[0][0]).toEqual({ take: 100, skip: 0, mediaType: "tv" });
     expect(getRequests.mock.calls[1][0]).toEqual({ take: 100, skip: 0 });
   });
 

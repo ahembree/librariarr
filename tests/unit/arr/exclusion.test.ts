@@ -29,6 +29,8 @@ describe("isExistingExclusionError", () => {
       { errorMessage: "This exclusion has already been added." },
     ]))).toBe(false);
     expect(isExistingExclusionError(arrError(400, { message: "Bad request" }))).toBe(false);
+    // A 400 with no validation message at all is not the duplicate refusal.
+    expect(isExistingExclusionError(arrError(400, []))).toBe(false);
     expect(isExistingExclusionError(new Error("This exclusion has already been added."))).toBe(false);
   });
 });

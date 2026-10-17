@@ -90,7 +90,8 @@ describe("testConnection", () => {
     });
     markUnreachable(url, new Error("earlier"));
     const result = await new JellyfinClient(url, "t").testConnection();
-    expect(result.ok).toBe(true);
+    expect(result).toEqual({ ok: true, serverName: "Den" });
+    expect(requests.map((r) => r.path)).toEqual(["/System/Info/Public", "/System/Info"]);
     // A success clears the breaker.
     expect(isUnreachable(url)).toBe(false);
   });
@@ -118,8 +119,7 @@ describe("testConnection", () => {
       return { status: 500, raw: "boom", contentType: "text/plain" };
     });
     const result = await new JellyfinClient(url, "t").testConnection();
-    expect(result.ok).toBe(false);
-    expect(result.error).toContain("500");
+    expect(result).toEqual({ ok: false, error: "Request failed with status code 500" });
     // The error interceptor logs the string body as detail.
     expect(logger.debug).toHaveBeenCalledWith(
       "Jellyfin",
@@ -182,7 +182,9 @@ describe("getUserId (via getItemMetadata)", () => {
     expect(requests.filter((r) => r.path === "/Users/Me")).toHaveLength(1);
     const itemReq = requests.find((r) => r.path === "/Items/b")!;
     expect(itemReq.query.get("UserId")).toBe("me-1");
-    expect(itemReq.headers.authorization).toContain('Token="tok"');
+    expect(itemReq.headers.authorization).toBe(
+      'MediaBrowser Client="Librariarr", Device="Server", DeviceId="librariarr", Version="1.0.0", Token="tok"',
+    );
   });
 
   it("falls back to the lowest-id administrator from /Users", async () => {
@@ -213,7 +215,10 @@ describe("getUserId (via getItemMetadata)", () => {
     });
     await new JellyfinClient(url, "t").getItemMetadata("i");
     expect(requests.find((r) => r.path === "/Items/i")!.query.get("UserId")).toBe("p");
-    expect(logger.warn).toHaveBeenCalledWith("Jellyfin", expect.stringContaining('using "P"'));
+    expect(logger.warn).toHaveBeenCalledWith(
+      "Jellyfin",
+      'No administrator user found; using "P" — library/watch-history queries may be incomplete (restricted view)',
+    );
   });
 
   it("throws when the server lists no users", async () => {
@@ -405,7 +410,7 @@ describe("getDetailedWatchHistory", () => {
       return undefined;
     });
     expect(await new JellyfinClient(url, "t").getDetailedWatchHistory()).toEqual([]);
-    expect(logger.warn).toHaveBeenCalledWith("Jellyfin", expect.stringContaining("HTTP 404"));
+    expect(logger.warn).toHaveBeenCalledWith("Jellyfin", 'Skipping watch history for user "Gone" (HTTP 404)');
   });
 
   it("rethrows a failure to list users so the caller keeps stored history", async () => {
@@ -485,6 +490,8 @@ describe("sessions", () => {
             Type: "Episode",
             SeriesName: "Show",
             SeasonName: "Season 1",
+            ParentIndexNumber: 1,
+            IndexNumber: 1,
             SeriesId: "ser",
             SeriesPrimaryImageTag: "x",
           },
@@ -493,6 +500,12 @@ describe("sessions", () => {
     }));
     const [s] = await new JellyfinClient(url, "t").getSessions();
     expect(s).toMatchObject({
+      type: "episode",
+      title: "Pilot",
+      // The show, not the season — an episode's parent is "Season 1".
+      grandparentTitle: "Show",
+      seasonNumber: 1,
+      episodeNumber: 1,
       grandparentThumb: "/Items/ser/Images/Primary",
       thumb: undefined,
       player: { state: "playing", address: "", local: false },
@@ -508,8 +521,10 @@ describe("sessions", () => {
 
   it("propagates a failure so callers keep per-server state", async () => {
     const url = await serve(() => ({ status: 401, body: {} }));
-    await expect(new JellyfinClient(url, "t").getSessions()).rejects.toThrow();
-    expect(logger.debug).toHaveBeenCalledWith("Jellyfin", "Failed to fetch sessions", expect.any(Object));
+    await expect(new JellyfinClient(url, "t").getSessions()).rejects.toThrow("Request failed with status code 401");
+    expect(logger.debug).toHaveBeenCalledWith("Jellyfin", "Failed to fetch sessions", {
+      error: "AxiosError: Request failed with status code 401",
+    });
   });
 
   it.each(["", ".", ".."])("refuses the dot-segment session id %j before sending anything", async (id) => {
@@ -588,7 +603,8 @@ describe("item normalisation (getItemMetadata)", () => {
       PremiereDate: "2020-03-04T00:00:00Z",
       DateCreated: "2021-01-01T00:00:00Z",
       SortName: "film",
-      ProviderIds: { Tmdb: "11", TVDB: "22", imdb: "tt3" },
+      // Mixed key casing on purpose: the lookup is case-insensitive.
+      ProviderIds: { Tmdb: "550", TVDB: "290", imdb: "tt0137523" },
       Genres: ["Drama"],
       ImageTags: { Primary: "p" },
       UserData: { PlayCount: 3, LastPlayedDate: "not a date", IsFavorite: true },
@@ -602,7 +618,7 @@ describe("item normalisation (getItemMetadata)", () => {
       MediaSources: [
         {
           Path: "/m/film.mkv",
-          Size: 1000,
+          Size: 58_412_633_211,
           Container: "mkv",
           RunTimeTicks: 72_000_000_000,
           Bitrate: 20_000_000,
@@ -627,7 +643,7 @@ describe("item normalisation (getItemMetadata)", () => {
               Hdr10PlusPresentFlag: true,
             },
             { Index: 1, Type: "Audio", Codec: "truehd", Channels: 8, AudioSpatialFormat: "DolbyAtmos" },
-            { Index: 2, Type: "Audio", Codec: "aac", AudioSpatialFormat: "None", IsInterlaced: true },
+            { Index: 2, Type: "Audio", Codec: "aac", AudioSpatialFormat: "None", IsInterlaced: false },
             { Index: 3, Type: "Subtitle", Codec: "srt", IsForced: true },
             { Index: 4, Type: "EmbeddedImage" },
           ],
@@ -654,7 +670,7 @@ describe("item normalisation (getItemMetadata)", () => {
       Genre: [{ tag: "Drama" }],
       Director: [{ tag: "Dir" }],
       Writer: [{ tag: "Wri" }],
-      Guid: [{ id: "tmdb://11" }, { id: "tvdb://22" }, { id: "imdb://tt3" }],
+      Guid: [{ id: "tmdb://550" }, { id: "tvdb://290" }, { id: "imdb://tt0137523" }],
     });
     expect(m.Role).toEqual([
       { tag: "Actor", role: "Lead", thumb: "/Items/pa/Images/Primary" },
@@ -672,7 +688,7 @@ describe("item normalisation (getItemMetadata)", () => {
       audioChannels: 8,
       container: "mkv",
     });
-    expect(media.Part![0]).toMatchObject({ file: "/m/film.mkv", size: 1000, container: "mkv", duration: 7_200_000 });
+    expect(media.Part![0]).toMatchObject({ file: "/m/film.mkv", size: 58_412_633_211, container: "mkv", duration: 7_200_000 });
     const [video, atmos, aac, sub, other] = media.Part![0].Stream!;
     expect(video).toMatchObject({
       streamType: 1,
@@ -689,7 +705,7 @@ describe("item normalisation (getItemMetadata)", () => {
       HDR10PlusPresent: true,
     });
     expect(atmos).toMatchObject({ streamType: 2, channels: 8, audioSpatialFormat: "DolbyAtmos", DOVIPresent: undefined });
-    expect(aac).toMatchObject({ audioSpatialFormat: undefined, scanType: "interlaced" });
+    expect(aac).toMatchObject({ audioSpatialFormat: undefined, scanType: "progressive" });
     expect(sub).toMatchObject({ streamType: 3, forced: true, scanType: undefined });
     expect(other.streamType).toBe(0);
   });
@@ -709,7 +725,27 @@ describe("item normalisation (getItemMetadata)", () => {
       ParentBackdropImageTags: ["b"],
       GenreItems: [{ Name: "Comedy", Id: "g" }],
       Genres: ["Ignored"],
-      MediaSources: [{ MediaStreams: [{ Index: 0, Type: "Video", VideoDoViTitle: "DV P5", DvVersionMajor: 2 }] }],
+      MediaSources: [
+        {
+          MediaStreams: [
+            {
+              Index: 0,
+              Type: "Video",
+              Codec: "hevc",
+              IsInterlaced: true,
+              VideoRangeType: "DOVI",
+              DvProfile: 5,
+              DvLevel: 6,
+              DvVersionMajor: 1,
+              DvVersionMinor: 0,
+              RpuPresentFlag: 1,
+              BlPresentFlag: 1,
+              ElPresentFlag: 0,
+              VideoDoViTitle: "Dolby Vision Profile 5",
+            },
+          ],
+        },
+      ],
     });
     expect(m).toMatchObject({
       type: "episode",
@@ -731,8 +767,9 @@ describe("item normalisation (getItemMetadata)", () => {
       isWatchlisted: false,
     });
     const stream = m.Media![0].Part![0].Stream![0];
-    expect(stream.DOVIVersion).toBe("DV P5");
-    expect(stream.DOVIPresent).toBeUndefined();
+    // The server's own title wins over the "1.0" built from the version fields.
+    expect(stream.DOVIVersion).toBe("Dolby Vision Profile 5");
+    expect(stream).toMatchObject({ DOVIPresent: true, DOVIProfile: 5, scanType: "interlaced", videoRangeType: "DOVI" });
     expect(m.Media![0].bitrate).toBeUndefined();
   });
 

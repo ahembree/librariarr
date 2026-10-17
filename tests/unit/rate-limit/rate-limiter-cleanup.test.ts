@@ -15,6 +15,16 @@ async function load(): Promise<Module> {
   return import("@/lib/rate-limit/rate-limiter");
 }
 
+// Every address below comes from X-Forwarded-For, which is only read while
+// proxy headers are trusted (the default): pin that against the shell's env.
+beforeEach(() => {
+  vi.stubEnv("TRUST_PROXY_HEADERS", "true");
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 describe("rate-limiter periodic cleanup", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -51,7 +61,7 @@ describe("rate-limiter periodic cleanup", () => {
     }
   });
 
-  it("an expired per-address entry swept by the interval starts a fresh window", async () => {
+  it("a per-address entry whose window has ended (and been swept) starts a fresh window", async () => {
     const mod = await load();
     const bucket = "sweep";
     for (let i = 0; i < 10; i++) expect(mod.checkRateLimit(req("1.1.1.1"), mod.authRateLimiter, bucket)).toBeNull();
@@ -134,12 +144,15 @@ describe("auth attempt reservations", () => {
   it("a known address bypasses the floor in peek and reserve, and succeeded() is idempotent", () => {
     const bucket = "known";
     const first = mod.reserveAuthAttempt(req("8.8.8.8"), bucket);
-    if (first.refused) throw new Error("unexpected refusal");
+    // A second attempt in flight from the same address, which fails.
+    const second = mod.reserveAuthAttempt(req("8.8.8.8"), bucket);
+    if (first.refused || second.refused) throw new Error("unexpected refusal");
     first.succeeded();
     first.succeeded();
     expect(mod.isKnownAddress("8.8.8.8")).toBe(true);
-    // Given back once, not twice.
-    expect(mod.authRateLimiter.check(`${bucket}:8.8.8.8`).remaining).toBe(9);
+    // Given back once, not twice: the failed attempt stays charged, so this
+    // check is the second of ten.
+    expect(mod.authRateLimiter.check(`${bucket}:8.8.8.8`).remaining).toBe(8);
 
     for (let i = 0; i < 60; i++) mod.reserveAuthAttempt(req(`172.16.0.${i}`), bucket);
     expect(mod.peekAuthRateLimit(req("172.16.1.1"), bucket)?.status).toBe(429);

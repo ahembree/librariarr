@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
 /**
@@ -117,6 +118,9 @@ describe("useRealtime reconnect machinery", () => {
     await vi.advanceTimersByTimeAsync(0);
 
     expect((second as unknown as FakeEventSource).closed).toBe(false);
+    // Nor does it schedule a reconnect that would build a duplicate.
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(FakeEventSource.instances).toEqual([first, second]);
   });
 
   it("keeps retrying after a 401, slowly, so a re-login recovers without a reload", async () => {
@@ -128,14 +132,15 @@ describe("useRealtime reconnect machinery", () => {
 
     (first as unknown as FakeEventSource).fireFatalError();
     await vi.advanceTimersByTimeAsync(0);
+    expect(fetchMock).toHaveBeenCalledWith("/api/events/stream", expect.objectContaining({ method: "HEAD" }));
 
     // Not on the ordinary 2s backoff — that would hammer a dead session.
-    await vi.advanceTimersByTimeAsync(30_000);
+    await vi.advanceTimersByTimeAsync(59_999);
     expect(FakeEventSource.instances.length).toBe(createdBefore);
 
     // But it does come back, on the slow floor.
-    await vi.advanceTimersByTimeAsync(31_000);
-    expect(FakeEventSource.instances.length).toBeGreaterThan(createdBefore);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(FakeEventSource.instances.length).toBe(createdBefore + 1);
   });
 
   it("reconnects on the fast backoff for an ordinary drop", async () => {
@@ -145,15 +150,17 @@ describe("useRealtime reconnect machinery", () => {
 
     (first as unknown as FakeEventSource).fireFatalError();
     await vi.advanceTimersByTimeAsync(0);
-    await vi.advanceTimersByTimeAsync(2_100);
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(FakeEventSource.instances.length).toBe(createdBefore);
+    await vi.advanceTimersByTimeAsync(1);
 
-    expect(FakeEventSource.instances.length).toBeGreaterThan(createdBefore);
+    expect(FakeEventSource.instances.length).toBe(createdBefore + 1);
   });
 
-  it("a probe that never answers still reconnects, rather than stalling forever", async () => {
-    // The probe is bounded by AbortSignal.timeout; a hung fetch that eventually
-    // rejects must fall through to an ordinary reconnect.
-    fetchMock.mockRejectedValue(new Error("timeout"));
+  it("a probe that fails still reconnects, rather than stalling forever", async () => {
+    // The probe is bounded by AbortSignal.timeout; a hung fetch that is
+    // aborted (it rejects) must fall through to an ordinary reconnect.
+    fetchMock.mockRejectedValue(new DOMException("The operation was aborted due to timeout", "TimeoutError"));
 
     const first = subscribe();
     (first as unknown as FakeEventSource).fireOpen();
@@ -161,9 +168,9 @@ describe("useRealtime reconnect machinery", () => {
 
     (first as unknown as FakeEventSource).fireFatalError();
     await vi.advanceTimersByTimeAsync(0);
-    await vi.advanceTimersByTimeAsync(2_100);
+    await vi.advanceTimersByTimeAsync(2_000);
 
-    expect(FakeEventSource.instances.length).toBeGreaterThan(createdBefore);
+    expect(FakeEventSource.instances.length).toBe(createdBefore + 1);
   });
 
   it("does not fan out a resync burst on every reopen when a proxy flaps the connection", async () => {
@@ -209,7 +216,9 @@ describe("useRealtime reconnect machinery", () => {
     mod.__testing.releaseSource();
     expect((first as unknown as FakeEventSource).closed).toBe(false);
 
-    await vi.advanceTimersByTimeAsync(11_000);
+    await vi.advanceTimersByTimeAsync(9_999);
+    expect((first as unknown as FakeEventSource).closed).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
     expect((first as unknown as FakeEventSource).closed).toBe(true);
   });
 });

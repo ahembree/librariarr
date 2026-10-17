@@ -61,6 +61,7 @@ const HEALTH = {
       name: "Basement Plex",
       type: "plex",
       online: true,
+      historical: false,
       activeStreams: 2,
     },
     {
@@ -68,6 +69,7 @@ const HEALTH = {
       name: "Attic Jellyfin",
       type: "jellyfin",
       online: false,
+      historical: false,
       activeStreams: 0,
     },
   ],
@@ -85,8 +87,10 @@ const HEALTH = {
  * `platform`→platform, `user.username`→serverUsername, and the source_/stream_
  * detail objects + `*_display` strings that bundle into `streamQuality`.
  */
+const CHAIN_ID = "6f1c2b9e-4d3a-4e8b-9c7d-2a1b3c4d5e6f";
+
 const FULL_RECORD: TracearrHistoryRecord = {
-  id: "chain-0001",
+  id: CHAIN_ID,
   server_id: "11111111-1111-1111-1111-111111111111",
   server_name: "Basement Plex",
   server_type: "plex",
@@ -101,11 +105,12 @@ const FULL_RECORD: TracearrHistoryRecord = {
   album_name: null,
   track_number: null,
   disc_number: null,
-  thumb_path: "/library/metadata/1234/thumb/1700000000",
+  thumb_path: "/library/metadata/48291/thumb/1700000000",
   poster_url: "https://tracearr.example/poster/1234.jpg",
   duration_ms: 2_760_000,
-  progress_ms: 2_820_000,
-  total_duration_ms: 2_880_000,
+  // Sent as JSON strings by a live instance (see the type's comment).
+  progress_ms: "2820000",
+  total_duration_ms: "2880000",
   percent_complete: 97.9,
   started_at: "2026-09-02T21:04:00.000Z",
   stopped_at: "2026-09-02T21:53:00.000Z",
@@ -175,24 +180,34 @@ const FULL_RECORD: TracearrHistoryRecord = {
   audio_channels_display: "5.1",
   stream_video_codec_display: "H.264",
   stream_audio_codec_display: "Dolby Digital Plus",
-  media_id: "media-9001",
-  show_media_id: "media-8001",
+  media_id: "0d9e8f7a-6b5c-4d3e-8f1a-2b3c4d5e6f70",
+  show_media_id: "1e2f3a4b-5c6d-4e7f-8a9b-0c1d2e3f4a5b",
   imdb_id: "tt2301451",
+  // The EPISODE's own provider ids — not the show's (TVDB 81189).
   tmdb_id: 62_161,
-  tvdb_id: 81_189,
+  tvdb_id: 4_589_014,
   rating_key: "48291",
   parent_rating_key: "48200",
   grandparent_rating_key: "48000",
   library_id: "lib-2",
   genres: ["Drama", "Crime", "Thriller"],
-  reference_id: "chain-0001",
+  reference_id: CHAIN_ID,
   user: {
-    id: "identity-77",
-    server_user_id: "plex-1234567",
+    id: "7a8b9c0d-1e2f-4a3b-8c4d-5e6f7a8b9c0d",
+    server_user_id: "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
     username: "walter",
     thumb_url: "https://plex.tv/users/abc/avatar",
     avatar_url: "https://tracearr.example/avatar/77.png",
   },
+};
+
+const STATUS_TEXT: Record<number, string> = {
+  400: "Bad Request",
+  401: "Unauthorized",
+  403: "Forbidden",
+  404: "Not Found",
+  429: "Too Many Requests",
+  500: "Internal Server Error",
 };
 
 /** An axios failure shaped the way the real response interceptor sees one. */
@@ -212,7 +227,8 @@ function axiosFailure(
       ? undefined
       : ({
           status,
-          data: { message: "Too Many Requests" },
+          // Fastify's error body, which is what Tracearr answers with.
+          data: { statusCode: status, error: STATUS_TEXT[status] ?? "Error", message: STATUS_TEXT[status] ?? "Error" },
           headers,
         } as unknown as AxiosError["response"]);
   error.toJSON = () => ({});
@@ -309,6 +325,7 @@ describe("TracearrClient", () => {
         name: "Basement Plex",
         type: "plex",
         online: true,
+        historical: false,
         activeStreams: 2,
       });
     });
@@ -364,7 +381,8 @@ describe("TracearrClient", () => {
           );
         const result = await client.testConnection();
         expect(result.ok).toBe(false);
-        expect(result.error).toContain("2.0.0 or later");
+        expect(result.error).toContain(`Reached Tracearr 2.0.0, but its v2 public API is not available (HTTP ${status})`);
+        expect(result.error).toContain("Librariarr needs Tracearr 2.0.0 or later");
       },
     );
 
@@ -514,8 +532,8 @@ describe("TracearrClient", () => {
 
       // The columns the importer writes, asserted individually so a change to
       // the mapping contract fails on a named field rather than a deep diff.
-      expect(record.id).toBe("chain-0001");
-      expect(record.reference_id).toBe("chain-0001");
+      expect(record.id).toBe(CHAIN_ID);
+      expect(record.reference_id).toBe(CHAIN_ID);
       expect(record.started_at).toBe("2026-09-02T21:04:00.000Z");
       expect(record.stopped_at).toBe("2026-09-02T21:53:00.000Z");
       expect(record.device).toBe("Living Room Shield");
@@ -525,9 +543,9 @@ describe("TracearrClient", () => {
       expect(record.user.username).toBe("walter");
       expect(record.watched).toBe(true);
       expect(record.percent_complete).toBe(97.9);
-      expect(record.progress_ms).toBe(2_820_000);
+      expect(record.progress_ms).toBe("2820000");
       expect(record.duration_ms).toBe(2_760_000);
-      expect(record.total_duration_ms).toBe(2_880_000);
+      expect(record.total_duration_ms).toBe("2880000");
       expect(record.segment_count).toBe(3);
       expect(record.is_transcode).toBe(true);
       expect(record.video_decision).toBe("transcode");
@@ -535,7 +553,7 @@ describe("TracearrClient", () => {
       expect(record.bitrate).toBe(8_000);
       expect(record.resolution).toBe("4K");
       expect(record.rating_key).toBe("48291");
-      expect(record.tvdb_id).toBe(81_189);
+      expect(record.tvdb_id).toBe(4_589_014);
       expect(record.tmdb_id).toBe(62_161);
       expect(record.imdb_id).toBe("tt2301451");
 
@@ -1062,7 +1080,7 @@ describe("TracearrClient", () => {
       let page = 0;
       mockAxiosInstance.get.mockImplementation(async () => {
         page += 1;
-        return historyBody([{ ...FULL_RECORD, id: `chain-${page}` }], `cursor-${page}`);
+        return historyBody([{ ...FULL_RECORD, id: `${CHAIN_ID.slice(0, -4)}${String(page).padStart(4, "0")}` }], `cursor-${page}`);
       });
     }
 

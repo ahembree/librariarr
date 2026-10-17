@@ -73,15 +73,15 @@ const cases = [
   },
 ];
 
+afterAll(async () => {
+  await disconnectTestDb();
+});
+
 describe.each(cases)("GET /api/integrations/$name/[id]/recycle-bin", (c) => {
   beforeEach(async () => {
     await cleanDatabase();
     clearMockSession();
     vi.clearAllMocks();
-  });
-
-  afterAll(async () => {
-    await disconnectTestDb();
   });
 
   it("returns 401 without auth", async () => {
@@ -95,7 +95,8 @@ describe.each(cases)("GET /api/integrations/$name/[id]/recycle-bin", (c) => {
     const user = await createTestUser();
     setMockSession({ userId: user.id, isLoggedIn: true });
     const res = await callRouteWithParams(c.handler, { id: "missing" });
-    await expectJson(res, 404);
+    expect(await expectJson(res, 404)).toEqual({ error: "Instance not found" });
+    expect(c.config).not.toHaveBeenCalled();
   });
 
   it("returns 404 for another user's instance", async () => {
@@ -104,7 +105,7 @@ describe.each(cases)("GET /api/integrations/$name/[id]/recycle-bin", (c) => {
     const instance = await c.create(owner.id);
     setMockSession({ userId: other.id, isLoggedIn: true });
     const res = await callRouteWithParams(c.handler, { id: instance.id });
-    await expectJson(res, 404);
+    expect(await expectJson(res, 404)).toEqual({ error: "Instance not found" });
     expect(c.config).not.toHaveBeenCalled();
   });
 
@@ -125,26 +126,26 @@ describe.each(cases)("GET /api/integrations/$name/[id]/recycle-bin", (c) => {
     expect(c.ctor).toHaveBeenCalledWith("http://arr.local:1234", "k1");
   });
 
-  it("reports disabled for an empty or whitespace-only path", async () => {
+  it.each([
+    ["empty (the apps' default)", "", ""],
+    ["whitespace-only", "   ", "   "],
+    ["null", null, null],
+  ])("reports disabled for a %s path", async (_label, recycleBin, expectedPath) => {
     const user = await createTestUser();
-    const instance = await c.create(user.id);
+    const instance = await c.create(user.id, { url: "http://arr.local:1234" });
     setMockSession({ userId: user.id, isLoggedIn: true });
 
-    c.config.mockResolvedValueOnce({ recycleBin: "   ", recycleBinCleanupDays: 0 });
-    let body = await expectJson<RecycleBinBody>(
+    c.config.mockResolvedValueOnce({ recycleBin, recycleBinCleanupDays: 7 });
+    const body = await expectJson<RecycleBinBody>(
       await callRouteWithParams(c.handler, { id: instance.id }),
       200,
     );
-    expect(body.enabled).toBe(false);
-    expect(body.path).toBe("   ");
-
-    c.config.mockResolvedValueOnce({ recycleBinCleanupDays: 0 });
-    body = await expectJson<RecycleBinBody>(
-      await callRouteWithParams(c.handler, { id: instance.id }),
-      200,
-    );
-    expect(body.enabled).toBe(false);
-    expect(body.path).toBeNull();
+    expect(body).toEqual({
+      enabled: false,
+      path: expectedPath,
+      cleanupDays: 7,
+      arrUrl: "http://arr.local:1234",
+    });
   });
 
   it("prefers the external URL for the browser link", async () => {
@@ -171,10 +172,11 @@ describe.each(cases)("GET /api/integrations/$name/[id]/recycle-bin", (c) => {
       await callRouteWithParams(c.handler, { id: instance.id }),
       200,
     );
-    expect(body.enabled).toBeNull();
-    expect(body.error).toBeTruthy();
-    expect(body.error).not.toContain("192.168.1.20");
-    expect(body.arrUrl).toBe("http://internal:1");
+    expect(body).toEqual({
+      enabled: null,
+      error: "connect ECONNREFUSED [internal]:8989",
+      arrUrl: "http://internal:1",
+    });
   });
 
   it("falls back to a generic message for a non-Error rejection", async () => {
@@ -187,7 +189,10 @@ describe.each(cases)("GET /api/integrations/$name/[id]/recycle-bin", (c) => {
       await callRouteWithParams(c.handler, { id: instance.id }),
       200,
     );
-    expect(body.enabled).toBeNull();
-    expect(body.error).toBe(`Failed to query ${c.name}`);
+    expect(body).toEqual({
+      enabled: null,
+      error: `Failed to query ${c.name}`,
+      arrUrl: instance.url,
+    });
   });
 });

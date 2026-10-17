@@ -174,8 +174,9 @@ describe("useRealtime ref count and idle close", () => {
     });
     expect(FakeEventSource.instances).toHaveLength(1);
     expect(source.closed).toBe(false);
-    act(() => source.emit("page-b", "{}"));
-    expect(cb).toHaveBeenCalled();
+    act(() => source.emit("page-b", '{"n":2}'));
+    expect(cb).toHaveBeenCalledTimes(1);
+    expect(cb).toHaveBeenCalledWith({ n: 2 });
   });
 
   it("opens a fresh connection after the idle close, with no resync on its first open", () => {
@@ -214,8 +215,12 @@ describe("useRealtime resync and auth", () => {
     expect(a).toHaveBeenLastCalledWith({ live: true });
     a.mockClear();
 
+    b.mockClear();
+
     act(() => latest().open());
+    expect(a).toHaveBeenCalledTimes(1);
     expect(a).toHaveBeenCalledWith({});
+    expect(b).toHaveBeenCalledTimes(1);
     expect(b).toHaveBeenCalledWith({});
   });
 
