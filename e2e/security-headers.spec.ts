@@ -32,10 +32,10 @@ test.describe("security headers", () => {
     expect(headers["permissions-policy"]).toBe("camera=(), microphone=(), geolocation=()");
     expect(headers["x-powered-by"]).toBeUndefined();
 
-    // Every script Next.js rendered carries that nonce, and the next request
-    // gets a different one.
+    // Every script Next.js rendered carries that nonce (tags matched in any
+    // case, as a browser parses them), and the next request gets a different one.
     const html = await res.text();
-    const scripts = html.match(/<script\b[^>]*>/g) ?? [];
+    const scripts = html.match(/<script\b[^>]*>/gi) ?? [];
     expect(scripts.length).toBeGreaterThan(0);
     for (const tag of scripts) expect(tag).toContain(`nonce="${nonce}"`);
     const again = (await request.get("/login")).headers()["content-security-policy"] ?? "";
