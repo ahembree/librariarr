@@ -83,11 +83,25 @@ async function computeGroupSummary(
   // For multi-server, restrict to canonical copies to avoid double-counting
   // episodes/size/playCount across duplicate items. SERIES matches by identity
   // (`seriesKey`) when the representative has one; MUSIC (and a keyless legacy
-  // SERIES row) matches by the artist/series title.
+  // SERIES row) matches by the artist/series title — ignoring case and
+  // surrounding spaces, as the artist list and getServerPresenceByGroup group
+  // it, so an artist merged from "Air" and "air " sums every track.
+  const spellings = seriesKey
+    ? []
+    : (
+        await prisma.$queryRaw<{ parentTitle: string }[]>`
+          SELECT DISTINCT mi."parentTitle"
+          FROM "MediaItem" mi
+          JOIN "Library" l ON mi."libraryId" = l.id
+          WHERE mi.type = ${type}::"LibraryType"
+            AND l."mediaServerId" = ANY(${serverIds}::text[])
+            AND LOWER(TRIM(mi."parentTitle")) = LOWER(TRIM(${parentTitle}))
+        `
+      ).map((r) => r.parentTitle);
   const items = await prisma.mediaItem.findMany({
     where: {
       type,
-      ...(seriesKey ? { seriesKey } : { parentTitle }),
+      ...(seriesKey ? { seriesKey } : { parentTitle: { in: spellings } }),
       library: { mediaServerId: { in: serverIds } },
       ...(isSingleServer ? {} : { dedupCanonical: true }),
     },

@@ -309,7 +309,7 @@ export async function GET(request: NextRequest) {
         AND l."mediaServerId" = ANY($1::text[])
         ${filters.join("\n        ")}`;
 
-  const first = (col: string) => firstNonNullSql(col, `"seasonNumber", "episodeNumber"`);
+  const first = (col: string) => firstNonNullSql(col, `"seasonNumber", "episodeNumber", id`);
 
   // Two queries in parallel rather than one, on purpose. The aggregate below
   // is NARROW — counts, sums, maxes and a handful of scalar firsts — and the

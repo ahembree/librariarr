@@ -181,6 +181,48 @@ describe("getServerPresenceByDedupKey", () => {
   });
 });
 
+describe("getServerPresenceByDedupKey copy choice", () => {
+  beforeEach(async () => {
+    await cleanDatabase();
+    clearMockSession();
+  });
+
+  it("links the oldest copy when one server holds two, whatever order the rows are stored in", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id, { name: "Main" });
+    const uhd = await createTestLibrary(server.id, { title: "Movies 4K" });
+    const hd = await createTestLibrary(server.id, { title: "Movies" });
+    // The newer copy is written first, so a read in storage order meets it
+    // before the older one.
+    const newer = await createItemWithDedupKey(uhd.id, "movie:tmdb:603");
+    const older = await createItemWithDedupKey(hd.id, "movie:tmdb:603");
+    await testPrisma.mediaItem.update({ where: { id: newer.id }, data: { createdAt: new Date("2025-01-01T00:00:00Z") } });
+    await testPrisma.mediaItem.update({ where: { id: older.id }, data: { createdAt: new Date("2024-01-01T00:00:00Z") } });
+
+    const result = await getServerPresenceByDedupKey(["movie:tmdb:603"], [server.id]);
+    expect(result.get("movie:tmdb:603")).toEqual([
+      { serverId: server.id, serverName: "Main", serverType: "PLEX", mediaItemId: older.id },
+    ]);
+  });
+
+  it("orders two servers with the same name by id", async () => {
+    const user = await createTestUser();
+    // Ids chosen against insertion order: the server written first sorts last
+    // by id, so a stable sort of the rows as read keeps them the wrong way round.
+    const z = await testPrisma.mediaServer.create({
+      data: { id: "srv-z", userId: user.id, type: "PLEX", name: "Plex", url: "http://10.0.0.2:32400", accessToken: "t" },
+    });
+    const a = await testPrisma.mediaServer.create({
+      data: { id: "srv-a", userId: user.id, type: "PLEX", name: "Plex", url: "http://10.0.0.1:32400", accessToken: "t" },
+    });
+    await createItemWithDedupKey((await createTestLibrary(z.id)).id, "movie:tmdb:1");
+    await createItemWithDedupKey((await createTestLibrary(a.id)).id, "movie:tmdb:1");
+
+    const result = await getServerPresenceByDedupKey(["movie:tmdb:1"], [z.id, a.id]);
+    expect(result.get("movie:tmdb:1")!.map((s) => s.serverId)).toEqual(["srv-a", "srv-z"]);
+  });
+});
+
 describe("getServerPresenceByGroup", () => {
   beforeEach(async () => {
     await cleanDatabase();

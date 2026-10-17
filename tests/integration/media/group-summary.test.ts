@@ -259,6 +259,26 @@ describe("GET /api/media/[id]/group-summary", () => {
     expect(body).not.toHaveProperty("episodeCount");
   });
 
+  it("sums an artist across spellings that differ only in case and surrounding spaces", async () => {
+    // The artist list groups by LOWER(TRIM(parentTitle)), so "Air" and "air "
+    // are one artist there; the summary it opens must count both spellings.
+    const lib = await createTestLibrary(serverId, { type: "MUSIC" });
+    const t1 = await createTestMediaItem(lib.id, {
+      type: "MUSIC", parentTitle: "Air", albumTitle: "Moon Safari", title: "La Femme d'Argent", fileSize: BigInt(7),
+    });
+    await createTestMediaItem(lib.id, {
+      type: "MUSIC", parentTitle: "air ", albumTitle: "Talkie Walkie", title: "Venus", fileSize: BigInt(3),
+    });
+    await createTestMediaItem(lib.id, {
+      type: "MUSIC", parentTitle: "Airiel", albumTitle: "Winks", title: "Sugar Cloud", fileSize: BigInt(100),
+    });
+
+    const body = await expectJson<MusicSummary>(await call(t1.id, "MUSIC"), 200);
+    expect(body.trackCount).toBe(2);
+    expect(body.albumCount).toBe(2);
+    expect(body.fileSize).toBe("10");
+  });
+
   it("serves a repeat request from cache", async () => {
     const lib = await createTestLibrary(serverId, { type: "SERIES" });
     const e1 = await createTestMediaItem(lib.id, { type: "SERIES", parentTitle: "Show", title: "E1" });
