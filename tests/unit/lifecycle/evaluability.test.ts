@@ -111,9 +111,11 @@ describe("checkLifecycleRuleEvaluability", () => {
   it("names the right Arr family per library type", async () => {
     mockHasEnabledArrInstances.mockResolvedValue(false);
     const series = await checkLifecycleRuleEvaluability("u1", "SERIES", groupsWith("foundInArr"));
-    if (!series.evaluable) expect(series.reason).toMatch(/Sonarr/);
+    if (series.evaluable) throw new Error("expected not evaluable");
+    expect(series.reason).toMatch(/no enabled Sonarr instance/);
     const music = await checkLifecycleRuleEvaluability("u1", "MUSIC", groupsWith("foundInArr"));
-    if (!music.evaluable) expect(music.reason).toMatch(/Lidarr/);
+    if (music.evaluable) throw new Error("expected not evaluable");
+    expect(music.reason).toMatch(/no enabled Lidarr instance/);
   });
 
   it("refuses Seerr rules on MUSIC as PERMANENT regardless of instances", async () => {
@@ -167,7 +169,8 @@ describe("checkLifecycleRuleEvaluability", () => {
       // Transient: it resumes by itself once the backfill finishes, so callers
       // skip rather than disarm.
       expect(result.permanent).toBe(false);
-      expect(result.reason).toMatch(/play history|import/i);
+      expect(result.reason).toContain('"Plex"');
+      expect(result.reason).toMatch(/Tracearr history import has not finished/);
     });
 
     it("is evaluable once every Tracearr server has finished importing", async () => {
@@ -178,9 +181,7 @@ describe("checkLifecycleRuleEvaluability", () => {
       ).resolves.toEqual({ evaluable: true });
     });
 
-
-
-    it("refuses after an UNLINK, not just during an import", async () => {
+    it("looks for an unestablished history whether or not the server is Tracearr-mapped (an UNLINK too)", async () => {
       // The hole the first version of this guard had. Unlinking a server
       // (Tracearr -> native) wipes its rows AND sets `tracearrServerId` to
       // null, so a check keyed on "is Tracearr-mapped and unfinished" stops
@@ -194,12 +195,17 @@ describe("checkLifecycleRuleEvaluability", () => {
       await checkLifecycleRuleEvaluability("u1", "MOVIE", groupsWith("watchedByUser"));
 
       const where = mockServerFindMany.mock.calls[0][0].where;
-      expect(where.OR).toEqual(
-        expect.arrayContaining([{ watchHistorySyncedAt: null }]),
-      );
-      // ...and must NOT require a Tracearr mapping at the top level, or an
-      // unlinked server would be filtered out before the OR is considered.
-      expect(where).not.toHaveProperty("tracearrServerId");
+      // A Tracearr mapping is required only by the import clause — never at the
+      // top level, or an unlinked server would be filtered out before the OR
+      // is considered.
+      expect(where).toEqual({
+        userId: "u1",
+        enabled: true,
+        OR: [
+          { watchHistorySyncedAt: null },
+          { tracearrServerId: { not: null }, tracearrBackfillComplete: false },
+        ],
+      });
     });
 
     it("refuses a server whose history has never been established", async () => {
@@ -207,14 +213,14 @@ describe("checkLifecycleRuleEvaluability", () => {
       // whose history was destroyed by a purge or a restore. A "cleared at"
       // marker could not express either — its null read as healthy, so absence
       // of evidence presented itself as evidence of absence.
-      mockServerFindMany.mockResolvedValue([]);
+      mockServerFindMany.mockResolvedValue([unsyncedServer("Living Room")]);
 
-      await checkLifecycleRuleEvaluability("u1", "MOVIE", groupsWith("watchedByUser"));
+      const result = await checkLifecycleRuleEvaluability("u1", "MOVIE", groupsWith("watchedByUser"));
 
-      const where = mockServerFindMany.mock.calls[0][0].where;
-      expect(where.OR).toEqual(
-        expect.arrayContaining([{ watchHistorySyncedAt: null }]),
-      );
+      if (result.evaluable) throw new Error("expected not evaluable");
+      expect(result.permanent).toBe(false);
+      expect(result.reason).toMatch(/^Rules read play activity but 1 server\(s\) have no established play history yet/);
+      expect(result.reason).toContain('"Living Room"');
     });
 
     it("only considers the servers the rule set targets", async () => {
@@ -301,6 +307,8 @@ describe("checkLifecycleRuleEvaluability", () => {
       if (result.evaluable) throw new Error("expected not evaluable");
       expect(result.reason).toContain("8 server(s)");
       expect(result.reason).toContain("and 3 more");
+      // The first five are named, the rest only counted.
+      expect(result.reason).toContain('"Server 4"');
       expect(result.reason).not.toContain('"Server 5"');
     });
 
@@ -312,5 +320,4 @@ describe("checkLifecycleRuleEvaluability", () => {
       expect(mockServerFindMany).not.toHaveBeenCalled();
     });
   });
-
 });

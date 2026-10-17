@@ -91,7 +91,12 @@ describe("actionTitleSnapshot", () => {
         mediaItem: episode,
         memberEpisodes: new Map([["ep-10", { title: "Fly", seasonNumber: 3, episodeNumber: 10 }]]),
       }),
-    ).toMatchObject({ mediaItemTitle: "Breaking Bad", mediaItemSeasonNumber: 3, mediaItemEpisodeNumber: 10 });
+    ).toEqual({
+      mediaItemTitle: "Breaking Bad",
+      mediaItemParentTitle: null,
+      mediaItemSeasonNumber: 3,
+      mediaItemEpisodeNumber: 10,
+    });
   });
 
   it("keeps the numbers of the one episode a file delete acted on", () => {

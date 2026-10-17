@@ -13,7 +13,7 @@
  *      `EXTERNAL_RULE` so AND/OR is preserved when in-memory re-eval is needed.
  *   3. Explicit safety net in `evaluateLifecycleRules`: when every rule produces an
  *      empty WHERE AND no in-memory re-eval is flagged, return [] rather than
- *      matching the entire library (engine.ts ~line 2779).
+ *      matching the entire library.
  *   4. `isUnconfiguredContainsRule` returns false / unsatisfiable WHERE for
  *      contains/notContains rules with no selected values — prevents partially
  *      configured rules (especially `notContains <nothing>`, which is
@@ -21,10 +21,15 @@
  *      not applied.
  */
 
-import { describe, it, expect } from "vitest";
-import { hasAnyActiveRules, getMatchedCriteriaForItems, evaluateAllRulesInMemory } from "@/lib/rules/lifecycle-engine";
+import { describe, it, expect, vi } from "vitest";
+
+const mockFindMany = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/db", () => ({ prisma: { mediaItem: { findMany: mockFindMany } } }));
+
+import { hasAnyActiveRules, getMatchedCriteriaForItems, evaluateAllRulesInMemory, evaluateLifecycleRules } from "@/lib/rules/lifecycle-engine";
 import type { ArrMetadata, ArrDataMap, SeerrMetadata, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import {
+  isArrayField,
   isArrField,
   isSeerrField,
   isSeriesAggregateField,
@@ -96,8 +101,8 @@ describe("hasAnyActiveRules — first defense against match-all", () => {
  *   - Cross-system fields (post-filtered with fetchCrossSystemData)
  *   - Stream-count fields (post-filtered in-memory)
  *   - Wildcard operators on stream language/codec fields
+ *   - Array fields — genre, labels, country (always evaluated in memory)
  *   - Stream-query fields (handled at the group level)
- *   - Unknown field names (caught by the safety net at line 2779)
  *
  * Each of the first four trips a corresponding `has*Rules` predicate which
  * sets `needsFullReeval=true` in `evaluateLifecycleRules`. This test asserts those
@@ -149,12 +154,10 @@ describe("Empty-WHERE field categorization (invariants)", () => {
     expect(isStreamField("title")).toBe(false);
   });
 
-  it("the new fields (labels, ratingCount) are NOT in any empty-WHERE category", () => {
-    // labels → handled in ruleToWhereClause (JSON array containment).
-    // ratingCount → handled in ruleToWhereClause (numeric).
-    // Both produce real WHERE clauses, so they don't need to trip
-    // needsFullReeval. Confirm they aren't accidentally classified as Arr,
-    // Seerr, series-aggregate, cross-system, or stream fields.
+  it("labels and ratingCount are not misclassified as external, aggregate, cross-system or stream fields", () => {
+    // ratingCount → a real numeric WHERE clause, no in-memory re-eval needed.
+    // labels → no Phase-1 clause at all: it is an array field, and
+    // `hasArrayFieldRules` (isArrayField) is what forces Phase 2 for it.
     for (const f of ["labels", "ratingCount"]) {
       expect(isArrField(f)).toBe(false);
       expect(isSeerrField(f)).toBe(false);
@@ -162,22 +165,29 @@ describe("Empty-WHERE field categorization (invariants)", () => {
       expect(isCrossSystemField(f)).toBe(false);
       expect(isStreamField(f)).toBe(false);
     }
+    expect(isArrayField("labels")).toBe(true);
+    expect(isArrayField("ratingCount")).toBe(false);
   });
 });
 
-// ─── Defense 3 invariants: documentation tests ───────────────────────────
+// ─── Defense 3: the empty-WHERE safety net in evaluateLifecycleRules ─────
 
-describe("Safety invariants (documentation)", () => {
-  it("the engine's safety net at line ~2779 returns [] when andConditions.length===0 && !needsFullReeval", () => {
-    // This is asserted by the engine's source code, not by this test
-    // directly (we'd need DB access for a true integration test). Document
-    // the invariant here so anyone editing engine.ts knows it must hold.
-    //
-    // If you remove or alter that block, you MUST replace it with an
-    // equivalent guard. Otherwise rule sets where every rule produces an
-    // empty WHERE (e.g. invalid operators, typo'd fields) will match the
-    // entire library and queue every item for deletion.
-    expect(true).toBe(true);
+describe("Safety net: every rule has an empty WHERE and nothing re-evaluates in memory", () => {
+  it("returns [] without querying the library", async () => {
+    // An Arr-only rule set evaluated with no Arr data: arrTag has no Phase-1
+    // clause, and with no Arr data nothing forces Phase 2. Without the safety
+    // net the query would carry no condition but the type and servers, and
+    // every item in the library would come back as a match.
+    mockFindMany.mockResolvedValue([
+      { id: "m1", type: "MOVIE", title: "Movie A", fileSize: BigInt(1073741824) },
+      { id: "m2", type: "MOVIE", title: "Movie B", fileSize: BigInt(2147483648) },
+    ]);
+    const groups: LifecycleRuleGroup[] = [
+      makeGroup([makeRule({ field: "arrTag", operator: "equals", value: "keep" })]),
+    ];
+
+    await expect(evaluateLifecycleRules(groups, "MOVIE", ["server-1"])).resolves.toEqual([]);
+    expect(mockFindMany).not.toHaveBeenCalled();
   });
 });
 

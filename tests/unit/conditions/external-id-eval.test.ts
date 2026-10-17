@@ -32,6 +32,11 @@ describe("matchExternalIdField (shared Phase-2 external-id evaluator)", () => {
     expect(matchExternalIdField(withIds, "notContains", "TVDB")).toBe(true);
     expect(matchExternalIdField(withIds, "matchesWildcard", "T*")).toBe(true);
     expect(matchExternalIdField(withIds, "notMatchesWildcard", "X*")).toBe(true);
+    expect(matchExternalIdField(withIds, "notEquals", "TMDB")).toBe(false);
+    expect(matchExternalIdField(withIds, "contains", "TVDB|MUSICBRAINZ")).toBe(false);
+    expect(matchExternalIdField(withIds, "notContains", "TVDB|IMDB")).toBe(false);
+    expect(matchExternalIdField(withIds, "matchesWildcard", "X*")).toBe(false);
+    expect(matchExternalIdField(withIds, "notMatchesWildcard", "I*")).toBe(false);
   });
 
   it("normalizes a null / non-array value to 'no ids'", () => {
@@ -63,24 +68,34 @@ describe("hasExternalId Phase 1 / Phase 2 agree and never sweep the library", ()
     expect(ruleToWhere(rule("notEquals", "TMDB"))).toEqual({ externalIds: { none: { source: "TMDB" } } });
   });
 
+  const lifecycle = (item: Record<string, unknown>, operator: string) =>
+    (getMatchedCriteriaForItems(
+      [item],
+      [{ id: "g", condition: "AND", rules: [rule(operator, "")], groups: [] }] as LifecycleRuleGroup[],
+      "MOVIE",
+    ).get("1") ?? []).length > 0;
+  const query = (item: Record<string, unknown>, operator: string) =>
+    evaluateAllQueryRulesInMemory(
+      [{ id: "g", condition: "AND", rules: [rule(operator, "")], groups: [] }] as QueryGroup[],
+      item, undefined, undefined,
+    );
+
   it("both engines agree with Phase 1 on an item that HAS external ids", () => {
     const item = { id: "1", externalIds: withIds };
-    const lifecycle = (operator: string) =>
-      (getMatchedCriteriaForItems(
-        [item],
-        [{ id: "g", condition: "AND", rules: [rule(operator, "")], groups: [] }] as LifecycleRuleGroup[],
-        "MOVIE",
-      ).get("1") ?? []).length > 0;
-    const query = (operator: string) =>
-      evaluateAllQueryRulesInMemory(
-        [{ id: "g", condition: "AND", rules: [rule(operator, "")], groups: [] }] as QueryGroup[],
-        item, undefined, undefined,
-      );
 
     // "Is Empty" on an item that has two ids must be false in both engines.
-    expect(lifecycle("isNull")).toBe(false);
-    expect(query("isNull")).toBe(false);
-    expect(lifecycle("isNotNull")).toBe(true);
-    expect(query("isNotNull")).toBe(true);
+    expect(lifecycle(item, "isNull")).toBe(false);
+    expect(query(item, "isNull")).toBe(false);
+    expect(lifecycle(item, "isNotNull")).toBe(true);
+    expect(query(item, "isNotNull")).toBe(true);
+  });
+
+  it("both engines agree with Phase 1 on an item with NO external ids", () => {
+    const item = { id: "1", externalIds: noIds };
+
+    expect(lifecycle(item, "isNull")).toBe(true);
+    expect(query(item, "isNull")).toBe(true);
+    expect(lifecycle(item, "isNotNull")).toBe(false);
+    expect(query(item, "isNotNull")).toBe(false);
   });
 });

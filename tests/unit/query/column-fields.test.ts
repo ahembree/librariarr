@@ -61,7 +61,9 @@ describe("formatColumnValue", () => {
   });
 
   it("formats valid dates and dashes invalid ones", () => {
-    expect(formatColumnValue(dateDef, "2024-03-05T12:00:00Z")).toBe("Mar 5, 2024");
+    // Cells show the viewer's local calendar day: local noon on 5 March is
+    // 5 March in every timezone (a fixed UTC instant is 6 March east of +12).
+    expect(formatColumnValue(dateDef, new Date(2024, 2, 5, 12).toISOString())).toBe("Mar 5, 2024");
     expect(formatColumnValue(dateDef, "garbage")).toBe("-");
   });
 

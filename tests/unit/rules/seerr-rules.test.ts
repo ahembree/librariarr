@@ -186,12 +186,12 @@ describe("hasSeerrRules", () => {
 // evaluateSeerrRule — tested indirectly via getMatchedCriteriaForItems
 // ---------------------------------------------------------------------------
 //
-// evaluateSeerrRule is not exported from engine.ts. We exercise it through
-// getMatchedCriteriaForItems, which calls evaluateRuleAgainstItem, which
-// delegates to evaluateSeerrRule for any seerr field.
+// Exercised through getMatchedCriteriaForItems, which calls
+// evaluateRuleAgainstItem, which delegates to evaluateSeerrRule for any seerr
+// field — so these also cover the Seerr metadata lookup.
 //
 // Each item needs an `externalIds` array with a TMDB entry so the engine can
-// look up seerr metadata.  The seerrData map is keyed by TMDB ID for movies.
+// look up seerr metadata. The seerrData map is keyed `TMDB:<id>` for movies.
 // ---------------------------------------------------------------------------
 
 function makeItem(id: string, tmdbId: string, overrides?: Record<string, unknown>) {
@@ -669,14 +669,14 @@ describe("evaluateSeerrRule (via getMatchedCriteriaForItems)", () => {
         {
           id: "item1",
           externalIds: [
-            { source: "TMDB", externalId: "tmdb-999" },
-            { source: "TVDB", externalId: "tvdb-123" },
+            { source: "TMDB", externalId: "1396" },
+            { source: "TVDB", externalId: "81189" },
           ],
         },
       ];
       // Seerr data keyed by namespaced TVDB ID for series
       const seerrData: SeerrDataMap = {
-        "TVDB:tvdb-123": {
+        "TVDB:81189": {
           requested: true,
           requestCount: 2,
           requestDate: "2024-06-01T00:00:00Z",
@@ -694,29 +694,32 @@ describe("evaluateSeerrRule (via getMatchedCriteriaForItems)", () => {
   // -- default operator behavior (unsupported operators return false for safety) --
 
   describe("default operator behavior", () => {
-    it("unsupported operator for seerrRequested returns false (no match)", () => {
-      // "contains" is not a valid operator for seerrRequested (boolean field)
-      // The switch default returns result = false to prevent matching everything
-      const rules: LifecycleRule[] = [
-        { id: "r1", field: "seerrRequested", operator: "contains", value: "true", condition: "AND" },
-      ];
+    it("unsupported operator for seerrRequested returns false (no match), even negated", () => {
+      // "contains" is not a valid operator for seerrRequested (boolean field).
+      // The rule is refused before `negate` applies, so NOT cannot turn it
+      // into match-everything.
       const items = [makeItem("item1", "50")];
       const seerrData = makeSeerrData("50", { requested: true });
-
-      const result = getMatchedCriteriaForItems(items, rules, "MOVIE", undefined, seerrData);
-      expect(result.get("item1")!).toHaveLength(0);
+      for (const negate of [false, true]) {
+        const rules: LifecycleRule[] = [
+          { id: "r1", field: "seerrRequested", operator: "contains", value: "true", condition: "AND", negate },
+        ];
+        const result = getMatchedCriteriaForItems(items, rules, "MOVIE", undefined, seerrData);
+        expect(result.get("item1")!, `negate=${negate}`).toHaveLength(0);
+      }
     });
 
-    it("unsupported operator for seerrRequestCount returns false (no match)", () => {
+    it("unsupported operator for seerrRequestCount returns false (no match), even negated", () => {
       // "contains" is not valid for numeric fields
-      const rules: LifecycleRule[] = [
-        { id: "r1", field: "seerrRequestCount", operator: "contains", value: "5", condition: "AND" },
-      ];
       const items = [makeItem("item1", "50")];
       const seerrData = makeSeerrData("50", { requestCount: 5 });
-
-      const result = getMatchedCriteriaForItems(items, rules, "MOVIE", undefined, seerrData);
-      expect(result.get("item1")!).toHaveLength(0);
+      for (const negate of [false, true]) {
+        const rules: LifecycleRule[] = [
+          { id: "r1", field: "seerrRequestCount", operator: "contains", value: "5", condition: "AND", negate },
+        ];
+        const result = getMatchedCriteriaForItems(items, rules, "MOVIE", undefined, seerrData);
+        expect(result.get("item1")!, `negate=${negate}`).toHaveLength(0);
+      }
     });
   });
 });
@@ -752,24 +755,24 @@ describe("Seerr isNull / isNotNull on always-present fields", () => {
   };
 
   it("seerrRequestedBy isNull matches an item with no recorded requester", () => {
-    expect(count("seerrRequestedBy", "isNull", { requestedBy: [] })).toBeGreaterThan(0);
+    expect(count("seerrRequestedBy", "isNull", { requestedBy: [] })).toBe(1);
     expect(count("seerrRequestedBy", "isNull", { requestedBy: ["alice"] })).toBe(0);
   });
 
   it("seerrRequestedBy isNotNull matches an item that has a requester", () => {
-    expect(count("seerrRequestedBy", "isNotNull", { requestedBy: ["alice"] })).toBeGreaterThan(0);
+    expect(count("seerrRequestedBy", "isNotNull", { requestedBy: ["alice"] })).toBe(1);
     expect(count("seerrRequestedBy", "isNotNull", { requestedBy: [] })).toBe(0);
   });
 
   it("seerrRequestedBy negate inverts both operators", () => {
-    expect(count("seerrRequestedBy", "isNull", { requestedBy: ["alice"] }, true)).toBeGreaterThan(0);
-    expect(count("seerrRequestedBy", "isNotNull", { requestedBy: [] }, true)).toBeGreaterThan(0);
+    expect(count("seerrRequestedBy", "isNull", { requestedBy: ["alice"] }, true)).toBe(1);
+    expect(count("seerrRequestedBy", "isNotNull", { requestedBy: [] }, true)).toBe(1);
   });
 
   it("seerrRequested / seerrRequestCount are non-nullable: isNull matches nothing, isNotNull matches all", () => {
     expect(count("seerrRequested", "isNull", {})).toBe(0);
-    expect(count("seerrRequested", "isNotNull", {})).toBeGreaterThan(0);
+    expect(count("seerrRequested", "isNotNull", {})).toBe(1);
     expect(count("seerrRequestCount", "isNull", { requestCount: 0 })).toBe(0);
-    expect(count("seerrRequestCount", "isNotNull", { requestCount: 0 })).toBeGreaterThan(0);
+    expect(count("seerrRequestCount", "isNotNull", { requestCount: 0 })).toBe(1);
   });
 });

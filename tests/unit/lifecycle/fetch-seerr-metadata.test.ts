@@ -71,6 +71,12 @@ describe("fetchSeerrMetadata", () => {
     mockPrisma.seerrInstance.findMany.mockResolvedValue([]);
     const result = await fetchSeerrMetadata("u1", "MOVIE");
     expect(result).toEqual({});
+    // Only the user's enabled instances, in a fixed order.
+    expect(mockPrisma.seerrInstance.findMany).toHaveBeenCalledWith({
+      where: { userId: "u1", enabled: true },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    });
+    expect(mockSeerrClient.getRequests).not.toHaveBeenCalled();
   });
 
   it("fetches and maps movie requests by TMDB ID", async () => {
@@ -133,10 +139,16 @@ describe("fetchSeerrMetadata", () => {
 
     const result = await fetchSeerrMetadata("u1", "SERIES");
 
-    expect(result["TVDB:2000"]).toBeDefined();
-    expect(result["TMDB:1000"]).toBeDefined();
+    expect(Object.keys(result).sort()).toEqual(["TMDB:1000", "TVDB:2000"]);
     expect(result["TVDB:2000"]).toBe(result["TMDB:1000"]);
-    expect(result["TVDB:2000"].requestedBy).toEqual(["jane"]);
+    expect(result["TVDB:2000"]).toEqual({
+      requested: true,
+      requestCount: 1,
+      requestDate: "2024-02-01",
+      requestedBy: ["jane"],
+      approvalDate: null,
+      declineDate: null,
+    });
   });
 
   it("merges TV requests for one show when only some instances know its tvdbId", async () => {
@@ -187,8 +199,7 @@ describe("fetchSeerrMetadata", () => {
 
     const result = await fetchSeerrMetadata("u1", "MOVIE");
 
-    expect(result["TMDB:550"]).toBeUndefined();
-    expect(result["TMDB:551"]).toBeDefined();
+    expect(Object.keys(result)).toEqual(["TMDB:551"]);
   });
 
   it("merges multiple requests for the same TMDB ID, keeping the most recent dates", async () => {
@@ -344,7 +355,8 @@ describe("fetchSeerrMetadata", () => {
 
     const result = await fetchSeerrMetadata("u1", "MOVIE");
 
-    expect(result["TMDB:100"]).toBeDefined();
-    expect(result["TMDB:200"]).toBeDefined();
+    expect(mockSeerrClient.getRequests).toHaveBeenCalledTimes(2);
+    expect(result["TMDB:100"]).toMatchObject({ requestCount: 1, requestedBy: ["user1"] });
+    expect(result["TMDB:200"]).toMatchObject({ requestCount: 1, requestedBy: ["user2"] });
   });
 });

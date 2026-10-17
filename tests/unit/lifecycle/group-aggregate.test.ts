@@ -94,6 +94,10 @@ describe("loadGroupMemberStats", () => {
     await loadGroupMemberStats(["a", "b", "a", "b", "c"]);
     expect(mockFindMany).toHaveBeenCalledTimes(1);
     expect(mockFindMany.mock.calls[0][0].where.id.in.sort()).toEqual(["a", "b", "c"]);
+    expect(mockFindMany.mock.calls[0][0].select).toEqual({
+      id: true, fileSize: true, playCount: true, lastPlayedAt: true,
+      title: true, seasonNumber: true, episodeNumber: true,
+    });
   });
 
   it("coalesces a null fileSize to zero so the sum stays a BigInt", async () => {
@@ -108,10 +112,10 @@ describe("loadGroupMemberStats", () => {
 
   it("omits ids with no row rather than failing the request", async () => {
     mockFindMany.mockResolvedValue([
-      { id: "a", fileSize: BigInt(10), playCount: 0, lastPlayedAt: null },
+      { id: "a", fileSize: BigInt(10), playCount: 0, lastPlayedAt: null, title: "Pilot", seasonNumber: 1, episodeNumber: 1 },
     ]);
     const result = await loadGroupMemberStats(["a", "gone"]);
-    expect(result.has("a")).toBe(true);
-    expect(result.has("gone")).toBe(false);
+    expect([...result.keys()]).toEqual(["a"]);
+    expect(result.get("a")?.fileSize).toBe(BigInt(10));
   });
 });

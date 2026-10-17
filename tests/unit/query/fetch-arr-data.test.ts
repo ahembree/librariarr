@@ -97,10 +97,12 @@ describe("fetchArrDataForQuery", () => {
     const fractions: number[] = [];
     await fetchArrDataForQuery("u1", { radarr: "r1", sonarr: "n1" }, ["MOVIE", "SERIES"], (f) => fractions.push(f));
 
-    expect(fractions.length).toBeGreaterThan(0);
     expect(fractions[fractions.length - 1]).toBe(1);
-    // Combined across two fetches, so intermediate values never exceed 1.
-    expect(Math.max(...fractions)).toBeLessThanOrEqual(1);
+    // Averaged across the two fetches: the first one to finish does not
+    // complete the bar, so 1 is reported only once, at the very end, and the
+    // combined value never goes backwards.
+    expect(fractions.filter((f) => f === 1)).toHaveLength(1);
+    expect(fractions).toEqual([...fractions].sort((a, b) => a - b));
   });
 
   it("scopes the Radarr lookup to the user and selected instance", async () => {

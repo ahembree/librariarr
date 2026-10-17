@@ -172,7 +172,7 @@ describe("groupSeriesResults", () => {
     expect(groupSeriesResults([])).toEqual([]);
   });
 
-  it("groups episodes by parentTitle and libraryId", () => {
+  it("groups episodes by show within a library (title fallback with no seriesKey)", () => {
     const items = [
       { id: "ep1", title: "S01E01", parentTitle: "Breaking Bad", libraryId: "lib1", playCount: 2, fileSize: "1073741824", lastPlayedAt: "2024-01-15T00:00:00Z" },
       { id: "ep2", title: "S01E02", parentTitle: "Breaking Bad", libraryId: "lib1", playCount: 3, fileSize: "1073741824", lastPlayedAt: "2024-02-15T00:00:00Z" },
@@ -226,6 +226,21 @@ describe("groupSeriesResults", () => {
 
     const result = groupSeriesResults(items);
     expect(result).toHaveLength(2);
+    expect(result.map((r) => r.memberIds)).toEqual([["ep1"], ["ep2"]]);
+  });
+
+  it("keeps two same-titled shows apart by seriesKey, and one show together", () => {
+    const items = [
+      { id: "uk1", title: "Pilot", parentTitle: "The Office", seriesKey: "tvdb:78107", libraryId: "lib1", playCount: 1, fileSize: "100" },
+      { id: "us1", title: "Pilot", parentTitle: "The Office", seriesKey: "tvdb:73244", libraryId: "lib1", playCount: 2, fileSize: "200" },
+      { id: "us2", title: "Diversity Day", parentTitle: "The Office", seriesKey: "tvdb:73244", libraryId: "lib1", playCount: 3, fileSize: "300" },
+    ];
+
+    const result = groupSeriesResults(items);
+    expect(result.map((r) => [r.seriesKey, r.memberIds, r.playCount, r.fileSize])).toEqual([
+      ["tvdb:78107", ["uk1"], 1, "100"],
+      ["tvdb:73244", ["us1", "us2"], 5, "500"],
+    ]);
   });
 });
 
@@ -687,6 +702,20 @@ describe("evaluateAllRulesInMemory — invalid operators default to false", () =
       groups: [],
     }];
     expect(evaluateAllRulesInMemory(groups, dummyItem, undefined, seerrMeta)).toBe(false);
+  });
+
+  it("stays false when the invalid rule is negated (never fails open)", () => {
+    const deadRules = [
+      { id: "1", field: "arrTag", operator: "INVALID_OP" as never, value: "test", condition: "AND" as const },
+      { id: "2", field: "arrMonitored", operator: "contains" as never, value: "true", condition: "AND" as const },
+      { id: "3", field: "arrNonExistentField" as never, operator: "equals" as const, value: "x", condition: "AND" as const },
+      { id: "4", field: "seerrRequested", operator: "INVALID" as never, value: "true", condition: "AND" as const },
+      { id: "5", field: "seerrFakeField" as never, operator: "equals" as const, value: "x", condition: "AND" as const },
+    ];
+    for (const r of deadRules) {
+      const groups: LifecycleRuleGroup[] = [{ id: "g1", condition: "AND", rules: [{ ...r, negate: true }], groups: [] }];
+      expect(evaluateAllRulesInMemory(groups, dummyItem, arrMeta, seerrMeta), r.field).toBe(false);
+    }
   });
 
   it("does not match all items when only Arr rules have invalid operators", () => {

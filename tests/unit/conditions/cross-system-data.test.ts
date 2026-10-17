@@ -20,7 +20,7 @@ vi.mock("@/lib/db", () => ({
   prisma: mockPrisma,
 }));
 
-import { fetchCrossSystemData } from "@/lib/conditions/cross-system-data";
+import { fetchCrossSystemData, foldCrossSystemData } from "@/lib/conditions/cross-system-data";
 
 describe("fetchCrossSystemData", () => {
   beforeEach(() => {
@@ -244,6 +244,34 @@ describe("fetchCrossSystemData", () => {
     expect(result.get("not-pending")?.hasPendingAction).toBe(false);
   });
 
+  it("flags an item whose other copy (same dedupKey) has a pending action", async () => {
+    // "b" is another server's copy of "a"; the action on "a" acts on the one
+    // Arr record both copies are backed by.
+    mockPrisma.mediaItem.findMany
+      .mockResolvedValueOnce([
+        { id: "b", dedupKey: "k1" },
+        { id: "c", dedupKey: "k2" },
+      ])
+      .mockResolvedValueOnce([{ dedupKey: "k1" }]);
+    mockPrisma.mediaItem.groupBy.mockResolvedValueOnce([
+      { dedupKey: "k1", _count: { id: 2 } },
+      { dedupKey: "k2", _count: { id: 1 } },
+    ]);
+    mockPrisma.lifecycleAction.findMany.mockResolvedValueOnce([
+      { ruleSetId: "rs", mediaItemId: "a", matchedMediaItemIds: [] },
+    ]);
+
+    const result = await fetchCrossSystemData(["b", "c"]);
+
+    expect(result.get("b")?.hasPendingAction).toBe(true);
+    expect(result.get("c")?.hasPendingAction).toBe(false);
+    // Only the pending items' keys are read, never the requested library's.
+    expect(mockPrisma.mediaItem.findMany).toHaveBeenLastCalledWith({
+      where: { id: { in: ["a"] }, dedupKey: { not: null } },
+      select: { dedupKey: true },
+    });
+  });
+
   it("splits a server-count lookup past the bind-parameter limit", async () => {
     const ids = Array.from({ length: 25_000 }, (_, i) => `id-${i}`);
     mockPrisma.mediaItem.findMany.mockResolvedValueOnce(ids.map((id) => ({ id, dedupKey: `k-${id}` })));
@@ -290,5 +318,34 @@ describe("fetchCrossSystemData", () => {
       where: { mediaItemId: { in: ["a", "b"] } },
       select: { mediaItemId: true, ruleSet: { select: { name: true } } },
     });
+  });
+});
+
+describe("foldCrossSystemData", () => {
+  const data = new Map([
+    ["e1", { serverCount: 1, matchedRuleSets: ["Keep"], hasPendingAction: false }],
+    ["e2", { serverCount: 3, matchedRuleSets: ["Keep", "Leaving Soon"], hasPendingAction: true }],
+    ["e3", { serverCount: 2, matchedRuleSets: [], hasPendingAction: false }],
+  ]);
+
+  it("reads a show as matched by any member's rule sets, pending if any member is, on its most-copied member's servers", () => {
+    expect(foldCrossSystemData(["e1", "e2", "e3"], data)).toEqual({
+      serverCount: 3,
+      matchedRuleSets: ["Keep", "Leaving Soon"],
+      hasPendingAction: true,
+    });
+  });
+
+  it("reads members with no entry as single-server, unmatched and not pending", () => {
+    expect(foldCrossSystemData(["e1", "missing"], data)).toEqual({
+      serverCount: 1,
+      matchedRuleSets: ["Keep"],
+      hasPendingAction: false,
+    });
+    expect(foldCrossSystemData([], data)).toEqual({ serverCount: 1, matchedRuleSets: [], hasPendingAction: false });
+  });
+
+  it("is undefined when no cross-system data was fetched", () => {
+    expect(foldCrossSystemData(["e1"], undefined)).toBeUndefined();
   });
 });

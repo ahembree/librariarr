@@ -29,9 +29,22 @@ describe("computeDeletedBytes", () => {
 
   it("counts the whole series for a whole-series Sonarr delete, by seriesKey", async () => {
     mockPrisma.mediaItem.aggregate.mockResolvedValue({ _sum: { fileSize: BigInt(500) } });
-    await computeDeletedBytes("DELETE_SONARR", { ...item, parentTitle: "Show", seriesKey: "tvdb:1" }, [], {});
+    expect(
+      await computeDeletedBytes("DELETE_SONARR", { ...item, parentTitle: "Show", seriesKey: "tvdb:1" }, ["e1"], {}),
+    ).toBe(BigInt(500));
     expect(mockPrisma.mediaItem.aggregate).toHaveBeenCalledWith({
       where: { type: "SERIES", libraryId: "lib1", seriesKey: "tvdb:1" },
+      _sum: { fileSize: true },
+    });
+  });
+
+  it("counts a whole-series delete by title only for a row with no seriesKey", async () => {
+    mockPrisma.mediaItem.aggregate.mockResolvedValue({ _sum: { fileSize: BigInt(400) } });
+    expect(await computeDeletedBytes("DELETE_SONARR", { ...item, parentTitle: "Show", seriesKey: null }, [], {})).toBe(
+      BigInt(400),
+    );
+    expect(mockPrisma.mediaItem.aggregate).toHaveBeenCalledWith({
+      where: { type: "SERIES", libraryId: "lib1", parentTitle: "Show" },
       _sum: { fileSize: true },
     });
   });
@@ -50,6 +63,10 @@ describe("computeDeletedBytes", () => {
   it("falls back to the members, then to the item itself", async () => {
     mockPrisma.mediaItem.findMany.mockResolvedValue([{ fileSize: BigInt(2) }, { fileSize: BigInt(4) }]);
     expect(await computeDeletedBytes("DELETE_FILES_SONARR", item, ["a", "b"], undefined)).toBe(BigInt(6));
-    expect(await computeDeletedBytes("DELETE_RADARR", item, [], {})).toBe(BigInt(7));
+    expect(mockPrisma.mediaItem.findMany).toHaveBeenCalledWith({
+      where: { id: { in: ["a", "b"] } },
+      select: { fileSize: true },
+    });
+    expect(await computeDeletedBytes("DELETE_RADARR", { ...item, parentTitle: null }, [], {})).toBe(BigInt(7));
   });
 });

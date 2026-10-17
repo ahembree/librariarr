@@ -27,7 +27,7 @@ describe("isHostLevelFailure", () => {
     expect(isHostLevelFailure(integrationError(503, { method }))).toBe(false);
   });
 
-  it.each(["ECONNREFUSED", "ENOTFOUND", "EHOSTUNREACH", "EAI_AGAIN"])(
+  it.each(["ECONNREFUSED", "ENOTFOUND", "EHOSTUNREACH", "ENETUNREACH", "EHOSTDOWN", "EAI_AGAIN"])(
     "is true for a connection that could not be made (%s), whatever the method",
     (code) => {
       expect(isHostLevelFailure(integrationError(null, { method: "delete", code }))).toBe(true);

@@ -18,7 +18,7 @@ describe("CONDITION_OPERATORS", () => {
     }
   });
 
-  it("offers every non-boolean field type at least an equality operator", () => {
+  it("offers every field type an equality operator", () => {
     for (const t of ["number", "text", "date", "boolean"] as const) {
       expect(CONDITION_OPERATORS.some((o) => o.value === "equals" && o.types.includes(t))).toBe(true);
     }

@@ -39,6 +39,7 @@ interface MatchableItem {
   parentTitle?: string | null;
   seriesKey?: string | null;
   title?: string;
+  matchedEpisodes?: number;
 }
 
 describe("executeQuery — series-aggregate fields with includeEpisodes", () => {
@@ -108,7 +109,7 @@ describe("executeQuery — series-aggregate fields with includeEpisodes", () => 
     const items = result.items as unknown as MatchableItem[];
 
     // Exactly the 4 episodes of the stale show — individual episodes, not grouped.
-    expect(new Set(items.map((i) => i.id))).toEqual(new Set(staleEpisodeIds));
+    expect(items.map((i) => i.id).sort()).toEqual([...staleEpisodeIds].sort());
     expect(items.every((i) => i.type === "SERIES" && i.parentTitle === "Stale Show")).toBe(true);
   });
 
@@ -125,7 +126,7 @@ describe("executeQuery — series-aggregate fields with includeEpisodes", () => 
 
     // Grouped: a single show row (parentTitle nulled, title = show name).
     expect(items).toHaveLength(1);
-    expect((items[0] as { title?: string }).title).toBe("Stale Show");
+    expect(items[0]).toMatchObject({ title: "Stale Show", parentTitle: null, matchedEpisodes: 4 });
   });
 
   it("groups two same-titled shows as separate rows by seriesKey", async () => {
@@ -154,7 +155,9 @@ describe("executeQuery — series-aggregate fields with includeEpisodes", () => 
 
     // Two grouped rows despite the shared title, keyed by distinct seriesKeys.
     expect(items).toHaveLength(2);
-    expect(new Set(items.map((i) => i.seriesKey))).toEqual(new Set(["tvdb:78107", "tvdb:73244"]));
-    expect(items.every((i) => i.title === "The Office")).toBe(true);
+    const byKey = Object.fromEntries(items.map((i) => [i.seriesKey, i]));
+    expect(Object.keys(byKey).sort()).toEqual(["tvdb:73244", "tvdb:78107"]);
+    expect(byKey["tvdb:78107"]).toMatchObject({ title: "The Office", matchedEpisodes: 1 });
+    expect(byKey["tvdb:73244"]).toMatchObject({ title: "The Office", matchedEpisodes: 2 });
   });
 });

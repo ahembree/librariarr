@@ -152,7 +152,7 @@ describe("array / external id / watchlist / watched-by", () => {
 });
 
 describe("cross-system fields", () => {
-  it("serverCount defaults to 1", () => {
+  it("serverCount compares numerically and defaults to 1", () => {
     const item = { id: "1", serverCount: 2 };
     expect(ev(item, rule("serverCount", "equals", "2"))).toBe(true);
     expect(ev(item, rule("serverCount", "notEquals", "2"))).toBe(false);
@@ -372,10 +372,15 @@ describe("stream-query groups in memory", () => {
   });
 });
 
+// Dates are displayed as the server's local calendar day, so the fixtures are
+// local noon: the same day in every timezone (a UTC midnight is the previous
+// day west of UTC).
+const localNoon = (y: number, m: number, d: number) => new Date(y, m - 1, d, 12).toISOString();
+
 const arrMeta: ArrMetadata = {
   arrId: 1, tags: ["keep"], qualityProfile: "HD", monitored: true, rating: 7, tmdbRating: null, rtCriticRating: 80,
-  dateAdded: "2024-01-01T00:00:00Z", path: "/m/a", sizeOnDisk: 1536 * MB, originalLanguage: null, releaseDate: null,
-  inCinemasDate: "2023-01-01T00:00:00Z", runtime: 120, qualityName: "Bluray", qualityCutoffMet: true, customFormatScore: 5,
+  dateAdded: localNoon(2024, 1, 1), path: "/m/a", sizeOnDisk: 1536 * MB, originalLanguage: null, releaseDate: null,
+  inCinemasDate: localNoon(2023, 1, 1), runtime: 120, qualityName: "Bluray", qualityCutoffMet: true, customFormatScore: 5,
   downloadDate: null, firstAired: null, seasonCount: 2, episodeCount: null, status: "ended", ended: false, seriesType: null,
   hasUnaired: null, monitoredSeasonCount: 1, monitoredEpisodeCount: 4,
 };
@@ -397,8 +402,9 @@ describe("getActualValuesForAllRules", () => {
     expect(vals.get("arrRating-isNotNull")).toBe("7");
     expect(vals.get("arrTmdbRating-isNotNull")).toBe("N/A");
     expect(vals.get("arrRtCriticRating-isNotNull")).toBe("80");
+    expect(vals.get("arrDateAdded-isNotNull")).toBe("Jan 1, 2024");
     expect(vals.get("arrReleaseDate-isNotNull")).toBe("N/A");
-    expect(vals.get("arrInCinemasDate-isNotNull")).toMatch(/2023/);
+    expect(vals.get("arrInCinemasDate-isNotNull")).toBe("Jan 1, 2023");
     expect(vals.get("arrSizeOnDisk-isNotNull")).toBe("1536 MB");
     expect(vals.get("arrRuntime-isNotNull")).toBe("120 min");
     expect(vals.get("arrEpisodeCount-isNotNull")).toBe("N/A");
@@ -439,13 +445,13 @@ describe("getActualValuesForAllRules", () => {
   it("formats Seerr fields with and without metadata", () => {
     const seerrFields = ["seerrRequested", "seerrRequestCount", "seerrRequestDate", "seerrApprovalDate", "seerrDeclineDate", "seerrRequestedBy"];
     const rules = [group(seerrFields.map((f) => rule(f, "isNotNull")))];
-    const seerrData = { "TMDB:1": { requested: true, requestCount: 3, requestDate: "2024-01-01T00:00:00Z", requestedBy: ["a", "b"], approvalDate: null, declineDate: null } };
+    const seerrData = { "TMDB:1": { requested: true, requestCount: 3, requestDate: localNoon(2024, 1, 1), requestedBy: ["a", "b"], approvalDate: null, declineDate: null } };
     const items = [{ id: "a", externalIds: [{ source: "TMDB", externalId: "1" }] }, { id: "b", externalIds: [] }];
     const res = getActualValuesForAllRules(items, rules, "MOVIE", undefined, seerrData);
     const a = res.get("a")!;
     expect(a.get("seerrRequested-isNotNull")).toBe("true");
     expect(a.get("seerrRequestCount-isNotNull")).toBe("3");
-    expect(a.get("seerrRequestDate-isNotNull")).toMatch(/2024/);
+    expect(a.get("seerrRequestDate-isNotNull")).toBe("Jan 1, 2024");
     expect(a.get("seerrApprovalDate-isNotNull")).toBe("N/A");
     expect(a.get("seerrRequestedBy-isNotNull")).toBe("a, b");
     const b = res.get("b")!;
@@ -467,7 +473,7 @@ describe("getActualValuesForAllRules", () => {
       id: "f", streams: [audio("English", "dts"), audio("English", "aac"), audio("unknown"), sub("French")],
       genres: ["Drama"], labels: [], countries: ["UK", "US"], externalIds: [{ source: "IMDB", externalId: "tt1" }],
       isWatchlisted: true, watchHistory: [{ serverUsername: "a" }, { serverUsername: "a" }, { serverUsername: null }],
-      fileSize: String(2048 * MB), duration: 5_400_000, addedAt: "2024-01-15T00:00:00Z", year: 2001,
+      fileSize: String(2048 * MB), duration: 5_400_000, addedAt: localNoon(2024, 1, 15), year: 2001,
       watchedEpisodePercentage: 33.333, studio: null, title: "T",
     };
     const v = getActualValuesForAllRules([full], rules, "MOVIE").get("f")!;
@@ -484,7 +490,7 @@ describe("getActualValuesForAllRules", () => {
     expect(v.get("watchedByUser-isNull")).toBe("a");
     expect(v.get("fileSize-isNull")).toBe("2.0 GB");
     expect(v.get("duration-isNull")).toBe("90 min");
-    expect(v.get("addedAt-isNull")).toMatch(/2024/);
+    expect(v.get("addedAt-isNull")).toBe("Jan 15, 2024");
     expect(v.get("year-isNull")).toBe("2001");
     expect(v.get("watchedEpisodePercentage-isNull")).toBe("33.3%");
     expect(v.get("studio-isNull")).toBe("N/A");

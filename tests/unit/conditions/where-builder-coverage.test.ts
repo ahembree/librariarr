@@ -128,8 +128,9 @@ describe("date handler", () => {
   it("inLastDays / notInLastDays use a rolling window", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2025-06-15T12:00:00Z"));
-    const tenAgo = new Date("2025-06-15T12:00:00Z");
-    tenAgo.setDate(tenAgo.getDate() - 10);
+    // No time zone changes its clocks between 5 and 15 June, so ten calendar
+    // days back is the same instant everywhere.
+    const tenAgo = new Date("2025-06-05T12:00:00Z");
     expect(w("lastPlayedAt", "inLastDays", "10")).toEqual({ lastPlayedAt: { gte: tenAgo } });
     expect(w("lastPlayedAt", "notInLastDays", "10")).toEqual({ lastPlayedAt: { lt: tenAgo } });
   });

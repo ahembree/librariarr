@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import { cleanDatabase, disconnectTestDb } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
 import { callRoute, expectJson, expectStreamResult, createTestUser } from "../../setup/test-helpers";
+import type { QueryResult } from "@/lib/query/query-engine";
 
 // Mock the query executor to avoid complex dependency chain (Arr clients, Seerr, dedup, etc.)
 const mockExecuteQuery = vi.hoisted(() => vi.fn());
@@ -38,7 +39,8 @@ describe("POST /api/query", () => {
   beforeEach(async () => {
     await cleanDatabase();
     clearMockSession();
-    vi.clearAllMocks();
+    // mockReset, not clearAllMocks: a previous test's result must not answer this one.
+    mockExecuteQuery.mockReset();
   });
 
   afterAll(async () => {
@@ -78,19 +80,19 @@ describe("POST /api/query", () => {
     });
     const body = await expectJson<{ error: string }>(response, 400);
     expect(body.error).toBe("Validation failed");
+    expect(mockExecuteQuery).not.toHaveBeenCalled();
   });
 
   it("returns matching items for a valid query", async () => {
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id });
 
-    const mockResult = {
+    const mockResult: QueryResult = {
       items: [
         { id: "item-1", title: "Test Movie", type: "MOVIE" },
         { id: "item-2", title: "Another Movie", type: "MOVIE" },
       ],
-      pagination: { page: 1, limit: 50, hasMore: false },
-      totalMatched: 2,
+      pagination: { page: 1, limit: 50, hasMore: false, total: 2 },
     };
     mockExecuteQuery.mockResolvedValue(mockResult);
 
@@ -99,11 +101,10 @@ describe("POST /api/query", () => {
       method: "POST",
       body: { query: validQuery },
     });
-    const { result: body } = await expectStreamResult<typeof mockResult>(response);
+    const { result: body } = await expectStreamResult<QueryResult>(response);
 
-    expect(body.items).toHaveLength(2);
-    expect(body.items[0].title).toBe("Test Movie");
-    expect(body.pagination.hasMore).toBe(false);
+    // The engine's result is the stream's terminal payload, unchanged.
+    expect(body).toEqual(mockResult);
 
     // Verify executeQuery was called with the right args (plus the streaming
     // progress emitter as the final argument).
@@ -125,20 +126,16 @@ describe("POST /api/query", () => {
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id });
 
-    mockExecuteQuery.mockResolvedValue({
-      items: [],
-      pagination: { page: 1, limit: 50, hasMore: false },
-      totalMatched: 0,
-    });
+    const empty: QueryResult = { items: [], pagination: { page: 1, limit: 50, hasMore: false, total: 0 } };
+    mockExecuteQuery.mockResolvedValue(empty);
 
     const response = await callRoute(POST, {
       url: "/api/query",
       method: "POST",
       body: { query: validQuery },
     });
-    const { result: body } = await expectStreamResult<{ items: unknown[]; totalMatched: number }>(response);
-    expect(body.items).toHaveLength(0);
-    expect(body.totalMatched).toBe(0);
+    const { result: body } = await expectStreamResult<QueryResult>(response);
+    expect(body).toEqual(empty);
   });
 
   it("passes custom page and limit to executeQuery", async () => {
@@ -147,9 +144,8 @@ describe("POST /api/query", () => {
 
     mockExecuteQuery.mockResolvedValue({
       items: [],
-      pagination: { page: 2, limit: 25, hasMore: false },
-      totalMatched: 0,
-    });
+      pagination: { page: 2, limit: 25, hasMore: false, total: 0 },
+    } satisfies QueryResult);
 
     const response = await callRoute(POST, {
       url: "/api/query",
@@ -175,7 +171,7 @@ describe("POST /api/query", () => {
     mockExecuteQuery.mockImplementation(async (_def, _uid, _page, _limit, emit) => {
       emit?.({ type: "plan", phases: [{ key: "query", label: "Querying library" }] });
       emit?.({ type: "phase", key: "query" });
-      return { items: [], pagination: { page: 1, limit: 50, hasMore: false }, totalMatched: 0 };
+      return { items: [], pagination: { page: 1, limit: 50, hasMore: false, total: 0 } } satisfies QueryResult;
     });
 
     const response = await callRoute(POST, {

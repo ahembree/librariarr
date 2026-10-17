@@ -31,7 +31,7 @@ describe("collectRuleFields", () => {
     expect(collectRuleFields([null, 42, "str", group([])])).toEqual([]);
   });
 
-  it("skips stream-query (sq*) fields' absence gracefully (they are still collected as raw field names)", () => {
+  it("collects stream-query (sq*) fields as raw names, leaving gating to the callers", () => {
     // collectRuleFields returns raw names; gating filters happen in the callers.
     expect(collectRuleFields([group([rule("sqColorPrimaries")])])).toEqual(["sqColorPrimaries"]);
   });

@@ -242,7 +242,8 @@ describe("executeQuery — paths", () => {
       def({ serverIds: [server.id], mediaTypes: ["MOVIE", "SERIES"], includeEpisodes: true, groups }),
       user.id, 2, 3,
     );
-    expect(paged.items).toHaveLength(1);
+    // Sorted by title: Ep 1, Ep 2, Ep 3 on page 1, the movie alone on page 2.
+    expect(titles(paged)).toEqual(["Small Movie"]);
     expect(paged.pagination).toEqual({ page: 2, limit: 3, hasMore: false, total: 4 });
 
     const seriesOnly = await executeQuery(

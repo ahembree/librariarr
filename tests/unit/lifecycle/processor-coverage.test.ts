@@ -95,6 +95,8 @@ vi.mock("@/lib/lifecycle/collections", () => ({
 vi.mock("@/lib/lifecycle/fetch-arr-metadata", () => ({
   fetchArrMetadata: mockFetchArrMetadata,
   hasEnabledArrInstances: mockHasEnabledArrInstances,
+  // Read by the real evaluability guard when a rule set names its instance.
+  resolveArrInstanceScope: vi.fn().mockResolvedValue(null),
   arrFamilyLabel: (type: string) =>
     type === "MOVIE" ? "Radarr" : type === "MUSIC" ? "Lidarr" : "Sonarr",
 }));
@@ -197,6 +199,11 @@ describe("executeLifecycleActions — narrowing and late exceptions", () => {
 
     expect(mockExecuteAction).toHaveBeenCalledTimes(1);
     expect(mockExecuteAction.mock.calls[0][0].matchedMediaItemIds).toEqual(["e2"]);
+    // History records what it acted on, not what was scheduled.
+    expect(mockPrisma.lifecycleAction.updateMany).toHaveBeenCalledWith({
+      where: { id: "a1" },
+      data: expect.objectContaining({ status: "COMPLETED", matchedMediaItemIds: ["e2"] }),
+    });
   });
 
   it("cancels a member-scoped action whose every member is excepted", async () => {
@@ -267,8 +274,13 @@ describe("executeLifecycleActions — narrowing and late exceptions", () => {
     mockPrisma.mediaItem.aggregate.mockResolvedValue({ _sum: { fileSize: null } });
     mockSyncMediaServer.mockRejectedValue(new Error("plex down"));
 
-    await expect(executeLifecycleActions("u1")).resolves.not.toThrow();
+    await expect(executeLifecycleActions("u1")).resolves.toBeUndefined();
 
+    // The delete itself is recorded as done before the re-sync is attempted.
+    expect(mockPrisma.lifecycleAction.updateMany).toHaveBeenCalledWith({
+      where: { id: "a1" },
+      data: expect.objectContaining({ status: "COMPLETED" }),
+    });
     expect(mockSyncMediaServer).toHaveBeenCalledWith("s1", "2", expect.objectContaining({ skipWatchHistory: true }));
     expect(logger.error).toHaveBeenCalledWith("Lifecycle", expect.stringContaining("Failed to sync library 2"), expect.any(Object));
   });

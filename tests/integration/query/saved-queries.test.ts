@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
-import { cleanDatabase, disconnectTestDb } from "../../setup/test-db";
+import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
 import {
   callRoute,
@@ -102,16 +102,20 @@ describe("Saved queries API", () => {
       const user = await createTestUser();
       setMockSession({ userId: user.id, isLoggedIn: true });
 
-      await createSavedQuery("First");
-      await createSavedQuery("Second");
-      await createSavedQuery("Third");
+      const first = await createSavedQuery("First");
+      const second = await createSavedQuery("Second");
+      const third = await createSavedQuery("Third");
+      // Three inserts can share a millisecond; give them distinct times, and an
+      // order that differs from creation order, so the sort is what is tested.
+      const prisma = getTestPrisma();
+      const now = Date.now();
+      await prisma.savedQuery.update({ where: { id: first.query.id }, data: { updatedAt: new Date(now - 60_000) } });
+      await prisma.savedQuery.update({ where: { id: second.query.id }, data: { updatedAt: new Date(now) } });
+      await prisma.savedQuery.update({ where: { id: third.query.id }, data: { updatedAt: new Date(now - 120_000) } });
 
       const response = await callRoute(GET, { url: "/api/saved-queries" });
       const body = await expectJson<{ queries: { name: string }[] }>(response, 200);
-      expect(body.queries).toHaveLength(3);
-      // Most recently created (updated) should be first
-      expect(body.queries[0].name).toBe("Third");
-      expect(body.queries[2].name).toBe("First");
+      expect(body.queries.map((q) => q.name)).toEqual(["Second", "First", "Third"]);
     });
   });
 
@@ -135,11 +139,14 @@ describe("Saved queries API", () => {
       const query = makeQuery({ mediaTypes: ["MOVIE", "SERIES"] });
       const body = await createSavedQuery("My Query", query);
 
-      expect(body.query.id).toBeDefined();
       expect(body.query.name).toBe("My Query");
-      expect(body.query.query).toMatchObject({ mediaTypes: ["MOVIE", "SERIES"] });
-      expect(body.query.createdAt).toBeDefined();
-      expect(body.query.updatedAt).toBeDefined();
+      // Stored as validated: the schema's defaults filled in.
+      expect(body.query.query).toEqual({ ...query, includeEpisodes: false });
+      expect(Number.isNaN(Date.parse(body.query.createdAt))).toBe(false);
+      expect(Number.isNaN(Date.parse(body.query.updatedAt))).toBe(false);
+
+      const row = await getTestPrisma().savedQuery.findUniqueOrThrow({ where: { id: body.query.id } });
+      expect(row).toMatchObject({ userId: user.id, name: "My Query", query: { ...query, includeEpisodes: false } });
     });
 
     it("returns 400 when name is empty", async () => {
@@ -164,7 +171,10 @@ describe("Saved queries API", () => {
         method: "POST",
         body: { name: "No Query" },
       });
-      expect(response.status).toBe(400);
+      const body = await expectJson<{ error: string; details: string[] }>(response, 400);
+      expect(body.error).toBe("Validation failed");
+      expect(body.details.some((d) => d.startsWith("query"))).toBe(true);
+      expect(await getTestPrisma().savedQuery.count()).toBe(0);
     });
 
     it("returns 400 when name exceeds 100 characters", async () => {
@@ -189,7 +199,9 @@ describe("Saved queries API", () => {
         method: "POST",
         body: { name: "Bad", query: { invalid: true } },
       });
-      expect(response.status).toBe(400);
+      const body = await expectJson<{ error: string }>(response, 400);
+      expect(body.error).toBe("Validation failed");
+      expect(await getTestPrisma().savedQuery.count()).toBe(0);
     });
 
     it("rejects fields invalid for every selected media type", async () => {
@@ -218,7 +230,9 @@ describe("Saved queries API", () => {
       });
 
       const body = await expectJson<{ error: string }>(response, 400);
-      expect(body.error).toContain("arrSeasonCount");
+      expect(body.error).toBe("These criteria are not valid for the selected media types: arrSeasonCount");
+      // A silently-dead query is never persisted.
+      expect(await getTestPrisma().savedQuery.count()).toBe(0);
     });
 
     it("accepts a field valid for at least one of several selected types", async () => {
@@ -246,7 +260,9 @@ describe("Saved queries API", () => {
         body: { name: "OK Mixed Query", query },
       });
 
-      await expectJson(response, 201);
+      const body = await expectJson<{ query: { id: string; name: string } }>(response, 201);
+      expect(body.query.name).toBe("OK Mixed Query");
+      expect(await getTestPrisma().savedQuery.count({ where: { id: body.query.id } })).toBe(1);
     });
   });
 
@@ -272,7 +288,8 @@ describe("Saved queries API", () => {
         { id: "00000000-0000-0000-0000-000000000000" },
         { method: "PUT", body: { name: "New" } }
       );
-      await expectJson<{ error: string }>(response, 404);
+      const body = await expectJson<{ error: string }>(response, 404);
+      expect(body.error).toBe("Not found");
     });
 
     it("returns 404 when updating another user's query", async () => {
@@ -289,6 +306,8 @@ describe("Saved queries API", () => {
         { method: "PUT", body: { name: "Stolen" } }
       );
       await expectJson<{ error: string }>(response, 404);
+      const row = await getTestPrisma().savedQuery.findUniqueOrThrow({ where: { id: created.query.id } });
+      expect(row.name).toBe("Owner's Query");
     });
 
     it("updates name successfully", async () => {
@@ -304,6 +323,11 @@ describe("Saved queries API", () => {
       );
       const body = await expectJson<{ query: { name: string; query: object } }>(response, 200);
       expect(body.query.name).toBe("Updated Name");
+      // Only the name changed: the stored definition is untouched.
+      expect(body.query.query).toEqual(created.query.query);
+      const row = await getTestPrisma().savedQuery.findUniqueOrThrow({ where: { id: created.query.id } });
+      expect(row.name).toBe("Updated Name");
+      expect(row.query).toEqual(created.query.query);
     });
 
     it("updates query definition successfully", async () => {
@@ -318,8 +342,11 @@ describe("Saved queries API", () => {
         { id: created.query.id },
         { method: "PUT", body: { query: newQuery } }
       );
-      const body = await expectJson<{ query: { query: { mediaTypes: string[] } } }>(response, 200);
+      const body = await expectJson<{ query: { name: string; query: { mediaTypes: string[] } } }>(response, 200);
       expect(body.query.query.mediaTypes).toEqual(["SERIES", "MUSIC"]);
+      expect(body.query.name).toBe("My Query");
+      const row = await getTestPrisma().savedQuery.findUniqueOrThrow({ where: { id: created.query.id } });
+      expect(row.query).toMatchObject({ mediaTypes: ["SERIES", "MUSIC"] });
     });
 
     it("updates both name and query at once", async () => {
@@ -359,7 +386,10 @@ describe("Saved queries API", () => {
         { id: created.query.id },
         { method: "PUT", body: { name: "" } }
       );
-      expect(response.status).toBe(400);
+      const body = await expectJson<{ error: string }>(response, 400);
+      expect(body.error).toBe("Validation failed");
+      const row = await getTestPrisma().savedQuery.findUniqueOrThrow({ where: { id: created.query.id } });
+      expect(row.name).toBe("Valid");
     });
   });
 
@@ -385,7 +415,8 @@ describe("Saved queries API", () => {
         { id: "00000000-0000-0000-0000-000000000000" },
         { method: "DELETE" }
       );
-      await expectJson<{ error: string }>(response, 404);
+      const body = await expectJson<{ error: string }>(response, 404);
+      expect(body.error).toBe("Not found");
     });
 
     it("returns 404 when deleting another user's query", async () => {
@@ -402,6 +433,7 @@ describe("Saved queries API", () => {
         { method: "DELETE" }
       );
       await expectJson<{ error: string }>(response, 404);
+      expect(await getTestPrisma().savedQuery.count({ where: { id: created.query.id } })).toBe(1);
     });
 
     it("deletes query successfully", async () => {
@@ -431,11 +463,11 @@ describe("Saved queries API", () => {
       const q1 = await createSavedQuery("Keep This");
       const q2 = await createSavedQuery("Delete This");
 
-      await callRouteWithParams(
+      await expectJson(await callRouteWithParams(
         DELETE,
         { id: q2.query.id },
         { method: "DELETE" }
-      );
+      ), 200);
 
       const listResponse = await callRoute(GET, { url: "/api/saved-queries" });
       const listBody = await expectJson<{ queries: { id: string; name: string }[] }>(listResponse, 200);

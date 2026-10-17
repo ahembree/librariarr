@@ -151,7 +151,7 @@ describe("action-date ordering", () => {
 });
 
 describe("syncCollectionById / syncAllCollections", () => {
-  it("defaults a missing title to an empty string", async () => {
+  it("syncs a match whose stored snapshot carries no title", async () => {
     mockPrisma.collection.findUnique.mockResolvedValue(collectionDef({ sort: "ALPHABETICAL" }));
     mockPrisma.ruleSet.findMany.mockResolvedValue([
       { id: "rs1", seriesScope: false, ruleMatches: [{ mediaItemId: "m", itemData: { libraryId: "lib1", ratingKey: "rk" } }] },
@@ -161,6 +161,10 @@ describe("syncCollectionById / syncAllCollections", () => {
 
     await syncCollectionById("c1");
 
+    // Every enabled rule set assigned to the collection feeds it.
+    expect(mockPrisma.ruleSet.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { collectionId: "c1", enabled: true },
+    }));
     expect(mockPlex.createCollection).toHaveBeenCalledWith("1", "Leaving Soon", "m1", ["rk"], 1);
   });
 

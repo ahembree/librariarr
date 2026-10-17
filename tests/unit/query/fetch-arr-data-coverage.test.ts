@@ -101,7 +101,7 @@ describe("fetchArrDataForQuery — mapping and progress", () => {
   it("reports Radarr mapping progress past 500 movies", async () => {
     mockPrisma.radarrInstance.findFirst.mockResolvedValue(instance);
     mockRadarr.getMovies.mockResolvedValue(
-      Array.from({ length: 500 }, (_, i) => ({
+      Array.from({ length: 501 }, (_, i) => ({
         id: i + 1, tmdbId: i + 1, tags: [], qualityProfileId: 1, monitored: true, ratings: {}, hasFile: false,
       })),
     );
@@ -111,8 +111,10 @@ describe("fetchArrDataForQuery — mapping and progress", () => {
 
     const result = await fetchArrDataForQuery("u1", { radarr: "r1" }, ["MOVIE"], (f) => progress.push(f));
 
-    expect(Object.keys(result.MOVIE)).toHaveLength(500);
+    expect(Object.keys(result.MOVIE)).toHaveLength(501);
     expect(mockRadarr.getCustomFormatScores).toHaveBeenCalledWith([], expect.any(Function));
+    // The mapping loop owns 0.85..1 and reports after its 500th movie.
+    expect(progress.some((p) => p > 0.85 && p < 1)).toBe(true);
     expect(progress.at(-1)).toBe(1);
   });
 

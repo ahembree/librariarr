@@ -120,9 +120,22 @@ function makeRuleSetConfig(overrides: Partial<Parameters<typeof detectAndSaveMat
   };
 }
 
+/**
+ * `vi.clearAllMocks` keeps implementations, so a classifier one test switches
+ * on would stay on for every later test. Each describe resets them.
+ */
+function resetRuleClassifiers() {
+  mockHasArrRules.mockReturnValue(false);
+  mockHasSeerrRules.mockReturnValue(false);
+  mockHasSeriesAggregateRules.mockReturnValue(false);
+  mockHasWatchedByUserRules.mockReturnValue(false);
+  mockHasPlayActivityRules.mockReturnValue(false);
+}
+
 describe("detectAndSaveMatches", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetRuleClassifiers();
     mockGetMatchedCriteriaForItems.mockReturnValue(new Map());
     mockGetActualValuesForAllRules.mockReturnValue(new Map());
     mockPrisma.lifecycleException.findMany.mockResolvedValue([]);
@@ -162,8 +175,10 @@ describe("detectAndSaveMatches", () => {
 
     const result = await detectAndSaveMatches(makeRuleSetConfig(), ["s1"]);
 
-    expect(result.items).toHaveLength(1);
+    expect(result.items).toEqual([{ id: "item1", title: "Existing" }]);
     expect(result.count).toBe(1);
+    expect(mockPrisma.ruleMatch.deleteMany).not.toHaveBeenCalled();
+    expect(mockEvaluateRules).not.toHaveBeenCalled();
   });
 
   it("evaluates MOVIE rules and returns enriched items", async () => {
@@ -184,15 +199,24 @@ describe("detectAndSaveMatches", () => {
 
     const result = await detectAndSaveMatches(makeRuleSetConfig(), ["s1"]);
 
+    // "Has Pending Action" reads other rule sets' actions, never this one's own.
+    expect(mockEvaluateRules).toHaveBeenCalledWith(
+      makeRuleSetConfig().rules, "MOVIE", ["s1"], undefined, undefined, { excludeRuleSetId: "rs1" },
+    );
     expect(result.items).toHaveLength(1);
     expect(result.items[0]).toEqual(
       expect.objectContaining({
         id: "item1",
         title: "Test Movie",
+        arrId: null,
         matchedCriteria: [],
         servers: [{ serverId: "s1", serverName: "Plex", serverType: "PLEX" }],
       }),
     );
+    expect(mockPrisma.ruleMatch.createMany).toHaveBeenCalledWith({
+      data: [expect.objectContaining({ ruleSetId: "rs1", mediaItemId: "item1", copyIds: [] })],
+      skipDuplicates: true,
+    });
   });
 
   it("evaluates series-scope rules via evaluateSeriesScope", async () => {
@@ -215,7 +239,11 @@ describe("detectAndSaveMatches", () => {
       ["s1"],
     );
 
-    expect(mockEvaluateSeriesScope).toHaveBeenCalled();
+    // Series scope keeps every episode a member (no per-episode restriction).
+    expect(mockEvaluateSeriesScope).toHaveBeenCalledWith(
+      makeRuleSetConfig().rules, ["s1"], undefined, undefined, false, { excludeRuleSetId: "rs1" },
+    );
+    expect(mockEvaluateRules).not.toHaveBeenCalled();
     expect(result.items).toHaveLength(1);
   });
 
@@ -305,7 +333,10 @@ describe("detectAndSaveMatches", () => {
       ["s1"],
     );
 
-    expect(mockEvaluateMusicScope).toHaveBeenCalled();
+    expect(mockEvaluateMusicScope).toHaveBeenCalledWith(
+      makeRuleSetConfig().rules, ["s1"], undefined, { excludeRuleSetId: "rs1" },
+    );
+    expect(mockEvaluateRules).not.toHaveBeenCalled();
     expect(result.items).toHaveLength(1);
   });
 
@@ -362,9 +393,14 @@ describe("detectAndSaveMatches", () => {
       ["s1"],
     );
 
-    expect(mockEvaluateSeriesScope).toHaveBeenCalled();
+    // The user asked for per-episode scope, so the members are restricted to
+    // the episodes that match individually (fifth argument).
+    expect(mockEvaluateSeriesScope).toHaveBeenCalledWith(
+      makeRuleSetConfig().rules, ["s1"], undefined, undefined, true, { excludeRuleSetId: "rs1" },
+    );
     expect(mockEvaluateRules).not.toHaveBeenCalled();
     expect(result.items).toHaveLength(1);
+    expect(result.episodeIdMap.get("agg1")).toEqual(["ep1", "ep2"]);
   });
 
   it("collapses cross-server duplicate matches by resolved Arr id (multi-server)", async () => {
@@ -500,10 +536,10 @@ describe("detectAndSaveMatches", () => {
     });
 
     it("merges members as distinct episodes — the same episode on two servers is one file", async () => {
-      mockEvaluateRules.mockResolvedValue([
-        copy("a", "s1", { memberIds: ["a1", "a2"] }),
-        copy("b", "s2", { memberIds: ["b1", "b3"] }),
-      ]);
+      // One show on two servers, each matched as its group (title = the show).
+      const show = (id: string, server: string, memberIds: string[]) =>
+        copy(id, server, { title: "Show", memberIds, externalIds: [{ source: "TVDB", externalId: "1" }] });
+      mockEvaluateSeriesScope.mockResolvedValue([show("a", "s1", ["a1", "a2"]), show("b", "s2", ["b1", "b3"])]);
       mockPrisma.ruleMatch.findMany.mockResolvedValue([]);
       mockPrisma.mediaItem.findMany.mockResolvedValueOnce([
         { id: "a1", dedupKey: "series:tvdb:1:s1e1" },
@@ -512,7 +548,16 @@ describe("detectAndSaveMatches", () => {
         { id: "b3", dedupKey: "series:tvdb:1:s1e3" },
       ]);
 
-      const result = await detectAndSaveMatches(armed, ["s1", "s2"]);
+      const result = await detectAndSaveMatches(
+        makeRuleSetConfig({
+          type: "SERIES",
+          seriesScope: true,
+          serverIds: ["s1", "s2"],
+          actionEnabled: true,
+          actionType: "DELETE_FILES_SONARR",
+        }),
+        ["s1", "s2"],
+      );
 
       expect(result.items[0].memberIds).toEqual(["a1", "a2", "b3"]);
       expect(result.episodeIdMap.get("a")).toEqual(["a1", "a2", "b3"]);
@@ -849,7 +894,7 @@ describe("detectAndSaveMatches", () => {
       },
     ]);
     mockPrisma.lifecycleException.findMany.mockResolvedValue([
-      { mediaItemId: "item1" },
+      { mediaItemId: "item1", mediaItem: { dedupKey: "movie:tmdb:1" } },
     ]);
     mockPrisma.ruleMatch.findMany.mockResolvedValue([]);
     mockPrisma.ruleMatch.createMany.mockResolvedValue({ count: 1 });
@@ -872,25 +917,28 @@ describe("detectAndSaveMatches", () => {
         externalIds: [],
       },
     ]);
-    // Full re-eval uses the callback form; handle the array form too so this
-    // override (which persists across clearAllMocks) doesn't break the
-    // incremental array-form tests that run after it.
-    mockPrisma.$transaction.mockImplementation((arg: unknown) => {
-      if (typeof arg === "function") {
-        return (arg as (tx: unknown) => Promise<unknown>)({
-          ruleMatch: {
-            deleteMany: vi.fn().mockResolvedValue({ count: 0 }),
-            createMany: vi.fn().mockResolvedValue({ count: 1 }),
-          },
-        });
-      }
-      if (Array.isArray(arg)) return Promise.all(arg);
-      return Promise.resolve(undefined);
-    });
+    mockPrisma.ruleMatch.deleteMany.mockResolvedValue({ count: 3 });
+    mockPrisma.ruleMatch.createMany.mockResolvedValue({ count: 1 });
 
     const result = await detectAndSaveMatches(makeRuleSetConfig(), ["s1"], undefined, undefined, true);
 
-    expect(mockPrisma.$transaction).toHaveBeenCalled();
+    // One transaction: every match of the rule set deleted, the current ones re-created.
+    expect(mockPrisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(mockPrisma.ruleMatch.deleteMany).toHaveBeenCalledWith({ where: { ruleSetId: "rs1" } });
+    expect(mockPrisma.ruleMatch.createMany).toHaveBeenCalledWith({
+      data: [
+        expect.objectContaining({
+          ruleSetId: "rs1",
+          mediaItemId: "item1",
+          itemData: expect.objectContaining({ id: "item1", title: "Movie" }),
+          copyIds: [],
+          detectedAt: expect.any(Date),
+        }),
+      ],
+    });
+    expect(mockPrisma.ruleMatch.deleteMany.mock.invocationCallOrder[0]).toBeLessThan(
+      mockPrisma.ruleMatch.createMany.mock.invocationCallOrder[0],
+    );
     expect(result.items).toHaveLength(1);
   });
 
@@ -968,6 +1016,13 @@ describe("detectAndSaveMatches", () => {
 describe("runDetection", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetRuleClassifiers();
+    mockHasAnyActiveRules.mockReturnValue(true);
+    mockEvaluateRules.mockResolvedValue([]);
+    mockPrisma.ruleMatch.findMany.mockResolvedValue([]);
+    mockPrisma.mediaServer.findMany.mockResolvedValue([]);
+    mockFetchArrMetadata.mockReset();
+    mockFetchSeerrMetadata.mockReset();
     mockGetMatchedCriteriaForItems.mockReturnValue(new Map());
     mockGetActualValuesForAllRules.mockReturnValue(new Map());
     mockPrisma.lifecycleException.findMany.mockResolvedValue([]);
@@ -983,6 +1038,9 @@ describe("runDetection", () => {
     const results = await runDetection("u1");
 
     expect(results).toEqual([]);
+    expect(mockPrisma.ruleSet.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { userId: "u1", enabled: true } }),
+    );
   });
 
   it("skips rule sets with no valid servers", async () => {
@@ -1002,8 +1060,7 @@ describe("runDetection", () => {
         addImportExclusion: false,
         addArrTags: [],
         removeArrTags: [],
-        collectionEnabled: false,
-        collectionName: null,
+        collectionId: null,
         stickyMatches: false,
         user: { mediaServers: [{ id: "other" }] },
       },
@@ -1012,6 +1069,7 @@ describe("runDetection", () => {
     const results = await runDetection("u1");
 
     expect(results).toEqual([]);
+    expect(mockEvaluateRules).not.toHaveBeenCalled();
   });
 
   it("caches Arr metadata across rule sets of same type", async () => {
@@ -1028,7 +1086,7 @@ describe("runDetection", () => {
         rules: [{ field: "arrMonitored", operator: "equals", value: "true", enabled: true }],
         seriesScope: false, serverIds: ["s1"], actionEnabled: false, actionType: null,
         actionDelayDays: 0, arrInstanceId: null, addImportExclusion: false,
-        addArrTags: [], removeArrTags: [], collectionEnabled: false, collectionName: null,
+        addArrTags: [], removeArrTags: [], collectionId: null,
         stickyMatches: false,
         user: { mediaServers: [{ id: "s1" }] },
       },
@@ -1037,16 +1095,21 @@ describe("runDetection", () => {
         rules: [{ field: "arrMonitored", operator: "equals", value: "false", enabled: true }],
         seriesScope: false, serverIds: ["s1"], actionEnabled: false, actionType: null,
         actionDelayDays: 0, arrInstanceId: null, addImportExclusion: false,
-        addArrTags: [], removeArrTags: [], collectionEnabled: false, collectionName: null,
+        addArrTags: [], removeArrTags: [], collectionId: null,
         stickyMatches: false,
         user: { mediaServers: [{ id: "s1" }] },
       },
     ]);
 
-    await runDetection("u1");
+    const results = await runDetection("u1");
 
     // fetchArrMetadata should only be called once for MOVIE type
     expect(mockFetchArrMetadata).toHaveBeenCalledTimes(1);
+    expect(mockFetchArrMetadata).toHaveBeenCalledWith("u1", "MOVIE", undefined, null);
+    // ...and both rule sets were evaluated against it.
+    expect(results.map((r) => r.ruleSet.id)).toEqual(["rs1", "rs2"]);
+    expect(mockEvaluateRules).toHaveBeenCalledTimes(2);
+    for (const call of mockEvaluateRules.mock.calls) expect(call[3]).toEqual({ "123": { arrId: 1 } });
   });
 
   it("isolates a Seerr fetch failure to the rule sets that need it", async () => {
@@ -1188,7 +1251,6 @@ describe("runDetection", () => {
     expect(mockPrisma.ruleMatch.deleteMany).toHaveBeenCalledWith({ where: { ruleSetId: "rs1" } });
   });
 
-
   it("scopes the evaluability check to the rule set's own servers", async () => {
     // `processLifecycleRules` (the scheduled path) passes `serverIds`; this
     // manual "Re-evaluate All" path did not. The watch-history half of the
@@ -1215,8 +1277,7 @@ describe("runDetection", () => {
         addImportExclusion: false,
         addArrTags: [],
         removeArrTags: [],
-        collectionEnabled: false,
-        collectionName: null,
+        collectionId: null,
         stickyMatches: false,
         // `s-disabled` is not among the user's servers, so it is filtered out
         // before the check — the scope passed is the INTERSECTION, exactly what
@@ -1226,12 +1287,17 @@ describe("runDetection", () => {
     ]);
     mockPrisma.mediaItem.findMany.mockResolvedValue([]);
 
-    await runDetection("u1");
+    const results = await runDetection("u1");
 
     expect(mockPrisma.mediaServer.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({ id: { in: ["s1"] } }),
       }),
+    );
+    // Every in-scope server's history is established, so the rule set runs.
+    expect(results.map((r) => r.ruleSet.id)).toEqual(["rs1"]);
+    expect(mockEvaluateRules).toHaveBeenCalledWith(
+      expect.anything(), "MOVIE", ["s1"], undefined, undefined, { excludeRuleSetId: "rs1" },
     );
   });
 });
@@ -1239,6 +1305,7 @@ describe("runDetection", () => {
 describe("detectAndSaveMatches evaluability defense-in-depth", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetRuleClassifiers();
     mockGetMatchedCriteriaForItems.mockReturnValue(new Map());
     mockGetActualValuesForAllRules.mockReturnValue(new Map());
     mockPrisma.lifecycleException.findMany.mockResolvedValue([]);

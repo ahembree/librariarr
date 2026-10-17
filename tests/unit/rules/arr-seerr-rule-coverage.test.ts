@@ -98,7 +98,7 @@ describe("evaluateArrRule — guards", () => {
     expect(arr("arrMonitored", "equals", "false", null, true)).toBe(false);
   });
 
-  it("an Arr field with no evaluator branch matches nothing", () => {
+  it("a field with no Arr evaluator branch matches nothing, even negated", () => {
     // Not an Arr field at all — passes the type guards (number) but has no case.
     expect(arr("year", "equals", "1", meta(), true)).toBe(false);
   });

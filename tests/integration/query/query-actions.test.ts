@@ -75,6 +75,11 @@ describe("POST /api/query/actions", () => {
     await cleanDatabase();
     clearMockSession();
     vi.clearAllMocks();
+    // clearAllMocks keeps implementations: without these a test's
+    // mockResolvedValue / mockImplementation would answer the next test's
+    // re-query. mockReset restores executeAction's no-op echo above.
+    mockedExecuteQuery.mockReset();
+    mockedExecuteAction.mockReset();
   });
 
   afterAll(async () => {
@@ -208,10 +213,14 @@ describe("POST /api/query/actions", () => {
     expect(actions).toHaveLength(1);
     expect(actions[0]).toMatchObject({
       status: "COMPLETED",
+      mediaItemId: movie.id,
       ruleSetId: null,
       ruleSetName: "Ad-hoc query action",
       ruleSetType: "MOVIE",
       actionType: "DELETE_RADARR",
+      arrInstanceId: radarr.id,
+      // The movie's own file (the factory's 1 GiB) is what the delete freed.
+      deletedBytes: BigInt(1073741824),
     });
   });
 
@@ -236,7 +245,9 @@ describe("POST /api/query/actions", () => {
     const { result } = await expectStreamResult<{ executed: number; skipped: number; errors: string[] }>(response);
     expect(result.executed).toBe(0);
     expect(result.skipped).toBe(1);
+    expect(result.errors).toEqual(["All selected items are excluded from lifecycle actions"]);
     expect(mockedExecuteAction).not.toHaveBeenCalled();
+    expect(await prisma.lifecycleAction.count()).toBe(0);
   });
 
   it("streams phase progress events with determinate per-item execute progress", async () => {
@@ -324,7 +335,8 @@ describe("POST /api/query/actions", () => {
       method: "POST",
       body: { query: BASE_QUERY, mediaItemIds: ["a"], actionType: "DROP_TABLE", arrInstanceId: radarr.id },
     });
-    await expectJson(response, 400);
+    const body = await expectJson<{ error: string }>(response, 400);
+    expect(body.error).toBe("Unknown action type");
     expect(mockedExecuteQuery).not.toHaveBeenCalled();
   });
 
@@ -336,7 +348,8 @@ describe("POST /api/query/actions", () => {
       method: "POST",
       body: { query: BASE_QUERY, mediaItemIds: ["a"], actionType: "DELETE_RADARR" },
     });
-    await expectJson(response, 400);
+    const body = await expectJson<{ error: string }>(response, 400);
+    expect(body.error).toBe("An Arr instance is required for this action");
     expect(mockedExecuteQuery).not.toHaveBeenCalled();
   });
 
@@ -354,7 +367,9 @@ describe("POST /api/query/actions", () => {
         arrInstanceId: radarr.id,
       },
     });
-    await expectJson(response, 400);
+    const body = await expectJson<{ error: string }>(response, 400);
+    expect(body.error).toBe("A target quality profile is required");
+    expect(mockedExecuteQuery).not.toHaveBeenCalled();
   });
 
   it("executes a quality profile change with search-after and records both fields", async () => {
@@ -467,8 +482,13 @@ describe("POST /api/query/actions", () => {
       },
     });
     const { result: body } = await expectStreamResult<{ executed: number; skipped: number; errors: string[] }>(response);
-    expect(body.executed).toBe(0);
+    expect(body).toMatchObject({
+      executed: 0,
+      skipped: 1,
+      errors: ["All selected items are excluded from lifecycle actions"],
+    });
     expect(mockedExecuteAction).not.toHaveBeenCalled();
+    expect(await prisma.lifecycleAction.count()).toBe(0);
   });
 
   it("resolves grouped-series member episode IDs for file-deletion actions", async () => {
@@ -754,11 +774,14 @@ describe("POST /api/query/actions", () => {
     });
     const { result: body } = await expectStreamResult<{ executed: number; failed: number; errors: string[] }>(response);
     expect(body).toMatchObject({ executed: 0, failed: 1 });
+    expect(body.errors).toHaveLength(1);
     expect(body.errors[0]).toContain("Radarr exploded");
 
     const prisma = getTestPrisma();
     const actions = await prisma.lifecycleAction.findMany({ where: { userId: user.id } });
-    expect(actions[0].status).toBe("FAILED");
+    expect(actions).toHaveLength(1);
+    expect(actions[0]).toMatchObject({ status: "FAILED", mediaItemId: movie.id, actionType: "DELETE_RADARR", deletedBytes: null });
+    expect(actions[0].error).toContain("Radarr exploded");
   });
 
   it("refuses a whole-series DELETE_SONARR when a NON-matching sibling episode is excepted", async () => {
@@ -1290,7 +1313,9 @@ describe("POST /api/query/actions", () => {
       });
 
       const body = await expectJson<{ error: string }>(response, 400);
-      expect(body.error).toMatch(/play-activity/i);
+      expect(body.error).toMatch(/^The query uses play-activity criteria but 1 server\(s\) have no established play history yet/);
+      // The refusal names the server and which fault applies (wait for the import).
+      expect(body.error).toContain('"Test Server" (its Tracearr history import has not finished walking back through the archive)');
       // The query must not even run: executing it would produce the vacuous
       // whole-library match set this guard exists to keep out of an action.
       expect(mockedExecuteQuery).not.toHaveBeenCalled();
@@ -1320,7 +1345,10 @@ describe("POST /api/query/actions", () => {
         },
       });
 
-      await expectJson<{ error: string }>(response, 400);
+      const body = await expectJson<{ error: string }>(response, 400);
+      // The other fault: nothing to wait for, a sync has to re-establish it.
+      expect(body.error).toContain('"Test Server" (no sync has established what was played there');
+      expect(mockedExecuteQuery).not.toHaveBeenCalled();
       expect(mockedExecuteAction).not.toHaveBeenCalled();
     });
 
@@ -1399,7 +1427,20 @@ describe("POST /api/query/actions", () => {
 
       const { result: body } = await expectStreamResult<{ executed: number }>(response);
       expect(body.executed).toBe(1);
-      expect(importing.id).not.toBe(native.id);
+
+      // The same query aimed at the importing server is refused.
+      const refused = await callRoute(POST, {
+        method: "POST",
+        body: {
+          query: { ...BASE_QUERY, serverIds: [importing.id], groups: watchedByUserGroups },
+          mediaItemIds: [movie.id],
+          actionType: "DELETE_RADARR",
+          arrInstanceId: radarr.id,
+        },
+      });
+      const refusal = await expectJson<{ error: string }>(refused, 400);
+      expect(refusal.error).toContain('"Importing" (its Tracearr history import');
+      expect(mockedExecuteAction).toHaveBeenCalledTimes(1);
     });
 
     it("refuses an unscoped query while ANY server is still importing", async () => {
@@ -1423,7 +1464,9 @@ describe("POST /api/query/actions", () => {
         },
       });
 
-      await expectJson<{ error: string }>(response, 400);
+      const body = await expectJson<{ error: string }>(response, 400);
+      expect(body.error).toContain('"Test Server" (its Tracearr history import has not finished');
+      expect(mockedExecuteQuery).not.toHaveBeenCalled();
       expect(mockedExecuteAction).not.toHaveBeenCalled();
     });
   });

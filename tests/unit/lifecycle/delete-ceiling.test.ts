@@ -28,8 +28,11 @@ describe("checkDeleteCeiling", () => {
   it("allows anything when no ceiling is configured", async () => {
     limit(null);
     const verdict = await checkDeleteCeiling("u1", Array(50_000).fill(DESTRUCTIVE));
-    expect(verdict.allowed).toBe(true);
-    expect(verdict.limit).toBeNull();
+    expect(verdict).toEqual({ allowed: true, count: 50_000, limit: null });
+    expect(m.findFirst).toHaveBeenCalledWith({
+      where: { userId: "u1" },
+      select: { maxAutoDeleteItems: true },
+    });
   });
 
   it("allows a run exactly at the ceiling", async () => {
@@ -46,8 +49,8 @@ describe("checkDeleteCeiling", () => {
     expect(verdict.allowed).toBe(false);
     expect(verdict.count).toBe(11);
     expect(verdict.limit).toBe(10);
-    expect(verdict.reason).toMatch(/11/);
-    expect(verdict.reason).toMatch(/10/);
+    expect(verdict.reason).toContain("would delete 11 item(s)");
+    expect(verdict.reason).toContain("configured limit of 10.");
   });
 
   it("counts only destructive actions", async () => {
@@ -103,6 +106,6 @@ describe("checkDeleteCeilingForRun", () => {
 
   it("never counts a non-destructive run", async () => {
     m.findFirst.mockResolvedValue({ maxAutoDeleteItems: 1 });
-    expect((await checkDeleteCeilingForRun("u1", "UNMONITOR_RADARR", 50)).allowed).toBe(true);
+    expect(await checkDeleteCeilingForRun("u1", "UNMONITOR_RADARR", 50)).toEqual({ allowed: true, count: 0, limit: 1 });
   });
 });

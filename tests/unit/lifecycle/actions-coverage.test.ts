@@ -116,7 +116,7 @@ function artistAction(overrides: Partial<ActionRecord> = {}): ActionRecord {
     targetTitle: "Radiohead",
     mediaItem: {
       id: "t-rep", title: "Airbag", parentTitle: "Radiohead", year: null,
-      externalIds: [{ source: "MUSICBRAINZ", externalId: "a74b1b7f" }],
+      externalIds: [{ source: "MUSICBRAINZ", externalId: "a74b1b7f-71a5-4011-9441-d0b5e4122711" }],
     },
     ...overrides,
   });
@@ -124,7 +124,7 @@ function artistAction(overrides: Partial<ActionRecord> = {}): ActionRecord {
 
 const MOVIE = { id: 7, title: "Arrival", year: 2016, tmdbId: 329865, tags: [1], monitored: true, hasFile: true, movieFileId: 70, qualityProfileId: 1 };
 const SERIES = { id: 2, title: "Severance", year: 2022, tvdbId: 371980, tags: [1], monitored: true, qualityProfileId: 1 };
-const ARTIST = { id: 5, artistName: "Radiohead", foreignArtistId: "a74b1b7f", tags: [1], monitored: true, qualityProfileId: 1 };
+const ARTIST = { id: 5, artistName: "Radiohead", foreignArtistId: "a74b1b7f-71a5-4011-9441-d0b5e4122711", tags: [1], monitored: true, qualityProfileId: 1 };
 
 beforeEach(() => {
   vi.resetAllMocks();
@@ -360,7 +360,7 @@ describe("whole-record and monitoring executors", () => {
   it("UNMONITOR_LIDARR adds the exclusion by foreign artist id", async () => {
     await executeAction(artistAction({ actionType: "UNMONITOR_LIDARR", addImportExclusion: true }));
     expect(mockLidarr.updateArtist).toHaveBeenCalledWith(5, { monitored: false });
-    expect(mockLidarr.addExclusion).toHaveBeenCalledWith("a74b1b7f", "Radiohead");
+    expect(mockLidarr.addExclusion).toHaveBeenCalledWith("a74b1b7f-71a5-4011-9441-d0b5e4122711", "Radiohead");
   });
 
   it("UNMONITOR_RADARR uses the item's year when Radarr has none, and 0 when neither does", async () => {
@@ -569,12 +569,12 @@ describe("Lidarr member-scoped file deletes", () => {
       .rejects.toThrow(/nothing was deleted/);
   });
 
-  it("a track without a stored album or position falls back to exact title on the album", async () => {
+  it("leaves a track with no stored album title unresolved, though Lidarr has its title", async () => {
     mockPrisma.mediaItem.findMany.mockResolvedValue([track({ albumTitle: null, episodeNumber: null })]);
     mockLidarr.getTracks.mockResolvedValue([
       { id: 1, albumId: 10, trackFileId: 101, title: "Airbag", hasFile: true },
     ]);
-    // No album title → no album → unresolved.
+    // No album title → no album → unresolved: a title alone is never matched across albums.
     await expect(executeAction(artistAction({ actionType: "DELETE_FILES_LIDARR", matchedMediaItemIds: ["t1"] })))
       .rejects.toThrow(/nothing was deleted/);
   });
@@ -602,7 +602,7 @@ describe("Lidarr member-scoped file deletes", () => {
     }));
     expect(mockLidarr.updateArtist).toHaveBeenCalledWith(5, { monitored: false });
     expect(mockLidarr.deleteTrackFiles).toHaveBeenCalledWith([101]);
-    expect(mockLidarr.addExclusion).toHaveBeenCalledWith("a74b1b7f", "Radiohead");
+    expect(mockLidarr.addExclusion).toHaveBeenCalledWith("a74b1b7f-71a5-4011-9441-d0b5e4122711", "Radiohead");
     expect(mockLidarr.triggerArtistSearch).toHaveBeenCalledWith(5);
     expect(outcome.deletedMemberIds).toEqual(["t1"]);
   });

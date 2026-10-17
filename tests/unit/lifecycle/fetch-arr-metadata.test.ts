@@ -150,6 +150,7 @@ describe("fetchArrMetadata", () => {
       expect(result["550"].rtCriticRating).toBe(9); // 90/10
       expect(result["550"].dateAdded).toBe("2024-01-01");
       expect(result["550"].path).toBe("/movies/fight-club");
+      expect(result["550"].sizeOnDisk).toBe(5000000000);
       expect(result["550"].originalLanguage).toBe("English");
       expect(result["550"].releaseDate).toBe("2024-06-01");
       expect(result["550"].inCinemasDate).toBe("2024-03-01");
@@ -271,9 +272,9 @@ describe("fetchArrMetadata", () => {
 
       const result = await fetchArrMetadata("u1", "MOVIE");
 
-      expect(Object.keys(result)).toHaveLength(2);
-      expect(result["100"]).toBeDefined();
-      expect(result["200"]).toBeDefined();
+      expect(Object.keys(result).sort()).toEqual(["100", "200"]);
+      expect(result["100"].arrId).toBe(1);
+      expect(result["200"].arrId).toBe(2);
     });
 
     it("keeps the oldest instance's record for a movie on several instances", async () => {
@@ -343,26 +344,38 @@ describe("fetchArrMetadata", () => {
       mockPrisma.sonarrInstance.findMany.mockResolvedValue([
         { id: "s1", url: "http://sonarr", apiKey: "key" },
       ]);
+      // Breaking Bad: 62 regular episodes over 5 seasons plus 9 specials,
+      // only seasons 1 and 5 (and the specials) monitored and on disk.
+      const season = (seasonNumber: number, monitored: boolean, total: number, onDisk: number) => ({
+        seasonNumber,
+        monitored,
+        statistics: { episodeCount: onDisk, episodeFileCount: onDisk, totalEpisodeCount: total },
+      });
       mockSonarrClient.getSeries.mockResolvedValue([
         {
           id: 1,
-          tvdbId: 12345,
+          tvdbId: 81189,
           tags: [1],
           qualityProfileId: 5,
           monitored: true,
           ratings: { votes: 1000, value: 9.0 },
           added: "2023-01-01",
           path: "/tv/breaking-bad",
-          statistics: { sizeOnDisk: 80000000000, seasonCount: 5, episodeCount: 62 },
-          originalLanguage: { name: "English" },
+          // Sonarr's own episodeCount (23) counts only monitored-and-aired or
+          // on-disk episodes; its totalEpisodeCount (71) includes the specials.
+          statistics: { sizeOnDisk: 80000000000, seasonCount: 5, episodeCount: 23, episodeFileCount: 23, totalEpisodeCount: 71 },
+          originalLanguage: { id: 1, name: "English" },
           firstAired: "2008-01-20",
           status: "ended",
           ended: true,
           seriesType: "standard",
-          nextAiring: null,
           seasons: [
-            { seasonNumber: 1, monitored: true, statistics: { episodeCount: 10, totalEpisodeCount: 31 } },
-            { seasonNumber: 2, monitored: false, statistics: { episodeCount: 13, totalEpisodeCount: 31 } },
+            season(0, true, 9, 0),
+            season(1, true, 7, 7),
+            season(2, false, 13, 0),
+            season(3, false, 13, 0),
+            season(4, false, 13, 0),
+            season(5, true, 16, 16),
           ],
         },
       ]);
@@ -373,23 +386,31 @@ describe("fetchArrMetadata", () => {
 
       const result = await fetchArrMetadata("u1", "SERIES");
 
-      expect(result["12345"]).toBeDefined();
-      expect(result["12345"].arrId).toBe(1);
-      expect(result["12345"].qualityProfile).toBe("HD-1080p");
+      expect(Object.keys(result)).toEqual(["81189"]);
+      const meta = result["81189"];
+      expect(meta.arrId).toBe(1);
+      expect(meta.tags).toEqual(["auto"]);
+      expect(meta.qualityProfile).toBe("HD-1080p");
       // Sonarr's flat series rating maps to `rating`; it has no per-source
       // TMDB or Rotten Tomatoes rating, so those stay null.
-      expect(result["12345"].rating).toBe(9.0);
-      expect(result["12345"].tmdbRating).toBeNull();
-      expect(result["12345"].rtCriticRating).toBeNull();
-      expect(result["12345"].firstAired).toBe("2008-01-20");
-      expect(result["12345"].seasonCount).toBe(5);
-      expect(result["12345"].episodeCount).toBe(62);
-      expect(result["12345"].status).toBe("ended");
-      expect(result["12345"].ended).toBe(true);
-      expect(result["12345"].hasUnaired).toBe(false);
-      expect(result["12345"].monitoredSeasonCount).toBe(1);
-      // Every episode of the monitored season, aired or not.
-      expect(result["12345"].monitoredEpisodeCount).toBe(31);
+      expect(meta.rating).toBe(9.0);
+      expect(meta.tmdbRating).toBeNull();
+      expect(meta.rtCriticRating).toBeNull();
+      expect(meta.sizeOnDisk).toBe(80000000000);
+      expect(meta.originalLanguage).toBe("English");
+      expect(meta.firstAired).toBe("2008-01-20");
+      expect(meta.seasonCount).toBe(5);
+      // Every regular episode Sonarr knows of — not its monitored-or-on-disk
+      // count, and without the specials.
+      expect(meta.episodeCount).toBe(62);
+      expect(meta.status).toBe("ended");
+      expect(meta.ended).toBe(true);
+      expect(meta.seriesType).toBe("standard");
+      expect(meta.hasUnaired).toBe(false);
+      // Seasons 1 and 5; a monitored specials season is not one of them.
+      expect(meta.monitoredSeasonCount).toBe(2);
+      // Every episode of the monitored seasons, aired or not.
+      expect(meta.monitoredEpisodeCount).toBe(23);
     });
 
     it("sets hasUnaired to true when nextAiring exists", async () => {
@@ -413,6 +434,35 @@ describe("fetchArrMetadata", () => {
 
       expect(result["555"].hasUnaired).toBe(true);
     });
+
+    it("sets hasUnaired from the calendar when only an unmonitored episode is upcoming", async () => {
+      // nextAiring covers monitored episodes only.
+      mockPrisma.sonarrInstance.findMany.mockResolvedValue([
+        { id: "s1", url: "http://sonarr", apiKey: "key" },
+      ]);
+      mockSonarrClient.getSeries.mockResolvedValue([
+        {
+          id: 7, tvdbId: 777, tags: [], qualityProfileId: 1,
+          monitored: false, ratings: {}, path: "/tv/show",
+          status: "continuing", ended: false, seriesType: "standard",
+          seasons: [],
+        },
+        {
+          id: 8, tvdbId: 888, tags: [], qualityProfileId: 1,
+          monitored: false, ratings: {}, path: "/tv/other",
+          status: "continuing", ended: false, seriesType: "standard",
+          seasons: [],
+        },
+      ]);
+      mockSonarrClient.getSeriesIdsWithUpcomingEpisodes.mockResolvedValueOnce(new Set([7]));
+      mockSonarrClient.getQualityProfiles.mockResolvedValue([]);
+      mockSonarrClient.getTags.mockResolvedValue([]);
+
+      const result = await fetchArrMetadata("u1", "SERIES");
+
+      expect(result["777"].hasUnaired).toBe(true);
+      expect(result["888"].hasUnaired).toBe(false);
+    });
   });
 
   describe("MUSIC type", () => {
@@ -429,7 +479,7 @@ describe("fetchArrMetadata", () => {
       mockLidarrClient.getArtists.mockResolvedValue([
         {
           id: 1,
-          foreignArtistId: "mb-abc-123",
+          foreignArtistId: "a74b1b7f-71a5-4011-9441-d0b5e4122711",
           tags: [1],
           qualityProfileId: 3,
           monitored: true,
@@ -447,21 +497,21 @@ describe("fetchArrMetadata", () => {
 
       const result = await fetchArrMetadata("u1", "MUSIC");
 
-      expect(result["mb-abc-123"]).toBeDefined();
-      expect(result["mb-abc-123"].arrId).toBe(1);
-      expect(result["mb-abc-123"].tags).toEqual(["favorite"]);
-      expect(result["mb-abc-123"].qualityProfile).toBe("Lossless");
-      expect(result["mb-abc-123"].monitored).toBe(true);
-      expect(result["mb-abc-123"].rating).toBe(7.5);
-      expect(result["mb-abc-123"].path).toBe("/music/radiohead");
+      expect(result["a74b1b7f-71a5-4011-9441-d0b5e4122711"]).toBeDefined();
+      expect(result["a74b1b7f-71a5-4011-9441-d0b5e4122711"].arrId).toBe(1);
+      expect(result["a74b1b7f-71a5-4011-9441-d0b5e4122711"].tags).toEqual(["favorite"]);
+      expect(result["a74b1b7f-71a5-4011-9441-d0b5e4122711"].qualityProfile).toBe("Lossless");
+      expect(result["a74b1b7f-71a5-4011-9441-d0b5e4122711"].monitored).toBe(true);
+      expect(result["a74b1b7f-71a5-4011-9441-d0b5e4122711"].rating).toBe(7.5);
+      expect(result["a74b1b7f-71a5-4011-9441-d0b5e4122711"].path).toBe("/music/radiohead");
       // Artist status is now populated (was previously hardcoded null).
-      expect(result["mb-abc-123"].status).toBe("continuing");
+      expect(result["a74b1b7f-71a5-4011-9441-d0b5e4122711"].status).toBe("continuing");
       // Music-specific nulls
-      expect(result["mb-abc-123"].tmdbRating).toBeNull();
-      expect(result["mb-abc-123"].rtCriticRating).toBeNull();
-      expect(result["mb-abc-123"].originalLanguage).toBeNull();
-      expect(result["mb-abc-123"].releaseDate).toBeNull();
-      expect(result["mb-abc-123"].firstAired).toBeNull();
+      expect(result["a74b1b7f-71a5-4011-9441-d0b5e4122711"].tmdbRating).toBeNull();
+      expect(result["a74b1b7f-71a5-4011-9441-d0b5e4122711"].rtCriticRating).toBeNull();
+      expect(result["a74b1b7f-71a5-4011-9441-d0b5e4122711"].originalLanguage).toBeNull();
+      expect(result["a74b1b7f-71a5-4011-9441-d0b5e4122711"].releaseDate).toBeNull();
+      expect(result["a74b1b7f-71a5-4011-9441-d0b5e4122711"].firstAired).toBeNull();
     });
   });
 });

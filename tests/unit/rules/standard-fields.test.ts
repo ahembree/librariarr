@@ -37,7 +37,7 @@ describe("Text fields (title as representative)", () => {
   it("equals matches case-insensitively", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "title", operator: "equals", value: "the matrix" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
     expect(result.get("2")).toHaveLength(0);
   });
 
@@ -52,28 +52,28 @@ describe("Text fields (title as representative)", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "title", operator: "notEquals", value: "The Matrix" })])];
     const result = matched(items, rules);
     expect(result.get("1")).toHaveLength(0);
-    expect(result.get("2")!.length).toBeGreaterThan(0);
+    expect(result.get("2")).toHaveLength(1);
   });
 
   it("contains matches substring", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "title", operator: "contains", value: "matrix" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
     expect(result.get("2")).toHaveLength(0);
   });
 
   it("contains with pipe-separated values matches any", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "title", operator: "contains", value: "matrix|inception" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
-    expect(result.get("2")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
+    expect(result.get("2")).toHaveLength(1);
   });
 
   it("notContains excludes matching substring", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "title", operator: "notContains", value: "matrix" })])];
     const result = matched(items, rules);
     expect(result.get("1")).toHaveLength(0);
-    expect(result.get("2")!.length).toBeGreaterThan(0);
+    expect(result.get("2")).toHaveLength(1);
   });
 
   it("notContains with pipe-separated values excludes any match", () => {
@@ -86,14 +86,14 @@ describe("Text fields (title as representative)", () => {
   it("matchesWildcard with * pattern", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "title", operator: "matchesWildcard", value: "The *" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
     expect(result.get("2")).toHaveLength(0);
   });
 
   it("matchesWildcard with ? pattern", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "title", operator: "matchesWildcard", value: "?nception" })])];
     const result = matched(items, rules);
-    expect(result.get("2")!.length).toBeGreaterThan(0);
+    expect(result.get("2")).toHaveLength(1);
     expect(result.get("1")).toHaveLength(0);
   });
 
@@ -101,7 +101,7 @@ describe("Text fields (title as representative)", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "title", operator: "notMatchesWildcard", value: "The *" })])];
     const result = matched(items, rules);
     expect(result.get("1")).toHaveLength(0);
-    expect(result.get("2")!.length).toBeGreaterThan(0);
+    expect(result.get("2")).toHaveLength(1);
   });
 
   it("empty-string value matches equals empty; NULL does not", () => {
@@ -110,7 +110,7 @@ describe("Text fields (title as representative)", () => {
     // Phase 1's `{title: {equals: ""}}` which excludes NULL.
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "title", operator: "equals", value: "" })])];
     const result = matched(items, rules);
-    expect(result.get("4")!.length).toBeGreaterThan(0); // "" matches
+    expect(result.get("4")).toHaveLength(1); // "" matches
     expect(result.get("3") ?? []).toHaveLength(0); // null does not
   });
 
@@ -119,9 +119,9 @@ describe("Text fields (title as representative)", () => {
     // a NULL value matches; the actual empty string does not.
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "title", operator: "notEquals", value: "" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0); // "The Matrix"
+    expect(result.get("1")).toHaveLength(1); // "The Matrix"
     expect(result.get("4")).toHaveLength(0); // "" excluded
-    expect(result.get("3")!.length).toBeGreaterThan(0); // null matches
+    expect(result.get("3")).toHaveLength(1); // null matches
   });
 });
 
@@ -130,98 +130,98 @@ describe("Text fields spot-check (other text fields)", () => {
     const items = [{ id: "1", parentTitle: "Breaking Bad" }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "parentTitle", operator: "equals", value: "breaking bad" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   it("albumTitle contains", () => {
     const items = [{ id: "1", albumTitle: "Dark Side of the Moon" }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "albumTitle", operator: "contains", value: "dark side" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   it("contentRating equals", () => {
     const items = [{ id: "1", contentRating: "PG-13" }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "contentRating", operator: "equals", value: "pg-13" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   it("studio notContains", () => {
     const items = [{ id: "1", studio: "Warner Bros" }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "studio", operator: "notContains", value: "disney" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   it("resolution equals", () => {
     const items = [{ id: "1", resolution: "4K" }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "resolution", operator: "equals", value: "4K" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   it("videoCodec matchesWildcard", () => {
     const items = [{ id: "1", videoCodec: "hevc" }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "videoCodec", operator: "matchesWildcard", value: "h*" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   it("audioCodec notEquals", () => {
     const items = [{ id: "1", audioCodec: "aac" }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "audioCodec", operator: "notEquals", value: "dts" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   it("dynamicRange equals", () => {
     const items = [{ id: "1", dynamicRange: "Dolby Vision" }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "dynamicRange", operator: "equals", value: "dolby vision" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   it("audioProfile contains (multi-select) matches an exact profile", () => {
     const items = [{ id: "1", audioProfile: "Dolby Atmos" }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "audioProfile", operator: "contains", value: "Dolby Atmos" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   it("videoProfile notMatchesWildcard", () => {
     const items = [{ id: "1", videoProfile: "main 10" }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "videoProfile", operator: "notMatchesWildcard", value: "high*" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   it("videoFrameRate equals", () => {
     const items = [{ id: "1", videoFrameRate: "24p" }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "videoFrameRate", operator: "equals", value: "24p" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   it("aspectRatio contains (multi-select) matches an exact aspect ratio", () => {
     const items = [{ id: "1", aspectRatio: "2.39:1" }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "aspectRatio", operator: "contains", value: "2.39:1" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   it("scanType equals", () => {
     const items = [{ id: "1", scanType: "progressive" }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "scanType", operator: "equals", value: "progressive" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   it("container equals", () => {
     const items = [{ id: "1", container: "mkv" }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "container", operator: "equals", value: "mkv" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   // --- parentTitle: additional operators ---
@@ -230,14 +230,14 @@ describe("Text fields spot-check (other text fields)", () => {
     const items = [{ id: "1", parentTitle: "Breaking Bad" }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "parentTitle", operator: "notEquals", value: "Better Call Saul" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   it("parentTitle matchesWildcard", () => {
     const items = [{ id: "1", parentTitle: "Breaking Bad" }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "parentTitle", operator: "matchesWildcard", value: "Break*" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   // --- albumTitle: additional operators ---
@@ -246,14 +246,14 @@ describe("Text fields spot-check (other text fields)", () => {
     const items = [{ id: "1", albumTitle: "Dark Side of the Moon" }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "albumTitle", operator: "notEquals", value: "The Wall" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   it("albumTitle matchesWildcard", () => {
     const items = [{ id: "1", albumTitle: "Dark Side of the Moon" }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "albumTitle", operator: "matchesWildcard", value: "Dark *" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   // --- contentRating: additional operators ---
@@ -262,14 +262,14 @@ describe("Text fields spot-check (other text fields)", () => {
     const items = [{ id: "1", contentRating: "PG-13" }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "contentRating", operator: "notEquals", value: "R" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   it("contentRating matchesWildcard", () => {
     const items = [{ id: "1", contentRating: "PG-13" }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "contentRating", operator: "matchesWildcard", value: "PG*" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   // --- studio: additional operators ---
@@ -278,14 +278,14 @@ describe("Text fields spot-check (other text fields)", () => {
     const items = [{ id: "1", studio: "Warner Bros" }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "studio", operator: "notEquals", value: "Disney" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   it("studio matchesWildcard", () => {
     const items = [{ id: "1", studio: "Warner Bros" }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "studio", operator: "matchesWildcard", value: "Warner*" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   // --- resolution: additional operators ---
@@ -294,14 +294,14 @@ describe("Text fields spot-check (other text fields)", () => {
     const items = [{ id: "1", resolution: "4K" }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "resolution", operator: "notEquals", value: "1080P" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   it("resolution matchesWildcard", () => {
     const items = [{ id: "1", resolution: "4K" }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "resolution", operator: "matchesWildcard", value: "4?" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   // --- videoCodec: additional operators ---
@@ -310,19 +310,19 @@ describe("Text fields spot-check (other text fields)", () => {
     const items = [{ id: "1", videoCodec: "hevc" }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "videoCodec", operator: "notEquals", value: "h264" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   it("videoCodec matchesWildcard", () => {
     const items = [{ id: "1", videoCodec: "hevc" }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "videoCodec", operator: "matchesWildcard", value: "he*" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   // --- audioCodec: additional operators ---
 
-  it("audioCodec notEquals already tested above, testing non-match", () => {
+  it("audioCodec notEquals does not match the item's own codec", () => {
     const items = [{ id: "1", audioCodec: "aac" }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "audioCodec", operator: "notEquals", value: "aac" })])];
     const result = matched(items, rules);
@@ -333,7 +333,7 @@ describe("Text fields spot-check (other text fields)", () => {
     const items = [{ id: "1", audioCodec: "aac" }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "audioCodec", operator: "matchesWildcard", value: "a?c" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   // --- dynamicRange: additional operators ---
@@ -342,14 +342,14 @@ describe("Text fields spot-check (other text fields)", () => {
     const items = [{ id: "1", dynamicRange: "Dolby Vision" }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "dynamicRange", operator: "notEquals", value: "HDR10" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   it("dynamicRange matchesWildcard", () => {
     const items = [{ id: "1", dynamicRange: "Dolby Vision" }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "dynamicRange", operator: "matchesWildcard", value: "Dolby*" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   // --- audioProfile: additional operators ---
@@ -358,14 +358,14 @@ describe("Text fields spot-check (other text fields)", () => {
     const items = [{ id: "1", audioProfile: "Dolby Atmos" }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "audioProfile", operator: "notEquals", value: "DTS-HD MA" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   it("audioProfile matchesWildcard", () => {
     const items = [{ id: "1", audioProfile: "Dolby Atmos" }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "audioProfile", operator: "matchesWildcard", value: "Dolby*" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   // --- videoProfile: additional operators ---
@@ -374,14 +374,14 @@ describe("Text fields spot-check (other text fields)", () => {
     const items = [{ id: "1", videoProfile: "main 10" }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "videoProfile", operator: "notEquals", value: "high" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   it("videoProfile matchesWildcard", () => {
     const items = [{ id: "1", videoProfile: "main 10" }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "videoProfile", operator: "matchesWildcard", value: "main*" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   // --- videoFrameRate: additional operators ---
@@ -390,14 +390,14 @@ describe("Text fields spot-check (other text fields)", () => {
     const items = [{ id: "1", videoFrameRate: "24p" }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "videoFrameRate", operator: "notEquals", value: "60p" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   it("videoFrameRate matchesWildcard", () => {
     const items = [{ id: "1", videoFrameRate: "24p" }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "videoFrameRate", operator: "matchesWildcard", value: "2?p" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   // --- aspectRatio: additional operators ---
@@ -406,14 +406,14 @@ describe("Text fields spot-check (other text fields)", () => {
     const items = [{ id: "1", aspectRatio: "2.39:1" }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "aspectRatio", operator: "notEquals", value: "16:9" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   it("aspectRatio matchesWildcard", () => {
     const items = [{ id: "1", aspectRatio: "2.39:1" }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "aspectRatio", operator: "matchesWildcard", value: "2.*" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   // --- scanType: additional operators ---
@@ -422,14 +422,14 @@ describe("Text fields spot-check (other text fields)", () => {
     const items = [{ id: "1", scanType: "progressive" }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "scanType", operator: "notEquals", value: "interlaced" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   it("scanType matchesWildcard", () => {
     const items = [{ id: "1", scanType: "progressive" }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "scanType", operator: "matchesWildcard", value: "pro*" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   // --- container: additional operators ---
@@ -438,14 +438,14 @@ describe("Text fields spot-check (other text fields)", () => {
     const items = [{ id: "1", container: "mkv" }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "container", operator: "notEquals", value: "mp4" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   it("container matchesWildcard", () => {
     const items = [{ id: "1", container: "mkv" }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "container", operator: "matchesWildcard", value: "m?v" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 });
 
@@ -463,7 +463,7 @@ describe("Numeric fields (playCount as representative)", () => {
   it("equals matches exact value", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "playCount", operator: "equals", value: 10 })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
     expect(result.get("2")).toHaveLength(0);
   });
 
@@ -471,20 +471,20 @@ describe("Numeric fields (playCount as representative)", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "playCount", operator: "notEquals", value: 10 })])];
     const result = matched(items, rules);
     expect(result.get("1")).toHaveLength(0);
-    expect(result.get("2")!.length).toBeGreaterThan(0);
+    expect(result.get("2")).toHaveLength(1);
   });
 
   it("greaterThan matches items above threshold", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "playCount", operator: "greaterThan", value: 5 })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
     expect(result.get("2")).toHaveLength(0);
   });
 
   it("greaterThanOrEqual matches items at or above threshold", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "playCount", operator: "greaterThanOrEqual", value: 10 })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
     expect(result.get("2")).toHaveLength(0);
   });
 
@@ -492,14 +492,14 @@ describe("Numeric fields (playCount as representative)", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "playCount", operator: "lessThan", value: 10 })])];
     const result = matched(items, rules);
     expect(result.get("1")).toHaveLength(0);
-    expect(result.get("2")!.length).toBeGreaterThan(0);
+    expect(result.get("2")).toHaveLength(1);
   });
 
   it("lessThanOrEqual matches items at or below threshold", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "playCount", operator: "lessThanOrEqual", value: 0 })])];
     const result = matched(items, rules);
     expect(result.get("1")).toHaveLength(0);
-    expect(result.get("2")!.length).toBeGreaterThan(0);
+    expect(result.get("2")).toHaveLength(1);
   });
 
   it("null playCount does not match equals 0 (Phase 1 parity)", () => {
@@ -507,7 +507,7 @@ describe("Numeric fields (playCount as representative)", () => {
     // item has 0 (matches). A synthetic NULL no longer coerces to 0.
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "playCount", operator: "equals", value: 0 })])];
     expect(matched(items, rules).get("3") ?? []).toHaveLength(0);
-    expect(matched([{ id: "z", playCount: 0 }], rules).get("z")!.length).toBeGreaterThan(0);
+    expect(matched([{ id: "z", playCount: 0 }], rules).get("z")).toHaveLength(1);
   });
 });
 
@@ -516,56 +516,56 @@ describe("Numeric fields spot-check (other numeric fields)", () => {
     const items = [{ id: "1", year: 2023 }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "year", operator: "greaterThan", value: 2020 })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   it("rating lessThanOrEqual", () => {
     const items = [{ id: "1", rating: 7.5 }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "rating", operator: "lessThanOrEqual", value: 8 })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   it("audienceRating equals", () => {
     const items = [{ id: "1", audienceRating: 85 }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "audienceRating", operator: "equals", value: 85 })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   it("videoBitDepth notEquals", () => {
     const items = [{ id: "1", videoBitDepth: 10 }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "videoBitDepth", operator: "notEquals", value: 8 })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   it("videoBitrate greaterThanOrEqual", () => {
     const items = [{ id: "1", videoBitrate: 20000 }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "videoBitrate", operator: "greaterThanOrEqual", value: 15000 })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   it("audioChannels lessThan", () => {
     const items = [{ id: "1", audioChannels: 2 }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "audioChannels", operator: "lessThan", value: 6 })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   it("audioSamplingRate equals", () => {
     const items = [{ id: "1", audioSamplingRate: 48000 }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "audioSamplingRate", operator: "equals", value: 48000 })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   it("audioBitrate greaterThan", () => {
     const items = [{ id: "1", audioBitrate: 640 }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "audioBitrate", operator: "greaterThan", value: 320 })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   // --- year: additional operators ---
@@ -581,7 +581,7 @@ describe("Numeric fields spot-check (other numeric fields)", () => {
     const items = [{ id: "1", year: 2023 }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "year", operator: "lessThan", value: 2025 })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   // --- rating: additional operators ---
@@ -590,14 +590,14 @@ describe("Numeric fields spot-check (other numeric fields)", () => {
     const items = [{ id: "1", rating: 7.5 }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "rating", operator: "greaterThan", value: 5 })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   it("rating lessThan", () => {
     const items = [{ id: "1", rating: 7.5 }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "rating", operator: "lessThan", value: 9 })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   // --- audienceRating: additional operators ---
@@ -606,14 +606,14 @@ describe("Numeric fields spot-check (other numeric fields)", () => {
     const items = [{ id: "1", audienceRating: 85 }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "audienceRating", operator: "greaterThan", value: 70 })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   it("audienceRating lessThan", () => {
     const items = [{ id: "1", audienceRating: 85 }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "audienceRating", operator: "lessThan", value: 90 })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   // --- videoBitDepth: additional operators ---
@@ -622,14 +622,14 @@ describe("Numeric fields spot-check (other numeric fields)", () => {
     const items = [{ id: "1", videoBitDepth: 10 }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "videoBitDepth", operator: "greaterThan", value: 8 })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   it("videoBitDepth lessThan", () => {
     const items = [{ id: "1", videoBitDepth: 10 }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "videoBitDepth", operator: "lessThan", value: 12 })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   // --- videoBitrate: additional operators ---
@@ -638,14 +638,14 @@ describe("Numeric fields spot-check (other numeric fields)", () => {
     const items = [{ id: "1", videoBitrate: 20000 }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "videoBitrate", operator: "greaterThan", value: 15000 })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   it("videoBitrate lessThan", () => {
     const items = [{ id: "1", videoBitrate: 20000 }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "videoBitrate", operator: "lessThan", value: 25000 })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   // --- audioChannels: additional operators ---
@@ -654,7 +654,7 @@ describe("Numeric fields spot-check (other numeric fields)", () => {
     const items = [{ id: "1", audioChannels: 2 }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "audioChannels", operator: "greaterThan", value: 1 })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   it("audioChannels lessThan non-match", () => {
@@ -670,14 +670,14 @@ describe("Numeric fields spot-check (other numeric fields)", () => {
     const items = [{ id: "1", audioSamplingRate: 48000 }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "audioSamplingRate", operator: "greaterThan", value: 44100 })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   it("audioSamplingRate lessThan", () => {
     const items = [{ id: "1", audioSamplingRate: 48000 }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "audioSamplingRate", operator: "lessThan", value: 96000 })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   // --- audioBitrate: additional operators ---
@@ -693,7 +693,7 @@ describe("Numeric fields spot-check (other numeric fields)", () => {
     const items = [{ id: "1", audioBitrate: 640 }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "audioBitrate", operator: "lessThan", value: 1000 })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 });
 
@@ -713,20 +713,20 @@ describe("Date fields (lastPlayedAt as representative)", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "lastPlayedAt", operator: "before", value: "2024-03-01" })])];
     const result = matched(items, rules);
     expect(result.get("1")).toHaveLength(0);
-    expect(result.get("2")!.length).toBeGreaterThan(0);
+    expect(result.get("2")).toHaveLength(1);
   });
 
   it("after matches items with later date", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "lastPlayedAt", operator: "after", value: "2024-03-01" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
     expect(result.get("2")).toHaveLength(0);
   });
 
   it("equals matches at day level", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "lastPlayedAt", operator: "equals", value: "2024-06-15" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
     expect(result.get("2")).toHaveLength(0);
   });
 
@@ -734,7 +734,7 @@ describe("Date fields (lastPlayedAt as representative)", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "lastPlayedAt", operator: "notEquals", value: "2024-06-15" })])];
     const result = matched(items, rules);
     expect(result.get("1")).toHaveLength(0);
-    expect(result.get("2")!.length).toBeGreaterThan(0);
+    expect(result.get("2")).toHaveLength(1);
   });
 
   it("inLastDays matches recent dates", () => {
@@ -746,7 +746,7 @@ describe("Date fields (lastPlayedAt as representative)", () => {
     ];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "lastPlayedAt", operator: "inLastDays", value: 10 })])];
     const result = matched(items2, rules);
-    expect(result.get("recent")!.length).toBeGreaterThan(0);
+    expect(result.get("recent")).toHaveLength(1);
     expect(result.get("old")).toHaveLength(0);
   });
 
@@ -760,7 +760,7 @@ describe("Date fields (lastPlayedAt as representative)", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "lastPlayedAt", operator: "notInLastDays", value: 10 })])];
     const result = matched(items2, rules);
     expect(result.get("recent")).toHaveLength(0);
-    expect(result.get("old")!.length).toBeGreaterThan(0);
+    expect(result.get("old")).toHaveLength(1);
   });
 
   // Positive-shaped operators never match a NULL/invalid date (parity with
@@ -775,7 +775,7 @@ describe("Date fields (lastPlayedAt as representative)", () => {
       expect(matched(items, rules).get("3") ?? [], `null date should not match ${op}`).toHaveLength(0);
     }
     const neRules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "lastPlayedAt", operator: "notEquals", value: "2024-06-15" })])];
-    expect(matched(items, neRules).get("3")!.length).toBeGreaterThan(0);
+    expect(matched(items, neRules).get("3")).toHaveLength(1);
   });
 
   it("invalid date returns false for positive operators, true for notEquals", () => {
@@ -786,7 +786,7 @@ describe("Date fields (lastPlayedAt as representative)", () => {
       expect(matched(items, rules).get("4") ?? [], `invalid date should not match ${op}`).toHaveLength(0);
     }
     const neRules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "lastPlayedAt", operator: "notEquals", value: "2024-06-15" })])];
-    expect(matched(items, neRules).get("4")!.length).toBeGreaterThan(0);
+    expect(matched(items, neRules).get("4")).toHaveLength(1);
   });
 });
 
@@ -795,14 +795,14 @@ describe("Date fields spot-check (other date fields)", () => {
     const items = [{ id: "1", addedAt: "2023-06-01T00:00:00Z" }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "addedAt", operator: "before", value: "2024-01-01" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   it("originallyAvailableAt after", () => {
     const items = [{ id: "1", originallyAvailableAt: "2024-07-01T00:00:00Z" }];
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "originallyAvailableAt", operator: "after", value: "2024-01-01" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 });
 
@@ -820,7 +820,7 @@ describe("Genre field (JSON array)", () => {
   it("equals matches item with that genre", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "genre", operator: "equals", value: "Action" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
     expect(result.get("2")).toHaveLength(0);
   });
 
@@ -828,27 +828,27 @@ describe("Genre field (JSON array)", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "genre", operator: "notEquals", value: "Action" })])];
     const result = matched(items, rules);
     expect(result.get("1")).toHaveLength(0);
-    expect(result.get("2")!.length).toBeGreaterThan(0);
+    expect(result.get("2")).toHaveLength(1);
   });
 
   it("contains matches item with that genre", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "genre", operator: "contains", value: "Comedy" })])];
     const result = matched(items, rules);
     expect(result.get("1")).toHaveLength(0);
-    expect(result.get("2")!.length).toBeGreaterThan(0);
+    expect(result.get("2")).toHaveLength(1);
   });
 
   it("notContains excludes item with that genre", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "genre", operator: "notContains", value: "Comedy" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
     expect(result.get("2")).toHaveLength(0);
   });
 
   it("matchesWildcard with * pattern", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "genre", operator: "matchesWildcard", value: "Sci*" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
     expect(result.get("2")).toHaveLength(0);
   });
 
@@ -856,7 +856,7 @@ describe("Genre field (JSON array)", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "genre", operator: "notMatchesWildcard", value: "Act*" })])];
     const result = matched(items, rules);
     expect(result.get("1")).toHaveLength(0);
-    expect(result.get("2")!.length).toBeGreaterThan(0);
+    expect(result.get("2")).toHaveLength(1);
   });
 
   it("empty genres array does not match equals", () => {
@@ -868,26 +868,26 @@ describe("Genre field (JSON array)", () => {
   it("empty genres array matches notContains", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "genre", operator: "notContains", value: "Action" })])];
     const result = matched(items, rules);
-    expect(result.get("3")!.length).toBeGreaterThan(0);
+    expect(result.get("3")).toHaveLength(1);
   });
 
   it("case-insensitive matching for genre equals", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "genre", operator: "equals", value: "action" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   it("case-insensitive matching for genre contains", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "genre", operator: "contains", value: "SCI-FI" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   it("contains supports pipe-separated multi-select (matches if any value is in genres)", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "genre", operator: "contains", value: "Comedy|Sci-Fi" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0); // has Sci-Fi
-    expect(result.get("2")!.length).toBeGreaterThan(0); // has Comedy
+    expect(result.get("1")).toHaveLength(1); // has Sci-Fi
+    expect(result.get("2")).toHaveLength(1); // has Comedy
     expect(result.get("3")).toHaveLength(0); // empty
   });
 
@@ -895,8 +895,8 @@ describe("Genre field (JSON array)", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "genre", operator: "notContains", value: "Action|Sci-Fi" })])];
     const result = matched(items, rules);
     expect(result.get("1")).toHaveLength(0); // has both
-    expect(result.get("2")!.length).toBeGreaterThan(0); // has neither
-    expect(result.get("3")!.length).toBeGreaterThan(0); // empty
+    expect(result.get("2")).toHaveLength(1); // has neither
+    expect(result.get("3")).toHaveLength(1); // empty
   });
 });
 
@@ -910,15 +910,15 @@ describe("Country field (JSON array, movies)", () => {
   it("equals matches item with that country", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "country", operator: "equals", value: "France" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
     expect(result.get("2")).toHaveLength(0);
   });
 
   it("contains supports pipe-separated multi-select", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "country", operator: "contains", value: "Japan|Germany" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0); // has Germany
-    expect(result.get("2")!.length).toBeGreaterThan(0); // has Japan
+    expect(result.get("1")).toHaveLength(1); // has Germany
+    expect(result.get("2")).toHaveLength(1); // has Japan
     expect(result.get("3")).toHaveLength(0); // empty
   });
 
@@ -926,26 +926,26 @@ describe("Country field (JSON array, movies)", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "country", operator: "notContains", value: "France" })])];
     const result = matched(items, rules);
     expect(result.get("1")).toHaveLength(0);
-    expect(result.get("2")!.length).toBeGreaterThan(0);
-    expect(result.get("3")!.length).toBeGreaterThan(0);
+    expect(result.get("2")).toHaveLength(1);
+    expect(result.get("3")).toHaveLength(1);
   });
 
   it("matchesWildcard against the country array", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "country", operator: "matchesWildcard", value: "Ger*" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
     expect(result.get("2")).toHaveLength(0);
   });
 
   it("case-insensitive matching for country equals (matches genre/labels)", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "country", operator: "equals", value: "france" })])];
-    expect(matched(items, rules).get("1")!.length).toBeGreaterThan(0);
+    expect(matched(items, rules).get("1")).toHaveLength(1);
   });
 
   it("wildcard on country is case-insensitive", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "country", operator: "matchesWildcard", value: "GER*" })])];
     // uppercase pattern matches title-cased "Germany"
-    expect(matched(items, rules).get("1")!.length).toBeGreaterThan(0);
+    expect(matched(items, rules).get("1")).toHaveLength(1);
   });
 });
 
@@ -963,7 +963,7 @@ describe("hasExternalId field", () => {
   it("equals TMDB matches item with TMDB ID", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "hasExternalId", operator: "equals", value: "TMDB" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
     expect(result.get("2")).toHaveLength(0);
   });
 
@@ -977,7 +977,7 @@ describe("hasExternalId field", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "hasExternalId", operator: "notEquals", value: "TMDB" })])];
     const result = matched(items, rules);
     expect(result.get("1")).toHaveLength(0);
-    expect(result.get("2")!.length).toBeGreaterThan(0);
+    expect(result.get("2")).toHaveLength(1);
   });
 
   it("empty externalIds does not match equals", () => {
@@ -989,7 +989,7 @@ describe("hasExternalId field", () => {
   it("empty externalIds matches notEquals", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "hasExternalId", operator: "notEquals", value: "IMDB" })])];
     const result = matched(items, rules);
-    expect(result.get("3")!.length).toBeGreaterThan(0);
+    expect(result.get("3")).toHaveLength(1);
   });
 
   // isNull / isNotNull are VALUELESS operators — the builder clears the value
@@ -1003,8 +1003,8 @@ describe("hasExternalId field", () => {
   it("isNotNull matches items that have any external id", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "hasExternalId", operator: "isNotNull", value: "" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0); // TMDB + IMDB
-    expect(result.get("2")!.length).toBeGreaterThan(0); // TVDB
+    expect(result.get("1")).toHaveLength(1); // TMDB + IMDB
+    expect(result.get("2")).toHaveLength(1); // TVDB
     expect(result.get("3")).toHaveLength(0); // none
   });
 
@@ -1013,7 +1013,7 @@ describe("hasExternalId field", () => {
     const result = matched(items, rules);
     expect(result.get("1")).toHaveLength(0);
     expect(result.get("2")).toHaveLength(0);
-    expect(result.get("3")!.length).toBeGreaterThan(0);
+    expect(result.get("3")).toHaveLength(1);
   });
 
   it("isNull ignores any leftover source value (list-emptiness, not per-source)", () => {
@@ -1023,14 +1023,14 @@ describe("hasExternalId field", () => {
     const result = matched(items, rules);
     expect(result.get("1")).toHaveLength(0); // has ids
     expect(result.get("2")).toHaveLength(0); // has ids (no TMDB, but not empty)
-    expect(result.get("3")!.length).toBeGreaterThan(0); // genuinely empty
+    expect(result.get("3")).toHaveLength(1); // genuinely empty
   });
 
   it("negate inverts both, and they stay each other's complement", () => {
     const negIsNull: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "hasExternalId", operator: "isNull", value: "", negate: true })])];
     const result = matched(items, negIsNull);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
-    expect(result.get("2")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
+    expect(result.get("2")).toHaveLength(1);
     expect(result.get("3")).toHaveLength(0);
   });
 });
@@ -1049,7 +1049,7 @@ describe("isWatchlisted field (boolean)", () => {
   it("equals true matches watchlisted item", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "isWatchlisted", operator: "equals", value: "true" })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
     expect(result.get("2")).toHaveLength(0);
   });
 
@@ -1057,20 +1057,20 @@ describe("isWatchlisted field (boolean)", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "isWatchlisted", operator: "equals", value: "false" })])];
     const result = matched(items, rules);
     expect(result.get("1")).toHaveLength(0);
-    expect(result.get("2")!.length).toBeGreaterThan(0);
+    expect(result.get("2")).toHaveLength(1);
   });
 
   it("notEquals true matches non-watchlisted items", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "isWatchlisted", operator: "notEquals", value: "true" })])];
     const result = matched(items, rules);
     expect(result.get("1")).toHaveLength(0);
-    expect(result.get("2")!.length).toBeGreaterThan(0);
+    expect(result.get("2")).toHaveLength(1);
   });
 
   it("undefined defaults to false", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "isWatchlisted", operator: "equals", value: "false" })])];
     const result = matched(items, rules);
-    expect(result.get("3")!.length).toBeGreaterThan(0);
+    expect(result.get("3")).toHaveLength(1);
   });
 
   it("undefined does not match equals true", () => {
@@ -1090,13 +1090,13 @@ describe("fileSize field (MB to bytes conversion)", () => {
   const items = [
     { id: "1", fileSize: String(1000 * MB) },  // 1000 MB
     { id: "2", fileSize: String(500 * MB) },    // 500 MB
-    { id: "3", fileSize: null },                 // null, should default to 0
+    { id: "3", fileSize: null },                 // null: unknown size, never 0
   ];
 
   it("greaterThan matches larger file", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "fileSize", operator: "greaterThan", value: 800 })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
     expect(result.get("2")).toHaveLength(0);
   });
 
@@ -1104,13 +1104,14 @@ describe("fileSize field (MB to bytes conversion)", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "fileSize", operator: "lessThan", value: 800 })])];
     const result = matched(items, rules);
     expect(result.get("1")).toHaveLength(0);
-    expect(result.get("2")!.length).toBeGreaterThan(0);
+    expect(result.get("2")).toHaveLength(1);
+    expect(result.get("3")).toHaveLength(0); // an unknown size is not a small one
   });
 
   it("equals matches exact size", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "fileSize", operator: "equals", value: 1000 })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
     expect(result.get("2")).toHaveLength(0);
   });
 
@@ -1118,13 +1119,13 @@ describe("fileSize field (MB to bytes conversion)", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "fileSize", operator: "notEquals", value: 1000 })])];
     const result = matched(items, rules);
     expect(result.get("1")).toHaveLength(0);
-    expect(result.get("2")!.length).toBeGreaterThan(0);
+    expect(result.get("2")).toHaveLength(1);
   });
 
   it("greaterThanOrEqual matches at boundary", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "fileSize", operator: "greaterThanOrEqual", value: 1000 })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
     expect(result.get("2")).toHaveLength(0);
   });
 
@@ -1132,7 +1133,7 @@ describe("fileSize field (MB to bytes conversion)", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "fileSize", operator: "lessThanOrEqual", value: 500 })])];
     const result = matched(items, rules);
     expect(result.get("1")).toHaveLength(0);
-    expect(result.get("2")!.length).toBeGreaterThan(0);
+    expect(result.get("2")).toHaveLength(1);
   });
 
   it("null fileSize does not match equals 0 (Phase 1 parity)", () => {
@@ -1153,13 +1154,13 @@ describe("duration field (minutes to milliseconds conversion)", () => {
   const items = [
     { id: "1", duration: 90 * MS_PER_MIN },   // 90 min
     { id: "2", duration: 30 * MS_PER_MIN },   // 30 min
-    { id: "3", duration: null },               // null, defaults to 0
+    { id: "3", duration: null },               // null: unknown, never 0
   ];
 
   it("greaterThan matches longer duration", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "duration", operator: "greaterThan", value: 60 })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
     expect(result.get("2")).toHaveLength(0);
   });
 
@@ -1167,13 +1168,14 @@ describe("duration field (minutes to milliseconds conversion)", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "duration", operator: "lessThan", value: 60 })])];
     const result = matched(items, rules);
     expect(result.get("1")).toHaveLength(0);
-    expect(result.get("2")!.length).toBeGreaterThan(0);
+    expect(result.get("2")).toHaveLength(1);
+    expect(result.get("3")).toHaveLength(0); // an unknown duration is not a short one
   });
 
   it("equals matches exact duration", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "duration", operator: "equals", value: 90 })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
     expect(result.get("2")).toHaveLength(0);
   });
 
@@ -1181,13 +1183,13 @@ describe("duration field (minutes to milliseconds conversion)", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "duration", operator: "notEquals", value: 90 })])];
     const result = matched(items, rules);
     expect(result.get("1")).toHaveLength(0);
-    expect(result.get("2")!.length).toBeGreaterThan(0);
+    expect(result.get("2")).toHaveLength(1);
   });
 
   it("greaterThanOrEqual matches at boundary", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "duration", operator: "greaterThanOrEqual", value: 90 })])];
     const result = matched(items, rules);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
     expect(result.get("2")).toHaveLength(0);
   });
 
@@ -1195,7 +1197,7 @@ describe("duration field (minutes to milliseconds conversion)", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "duration", operator: "lessThanOrEqual", value: 30 })])];
     const result = matched(items, rules);
     expect(result.get("1")).toHaveLength(0);
-    expect(result.get("2")!.length).toBeGreaterThan(0);
+    expect(result.get("2")).toHaveLength(1);
   });
 });
 
@@ -1209,7 +1211,7 @@ describe("Negate flag", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "title", operator: "equals", value: "The Matrix", negate: true })])];
     const result = matched(items, rules);
     expect(result.get("1")).toHaveLength(0);
-    expect(result.get("2")!.length).toBeGreaterThan(0);
+    expect(result.get("2")).toHaveLength(1);
   });
 
   it("negate on numeric greaterThan inverts the result", () => {
@@ -1217,7 +1219,7 @@ describe("Negate flag", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "playCount", operator: "greaterThan", value: 5, negate: true })])];
     const result = matched(items, rules);
     expect(result.get("1")).toHaveLength(0);
-    expect(result.get("2")!.length).toBeGreaterThan(0);
+    expect(result.get("2")).toHaveLength(1);
   });
 
   it("negate on date before inverts the result", () => {
@@ -1228,7 +1230,7 @@ describe("Negate flag", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "lastPlayedAt", operator: "before", value: "2024-06-01", negate: true })])];
     const result = matched(items, rules);
     expect(result.get("1")).toHaveLength(0);
-    expect(result.get("2")!.length).toBeGreaterThan(0);
+    expect(result.get("2")).toHaveLength(1);
   });
 
   it("negate on genre contains inverts the result", () => {
@@ -1239,7 +1241,7 @@ describe("Negate flag", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "genre", operator: "contains", value: "Action", negate: true })])];
     const result = matched(items, rules);
     expect(result.get("1")).toHaveLength(0);
-    expect(result.get("2")!.length).toBeGreaterThan(0);
+    expect(result.get("2")).toHaveLength(1);
   });
 
   it("negate on boolean equals inverts the result", () => {
@@ -1247,6 +1249,6 @@ describe("Negate flag", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([makeRule({ field: "isWatchlisted", operator: "equals", value: "true", negate: true })])];
     const result = matched(items, rules);
     expect(result.get("1")).toHaveLength(0);
-    expect(result.get("2")!.length).toBeGreaterThan(0);
+    expect(result.get("2")).toHaveLength(1);
   });
 });

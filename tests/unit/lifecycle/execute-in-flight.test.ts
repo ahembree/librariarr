@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
   tryBeginExecute,
   endExecute,
@@ -65,8 +65,12 @@ describe("lifecycle execute single-flight registry", () => {
     // dev HMR re-evaluates it too. Two copies with separate sets would let two
     // requests through, so the set is pinned on globalThis.
     expect(tryBeginExecute("rs-1")).toBe(true);
-    const g = globalThis as unknown as { lifecycleExecuteInFlightScopes: Map<string, unknown> };
-    expect(g.lifecycleExecuteInFlightScopes.has("rs-1")).toBe(true);
+    vi.resetModules();
+    const second = await import("@/lib/lifecycle/execute-in-flight");
+    // The second copy sees the first copy's claim, and releases it for both.
+    expect(second.tryBeginExecute("rs-1")).toBe(false);
+    second.endExecute("rs-1");
+    expect(tryBeginExecute("rs-1")).toBe(true);
   });
 
   // The Pending page runs per-item Executes side by side; a rule-set-wide lock

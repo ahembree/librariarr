@@ -49,11 +49,14 @@ describe("Single group with AND rules", () => {
     { id: "neither", playCount: 0, year: 2015 },
   ];
 
-  it("all AND rules must match for criteria to appear", () => {
+  it("all AND rules must match; each passing rule is reported as a criterion", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([
       makeRule({ id: "r1", field: "playCount", operator: "greaterThan", value: "5" }),
       makeRule({ id: "r2", field: "year", operator: "greaterThanOrEqual", value: "2020", condition: "AND" }),
     ])];
+    expect(items.map((i) => evaluateAllRulesInMemory(rules, i))).toEqual([true, false, false]);
+    // getMatchedCriteriaForItems lists every rule an item passes, without
+    // applying the group logic.
     const result = matched(items, rules);
     // Both rules match "both"
     expect(result.get("both")!.length).toBe(2);
@@ -72,11 +75,12 @@ describe("Single group with OR rules", () => {
     { id: "neither", playCount: 0, year: 2015 },
   ];
 
-  it("any OR rule match produces criteria", () => {
+  it("any OR rule match is enough, and produces criteria", () => {
     const rules: LifecycleRuleGroup[] = [makeGroup([
       makeRule({ id: "r1", field: "playCount", operator: "greaterThan", value: "5" }),
       makeRule({ id: "r2", field: "year", operator: "equals", value: "2020", condition: "OR" }),
     ])];
+    expect(items.map((i) => evaluateAllRulesInMemory(rules, i))).toEqual([true, true, true, false]);
     const result = matched(items, rules);
     expect(result.get("both")!.length).toBe(2);
     expect(result.get("play_only")!.length).toBe(1);
@@ -107,10 +111,11 @@ describe("Two groups connected by AND", () => {
         { id: "g2", condition: "AND" },
       ),
     ];
+    expect(items.map((i) => evaluateAllRulesInMemory(rules, i))).toEqual([true, false, false]);
     const result = matched(items, rules);
     expect(result.get("pass")!.length).toBe(2);
-    // Each group's rules appear individually even if overall AND logic would filter
-    // getMatchedCriteriaForItems shows individual rule matches, not combined group logic
+    // getMatchedCriteriaForItems shows individual rule matches, not the
+    // combined group logic, so the items the AND rejects still list theirs.
     expect(result.get("fail_play")!.length).toBe(1); // title matches
     expect(result.get("fail_title")!.length).toBe(1); // playCount matches
   });
@@ -124,7 +129,7 @@ describe("Two groups connected by OR", () => {
     { id: "neither", playCount: 0, title: "Inception" },
   ];
 
-  it("either group matching produces criteria", () => {
+  it("either group matching is enough, and produces criteria", () => {
     const rules: LifecycleRuleGroup[] = [
       makeGroup(
         [makeRule({ id: "r1", field: "playCount", operator: "greaterThan", value: "5" })],
@@ -135,6 +140,7 @@ describe("Two groups connected by OR", () => {
         { id: "g2", condition: "OR" },
       ),
     ];
+    expect(items.map((i) => evaluateAllRulesInMemory(rules, i))).toEqual([true, true, true, false]);
     const result = matched(items, rules);
     expect(result.get("both")!.length).toBe(2);
     expect(result.get("play_only")!.length).toBe(1);
@@ -171,6 +177,8 @@ describe("Nested groups", () => {
         groups: [],
       }],
     }];
+    // all3 and play_year satisfy the OR sub-group; play_only does not.
+    expect(items.map((i) => evaluateAllRulesInMemory(rules, i))).toEqual([true, true, false]);
     const result = matched(items, rules);
     // all3: playCount matches, title matches, year matches → all 3 criteria
     expect(result.get("all3")!.length).toBe(3);
@@ -200,6 +208,8 @@ describe("Nested groups", () => {
         }],
       }],
     }];
+    expect(evaluateAllRulesInMemory(rules, items[0])).toBe(true);
+    expect(evaluateAllRulesInMemory(rules, { ...items[0], year: 2019 })).toBe(false);
     const result = matched(items, rules);
     expect(result.get("deep")!.length).toBe(3);
   });
@@ -288,7 +298,7 @@ describe("Negate on rules", () => {
     ])];
     const result = matched(items, rules);
     // 2 > 5 → false → negate → true
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
   });
 
   it("negate combined with notEquals (double negation)", () => {
@@ -301,7 +311,7 @@ describe("Negate on rules", () => {
     ])];
     const result = matched(items, rules);
     // "Star Wars" notEquals "Star Wars" → false → negate → true (double negation = equals)
-    expect(result.get("match")!.length).toBeGreaterThan(0);
+    expect(result.get("match")).toHaveLength(1);
     // "Star Trek" notEquals "Star Wars" → true → negate → false
     expect(result.get("nomatch")).toHaveLength(0);
   });
@@ -329,7 +339,7 @@ describe("Mixed field types in groups", () => {
   });
 
   it("group with arr + standard fields", () => {
-    const extId = "tmdb-100";
+    const extId = "100";
     const items = [{ id: "1", playCount: 10, externalIds: [{ source: "TMDB", externalId: extId }] }];
     const arrData: ArrDataMap = { [extId]: makeArrMeta({ monitored: true }) };
     const rules: LifecycleRuleGroup[] = [makeGroup([
@@ -401,7 +411,7 @@ describe("Edge cases", () => {
     ])];
     expect(matched([{ id: "1" }], rules).get("1") ?? []).toHaveLength(0);
     // Actual empty-string value matches equals ""
-    expect(matched([{ id: "2", studio: "" }], rules).get("2")!.length).toBeGreaterThan(0);
+    expect(matched([{ id: "2", studio: "" }], rules).get("2")).toHaveLength(1);
   });
 
   it("present numeric value matches; NULL does not (Phase 1 parity)", () => {
@@ -409,7 +419,7 @@ describe("Edge cases", () => {
       makeRule({ field: "playCount", operator: "equals", value: "0" }),
     ])];
     // Real unwatched item: playCount is non-nullable @default(0), always present
-    expect(matched([{ id: "1", playCount: 0 }], rules).get("1")!.length).toBeGreaterThan(0);
+    expect(matched([{ id: "1", playCount: 0 }], rules).get("1")).toHaveLength(1);
     // Synthetic NULL no longer coerces to 0
     expect(matched([{ id: "2" }], rules).get("2") ?? []).toHaveLength(0);
   });
@@ -429,6 +439,8 @@ describe("Legacy flat rules (non-grouped)", () => {
       makeRule({ id: "r1", field: "playCount", operator: "greaterThan", value: "5", condition: "AND" }),
       makeRule({ id: "r2", field: "year", operator: "equals", value: "2020", condition: "AND" }),
     ];
+    // A rule's AND closes its bucket: r1 AND r2.
+    expect(items.map((i) => evaluateAllRulesInMemory(rules, i))).toEqual([true, false]);
     const result = matched(items, rules);
     expect(result.get("both")!.length).toBe(2);
     expect(result.get("one")!.length).toBe(1);
@@ -444,6 +456,7 @@ describe("Legacy flat rules (non-grouped)", () => {
       makeRule({ id: "r1", field: "playCount", operator: "greaterThan", value: "5", condition: "OR" }),
       makeRule({ id: "r2", field: "year", operator: "equals", value: "2020", condition: "OR" }),
     ];
+    expect(items.map((i) => evaluateAllRulesInMemory(rules, i))).toEqual([true, true, false]);
     const result = matched(items, rules);
     expect(result.get("play")!.length).toBe(1);
     expect(result.get("year")!.length).toBe(1);

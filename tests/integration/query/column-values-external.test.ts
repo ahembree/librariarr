@@ -97,9 +97,8 @@ describe("computeQueryColumnValues — Arr and Seerr columns", () => {
       arrServerIds: { sonarr: "s1" },
     });
     expect(values[item.id]).toEqual({ foundInArr: null, arrMonitored: null });
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toMatch(/^Arr columns are empty: /);
-    expect(warnings[0]).not.toContain("10.0.0.5");
+    // The private address is scrubbed before the reason reaches the page.
+    expect(warnings).toEqual(["Arr columns are empty: connect ECONNREFUSED [internal]:7878"]);
   });
 
   it("stringifies a non-Error Arr failure", async () => {
@@ -159,14 +158,15 @@ describe("computeQueryColumnValues — Arr and Seerr columns", () => {
   it("answers a grouped row from its show aggregate, with episode-only detail null", async () => {
     const lib = await createTestLibrary(serverId, { type: "SERIES" });
     const ep = await createTestMediaItem(lib.id, {
-      type: "SERIES", title: "Pilot", parentTitle: "Show", seasonNumber: 1, episodeNumber: 1,
+      type: "SERIES", title: "Pilot", parentTitle: "Show", seasonNumber: 1, episodeNumber: 1, studio: "HBO",
     });
     const { values } = await computeQueryColumnValues(userId, {
       items: [{ id: ep.id, grouped: true }],
       fields: ["availableEpisodeCount", "studio", "audioStreamCount"],
       serverIds: [],
     });
-    expect(values[ep.id].availableEpisodeCount).toBe(1);
-    expect(values[ep.id].audioStreamCount).toBeNull();
+    // Show-level fields come from the aggregate; a per-show stream count would
+    // total every episode's tracks, so it is left empty.
+    expect(values[ep.id]).toEqual({ availableEpisodeCount: 1, studio: "HBO", audioStreamCount: null });
   });
 });

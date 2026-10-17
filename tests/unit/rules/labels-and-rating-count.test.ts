@@ -24,34 +24,37 @@ describe("Rule engine: labels (JSON array)", () => {
 
   it("equals matches items containing the label", () => {
     const result = evalRules(items, [makeGroup([makeRule({ field: "labels", operator: "equals", value: "Imported" })])]);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
     expect(result.get("2")).toHaveLength(0);
   });
 
   it("contains matches items containing the label", () => {
     const result = evalRules(items, [makeGroup([makeRule({ field: "labels", operator: "contains", value: "Favorite" })])]);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
-    expect(result.get("2")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
+    expect(result.get("2")).toHaveLength(1);
     expect(result.get("3")).toHaveLength(0);
   });
 
   it("notContains excludes items containing the label", () => {
     const result = evalRules(items, [makeGroup([makeRule({ field: "labels", operator: "notContains", value: "Imported" })])]);
     expect(result.get("1")).toHaveLength(0);
-    expect(result.get("2")!.length).toBeGreaterThan(0);
-    expect(result.get("3")!.length).toBeGreaterThan(0);
+    expect(result.get("2")).toHaveLength(1);
+    expect(result.get("3")).toHaveLength(1);
+    // A NULL labels column is "no labels", like a stored [].
+    expect(result.get("4")).toHaveLength(1);
   });
 
   it("matchesWildcard matches via glob pattern", () => {
     const result = evalRules(items, [makeGroup([makeRule({ field: "labels", operator: "matchesWildcard", value: "Fav*" })])]);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
-    expect(result.get("2")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
+    expect(result.get("2")).toHaveLength(1);
     expect(result.get("3")).toHaveLength(0);
   });
 
   it("is case-insensitive for in-memory evaluation", () => {
     const result = evalRules(items, [makeGroup([makeRule({ field: "labels", operator: "contains", value: "imported" })])]);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
+    expect(result.get("2")).toHaveLength(0);
   });
 });
 
@@ -65,7 +68,7 @@ describe("Rule engine: ratingCount (numeric)", () => {
 
   it("greaterThan matches items above the threshold", () => {
     const result = evalRules(items, [makeGroup([makeRule({ field: "ratingCount", operator: "greaterThan", value: 100 })])]);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
     expect(result.get("2")).toHaveLength(0);
     expect(result.get("3")).toHaveLength(0);
   });
@@ -73,20 +76,20 @@ describe("Rule engine: ratingCount (numeric)", () => {
   it("lessThan matches items below the threshold", () => {
     const result = evalRules(items, [makeGroup([makeRule({ field: "ratingCount", operator: "lessThan", value: 100 })])]);
     expect(result.get("1")).toHaveLength(0);
-    expect(result.get("2")!.length).toBeGreaterThan(0);
-    expect(result.get("3")!.length).toBeGreaterThan(0);
+    expect(result.get("2")).toHaveLength(1);
+    expect(result.get("3")).toHaveLength(1);
   });
 
   it("between matches items in the range", () => {
     const result = evalRules(items, [makeGroup([makeRule({ field: "ratingCount", operator: "between", value: "10,200" })])]);
     expect(result.get("1")).toHaveLength(0);
-    expect(result.get("2")!.length).toBeGreaterThan(0);
+    expect(result.get("2")).toHaveLength(1);
     expect(result.get("3")).toHaveLength(0);
   });
 
   it("equals matches exact ratingCount", () => {
     const result = evalRules(items, [makeGroup([makeRule({ field: "ratingCount", operator: "equals", value: 1500 })])]);
-    expect(result.get("1")!.length).toBeGreaterThan(0);
+    expect(result.get("1")).toHaveLength(1);
     expect(result.get("2")).toHaveLength(0);
   });
 });

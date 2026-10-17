@@ -107,13 +107,17 @@ describe("convertQueryToRuleSetBody", () => {
   });
 
   it("throws ConvertQueryError when name is empty", () => {
-    expect(() =>
+    try {
       convertQueryToRuleSetBody(makeQuery(), {
         name: "   ",
         targetLibraryType: "MOVIE",
         serverIds: ["srv1"],
-      }),
-    ).toThrow(ConvertQueryError);
+      });
+      expect.fail("expected throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(ConvertQueryError);
+      expect((err as ConvertQueryError).code).toBe("EMPTY_NAME");
+    }
   });
 
   it("throws ConvertQueryError when serverIds is empty", () => {
@@ -194,13 +198,17 @@ describe("convertQueryToRuleSetBody", () => {
       mediaTypes: ["MOVIE"],
       groups: [{ id: "g1", condition: "AND", rules: [], groups: [] }],
     });
-    expect(() =>
+    try {
       convertQueryToRuleSetBody(query, {
         name: "n",
         targetLibraryType: "MOVIE",
         serverIds: ["srv1"],
-      }),
-    ).toThrow(ConvertQueryError);
+      });
+      expect.fail("expected throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(ConvertQueryError);
+      expect((err as ConvertQueryError).code).toBe("ALL_RULES_INCOMPATIBLE");
+    }
   });
 
   it("trims the name", () => {

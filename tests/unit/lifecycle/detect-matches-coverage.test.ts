@@ -98,6 +98,7 @@ vi.mock("@/lib/lifecycle/collections", () => ({
 }));
 
 import { detectAndSaveMatches, runDetection } from "@/lib/lifecycle/detect-matches";
+import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
 
 function makeRuleSetConfig(overrides: Partial<Parameters<typeof detectAndSaveMatches>[0]> = {}) {
   return {
@@ -156,7 +157,10 @@ describe("stale match explanations", () => {
 
   it("names the rules that stopped matching, the ones that still do, and items that are gone", async () => {
     mockHasAnyActiveRules.mockReturnValue(true);
+    // A watchedByUser rule reads play activity too (its servers' history is
+    // established: the default mediaServer.findMany finds none unevidenced).
     mockHasWatchedByUserRules.mockReturnValue(true);
+    mockHasPlayActivityRules.mockReturnValue(true);
     mockEvaluateRules.mockResolvedValue([]);
     mockPrisma.ruleMatch.findMany.mockResolvedValue([
       { mediaItemId: "dropped", itemData: { id: "dropped", title: "Dropped", matchedCriteria: criteria } },
@@ -185,7 +189,10 @@ describe("stale match explanations", () => {
     expect(info).toContain(`Removed stale match "Legacy" from rule set "Test Rule Set"`);
     // The re-evaluation loads only completed plays for watchedByUser rules.
     const staleLoad = mockPrisma.mediaItem.findMany.mock.calls.find((c) => (c[0] as { include?: object }).include);
-    expect((staleLoad![0] as { include: { watchHistory?: unknown } }).include.watchHistory).toBeDefined();
+    expect((staleLoad![0] as { include: { watchHistory?: unknown } }).include.watchHistory).toEqual({
+      where: COMPLETED_PLAY_FILTER,
+      select: { serverUsername: true },
+    });
     expect((staleLoad![0] as { where: unknown }).where).toEqual({
       id: { in: ["dropped", "unexplained", "gone", "legacy"] },
       library: { mediaServerId: { in: ["s1"] } },
@@ -216,8 +223,14 @@ describe("cross-server collapse", () => {
     );
 
     expect(result.items).toHaveLength(1);
+    expect(result.items[0].id).toBe("a");
     expect(result.items[0].servers).toEqual([{ serverId: "s1", serverName: "Plex", serverType: "PLEX" }]);
     expect((result.items[0].copies as Array<{ id: string }>).map((c) => c.id)).toEqual(["b"]);
+    // The one stored match records the absorbed copy for the indexed lookup.
+    expect(mockPrisma.ruleMatch.createMany).toHaveBeenCalledWith({
+      data: [expect.objectContaining({ ruleSetId: "rs1", mediaItemId: "a", copyIds: ["b"] })],
+      skipDuplicates: true,
+    });
   });
 });
 

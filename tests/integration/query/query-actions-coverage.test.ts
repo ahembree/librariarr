@@ -50,6 +50,8 @@ beforeEach(async () => {
   await cleanDatabase();
   clearMockSession();
   vi.clearAllMocks();
+  // clearAllMocks keeps implementations; a re-query answer must not carry over.
+  mockedExecuteQuery.mockReset();
 });
 
 afterAll(async () => {
@@ -99,7 +101,11 @@ describe("POST /api/query/actions — action configuration", () => {
       type, title: "Item", parentTitle: type === "MOVIE" ? null : "Parent",
       ...(type === "SERIES" ? { seasonNumber: 1, episodeNumber: 1 } : {}),
     });
-    await createTestExternalId(item.id, type === "MOVIE" ? "TMDB" : type === "SERIES" ? "TVDB" : "MUSICBRAINZ", "42");
+    await createTestExternalId(
+      item.id,
+      type === "MOVIE" ? "TMDB" : type === "SERIES" ? "TVDB" : "MUSICBRAINZ",
+      type === "MUSIC" ? "a74b1b7f-71a5-4011-9441-d0b5e4122711" : "42",
+    );
     const instance = await makeInstance(user.id);
     mockedExecuteQuery.mockResolvedValue(queryResult([{ id: item.id, type, title: "Item", parentTitle: item.parentTitle }]));
 
