@@ -528,7 +528,10 @@ Documentation files to be aware of:
 | Installation & env vars | `getting-started/installation.mdx`, `getting-started/configuration.mdx` |
 | Server setup | `getting-started/connecting-a-server.mdx` |
 | Library browsing & filters | `features/library.mdx` |
+| Dashboard | `features/dashboard.mdx` |
 | Lifecycle rules & actions | `features/lifecycle-rules.mdx` |
+| Deletion safeguards (evaluability, ceiling, guards) | `features/deletion-safety.mdx` |
+| Use-case guides & importable rule sets | `guides/delete-unwatched-media.mdx`, `guides/leaving-soon-collection.mdx`, `guides/seerr-request-cleanup.mdx`, `guides/replace-low-quality-files.mdx`, `guides/ended-shows.mdx`, `guides/rule-set-library.mdx` |
 | Backup & restore | `features/backup-restore.mdx` |
 | Notifications | `features/notifications.mdx` |
 | Stream manager & maintenance | `features/stream-manager.mdx` |
@@ -541,8 +544,10 @@ Documentation files to be aware of:
 | Unraid | `getting-started/unraid.mdx` |
 | Style guide | `development/style-guide.mdx` |
 | Security | `advanced/security-hardening.mdx` |
-| Public API & API keys | `advanced/api.mdx` |
+| SSO (OIDC & forward-auth) | `advanced/sso.mdx` |
+| Public API & API keys | `advanced/api.mdx`, `advanced/api-reference.mdx` (renders the generated OpenAPI document) |
 | Development | `advanced/development.mdx` |
+| Docs home & disclaimer | `index.mdx`, `disclaimer.mdx` (landing page: `docs/src/pages/index.astro`) |
 
 ### CI/CD
 

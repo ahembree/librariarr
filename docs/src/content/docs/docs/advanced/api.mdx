@@ -33,7 +33,7 @@ When a [Discord webhook](/docs/features/notifications/) is configured, Librariar
 
 ### Deleting (revoking) a key
 
-Click **Delete** next to a key and confirm. The key stops working immediately. Librariarr checks the key against its database on every request and never caches it, so there is no grace period. Deleting cannot be undone; to restore access, create a new key.
+Click **Delete** next to a key and confirm. The key stops working immediately. Librariarr reads the key's database row on every request (it only remembers that the key's hash matched, never whether the key is still valid), so there is no grace period. Deleting cannot be undone; to restore access, create a new key.
 
 An expired key is refused in the same way. It stays in the list, marked **Expired**, until you delete it.
 
@@ -77,7 +77,7 @@ curl -H "X-Api-Key: lbr_YOUR_KEY" https://librariarr.example.com/api/v1/me
 A **read-only** key has every `:read` scope. Every `GET` endpoint needs a read scope and every other method needs a write scope, so a read-only key cannot change anything. A key keeps exactly the scopes it was created with: a scope added in a later version of Librariarr is never added to an existing key.
 
 <Aside type="danger">
-  Only grant `lifecycle:execute` to an application you trust to delete media. `POST /api/v1/lifecycle/actions/execute` runs a rule set's action straight away, like the **Execute** button on the **Pending** page, without waiting for the scheduled date. The [deletion ceiling](/docs/features/deletion-safety/) is counted per request, so it limits each call but not a client that makes many. Removing an exception needs this scope too: an exception is what stops your rules from matching an item, so removing one can lead to that item being deleted.
+  Only grant `lifecycle:execute` to an application you trust to delete media. `POST /api/v1/lifecycle/actions/execute` runs a rule set's action straight away, like the **Execute** button on the **Pending** page, without waiting for the scheduled date. Your [deletion ceiling](/docs/features/deletion-safety/) is counted per request, so on its own it would not stop a client that makes many calls; the fixed API limits below (25 items per request, 100 per hour across every key) do. Removing an exception needs this scope too: an exception is what stops your rules from matching an item, so removing one can lead to that item being deleted.
 </Aside>
 
 ## OpenAPI document
@@ -200,6 +200,7 @@ Errors are JSON: `{ "error": "…" }`, sometimes with a `details` array (validat
 
 - **Per key:** 600 requests per minute. Past that, the key's requests are answered `429` until the minute is up. A request with `limit=0` to a listing that returns everything for it — movies, episodes, tracks, shows and artists — returns a whole library rather than a page, so it counts as 20 requests: thirty full listings a minute. Elsewhere `limit=0` is an ordinary request. `limit` is read as a number, so every spelling of zero (`00`, `+0`, `0.0`) is a full listing and costs the same. The listings with no paging — rule matches, actions and exceptions — always return everything, so every call to them counts as 20 too.
 - **Unrecognised keys:** at most 1,000 keys that turn out not to exist are looked up per minute, across every client. Past that, until the minute is up, a key that has not been used successfully in the last 15 minutes is answered `429` without being looked up; keys in use are unaffected. This bounds what a flood of random keys can cost, at the price of an idle integration waiting out the minute while such a flood lasts.
+- **Hash checks:** at most 100 keys are checked against their stored hash per minute, across every client (each check is deliberately expensive). A key verified in the last 15 minutes needs no check and is unaffected; past the limit, until the minute is up, other keys are answered `429`.
 - **Failing keys:** a key that fails 20 times within 15 minutes (deleted, expired, mistyped) is answered `429` for the rest of that window without being looked up, so an application still using a deleted key stops costing anything. Failures are counted per key, not per address, so they never lock out a key that works, even when every client reaches Librariarr from the same address (containers on one Docker host, or `TRUST_PROXY_HEADERS=false`).
 
 ## Deletion limits
@@ -218,7 +219,7 @@ The hourly budget is kept in memory, so restarting Librariarr resets it.
 
 ## How keys are protected
 
-- **Creating a key is a step up from being signed in.** It needs your password — or, on an account with no password, a sign-in from the last 15 minutes, which the dialog renews by asking you to sign in with Plex or SSO again — and each creation and deletion is posted to Discord when a webhook is set. A stolen browser session could otherwise turn itself into a key that outlives it, since logging out or changing the password revokes sessions, not keys. Wrong passwords here count against the same limit as failed logins.
+- **Creating a key is a step up from being signed in.** It needs your password — or, on an account with no password, a sign-in from the last 15 minutes, which the dialog renews by asking you to sign in with Plex or SSO again — and each creation and deletion is posted to Discord when a webhook is set. A stolen browser session could otherwise turn itself into a key that outlives it, since logging out or changing the password revokes sessions, not keys. Wrong passwords here are limited like failed logins (10 per 15 minutes per address), in one budget shared with the in-place "confirm it's you" password check and the current-password check when changing credentials.
 - **Only a hash is stored.** A key is `lbr_` followed by 43 random characters (about 256 bits). Librariarr stores only a salted scrypt hash of it and its first 10 characters, which are shown in the list and used to find the key. Neither the database nor a leaked database dump contains a usable key, or anything to test guesses against cheaply. The hash is checked once when a key is first used, and Librariarr remembers in memory that it matched, so later requests cost no extra work. Keys created before this version stored an unsalted SHA-256 hash; upgrading removes them, and they need to be created again.
 - **Immediate revocation.** Keys are checked against the database on every request, so deleting or expiring a key takes effect on the next request.
 - **Not in backups.** API keys are never written to backups, not even their hashes. Restoring a backup deletes every API key, so a key you deleted cannot come back from an older backup. After a restore, create new keys for your applications.

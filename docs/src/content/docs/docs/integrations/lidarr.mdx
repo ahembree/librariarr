@@ -16,14 +16,17 @@ Lidarr integration enables lifecycle actions on music managed by Lidarr.
 2. Under the **Lidarr** section, click **Add Instance**
 3. Enter:
    - **Name**: A label for this instance (e.g., "Main Lidarr")
-   - **URL**: Lidarr's base URL (e.g., `http://192.168.1.100:8686`)
+   - **URL**: Lidarr's base URL (e.g., `http://192.168.1.100:8686`) — the address Librariarr uses to reach Lidarr
+   - **External URL** (optional): The address your browser uses for Lidarr, starting with `http://` or `https://`. Used for "open in Lidarr" links; falls back to **URL** when empty
    - **API Key**: Found in Lidarr → Settings → General → API Key
-4. Click **Test Connection** to verify
+4. Click **Test** to verify — **Save** stays disabled until the test passes
 5. Save
 
 </Steps>
 
-You can add multiple Lidarr instances.
+You can add multiple Lidarr instances. A rule set reads its Lidarr criteria from the instance its action is linked to (see [lifecycle rules](/docs/features/lifecycle-rules/)).
+
+Deleting an instance cancels the pending lifecycle actions bound to it and detaches it from every rule set that used it; those rule sets' actions are turned off until you pick another instance.
 
 ## How Matching Works
 
@@ -41,17 +44,23 @@ Once connected, these operations are available via [lifecycle rules](/docs/featu
 
 | Operation | Description |
 |-----------|-------------|
-| **Delete** | Remove the artist/album from Lidarr (optionally delete files) |
-| **Unmonitor** | Stop Lidarr from monitoring for upgrades |
-| **Tag** | Add a custom tag to the artist in Lidarr |
+| **Delete from Lidarr** | Remove the artist from Lidarr **and delete its files from disk** |
+| **Unmonitor & Delete Files** | Unmonitor the artist and delete the matched tracks' files |
+| **Monitor & Delete Files** | Make sure the artist is monitored, then delete the matched tracks' files so Lidarr grabs a new copy |
+| **Delete Files Only** | Delete the matched tracks' files without changing monitoring |
+| **Unmonitor Only** | Stop Lidarr from monitoring the artist |
+| **Change Quality Profile** | Move the artist to another quality profile (skipped if it is already on it) |
+| **Search for New Copy** | Trigger a Lidarr search, changing nothing else |
+| **Do Nothing** | Only track the match (and apply tag changes, if configured) |
+
+The file deletes act only on the matched tracks — see [which files a file delete removes](/docs/features/lifecycle-rules/#which-files-a-file-delete-removes). Every action can also **add and remove Lidarr tags**, applied before the main action. **Delete from Lidarr** can also **add an import list exclusion** so import lists don't add it back, and the file-delete and quality-profile actions can **search after** the change. When a destructive action is linked to an instance with no recycle bin configured, the rule editor warns you before saving. See [Available Actions](/docs/features/lifecycle-rules/#available-actions).
 
 ## Data from Lidarr
 
 The following Lidarr metadata is available for lifecycle rule conditions:
 
-- **Quality profile**: The assigned quality profile name
-- **Monitored status**: Whether the artist is monitored
-- **Tags**: Current tags on the artist
+- **Found in Arr**, **Monitored**, **Tag**, **Quality Profile**, **Status**
+- **Rating** (Lidarr's artist rating), **Size on Disk**, **Path**, **Date Added**
 
 ## Security
 
@@ -62,5 +71,5 @@ The following Lidarr metadata is available for lifecycle rule conditions:
 ## Limitations
 
 - MusicBrainz ID availability depends on your media server's metadata agent
-- Lifecycle actions require Lidarr to be reachable at execution time
+- Lifecycle actions call Lidarr's API in real time. Requests time out after 15 seconds; reads are retried up to 3 times, writes are not. If Lidarr is unreachable during a scheduled run, its remaining actions stay pending for the next run; a manual **Execute** fails them
 - Music matching can be less reliable than movie/series matching due to artist name variations

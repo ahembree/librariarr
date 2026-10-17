@@ -24,44 +24,40 @@ Plex OAuth is the primary way to sign in to Librariarr.
 
 After Plex OAuth sign-in, Librariarr stores your Plex token securely for API calls.
 
-### Re-Linking
+### Linking a Plex Account
 
-To change or re-authenticate your Plex account:
+If you set Librariarr up with a local username and password, you can link a Plex account later:
 
 1. Go to **Settings → Authentication**
-2. Click **Link Account** to re-initiate Plex OAuth
+2. Under **Plex Connection**, click **Connect Plex Account** to start Plex OAuth
+
+Once an account is linked the section shows **Connected as …** instead. Signing in with Plex again refreshes the stored Plex token.
 
 Linking needs a sign-in from the last 15 minutes, because a linked Plex account is a way into Librariarr that outlasts the session. If it has been longer, Librariarr asks you to confirm it's you — with your password, or by signing in again with Plex or SSO in a pop-up — and then links the account, without signing you out. Signing in with Plex is offered only while **Allow Plex Login** is on.
+
+### Allow Plex Login
+
+With a Plex account linked, **Settings → Authentication → Plex Connection** shows an **Allow Plex Login** toggle (on by default; off by default when the first admin was created with a local password). Turning it off hides the **Sign in with Plex** button from the login page but keeps your Plex token attached, so server discovery and library sync keep working. Librariarr refuses a change that would leave no usable sign-in method (Plex, local login or SSO), and turning Plex login back on needs a sign-in from the last 15 minutes.
 
 ## Server Connection
 
 ### Auto-Discovery
 
-When signed in via Plex OAuth, Librariarr can automatically discover all Plex servers accessible to your account. For each server it shows:
+When signed in via Plex OAuth, Librariarr can automatically discover the Plex servers your account **owns** (servers shared with you are not listed). Add one from **Settings → Media Servers → Add Server → Plex**, or during onboarding. For each server it shows:
 
 - Server name and version
 - Platform (Linux, Windows, macOS, etc.)
 - Available connections (local and remote URLs)
 
-A discovered server's access token is never sent to your browser: when you add the server, Librariarr looks the token up from your Plex account itself. That lookup, and later changing a Plex server's URL or turning on **Skip TLS Verification** without entering a new token, needs a sign-in from the last 15 minutes, because the token then goes to the address you entered, or to whoever answers there unverified — and a Plex token is enough to sign in to Librariarr. If it has been longer, Librariarr asks you to confirm it's you and then carries on.
+A discovered server's access token is never sent to your browser: when you add the server, Librariarr looks the token up from your Plex account itself. That lookup, and later changing a Plex server's URL or turning on **Skip TLS Verification** (the stored token stays in place), needs a sign-in from the last 15 minutes, because the token then goes to the address you entered, or to whoever answers there unverified — and a Plex token is enough to sign in to Librariarr. If it has been longer, Librariarr asks you to confirm it's you and then carries on.
 
-### Manual Setup
+### Editing a Server
 
-You can also manually add a Plex server in **Settings → Servers**:
+Plex servers are always added through your linked Plex account — there is no field for pasting a Plex token. After adding one, you can edit it in **Settings → Media Servers**:
 
-- **URL**: Base URL (e.g., `http://192.168.1.100:32400` or `https://plex.example.com`)
-- **Access Token**: Your Plex token (see below)
+- **URL**: Base URL (e.g., `http://192.168.1.100:32400` or `https://plex.example.com`); the server's known addresses from plex.tv are offered as one-click choices
+- **External URL** (optional): A browser-facing address used for "Open in" links; falls back to **URL**
 - **Skip TLS Verification**: Enable for self-signed certificates
-
-### Getting Your Plex Token
-
-If you need to provide a token manually:
-
-1. Open Plex Web App and navigate to any media item
-2. Click **Get Info** → **View XML**
-3. In the browser URL, look for `X-Plex-Token=` — the value after this is your token
-
-Alternatively, the Plex token from OAuth sign-in is used automatically when discovering servers.
 
 ## Media Sync
 
@@ -70,12 +66,25 @@ Alternatively, the Plex token from OAuth sign-in is used automatically when disc
 Librariarr fetches comprehensive metadata for each media item:
 
 - **Core metadata**: title, year, rating, studio, genres, content rating, duration
-- **Play data**: play count, last played date, date added
+- **Play data**: play count, last played date, date added — reconciled from every user's plays in the server's watch history, not only your own account's
+- **Watchlist**: whether an item is on your plex.tv watchlist (read during full syncs; if plex.tv can't be reached, the stored flags are kept)
 - **Video details**: resolution, format, frame rate, HDR type, and more
 - **Audio details**: format, channels, quality, and language
 - **Subtitles**: language and settings
 - **File info**: size, format, and location
 - **External IDs**: TMDB, TVDB, and IMDB (used to match with Sonarr/Radarr)
+
+### Watch History
+
+By default, watch history comes from the server's own history API, which records each play with its user, timestamp, and device for every account on the server. A server can instead take its history from [Tracearr](/docs/integrations/tracearr/), which adds completion, transcode, and stream detail per play. See [Watch History Sources](/docs/features/library/#watch-history-sources).
+
+### Real-Time Updates
+
+Librariarr keeps a live connection to each Plex server, so new streams, finished plays, and added or removed items are picked up within seconds instead of waiting for the next scheduled sync. See [Real-time sync](/docs/features/real-time-sync/).
+
+### Artwork
+
+Posters and backgrounds are resized by Plex's photo transcoder to the size Librariarr displays, then cached locally under `/config/cache/images`.
 
 ### Dynamic Range Detection
 
@@ -114,11 +123,15 @@ A library that no longer exists on the server is removed from Librariarr on the 
 
 ### Enabling/Disabling Libraries
 
-Each Plex library can be independently enabled or disabled for syncing in **Settings → Servers**.
+Each Plex library can be independently enabled or disabled for syncing in **Settings → Media Servers**.
 
 <Aside type="caution">
   When disabling the last library of a given type, you'll be asked whether to keep or delete the associated media data from Librariarr's database.
 </Aside>
+
+## Collections
+
+Lifecycle rule sets can maintain Plex collections — a "Leaving Soon" shelf, for example — whose membership follows the rules' matches. This is Plex-only. See [Plex Collections](/docs/features/lifecycle-rules/#plex-collections).
 
 ## Stream Manager Integration
 
