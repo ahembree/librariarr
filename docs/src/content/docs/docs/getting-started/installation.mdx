@@ -74,7 +74,7 @@ Librariarr runs as a Docker container. The recommended setup uses Docker Compose
 2. **Create a `.env` file**
 
    ```bash title=".env"
-   # Required — database password
+   # Required — database password (letters and digits only)
    DB_PASSWORD=your-secure-db-password
 
    # Optional — session encryption key (auto-generated if not set)
@@ -85,6 +85,10 @@ Librariarr runs as a Docker container. The recommended setup uses Docker Compose
    PGID=1000
    LIBRARIARR_PORT=3000
    ```
+
+   <Aside type="caution">
+     `DB_PASSWORD` is placed inside `DATABASE_URL`, so use letters and digits only: characters such as `@`, `:`, `/`, `#` or `%` break the connection URL. Postgres reads it only when the database volume is first created; changing it later does not change the database's password, and the app can no longer connect until you change it inside Postgres too (or recreate the volume).
+   </Aside>
 
    <Aside type="tip">
      `SESSION_SECRET` is auto-generated and saved to `/config/.session-secret` if not set. To provide your own, set it in `.env` (must be at least 32 characters — generate with `openssl rand -base64 32`). Changing the secret after deployment will invalidate all active sessions.
@@ -107,6 +111,7 @@ Librariarr runs as a Docker container. The recommended setup uses Docker Compose
 | Variable | Required | Default | Description |
 |----------|:--------:|---------|-------------|
 | `DATABASE_URL` | Yes | — | PostgreSQL connection URL (provided in the docker-compose.yml above) |
+| `DB_PASSWORD` | Yes (Docker Compose) | — | Read by Docker Compose, not by the app: the compose files above substitute it into `DATABASE_URL`, and for the bundled database it also sets the Postgres password. Letters and digits only. The bundled Postgres applies it only when its volume is first created. Not needed if you write the password into `DATABASE_URL` yourself. |
 | `SESSION_SECRET` | No | Auto-generated | Random string (32+ characters) used to secure your login sessions. Auto-generated and saved to `/config/.session-secret` if not set. A value shorter than 32 characters is refused and the app will not start. |
 | `PUID` | No | `1000` | User ID for file permissions |
 | `PGID` | No | `1000` | Group ID for file permissions |
