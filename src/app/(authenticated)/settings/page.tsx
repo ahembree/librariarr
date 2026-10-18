@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useMemo, useRef, useSyncExternalStore
 import { toast } from "sonner";
 import { usePlexOAuth } from "@/hooks/use-plex-oauth";
 import { fetchWithReauth } from "@/lib/auth/reauth-client";
+import { responseErrorMessage } from "@/lib/api/error-message";
 import { useRealtime } from "@/hooks/use-realtime";
 import {
   DEFAULT_CHIP_COLORS,
@@ -96,25 +97,8 @@ const TRACEARR_IMPORT_POLL_MS = 30_000;
 // deliberately not pushed, so this is what eventually shows it.
 const REALTIME_STATUS_POLL_MS = 60_000;
 
-/**
- * The message to show for a failed integration save. A validation failure
- * answers `{ error: "Validation failed", details: ["field: why", …] }`, and
- * the bare `error` names neither the field nor the problem.
- */
-function integrationSaveError(
-  data: { error?: string; detail?: string; details?: unknown } | null,
-  fallback: string,
-): string {
-  const first = Array.isArray(data?.details) ? data.details[0] : undefined;
-  const detail =
-    typeof first === "string"
-      ? first
-      : typeof (first as { message?: unknown } | undefined)?.message === "string"
-        ? (first as { message: string }).message
-        : data?.detail;
-  const error = data?.error || fallback;
-  return detail ? `${error} — ${detail}` : error;
-}
+/** The message to show for a failed integration save. */
+const integrationSaveError = responseErrorMessage;
 
 
 /** `useSyncExternalStore` subscriber for a value that never changes. */

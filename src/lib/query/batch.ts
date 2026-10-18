@@ -73,6 +73,28 @@ export function countActionUnits(
 }
 
 /**
+ * The type of the first show or artist in `items` with more selected rows than
+ * fit one request (`size`), or null. Such a group is split across batches by
+ * {@link buildActionBatches}, which a whole-record action must not be.
+ */
+export function oversizedActionGroup(
+  items: readonly BatchableItem[],
+  targetType: BatchMediaType | null,
+  size: number = MAX_QUERY_ACTION_ITEMS,
+): "SERIES" | "MUSIC" | null {
+  const counts = new Map<string, number>();
+  for (const item of items) {
+    if (targetType && item.type !== targetType) continue;
+    if (item.type !== "SERIES" && item.type !== "MUSIC") continue;
+    const key = groupKey(item);
+    const n = (counts.get(key) ?? 0) + 1;
+    counts.set(key, n);
+    if (n > size) return item.type;
+  }
+  return null;
+}
+
+/**
  * Build the request batches for an ad-hoc query action.
  *
  * The server caps each request at {@link MAX_QUERY_ACTION_ITEMS} ids (a safety
@@ -90,8 +112,8 @@ export function countActionUnits(
  *    excepted episodes from the per-request exception guard.
  *
  * Whole groups are packed greedily into batches of at most `size`. A single
- * group larger than `size` (only reachable for one series with >`size` selected
- * episodes — vanishingly rare) is hard-split across batches. Order is preserved
+ * group larger than `size` (one show or artist with more than `size` selected
+ * rows; the page refuses that for a whole-record action) is hard-split across batches. Order is preserved
  * and the batches are a disjoint partition of the retained ids.
  */
 export function buildActionBatches(

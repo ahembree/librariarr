@@ -12,7 +12,7 @@ import { detectStreamAudioProfile, detectStreamDynamicRange } from "@/lib/rules/
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
 import { evaluateQueryArrRule } from "./arr-filter";
 import { evaluateQuerySeerrRule } from "./seerr-filter";
-import { fetchArrDataForQuery } from "./fetch-arr-data";
+import { fetchArrDataForQuery, resolveQueryArrScope } from "./fetch-arr-data";
 import { fetchSeerrDataForQuery } from "./fetch-seerr-data";
 import type { ProgressEmit, ProgressPhase } from "@/lib/progress/types";
 import type { ArrDataMap, ArrMetadata, SeerrDataMap, SeerrMetadata } from "@/lib/rules/lifecycle-engine";
@@ -80,6 +80,9 @@ export interface QueryResult {
     hasMore: boolean;
     total: number;
   };
+  /** Why part of the query's scope was left out (e.g. a media type whose Arr
+   *  criteria have no enabled Arr server to answer them). */
+  warnings?: string[];
 }
 
 const ITEM_SELECT = {
@@ -262,10 +265,10 @@ interface SeriesGroupRow {
   lastPlayedAt: Date | null;
   addedAt: Date | null;
   year: number | null;
+  /** Plays of every matched episode, summed. */
   playCount: number;
-  serverId: string;
-  serverName: string;
-  serverType: string;
+  /** Every server holding a matched episode. */
+  servers: Array<{ serverId: string; serverName: string; serverType: string }>;
   summary: string | null;
   genres: unknown;
   studio: string | null;
@@ -319,10 +322,8 @@ async function groupSeriesEpisodes(
       MAX(mi."lastPlayedAt") as "lastPlayedAt",
       MAX(mi."addedAt") as "addedAt",
       MIN(mi.year) FILTER (WHERE mi.year IS NOT NULL) as year,
-      MAX(mi."playCount")::int as "playCount",
-      (array_agg(l."mediaServerId" ORDER BY mi."seasonNumber" NULLS LAST, mi."episodeNumber" NULLS LAST))[1] as "serverId",
-      (array_agg(ms.name ORDER BY mi."seasonNumber" NULLS LAST, mi."episodeNumber" NULLS LAST))[1] as "serverName",
-      (array_agg(ms.type ORDER BY mi."seasonNumber" NULLS LAST, mi."episodeNumber" NULLS LAST))[1] as "serverType",
+      COALESCE(SUM(mi."playCount"), 0)::int as "playCount",
+      jsonb_agg(DISTINCT jsonb_build_object('serverId', ms.id, 'serverName', ms.name, 'serverType', ms.type)) as servers,
       COALESCE(
         (array_agg(mi."parentSummary" ORDER BY mi."seasonNumber", mi."episodeNumber") FILTER (WHERE mi."parentSummary" IS NOT NULL))[1],
         (array_agg(mi."summary" ORDER BY mi."seasonNumber", mi."episodeNumber") FILTER (WHERE mi."summary" IS NOT NULL))[1]
@@ -382,13 +383,10 @@ async function groupSeriesEpisodes(
     dedupKey: null,
     matchedEpisodes: r.matchedEpisodes,
     seasonCount: r.seasonCount,
-    servers: [
-      {
-        serverId: r.serverId,
-        serverName: r.serverName,
-        serverType: r.serverType,
-      },
-    ],
+    // By name, ties by id — the order the library listings use.
+    servers: [...r.servers].sort(
+      (a, b) => a.serverName.localeCompare(b.serverName) || a.serverId.localeCompare(b.serverId),
+    ),
     library: null,
   }));
 }
@@ -405,6 +403,33 @@ export async function executeQuery(
   userId: string,
   page: number = 1,
   limit: number = 50,
+  onProgress?: ProgressEmit,
+): Promise<QueryResult> {
+  // Arr criteria are judged per media type against that type's selected Arr
+  // server. A type with none (or a disabled one) has no Arr data, so a rule
+  // like "Found In Arr = false" would match every item of it: leave the type
+  // out and say so, rather than return a whole library as matching.
+  if (hasArrRules(definition.groups)) {
+    const scope = await resolveQueryArrScope(userId, definition.arrServerIds, definition.mediaTypes);
+    if (scope.unevaluable.length > 0) {
+      const warnings = scope.unevaluable.map((u) => u.reason);
+      if (scope.evaluable.length === 0) {
+        return { items: [], pagination: { page, limit, hasMore: false, total: 0 }, warnings };
+      }
+      const result = await runQueryDefinition(
+        { ...definition, mediaTypes: scope.evaluable }, userId, page, limit, onProgress,
+      );
+      return { ...result, warnings: [...(result.warnings ?? []), ...warnings] };
+    }
+  }
+  return runQueryDefinition(definition, userId, page, limit, onProgress);
+}
+
+async function runQueryDefinition(
+  definition: QueryDefinition,
+  userId: string,
+  page: number,
+  limit: number,
   onProgress?: ProgressEmit,
 ): Promise<QueryResult> {
   const { mediaTypes, serverIds: requestedServerIds, groups, sortBy, sortOrder } = definition;

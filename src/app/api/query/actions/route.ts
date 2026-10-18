@@ -5,7 +5,7 @@ import { logger } from "@/lib/logger";
 import { executeQuery } from "@/lib/query/query-engine";
 import { appCache } from "@/lib/cache/memory-cache";
 import { executeActionsForItems } from "@/lib/lifecycle/run-actions";
-import { MOVIE_ACTION_TYPES, SERIES_ACTION_TYPES, MUSIC_ACTION_TYPES, actionHonorsMemberIds } from "@/lib/lifecycle/action-types";
+import { MOVIE_ACTION_TYPES, SERIES_ACTION_TYPES, MUSIC_ACTION_TYPES, actionHonorsMemberIds, deletesArrRecord } from "@/lib/lifecycle/action-types";
 import {
   findExceptedItemIds,
   findExceptionProtectedGroups,
@@ -104,6 +104,10 @@ export async function POST(request: NextRequest) {
   }
 
   const hasTagOps = addArrTags.length > 0 || removeArrTags.length > 0;
+
+  if (hasTagOps && deletesArrRecord(actionType)) {
+    return NextResponse.json({ error: "Tags can't be changed by an action that deletes the whole Arr record" }, { status: 400 });
+  }
 
   if (actionType === "DO_NOTHING" && !hasTagOps) {
     return NextResponse.json({ error: "No action configured" }, { status: 400 });
@@ -540,6 +544,24 @@ export async function POST(request: NextRequest) {
     items = collapsed.items;
     const actionMembers = collapsed.members;
 
+    // One action per Arr record across the whole RUN, not only this batch. The
+    // client keeps a show's or an artist's rows in one batch, but a group too
+    // big for a batch is split, and two servers' copies of a movie can land in
+    // different batches: a whole-record action would then run once per batch —
+    // the first deletes the artist and the next re-sends it. Member-scoped file
+    // deletes are exempt: each batch acts on its own episodes or tracks.
+    const recordsKey = runId && !isMemberScoped ? `query-action-records:${userId}:${runId}` : null;
+    const doneRecords = new Set(recordsKey ? (appCache.get<string[]>(recordsKey) ?? []) : []);
+    if (doneRecords.size > 0) {
+      const before = items.length;
+      items = items.filter((i) => !doneRecords.has(collapsed.recordKeys.get(i.id) ?? `id:${i.id}`));
+      if (items.length < before) {
+        skipped += before - items.length;
+        logger.info("Lifecycle", `Ad-hoc ${actionType}: skipped ${before - items.length} record(s) an earlier batch of this run already acted on`);
+      }
+      if (items.length === 0) return { executed: 0, failed: 0, skipped, errors: [] };
+    }
+
     // The ceiling over the whole run: every earlier batch's actions plus this
     // one's, counted after the collapse (a show's episodes are one action).
     const unitsKey = runId ? `query-action-units:${runId}` : null;
@@ -559,6 +581,12 @@ export async function POST(request: NextRequest) {
       };
     }
     if (unitsKey) appCache.set(unitsKey, priorUnits + items.length, RUN_LIVE_TTL_MS);
+    // Recorded before the Arr calls: a timed-out delete may still have landed,
+    // so a record attempted once is never re-sent by a later batch.
+    if (recordsKey) {
+      for (const i of items) doneRecords.add(collapsed.recordKeys.get(i.id) ?? `id:${i.id}`);
+      appCache.set(recordsKey, [...doneRecords], RUN_LIVE_TTL_MS);
+    }
 
     // Per-item progress drives the determinate "Running action" segment.
     emit({ type: "phase", key: "execute", fraction: 0 });

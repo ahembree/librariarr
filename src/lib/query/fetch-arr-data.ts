@@ -9,6 +9,54 @@ import type { ArrDataMap } from "@/lib/rules/lifecycle-engine";
 // How often (in items) the in-memory mapping loop reports sub-progress.
 const MAP_PROGRESS_INTERVAL = 500;
 
+type QueryMediaType = "MOVIE" | "SERIES" | "MUSIC";
+
+const ARR_FAMILY: Record<QueryMediaType, { key: "radarr" | "sonarr" | "lidarr"; label: string; typeLabel: string }> = {
+  MOVIE: { key: "radarr", label: "Radarr", typeLabel: "Movies" },
+  SERIES: { key: "sonarr", label: "Sonarr", typeLabel: "Series" },
+  MUSIC: { key: "lidarr", label: "Lidarr", typeLabel: "Music" },
+};
+
+/**
+ * Which of a query's media types its Arr criteria can be judged for: those
+ * with an Arr server selected that still exists and is enabled. A type without
+ * one has no Arr data, so a rule like "Found In Arr = false" would match every
+ * item of it — the engine leaves such a type out of the results instead, and
+ * `unevaluable` says why for each.
+ */
+export async function resolveQueryArrScope(
+  userId: string,
+  arrServerIds: { radarr?: string; sonarr?: string; lidarr?: string } | undefined,
+  mediaTypes: string[],
+): Promise<{ evaluable: QueryMediaType[]; unevaluable: Array<{ type: QueryMediaType; reason: string }> }> {
+  const typesInScope = (mediaTypes.length === 0 ? ["MOVIE", "SERIES", "MUSIC"] : mediaTypes) as QueryMediaType[];
+  const evaluable: QueryMediaType[] = [];
+  const unevaluable: Array<{ type: QueryMediaType; reason: string }> = [];
+  for (const type of typesInScope) {
+    const family = ARR_FAMILY[type];
+    if (!family) continue;
+    const id = arrServerIds?.[family.key];
+    if (!id) {
+      unevaluable.push({ type, reason: `${family.typeLabel} left out: no ${family.label} server is selected for the query's Arr criteria` });
+      continue;
+    }
+    const where = { id, userId };
+    const select = { name: true, enabled: true } as const;
+    const instance =
+      type === "MOVIE" ? await prisma.radarrInstance.findFirst({ where, select })
+      : type === "SERIES" ? await prisma.sonarrInstance.findFirst({ where, select })
+      : await prisma.lidarrInstance.findFirst({ where, select });
+    if (!instance) {
+      unevaluable.push({ type, reason: `${family.typeLabel} left out: the selected ${family.label} server no longer exists` });
+    } else if (!instance.enabled) {
+      unevaluable.push({ type, reason: `${family.typeLabel} left out: ${family.label} server "${instance.name}" is disabled` });
+    } else {
+      evaluable.push(type);
+    }
+  }
+  return { evaluable, unevaluable };
+}
+
 /**
  * Fetch Arr metadata from specific instances for the query builder.
  * Unlike the lifecycle fetcher (which queries ALL instances), this fetches
@@ -65,8 +113,10 @@ async function fetchRadarrData(
   instanceId: string,
   onProgress?: FractionReporter,
 ): Promise<ArrDataMap | null> {
+  // A disabled instance is one the user switched off — its data may be stale
+  // or its server gone — so it answers no criteria (resolveQueryArrScope).
   const instance = await prisma.radarrInstance.findFirst({
-    where: { id: instanceId, userId },
+    where: { id: instanceId, userId, enabled: true },
   });
   if (!instance) return null;
 
@@ -109,8 +159,10 @@ async function fetchSonarrData(
   instanceId: string,
   onProgress?: FractionReporter,
 ): Promise<ArrDataMap | null> {
+  // A disabled instance is one the user switched off — its data may be stale
+  // or its server gone — so it answers no criteria (resolveQueryArrScope).
   const instance = await prisma.sonarrInstance.findFirst({
-    where: { id: instanceId, userId },
+    where: { id: instanceId, userId, enabled: true },
   });
   if (!instance) return null;
 
@@ -145,8 +197,10 @@ async function fetchLidarrData(
   instanceId: string,
   onProgress?: FractionReporter,
 ): Promise<ArrDataMap | null> {
+  // A disabled instance is one the user switched off — its data may be stale
+  // or its server gone — so it answers no criteria (resolveQueryArrScope).
   const instance = await prisma.lidarrInstance.findFirst({
-    where: { id: instanceId, userId },
+    where: { id: instanceId, userId, enabled: true },
   });
   if (!instance) return null;
 

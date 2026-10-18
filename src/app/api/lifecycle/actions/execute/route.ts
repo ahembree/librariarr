@@ -380,6 +380,7 @@ async function executeRuleSet(
     const verdict = await checkDeleteCeiling(
       session.userId!,
       items.map(() => ruleSet.actionType ?? "DO_NOTHING"),
+      "manual",
     );
     if (!verdict.allowed) {
       logger.warn("Lifecycle", `Refused manual execute for rule set "${ruleSet.id}" — ${verdict.reason}`);

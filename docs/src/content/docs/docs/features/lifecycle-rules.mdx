@@ -35,7 +35,19 @@ Each individual rule consists of:
 
 Negation is part of the operator choice: alongside each comparison the picker offers its inverse — `Not Equals`, `Not Contains`, `Not Greater Than`, `Not Between`, and so on.
 
-**Whole groups can be negated too.** Every group has a **NOT** toggle that inverts its entire result — for example `NOT (watched by Alice OR watched by Bob)` matches items watched by neither. The Logic Preview shows the negation in place, and items the group would have matched are excluded instead. (Stream query groups negate through their ANY/NO quantifier rather than a NOT toggle.)
+**Whole groups can be negated too.** Every group has a **NOT** toggle that inverts its entire result — for example `NOT (watched by Alice OR watched by Bob)` matches items watched by neither. The Logic Preview shows the negation in place, and items the group would have matched are excluded instead. (Stream query groups negate through their quantifier rather than a NOT toggle.)
+
+### Stream query groups
+
+A **Stream Query** group tests an item's individual audio, video or subtitle tracks instead of the item's summary fields, so every condition inside it is checked against the **same** track — "an English audio track that is also Dolby Atmos", not "an English track and, separately, an Atmos one". The group reads `<quantifier> <stream type> stream where …`:
+
+| Quantifier | Matches an item when… |
+|---|---|
+| **ANY** | at least one track of that type meets every condition in the group |
+| **NO** | no track of that type meets them (an item with no track of that type matches) |
+| **ALL** | it has at least one track of that type, and every one of them meets the conditions |
+
+The fields offered depend on the stream type: codec, profile, language and language code, channels, bitrate, bit depth, default and forced flags, display titles, width, height, frame rate, scan type, video range type, sample rate, channel layout, audio profile, dynamic range, and the colour fields — each type shows only the ones its tracks carry. Changing a group's stream type clears its conditions, since the fields differ.
 
 ## Limiting how much one run can delete
 
@@ -396,7 +408,7 @@ Every library type offers the same eight actions, against Radarr (movies), Sonar
 
 The three file-delete actions can **Search for new copy after file deletion**.
 
-**Manage Tags** adds or removes *arr tags alongside the action, including **Do Nothing**. It is unavailable with **Delete from …** and **Delete Files Only**.
+**Manage Tags** adds or removes *arr tags alongside the action, including **Do Nothing**. It is unavailable only with **Delete from …**, which removes the *arr record and its tags with it; the file-only deletes keep the record, so tags apply to them.
 
 ### Which files a file delete removes
 

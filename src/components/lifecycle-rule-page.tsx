@@ -26,6 +26,7 @@ import { MediaTable } from "@/components/media-table";
 import { MediaDetailSidePanel, type MatchedCriterion } from "@/components/media-detail-side-panel";
 import { usePanelResize } from "@/hooks/use-panel-resize";
 import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
+import { deletesArrRecord } from "@/lib/lifecycle/action-types";
 import type { MediaItemWithRelations } from "@/lib/types";
 import { Label } from "@/components/ui/label";
 import {
@@ -1328,8 +1329,9 @@ export function LifecycleRulePage({
         targetQualityProfileId: isQualityProfileChangeAction(actionType) ? targetQualityProfileId : null,
         addImportExclusion,
         searchAfterAction,
-        addArrTags,
-        removeArrTags,
+        // Deleting the whole Arr record deletes its tags with it.
+        addArrTags: deletesArrRecord(actionType) ? [] : addArrTags,
+        removeArrTags: deletesArrRecord(actionType) ? [] : removeArrTags,
         collectionId: targetCollectionId,
         discordNotifyOnAction,
         discordNotifyOnMatch,
@@ -2561,20 +2563,20 @@ export function LifecycleRulePage({
                           setRemoveArrTags([]);
                         }
                       }}
-                      disabled={actionType.startsWith("DELETE_") || !arrInstanceId}
+                      disabled={deletesArrRecord(actionType) || !arrInstanceId}
                     />
-                    <Label htmlFor="manage-tags" className={(actionType.startsWith("DELETE_") || !arrInstanceId) ? "text-muted-foreground" : ""}>
+                    <Label htmlFor="manage-tags" className={(deletesArrRecord(actionType) || !arrInstanceId) ? "text-muted-foreground" : ""}>
                       Manage Tags
                     </Label>
-                    {actionType.startsWith("DELETE_") && (
+                    {deletesArrRecord(actionType) && (
                       <span className="text-xs text-muted-foreground">(disabled when deleting from Arr)</span>
                     )}
-                    {!actionType.startsWith("DELETE_") && !arrInstanceId && (
+                    {!deletesArrRecord(actionType) && !arrInstanceId && (
                       <span className="text-xs text-muted-foreground">(select a {arrServiceName} server above)</span>
                     )}
                   </div>
 
-                  {manageTagsEnabled && !actionType.startsWith("DELETE_") && arrInstanceId && (
+                  {manageTagsEnabled && !deletesArrRecord(actionType) && arrInstanceId && (
                     <div className="ml-7 space-y-3">
                       <Select value={tagMode} onValueChange={(v) => setTagMode(v as "add" | "remove")}>
                         <SelectTrigger className="w-full sm:w-56">

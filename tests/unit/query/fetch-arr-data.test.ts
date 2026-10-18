@@ -37,7 +37,7 @@ vi.mock("@/lib/arr/lidarr-client", () => ({
   LidarrClient: function () { return mockLidarrClient; },
 }));
 
-import { fetchArrDataForQuery } from "@/lib/query/fetch-arr-data";
+import { fetchArrDataForQuery, resolveQueryArrScope } from "@/lib/query/fetch-arr-data";
 
 describe("fetchArrDataForQuery", () => {
   beforeEach(() => {
@@ -116,7 +116,46 @@ describe("fetchArrDataForQuery", () => {
     await fetchArrDataForQuery("u1", { radarr: "r1" }, ["MOVIE"]);
 
     expect(mockPrisma.radarrInstance.findFirst).toHaveBeenCalledWith({
+      where: { id: "r1", userId: "u1", enabled: true },
+    });
+  });
+});
+
+describe("resolveQueryArrScope", () => {
+  beforeEach(() => {
+    mockPrisma.radarrInstance.findFirst.mockReset();
+    mockPrisma.sonarrInstance.findFirst.mockReset();
+    mockPrisma.lidarrInstance.findFirst.mockReset();
+  });
+
+  it("keeps a type whose selected instance exists and is enabled", async () => {
+    mockPrisma.radarrInstance.findFirst.mockResolvedValue({ name: "Radarr", enabled: true });
+    expect(await resolveQueryArrScope("u1", { radarr: "r1" }, ["MOVIE"])).toEqual({ evaluable: ["MOVIE"], unevaluable: [] });
+    expect(mockPrisma.radarrInstance.findFirst).toHaveBeenCalledWith({
       where: { id: "r1", userId: "u1" },
+      select: { name: true, enabled: true },
+    });
+  });
+
+  it("leaves out a type with no instance selected, a deleted one, or a disabled one", async () => {
+    mockPrisma.sonarrInstance.findFirst.mockResolvedValue(null);
+    mockPrisma.lidarrInstance.findFirst.mockResolvedValue({ name: "Old Lidarr", enabled: false });
+    const scope = await resolveQueryArrScope("u1", { sonarr: "gone", lidarr: "l1" }, []);
+    expect(scope.evaluable).toEqual([]);
+    expect(scope.unevaluable.map((u) => u.type)).toEqual(["MOVIE", "SERIES", "MUSIC"]);
+    expect(scope.unevaluable[0].reason).toContain("no Radarr server is selected");
+    expect(scope.unevaluable[1].reason).toContain("no longer exists");
+    expect(scope.unevaluable[2].reason).toContain('"Old Lidarr" is disabled');
+  });
+});
+
+describe("fetchArrDataForQuery — disabled instances", () => {
+  it("reads nothing from a disabled instance", async () => {
+    // The lookup filters on enabled, so a disabled instance is never found.
+    mockPrisma.radarrInstance.findFirst.mockResolvedValue(null);
+    expect(await fetchArrDataForQuery("u1", { radarr: "r1" }, ["MOVIE"])).toEqual({});
+    expect(mockPrisma.radarrInstance.findFirst).toHaveBeenCalledWith({
+      where: { id: "r1", userId: "u1", enabled: true },
     });
   });
 });

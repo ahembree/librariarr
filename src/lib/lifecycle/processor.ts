@@ -860,7 +860,7 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
       destructiveByUser.set(action.userId, list);
     }
     for (const [uid, actionTypes] of destructiveByUser) {
-      const verdict = await checkDeleteCeiling(uid, actionTypes);
+      const verdict = await checkDeleteCeiling(uid, actionTypes, "scheduled");
       if (verdict.allowed) continue;
       blockedUserIds.add(uid);
       logger.warn(

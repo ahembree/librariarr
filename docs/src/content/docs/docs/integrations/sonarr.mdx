@@ -55,7 +55,7 @@ Once connected, Librariarr can perform these operations via [lifecycle rules](/d
 | **Search for New Copy** | Trigger a Sonarr search, changing nothing else |
 | **Do Nothing** | Only track the match (and apply tag changes, if configured) |
 
-The file deletes act only on the matched episodes — see [which files a file delete removes](/docs/features/lifecycle-rules/#which-files-a-file-delete-removes). Every action can also **add and remove Sonarr tags**, applied before the main action. **Delete from Sonarr** can also **add an import list exclusion** so import lists don't add it back, and the file-delete and quality-profile actions can **search after** the change. When a destructive action is linked to an instance with no recycle bin configured, the rule editor warns you before saving. See [Available Actions](/docs/features/lifecycle-rules/#available-actions).
+The file deletes act only on the matched episodes — see [which files a file delete removes](/docs/features/lifecycle-rules/#which-files-a-file-delete-removes). Every action except **Delete from Sonarr** (which removes the record and its tags) can also **add and remove Sonarr tags**, applied before the main action. **Delete from Sonarr** can also **add an import list exclusion** so import lists don't add it back, and the file-delete and quality-profile actions can **search after** the change. When a destructive action is linked to an instance with no recycle bin configured, the rule editor warns you before saving. See [Available Actions](/docs/features/lifecycle-rules/#available-actions).
 
 ## Data from Sonarr
 

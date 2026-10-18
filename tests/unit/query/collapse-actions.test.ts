@@ -39,4 +39,15 @@ describe("collapseActionItems", () => {
     expect(members.get("t1")).toEqual(["t1", "t2"]);
     expect(members.get("t3")).toEqual(["t3"]);
   });
+
+  it("names the record each kept item stands for", () => {
+    // The route remembers these per run, so a later batch skips a record an
+    // earlier one already acted on.
+    const { recordKeys } = collapseActionItems("MOVIE", [
+      item("a", { externalIds: [{ source: "TMDB", externalId: "9" }] }),
+      item("b", { externalIds: [{ source: "TMDB", externalId: "9" }] }),
+      item("c"),
+    ], new Map());
+    expect([...recordKeys.entries()]).toEqual([["a", "TMDB:9"], ["c", "id:c"]]);
+  });
 });

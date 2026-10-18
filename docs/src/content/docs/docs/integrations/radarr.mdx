@@ -55,7 +55,7 @@ Once connected, these operations are available via [lifecycle rules](/docs/featu
 | **Search for New Copy** | Trigger a Radarr search, changing nothing else |
 | **Do Nothing** | Only track the match (and apply tag changes, if configured) |
 
-Every action can also **add and remove Radarr tags**, applied before the main action. **Delete from Radarr** can also **add an import list exclusion** so import lists don't add it back, and the file-delete and quality-profile actions can **search after** the change. When a destructive action is linked to an instance with no recycle bin configured, the rule editor warns you before saving. See [Available Actions](/docs/features/lifecycle-rules/#available-actions).
+Every action except **Delete from Radarr** (which removes the record and its tags) can also **add and remove Radarr tags**, applied before the main action. **Delete from Radarr** can also **add an import list exclusion** so import lists don't add it back, and the file-delete and quality-profile actions can **search after** the change. When a destructive action is linked to an instance with no recycle bin configured, the rule editor warns you before saving. See [Available Actions](/docs/features/lifecycle-rules/#available-actions).
 
 ## Data from Radarr
 

@@ -1,6 +1,6 @@
 import { z } from "zod/v4";
 import { NextResponse } from "next/server";
-import { MAX_COLUMN_VALUE_ITEMS, MAX_QUERY_ACTION_ITEMS } from "@/lib/query/constants";
+import { MAX_COLUMN_VALUE_ITEMS, MAX_QUERY_ACTION_ITEMS, MAX_QUERY_SERVER_IDS } from "@/lib/query/constants";
 import { MASKED_VALUE } from "@/lib/api/sanitize";
 import { API_SCOPES } from "@/lib/api-keys/scopes";
 import { API_DESTRUCTIVE_PER_REQUEST } from "@/lib/api-keys/limits";
@@ -942,7 +942,7 @@ const queryGroupSchema: z.ZodType = z.lazy(() =>
 
 const queryDefinitionSchema = z.object({
   mediaTypes: z.array(z.enum(["MOVIE", "SERIES", "MUSIC"])).max(3),
-  serverIds: z.array(z.string()).max(20),
+  serverIds: z.array(z.string().max(200)).max(MAX_QUERY_SERVER_IDS),
   groups: z.array(queryGroupSchema).max(20),
   sortBy: z.string().min(1).default("title"),
   sortOrder: z.enum(["asc", "desc"]).default("asc"),
@@ -967,7 +967,7 @@ export const queryColumnValuesSchema = z.object({
     .array(z.object({ id: z.string().min(1).max(200), grouped: z.boolean().optional() }))
     .max(MAX_COLUMN_VALUE_ITEMS),
   fields: z.array(z.string().min(1).max(100)).min(1).max(200),
-  serverIds: z.array(z.string().max(200)).max(100).optional().default([]),
+  serverIds: z.array(z.string().max(200)).max(MAX_QUERY_SERVER_IDS).optional().default([]),
   arrServerIds: z
     .object({
       radarr: z.string().max(200).optional(),

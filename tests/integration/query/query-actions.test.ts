@@ -154,6 +154,97 @@ describe("POST /api/query/actions", () => {
     expect(mockedExecuteQuery).toHaveBeenCalledTimes(1);
   });
 
+  it("never acts on one Arr record twice in a run, even across batches", async () => {
+    // Two servers' copies of a movie (one TMDB id) sent in different batches:
+    // the second batch must not re-send the delete the first already made.
+    appCache.clear();
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const libA = await createTestLibrary((await createTestServer(user.id, { name: "A" })).id, { type: "MOVIE" });
+    const libB = await createTestLibrary((await createTestServer(user.id, { name: "B" })).id, { type: "MOVIE" });
+    const copyA = await createTestMediaItem(libA.id, { type: "MOVIE", title: "Same" });
+    const copyB = await createTestMediaItem(libB.id, { type: "MOVIE", title: "Same" });
+    await createTestExternalId(copyA.id, "TMDB", "777");
+    await createTestExternalId(copyB.id, "TMDB", "777");
+    const radarr = await createTestRadarrInstance(user.id);
+    mockedExecuteQuery.mockResolvedValue(
+      queryResult([
+        { id: copyA.id, type: "MOVIE", title: "Same", parentTitle: null },
+        { id: copyB.id, type: "MOVIE", title: "Same", parentTitle: null },
+      ]),
+    );
+    const batch = (id: string) =>
+      callRoute(POST, {
+        method: "POST",
+        body: { query: BASE_QUERY, mediaItemIds: [id], runId: "run-dedup", actionType: "DELETE_RADARR", arrInstanceId: radarr.id },
+      });
+
+    const { result: b1 } = await expectStreamResult<{ executed: number; skipped: number }>(await batch(copyA.id));
+    const { result: b2 } = await expectStreamResult<{ executed: number; skipped: number }>(await batch(copyB.id));
+
+    expect(b1.executed).toBe(1);
+    expect(b2).toMatchObject({ executed: 0, skipped: 1 });
+    expect(mockedExecuteAction).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets a member-scoped file delete act in every batch of a run", async () => {
+    // File deletes act on each batch's own tracks, so a split artist is fine.
+    appCache.clear();
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const lib = await createTestLibrary((await createTestServer(user.id)).id, { type: "MUSIC" });
+    const t1 = await createTestMediaItem(lib.id, { type: "MUSIC", title: "One", parentTitle: "Artist" });
+    const t2 = await createTestMediaItem(lib.id, { type: "MUSIC", title: "Two", parentTitle: "Artist" });
+    await createTestExternalId(t1.id, "MUSICBRAINZ", "mbid-1");
+    await createTestExternalId(t2.id, "MUSICBRAINZ", "mbid-1");
+    const lidarr = await createTestLidarrInstance(user.id);
+    mockedExecuteQuery.mockResolvedValue(
+      queryResult([
+        { id: t1.id, type: "MUSIC", title: "One", parentTitle: "Artist" },
+        { id: t2.id, type: "MUSIC", title: "Two", parentTitle: "Artist" },
+      ]),
+    );
+    const batch = (id: string) =>
+      callRoute(POST, {
+        method: "POST",
+        body: { query: BASE_QUERY, mediaItemIds: [id], runId: "run-files", actionType: "DELETE_FILES_LIDARR", arrInstanceId: lidarr.id },
+      });
+
+    await expectStreamResult(await batch(t1.id));
+    await expectStreamResult(await batch(t2.id));
+    expect(mockedExecuteAction).toHaveBeenCalledTimes(2);
+  });
+
+  it("refuses tag changes on an action that deletes the whole Arr record", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const radarr = await createTestRadarrInstance(user.id);
+    const response = await callRoute(POST, {
+      method: "POST",
+      body: { query: BASE_QUERY, mediaItemIds: ["x"], actionType: "DELETE_RADARR", arrInstanceId: radarr.id, addArrTags: ["gone"] },
+    });
+    const body = await expectJson<{ error: string }>(response, 400);
+    expect(body.error).toContain("deletes the whole Arr record");
+    expect(mockedExecuteQuery).not.toHaveBeenCalled();
+  });
+
+  it("runs tag changes alongside a file-only delete, whose Arr record stays", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const lib = await createTestLibrary((await createTestServer(user.id)).id, { type: "MOVIE" });
+    const m = await createTestMediaItem(lib.id, { type: "MOVIE", title: "Keep Record" });
+    await createTestExternalId(m.id, "TMDB", "888");
+    const radarr = await createTestRadarrInstance(user.id);
+    mockedExecuteQuery.mockResolvedValue(queryResult([{ id: m.id, type: "MOVIE", title: "Keep Record", parentTitle: null }]));
+    const response = await callRoute(POST, {
+      method: "POST",
+      body: { query: BASE_QUERY, mediaItemIds: [m.id], actionType: "DELETE_FILES_RADARR", arrInstanceId: radarr.id, addArrTags: ["redownload"] },
+    });
+    const { result } = await expectStreamResult<{ executed: number }>(response);
+    expect(result.executed).toBe(1);
+    expect(mockedExecuteAction.mock.calls[0][0]).toMatchObject({ actionType: "DELETE_FILES_RADARR", addArrTags: ["redownload"] });
+  });
+
   it("re-runs the safety query per request when no runId is shared", async () => {
     appCache.clear();
     const user = await createTestUser();
