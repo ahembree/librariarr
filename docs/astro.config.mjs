@@ -156,6 +156,7 @@ export default defineConfig({
           items: [
             { label: "Dashboard", slug: "docs/features/dashboard" },
             { label: "Library Browsing", slug: "docs/features/library" },
+            { label: "Query Builder", slug: "docs/features/query" },
             {
               label: "Lifecycle Rules",
               slug: "docs/features/lifecycle-rules",

@@ -528,6 +528,7 @@ Documentation files to be aware of:
 | Installation & env vars | `getting-started/installation.mdx`, `getting-started/configuration.mdx` |
 | Server setup | `getting-started/connecting-a-server.mdx` |
 | Library browsing & filters | `features/library.mdx` |
+| Query Builder (criteria, criterion columns, saved queries, convert to rule set, ad-hoc actions) | `features/query.mdx` |
 | Dashboard | `features/dashboard.mdx` |
 | Lifecycle rules & actions | `features/lifecycle-rules.mdx` |
 | Deletion safeguards (evaluability, ceiling, guards) | `features/deletion-safety.mdx` |

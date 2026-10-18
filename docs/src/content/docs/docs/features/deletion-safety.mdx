@@ -114,7 +114,7 @@ Detection therefore refuses to evaluate a rule set whose *arr or Seerr fields ha
 
 Play history is the third outside dependency, and it fails the same way. Until a server's watch history has been synced, every item on it looks never watched, so *Play Count = 0* or *Last Played more than 180 days ago* would match the whole library. A rule set that reads play activity — *Watched By User*, *Play Count*, *Last Played*, and the series rollups built on them — is therefore skipped while any server it targets has no established play history: it has never completed a watch-history sync, its history was just cleared (a purge, a restore, a change of watch-history source), or a [Tracearr](/docs/integrations/tracearr/) import is still backfilling. Previews return an error naming the server, and the rule editor shows a **"Play history not established yet"** warning.
 
-The same refusal applies to ad-hoc **Query page actions**: running an action on results whose Arr/Seerr criteria couldn't actually be evaluated (no Arr server selected for the action's media type, no enabled Seerr instance, or Seerr criteria on music) is blocked with an explanatory error before anything runs.
+The same refusal applies to ad-hoc [Query page actions](/docs/features/query/#running-actions-on-results): running an action on results whose Arr/Seerr criteria couldn't actually be evaluated (no Arr server selected for the action's media type, a disabled one, no enabled Seerr instance, or Seerr criteria on music), or whose play-activity criteria read a server with no known watch history, is blocked with an explanatory error before anything runs. See [When a query action is refused](/docs/features/query/#when-a-query-action-is-refused).
 
 ### Check 3 — A final safety net for unrecognized rules
 
@@ -257,7 +257,7 @@ The one exception is an *arr instance that is down altogether (the connection is
 
 ### Runs never overlap
 
-The same item can't be acted on twice at once. **Execute All** on a rule set, a per-item **Execute**, a **Retry**, and each action of a scheduled run claim what they act on first; a request that overlaps one already running is refused ("already running"), and a scheduled run leaves a claimed action pending for its next pass. A Query-page action and a rule set's actions never run at the same time, since they can reach the same *arr record through different copies. Before each scheduled action is sent, it is re-read: one that was cancelled, rescheduled, re-configured or protected by a new exception since the run started is left alone.
+The same item can't be acted on twice at once. **Execute All** on a rule set, a per-item **Execute**, a **Retry**, and each action of a scheduled run claim what they act on first; a request that overlaps one already running is refused ("already running"), and a scheduled run leaves a claimed action pending for its next pass. A [Query-page action](/docs/features/query/#when-a-query-action-is-refused) and a rule set's actions never run at the same time, since they can reach the same *arr record through different copies. Before each scheduled action is sent, it is re-read: one that was cancelled, rescheduled, re-configured or protected by a new exception since the run started is left alone.
 
 ### One action per *arr record
 
@@ -265,7 +265,7 @@ When a rule set targets several servers, the copies of one title (same TMDB, TVD
 
 ### An optional ceiling on each run
 
-Under **Settings → General → Delete without asking, up to N items per run** you can cap how many items one run may delete across all rule sets. A run over the limit deletes nothing: its actions stay on the Pending page for you to execute there. It applies to scheduled runs, **Execute** on the Pending page, and Query-page actions. There is no limit by default. See [Limiting how much one run can delete](/docs/features/lifecycle-rules/#limiting-how-much-one-run-can-delete).
+Under **Settings → General → Delete without asking, up to N items per run** you can cap how many items one run may delete across all rule sets. A run over the limit deletes nothing: its actions stay on the Pending page for you to execute there. It applies to scheduled runs, **Execute** on the Pending page, and [Query-page actions](/docs/features/query/#the-deletion-limit), where it counts the whole run rather than each batch. There is no limit by default. See [Limiting how much one run can delete](/docs/features/lifecycle-rules/#limiting-how-much-one-run-can-delete).
 
 ## Through the API
 

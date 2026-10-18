@@ -1,0 +1,195 @@
+---
+title: Query Builder
+description: "Search your Plex, Jellyfin and Emby library with lifecycle-rule criteria, show any criterion as a table column, save queries, convert one into a rule set, or run a Radarr, Sonarr or Lidarr action on the results right away."
+seoTitle: "Query Builder: Search and Act on Your Library"
+---
+
+import { Aside, Steps } from "@astrojs/starlight/components";
+
+The **Query Builder** (**Library → Query** in the sidebar, at `/library/query`) answers one-off questions about your library with the same criteria lifecycle rules use: "which 1080p movies over 20 GB has nobody played in two years?", "which shows has Sonarr tagged `keep`?". You build the criteria, run them, and get every matching item in a table or a poster grid. From the results you can save the query, turn it into a [lifecycle rule set](/docs/features/lifecycle-rules/), or run a Radarr, Sonarr or Lidarr action on a selection straight away.
+
+You can also reach it from the global search palette (<kbd>⌘K</kbd> / <kbd>Ctrl+K</kbd>): **Open the Query workspace** sits under **Advanced** at the bottom of every search.
+
+## Query Scope
+
+The **Query Scope** card at the top decides what the query searches.
+
+- **Servers** — **All servers** (the default), one server, or any combination. Ticking every server is the same as **All servers**, so a server you add later is included too. Disabled servers are not offered and are never searched. The selection is saved with the query, carried into **Convert to Lifecycle Rule**, and used by actions run from the page.
+- **Media types** — **Movies**, **Series** and **Music** pills. With none selected the query covers all three ("None selected = all types").
+- **Include individual episodes** — shown while Series is in scope. Off (the default), episodes that match are **grouped by show**: one row per show, reading "*N* seasons, *M* episodes matched". On, every matching episode is its own row, named by its show and episode number (*Breaking Bad S01E01*). Shows are grouped by series identity, so two different shows sharing a title stay separate and the same show on two servers is one row.
+- **Arr servers** — one picker per *arr family (**Radarr**, **Sonarr**, **Lidarr**), shown for the media types in scope when that family has an instance configured. The *arr criteria are read from the instance you pick here, and query actions run on it. Leave it on **None** for a family you don't need.
+
+Music results are always individual tracks; the Query page has no artist grouping. Movies, tracks and individual episodes are **not** deduplicated across servers: a movie on two servers is two rows, one per server.
+
+## Building criteria
+
+The criteria builder is the lifecycle rule builder: conditions with a field, operator and value; **AND**/**OR** connectors that combine top to bottom; **Add Condition**, **Add Sub-group** and **Stream Query** groups; a **NOT** toggle on a group; per-condition enable/disable; drag to reorder; and the **Logic Preview** beside it spelling out the exact grouping with parentheses. Every field and operator is described in the [lifecycle rules field reference](/docs/features/lifecycle-rules/#available-fields), and the [operators](/docs/features/lifecycle-rules/#operators) and [Is Empty](/docs/features/lifecycle-rules/#what-is-empty-means-per-field) sections apply here unchanged — the two share one evaluation engine, so a query returns exactly what a rule set with the same criteria would match.
+
+What the scope changes in the builder:
+
+- **Fields that can't apply to any selected media type are disabled**, with a tooltip saying why (for example a Sonarr-only field when only Movies is selected). A field is allowed as long as it applies to at least one selected type.
+- **Series criteria** (episode counts, watched %, Series Last Played, …) need Series in scope and are hidden in episode mode ("Series criteria are not available in episode mode"), because they describe a whole show, not one episode.
+- ***arr criteria** appear once an **Arr server** is picked in the scope.
+- **Seerr criteria** need an enabled Seerr instance. Every enabled instance is read and their requests merged, as for lifecycle rules.
+
+Two warnings can appear above the builder:
+
+- **"Some criteria can't be evaluated"** — the query uses *arr criteria with no Arr server selected, Seerr criteria with no Seerr instance, or Seerr criteria on music (Seerr has no music). Without that data a rule like *Found In Arr = false* matches everything, so actions on the results are blocked until it is fixed.
+- **An integration-unreachable banner** — an *arr or Seerr instance the query reads is configured but not answering right now, so its criteria won't reflect real data.
+
+<Aside type="caution">
+  Pick an Arr server for **every** media type your *arr criteria apply to. With Movies and Series both in scope but only a Sonarr instance picked, the movies are judged with no Radarr data at all, so *Found In Arr = false* would list every movie. The warning above only appears when no Arr server is picked; [actions](#running-actions-on-results) on such results are refused either way.
+</Aside>
+
+Limits: up to 20 top-level groups, 50 conditions and 10 sub-groups per group.
+
+## Running a query
+
+**Run Query** (beside the condition count) is enabled once every condition has a value. A progress bar walks through the phases the run needs — **Resolving servers**, **Fetching Arr metadata**, **Fetching Seerr metadata**, **Querying library**, **Evaluating rules**, **Finalizing** — showing only the ones it uses; *arr and Seerr fetches and the rule evaluation report how far they've got. A query that fails says so in a **Query failed** message with the reason, rather than showing zero results.
+
+Every matching item is returned in one go — there is no paging. The line above the results reads "*N* results found · *total size*", the total file size of everything that matched.
+
+## Results
+
+Switch between the **Table view** and **Card view** icons beside **Run Query**; your choice is remembered in this browser. Clicking a row or card opens the item's detail panel, and hovering shows the same hover card as the library pages.
+
+### Table view
+
+The table starts with **Type**, **Title**, **Year**, **Resolution**, **Video Codec**, **Dynamic Range**, **Audio Codec**, **Size**, **Duration**, **Plays** and **Server**. **Columns** adds or removes columns, including **Audio Profile** and **Container**; **Title** can't be hidden. The chosen columns and their widths (drag a header edge) are remembered in this browser.
+
+Click a column header to sort by it, and again to reverse. Results arrive sorted by title.
+
+On a grouped show row, **Size** is the total of the episodes that matched, **Plays** the highest play count of any of them, and per-episode detail such as resolution or codec shows "-".
+
+### Showing any criterion as a table column
+
+Every criterion a query can filter on can also be shown as a column. Open **Columns** and pick from the sections the builder uses (Content, Activity, Streams, Arr, Seerr, Series and so on); **Search columns...** finds one by name. Arr columns are offered only when an *arr instance is configured, Seerr columns only when a Seerr instance is enabled.
+
+Turning a column on loads its values for the rows already on screen — the query is not run again. Only the table view shows these columns, so the card view loads none of them until you switch back. Very large result sets are loaded in chunks of 50,000 rows.
+
+- **Arr columns** read the *arr instance selected in the query scope. With none selected they stay empty and a note above the table says why.
+- **Seerr columns** read every enabled Seerr instance. If none can be reached, the columns stay empty and the note gives the reason.
+- **Series columns** (episode counts, watched %, last played) apply to a grouped show row. A show row has no single value for per-episode detail such as bitrate or the number of audio tracks, so those cells show "-".
+
+A source that can't answer leaves its cells empty and explains why in the note — it never guesses a value. Columns sort like the fixed ones: numbers and dates in order, empty cells last.
+
+### Pinning columns
+
+Click or tap the pin icon in a column header to keep that column at the left edge while the rest scroll sideways, and again to unpin it. With a mouse, the pin on an unpinned column appears when you point at its header; on a touch screen every pin is always shown. **Type**, **Title** and **Year** are pinned by default, and your choice is remembered in this browser. Pinned columns never take more than about 60% of the table's width: on a phone or a narrow window, the pins that don't fit are paused (their pin icon is dimmed and a note above the table names them) so there is still room to scroll, and they come back when the screen is wide enough.
+
+### Scrolling sideways
+
+When the table is wider than the page, a scrollbar stays at the bottom of the window while the table is on screen, so you never have to scroll to the last row to reach it. Drag its handle (with a mouse or a finger), click or tap beside the handle to move one screen's width, or point at it and turn the mouse wheel. Shift + mouse wheel over the rows also scrolls sideways, and on a touch screen you can swipe the table itself.
+
+### Card view
+
+The card view shows posters with year, duration (or seasons/episodes for a show) and size, and the S/M/L card size control. **Select all** above the grid and a checkbox on each card select results for an action.
+
+## Saving and loading queries
+
+The toolbar above the scope manages saved queries:
+
+- **Save** stores the query under a name (up to 100 characters); on a loaded query it offers **Update** instead. A saved query keeps its scope (servers, media types, episode mode, Arr servers) and its criteria — not its results, columns or pins.
+- **Load saved query...** appears once you have one, listing the most recently updated first.
+- **Save As** copies the loaded query under a new name, and **Delete** removes it.
+- **New** clears the builder.
+
+A query whose criteria can't apply to any of its media types is refused when saved.
+
+**Unsaved drafts.** An in-progress query is kept for the current browser tab, so navigating away and back doesn't lose it: "Restored your unsaved query from this session." appears with **Discard**. The draft lives only in that tab and is cleared when you close it; it is separate from **Save**.
+
+## Converting a query into a rule set
+
+If you build a query you'd like enforced on a schedule, **Convert to Lifecycle Rule** on the toolbar creates a rule set without re-entering the criteria. It needs at least one condition with every value filled in, at least one media type selected, and a connected server.
+
+What the conversion does:
+
+- Copies the rule tree verbatim — no changes to fields, operators, or values.
+- Asks for a **Rule set name**, defaulting to the saved query's name plus "(rule set)" and adding "(2)", "(3)", … when a rule set of that type already has the name.
+- Prompts you to pick a **Target library type** when the query targets more than one (rule sets are scoped to a single type).
+- Drops any rules that don't apply to the chosen library type and lists them before submitting. For example, when targeting **Movies**, any series-aggregate or music-only rules are removed. If none would remain it says so and won't create the rule set.
+- Uses the query's servers. A query that searches all servers asks you to confirm **Apply the rule set to all my servers**, since a rule set needs its servers listed.
+- Carries over the Arr server picked for the target type, which you can change in the rule set editor.
+- For Series, maps **Include individual episodes** to the rule set's series scope: grouped by show becomes series scope on, episode mode becomes series scope off.
+- Creates the rule set enabled, with **actionEnabled off** and no action configured — matches will be detected on the next scheduler run, but nothing is deleted or unmonitored until you choose an action.
+
+After conversion you're taken to the new rule set's editor so you can pick an action type, set the delay, configure tags, and re-evaluate.
+
+## Running actions on results
+
+For one-off cleanups you don't want to schedule, you can run a lifecycle action on query results **without** creating a rule set.
+
+<Aside type="danger" title="Query actions run immediately">
+  A rule set's action waits its action delay and sits on the Pending page first, where you can review, cancel or exclude it. A query action has **no delay and no review step**: it runs the moment you confirm, against whatever is selected. Deletions cannot be undone. Check the selection, the action and the Arr server before you press **Run action**, and consider [converting the query into a rule set](#converting-a-query-into-a-rule-set) if you want the review window.
+</Aside>
+
+<Steps>
+
+1. Pick the Arr server for each media type you want to act on in the **Query Scope** (Radarr for movies, Sonarr for series, Lidarr for music). The action runs on that instance.
+
+2. Run the query, then tick the results you want to act on. The table's header checkbox and the card view's **Select all** select everything.
+
+3. In the **Actions** bar above the results, **Choose an action…**, set any options it offers, optionally pick **Add tags** / **Remove tags** (type a new tag and press Enter to add it), then **Run action**.
+
+4. Confirm in the **Run "…"?** dialog, which says how many items it will act on, how many selected items of another media type will be skipped, how many batches it runs in, and, for a delete, that it cannot be undone.
+
+</Steps>
+
+The actions are the lifecycle actions for each family — **Delete from Radarr / Sonarr / Lidarr**, **Unmonitor & Delete Files**, **Monitor & Delete Files**, **Delete Files Only**, **Unmonitor Only**, **Change Quality Profile** and **Search for New Copy** (see [Available Actions](/docs/features/lifecycle-rules/#available-actions)). **Do Nothing** (tags only) is not offered here. The options:
+
+- **Change Quality Profile** needs a quality profile from the instance, and offers **Search for upgrade**.
+- The three file deletes offer **Search after** (search for a new copy once the file is gone).
+- Every delete offers **Add import exclusion**.
+
+The bar shows how many results are selected and their **combined size** — handy for gauging how much space a cleanup will reclaim. An action applies only to selected results of its media type: *Delete from Radarr* acts on the selected movies, and selected shows or tracks are skipped and reported. With nothing selected the bar says "Select results below to run an action."; with no Arr server picked for the selected types, "Select an Arr instance above for the media type(s) you want to act on."
+
+### What happens when you run one
+
+A progress bar tracks the action through **Validating selection**, **Running action** (item by item, naming the item and step in flight) and **Finalizing**. Before anything is sent:
+
+- **The query is re-run**, and only selected items still in its results are acted on. The action uses the criteria of the run whose results are on screen, not edits you have made to the builder since.
+- **Exceptions are honoured.** Items on the [Lifecycle Exceptions](/docs/features/deletion-safety/#lifecycle-exceptions-are-honored-at-every-step) list are skipped, including an item whose copy on another server is excepted. For a grouped show, excepted episodes are left out of a file delete, and the show is skipped only when every matched episode is excepted. A whole-record delete (**Delete from Sonarr**, **Delete from Lidarr**) is skipped entirely when **any** episode of the show or track of the artist is excepted — even one the query didn't match — because it would remove that one too.
+- **One action per *arr record.** A title found on two of your servers, or several tracks of one artist, is one record in the *arr app, so it gets one action. A file delete on an artist's tracks deletes all the selected tracks in that one action. Likewise, a whole-show action picked in episode mode runs once per show, not once per selected episode.
+
+When it finishes, the selection is cleared and the query re-runs, so the results reflect what changed; other open pages (library listings, Matches, the dashboard) refresh too. The result message reports how many were executed, failed and skipped, with the first failure's reason.
+
+### When a query action is refused
+
+The action is refused, with the reason, before anything runs when:
+
+- **The query's *arr criteria can't be evaluated** for the action's media type: no Arr server selected for it, or the selected one has been disabled. Without that data *Found In Arr = false* would match your entire library.
+- **The action would run on a different *arr instance than the criteria were read from.** A tag checked on your 1080p Radarr says nothing about the copy on your 4K Radarr. (The page always runs the action on the scope's instance; the server checks it anyway.)
+- **The query's Seerr criteria can't be evaluated**: no enabled Seerr instance, or a music action (Seerr has no music, so they would match every artist).
+- **The query reads play activity that isn't known yet.** Criteria reading play history — **Watched By User**, **Play Count**, **Last Played** and the series aggregates built on them — are refused while a server the query searches has never completed a watch-history sync, or is still importing its history from [Tracearr](/docs/integrations/tracearr/#play-activity-rules-pause-until-a-servers-history-is-known). This matters most here: a query action executes immediately, with no Pending page to catch a library that suddenly reads as never watched. It is scoped to the query's own servers.
+- **The run would exceed your deletion limit** (below).
+- **Another action is running.** One query action runs at a time ("A query action is already running — wait for it to finish"). A query action and a rule set's actions never run at the same time either, since they can reach the same *arr record through different copies or tracks: while a query action runs, scheduled actions wait for the next execution run and **Execute** or **Retry** on the Pending page is refused; a query action that starts while a rule set's actions are running waits up to a minute for them, then is refused ("A lifecycle execution is running — try again when it finishes").
+
+These are the same guards described in [Deletion Safety](/docs/features/deletion-safety/), applied to a path with no countdown in front of it.
+
+### Large selections and batches
+
+Any selection size works. A selection is sent in sequential batches of up to **1,000** items, and the Actions bar and confirmation dialog tell you how many. A show's episodes and an artist's tracks always travel in the same batch, so a whole-record action never fires once per batch. Each batch is recorded before the next starts, so a run that stops part-way loses nothing — re-run to finish the rest ("Action stopped part-way" lists what completed). The re-check of the query is done once for the whole run, not per batch.
+
+- A batch that fails entirely, with nothing executed, stops the remaining batches ("Action stopped … check the Arr instance, then re-run") rather than sending every one of them to an instance that is down.
+- A whole-show action on more than 1,000 episodes of a *single* show is refused in episode mode ("Too many episodes for one series") — switch off **Include individual episodes** to act on the show as one unit.
+
+### The deletion limit
+
+The optional [deletion limit](/docs/features/lifecycle-rules/#limiting-how-much-one-run-can-delete) (**Settings → General → Delete without asking, up to N items per run**) counts the **whole run**, not each batch: a run over the limit is refused before its first batch starts, and nothing is deleted. A show or an artist counts once, as one action. Only delete actions count; unmonitor, quality-profile and search actions are never limited. A query run over the limit is not queued anywhere — narrow the selection or raise the limit. The refusal is shown on the page and is not sent to Discord.
+
+### Audit trail
+
+Every run is recorded in the **Actions** history and the [deletion stats](/docs/features/lifecycle-rules/#deletion-stats) labelled *Ad-hoc query action*, so there's a full record even though no rule set exists. An action on exactly one episode is named by its show and episode number, for example *Breaking Bad S03E10*. Query actions send no Discord notifications.
+
+## Limits
+
+| What | Limit |
+|------|-------|
+| Top-level groups per query | 20 |
+| Conditions per group | 50 |
+| Sub-groups per group | 10 |
+| Saved query name | 100 characters |
+| Items per action batch | 1,000 (larger selections run as several batches) |
+| Episodes of one show per whole-show action, episode mode | 1,000 |
+| Wait for a running rule-set execution before refusing | 1 minute |
+| Rows per criterion-column request | 50,000 (larger result sets load in chunks) |

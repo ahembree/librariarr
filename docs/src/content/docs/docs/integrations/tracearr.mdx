@@ -176,7 +176,7 @@ So Librariarr **refuses to evaluate** any criterion that reads play activity whi
 
 - **Scheduled detection** skips those rule sets and leaves their existing matches and pending actions untouched, logging the reason to [System Logs](/docs/features/system-logs/).
 - **Rule preview, Test Item, and the rule diff** return the same reason instead of showing you a match set that detection would never produce.
-- **The Query page's actions** refuse to run for the same reason. This one matters most: a lifecycle action is scheduled days ahead and visible on the Pending page before it fires, whereas a query action executes immediately on whatever the query returned.
+- **The [Query page's actions](/docs/features/query/#when-a-query-action-is-refused)** refuse to run for the same reason. This one matters most: a lifecycle action is scheduled days ahead and visible on the Pending page before it fires, whereas a query action executes immediately on whatever the query returned.
 
 It is **scoped to the servers each rule set or query actually targets**, so one server importing does not pause rules that read only your other servers.
 
