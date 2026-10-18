@@ -25,6 +25,7 @@ import { progressStreamResponse } from "@/lib/progress/stream";
 import type { ProgressPhase, ProgressEmit } from "@/lib/progress/types";
 import type { QueryDefinition } from "@/lib/query/types";
 import { collapseActionItems } from "@/lib/query/collapse-actions";
+import { actedRecords, markRecordsActed } from "@/lib/query/run-records";
 
 type MediaType = "MOVIE" | "SERIES" | "MUSIC";
 
@@ -550,8 +551,8 @@ export async function POST(request: NextRequest) {
     // different batches: a whole-record action would then run once per batch —
     // the first deletes the artist and the next re-sends it. Member-scoped file
     // deletes are exempt: each batch acts on its own episodes or tracks.
-    const recordsKey = runId && !isMemberScoped ? `query-action-records:${userId}:${runId}` : null;
-    const doneRecords = new Set(recordsKey ? (appCache.get<string[]>(recordsKey) ?? []) : []);
+    const trackRecords = !!runId && !isMemberScoped;
+    const doneRecords = trackRecords ? actedRecords(runId!) : new Set<string>();
     if (doneRecords.size > 0) {
       const before = items.length;
       items = items.filter((i) => !doneRecords.has(collapsed.recordKeys.get(i.id) ?? `id:${i.id}`));
@@ -583,9 +584,8 @@ export async function POST(request: NextRequest) {
     if (unitsKey) appCache.set(unitsKey, priorUnits + items.length, RUN_LIVE_TTL_MS);
     // Recorded before the Arr calls: a timed-out delete may still have landed,
     // so a record attempted once is never re-sent by a later batch.
-    if (recordsKey) {
-      for (const i of items) doneRecords.add(collapsed.recordKeys.get(i.id) ?? `id:${i.id}`);
-      appCache.set(recordsKey, [...doneRecords], RUN_LIVE_TTL_MS);
+    if (trackRecords) {
+      markRecordsActed(runId!, items.map((i) => collapsed.recordKeys.get(i.id) ?? `id:${i.id}`));
     }
 
     // Per-item progress drives the determinate "Running action" segment.

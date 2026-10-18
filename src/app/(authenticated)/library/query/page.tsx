@@ -215,16 +215,15 @@ function anyRuleConfigured(groups: QueryGroup[]): boolean {
 
 /**
  * Whether a draft holds anything worth restoring. A pristine builder (no media
- * types, default scope/sort, and the single empty starter rule) is treated as
- * empty so we neither persist nor advertise a restore for it.
+ * types, default scope, and the single empty starter rule) is treated as empty
+ * so we neither persist nor advertise a restore for it. The sort is left out:
+ * clicking a column header is not building a query.
  */
 function queryHasContent(def: QueryDefinition, activeQueryId: string | null): boolean {
   return (
     (def.mediaTypes?.length ?? 0) > 0 ||
     (def.serverIds?.length ?? 0) > 0 ||
     Boolean(def.includeEpisodes) ||
-    def.sortBy !== "title" ||
-    def.sortOrder !== "asc" ||
     Object.values(def.arrServerIds ?? {}).some(Boolean) ||
     Boolean(activeQueryId) ||
     anyRuleConfigured(def.groups)
@@ -340,6 +339,8 @@ export default function QueryPage() {
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
   const [includeEpisodes, setIncludeEpisodes] = useState(false);
   const [arrServerIds, setArrServerIds] = useState<{ radarr?: string; sonarr?: string; lidarr?: string }>({});
+  // Media types with an enabled library; null until loaded (then every type counts).
+  const [libraryTypes, setLibraryTypes] = useState<Set<string> | null>(null);
 
   // Arr instances
   const [arrInstances, setArrInstances] = useState<{
@@ -438,6 +439,13 @@ export default function QueryPage() {
         // metadata fetch, dropping the enumerated dropdown back to a text input.
         if (data) setDistinctValues((prev) => ({ ...prev, ...data }));
       })
+      .catch(() => {});
+
+    // The media types the user has libraries for, so the Arr warning names
+    // only types a query could return (the engine warns the same way).
+    fetch("/api/media/library-types")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => setLibraryTypes(new Set((data?.types ?? []) as string[])))
       .catch(() => {});
 
     // Fetch Arr instances (all 3 types in parallel)
@@ -799,24 +807,6 @@ export default function QueryPage() {
 
   const allColumns = useMemo(() => [...baseColumns, ...criterionColumns], [baseColumns, criterionColumns]);
 
-  // The table's sort is the query's own `sortBy`/`sortOrder`, so a saved query
-  // reopens sorted the way it was saved, and the card view shows the same order.
-  // Sorted here with the column's own sort value (DataTable is controlled).
-  const sortedResults = useMemo(() => {
-    const getValue = allColumns.find((c) => c.id === sortBy)?.sortValue;
-    if (!getValue) return results;
-    return [...results].sort((a, b) => {
-      const aVal = getValue(a);
-      const bVal = getValue(b);
-      if (aVal == null && bVal == null) return 0;
-      if (aVal == null) return 1;
-      if (bVal == null) return -1;
-      const cmp = typeof aVal === "number" && typeof bVal === "number"
-        ? aVal - bVal
-        : String(aVal).localeCompare(String(bVal), undefined, { numeric: true });
-      return sortOrder === "asc" ? cmp : -cmp;
-    });
-  }, [results, allColumns, sortBy, sortOrder]);
 
   const columnGroups = useMemo(() => {
     const groups: Array<[string, string]> = Object.entries(COLUMN_GROUPS);
@@ -858,6 +848,26 @@ export default function QueryPage() {
     return visibleCols;
   }, [allColumns, visibleCols]);
 
+  // The table's sort is the query's own `sortBy`/`sortOrder`, so a saved query
+  // reopens sorted the way it was saved, and the card view shows the same order.
+  // Sorted here with the column's own sort value (DataTable is controlled).
+  const sortedResults = useMemo(() => {
+    // A criterion column sorts only while shown: its values load only then.
+    const getValue = allColumns.find((c) => c.id === sortBy && effectiveVisible.has(c.id))?.sortValue;
+    if (!getValue) return results;
+    return [...results].sort((a, b) => {
+      const aVal = getValue(a);
+      const bVal = getValue(b);
+      if (aVal == null && bVal == null) return 0;
+      if (aVal == null) return 1;
+      if (bVal == null) return -1;
+      const cmp = typeof aVal === "number" && typeof bVal === "number"
+        ? aVal - bVal
+        : String(aVal).localeCompare(String(bVal), undefined, { numeric: true });
+      return sortOrder === "asc" ? cmp : -cmp;
+    });
+  }, [results, allColumns, effectiveVisible, sortBy, sortOrder]);
+
   const isValid = useMemo(() => {
     return groups.length > 0 && validateAllRules(groups);
   }, [groups]);
@@ -876,12 +886,13 @@ export default function QueryPage() {
     const label = { MOVIE: "Movies", SERIES: "Series", MUSIC: "Music" } as const;
     return inScope
       .filter((t): t is keyof typeof family => t in family)
+      .filter((t) => !libraryTypes || libraryTypes.has(t))
       .filter((t) => {
         const id = arrServerIds[family[t]];
         return !id || !arrInstances[family[t]].some((i) => i.id === id && i.enabled);
       })
       .map((t) => label[t]);
-  }, [groups, mediaTypes, arrServerIds, arrInstances]);
+  }, [groups, mediaTypes, arrServerIds, arrInstances, libraryTypes]);
   const orphanArrRules = unevaluableArrTypes.length > 0;
   const orphanSeerrRules = useMemo(() => hasSeerrRules(groups) && !seerrConnected, [groups, seerrConnected]);
   const seerrWithMusic = useMemo(
@@ -1060,25 +1071,22 @@ export default function QueryPage() {
       // "Do Nothing" (tags only) has no Arr suffix; the bar names its family.
       const targetType = actionMediaType(config.actionType) ?? config.mediaType;
 
-      // Guard (deletion-safety): a whole-record action can't safely span one
-      // show or artist across batches — split, it would run once per batch.
-      // The server also refuses to act on a record twice in one run, but steer
-      // the user before anything runs: the grouped series view acts on a whole
-      // show as one row; music results are always tracks, so narrow the query.
-      if (!actionHonorsMemberIds(config.actionType)) {
-        const oversized = oversizedActionGroup(selectedItems, targetType);
-        if (oversized === "SERIES" && definition.includeEpisodes) {
-          toast.error("Too many episodes for one series", {
-            description: `Acting on more than ${MAX_QUERY_ACTION_ITEMS.toLocaleString()} episodes of a single show at once isn't supported in episode view — switch to the grouped series view to act on the whole show.`,
-          });
-          return;
-        }
-        if (oversized === "MUSIC") {
-          toast.error("Too many tracks for one artist", {
-            description: `Acting on more than ${MAX_QUERY_ACTION_ITEMS.toLocaleString()} tracks of a single artist at once isn't supported — narrow the query so fewer of the artist's tracks are selected.`,
-          });
-          return;
-        }
+      // Guard (deletion-safety): in episode view a whole-record series action
+      // can't safely span one show across batches — split, the route would
+      // collapse it per batch. The route also never acts on one Arr record
+      // twice in a run, but steer the user to the grouped series view, which
+      // acts on a whole show as one row. An artist split across batches is
+      // left to that route rule: the Query page has no artist-grouped view to
+      // offer instead.
+      if (
+        !actionHonorsMemberIds(config.actionType) &&
+        definition.includeEpisodes &&
+        oversizedActionGroup(selectedItems, targetType) === "SERIES"
+      ) {
+        toast.error("Too many episodes for one series", {
+          description: `Acting on more than ${MAX_QUERY_ACTION_ITEMS.toLocaleString()} episodes of a single show at once isn't supported in episode view — switch to the grouped series view to act on the whole show.`,
+        });
+        return;
       }
 
       // The server caps each request at MAX_QUERY_ACTION_ITEMS ids (a safety
@@ -1156,8 +1164,7 @@ export default function QueryPage() {
           });
           if (!resp.ok) {
             // Auth/validation failures come back as plain JSON (before streaming).
-            const data = await resp.json().catch(() => null);
-            const reason = data?.error ?? "Unknown error";
+            const reason = await readResponseError(resp, "Unknown error");
             if (didWork()) {
               // Earlier batches did real work (recorded server-side). Stop here
               // (fail-closed), report the partial result, and refresh.
@@ -1435,8 +1442,6 @@ export default function QueryPage() {
   }, [cardColumns, gridVirtualizer]);
 
   const virtualRows = gridVirtualizer.getVirtualItems();
-
-
 
   return (
     <>
@@ -1729,7 +1734,7 @@ export default function QueryPage() {
             {orphanArrRules && (
               <p className="text-muted-foreground">
                 {hasAnyArrInstanceAvailable
-                  ? `This query uses Arr criteria, but no enabled Arr server is selected above for ${unevaluableArrTypes.join(", ")}. Those media types are left out of the results — without Arr data, negative rules like \u201cFound In Arr = false\u201d would match every item of them. Pick an enabled server for each to include them.`
+                  ? `This query uses Arr criteria, but no enabled Arr server is selected above for ${unevaluableArrTypes.join(", ")}. Those media types are left out of the results — without Arr data, negative rules like \u201cFound In Arr = false\u201d would match every item of them. Pick an enabled server for each above — or connect one in Settings → Integrations — to include them.`
                   : "This query uses Arr criteria but no Arr server is configured. Connect Radarr, Sonarr, or Lidarr in Settings → Integrations — until then these rules can't reflect real Arr data, and the query returns no results."}
               </p>
             )}

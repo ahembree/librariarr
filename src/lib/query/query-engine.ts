@@ -412,17 +412,38 @@ export async function executeQuery(
   if (hasArrRules(definition.groups)) {
     const scope = await resolveQueryArrScope(userId, definition.arrServerIds, definition.mediaTypes);
     if (scope.unevaluable.length > 0) {
-      const warnings = scope.unevaluable.map((u) => u.reason);
+      // Only a type the query could have returned is worth a warning: with
+      // every type in scope, a user with no music library and no Lidarr would
+      // otherwise be told on every run that music was left out.
+      const presentTypes = await libraryTypesInScope(userId, definition.serverIds);
+      const warnings = scope.unevaluable.filter((u) => presentTypes.has(u.type)).map((u) => u.reason);
       if (scope.evaluable.length === 0) {
-        return { items: [], pagination: { page, limit, hasMore: false, total: 0 }, warnings };
+        return {
+          items: [],
+          pagination: { page, limit, hasMore: false, total: 0 },
+          ...(warnings.length > 0 && { warnings }),
+        };
       }
       const result = await runQueryDefinition(
         { ...definition, mediaTypes: scope.evaluable }, userId, page, limit, onProgress,
       );
-      return { ...result, warnings: [...(result.warnings ?? []), ...warnings] };
+      return warnings.length > 0 ? { ...result, warnings: [...(result.warnings ?? []), ...warnings] } : result;
     }
   }
   return runQueryDefinition(definition, userId, page, limit, onProgress);
+}
+
+/** The media types of the enabled libraries a query over `serverIds` searches. */
+async function libraryTypesInScope(userId: string, serverIds: string[]): Promise<Set<string>> {
+  const libraries = await prisma.library.findMany({
+    where: {
+      enabled: true,
+      mediaServer: { userId, enabled: true, ...(serverIds.length > 0 && { id: { in: serverIds } }) },
+    },
+    select: { type: true },
+    distinct: ["type"],
+  });
+  return new Set(libraries.map((l) => l.type));
 }
 
 async function runQueryDefinition(

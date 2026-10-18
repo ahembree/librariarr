@@ -230,6 +230,21 @@ describe("executeQuery — paths", () => {
     expect(mockFetchArr).toHaveBeenCalledWith(user.id, { radarr: "radarr-1" }, ["MOVIE"], undefined);
   });
 
+  it("warns only about a left-out type the user has a library for", async () => {
+    // No music library: leaving music out takes nothing away, so say nothing.
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const movies = await createTestLibrary(server.id, { type: "MOVIE", key: "m" });
+    await createTestMediaItem(movies.id, { title: "Film" });
+    mockFetchArr.mockResolvedValue({ MOVIE: {} });
+    const res = await executeQuery(
+      def({ mediaTypes: [], arrServerIds: { radarr: "radarr-1" }, groups: [group([rule("foundInArr", "equals", "false")])] }),
+      user.id, 1, 0,
+    );
+    expect(titles(res)).toEqual(["Film"]);
+    expect(res.warnings).toBeUndefined();
+  });
+
   it("a grouped show row lists every server holding it and totals its plays", async () => {
     const user = await createTestUser();
     const a = await createTestServer(user.id, { name: "Beta" });

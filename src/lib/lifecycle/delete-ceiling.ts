@@ -35,10 +35,10 @@ interface DeleteCeilingVerdict {
 
 /**
  * Who started the run, which decides what the refusal can tell them to do. A
- * scheduled run is held for review: its actions stay pending and the Pending
- * page's Execute runs them. A run someone started by hand (Execute, a query
- * action) has no later approval step — a smaller selection or a higher limit
- * is all that lets it through.
+ * scheduled run is held for review: its actions stay pending on the Pending
+ * page, whose Execute is held to the same limit. A run someone started by hand
+ * (Execute, a query action) has no later approval step. Either way, acting on
+ * fewer items at a time or a higher limit is what lets it through.
  */
 export type DeleteCeilingRunKind = "scheduled" | "manual";
 
@@ -98,9 +98,12 @@ async function ceilingVerdict(
     limit,
     reason:
       `This run would delete ${count} item(s), above the configured limit of ${limit}. ` +
+      // Execute on the Pending page is held to the same limit, so a scheduled
+      // run's message cannot send the user to an Execute All that would be
+      // refused for the same count.
       (kind === "scheduled"
-        ? `Nothing was deleted. Review the items on the Pending page and run them with Execute if they are correct, ` +
-          `or raise the limit in Settings.`
-        : `Nothing was deleted. Select at most ${limit} item(s), or raise the limit in Settings.`),
+        ? `Nothing was deleted; the actions stay pending. Review them on the Pending page and execute ` +
+          `at most ${limit} at a time if they are correct, or raise the limit in Settings.`
+        : `Nothing was deleted. Run it on at most ${limit} item(s) at a time, or raise the limit in Settings.`),
   };
 }

@@ -109,11 +109,11 @@ describe("checkDeleteCeilingForRun", () => {
     expect(await checkDeleteCeilingForRun("u1", "UNMONITOR_RADARR", 50)).toEqual({ allowed: true, count: 0, limit: 1 });
   });
 
-  it("tells a hand-started run to select less, not to run it manually", async () => {
+  it("tells a hand-started run to act on fewer items, not to run it manually", async () => {
     // A query action is already manual — "run it manually" offered nothing.
     m.findFirst.mockResolvedValue({ maxAutoDeleteItems: 25 });
     const verdict = await checkDeleteCeilingForRun("u1", "DELETE_RADARR", 30);
-    expect(verdict.reason).toContain("Select at most 25 item(s)");
+    expect(verdict.reason).toContain("at most 25 item(s) at a time");
     expect(verdict.reason).not.toMatch(/manually|Pending page/);
   });
 });
@@ -123,8 +123,10 @@ describe("checkDeleteCeiling refusal wording", () => {
     m.findFirst.mockResolvedValue({ maxAutoDeleteItems: 2 });
     const scheduled = await checkDeleteCeiling("u1", Array(3).fill(DESTRUCTIVE), "scheduled");
     expect(scheduled.reason).toContain("Pending page");
+    // Execute there is held to the same limit, so the advice must fit it.
+    expect(scheduled.reason).toContain("at most 2 at a time");
     const manual = await checkDeleteCeiling("u1", Array(3).fill(DESTRUCTIVE), "manual");
-    expect(manual.reason).toContain("Select at most 2 item(s)");
+    expect(manual.reason).toContain("at most 2 item(s) at a time");
     expect(manual.reason).not.toContain("Pending page");
   });
 });

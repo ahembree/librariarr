@@ -174,7 +174,6 @@ Any selection size works. A selection is sent in sequential batches of up to **1
 
 - A batch that fails entirely, with nothing executed, stops the remaining batches ("Action stopped … check the Arr instance, then re-run") rather than sending every one of them to an instance that is down.
 - A whole-show action on more than 1,000 episodes of a *single* show is refused in episode mode ("Too many episodes for one series") — switch off **Include individual episodes** to act on the show as one unit.
-- An artist-wide action on more than 1,000 tracks of a *single* artist is refused ("Too many tracks for one artist") — narrow the query so fewer of the artist's tracks are selected.
 
 ### The deletion limit
 
@@ -194,7 +193,6 @@ Every run is recorded in the **Actions** history and the [deletion stats](/docs/
 | Saved query name | 100 characters |
 | Items per action batch | 1,000 (larger selections run as several batches) |
 | Episodes of one show per whole-show action, episode mode | 1,000 |
-| Tracks of one artist per artist-wide action | 1,000 |
 | Servers per query | 100 |
 | Wait for a running rule-set execution before refusing | 1 minute |
 | Rows per criterion-column request | 50,000 (larger result sets load in chunks) |
