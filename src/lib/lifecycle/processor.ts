@@ -13,6 +13,7 @@ import { heldScheduledFor, loadGroupedActionHold } from "@/lib/lifecycle/grouped
 import { UnreachableInstances } from "@/lib/lifecycle/unreachable-instances";
 import { actionHonorsMemberIds, isDestructiveActionType } from "@/lib/lifecycle/action-types";
 import { checkDeleteCeiling } from "@/lib/lifecycle/delete-ceiling";
+import { notifyDeleteCeilingHeld, notifyDeletionHeld } from "@/lib/lifecycle/deletion-held-notice";
 import { reserveApiDestructive, type ApiDestructiveReservation } from "@/lib/api-keys/destructive-budget";
 import {
   tryBeginExecute,
@@ -454,46 +455,6 @@ export async function processLifecycleRules(userId?: string) {
   }
 }
 
-/**
- * Tell the operator their run was held, over Discord if it is configured.
- *
- * A ceiling that silently does nothing is worse than no ceiling: the actions
- * stay PENDING and the user has no reason to go looking. Best-effort — the
- * caller swallows failures, exactly like every other notification path here,
- * because a webhook outage must not fail a lifecycle run.
- */
-async function notifyDeleteCeilingReached(
-  userId: string,
-  verdict: { count: number; limit: number | null },
-): Promise<void> {
-  await notifyDeletionHeld(
-    userId,
-    `This run would have deleted **${verdict.count}** item(s), above the ` +
-      `configured limit of **${verdict.limit}**.\n\nNothing was deleted. The ` +
-      `actions are still pending — review them on the Pending page and execute ` +
-      `them there if they are correct, or raise the limit in Settings.`,
-  );
-}
-
-async function notifyDeletionHeld(userId: string, description: string): Promise<void> {
-  const settings = await prisma.appSettings.findFirst({
-    where: { userId },
-    select: { discordWebhookUrl: true },
-  });
-  if (!settings?.discordWebhookUrl) return;
-
-  await sendDiscordNotification(settings.discordWebhookUrl, {
-    embeds: [
-      {
-        title: "Lifecycle deletion held for review",
-        description,
-        color: 0xf59e0b,
-        timestamp: new Date().toISOString(),
-      },
-    ],
-  });
-}
-
 // A held API-queued run tells Discord at most once per 15 minutes: the run is
 // cheap to queue again, and a client doing so in a loop while the limits hold
 // it would otherwise post a message per call. Every hold is still logged.
@@ -868,7 +829,7 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
         `Holding this run's destructive actions — ${verdict.reason} ` +
           `They remain pending and can be executed from the Pending page.`,
       );
-      await notifyDeleteCeilingReached(uid, verdict).catch(() => {});
+      await notifyDeleteCeilingHeld(uid, verdict, "scheduled").catch(() => {});
     }
   }
 

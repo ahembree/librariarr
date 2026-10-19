@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { usePlexOAuth } from "@/hooks/use-plex-oauth";
 import { fetchWithReauth } from "@/lib/auth/reauth-client";
 import { responseErrorMessage } from "@/lib/api/error-message";
+import { PlexLoginPrompt } from "@/components/plex-login-prompt";
 import { useRealtime } from "@/hooks/use-realtime";
 import {
   DEFAULT_CHIP_COLORS,
@@ -212,6 +213,7 @@ export default function SettingsPage() {
       if (linkData.linked) {
         const infoRes = await fetch("/api/settings/auth");
         setAuthInfo(await infoRes.json());
+        if (linkData.plexLoginEnabled === false) setPlexLoginPrompt({ then: null });
       } else if (linkData.error) {
         throw new Error(linkData.error);
       }
@@ -227,13 +229,20 @@ export default function SettingsPage() {
       });
       const linkData = await linkRes.json();
       if (linkData.linked) {
-        window.location.href = "/onboarding";
+        // Ask about Plex login first; the prompt continues to onboarding.
+        if (linkData.plexLoginEnabled === false) {
+          setPlexLoginPrompt({ then: "/onboarding" });
+        } else {
+          window.location.assign("/onboarding");
+        }
       } else if (linkData.error) {
         throw new Error(linkData.error);
       }
     },
   });
   const plexLinking = plexOAuth.isLoading || plexOAuthForOnboarding.isLoading;
+  // Open after a Plex link while Plex login is off; `then` is where to go next.
+  const [plexLoginPrompt, setPlexLoginPrompt] = useState<{ then: string | null } | null>(null);
   const [credentialsForm, setCredentialsForm] = useState<CredentialsForm>({
     currentPassword: "",
     newUsername: "",
@@ -3491,6 +3500,16 @@ export default function SettingsPage() {
           </div>
         </div>
       </Tabs>
+
+      <PlexLoginPrompt
+        open={plexLoginPrompt !== null}
+        onDone={(enabled) => {
+          const then = plexLoginPrompt?.then ?? null;
+          setPlexLoginPrompt(null);
+          if (enabled) setAuthInfo((prev) => (prev ? { ...prev, plexLoginEnabled: true } : prev));
+          if (then) window.location.assign(then);
+        }}
+      />
     </div>
   );
 }

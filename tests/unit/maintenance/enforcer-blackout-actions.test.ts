@@ -64,12 +64,15 @@ function setBlackouts(list: unknown[]) {
   vi.mocked(prisma.blackoutSchedule.findMany).mockResolvedValue(list as never);
 }
 
-function client(over: Partial<Record<string, unknown>> = {}) {
+function client(over: Partial<Record<string, unknown>> = {}, initialPreroll = "") {
+  // The server's preroll setting, so a clear can check what it would remove.
+  let preroll = initialPreroll;
   const c = {
     getSessions: vi.fn().mockResolvedValue([]),
     terminateSession: vi.fn().mockResolvedValue(undefined),
-    setPrerollPath: vi.fn().mockResolvedValue(undefined),
-    clearPreroll: vi.fn().mockResolvedValue(undefined),
+    getPrerollSetting: vi.fn(async () => preroll),
+    setPrerollPath: vi.fn(async (path: string) => { preroll = path; }),
+    clearPreroll: vi.fn(async () => { preroll = ""; }),
     ...over,
   };
   vi.mocked(createMediaServerClient).mockReturnValue(c as unknown as Client);
@@ -416,6 +419,22 @@ describe("preroll edge cases", () => {
     expect(c.clearPreroll).toHaveBeenCalledTimes(1);
 
     // Cached as cleared: nothing more to do.
+    await processPrerollSchedules();
+    expect(c.clearPreroll).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a preroll set by hand alone when no schedule is active", async () => {
+    // After a restart the enforcer has no record of what it set. Clearing then
+    // wiped whatever preroll the server had, including one set in Plex itself.
+    vi.mocked(prisma.prerollSchedule.findMany).mockResolvedValue([prerollSchedule(pastWindow())] as never);
+    const c = client({}, "/my-own-intro.mp4");
+    await processPrerollSchedules();
+    expect(c.clearPreroll).not.toHaveBeenCalled();
+  });
+
+  it("after a restart still clears a preroll one of the schedules set", async () => {
+    vi.mocked(prisma.prerollSchedule.findMany).mockResolvedValue([prerollSchedule(pastWindow())] as never);
+    const c = client({}, "/pre.mp4");
     await processPrerollSchedules();
     expect(c.clearPreroll).toHaveBeenCalledTimes(1);
   });

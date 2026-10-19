@@ -17,6 +17,7 @@ import { hasEnabledSeerrInstances } from "@/lib/lifecycle/fetch-seerr-metadata";
 import { hasArrRules, hasSeerrRules, hasPlayActivityRules } from "@/lib/conditions/helpers";
 import { checkWatchHistoryCompleteness } from "@/lib/lifecycle/evaluability";
 import { checkDeleteCeilingForRun } from "@/lib/lifecycle/delete-ceiling";
+import { notifyDeleteCeilingHeld } from "@/lib/lifecycle/deletion-held-notice";
 import { beginQueryExecution, endQueryExecution } from "@/lib/lifecycle/execute-in-flight";
 import { eventBus } from "@/lib/events/event-bus";
 import type { ConditionGroup } from "@/lib/conditions/types";
@@ -238,6 +239,7 @@ export async function POST(request: NextRequest) {
   {
     const verdict = await checkDeleteCeilingForRun(userId, actionType, runUnits ?? mediaItemIds.length);
     if (!verdict.allowed) {
+      void notifyDeleteCeilingHeld(userId, verdict, "manual", "a Query page action").catch(() => {});
       return NextResponse.json({ error: verdict.reason }, { status: 400 });
     }
   }
@@ -573,6 +575,7 @@ export async function POST(request: NextRequest) {
       Math.max(runUnits ?? 0, priorUnits + items.length),
     );
     if (!verdict.allowed) {
+      void notifyDeleteCeilingHeld(userId, verdict, "manual", "a Query page action").catch(() => {});
       return {
         executed: 0,
         failed: 0,

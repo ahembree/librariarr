@@ -1507,6 +1507,7 @@ describe("preroll cache resilience", () => {
     const setPreroll = vi.fn().mockResolvedValue(undefined);
     const clearPreroll = vi.fn().mockResolvedValue(undefined);
     vi.mocked(createMediaServerClient).mockReturnValue({
+      getPrerollSetting: vi.fn().mockResolvedValue("/x.mp4"),
       setPrerollPath: setPreroll,
       clearPreroll,
     } as unknown as ReturnType<typeof createMediaServerClient>);

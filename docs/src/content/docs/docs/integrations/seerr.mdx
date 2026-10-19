@@ -93,12 +93,12 @@ Seerr data is available as rule conditions in the [lifecycle engine](/docs/featu
 
 | Field | Description | Example Use |
 |-------|-------------|-------------|
-| `seerrRequested` | Whether media was requested | Keep all requested content |
-| `seerrRequestDate` | When requested | Delete if requested over a year ago |
-| `seerrRequestCount` | Number of requests | Prioritize frequently requested content |
-| `seerrRequestedBy` | Who requested | Filter by specific user |
-| `seerrApprovalDate` | When approved | Track time since approval |
-| `seerrDeclineDate` | When declined | Clean up declined requests |
+| **Has Request** (`seerrRequested`) | Whether media was requested | Keep all requested content |
+| **Request Date** (`seerrRequestDate`) | When requested | Delete if requested over a year ago |
+| **Request Count** (`seerrRequestCount`) | Number of requests | Prioritize frequently requested content |
+| **Requested By** (`seerrRequestedBy`) | Who requested | Filter by specific user |
+| **Approval Date** (`seerrApprovalDate`) | When approved | Track time since approval |
+| **Decline Date** (`seerrDeclineDate`) | When declined | Clean up declined requests |
 
 Lifecycle rules and the [Query](/docs/features/query/) page both read every enabled Seerr instance and merge their requests, so a title requested on any of them counts as requested.
 
@@ -114,9 +114,9 @@ Seerr fields are available for **movie and series** rule sets only. Seerr has no
 
 Create a rule set to find media that was requested but never watched:
 
-- `seerrRequested` equals `true`
-- AND `playCount` equals `0`
-- AND `seerrApprovalDate` before 6 months ago
+- **Has Request** (`seerrRequested`) equals `true`
+- AND **Play Count** (`playCount`) equals `0`
+- AND **Approval Date** (`seerrApprovalDate`) before 6 months ago
 
 ## Security
 

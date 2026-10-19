@@ -177,11 +177,11 @@ Any selection size works. A selection is sent in sequential batches of up to **1
 
 ### The deletion limit
 
-The optional [deletion limit](/docs/features/lifecycle-rules/#limiting-how-much-one-run-can-delete) (**Settings → General → Delete without asking, up to N items per run**) counts the **whole run**, not each batch: a run over the limit is refused before its first batch starts, and nothing is deleted. A show or an artist counts once, as one action. Only delete actions count; unmonitor, quality-profile and search actions are never limited. A query run over the limit is not queued anywhere — the refusal says how many items the limit allows; select at most that many or raise the limit. The refusal is shown on the page and is not sent to Discord.
+The optional [deletion limit](/docs/features/lifecycle-rules/#limiting-how-much-one-run-can-delete) (**Settings → General → Delete without asking, up to N items per run**) counts the **whole run**, not each batch: a run over the limit is refused before its first batch starts, and nothing is deleted. A show or an artist counts once, as one action. Only delete actions count; unmonitor, quality-profile and search actions are never limited. A query run over the limit is not queued anywhere — the refusal says how many items the limit allows; select at most that many or raise the limit. The refusal is shown on the page and, when a Discord webhook is set, announced there as *Lifecycle deletion held for review* (at most once per 15 minutes).
 
 ### Audit trail
 
-Every run is recorded in the **Actions** history and the [deletion stats](/docs/features/lifecycle-rules/#deletion-stats) labelled *Ad-hoc query action*, so there's a full record even though no rule set exists. An action on exactly one episode is named by its show and episode number, for example *Breaking Bad S03E10*. Query actions send no Discord notifications.
+Every run is recorded in the **Actions** history and the [deletion stats](/docs/features/lifecycle-rules/#deletion-stats) labelled *Ad-hoc query action*, so there's a full record even though no rule set exists. An action on exactly one episode is named by its show and episode number, for example *Breaking Bad S03E10*. Query actions send no Discord notifications of their own, except the *deletion held* notice above.
 
 ## Limits
 

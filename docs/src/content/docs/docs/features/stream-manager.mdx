@@ -10,7 +10,7 @@ The Stream Manager provides real-time monitoring of active media streams and too
 
 ## Active Sessions
 
-The sessions view shows all currently active streams across your connected servers. It polls every 5 seconds as a baseline, and — when [Real-Time Sync](/docs/features/real-time-sync/) is enabled — pushes updates within ~2 seconds of a play, pause, or stop via the server's WebSocket. Real-time events also let the maintenance, blackout, and transcode enforcers see a new stream within about half a second instead of up to 30 seconds.
+The sessions view shows all currently active streams across your connected servers. It polls every 5 seconds as a baseline, and — when [Real-Time Sync](/docs/features/real-time-sync/) is enabled — pushes updates within ~2 seconds of a play, pause, or stop via the server's WebSocket. Real-time events also run the maintenance, blackout and transcode enforcers as soon as a stream changes — immediately on the first change, then at most once every 2 seconds while a server keeps sending session updates — instead of on their 30-second poll.
 
 ### Information Displayed
 
@@ -45,7 +45,7 @@ Temporarily pause all streaming activity for server maintenance.
 | Setting | Description |
 |---------|-------------|
 | **Termination Message** | Message shown to users when their stream is stopped — a preset or a custom message |
-| **Termination Delay** | Seconds a stream may play, from when the enforcer first sees it, before it is terminated (default: 30; 0 = immediately) |
+| **Termination Delay** | Seconds a stream may play, from when the enforcer first sees it, before it is terminated (default: 30; 0 = immediately; at most 3600, one hour) |
 | **Excluded Users** | Users who can continue streaming during maintenance |
 | **Notify Discord** | Send a Discord notification when maintenance mode is turned on or off (default: off; needs a webhook under Settings → Notifications) |
 
@@ -99,7 +99,7 @@ Automatically terminate streams that match transcoding criteria.
 
 | Setting | Description |
 |---------|-------------|
-| **Delay** | Seconds to wait before terminating matching streams (default: 30) |
+| **Delay** | Seconds to wait before terminating matching streams (default: 30; at most 3600) |
 | **Custom Message** | Message displayed to users when their session is terminated |
 | **Excluded Users** | Users who bypass transcode restrictions |
 | **Skip Hardware Transcodes** | Never terminate a stream Plex is encoding on a GPU, regardless of criteria (Plex-only; default: off) |
@@ -168,7 +168,7 @@ During a blackout window:
 | Action | Description |
 |--------|-------------|
 | **Terminate Immediately** | Stop sessions as soon as the blackout starts |
-| **Warn Then Terminate** | Send a warning, then terminate after a configurable delay (default: 30 seconds) |
+| **Warn Then Terminate** | Send a warning, then terminate after a configurable delay (default: 30 seconds, at most 3600) |
 | **Block New Only** | Allow existing sessions to continue but block new playbacks |
 
 <Aside>

@@ -47,7 +47,35 @@ A **Stream Query** group tests an item's individual audio, video or subtitle tra
 | **NO** | no track of that type meets them (an item with no track of that type matches) |
 | **ALL** | it has at least one track of that type, and every one of them meets the conditions |
 
-The fields offered depend on the stream type: codec, profile, language and language code, channels, bitrate, bit depth, default and forced flags, display titles, width, height, frame rate, scan type, video range type, sample rate, channel layout, audio profile, dynamic range, and the colour fields — each type shows only the ones its tracks carry. Changing a group's stream type clears its conditions, since the fields differ.
+Each stream type offers only the fields its tracks carry:
+
+| Label | Field | Stream types |
+|-|-|-|
+| Codec | `sqCodec` | audio, video, subtitle |
+| Profile | `sqProfile` | audio, video, subtitle |
+| Language | `sqLanguage` | audio, video, subtitle |
+| Language Code | `sqLanguageCode` | audio, video, subtitle |
+| Bitrate (kbps) | `sqBitrate` | audio, video |
+| Is Default Track | `sqIsDefault` | audio, video, subtitle |
+| Display Title | `sqDisplayTitle` | audio, video, subtitle |
+| Extended Display Title | `sqExtDisplayTitle` | audio, video, subtitle |
+| Channels | `sqChannels` | audio |
+| Sample Rate (Hz) | `sqSamplingRate` | audio |
+| Channel Layout | `sqAudioLayout` | audio |
+| Audio Profile | `sqAudioProfile` | audio |
+| Bit Depth | `sqBitDepth` | video |
+| Width | `sqWidth` | video |
+| Height | `sqHeight` | video |
+| Frame Rate | `sqFrameRate` | video |
+| Scan Type | `sqScanType` | video |
+| Video Range Type | `sqVideoRangeType` | video |
+| Dynamic Range | `sqDynamicRange` | video |
+| Color Primaries | `sqColorPrimaries` | video |
+| Color Range | `sqColorRange` | video |
+| Chroma Subsampling | `sqChromaSubsampling` | video |
+| Forced | `sqForced` | subtitle |
+
+In rule JSON a stream query group is a group with a `streamQuery` object — `{ "streamType": "audio", "quantifier": "any" }` (`any`, `none` or `all`) — whose conditions use the fields above. Changing a group's stream type clears its conditions, since the fields differ.
 
 ## Limiting how much one run can delete
 
@@ -90,30 +118,32 @@ Details worth knowing:
 
 Over 80 fields are available for rule conditions. Fields that can never have a value for a library type (for example Sonarr's season count on a movie rule set) are disabled in the builder, and a rule set that uses one anyway is refused when saved.
 
+Each table gives the **Label** the rule editor shows and the **Field** name it stands for. Use the field name wherever a rule is written as data: the `field` of a condition in an exported or imported rule set (see the [Rule Set Library](/docs/guides/rule-set-library/)), and in the JSON sent to the rule set and query routes.
+
 ### Media Fields
 
-| Field | Description | Operators |
-|-------|-------------|-----------|
-| `playCount` | Number of times played | equals, greaterThan, lessThan, etc. |
-| `watchedByUser` | Server username that played the item (Plex/Jellyfin/Emby) — multi-select | equals, notEquals, contains, notContains, matchesWildcard, isNull, isNotNull |
-| `lastPlayedAt` | When last played | before, after, inLastDays |
-| `addedAt` | When added to library (**Date Added**) | before, after, inLastDays |
-| `originallyAvailableAt` | **Release Date** reported by the media server (a calendar day) | before, after, inLastDays |
-| `isWatchlisted` | On your Plex watchlist (Plex) or marked favourite (Jellyfin/Emby) | equals, notEquals |
-| `title` | Media title | equals, contains, matchesWildcard |
-| `parentTitle` | **Artist / Series** — the series name for an episode, the artist for a track | equals, contains, matchesWildcard |
-| `albumTitle` | Album (music) | equals, contains, matchesWildcard |
-| `year` | Release year | equals, greaterThan, lessThan, etc. |
-| `contentRating` | Content rating (PG, R, etc.) | equals, notEquals |
-| `rating` | Critic rating | greaterThan, lessThan, etc. |
-| `audienceRating` | Audience rating | greaterThan, lessThan, etc. |
-| `ratingCount` | **Rating Count** reported by the media server | greaterThan, lessThan, etc. |
-| `studio` | Production studio | equals, contains |
-| `genre` | Genre(s) | equals, contains |
-| `labels` | **Label** tags set on the media server | equals, contains |
-| `country` | Country of origin — multi-select (movies only) | equals, contains, notContains |
-| `duration` | Duration in minutes | greaterThan, lessThan, etc. |
-| `hasExternalId` | Which external-id sources the item carries (TMDB, TVDB, IMDB, MUSICBRAINZ) — multi-select | equals, notEquals, contains, notContains, matchesWildcard, isNull, isNotNull |
+| Label | Field | Description | Operators |
+|-|-------|-------------|-----------|
+| Play Count | `playCount` | Number of times played | equals, greaterThan, lessThan, etc. |
+| Watched By User | `watchedByUser` | Server username that played the item (Plex/Jellyfin/Emby) — multi-select | equals, notEquals, contains, notContains, matchesWildcard, isNull, isNotNull |
+| Last Played | `lastPlayedAt` | When last played | before, after, inLastDays |
+| Date Added | `addedAt` | When added to library (**Date Added**) | before, after, inLastDays |
+| Release Date | `originallyAvailableAt` | **Release Date** reported by the media server (a calendar day) | before, after, inLastDays |
+| Is Watchlisted | `isWatchlisted` | On your Plex watchlist (Plex) or marked favourite (Jellyfin/Emby) | equals, notEquals |
+| Title | `title` | Media title | equals, contains, matchesWildcard |
+| Artist / Series | `parentTitle` | **Artist / Series** — the series name for an episode, the artist for a track | equals, contains, matchesWildcard |
+| Album | `albumTitle` | Album (music) | equals, contains, matchesWildcard |
+| Year | `year` | Release year | equals, greaterThan, lessThan, etc. |
+| Content Rating | `contentRating` | Content rating (PG, R, etc.) | equals, notEquals |
+| Rating | `rating` | Critic rating | greaterThan, lessThan, etc. |
+| Audience Rating | `audienceRating` | Audience rating | greaterThan, lessThan, etc. |
+| Rating Count | `ratingCount` | **Rating Count** — Plex's `ratingCount`, the number of ratings behind the item's rating in Plex's online metadata. Plex sets it mostly on music tracks (a popularity count); it is empty for Jellyfin and Emby items and for most movies and episodes, so pair it with **Is Empty** or a media-type check | greaterThan, lessThan, etc. |
+| Studio | `studio` | Production studio | equals, contains |
+| Genre | `genre` | Genre(s) | equals, contains |
+| Label | `labels` | **Label** tags set on the media server | equals, contains |
+| Country | `country` | Country of origin — multi-select (movies only) | equals, contains, notContains |
+| Duration (min) | `duration` | Duration in minutes | greaterThan, lessThan, etc. |
+| Has External ID | `hasExternalId` | Which external-id sources the item carries (TMDB, TVDB, IMDB, MUSICBRAINZ) — multi-select | equals, notEquals, contains, notContains, matchesWildcard, isNull, isNotNull |
 
 :::note[`hasExternalId`: per-source vs. "any at all"]
 Operators that take a value ask a **per-source** question: `equals TMDB` matches
@@ -124,61 +154,61 @@ TMDB id specifically", use `notEquals TMDB`.
 
 ### Video Fields
 
-| Field | Description |
-|-------|-------------|
-| `resolution` | 4K, 1080P, 720P, etc. |
-| `videoCodec` | H.264, H.265, AV1, etc. |
-| `videoBitrate` | Video bitrate (kbps) |
-| `videoBitDepth` | 8-bit, 10-bit |
-| `videoProfile` | Baseline, Main, High |
-| `videoFrameRate` | Frame rate (23.976, 24, etc.) |
-| `aspectRatio` | 16:9, 4:3, 2.39:1, etc. |
-| `dynamicRange` | SDR, HDR10, HDR10+, Dolby Vision, HLG |
-| `scanType` | progressive, interlaced |
+| Label | Field | Description |
+|-|-------|-------------|
+| Resolution | `resolution` | 4K, 1080P, 720P, etc. |
+| Video Codec | `videoCodec` | H.264, H.265, AV1, etc. |
+| Video Bitrate (kbps) | `videoBitrate` | Video bitrate (kbps) |
+| Video Bit Depth | `videoBitDepth` | 8-bit, 10-bit |
+| Video Profile | `videoProfile` | Baseline, Main, High |
+| Frame Rate | `videoFrameRate` | Frame rate (23.976, 24, etc.) |
+| Aspect Ratio | `aspectRatio` | 16:9, 4:3, 2.39:1, etc. |
+| Dynamic Range | `dynamicRange` | SDR, HDR10, HDR10+, Dolby Vision, HLG |
+| Scan Type | `scanType` | progressive, interlaced |
 
 ### Audio Fields
 
-| Field | Description |
-|-------|-------------|
-| `audioCodec` | AAC, AC3, FLAC, etc. |
-| `audioChannels` | Channel count (2, 6, 8, etc.) |
-| `audioProfile` | Dolby Atmos, DTS-HD MA, etc. |
-| `audioSamplingRate` | Sampling rate in Hz (48000, etc.) |
-| `audioBitrate` | Audio bitrate (kbps) |
-| `audioLanguage` | Audio track language |
-| `streamAudioCodec` | Codec of any audio track (not only the primary one) |
-| `audioStreamCount` | Number of audio tracks |
+| Label | Field | Description |
+|-|-------|-------------|
+| Audio Codec | `audioCodec` | AAC, AC3, FLAC, etc. |
+| Audio Channels | `audioChannels` | Channel count (2, 6, 8, etc.) |
+| Audio Profile | `audioProfile` | Dolby Atmos, DTS-HD MA, etc. |
+| Sample Rate (Hz) | `audioSamplingRate` | Sampling rate in Hz (48000, etc.) |
+| Audio Bitrate (kbps) | `audioBitrate` | Audio bitrate (kbps) |
+| Audio Language | `audioLanguage` | Audio track language |
+| Stream Audio Codec | `streamAudioCodec` | Codec of any audio track (not only the primary one) |
+| Audio Track Count | `audioStreamCount` | Number of audio tracks |
 
 ### File Fields
 
-| Field | Description |
-|-------|-------------|
-| `fileSize` | File size (in MB) |
-| `container` | File container (MKV, MP4, etc.) |
-| `subtitleLanguage` | Subtitle track language |
-| `subtitleStreamCount` | Number of subtitle tracks |
+| Label | Field | Description |
+|-|-------|-------------|
+| File Size (MB) | `fileSize` | File size (in MB) |
+| Container | `container` | File container (MKV, MP4, etc.) |
+| Subtitle Language | `subtitleLanguage` | Subtitle track language |
+| Subtitle Track Count | `subtitleStreamCount` | Number of subtitle tracks |
 
 ### Cross-System Fields
 
-| Field | Description |
-|-------|-------------|
-| `serverCount` | Number of copies of the item across your servers (items sharing its dedup identity) |
-| `matchedByRuleSet` | Names of the rule sets currently matching the item — multi-select |
-| `hasPendingAction` | Whether another rule set already has an action pending on the item or another copy of it |
+| Label | Field | Description |
+|-|-------|-------------|
+| Server Count | `serverCount` | Number of copies of the item across your servers (items sharing its dedup identity) |
+| Matched By Rule Set | `matchedByRuleSet` | Names of the rule sets currently matching the item — multi-select |
+| Has Pending Action | `hasPendingAction` | Whether another rule set already has an action pending on the item or another copy of it |
 
 ### Series Fields
 
 Series rule sets only. See [Series scope and aggregate fields](#series-scope-and-aggregate-fields).
 
-| Field | Description |
-|-------|-------------|
-| `availableEpisodeCount` | Episodes of the show in your library |
-| `watchedEpisodeCount` | Episodes played at least once |
-| `watchedEpisodePercentage` | Share of the show's episodes played, as a percentage |
-| `seriesLastPlayedAt` | **Series Last Played** — most recent play of any episode |
-| `latestEpisodeViewDate` | Last play of the newest episode |
-| `lastEpisodeAddedAt` | When the newest episode was added |
-| `lastEpisodeAiredAt` | Air date of the newest episode (a calendar day) |
+| Label | Field | Description |
+|-|-------|-------------|
+| Available Episode Count | `availableEpisodeCount` | Episodes of the show in your library |
+| Watched Episode Count | `watchedEpisodeCount` | Episodes played at least once |
+| Watched Episode % | `watchedEpisodePercentage` | Share of the show's episodes played, as a percentage |
+| Series Last Played | `seriesLastPlayedAt` | **Series Last Played** — most recent play of any episode |
+| Latest Episode View Date | `latestEpisodeViewDate` | Last play of the newest episode |
+| Last Episode Added | `lastEpisodeAddedAt` | When the newest episode was added |
+| Last Episode Aired | `lastEpisodeAiredAt` | Air date of the newest episode (a calendar day) |
 
 :::note[Calendar-day fields]
 `originallyAvailableAt`, `arrReleaseDate`, `arrInCinemasDate`, `arrFirstAired` and `lastEpisodeAiredAt` are calendar days rather than moments in time, and are shown as that day wherever you are. Other date fields (added, last played, request dates) are moments and are shown in your local time.
@@ -188,35 +218,35 @@ Series rule sets only. See [Series scope and aggregate fields](#series-scope-and
 
 These fields require configured [Sonarr](/docs/integrations/sonarr/), [Radarr](/docs/integrations/radarr/), or [Lidarr](/docs/integrations/lidarr/) integrations.
 
-| Field | Description |
-|-------|-------------|
-| `foundInArr` | Whether the item exists in the linked *arr instance |
-| `arrMonitored` | Whether monitored in *arr |
-| `arrTag` | Tags in *arr instance |
-| `arrQualityProfile` | Quality profile name |
-| `arrQualityName` | Name of the current file's quality (Radarr / movies only) |
-| `arrQualityCutoffMet` | Whether the current file meets the quality profile's cutoff (Radarr / movies only). `true` once the file is at or above the cutoff, so no upgrade is pending |
-| `arrCustomFormatScore` | Custom format score of the movie's current file (Radarr / movies only) |
-| `arrStatus` | Release/lifecycle status in *arr (e.g. `released`, `continuing`) |
-| `arrEnded` | Whether the series has ended (Sonarr / series only) |
-| `arrSeriesType` | Series type: `standard`, `daily`, or `anime` (Sonarr / series only) |
-| `arrRating` | **IMDB Rating** in *arr. For movies this is the IMDB rating; for series/music it is the single aggregate rating the *arr exposes |
-| `arrTmdbRating` | TMDB rating in *arr (Radarr / movies only — Sonarr/Lidarr expose only a single flat rating) |
-| `arrRtCriticRating` | Rotten Tomatoes critic rating in *arr (Radarr / movies only — Sonarr/Lidarr expose only a single flat rating) |
-| `arrOriginalLanguage` | Original language in *arr (not music) |
-| `arrRuntime` | Runtime in minutes (Radarr / movies only) |
-| `arrSizeOnDisk` | Size on disk in MB |
-| `arrPath` | File path in *arr |
-| `arrReleaseDate` | Digital/physical release date (Radarr / movies only) |
-| `arrInCinemasDate` | In-cinemas date (Radarr / movies only) |
-| `arrFirstAired` | First-aired date (Sonarr / series only) |
-| `arrDateAdded` | When the item was added to *arr |
-| `arrDownloadDate` | When the current file was downloaded (Radarr / movies only) |
-| `arrSeasonCount` | Total season count (Sonarr / series only) |
-| `arrEpisodeCount` | Total episode count, specials excluded — every episode Sonarr knows of, aired or not, monitored or not (Sonarr / series only) |
-| `arrHasUnaired` | Whether the series has an episode airing in the future, monitored or not, or is still upcoming (Sonarr / series only) |
-| `arrMonitoredSeasonCount` | Number of monitored seasons, specials excluded (Sonarr / series only) |
-| `arrMonitoredEpisodeCount` | Number of episodes in monitored seasons, specials excluded. Sonarr reports no per-episode monitored count with the series, so an episode unmonitored inside a monitored season is still counted (Sonarr / series only) |
+| Label | Field | Description |
+|-|-------|-------------|
+| Found In Arr | `foundInArr` | Whether the item exists in the linked *arr instance |
+| Monitored | `arrMonitored` | Whether monitored in *arr |
+| Tag | `arrTag` | Tags in *arr instance |
+| Quality Profile | `arrQualityProfile` | Quality profile name |
+| Quality Name | `arrQualityName` | Name of the current file's quality (Radarr / movies only) |
+| Quality Cutoff Met | `arrQualityCutoffMet` | Whether the current file meets the quality profile's cutoff (Radarr / movies only). `true` once the file is at or above the cutoff, so no upgrade is pending |
+| Custom Format Score | `arrCustomFormatScore` | Custom format score of the movie's current file (Radarr / movies only) |
+| Status | `arrStatus` | Release/lifecycle status in *arr (e.g. `released`, `continuing`) |
+| Ended | `arrEnded` | Whether the series has ended (Sonarr / series only) |
+| Series Type | `arrSeriesType` | Series type: `standard`, `daily`, or `anime` (Sonarr / series only) |
+| IMDB Rating | `arrRating` | **IMDB Rating** in *arr. For movies this is the IMDB rating; for series/music it is the single aggregate rating the *arr exposes |
+| TMDB Rating | `arrTmdbRating` | TMDB rating in *arr (Radarr / movies only — Sonarr/Lidarr expose only a single flat rating) |
+| RT Critic Rating | `arrRtCriticRating` | Rotten Tomatoes critic rating in *arr (Radarr / movies only — Sonarr/Lidarr expose only a single flat rating) |
+| Original Language | `arrOriginalLanguage` | Original language in *arr (not music) |
+| Runtime (min) | `arrRuntime` | Runtime in minutes (Radarr / movies only) |
+| Size on Disk (MB) | `arrSizeOnDisk` | Size on disk in MB |
+| Path | `arrPath` | File path in *arr |
+| Release Date | `arrReleaseDate` | Digital/physical release date (Radarr / movies only) |
+| In Cinemas Date | `arrInCinemasDate` | In-cinemas date (Radarr / movies only) |
+| First Aired | `arrFirstAired` | First-aired date (Sonarr / series only) |
+| Date Added | `arrDateAdded` | When the item was added to *arr |
+| Download Date | `arrDownloadDate` | When the current file was downloaded (Radarr / movies only) |
+| Season Count | `arrSeasonCount` | Total season count (Sonarr / series only) |
+| Episode Count | `arrEpisodeCount` | Total episode count, specials excluded — every episode Sonarr knows of, aired or not, monitored or not (Sonarr / series only) |
+| Has Unaired | `arrHasUnaired` | Whether the series has an episode airing in the future, monitored or not, or is still upcoming (Sonarr / series only) |
+| Monitored Seasons | `arrMonitoredSeasonCount` | Number of monitored seasons, specials excluded (Sonarr / series only) |
+| Monitored Episodes | `arrMonitoredEpisodeCount` | Number of episodes in monitored seasons, specials excluded. Sonarr reports no per-episode monitored count with the series, so an episode unmonitored inside a monitored season is still counted (Sonarr / series only) |
 
 :::note[Missing *arr data is fail-closed]
 If an item isn't in the linked *arr instance, or a specific field has no value (for example a movie with no downloaded file has no quality name, quality-cutoff, or size), **no comparison operator matches it** — including negative operators like *Not Equals* / *Not Contains* and the *NOT* toggle. This is deliberate so lifecycle rules never delete an item on the strength of absent *arr data. To target items with missing data, use the *Is Empty* (`isNull`) operator, or the `foundInArr` field.
@@ -232,14 +262,14 @@ When a rule set's action is linked to an *arr instance, its *arr criteria are re
 
 These fields require a configured [Seerr](/docs/integrations/seerr/) integration.
 
-| Field | Description |
-|-------|-------------|
-| `seerrRequested` | Whether requested in Seerr |
-| `seerrRequestDate` | When the most recent request was made |
-| `seerrRequestCount` | Number of requests |
-| `seerrRequestedBy` | Who requested it |
-| `seerrApprovalDate` | When the most recent request was approved (including requests Seerr has since marked Completed or Failed) |
-| `seerrDeclineDate` | When the most recent request was declined |
+| Label | Field | Description |
+|-|-------|-------------|
+| Has Request | `seerrRequested` | Whether requested in Seerr |
+| Request Date | `seerrRequestDate` | When the most recent request was made |
+| Request Count | `seerrRequestCount` | Number of requests |
+| Requested By | `seerrRequestedBy` | Who requested it |
+| Approval Date | `seerrApprovalDate` | When the most recent request was approved (including requests Seerr has since marked Completed or Failed) |
+| Decline Date | `seerrDeclineDate` | When the most recent request was declined |
 
 An item with no such date (never requested, never approved, never declined) fails every date comparison except **Not Equals**, exactly like the library's own date fields, and **Not** then applies as usual — so NOT (Request Date in the last 90 days) includes titles nobody ever requested, while NOT (Request Date not equal to a date) does not. Use **Is Empty** / **Is Not Empty** to target them directly. If Seerr's request list can't be read in full, rule sets using Seerr fields are skipped for that run rather than evaluated against a partial list.
 

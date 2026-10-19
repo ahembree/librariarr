@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { executeActionsForItems } from "@/lib/lifecycle/run-actions";
 import { checkDeleteCeiling } from "@/lib/lifecycle/delete-ceiling";
+import { notifyDeleteCeilingHeld } from "@/lib/lifecycle/deletion-held-notice";
 import {
   tryBeginExecute,
   endExecute,
@@ -384,6 +385,7 @@ async function executeRuleSet(
     );
     if (!verdict.allowed) {
       logger.warn("Lifecycle", `Refused manual execute for rule set "${ruleSet.id}" — ${verdict.reason}`);
+      void notifyDeleteCeilingHeld(session.userId!, verdict, "manual", `Execute on rule set "${ruleSet.name}"`).catch(() => {});
       return NextResponse.json({ error: verdict.reason }, { status: 400 });
     }
   }

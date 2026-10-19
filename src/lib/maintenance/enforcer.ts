@@ -118,6 +118,25 @@ export function isBlackoutActive(schedule: ScheduleWindow): boolean {
 // Cache the last-set preroll path per user to avoid redundant Plex API calls
 const lastPrerollPath = new Map<string, string>();
 
+/**
+ * Clear a server's preroll only when it is one the enforcer would have set:
+ * a path it applied (`ownPaths` — the cached one and every schedule's path).
+ * A preroll set by hand in Plex, or by a preset's Apply, is left alone. The
+ * cache is in memory, so after a restart it is empty and the enforcer cannot
+ * know what it set; unconditionally clearing then wiped a manual preroll on
+ * every Plex server the moment no schedule was active.
+ */
+async function clearPrerollIfOurs(
+  client: { getPrerollSetting?(): Promise<string>; clearPreroll?(): Promise<void> },
+  ownPaths: ReadonlySet<string>,
+): Promise<boolean> {
+  if (!client.getPrerollSetting || !client.clearPreroll) return false;
+  const current = await client.getPrerollSetting();
+  if (!current || !ownPaths.has(current)) return false;
+  await client.clearPreroll();
+  return true;
+}
+
 /** Exported for direct testing. */
 export async function processPrerollSchedules() {
   // Re-entrancy guard: a slow Plex call must not let one tick overlap the next.
@@ -168,6 +187,10 @@ export async function processPrerollSchedules() {
 
       if (cached === desiredPath) continue; // No change needed
 
+      // The paths this user's schedules set — the only ones a clear may remove.
+      const ownPaths = new Set(userSchedules.map((s) => s.prerollPath).filter(Boolean));
+      if (cached) ownPaths.add(cached);
+
       const outcomes = await Promise.allSettled(
         servers.map(async (server) => {
           const client = createMediaServerClient(server.type, server.url, server.accessToken, {
@@ -177,8 +200,7 @@ export async function processPrerollSchedules() {
           if (desiredPath) {
             await client.setPrerollPath?.(desiredPath);
             logger.info("Enforcer", `Preroll: set to "${desiredPath}" for schedule "${activeSchedule!.name}"`);
-          } else {
-            await client.clearPreroll?.();
+          } else if (await clearPrerollIfOurs(client, ownPaths)) {
             logger.info("Enforcer", "Preroll: cleared (no active schedule)");
           }
         }),
@@ -224,8 +246,9 @@ export async function processPrerollSchedules() {
                   const client = createMediaServerClient(server.type, server.url, server.accessToken, {
                     skipTlsVerify: server.tlsSkipVerify,
                   });
-                  await client.clearPreroll?.();
-                  logger.info("Enforcer", "Preroll: cleared (no more enabled schedules)");
+                  if (await clearPrerollIfOurs(client, new Set([lastPrerollPath.get(userId)!]))) {
+                    logger.info("Enforcer", "Preroll: cleared (no more enabled schedules)");
+                  }
                 } catch (error) {
                   logger.debug("Enforcer", "Preroll: could not clear on server", { error: String(error) });
                 }

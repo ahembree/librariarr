@@ -39,6 +39,8 @@ Linking needs a sign-in from the last 15 minutes, because a linked Plex account 
 
 With a Plex account linked, **Settings → Authentication → Plex Connection** shows an **Allow Plex Login** toggle (on by default; off by default when the first admin was created with a local password). Turning it off hides the **Sign in with Plex** button from the login page but keeps your Plex token attached, so server discovery and library sync keep working. Librariarr refuses a change that would leave no usable sign-in method (Plex, local login or SSO), and turning Plex login back on needs a sign-in from the last 15 minutes.
 
+Linking an account never changes this setting. When you link Plex — under **Settings → Authentication**, from **Add Server → Plex**, or during onboarding — while Plex login is off, Librariarr asks **Allow signing in with Plex?**: **Enable Plex login** turns it on, **Keep it off** leaves it as it is. Keep it off if other people share the Plex account, since anyone who can sign in to it could then sign in to Librariarr.
+
 ## Server Connection
 
 ### Auto-Discovery
