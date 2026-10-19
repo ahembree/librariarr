@@ -46,6 +46,12 @@ describe("deletion held notices", () => {
     expect(m.send.mock.calls[0][1].embeds[0].description).toContain("started by hand (a Query page action)");
   });
 
+  it("throttle a scheduled-kind run queued through an API key", async () => {
+    await notifyDeleteCeilingHeld("u1", { count: 3, limit: 2 }, "scheduled", undefined, { throttle: true });
+    await notifyDeleteCeilingHeld("u1", { count: 3, limit: 2 }, "scheduled", undefined, { throttle: true });
+    expect(m.send).toHaveBeenCalledTimes(1);
+  });
+
   it("never throttle a scheduled run's notice", async () => {
     await notifyDeleteCeilingHeld("u1", { count: 3, limit: 2 }, "scheduled");
     await notifyDeleteCeilingHeld("u1", { count: 3, limit: 2 }, "scheduled");

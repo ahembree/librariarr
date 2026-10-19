@@ -829,7 +829,8 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
         `Holding this run's destructive actions — ${verdict.reason} ` +
           `They remain pending and can be executed from the Pending page.`,
       );
-      await notifyDeleteCeilingHeld(uid, verdict, "scheduled").catch(() => {});
+      // A run queued through an API key can be re-queued in a loop.
+      await notifyDeleteCeilingHeld(uid, verdict, "scheduled", undefined, { throttle: !!options.viaApiKey }).catch(() => {});
     }
   }
 

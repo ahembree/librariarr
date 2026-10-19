@@ -37,7 +37,9 @@ export async function notifyDeletionHeld(userId: string, description: string): P
 
 // A hand-started run that is held tells Discord at most once per 15 minutes:
 // Execute and the public API's execute endpoint can be called in a loop, and
-// each refusal would otherwise post a message. Every hold is still logged.
+// each refusal would otherwise post a message. So does a scheduled-kind run
+// queued through an API key (`throttle`), which a client can re-queue in a
+// loop just the same. Every hold is still logged.
 // Pinned to globalThis: the route bundles and the job worker load this module
 // separately (see "Cross-bundle singletons" in CLAUDE.md).
 const MANUAL_HOLD_NOTICE_INTERVAL_MS = 15 * 60 * 1000;
@@ -50,8 +52,9 @@ export async function notifyDeleteCeilingHeld(
   verdict: { count: number; limit: number | null },
   kind: DeleteCeilingRunKind,
   source?: string,
+  options: { throttle?: boolean } = {},
 ): Promise<void> {
-  if (kind === "manual") {
+  if (kind === "manual" || options.throttle) {
     if (Date.now() - manualHoldNotice.at < MANUAL_HOLD_NOTICE_INTERVAL_MS) return;
     manualHoldNotice.at = Date.now();
   }
@@ -69,7 +72,7 @@ export async function notifyDeleteCeilingHeld(
   );
 }
 
-/** Test seam: forget when the last hand-started hold was announced. */
+/** Test seam: forget when the last throttled hold was announced. */
 export function _resetHoldNoticeForTesting(): void {
   manualHoldNotice.at = 0;
 }

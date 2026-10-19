@@ -1,3 +1,5 @@
+import { deletesArrRecord } from "@/lib/lifecycle/action-types";
+
 /**
  * The effective configuration of a lifecycle action — everything that
  * determines WHAT the action does, independent of when it runs or which item
@@ -39,7 +41,10 @@ export function actionConfigSignature(c: ActionConfig): string {
     actionType: c.actionType ?? "",
     arrInstanceId: c.arrInstanceId ?? "",
     targetQualityProfileId: c.targetQualityProfileId ?? null,
-    addImportExclusion: c.addImportExclusion,
+    // Only a whole-record delete adds an import exclusion; on any other action
+    // the flag does nothing, so a stale stored `true` must not read as a
+    // re-configured action and re-fire every completed one.
+    addImportExclusion: deletesArrRecord(c.actionType ?? "") && c.addImportExclusion,
     searchAfterAction: c.searchAfterAction,
     addArrTags: normTags(c.addArrTags),
     removeArrTags: normTags(c.removeArrTags),
