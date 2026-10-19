@@ -1059,7 +1059,10 @@ export default function StreamManagerPage() {
   // has not synced (nothing to open the panel on).
   const detailPanel = useMediaDetailPanel();
   const { open: openPanel, close: closePanel } = detailPanel;
-  const [panelSession, setPanelSession] = useState<SessionWithServer | null>(null);
+  // The session the panel was opened for, with the item it resolved to: the
+  // panel shows the previous item until the new record loads, and the new
+  // session's details must not sit over it meanwhile.
+  const [panelSession, setPanelSession] = useState<{ session: SessionWithServer; itemId: string } | null>(null);
   const [sheetSession, setSheetSession] = useState<SessionWithServer | null>(null);
   const detailLookupToken = useRef(0);
 
@@ -1079,7 +1082,7 @@ export default function StreamManagerPage() {
     if (token !== detailLookupToken.current) return;
     if (itemId && mediaType) {
       setSheetSession(null);
-      setPanelSession(s);
+      setPanelSession({ session: s, itemId });
       void openPanel({ id: itemId, mediaType });
     } else {
       closePanel();
@@ -2287,13 +2290,11 @@ export default function StreamManagerPage() {
       {detailPanel.panelProps && (
         <MediaDetailSidePanel
           {...detailPanel.panelProps}
-          contextSection={panelSession && (
-            <div className="mb-6">
-              {/* The live session while it plays; the last one seen once it ends. */}
-              <SessionStreamDetails
-                session={sessions.find((x) => sessionKey(x) === sessionKey(panelSession)) ?? panelSession}
-              />
-            </div>
+          contextSection={panelSession && panelSession.itemId === detailPanel.selectedId && (
+            // The live session while it plays; the last one seen once it ends.
+            <SessionStreamDetails
+              session={sessions.find((x) => sessionKey(x) === sessionKey(panelSession.session)) ?? panelSession.session}
+            />
           )}
         />
       )}

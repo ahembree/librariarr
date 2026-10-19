@@ -23,6 +23,8 @@ export interface DetailPanelGroup {
   playCount?: number;
   /** Most recent play across the members. */
   lastPlayedAt?: string | null;
+  /** When the group's first member was added. Omitted keeps the record's. */
+  addedAt?: string | null;
   /**
    * The group's blurb, when the row carries one (a show's rather than its
    * first episode's). Omitted keeps the representative record's.
@@ -49,6 +51,7 @@ export function groupOfRow(row: {
   fileSize?: string | null;
   playCount?: number | null;
   lastPlayedAt?: string | null;
+  addedAt?: string | null;
   summary?: string | null;
 }): DetailPanelGroup | undefined {
   if (!row.matchedEpisodes) return undefined;
@@ -60,6 +63,7 @@ export function groupOfRow(row: {
     fileSize: row.fileSize ?? null,
     playCount: row.playCount ?? undefined,
     lastPlayedAt: row.lastPlayedAt ?? null,
+    ...(row.addedAt !== undefined && { addedAt: row.addedAt }),
     ...(row.summary !== undefined && { summary: row.summary }),
   };
 }
@@ -82,6 +86,7 @@ export function buildDetailPanelItem(
     fileSize: group.fileSize ?? record.fileSize,
     playCount: group.playCount ?? 0,
     lastPlayedAt: group.lastPlayedAt ?? null,
+    addedAt: group.addedAt !== undefined ? group.addedAt : record.addedAt,
     summary: group.summary !== undefined ? group.summary : record.summary,
   };
 }

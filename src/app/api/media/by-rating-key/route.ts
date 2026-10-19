@@ -22,7 +22,13 @@ export async function GET(request: NextRequest) {
   if (!serverId || !ratingKey || serverId.length > 200 || ratingKey.length > 200) {
     return NextResponse.json({ error: "serverId and ratingKey are required" }, { status: 400 });
   }
-  const type = sessionMediaType(params.get("type"));
+  // A type that names no library type (a trailer, a photo) has no item to
+  // find; ignoring it would let the key match whatever else carries it.
+  const rawType = params.get("type");
+  const type = sessionMediaType(rawType);
+  if (rawType && !type) {
+    return NextResponse.json({ error: "Not found" }, { status: 404 });
+  }
 
   const items = await prisma.mediaItem.findMany({
     where: {

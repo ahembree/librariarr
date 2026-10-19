@@ -73,6 +73,10 @@ describe("GET /api/media/by-rating-key", () => {
     const typed = await callRoute(GET, { url: url({ serverId: server.id, ratingKey: "7", type: "episode" }) });
     expect((await expectJson<{ id: string }>(typed, 200)).id).toBe(episode.id);
 
+    // A type that names no library type finds nothing rather than ignoring it.
+    const clip = await callRoute(GET, { url: url({ serverId: server.id, ratingKey: "7", type: "clip" }) });
+    expect(clip.status).toBe(404);
+
     // Without a type the key names two items: no guess.
     const untyped = await callRoute(GET, { url: url({ serverId: server.id, ratingKey: "7" }) });
     expect(untyped.status).toBe(404);

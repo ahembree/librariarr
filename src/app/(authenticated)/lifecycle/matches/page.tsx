@@ -765,7 +765,7 @@ export default function RuleMatchesPage() {
   const openDetailPanel = useCallback((item: MatchedMediaItem, ruleSet: RuleSetMatch["ruleSet"]) => {
     // The Logic Preview reads grouped rules; a rule set still stored in the
     // flat legacy shape shows its matched criteria alone.
-    const rules = ruleSet.rules as LifecycleRuleGroup[];
+    const rules = (Array.isArray(ruleSet.rules) ? ruleSet.rules : []) as LifecycleRuleGroup[];
     const grouped = rules.length > 0 && typeof rules[0] === "object" && rules[0] !== null && "rules" in rules[0];
     void openPanel({
       id: item.id,

@@ -17,6 +17,7 @@ const episode = {
   playCount: 3,
   lastPlayedAt: "2026-01-01T00:00:00.000Z",
   summary: "Episode blurb",
+  addedAt: "2025-06-01T00:00:00.000Z",
 } as unknown as MediaItemWithRelations;
 
 describe("groupOfRow", () => {
@@ -35,6 +36,11 @@ describe("groupOfRow", () => {
     expect(groupOfRow({
       title: "The Show", matchedEpisodes: 4, fileSize: "999", playCount: 12, lastPlayedAt: "2026-02-02",
     })).toEqual({ title: "The Show", memberCount: 4, fileSize: "999", playCount: 12, lastPlayedAt: "2026-02-02" });
+  });
+
+  it("keeps the row's added date only when it has one", () => {
+    expect(groupOfRow({ title: "S", matchedEpisodes: 2 })).not.toHaveProperty("addedAt");
+    expect(groupOfRow({ title: "S", matchedEpisodes: 2, addedAt: "2026-01-01" })?.addedAt).toBe("2026-01-01");
   });
 
   it("keeps the row's summary only when it has one", () => {
@@ -59,6 +65,12 @@ describe("buildDetailPanelItem", () => {
     expect(item.playCount).toBe(0);
     expect(item.lastPlayedAt).toBeNull();
     expect(item.summary).toBe("Episode blurb");
+    expect(item.addedAt).toBe(episode.addedAt);
+  });
+
+  it("uses the group's added date when it has one", () => {
+    const item = buildDetailPanelItem(episode, { title: "The Show", memberCount: 2, addedAt: "2020-05-05" });
+    expect(item.addedAt).toBe("2020-05-05");
   });
 
   it("uses the group's plays and summary when it has them", () => {

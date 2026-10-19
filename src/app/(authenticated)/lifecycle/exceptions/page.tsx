@@ -114,6 +114,8 @@ interface GroupedExceptionRow {
   albumCount?: number;
   /** Most recent lastPlayedAt across group items. */
   lastPlayedAt: string | null;
+  /** Plays summed across the group items. */
+  playCount: number;
   /** Earliest addedAt across group items. */
   addedAt: string | null;
   /** Unique servers that hold items in this group. */
@@ -143,6 +145,7 @@ const TABS: { value: TabType; label: string; icon: typeof Film }[] = [
 
 function computeAggregates(items: ExceptionItem[]) {
   let totalSize = BigInt(0);
+  let playCount = 0;
   let lastPlayedAt: string | null = null;
   let addedAt: string | null = null;
   const serverMap = new Map<string, ServerInfo>();
@@ -151,6 +154,7 @@ function computeAggregates(items: ExceptionItem[]) {
     if (e.mediaItem.fileSize) {
       totalSize += BigInt(e.mediaItem.fileSize);
     }
+    playCount += e.mediaItem.playCount ?? 0;
     if (e.mediaItem.lastPlayedAt) {
       if (!lastPlayedAt || e.mediaItem.lastPlayedAt > lastPlayedAt) {
         lastPlayedAt = e.mediaItem.lastPlayedAt;
@@ -173,6 +177,7 @@ function computeAggregates(items: ExceptionItem[]) {
 
   return {
     totalSize: totalSize > 0 ? totalSize.toString() : null,
+    playCount,
     lastPlayedAt,
     addedAt,
     servers: [...serverMap.values()].sort((a, b) =>
@@ -198,6 +203,7 @@ function groupExceptions(
         createdAt: e.createdAt,
         year: e.mediaItem.year,
         totalSize: e.mediaItem.fileSize,
+        playCount: e.mediaItem.playCount,
         lastPlayedAt: e.mediaItem.lastPlayedAt,
         addedAt: e.mediaItem.addedAt,
         servers: ms
@@ -353,12 +359,16 @@ export default function LifecycleExceptionsPage() {
     void detailPanel.open({
       id: row.mediaItem.id,
       mediaType,
-      // A series or music row stands for every excepted episode/track under it.
-      group: mediaType === "MOVIE" ? undefined : {
+      // A series or music row stands for every excepted episode/track under
+      // it — except a series row holding one episode, which is named as that
+      // episode ("<Show> SxxExx") and so opens as it.
+      group: mediaType === "MOVIE" || (mediaType === "SERIES" && row.itemCount === 1) ? undefined : {
         title: row.displayTitle,
         memberCount: row.itemCount,
         fileSize: row.totalSize,
+        playCount: row.playCount,
         lastPlayedAt: row.lastPlayedAt,
+        addedAt: row.addedAt,
       },
     });
   };
@@ -532,7 +542,7 @@ export default function LifecycleExceptionsPage() {
             fileSize: row.totalSize,
             genres: row.mediaItem.genres,
             studio: row.mediaItem.studio,
-            playCount: row.mediaItem.playCount,
+            playCount: row.playCount,
             lastPlayedAt: row.lastPlayedAt,
             addedAt: row.addedAt,
             servers: row.servers,
@@ -562,7 +572,7 @@ export default function LifecycleExceptionsPage() {
             dynamicRange: row.mediaItem.dynamicRange,
             audioProfile: row.mediaItem.audioProfile,
             fileSize: row.totalSize,
-            playCount: row.mediaItem.playCount,
+            playCount: row.playCount,
             lastPlayedAt: row.lastPlayedAt,
             addedAt: row.addedAt,
             servers: row.servers,
@@ -593,7 +603,7 @@ export default function LifecycleExceptionsPage() {
           dynamicRange: row.mediaItem.dynamicRange,
           audioProfile: row.mediaItem.audioProfile,
           fileSize: row.totalSize,
-          playCount: row.mediaItem.playCount,
+          playCount: row.playCount,
           lastPlayedAt: row.lastPlayedAt,
           addedAt: row.addedAt,
           servers: row.servers,
