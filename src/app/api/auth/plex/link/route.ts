@@ -84,9 +84,19 @@ export async function POST(request: NextRequest) {
 
     apiLogger.info("Auth", `Plex account linked for user "${session.userId}"`);
 
+    // Whether Plex sign-in is on, so the page can offer to turn it on: linking
+    // never changes it, and a setup done with a password leaves it off — the
+    // admin who just linked Plex would otherwise find the Plex button missing
+    // from the login page with nothing saying why.
+    const settings = await prisma.appSettings.findFirst({
+      where: { userId: session.userId },
+      select: { plexLoginEnabled: true },
+    });
+
     return NextResponse.json({
       linked: true,
       plexUsername: plexUser.username,
+      plexLoginEnabled: settings?.plexLoginEnabled ?? true,
     });
   } catch (error) {
     apiLogger.error("Auth", "Plex link failed", { error: String(error) });

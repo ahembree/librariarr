@@ -19,6 +19,7 @@ import { Logo } from "@/components/logo";
 import { usePlexOAuth } from "@/hooks/use-plex-oauth";
 import { fetchWithReauth } from "@/lib/auth/reauth-client";
 import { ReauthDialogHost } from "@/components/reauth-dialog-host";
+import { PlexLoginPrompt } from "@/components/plex-login-prompt";
 import { SERVER_TYPE_STYLES } from "@/lib/server-styles";
 
 // ─── Types ───
@@ -69,7 +70,7 @@ function getDefaultUrl(connections: PlexConnection[]): string {
   return (remote || connections[0])?.uri ?? "";
 }
 
-function OnboardingContent() {
+function OnboardingContent({ onAskPlexLogin }: { onAskPlexLogin: () => void }) {
   const router = useRouter();
 
   // Mode & detection
@@ -155,6 +156,8 @@ function OnboardingContent() {
       const result = await res.json();
       if (!res.ok) throw new Error(result.error || "Failed to link Plex account");
       if (!result.linked) throw new Error(result.message || "Plex authentication not completed");
+      // Linking leaves Plex login as it was — off after a password setup — so ask.
+      if (result.plexLoginEnabled === false) onAskPlexLogin();
       // Now fetch Plex servers with the new token
       await fetchPlexServers();
     },
@@ -888,9 +891,11 @@ function OnboardingContent() {
 }
 
 export default function OnboardingPage() {
+  const [plexLoginPromptOpen, setPlexLoginPromptOpen] = useState(false);
   return (
     <>
-      <OnboardingContent />
+      <OnboardingContent onAskPlexLogin={() => setPlexLoginPromptOpen(true)} />
+      <PlexLoginPrompt open={plexLoginPromptOpen} onDone={() => setPlexLoginPromptOpen(false)} />
       {/* Onboarding sits outside the authenticated shell, so it hosts its own
           "Confirm it's you" prompt for the Plex link above. */}
       <ReauthDialogHost />

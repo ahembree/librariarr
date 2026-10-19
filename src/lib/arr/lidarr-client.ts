@@ -2,7 +2,6 @@ import axios, { AxiosInstance } from "axios";
 import { logger } from "@/lib/logger";
 import { IntegrationError } from "@/lib/integration-error";
 import { configureRetry, NO_RETRY } from "@/lib/http-retry";
-import { isExistingExclusionError } from "@/lib/arr/exclusion";
 
 export interface LidarrArtist {
   id: number;
@@ -214,19 +213,6 @@ export class LidarrClient {
 
   async deleteTag(id: number): Promise<void> {
     await this.client.delete(`/api/v1/tag/${id}`);
-  }
-
-  /** Idempotent: an exclusion that already exists counts as added. */
-  async addExclusion(foreignId: string, artistName: string): Promise<void> {
-    try {
-      await this.client.post("/api/v1/importlistexclusion", {
-        foreignId,
-        artistName,
-      });
-    } catch (error) {
-      if (isExistingExclusionError(error)) return;
-      throw error;
-    }
   }
 
   /**

@@ -12,16 +12,14 @@ Librariarr supports Jellyfin and Emby as media server backends alongside Plex.
 
 <Steps>
 
-1. Go to **Settings → Servers**
-2. Click **Add Server**
-3. Select **Jellyfin** or **Emby** as the server type
-4. Enter connection details:
-   - **URL**: Your server's base URL (e.g., `http://192.168.1.100:8096`)
-   - **Access Token**: An API key from your server
-   - **Skip TLS Verification**: Enable for self-signed certificates
-5. Click **Test Connection**
-6. Select which libraries to sync
-7. Save
+1. Go to **Settings → Media Servers**
+2. Click **Add Server** and choose **Jellyfin** or **Emby**
+3. Enter connection details:
+   - **URL**: Your server's base URL, including `http://` or `https://` (e.g., `http://192.168.1.100:8096`)
+   - **API Key**: An API key from your server
+   - **Skip TLS verification**: Enable for self-signed certificates
+4. Click **Test** — **Add Server** stays disabled until the test passes
+5. Click **Add Server**, then select which libraries to sync
 
 </Steps>
 
@@ -54,7 +52,8 @@ The same metadata is synced as with Plex:
 - Core metadata (title, year, ratings, genres, etc.)
 - Video, audio, and subtitle stream details
 - File information and external IDs
-- Play counts and history
+- Play counts and history, from every user's played items (or from [Tracearr](/docs/integrations/tracearr/), if you map the server to it)
+- Favorites — an item marked as a favorite counts as **watchlisted** in Librariarr
 
 ## Feature Parity Notes
 
@@ -66,7 +65,8 @@ Most Librariarr features work identically with Jellyfin and Emby. However, some 
 | Server discovery | Automatic | Manual URL entry |
 | Active stream monitoring | Yes | Yes |
 | Maintenance mode | Yes | Yes |
-| Preroll support | Native (Plex Pass) | Varies by version/plugins |
+| Preroll support | Native (Plex Pass) | No — the Preroll Manager is Plex-only |
+| Lifecycle collections | Yes | No — Plex-only |
 | Transcode management | Yes | Yes |
 | Real-time sync of added items | Yes | Yes — the item's library is resolved from its parent chain |
 
@@ -89,6 +89,6 @@ When the same media exists on multiple servers, Librariarr's [deduplication syst
 
 - No auto-discovery for Jellyfin/Emby — you must enter the URL manually
 - Some metadata fields may differ slightly between server types due to different APIs
-- Preroll functionality depends on server-side support, which varies for Jellyfin and Emby
+- The [Preroll Manager](/docs/features/preroll-manager/) and lifecycle-managed collections only work with Plex servers
 - Only libraries whose content type is **Movies**, **Shows** or **Music** are synced. A *mixed content* library has no content type and is skipped; if you change an existing library's content type to mixed, it is removed from Librariarr on the next full sync like any library the server no longer reports as one of those three
 - Watch history comes from each user's played-items list, so it carries play counts and last-played dates but not the per-play timestamps Plex provides. If a user's list cannot be fetched during a sync, the previous history is kept rather than partially replaced; a user the API key cannot read is skipped and logged

@@ -33,7 +33,23 @@ const { mockFetchArr, mockFetchSeerr } = vi.hoisted(() => ({
   mockFetchSeerr: vi.fn(),
 }));
 
-vi.mock("@/lib/query/fetch-arr-data", () => ({ fetchArrDataForQuery: mockFetchArr }));
+vi.mock("@/lib/query/fetch-arr-data", () => ({
+  fetchArrDataForQuery: mockFetchArr,
+  // Every selected id stands for an enabled instance here; the real lookup is
+  // covered in tests/unit/query/fetch-arr-data.test.ts.
+  resolveQueryArrScope: async (
+    _u: string,
+    ids: { radarr?: string; sonarr?: string; lidarr?: string } | undefined,
+    types: string[],
+  ) => {
+    const family = { MOVIE: "radarr", SERIES: "sonarr", MUSIC: "lidarr" } as const;
+    const inScope = (types.length === 0 ? ["MOVIE", "SERIES", "MUSIC"] : types) as Array<keyof typeof family>;
+    return {
+      evaluable: inScope.filter((t) => ids?.[family[t]]),
+      unevaluable: inScope.filter((t) => !ids?.[family[t]]).map((type) => ({ type, reason: `${type} left out` })),
+    };
+  },
+}));
 vi.mock("@/lib/query/fetch-seerr-data", () => ({ fetchSeerrDataForQuery: mockFetchSeerr }));
 
 import { executeQuery } from "@/lib/query/query-engine";
@@ -193,6 +209,58 @@ describe("executeQuery — paths", () => {
     const res = await executeQuery(def({ mediaTypes: ["MOVIE"], groups: [group([rule("arrTag", "contains", "keep")])] }), user.id, 1, 50);
     expect(mockFetchArr).not.toHaveBeenCalled();
     expect(res.items).toEqual([]);
+    expect(res.warnings).toEqual(["MOVIE left out"]);
+  });
+
+  it("leaves out a media type whose Arr criteria have no Arr server, and says so", async () => {
+    // "Found In Arr = false" with no Sonarr data would match every show.
+    const { user } = await seedMixed();
+    mockFetchArr.mockResolvedValue({ MOVIE: {} });
+    const res = await executeQuery(
+      def({
+        mediaTypes: ["MOVIE", "SERIES"],
+        arrServerIds: { radarr: "radarr-1" },
+        groups: [group([rule("foundInArr", "equals", "false")])],
+      }),
+      user.id, 1, 0,
+    );
+    expect(res.items.map((i) => i.type)).not.toContain("SERIES");
+    expect(titles(res)).toEqual(["Big Movie", "Small Movie"]);
+    expect(res.warnings).toEqual(["SERIES left out"]);
+    expect(mockFetchArr).toHaveBeenCalledWith(user.id, { radarr: "radarr-1" }, ["MOVIE"], undefined);
+  });
+
+  it("warns only about a left-out type the user has a library for", async () => {
+    // No music library: leaving music out takes nothing away, so say nothing.
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const movies = await createTestLibrary(server.id, { type: "MOVIE", key: "m" });
+    await createTestMediaItem(movies.id, { title: "Film" });
+    mockFetchArr.mockResolvedValue({ MOVIE: {} });
+    const res = await executeQuery(
+      def({ mediaTypes: [], arrServerIds: { radarr: "radarr-1" }, groups: [group([rule("foundInArr", "equals", "false")])] }),
+      user.id, 1, 0,
+    );
+    expect(titles(res)).toEqual(["Film"]);
+    expect(res.warnings).toBeUndefined();
+  });
+
+  it("a grouped show row lists every server holding it and totals its plays", async () => {
+    const user = await createTestUser();
+    const a = await createTestServer(user.id, { name: "Beta" });
+    const b = await createTestServer(user.id, { name: "Alpha" });
+    const libA = await createTestLibrary(a.id, { type: "SERIES", key: "sa" });
+    const libB = await createTestLibrary(b.id, { type: "SERIES", key: "sb" });
+    for (const [lib, plays] of [[libA, 2], [libB, 3]] as const) {
+      await createTestMediaItem(lib.id, {
+        type: "SERIES", title: "Pilot", parentTitle: "Shared", seriesKey: "tvdb:42",
+        seasonNumber: 1, episodeNumber: 1, playCount: plays,
+      });
+    }
+    const res = await executeQuery(def({ mediaTypes: ["SERIES"], groups: [] }), user.id, 1, 0);
+    const show = res.items.find((i) => i.title === "Shared")!;
+    expect((show.servers as Array<{ serverName: string }>).map((sv) => sv.serverName)).toEqual(["Alpha", "Beta"]);
+    expect(show.playCount).toBe(5);
   });
 
   it("grouped series-aggregate path: no SERIES episodes, or none surviving, yields no shows", async () => {

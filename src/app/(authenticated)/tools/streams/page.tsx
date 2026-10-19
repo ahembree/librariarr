@@ -100,6 +100,7 @@ import { hardwareEncoder, hardwareDecoder } from "@/lib/media-server/hardware-tr
 import { formatSessionMediaTitle } from "@/lib/media-server/session-title";
 import { formatEpisodeCode } from "@/lib/media/display-title";
 import { cn } from "@/lib/utils";
+import { MAX_TERMINATION_DELAY_SECONDS } from "@/lib/maintenance/limits";
 import {
   SERVER_TYPE_STYLES,
   DEFAULT_SERVER_STYLE,
@@ -1546,11 +1547,11 @@ export default function StreamManagerPage() {
                 <Input
                   type="number"
                   min={0}
-                  max={600}
+                  max={MAX_TERMINATION_DELAY_SECONDS}
                   value={maintenanceDelay}
                   onChange={(e) => {
                     const val = parseInt(e.target.value, 10);
-                    if (!isNaN(val) && val >= 0) updateMaintenanceDelay(val);
+                    if (!isNaN(val) && val >= 0) updateMaintenanceDelay(Math.min(val, MAX_TERMINATION_DELAY_SECONDS));
                   }}
                   className="w-full sm:w-24"
                 />
@@ -1643,11 +1644,11 @@ export default function StreamManagerPage() {
                 <Input
                   type="number"
                   min={0}
-                  max={600}
+                  max={MAX_TERMINATION_DELAY_SECONDS}
                   value={transcodeDelay}
                   onChange={(e) => {
                     const val = parseInt(e.target.value, 10);
-                    if (!isNaN(val) && val >= 0) updateTranscodeDelay(val);
+                    if (!isNaN(val) && val >= 0) updateTranscodeDelay(Math.min(val, MAX_TERMINATION_DELAY_SECONDS));
                   }}
                   className="w-full sm:w-24"
                 />
@@ -1948,12 +1949,12 @@ export default function StreamManagerPage() {
                 <Input
                   type="number"
                   min={0}
-                  max={600}
+                  max={MAX_TERMINATION_DELAY_SECONDS}
                   value={blackoutForm.delay}
                   onChange={(e) => {
                     const val = parseInt(e.target.value, 10);
                     if (!isNaN(val) && val >= 0)
-                      setBlackoutForm((f) => ({ ...f, delay: val }));
+                      setBlackoutForm((f) => ({ ...f, delay: Math.min(val, MAX_TERMINATION_DELAY_SECONDS) }));
                   }}
                   className="w-full sm:w-24"
                 />

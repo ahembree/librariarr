@@ -47,8 +47,8 @@ All colors use the **OKLCH color model** for perceptual uniformity. The applicat
 | `--foreground` | `oklch(0.95 0.008 80)` | Primary text — warm off-white |
 | `--card` | `oklch(0.21 0.008 270)` | Card/panel surfaces — lifted from background |
 | `--popover` | `oklch(0.23 0.01 270)` | Popover/dropdown surfaces |
-| `--primary` | `oklch(0.90 0 0)` | Primary actions — near-white |
-| `--primary-foreground` | `oklch(0.18 0.01 270)` | Text on primary — dark navy |
+| `--primary` | `oklch(0.62 0.2 264)` (`var(--brand)`) | Primary actions — the brand blue |
+| `--primary-foreground` | `oklch(0.98 0.005 270)` (`var(--on-brand)`) | Text on primary — near-white |
 | `--secondary` | `oklch(0.27 0.01 270)` | Secondary surfaces |
 | `--muted` | `oklch(0.25 0.01 265)` | Muted backgrounds |
 | `--muted-foreground` | `oklch(0.65 0.015 260)` | Secondary/helper text |
@@ -98,7 +98,7 @@ Users can choose from 7 accent colors in Settings. Each overrides `--primary`, `
 
 | Preset | Primary OKLCH | Swatch |
 |-|-|-|
-| Default | `oklch(0.90 0 0)` | Neutral (near-white) |
+| Default | `oklch(0.62 0.2 264)` | `#457cfd` — the stylesheet's `--brand`; choosing it removes every override |
 | Blue | `oklch(0.65 0.24 260)` | `#3b82f6` |
 | Violet | `oklch(0.65 0.28 304)` | `#8b5cf6` |
 | Green | `oklch(0.72 0.19 162)` | `#22c55e` |

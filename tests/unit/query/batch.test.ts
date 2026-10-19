@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildActionBatches, actionMediaType, countActionUnits, type BatchableItem } from "@/lib/query/batch";
+import { buildActionBatches, actionMediaType, countActionUnits, oversizedActionGroup, type BatchableItem } from "@/lib/query/batch";
 import { MAX_QUERY_ACTION_ITEMS } from "@/lib/query/constants";
 
 /** N movies as distinct items. */
@@ -171,5 +171,29 @@ describe("music batching and run size", () => {
       { id: "m1", type: "MOVIE" },
     ], "MUSIC")).toBe(1);
     expect(countActionUnits([{ id: "m1", type: "MOVIE" }, { id: "m2", type: "MOVIE" }], "MOVIE")).toBe(2);
+  });
+});
+
+describe("oversizedActionGroup", () => {
+  const tracks = (artist: string, n: number): BatchableItem[] =>
+    Array.from({ length: n }, (_, i) => ({ id: `${artist}-t${i}`, type: "MUSIC", title: `T${i}`, parentTitle: artist }));
+
+  it("flags an artist with more selected tracks than one batch holds", () => {
+    // Split across batches, a whole-artist Lidarr action ran once per batch.
+    expect(oversizedActionGroup(tracks("Big Artist", 4), "MUSIC", 3)).toBe("MUSIC");
+    expect(oversizedActionGroup(tracks("Big Artist", 3), "MUSIC", 3)).toBeNull();
+  });
+
+  it("flags a show in episode view the same way", () => {
+    expect(oversizedActionGroup(episodes("show", 4), "SERIES", 3)).toBe("SERIES");
+  });
+
+  it("ignores movies and types outside the action's family", () => {
+    expect(oversizedActionGroup(movies(10), "MOVIE", 3)).toBeNull();
+    expect(oversizedActionGroup(tracks("Big Artist", 10), "MOVIE", 3)).toBeNull();
+  });
+
+  it("counts each artist apart", () => {
+    expect(oversizedActionGroup([...tracks("A", 3), ...tracks("B", 3)], "MUSIC", 3)).toBeNull();
   });
 });

@@ -5,7 +5,7 @@ import { logger } from "@/lib/logger";
 import { executeQuery } from "@/lib/query/query-engine";
 import { appCache } from "@/lib/cache/memory-cache";
 import { executeActionsForItems } from "@/lib/lifecycle/run-actions";
-import { MOVIE_ACTION_TYPES, SERIES_ACTION_TYPES, MUSIC_ACTION_TYPES, actionHonorsMemberIds } from "@/lib/lifecycle/action-types";
+import { MOVIE_ACTION_TYPES, SERIES_ACTION_TYPES, MUSIC_ACTION_TYPES, actionHonorsMemberIds, deletesArrRecord } from "@/lib/lifecycle/action-types";
 import {
   findExceptedItemIds,
   findExceptionProtectedGroups,
@@ -17,6 +17,7 @@ import { hasEnabledSeerrInstances } from "@/lib/lifecycle/fetch-seerr-metadata";
 import { hasArrRules, hasSeerrRules, hasPlayActivityRules } from "@/lib/conditions/helpers";
 import { checkWatchHistoryCompleteness } from "@/lib/lifecycle/evaluability";
 import { checkDeleteCeilingForRun } from "@/lib/lifecycle/delete-ceiling";
+import { notifyDeleteCeilingHeld } from "@/lib/lifecycle/deletion-held-notice";
 import { beginQueryExecution, endQueryExecution } from "@/lib/lifecycle/execute-in-flight";
 import { eventBus } from "@/lib/events/event-bus";
 import type { ConditionGroup } from "@/lib/conditions/types";
@@ -25,6 +26,7 @@ import { progressStreamResponse } from "@/lib/progress/stream";
 import type { ProgressPhase, ProgressEmit } from "@/lib/progress/types";
 import type { QueryDefinition } from "@/lib/query/types";
 import { collapseActionItems } from "@/lib/query/collapse-actions";
+import { actedRecords, markRecordsActed } from "@/lib/query/run-records";
 
 type MediaType = "MOVIE" | "SERIES" | "MUSIC";
 
@@ -104,6 +106,10 @@ export async function POST(request: NextRequest) {
   }
 
   const hasTagOps = addArrTags.length > 0 || removeArrTags.length > 0;
+
+  if (hasTagOps && deletesArrRecord(actionType)) {
+    return NextResponse.json({ error: "Tags can't be changed by an action that deletes the whole Arr record" }, { status: 400 });
+  }
 
   if (actionType === "DO_NOTHING" && !hasTagOps) {
     return NextResponse.json({ error: "No action configured" }, { status: 400 });
@@ -233,6 +239,7 @@ export async function POST(request: NextRequest) {
   {
     const verdict = await checkDeleteCeilingForRun(userId, actionType, runUnits ?? mediaItemIds.length);
     if (!verdict.allowed) {
+      void notifyDeleteCeilingHeld(userId, verdict, "manual", "a Query page action").catch(() => {});
       return NextResponse.json({ error: verdict.reason }, { status: 400 });
     }
   }
@@ -540,6 +547,24 @@ export async function POST(request: NextRequest) {
     items = collapsed.items;
     const actionMembers = collapsed.members;
 
+    // One action per Arr record across the whole RUN, not only this batch. The
+    // client keeps a show's or an artist's rows in one batch, but a group too
+    // big for a batch is split, and two servers' copies of a movie can land in
+    // different batches: a whole-record action would then run once per batch —
+    // the first deletes the artist and the next re-sends it. Member-scoped file
+    // deletes are exempt: each batch acts on its own episodes or tracks.
+    const trackRecords = !!runId && !isMemberScoped;
+    const doneRecords = trackRecords ? actedRecords(runId!) : new Set<string>();
+    if (doneRecords.size > 0) {
+      const before = items.length;
+      items = items.filter((i) => !doneRecords.has(collapsed.recordKeys.get(i.id) ?? `id:${i.id}`));
+      if (items.length < before) {
+        skipped += before - items.length;
+        logger.info("Lifecycle", `Ad-hoc ${actionType}: skipped ${before - items.length} record(s) an earlier batch of this run already acted on`);
+      }
+      if (items.length === 0) return { executed: 0, failed: 0, skipped, errors: [] };
+    }
+
     // The ceiling over the whole run: every earlier batch's actions plus this
     // one's, counted after the collapse (a show's episodes are one action).
     const unitsKey = runId ? `query-action-units:${runId}` : null;
@@ -550,15 +575,28 @@ export async function POST(request: NextRequest) {
       Math.max(runUnits ?? 0, priorUnits + items.length),
     );
     if (!verdict.allowed) {
+      // Earlier batches of this run may already have acted, so "nothing was
+      // deleted" would be false here.
+      const reason =
+        priorUnits > 0
+          ? `This run would delete ${verdict.count} item(s), above the configured limit of ${verdict.limit}. ` +
+            `It was stopped after ${priorUnits} had already been acted on; the rest were not sent. ` +
+            `Run it on at most ${verdict.limit} item(s) at a time, or raise the limit in Settings.`
+          : verdict.reason;
+      void notifyDeleteCeilingHeld(userId, verdict, "manual", "a Query page action", { stoppedAfter: priorUnits }).catch(() => {});
       return {
         executed: 0,
         failed: 0,
         skipped: skipped + items.length,
-        errors: [verdict.reason ?? "Held by the deletion ceiling"],
+        errors: [reason ?? "Held by the deletion ceiling"],
         stopped: true,
       };
     }
     if (unitsKey) appCache.set(unitsKey, priorUnits + items.length, RUN_LIVE_TTL_MS);
+    // Recorded before the Arr calls: a timed-out delete may still have landed,
+    // so a record attempted once is never re-sent by a later batch.
+    const batchRecordKeys = items.map((i) => collapsed.recordKeys.get(i.id) ?? `id:${i.id}`);
+    if (trackRecords) markRecordsActed(runId!, batchRecordKeys);
 
     // Per-item progress drives the determinate "Running action" segment.
     emit({ type: "phase", key: "execute", fraction: 0 });
@@ -593,6 +631,11 @@ export async function POST(request: NextRequest) {
             : `${done} / ${total}`,
         }),
     );
+
+    // A batch can outlast the TTL both run stores were given when it started;
+    // refresh them so the next batch still sees what this one acted on.
+    if (trackRecords) markRecordsActed(runId!, batchRecordKeys);
+    if (unitsKey) appCache.set(unitsKey, priorUnits + items.length, RUN_LIVE_TTL_MS);
 
     emit({ type: "phase", key: "finalize" });
 

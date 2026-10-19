@@ -99,14 +99,16 @@ cover where to click and what defaults to expect.
    - **Scopes:** `openid profile email` (default — `openid` is required)
    - **Username Claim:** `preferred_username` (default — used for the display name shown in the app)
 
-4. Click **Test Discovery**. Should report "Discovery succeeded."
+4. Click **Test Discovery**. Should report "Discovery succeeded." Then click
+   **Save Configuration**.
 
-5. **Link your account.** Under **SSO Account Linking**, paste the `sub`
-   value (see [Finding your subject value](#finding-your-subject-value)
-   below). Click **Link Identity**.
+5. **Link your account** in step 2 (**Link your SSO identity**): click
+   **Verify & Link via OIDC**, or **Or paste the subject manually →**, paste
+   the `sub` value and click **Link Manually** (see
+   [Finding your subject value](#finding-your-subject-value) below).
 
-6. Toggle **Enable SSO Login** on and click **Save SSO Settings**. The login
-   page now shows **Sign in with SSO**.
+6. In step 3 (**Enable SSO login**), turn the **SSO login** switch on. It
+   takes effect immediately; the login page now shows **Sign in with SSO**.
 
 7. Sign out and verify the SSO flow works end-to-end before relying on it.
 
@@ -184,8 +186,8 @@ predate that feature and use a slightly different client schema.
 for every client, and there is no first-class way to swap `sub` for a
 username — that's by design (the OIDC spec requires `sub` to be a stable
 opaque identifier per user/client). Link by the UUID:
-[trigger the SSO flow once and read the logs](#recommended-method-trigger-the-flow-once-read-the-logs)
-to obtain the value, then paste it into Librariarr's linking input.
+use [Verify & Link via OIDC](#recommended-method-verify--link-via-oidc),
+which captures the value for you.
 
 ### Keycloak
 
@@ -301,13 +303,14 @@ the log records the rejection. With the variable itself unset the page says
    - **SSO Mode:** `Forward Auth`
    - Override the header names if your proxy uses different ones (some
      proxies use `X-Forwarded-User`, `X-authentik-username`, etc.)
-   - The page confirms that `FORWARD_AUTH_SECRET` is set; the **Enable SSO
-     Login** toggle stays off until it is.
+   - The page confirms that `FORWARD_AUTH_SECRET` is set; SSO login cannot
+     be turned on until it is.
 
-3. **Link your account** using the value your proxy sends as the user header
-   (typically the username).
+3. Click **Save Configuration**, then **link your account** in step 2 using
+   the value your proxy sends as the user header (typically the username),
+   and click **Link Identity**.
 
-4. Toggle **Enable SSO Login** on and save.
+4. In step 3, turn the **SSO login** switch on (it takes effect immediately).
 
 ### Authentication providers
 
@@ -612,7 +615,11 @@ your current session throughout, so a failure doesn't lock you out.
 ### Alternative: paste the sub manually after triggering the flow
 
 If the verify-link button isn't usable (e.g. air-gapped admin network, or
-you're using the forward-auth mode), the manual fallback:
+you're using the forward-auth mode), the manual fallback below reads the
+value from a rejected sign-in. It needs SSO login to be on already (the
+login page offers **Sign in with SSO** only then, and step 3 unlocks only
+once an identity is linked), so it suits re-linking after the subject
+changed; for a first setup, read the value from your IdP (next section):
 
 1. Save your OIDC config in Librariarr (don't link anything yet).
 2. Sign out.
@@ -644,7 +651,7 @@ you're using the forward-auth mode), the manual fallback:
 
 | Provider | Where to find the `sub` |
 |----------|-------------------------|
-| Authentik (hashed ID) | Not visible in the admin UI. Use the logs method, or switch to username mode. |
+| Authentik (hashed ID) | Not visible in the admin UI. Use Verify & Link via OIDC, or switch to username mode. |
 | Authentik (username mode) | The user's username, as shown in **Directory → Users**. |
 | Authelia | UUID in `users_database.yml` if file-based, or your LDAP/database. |
 | Keycloak | **Users → \<user\> → Details → ID** (a UUID). |
@@ -653,7 +660,7 @@ you're using the forward-auth mode), the manual fallback:
 
 ## Disabling SSO
 
-Toggle **Enable SSO Login** off and save. The local username/password form
+Turn the **SSO login** switch in step 3 off (it takes effect immediately). The local username/password form
 returns on the login page (provided local auth is enabled in
 **Settings → Authentication → Local Authentication**).
 
@@ -919,7 +926,7 @@ The login page surfaces SSO errors as a banner above the SSO button:
 
 | Message | What it means | Fix |
 |---------|---------------|-----|
-| Your SSO account is not linked to a Librariarr user | The `sub` (or proxy username) doesn't match any account's linked subject | Use the [logs method](#recommended-method-trigger-the-flow-once-read-the-logs) to find the actual value and re-link |
+| Your SSO account is not linked to a Librariarr user | The `sub` (or proxy username) doesn't match any account's linked subject | Use the [logs method](#alternative-paste-the-sub-manually-after-triggering-the-flow) to find the actual value and re-link |
 | SSO request expired or was tampered with | State cookie was lost between redirect and callback, or `state` didn't match | Try again. If persistent, check that `COOKIE_SECURE` isn't forcing HTTPS-only on an HTTP host |
 | Failed to verify your identity with the SSO provider | Token exchange with the IdP failed | Check Librariarr logs for the underlying response — usually a redirect URI mismatch or wrong client secret |
 | Forward-auth proxy did not provide a user identity header | The configured user header was absent from the request | Verify the proxy is injecting the header and the name matches what's configured |
@@ -933,6 +940,7 @@ The login page surfaces SSO errors as a banner above the SSO button:
 |-------|--------------|
 | `OIDC discovery failed (404)` | Wrong issuer URL. Try with/without a trailing slash. For Authentik, the path is `/application/o/{slug}/`. For Keycloak, `/realms/{realm}`. |
 | `OIDC issuer mismatch` | The `issuer` claim in the response doesn't match the URL Librariarr fetched. Re-check the URL — often a wrong realm/slug. |
+| `OIDC discovery response from "…" has no issuer` | The discovery document has no `issuer` field, which OpenID Connect Discovery requires. Librariarr refuses it rather than skipping the issuer check. |
 | `OIDC discovery response missing required endpoints` | The endpoint returned something other than valid discovery JSON. Browser-check `{issuer}/.well-known/openid-configuration` to confirm. |
 
 ### Login bounces back without an error code

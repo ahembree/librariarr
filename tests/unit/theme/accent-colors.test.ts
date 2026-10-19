@@ -95,4 +95,14 @@ describe("getAccentPreset", () => {
   it("returns undefined for unknown names (graceful fallback to default)", () => {
     expect(getAccentPreset("magenta")).toBeUndefined();
   });
+
+  it("describes the default preset with the stylesheet's own brand colour", async () => {
+    // Choosing Default clears every override, so the dark theme's --brand is
+    // what shows; the swatch and table used to claim a near-white.
+    const { readFileSync } = await import("node:fs");
+    const css = readFileSync("src/app/globals.css", "utf8");
+    const dark = css.slice(css.indexOf(".dark {"));
+    const brand = /--brand:\s*([^;]+);/.exec(dark)?.[1];
+    expect(getAccentPreset("default")!.cssVars["--primary"]).toBe(brand);
+  });
 });

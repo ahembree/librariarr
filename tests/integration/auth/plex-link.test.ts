@@ -176,6 +176,22 @@ describe("POST /api/auth/plex/link", () => {
     expect(body.error).toBe("Failed to link Plex account");
   });
 
+  it("reports whether Plex login is on, so the page can offer to turn it on", async () => {
+    // Linking never changes the setting, and a password setup leaves it off.
+    const user = await createUserWithoutPlex();
+    await prisma.appSettings.create({ data: { userId: user.id, plexLoginEnabled: false } });
+    setMockSession({ userId: user.id, isLoggedIn: true, authenticatedAt: Date.now() });
+    mockGetPlexUser.mockResolvedValue({
+      id: 77777, uuid: "u", email: "x@example.com", username: "Linker", authToken: "t", thumb: "",
+    });
+
+    const response = await callRoute(POST, { url: "/api/auth/plex/link", method: "POST", body: { authToken: "t" } });
+    const body = await expectJson<{ linked: boolean; plexLoginEnabled: boolean }>(response, 200);
+    expect(body).toMatchObject({ linked: true, plexLoginEnabled: false });
+    const settings = await prisma.appSettings.findUniqueOrThrow({ where: { userId: user.id } });
+    expect(settings.plexLoginEnabled).toBe(false);
+  });
+
   // ─── authToken-based flow (new client-side polling approach) ───
 
   it("successfully links Plex account when authToken is provided directly", async () => {

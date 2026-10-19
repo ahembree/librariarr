@@ -83,8 +83,9 @@ import { ConvertQueryToRuleDialog } from "@/components/convert-query-to-rule-dia
 import { QueryProgress, useStreamProgress } from "@/components/query-progress";
 import { consumeProgressStream } from "@/lib/progress/client";
 import type { ProgressUpdate } from "@/lib/progress/types";
-import { buildActionBatches, actionMediaType, countActionUnits } from "@/lib/query/batch";
+import { buildActionBatches, actionMediaType, countActionUnits, oversizedActionGroup } from "@/lib/query/batch";
 import { MAX_QUERY_ACTION_ITEMS } from "@/lib/query/constants";
+import { readResponseError } from "@/lib/api/error-message";
 import { actionHonorsMemberIds } from "@/lib/lifecycle/action-types";
 import { QueryActionBar, type ArrFamily, type ArrFamilyMeta, type QueryActionConfig } from "@/components/query-action-bar";
 import { toast } from "sonner";
@@ -214,16 +215,15 @@ function anyRuleConfigured(groups: QueryGroup[]): boolean {
 
 /**
  * Whether a draft holds anything worth restoring. A pristine builder (no media
- * types, default scope/sort, and the single empty starter rule) is treated as
- * empty so we neither persist nor advertise a restore for it.
+ * types, default scope, and the single empty starter rule) is treated as empty
+ * so we neither persist nor advertise a restore for it. The sort is left out:
+ * clicking a column header is not building a query.
  */
 function queryHasContent(def: QueryDefinition, activeQueryId: string | null): boolean {
   return (
     (def.mediaTypes?.length ?? 0) > 0 ||
     (def.serverIds?.length ?? 0) > 0 ||
     Boolean(def.includeEpisodes) ||
-    def.sortBy !== "title" ||
-    def.sortOrder !== "asc" ||
     Object.values(def.arrServerIds ?? {}).some(Boolean) ||
     Boolean(activeQueryId) ||
     anyRuleConfigured(def.groups)
@@ -339,12 +339,14 @@ export default function QueryPage() {
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
   const [includeEpisodes, setIncludeEpisodes] = useState(false);
   const [arrServerIds, setArrServerIds] = useState<{ radarr?: string; sonarr?: string; lidarr?: string }>({});
+  // Media types with an enabled library; null until loaded (then every type counts).
+  const [libraryTypes, setLibraryTypes] = useState<Set<string> | null>(null);
 
   // Arr instances
   const [arrInstances, setArrInstances] = useState<{
-    radarr: Array<{ id: string; name: string }>;
-    sonarr: Array<{ id: string; name: string }>;
-    lidarr: Array<{ id: string; name: string }>;
+    radarr: Array<{ id: string; name: string; enabled: boolean }>;
+    sonarr: Array<{ id: string; name: string; enabled: boolean }>;
+    lidarr: Array<{ id: string; name: string; enabled: boolean }>;
   }>({ radarr: [], sonarr: [], lidarr: [] });
 
   // Seerr integration status
@@ -439,16 +441,27 @@ export default function QueryPage() {
       })
       .catch(() => {});
 
+    // The media types the user has libraries for, so the Arr warning names
+    // only types a query could return (the engine warns the same way).
+    fetch("/api/media/library-types")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => setLibraryTypes(new Set((data?.types ?? []) as string[])))
+      .catch(() => {});
+
     // Fetch Arr instances (all 3 types in parallel)
     Promise.all([
       fetch("/api/integrations/radarr").then((r) => r.ok ? r.json() : null).catch(() => null),
       fetch("/api/integrations/sonarr").then((r) => r.ok ? r.json() : null).catch(() => null),
       fetch("/api/integrations/lidarr").then((r) => r.ok ? r.json() : null).catch(() => null),
     ]).then(([radarrData, sonarrData, lidarrData]) => {
+      // A disabled instance answers no criteria (the engine leaves its media
+      // type out), so it is listed but marked and never counted as selected.
+      const toInstances = (data: { instances?: Array<{ id: string; name: string; enabled?: boolean }> } | null) =>
+        (data?.instances ?? []).map((i) => ({ id: i.id, name: i.name, enabled: i.enabled !== false }));
       setArrInstances({
-        radarr: (radarrData?.instances ?? []).map((i: { id: string; name: string }) => ({ id: i.id, name: i.name })),
-        sonarr: (sonarrData?.instances ?? []).map((i: { id: string; name: string }) => ({ id: i.id, name: i.name })),
-        lidarr: (lidarrData?.instances ?? []).map((i: { id: string; name: string }) => ({ id: i.id, name: i.name })),
+        radarr: toInstances(radarrData),
+        sonarr: toInstances(sonarrData),
+        lidarr: toInstances(lidarrData),
       });
     });
 
@@ -794,6 +807,7 @@ export default function QueryPage() {
 
   const allColumns = useMemo(() => [...baseColumns, ...criterionColumns], [baseColumns, criterionColumns]);
 
+
   const columnGroups = useMemo(() => {
     const groups: Array<[string, string]> = Object.entries(COLUMN_GROUPS);
     const sections = [...new Set(columnFieldDefs.map((f) => f.section))];
@@ -834,6 +848,26 @@ export default function QueryPage() {
     return visibleCols;
   }, [allColumns, visibleCols]);
 
+  // The table's sort is the query's own `sortBy`/`sortOrder`, so a saved query
+  // reopens sorted the way it was saved, and the card view shows the same order.
+  // Sorted here with the column's own sort value (DataTable is controlled).
+  const sortedResults = useMemo(() => {
+    // A criterion column sorts only while shown: its values load only then.
+    const getValue = allColumns.find((c) => c.id === sortBy && effectiveVisible.has(c.id))?.sortValue;
+    if (!getValue) return results;
+    return [...results].sort((a, b) => {
+      const aVal = getValue(a);
+      const bVal = getValue(b);
+      if (aVal == null && bVal == null) return 0;
+      if (aVal == null) return 1;
+      if (bVal == null) return -1;
+      const cmp = typeof aVal === "number" && typeof bVal === "number"
+        ? aVal - bVal
+        : String(aVal).localeCompare(String(bVal), undefined, { numeric: true });
+      return sortOrder === "asc" ? cmp : -cmp;
+    });
+  }, [results, allColumns, effectiveVisible, sortBy, sortOrder]);
+
   const isValid = useMemo(() => {
     return groups.length > 0 && validateAllRules(groups);
   }, [groups]);
@@ -842,7 +876,24 @@ export default function QueryPage() {
 
   const hasAnyArrServer = !!(arrServerIds.radarr || arrServerIds.sonarr || arrServerIds.lidarr);
   const hasAnyArrInstanceAvailable = arrInstances.radarr.length > 0 || arrInstances.sonarr.length > 0 || arrInstances.lidarr.length > 0;
-  const orphanArrRules = useMemo(() => hasArrRules(groups) && !hasAnyArrServer, [groups, hasAnyArrServer]);
+  // Media types in scope whose Arr criteria nothing can answer: no Arr server
+  // selected for the type, or a disabled one. The engine leaves those types
+  // out of the results (resolveQueryArrScope); name them here before a run.
+  const unevaluableArrTypes = useMemo(() => {
+    if (!hasArrRules(groups)) return [] as string[];
+    const inScope = mediaTypes.length === 0 ? ["MOVIE", "SERIES", "MUSIC"] : mediaTypes;
+    const family = { MOVIE: "radarr", SERIES: "sonarr", MUSIC: "lidarr" } as const;
+    const label = { MOVIE: "Movies", SERIES: "Series", MUSIC: "Music" } as const;
+    return inScope
+      .filter((t): t is keyof typeof family => t in family)
+      .filter((t) => !libraryTypes || libraryTypes.has(t))
+      .filter((t) => {
+        const id = arrServerIds[family[t]];
+        return !id || !arrInstances[family[t]].some((i) => i.id === id && i.enabled);
+      })
+      .map((t) => label[t]);
+  }, [groups, mediaTypes, arrServerIds, arrInstances, libraryTypes]);
+  const orphanArrRules = unevaluableArrTypes.length > 0;
   const orphanSeerrRules = useMemo(() => hasSeerrRules(groups) && !seerrConnected, [groups, seerrConnected]);
   const seerrWithMusic = useMemo(
     () => hasSeerrRules(groups) && seerrConnected && (mediaTypes.length === 0 || mediaTypes.includes("MUSIC")),
@@ -901,8 +952,11 @@ export default function QueryPage() {
         // No `resp.ok` pre-check: a refusal is answered as plain JSON before the
         // stream opens, and `consumeProgressStream` reads the server's reason out
         // of it. Throwing a generic "Query failed" here would discard that.
-        const data = await consumeProgressStream<{ items?: QueryResultItem[] }>(resp, onQueryProgress);
+        const data = await consumeProgressStream<{ items?: QueryResultItem[]; warnings?: string[] }>(resp, onQueryProgress);
         setResults(data.items ?? []);
+        if (data.warnings?.length) {
+          toast.warning("Part of the query was left out", { description: data.warnings.join(" · ") });
+        }
         setRunScope({
           serverIds: definition.serverIds,
           ...(definition.arrServerIds && { arrServerIds: definition.arrServerIds }),
@@ -1014,28 +1068,25 @@ export default function QueryPage() {
     async (config: QueryActionConfig) => {
       const definition = lastRunDefinitionRef.current ?? buildDefinition();
       const selectedItems = results.filter((r) => selectedIds.has(r.id));
-      const targetType = actionMediaType(config.actionType);
+      // "Do Nothing" (tags only) has no Arr suffix; the bar names its family.
+      const targetType = actionMediaType(config.actionType) ?? config.mediaType;
 
-      // Guard (deletion-safety): a whole-record series action can't safely span a
-      // single show across batches — the server collapses-and-fires it once per
-      // batch, so a show with more than a batch's worth of selected episodes would
-      // double-fire. Refuse and steer the user to the grouped series view, which
-      // acts on the whole show as one unit.
-      if (targetType === "SERIES" && definition.includeEpisodes && !actionHonorsMemberIds(config.actionType)) {
-        const perShow = new Map<string, number>();
-        for (const it of selectedItems) {
-          if (it.type !== "SERIES") continue;
-          // Series identity (falls back to title) so two same-titled shows are
-          // counted separately — mirrors the server's grouping.
-          const key = it.seriesKey ?? `title:${(it.parentTitle ?? it.title ?? "").trim().toLowerCase()}`;
-          perShow.set(key, (perShow.get(key) ?? 0) + 1);
-        }
-        if ([...perShow.values()].some((n) => n > MAX_QUERY_ACTION_ITEMS)) {
-          toast.error("Too many episodes for one series", {
-            description: `Acting on more than ${MAX_QUERY_ACTION_ITEMS.toLocaleString()} episodes of a single show at once isn't supported in episode view — switch to the grouped series view to act on the whole show.`,
-          });
-          return;
-        }
+      // Guard (deletion-safety): in episode view a whole-record series action
+      // can't safely span one show across batches — split, the route would
+      // collapse it per batch. The route also never acts on one Arr record
+      // twice in a run, but steer the user to the grouped series view, which
+      // acts on a whole show as one row. An artist split across batches is
+      // left to that route rule: the Query page has no artist-grouped view to
+      // offer instead.
+      if (
+        !actionHonorsMemberIds(config.actionType) &&
+        definition.includeEpisodes &&
+        oversizedActionGroup(selectedItems, targetType) === "SERIES"
+      ) {
+        toast.error("Too many episodes for one series", {
+          description: `Acting on more than ${MAX_QUERY_ACTION_ITEMS.toLocaleString()} episodes of a single show at once isn't supported in episode view — switch to the grouped series view to act on the whole show.`,
+        });
+        return;
       }
 
       // The server caps each request at MAX_QUERY_ACTION_ITEMS ids (a safety
@@ -1113,8 +1164,7 @@ export default function QueryPage() {
           });
           if (!resp.ok) {
             // Auth/validation failures come back as plain JSON (before streaming).
-            const data = await resp.json().catch(() => null);
-            const reason = data?.error ?? "Unknown error";
+            const reason = await readResponseError(resp, "Unknown error");
             if (didWork()) {
               // Earlier batches did real work (recorded server-side). Stop here
               // (fail-closed), report the partial result, and refresh.
@@ -1253,7 +1303,7 @@ export default function QueryPage() {
           );
           toast.success("Query updated", { description: name });
         } else {
-          toast.error("Couldn't save query");
+          toast.error("Couldn't save query", { description: await readResponseError(resp, "The server refused the save") });
         }
       } else {
         const resp = await fetch("/api/saved-queries", {
@@ -1267,11 +1317,11 @@ export default function QueryPage() {
           setActiveQueryId(data.query.id);
           toast.success("Query saved", { description: name });
         } else {
-          toast.error("Couldn't save query");
+          toast.error("Couldn't save query", { description: await readResponseError(resp, "The server refused the save") });
         }
       }
-    } catch {
-      toast.error("Couldn't save query");
+    } catch (err) {
+      toast.error("Couldn't save query", { description: err instanceof Error ? err.message : undefined });
     }
     setSavePopoverOpen(false);
     setSaveName("");
@@ -1392,15 +1442,6 @@ export default function QueryPage() {
   }, [cardColumns, gridVirtualizer]);
 
   const virtualRows = gridVirtualizer.getVirtualItems();
-
-  const getItemDetailUrl = (item: QueryResultItem): string => {
-    switch (item.type) {
-      case "MOVIE": return `/library/movies/${item.id}`;
-      case "SERIES": return `/library/series/show/${item.id}`;
-      case "MUSIC": return `/library/music/${item.id}`;
-      default: return `/library/movies/${item.id}`;
-    }
-  };
 
   return (
     <>
@@ -1629,7 +1670,7 @@ export default function QueryPage() {
                       <SelectContent>
                         <SelectItem value="none">Radarr: None</SelectItem>
                         {arrInstances.radarr.map((inst) => (
-                          <SelectItem key={inst.id} value={inst.id}>{inst.name}</SelectItem>
+                          <SelectItem key={inst.id} value={inst.id}>{inst.enabled ? inst.name : `${inst.name} (disabled)`}</SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
@@ -1645,7 +1686,7 @@ export default function QueryPage() {
                       <SelectContent>
                         <SelectItem value="none">Sonarr: None</SelectItem>
                         {arrInstances.sonarr.map((inst) => (
-                          <SelectItem key={inst.id} value={inst.id}>{inst.name}</SelectItem>
+                          <SelectItem key={inst.id} value={inst.id}>{inst.enabled ? inst.name : `${inst.name} (disabled)`}</SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
@@ -1661,7 +1702,7 @@ export default function QueryPage() {
                       <SelectContent>
                         <SelectItem value="none">Lidarr: None</SelectItem>
                         {arrInstances.lidarr.map((inst) => (
-                          <SelectItem key={inst.id} value={inst.id}>{inst.name}</SelectItem>
+                          <SelectItem key={inst.id} value={inst.id}>{inst.enabled ? inst.name : `${inst.name} (disabled)`}</SelectItem>
                         ))}
                       </SelectContent>
                     </Select>
@@ -1692,10 +1733,9 @@ export default function QueryPage() {
             <p className="font-medium text-amber">Some criteria can&apos;t be evaluated</p>
             {orphanArrRules && (
               <p className="text-muted-foreground">
-                This query uses Arr criteria but no Arr server is{" "}
                 {hasAnyArrInstanceAvailable
-                  ? "selected above for the relevant media type. Pick one to evaluate Arr rules — until then these rules can't reflect real Arr data (negative rules like \u201cFound In Arr = false\u201d would match everything), and actions on the results are blocked."
-                  : "configured. Connect Radarr, Sonarr, or Lidarr in Settings → Integrations — until then these rules can't reflect real Arr data, and actions on the results are blocked."}
+                  ? `This query uses Arr criteria, but no enabled Arr server is selected above for ${unevaluableArrTypes.join(", ")}. Those media types are left out of the results — without Arr data, negative rules like \u201cFound In Arr = false\u201d would match every item of them. Pick an enabled server for each above — or connect one in Settings → Integrations — to include them.`
+                  : "This query uses Arr criteria but no Arr server is configured. Connect Radarr, Sonarr, or Lidarr in Settings → Integrations — until then these rules can't reflect real Arr data, and the query returns no results."}
               </p>
             )}
             {orphanSeerrRules && (
@@ -1878,11 +1918,12 @@ export default function QueryPage() {
             viewMode === "table" ? (
               <DataTable
                 columns={tableColumns}
-                data={results}
+                data={sortedResults}
                 onRowClick={navigateToItem}
                 keyExtractor={(item) => item.id}
-                defaultSortId="title"
-                defaultSortOrder="asc"
+                defaultSortId={sortBy}
+                defaultSortOrder={sortOrder}
+                onSortChange={(id, order) => { setSortBy(id); setSortOrder(order); }}
                 resizeStorageKey="query-results-col-widths"
                 pinning={QUERY_TABLE_PINNING}
                 renderHoverContent={(item) => (
@@ -1925,7 +1966,7 @@ export default function QueryPage() {
                 >
                   {virtualRows.map((virtualRow) => {
                     const rowStart = virtualRow.index * cardColumns;
-                    const rowItems = results.slice(rowStart, rowStart + cardColumns);
+                    const rowItems = sortedResults.slice(rowStart, rowStart + cardColumns);
                     return (
                       <div
                         key={virtualRow.key}
@@ -2056,7 +2097,6 @@ export default function QueryPage() {
           onClose={() => setSelectedItem(null)}
           width={panelWidth}
           resizeHandleProps={resizeHandleProps}
-          detailUrl={getItemDetailUrl(selectedItem)}
         />
       )}
 
@@ -2072,7 +2112,7 @@ export default function QueryPage() {
           includeEpisodes,
           ...(Object.values(arrServerIds).some(Boolean) && { arrServerIds }),
         }}
-        availableServerIds={servers.map((s) => s.id)}
+        availableServerIds={queryServers.map((s) => s.id)}
         defaultName={activeQuery?.name}
       />
     </>

@@ -16,9 +16,10 @@ Radarr integration enables lifecycle actions on movies managed by Radarr.
 2. Under the **Radarr** section, click **Add Instance**
 3. Enter:
    - **Name**: A label for this instance (e.g., "Main Radarr")
-   - **URL**: Radarr's base URL (e.g., `http://192.168.1.100:7878`)
+   - **URL**: Radarr's base URL (e.g., `http://192.168.1.100:7878`) — the address Librariarr uses to reach Radarr
+   - **External URL** (optional): The address your browser uses for Radarr, starting with `http://` or `https://`. Used for "open in Radarr" links; falls back to **URL** when empty
    - **API Key**: Found in Radarr → Settings → General → API Key
-4. Click **Test Connection** to verify
+4. Click **Test** to verify — **Save** stays disabled until the test passes
 5. Save
 
 </Steps>
@@ -33,7 +34,7 @@ Librariarr matches movies to Radarr using **TMDB IDs**:
 
 1. During media sync, external IDs (including TMDB) are fetched from your media server
 2. When lifecycle rules need Radarr data, Librariarr queries Radarr by TMDB ID
-3. If a TMDB ID is not available, Librariarr falls back to title + year matching
+3. There is no title fallback: a movie without a TMDB ID is never found in Radarr, and an action on it fails. Before acting, Librariarr also checks that the Radarr movie's title and year match, so a wrong ID never acts on a different film
 
 <Aside>
   Ensure your media server's metadata agent populates TMDB IDs for movies. This is the default behavior for most agents.
@@ -45,18 +46,24 @@ Once connected, these operations are available via [lifecycle rules](/docs/featu
 
 | Operation | Description |
 |-----------|-------------|
-| **Delete** | Remove the movie from Radarr (optionally delete files from disk) |
-| **Unmonitor** | Stop Radarr from monitoring for upgrades (optionally adding an import list exclusion — one that already exists counts as added) |
-| **Tag** | Add a custom tag to the movie in Radarr |
+| **Delete from Radarr** | Remove the movie from Radarr **and delete its files from disk** |
+| **Unmonitor & Delete Files** | Unmonitor the movie and delete its file |
+| **Monitor & Delete Files** | Make sure the movie is monitored, then delete its file so Radarr grabs a new copy |
+| **Delete Files Only** | Delete the movie's file without changing monitoring |
+| **Unmonitor Only** | Stop Radarr from monitoring the movie |
+| **Change Quality Profile** | Move the movie to another quality profile (skipped if it is already on it) |
+| **Search for New Copy** | Trigger a Radarr search, changing nothing else |
+| **Do Nothing** | Only track the match (and apply tag changes, if configured) |
+
+Every action except **Delete from Radarr** (which removes the record and its tags) can also **add and remove Radarr tags**, applied before the main action. **Delete from Radarr** can also **add an import list exclusion** so import lists don't add it back, and the file-delete and quality-profile actions can **search after** the change. When a destructive action is linked to an instance with no recycle bin configured, the rule editor warns you before saving. See [Available Actions](/docs/features/lifecycle-rules/#available-actions).
 
 ## Data from Radarr
 
 The following Radarr metadata is available for lifecycle rule conditions:
 
-- **Quality profile**: The assigned quality profile name
-- **Monitored status**: Whether the movie is monitored
-- **Tags**: Current tags on the movie
-- **Ratings**: Radarr ratings data
+- **Found in Arr**, **Monitored**, **Tag**, **Quality Profile**, **Quality Name**, **Quality Cutoff Met**, **Custom Format Score**, **Status**
+- **IMDB Rating**, **TMDB Rating**, **RT Critic Rating**, **Original Language**, **Runtime**, **Size on Disk**, **Path**
+- **Release Date**, **In Cinemas Date**, **Date Added**, **Download Date**
 
 ## Security
 
@@ -66,6 +73,6 @@ The following Radarr metadata is available for lifecycle rule conditions:
 
 ## Limitations
 
-- Matching requires TMDB IDs — movies without TMDB IDs fall back to title + year matching
-- Lifecycle actions call Radarr's API in real time — Radarr must be reachable
+- Matching requires TMDB IDs — movies without one are not found in Radarr
+- Lifecycle actions call Radarr's API in real time. Requests time out after 15 seconds; reads are retried up to 3 times, writes are not. If Radarr is unreachable during a scheduled run, its remaining actions stay pending for the next run; a manual **Execute** fails them
 - Bulk delete operations call the API once per movie — very large batches may take time

@@ -36,8 +36,8 @@ describe("fetchArrDataForQuery — instance scoping", () => {
     const result = await fetchArrDataForQuery("u1", { sonarr: "s1", lidarr: "l1" }, ["SERIES", "MUSIC"]);
 
     expect(result).toEqual({});
-    expect(mockPrisma.sonarrInstance.findFirst).toHaveBeenCalledWith({ where: { id: "s1", userId: "u1" } });
-    expect(mockPrisma.lidarrInstance.findFirst).toHaveBeenCalledWith({ where: { id: "l1", userId: "u1" } });
+    expect(mockPrisma.sonarrInstance.findFirst).toHaveBeenCalledWith({ where: { id: "s1", userId: "u1", enabled: true } });
+    expect(mockPrisma.lidarrInstance.findFirst).toHaveBeenCalledWith({ where: { id: "l1", userId: "u1", enabled: true } });
     expect(mockSonarr.getSeries).not.toHaveBeenCalled();
     expect(mockLidarr.getArtists).not.toHaveBeenCalled();
   });

@@ -1,6 +1,7 @@
 import { z } from "zod/v4";
 import { NextResponse } from "next/server";
-import { MAX_COLUMN_VALUE_ITEMS, MAX_QUERY_ACTION_ITEMS } from "@/lib/query/constants";
+import { MAX_COLUMN_VALUE_ITEMS, MAX_QUERY_ACTION_ITEMS, MAX_QUERY_SERVER_IDS } from "@/lib/query/constants";
+import { MAX_TERMINATION_DELAY_SECONDS } from "@/lib/maintenance/limits";
 import { MASKED_VALUE } from "@/lib/api/sanitize";
 import { API_SCOPES } from "@/lib/api-keys/scopes";
 import { API_DESTRUCTIVE_PER_REQUEST } from "@/lib/api-keys/limits";
@@ -288,7 +289,7 @@ export const runJobSchema = z.object({
 export const maintenanceSchema = z.object({
   enabled: z.boolean(),
   message: z.string().optional(),
-  delay: z.number().int().min(0).max(3600).optional(),
+  delay: z.number().int().min(0).max(MAX_TERMINATION_DELAY_SECONDS).optional(),
   discordNotifyMaintenance: z.boolean().optional(),
   excludedUsers: z.array(z.string()).optional(),
 });
@@ -296,7 +297,7 @@ export const maintenanceSchema = z.object({
 export const transcodeManagerSchema = z.object({
   enabled: z.boolean().optional(),
   message: z.string().optional(),
-  delay: z.number().int().min(0).max(3600).optional(),
+  delay: z.number().int().min(0).max(MAX_TERMINATION_DELAY_SECONDS).optional(),
   criteria: z.record(z.string(), z.boolean()).optional(),
   excludedUsers: z.array(z.string()).optional(),
   exemptHardware: z.boolean().optional(),
@@ -337,7 +338,7 @@ export const blackoutCreateSchema = z.object({
   // Bounded + integer to match the maintenance/transcode delays: an unbounded
   // value makes warn_then_terminate effectively never fire, and a non-integer
   // would 500 on write to the Int column.
-  delay: z.number().int().min(0).max(3600).optional(),
+  delay: z.number().int().min(0).max(MAX_TERMINATION_DELAY_SECONDS).optional(),
   enabled: z.boolean().optional(),
   excludedUsers: z.array(z.string()).optional(),
 });
@@ -671,7 +672,7 @@ export const apiKeyCreateSchema = z.object({
 export const apiMaintenanceSchema = z.strictObject({
   enabled: z.boolean(),
   message: z.string().max(500, "Message must be 500 characters or fewer").optional(),
-  delay: z.number().int().min(0).max(3600).optional(),
+  delay: z.number().int().min(0).max(MAX_TERMINATION_DELAY_SECONDS).optional(),
 });
 
 /**
@@ -942,7 +943,7 @@ const queryGroupSchema: z.ZodType = z.lazy(() =>
 
 const queryDefinitionSchema = z.object({
   mediaTypes: z.array(z.enum(["MOVIE", "SERIES", "MUSIC"])).max(3),
-  serverIds: z.array(z.string()).max(20),
+  serverIds: z.array(z.string().max(200)).max(MAX_QUERY_SERVER_IDS),
   groups: z.array(queryGroupSchema).max(20),
   sortBy: z.string().min(1).default("title"),
   sortOrder: z.enum(["asc", "desc"]).default("asc"),
@@ -967,7 +968,7 @@ export const queryColumnValuesSchema = z.object({
     .array(z.object({ id: z.string().min(1).max(200), grouped: z.boolean().optional() }))
     .max(MAX_COLUMN_VALUE_ITEMS),
   fields: z.array(z.string().min(1).max(100)).min(1).max(200),
-  serverIds: z.array(z.string().max(200)).max(100).optional().default([]),
+  serverIds: z.array(z.string().max(200)).max(MAX_QUERY_SERVER_IDS).optional().default([]),
   arrServerIds: z
     .object({
       radarr: z.string().max(200).optional(),

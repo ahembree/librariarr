@@ -54,6 +54,16 @@ export function actionHonorsMemberIds(actionType: string): boolean {
   return MEMBER_SCOPED_ACTION_TYPES.has(actionType);
 }
 
+/**
+ * Whether the action removes the whole Arr record — the movie, series or
+ * artist — from Radarr/Sonarr/Lidarr. Tags on a record about to be deleted
+ * would be deleted with it, so tag options are offered for every other action,
+ * the file-only deletes included (their record stays).
+ */
+export function deletesArrRecord(actionType: string): boolean {
+  return actionType === "DELETE_RADARR" || actionType === "DELETE_SONARR" || actionType === "DELETE_LIDARR";
+}
+
 /** Whether the action removes media/files (not just monitoring/quality). */
 export function isDestructiveActionType(actionType: string): boolean {
   return actionType.includes("DELETE");

@@ -35,7 +35,47 @@ Each individual rule consists of:
 
 Negation is part of the operator choice: alongside each comparison the picker offers its inverse — `Not Equals`, `Not Contains`, `Not Greater Than`, `Not Between`, and so on.
 
-**Whole groups can be negated too.** Every group has a **NOT** toggle that inverts its entire result — for example `NOT (watched by Alice OR watched by Bob)` matches items watched by neither. The Logic Preview shows the negation in place, and items the group would have matched are excluded instead. (Stream query groups negate through their ANY/NO quantifier rather than a NOT toggle.)
+**Whole groups can be negated too.** Every group has a **NOT** toggle that inverts its entire result — for example `NOT (watched by Alice OR watched by Bob)` matches items watched by neither. The Logic Preview shows the negation in place, and items the group would have matched are excluded instead. (Stream query groups negate through their quantifier rather than a NOT toggle.)
+
+### Stream query groups
+
+A **Stream Query** group tests an item's individual audio, video or subtitle tracks instead of the item's summary fields, so every condition inside it is checked against the **same** track — "an English audio track that is also Dolby Atmos", not "an English track and, separately, an Atmos one". The group reads `<quantifier> <stream type> stream where …`:
+
+| Quantifier | Matches an item when… |
+|---|---|
+| **ANY** | at least one track of that type meets every condition in the group |
+| **NO** | no track of that type meets them (an item with no track of that type matches) |
+| **ALL** | it has at least one track of that type, and every one of them meets the conditions |
+
+Each stream type offers only the fields its tracks carry:
+
+| Label | Field | Stream types |
+|-|-|-|
+| Codec | `sqCodec` | audio, video, subtitle |
+| Profile | `sqProfile` | audio, video, subtitle |
+| Language | `sqLanguage` | audio, video, subtitle |
+| Language Code | `sqLanguageCode` | audio, video, subtitle |
+| Bitrate (kbps) | `sqBitrate` | audio, video |
+| Is Default Track | `sqIsDefault` | audio, video, subtitle |
+| Display Title | `sqDisplayTitle` | audio, video, subtitle |
+| Extended Display Title | `sqExtDisplayTitle` | audio, video, subtitle |
+| Channels | `sqChannels` | audio |
+| Sample Rate (Hz) | `sqSamplingRate` | audio |
+| Channel Layout | `sqAudioLayout` | audio |
+| Audio Profile | `sqAudioProfile` | audio |
+| Bit Depth | `sqBitDepth` | video |
+| Width | `sqWidth` | video |
+| Height | `sqHeight` | video |
+| Frame Rate | `sqFrameRate` | video |
+| Scan Type | `sqScanType` | video |
+| Video Range Type | `sqVideoRangeType` | video |
+| Dynamic Range | `sqDynamicRange` | video |
+| Color Primaries | `sqColorPrimaries` | video |
+| Color Range | `sqColorRange` | video |
+| Chroma Subsampling | `sqChromaSubsampling` | video |
+| Forced | `sqForced` | subtitle |
+
+In rule JSON a stream query group is a group with a `streamQuery` object — `{ "streamType": "audio", "quantifier": "any" }` (`any`, `none` or `all`) — whose conditions use the fields above. Changing a group's stream type clears its conditions, since the fields differ.
 
 ## Limiting how much one run can delete
 
@@ -68,35 +108,42 @@ Details worth knowing:
 - **All-or-nothing.** Exceeding the limit holds the entire batch rather than deleting up to
   the limit. Acting on an arbitrary slice of a match set you already have reason to distrust
   is not safer.
-- **It applies to manual bulk actions too** — "Execute All" on the Matches page and the Query
-  page's actions — not just scheduled runs.
+- **It applies to manual bulk actions too** — **Execute** and **Execute All** on the Pending page and the
+  [Query page's actions](/docs/features/query/#the-deletion-limit) — not just scheduled runs.
 - If you have a [Discord webhook](/docs/features/notifications/) configured, a held run
   notifies you, so it cannot fail silently.
 
 
 ## Available Fields
 
-Over 50 fields are available for rule conditions.
+Over 80 fields are available for rule conditions. Fields that can never have a value for a library type (for example Sonarr's season count on a movie rule set) are disabled in the builder, and a rule set that uses one anyway is refused when saved.
+
+Each table gives the **Label** the rule editor shows and the **Field** name it stands for. Use the field name wherever a rule is written as data: the `field` of a condition in an exported or imported rule set (see the [Rule Set Library](/docs/guides/rule-set-library/)), and in the JSON sent to the rule set and query routes.
 
 ### Media Fields
 
-| Field | Description | Operators |
-|-------|-------------|-----------|
-| `playCount` | Number of times played | equals, greaterThan, lessThan, etc. |
-| `watchedByUser` | Server username that played the item (Plex/Jellyfin/Emby) — multi-select | equals, notEquals, contains, notContains |
-| `lastPlayedAt` | When last played | before, after, inLastDays |
-| `addedAt` | When added to library | before, after, inLastDays |
-| `title` | Media title | equals, contains, matchesWildcard |
-| `parentTitle` | Series name (for episodes) | equals, contains, matchesWildcard |
-| `year` | Release year | equals, greaterThan, lessThan, etc. |
-| `contentRating` | Content rating (PG, R, etc.) | equals, notEquals |
-| `rating` | Critic rating | greaterThan, lessThan, etc. |
-| `audienceRating` | Audience rating | greaterThan, lessThan, etc. |
-| `studio` | Production studio | equals, contains |
-| `genre` | Genre(s) | equals, contains |
-| `country` | Country of origin — multi-select (movies only) | equals, contains, notContains |
-| `duration` | Duration in minutes | greaterThan, lessThan, etc. |
-| `hasExternalId` | Which external-id sources the item carries (TMDB, TVDB, IMDB, MUSICBRAINZ) — multi-select | equals, notEquals, contains, notContains, matchesWildcard, isNull, isNotNull |
+| Label | Field | Description | Operators |
+|-|-------|-------------|-----------|
+| Play Count | `playCount` | Number of times played | equals, greaterThan, lessThan, etc. |
+| Watched By User | `watchedByUser` | Server username that played the item (Plex/Jellyfin/Emby) — multi-select | equals, notEquals, contains, notContains, matchesWildcard, isNull, isNotNull |
+| Last Played | `lastPlayedAt` | When last played | before, after, inLastDays |
+| Date Added | `addedAt` | When added to library (**Date Added**) | before, after, inLastDays |
+| Release Date | `originallyAvailableAt` | **Release Date** reported by the media server (a calendar day) | before, after, inLastDays |
+| Is Watchlisted | `isWatchlisted` | On your Plex watchlist (Plex) or marked favourite (Jellyfin/Emby) | equals, notEquals |
+| Title | `title` | Media title | equals, contains, matchesWildcard |
+| Artist / Series | `parentTitle` | **Artist / Series** — the series name for an episode, the artist for a track | equals, contains, matchesWildcard |
+| Album | `albumTitle` | Album (music) | equals, contains, matchesWildcard |
+| Year | `year` | Release year | equals, greaterThan, lessThan, etc. |
+| Content Rating | `contentRating` | Content rating (PG, R, etc.) | equals, notEquals |
+| Rating | `rating` | Critic rating | greaterThan, lessThan, etc. |
+| Audience Rating | `audienceRating` | Audience rating | greaterThan, lessThan, etc. |
+| Rating Count | `ratingCount` | **Rating Count** — Plex's `ratingCount`, the number of ratings behind the item's rating in Plex's online metadata. Plex sets it mostly on music tracks (a popularity count); it is empty for Jellyfin and Emby items and for most movies and episodes, so pair it with **Is Empty** or a media-type check | greaterThan, lessThan, etc. |
+| Studio | `studio` | Production studio | equals, contains |
+| Genre | `genre` | Genre(s) | equals, contains |
+| Label | `labels` | **Label** tags set on the media server | equals, contains |
+| Country | `country` | Country of origin — multi-select (movies only) | equals, contains, notContains |
+| Duration (min) | `duration` | Duration in minutes | greaterThan, lessThan, etc. |
+| Has External ID | `hasExternalId` | Which external-id sources the item carries (TMDB, TVDB, IMDB, MUSICBRAINZ) — multi-select | equals, notEquals, contains, notContains, matchesWildcard, isNull, isNotNull |
 
 :::note[`hasExternalId`: per-source vs. "any at all"]
 Operators that take a value ask a **per-source** question: `equals TMDB` matches
@@ -107,72 +154,99 @@ TMDB id specifically", use `notEquals TMDB`.
 
 ### Video Fields
 
-| Field | Description |
-|-------|-------------|
-| `resolution` | 4K, 1080P, 720P, etc. |
-| `videoCodec` | H.264, H.265, AV1, etc. |
-| `videoBitrate` | Video bitrate |
-| `videoBitDepth` | 8-bit, 10-bit |
-| `videoProfile` | Baseline, Main, High |
-| `videoFrameRate` | Frame rate (23.976, 24, etc.) |
-| `aspectRatio` | 16:9, 4:3, 2.39:1, etc. |
-| `dynamicRange` | SDR, HDR10, HDR10+, Dolby Vision, HLG |
-| `scanType` | progressive, interlaced |
+| Label | Field | Description |
+|-|-------|-------------|
+| Resolution | `resolution` | 4K, 1080P, 720P, etc. |
+| Video Codec | `videoCodec` | H.264, H.265, AV1, etc. |
+| Video Bitrate (kbps) | `videoBitrate` | Video bitrate (kbps) |
+| Video Bit Depth | `videoBitDepth` | 8-bit, 10-bit |
+| Video Profile | `videoProfile` | Baseline, Main, High |
+| Frame Rate | `videoFrameRate` | Frame rate (23.976, 24, etc.) |
+| Aspect Ratio | `aspectRatio` | 16:9, 4:3, 2.39:1, etc. |
+| Dynamic Range | `dynamicRange` | SDR, HDR10, HDR10+, Dolby Vision, HLG |
+| Scan Type | `scanType` | progressive, interlaced |
 
 ### Audio Fields
 
-| Field | Description |
-|-------|-------------|
-| `audioCodec` | AAC, AC3, FLAC, etc. |
-| `audioChannels` | Channel count (2, 6, 8, etc.) |
-| `audioProfile` | Dolby Atmos, DTS-HD MA, etc. |
-| `audioSamplingRate` | Sampling rate (48000, etc.) |
-| `audioBitrate` | Audio bitrate |
-| `audioLanguage` | Audio track language |
-| `audioStreamCount` | Number of audio tracks |
+| Label | Field | Description |
+|-|-------|-------------|
+| Audio Codec | `audioCodec` | AAC, AC3, FLAC, etc. |
+| Audio Channels | `audioChannels` | Channel count (2, 6, 8, etc.) |
+| Audio Profile | `audioProfile` | Dolby Atmos, DTS-HD MA, etc. |
+| Sample Rate (Hz) | `audioSamplingRate` | Sampling rate in Hz (48000, etc.) |
+| Audio Bitrate (kbps) | `audioBitrate` | Audio bitrate (kbps) |
+| Audio Language | `audioLanguage` | Audio track language |
+| Stream Audio Codec | `streamAudioCodec` | Codec of any audio track (not only the primary one) |
+| Audio Track Count | `audioStreamCount` | Number of audio tracks |
 
 ### File Fields
 
-| Field | Description |
-|-------|-------------|
-| `fileSize` | File size (in MB) |
-| `container` | File container (MKV, MP4, etc.) |
-| `subtitleLanguage` | Subtitle track language |
-| `subtitleStreamCount` | Number of subtitle tracks |
+| Label | Field | Description |
+|-|-------|-------------|
+| File Size (MB) | `fileSize` | File size (in MB) |
+| Container | `container` | File container (MKV, MP4, etc.) |
+| Subtitle Language | `subtitleLanguage` | Subtitle track language |
+| Subtitle Track Count | `subtitleStreamCount` | Number of subtitle tracks |
+
+### Cross-System Fields
+
+| Label | Field | Description |
+|-|-------|-------------|
+| Server Count | `serverCount` | Number of copies of the item across your servers (items sharing its dedup identity) |
+| Matched By Rule Set | `matchedByRuleSet` | Names of the rule sets currently matching the item — multi-select |
+| Has Pending Action | `hasPendingAction` | Whether another rule set already has an action pending on the item or another copy of it |
+
+### Series Fields
+
+Series rule sets only. See [Series scope and aggregate fields](#series-scope-and-aggregate-fields).
+
+| Label | Field | Description |
+|-|-------|-------------|
+| Available Episode Count | `availableEpisodeCount` | Episodes of the show in your library |
+| Watched Episode Count | `watchedEpisodeCount` | Episodes played at least once |
+| Watched Episode % | `watchedEpisodePercentage` | Share of the show's episodes played, as a percentage |
+| Series Last Played | `seriesLastPlayedAt` | **Series Last Played** — most recent play of any episode |
+| Latest Episode View Date | `latestEpisodeViewDate` | Last play of the newest episode |
+| Last Episode Added | `lastEpisodeAddedAt` | When the newest episode was added |
+| Last Episode Aired | `lastEpisodeAiredAt` | Air date of the newest episode (a calendar day) |
+
+:::note[Calendar-day fields]
+`originallyAvailableAt`, `arrReleaseDate`, `arrInCinemasDate`, `arrFirstAired` and `lastEpisodeAiredAt` are calendar days rather than moments in time, and are shown as that day wherever you are. Other date fields (added, last played, request dates) are moments and are shown in your local time.
+:::
 
 ### External / *arr Fields
 
 These fields require configured [Sonarr](/docs/integrations/sonarr/), [Radarr](/docs/integrations/radarr/), or [Lidarr](/docs/integrations/lidarr/) integrations.
 
-| Field | Description |
-|-------|-------------|
-| `foundInArr` | Whether the item exists in the linked *arr instance |
-| `arrMonitored` | Whether monitored in *arr |
-| `arrTag` | Tags in *arr instance |
-| `arrQualityProfile` | Quality profile name |
-| `arrQualityName` | Name of the current file's quality (Radarr / movies only) |
-| `arrQualityCutoffMet` | Whether the current file meets the quality profile's cutoff (Radarr / movies only). `true` once the file is at or above the cutoff, so no upgrade is pending |
-| `arrCustomFormatScore` | Custom format score of the movie's current file (Radarr / movies only) |
-| `arrStatus` | Release/lifecycle status in *arr (e.g. `released`, `continuing`) |
-| `arrEnded` | Whether the series has ended (Sonarr / series only) |
-| `arrSeriesType` | Series type: `standard`, `daily`, or `anime` (Sonarr / series only) |
-| `arrRating` | Rating in *arr. For movies this is the IMDB rating; for series/music it is the single aggregate rating the *arr exposes |
-| `arrTmdbRating` | TMDB rating in *arr (Radarr / movies only — Sonarr/Lidarr expose only a single flat rating) |
-| `arrRtCriticRating` | Rotten Tomatoes critic rating in *arr (Radarr / movies only — Sonarr/Lidarr expose only a single flat rating) |
-| `arrOriginalLanguage` | Original language in *arr (not music) |
-| `arrRuntime` | Runtime in minutes (Radarr / movies only) |
-| `arrSizeOnDisk` | Size on disk in MB |
-| `arrPath` | File path in *arr |
-| `arrReleaseDate` | Digital/physical release date (Radarr / movies only) |
-| `arrInCinemasDate` | In-cinemas date (Radarr / movies only) |
-| `arrFirstAired` | First-aired date (Sonarr / series only) |
-| `arrDateAdded` | When the item was added to *arr |
-| `arrDownloadDate` | When the current file was downloaded (Radarr / movies only) |
-| `arrSeasonCount` | Total season count (Sonarr / series only) |
-| `arrEpisodeCount` | Total episode count, specials excluded — every episode Sonarr knows of, aired or not, monitored or not (Sonarr / series only) |
-| `arrHasUnaired` | Whether the series has an episode airing in the future, monitored or not, or is still upcoming (Sonarr / series only) |
-| `arrMonitoredSeasonCount` | Number of monitored seasons, specials excluded (Sonarr / series only) |
-| `arrMonitoredEpisodeCount` | Number of episodes in monitored seasons, specials excluded. Sonarr reports no per-episode monitored count with the series, so an episode unmonitored inside a monitored season is still counted (Sonarr / series only) |
+| Label | Field | Description |
+|-|-------|-------------|
+| Found In Arr | `foundInArr` | Whether the item exists in the linked *arr instance |
+| Monitored | `arrMonitored` | Whether monitored in *arr |
+| Tag | `arrTag` | Tags in *arr instance |
+| Quality Profile | `arrQualityProfile` | Quality profile name |
+| Quality Name | `arrQualityName` | Name of the current file's quality (Radarr / movies only) |
+| Quality Cutoff Met | `arrQualityCutoffMet` | Whether the current file meets the quality profile's cutoff (Radarr / movies only). `true` once the file is at or above the cutoff, so no upgrade is pending |
+| Custom Format Score | `arrCustomFormatScore` | Custom format score of the movie's current file (Radarr / movies only) |
+| Status | `arrStatus` | Release/lifecycle status in *arr (e.g. `released`, `continuing`) |
+| Ended | `arrEnded` | Whether the series has ended (Sonarr / series only) |
+| Series Type | `arrSeriesType` | Series type: `standard`, `daily`, or `anime` (Sonarr / series only) |
+| IMDB Rating | `arrRating` | **IMDB Rating** in *arr. For movies this is the IMDB rating; for series/music it is the single aggregate rating the *arr exposes |
+| TMDB Rating | `arrTmdbRating` | TMDB rating in *arr (Radarr / movies only — Sonarr/Lidarr expose only a single flat rating) |
+| RT Critic Rating | `arrRtCriticRating` | Rotten Tomatoes critic rating in *arr (Radarr / movies only — Sonarr/Lidarr expose only a single flat rating) |
+| Original Language | `arrOriginalLanguage` | Original language in *arr (not music) |
+| Runtime (min) | `arrRuntime` | Runtime in minutes (Radarr / movies only) |
+| Size on Disk (MB) | `arrSizeOnDisk` | Size on disk in MB |
+| Path | `arrPath` | File path in *arr |
+| Release Date | `arrReleaseDate` | Digital/physical release date (Radarr / movies only) |
+| In Cinemas Date | `arrInCinemasDate` | In-cinemas date (Radarr / movies only) |
+| First Aired | `arrFirstAired` | First-aired date (Sonarr / series only) |
+| Date Added | `arrDateAdded` | When the item was added to *arr |
+| Download Date | `arrDownloadDate` | When the current file was downloaded (Radarr / movies only) |
+| Season Count | `arrSeasonCount` | Total season count (Sonarr / series only) |
+| Episode Count | `arrEpisodeCount` | Total episode count, specials excluded — every episode Sonarr knows of, aired or not, monitored or not (Sonarr / series only) |
+| Has Unaired | `arrHasUnaired` | Whether the series has an episode airing in the future, monitored or not, or is still upcoming (Sonarr / series only) |
+| Monitored Seasons | `arrMonitoredSeasonCount` | Number of monitored seasons, specials excluded (Sonarr / series only) |
+| Monitored Episodes | `arrMonitoredEpisodeCount` | Number of episodes in monitored seasons, specials excluded. Sonarr reports no per-episode monitored count with the series, so an episode unmonitored inside a monitored season is still counted (Sonarr / series only) |
 
 :::note[Missing *arr data is fail-closed]
 If an item isn't in the linked *arr instance, or a specific field has no value (for example a movie with no downloaded file has no quality name, quality-cutoff, or size), **no comparison operator matches it** — including negative operators like *Not Equals* / *Not Contains* and the *NOT* toggle. This is deliberate so lifecycle rules never delete an item on the strength of absent *arr data. To target items with missing data, use the *Is Empty* (`isNull`) operator, or the `foundInArr` field.
@@ -181,21 +255,21 @@ If an item isn't in the linked *arr instance, or a specific field has no value (
 :::caution[*arr criteria need at least one enabled instance]
 If you disable or delete your only Radarr, Sonarr, or Lidarr instance, rule sets using that family's fields are **skipped entirely** by detection, with a warning in System Logs, and previews return an error. This is deliberate: without an instance to check against, `foundInArr = false` would be true for your whole library. Re-add the instance and the rule set resumes on the next detection run.
 
-When a rule set's action is linked to an *arr instance, its *arr criteria are read from **that instance only** — the same one its action runs against. With a 1080p and a 4K Radarr, a rule set acting on the 4K instance sees the 4K copy's tags, monitored state and quality profile, never the 1080p copy's. If that instance is disabled, the rule set is skipped in the same way, even while another instance of the family is enabled. A rule set with no instance selected reads every enabled instance; a title on more than one of them takes the record from the instance that was added first. Changing the *arr instance of a rule set that uses *arr criteria clears its matches and cancels its pending actions, since they were judged on the old instance; the editor asks how to handle matches as it does for a rule change.
+When a rule set's action is linked to an *arr instance, its *arr criteria are read from **that instance only** — the same one its action runs against. With a 1080p and a 4K Radarr, a rule set acting on the 4K instance sees the 4K copy's tags, monitored state and quality profile, never the 1080p copy's. If that instance is disabled, the rule set is skipped in the same way, even while another instance of the family is enabled. The editor requires an instance for a rule set that uses *arr fields (an **"… instance required"** warning disables Preview, Test Media and Save until you pick one). A rule set saved without one, such as an older one, reads every enabled instance; a title on more than one of them takes the record from the instance that was added first. Changing the *arr instance of a rule set that uses *arr criteria clears its matches and cancels its pending actions, since they were judged on the old instance; the editor asks how to handle matches as it does for a rule change.
 :::
 
 ### Seerr Fields
 
 These fields require a configured [Seerr](/docs/integrations/seerr/) integration.
 
-| Field | Description |
-|-------|-------------|
-| `seerrRequested` | Whether requested in Seerr |
-| `seerrRequestDate` | When the most recent request was made |
-| `seerrRequestCount` | Number of requests |
-| `seerrRequestedBy` | Who requested it |
-| `seerrApprovalDate` | When the most recent request was approved (including requests Seerr has since marked Completed or Failed) |
-| `seerrDeclineDate` | When the most recent request was declined |
+| Label | Field | Description |
+|-|-------|-------------|
+| Has Request | `seerrRequested` | Whether requested in Seerr |
+| Request Date | `seerrRequestDate` | When the most recent request was made |
+| Request Count | `seerrRequestCount` | Number of requests |
+| Requested By | `seerrRequestedBy` | Who requested it |
+| Approval Date | `seerrApprovalDate` | When the most recent request was approved (including requests Seerr has since marked Completed or Failed) |
+| Decline Date | `seerrDeclineDate` | When the most recent request was declined |
 
 An item with no such date (never requested, never approved, never declined) fails every date comparison except **Not Equals**, exactly like the library's own date fields, and **Not** then applies as usual — so NOT (Request Date in the last 90 days) includes titles nobody ever requested, while NOT (Request Date not equal to a date) does not. Use **Is Empty** / **Is Not Empty** to target them directly. If Seerr's request list can't be read in full, rule sets using Seerr fields are skipped for that run rather than evaluated against a partial list.
 
@@ -207,30 +281,32 @@ Seerr fields work on **movie and series** rule sets only; Seerr doesn't manage m
 
 ## Operators
 
-| Operator | Applicable Types | Description |
-|----------|-----------------|-------------|
-| `equals` | text, number | Exact match |
-| `notEquals` | text, number | Not an exact match |
-| `greaterThan` | number | Greater than value |
-| `greaterThanOrEqual` | number | Greater than or equal |
-| `lessThan` | number | Less than value |
-| `lessThanOrEqual` | number | Less than or equal |
-| `contains` | text | For free-text fields (e.g. title, path): substring match (case-insensitive). For enumerable fields (e.g. quality profile, tag, codec) the operator presents a multi-select and matches if the item's value equals any selected value (list membership, not substring). |
+| Operator | Label | Applicable Types | Description |
+|----------|-------|-----------------|-------------|
+| `equals` | Equals (dates: Is On) | text, number, date, boolean | Exact match |
+| `notEquals` | Not Equals (dates: Is Not On) | text, number, date, boolean | Not an exact match |
+| `greaterThan` | Greater Than | number | Greater than value |
+| `greaterThanOrEqual` | `>=` | number | Greater than or equal |
+| `lessThan` | Less Than | number | Less than value |
+| `lessThanOrEqual` | `<=` | number | Less than or equal |
+| `contains` | Contains | text | For free-text fields (e.g. title, path): substring match (case-insensitive). For enumerable fields (e.g. quality profile, tag, codec) the operator presents a multi-select and matches if the item's value equals any selected value (list membership, not substring). |
+| `notContains` | Not Contains | text | Inverse of `contains` — same free-text vs enumerable distinction. |
+| `matchesWildcard` | Matches Wildcard | text | Wildcard match (`*` = any characters, `?` = single character) |
+| `notMatchesWildcard` | Not Matches Wildcard | text | Does not match wildcard pattern |
+| `before` | Is Before | date | Before a specific date |
+| `after` | Is After | date | After a specific date |
+| `inLastDays` | In Last X Days | date | Within the last N days |
+| `notInLastDays` | More Than X Days Ago | date | More than N days ago |
+| `between` | Between | number, date | Within an inclusive range |
+| `isNull` | Is Empty | text, number, date (and the booleans *arr may leave unset: `arrQualityCutoffMet`, `arrEnded`, `arrHasUnaired`) | The item has no value for this field (takes no value of its own) |
+| `isNotNull` | Is Not Empty | same as Is Empty | The item has some value for this field (takes no value of its own) |
+
+Boolean fields (`isWatchlisted`, `foundInArr`, `hasPendingAction` and so on) take *Equals* / *Not Equals* `true` or `false`.
 
 All text comparisons are case-insensitive, including genres, labels and
 countries. Servers do not agree on casing — one may report `Sci-Fi` where
 another reports `sci-fi`, and the dropdown lists both — so a rule written
 against either spelling matches copies on every server.
-| `notContains` | text | Inverse of `contains` — same free-text vs enumerable distinction. |
-| `matchesWildcard` | text | Wildcard match (`*` = any characters, `?` = single character) |
-| `notMatchesWildcard` | text | Does not match wildcard pattern |
-| `before` | date | Before a specific date |
-| `after` | date | After a specific date |
-| `inLastDays` | date | Within the last N days |
-| `notInLastDays` | date | More than N days ago |
-| `between` | number, date | Within an inclusive range |
-| `isNull` | text, number, date | *Is Empty* — the item has no value for this field (takes no value of its own) |
-| `isNotNull` | text, number, date | *Is Not Empty* — the item has some value for this field (takes no value of its own) |
 
 ### What "Is Empty" means per field
 
@@ -245,7 +321,7 @@ field's shape:
 
 Fields whose value is always present and has no meaningful "empty" reading —
 `foundInArr`, `arrMonitored`, `seerrRequested`, `seerrRequestCount`,
-`playCount`, `isWatchlisted` — don't offer the two operators at all, because
+`playCount`, `isWatchlisted`, `serverCount`, `hasPendingAction` — don't offer the two operators at all, because
 *Is Not Empty* on them would just match everything.
 
 :::note[List fields ask about membership]
@@ -307,65 +383,11 @@ Create a rule set with an AND group:
 - `watchedByUser` notContains `carol|dave` — Never watched by current household members
 - `addedAt` notInLastDays `180` — Been in the library for at least 6 months
 
-The `watchedByUser` field reads from the per-user play history synced from Plex / Jellyfin / Emby. "Watched by" means **any play by that user**, regardless of how much of the item they actually consumed. The dropdown is populated with usernames that have at least one counted play on your connected servers — a user whose only [Tracearr](/docs/integrations/tracearr/) plays stopped short of Tracearr's completion threshold is not offered, since no rule could match them.
+The `watchedByUser` field reads from the per-user play history synced from Plex / Jellyfin / Emby. "Watched by" means **any counted play by that user**: every play the media server's own history records, and, for history imported from [Tracearr](/docs/integrations/tracearr/), only plays that reached Tracearr's completion threshold. The dropdown is populated with usernames that have at least one counted play on your connected servers — a user whose only [Tracearr](/docs/integrations/tracearr/) plays stopped short of Tracearr's completion threshold is not offered, since no rule could match them.
 
-### Converting a Query into a Rule Set
+### Building rules on the Query page
 
-The **Query Builder** at `/library/query` shares its rule shape with the lifecycle engine. If you build a query that you'd like to enforce on a schedule, use **Convert to Lifecycle Rule** on the query builder toolbar to create a rule set without re-entering the criteria.
-
-What the conversion does:
-
-- Copies the rule tree verbatim — no changes to fields, operators, or values.
-- Prompts you to pick a target library type when the query targets more than one (rule sets are scoped to a single type).
-- Drops any rules that don't apply to the chosen library type and shows you the list before submitting. For example, when targeting **Movies**, any series-aggregate or music-only rules are removed.
-- Creates the new rule set with **actionEnabled off** and no action configured — matches will be detected on the next scheduler run, but nothing is deleted or unmonitored until you choose an action.
-
-After conversion, you're redirected to the new rule set's editor so you can pick an action type, set the delay, configure tags, and re-evaluate.
-
-### Choosing which servers a query searches
-
-The **Servers** dropdown in the query's scope picks the media servers it searches: **All servers** (the default), one server, or any combination of them. Ticking every server is the same as **All servers**, so a server you add later is included too. Disabled servers are not offered and are never searched. The selection is saved with the query, carried into **Convert to Lifecycle Rule**, and used by actions run from the Query page.
-
-### Showing any criterion as a table column
-
-Every criterion a query can filter on can also be shown as a column in the results table. Open **Columns** and pick from the sections the query builder uses (Content, Activity, Streams, Arr, Seerr, Series and so on); the search box at the top finds a column by name. Turning a column on loads its values for the rows already on screen — the query is not run again. Only the table view shows these columns, so the card view loads none of them until you switch back to the table.
-
-- **Arr columns** read the *arr instance selected in the query scope. With none selected they stay empty and a note above the table says why.
-- **Seerr columns** read every enabled Seerr instance. If none can be reached, the columns stay empty and the note gives the reason.
-- **Series columns** (episode counts, watched %, last played) apply to a grouped show row. A show row has no single value for per-episode detail such as bitrate, so those cells show "-".
-
-Columns sort like the fixed ones: numbers and dates in order, empty cells last.
-
-**Pinning columns.** Click or tap the pin icon in a column header to keep that column at the left edge while the rest scroll sideways, and again to unpin it. With a mouse, the pin on an unpinned column appears when you point at its header; on a touch screen every pin is always shown. **Type**, **Title** and **Year** are pinned by default, and your choice is remembered in this browser. Pinned columns never take more than about 60% of the table's width: on a phone or a narrow window, the pins that don't fit are paused (their pin icon is dimmed and a note above the table names them) so there is still room to scroll, and they come back when the screen is wide enough.
-
-**Scrolling sideways.** When the table is wider than the page, a scrollbar stays at the bottom of the window while the table is on screen, so you never have to scroll to the last row to reach it. Drag its handle (with a mouse or a finger), click or tap beside the handle to move one screen's width, or point at it and turn the mouse wheel. Shift + mouse wheel over the rows also scrolls sideways, and on a touch screen you can swipe the table itself.
-
-### Unsaved query drafts
-
-An in-progress query is kept for the current browser tab, so navigating away and back doesn't lose it. This is separate from **Save**, which stores a named query — the draft lives only in that tab and is cleared when you close it. **Discard** appears when a draft is restored; **New** clears the builder at any time.
-
-### Running Actions Directly from the Query Page
-
-For one-off cleanups you don't want to schedule, you can run a lifecycle action on query results **without** creating a rule set:
-
-1. Pick the Arr instance(s) for the media types you want to act on in the query toolbar (Radarr for movies, Sonarr for series, Lidarr for music).
-2. Run the query, then tick the results you want to act on. Table and card views both offer a select-all control.
-3. In the **Actions** bar above the results, choose an action (e.g. *Delete from Radarr*, *Unmonitor & Delete Files*, *Change Quality Profile*), set any options it offers (target quality profile, import exclusion, **Search after**), optionally add or remove *arr tags, then **Run action** and confirm.
-
-A progress bar tracks both the query and the action while they run. The result count line reports the **total file size of all results**, and the Actions bar shows the **combined size of your selection** — handy for gauging how much space a cleanup will reclaim before you run it.
-
-Notes:
-
-- **Runs immediately** — there is no delay, unlike scheduled rule actions.
-- **Any selection size** — larger selections are split automatically into sequential batches of up to 1,000 items, and the Actions bar and confirmation dialog tell you how many. Each batch is recorded before the next starts, so a run that stops part-way loses nothing — re-run to finish the rest. (One exception: a whole-series action on more than 1,000 episodes of a *single* show is refused while you're viewing individual episodes — switch to the grouped series view, which acts on the show in one unit.)
-- **One Arr family per run** — an action applies only to selected results of its media type (e.g. *Delete from Radarr* acts on selected movies); selected items of other types are skipped and reported in the result toast.
-- Before acting, the query is re-run so only items that still match are affected, and items on the [Lifecycle Exceptions](/docs/features/deletion-safety/) list are skipped automatically.
-- Actions are refused when the query's *arr or Seerr criteria can't actually be evaluated — no *arr server selected for the action's media type, a disabled one, no enabled Seerr instance, or Seerr criteria on a music action. Without that data a rule like *Found In Arr = false* would match your entire library, so the run is blocked with an explanatory error.
-- When the query uses *arr criteria, the action must run on the same *arr instance the criteria were read from. A tag checked on your 1080p Radarr says nothing about the copy on your 4K Radarr.
-- A query action and a rule set's actions never run at the same time, since they can reach the same *arr record through different copies or tracks. While a query action is running, scheduled actions wait for the next execution run and **Execute** or **Retry** on the Pending page is refused. A query action that starts while a rule set's actions are running waits for them, up to a minute, before it is refused.
-- **One action per *arr record.** A title found on two of your servers, or several tracks of one artist, is one record in the *arr app, so it gets one action. A file delete on an artist's tracks deletes all the selected tracks in that one action.
-- The [deletion limit](#limiting-how-much-one-run-can-delete) counts the whole run, not each batch: a run over the limit is refused before its first batch starts. A series action in episode view counts once per show.
-- Every run is recorded in the **Actions** history (and deletion stats) labelled *Ad-hoc query action*, so there's a full audit trail even though no rule set exists.
+The [Query Builder](/docs/features/query/) at `/library/query` uses this same builder and engine to search your library on demand. A query you'd like enforced on a schedule can be turned into a rule set with **Convert to Lifecycle Rule** — see [Converting a query into a rule set](/docs/features/query/#converting-a-query-into-a-rule-set). The Query page can also run an action on its results straight away, without a rule set and without the action delay — see [Running actions on results](/docs/features/query/#running-actions-on-results).
 
 ### Importing and Exporting Rule Sets
 
@@ -379,21 +401,21 @@ The [Rule Set Library](/docs/guides/rule-set-library/) has ready-made rule sets 
 
 Before executing any actions, use the **Preview** feature to see which media items match your rules:
 
-- Shows a count of matching items
-- Displays a paginated list (50 per page) with metadata
-- Updates in real time as you modify rules
+- Shows a count of matching items, in a card or table view
+- On an existing rule set, marks each item as **new**, **retained** or **removed** compared with its current matches
+- Runs when you click **Preview** (and **Test Media** checks one item of your choice against the rules)
 - Shows a live progress bar through each phase (fetching *arr/Seerr metadata, evaluating rules, computing matched criteria) so large libraries don't just spin
 
 Preview is **refused** whenever the rules can't be evaluated faithfully, and the reason is shown as an error notification rather than an empty or stale result list. The same guard that pauses detection applies here, so a preview never shows matches that detection would refuse to produce:
 
 - *arr criteria with no enabled Sonarr/Radarr/Lidarr instance, or Seerr criteria with no enabled Seerr instance (Seerr criteria on a music rule set are refused permanently).
-- Criteria that read play activity — *Watched By User*, *Play Count*, *Last Played*, and the series rollups built on them — while any targeted server's play history isn't established yet: it has never synced, was recently cleared, or a [Tracearr](/docs/integrations/tracearr/) history import is still backfilling. Until the history is known, every item looks never-watched, so *Play Count = 0* or *not played in N months* would match the entire library. The warning names the server and which of those applies: a server that is **still importing** clears itself when the import finishes (Settings → Servers shows its progress), while one where **no sync has established what was played** clears on the next successful watch-history sync — run one from **Library → History → Refresh**.
+- Criteria that read play activity — *Watched By User*, *Play Count*, *Last Played*, and the series rollups built on them — while any targeted server's play history isn't established yet: it has never synced, was recently cleared, or a [Tracearr](/docs/integrations/tracearr/) history import is still backfilling. Until the history is known, every item looks never-watched, so *Play Count = 0* or *not played in N months* would match the entire library. The warning names the server and which of those applies: a server that is **still importing** clears itself when the import finishes (Settings → Media Servers shows its progress), while one where **no sync has established what was played** clears on the next successful watch-history sync — run one from **Library → History → Refresh**.
 
 The last case also shows a **"Play history not established yet"** warning in the rule editor, naming the servers involved, so you can see a rule set is paused without having to run anything. It clears itself when the import finishes — no reload needed. The same warning pattern already covers a missing *arr or Seerr instance.
 
-Saving with **Run detection now** reports the same thing: if detection refuses the rule set, you stay on the editor with the reason rather than being sent to Matches, where the previous run's matches would otherwise look like the new result.
+Saving with **Save and re-detect** (then **Confirm and Save**) reports the same thing: if detection refuses the rule set, you stay on the editor with the reason rather than being sent to Matches, where the previous run's matches would otherwise look like the new result.
 
-**Run** and **Re-evaluate All** on the [Matches](/docs/features/lifecycle-rules/) page report it too. A refused rule set keeps the matches it already had — detection preserves them deliberately — so its row is left as it was and a notification names the rule set and the reason. It is not shown as having zero matches; that would be the opposite of what happened.
+**Re-evaluate** and **Re-evaluate All** on the Matches page report it too. A refused rule set keeps the matches it already had — detection preserves them deliberately — so its row is left as it was and a notification names the rule set and the reason. It is not shown as having zero matches; that would be the opposite of what happened.
 
 ## Actions
 
@@ -401,15 +423,22 @@ Actions determine what happens to matched media. Configure them in the action se
 
 ### Available Actions
 
-| Action | Description | Requires |
-|--------|-------------|----------|
-| **Delete** | Remove from *arr and optionally delete files | Sonarr/Radarr/Lidarr |
-| **Unmonitor** | Stop monitoring for upgrades in *arr | Sonarr/Radarr/Lidarr |
-| **Change Quality Profile** | Switch the *arr item to a different quality profile | Sonarr/Radarr/Lidarr |
-| **Search for New Copy** | Trigger an *arr search for a new copy of the item | Sonarr/Radarr/Lidarr |
-| **Do Nothing** | Track matches without taking action | — |
+Every library type offers the same eight actions, against Radarr (movies), Sonarr (series) or Lidarr (music):
 
-Tags can be added or removed as a supplementary operation alongside any action (including Do Nothing).
+| Action | Description |
+|--------|-------------|
+| **Do Nothing** | Track matches without taking action (no *arr server needed unless it manages tags) |
+| **Delete from Radarr / Sonarr / Lidarr** | Remove the whole movie, series or artist from the *arr app **and delete its files**. Optionally adds an import list exclusion so lists don't add it back |
+| **Unmonitor & Delete Files** | Unmonitor, then delete the matched files |
+| **Monitor & Delete Files** | Delete the matched files and keep (or set) them monitored, so the *arr app grabs them again |
+| **Delete Files Only** | Delete the matched files without changing monitoring |
+| **Unmonitor Only** | Stop monitoring in the *arr app; nothing is deleted |
+| **Change Quality Profile** | Switch the *arr item to a different quality profile |
+| **Search for New Copy** | Trigger an *arr search for a new copy of the item |
+
+The three file-delete actions can **Search for new copy after file deletion**.
+
+**Manage Tags** adds or removes *arr tags alongside the action, including **Do Nothing**. It is unavailable only with **Delete from …**, which removes the *arr record and its tags with it; the file-only deletes keep the record, so tags apply to them.
 
 ### Which files a file delete removes
 
@@ -441,11 +470,11 @@ This action triggers an *arr search for a new copy of the matched movie, series,
 
 Each action links a rule set to an *arr instance:
 
-1. Select the *arr integration (e.g., "My Radarr") — the rule set's *arr criteria are also read from this instance
-2. Choose the action type (delete, unmonitor, do nothing)
-3. Set action-specific options (e.g., delete files toggle)
-4. Optionally configure tags to add or remove
-5. Set priority — actions execute top-to-bottom
+1. Select the *arr server at the top of the editor (e.g., "My Radarr") — the rule set's *arr criteria are also read from this instance
+2. Switch on **Enable lifecycle action** and choose the **Action type**
+3. Set the **Delay (days)** — how long after a match the action runs (default 7)
+4. Set action-specific options (import list exclusion, target quality profile, search after)
+5. Optionally turn on **Manage Tags** to add or remove tags
 
 <Aside type="caution">
   The **Delete** action permanently removes files from your *arr instance and, optionally, from disk. Preview your matches carefully before enabling deletion rules.
@@ -527,7 +556,7 @@ Rules are evaluated in two steps:
 
 ### Series scope and aggregate fields
 
-For **Series** rule sets, the **Series Scope** toggle controls the unit of evaluation:
+For **Series** rule sets, the **Match against entire series** toggle (series scope) controls the unit of evaluation:
 
 - **Series scope on** — the rule is evaluated against the whole show, and an action applies to the entire series. Every episode is a member of the match.
 - **Series scope off** — the rule is evaluated against individual episodes, then results are grouped by show. A member-scoped action (such as **Delete Files Only**) acts only on the episodes that matched.
@@ -546,6 +575,10 @@ Some fields are **series-aggregate** fields — `availableEpisodeCount`, `watche
 
 When Series Scope is **off** and your rule mixes an aggregate field with a per-episode field (for example, *available episode count ≥ 20 **and** resolution = 4K*), the show first has to qualify on the aggregate, and then a member-scoped file delete acts only on the episodes that individually satisfy the per-episode conditions (here, just the 4K episodes) — not every episode of the series. With Series Scope **on**, the same rule deletes the whole series.
 
+### Artist scope
+
+**Music** rule sets have the same switch, **Match against entire artist**. On, the rules are evaluated against each artist's tracks taken together and an action covers the artist. Off (track scope), the rules are evaluated per track, then grouped by artist; file deletes act on the matched tracks only.
+
 ### How series actions are named
 
 A series match and its action are always named by the **show**. This holds on the Matches and Pending pages, in the action history, in System Logs and in Discord notifications. It is never named by the episode Librariarr stores the match against. An action that acts on **exactly one episode** is named by the show plus that episode's season and episode number, for example *Breaking Bad S03E10*. That happens with a file delete whose rule matched a single episode, or a Query-page action on one episode. The history keeps that name after the episode has been deleted from your server.
@@ -558,6 +591,20 @@ Lifecycle processing runs on two independent schedules (configured in **Settings
 - **Execution**: Performs configured actions on matched media
 
 Both can be run manually via the **Run Now** button at any time.
+
+### Detection: incremental and full
+
+Scheduled detection is **incremental**: it adds new matches, refreshes the ones it keeps, and removes matches whose items no longer satisfy the rules — cancelling their pending actions. **Re-evaluate** (per rule set) and **Re-evaluate All** on the Matches page run a **full re-evaluation** instead, replacing each rule set's matches with exactly what its rules select now.
+
+Turn on **Sticky matches** in a rule set to keep items matched after they stop meeting the rules: incremental runs then only add matches, and only a manual re-evaluation removes them.
+
+### Action delay
+
+When a match is found and the rule set's action is enabled, an action is scheduled **Delay (days)** after detection (0–365, default 7) and appears on the Pending page until it runs. An item that already has a pending action is not scheduled again. When you change the delay, the editor offers to reschedule the actions already pending to the new delay from today.
+
+### Editing a rule set
+
+Changing the rules prompts **Save and re-detect** (shows a **Match Changes Preview** — new, retained and removed — and **Confirm and Save** runs detection for the rule set at once) or **Save only** (the matches stay as they are until the next detection run). Action-only changes save directly and are copied onto the pending actions. Turning off **Enabled** or **Enable lifecycle action** cancels the pending actions.
 
 ## Deletion Stats
 

@@ -12,7 +12,6 @@ const mockRadarrClient = vi.hoisted(() => ({
   getMovieByTmdbId: vi.fn(),
   deleteMovie: vi.fn(),
   updateMovie: vi.fn(),
-  addExclusion: vi.fn(),
   deleteMovieFile: vi.fn(),
   triggerMovieSearch: vi.fn(),
   getTags: vi.fn(),
@@ -26,7 +25,6 @@ const mockSonarrClient = vi.hoisted(() => ({
   getSeriesByTvdbId: vi.fn(),
   deleteSeries: vi.fn(),
   updateSeries: vi.fn(),
-  addExclusion: vi.fn(),
   deleteEpisodeFiles: vi.fn(),
   getEpisodes: vi.fn(),
   triggerSeriesSearch: vi.fn(),
@@ -43,7 +41,6 @@ const mockLidarrClient = vi.hoisted(() => ({
   getArtistByMusicBrainzId: vi.fn(),
   deleteArtist: vi.fn(),
   updateArtist: vi.fn(),
-  addExclusion: vi.fn(),
   getTracks: vi.fn(),
   getAlbums: vi.fn(),
   deleteTrackFiles: vi.fn(),
@@ -366,7 +363,7 @@ describe("executeAction", () => {
     expect(mockSonarrClient.deleteSeries).not.toHaveBeenCalled();
   });
 
-  it("executes UNMONITOR_RADARR with import exclusion", async () => {
+  it("executes UNMONITOR_RADARR", async () => {
     mockPrisma.radarrInstance.findUnique.mockResolvedValue({
       id: "arr1",
       url: "http://radarr",
@@ -380,10 +377,9 @@ describe("executeAction", () => {
       tags: [],
     });
 
-    await executeAction(makeAction({ actionType: "UNMONITOR_RADARR", addImportExclusion: true }));
+    await executeAction(makeAction({ actionType: "UNMONITOR_RADARR" }));
 
     expect(mockRadarrClient.updateMovie).toHaveBeenCalledWith(1, { monitored: false });
-    expect(mockRadarrClient.addExclusion).toHaveBeenCalledWith(12345, "Test Movie", 2024);
   });
 
   it("executes UNMONITOR_DELETE_FILES_RADARR with search after delete", async () => {

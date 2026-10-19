@@ -53,7 +53,7 @@ Click **Sign in with Plex** on the login page or **Connect Plex Account**
 in **Settings → Authentication** to link a Plex account.
 
 - Automatically discovers your Plex servers
-- Tokens are stored in the DB and re-attached to your session on login
+- The Plex token is stored in the database only — never in the session cookie
 - The display name + email sync from Plex on every Plex login
 - Linking from Settings needs a sign-in from the last 15 minutes; if it has
   been longer, Librariarr asks you to confirm it's you (your password, or
@@ -69,6 +69,10 @@ media-server features. Turning it back on needs a sign-in from the last 15
 minutes, by another method: with it off, whoever holds the Plex account (say,
 a household that shares it) cannot sign in, and a stolen browser session must
 not be able to change that.
+
+Linking Plex never turns the toggle on. If it is off when you link an account,
+Librariarr asks **Allow signing in with Plex?** right away; choose **Enable
+Plex login** or **Keep it off**.
 
 ### Local Authentication
 
@@ -170,7 +174,7 @@ If `TZ` is not set, the container defaults to **UTC**. The current server timezo
 
 ### Daily Run Time
 
-The **Time of day for scheduled jobs** setting controls when preset schedules fire. All preset frequencies (Daily, Every 6h, Every 12h, Weekly) use this time as their anchor. For example, setting it to `02:00` with "Every 6 hours" runs at 2:00 AM, 8:00 AM, 2:00 PM, and 8:00 PM in the server's timezone. Custom schedule expressions are not affected by this setting.
+The **Time of day for scheduled jobs** setting (default `00:00`) controls when preset schedules fire. All preset frequencies (Daily, Every 6h, Every 12h, Weekly) use this time as their anchor. For example, setting it to `02:00` with "Every 6 hours" runs at 2:00 AM, 8:00 AM, 2:00 PM, and 8:00 PM in the server's timezone. Custom schedule expressions are not affected by this setting.
 
 ### Sync Schedule
 
@@ -182,9 +186,10 @@ Controls how often Librariarr fetches metadata from your connected media servers
 | Every 12 hours | Twice daily, anchored to Daily Run Time |
 | Daily (default) | Once daily at the Daily Run Time |
 | Weekly | Weekly on Monday at the Daily Run Time |
-| Custom | A custom schedule expression |
+| Manual only | Never runs on a schedule; sync from **Settings → Servers** instead |
+| Custom (cron) | A custom schedule expression |
 
-A custom schedule is standard cron: five fields, or six with seconds. Wrap-around ranges such as `22-2` or `FRI-MON` are refused — list the values instead (`22,23,0,1,2`). The same rule applies to the lifecycle and backup schedules.
+A custom schedule is standard cron: five fields, or six with seconds. Wrap-around ranges such as `22-2` or `FRI-MON` are refused — list the values instead (`22,23,0,1,2`). The same rule applies to the lifecycle schedules.
 
 When [Real-Time Sync](/docs/features/real-time-sync/) is enabled, library and watch-state changes on a server also trigger an incremental sync between scheduled runs, so this schedule mainly acts as a full reconciliation pass.
 
@@ -224,18 +229,18 @@ When the same media exists on multiple connected servers:
 
 These settings only appear when you have more than one server connected.
 
-### Log Retention
+### Data Retention
 
-- Configurable from 1 to 365 days (default: 7)
-- Logs older than today are automatically archived to compressed files and removed from the database
-- Archive files older than the retention period are automatically pruned
+- **Keep logs for**: 1 to 365 days (default: 7). Logs older than today are automatically archived to compressed files (in `/config/logs`) and removed from the database; archive files older than the retention period are automatically pruned
+- **Keep action history for**: 0 to 365 days (default: 30). Completed and failed lifecycle actions that ran longer ago than this are deleted; `0` keeps them forever
+- **Delete without asking, up to**: an optional per-run limit on lifecycle deletions (default: no limit). A run that would delete more is held — nothing is deleted and the actions stay on the Pending page for you to execute
 
 ## Backup Settings
 
-Configure in **Settings → General** under the Backup section. See the [Backup & Restore](/docs/features/backup-restore/) guide for full details.
+Configure in **Settings → General** under the Backup & Restore section. See the [Backup & Restore](/docs/features/backup-restore/) guide for full details.
 
-- **Schedule**: Manual, Every 6H, Every 12H, Daily (default), or Weekly
-- **Retention**: Number of backups to keep (default: 7)
+- **Schedule**: Manual only, Every 6 hours, Every 12 hours, Daily (default), or Weekly
+- **Keep backups**: Number of backups to keep (1–100, default: 7)
 - **Encryption Password**: Optional password-based encryption for all backups (minimum 8 characters)
 
 ## AI Analysis
@@ -276,6 +281,13 @@ Displays changelog entries fetched from GitHub Releases, including:
   rather than the full-resolution original, and it is cached on first view. If your
   server's transcoder is unavailable, Librariarr falls back to fetching the
   original and resizing it locally.
+
+## Environment Variables
+
+Container-level settings (database URL, session secret, timezone, file
+ownership, directories, proxy and SSO options) are set as environment
+variables rather than in the UI. See the full list in
+[Installation → Environment Variables](/docs/getting-started/installation/#environment-variables).
 
 ## Next Steps
 

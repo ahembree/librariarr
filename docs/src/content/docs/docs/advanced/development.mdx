@@ -25,23 +25,17 @@ Librariarr uses Docker Compose for development to provide a PostgreSQL database 
    cd librariarr
    ```
 
-2. **Create a `.env` file**
-
-   Copy the example and fill in the required values:
-
-   ```bash
-   cp .env.example .env
-   ```
-
-3. **Start the dev environment**
+2. **Start the dev environment**
 
    ```bash
    pnpm docker:dev
    ```
 
-   This builds the dev container, starts PostgreSQL, runs migrations, and starts the Next.js dev server with Turbopack hot-reloading.
+   This builds the dev container, starts PostgreSQL, pushes the Prisma schema to the dev database (`prisma db push` — no migration files), and starts the Next.js dev server with Turbopack hot-reloading.
 
-4. **Open the app**
+   No `.env` file is needed: `docker-compose.dev.yml` sets `DATABASE_URL` and a development `SESSION_SECRET` itself. Docker Compose does read a `.env` next to it for `TZ`, so put `TZ=…` there to run scheduled jobs in your time zone. Copy `.env.example` to `.env` only when running the app outside Docker (`pnpm dev` against your own Postgres).
+
+3. **Open the app**
 
    Navigate to `http://localhost:3000`
 
@@ -113,6 +107,33 @@ Tests use **Vitest** with a real PostgreSQL test database (`librariarr_test`), a
 - **`tests/unit/`** — Pure logic tests (rules engine, filters, sync detection, formatting, caching, validation schemas)
 - **`tests/unit/hooks/`** — React hook tests, run under `happy-dom` (`// @vitest-environment happy-dom` at the top of each file) with `renderHook` from `@testing-library/react`
 - **`tests/integration/`** — API route handler tests against a real database with mocked external services
+
+### Browser end-to-end tests
+
+Real-browser tests live in `e2e/` and run with Playwright, separately from Vitest.
+
+| Command | Description |
+|-|-|
+| `pnpm e2e:docker` | Build the production image and run the whole suite in Docker (Postgres, the app and the official Playwright image, browsers included) |
+| `pnpm e2e:docker:down` | Remove the e2e containers and their database volume |
+| `pnpm e2e:install` | Download Chromium for running on the host (needs access to `cdn.playwright.dev`) |
+| `pnpm e2e` | Run the suite on the host, against the app `pnpm build` produced (run it first) |
+| `pnpm e2e:ui` | Playwright's interactive UI mode |
+| `pnpm e2e:report` | Open the last HTML report |
+
+The Playwright image's tag is never written by hand: both Docker scripts set `PLAYWRIGHT_VERSION` from the `@playwright/test` version in `pnpm-lock.yaml` (`scripts/playwright-version.mjs`), because the image's browsers only work with that exact library version. A bare `docker compose -f docker-compose.e2e.yml up` without it refuses to start.
+
+## Documentation site
+
+The documentation (this site) is an Astro + Starlight project in `docs/`, with its own `package.json` and lockfile.
+
+| Command | Description |
+|-|-|
+| `pnpm docs:dev` | Start the docs dev server (`http://localhost:4321`) |
+| `pnpm docs:build` | Production build |
+| `pnpm docs:preview` | Preview the built site |
+
+Both `dev` and `build` first validate the rule sets on the [rule set library](/docs/guides/rule-set-library/) page and generate the API reference's OpenAPI document from the app's source.
 
 ## Tech Stack
 

@@ -33,6 +33,15 @@ interface DeleteCeilingVerdict {
   reason?: string;
 }
 
+/**
+ * Who started the run, which decides what the refusal can tell them to do. A
+ * scheduled run is held for review: its actions stay pending on the Pending
+ * page, whose Execute is held to the same limit. A run someone started by hand
+ * (Execute, a query action) has no later approval step. Either way, acting on
+ * fewer items at a time or a higher limit is what lets it through.
+ */
+export type DeleteCeilingRunKind = "scheduled" | "manual";
+
 /** Read the user's configured ceiling. `null` means unlimited. */
 export async function getDeleteCeiling(userId: string): Promise<number | null> {
   const settings = await prisma.appSettings.findFirst({
@@ -56,8 +65,9 @@ export async function getDeleteCeiling(userId: string): Promise<number | null> {
 export async function checkDeleteCeiling(
   userId: string,
   actionTypes: string[],
+  kind: DeleteCeilingRunKind,
 ): Promise<DeleteCeilingVerdict> {
-  return ceilingVerdict(userId, actionTypes.filter(isDestructiveActionType).length);
+  return ceilingVerdict(userId, actionTypes.filter(isDestructiveActionType).length, kind);
 }
 
 /**
@@ -69,10 +79,15 @@ export async function checkDeleteCeilingForRun(
   actionType: string,
   count: number,
 ): Promise<DeleteCeilingVerdict> {
-  return ceilingVerdict(userId, isDestructiveActionType(actionType) ? count : 0);
+  // Only the query page sends a run of one action type, and it is started by hand.
+  return ceilingVerdict(userId, isDestructiveActionType(actionType) ? count : 0, "manual");
 }
 
-async function ceilingVerdict(userId: string, count: number): Promise<DeleteCeilingVerdict> {
+async function ceilingVerdict(
+  userId: string,
+  count: number,
+  kind: DeleteCeilingRunKind,
+): Promise<DeleteCeilingVerdict> {
   const limit = await getDeleteCeiling(userId);
 
   if (limit == null || count <= limit) return { allowed: true, count, limit };
@@ -83,7 +98,12 @@ async function ceilingVerdict(userId: string, count: number): Promise<DeleteCeil
     limit,
     reason:
       `This run would delete ${count} item(s), above the configured limit of ${limit}. ` +
-      `Nothing was deleted. Review the items and run it manually if they are correct, ` +
-      `or raise the limit in Settings.`,
+      // Execute on the Pending page is held to the same limit, so a scheduled
+      // run's message cannot send the user to an Execute All that would be
+      // refused for the same count.
+      (kind === "scheduled"
+        ? `Nothing was deleted; the actions stay pending. Review them on the Pending page and execute ` +
+          `at most ${limit} at a time if they are correct, or raise the limit in Settings.`
+        : `Nothing was deleted. Run it on at most ${limit} item(s) at a time, or raise the limit in Settings.`),
   };
 }

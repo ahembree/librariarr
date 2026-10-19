@@ -281,41 +281,6 @@ describe("SonarrClient", () => {
     });
   });
 
-  describe("addExclusion", () => {
-    const exclusionError = (data: unknown) =>
-      new IntegrationError("Sonarr", {
-        config: { url: "/api/v3/importlistexclusion", method: "post" },
-        response: { status: 400, data },
-        code: "ERR_BAD_REQUEST",
-      } as never);
-
-    it("treats an exclusion that already exists as added", async () => {
-      mockAxiosInstance.post.mockRejectedValueOnce(
-        exclusionError([{ propertyName: "TvdbId", errorMessage: "This exclusion has already been added." }]),
-      );
-      await expect(client.addExclusion(81189, "Breaking Bad")).resolves.toBeUndefined();
-      expect(mockAxiosInstance.post).toHaveBeenCalledWith("/api/v3/importlistexclusion", {
-        tvdbId: 81189,
-        title: "Breaking Bad",
-      });
-    });
-
-    it("still throws any other validation failure", async () => {
-      const error = exclusionError([{ propertyName: "Title", errorMessage: "'Title' must not be empty." }]);
-      mockAxiosInstance.post.mockRejectedValueOnce(error);
-      await expect(client.addExclusion(81189, "")).rejects.toBe(error);
-    });
-
-    it("posts exclusion data", async () => {
-      mockAxiosInstance.post.mockResolvedValueOnce({});
-      await client.addExclusion(81189, "Breaking Bad");
-      expect(mockAxiosInstance.post).toHaveBeenCalledWith("/api/v3/importlistexclusion", {
-        tvdbId: 81189,
-        title: "Breaking Bad",
-      });
-    });
-  });
-
   describe("getLanguages", () => {
     it("returns languages", async () => {
       const langs = [{ id: 0, name: "Unknown" }, { id: 1, name: "English" }];

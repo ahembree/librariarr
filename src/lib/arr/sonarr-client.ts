@@ -2,7 +2,6 @@ import axios, { AxiosInstance } from "axios";
 import { logger } from "@/lib/logger";
 import { IntegrationError } from "@/lib/integration-error";
 import { configureRetry, NO_RETRY } from "@/lib/http-retry";
-import { isExistingExclusionError } from "@/lib/arr/exclusion";
 
 export interface SonarrSeries {
   id: number;
@@ -247,19 +246,6 @@ export class SonarrClient {
 
   async deleteTag(id: number): Promise<void> {
     await this.client.delete(`/api/v3/tag/${id}`);
-  }
-
-  /** Idempotent: an exclusion that already exists counts as added. */
-  async addExclusion(tvdbId: number, title: string): Promise<void> {
-    try {
-      await this.client.post("/api/v3/importlistexclusion", {
-        tvdbId,
-        title,
-      });
-    } catch (error) {
-      if (isExistingExclusionError(error)) return;
-      throw error;
-    }
   }
 
   async getLanguages(): Promise<{ id: number; name: string }[]> {

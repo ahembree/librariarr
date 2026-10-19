@@ -42,6 +42,7 @@ import {
   MUSIC_ACTION_TYPES,
   QUALITY_PROFILE_ACTION_TYPES,
   supportsSearchAfter as canSearchAfter,
+  deletesArrRecord,
 } from "@/lib/lifecycle/action-types";
 import { formatBytesNum } from "@/lib/format";
 import { MAX_QUERY_ACTION_ITEMS } from "@/lib/query/constants";
@@ -56,6 +57,9 @@ export interface ArrFamilyMeta {
 
 export interface QueryActionConfig {
   actionType: string;
+  /** The media type acted on. "Do Nothing" (tags only) carries no Arr suffix,
+   *  so its family comes from here rather than from the action type. */
+  mediaType: MediaType;
   arrInstanceId: string;
   targetQualityProfileId: number | null;
   addImportExclusion: boolean;
@@ -97,7 +101,16 @@ const FAMILY_LABEL: Record<ArrFamily, string> = {
   lidarr: "Music",
 };
 
+/** "Do Nothing" is one action type shared by every family, so the dropdown
+ *  gives each family its own value (`DO_NOTHING:radarr`, …) and submits plain
+ *  `DO_NOTHING` with that family's instance. */
+const TAG_ONLY_PREFIX = "DO_NOTHING:";
+
 function familyFromActionType(actionType: string): ArrFamily | null {
+  if (actionType.startsWith(TAG_ONLY_PREFIX)) {
+    const fam = actionType.slice(TAG_ONLY_PREFIX.length);
+    return fam === "radarr" || fam === "sonarr" || fam === "lidarr" ? fam : null;
+  }
   if (actionType.endsWith("RADARR")) return "radarr";
   if (actionType.endsWith("SONARR")) return "sonarr";
   if (actionType.endsWith("LIDARR")) return "lidarr";
@@ -196,14 +209,19 @@ export function QueryActionBar({
   const familyActive = rawFamily ? actionableFamilies.includes(rawFamily) : false;
   const family = familyActive ? rawFamily : null;
   const effectiveActionType = familyActive ? actionType : "";
+  // What the server is sent: the per-family "Do Nothing" value is plain DO_NOTHING.
+  const submittedActionType = effectiveActionType.startsWith(TAG_ONLY_PREFIX) ? "DO_NOTHING" : effectiveActionType;
 
   const arrInstanceId = family ? arrServerIds[family] : undefined;
   const meta = family ? arrMeta[family] : undefined;
-  const needsProfile = QUALITY_PROFILE_ACTION_TYPES.has(effectiveActionType);
-  const supportsImportExclusion = effectiveActionType.includes("DELETE");
-  const supportsSearchAfter = canSearchAfter(effectiveActionType);
-  const isTagOnly = effectiveActionType === "DO_NOTHING";
-  const hasTags = addArrTags.length > 0 || removeArrTags.length > 0;
+  const needsProfile = QUALITY_PROFILE_ACTION_TYPES.has(submittedActionType);
+  const supportsImportExclusion = deletesArrRecord(submittedActionType);
+  const supportsSearchAfter = canSearchAfter(submittedActionType);
+  const isTagOnly = submittedActionType === "DO_NOTHING";
+  // Deleting the whole Arr record deletes its tags with it; every other
+  // action — the file-only deletes included — keeps the record, so tags apply.
+  const supportsTags = !!family && !deletesArrRecord(submittedActionType);
+  const hasTags = supportsTags && (addArrTags.length > 0 || removeArrTags.length > 0);
 
   const targetCount = family
     ? selectionTypeCounts[(Object.keys(FAMILY_BY_TYPE) as MediaType[]).find((t) => FAMILY_BY_TYPE[t] === family)!]
@@ -240,16 +258,18 @@ export function QueryActionBar({
 
   const handleConfirm = () => {
     if (!effectiveActionType || !arrInstanceId) return;
+    if (!family) return;
     onExecute({
-      actionType: effectiveActionType,
+      actionType: submittedActionType,
+      mediaType: (Object.keys(FAMILY_BY_TYPE) as MediaType[]).find((t) => FAMILY_BY_TYPE[t] === family)!,
       arrInstanceId,
       targetQualityProfileId: needsProfile ? targetQualityProfileId : null,
       // Only submit toggles the current action actually exposes — a checkbox
       // ticked under a previous action type must not leak into this run.
       addImportExclusion: supportsImportExclusion && addImportExclusion,
       searchAfterAction: supportsSearchAfter && searchAfterAction,
-      addArrTags,
-      removeArrTags,
+      addArrTags: supportsTags ? addArrTags : [],
+      removeArrTags: supportsTags ? removeArrTags : [],
     });
     setConfirmOpen(false);
     resetAction();
@@ -257,8 +277,8 @@ export function QueryActionBar({
 
   const actionLabel = useMemo(() => {
     if (!family) return effectiveActionType;
-    return ACTIONS_BY_FAMILY[family].find((a) => a.value === effectiveActionType)?.label ?? effectiveActionType;
-  }, [family, effectiveActionType]);
+    return ACTIONS_BY_FAMILY[family].find((a) => a.value === submittedActionType)?.label ?? effectiveActionType;
+  }, [family, effectiveActionType, submittedActionType]);
 
   const noFamilies = actionableFamilies.length === 0;
   const controlsDisabled = noSelection || noFamilies;
@@ -305,13 +325,14 @@ export function QueryActionBar({
           {actionableFamilies.map((fam) => (
             <SelectGroup key={fam}>
               <SelectLabel>{FAMILY_LABEL[fam]}</SelectLabel>
-              {ACTIONS_BY_FAMILY[fam]
-                .filter((a) => a.value !== "DO_NOTHING")
-                .map((a) => (
-                  <SelectItem key={a.value} value={a.value}>
-                    {a.label}
+              {ACTIONS_BY_FAMILY[fam].map((a) => {
+                const value = a.value === "DO_NOTHING" ? `${TAG_ONLY_PREFIX}${fam}` : a.value;
+                return (
+                  <SelectItem key={value} value={value}>
+                    {a.value === "DO_NOTHING" ? "Do Nothing (tags only)" : a.label}
                   </SelectItem>
-                ))}
+                );
+              })}
             </SelectGroup>
           ))}
         </SelectContent>
@@ -336,7 +357,7 @@ export function QueryActionBar({
         </Select>
       )}
 
-      {family && (
+      {supportsTags && (
         <>
           <TagPicker label="Add tags" options={meta?.tags ?? []} selected={addArrTags} onChange={setAddArrTags} disabled={controlsDisabled} />
           <TagPicker label="Remove tags" options={meta?.tags ?? []} selected={removeArrTags} onChange={setRemoveArrTags} disabled={controlsDisabled} />
@@ -382,7 +403,7 @@ export function QueryActionBar({
               {willBatch && (
                 <> Your selection runs in <strong>{batchCount}</strong> sequential batches of up to {MAX_QUERY_ACTION_ITEMS.toLocaleString()} items.</>
               )}{" "}
-              {effectiveActionType.includes("DELETE") && "This cannot be undone."}
+              {submittedActionType.includes("DELETE") && "This cannot be undone."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
