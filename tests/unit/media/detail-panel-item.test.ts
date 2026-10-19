@@ -4,6 +4,7 @@ import {
   detailPanelUrl,
   groupOfRow,
   toDetailPanelMediaType,
+  sessionMediaType,
 } from "@/lib/media/detail-panel-item";
 import type { MediaItemWithRelations } from "@/lib/types";
 
@@ -92,5 +93,15 @@ describe("toDetailPanelMediaType", () => {
     expect(toDetailPanelMediaType("MUSIC")).toBe("MUSIC");
     expect(toDetailPanelMediaType("MOVIE")).toBe("MOVIE");
     expect(toDetailPanelMediaType(undefined)).toBe("MOVIE");
+  });
+});
+
+describe("sessionMediaType", () => {
+  it("maps a playback session's item type to its library type", () => {
+    expect(sessionMediaType("movie")).toBe("MOVIE");
+    expect(sessionMediaType("episode")).toBe("SERIES");
+    expect(sessionMediaType("Track")).toBe("MUSIC");
+    expect(sessionMediaType("clip")).toBeNull();
+    expect(sessionMediaType(null)).toBeNull();
   });
 });

@@ -31,7 +31,7 @@ For each active stream:
 
 ### Working with Sessions
 
-- **Click a session card** to open its detail panel with full overview, stream, media, and transcode information.
+- **Click a session card** to open the item's [detail panel](/docs/features/library/#detail-panel) — the same one the library and lifecycle pages open — with the session's stream, media and transcode information at the top. An item the library has not synced yet opens a panel with the session's own overview and stream details instead.
 - **Tick the checkbox** in a card's corner to select sessions, then use **Terminate Selected** — or **Select All** / **Terminate All** for everything at once. You pick the message the viewer is shown from a list of presets or write your own (required, up to 500 characters).
 - The strip along each card's bottom edge shows playback progress, colored by state (accent while playing, amber while paused).
 - Every termination is written to **System Logs** under the `Streams` source — manual ones and automatic ones (maintenance mode, transcode manager, blackout) alike, so one filter shows them all. Each line names the viewer, the media they were watching, what triggered the stop, and the message they were shown as the reason. An episode is named by its show and its season and episode number, for example *Breaking Bad S01E01*.

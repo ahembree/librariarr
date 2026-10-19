@@ -96,3 +96,16 @@ export function detailPanelUrl(mediaType: DetailPanelMediaType, itemId: string, 
   if (mediaType === "MUSIC") return `/library/music/track/${itemId}`;
   return `/library/movies/${itemId}`;
 }
+
+/**
+ * The library type a playback session's item type ("movie", "episode",
+ * "track") belongs to; `null` for anything else (a trailer, a photo, live TV).
+ */
+export function sessionMediaType(type: string | null | undefined): DetailPanelMediaType | null {
+  switch (type?.toLowerCase()) {
+    case "movie": return "MOVIE";
+    case "episode": return "SERIES";
+    case "track": return "MUSIC";
+    default: return null;
+  }
+}

@@ -59,6 +59,12 @@ interface MediaDetailSidePanelProps {
   allActualValues?: Record<string, string>;
   /** Diff status for preview highlighting (added/removed/retained) */
   diffStatus?: "added" | "removed" | "retained";
+  /**
+   * What the page that opened the panel knows about the item beyond the
+   * library record — the Stream Manager's live playback details — shown above
+   * the item's own details.
+   */
+  contextSection?: React.ReactNode;
 }
 
 function formatResolution(resolution: string | null): string {
@@ -79,6 +85,7 @@ export function MediaDetailSidePanel({
   ruleGroups,
   builderConfig,
   allActualValues,
+  contextSection,
 }: MediaDetailSidePanelProps) {
   const isMobile = useIsMobile();
   const { getBadgeStyle } = useChipColors();
@@ -303,6 +310,7 @@ export function MediaDetailSidePanel({
     // The bottom padding clears a phone's home indicator in the installed app
     // (env() is 0 everywhere else).
     <div className="flex-1 overflow-y-auto p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">
+      {contextSection}
       <MediaDetailContent
         item={item}
         hideVideo={mediaType === "MUSIC"}
