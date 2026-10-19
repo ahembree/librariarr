@@ -27,6 +27,8 @@ export async function GET(request: NextRequest) {
       searchAfterAction: true,
       addArrTags: true,
       removeArrTags: true,
+      // The detail panel's Logic Preview, as the rule editor's preview shows it.
+      rules: true,
       collection: { select: { name: true, sort: true } },
     },
   });
@@ -67,6 +69,7 @@ export async function GET(request: NextRequest) {
       searchAfterAction: rs.searchAfterAction,
       addArrTags: rs.addArrTags,
       removeArrTags: rs.removeArrTags,
+      rules: rs.rules,
       collectionName: rs.collection?.name ?? null,
       collectionSort: rs.collection?.sort ?? null,
     };

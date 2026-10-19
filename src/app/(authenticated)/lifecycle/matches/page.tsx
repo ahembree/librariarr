@@ -5,8 +5,12 @@ import { toast } from "sonner";
 import { useLocalStorage, useLocalStorageJSON } from "@/hooks/use-local-storage";
 import Link from "next/link";
 import { useColumnResize } from "@/hooks/use-column-resize";
-import { usePanelResize } from "@/hooks/use-panel-resize";
+import { useMediaDetailPanel } from "@/hooks/use-media-detail-panel";
+import { groupOfRow, toDetailPanelMediaType } from "@/lib/media/detail-panel-item";
 import { MediaDetailSidePanel } from "@/components/media-detail-side-panel";
+import { ruleBuilderConfig } from "@/components/rule-builder";
+import type { BaseGroup, BaseRule, BuilderConfig } from "@/components/builder/types";
+import type { LifecycleRuleGroup } from "@/lib/rules/types";
 import { EmptyState } from "@/components/empty-state";
 import { IntegrationUnreachableBanner } from "@/components/integration-unreachable-banner";
 import { useIntegrationsHealth } from "@/hooks/use-integrations-health";
@@ -100,6 +104,7 @@ interface RuleSetMatch {
     searchAfterAction: boolean;
     addArrTags: string[];
     removeArrTags: string[];
+    rules: LifecycleRuleGroup[] | unknown[];
     collectionName: string | null;
   };
   items: MatchedMediaItem[];
@@ -115,7 +120,7 @@ function formatResolution(resolution: string | null): string {
 interface MatchItemsViewProps {
   items: MatchedMediaItem[];
   ruleSet: RuleSetMatch["ruleSet"];
-  onItemClick: (item: MediaItemWithRelations) => void;
+  onItemClick: (item: MatchedMediaItem) => void;
   onExclude: (item: MatchedMediaItem) => void;
   excludingItems: Set<string>;
   exceptedItemIds: Set<string>;
@@ -637,14 +642,7 @@ const TAB_TO_TYPE: Record<MediaTypeTab, string | null> = {
 
 export default function RuleMatchesPage() {
   const [mediaTypeTab, setMediaTypeTab] = useState<MediaTypeTab>("all");
-  const { width: panelWidth, resizeHandleProps } = usePanelResize({
-    storageKey: "lifecycle-matches-panel-width",
-    defaultWidth: 480,
-    minWidth: 360,
-    maxWidth: 800,
-  });
-  const [selectedItem, setSelectedItem] = useState<MatchedMediaItem | null>(null);
-  const [selectedItemType, setSelectedItemType] = useState<"MOVIE" | "SERIES" | "MUSIC">("MOVIE");
+  const detailPanel = useMediaDetailPanel();
   const [ruleMatches, setRuleMatches] = useState<RuleSetMatch[]>([]);
   const { health: integrationsHealth } = useIntegrationsHealth();
   const arrInstanceIds = useMemo<readonly string[]>(
@@ -762,6 +760,26 @@ export default function RuleMatchesPage() {
       });
     }
   }, []);
+
+  const { open: openPanel } = detailPanel;
+  const openDetailPanel = useCallback((item: MatchedMediaItem, ruleSet: RuleSetMatch["ruleSet"]) => {
+    // The Logic Preview reads grouped rules; a rule set still stored in the
+    // flat legacy shape shows its matched criteria alone.
+    const rules = ruleSet.rules as LifecycleRuleGroup[];
+    const grouped = rules.length > 0 && typeof rules[0] === "object" && rules[0] !== null && "rules" in rules[0];
+    void openPanel({
+      id: item.id,
+      mediaType: toDetailPanelMediaType(ruleSet.type),
+      seed: item,
+      group: groupOfRow(item),
+      matchedCriteria: item.matchedCriteria,
+      actualValues: item.actualValues,
+      ...(grouped && {
+        ruleGroups: rules.map((g) => ({ ...g, groups: g.groups ?? [] })) as unknown as BaseGroup<BaseRule>[],
+        builderConfig: ruleBuilderConfig as unknown as BuilderConfig<BaseRule, BaseGroup<BaseRule>>,
+      }),
+    });
+  }, [openPanel]);
 
   const excludeItem = useCallback((item: MatchedMediaItem) => {
     setExcludeReason("");
@@ -1087,10 +1105,7 @@ export default function RuleMatchesPage() {
                     viewMode={viewMode}
                     items={match.items}
                     ruleSet={match.ruleSet}
-                    onItemClick={(item) => {
-                      setSelectedItem(item);
-                      setSelectedItemType(match.ruleSet.type as "MOVIE" | "SERIES" | "MUSIC");
-                    }}
+                    onItemClick={(item) => openDetailPanel(item, match.ruleSet)}
                     onExclude={excludeItem}
                     excludingItems={excludingItems}
                     exceptedItemIds={exceptedItemIds}
@@ -1118,17 +1133,7 @@ export default function RuleMatchesPage() {
       </div>
 
 
-      {selectedItem && (
-        <MediaDetailSidePanel
-          item={selectedItem}
-          mediaType={selectedItemType}
-          onClose={() => setSelectedItem(null)}
-          width={panelWidth}
-          resizeHandleProps={resizeHandleProps}
-          matchedCriteria={selectedItem.matchedCriteria}
-          allActualValues={selectedItem.actualValues}
-        />
-      )}
+      {detailPanel.panelProps && <MediaDetailSidePanel {...detailPanel.panelProps} />}
 
       {/* Exclude reason prompt */}
       <Dialog open={!!excludePromptItem} onOpenChange={(open) => { if (!open) setExcludePromptItem(null); }}>

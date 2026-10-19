@@ -3,7 +3,8 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { toast } from "sonner";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { usePanelResize } from "@/hooks/use-panel-resize";
+import { useMediaDetailPanel } from "@/hooks/use-media-detail-panel";
+import { groupOfRow, toDetailPanelMediaType } from "@/lib/media/detail-panel-item";
 import { MediaDetailSidePanel } from "@/components/media-detail-side-panel";
 import { EmptyState } from "@/components/empty-state";
 import { IntegrationUnreachableBanner } from "@/components/integration-unreachable-banner";
@@ -66,7 +67,6 @@ import {
 import { Input } from "@/components/ui/input";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
 import { HoverCard, HoverCardTrigger, HoverCardContent } from "@/components/ui/hover-card";
-import type { MediaItemWithRelations } from "@/lib/types";
 import { useRealtime } from "@/hooks/use-realtime";
 
 interface ActionItem {
@@ -652,19 +652,7 @@ export default function PendingActionsPage() {
   const [executeResults, setExecuteResults] = useState<Record<string, { executed: number; failed: number; errors: string[] }>>({});
   const [confirmExecuteRuleSetId, setConfirmExecuteRuleSetId] = useState<string | null>(null);
 
-  // Media detail panel state
-  const [selected, setSelected] = useState<{
-    item: MediaItemWithRelations;
-    type: "MOVIE" | "SERIES" | "MUSIC";
-    title?: string;
-  } | null>(null);
-  const [, setLoadingDetail] = useState(false);
-  const { width: panelWidth, resizeHandleProps } = usePanelResize({
-    storageKey: "lifecycle-pending-panel-width",
-    defaultWidth: 480,
-    minWidth: 360,
-    maxWidth: 800,
-  });
+  const detailPanel = useMediaDetailPanel();
 
   // Deletion stats
   const [deletionStats, setDeletionStats] = useState<{
@@ -985,38 +973,18 @@ export default function PendingActionsPage() {
     setExcludePromptAction(action);
   };
 
-  const openDetailPanel = async (action: ActionItem) => {
-    const mediaType = action.mediaItem.type as "MOVIE" | "SERIES" | "MUSIC";
+  const openDetailPanel = (action: ActionItem) => {
     if (!action.mediaItem.id) return;
-    setLoadingDetail(true);
-    try {
-      const response = await fetch(`/api/media/${action.mediaItem.id}`);
-      if (response.ok) {
-        const data = await response.json();
-        const item = data.item ?? data;
-        // For series/music with aggregated data, overlay series-level values
-        // so the detail panel shows totals instead of single-episode data
-        if (action.mediaItem.matchedEpisodes) {
-          item.fileSize = action.mediaItem.fileSize ? BigInt(action.mediaItem.fileSize) : item.fileSize;
-          item.playCount = action.mediaItem.playCount ?? item.playCount;
-          item.lastPlayedAt = action.mediaItem.lastPlayedAt ?? item.lastPlayedAt;
-          item.matchedEpisodes = action.mediaItem.matchedEpisodes;
-          // Use series title instead of episode title
-          if (item.parentTitle) {
-            item.title = item.parentTitle;
-            item.parentTitle = null;
-          }
-        }
-        // A series action is named as its row names it — the show, or
-        // "<Show> SxxExx" for an action on one episode — not by the episode it
-        // is stored against.
-        setSelected({ item, type: mediaType, title: mediaType === "SERIES" ? action.mediaItem.title : undefined });
-      }
-    } catch (error) {
-      console.error("Failed to fetch media item:", error);
-    } finally {
-      setLoadingDetail(false);
-    }
+    const mediaType = toDetailPanelMediaType(action.mediaItem.type);
+    void detailPanel.open({
+      id: action.mediaItem.id,
+      mediaType,
+      group: groupOfRow(action.mediaItem),
+      // A series action is named as its row names it — the show, or
+      // "<Show> SxxExx" for an action on one episode — not by the episode it
+      // is stored against.
+      title: mediaType === "SERIES" ? action.mediaItem.title : undefined,
+    });
   };
 
   const isPending = statusFilter === "PENDING";
@@ -1415,16 +1383,7 @@ export default function PendingActionsPage() {
         </AlertDialog>
       </div>
 
-      {selected && (
-        <MediaDetailSidePanel
-          item={selected.item}
-          mediaType={selected.type}
-          title={selected.title}
-          onClose={() => setSelected(null)}
-          width={panelWidth}
-          resizeHandleProps={resizeHandleProps}
-        />
-      )}
+      {detailPanel.panelProps && <MediaDetailSidePanel {...detailPanel.panelProps} />}
 
       {/* Exclude reason prompt */}
       <Dialog open={!!excludePromptAction} onOpenChange={(open) => { if (!open) setExcludePromptAction(null); }}>

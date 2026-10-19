@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { toast } from "sonner";
-import { usePanelResize } from "@/hooks/use-panel-resize";
+import { useMediaDetailPanel } from "@/hooks/use-media-detail-panel";
+import { toDetailPanelMediaType } from "@/lib/media/detail-panel-item";
 import { useRealtime } from "@/hooks/use-realtime";
 import { MediaDetailSidePanel } from "@/components/media-detail-side-panel";
 import { EmptyState } from "@/components/empty-state";
@@ -43,7 +44,6 @@ import {
   Tv,
 } from "lucide-react";
 import { formatEpisodeTitle } from "@/lib/media/display-title";
-import type { MediaItemWithRelations } from "@/lib/types";
 
 interface ExceptionItem {
   id: string;
@@ -311,15 +311,7 @@ export default function LifecycleExceptionsPage() {
   const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Media detail panel
-  const [selectedItem, setSelectedItem] = useState<MediaItemWithRelations | null>(null);
-  const [selectedItemType, setSelectedItemType] = useState<"MOVIE" | "SERIES" | "MUSIC">("MOVIE");
-  const [selectedDetailUrl, setSelectedDetailUrl] = useState<string | undefined>();
-  const { width: panelWidth, resizeHandleProps } = usePanelResize({
-    storageKey: "lifecycle-exceptions-panel-width",
-    defaultWidth: 480,
-    minWidth: 360,
-    maxWidth: 800,
-  });
+  const detailPanel = useMediaDetailPanel();
 
   // Only the latest request may write: a tab switch while the previous tab's
   // list loaded let the older response land second, and the new tab grouped
@@ -356,37 +348,19 @@ export default function LifecycleExceptionsPage() {
     [exceptions, activeTab]
   );
 
-  const openDetailPanel = async (row: GroupedExceptionRow) => {
-    const mediaType = row.mediaItem.type as "MOVIE" | "SERIES" | "MUSIC";
-    setSelectedItemType(mediaType);
-
-    try {
-      const response = await fetch(`/api/media/${row.mediaItem.id}`);
-      if (!response.ok) return;
-      const data = await response.json();
-      const rawItem: MediaItemWithRelations = data.item ?? data;
-
-      if (mediaType === "MOVIE") {
-        setSelectedDetailUrl(undefined);
-        setSelectedItem(rawItem);
-      } else {
-        // Series/Music: construct a top-level aggregate view
-        const topLevelItem: MediaItemWithRelations = {
-          ...rawItem,
-          title: row.displayTitle,
-          parentTitle: null,
-          matchedEpisodes: row.itemCount,
-          fileSize: row.totalSize,
-        };
-        const detailUrl = mediaType === "SERIES"
-          ? `/library/series/show/${row.mediaItem.id}`
-          : `/library/music/artist/${row.mediaItem.id}`;
-        setSelectedDetailUrl(detailUrl);
-        setSelectedItem(topLevelItem);
-      }
-    } catch (error) {
-      console.error("Failed to fetch media item:", error);
-    }
+  const openDetailPanel = (row: GroupedExceptionRow) => {
+    const mediaType = toDetailPanelMediaType(row.mediaItem.type);
+    void detailPanel.open({
+      id: row.mediaItem.id,
+      mediaType,
+      // A series or music row stands for every excepted episode/track under it.
+      group: mediaType === "MOVIE" ? undefined : {
+        title: row.displayTitle,
+        memberCount: row.itemCount,
+        fileSize: row.totalSize,
+        lastPlayedAt: row.lastPlayedAt,
+      },
+    });
   };
 
   const handleRemove = async (row: GroupedExceptionRow) => {
@@ -400,8 +374,8 @@ export default function LifecycleExceptionsPage() {
       if (response.ok) {
         const removedIds = new Set(row.exceptionIds);
         setExceptions((prev) => prev.filter((e) => !removedIds.has(e.id)));
-        if (selectedItem && selectedItem.id === row.mediaItem.id) {
-          setSelectedItem(null);
+        if (detailPanel.selectedId === row.mediaItem.id) {
+          detailPanel.close();
         }
         toast.success("Exception removed", { description: row.displayTitle });
       } else {
@@ -960,16 +934,7 @@ export default function LifecycleExceptionsPage() {
       </div>
 
       {/* Media detail side panel */}
-      {selectedItem && (
-        <MediaDetailSidePanel
-          item={selectedItem}
-          mediaType={selectedItemType}
-          onClose={() => setSelectedItem(null)}
-          width={panelWidth}
-          resizeHandleProps={resizeHandleProps}
-          detailUrl={selectedDetailUrl}
-        />
-      )}
+      {detailPanel.panelProps && <MediaDetailSidePanel {...detailPanel.panelProps} />}
     </>
   );
 }

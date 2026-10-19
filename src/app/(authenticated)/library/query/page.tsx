@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { usePanelResize } from "@/hooks/use-panel-resize";
+import { useMediaDetailPanel } from "@/hooks/use-media-detail-panel";
+import { groupOfRow, toDetailPanelMediaType } from "@/lib/media/detail-panel-item";
 import { MediaDetailSidePanel } from "@/components/media-detail-side-panel";
 import { Button } from "@/components/ui/button";
 import { ColorChip } from "@/components/color-chip";
@@ -303,13 +304,7 @@ export default function QueryPage() {
   // offering them in the picker would only ever return nothing.
   const queryServers = useMemo(() => servers.filter((s) => s.enabled), [servers]);
   const { getHex, getBadgeStyle } = useChipColors();
-  const { width: panelWidth, resizeHandleProps } = usePanelResize({
-    storageKey: "library-query-panel-width",
-    defaultWidth: 480,
-    minWidth: 360,
-    maxWidth: 800,
-  });
-  const [selectedItem, setSelectedItem] = useState<QueryResultItem | null>(null);
+  const detailPanel = useMediaDetailPanel();
 
   // Result selection (for triggering ad-hoc lifecycle actions)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -1375,9 +1370,15 @@ export default function QueryPage() {
     });
   };
 
+  const { open: openPanel } = detailPanel;
   const navigateToItem = useCallback((item: QueryResultItem) => {
-    setSelectedItem(item);
-  }, []);
+    void openPanel({
+      id: item.id,
+      mediaType: toDetailPanelMediaType(item.type),
+      seed: item as unknown as MediaItemWithRelations,
+      group: groupOfRow(item),
+    });
+  }, [openPanel]);
 
   const handleViewModeChange = (mode: "table" | "cards") => {
     setViewMode(mode);
@@ -2090,15 +2091,7 @@ export default function QueryPage() {
       )}
       </div>
 
-      {selectedItem && (
-        <MediaDetailSidePanel
-          item={selectedItem as unknown as MediaItemWithRelations}
-          mediaType={(selectedItem.type as "MOVIE" | "SERIES" | "MUSIC") || "MOVIE"}
-          onClose={() => setSelectedItem(null)}
-          width={panelWidth}
-          resizeHandleProps={resizeHandleProps}
-        />
-      )}
+      {detailPanel.panelProps && <MediaDetailSidePanel {...detailPanel.panelProps} />}
 
       <ConvertQueryToRuleDialog
         open={convertDialogOpen}

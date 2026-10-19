@@ -24,7 +24,8 @@ import { hasArrRules, hasSeerrRules, hasPlayActivityRules } from "@/lib/conditio
 import { useRealtime } from "@/hooks/use-realtime";
 import { MediaTable } from "@/components/media-table";
 import { MediaDetailSidePanel, type MatchedCriterion } from "@/components/media-detail-side-panel";
-import { usePanelResize } from "@/hooks/use-panel-resize";
+import { useMediaDetailPanel } from "@/hooks/use-media-detail-panel";
+import { groupOfRow } from "@/lib/media/detail-panel-item";
 import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
 import { deletesArrRecord } from "@/lib/lifecycle/action-types";
 import type { MediaItemWithRelations } from "@/lib/types";
@@ -610,13 +611,7 @@ export function LifecycleRulePage({
   scopeConfig,
   embedded,
 }: LifecycleRulePageProps) {
-  const { width: panelWidth, resizeHandleProps } = usePanelResize({
-    storageKey: "lifecycle-rule-panel-width",
-    defaultWidth: 480,
-    minWidth: 360,
-    maxWidth: 800,
-  });
-  const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+  const detailPanel = useMediaDetailPanel();
   const [name, setName] = useState("");
   // Only flag a missing name after the user has interacted with the field
   const [nameTouched, setNameTouched] = useState(false);
@@ -627,10 +622,21 @@ export function LifecycleRulePage({
   const [copied, setCopied] = useState(false);
   const [groups, setGroups] = useState<LifecycleRuleGroup[]>([]);
   const [preview, setPreview] = useState<PreviewItem[]>([]);
-  const selectedItem = useMemo(
-    () => (selectedItemId ? preview.find((p) => p.id === selectedItemId) ?? null : null),
-    [preview, selectedItemId],
+  // The open row as the latest preview has it: a re-run refreshes its matched
+  // criteria and values, and the panel hides while the row is gone.
+  const selectedPreview = useMemo(
+    () => (detailPanel.selectedId ? preview.find((p) => p.id === detailPanel.selectedId) ?? null : null),
+    [preview, detailPanel.selectedId],
   );
+  const { open: openPanel } = detailPanel;
+  const openDetailPanel = useCallback((item: PreviewItem) => {
+    void openPanel({
+      id: item.id,
+      mediaType,
+      seed: item,
+      group: groupOfRow(item),
+    });
+  }, [openPanel, mediaType]);
   const [savedRuleSets, setSavedRuleSets] = useState<SavedRuleSet[]>([]);
   const [activeRuleSetId, setActiveRuleSetId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -3102,7 +3108,7 @@ export function LifecycleRulePage({
           {previewViewMode === "table" ? (
             <MediaTable
               items={sortedPreview}
-              onItemClick={(item) => setSelectedItemId(item.id)}
+              onItemClick={openDetailPanel}
               sortBy={previewSortBy}
               sortOrder={previewSortOrder}
               onSort={handlePreviewSort}
@@ -3146,7 +3152,7 @@ export function LifecycleRulePage({
             <PreviewCardGrid
               items={sortedPreview}
               mediaType={mediaType}
-              onItemClick={(item) => setSelectedItemId(item.id)}
+              onItemClick={openDetailPanel}
               diffMap={previewDiffMap}
               exceptedItemIds={exceptedItemIds}
               show={showCardField}
@@ -3764,17 +3770,13 @@ export function LifecycleRulePage({
         </div>
     </div>
 
-      {selectedItem && (
+      {detailPanel.panelProps && selectedPreview && (
         <MediaDetailSidePanel
-          item={selectedItem}
-          mediaType={mediaType}
-          onClose={() => setSelectedItemId(null)}
-          width={panelWidth}
-          resizeHandleProps={resizeHandleProps}
-          matchedCriteria={selectedItem.matchedCriteria}
+          {...detailPanel.panelProps}
+          matchedCriteria={selectedPreview.matchedCriteria}
           ruleGroups={groups}
           builderConfig={ruleBuilderConfig}
-          allActualValues={selectedItem.actualValues}
+          allActualValues={selectedPreview.actualValues}
         />
       )}
     </>

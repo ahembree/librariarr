@@ -15,6 +15,7 @@ import { useChipColors } from "@/components/chip-color-provider";
 import { normalizeResolutionLabel } from "@/lib/resolution";
 import { formatFileSize, formatDuration } from "@/lib/format";
 import { formatEpisodeTitle, seriesTitleOf } from "@/lib/media/display-title";
+import { detailPanelUrl } from "@/lib/media/detail-panel-item";
 import { PseudocodePanel } from "@/components/builder/pseudocode-panel";
 import type { BaseRule, BaseGroup, BuilderConfig } from "@/components/builder/types";
 import type { MediaItemWithRelations } from "@/lib/types";
@@ -58,16 +59,6 @@ interface MediaDetailSidePanelProps {
   allActualValues?: Record<string, string>;
   /** Diff status for preview highlighting (added/removed/retained) */
   diffStatus?: "added" | "removed" | "retained";
-}
-
-function getDetailPageUrl(mediaType: string, itemId: string): string {
-  const prefix =
-    mediaType === "MOVIE"
-      ? "/library/movies"
-      : mediaType === "SERIES"
-        ? "/library/series/episode"
-        : "/library/music/track";
-  return `${prefix}/${itemId}`;
 }
 
 function formatResolution(resolution: string | null): string {
@@ -119,12 +110,7 @@ export function MediaDetailSidePanel({
   }, [allActualValues, matchedCriteria]);
 
   const isAggregate = !!item.matchedEpisodes;
-  const detailUrl = detailUrlOverride
-    ?? (isAggregate && mediaType === "SERIES"
-      ? `/library/series/show/${item.id}`
-      : isAggregate && mediaType === "MUSIC"
-        ? `/library/music/artist/${item.id}`
-        : getDetailPageUrl(mediaType, item.id));
+  const detailUrl = detailUrlOverride ?? detailPanelUrl(mediaType, item.id, isAggregate);
   // Aggregated items (series/artist scope) use parentTitle=null but still need the parent image
   const imageUrl = `/api/media/${item.id}/image${item.parentTitle || isAggregate ? "?type=parent" : ""}`;
   // A missing poster shows the type's icon, as the library cards do, rather

@@ -37,7 +37,8 @@ import { consumeProgressStream } from "@/lib/progress/client";
 import { DataTable, type DataTableColumn } from "@/components/data-table";
 import { MediaDetailSidePanel } from "@/components/media-detail-side-panel";
 import { PaginationControls } from "@/components/pagination-controls";
-import { usePanelResize } from "@/hooks/use-panel-resize";
+import { useMediaDetailPanel } from "@/hooks/use-media-detail-panel";
+import { toDetailPanelMediaType } from "@/lib/media/detail-panel-item";
 import { useServers } from "@/hooks/use-servers";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useChipColors } from "@/components/chip-color-provider";
@@ -46,7 +47,6 @@ import { formatEpisodeCode } from "@/lib/media/display-title";
 import { normalizeResolutionLabel } from "@/lib/resolution";
 import { MEDIA_TYPE_BADGE_COLORS, MEDIA_TYPE_LABELS } from "@/lib/theme/media-type-colors";
 import { EmptyState } from "@/components/empty-state";
-import type { MediaItemWithRelations } from "@/lib/types";
 
 // ── Types ────────────────────────────────────────────────────────
 
@@ -251,15 +251,6 @@ function getItemTitle(item: WatchHistoryItem): string {
   return mi.title;
 }
 
-function getItemDetailUrl(item: WatchHistoryItem): string {
-  switch (item.mediaItem.type) {
-    case "MOVIE": return `/library/movies/${item.mediaItem.id}`;
-    case "SERIES": return `/library/series/episode/${item.mediaItem.id}`;
-    case "MUSIC": return `/library/music/track/${item.mediaItem.id}`;
-    default: return `/library/movies/${item.mediaItem.id}`;
-  }
-}
-
 // ── Column groups ────────────────────────────────────────────────
 
 interface HistoryColumn extends DataTableColumn<WatchHistoryItem> {
@@ -285,12 +276,7 @@ const COLUMN_GROUPS: Record<string, string> = {
 export default function HistoryPage() {
   const { servers } = useServers();
   const { getBadgeStyle } = useChipColors();
-  const { width: panelWidth, resizeHandleProps } = usePanelResize({
-    storageKey: "library-history-panel-width",
-    defaultWidth: 480,
-    minWidth: 360,
-    maxWidth: 800,
-  });
+  const detailPanel = useMediaDetailPanel();
 
   // Data
   const [items, setItems] = useState<WatchHistoryItem[]>([]);
@@ -322,10 +308,6 @@ export default function HistoryPage() {
   // the start of the archive hasn't been measured, so the note keeps its
   // original wording rather than claiming 0%.
   const [importBackfillPercent, setImportBackfillPercent] = useState<number | null>(null);
-  const [selectedItem, setSelectedItem] = useState<MediaItemWithRelations | null>(null);
-  const [selectedItemType, setSelectedItemType] = useState<"MOVIE" | "SERIES" | "MUSIC">("MOVIE");
-  const [selectedDetailUrl, setSelectedDetailUrl] = useState<string>("");
-  const [, setLoadingDetail] = useState(false);
 
   // Pagination
   const [page, setPage] = useState(1);
@@ -645,9 +627,6 @@ export default function HistoryPage() {
   // Token guards against a stale slow response landing after a quick
   // filter/page flip and overwriting the current result set.
   const reqToken = useRef(0);
-  // Separate token for the detail panel so rapidly clicking two rows doesn't
-  // let the slower /api/media/:id response win and show the wrong item.
-  const detailReqToken = useRef(0);
 
   const fetchHistory = useCallback(async (fetchPage: number) => {
     const token = ++reqToken.current;
@@ -954,26 +933,13 @@ export default function HistoryPage() {
 
   // ── Detail panel ──────────────────────────────────────────────
 
-  const openDetailPanel = useCallback(async (historyItem: WatchHistoryItem) => {
-    const token = ++detailReqToken.current;
-    const mediaType = historyItem.mediaItem.type as "MOVIE" | "SERIES" | "MUSIC";
-    setSelectedItemType(mediaType);
-    setSelectedDetailUrl(getItemDetailUrl(historyItem));
-    setLoadingDetail(true);
-    try {
-      const response = await fetch(`/api/media/${historyItem.mediaItem.id}`);
-      // Ignore a stale response superseded by a newer click.
-      if (token !== detailReqToken.current) return;
-      if (response.ok) {
-        const data = await response.json();
-        setSelectedItem(data.item ?? data);
-      }
-    } catch (error) {
-      console.error("Failed to fetch media item:", error);
-    } finally {
-      if (token === detailReqToken.current) setLoadingDetail(false);
-    }
-  }, []);
+  const { open: openPanel } = detailPanel;
+  const openDetailPanel = useCallback((historyItem: WatchHistoryItem) => {
+    void openPanel({
+      id: historyItem.mediaItem.id,
+      mediaType: toDetailPanelMediaType(historyItem.mediaItem.type),
+    });
+  }, [openPanel]);
 
   // Map current sortBy back to DataTable column ID for sort indicator
   const activeColumnSortId = useMemo(() => {
@@ -1291,16 +1257,7 @@ export default function HistoryPage() {
         </div>
 
       {/* Detail side panel */}
-      {selectedItem && (
-        <MediaDetailSidePanel
-          item={selectedItem}
-          mediaType={selectedItemType}
-          onClose={() => setSelectedItem(null)}
-          width={panelWidth}
-          resizeHandleProps={resizeHandleProps}
-          detailUrl={selectedDetailUrl}
-        />
-      )}
+      {detailPanel.panelProps && <MediaDetailSidePanel {...detailPanel.panelProps} />}
     </>
   );
 }
