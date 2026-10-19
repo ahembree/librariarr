@@ -52,23 +52,28 @@ export async function notifyDeleteCeilingHeld(
   verdict: { count: number; limit: number | null },
   kind: DeleteCeilingRunKind,
   source?: string,
-  options: { throttle?: boolean } = {},
+  options: { throttle?: boolean; stoppedAfter?: number } = {},
 ): Promise<void> {
   if (kind === "manual" || options.throttle) {
     if (Date.now() - manualHoldNotice.at < MANUAL_HOLD_NOTICE_INTERVAL_MS) return;
     manualHoldNotice.at = Date.now();
   }
   const what = kind === "scheduled" ? "This run" : `A run started by hand${source ? ` (${source})` : ""}`;
+  const done = options.stoppedAfter ?? 0;
+  const outcome =
+    done > 0
+      ? `It was stopped after **${done}** item(s) had already been acted on; the rest were not sent.`
+      : "Nothing was deleted.";
   const next =
     kind === "scheduled"
       ? `The actions are still pending — review them on the Pending page and execute at most ` +
         `**${verdict.limit}** at a time if they are correct, or raise the limit in Settings.`
-      : `It was refused before anything ran. Run it on at most **${verdict.limit}** item(s) at a time, ` +
-        `or raise the limit in Settings.`;
+      : `${done > 0 ? "" : "It was refused before anything ran. "}Run it on at most **${verdict.limit}** item(s) ` +
+        `at a time, or raise the limit in Settings.`;
   await notifyDeletionHeld(
     userId,
     `${what} would have deleted **${verdict.count}** item(s), above the configured limit of ` +
-      `**${verdict.limit}**.\n\nNothing was deleted. ${next}`,
+      `**${verdict.limit}**.\n\n${outcome} ${next}`,
   );
 }
 

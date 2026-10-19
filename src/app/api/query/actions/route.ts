@@ -575,21 +575,28 @@ export async function POST(request: NextRequest) {
       Math.max(runUnits ?? 0, priorUnits + items.length),
     );
     if (!verdict.allowed) {
-      void notifyDeleteCeilingHeld(userId, verdict, "manual", "a Query page action").catch(() => {});
+      // Earlier batches of this run may already have acted, so "nothing was
+      // deleted" would be false here.
+      const reason =
+        priorUnits > 0
+          ? `This run would delete ${verdict.count} item(s), above the configured limit of ${verdict.limit}. ` +
+            `It was stopped after ${priorUnits} had already been acted on; the rest were not sent. ` +
+            `Run it on at most ${verdict.limit} item(s) at a time, or raise the limit in Settings.`
+          : verdict.reason;
+      void notifyDeleteCeilingHeld(userId, verdict, "manual", "a Query page action", { stoppedAfter: priorUnits }).catch(() => {});
       return {
         executed: 0,
         failed: 0,
         skipped: skipped + items.length,
-        errors: [verdict.reason ?? "Held by the deletion ceiling"],
+        errors: [reason ?? "Held by the deletion ceiling"],
         stopped: true,
       };
     }
     if (unitsKey) appCache.set(unitsKey, priorUnits + items.length, RUN_LIVE_TTL_MS);
     // Recorded before the Arr calls: a timed-out delete may still have landed,
     // so a record attempted once is never re-sent by a later batch.
-    if (trackRecords) {
-      markRecordsActed(runId!, items.map((i) => collapsed.recordKeys.get(i.id) ?? `id:${i.id}`));
-    }
+    const batchRecordKeys = items.map((i) => collapsed.recordKeys.get(i.id) ?? `id:${i.id}`);
+    if (trackRecords) markRecordsActed(runId!, batchRecordKeys);
 
     // Per-item progress drives the determinate "Running action" segment.
     emit({ type: "phase", key: "execute", fraction: 0 });
@@ -624,6 +631,11 @@ export async function POST(request: NextRequest) {
             : `${done} / ${total}`,
         }),
     );
+
+    // A batch can outlast the TTL both run stores were given when it started;
+    // refresh them so the next batch still sees what this one acted on.
+    if (trackRecords) markRecordsActed(runId!, batchRecordKeys);
+    if (unitsKey) appCache.set(unitsKey, priorUnits + items.length, RUN_LIVE_TTL_MS);
 
     emit({ type: "phase", key: "finalize" });
 

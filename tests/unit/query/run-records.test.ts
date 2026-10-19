@@ -15,6 +15,13 @@ describe("query run records", () => {
     expect(actedRecords("run-c", 16 * 60_000).size).toBe(0);
   });
 
+  it("keeps what a batch acted on when the batch itself outlasts the TTL", () => {
+    // Marked when the batch starts, marked again when it finishes 12 minutes later.
+    markRecordsActed("run-e", ["TMDB:9"], 0);
+    markRecordsActed("run-e", ["TMDB:9"], 12 * 60_000);
+    expect(actedRecords("run-e", 13 * 60_000).has("TMDB:9")).toBe(true);
+  });
+
   it("is one store per process, whichever module copy loads it", () => {
     // Pinned to globalThis, so the route bundle and any other copy share it.
     markRecordsActed("run-d", ["x"], 0);

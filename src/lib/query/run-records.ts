@@ -9,7 +9,8 @@
  * an evicted entry would let a later batch re-send a delete.
  *
  * Pinned to `globalThis` like the other registries the route bundle shares
- * (see "Cross-bundle singletons" in CLAUDE.md). Entries expire with the run.
+ * (see "Cross-bundle singletons" in CLAUDE.md). Entries expire
+ * `RUN_TTL_MS` after the run's last batch finished.
  */
 const RUN_TTL_MS = 10 * 60 * 1000;
 
@@ -21,8 +22,8 @@ interface RunRecords {
 const globalForRunRecords = globalThis as unknown as { queryRunRecords?: Map<string, RunRecords> };
 const runs = (globalForRunRecords.queryRunRecords ??= new Map<string, RunRecords>());
 
-function prune(now: number): void {
-  for (const [runId, entry] of runs) if (entry.expiresAt <= now) runs.delete(runId);
+function prune(now: number, keep?: string): void {
+  for (const [runId, entry] of runs) if (runId !== keep && entry.expiresAt <= now) runs.delete(runId);
 }
 
 /** The records an earlier batch of `runId` acted on (empty for a new run). */
@@ -31,9 +32,13 @@ export function actedRecords(runId: string, now: number = Date.now()): ReadonlyS
   return runs.get(runId)?.keys ?? new Set();
 }
 
-/** Record that this batch is acting on `keys`; refreshes the run's expiry. */
+/**
+ * Record that this batch is acting on `keys`; refreshes the run's expiry. The
+ * route calls it again once the batch has run, since one batch can outlast
+ * the TTL — so the run being written is never pruned here, even if expired.
+ */
 export function markRecordsActed(runId: string, keys: Iterable<string>, now: number = Date.now()): void {
-  prune(now);
+  prune(now, runId);
   const entry = runs.get(runId) ?? { keys: new Set<string>(), expiresAt: 0 };
   for (const key of keys) entry.keys.add(key);
   entry.expiresAt = now + RUN_TTL_MS;

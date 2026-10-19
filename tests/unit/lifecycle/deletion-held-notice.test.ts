@@ -46,6 +46,14 @@ describe("deletion held notices", () => {
     expect(m.send.mock.calls[0][1].embeds[0].description).toContain("started by hand (a Query page action)");
   });
 
+  it("say a query run stopped part-way had already acted, not that nothing was deleted", async () => {
+    await notifyDeleteCeilingHeld("u1", { count: 30, limit: 25 }, "manual", "a Query page action", { stoppedAfter: 20 });
+    const text = m.send.mock.calls[0][1].embeds[0].description as string;
+    expect(text).toContain("stopped after **20** item(s) had already been acted on");
+    expect(text).not.toContain("Nothing was deleted");
+    expect(text).not.toContain("refused before anything ran");
+  });
+
   it("throttle a scheduled-kind run queued through an API key", async () => {
     await notifyDeleteCeilingHeld("u1", { count: 3, limit: 2 }, "scheduled", undefined, { throttle: true });
     await notifyDeleteCeilingHeld("u1", { count: 3, limit: 2 }, "scheduled", undefined, { throttle: true });
