@@ -5,7 +5,7 @@ import { SonarrClient } from "@/lib/arr/sonarr-client";
 import { LidarrClient, type LidarrTrack } from "@/lib/arr/lidarr-client";
 import { logger } from "@/lib/logger";
 import { sanitizeErrorDetail } from "@/lib/api/sanitize";
-import { actionHonorsMemberIds, formatActionLabel, supportsSearchAfter } from "@/lib/lifecycle/action-types";
+import { actionHonorsMemberIds, deletesArrRecord, formatActionLabel, supportsSearchAfter } from "@/lib/lifecycle/action-types";
 import { seriesTitleOf } from "@/lib/media/display-title";
 
 /**
@@ -470,17 +470,11 @@ async function executeDeleteSonarr(action: ActionRecord) {
 async function executeUnmonitorRadarr(action: ActionRecord) {
   const { client, movie } = await resolveRadarrMovie(action);
   await client.updateMovie(movie.id, { monitored: false });
-  if (action.addImportExclusion) {
-    await client.addExclusion(movie.tmdbId, movie.title, movie.year ?? action.mediaItem.year ?? 0);
-  }
 }
 
 async function executeUnmonitorSonarr(action: ActionRecord) {
   const { client, series } = await resolveSonarrSeries(action);
   await client.updateSeries(series.id, { monitored: false });
-  if (action.addImportExclusion) {
-    await client.addExclusion(series.tvdbId, series.title);
-  }
 }
 
 async function executeUnmonitorDeleteFilesRadarr(action: ActionRecord) {
@@ -488,9 +482,6 @@ async function executeUnmonitorDeleteFilesRadarr(action: ActionRecord) {
   await client.updateMovie(movie.id, { monitored: false });
   if (movie.hasFile && movie.movieFileId) {
     await client.deleteMovieFile(movie.movieFileId);
-  }
-  if (action.addImportExclusion) {
-    await client.addExclusion(movie.tmdbId, movie.title, movie.year ?? action.mediaItem.year ?? 0);
   }
   if (action.searchAfterAction) {
     await client.triggerMovieSearch(movie.id);
@@ -501,9 +492,6 @@ async function executeUnmonitorDeleteFilesSonarr(action: ActionRecord): Promise<
   const { client, series } = await resolveSonarrSeries(action);
   await client.updateSeries(series.id, { monitored: false });
   const deleted = await deleteEpisodeFilesForAction(client, series.id, action);
-  if (action.addImportExclusion) {
-    await client.addExclusion(series.tvdbId, series.title);
-  }
   if (action.searchAfterAction) {
     // A series search skips unmonitored seasons and episodes, and this action
     // just unmonitored the series — search the episodes acted on by id.
@@ -574,18 +562,12 @@ async function refuseSplitArtistDelete(
 async function executeUnmonitorLidarr(action: ActionRecord) {
   const { client, artist } = await resolveLidarrArtist(action);
   await client.updateArtist(artist.id, { monitored: false });
-  if (action.addImportExclusion) {
-    await client.addExclusion(artist.foreignArtistId, artist.artistName);
-  }
 }
 
 async function executeUnmonitorDeleteFilesLidarr(action: ActionRecord): Promise<ActionOutcome> {
   const { client, artist } = await resolveLidarrArtist(action);
   await client.updateArtist(artist.id, { monitored: false });
   const deleted = await deleteTrackFilesForAction(client, artist, action);
-  if (action.addImportExclusion) {
-    await client.addExclusion(artist.foreignArtistId, artist.artistName);
-  }
   if (action.searchAfterAction) {
     await client.triggerArtistSearch(artist.id);
   }
@@ -936,9 +918,6 @@ async function executeMonitorDeleteFilesRadarr(action: ActionRecord) {
   if (movie.hasFile && movie.movieFileId) {
     await client.deleteMovieFile(movie.movieFileId);
   }
-  if (action.addImportExclusion) {
-    await client.addExclusion(movie.tmdbId, movie.title, movie.year ?? action.mediaItem.year ?? 0);
-  }
   if (action.searchAfterAction) {
     await client.triggerMovieSearch(movie.id);
   }
@@ -954,9 +933,6 @@ async function executeMonitorDeleteFilesSonarr(action: ActionRecord): Promise<Ac
   // "Unmonitor Deleted Episodes" setting unmonitors the ones just deleted — so
   // monitor the episodes acted on, after the delete.
   await client.setEpisodesMonitored(deleted.arrItemIds, true);
-  if (action.addImportExclusion) {
-    await client.addExclusion(series.tvdbId, series.title);
-  }
   if (action.searchAfterAction) {
     await client.triggerEpisodeSearch(deleted.arrItemIds);
   }
@@ -969,9 +945,6 @@ async function executeMonitorDeleteFilesLidarr(action: ActionRecord): Promise<Ac
     await client.updateArtist(artist.id, { monitored: true });
   }
   const deleted = await deleteTrackFilesForAction(client, artist, action);
-  if (action.addImportExclusion) {
-    await client.addExclusion(artist.foreignArtistId, artist.artistName);
-  }
   if (action.searchAfterAction) {
     await client.triggerArtistSearch(artist.id);
   }
@@ -985,9 +958,6 @@ async function executeDeleteFilesRadarr(action: ActionRecord) {
   if (movie.hasFile && movie.movieFileId) {
     await client.deleteMovieFile(movie.movieFileId);
   }
-  if (action.addImportExclusion) {
-    await client.addExclusion(movie.tmdbId, movie.title, movie.year ?? action.mediaItem.year ?? 0);
-  }
   if (action.searchAfterAction) {
     await client.triggerMovieSearch(movie.id);
   }
@@ -996,9 +966,6 @@ async function executeDeleteFilesRadarr(action: ActionRecord) {
 async function executeDeleteFilesSonarr(action: ActionRecord): Promise<ActionOutcome> {
   const { client, series } = await resolveSonarrSeries(action);
   const deleted = await deleteEpisodeFilesForAction(client, series.id, action);
-  if (action.addImportExclusion) {
-    await client.addExclusion(series.tvdbId, series.title);
-  }
   if (action.searchAfterAction) {
     // By id: a series search skips unmonitored seasons and episodes, and
     // Sonarr may have unmonitored the episodes it just deleted.
@@ -1010,9 +977,6 @@ async function executeDeleteFilesSonarr(action: ActionRecord): Promise<ActionOut
 async function executeDeleteFilesLidarr(action: ActionRecord): Promise<ActionOutcome> {
   const { client, artist } = await resolveLidarrArtist(action);
   const deleted = await deleteTrackFilesForAction(client, artist, action);
-  if (action.addImportExclusion) {
-    await client.addExclusion(artist.foreignArtistId, artist.artistName);
-  }
   if (action.searchAfterAction) {
     await client.triggerArtistSearch(artist.id);
   }
@@ -1197,7 +1161,7 @@ export async function executeAction(
 
   logger.info(
     "Lifecycle",
-    `Executed ${action.actionType} for "${action.targetTitle}"${action.addImportExclusion ? " (with import exclusion)" : ""}`
+    `Executed ${action.actionType} for "${action.targetTitle}"${deletesArrRecord(action.actionType) && action.addImportExclusion ? " (with import exclusion)" : ""}`
   );
   return outcome;
 }

@@ -139,7 +139,7 @@ The actions are the lifecycle actions for each family — **Delete from Radarr /
 
 - **Change Quality Profile** needs a quality profile from the instance, and offers **Search for upgrade**.
 - The three file deletes offer **Search after** (search for a new copy once the file is gone).
-- Every delete offers **Add import exclusion**.
+- **Delete from Radarr / Sonarr / Lidarr** offers **Add import exclusion**; no other action does.
 - **Add tags** / **Remove tags** are offered with every action except **Delete from Radarr / Sonarr / Lidarr**, which removes the record and its tags with it. **Do Nothing (tags only)** changes tags and nothing else, so it needs at least one.
 
 The bar shows how many results are selected and their **combined size** — handy for gauging how much space a cleanup will reclaim. An action applies only to selected results of its media type: *Delete from Radarr* acts on the selected movies, and selected shows or tracks are skipped and reported. With nothing selected the bar says "Select results below to run an action."; with no Arr server picked for the selected types, "Select an Arr instance above for the media type(s) you want to act on."

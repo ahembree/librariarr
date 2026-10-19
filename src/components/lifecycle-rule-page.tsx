@@ -1327,7 +1327,7 @@ export function LifecycleRulePage({
         actionDelayDays,
         arrInstanceId: arrInstanceId || null,
         targetQualityProfileId: isQualityProfileChangeAction(actionType) ? targetQualityProfileId : null,
-        addImportExclusion,
+        addImportExclusion: deletesArrRecord(actionType) && addImportExclusion,
         searchAfterAction,
         // Deleting the whole Arr record deletes its tags with it.
         addArrTags: deletesArrRecord(actionType) ? [] : addArrTags,
@@ -2491,7 +2491,7 @@ export function LifecycleRulePage({
                   </div>
                 )}
 
-                {actionType.startsWith("DELETE_") && !actionType.includes("DELETE_FILES") && (
+                {deletesArrRecord(actionType) && (
                   <div className="flex items-center gap-3">
                     <Switch
                       id="import-exclusion"

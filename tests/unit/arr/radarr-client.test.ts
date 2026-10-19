@@ -292,43 +292,6 @@ describe("RadarrClient", () => {
     });
   });
 
-  describe("addExclusion", () => {
-    const exclusionError = (data: unknown) =>
-      new IntegrationError("Radarr", {
-        config: { url: "/api/v3/exclusions", method: "post" },
-        response: { status: 400, data },
-        code: "ERR_BAD_REQUEST",
-      } as never);
-
-    it("treats an exclusion that already exists as added", async () => {
-      mockAxiosInstance.post.mockRejectedValueOnce(
-        exclusionError([{ propertyName: "TmdbId", errorMessage: "This exclusion has already been added." }]),
-      );
-      await expect(client.addExclusion(329865, "Arrival", 2016)).resolves.toBeUndefined();
-      expect(mockAxiosInstance.post).toHaveBeenCalledWith("/api/v3/exclusions", {
-        tmdbId: 329865,
-        movieTitle: "Arrival",
-        movieYear: 2016,
-      });
-    });
-
-    it("still throws any other validation failure", async () => {
-      const error = exclusionError([{ propertyName: "MovieTitle", errorMessage: "'Movie Title' must not be empty." }]);
-      mockAxiosInstance.post.mockRejectedValueOnce(error);
-      await expect(client.addExclusion(329865, "", 2016)).rejects.toBe(error);
-    });
-
-    it("posts exclusion data", async () => {
-      mockAxiosInstance.post.mockResolvedValueOnce({});
-      await client.addExclusion(329865, "Arrival", 2016);
-      expect(mockAxiosInstance.post).toHaveBeenCalledWith("/api/v3/exclusions", {
-        tmdbId: 329865,
-        movieTitle: "Arrival",
-        movieYear: 2016,
-      });
-    });
-  });
-
   describe("getLanguages", () => {
     it("returns languages", async () => {
       const langs = [{ id: 0, name: "Unknown" }, { id: 1, name: "English" }];

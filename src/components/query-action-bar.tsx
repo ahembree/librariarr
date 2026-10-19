@@ -215,7 +215,7 @@ export function QueryActionBar({
   const arrInstanceId = family ? arrServerIds[family] : undefined;
   const meta = family ? arrMeta[family] : undefined;
   const needsProfile = QUALITY_PROFILE_ACTION_TYPES.has(submittedActionType);
-  const supportsImportExclusion = submittedActionType.includes("DELETE");
+  const supportsImportExclusion = deletesArrRecord(submittedActionType);
   const supportsSearchAfter = canSearchAfter(submittedActionType);
   const isTagOnly = submittedActionType === "DO_NOTHING";
   // Deleting the whole Arr record deletes its tags with it; every other

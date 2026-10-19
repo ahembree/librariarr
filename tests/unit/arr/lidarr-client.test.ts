@@ -220,42 +220,6 @@ describe("LidarrClient", () => {
     });
   });
 
-  describe("addExclusion", () => {
-    const RADIOHEAD = "a74b1b7f-71a5-4011-9441-d0b5e4122711";
-    const exclusionError = (status: number, data: unknown) =>
-      new IntegrationError("Lidarr", {
-        config: { url: "/api/v1/importlistexclusion", method: "post" },
-        response: { status, data },
-        code: "ERR_BAD_REQUEST",
-      } as never);
-
-    it("treats an exclusion that already exists as added", async () => {
-      mockAxiosInstance.post.mockRejectedValueOnce(
-        exclusionError(400, [{ propertyName: "ForeignId", errorMessage: "This exclusion has already been added." }]),
-      );
-      await expect(client.addExclusion(RADIOHEAD, "Radiohead")).resolves.toBeUndefined();
-      expect(mockAxiosInstance.post).toHaveBeenCalledWith("/api/v1/importlistexclusion", {
-        foreignId: RADIOHEAD,
-        artistName: "Radiohead",
-      });
-    });
-
-    it("rethrows any other refusal", async () => {
-      const error = exclusionError(400, [{ propertyName: "ForeignId", errorMessage: "'Foreign Id' must not be empty." }]);
-      mockAxiosInstance.post.mockRejectedValueOnce(error);
-      await expect(client.addExclusion(RADIOHEAD, "Radiohead")).rejects.toBe(error);
-    });
-
-    it("posts exclusion data", async () => {
-      mockAxiosInstance.post.mockResolvedValueOnce({});
-      await client.addExclusion(RADIOHEAD, "Radiohead");
-      expect(mockAxiosInstance.post).toHaveBeenCalledWith("/api/v1/importlistexclusion", {
-        foreignId: RADIOHEAD,
-        artistName: "Radiohead",
-      });
-    });
-  });
-
   describe("getAlbums / getTracks", () => {
     it("scopes both listings to one artist", async () => {
       const albums = [{ id: 3, title: "OK Computer" }];

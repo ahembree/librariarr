@@ -19,7 +19,6 @@ const mockRadarr = vi.hoisted(() => ({
   getMovieByTmdbId: vi.fn(),
   deleteMovie: vi.fn(),
   updateMovie: vi.fn(),
-  addExclusion: vi.fn(),
   deleteMovieFile: vi.fn(),
   triggerMovieSearch: vi.fn(),
   getTags: vi.fn(),
@@ -32,7 +31,6 @@ const mockSonarr = vi.hoisted(() => ({
   getSeriesByTvdbId: vi.fn(),
   deleteSeries: vi.fn(),
   updateSeries: vi.fn(),
-  addExclusion: vi.fn(),
   deleteEpisodeFiles: vi.fn(),
   getEpisodes: vi.fn(),
   triggerSeriesSearch: vi.fn(),
@@ -48,7 +46,6 @@ const mockLidarr = vi.hoisted(() => ({
   getArtistByMusicBrainzId: vi.fn(),
   deleteArtist: vi.fn(),
   updateArtist: vi.fn(),
-  addExclusion: vi.fn(),
   getTracks: vi.fn(),
   getAlbums: vi.fn(),
   deleteTrackFiles: vi.fn(),
@@ -347,59 +344,38 @@ describe("cleanupArrTags", () => {
 });
 
 describe("whole-record and monitoring executors", () => {
-  it("UNMONITOR_SONARR adds the exclusion by TVDB id", async () => {
+  it("UNMONITOR_SONARR unmonitors the series", async () => {
     await executeAction(showAction({ actionType: "UNMONITOR_SONARR", addImportExclusion: true }));
     expect(mockSonarr.updateSeries).toHaveBeenCalledWith(2, { monitored: false });
-    expect(mockSonarr.addExclusion).toHaveBeenCalledWith(371980, "Severance");
   });
 
-  it("UNMONITOR_SONARR without an exclusion leaves the exclusion list alone", async () => {
-    await executeAction(showAction({ actionType: "UNMONITOR_SONARR" }));
-    expect(mockSonarr.addExclusion).not.toHaveBeenCalled();
-  });
-
-  it("UNMONITOR_LIDARR adds the exclusion by foreign artist id", async () => {
+  it("UNMONITOR_LIDARR unmonitors the artist", async () => {
     await executeAction(artistAction({ actionType: "UNMONITOR_LIDARR", addImportExclusion: true }));
     expect(mockLidarr.updateArtist).toHaveBeenCalledWith(5, { monitored: false });
-    expect(mockLidarr.addExclusion).toHaveBeenCalledWith("a74b1b7f-71a5-4011-9441-d0b5e4122711", "Radiohead");
-  });
-
-  it("UNMONITOR_RADARR uses the item's year when Radarr has none, and 0 when neither does", async () => {
-    mockRadarr.getMovieByTmdbId.mockResolvedValueOnce({ ...MOVIE, year: null });
-    await executeAction(movieAction({ actionType: "UNMONITOR_RADARR", addImportExclusion: true }));
-    expect(mockRadarr.addExclusion).toHaveBeenLastCalledWith(329865, "Arrival", 2016);
-
-    mockRadarr.getMovieByTmdbId.mockResolvedValueOnce({ ...MOVIE, year: null });
-    const a = movieAction({ actionType: "UNMONITOR_RADARR", addImportExclusion: true });
-    a.mediaItem.year = null;
-    await executeAction(a);
-    expect(mockRadarr.addExclusion).toHaveBeenLastCalledWith(329865, "Arrival", 0);
   });
 
   it("UNMONITOR_DELETE_FILES_RADARR skips the file delete when the movie has no file", async () => {
     mockRadarr.getMovieByTmdbId.mockResolvedValueOnce({ ...MOVIE, hasFile: false, movieFileId: 0 });
     await executeAction(movieAction({ actionType: "UNMONITOR_DELETE_FILES_RADARR", addImportExclusion: true }));
     expect(mockRadarr.deleteMovieFile).not.toHaveBeenCalled();
-    expect(mockRadarr.addExclusion).toHaveBeenCalled();
     expect(mockRadarr.triggerMovieSearch).not.toHaveBeenCalled();
   });
 
-  it("MONITOR_DELETE_FILES_RADARR re-monitors an unmonitored movie, excludes and searches", async () => {
+  it("MONITOR_DELETE_FILES_RADARR re-monitors an unmonitored movie and searches", async () => {
     mockRadarr.getMovieByTmdbId.mockResolvedValueOnce({ ...MOVIE, monitored: false, hasFile: false });
     await executeAction(movieAction({ actionType: "MONITOR_DELETE_FILES_RADARR", addImportExclusion: true, searchAfterAction: true }));
     expect(mockRadarr.updateMovie).toHaveBeenCalledWith(7, { monitored: true });
     expect(mockRadarr.deleteMovieFile).not.toHaveBeenCalled();
-    expect(mockRadarr.addExclusion).toHaveBeenCalledWith(329865, "Arrival", 2016);
     expect(mockRadarr.triggerMovieSearch).toHaveBeenCalledWith(7);
   });
 
-  it("DELETE_FILES_RADARR excludes, deletes the file and searches", async () => {
+  it("DELETE_FILES_RADARR deletes the file and searches, adding no exclusion", async () => {
     await executeAction(movieAction({ actionType: "DELETE_FILES_RADARR", addImportExclusion: true, searchAfterAction: true }));
     expect(mockRadarr.deleteMovieFile).toHaveBeenCalledWith(70);
     expect(mockRadarr.updateMovie).not.toHaveBeenCalled();
-    expect(mockRadarr.addExclusion).toHaveBeenCalled();
     expect(mockRadarr.triggerMovieSearch).toHaveBeenCalledWith(7);
-    expect(mockLogger.info).toHaveBeenCalledWith("Lifecycle", expect.stringContaining("(with import exclusion)"));
+    // Only a whole-record delete adds an import exclusion.
+    expect(mockLogger.info).not.toHaveBeenCalledWith("Lifecycle", expect.stringContaining("(with import exclusion)"));
   });
 
   it("quality-profile changes on Sonarr and Lidarr refuse without a target profile, before resolving", async () => {
@@ -461,7 +437,6 @@ describe("Sonarr member-scoped file deletes", () => {
     expect(outcome.deletedMemberIds).toEqual(["ok"]);
     // The episode whose file is already gone is still searched.
     expect(mockSonarr.triggerEpisodeSearch).toHaveBeenCalledWith([501, 504]);
-    expect(mockSonarr.addExclusion).toHaveBeenCalledWith(371980, "Severance");
   });
 
   it("deletes nothing (without throwing) when every matched episode is file-less", async () => {
@@ -478,7 +453,7 @@ describe("Sonarr member-scoped file deletes", () => {
     expect(mockSonarr.updateSeries).not.toHaveBeenCalled(); // series already monitored
   });
 
-  it("MONITOR_DELETE_FILES_SONARR monitors an unmonitored series and adds an exclusion", async () => {
+  it("MONITOR_DELETE_FILES_SONARR monitors an unmonitored series", async () => {
     mockSonarr.getSeriesByTvdbId.mockResolvedValueOnce({ ...SERIES, monitored: false });
     mockPrisma.mediaItem.findMany.mockResolvedValue([
       { id: "e1", seasonNumber: 1, episodeNumber: 1, originallyAvailableAt: null },
@@ -488,11 +463,10 @@ describe("Sonarr member-scoped file deletes", () => {
     await executeAction(showAction({ actionType: "MONITOR_DELETE_FILES_SONARR", matchedMediaItemIds: ["e1"], addImportExclusion: true }));
 
     expect(mockSonarr.updateSeries).toHaveBeenCalledWith(2, { monitored: true });
-    expect(mockSonarr.addExclusion).toHaveBeenCalledWith(371980, "Severance");
     expect(mockSonarr.triggerEpisodeSearch).not.toHaveBeenCalled();
   });
 
-  it("UNMONITOR_DELETE_FILES_SONARR adds the exclusion and reports matched episode count", async () => {
+  it("UNMONITOR_DELETE_FILES_SONARR reports matched episode count", async () => {
     mockPrisma.mediaItem.findMany.mockResolvedValue([
       { id: "e1", seasonNumber: 1, episodeNumber: 1, originallyAvailableAt: null },
     ]);
@@ -500,7 +474,6 @@ describe("Sonarr member-scoped file deletes", () => {
 
     await executeAction(showAction({ actionType: "UNMONITOR_DELETE_FILES_SONARR", matchedMediaItemIds: ["e1"], addImportExclusion: true }));
 
-    expect(mockSonarr.addExclusion).toHaveBeenCalled();
     expect(mockLogger.info).toHaveBeenCalledWith("Lifecycle", expect.stringContaining("1 matched episodes"));
   });
 });
@@ -603,12 +576,11 @@ describe("Lidarr member-scoped file deletes", () => {
     }));
     expect(mockLidarr.updateArtist).toHaveBeenCalledWith(5, { monitored: false });
     expect(mockLidarr.deleteTrackFiles).toHaveBeenCalledWith([101]);
-    expect(mockLidarr.addExclusion).toHaveBeenCalledWith("a74b1b7f-71a5-4011-9441-d0b5e4122711", "Radiohead");
     expect(mockLidarr.triggerArtistSearch).toHaveBeenCalledWith(5);
     expect(outcome.deletedMemberIds).toEqual(["t1"]);
   });
 
-  it("MONITOR_DELETE_FILES_LIDARR re-monitors an unmonitored artist, excludes and searches", async () => {
+  it("MONITOR_DELETE_FILES_LIDARR re-monitors an unmonitored artist and searches", async () => {
     mockLidarr.getArtistByMusicBrainzId.mockResolvedValueOnce({ ...ARTIST, monitored: false });
     mockPrisma.mediaItem.findMany.mockResolvedValue([track({})]);
     mockLidarr.getTracks.mockResolvedValue([
@@ -618,11 +590,10 @@ describe("Lidarr member-scoped file deletes", () => {
       actionType: "MONITOR_DELETE_FILES_LIDARR", matchedMediaItemIds: ["t1"], addImportExclusion: true, searchAfterAction: true,
     }));
     expect(mockLidarr.updateArtist).toHaveBeenCalledWith(5, { monitored: true });
-    expect(mockLidarr.addExclusion).toHaveBeenCalled();
     expect(mockLidarr.triggerArtistSearch).toHaveBeenCalledWith(5);
   });
 
-  it("DELETE_FILES_LIDARR adds the exclusion and searches when asked", async () => {
+  it("DELETE_FILES_LIDARR searches when asked", async () => {
     mockPrisma.mediaItem.findMany.mockResolvedValue([track({})]);
     mockLidarr.getTracks.mockResolvedValue([
       { id: 1, albumId: 10, trackFileId: 101, title: "Airbag", hasFile: true, trackNumber: "1", mediumNumber: 1 },
@@ -630,7 +601,6 @@ describe("Lidarr member-scoped file deletes", () => {
     await executeAction(artistAction({
       actionType: "DELETE_FILES_LIDARR", matchedMediaItemIds: ["t1"], addImportExclusion: true, searchAfterAction: true,
     }));
-    expect(mockLidarr.addExclusion).toHaveBeenCalled();
     expect(mockLidarr.triggerArtistSearch).toHaveBeenCalledWith(5);
   });
 });
