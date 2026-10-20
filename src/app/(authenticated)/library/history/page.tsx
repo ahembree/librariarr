@@ -938,6 +938,7 @@ export default function HistoryPage() {
     void openPanel({
       id: historyItem.mediaItem.id,
       mediaType: toDetailPanelMediaType(historyItem.mediaItem.type),
+      label: getItemTitle(historyItem),
     });
   }, [openPanel]);
 

@@ -359,6 +359,7 @@ export default function LifecycleExceptionsPage() {
     void detailPanel.open({
       id: row.mediaItem.id,
       mediaType,
+      label: row.displayTitle,
       // A series or music row stands for every excepted episode/track under
       // it — except a series row holding one episode, which is named as that
       // episode ("<Show> SxxExx") and so opens as it.

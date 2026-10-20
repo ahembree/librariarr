@@ -4,6 +4,9 @@ import { renderHook, act, waitFor } from "@testing-library/react";
 import { useMediaDetailPanel, MEDIA_DETAIL_PANEL_WIDTH_KEY } from "@/hooks/use-media-detail-panel";
 import type { MediaItemWithRelations } from "@/lib/types";
 
+const toastError = vi.hoisted(() => vi.fn());
+vi.mock("sonner", () => ({ toast: { error: toastError } }));
+
 const fetchMock = vi.fn();
 
 function record(id: string, extra: Record<string, unknown> = {}) {
@@ -11,12 +14,13 @@ function record(id: string, extra: Record<string, unknown> = {}) {
 }
 
 function respond(body: unknown) {
-  return { ok: true, json: async () => body };
+  return { ok: true, status: 200, json: async () => body };
 }
 
 beforeEach(() => {
   localStorage.clear();
   fetchMock.mockReset();
+  toastError.mockReset();
   vi.stubGlobal("fetch", fetchMock);
 });
 
@@ -121,11 +125,66 @@ describe("useMediaDetailPanel", () => {
 
   it("keeps the previous panel when the record cannot be read", async () => {
     fetchMock.mockResolvedValueOnce(respond({ item: record("a") }));
-    fetchMock.mockResolvedValueOnce({ ok: false, json: async () => ({}) });
+    fetchMock.mockResolvedValueOnce({ ok: false, status: 500, json: async () => ({}) });
     const { result } = renderHook(() => useMediaDetailPanel());
     await act(() => result.current.open({ id: "a", mediaType: "MOVIE" }));
-    await act(() => result.current.open({ id: "b", mediaType: "MOVIE" }));
+    await act(() => result.current.open({ id: "b", mediaType: "MOVIE", label: "B" }));
     expect(result.current.selectedId).toBe("a");
     expect(result.current.loading).toBe(false);
+    expect(toastError).toHaveBeenCalledWith("Couldn't load this item", { description: "B" });
+  });
+
+  it("says so when the item is gone, naming it", async () => {
+    fetchMock.mockResolvedValue({ ok: false, status: 404, json: async () => ({}) });
+    const { result } = renderHook(() => useMediaDetailPanel());
+    await act(() => result.current.open({ id: "a", mediaType: "MOVIE", label: "Alien" }));
+    expect(result.current.panelProps).toBeNull();
+    expect(toastError).toHaveBeenCalledTimes(1);
+    expect(toastError.mock.calls[0][0]).toBe('"Alien" is no longer in the library');
+  });
+
+  it("closes a seed for an item that is gone, named as its row names it", async () => {
+    fetchMock.mockResolvedValue({ ok: false, status: 404, json: async () => ({}) });
+    const { result } = renderHook(() => useMediaDetailPanel());
+    const seed = record("ep", {
+      title: "Pilot", parentTitle: "The Show", type: "SERIES", seasonNumber: 1, episodeNumber: 1,
+    }) as unknown as MediaItemWithRelations;
+    await act(() => result.current.open({ id: "ep", mediaType: "SERIES", seed }));
+    expect(result.current.panelProps).toBeNull();
+    expect(toastError.mock.calls[0][0]).toBe('"The Show S01E01" is no longer in the library');
+  });
+
+  it("keeps a seed on screen without a toast when only the refresh fails", async () => {
+    fetchMock.mockResolvedValue({ ok: false, status: 500, json: async () => ({}) });
+    const { result } = renderHook(() => useMediaDetailPanel());
+    const seed = record("a") as unknown as MediaItemWithRelations;
+    await act(() => result.current.open({ id: "a", mediaType: "MOVIE", seed }));
+    expect(result.current.selectedId).toBe("a");
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it("says so when the request itself fails", async () => {
+    fetchMock.mockRejectedValue(new Error("offline"));
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { result } = renderHook(() => useMediaDetailPanel());
+    await act(() => result.current.open({ id: "a", mediaType: "MOVIE", label: "Alien" }));
+    expect(toastError).toHaveBeenCalledWith("Couldn't load this item", { description: "Alien" });
+    consoleError.mockRestore();
+  });
+
+  it("stays quiet about a click a later one replaced", async () => {
+    let resolveFirst!: (v: unknown) => void;
+    fetchMock.mockReturnValueOnce(new Promise((r) => { resolveFirst = r; }));
+    fetchMock.mockResolvedValueOnce(respond({ item: record("b") }));
+    const { result } = renderHook(() => useMediaDetailPanel());
+    let first!: Promise<void>;
+    act(() => { first = result.current.open({ id: "a", mediaType: "MOVIE" }); });
+    await act(() => result.current.open({ id: "b", mediaType: "MOVIE" }));
+    await act(async () => {
+      resolveFirst({ ok: false, status: 404, json: async () => ({}) });
+      await first;
+    });
+    expect(toastError).not.toHaveBeenCalled();
+    expect(result.current.selectedId).toBe("b");
   });
 });

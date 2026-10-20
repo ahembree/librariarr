@@ -984,6 +984,9 @@ export default function PendingActionsPage() {
       // "<Show> SxxExx" for an action on one episode — not by the episode it
       // is stored against.
       title: mediaType === "SERIES" ? action.mediaItem.title : undefined,
+      label: action.mediaItem.parentTitle
+        ? `${action.mediaItem.parentTitle} - ${action.mediaItem.title}`
+        : action.mediaItem.title,
     });
   };
 

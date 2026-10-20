@@ -1,12 +1,14 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
+import { toast } from "sonner";
 import { usePanelResize } from "@/hooks/use-panel-resize";
 import {
   buildDetailPanelItem,
   type DetailPanelGroup,
   type DetailPanelMediaType,
 } from "@/lib/media/detail-panel-item";
+import { formatMediaItemTitle } from "@/lib/media/display-title";
 import type { MatchedCriterion } from "@/components/media-detail-side-panel";
 import type { BaseGroup, BaseRule, BuilderConfig } from "@/components/builder/types";
 import type { MediaItemWithRelations } from "@/lib/types";
@@ -28,6 +30,11 @@ export interface OpenMediaDetailPanel {
   group?: DetailPanelGroup;
   /** Header title override, e.g. a lifecycle action's target. */
   title?: string;
+  /**
+   * What the row calls the item, for the toast when it cannot be opened.
+   * Falls back to `title`, the group's name, then the seed's name.
+   */
+  label?: string;
   /** Lifecycle criteria the item matched, with the values it matched on. */
   matchedCriteria?: MatchedCriterion[];
   actualValues?: Record<string, string>;
@@ -83,10 +90,26 @@ export function useMediaDetailPanel() {
     if (request.seed) {
       setSelection({ ...base, item: buildDetailPanelItem(request.seed, request.group) });
     }
+    const name = request.label ?? request.title ?? request.group?.title
+      ?? (request.seed && formatMediaItemTitle(request.seed));
     setLoading(true);
     try {
       const response = await fetch(`/api/media/${request.id}`);
-      if (token !== reqToken.current || !response.ok) return;
+      if (token !== reqToken.current) return;
+      if (response.status === 404) {
+        // Gone since the list loaded (a sync or purge removed it). A seed
+        // would only describe an item that no longer exists.
+        if (request.seed) setSelection(null);
+        toast.error(name ? `"${name}" is no longer in the library` : "This item is no longer in the library", {
+          description: "It was removed since this list loaded. Refresh the page to update the list.",
+        });
+        return;
+      }
+      if (!response.ok) {
+        // With a seed on screen the row's own details still stand.
+        if (!request.seed) toast.error("Couldn't load this item", { description: name });
+        return;
+      }
       const data = await response.json();
       if (token !== reqToken.current) return;
       const record: MediaItemWithRelations | undefined = data.item ?? data;
@@ -97,6 +120,9 @@ export function useMediaDetailPanel() {
       setSelection({ ...base, item: buildDetailPanelItem(merged, request.group) });
     } catch (error) {
       console.error("Failed to fetch media item:", error);
+      if (token === reqToken.current && !request.seed) {
+        toast.error("Couldn't load this item", { description: name });
+      }
     } finally {
       if (token === reqToken.current) setLoading(false);
     }
