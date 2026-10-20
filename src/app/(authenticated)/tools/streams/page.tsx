@@ -636,7 +636,10 @@ function SessionStreamDetails({ session }: { session: SessionWithServer }) {
               Started {formatTime(session.startedAt)}
             </ColorChip>
           )}
-          {session.session.location && (
+          {/* The session's location is "lan" or "wan" — the LAN/WAN chip above
+              already says it; only another value (e.g. Plex's "cellular") adds
+              anything. */}
+          {session.session.location && !["lan", "wan"].includes(session.session.location.toLowerCase()) && (
             <ColorChip>{session.session.location}</ColorChip>
           )}
         </div>
