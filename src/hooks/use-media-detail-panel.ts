@@ -98,8 +98,10 @@ export function useMediaDetailPanel() {
       if (token !== reqToken.current) return;
       if (response.status === 404) {
         // Gone since the list loaded (a sync or purge removed it). A seed
-        // would only describe an item that no longer exists.
-        if (request.seed) setSelection(null);
+        // would only describe an item that no longer exists, and a panel
+        // still open on the previous click would sit beside a toast naming
+        // this one.
+        setSelection(null);
         toast.error(name ? `"${name}" is no longer in the library` : "This item is no longer in the library", {
           description: "It was removed since this list loaded. Refresh the page to update the list.",
         });

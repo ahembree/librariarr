@@ -154,6 +154,17 @@ describe("useMediaDetailPanel", () => {
     expect(toastError.mock.calls[0][0]).toBe('"The Show S01E01" is no longer in the library');
   });
 
+  it("closes the previous item's panel when the clicked one is gone", async () => {
+    fetchMock.mockResolvedValueOnce(respond({ item: record("a") }));
+    fetchMock.mockResolvedValueOnce({ ok: false, status: 404, json: async () => ({}) });
+    const { result } = renderHook(() => useMediaDetailPanel());
+    await act(() => result.current.open({ id: "a", mediaType: "MOVIE" }));
+    expect(result.current.selectedId).toBe("a");
+    await act(() => result.current.open({ id: "b", mediaType: "MOVIE", label: "B" }));
+    expect(result.current.panelProps).toBeNull();
+    expect(toastError.mock.calls[0][0]).toBe('"B" is no longer in the library');
+  });
+
   it("keeps a seed on screen without a toast when only the refresh fails", async () => {
     fetchMock.mockResolvedValue({ ok: false, status: 500, json: async () => ({}) });
     const { result } = renderHook(() => useMediaDetailPanel());
