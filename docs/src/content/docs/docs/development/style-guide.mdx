@@ -397,6 +397,7 @@ The coloured resolution, dynamic-range, audio-profile and audio-codec chips — 
 - **Labels**: a resolution shows its standard label (`4K`, `1080P`…) and a value that maps to none its own spelling; SDR is shown like any other dynamic range; an audio codec is upper-cased; a count reads `label: n` in the chip's colour.
 - **Order**: counts follow `QUALITY_ORDER` and `AUDIO_CODEC_ORDER`, then the rest by name, with empty buckets dropped.
 - **Card bars**: `qualitySegments(chips, getHex, show)` — one segment per chip, weighted by its count, filtered by the card-display toggles. Use the exported `QualityBar` for a bar outside `MediaCard`.
+- **Every other info pill beside them is a `ColorChip` too**, never a shadcn `Badge`: neutral facts (user, player, codec, container, bitrate) are a plain `ColorChip` (`font-mono tabular-nums` for figures), a stream decision is green for a copy or direct stream and amber for a transcode, a server is coloured by its type (`SERVER_TYPE_STYLES`), and ratings are `RatingChip`. The Stream Manager's session details, the side panel's matched criteria and the Arr tags in the Integrations section follow this
 - **Per-stream values** (a stream's `videoRangeType`, an audio stream's profile) are the server's own spellings; colour them by the range or profile they name (`detectStreamDynamicRange`, `detectStreamAudioProfile`), with the raw value as the chip's title.
 
 ### Hover Popovers

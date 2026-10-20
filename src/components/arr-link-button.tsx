@@ -1,6 +1,6 @@
 "use client";
 
-import { Badge } from "@/components/ui/badge";
+import { ColorChip } from "@/components/color-chip";
 import { Button } from "@/components/ui/button";
 import { ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -90,9 +90,7 @@ export function ArrInstanceCard({ match, hideQualityProfile }: { match: ArrMatch
           <span className="text-xs uppercase tracking-wide text-muted-foreground">Tags</span>
           <div className="flex flex-wrap items-center gap-1.5">
             {match.tags.map((tag) => (
-              <Badge key={tag} variant="outline" className="bg-muted/50 font-normal">
-                {tag}
-              </Badge>
+              <ColorChip key={tag}>{tag}</ColorChip>
             ))}
           </div>
         </div>

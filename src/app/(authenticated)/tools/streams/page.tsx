@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/empty-state";
 import { Badge } from "@/components/ui/badge";
 import { ColorChip } from "@/components/color-chip";
+import { RatingChip } from "@/components/rating-chip";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -581,6 +582,14 @@ function MessageSelector({
 
 // --- Session stream details ---
 
+/** The card's stream-decision colours, shared with the transcode details. */
+const AMBER_CHIP = "bg-amber-dim text-amber border-amber/25";
+const GREEN_CHIP = "bg-green-dim text-green border-green/25";
+
+function decisionChipClass(decision: string | undefined): string {
+  return decision === "transcode" ? AMBER_CHIP : GREEN_CHIP;
+}
+
 /**
  * What a playing session adds to its item's details: who is watching where,
  * the file and stream being delivered, and any transcode. Shown in the shared
@@ -588,51 +597,47 @@ function MessageSelector({
  * library has not synced.
  */
 function SessionStreamDetails({ session }: { session: SessionWithServer }) {
+  const transcoding = session.transcoding;
   return (
     <div className="space-y-5">
       {/* Stream Info */}
       <div className="space-y-2">
         <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Stream Info</h4>
         <div className="flex flex-wrap gap-1.5">
-          <Badge variant="secondary" className="text-[10px] gap-1">
+          <ColorChip className="gap-1">
             <User className="h-2.5 w-2.5" />
             {session.username}
-          </Badge>
-          <Badge variant="secondary" className="text-[10px]">
+          </ColorChip>
+          <ColorChip>
             {session.player.product} on {session.player.platform}
-          </Badge>
+          </ColorChip>
           {session.player.address && (
-            <Badge variant="secondary" className="text-[10px] gap-1">
+            <ColorChip className="gap-1">
               <Globe className="h-2.5 w-2.5" />
               {session.player.address}
-            </Badge>
+            </ColorChip>
           )}
-          <Badge variant="secondary" className="text-[10px] gap-1">
+          <ColorChip className="gap-1">
             {session.player.local ? <Wifi className="h-2.5 w-2.5" /> : <WifiOff className="h-2.5 w-2.5" />}
             {session.player.local ? "LAN" : "WAN"}
-          </Badge>
+          </ColorChip>
           {session.session.bandwidth > 0 && (
-            <Badge variant="secondary" className="text-[10px]">
+            <ColorChip className="font-mono tabular-nums">
               {formatBandwidth(session.session.bandwidth)}
-            </Badge>
+            </ColorChip>
           )}
-          <Badge variant="secondary" className="text-[10px] gap-1">
+          <ColorChip className={`gap-1 ${(SERVER_TYPE_STYLES[session.serverType] ?? DEFAULT_SERVER_STYLE).classes}`}>
             <Server className="h-2.5 w-2.5" />
-            {session.serverType !== "PLEX" && (
-              <span className="font-semibold">{session.serverType === "JELLYFIN" ? "JF" : session.serverType === "EMBY" ? "Emby" : ""} &middot;</span>
-            )}
             {session.serverName}
-          </Badge>
+          </ColorChip>
           {session.startedAt > 0 && (
-            <Badge variant="secondary" className="text-[10px] gap-1">
+            <ColorChip className="gap-1">
               <Clock className="h-2.5 w-2.5" />
               Started {formatTime(session.startedAt)}
-            </Badge>
+            </ColorChip>
           )}
           {session.session.location && (
-            <Badge variant="secondary" className="text-[10px]">
-              {session.session.location}
-            </Badge>
+            <ColorChip>{session.session.location}</ColorChip>
           )}
         </div>
       </div>
@@ -643,23 +648,19 @@ function SessionStreamDetails({ session }: { session: SessionWithServer }) {
           <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Media Info</h4>
           <div className="flex flex-wrap gap-1.5">
             {session.mediaWidth && session.mediaHeight && (
-              <Badge variant="outline" className="text-[10px]">
+              <ColorChip className="font-mono tabular-nums">
                 {session.mediaWidth}x{session.mediaHeight}
-              </Badge>
+              </ColorChip>
             )}
             {resolutionChipLabel(session.videoResolution) && (
               <QualityChip chip={{ category: "resolution", label: resolutionChipLabel(session.videoResolution)! }} />
             )}
-            {session.aspectRatio && (
-              <Badge variant="secondary" className="text-[10px]">
-                {session.aspectRatio}
-              </Badge>
-            )}
+            {session.aspectRatio && <ColorChip>{session.aspectRatio}</ColorChip>}
             {session.videoCodec && (
-              <Badge variant="secondary" className="text-[10px]">
+              <ColorChip>
                 Video: {session.videoCodec.toUpperCase()}
                 {session.videoProfile ? ` (${session.videoProfile})` : ""}
-              </Badge>
+              </ColorChip>
             )}
             {/* The codec and the profile are separate chips, coloured as they
                 are everywhere else. */}
@@ -669,34 +670,24 @@ function SessionStreamDetails({ session }: { session: SessionWithServer }) {
             {audioProfileChipLabel(session.audioProfile) && (
               <QualityChip chip={{ category: "audioProfile", label: audioProfileChipLabel(session.audioProfile)! }} />
             )}
-            {session.audioChannels != null && (
-              <Badge variant="secondary" className="text-[10px]">
-                {session.audioChannels}ch
-              </Badge>
-            )}
-            {session.container && (
-              <Badge variant="secondary" className="text-[10px]">
-                {session.container.toUpperCase()}
-              </Badge>
-            )}
+            {session.audioChannels != null && <ColorChip>{session.audioChannels}ch</ColorChip>}
+            {session.container && <ColorChip>{session.container.toUpperCase()}</ColorChip>}
             {session.bitrate != null && (
-              <Badge variant="secondary" className="text-[10px]">
+              <ColorChip className="font-mono tabular-nums">
                 {session.bitrate > 1000
                   ? `${(session.bitrate / 1000).toFixed(1)} Mbps`
                   : `${session.bitrate} kbps`}
-              </Badge>
+              </ColorChip>
             )}
             {session.optimizedForStreaming != null && (
-              <Badge variant="secondary" className="text-[10px]">
-                {session.optimizedForStreaming ? "Optimized" : "Not Optimized"}
-              </Badge>
+              <ColorChip>{session.optimizedForStreaming ? "Optimized" : "Not Optimized"}</ColorChip>
             )}
             {session.partSize != null && (
-              <Badge variant="secondary" className="text-[10px]">
+              <ColorChip className="font-mono tabular-nums">
                 {session.partSize > 1073741824
                   ? `${(session.partSize / 1073741824).toFixed(1)} GB`
                   : `${(session.partSize / 1048576).toFixed(0)} MB`}
-              </Badge>
+              </ColorChip>
             )}
           </div>
           {session.partFile && (
@@ -706,51 +697,46 @@ function SessionStreamDetails({ session }: { session: SessionWithServer }) {
       )}
 
       {/* Transcode Details */}
-      {session.transcoding && (session.transcoding.videoDecision === "transcode" || session.transcoding.audioDecision === "transcode") && (
+      {transcoding && (transcoding.videoDecision === "transcode" || transcoding.audioDecision === "transcode") && (
         <div className="space-y-2">
           <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Transcode Details</h4>
           <div className="flex flex-wrap gap-1.5">
-            {session.transcoding.sourceVideoCodec && (
-              <Badge variant="outline" className="text-[10px] bg-amber/10 text-amber border-amber/30">
-                Video: {session.transcoding.sourceVideoCodec.toUpperCase()} &rarr; {session.transcoding.videoDecision}
-              </Badge>
+            {/* Each stream coloured by its decision, as the card's stream
+                chip is: a transcode amber, a copy or direct stream green. */}
+            {transcoding.sourceVideoCodec && (
+              <ColorChip className={decisionChipClass(transcoding.videoDecision)}>
+                Video: {transcoding.sourceVideoCodec.toUpperCase()} &rarr; {transcoding.videoDecision}
+              </ColorChip>
             )}
-            {session.transcoding.sourceAudioCodec && (
-              <Badge variant="outline" className="text-[10px] bg-amber/10 text-amber border-amber/30">
-                Audio: {session.transcoding.sourceAudioCodec.toUpperCase()} &rarr; {session.transcoding.audioDecision}
-              </Badge>
+            {transcoding.sourceAudioCodec && (
+              <ColorChip className={decisionChipClass(transcoding.audioDecision)}>
+                Audio: {transcoding.sourceAudioCodec.toUpperCase()} &rarr; {transcoding.audioDecision}
+              </ColorChip>
             )}
             {/* HW encode/decode are Plex-only reliable signals; when
                 absent we cannot tell HW from CPU (Jellyfin/Emby report
                 only their configured accel), so show nothing rather
                 than a misleading "No (CPU)". */}
-            {hardwareEncoder(session.transcoding) && (
-              <Badge variant="secondary" className="text-[10px]">
-                HW Encode: {hardwareEncoder(session.transcoding)!.toUpperCase()}
-              </Badge>
+            {hardwareEncoder(transcoding) && (
+              <ColorChip>HW Encode: {hardwareEncoder(transcoding)!.toUpperCase()}</ColorChip>
             )}
-            {hardwareDecoder(session.transcoding) && (
-              <Badge variant="secondary" className="text-[10px]">
-                HW Decode: {hardwareDecoder(session.transcoding)!.toUpperCase()}
-              </Badge>
+            {hardwareDecoder(transcoding) && (
+              <ColorChip>HW Decode: {hardwareDecoder(transcoding)!.toUpperCase()}</ColorChip>
             )}
-            {session.transcoding.speed !== undefined && (
-              <Badge
-                variant="secondary"
+            {transcoding.speed !== undefined && (
+              <ColorChip
                 className={cn(
-                  "text-[10px]",
+                  "font-mono tabular-nums",
                   // Below realtime the transcode is losing ground and
                   // the viewer will buffer, hardware or not.
-                  session.transcoding.speed < 1 && "bg-amber/15 text-amber border-amber/30"
+                  transcoding.speed < 1 && AMBER_CHIP,
                 )}
               >
-                Speed: {session.transcoding.speed.toFixed(1)}x
-                {session.transcoding.speed < 1 && " \u2014 below realtime"}
-              </Badge>
+                Speed: {transcoding.speed.toFixed(1)}x
+                {transcoding.speed < 1 && " \u2014 below realtime"}
+              </ColorChip>
             )}
-            <Badge variant="secondary" className="text-[10px]">
-              Throttled: {session.transcoding.throttled ? "Yes" : "No"}
-            </Badge>
+            <ColorChip>Throttled: {transcoding.throttled ? "Yes" : "No"}</ColorChip>
           </div>
         </div>
       )}
@@ -902,8 +888,8 @@ function SessionCard({
           <ColorChip
             className={`gap-1 ${
               streamInfo.direct
-                ? "bg-green-dim text-green border-green/25"
-                : "bg-amber-dim text-amber border-amber/25"
+                ? GREEN_CHIP
+                : AMBER_CHIP
             }`}
           >
             {streamInfo.direct ? (
@@ -2332,18 +2318,11 @@ export default function StreamManagerPage() {
                       <p className="text-sm text-muted-foreground leading-relaxed">{sheetSession.summary}</p>
                     )}
                     <div className="flex flex-wrap gap-1.5">
-                      {sheetSession.contentRating && (
-                        <Badge variant="outline" className="text-[10px]">{sheetSession.contentRating}</Badge>
-                      )}
-                      {sheetSession.studio && (
-                        <Badge variant="secondary" className="text-[10px]">{sheetSession.studio}</Badge>
-                      )}
-                      {sheetSession.rating != null && (
-                        <Badge variant="secondary" className="text-[10px]">Rating: {sheetSession.rating.toFixed(1)}</Badge>
-                      )}
-                      {sheetSession.audienceRating != null && (
-                        <Badge variant="secondary" className="text-[10px]">Audience: {sheetSession.audienceRating.toFixed(1)}</Badge>
-                      )}
+                      {sheetSession.contentRating && <ColorChip>{sheetSession.contentRating}</ColorChip>}
+                      {sheetSession.studio && <ColorChip>{sheetSession.studio}</ColorChip>}
+                      {/* The ratings chips the detail pages show. */}
+                      {sheetSession.rating != null && <RatingChip label="Critic" value={sheetSession.rating} />}
+                      {sheetSession.audienceRating != null && <RatingChip label="Audience" value={sheetSession.audienceRating} />}
                     </div>
                     {sheetSession.genres && sheetSession.genres.length > 0 && (
                       <div className="flex flex-wrap gap-1">

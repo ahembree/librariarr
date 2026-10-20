@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { X, ExternalLink, Film, Tv, Music } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
+import { ColorChip } from "@/components/color-chip";
 import { QualityChips } from "@/components/quality-chips";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { MediaDetailContent } from "@/components/media-detail-content";
@@ -210,23 +210,20 @@ export function MediaDetailSidePanel({
       <div className="flex flex-wrap gap-1.5">
         {matchedCriteria.map((criterion, i) => {
           const badge = (
-            <Badge
-              key={i}
-              variant="outline"
-              className={`text-xs ${criterion.negate ? "border-red/30 text-red" : ""}`}
-            >
+            <ColorChip key={i} className={criterion.negate ? "border-red/30 text-red" : undefined}>
               {criterion.groupName && (
                 <span className="text-sky mr-1">[{criterion.groupName}]</span>
               )}
               {criterion.negate && <span className="text-red mr-1">NOT</span>}
               {criterion.field} {criterion.operator} {criterion.value}
-            </Badge>
+            </ColorChip>
           );
           if (criterion.actualValue) {
             return (
               <TooltipProvider key={i}>
                 <Tooltip>
-                  <TooltipTrigger asChild>{badge}</TooltipTrigger>
+                  {/* ColorChip takes no ref, so the trigger is a wrapper. */}
+                  <TooltipTrigger asChild><span className="inline-flex">{badge}</span></TooltipTrigger>
                   <TooltipContent>Actual: {criterion.actualValue}</TooltipContent>
                 </Tooltip>
               </TooltipProvider>
