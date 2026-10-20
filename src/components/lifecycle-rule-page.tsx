@@ -89,7 +89,6 @@ import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { qualityChips, qualitySegments } from "@/lib/media/quality-chips";
 import { useChipColors } from "@/components/chip-color-provider";
 import type { ChipColorCategory } from "@/lib/theme/chip-colors";
-import { normalizeResolutionLabel } from "@/lib/resolution";
 import { formatFileSize, formatDuration } from "@/lib/format";
 import { formatMediaItemTitle } from "@/lib/media/display-title";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -544,7 +543,13 @@ function PreviewCardGrid({
                             {show("metadata", "fileSize") && formatFileSize(item.fileSize) && <MetadataItem icon={<HardDrive />}>{formatFileSize(item.fileSize)}</MetadataItem>}
                           </MetadataLine>
                         }
-                        qualityBar={qualitySegments(qualityChips(item, mediaType === "MUSIC" ? "music" : "video"), getHex, (toggle) => show("badges", toggle))}
+                        qualityBar={qualitySegments(
+                          // An artist row is stored against one of its tracks, whose codec
+                          // is not the artist's, so it draws no codec segment.
+                          mediaType === "MUSIC" && item.matchedEpisodes ? [] : qualityChips(item, mediaType === "MUSIC" ? "music" : "video"),
+                          getHex,
+                          (toggle) => show("badges", toggle),
+                        )}
                         servers={showServers ? item.servers : undefined}
                       />
                     </div>

@@ -131,7 +131,11 @@ export function MediaDetailSidePanel({
       : item.parentTitle
         ? `${item.parentTitle} - ${item.title}`
         : item.title);
-  const chips = qualityChips(item, mediaType === "MUSIC" ? "music" : "video", { channels: true });
+  // An artist panel describes a group stored against one of its tracks; that
+  // track's codec is not the artist's.
+  const chips = mediaType === "MUSIC" && isAggregate
+    ? []
+    : qualityChips(item, mediaType === "MUSIC" ? "music" : "video", { channels: true });
 
   const header = (
     <div className="border-b shrink-0 relative overflow-hidden">

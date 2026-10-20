@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { qualityChips, qualitySegments } from "@/lib/media/quality-chips";
 import { useChipColors } from "@/components/chip-color-provider";
-import { normalizeResolutionLabel } from "@/lib/resolution";
 import { MediaTable } from "@/components/media-table";
 import { MediaFilters } from "@/components/media-filters";
 import { sameFilters } from "@/lib/filters/same-filters";

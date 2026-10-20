@@ -35,7 +35,7 @@ import {
 import { getDimensionMeta } from "@/lib/dashboard/custom-dimensions";
 import { CUSTOM_CARD_ICONS, HEATMAP_GRADIENTS, type CustomCardConfig } from "@/lib/dashboard/card-registry";
 import { useChipColors } from "@/components/chip-color-provider";
-import type { ChipColorCategory } from "@/lib/theme/chip-colors";
+import { FALLBACK_HEX, type ChipColorCategory } from "@/lib/theme/chip-colors";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AUTO_HEX, OTHER_HEX } from "@/components/dashboard/chart-palette";
 
@@ -230,14 +230,20 @@ export function CustomChartCard({
   const topN = config.topN !== undefined ? config.topN : 10;
   const displayed = applyTopN(sorted, topN);
   const chipCategory = DIMENSION_CHIP_CATEGORY[config.dimension];
-  const allWithColors = displayed.map((entry, i) => ({
-    ...entry,
-    fill: entry.label === "Other"
-      ? OTHER_HEX
-      : chipCategory
-        ? getHex(chipCategory, entry.label)
-        : AUTO_HEX[i % AUTO_HEX.length],
-  }));
+  const allWithColors = displayed.map((entry, i) => {
+    // A value with no chip colour of its own (a codec such as DCA or TRUEHD,
+    // "Unknown") keeps a palette colour, as the breakdown cards do, rather
+    // than every one of them drawing the same grey.
+    const chipHex = chipCategory ? getHex(chipCategory, entry.label) : null;
+    return {
+      ...entry,
+      fill: entry.label === "Other"
+        ? OTHER_HEX
+        : chipHex && chipHex !== FALLBACK_HEX
+          ? chipHex
+          : AUTO_HEX[i % AUTO_HEX.length],
+    };
+  });
   const chartData = allWithColors.filter((entry) => !hiddenItems.has(entry.label));
 
   return (

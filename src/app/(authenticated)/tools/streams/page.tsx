@@ -97,7 +97,7 @@ import { FadeImage } from "@/components/ui/fade-image";
 import { MediaDetailSidePanel } from "@/components/media-detail-side-panel";
 import { useMediaDetailPanel } from "@/hooks/use-media-detail-panel";
 import { sessionMediaType } from "@/lib/media/detail-panel-item";
-import { audioProfileChipLabel, qualityChips, resolutionChipLabel } from "@/lib/media/quality-chips";
+import { qualityChips, resolutionChipLabel } from "@/lib/media/quality-chips";
 import { QualityChip } from "@/components/quality-chips";
 import { formatDurationClock } from "@/lib/format";
 import { hardwareEncoder, hardwareDecoder } from "@/lib/media-server/hardware-transcode";
@@ -666,14 +666,15 @@ function SessionStreamDetails({ session }: { session: SessionWithServer }) {
                 {session.videoProfile ? ` (${session.videoProfile})` : ""}
               </ColorChip>
             )}
-            {/* The codec and the profile are separate chips, coloured as they
-                are everywhere else. */}
+            {/* A session's audio profile is the codec's own profile (Plex's
+                "lc", "ma"), not a library audio profile such as Dolby Atmos,
+                so it reads inside the codec chip rather than as one of its own. */}
             {qualityChips({ audioCodec: session.audioCodec }, "music").map((chip) => (
-              <QualityChip key={chip.category} chip={chip} />
+              <QualityChip
+                key={chip.category}
+                chip={session.audioProfile?.trim() ? { ...chip, detail: `(${session.audioProfile.trim()})` } : chip}
+              />
             ))}
-            {audioProfileChipLabel(session.audioProfile) && (
-              <QualityChip chip={{ category: "audioProfile", label: audioProfileChipLabel(session.audioProfile)! }} />
-            )}
             {session.audioChannels != null && <ColorChip>{session.audioChannels}ch</ColorChip>}
             {session.container && <ColorChip>{session.container.toUpperCase()}</ColorChip>}
             {session.bitrate != null && (

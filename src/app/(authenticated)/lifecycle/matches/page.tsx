@@ -32,7 +32,6 @@ import { qualityChips, qualitySegments } from "@/lib/media/quality-chips";
 import { useChipColors } from "@/components/chip-color-provider";
 import { type ChipColorCategory } from "@/lib/theme/chip-colors";
 import { MEDIA_TYPE_BADGE_COLORS, mediaTypeLabel } from "@/lib/theme/media-type-colors";
-import { normalizeResolutionLabel } from "@/lib/resolution";
 import { formatFileSize, formatDuration } from "@/lib/format";
 import { formatActionTypeLabel } from "@/lib/lifecycle/action-types";
 import { cn } from "@/lib/utils";
@@ -578,7 +577,13 @@ function MatchItemsCardView({
                             {show("metadata", "fileSize") && formatFileSize(item.fileSize) && <span>{formatFileSize(item.fileSize)}</span>}
                           </MetadataLine>
                         }
-                        qualityBar={qualitySegments(qualityChips(item, ruleSet.type === "MUSIC" ? "music" : "video"), getHex, (toggle) => show("badges", toggle))}
+                        qualityBar={qualitySegments(
+                          // An artist row is stored against one of its tracks, whose codec
+                          // is not the artist's, so it draws no codec segment.
+                          ruleSet.type === "MUSIC" && item.matchedEpisodes ? [] : qualityChips(item, ruleSet.type === "MUSIC" ? "music" : "video"),
+                          getHex,
+                          (toggle) => show("badges", toggle),
+                        )}
                         badges={
                           item.matchedCriteria && item.matchedCriteria.length > 0 ? (
                             <ColorChip className="border-border text-muted-foreground">

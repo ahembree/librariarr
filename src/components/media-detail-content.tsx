@@ -33,6 +33,11 @@ import { SERVER_TYPE_STYLES, DEFAULT_SERVER_STYLE } from "@/lib/server-styles";
 import { FadeImage } from "@/components/ui/fade-image";
 import type { MediaItemWithRelations } from "@/lib/types";
 
+/** The detected range, or the stream's own value when it names none. */
+function streamRangeLabel(raw: string, detected: string): string {
+  return detected === "SDR" && raw.trim().toUpperCase() !== "SDR" ? raw.trim() : detected;
+}
+
 /** A detail row's value as a quality chip, or "-" when there is none. */
 function chipValue(category: ChipColorCategory, label: string | null, raw?: string | null) {
   if (!label) return "-";
@@ -760,10 +765,12 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
                             {vs.videoRangeType && (
                               // The stream reports the server's own spelling
                               // (DOVIWithHDR10, HDR10Plus, PQ); the chip shows the
-                              // range it names, as the item's does.
+                              // range it names, as the item's does. A value that
+                              // names no range ("Unknown") keeps its own spelling
+                              // rather than reading as SDR.
                               <DetailRow
                                 label="Dynamic Range"
-                                value={chipValue("dynamicRange", detectStreamDynamicRange(vs), vs.videoRangeType)}
+                                value={chipValue("dynamicRange", streamRangeLabel(vs.videoRangeType, detectStreamDynamicRange(vs)), vs.videoRangeType)}
                               />
                             )}
                             {vs.chromaSubsampling && <DetailRow label="Chroma" value={vs.chromaSubsampling} />}
