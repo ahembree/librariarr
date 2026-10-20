@@ -495,16 +495,17 @@ function ExcludedUsersSelect({
       {selected.length > 0 && (
         <div className="flex flex-wrap gap-1">
           {selected.map((username) => (
-            <Badge key={username} variant="secondary" className="gap-1 pr-1">
+            <ColorChip key={username} className="gap-1 pl-2.5 pr-1 py-1 bg-secondary text-secondary-foreground">
               {username}
               <button
                 type="button"
                 onClick={() => remove(username)}
                 className="rounded-sm hover:bg-muted-foreground/20"
+                aria-label={`Remove ${username}`}
               >
                 <X className="h-3 w-3" />
               </button>
-            </Badge>
+            </ColorChip>
           ))}
         </div>
       )}

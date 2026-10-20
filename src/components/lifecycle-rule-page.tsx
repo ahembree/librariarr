@@ -78,7 +78,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Badge } from "@/components/ui/badge";
 import { PseudocodePanel } from "@/components/builder/pseudocode-panel";
 import { MediaCard } from "@/components/media-card";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
@@ -2213,10 +2212,7 @@ export function LifecycleRulePage({
                 {serverIds.map((id) => {
                   const server = servers.find((s) => s.id === id);
                   return (
-                    <span
-                      key={id}
-                      className="inline-flex items-center gap-1 rounded-md bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary"
-                    >
+                    <ColorChip key={id} className="gap-1 border-primary/25 bg-primary/10 text-primary">
                       {server?.name ?? id}
                       {server && <ServerTypeChip type={server.type} />}
                       <button
@@ -2226,7 +2222,7 @@ export function LifecycleRulePage({
                       >
                         <X className="h-3 w-3" />
                       </button>
-                    </span>
+                    </ColorChip>
                   );
                 })}
               </div>
@@ -2639,12 +2635,12 @@ export function LifecycleRulePage({
                       {(tagMode === "add" ? addArrTags : removeArrTags).length > 0 && (
                         <div className="flex flex-wrap gap-1.5">
                           {(tagMode === "add" ? addArrTags : removeArrTags).map((tag) => (
-                            <span
+                            <ColorChip
                               key={tag}
-                              className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs ${
+                              className={`gap-1 ${
                                 tagMode === "add"
-                                  ? "bg-green/15 text-green"
-                                  : "bg-red/15 text-red"
+                                  ? "border-green/30 bg-green-dim text-green"
+                                  : "border-red/30 bg-red-dim text-red"
                               }`}
                             >
                               {tagMode === "add" ? "+" : "-"}{tag}
@@ -2660,7 +2656,7 @@ export function LifecycleRulePage({
                               >
                                 <X className="h-3 w-3" />
                               </button>
-                            </span>
+                            </ColorChip>
                           ))}
                         </div>
                       )}
@@ -3030,19 +3026,19 @@ export function LifecycleRulePage({
               <div className="flex items-center gap-2 text-sm">
                 <span className="text-muted-foreground">—</span>
                 {previewDiffCounts.added > 0 && (
-                  <Badge variant="outline" className="border-emerald-500/50 text-emerald-400">
+                  <ColorChip className="border-green/30 bg-green-dim text-green">
                     +{previewDiffCounts.added} new
-                  </Badge>
+                  </ColorChip>
                 )}
                 {previewDiffCounts.retained > 0 && (
-                  <Badge variant="outline" className="text-muted-foreground">
+                  <ColorChip className="border-border bg-muted/40 text-muted-foreground">
                     {previewDiffCounts.retained} retained
-                  </Badge>
+                  </ColorChip>
                 )}
                 {previewDiffCounts.removed > 0 && (
-                  <Badge variant="outline" className="border-amber/50 text-amber">
+                  <ColorChip className="border-amber/30 bg-amber-dim text-amber">
                     -{previewDiffCounts.removed} removed
-                  </Badge>
+                  </ColorChip>
                 )}
               </div>
             )}
@@ -3311,14 +3307,13 @@ export function LifecycleRulePage({
                 <div className="space-y-4">
                   {/* Match indicator */}
                   <div className="flex items-center gap-2">
-                    <Badge
-                      variant={testMediaResult.matches ? "default" : "secondary"}
+                    <ColorChip
                       className={testMediaResult.matches
-                        ? "bg-green hover:bg-green text-white"
-                        : "text-muted-foreground"}
+                        ? "border-green/30 bg-green-dim text-green"
+                        : "border-border bg-muted/40 text-muted-foreground"}
                     >
                       {testMediaResult.matches ? "Matches Rules" : "Does Not Match"}
-                    </Badge>
+                    </ColorChip>
                   </div>
 
                   {/* Matched criteria badges */}
@@ -3328,23 +3323,20 @@ export function LifecycleRulePage({
                       <div className="flex flex-wrap gap-1.5">
                         {testMediaResult.matchedCriteria.map((criterion, i) => {
                           const badge = (
-                            <Badge
-                              key={i}
-                              variant="outline"
-                              className={`text-xs ${criterion.negate ? "border-red/30 text-red" : ""}`}
-                            >
+                            <ColorChip key={i} className={criterion.negate ? "border-red/30 text-red" : undefined}>
                               {criterion.groupName && (
                                 <span className="text-sky mr-1">[{criterion.groupName}]</span>
                               )}
                               {criterion.negate && <span className="text-red mr-1">NOT</span>}
                               {criterion.field} {criterion.operator} {criterion.value}
-                            </Badge>
+                            </ColorChip>
                           );
                           if (criterion.actualValue) {
                             return (
                               <TooltipProvider key={i}>
                                 <Tooltip>
-                                  <TooltipTrigger asChild>{badge}</TooltipTrigger>
+                                  {/* ColorChip takes no ref, so the trigger is a wrapper. */}
+                                  <TooltipTrigger asChild><span className="inline-flex">{badge}</span></TooltipTrigger>
                                   <TooltipContent>Actual: {criterion.actualValue}</TooltipContent>
                                 </Tooltip>
                               </TooltipProvider>

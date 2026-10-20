@@ -10,6 +10,7 @@ import { RatingChip } from "@/components/rating-chip";
 import { ServerChips } from "@/components/server-chips";
 import { FadeImage } from "@/components/ui/fade-image";
 import { QualityChips } from "@/components/quality-chips";
+import { ColorChip } from "@/components/color-chip";
 import { CACHE_WIDTH_GRID, withImageWidth } from "@/lib/image-url";
 
 export interface MediaHoverData {
@@ -171,9 +172,7 @@ export function MediaHoverPopover({
           {data.studio && <span className="truncate">{data.studio}</span>}
           {data.studio && data.contentRating && <Dot />}
           {data.contentRating && (
-            <span className="shrink-0 rounded border border-white/10 px-1 py-px text-[9.5px] leading-none">
-              {data.contentRating}
-            </span>
+            <ColorChip className="text-[10px]">{data.contentRating}</ColorChip>
           )}
         </div>
       )}

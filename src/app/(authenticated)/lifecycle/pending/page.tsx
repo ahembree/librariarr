@@ -10,7 +10,6 @@ import { EmptyState } from "@/components/empty-state";
 import { IntegrationUnreachableBanner } from "@/components/integration-unreachable-banner";
 import { useIntegrationsHealth } from "@/hooks/use-integrations-health";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { ColorChip } from "@/components/color-chip";
 import { MEDIA_TYPE_BADGE_COLORS, mediaTypeLabel } from "@/lib/theme/media-type-colors";
 import {
@@ -261,9 +260,7 @@ function VirtualizedActionTable({
                         {formatActionTypeLabel(action.actionType, action.targetQualityProfileId)}
                       </p>
                       {action.addImportExclusion && (
-                        <Badge variant="outline" className="text-[10px]">
-                          + List exclusion
-                        </Badge>
+                        <ColorChip className="bg-muted/40 text-muted-foreground">+ List exclusion</ColorChip>
                       )}
                       {action.addArrTags?.length > 0 && (
                         <div className="flex flex-wrap gap-1">
@@ -1169,9 +1166,9 @@ export default function PendingActionsPage() {
                             <ColorChip className={MEDIA_TYPE_BADGE_COLORS[group.ruleSet.type] ?? "border-border text-muted-foreground"}>
                               {mediaTypeLabel(group.ruleSet.type)}
                             </ColorChip>
-                            <Badge variant="secondary">
+                            <ColorChip className="bg-muted/40 text-muted-foreground">
                               {group.count} item{group.count !== 1 && "s"}
-                            </Badge>
+                            </ColorChip>
                             {group.ruleSet.actionType && (
                               <span className="text-xs text-muted-foreground">
                                 Action: {formatActionTypeLabel(group.ruleSet.actionType, group.ruleSet.targetQualityProfileId)}

@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { TableRowsSkeleton } from "@/components/skeletons";
 import { ColorChip } from "@/components/color-chip";
+import { Badge } from "@/components/ui/badge";
 import { ServerChips } from "@/components/server-chips";
 import { getDuplicateServerNames } from "@/lib/server-styles";
 import { ServerTypeChip } from "@/components/server-type-chip";
@@ -935,9 +936,9 @@ export default function HistoryPage() {
               <div className="flex items-center gap-3">
                 <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Watch History</h1>
                 {!loading && totalCount > 0 && (
-                  <span className="rounded-md border bg-muted/50 px-2 py-0.5 text-xs text-muted-foreground">
+                  <Badge variant="secondary">
                     {totalCount.toLocaleString()} {totalCount === 1 ? "play" : "plays"}
-                  </span>
+                  </Badge>
                 )}
               </div>
               <p className="text-muted-foreground mt-1">

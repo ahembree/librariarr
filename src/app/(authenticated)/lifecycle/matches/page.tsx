@@ -52,7 +52,6 @@ import {
   Tv,
 } from "lucide-react";
 import { TabNav, type TabNavItem } from "@/components/tab-nav";
-import { Badge } from "@/components/ui/badge";
 import { ColorChip } from "@/components/color-chip";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
 import { HoverCard, HoverCardTrigger, HoverCardContent } from "@/components/ui/hover-card";
@@ -1018,9 +1017,9 @@ export default function RuleMatchesPage() {
                         <ColorChip className={MEDIA_TYPE_BADGE_COLORS[match.ruleSet.type] ?? "border-border text-muted-foreground"}>
                           {mediaTypeLabel(match.ruleSet.type)}
                         </ColorChip>
-                        <Badge variant="secondary">
+                        <ColorChip className="bg-muted/40 text-muted-foreground">
                           {match.count} match{match.count !== 1 && "es"}
-                        </Badge>
+                        </ColorChip>
                         {match.ruleSet.actionEnabled && (
                           <span className="text-xs text-muted-foreground">
                             Action: {formatActionType(match.ruleSet.actionType, match.ruleSet.targetQualityProfileId)}

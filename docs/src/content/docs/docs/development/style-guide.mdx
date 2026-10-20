@@ -150,7 +150,7 @@ Don't switch back to `next/font/google`: it downloads the fonts from Google duri
 | Section heading | `text-xl font-bold font-display` |
 | Body text | `text-sm` (14px) — default |
 | Helper/metadata | `text-xs text-muted-foreground` |
-| Badge text | `text-xs font-medium` |
+| Chip and badge text | `text-xs font-medium` |
 | Micro text | `text-[10px]` or `text-[11px]` |
 
 ---
@@ -327,9 +327,18 @@ Eight sizes: `default` (h-9), `xs` (h-6), `sm` (h-8), `lg` (h-10), `icon` (9), `
 
 All buttons include `active:scale-[0.98]` and `transition-all duration-200`.
 
+### Chips vs Badges
+
+Two shapes, never interchangeable:
+
+- **`ColorChip`** (`src/components/color-chip.tsx`) — the rounded-rect chip (`rounded px-1.5 py-0.5 text-xs font-medium leading-none border`). Use it for **every value, status, label, tag or criterion** shown about something: quality chips (`QualityChip`), ratings (`RatingChip`), server types, media types, stream decisions, action and request statuses, Arr tags, matched criteria, API-key scopes, release markers, schedule types, a "N matches" figure in a card's meta row, and removable tokens in a picker (a server, a tag, an excluded user — keep the remove button inside the chip). Colour it with the dim tokens: `border-green/25 bg-green-dim text-green` (success, active, managed), `border-amber/25 bg-amber-dim text-amber` (pending, warning, transcode), `border-red/25 bg-red-dim text-red` (failed, expired, destructive), `border-sky/25 bg-sky-dim text-sky` (informational), `bg-muted/40 text-muted-foreground` (neutral). A plain `ColorChip` with no classes is a neutral fact (user, player, codec, bitrate; `font-mono tabular-nums` for figures).
+- **`Badge`** (shadcn, `rounded-full`) — only for a **bare count attached to a control or a heading**: the active-filter count on the Filters button, the log-level count on its dropdown, the session count beside "Active Sessions", the play count beside the History title, a group's count on a collapsible header. Also the selection summary inside a filter trigger.
+
+`ColorChip` does not forward a ref, so under a Radix `TooltipTrigger asChild` wrap it in a `<span className="inline-flex">`. Give a chip a `title` when its text abbreviates something.
+
 ### Badges
 
-Rounded-full pills with `backdrop-blur-sm` for use over images. Variants: `default`, `secondary`, `destructive`, `outline`, `ghost`, `link`.
+Rounded-full pills with `backdrop-blur-sm` for use over images. Variants: `default`, `secondary`, `destructive`, `outline`, `ghost`, `link`. See Chips vs Badges above for when a `Badge` is the right shape.
 
 ### Media Cards
 
@@ -397,7 +406,7 @@ The coloured resolution, dynamic-range, audio-profile and audio-codec chips — 
 - **Labels**: a resolution shows its standard label (`4K`, `1080P`…) and a value that maps to none its own spelling; SDR is shown like any other dynamic range; an audio codec is upper-cased; a count reads `label: n` in the chip's colour.
 - **Order**: counts follow `QUALITY_ORDER` and `AUDIO_CODEC_ORDER`, then the rest by name, with empty buckets dropped.
 - **Card bars**: `qualitySegments(chips, getHex, show)` — one segment per chip, weighted by its count, filtered by the card-display toggles. Use the exported `QualityBar` for a bar outside `MediaCard`.
-- **Every other info pill beside them is a `ColorChip` too**, never a shadcn `Badge`: neutral facts (user, player, codec, container, bitrate) are a plain `ColorChip` (`font-mono tabular-nums` for figures), a stream decision is green for a copy or direct stream and amber for a transcode, a server is coloured by its type (`SERVER_TYPE_STYLES`), and ratings are `RatingChip`. The Stream Manager's session details, the side panel's matched criteria and the Arr tags in the Integrations section follow this
+- **Every other info pill beside them is a `ColorChip` too**, never a shadcn `Badge` (see Chips vs Badges): neutral facts (user, player, codec, container, bitrate) are a plain `ColorChip` (`font-mono tabular-nums` for figures), a stream decision is green for a copy or direct stream and amber for a transcode, a server is coloured by its type (`SERVER_TYPE_STYLES`), and ratings are `RatingChip`. A resolution named outside a media item (a Seerr request's "4K") is a `QualityChip` too, so it takes the user's resolution colour.
 - **Per-stream values** (a stream's `videoRangeType`, an audio stream's profile) are the server's own spellings; colour them by the range or profile they name (`detectStreamDynamicRange`, `detectStreamAudioProfile`), with the raw value as the chip's title.
 
 ### Hover Popovers
@@ -461,22 +470,24 @@ Full-screen cinematic gradient background (the `.auth-backdrop` utility — a vi
 
 ### Log Levels
 
-| Level | Badge classes |
-|-|-|
-| DEBUG | `bg-zinc-500/20 text-zinc-400 shadow-zinc-500/10` |
-| INFO | `bg-blue-500/20 text-blue-400 shadow-blue-500/15` |
-| WARN | `bg-amber-500/20 text-amber-400 shadow-amber-500/15` |
-| ERROR | `bg-red-500/20 text-red-400 shadow-red-500/20` |
+Log levels are coloured mono text and an icon, not chips.
 
-All log level badges include a subtle `shadow-[0_0_8px]` glow matching their color.
+| Level | Text class |
+|-|-|
+| DEBUG | `text-faint` |
+| INFO | `text-sky` |
+| WARN | `text-amber` |
+| ERROR | `text-red` |
 
 ### Action Statuses
 
-| Status | Color |
+Lifecycle action statuses are `ColorChip`s.
+
+| Status | Chip classes |
 |-|-|
-| Pending | `bg-yellow-500` |
-| Completed | `bg-green-500` |
-| Failed | `bg-red-500` |
+| Pending | `bg-amber/20 text-amber border-amber/30` |
+| Completed | `bg-green/20 text-green border-green/30` |
+| Failed | `bg-red/20 text-red border-red/30` |
 
 ---
 
@@ -485,6 +496,7 @@ All log level badges include a subtle `shadow-[0_0_8px]` glow matching their col
 - **Don't use flat grey** — all dark surfaces should have the navy tint (hue ~270)
 - **Don't use HSL** — the entire color system is OKLCH for perceptual consistency
 - **Don't use generic fonts** — never fall back to Inter, Roboto, Arial, or system fonts
+- **Don't use a `Badge` for a status, label or tag** — that is a `ColorChip`; a `Badge` is only a count on a control or heading
 - **Don't edit shadcn/ui primitives** in `src/components/ui/` unless adding project-wide enhancements
 - **Don't use light mode** — the application enforces dark mode only
 - **Don't add emojis** — use Lucide icons for all iconography

@@ -20,7 +20,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
+import { ColorChip } from "@/components/color-chip";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -383,16 +383,14 @@ function ApiKeyListItem({ apiKey, onDelete }: { apiKey: ApiKeyRow; onDelete: () 
           <span className="truncate text-sm font-medium">{apiKey.name}</span>
           <code className={cn(codeClass, "text-muted-foreground")}>{apiKey.prefix}…</code>
           {expired ? (
-            <Badge variant="destructive">Expired</Badge>
+            <ColorChip className="border-red/25 bg-red-dim text-red">Expired</ColorChip>
           ) : readOnly ? (
-            <Badge variant="secondary">Read-only</Badge>
+            <ColorChip className="bg-muted/40 text-muted-foreground">Read-only</ColorChip>
           ) : (
-            <Badge variant="outline">Read &amp; write</Badge>
+            <ColorChip className="bg-muted/40 text-muted-foreground">Read &amp; write</ColorChip>
           )}
           {destructive && !expired && (
-            <Badge variant="outline" className="border-destructive/40 text-destructive">
-              Can delete media
-            </Badge>
+            <ColorChip className="border-red/25 text-red">Can delete media</ColorChip>
           )}
         </div>
         <p className="text-xs text-muted-foreground">
