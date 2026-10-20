@@ -43,6 +43,7 @@ const DIMENSION_CHIP_CATEGORY: Partial<Record<string, ChipColorCategory>> = {
   resolution: "resolution",
   dynamicRange: "dynamicRange",
   audioProfile: "audioProfile",
+  audioCodec: "audioCodec",
 };
 
 function interpolateHex(low: string, high: string, t: number): string {

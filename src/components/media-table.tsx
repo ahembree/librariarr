@@ -2,10 +2,14 @@
 
 import React, { memo, useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useChipColors } from "@/components/chip-color-provider";
-import { getChipBadgeStyle, type ChipColorCategory } from "@/lib/theme/chip-colors";
-import { ColorChip } from "@/components/color-chip";
-import { normalizeResolutionLabel } from "@/lib/resolution";
+import { QualityChip } from "@/components/quality-chips";
+import {
+  audioProfileChipLabel,
+  dynamicRangeChipLabel,
+  qualityChips,
+  resolutionChipLabel,
+  type QualityChipSpec,
+} from "@/lib/media/quality-chips";
 import {
   Table,
   TableBody,
@@ -75,19 +79,9 @@ interface ColumnDef {
   render: (item: MediaListItem) => React.ReactNode;
 }
 
-// Resolution and dynamic range colors now come from ChipColorProvider context
-
-function formatResolution(resolution: string | null): string {
-  if (!resolution) return "-";
-  const label = normalizeResolutionLabel(resolution);
-  return label === "Other" ? resolution : label;
-}
-
-// getDynamicRangeColor removed — now uses ChipColorProvider
-
-function formatDynamicRange(dr: string | null): string {
-  if (!dr || dr === "SDR") return "SDR";
-  return dr;
+/** One quality chip in a cell, or "-" when the item has no such value. */
+function chipCell(chip: QualityChipSpec | null) {
+  return chip ? <QualityChip chip={chip} /> : <span className="text-muted-foreground">-</span>;
 }
 
 const CHANNEL_LABELS: Record<number, string> = {
@@ -111,7 +105,7 @@ function formatEpisodeLabel(item: MediaListItem, isMusic: boolean): string | nul
   return formatEpisodeCode(item.seasonNumber, item.episodeNumber);
 }
 
-function buildColumns(getHex: (category: ChipColorCategory, value: string) => string): ColumnDef[] {
+function buildColumns(): ColumnDef[] {
   return [
   // Core (always title first, then contextual episode/year)
   {
@@ -143,11 +137,10 @@ function buildColumns(getHex: (category: ChipColorCategory, value: string) => st
     group: "video",
     defaultVisible: true,
     defaultWidth: 100,
-    render: (item) => (
-      <ColorChip style={getChipBadgeStyle(getHex("resolution", formatResolution(item.resolution)))}>
-        {formatResolution(item.resolution)}
-      </ColorChip>
-    ),
+    render: (item) => {
+      const label = resolutionChipLabel(item.resolution);
+      return chipCell(label ? { category: "resolution", label } : null);
+    },
   },
   {
     id: "dynamicRange",
@@ -157,12 +150,8 @@ function buildColumns(getHex: (category: ChipColorCategory, value: string) => st
     defaultVisible: true,
     defaultWidth: 90,
     render: (item) => {
-      const dr = item.dynamicRange ?? "SDR";
-      return (
-        <ColorChip style={getChipBadgeStyle(getHex("dynamicRange", dr))}>
-          {formatDynamicRange(dr)}
-        </ColorChip>
-      );
+      const label = dynamicRangeChipLabel(item.dynamicRange);
+      return chipCell(label ? { category: "dynamicRange", label } : null);
     },
   },
   {
@@ -183,15 +172,7 @@ function buildColumns(getHex: (category: ChipColorCategory, value: string) => st
     group: "audio",
     defaultVisible: true,
     defaultWidth: 130,
-    render: (item) =>
-      item.audioCodec ? (
-        <ColorChip style={getChipBadgeStyle(getHex("audioCodec", item.audioCodec))}>
-          {item.audioCodec.toUpperCase()}
-          {item.audioChannels ? ` ${item.audioChannels}ch` : ""}
-        </ColorChip>
-      ) : (
-        <span className="text-muted-foreground">-</span>
-      ),
+    render: (item) => chipCell(qualityChips(item, "music", { channels: true })[0] ?? null),
   },
   {
     id: "fileSize",
@@ -238,14 +219,10 @@ function buildColumns(getHex: (category: ChipColorCategory, value: string) => st
     group: "audio",
     defaultVisible: false,
     defaultWidth: 120,
-    render: (item) =>
-      item.audioProfile ? (
-        <ColorChip style={getChipBadgeStyle(getHex("audioProfile", item.audioProfile))}>
-          {item.audioProfile}
-        </ColorChip>
-      ) : (
-        <span className="text-muted-foreground">-</span>
-      ),
+    render: (item) => {
+      const label = audioProfileChipLabel(item.audioProfile);
+      return chipCell(label ? { category: "audioProfile", label } : null);
+    },
   },
   {
     id: "audioChannels",
@@ -424,8 +401,7 @@ const VIDEO_COLUMN_IDS = new Set([
 ]);
 
 function MediaTableInner<T extends MediaListItem>({ items, onItemClick, sortBy, sortOrder, onSort, mediaType, hideParentTitle, scrollToIndexRef, exceptedItemIds, hideServers, rowClassName, renderHoverContent }: MediaTableProps<T>) {
-  const { getHex } = useChipColors();
-  const allColumns = useMemo(() => buildColumns(getHex), [getHex]);
+  const allColumns = useMemo(() => buildColumns(), []);
   const [columnVisibility, setColumnVisibility] = useState<Record<string, boolean>>(() => getDefaultVisibility(allColumns));
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 

@@ -96,8 +96,8 @@ import { FadeImage } from "@/components/ui/fade-image";
 import { MediaDetailSidePanel } from "@/components/media-detail-side-panel";
 import { useMediaDetailPanel } from "@/hooks/use-media-detail-panel";
 import { sessionMediaType } from "@/lib/media/detail-panel-item";
-import { useChipColors } from "@/components/chip-color-provider";
-import { normalizeResolutionLabel } from "@/lib/resolution";
+import { audioProfileChipLabel, qualityChips, resolutionChipLabel } from "@/lib/media/quality-chips";
+import { QualityChip } from "@/components/quality-chips";
 import { formatDurationClock } from "@/lib/format";
 import { hardwareEncoder, hardwareDecoder } from "@/lib/media-server/hardware-transcode";
 import { formatSessionMediaTitle } from "@/lib/media-server/session-title";
@@ -588,7 +588,6 @@ function MessageSelector({
  * library has not synced.
  */
 function SessionStreamDetails({ session }: { session: SessionWithServer }) {
-  const { getBadgeStyle } = useChipColors();
   return (
     <div className="space-y-5">
       {/* Stream Info */}
@@ -648,14 +647,8 @@ function SessionStreamDetails({ session }: { session: SessionWithServer }) {
                 {session.mediaWidth}x{session.mediaHeight}
               </Badge>
             )}
-            {session.videoResolution && (
-              <Badge
-                variant="secondary"
-                className="text-[10px]"
-                style={getBadgeStyle("resolution", normalizeResolutionLabel(session.videoResolution))}
-              >
-                {normalizeResolutionLabel(session.videoResolution)}
-              </Badge>
+            {resolutionChipLabel(session.videoResolution) && (
+              <QualityChip chip={{ category: "resolution", label: resolutionChipLabel(session.videoResolution)! }} />
             )}
             {session.aspectRatio && (
               <Badge variant="secondary" className="text-[10px]">
@@ -668,15 +661,13 @@ function SessionStreamDetails({ session }: { session: SessionWithServer }) {
                 {session.videoProfile ? ` (${session.videoProfile})` : ""}
               </Badge>
             )}
-            {session.audioCodec && (
-              <Badge
-                variant="secondary"
-                className="text-[10px]"
-                style={session.audioProfile ? getBadgeStyle("audioProfile", session.audioProfile) : undefined}
-              >
-                Audio: {session.audioCodec.toUpperCase()}
-                {session.audioProfile ? ` (${session.audioProfile})` : ""}
-              </Badge>
+            {/* The codec and the profile are separate chips, coloured as they
+                are everywhere else. */}
+            {qualityChips({ audioCodec: session.audioCodec }, "music").map((chip) => (
+              <QualityChip key={chip.category} chip={chip} />
+            ))}
+            {audioProfileChipLabel(session.audioProfile) && (
+              <QualityChip chip={{ category: "audioProfile", label: audioProfileChipLabel(session.audioProfile)! }} />
             )}
             {session.audioChannels != null && (
               <Badge variant="secondary" className="text-[10px]">
@@ -786,7 +777,6 @@ function SessionCard({
   onTerminate: (session: SessionWithServer) => void;
   onOpenDetail: (session: SessionWithServer) => void;
 }) {
-  const { getBadgeStyle } = useChipColors();
   const stateConfig = getStateConfig(session.player.state);
   const StateIcon = stateConfig.icon;
 
@@ -802,9 +792,7 @@ function SessionCard({
     (session.transcoding.videoDecision === "transcode" ||
       session.transcoding.audioDecision === "transcode");
   const { primary, secondary } = sessionTitleParts(session);
-  const resolution = session.videoResolution
-    ? normalizeResolutionLabel(session.videoResolution)
-    : null;
+  const resolution = resolutionChipLabel(session.videoResolution);
   const eta = formatEstimatedEnd(session);
   const playerMeta = [session.player.product, session.player.platform, session.player.address]
     .filter(Boolean)
@@ -926,7 +914,7 @@ function SessionCard({
             {streamInfo.label}
           </ColorChip>
           {resolution && (
-            <ColorChip style={getBadgeStyle("resolution", resolution)}>{resolution}</ColorChip>
+            <QualityChip chip={{ category: "resolution", label: resolution }} />
           )}
           <ColorChip className="gap-1">
             {session.player.local ? (
@@ -1007,7 +995,6 @@ function SessionCard({
 // --- Main Page ---
 
 export default function StreamManagerPage() {
-  const { getBadgeStyle } = useChipColors();
   const [sessions, setSessions] = useState<SessionWithServer[]>([]);
   const [loading, setLoading] = useState(true);
   const [terminating, setTerminating] = useState(false);

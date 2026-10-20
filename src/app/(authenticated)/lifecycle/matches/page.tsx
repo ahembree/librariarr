@@ -28,6 +28,7 @@ import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { CardSizeControl } from "@/components/card-size-control";
 import { CardDisplayControl } from "@/components/card-display-control";
 import { MetadataLine } from "@/components/metadata-line";
+import { qualityChips, qualitySegments } from "@/lib/media/quality-chips";
 import { useChipColors } from "@/components/chip-color-provider";
 import { type ChipColorCategory } from "@/lib/theme/chip-colors";
 import { MEDIA_TYPE_BADGE_COLORS, mediaTypeLabel } from "@/lib/theme/media-type-colors";
@@ -109,12 +110,6 @@ interface RuleSetMatch {
   };
   items: MatchedMediaItem[];
   count: number;
-}
-
-function formatResolution(resolution: string | null): string {
-  if (!resolution) return "";
-  const label = normalizeResolutionLabel(resolution);
-  return label === "Other" ? resolution : label;
 }
 
 interface MatchItemsViewProps {
@@ -409,6 +404,7 @@ function MatchItemsTableView({
                       resolution: item.resolution,
                       dynamicRange: item.dynamicRange,
                       audioProfile: item.audioProfile,
+                      audioCodec: ruleSet.type === "MUSIC" && !item.matchedEpisodes ? item.audioCodec : undefined,
                       fileSize: item.fileSize,
                       genres: item.genres,
                       studio: item.studio,
@@ -565,6 +561,7 @@ function MatchItemsCardView({
                               resolution: item.resolution,
                               dynamicRange: item.dynamicRange,
                               audioProfile: item.audioProfile,
+                              audioCodec: ruleSet.type === "MUSIC" && !item.matchedEpisodes ? item.audioCodec : undefined,
                               fileSize: item.fileSize,
                               genres: item.genres,
                               studio: item.studio,
@@ -582,18 +579,7 @@ function MatchItemsCardView({
                             {show("metadata", "fileSize") && formatFileSize(item.fileSize) && <span>{formatFileSize(item.fileSize)}</span>}
                           </MetadataLine>
                         }
-                        qualityBar={
-                          show("badges", "resolution") || show("badges", "dynamicRange")
-                            ? [
-                                ...(show("badges", "resolution") && item.resolution
-                                  ? [{ color: getHex("resolution", formatResolution(item.resolution)), weight: 1, label: formatResolution(item.resolution) }]
-                                  : []),
-                                ...(show("badges", "dynamicRange") && item.dynamicRange && item.dynamicRange !== "SDR"
-                                  ? [{ color: getHex("dynamicRange", item.dynamicRange), weight: 1, label: item.dynamicRange }]
-                                  : []),
-                              ]
-                            : undefined
-                        }
+                        qualityBar={qualitySegments(qualityChips(item, ruleSet.type === "MUSIC" ? "music" : "video"), getHex, (toggle) => show("badges", toggle))}
                         badges={
                           item.matchedCriteria && item.matchedCriteria.length > 0 ? (
                             <ColorChip className="border-border text-muted-foreground">

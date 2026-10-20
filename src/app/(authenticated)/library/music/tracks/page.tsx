@@ -8,6 +8,7 @@ import { MediaFilters } from "@/components/media-filters";
 import { sameFilters } from "@/lib/filters/same-filters";
 import { MediaCard, CARD_CONTENT_HEIGHT, PRIORITY_ROWS } from "@/components/media-card";
 import { useChipColors } from "@/components/chip-color-provider";
+import { qualityChips, qualitySegments } from "@/lib/media/quality-chips";
 import { Music, ListMusic, Clock, HardDrive } from "lucide-react";
 import { LibraryToolbar } from "@/components/library-toolbar";
 import type { MediaListItem } from "@/lib/types";
@@ -247,7 +248,7 @@ export default function AllTracksPage() {
                 resolution: item.resolution,
                 dynamicRange: item.dynamicRange,
                 audioProfile: item.audioProfile,
-                audioCodecCounts: item.audioCodec ? { [item.audioCodec.toUpperCase()]: 1 } : undefined,
+                audioCodec: item.audioCodec,
                 fileSize: item.fileSize,
                 genres: item.genres,
                 studio: item.studio,
@@ -290,11 +291,7 @@ export default function AllTracksPage() {
                         fallbackIcon="music"
                         href={`/library/music/track/${track.id}?from=${encodeURIComponent("/library/music/tracks")}`}
                         onClick={markChildNavigation}
-                        qualityBar={
-                          track.audioCodec
-                            ? [{ color: getHex("audioCodec", track.audioCodec), weight: 1, label: track.audioCodec }]
-                            : undefined
-                        }
+                        qualityBar={qualitySegments(qualityChips(track, "music"), getHex, (toggle) => show("badges", toggle))}
                         hoverContent={
                           <MediaHoverPopover
                             summaryUrl={`/api/media/${track.id}`}
@@ -310,7 +307,7 @@ export default function AllTracksPage() {
                               resolution: track.resolution,
                               dynamicRange: track.dynamicRange,
                               audioProfile: track.audioProfile,
-                              audioCodecCounts: track.audioCodec ? { [track.audioCodec.toUpperCase()]: 1 } : undefined,
+                              audioCodec: track.audioCodec,
                               fileSize: track.fileSize,
                               genres: track.genres,
                               studio: track.studio,

@@ -43,6 +43,7 @@ import {
   Trash2,
   Tv,
 } from "lucide-react";
+import { normalizeResolutionLabel } from "@/lib/resolution";
 import { formatEpisodeTitle } from "@/lib/media/display-title";
 
 interface ExceptionItem {
@@ -69,6 +70,7 @@ interface ExceptionItem {
     resolution: string | null;
     dynamicRange: string | null;
     audioProfile: string | null;
+    audioCodec: string | null;
     fileSize: string | null;
     genres: string[] | null;
     studio: string | null;
@@ -116,6 +118,10 @@ interface GroupedExceptionRow {
   lastPlayedAt: string | null;
   /** Plays summed across the group items. */
   playCount: number;
+  /** Items per resolution label (series rows). */
+  qualityCounts: Record<string, number>;
+  /** Items per audio codec (music rows). */
+  audioCodecCounts: Record<string, number>;
   /** Earliest addedAt across group items. */
   addedAt: string | null;
   /** Unique servers that hold items in this group. */
@@ -146,6 +152,8 @@ const TABS: { value: TabType; label: string; icon: typeof Film }[] = [
 function computeAggregates(items: ExceptionItem[]) {
   let totalSize = BigInt(0);
   let playCount = 0;
+  const qualityCounts: Record<string, number> = {};
+  const audioCodecCounts: Record<string, number> = {};
   let lastPlayedAt: string | null = null;
   let addedAt: string | null = null;
   const serverMap = new Map<string, ServerInfo>();
@@ -155,6 +163,11 @@ function computeAggregates(items: ExceptionItem[]) {
       totalSize += BigInt(e.mediaItem.fileSize);
     }
     playCount += e.mediaItem.playCount ?? 0;
+    // The buckets the library's own aggregates use.
+    const quality = normalizeResolutionLabel(e.mediaItem.resolution);
+    qualityCounts[quality] = (qualityCounts[quality] ?? 0) + 1;
+    const codec = e.mediaItem.audioCodec ? e.mediaItem.audioCodec.toUpperCase() : "Unknown";
+    audioCodecCounts[codec] = (audioCodecCounts[codec] ?? 0) + 1;
     if (e.mediaItem.lastPlayedAt) {
       if (!lastPlayedAt || e.mediaItem.lastPlayedAt > lastPlayedAt) {
         lastPlayedAt = e.mediaItem.lastPlayedAt;
@@ -178,6 +191,8 @@ function computeAggregates(items: ExceptionItem[]) {
   return {
     totalSize: totalSize > 0 ? totalSize.toString() : null,
     playCount,
+    qualityCounts,
+    audioCodecCounts,
     lastPlayedAt,
     addedAt,
     servers: [...serverMap.values()].sort((a, b) =>
@@ -204,6 +219,8 @@ function groupExceptions(
         year: e.mediaItem.year,
         totalSize: e.mediaItem.fileSize,
         playCount: e.mediaItem.playCount,
+        qualityCounts: {},
+        audioCodecCounts: {},
         lastPlayedAt: e.mediaItem.lastPlayedAt,
         addedAt: e.mediaItem.addedAt,
         servers: ms
@@ -569,9 +586,12 @@ export default function LifecycleExceptionsPage() {
             studio: row.mediaItem.studio,
             seasonCount: row.seasonCount,
             episodeCount: row.itemCount,
-            resolution: row.mediaItem.resolution,
-            dynamicRange: row.mediaItem.dynamicRange,
-            audioProfile: row.mediaItem.audioProfile,
+            // One excepted episode is that episode; a group's own quality
+            // values would be one episode's.
+            resolution: row.itemCount === 1 ? row.mediaItem.resolution : undefined,
+            dynamicRange: row.itemCount === 1 ? row.mediaItem.dynamicRange : undefined,
+            audioProfile: row.itemCount === 1 ? row.mediaItem.audioProfile : undefined,
+            qualityCounts: row.itemCount === 1 ? undefined : row.qualityCounts,
             fileSize: row.totalSize,
             playCount: row.playCount,
             lastPlayedAt: row.lastPlayedAt,
@@ -600,9 +620,8 @@ export default function LifecycleExceptionsPage() {
           studio: row.mediaItem.studio,
           albumCount: row.albumCount,
           trackCount: row.itemCount,
-          resolution: row.mediaItem.resolution,
-          dynamicRange: row.mediaItem.dynamicRange,
-          audioProfile: row.mediaItem.audioProfile,
+          // An album or artist row is a group: its codecs, counted.
+          audioCodecCounts: row.audioCodecCounts,
           fileSize: row.totalSize,
           playCount: row.playCount,
           lastPlayedAt: row.lastPlayedAt,

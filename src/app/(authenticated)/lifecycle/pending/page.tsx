@@ -48,6 +48,8 @@ import {
   XCircle,
 } from "lucide-react";
 import { MediaCard } from "@/components/media-card";
+import { useChipColors } from "@/components/chip-color-provider";
+import { qualityChips, qualitySegments } from "@/lib/media/quality-chips";
 import { useCardSize, estimateContentWidth } from "@/hooks/use-card-size";
 import { CardSizeControl } from "@/components/card-size-control";
 import { formatDuration, formatFileSize } from "@/lib/format";
@@ -98,6 +100,7 @@ interface ActionItem {
     resolution?: string | null;
     dynamicRange?: string | null;
     audioProfile?: string | null;
+    audioCodec?: string | null;
     fileSize?: string | null;
     genres?: string[] | null;
     studio?: string | null;
@@ -422,9 +425,12 @@ function VirtualizedActionTable({
                         ratingImage: action.mediaItem.ratingImage,
                         audienceRatingImage: action.mediaItem.audienceRatingImage,
                         duration: action.mediaItem.matchedEpisodes ? undefined : action.mediaItem.duration,
-                        resolution: action.mediaItem.resolution,
-                        dynamicRange: action.mediaItem.dynamicRange,
-                        audioProfile: action.mediaItem.audioProfile,
+                        // A grouped row's own quality values are one episode's or
+                        // track's, never the group's.
+                        resolution: action.mediaItem.matchedEpisodes ? undefined : action.mediaItem.resolution,
+                        dynamicRange: action.mediaItem.matchedEpisodes ? undefined : action.mediaItem.dynamicRange,
+                        audioProfile: action.mediaItem.matchedEpisodes ? undefined : action.mediaItem.audioProfile,
+                        audioCodec: action.mediaItem.type === "MUSIC" && !action.mediaItem.matchedEpisodes ? action.mediaItem.audioCodec : undefined,
                         fileSize: action.mediaItem.fileSize,
                         genres: action.mediaItem.genres,
                         studio: action.mediaItem.studio,
@@ -468,6 +474,7 @@ function PendingActionCardGrid({
 }) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const { columns: actualColumns } = useCardSize();
+  const { getHex } = useChipColors();
   const isMusic = ruleSetType === "MUSIC";
   const isMovie = ruleSetType === "MOVIE";
   const fallbackIcon = isMovie ? "movie" as const : isMusic ? "music" as const : "series" as const;
@@ -572,9 +579,10 @@ function PendingActionCardGrid({
                               ratingImage: mi.ratingImage,
                               audienceRatingImage: mi.audienceRatingImage,
                               duration: mi.matchedEpisodes ? undefined : mi.duration,
-                              resolution: mi.resolution,
-                              dynamicRange: mi.dynamicRange,
-                              audioProfile: mi.audioProfile,
+                              resolution: mi.matchedEpisodes ? undefined : mi.resolution,
+                              dynamicRange: mi.matchedEpisodes ? undefined : mi.dynamicRange,
+                              audioProfile: mi.matchedEpisodes ? undefined : mi.audioProfile,
+                              audioCodec: mi.type === "MUSIC" && !mi.matchedEpisodes ? mi.audioCodec : undefined,
                               fileSize: mi.fileSize,
                               genres: mi.genres,
                               studio: mi.studio,
@@ -593,6 +601,10 @@ function PendingActionCardGrid({
                             {formatDuration(mi.duration ?? null) && <span>{formatDuration(mi.duration ?? null)}</span>}
                             {formatFileSize(mi.fileSize ?? null) && <span>{formatFileSize(mi.fileSize ?? null)}</span>}
                           </MetadataLine>
+                        }
+                        qualityBar={
+                          // A grouped row's own values are one episode's or track's.
+                          mi.matchedEpisodes ? undefined : qualitySegments(qualityChips(mi, isMusic ? "music" : "video"), getHex)
                         }
                         badges={
                           <ColorChip className={STATUS_COLORS[action.status] || "bg-muted text-muted-foreground"}>

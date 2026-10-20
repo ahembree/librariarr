@@ -4,6 +4,7 @@ import { useState, memo } from "react";
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
+import type { QualitySegment } from "@/lib/media/quality-chips";
 import { Card } from "@/components/ui/card";
 import { Film, Tv, Music, Info } from "lucide-react";
 import { ServerChips } from "@/components/server-chips";
@@ -23,10 +24,28 @@ interface ServerPresence {
   serverType: string;
 }
 
-interface QualitySegment {
-  color: string;
-  weight: number;
-  label?: string;
+/**
+ * The thin coloured bar under a card's artwork, one segment per quality chip
+ * (`qualitySegments` in `src/lib/media/quality-chips.ts`). Rendered even when
+ * empty so a card keeps its height in a virtualized grid.
+ */
+export function QualityBar({ segments, className }: { segments?: QualitySegment[]; className?: string }) {
+  return (
+    <div className={cn("flex w-full shrink-0 gap-1 px-2 py-1 bg-card", className)} aria-hidden="true">
+      {segments && segments.length > 0 ? (
+        segments.map((seg, i) => (
+          <div
+            key={i}
+            className="h-1 min-w-1 rounded-full"
+            style={{ backgroundColor: seg.color, flex: seg.weight }}
+            title={seg.label}
+          />
+        ))
+      ) : (
+        <div className="h-1" />
+      )}
+    </div>
+  );
 }
 
 /** Fixed height of the text block under the poster, in px. Exported so the
@@ -136,17 +155,7 @@ export const MediaCard = memo(function MediaCard({
       </div>
 
       {/* Quality bar — always rendered for consistent card height in virtualizer */}
-      <div className="flex w-full shrink-0 gap-1 px-2 py-1 bg-card" aria-hidden="true">
-        {qualityBar && qualityBar.length > 0 && qualityBar.map((seg, i) => (
-          <div
-            key={i}
-            className="h-1 min-w-1 rounded-full"
-            style={{ backgroundColor: seg.color, flex: seg.weight }}
-            title={seg.label}
-          />
-        ))}
-        {(!qualityBar || qualityBar.length === 0) && <div className="h-1" />}
-      </div>
+      <QualityBar segments={qualityBar} />
 
       {/* Content block — fixed height for virtualizer stability:
           title (2 lines reserved), stacked icon metadata rows, footer chips. */}

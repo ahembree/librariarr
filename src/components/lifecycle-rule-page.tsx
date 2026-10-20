@@ -87,6 +87,7 @@ import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { CardSizeControl } from "@/components/card-size-control";
 import { CardDisplayControl } from "@/components/card-display-control";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
+import { qualityChips, qualitySegments } from "@/lib/media/quality-chips";
 import { useChipColors } from "@/components/chip-color-provider";
 import type { ChipColorCategory } from "@/lib/theme/chip-colors";
 import { normalizeResolutionLabel } from "@/lib/resolution";
@@ -305,12 +306,6 @@ interface LifecycleRulePageProps {
   scopeConfig?: ScopeConfig;
   /** When true, skips outer padding and page title (used when embedded in the unified rules page) */
   embedded?: boolean;
-}
-
-function formatResolution(resolution: string | null): string {
-  if (!resolution) return "";
-  const label = normalizeResolutionLabel(resolution);
-  return label === "Other" ? resolution : label;
 }
 
 const CARD_GAP = 16;
@@ -532,6 +527,7 @@ function PreviewCardGrid({
                               resolution: item.resolution,
                               dynamicRange: item.dynamicRange,
                               audioProfile: item.audioProfile,
+                              audioCodec: mediaType === "MUSIC" && !item.matchedEpisodes ? item.audioCodec : undefined,
                               fileSize: item.fileSize,
                               genres: item.genres,
                               studio: item.studio,
@@ -549,21 +545,7 @@ function PreviewCardGrid({
                             {show("metadata", "fileSize") && formatFileSize(item.fileSize) && <MetadataItem icon={<HardDrive />}>{formatFileSize(item.fileSize)}</MetadataItem>}
                           </MetadataLine>
                         }
-                        qualityBar={
-                          show("badges", "resolution") || show("badges", "dynamicRange") || show("badges", "audioProfile")
-                            ? [
-                                ...(show("badges", "resolution") && item.resolution
-                                  ? [{ color: getHex("resolution", formatResolution(item.resolution)), weight: 1, label: formatResolution(item.resolution) }]
-                                  : []),
-                                ...(show("badges", "dynamicRange") && item.dynamicRange && item.dynamicRange !== "SDR"
-                                  ? [{ color: getHex("dynamicRange", item.dynamicRange), weight: 1, label: item.dynamicRange }]
-                                  : []),
-                                ...(show("badges", "audioProfile") && item.audioProfile
-                                  ? [{ color: getHex("audioProfile", item.audioProfile), weight: 1, label: item.audioProfile }]
-                                  : []),
-                              ]
-                            : undefined
-                        }
+                        qualityBar={qualitySegments(qualityChips(item, mediaType === "MUSIC" ? "music" : "video"), getHex, (toggle) => show("badges", toggle))}
                         servers={showServers ? item.servers : undefined}
                       />
                     </div>
@@ -3131,6 +3113,7 @@ export function LifecycleRulePage({
                     resolution: item.resolution,
                     dynamicRange: item.dynamicRange,
                     audioProfile: item.audioProfile,
+                    audioCodec: mediaType === "MUSIC" && !item.matchedEpisodes ? item.audioCodec : undefined,
                     fileSize: item.fileSize,
                     genres: item.genres,
                     studio: item.studio,

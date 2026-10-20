@@ -26,7 +26,7 @@ import { getDuplicateServerNames } from "@/lib/server-styles";
 import { ServerTypeChip } from "@/components/server-type-chip";
 import { LazyMediaHoverPopover } from "@/components/lazy-media-hover-popover";
 import { useRealtime } from "@/hooks/use-realtime";
-import type { MediaHoverData } from "@/components/media-hover-popover";
+import { hoverDataFromRecord, type MediaHoverData } from "@/components/media-hover-popover";
 
 interface RecentItem {
   id: string;
@@ -441,7 +441,7 @@ export function RecentlyAdded({
                   key={item.groupKey}
                   fetchUrl={`/api/media/${item.id}`}
                   extractData={(json) => {
-                    const data = (json as { item: MediaHoverData }).item;
+                    const data = hoverDataFromRecord((json as { item: MediaHoverData }).item);
                     return item.type === "MOVIE"
                       ? data
                       : { ...data, title: formatEpisode(item) };

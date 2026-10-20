@@ -6,7 +6,8 @@ import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useLocalStorage } from "@/hooks/use-local-storage";
 import { cn } from "@/lib/utils";
 import { useChipColors } from "@/components/chip-color-provider";
-import { AUDIO_CODEC_ORDER } from "@/lib/theme/chip-colors";
+import { QualityChip } from "@/components/quality-chips";
+import { qualityChips, qualitySegments } from "@/lib/media/quality-chips";
 import { MediaDetailHero } from "@/components/media-detail-hero";
 import { MediaTable } from "@/components/media-table";
 import { MediaCard } from "@/components/media-card";
@@ -31,7 +32,7 @@ const NUMERIC_STRING_FIELDS = new Set(["fileSize"]);
 export default function AlbumDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
-  const { getBadgeStyle, getHex } = useChipColors();
+  const { getHex } = useChipColors();
   const { show, setVisible, prefs } = useCardDisplay("MUSIC_TRACKS");
   const { size, setSize, gridStyle } = useCardSize();
   const [item, setItem] = useState<(MediaItemWithRelations & { albumTitle?: string | null }) | null>(null);
@@ -166,14 +167,9 @@ export default function AlbumDetailPage() {
       }
       badges={
         <>
-          {[
-            ...AUDIO_CODEC_ORDER.filter((c) => codecCounts[c]).map((c) => [c, codecCounts[c]] as const),
-            ...Object.entries(codecCounts).filter(([c]) => !(AUDIO_CODEC_ORDER as readonly string[]).includes(c)),
-          ].map(([codec, count]) => (
-              <ColorChip key={codec} style={getBadgeStyle("audioCodec", codec)}>
-                {codec}: {count}
-              </ColorChip>
-            ))}
+          {qualityChips({ audioCodecCounts: codecCounts }, "music").map((chip) => (
+            <QualityChip key={chip.label} chip={chip} />
+          ))}
           {totalSize > 0 && (
             <ColorChip className="border-border text-muted-foreground">{formatFileSize(totalSize.toString())}</ColorChip>
           )}
@@ -262,7 +258,7 @@ export default function AlbumDetailPage() {
                     resolution: track.resolution,
                     dynamicRange: track.dynamicRange,
                     audioProfile: track.audioProfile,
-                    audioCodecCounts: track.audioCodec ? { [track.audioCodec.toUpperCase()]: 1 } : undefined,
+                    audioCodec: track.audioCodec,
                     fileSize: track.fileSize,
                     genres: track.genres,
                     studio: track.studio,
@@ -299,7 +295,7 @@ export default function AlbumDetailPage() {
                         resolution: t.resolution,
                         dynamicRange: t.dynamicRange,
                         audioProfile: t.audioProfile,
-                        audioCodecCounts: t.audioCodec ? { [t.audioCodec.toUpperCase()]: 1 } : undefined,
+                        audioCodec: t.audioCodec,
                         fileSize: t.fileSize,
                         genres: t.genres,
                         studio: t.studio,
@@ -319,11 +315,7 @@ export default function AlbumDetailPage() {
                       {show("metadata", "fileSize") && formatFileSize(t.fileSize) && <MetadataItem icon={<HardDrive />}>{formatFileSize(t.fileSize)}</MetadataItem>}
                     </MetadataLine>
                   }
-                  qualityBar={
-                    show("badges", "audioCodec") && t.audioCodec
-                      ? [{ color: getHex("audioCodec", t.audioCodec.toUpperCase()), weight: 1, label: t.audioCodec.toUpperCase() }]
-                      : undefined
-                  }
+                  qualityBar={qualitySegments(qualityChips(t, "music"), getHex, (toggle) => show("badges", toggle))}
                 />
               ))}
             </div>

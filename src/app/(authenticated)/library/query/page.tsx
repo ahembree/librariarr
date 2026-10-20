@@ -72,10 +72,17 @@ import { MediaHoverPopover } from "@/components/media-hover-popover";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { CardSizeControl } from "@/components/card-size-control";
 import { useCardSize, estimateContentWidth } from "@/hooks/use-card-size";
+import {
+  audioProfileChipLabel,
+  dynamicRangeChipLabel,
+  qualityChips,
+  qualitySegments,
+  resolutionChipLabel,
+} from "@/lib/media/quality-chips";
+import { QualityChip } from "@/components/quality-chips";
 import { useChipColors } from "@/components/chip-color-provider";
 import { useServers } from "@/hooks/use-servers";
 import { formatFileSize, formatDuration, formatBytesNum } from "@/lib/format";
-import { normalizeResolutionLabel } from "@/lib/resolution";
 import { formatEpisodeTitle, formatMediaItemTitle } from "@/lib/media/display-title";
 import { generateId } from "@/lib/utils";
 import { MEDIA_TYPE_BADGE_COLORS, mediaTypeLabel } from "@/lib/theme/media-type-colors";
@@ -127,6 +134,7 @@ interface QueryResultItem {
   dynamicRange: string | null;
   videoCodec: string | null;
   audioCodec: string | null;
+  audioChannels?: number | null;
   audioProfile: string | null;
   container: string | null;
   fileSize: string | null;
@@ -231,12 +239,6 @@ function queryHasContent(def: QueryDefinition, activeQueryId: string | null): bo
   );
 }
 
-function formatResolution(res: string | null) {
-  if (!res) return "";
-  const label = normalizeResolutionLabel(res);
-  return label === "Other" ? res : label;
-}
-
 /** Aligned label + control row used inside the Query Scope card. */
 function ScopeRow({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -303,7 +305,7 @@ export default function QueryPage() {
   // Disabled servers are never queried (the engine scopes to enabled ones), so
   // offering them in the picker would only ever return nothing.
   const queryServers = useMemo(() => servers.filter((s) => s.enabled), [servers]);
-  const { getHex, getBadgeStyle } = useChipColors();
+  const { getHex } = useChipColors();
   const detailPanel = useMediaDetailPanel();
 
   // Result selection (for triggering ad-hoc lifecycle actions)
@@ -623,13 +625,8 @@ export default function QueryPage() {
       defaultVisible: true,
       accessor: (item) => {
         if (item.matchedEpisodes != null) return "-";
-        const label = formatResolution(item.resolution);
-        if (!label) return "-";
-        return (
-          <ColorChip style={getBadgeStyle("resolution", label)}>
-            {label}
-          </ColorChip>
-        );
+        const label = resolutionChipLabel(item.resolution);
+        return label ? <QualityChip chip={{ category: "resolution", label }} /> : "-";
       },
       sortValue: (item) => item.resolution,
     },
@@ -651,13 +648,8 @@ export default function QueryPage() {
       defaultVisible: true,
       accessor: (item) => {
         if (item.matchedEpisodes != null) return "-";
-        const dr = item.dynamicRange;
-        if (!dr) return "-";
-        return (
-          <ColorChip style={getBadgeStyle("dynamicRange", dr)}>
-            {dr}
-          </ColorChip>
-        );
+        const label = dynamicRangeChipLabel(item.dynamicRange);
+        return label ? <QualityChip chip={{ category: "dynamicRange", label }} /> : "-";
       },
       sortValue: (item) => item.dynamicRange,
     },
@@ -669,13 +661,8 @@ export default function QueryPage() {
       defaultVisible: true,
       accessor: (item) => {
         if (item.matchedEpisodes != null) return "-";
-        const codec = item.audioCodec;
-        if (!codec) return "-";
-        return (
-          <ColorChip style={getBadgeStyle("audioCodec", codec)}>
-            {codec}
-          </ColorChip>
-        );
+        const chip = qualityChips(item, "music", { channels: true })[0];
+        return chip ? <QualityChip chip={chip} /> : "-";
       },
       sortValue: (item) => item.audioCodec,
     },
@@ -687,13 +674,8 @@ export default function QueryPage() {
       defaultVisible: false,
       accessor: (item) => {
         if (item.matchedEpisodes != null) return "-";
-        const ap = item.audioProfile as string | null;
-        if (!ap) return "-";
-        return (
-          <ColorChip style={getBadgeStyle("audioProfile", ap)}>
-            {ap}
-          </ColorChip>
-        );
+        const label = audioProfileChipLabel(item.audioProfile);
+        return label ? <QualityChip chip={{ category: "audioProfile", label }} /> : "-";
       },
       sortValue: (item) => item.audioProfile as string | null,
     },
@@ -752,7 +734,7 @@ export default function QueryPage() {
       },
       sortValue: (item) => item.servers?.[0]?.serverName ?? item.library?.mediaServer?.name ?? null,
     },
-  ], [getBadgeStyle]);
+  ], []);
 
   // Criterion columns: every field a query can filter on (beyond the fixed
   // columns above) can be shown, its values loaded on demand for the rows on
@@ -1943,6 +1925,7 @@ export default function QueryPage() {
                       resolution: item.matchedEpisodes != null ? undefined : item.resolution,
                       dynamicRange: item.matchedEpisodes != null ? undefined : item.dynamicRange,
                       audioProfile: item.matchedEpisodes != null ? undefined : item.audioProfile,
+                      audioCodec: item.type === "MUSIC" && item.matchedEpisodes == null ? item.audioCodec : undefined,
                       seasonCount: item.matchedEpisodes != null ? item.seasonCount : undefined,
                       episodeCount: item.matchedEpisodes != null ? item.matchedEpisodes : undefined,
                       fileSize: item.fileSize,
@@ -2034,15 +2017,7 @@ export default function QueryPage() {
                                   {mediaTypeLabel(item.type)}
                                 </ColorChip>
                               }
-                              qualityBar={
-                                item.matchedEpisodes == null
-                                  ? [
-                                      ...(item.resolution ? [{ color: getHex("resolution", formatResolution(item.resolution)), weight: 1, label: formatResolution(item.resolution) }] : []),
-                                      ...(item.dynamicRange && item.dynamicRange !== "SDR" ? [{ color: getHex("dynamicRange", item.dynamicRange), weight: 1, label: item.dynamicRange }] : []),
-                                      ...(item.audioProfile ? [{ color: getHex("audioProfile", item.audioProfile), weight: 1, label: item.audioProfile }] : []),
-                                    ]
-                                  : undefined
-                              }
+                              qualityBar={qualitySegments(qualityChips(item, item.type === "MUSIC" ? "music" : "video"), getHex)}
                               hoverContent={
                                 <MediaHoverPopover
                                   data={{
@@ -2058,6 +2033,7 @@ export default function QueryPage() {
                                     resolution: item.matchedEpisodes != null ? undefined : item.resolution,
                                     dynamicRange: item.matchedEpisodes != null ? undefined : item.dynamicRange,
                                     audioProfile: item.matchedEpisodes != null ? undefined : item.audioProfile,
+                                    audioCodec: item.type === "MUSIC" && item.matchedEpisodes == null ? item.audioCodec : undefined,
                                     seasonCount: item.matchedEpisodes != null ? item.seasonCount : undefined,
                                     episodeCount: item.matchedEpisodes != null ? item.matchedEpisodes : undefined,
                                     fileSize: item.fileSize,

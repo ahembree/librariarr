@@ -7,6 +7,8 @@ import { MediaDetailHero } from "@/components/media-detail-hero";
 import { MediaDetailContent } from "@/components/media-detail-content";
 import { PlayHistory } from "@/components/play-history";
 import { ColorChip } from "@/components/color-chip";
+import { QualityChip } from "@/components/quality-chips";
+import { qualityChips } from "@/lib/media/quality-chips";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatFileSize, formatDuration } from "@/lib/format";
 import type { MediaItemWithRelations } from "@/lib/types";
@@ -94,12 +96,9 @@ export default function TrackDetailPage() {
       }
       badges={
         <>
-          {item.audioCodec && (
-            <ColorChip className="border-border text-muted-foreground">
-              {item.audioCodec.toUpperCase()}
-              {item.audioChannels ? ` ${item.audioChannels}ch` : ""}
-            </ColorChip>
-          )}
+          {qualityChips(item, "music", { channels: true }).map((chip) => (
+            <QualityChip key={chip.category} chip={chip} />
+          ))}
           {item.fileSize && (
             <ColorChip className="border-border text-muted-foreground">{formatFileSize(item.fileSize)}</ColorChip>
           )}

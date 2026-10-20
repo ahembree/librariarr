@@ -1,9 +1,16 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { useChipColors } from "@/components/chip-color-provider";
 import { cn } from "@/lib/utils";
-import { normalizeResolutionLabel } from "@/lib/resolution";
+import {
+  audioCodecChipLabel,
+  audioProfileChipLabel,
+  dynamicRangeChipLabel,
+  resolutionChipLabel,
+} from "@/lib/media/quality-chips";
+import { detectStreamAudioProfile, detectStreamDynamicRange } from "@/lib/rules/stream-detection";
+import { QualityChip } from "@/components/quality-chips";
+import type { ChipColorCategory } from "@/lib/theme/chip-colors";
 import { ColorChip } from "@/components/color-chip";
 import { Separator } from "@/components/ui/separator";
 import {
@@ -26,10 +33,15 @@ import { SERVER_TYPE_STYLES, DEFAULT_SERVER_STYLE } from "@/lib/server-styles";
 import { FadeImage } from "@/components/ui/fade-image";
 import type { MediaItemWithRelations } from "@/lib/types";
 
-function formatResolution(resolution: string | null): string {
-  if (!resolution) return "Unknown";
-  const label = normalizeResolutionLabel(resolution);
-  return label === "Other" ? resolution : label;
+/** A detail row's value as a quality chip, or "-" when there is none. */
+function chipValue(category: ChipColorCategory, label: string | null, raw?: string | null) {
+  if (!label) return "-";
+  return (
+    <QualityChip
+      chip={{ category, label }}
+      title={raw && raw !== label ? raw : undefined}
+    />
+  );
 }
 
 function DetailRow({ label, value }: { label: string; value: React.ReactNode }) {
@@ -207,7 +219,6 @@ function audioStreamCount(streams: MediaItemWithRelations["streams"] | undefined
 }
 
 export function MediaDetailContent({ item, children, hideVideo, compact, matchedCriteriaSection, isAggregate, historySection, detailLoaded }: MediaDetailContentProps) {
-  const { getBadgeStyle } = useChipColors();
 
   // Fetch full detail data (summary, tagline, genres, directors, etc.)
   const [detailData, setDetailData] = useState<Partial<MediaItemWithRelations> | null>(null);
@@ -724,6 +735,11 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
                 <div className="mt-2">
                   {videoStreams.length > 0 ? (
                     <div className="space-y-3">
+                      {resolutionChipLabel(merged.resolution) && (
+                        <div className="text-sm">
+                          <DetailRow label="Resolution" value={chipValue("resolution", resolutionChipLabel(merged.resolution))} />
+                        </div>
+                      )}
                       {videoStreams.map((vs, i) => (
                         <div key={vs.id} className={cn(videoStreams.length > 1 && "rounded-lg border border-white/5 bg-muted/50 p-3")}>
                           {videoStreams.length > 1 && (
@@ -742,13 +758,12 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
                             {vs.frameRate != null && <DetailRow label="Frame Rate" value={`${vs.frameRate} fps`} />}
                             {vs.bitDepth != null && <DetailRow label="Bit Depth" value={`${vs.bitDepth}-bit`} />}
                             {vs.videoRangeType && (
+                              // The stream reports the server's own spelling
+                              // (DOVIWithHDR10, HDR10Plus, PQ); the chip shows the
+                              // range it names, as the item's does.
                               <DetailRow
                                 label="Dynamic Range"
-                                value={
-                                  <ColorChip style={getBadgeStyle("dynamicRange", vs.videoRangeType)}>
-                                    {vs.videoRangeType}
-                                  </ColorChip>
-                                }
+                                value={chipValue("dynamicRange", detectStreamDynamicRange(vs), vs.videoRangeType)}
                               />
                             )}
                             {vs.chromaSubsampling && <DetailRow label="Chroma" value={vs.chromaSubsampling} />}
@@ -764,14 +779,7 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
                     </div>
                   ) : (
                     <div className="text-sm">
-                      <DetailRow
-                        label="Resolution"
-                        value={
-                          <ColorChip style={getBadgeStyle("resolution", formatResolution(merged.resolution))}>
-                            {formatResolution(merged.resolution)}
-                          </ColorChip>
-                        }
-                      />
+                      <DetailRow label="Resolution" value={chipValue("resolution", resolutionChipLabel(merged.resolution))} />
                       {merged.videoWidth && merged.videoHeight && (
                         <DetailRow label="Dimensions" value={`${merged.videoWidth}x${merged.videoHeight}`} />
                       )}
@@ -783,15 +791,8 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
                       {merged.videoFrameRate && <DetailRow label="Frame Rate" value={merged.videoFrameRate} />}
                       {merged.videoBitDepth && <DetailRow label="Bit Depth" value={`${merged.videoBitDepth}-bit`} />}
                       {merged.aspectRatio && <DetailRow label="Aspect Ratio" value={merged.aspectRatio} />}
-                      {merged.dynamicRange && (
-                        <DetailRow
-                          label="Dynamic Range"
-                          value={
-                            <ColorChip style={getBadgeStyle("dynamicRange", merged.dynamicRange)}>
-                              {merged.dynamicRange}
-                            </ColorChip>
-                          }
-                        />
+                      {dynamicRangeChipLabel(merged.dynamicRange) && (
+                        <DetailRow label="Dynamic Range" value={chipValue("dynamicRange", dynamicRangeChipLabel(merged.dynamicRange))} />
                       )}
                       {merged.videoChromaSubsampling && <DetailRow label="Chroma" value={merged.videoChromaSubsampling} />}
                       <DetailRow label="Container" value={merged.container?.toUpperCase() ?? "-"} />
@@ -831,15 +832,15 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
                         )}
                         <div className="text-sm">
                           {as.extendedDisplayTitle && <DetailRow label="Title" value={as.extendedDisplayTitle} />}
-                          <DetailRow label="Codec" value={as.codec?.toUpperCase() ?? "-"} />
+                          <DetailRow label="Codec" value={chipValue("audioCodec", audioCodecChipLabel(as.codec))} />
                           {as.profile && (
+                            // A stream's profile is the codec's own ("LC",
+                            // "ma"); only one naming an audio profile is a chip.
                             <DetailRow
                               label="Profile"
-                              value={
-                                <ColorChip style={getBadgeStyle("audioProfile", as.profile)}>
-                                  {as.profile}
-                                </ColorChip>
-                              }
+                              value={detectStreamAudioProfile(as)
+                                ? chipValue("audioProfile", detectStreamAudioProfile(as), as.profile)
+                                : as.profile}
                             />
                           )}
                           <DetailRow label="Channels" value={as.channels ? `${as.channels} ch` : "-"} />
@@ -852,16 +853,9 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
                   </div>
                 ) : (
                   <div className="text-sm">
-                    <DetailRow label="Codec" value={merged.audioCodec?.toUpperCase() ?? "-"} />
-                    {merged.audioProfile && (
-                      <DetailRow
-                        label="Profile"
-                        value={
-                          <ColorChip style={getBadgeStyle("audioProfile", merged.audioProfile)}>
-                            {merged.audioProfile}
-                          </ColorChip>
-                        }
-                      />
+                    <DetailRow label="Codec" value={chipValue("audioCodec", audioCodecChipLabel(merged.audioCodec))} />
+                    {audioProfileChipLabel(merged.audioProfile) && (
+                      <DetailRow label="Profile" value={chipValue("audioProfile", audioProfileChipLabel(merged.audioProfile))} />
                     )}
                     <DetailRow label="Channels" value={merged.audioChannels ? `${merged.audioChannels} channels` : "-"} />
                     {merged.audioBitrate && <DetailRow label="Bitrate" value={`${merged.audioBitrate} kbps`} />}

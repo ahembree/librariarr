@@ -41,10 +41,10 @@ import { useMediaDetailPanel } from "@/hooks/use-media-detail-panel";
 import { toDetailPanelMediaType } from "@/lib/media/detail-panel-item";
 import { useServers } from "@/hooks/use-servers";
 import { useRealtime } from "@/hooks/use-realtime";
-import { useChipColors } from "@/components/chip-color-provider";
+import { QualityChip } from "@/components/quality-chips";
 import { formatFileSize, formatDuration } from "@/lib/format";
 import { formatEpisodeCode } from "@/lib/media/display-title";
-import { normalizeResolutionLabel } from "@/lib/resolution";
+import { dynamicRangeChipLabel, qualityChips, resolutionChipLabel } from "@/lib/media/quality-chips";
 import { MEDIA_TYPE_BADGE_COLORS, MEDIA_TYPE_LABELS } from "@/lib/theme/media-type-colors";
 import { EmptyState } from "@/components/empty-state";
 
@@ -164,12 +164,6 @@ function saveVisibleColumns(cols: Set<string>) {
   } catch { /* private mode / quota — ignore */ }
 }
 
-function formatResolution(res: string | null) {
-  if (!res) return "";
-  const label = normalizeResolutionLabel(res);
-  return label === "Other" ? res : label;
-}
-
 /**
  * Three-way stream decision, mirroring the Stream Manager's `getStreamDecision`
  * (`/tools/streams`) so the same play reads the same in both places: any
@@ -275,7 +269,6 @@ const COLUMN_GROUPS: Record<string, string> = {
 
 export default function HistoryPage() {
   const { servers } = useServers();
-  const { getBadgeStyle } = useChipColors();
   const detailPanel = useMediaDetailPanel();
 
   // Data
@@ -403,14 +396,8 @@ export default function HistoryPage() {
       group: "video",
       defaultVisible: true,
       accessor: (item) => {
-        const res = item.mediaItem.resolution;
-        if (!res) return "-";
-        const label = formatResolution(res);
-        return (
-          <ColorChip style={getBadgeStyle("resolution", label)}>
-            {label}
-          </ColorChip>
-        );
+        const label = resolutionChipLabel(item.mediaItem.resolution);
+        return label ? <QualityChip chip={{ category: "resolution", label }} /> : "-";
       },
       sortValue: (item) => item.mediaItem.resolution,
     },
@@ -421,13 +408,8 @@ export default function HistoryPage() {
       group: "video",
       defaultVisible: true,
       accessor: (item) => {
-        const dr = item.mediaItem.dynamicRange;
-        if (!dr) return "-";
-        return (
-          <ColorChip style={getBadgeStyle("dynamicRange", dr)}>
-            {dr}
-          </ColorChip>
-        );
+        const label = dynamicRangeChipLabel(item.mediaItem.dynamicRange);
+        return label ? <QualityChip chip={{ category: "dynamicRange", label }} /> : "-";
       },
       sortValue: (item) => item.mediaItem.dynamicRange,
     },
@@ -469,11 +451,9 @@ export default function HistoryPage() {
       defaultWidth: 130,
       group: "audio",
       defaultVisible: false,
-      className: "text-muted-foreground",
       accessor: (item) => {
-        const codec = item.mediaItem.audioCodec ?? "";
-        const ch = item.mediaItem.audioChannels;
-        return ch ? `${codec} ${ch}ch` : codec || "-";
+        const chip = qualityChips(item.mediaItem, "music", { channels: true })[0];
+        return chip ? <QualityChip chip={chip} /> : <span className="text-muted-foreground">-</span>;
       },
       sortValue: (item) => item.mediaItem.audioCodec,
     },
@@ -563,14 +543,8 @@ export default function HistoryPage() {
       group: "stream",
       defaultVisible: false,
       accessor: (item) => {
-        const res = item.resolution;
-        if (!res) return "-";
-        const label = formatResolution(res);
-        return (
-          <ColorChip style={getBadgeStyle("resolution", label)}>
-            {label}
-          </ColorChip>
-        );
+        const label = resolutionChipLabel(item.resolution);
+        return label ? <QualityChip chip={{ category: "resolution", label }} /> : "-";
       },
       sortValue: (item) => item.resolution,
     },
@@ -585,7 +559,7 @@ export default function HistoryPage() {
       ),
       sortValue: (item) => item.server.name,
     },
-  ], [getBadgeStyle]);
+  ], []);
 
   // ── Column visibility ──────────────────────────────────────────
 
@@ -1230,6 +1204,7 @@ export default function HistoryPage() {
                       resolution: item.mediaItem.resolution,
                       dynamicRange: item.mediaItem.dynamicRange,
                       audioProfile: item.mediaItem.audioProfile,
+                      audioCodec: item.mediaItem.type === "MUSIC" ? item.mediaItem.audioCodec : undefined,
                       fileSize: item.mediaItem.fileSize,
                       genres: item.mediaItem.genres,
                       studio: item.mediaItem.studio,

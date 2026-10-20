@@ -4,10 +4,10 @@ import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, use
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useRouter } from "next/navigation";
 import { useChipColors } from "@/components/chip-color-provider";
-import { AUDIO_CODEC_ORDER, getChipBadgeStyle } from "@/lib/theme/chip-colors";
+import { QualityChips } from "@/components/quality-chips";
+import { qualityChips, qualitySegments } from "@/lib/media/quality-chips";
 import { MediaFilters } from "@/components/media-filters";
 import { MediaCard, CARD_CONTENT_HEIGHT, PRIORITY_ROWS } from "@/components/media-card";
-import { ColorChip } from "@/components/color-chip";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
 import { Button } from "@/components/ui/button";
 import { LibraryToolbar } from "@/components/library-toolbar";
@@ -67,7 +67,7 @@ const SORT_OPTIONS = [
   { value: "addedAt", label: "Date Added" },
 ];
 
-function artistTableColumns(getHex: (category: "resolution" | "dynamicRange" | "audioProfile" | "audioCodec", value: string) => string): DataTableColumn<GroupedArtist>[] {
+function artistTableColumns(): DataTableColumn<GroupedArtist>[] {
   return [
     {
       id: "parentTitle",
@@ -106,19 +106,7 @@ function artistTableColumns(getHex: (category: "resolution" | "dynamicRange" | "
       header: "Codecs",
       defaultWidth: 200,
       accessor: (a) => (
-        <div className="flex flex-wrap gap-1">
-          {[
-            ...AUDIO_CODEC_ORDER.filter((c) => a.audioCodecCounts[c]).map((c) => [c, a.audioCodecCounts[c]] as const),
-            ...Object.entries(a.audioCodecCounts).filter(([c]) => !(AUDIO_CODEC_ORDER as readonly string[]).includes(c)),
-          ].map(([codec, count]) => (
-              <ColorChip
-                key={codec}
-                style={getChipBadgeStyle(getHex("audioCodec", String(codec)))}
-              >
-                {codec}: {count}
-              </ColorChip>
-            ))}
-        </div>
+        <QualityChips chips={qualityChips({ audioCodecCounts: a.audioCodecCounts }, "music")} />
       ),
     },
     {
@@ -379,7 +367,7 @@ export default function MusicPage() {
         <>
           {viewMode === "table" ? (
             <DataTable<GroupedArtist>
-              columns={artistTableColumns(getHex)}
+              columns={artistTableColumns()}
               data={artistList}
               keyExtractor={(a) => a.parentTitle}
               defaultSortId="parentTitle"
@@ -462,26 +450,11 @@ export default function MusicPage() {
                                 {show("metadata", "fileSize") && <MetadataItem icon={<HardDrive />}>{formatFileSize(a.totalSize)}</MetadataItem>}
                               </MetadataLine>
                             }
-                            qualityBar={
-                              show("badges", "audioCodecs")
-                                ? [
-                                    ...AUDIO_CODEC_ORDER
-                                      .filter((c) => a.audioCodecCounts[c])
-                                      .map((codec) => ({
-                                        color: getHex("audioCodec", codec),
-                                        weight: a.audioCodecCounts[codec],
-                                        label: `${codec}: ${a.audioCodecCounts[codec]}`,
-                                      })),
-                                    ...Object.entries(a.audioCodecCounts)
-                                      .filter(([c]) => !(AUDIO_CODEC_ORDER as readonly string[]).includes(c))
-                                      .map(([codec, count]) => ({
-                                        color: getHex("audioCodec", codec),
-                                        weight: count,
-                                        label: `${codec}: ${count}`,
-                                      })),
-                                  ]
-                                : undefined
-                            }
+                            qualityBar={qualitySegments(
+                              qualityChips({ audioCodecCounts: a.audioCodecCounts }, "music"),
+                              getHex,
+                              (toggle) => show("badges", toggle),
+                            )}
                             servers={showServers && servers.length > 1 ? a.servers : undefined}
                             hoverContent={
                               <MediaHoverPopover

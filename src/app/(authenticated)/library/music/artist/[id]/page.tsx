@@ -5,7 +5,9 @@ import { useRealtime } from "@/hooks/use-realtime";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useChipColors } from "@/components/chip-color-provider";
-import { AUDIO_CODEC_ORDER } from "@/lib/theme/chip-colors";
+import { QualityChip } from "@/components/quality-chips";
+import { QualityBar } from "@/components/media-card";
+import { qualityChips, qualitySegments } from "@/lib/media/quality-chips";
 import { MediaDetailHero } from "@/components/media-detail-hero";
 import { FadeImage } from "@/components/ui/fade-image";
 import { ColorChip } from "@/components/color-chip";
@@ -40,7 +42,7 @@ interface AlbumData {
 
 export default function ArtistDetailPage() {
   const { id } = useParams<{ id: string }>();
-  const { getBadgeStyle, getHex } = useChipColors();
+  const { getHex } = useChipColors();
   const [item, setItem] = useState<MediaItemWithRelations | null>(null);
   const [playServers, setPlayServers] = useState<PlayServer[]>([]);
   const [albums, setAlbums] = useState<AlbumData[]>([]);
@@ -125,14 +127,9 @@ export default function ArtistDetailPage() {
       }
       badges={
         <>
-          {[
-            ...AUDIO_CODEC_ORDER.filter((c) => codecCounts[c]).map((c) => [c, codecCounts[c]] as const),
-            ...Object.entries(codecCounts).filter(([c]) => !(AUDIO_CODEC_ORDER as readonly string[]).includes(c)),
-          ].map(([codec, count]) => (
-              <ColorChip key={codec} style={getBadgeStyle("audioCodec", codec)}>
-                {codec}: {count}
-              </ColorChip>
-            ))}
+          {qualityChips({ audioCodecCounts: codecCounts }, "music").map((chip) => (
+            <QualityChip key={chip.label} chip={chip} />
+          ))}
           {totalSize > 0 && (
             <ColorChip className="border-border text-muted-foreground">{formatFileSize(totalSize.toString())}</ColorChip>
           )}
@@ -187,14 +184,10 @@ export default function ArtistDetailPage() {
                       />
                     </div>
                     {Object.keys(a.audioCodecCounts).length > 0 && (
-                      <div className="flex w-full gap-1 px-1 py-0.5">
-                        {[
-                          ...AUDIO_CODEC_ORDER.filter((c) => a.audioCodecCounts[c]).map((codec) => ({ color: getHex("audioCodec", codec), weight: a.audioCodecCounts[codec], label: `${codec}: ${a.audioCodecCounts[codec]}` })),
-                          ...Object.entries(a.audioCodecCounts).filter(([c]) => !(AUDIO_CODEC_ORDER as readonly string[]).includes(c)).map(([codec, count]) => ({ color: getHex("audioCodec", codec), weight: count, label: `${codec}: ${count}` })),
-                        ].map((seg, i) => (
-                          <div key={i} className="h-1 min-w-1 rounded-full" style={{ backgroundColor: seg.color, flex: seg.weight }} title={seg.label} />
-                        ))}
-                      </div>
+                      <QualityBar
+                        segments={qualitySegments(qualityChips({ audioCodecCounts: a.audioCodecCounts }, "music"), getHex)}
+                        className="px-1 py-0.5 bg-transparent"
+                      />
                     )}
                     <p className="mt-1 truncate text-xs font-medium text-foreground">
                       {a.albumTitle}

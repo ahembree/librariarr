@@ -388,13 +388,24 @@ An episode row's own `title` is the **episode's** name ("Pilot"). The show is it
 - The episode's own title is fine where the show is already on screen, such as the episode list of a season page, or as secondary detail beside the show and code.
 - For lifecycle actions use `actionTargetTitle` and `actionTitleSnapshot` (`src/lib/lifecycle/action-target.ts`). An action stored against an episode may act on the whole show or on exactly that episode.
 
+### Quality Chips
+
+The coloured resolution, dynamic-range, audio-profile and audio-codec chips — and the quality bar under a card's artwork, drawn from the same values — follow one set of rules, held in `src/lib/media/quality-chips.ts` and drawn by `QualityChip` / `QualityChips` (`src/components/quality-chips.tsx`). Never build a chip or a bar segment by hand.
+
+- **What an item shows**: a film or episode its resolution, dynamic range and audio profile; a track its audio codec; a show or season its resolution counts; an artist or album its codec counts (`qualityChips(source, "video" | "music")`). The same set everywhere: card bars, table cells, hover popovers, detail-page heroes and the side panel.
+- **Missing values**: no chip. A table cell shows a plain `-` instead — never a grey "-", "Unknown" or "SDR" chip.
+- **Labels**: a resolution shows its standard label (`4K`, `1080P`…) and a value that maps to none its own spelling; SDR is shown like any other dynamic range; an audio codec is upper-cased; a count reads `label: n` in the chip's colour.
+- **Order**: counts follow `QUALITY_ORDER` and `AUDIO_CODEC_ORDER`, then the rest by name, with empty buckets dropped.
+- **Card bars**: `qualitySegments(chips, getHex, show)` — one segment per chip, weighted by its count, filtered by the card-display toggles. Use the exported `QualityBar` for a bar outside `MediaCard`.
+- **Per-stream values** (a stream's `videoRangeType`, an audio stream's profile) are the server's own spellings; colour them by the range or profile they name (`detectStreamDynamicRange`, `detectStreamAudioProfile`), with the raw value as the chip's title.
+
 ### Hover Popovers
 
 Every `MediaHoverPopover` must pass the **same universal set of fields** regardless of page, view type (table or card), or data source. All fields are optional — sections hide gracefully when data is absent. The component renders only what is non-null, so passing all fields is always safe.
 
 **Universal field set:**
 
-`title`, `year`, `summary`, `contentRating`, `rating`, `audienceRating`, `ratingImage`, `audienceRatingImage`, `duration`, `resolution`, `dynamicRange`, `audioProfile`, `fileSize`, `genres`, `studio`, `playCount`, `lastPlayedAt`, `addedAt`, `servers`, `seasonCount`, `episodeCount`, `albumCount`, `trackCount`, `qualityCounts`, `audioCodecCounts`
+`title`, `year`, `summary`, `contentRating`, `rating`, `audienceRating`, `ratingImage`, `audienceRatingImage`, `duration`, `resolution`, `dynamicRange`, `audioProfile`, `audioCodec`, `fileSize`, `genres`, `studio`, `playCount`, `lastPlayedAt`, `addedAt`, `servers`, `seasonCount`, `episodeCount`, `albumCount`, `trackCount`, `qualityCounts`, `audioCodecCounts`
 
 For grouped data sources (series shows, seasons, music artists, albums), metadata fields (`summary`, `genres`, `studio`, `contentRating`, `rating`, etc.) are aggregated from a representative child item via first-non-null picking in the API.
 
@@ -404,7 +415,8 @@ For grouped data sources (series shows, seasons, music artists, albums), metadat
 - Pages fed by the flat list endpoints type their rows as `MediaListItem`, which has no `summary` — passing one is a compile error, so this cannot silently regress
 - `summary` may be passed **or** fetched: the large list endpoints (movies, all-episodes, all-tracks) leave it out of their payloads because it is a paragraph of prose per row that only this popover renders. Those pages pass `summaryUrl` instead and the popover fetches the summary for the one hovered item when it opens, caching it. Every other field still comes from the list, so the popover paints immediately either way
 - `imageAspect="square"` for music items; `"poster"` (default) for everything else
-- `audioCodecCounts` is music-only; `qualityCounts` is series-only
+- `audioCodec` (one track) and `audioCodecCounts` (an artist or album) are music-only; `qualityCounts` is series-only. A popover given an `audioCodec` shows the track's codec chip instead of the video chips, so never pass it for a film or episode — `hoverDataFromRecord` strips it from a raw `/api/media/[id]` record that is not a track
+- A grouped row (a show, artist or album standing for its members) passes its counts, never its representative episode's or track's own `resolution`, `dynamicRange`, `audioProfile` or `audioCodec`
 - When an item can be either individual or grouped (e.g. query results), conditionally pass the appropriate fields based on whether it's grouped (e.g. `seasonCount`/`episodeCount` for grouped series, `duration`/`resolution` for individual items)
 
 ---

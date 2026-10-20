@@ -5,14 +5,13 @@ import Link from "next/link";
 import { X, ExternalLink, Film, Tv, Music } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { ColorChip } from "@/components/color-chip";
+import { QualityChips } from "@/components/quality-chips";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { MediaDetailContent } from "@/components/media-detail-content";
 import { PlayHistory } from "@/components/play-history";
 import { FadeImage } from "@/components/ui/fade-image";
 import { useIsMobile } from "@/hooks/use-is-mobile";
-import { useChipColors } from "@/components/chip-color-provider";
-import { normalizeResolutionLabel } from "@/lib/resolution";
+import { qualityChips } from "@/lib/media/quality-chips";
 import { formatFileSize, formatDuration } from "@/lib/format";
 import { formatEpisodeTitle, seriesTitleOf } from "@/lib/media/display-title";
 import { detailPanelUrl } from "@/lib/media/detail-panel-item";
@@ -67,12 +66,6 @@ interface MediaDetailSidePanelProps {
   contextSection?: React.ReactNode;
 }
 
-function formatResolution(resolution: string | null): string {
-  if (!resolution) return "";
-  const label = normalizeResolutionLabel(resolution);
-  return label === "Other" ? resolution : label;
-}
-
 export function MediaDetailSidePanel({
   item,
   mediaType,
@@ -88,7 +81,6 @@ export function MediaDetailSidePanel({
   contextSection,
 }: MediaDetailSidePanelProps) {
   const isMobile = useIsMobile();
-  const { getBadgeStyle } = useChipColors();
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -139,7 +131,7 @@ export function MediaDetailSidePanel({
       : item.parentTitle
         ? `${item.parentTitle} - ${item.title}`
         : item.title);
-  const resolutionLabel = formatResolution(item.resolution);
+  const chips = qualityChips(item, mediaType === "MUSIC" ? "music" : "video", { channels: true });
 
   const header = (
     <div className="border-b shrink-0 relative overflow-hidden">
@@ -204,23 +196,7 @@ export function MediaDetailSidePanel({
                   item.fileSize ? formatFileSize(item.fileSize) : null,
                 ].filter(Boolean).join(" \u00b7 ")}
               </p>
-              <div className="flex flex-wrap gap-1">
-                {resolutionLabel && (
-                  <ColorChip style={getBadgeStyle("resolution", resolutionLabel)}>
-                    {resolutionLabel}
-                  </ColorChip>
-                )}
-                {item.dynamicRange && (
-                  <ColorChip style={getBadgeStyle("dynamicRange", item.dynamicRange)}>
-                    {item.dynamicRange}
-                  </ColorChip>
-                )}
-                {item.audioProfile && (
-                  <ColorChip style={getBadgeStyle("audioProfile", item.audioProfile)}>
-                    {item.audioProfile}
-                  </ColorChip>
-                )}
-              </div>
+              <QualityChips chips={chips} />
             </>
           )}
         </div>

@@ -4,12 +4,12 @@ import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } fr
 import { useRouter } from "next/navigation";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useChipColors } from "@/components/chip-color-provider";
-import { getChipBadgeStyle } from "@/lib/theme/chip-colors";
+import { QualityChips } from "@/components/quality-chips";
+import { qualityChips, qualitySegments } from "@/lib/media/quality-chips";
 import { MediaCard, CARD_CONTENT_HEIGHT, PRIORITY_ROWS } from "@/components/media-card";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
 import { MediaFilters } from "@/components/media-filters";
 import { sameFilters } from "@/lib/filters/same-filters";
-import { ColorChip } from "@/components/color-chip";
 import { DataTable } from "@/components/data-table";
 import type { DataTableColumn } from "@/components/data-table";
 import { LibraryToolbar } from "@/components/library-toolbar";
@@ -50,7 +50,6 @@ interface SeasonEntry {
   year?: number | null;
 }
 
-import { QUALITY_ORDER } from "@/lib/resolution";
 
 const GAP = 16;
 const CARD_BORDER = 2;
@@ -65,9 +64,7 @@ const SORT_OPTIONS = [
   { value: "addedAt", label: "Date Added" },
 ];
 
-function seasonTableColumns(
-  getHex: (category: "resolution" | "dynamicRange" | "audioProfile", value: string) => string
-): DataTableColumn<SeasonEntry>[] {
+function seasonTableColumns(): DataTableColumn<SeasonEntry>[] {
   return [
     {
       id: "parentTitle",
@@ -109,22 +106,7 @@ function seasonTableColumns(
       id: "quality",
       header: "Quality",
       defaultWidth: 200,
-      accessor: (s) => {
-        const qualities = QUALITY_ORDER.filter((q) => s.qualityCounts[q]);
-        if (qualities.length === 0) return null;
-        return (
-          <div className="flex flex-wrap gap-1">
-            {qualities.map((q) => (
-              <ColorChip
-                key={q}
-                style={getChipBadgeStyle(getHex("resolution", q))}
-              >
-                {q}: {s.qualityCounts[q]}
-              </ColorChip>
-            ))}
-          </div>
-        );
-      },
+      accessor: (s) => <QualityChips chips={qualityChips({ qualityCounts: s.qualityCounts }, "video")} />,
     },
     {
       id: "totalPlayCount",
@@ -342,7 +324,7 @@ export default function AllSeasonsPage() {
 
           {viewMode === "table" ? (
             <DataTable<SeasonEntry>
-              columns={seasonTableColumns(getHex)}
+              columns={seasonTableColumns()}
               data={seasons}
               keyExtractor={(s) => `${s.seriesKey ?? s.parentTitle}::${s.seasonNumber}`}
               defaultSortId="parentTitle"
@@ -412,17 +394,11 @@ export default function AllSeasonsPage() {
                                 )}
                               </MetadataLine>
                             }
-                            qualityBar={
-                              show("badges", "qualityCounts")
-                                ? QUALITY_ORDER
-                                    .filter((q) => season.qualityCounts[q])
-                                    .map((quality) => ({
-                                      color: getHex("resolution", quality),
-                                      weight: season.qualityCounts[quality],
-                                      label: `${quality}: ${season.qualityCounts[quality]}`,
-                                    }))
-                                : undefined
-                            }
+                            qualityBar={qualitySegments(
+                              qualityChips({ qualityCounts: season.qualityCounts }, "video"),
+                              getHex,
+                              (toggle) => show("badges", toggle),
+                            )}
                             servers={showServers && servers.length > 1 ? season.servers : undefined}
                             hoverContent={
                               <MediaHoverPopover
