@@ -3,8 +3,8 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { qualityChips, qualitySegments } from "@/lib/media/quality-chips";
 import { useChipColors } from "@/components/chip-color-provider";
-import { normalizeResolutionLabel } from "@/lib/resolution";
 import { MediaTable } from "@/components/media-table";
 import { MediaFilters } from "@/components/media-filters";
 import { sameFilters } from "@/lib/filters/same-filters";
@@ -27,12 +27,6 @@ import { MediaGridSkeleton } from "@/components/skeletons";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
 import { LibraryTabs, SERIES_TABS } from "@/components/library-tabs";
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
-
-function formatResolution(resolution: string | null): string {
-  if (!resolution) return "";
-  const label = normalizeResolutionLabel(resolution);
-  return label === "Other" ? resolution : label;
-}
 
 const GAP = 16;
 const CARD_BORDER = 2;
@@ -355,21 +349,7 @@ export default function AllEpisodesPage() {
                                 {show("metadata", "fileSize") && formatFileSize(ep.fileSize) && <MetadataItem icon={<HardDrive />}>{formatFileSize(ep.fileSize)}</MetadataItem>}
                               </MetadataLine>
                             }
-                            qualityBar={
-                              show("badges", "resolution") || show("badges", "dynamicRange") || show("badges", "audioProfile")
-                                ? [
-                                    ...(show("badges", "resolution") && ep.resolution
-                                      ? [{ color: getHex("resolution", formatResolution(ep.resolution)), weight: 1, label: formatResolution(ep.resolution) }]
-                                      : []),
-                                    ...(show("badges", "dynamicRange") && ep.dynamicRange && ep.dynamicRange !== "SDR"
-                                      ? [{ color: getHex("dynamicRange", ep.dynamicRange), weight: 1, label: ep.dynamicRange }]
-                                      : []),
-                                    ...(show("badges", "audioProfile") && ep.audioProfile
-                                      ? [{ color: getHex("audioProfile", ep.audioProfile), weight: 1, label: ep.audioProfile }]
-                                      : []),
-                                  ]
-                                : undefined
-                            }
+                            qualityBar={qualitySegments(qualityChips(ep, "video"), getHex, (toggle) => show("badges", toggle))}
                             servers={showServers && servers.length > 1 ? ep.servers : undefined}
                           />
                         ))}

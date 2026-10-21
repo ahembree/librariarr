@@ -3,8 +3,8 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, useTransition, memo } from "react";
 import { useRouter } from "next/navigation";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { qualityChips, qualitySegments } from "@/lib/media/quality-chips";
 import { useChipColors } from "@/components/chip-color-provider";
-import { normalizeResolutionLabel } from "@/lib/resolution";
 import { MediaTable } from "@/components/media-table";
 import { MediaFilters } from "@/components/media-filters";
 import { MediaCard, CARD_CONTENT_HEIGHT, PRIORITY_ROWS } from "@/components/media-card";
@@ -42,12 +42,6 @@ const SORT_OPTIONS = [
   { value: "rating", label: "Rating" },
 ];
 
-function formatResolution(resolution: string | null): string {
-  if (!resolution) return "";
-  const label = normalizeResolutionLabel(resolution);
-  return label === "Other" ? resolution : label;
-}
-
 const GAP = 16; // 1rem grid gap
 const CARD_BORDER = 2; // 1px top + 1px bottom border on Card
 const QUALITY_BAR_HEIGHT = 12; // h-1 quality bar between poster and content
@@ -84,21 +78,7 @@ const MovieGridCard = memo(function MovieGridCard({ movie, priority, show, getHe
           {show("metadata", "fileSize") && formatFileSize(movie.fileSize) && <MetadataItem icon={<HardDrive />}>{formatFileSize(movie.fileSize)}</MetadataItem>}
         </MetadataLine>
       }
-      qualityBar={
-        show("badges", "resolution") || show("badges", "dynamicRange") || show("badges", "audioProfile")
-          ? [
-              ...(show("badges", "resolution") && movie.resolution
-                ? [{ color: getHex("resolution", formatResolution(movie.resolution)), weight: 1, label: formatResolution(movie.resolution) }]
-                : []),
-              ...(show("badges", "dynamicRange") && movie.dynamicRange && movie.dynamicRange !== "SDR"
-                ? [{ color: getHex("dynamicRange", movie.dynamicRange), weight: 1, label: movie.dynamicRange }]
-                : []),
-              ...(show("badges", "audioProfile") && movie.audioProfile
-                ? [{ color: getHex("audioProfile", movie.audioProfile), weight: 1, label: movie.audioProfile }]
-                : []),
-            ]
-          : undefined
-      }
+      qualityBar={qualitySegments(qualityChips(movie, "video"), getHex, (toggle) => show("badges", toggle))}
       servers={serverChips ? movie.servers : undefined}
       hoverContent={
         <MediaHoverPopover

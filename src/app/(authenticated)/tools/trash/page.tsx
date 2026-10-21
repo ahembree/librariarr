@@ -29,6 +29,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { ColorChip } from "@/components/color-chip";
 import { Switch } from "@/components/ui/switch";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -210,19 +211,19 @@ interface QualityProfileSelection {
 // ─── Status presentation ───
 
 const STATUS_META: Record<ItemStatus, { label: string; className: string; dot: string }> = {
-  NEW: { label: "Not added", className: "border-white/15 text-muted-foreground", dot: "bg-muted-foreground/50" },
-  UNMANAGED_CONFLICT: { label: "Exists — unmanaged", className: "border-amber/40 text-amber", dot: "bg-amber" },
-  MANAGED: { label: "Managed", className: "border-green/40 text-green", dot: "bg-green" },
-  MANAGED_OUTDATED: { label: "Update available", className: "border-blue-400/40 text-blue-400", dot: "bg-blue-400" },
-  MANAGED_MISSING: { label: "Missing in app", className: "border-destructive/40 text-destructive", dot: "bg-destructive" },
+  NEW: { label: "Not added", className: "bg-muted/40 text-muted-foreground", dot: "bg-muted-foreground/50" },
+  UNMANAGED_CONFLICT: { label: "Exists — unmanaged", className: "border-amber/25 bg-amber-dim text-amber", dot: "bg-amber" },
+  MANAGED: { label: "Managed", className: "border-green/25 bg-green-dim text-green", dot: "bg-green" },
+  MANAGED_OUTDATED: { label: "Update available", className: "border-blue-400/25 bg-blue-400/15 text-blue-400", dot: "bg-blue-400" },
+  MANAGED_MISSING: { label: "Missing in app", className: "border-red/25 bg-red-dim text-red", dot: "bg-destructive" },
 };
 
 const ACTION_META: Record<PlanItem["action"], { label: string; className: string }> = {
-  CREATE: { label: "Create", className: "text-green" },
-  UPDATE: { label: "Update", className: "text-blue-400" },
-  NOOP: { label: "No change", className: "text-muted-foreground" },
-  SKIP: { label: "Skipped", className: "text-amber" },
-  ERROR: { label: "Error", className: "text-destructive" },
+  CREATE: { label: "Create", className: "border-green/25 bg-green-dim text-green" },
+  UPDATE: { label: "Update", className: "border-blue-400/25 bg-blue-400/15 text-blue-400" },
+  NOOP: { label: "No change", className: "bg-muted/40 text-muted-foreground" },
+  SKIP: { label: "Skipped", className: "border-amber/25 bg-amber-dim text-amber" },
+  ERROR: { label: "Error", className: "border-red/25 bg-red-dim text-red" },
 };
 
 function fmt(value: unknown): string {
@@ -1677,7 +1678,7 @@ function SingletonCard({
             <CardTitle className="text-base">{item.name}</CardTitle>
             <CardDescription>{item.description}</CardDescription>
           </div>
-          <Badge variant="outline" className={meta.className}>{meta.label}</Badge>
+          <ColorChip className={meta.className}>{meta.label}</ColorChip>
         </div>
       </CardHeader>
       <CardContent className="flex items-center gap-2">
@@ -1750,7 +1751,7 @@ function NamingCard({
               Choose the naming variants to apply, then let Librariarr manage them.
             </CardDescription>
           </div>
-          <Badge variant="outline" className={meta.className}>{meta.label}</Badge>
+          <ColorChip className={meta.className}>{meta.label}</ColorChip>
         </div>
       </CardHeader>
       <CardContent className="space-y-4">
@@ -2463,21 +2464,19 @@ function ProfileFormatsTab({
                                 <span className="min-w-0 flex-1 truncate text-sm">
                                   {f.name}
                                   {isRemovedFromGuide(f) ? (
-                                    <Badge
-                                      variant="outline"
-                                      className="ml-2 border-destructive/40 text-[10px] text-destructive"
+                                    <ColorChip
+                                      className="ml-2 border-red/25 bg-red-dim text-red"
                                       title="No longer in the TRaSH guide — it's dropped on the next save; remove it to clear this"
                                     >
                                       removed from guide
-                                    </Badge>
+                                    </ColorChip>
                                   ) : !isInApp(f) ? (
-                                    <Badge
-                                      variant="outline"
-                                      className="ml-2 border-amber/40 text-[10px] text-amber"
+                                    <ColorChip
+                                      className="ml-2 border-amber/25 bg-amber-dim text-amber"
                                       title="Not in this app yet — add & sync it from the Custom Formats tab"
                                     >
                                       not in app
-                                    </Badge>
+                                    </ColorChip>
                                   ) : (
                                     f.score === 0 && (
                                       <span
@@ -2834,7 +2833,7 @@ function ReportBody({ items, dryRun }: { items: PlanItem[]; dryRun: boolean }) {
                   <CheckCircle2 className="h-4 w-4 text-green" />
                 ) : null}
                 <span className="text-sm font-medium">{item.name}</span>
-                <Badge variant="outline" className={cn("text-[10.5px]", meta.className)}>{meta.label}</Badge>
+                <ColorChip className={meta.className}>{meta.label}</ColorChip>
               </div>
               {item.error && <p className="text-xs text-destructive">{item.error}</p>}
               {item.warnings.map((w, idx) => (

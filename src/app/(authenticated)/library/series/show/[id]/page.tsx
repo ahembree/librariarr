@@ -5,7 +5,9 @@ import { useRealtime } from "@/hooks/use-realtime";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useChipColors } from "@/components/chip-color-provider";
-import { QUALITY_ORDER } from "@/lib/resolution";
+import { QualityChip } from "@/components/quality-chips";
+import { QualityBar } from "@/components/media-card";
+import { qualityChips, qualitySegments } from "@/lib/media/quality-chips";
 import { MediaDetailHero } from "@/components/media-detail-hero";
 import { RatingChip } from "@/components/rating-chip";
 import { getRatingLabel } from "@/lib/rating-labels";
@@ -44,7 +46,7 @@ interface SeasonData {
 
 export default function SeriesDetailPage() {
   const { id } = useParams<{ id: string }>();
-  const { getBadgeStyle, getHex } = useChipColors();
+  const { getHex } = useChipColors();
   const [item, setItem] = useState<MediaItemWithRelations | null>(null);
   const [playServers, setPlayServers] = useState<PlayServer[]>([]);
   const [seasons, setSeasons] = useState<SeasonData[]>([]);
@@ -175,13 +177,9 @@ export default function SeriesDetailPage() {
       }
       badges={
         <>
-          {QUALITY_ORDER
-            .filter((q) => qualityCounts[q])
-            .map((label) => (
-              <ColorChip key={label} style={getBadgeStyle("resolution", label)}>
-                {label}: {qualityCounts[label]}
-              </ColorChip>
-            ))}
+          {qualityChips({ qualityCounts }, "video").map((chip) => (
+            <QualityChip key={chip.label} chip={chip} />
+          ))}
           {totalSize > 0 && (
             <ColorChip className="border-border text-muted-foreground">{formatFileSize(totalSize.toString())}</ColorChip>
           )}
@@ -246,18 +244,10 @@ export default function SeriesDetailPage() {
                       />
                     </div>
                     {Object.keys(s.qualityCounts).length > 0 && (
-                      <div className="flex w-full gap-1 px-1 py-0.5" aria-hidden="true">
-                        {QUALITY_ORDER
-                          .filter((q) => s.qualityCounts[q])
-                          .map((quality) => (
-                            <div
-                              key={quality}
-                              className="h-1 min-w-1 rounded-full"
-                              style={{ backgroundColor: getHex("resolution", quality), flex: s.qualityCounts[quality] }}
-                              title={`${quality}: ${s.qualityCounts[quality]}`}
-                            />
-                          ))}
-                      </div>
+                      <QualityBar
+                        segments={qualitySegments(qualityChips({ qualityCounts: s.qualityCounts }, "video"), getHex)}
+                        className="px-1 py-0.5 bg-transparent"
+                      />
                     )}
                     <p className="mt-1 truncate text-xs font-medium text-foreground px-0.5">
                       {s.title}

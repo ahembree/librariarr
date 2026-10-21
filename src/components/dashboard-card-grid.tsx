@@ -169,6 +169,7 @@ export function DashboardCardGrid({
 
   // Build hex color maps for breakdown charts from chip color context
   const dynamicRangeHex = useMemo(() => chipColors.dynamicRange, [chipColors.dynamicRange]);
+  const audioCodecHex = useMemo(() => chipColors.audioCodec, [chipColors.audioCodec]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -287,6 +288,9 @@ export function DashboardCardGrid({
               _count: b._count,
             }))}
             nullLabel="Unknown"
+            // Codecs are upper-cased by the default label transform, which is
+            // how the chip-colour keys are spelled.
+            hexColors={audioCodecHex}
             filterType={filterType}
             lockedFilterType={lockedFilterType}
             availableTypes={availableTypes}

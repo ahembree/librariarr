@@ -5,8 +5,12 @@ import { toast } from "sonner";
 import { useLocalStorage, useLocalStorageJSON } from "@/hooks/use-local-storage";
 import Link from "next/link";
 import { useColumnResize } from "@/hooks/use-column-resize";
-import { usePanelResize } from "@/hooks/use-panel-resize";
+import { useMediaDetailPanel } from "@/hooks/use-media-detail-panel";
+import { groupOfRow, toDetailPanelMediaType } from "@/lib/media/detail-panel-item";
 import { MediaDetailSidePanel } from "@/components/media-detail-side-panel";
+import { ruleBuilderConfig } from "@/components/rule-builder";
+import type { BaseGroup, BaseRule, BuilderConfig } from "@/components/builder/types";
+import type { LifecycleRuleGroup } from "@/lib/rules/types";
 import { EmptyState } from "@/components/empty-state";
 import { IntegrationUnreachableBanner } from "@/components/integration-unreachable-banner";
 import { useIntegrationsHealth } from "@/hooks/use-integrations-health";
@@ -24,10 +28,10 @@ import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { CardSizeControl } from "@/components/card-size-control";
 import { CardDisplayControl } from "@/components/card-display-control";
 import { MetadataLine } from "@/components/metadata-line";
+import { qualityChips, qualitySegments } from "@/lib/media/quality-chips";
 import { useChipColors } from "@/components/chip-color-provider";
 import { type ChipColorCategory } from "@/lib/theme/chip-colors";
 import { MEDIA_TYPE_BADGE_COLORS, mediaTypeLabel } from "@/lib/theme/media-type-colors";
-import { normalizeResolutionLabel } from "@/lib/resolution";
 import { formatFileSize, formatDuration } from "@/lib/format";
 import { formatActionTypeLabel } from "@/lib/lifecycle/action-types";
 import { cn } from "@/lib/utils";
@@ -47,7 +51,6 @@ import {
   Tv,
 } from "lucide-react";
 import { TabNav, type TabNavItem } from "@/components/tab-nav";
-import { Badge } from "@/components/ui/badge";
 import { ColorChip } from "@/components/color-chip";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
 import { HoverCard, HoverCardTrigger, HoverCardContent } from "@/components/ui/hover-card";
@@ -100,22 +103,17 @@ interface RuleSetMatch {
     searchAfterAction: boolean;
     addArrTags: string[];
     removeArrTags: string[];
+    rules: LifecycleRuleGroup[] | unknown[];
     collectionName: string | null;
   };
   items: MatchedMediaItem[];
   count: number;
 }
 
-function formatResolution(resolution: string | null): string {
-  if (!resolution) return "";
-  const label = normalizeResolutionLabel(resolution);
-  return label === "Other" ? resolution : label;
-}
-
 interface MatchItemsViewProps {
   items: MatchedMediaItem[];
   ruleSet: RuleSetMatch["ruleSet"];
-  onItemClick: (item: MediaItemWithRelations) => void;
+  onItemClick: (item: MatchedMediaItem) => void;
   onExclude: (item: MatchedMediaItem) => void;
   excludingItems: Set<string>;
   exceptedItemIds: Set<string>;
@@ -404,6 +402,7 @@ function MatchItemsTableView({
                       resolution: item.resolution,
                       dynamicRange: item.dynamicRange,
                       audioProfile: item.audioProfile,
+                      audioCodec: ruleSet.type === "MUSIC" && !item.matchedEpisodes ? item.audioCodec : undefined,
                       fileSize: item.fileSize,
                       genres: item.genres,
                       studio: item.studio,
@@ -560,6 +559,7 @@ function MatchItemsCardView({
                               resolution: item.resolution,
                               dynamicRange: item.dynamicRange,
                               audioProfile: item.audioProfile,
+                              audioCodec: ruleSet.type === "MUSIC" && !item.matchedEpisodes ? item.audioCodec : undefined,
                               fileSize: item.fileSize,
                               genres: item.genres,
                               studio: item.studio,
@@ -577,18 +577,13 @@ function MatchItemsCardView({
                             {show("metadata", "fileSize") && formatFileSize(item.fileSize) && <span>{formatFileSize(item.fileSize)}</span>}
                           </MetadataLine>
                         }
-                        qualityBar={
-                          show("badges", "resolution") || show("badges", "dynamicRange")
-                            ? [
-                                ...(show("badges", "resolution") && item.resolution
-                                  ? [{ color: getHex("resolution", formatResolution(item.resolution)), weight: 1, label: formatResolution(item.resolution) }]
-                                  : []),
-                                ...(show("badges", "dynamicRange") && item.dynamicRange && item.dynamicRange !== "SDR"
-                                  ? [{ color: getHex("dynamicRange", item.dynamicRange), weight: 1, label: item.dynamicRange }]
-                                  : []),
-                              ]
-                            : undefined
-                        }
+                        qualityBar={qualitySegments(
+                          // An artist row is stored against one of its tracks, whose codec
+                          // is not the artist's, so it draws no codec segment.
+                          ruleSet.type === "MUSIC" && item.matchedEpisodes ? [] : qualityChips(item, ruleSet.type === "MUSIC" ? "music" : "video"),
+                          getHex,
+                          (toggle) => show("badges", toggle),
+                        )}
                         badges={
                           item.matchedCriteria && item.matchedCriteria.length > 0 ? (
                             <ColorChip className="border-border text-muted-foreground">
@@ -637,14 +632,7 @@ const TAB_TO_TYPE: Record<MediaTypeTab, string | null> = {
 
 export default function RuleMatchesPage() {
   const [mediaTypeTab, setMediaTypeTab] = useState<MediaTypeTab>("all");
-  const { width: panelWidth, resizeHandleProps } = usePanelResize({
-    storageKey: "lifecycle-matches-panel-width",
-    defaultWidth: 480,
-    minWidth: 360,
-    maxWidth: 800,
-  });
-  const [selectedItem, setSelectedItem] = useState<MatchedMediaItem | null>(null);
-  const [selectedItemType, setSelectedItemType] = useState<"MOVIE" | "SERIES" | "MUSIC">("MOVIE");
+  const detailPanel = useMediaDetailPanel();
   const [ruleMatches, setRuleMatches] = useState<RuleSetMatch[]>([]);
   const { health: integrationsHealth } = useIntegrationsHealth();
   const arrInstanceIds = useMemo<readonly string[]>(
@@ -762,6 +750,26 @@ export default function RuleMatchesPage() {
       });
     }
   }, []);
+
+  const { open: openPanel } = detailPanel;
+  const openDetailPanel = useCallback((item: MatchedMediaItem, ruleSet: RuleSetMatch["ruleSet"]) => {
+    // The Logic Preview reads grouped rules; a rule set still stored in the
+    // flat legacy shape shows its matched criteria alone.
+    const rules = (Array.isArray(ruleSet.rules) ? ruleSet.rules : []) as LifecycleRuleGroup[];
+    const grouped = rules.length > 0 && typeof rules[0] === "object" && rules[0] !== null && "rules" in rules[0];
+    void openPanel({
+      id: item.id,
+      mediaType: toDetailPanelMediaType(ruleSet.type),
+      seed: item,
+      group: groupOfRow(item),
+      matchedCriteria: item.matchedCriteria,
+      actualValues: item.actualValues,
+      ...(grouped && {
+        ruleGroups: rules.map((g) => ({ ...g, groups: g.groups ?? [] })) as unknown as BaseGroup<BaseRule>[],
+        builderConfig: ruleBuilderConfig as unknown as BuilderConfig<BaseRule, BaseGroup<BaseRule>>,
+      }),
+    });
+  }, [openPanel]);
 
   const excludeItem = useCallback((item: MatchedMediaItem) => {
     setExcludeReason("");
@@ -1014,9 +1022,9 @@ export default function RuleMatchesPage() {
                         <ColorChip className={MEDIA_TYPE_BADGE_COLORS[match.ruleSet.type] ?? "border-border text-muted-foreground"}>
                           {mediaTypeLabel(match.ruleSet.type)}
                         </ColorChip>
-                        <Badge variant="secondary">
+                        <ColorChip className="bg-muted/40 text-muted-foreground">
                           {match.count} match{match.count !== 1 && "es"}
-                        </Badge>
+                        </ColorChip>
                         {match.ruleSet.actionEnabled && (
                           <span className="text-xs text-muted-foreground">
                             Action: {formatActionType(match.ruleSet.actionType, match.ruleSet.targetQualityProfileId)}
@@ -1087,10 +1095,7 @@ export default function RuleMatchesPage() {
                     viewMode={viewMode}
                     items={match.items}
                     ruleSet={match.ruleSet}
-                    onItemClick={(item) => {
-                      setSelectedItem(item);
-                      setSelectedItemType(match.ruleSet.type as "MOVIE" | "SERIES" | "MUSIC");
-                    }}
+                    onItemClick={(item) => openDetailPanel(item, match.ruleSet)}
                     onExclude={excludeItem}
                     excludingItems={excludingItems}
                     exceptedItemIds={exceptedItemIds}
@@ -1118,17 +1123,7 @@ export default function RuleMatchesPage() {
       </div>
 
 
-      {selectedItem && (
-        <MediaDetailSidePanel
-          item={selectedItem}
-          mediaType={selectedItemType}
-          onClose={() => setSelectedItem(null)}
-          width={panelWidth}
-          resizeHandleProps={resizeHandleProps}
-          matchedCriteria={selectedItem.matchedCriteria}
-          allActualValues={selectedItem.actualValues}
-        />
-      )}
+      {detailPanel.panelProps && <MediaDetailSidePanel {...detailPanel.panelProps} />}
 
       {/* Exclude reason prompt */}
       <Dialog open={!!excludePromptItem} onOpenChange={(open) => { if (!open) setExcludePromptItem(null); }}>

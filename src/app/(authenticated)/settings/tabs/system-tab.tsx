@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
+import { ColorChip } from "@/components/color-chip";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -123,14 +123,10 @@ function ReleaseNoteRow({ note }: { note: ReleaseNote }) {
             <span className="font-medium font-mono text-sm">v{note.version}</span>
             <div className="flex items-center gap-1.5 shrink-0">
               {note.isCurrent && (
-                <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
-                  Current
-                </Badge>
+                <ColorChip className="bg-muted/40 text-muted-foreground">Current</ColorChip>
               )}
               {note.isLatest && !note.isCurrent && (
-                <Badge className="bg-emerald-500/15 text-emerald-400 border-emerald-500/20 text-[10px] px-1.5 py-0">
-                  Latest
-                </Badge>
+                <ColorChip className="border-green/25 bg-green-dim text-green">Latest</ColorChip>
               )}
             </div>
             {note.publishedAt && (

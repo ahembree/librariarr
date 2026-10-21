@@ -5,7 +5,9 @@ import { useRealtime } from "@/hooks/use-realtime";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useLocalStorage } from "@/hooks/use-local-storage";
 import { useChipColors } from "@/components/chip-color-provider";
-import { normalizeResolutionLabel, QUALITY_ORDER } from "@/lib/resolution";
+import { QualityChip } from "@/components/quality-chips";
+import { qualityChips, qualitySegments } from "@/lib/media/quality-chips";
+import { normalizeResolutionLabel } from "@/lib/resolution";
 import { cn } from "@/lib/utils";
 import { MediaDetailHero } from "@/components/media-detail-hero";
 import { MediaTable } from "@/components/media-table";
@@ -27,16 +29,10 @@ import { IntegrationsSection } from "@/components/integrations-section";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
 import { PlayHistory } from "@/components/play-history";
 
-function formatResolution(resolution: string | null): string {
-  if (!resolution) return "Unknown";
-  const label = normalizeResolutionLabel(resolution);
-  return label === "Other" ? resolution : label;
-}
-
 export default function SeasonDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
-  const { getBadgeStyle, getHex } = useChipColors();
+  const { getHex } = useChipColors();
   const { show, setVisible, prefs } = useCardDisplay("SERIES_EPISODES");
   const { size, setSize, landscapeGridStyle } = useCardSize();
   const [item, setItem] = useState<MediaItemWithRelations | null>(null);
@@ -154,7 +150,7 @@ export default function SeasonDetailPage() {
   const seasonLabel = seasonNumber === 0 ? "Specials" : `Season ${seasonNumber}`;
   const totalSize = episodes.reduce((sum, ep) => sum + (ep.fileSize ? Number(ep.fileSize) : 0), 0);
 
-  // Quality breakdown (normalize to standard labels so QUALITY_ORDER works)
+  // Quality breakdown, under the standard labels the aggregate routes use
   const qualityCounts: Record<string, number> = {};
   for (const ep of episodes) {
     const label = normalizeResolutionLabel(ep.resolution);
@@ -174,13 +170,9 @@ export default function SeasonDetailPage() {
       }
       badges={
         <>
-          {QUALITY_ORDER
-            .filter((q) => qualityCounts[q])
-            .map((label) => (
-              <ColorChip key={label} style={getBadgeStyle("resolution", label)}>
-                {label}: {qualityCounts[label]}
-              </ColorChip>
-            ))}
+          {qualityChips({ qualityCounts }, "video").map((chip) => (
+            <QualityChip key={chip.label} chip={chip} />
+          ))}
           {totalSize > 0 && (
             <ColorChip className="border-border text-muted-foreground">{formatFileSize(totalSize.toString())}</ColorChip>
           )}
@@ -328,21 +320,7 @@ export default function SeasonDetailPage() {
                       {show("metadata", "fileSize") && formatFileSize(ep.fileSize) && <MetadataItem icon={<HardDrive />}>{formatFileSize(ep.fileSize)}</MetadataItem>}
                     </MetadataLine>
                   }
-                  qualityBar={
-                    show("badges", "resolution") || show("badges", "dynamicRange") || show("badges", "audioProfile")
-                      ? [
-                          ...(show("badges", "resolution") && ep.resolution
-                            ? [{ color: getHex("resolution", formatResolution(ep.resolution)), weight: 1, label: formatResolution(ep.resolution) }]
-                            : []),
-                          ...(show("badges", "dynamicRange") && ep.dynamicRange && ep.dynamicRange !== "SDR"
-                            ? [{ color: getHex("dynamicRange", ep.dynamicRange), weight: 1, label: ep.dynamicRange }]
-                            : []),
-                          ...(show("badges", "audioProfile") && ep.audioProfile
-                            ? [{ color: getHex("audioProfile", ep.audioProfile), weight: 1, label: ep.audioProfile }]
-                            : []),
-                        ]
-                      : undefined
-                  }
+                  qualityBar={qualitySegments(qualityChips(ep, "video"), getHex, (toggle) => show("badges", toggle))}
                 />
               ))}
             </div>

@@ -8,7 +8,7 @@ import { FadeImage } from "@/components/ui/fade-image";
 import { CACHE_WIDTH_GRID, withImageWidth } from "@/lib/image-url";
 import { InsightCard, InsightEmpty } from "@/components/dashboard/insight-card";
 import { LazyMediaHoverPopover } from "@/components/lazy-media-hover-popover";
-import type { MediaHoverData } from "@/components/media-hover-popover";
+import { hoverDataFromRecord, type MediaHoverData } from "@/components/media-hover-popover";
 
 interface TopMovie {
   id: string;
@@ -169,7 +169,7 @@ export function TopPlayed({
               <LazyMediaHoverPopover
                 key={movie.id}
                 fetchUrl={`/api/media/${movie.id}`}
-                extractData={(json) => (json as { item: MediaHoverData }).item}
+                extractData={(json) => hoverDataFromRecord((json as { item: MediaHoverData }).item)}
                 placeholder={placeholder}
                 imageUrl={`/api/media/${movie.id}/image`}
                 imageAspect="poster"

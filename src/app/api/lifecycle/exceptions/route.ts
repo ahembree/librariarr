@@ -60,6 +60,7 @@ export async function GET(request: NextRequest) {
           resolution: true,
           dynamicRange: true,
           audioProfile: true,
+          audioCodec: true,
           fileSize: true,
           genres: true,
           studio: true,

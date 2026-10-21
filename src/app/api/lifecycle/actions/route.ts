@@ -30,6 +30,7 @@ interface ActionItemMediaItem {
   resolution: string | null;
   dynamicRange: string | null;
   audioProfile: string | null;
+  audioCodec: string | null;
   fileSize: string | null;
   genres: string[] | null;
   studio: string | null;
@@ -82,7 +83,7 @@ interface RuleSetGroup {
 const MEDIA_ITEM_SELECT = {
   id: true, title: true, parentTitle: true, type: true, thumbUrl: true, seasonNumber: true, episodeNumber: true,
   year: true, summary: true, parentSummary: true, contentRating: true, rating: true, ratingImage: true, audienceRating: true, audienceRatingImage: true,
-  duration: true, resolution: true, dynamicRange: true, audioProfile: true, fileSize: true,
+  duration: true, resolution: true, dynamicRange: true, audioProfile: true, audioCodec: true, fileSize: true,
   genres: true, studio: true, playCount: true, lastPlayedAt: true, addedAt: true, libraryId: true,
 } as const;
 
@@ -121,7 +122,7 @@ type SelectedMediaItem = {
   rating: number | null; ratingImage: string | null;
   audienceRating: number | null; audienceRatingImage: string | null;
   duration: number | null; resolution: string | null; dynamicRange: string | null;
-  audioProfile: string | null; fileSize: bigint | null;
+  audioProfile: string | null; audioCodec: string | null; fileSize: bigint | null;
   genres: unknown; studio: string | null;
   playCount: number; lastPlayedAt: Date | null; addedAt: Date | null;
   libraryId: string;
@@ -135,7 +136,7 @@ function serializeMediaItem(mi: SelectedMediaItem, servers: LibraryServers): Act
     rating: mi.rating, ratingImage: mi.ratingImage,
     audienceRating: mi.audienceRating, audienceRatingImage: mi.audienceRatingImage,
     duration: mi.duration, resolution: mi.resolution, dynamicRange: mi.dynamicRange,
-    audioProfile: mi.audioProfile, fileSize: mi.fileSize?.toString() ?? null,
+    audioProfile: mi.audioProfile, audioCodec: mi.audioCodec, fileSize: mi.fileSize?.toString() ?? null,
     genres: (Array.isArray(mi.genres) ? mi.genres : null) as string[] | null,
     studio: mi.studio, playCount: mi.playCount,
     lastPlayedAt: mi.lastPlayedAt?.toISOString() ?? null,
@@ -180,7 +181,7 @@ function buildActionMediaItem(
   const nullFields = {
     thumbUrl: null, year: null, summary: null, contentRating: null, rating: null, ratingImage: null,
     audienceRating: null, audienceRatingImage: null, duration: null, resolution: null, dynamicRange: null,
-    audioProfile: null, fileSize: null, genres: null, studio: null,
+    audioProfile: null, audioCodec: null, fileSize: null, genres: null, studio: null,
     playCount: 0, lastPlayedAt: null, addedAt: null, matchedEpisodes: null,
   };
   if (ruleSetType === "SERIES") {

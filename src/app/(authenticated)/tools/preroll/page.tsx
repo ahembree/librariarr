@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { Badge } from "@/components/ui/badge";
+import { ColorChip } from "@/components/color-chip";
 import {
   Select,
   SelectContent,
@@ -1091,17 +1091,17 @@ export default function PrerollManagerPage() {
                     <div className="flex-1 min-w-0 space-y-1.5">
                       <div className="flex items-center gap-2 flex-wrap">
                         <p className="font-medium text-sm">{schedule.name}</p>
-                        <Badge variant="secondary" className="text-[10px] px-1.5">
+                        <ColorChip className="bg-muted/40 text-muted-foreground">
                           {formatScheduleTypeLabel(schedule.scheduleType)}
-                        </Badge>
-                        <Badge variant="outline" className="text-[10px] px-1.5">
-                          Priority: {schedule.priority}
-                        </Badge>
+                        </ColorChip>
+                        <ColorChip className="bg-muted/40 text-muted-foreground">
+                          Priority: <span className="ml-1 font-mono tabular-nums">{schedule.priority}</span>
+                        </ColorChip>
                         {isScheduleCurrentlyActive(schedule) && (
-                          <Badge className="text-[10px] px-1.5 border-emerald-500/30 bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/20">
-                            <span className="mr-1 inline-block h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                          <ColorChip className="border-green/25 bg-green-dim text-green">
+                            <span className="mr-1 inline-block h-1.5 w-1.5 rounded-full bg-green animate-pulse" />
                             Active
-                          </Badge>
+                          </ColorChip>
                         )}
                       </div>
                       <div className="flex items-center gap-1.5 text-xs text-muted-foreground">

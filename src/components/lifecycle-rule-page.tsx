@@ -24,7 +24,8 @@ import { hasArrRules, hasSeerrRules, hasPlayActivityRules } from "@/lib/conditio
 import { useRealtime } from "@/hooks/use-realtime";
 import { MediaTable } from "@/components/media-table";
 import { MediaDetailSidePanel, type MatchedCriterion } from "@/components/media-detail-side-panel";
-import { usePanelResize } from "@/hooks/use-panel-resize";
+import { useMediaDetailPanel } from "@/hooks/use-media-detail-panel";
+import { groupOfRow } from "@/lib/media/detail-panel-item";
 import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
 import { deletesArrRecord } from "@/lib/lifecycle/action-types";
 import type { MediaItemWithRelations } from "@/lib/types";
@@ -77,7 +78,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Badge } from "@/components/ui/badge";
 import { PseudocodePanel } from "@/components/builder/pseudocode-panel";
 import { MediaCard } from "@/components/media-card";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
@@ -86,9 +86,9 @@ import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { CardSizeControl } from "@/components/card-size-control";
 import { CardDisplayControl } from "@/components/card-display-control";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
+import { qualityChips, qualitySegments } from "@/lib/media/quality-chips";
 import { useChipColors } from "@/components/chip-color-provider";
 import type { ChipColorCategory } from "@/lib/theme/chip-colors";
-import { normalizeResolutionLabel } from "@/lib/resolution";
 import { formatFileSize, formatDuration } from "@/lib/format";
 import { formatMediaItemTitle } from "@/lib/media/display-title";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -304,12 +304,6 @@ interface LifecycleRulePageProps {
   scopeConfig?: ScopeConfig;
   /** When true, skips outer padding and page title (used when embedded in the unified rules page) */
   embedded?: boolean;
-}
-
-function formatResolution(resolution: string | null): string {
-  if (!resolution) return "";
-  const label = normalizeResolutionLabel(resolution);
-  return label === "Other" ? resolution : label;
 }
 
 const CARD_GAP = 16;
@@ -531,6 +525,7 @@ function PreviewCardGrid({
                               resolution: item.resolution,
                               dynamicRange: item.dynamicRange,
                               audioProfile: item.audioProfile,
+                              audioCodec: mediaType === "MUSIC" && !item.matchedEpisodes ? item.audioCodec : undefined,
                               fileSize: item.fileSize,
                               genres: item.genres,
                               studio: item.studio,
@@ -548,21 +543,13 @@ function PreviewCardGrid({
                             {show("metadata", "fileSize") && formatFileSize(item.fileSize) && <MetadataItem icon={<HardDrive />}>{formatFileSize(item.fileSize)}</MetadataItem>}
                           </MetadataLine>
                         }
-                        qualityBar={
-                          show("badges", "resolution") || show("badges", "dynamicRange") || show("badges", "audioProfile")
-                            ? [
-                                ...(show("badges", "resolution") && item.resolution
-                                  ? [{ color: getHex("resolution", formatResolution(item.resolution)), weight: 1, label: formatResolution(item.resolution) }]
-                                  : []),
-                                ...(show("badges", "dynamicRange") && item.dynamicRange && item.dynamicRange !== "SDR"
-                                  ? [{ color: getHex("dynamicRange", item.dynamicRange), weight: 1, label: item.dynamicRange }]
-                                  : []),
-                                ...(show("badges", "audioProfile") && item.audioProfile
-                                  ? [{ color: getHex("audioProfile", item.audioProfile), weight: 1, label: item.audioProfile }]
-                                  : []),
-                              ]
-                            : undefined
-                        }
+                        qualityBar={qualitySegments(
+                          // An artist row is stored against one of its tracks, whose codec
+                          // is not the artist's, so it draws no codec segment.
+                          mediaType === "MUSIC" && item.matchedEpisodes ? [] : qualityChips(item, mediaType === "MUSIC" ? "music" : "video"),
+                          getHex,
+                          (toggle) => show("badges", toggle),
+                        )}
                         servers={showServers ? item.servers : undefined}
                       />
                     </div>
@@ -610,13 +597,7 @@ export function LifecycleRulePage({
   scopeConfig,
   embedded,
 }: LifecycleRulePageProps) {
-  const { width: panelWidth, resizeHandleProps } = usePanelResize({
-    storageKey: "lifecycle-rule-panel-width",
-    defaultWidth: 480,
-    minWidth: 360,
-    maxWidth: 800,
-  });
-  const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
+  const detailPanel = useMediaDetailPanel();
   const [name, setName] = useState("");
   // Only flag a missing name after the user has interacted with the field
   const [nameTouched, setNameTouched] = useState(false);
@@ -627,10 +608,21 @@ export function LifecycleRulePage({
   const [copied, setCopied] = useState(false);
   const [groups, setGroups] = useState<LifecycleRuleGroup[]>([]);
   const [preview, setPreview] = useState<PreviewItem[]>([]);
-  const selectedItem = useMemo(
-    () => (selectedItemId ? preview.find((p) => p.id === selectedItemId) ?? null : null),
-    [preview, selectedItemId],
+  // The open row as the latest preview has it: a re-run refreshes its matched
+  // criteria and values, and the panel hides while the row is gone.
+  const selectedPreview = useMemo(
+    () => (detailPanel.selectedId ? preview.find((p) => p.id === detailPanel.selectedId) ?? null : null),
+    [preview, detailPanel.selectedId],
   );
+  const { open: openPanel } = detailPanel;
+  const openDetailPanel = useCallback((item: PreviewItem) => {
+    void openPanel({
+      id: item.id,
+      mediaType,
+      seed: item,
+      group: groupOfRow(item),
+    });
+  }, [openPanel, mediaType]);
   const [savedRuleSets, setSavedRuleSets] = useState<SavedRuleSet[]>([]);
   const [activeRuleSetId, setActiveRuleSetId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -2225,10 +2217,7 @@ export function LifecycleRulePage({
                 {serverIds.map((id) => {
                   const server = servers.find((s) => s.id === id);
                   return (
-                    <span
-                      key={id}
-                      className="inline-flex items-center gap-1 rounded-md bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary"
-                    >
+                    <ColorChip key={id} className="gap-1 border-primary/25 bg-primary/10 text-primary">
                       {server?.name ?? id}
                       {server && <ServerTypeChip type={server.type} />}
                       <button
@@ -2238,7 +2227,7 @@ export function LifecycleRulePage({
                       >
                         <X className="h-3 w-3" />
                       </button>
-                    </span>
+                    </ColorChip>
                   );
                 })}
               </div>
@@ -2651,12 +2640,12 @@ export function LifecycleRulePage({
                       {(tagMode === "add" ? addArrTags : removeArrTags).length > 0 && (
                         <div className="flex flex-wrap gap-1.5">
                           {(tagMode === "add" ? addArrTags : removeArrTags).map((tag) => (
-                            <span
+                            <ColorChip
                               key={tag}
-                              className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs ${
+                              className={`gap-1 ${
                                 tagMode === "add"
-                                  ? "bg-green/15 text-green"
-                                  : "bg-red/15 text-red"
+                                  ? "border-green/30 bg-green-dim text-green"
+                                  : "border-red/30 bg-red-dim text-red"
                               }`}
                             >
                               {tagMode === "add" ? "+" : "-"}{tag}
@@ -2672,7 +2661,7 @@ export function LifecycleRulePage({
                               >
                                 <X className="h-3 w-3" />
                               </button>
-                            </span>
+                            </ColorChip>
                           ))}
                         </div>
                       )}
@@ -3042,19 +3031,19 @@ export function LifecycleRulePage({
               <div className="flex items-center gap-2 text-sm">
                 <span className="text-muted-foreground">—</span>
                 {previewDiffCounts.added > 0 && (
-                  <Badge variant="outline" className="border-emerald-500/50 text-emerald-400">
+                  <ColorChip className="border-green/30 bg-green-dim text-green">
                     +{previewDiffCounts.added} new
-                  </Badge>
+                  </ColorChip>
                 )}
                 {previewDiffCounts.retained > 0 && (
-                  <Badge variant="outline" className="text-muted-foreground">
+                  <ColorChip className="border-border bg-muted/40 text-muted-foreground">
                     {previewDiffCounts.retained} retained
-                  </Badge>
+                  </ColorChip>
                 )}
                 {previewDiffCounts.removed > 0 && (
-                  <Badge variant="outline" className="border-amber/50 text-amber">
+                  <ColorChip className="border-amber/30 bg-amber-dim text-amber">
                     -{previewDiffCounts.removed} removed
-                  </Badge>
+                  </ColorChip>
                 )}
               </div>
             )}
@@ -3102,7 +3091,7 @@ export function LifecycleRulePage({
           {previewViewMode === "table" ? (
             <MediaTable
               items={sortedPreview}
-              onItemClick={(item) => setSelectedItemId(item.id)}
+              onItemClick={openDetailPanel}
               sortBy={previewSortBy}
               sortOrder={previewSortOrder}
               onSort={handlePreviewSort}
@@ -3125,6 +3114,7 @@ export function LifecycleRulePage({
                     resolution: item.resolution,
                     dynamicRange: item.dynamicRange,
                     audioProfile: item.audioProfile,
+                    audioCodec: mediaType === "MUSIC" && !item.matchedEpisodes ? item.audioCodec : undefined,
                     fileSize: item.fileSize,
                     genres: item.genres,
                     studio: item.studio,
@@ -3146,7 +3136,7 @@ export function LifecycleRulePage({
             <PreviewCardGrid
               items={sortedPreview}
               mediaType={mediaType}
-              onItemClick={(item) => setSelectedItemId(item.id)}
+              onItemClick={openDetailPanel}
               diffMap={previewDiffMap}
               exceptedItemIds={exceptedItemIds}
               show={showCardField}
@@ -3322,14 +3312,13 @@ export function LifecycleRulePage({
                 <div className="space-y-4">
                   {/* Match indicator */}
                   <div className="flex items-center gap-2">
-                    <Badge
-                      variant={testMediaResult.matches ? "default" : "secondary"}
+                    <ColorChip
                       className={testMediaResult.matches
-                        ? "bg-green hover:bg-green text-white"
-                        : "text-muted-foreground"}
+                        ? "border-green/30 bg-green-dim text-green"
+                        : "border-border bg-muted/40 text-muted-foreground"}
                     >
                       {testMediaResult.matches ? "Matches Rules" : "Does Not Match"}
-                    </Badge>
+                    </ColorChip>
                   </div>
 
                   {/* Matched criteria badges */}
@@ -3339,23 +3328,20 @@ export function LifecycleRulePage({
                       <div className="flex flex-wrap gap-1.5">
                         {testMediaResult.matchedCriteria.map((criterion, i) => {
                           const badge = (
-                            <Badge
-                              key={i}
-                              variant="outline"
-                              className={`text-xs ${criterion.negate ? "border-red/30 text-red" : ""}`}
-                            >
+                            <ColorChip key={i} className={criterion.negate ? "border-red/30 text-red" : undefined}>
                               {criterion.groupName && (
                                 <span className="text-sky mr-1">[{criterion.groupName}]</span>
                               )}
                               {criterion.negate && <span className="text-red mr-1">NOT</span>}
                               {criterion.field} {criterion.operator} {criterion.value}
-                            </Badge>
+                            </ColorChip>
                           );
                           if (criterion.actualValue) {
                             return (
                               <TooltipProvider key={i}>
                                 <Tooltip>
-                                  <TooltipTrigger asChild>{badge}</TooltipTrigger>
+                                  {/* ColorChip takes no ref, so the trigger is a wrapper. */}
+                                  <TooltipTrigger asChild><span className="inline-flex">{badge}</span></TooltipTrigger>
                                   <TooltipContent>Actual: {criterion.actualValue}</TooltipContent>
                                 </Tooltip>
                               </TooltipProvider>
@@ -3764,17 +3750,13 @@ export function LifecycleRulePage({
         </div>
     </div>
 
-      {selectedItem && (
+      {detailPanel.panelProps && selectedPreview && (
         <MediaDetailSidePanel
-          item={selectedItem}
-          mediaType={mediaType}
-          onClose={() => setSelectedItemId(null)}
-          width={panelWidth}
-          resizeHandleProps={resizeHandleProps}
-          matchedCriteria={selectedItem.matchedCriteria}
+          {...detailPanel.panelProps}
+          matchedCriteria={selectedPreview.matchedCriteria}
           ruleGroups={groups}
           builderConfig={ruleBuilderConfig}
-          allActualValues={selectedItem.actualValues}
+          allActualValues={selectedPreview.actualValues}
         />
       )}
     </>

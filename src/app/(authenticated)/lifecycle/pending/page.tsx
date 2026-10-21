@@ -3,13 +3,13 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { toast } from "sonner";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { usePanelResize } from "@/hooks/use-panel-resize";
+import { useMediaDetailPanel } from "@/hooks/use-media-detail-panel";
+import { groupOfRow, toDetailPanelMediaType } from "@/lib/media/detail-panel-item";
 import { MediaDetailSidePanel } from "@/components/media-detail-side-panel";
 import { EmptyState } from "@/components/empty-state";
 import { IntegrationUnreachableBanner } from "@/components/integration-unreachable-banner";
 import { useIntegrationsHealth } from "@/hooks/use-integrations-health";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { ColorChip } from "@/components/color-chip";
 import { MEDIA_TYPE_BADGE_COLORS, mediaTypeLabel } from "@/lib/theme/media-type-colors";
 import {
@@ -47,6 +47,8 @@ import {
   XCircle,
 } from "lucide-react";
 import { MediaCard } from "@/components/media-card";
+import { useChipColors } from "@/components/chip-color-provider";
+import { qualityChips, qualitySegments } from "@/lib/media/quality-chips";
 import { useCardSize, estimateContentWidth } from "@/hooks/use-card-size";
 import { CardSizeControl } from "@/components/card-size-control";
 import { formatDuration, formatFileSize } from "@/lib/format";
@@ -66,7 +68,6 @@ import {
 import { Input } from "@/components/ui/input";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
 import { HoverCard, HoverCardTrigger, HoverCardContent } from "@/components/ui/hover-card";
-import type { MediaItemWithRelations } from "@/lib/types";
 import { useRealtime } from "@/hooks/use-realtime";
 
 interface ActionItem {
@@ -98,6 +99,7 @@ interface ActionItem {
     resolution?: string | null;
     dynamicRange?: string | null;
     audioProfile?: string | null;
+    audioCodec?: string | null;
     fileSize?: string | null;
     genres?: string[] | null;
     studio?: string | null;
@@ -258,9 +260,7 @@ function VirtualizedActionTable({
                         {formatActionTypeLabel(action.actionType, action.targetQualityProfileId)}
                       </p>
                       {action.addImportExclusion && (
-                        <Badge variant="outline" className="text-[10px]">
-                          + List exclusion
-                        </Badge>
+                        <ColorChip className="bg-muted/40 text-muted-foreground">+ List exclusion</ColorChip>
                       )}
                       {action.addArrTags?.length > 0 && (
                         <div className="flex flex-wrap gap-1">
@@ -422,9 +422,12 @@ function VirtualizedActionTable({
                         ratingImage: action.mediaItem.ratingImage,
                         audienceRatingImage: action.mediaItem.audienceRatingImage,
                         duration: action.mediaItem.matchedEpisodes ? undefined : action.mediaItem.duration,
-                        resolution: action.mediaItem.resolution,
-                        dynamicRange: action.mediaItem.dynamicRange,
-                        audioProfile: action.mediaItem.audioProfile,
+                        // A grouped row's own quality values are one episode's or
+                        // track's, never the group's.
+                        resolution: action.mediaItem.matchedEpisodes ? undefined : action.mediaItem.resolution,
+                        dynamicRange: action.mediaItem.matchedEpisodes ? undefined : action.mediaItem.dynamicRange,
+                        audioProfile: action.mediaItem.matchedEpisodes ? undefined : action.mediaItem.audioProfile,
+                        audioCodec: action.mediaItem.type === "MUSIC" && !action.mediaItem.matchedEpisodes ? action.mediaItem.audioCodec : undefined,
                         fileSize: action.mediaItem.fileSize,
                         genres: action.mediaItem.genres,
                         studio: action.mediaItem.studio,
@@ -468,6 +471,7 @@ function PendingActionCardGrid({
 }) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const { columns: actualColumns } = useCardSize();
+  const { getHex } = useChipColors();
   const isMusic = ruleSetType === "MUSIC";
   const isMovie = ruleSetType === "MOVIE";
   const fallbackIcon = isMovie ? "movie" as const : isMusic ? "music" as const : "series" as const;
@@ -572,9 +576,10 @@ function PendingActionCardGrid({
                               ratingImage: mi.ratingImage,
                               audienceRatingImage: mi.audienceRatingImage,
                               duration: mi.matchedEpisodes ? undefined : mi.duration,
-                              resolution: mi.resolution,
-                              dynamicRange: mi.dynamicRange,
-                              audioProfile: mi.audioProfile,
+                              resolution: mi.matchedEpisodes ? undefined : mi.resolution,
+                              dynamicRange: mi.matchedEpisodes ? undefined : mi.dynamicRange,
+                              audioProfile: mi.matchedEpisodes ? undefined : mi.audioProfile,
+                              audioCodec: mi.type === "MUSIC" && !mi.matchedEpisodes ? mi.audioCodec : undefined,
                               fileSize: mi.fileSize,
                               genres: mi.genres,
                               studio: mi.studio,
@@ -593,6 +598,10 @@ function PendingActionCardGrid({
                             {formatDuration(mi.duration ?? null) && <span>{formatDuration(mi.duration ?? null)}</span>}
                             {formatFileSize(mi.fileSize ?? null) && <span>{formatFileSize(mi.fileSize ?? null)}</span>}
                           </MetadataLine>
+                        }
+                        qualityBar={
+                          // A grouped row's own values are one episode's or track's.
+                          mi.matchedEpisodes ? undefined : qualitySegments(qualityChips(mi, isMusic ? "music" : "video"), getHex)
                         }
                         badges={
                           <ColorChip className={STATUS_COLORS[action.status] || "bg-muted text-muted-foreground"}>
@@ -652,19 +661,7 @@ export default function PendingActionsPage() {
   const [executeResults, setExecuteResults] = useState<Record<string, { executed: number; failed: number; errors: string[] }>>({});
   const [confirmExecuteRuleSetId, setConfirmExecuteRuleSetId] = useState<string | null>(null);
 
-  // Media detail panel state
-  const [selected, setSelected] = useState<{
-    item: MediaItemWithRelations;
-    type: "MOVIE" | "SERIES" | "MUSIC";
-    title?: string;
-  } | null>(null);
-  const [, setLoadingDetail] = useState(false);
-  const { width: panelWidth, resizeHandleProps } = usePanelResize({
-    storageKey: "lifecycle-pending-panel-width",
-    defaultWidth: 480,
-    minWidth: 360,
-    maxWidth: 800,
-  });
+  const detailPanel = useMediaDetailPanel();
 
   // Deletion stats
   const [deletionStats, setDeletionStats] = useState<{
@@ -985,38 +982,21 @@ export default function PendingActionsPage() {
     setExcludePromptAction(action);
   };
 
-  const openDetailPanel = async (action: ActionItem) => {
-    const mediaType = action.mediaItem.type as "MOVIE" | "SERIES" | "MUSIC";
+  const openDetailPanel = (action: ActionItem) => {
     if (!action.mediaItem.id) return;
-    setLoadingDetail(true);
-    try {
-      const response = await fetch(`/api/media/${action.mediaItem.id}`);
-      if (response.ok) {
-        const data = await response.json();
-        const item = data.item ?? data;
-        // For series/music with aggregated data, overlay series-level values
-        // so the detail panel shows totals instead of single-episode data
-        if (action.mediaItem.matchedEpisodes) {
-          item.fileSize = action.mediaItem.fileSize ? BigInt(action.mediaItem.fileSize) : item.fileSize;
-          item.playCount = action.mediaItem.playCount ?? item.playCount;
-          item.lastPlayedAt = action.mediaItem.lastPlayedAt ?? item.lastPlayedAt;
-          item.matchedEpisodes = action.mediaItem.matchedEpisodes;
-          // Use series title instead of episode title
-          if (item.parentTitle) {
-            item.title = item.parentTitle;
-            item.parentTitle = null;
-          }
-        }
-        // A series action is named as its row names it — the show, or
-        // "<Show> SxxExx" for an action on one episode — not by the episode it
-        // is stored against.
-        setSelected({ item, type: mediaType, title: mediaType === "SERIES" ? action.mediaItem.title : undefined });
-      }
-    } catch (error) {
-      console.error("Failed to fetch media item:", error);
-    } finally {
-      setLoadingDetail(false);
-    }
+    const mediaType = toDetailPanelMediaType(action.mediaItem.type);
+    void detailPanel.open({
+      id: action.mediaItem.id,
+      mediaType,
+      group: groupOfRow(action.mediaItem),
+      // A series action is named as its row names it — the show, or
+      // "<Show> SxxExx" for an action on one episode — not by the episode it
+      // is stored against.
+      title: mediaType === "SERIES" ? action.mediaItem.title : undefined,
+      label: action.mediaItem.parentTitle
+        ? `${action.mediaItem.parentTitle} - ${action.mediaItem.title}`
+        : action.mediaItem.title,
+    });
   };
 
   const isPending = statusFilter === "PENDING";
@@ -1186,9 +1166,9 @@ export default function PendingActionsPage() {
                             <ColorChip className={MEDIA_TYPE_BADGE_COLORS[group.ruleSet.type] ?? "border-border text-muted-foreground"}>
                               {mediaTypeLabel(group.ruleSet.type)}
                             </ColorChip>
-                            <Badge variant="secondary">
+                            <ColorChip className="bg-muted/40 text-muted-foreground">
                               {group.count} item{group.count !== 1 && "s"}
-                            </Badge>
+                            </ColorChip>
                             {group.ruleSet.actionType && (
                               <span className="text-xs text-muted-foreground">
                                 Action: {formatActionTypeLabel(group.ruleSet.actionType, group.ruleSet.targetQualityProfileId)}
@@ -1415,16 +1395,7 @@ export default function PendingActionsPage() {
         </AlertDialog>
       </div>
 
-      {selected && (
-        <MediaDetailSidePanel
-          item={selected.item}
-          mediaType={selected.type}
-          title={selected.title}
-          onClose={() => setSelected(null)}
-          width={panelWidth}
-          resizeHandleProps={resizeHandleProps}
-        />
-      )}
+      {detailPanel.panelProps && <MediaDetailSidePanel {...detailPanel.panelProps} />}
 
       {/* Exclude reason prompt */}
       <Dialog open={!!excludePromptAction} onOpenChange={(open) => { if (!open) setExcludePromptAction(null); }}>

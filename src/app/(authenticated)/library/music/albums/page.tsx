@@ -5,8 +5,8 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { useRouter } from "next/navigation";
 import { MediaCard , CARD_CONTENT_HEIGHT } from "@/components/media-card";
 import { useChipColors } from "@/components/chip-color-provider";
-import { AUDIO_CODEC_ORDER, getChipBadgeStyle } from "@/lib/theme/chip-colors";
-import { ColorChip } from "@/components/color-chip";
+import { QualityChips } from "@/components/quality-chips";
+import { qualityChips, qualitySegments } from "@/lib/media/quality-chips";
 import { DataTable } from "@/components/data-table";
 import type { DataTableColumn } from "@/components/data-table";
 import { MediaFilters } from "@/components/media-filters";
@@ -59,7 +59,7 @@ const SORT_OPTIONS = [
   { value: "totalSize", label: "Size" },
 ];
 
-function albumTableColumns(getHex: (category: "audioCodec", value: string) => string): DataTableColumn<AlbumEntry>[] {
+function albumTableColumns(): DataTableColumn<AlbumEntry>[] {
   return [
     {
       id: "albumTitle",
@@ -98,16 +98,7 @@ function albumTableColumns(getHex: (category: "audioCodec", value: string) => st
       header: "Codecs",
       defaultWidth: 200,
       accessor: (a) => (
-        <div className="flex flex-wrap gap-1">
-          {[
-            ...AUDIO_CODEC_ORDER.filter((c) => a.audioCodecCounts[c]).map((c) => [c, a.audioCodecCounts[c]] as const),
-            ...Object.entries(a.audioCodecCounts).filter(([c]) => !(AUDIO_CODEC_ORDER as readonly string[]).includes(c)),
-          ].map(([codec, count]) => (
-            <ColorChip key={codec} style={getChipBadgeStyle(getHex("audioCodec", String(codec)))}>
-              {codec}: {count}
-            </ColorChip>
-          ))}
-        </div>
+        <QualityChips chips={qualityChips({ audioCodecCounts: a.audioCodecCounts }, "music")} />
       ),
     },
   ];
@@ -138,7 +129,7 @@ export default function AllAlbumsPage() {
   };
 
   const { size, setSize, columns: actualColumns } = useCardSize();
-  const { showServers, prefs: cardDisplayPrefs, setVisible: setCardDisplayVisible } = useCardDisplay("MUSIC_ALBUMS");
+  const { show: showCardBadge, showServers, prefs: cardDisplayPrefs, setVisible: setCardDisplayVisible } = useCardDisplay("MUSIC_ALBUMS");
   const { servers, selectedServerId, setSelectedServerId } = useServers();
 
   const gridContainerRef = useRef<HTMLDivElement>(null);
@@ -296,7 +287,7 @@ export default function AllAlbumsPage() {
 
           {viewMode === "table" ? (
             <DataTable<AlbumEntry>
-              columns={albumTableColumns(getHex)}
+              columns={albumTableColumns()}
               data={albums}
               keyExtractor={(a) => `${a.artistName}::${a.albumTitle}`}
               defaultSortId="albumTitle"
@@ -370,26 +361,11 @@ export default function AllAlbumsPage() {
                             fallbackIcon="music"
                             href={`/library/music/album/${album.mediaItemId}?from=${encodeURIComponent("/library/music/albums")}`}
                             onClick={markChildNavigation}
-                            qualityBar={
-                              Object.keys(album.audioCodecCounts).length > 0
-                                ? [
-                                    ...AUDIO_CODEC_ORDER
-                                      .filter((c) => album.audioCodecCounts[c])
-                                      .map((codec) => ({
-                                        color: getHex("audioCodec", codec),
-                                        weight: album.audioCodecCounts[codec],
-                                        label: `${codec}: ${album.audioCodecCounts[codec]}`,
-                                      })),
-                                    ...Object.entries(album.audioCodecCounts)
-                                      .filter(([c]) => !(AUDIO_CODEC_ORDER as readonly string[]).includes(c))
-                                      .map(([codec, count]) => ({
-                                        color: getHex("audioCodec", codec),
-                                        weight: count,
-                                        label: `${codec}: ${count}`,
-                                      })),
-                                  ]
-                                : undefined
-                            }
+                            qualityBar={qualitySegments(
+                              qualityChips({ audioCodecCounts: album.audioCodecCounts }, "music"),
+                              getHex,
+                              (toggle) => showCardBadge("badges", toggle),
+                            )}
                             servers={showServers && servers.length > 1 ? album.servers : undefined}
                             hoverContent={
                               <MediaHoverPopover

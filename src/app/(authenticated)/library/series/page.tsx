@@ -3,12 +3,12 @@
 import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, useTransition } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useChipColors } from "@/components/chip-color-provider";
-import { getChipBadgeStyle } from "@/lib/theme/chip-colors";
+import { QualityChips } from "@/components/quality-chips";
+import { qualityChips, qualitySegments } from "@/lib/media/quality-chips";
 import { useRouter } from "next/navigation";
 import { MediaFilters } from "@/components/media-filters";
 import { MediaCard, CARD_CONTENT_HEIGHT, PRIORITY_ROWS } from "@/components/media-card";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
-import { ColorChip } from "@/components/color-chip";
 import { useServers } from "@/hooks/use-servers";
 import { LibraryToolbar } from "@/components/library-toolbar";
 import { AlphabetFilter } from "@/components/alphabet-filter";
@@ -56,7 +56,6 @@ interface GroupedSeries {
   year?: number | null;
 }
 
-import { QUALITY_ORDER } from "@/lib/resolution";
 
 const SORT_OPTIONS = [
   { value: "parentTitle", label: "Name" },
@@ -67,7 +66,7 @@ const SORT_OPTIONS = [
   { value: "addedAt", label: "Date Added" },
 ];
 
-function seriesTableColumns(getHex: (category: "resolution" | "dynamicRange" | "audioProfile", value: string) => string): DataTableColumn<GroupedSeries>[] {
+function seriesTableColumns(): DataTableColumn<GroupedSeries>[] {
   return [
     {
       id: "parentTitle",
@@ -106,16 +105,7 @@ function seriesTableColumns(getHex: (category: "resolution" | "dynamicRange" | "
       header: "Quality",
       defaultWidth: 200,
       accessor: (s) => (
-        <div className="flex flex-wrap gap-1">
-          {QUALITY_ORDER.filter((q) => s.qualityCounts[q]).map((quality) => (
-            <ColorChip
-              key={quality}
-              style={getChipBadgeStyle(getHex("resolution", quality))}
-            >
-              {quality}: {s.qualityCounts[quality]}
-            </ColorChip>
-          ))}
-        </div>
+        <QualityChips chips={qualityChips({ qualityCounts: s.qualityCounts }, "video")} />
       ),
     },
     {
@@ -380,7 +370,7 @@ export default function SeriesPage() {
         <>
           {viewMode === "table" ? (
             <DataTable<GroupedSeries>
-              columns={seriesTableColumns(getHex)}
+              columns={seriesTableColumns()}
               data={seriesList}
               keyExtractor={(s) => s.seriesKey ?? s.parentTitle}
               defaultSortId="parentTitle"
@@ -463,17 +453,11 @@ export default function SeriesPage() {
                                 {show("metadata", "fileSize") && <MetadataItem icon={<HardDrive />}>{formatFileSize(s.totalSize)}</MetadataItem>}
                               </MetadataLine>
                             }
-                            qualityBar={
-                              show("badges", "qualityCounts")
-                                ? QUALITY_ORDER
-                                    .filter((q) => s.qualityCounts[q])
-                                    .map((quality) => ({
-                                      color: getHex("resolution", quality),
-                                      weight: s.qualityCounts[quality],
-                                      label: `${quality}: ${s.qualityCounts[quality]}`,
-                                    }))
-                                : undefined
-                            }
+                            qualityBar={qualitySegments(
+                              qualityChips({ qualityCounts: s.qualityCounts }, "video"),
+                              getHex,
+                              (toggle) => show("badges", toggle),
+                            )}
                             servers={showServers && servers.length > 1 ? s.servers : undefined}
                             hoverContent={
                               <MediaHoverPopover

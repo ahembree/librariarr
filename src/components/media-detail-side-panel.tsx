@@ -4,17 +4,17 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { X, ExternalLink, Film, Tv, Music } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { ColorChip } from "@/components/color-chip";
+import { QualityChips } from "@/components/quality-chips";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { MediaDetailContent } from "@/components/media-detail-content";
 import { PlayHistory } from "@/components/play-history";
 import { FadeImage } from "@/components/ui/fade-image";
 import { useIsMobile } from "@/hooks/use-is-mobile";
-import { useChipColors } from "@/components/chip-color-provider";
-import { normalizeResolutionLabel } from "@/lib/resolution";
+import { qualityChips } from "@/lib/media/quality-chips";
 import { formatFileSize, formatDuration } from "@/lib/format";
 import { formatEpisodeTitle, seriesTitleOf } from "@/lib/media/display-title";
+import { detailPanelUrl } from "@/lib/media/detail-panel-item";
 import { PseudocodePanel } from "@/components/builder/pseudocode-panel";
 import type { BaseRule, BaseGroup, BuilderConfig } from "@/components/builder/types";
 import type { MediaItemWithRelations } from "@/lib/types";
@@ -58,22 +58,12 @@ interface MediaDetailSidePanelProps {
   allActualValues?: Record<string, string>;
   /** Diff status for preview highlighting (added/removed/retained) */
   diffStatus?: "added" | "removed" | "retained";
-}
-
-function getDetailPageUrl(mediaType: string, itemId: string): string {
-  const prefix =
-    mediaType === "MOVIE"
-      ? "/library/movies"
-      : mediaType === "SERIES"
-        ? "/library/series/episode"
-        : "/library/music/track";
-  return `${prefix}/${itemId}`;
-}
-
-function formatResolution(resolution: string | null): string {
-  if (!resolution) return "";
-  const label = normalizeResolutionLabel(resolution);
-  return label === "Other" ? resolution : label;
+  /**
+   * What the page that opened the panel knows about the item beyond the
+   * library record — the Stream Manager's live playback details — shown above
+   * the item's own details.
+   */
+  contextSection?: React.ReactNode;
 }
 
 export function MediaDetailSidePanel({
@@ -88,9 +78,9 @@ export function MediaDetailSidePanel({
   ruleGroups,
   builderConfig,
   allActualValues,
+  contextSection,
 }: MediaDetailSidePanelProps) {
   const isMobile = useIsMobile();
-  const { getBadgeStyle } = useChipColors();
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -119,12 +109,7 @@ export function MediaDetailSidePanel({
   }, [allActualValues, matchedCriteria]);
 
   const isAggregate = !!item.matchedEpisodes;
-  const detailUrl = detailUrlOverride
-    ?? (isAggregate && mediaType === "SERIES"
-      ? `/library/series/show/${item.id}`
-      : isAggregate && mediaType === "MUSIC"
-        ? `/library/music/artist/${item.id}`
-        : getDetailPageUrl(mediaType, item.id));
+  const detailUrl = detailUrlOverride ?? detailPanelUrl(mediaType, item.id, isAggregate);
   // Aggregated items (series/artist scope) use parentTitle=null but still need the parent image
   const imageUrl = `/api/media/${item.id}/image${item.parentTitle || isAggregate ? "?type=parent" : ""}`;
   // A missing poster shows the type's icon, as the library cards do, rather
@@ -146,7 +131,11 @@ export function MediaDetailSidePanel({
       : item.parentTitle
         ? `${item.parentTitle} - ${item.title}`
         : item.title);
-  const resolutionLabel = formatResolution(item.resolution);
+  // An artist panel describes a group stored against one of its tracks; that
+  // track's codec is not the artist's.
+  const chips = mediaType === "MUSIC" && isAggregate
+    ? []
+    : qualityChips(item, mediaType === "MUSIC" ? "music" : "video", { channels: true });
 
   const header = (
     <div className="border-b shrink-0 relative overflow-hidden">
@@ -211,23 +200,7 @@ export function MediaDetailSidePanel({
                   item.fileSize ? formatFileSize(item.fileSize) : null,
                 ].filter(Boolean).join(" \u00b7 ")}
               </p>
-              <div className="flex flex-wrap gap-1">
-                {resolutionLabel && (
-                  <ColorChip style={getBadgeStyle("resolution", resolutionLabel)}>
-                    {resolutionLabel}
-                  </ColorChip>
-                )}
-                {item.dynamicRange && (
-                  <ColorChip style={getBadgeStyle("dynamicRange", item.dynamicRange)}>
-                    {item.dynamicRange}
-                  </ColorChip>
-                )}
-                {item.audioProfile && (
-                  <ColorChip style={getBadgeStyle("audioProfile", item.audioProfile)}>
-                    {item.audioProfile}
-                  </ColorChip>
-                )}
-              </div>
+              <QualityChips chips={chips} />
             </>
           )}
         </div>
@@ -241,23 +214,20 @@ export function MediaDetailSidePanel({
       <div className="flex flex-wrap gap-1.5">
         {matchedCriteria.map((criterion, i) => {
           const badge = (
-            <Badge
-              key={i}
-              variant="outline"
-              className={`text-xs ${criterion.negate ? "border-red/30 text-red" : ""}`}
-            >
+            <ColorChip key={i} className={criterion.negate ? "border-red/30 text-red" : undefined}>
               {criterion.groupName && (
                 <span className="text-sky mr-1">[{criterion.groupName}]</span>
               )}
               {criterion.negate && <span className="text-red mr-1">NOT</span>}
               {criterion.field} {criterion.operator} {criterion.value}
-            </Badge>
+            </ColorChip>
           );
           if (criterion.actualValue) {
             return (
               <TooltipProvider key={i}>
                 <Tooltip>
-                  <TooltipTrigger asChild>{badge}</TooltipTrigger>
+                  {/* ColorChip takes no ref, so the trigger is a wrapper. */}
+                  <TooltipTrigger asChild><span className="inline-flex">{badge}</span></TooltipTrigger>
                   <TooltipContent>Actual: {criterion.actualValue}</TooltipContent>
                 </Tooltip>
               </TooltipProvider>
@@ -317,6 +287,7 @@ export function MediaDetailSidePanel({
     // The bottom padding clears a phone's home indicator in the installed app
     // (env() is 0 everywhere else).
     <div className="flex-1 overflow-y-auto p-4 pb-[calc(1rem+env(safe-area-inset-bottom))]">
+      {contextSection}
       <MediaDetailContent
         item={item}
         hideVideo={mediaType === "MUSIC"}

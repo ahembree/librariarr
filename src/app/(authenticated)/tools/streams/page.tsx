@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/empty-state";
 import { Badge } from "@/components/ui/badge";
 import { ColorChip } from "@/components/color-chip";
+import { RatingChip } from "@/components/rating-chip";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
@@ -93,8 +94,11 @@ import {
   X,
 } from "lucide-react";
 import { FadeImage } from "@/components/ui/fade-image";
-import { useChipColors } from "@/components/chip-color-provider";
-import { normalizeResolutionLabel } from "@/lib/resolution";
+import { MediaDetailSidePanel } from "@/components/media-detail-side-panel";
+import { useMediaDetailPanel } from "@/hooks/use-media-detail-panel";
+import { sessionMediaType } from "@/lib/media/detail-panel-item";
+import { qualityChips, resolutionChipLabel } from "@/lib/media/quality-chips";
+import { QualityChip } from "@/components/quality-chips";
 import { formatDurationClock } from "@/lib/format";
 import { hardwareEncoder, hardwareDecoder } from "@/lib/media-server/hardware-transcode";
 import { formatSessionMediaTitle } from "@/lib/media-server/session-title";
@@ -139,6 +143,8 @@ interface SessionWithServer {
   serverName: string;
   serverType: string;
   sessionId: string;
+  /** The library item being played, which opens its detail panel. */
+  ratingKey?: string;
   userId: string;
   username: string;
   userThumb: string;
@@ -489,16 +495,17 @@ function ExcludedUsersSelect({
       {selected.length > 0 && (
         <div className="flex flex-wrap gap-1">
           {selected.map((username) => (
-            <Badge key={username} variant="secondary" className="gap-1 pr-1">
+            <ColorChip key={username} className="gap-1 pl-2.5 pr-1 py-1 bg-secondary text-secondary-foreground">
               {username}
               <button
                 type="button"
                 onClick={() => remove(username)}
                 className="rounded-sm hover:bg-muted-foreground/20"
+                aria-label={`Remove ${username}`}
               >
                 <X className="h-3 w-3" />
               </button>
-            </Badge>
+            </ColorChip>
           ))}
         </div>
       )}
@@ -574,6 +581,174 @@ function MessageSelector({
   );
 }
 
+// --- Session stream details ---
+
+/** The card's stream-decision colours, shared with the transcode details. */
+const AMBER_CHIP = "bg-amber-dim text-amber border-amber/25";
+const GREEN_CHIP = "bg-green-dim text-green border-green/25";
+
+function decisionChipClass(decision: string | undefined): string {
+  return decision === "transcode" ? AMBER_CHIP : GREEN_CHIP;
+}
+
+/**
+ * What a playing session adds to its item's details: who is watching where,
+ * the file and stream being delivered, and any transcode. Shown in the shared
+ * media detail panel above the library record, or on its own for an item the
+ * library has not synced.
+ */
+function SessionStreamDetails({ session }: { session: SessionWithServer }) {
+  const transcoding = session.transcoding;
+  return (
+    <div className="space-y-5">
+      {/* Stream Info */}
+      <div className="space-y-2">
+        <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Stream Info</h4>
+        <div className="flex flex-wrap gap-1.5">
+          <ColorChip className="gap-1">
+            <User className="h-2.5 w-2.5" />
+            {session.username}
+          </ColorChip>
+          <ColorChip>
+            {session.player.product} on {session.player.platform}
+          </ColorChip>
+          {session.player.address && (
+            <ColorChip className="gap-1">
+              <Globe className="h-2.5 w-2.5" />
+              {session.player.address}
+            </ColorChip>
+          )}
+          <ColorChip className="gap-1">
+            {session.player.local ? <Wifi className="h-2.5 w-2.5" /> : <WifiOff className="h-2.5 w-2.5" />}
+            {session.player.local ? "LAN" : "WAN"}
+          </ColorChip>
+          {session.session.bandwidth > 0 && (
+            <ColorChip className="font-mono tabular-nums">
+              {formatBandwidth(session.session.bandwidth)}
+            </ColorChip>
+          )}
+          <ColorChip className={`gap-1 ${(SERVER_TYPE_STYLES[session.serverType] ?? DEFAULT_SERVER_STYLE).classes}`}>
+            <Server className="h-2.5 w-2.5" />
+            {session.serverName}
+          </ColorChip>
+          {session.startedAt > 0 && (
+            <ColorChip className="gap-1">
+              <Clock className="h-2.5 w-2.5" />
+              Started {formatTime(session.startedAt)}
+            </ColorChip>
+          )}
+          {/* The session's location is "lan" or "wan" — the LAN/WAN chip above
+              already says it; only another value (e.g. Plex's "cellular") adds
+              anything. */}
+          {session.session.location && !["lan", "wan"].includes(session.session.location.toLowerCase()) && (
+            <ColorChip>{session.session.location}</ColorChip>
+          )}
+        </div>
+      </div>
+
+      {/* Media Info */}
+      {(session.mediaWidth || session.videoCodec || session.audioCodec || session.container) && (
+        <div className="space-y-2">
+          <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Media Info</h4>
+          <div className="flex flex-wrap gap-1.5">
+            {session.mediaWidth && session.mediaHeight && (
+              <ColorChip className="font-mono tabular-nums">
+                {session.mediaWidth}x{session.mediaHeight}
+              </ColorChip>
+            )}
+            {resolutionChipLabel(session.videoResolution) && (
+              <QualityChip chip={{ category: "resolution", label: resolutionChipLabel(session.videoResolution)! }} />
+            )}
+            {session.aspectRatio && <ColorChip>{session.aspectRatio}</ColorChip>}
+            {session.videoCodec && (
+              <ColorChip>
+                Video: {session.videoCodec.toUpperCase()}
+                {session.videoProfile ? ` (${session.videoProfile})` : ""}
+              </ColorChip>
+            )}
+            {/* A session's audio profile is the codec's own profile (Plex's
+                "lc", "ma"), not a library audio profile such as Dolby Atmos,
+                so it reads inside the codec chip rather than as one of its own. */}
+            {qualityChips({ audioCodec: session.audioCodec }, "music").map((chip) => (
+              <QualityChip
+                key={chip.category}
+                chip={session.audioProfile?.trim() ? { ...chip, detail: `(${session.audioProfile.trim()})` } : chip}
+              />
+            ))}
+            {session.audioChannels != null && <ColorChip>{session.audioChannels}ch</ColorChip>}
+            {session.container && <ColorChip>{session.container.toUpperCase()}</ColorChip>}
+            {session.bitrate != null && (
+              <ColorChip className="font-mono tabular-nums">
+                {session.bitrate > 1000
+                  ? `${(session.bitrate / 1000).toFixed(1)} Mbps`
+                  : `${session.bitrate} kbps`}
+              </ColorChip>
+            )}
+            {session.optimizedForStreaming != null && (
+              <ColorChip>{session.optimizedForStreaming ? "Optimized" : "Not Optimized"}</ColorChip>
+            )}
+            {session.partSize != null && (
+              <ColorChip className="font-mono tabular-nums">
+                {session.partSize > 1073741824
+                  ? `${(session.partSize / 1073741824).toFixed(1)} GB`
+                  : `${(session.partSize / 1048576).toFixed(0)} MB`}
+              </ColorChip>
+            )}
+          </div>
+          {session.partFile && (
+            <p className="text-[11px] text-muted-foreground break-all mt-1">{session.partFile}</p>
+          )}
+        </div>
+      )}
+
+      {/* Transcode Details */}
+      {transcoding && (transcoding.videoDecision === "transcode" || transcoding.audioDecision === "transcode") && (
+        <div className="space-y-2">
+          <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Transcode Details</h4>
+          <div className="flex flex-wrap gap-1.5">
+            {/* Each stream coloured by its decision, as the card's stream
+                chip is: a transcode amber, a copy or direct stream green. */}
+            {transcoding.sourceVideoCodec && (
+              <ColorChip className={decisionChipClass(transcoding.videoDecision)}>
+                Video: {transcoding.sourceVideoCodec.toUpperCase()} &rarr; {transcoding.videoDecision}
+              </ColorChip>
+            )}
+            {transcoding.sourceAudioCodec && (
+              <ColorChip className={decisionChipClass(transcoding.audioDecision)}>
+                Audio: {transcoding.sourceAudioCodec.toUpperCase()} &rarr; {transcoding.audioDecision}
+              </ColorChip>
+            )}
+            {/* HW encode/decode are Plex-only reliable signals; when
+                absent we cannot tell HW from CPU (Jellyfin/Emby report
+                only their configured accel), so show nothing rather
+                than a misleading "No (CPU)". */}
+            {hardwareEncoder(transcoding) && (
+              <ColorChip>HW Encode: {hardwareEncoder(transcoding)!.toUpperCase()}</ColorChip>
+            )}
+            {hardwareDecoder(transcoding) && (
+              <ColorChip>HW Decode: {hardwareDecoder(transcoding)!.toUpperCase()}</ColorChip>
+            )}
+            {transcoding.speed !== undefined && (
+              <ColorChip
+                className={cn(
+                  "font-mono tabular-nums",
+                  // Below realtime the transcode is losing ground and
+                  // the viewer will buffer, hardware or not.
+                  transcoding.speed < 1 && AMBER_CHIP,
+                )}
+              >
+                Speed: {transcoding.speed.toFixed(1)}x
+                {transcoding.speed < 1 && " \u2014 below realtime"}
+              </ColorChip>
+            )}
+            <ColorChip>Throttled: {transcoding.throttled ? "Yes" : "No"}</ColorChip>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // --- Session Card Component ---
 
 function sessionKey(s: SessionWithServer): string {
@@ -593,7 +768,6 @@ function SessionCard({
   onTerminate: (session: SessionWithServer) => void;
   onOpenDetail: (session: SessionWithServer) => void;
 }) {
-  const { getBadgeStyle } = useChipColors();
   const stateConfig = getStateConfig(session.player.state);
   const StateIcon = stateConfig.icon;
 
@@ -609,9 +783,7 @@ function SessionCard({
     (session.transcoding.videoDecision === "transcode" ||
       session.transcoding.audioDecision === "transcode");
   const { primary, secondary } = sessionTitleParts(session);
-  const resolution = session.videoResolution
-    ? normalizeResolutionLabel(session.videoResolution)
-    : null;
+  const resolution = resolutionChipLabel(session.videoResolution);
   const eta = formatEstimatedEnd(session);
   const playerMeta = [session.player.product, session.player.platform, session.player.address]
     .filter(Boolean)
@@ -721,8 +893,8 @@ function SessionCard({
           <ColorChip
             className={`gap-1 ${
               streamInfo.direct
-                ? "bg-green-dim text-green border-green/25"
-                : "bg-amber-dim text-amber border-amber/25"
+                ? GREEN_CHIP
+                : AMBER_CHIP
             }`}
           >
             {streamInfo.direct ? (
@@ -733,7 +905,7 @@ function SessionCard({
             {streamInfo.label}
           </ColorChip>
           {resolution && (
-            <ColorChip style={getBadgeStyle("resolution", resolution)}>{resolution}</ColorChip>
+            <QualityChip chip={{ category: "resolution", label: resolution }} />
           )}
           <ColorChip className="gap-1">
             {session.player.local ? (
@@ -814,7 +986,6 @@ function SessionCard({
 // --- Main Page ---
 
 export default function StreamManagerPage() {
-  const { getBadgeStyle } = useChipColors();
   const [sessions, setSessions] = useState<SessionWithServer[]>([]);
   const [loading, setLoading] = useState(true);
   const [terminating, setTerminating] = useState(false);
@@ -861,8 +1032,42 @@ export default function StreamManagerPage() {
   const [blackoutSaving, setBlackoutSaving] = useState(false);
   const [deleteBlackoutId, setDeleteBlackoutId] = useState<string | null>(null);
 
-  // Media detail sheet state
+  // Media detail: the shared library panel for a synced item, with the
+  // session's playback details on top; the sheet only for an item the library
+  // has not synced (nothing to open the panel on).
+  const detailPanel = useMediaDetailPanel();
+  const { open: openPanel, close: closePanel } = detailPanel;
+  // The session the panel was opened for, with the item it resolved to: the
+  // panel shows the previous item until the new record loads, and the new
+  // session's details must not sit over it meanwhile.
+  const [panelSession, setPanelSession] = useState<{ session: SessionWithServer; itemId: string } | null>(null);
   const [sheetSession, setSheetSession] = useState<SessionWithServer | null>(null);
+  const detailLookupToken = useRef(0);
+
+  const openSessionDetail = useCallback(async (s: SessionWithServer) => {
+    const token = ++detailLookupToken.current;
+    const mediaType = sessionMediaType(s.type);
+    let itemId: string | null = null;
+    if (s.ratingKey && mediaType) {
+      try {
+        const params = new URLSearchParams({ serverId: s.serverId, ratingKey: s.ratingKey, type: s.type });
+        const response = await fetch(`/api/media/by-rating-key?${params}`);
+        if (response.ok) itemId = ((await response.json()) as { id?: string }).id ?? null;
+      } catch {
+        // Fall through to the session-only sheet.
+      }
+    }
+    if (token !== detailLookupToken.current) return;
+    if (itemId && mediaType) {
+      setSheetSession(null);
+      setPanelSession({ session: s, itemId });
+      void openPanel({ id: itemId, mediaType });
+    } else {
+      closePanel();
+      setPanelSession(null);
+      setSheetSession(s);
+    }
+  }, [openPanel, closePanel]);
 
   const [connected, setConnected] = useState(false);
   const eventSourceRef = useRef<EventSource | null>(null);
@@ -1495,7 +1700,7 @@ export default function StreamManagerPage() {
                 selected={selectedKeys.has(sessionKey(s))}
                 onToggleSelect={toggleSelect}
                 onTerminate={handleTerminateClick}
-                onOpenDetail={setSheetSession}
+                onOpenDetail={openSessionDetail}
               />
             ))}
           </div>
@@ -2060,7 +2265,19 @@ export default function StreamManagerPage() {
         </AlertDialogContent>
       </AlertDialog>
 
-      {/* Media Detail Sheet */}
+      {detailPanel.panelProps && (
+        <MediaDetailSidePanel
+          {...detailPanel.panelProps}
+          contextSection={panelSession && panelSession.itemId === detailPanel.selectedId && (
+            // The live session while it plays; the last one seen once it ends.
+            <SessionStreamDetails
+              session={sessions.find((x) => sessionKey(x) === sessionKey(panelSession.session)) ?? panelSession.session}
+            />
+          )}
+        />
+      )}
+
+      {/* Media Detail Sheet — a session whose item the library has not synced */}
       <Sheet open={!!sheetSession} onOpenChange={(open) => { if (!open) setSheetSession(null); }}>
         <SheetContent side="right" className="pb-safe overflow-y-auto">
           {sheetSession && (
@@ -2098,7 +2315,7 @@ export default function StreamManagerPage() {
                 {/* Overview */}
                 {(sheetSession.tagline || sheetSession.summary || sheetSession.contentRating || sheetSession.studio || sheetSession.genres) && (
                   <div className="space-y-2">
-                    <h4 className="text-sm font-medium">Overview</h4>
+                    <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Overview</h4>
                     {sheetSession.tagline && (
                       <p className="text-xs italic text-muted-foreground">{sheetSession.tagline}</p>
                     )}
@@ -2106,18 +2323,11 @@ export default function StreamManagerPage() {
                       <p className="text-sm text-muted-foreground leading-relaxed">{sheetSession.summary}</p>
                     )}
                     <div className="flex flex-wrap gap-1.5">
-                      {sheetSession.contentRating && (
-                        <Badge variant="outline" className="text-[10px]">{sheetSession.contentRating}</Badge>
-                      )}
-                      {sheetSession.studio && (
-                        <Badge variant="secondary" className="text-[10px]">{sheetSession.studio}</Badge>
-                      )}
-                      {sheetSession.rating != null && (
-                        <Badge variant="secondary" className="text-[10px]">Rating: {sheetSession.rating.toFixed(1)}</Badge>
-                      )}
-                      {sheetSession.audienceRating != null && (
-                        <Badge variant="secondary" className="text-[10px]">Audience: {sheetSession.audienceRating.toFixed(1)}</Badge>
-                      )}
+                      {sheetSession.contentRating && <ColorChip>{sheetSession.contentRating}</ColorChip>}
+                      {sheetSession.studio && <ColorChip>{sheetSession.studio}</ColorChip>}
+                      {/* The ratings chips the detail pages show. */}
+                      {sheetSession.rating != null && <RatingChip label="Critic" value={sheetSession.rating} />}
+                      {sheetSession.audienceRating != null && <RatingChip label="Audience" value={sheetSession.audienceRating} />}
                     </div>
                     {sheetSession.genres && sheetSession.genres.length > 0 && (
                       <div className="flex flex-wrap gap-1">
@@ -2129,178 +2339,7 @@ export default function StreamManagerPage() {
                   </div>
                 )}
 
-                {/* Stream Info */}
-                <div className="space-y-2">
-                  <h4 className="text-sm font-medium">Stream Info</h4>
-                  <div className="flex flex-wrap gap-1.5">
-                    <Badge variant="secondary" className="text-[10px] gap-1">
-                      <User className="h-2.5 w-2.5" />
-                      {sheetSession.username}
-                    </Badge>
-                    <Badge variant="secondary" className="text-[10px]">
-                      {sheetSession.player.product} on {sheetSession.player.platform}
-                    </Badge>
-                    {sheetSession.player.address && (
-                      <Badge variant="secondary" className="text-[10px] gap-1">
-                        <Globe className="h-2.5 w-2.5" />
-                        {sheetSession.player.address}
-                      </Badge>
-                    )}
-                    <Badge variant="secondary" className="text-[10px] gap-1">
-                      {sheetSession.player.local ? <Wifi className="h-2.5 w-2.5" /> : <WifiOff className="h-2.5 w-2.5" />}
-                      {sheetSession.player.local ? "LAN" : "WAN"}
-                    </Badge>
-                    {sheetSession.session.bandwidth > 0 && (
-                      <Badge variant="secondary" className="text-[10px]">
-                        {formatBandwidth(sheetSession.session.bandwidth)}
-                      </Badge>
-                    )}
-                    <Badge variant="secondary" className="text-[10px] gap-1">
-                      <Server className="h-2.5 w-2.5" />
-                      {sheetSession.serverType !== "PLEX" && (
-                        <span className="font-semibold">{sheetSession.serverType === "JELLYFIN" ? "JF" : sheetSession.serverType === "EMBY" ? "Emby" : ""} &middot;</span>
-                      )}
-                      {sheetSession.serverName}
-                    </Badge>
-                    {sheetSession.startedAt > 0 && (
-                      <Badge variant="secondary" className="text-[10px] gap-1">
-                        <Clock className="h-2.5 w-2.5" />
-                        Started {formatTime(sheetSession.startedAt)}
-                      </Badge>
-                    )}
-                    {sheetSession.session.location && (
-                      <Badge variant="secondary" className="text-[10px]">
-                        {sheetSession.session.location}
-                      </Badge>
-                    )}
-                  </div>
-                </div>
-
-                {/* Media Info */}
-                {(sheetSession.mediaWidth || sheetSession.videoCodec || sheetSession.audioCodec || sheetSession.container) && (
-                  <div className="space-y-2">
-                    <h4 className="text-sm font-medium">Media Info</h4>
-                    <div className="flex flex-wrap gap-1.5">
-                      {sheetSession.mediaWidth && sheetSession.mediaHeight && (
-                        <Badge variant="outline" className="text-[10px]">
-                          {sheetSession.mediaWidth}x{sheetSession.mediaHeight}
-                        </Badge>
-                      )}
-                      {sheetSession.videoResolution && (
-                        <Badge
-                          variant="secondary"
-                          className="text-[10px]"
-                          style={getBadgeStyle("resolution", normalizeResolutionLabel(sheetSession.videoResolution))}
-                        >
-                          {normalizeResolutionLabel(sheetSession.videoResolution)}
-                        </Badge>
-                      )}
-                      {sheetSession.aspectRatio && (
-                        <Badge variant="secondary" className="text-[10px]">
-                          {sheetSession.aspectRatio}
-                        </Badge>
-                      )}
-                      {sheetSession.videoCodec && (
-                        <Badge variant="secondary" className="text-[10px]">
-                          Video: {sheetSession.videoCodec.toUpperCase()}
-                          {sheetSession.videoProfile ? ` (${sheetSession.videoProfile})` : ""}
-                        </Badge>
-                      )}
-                      {sheetSession.audioCodec && (
-                        <Badge
-                          variant="secondary"
-                          className="text-[10px]"
-                          style={sheetSession.audioProfile ? getBadgeStyle("audioProfile", sheetSession.audioProfile) : undefined}
-                        >
-                          Audio: {sheetSession.audioCodec.toUpperCase()}
-                          {sheetSession.audioProfile ? ` (${sheetSession.audioProfile})` : ""}
-                        </Badge>
-                      )}
-                      {sheetSession.audioChannels != null && (
-                        <Badge variant="secondary" className="text-[10px]">
-                          {sheetSession.audioChannels}ch
-                        </Badge>
-                      )}
-                      {sheetSession.container && (
-                        <Badge variant="secondary" className="text-[10px]">
-                          {sheetSession.container.toUpperCase()}
-                        </Badge>
-                      )}
-                      {sheetSession.bitrate != null && (
-                        <Badge variant="secondary" className="text-[10px]">
-                          {sheetSession.bitrate > 1000
-                            ? `${(sheetSession.bitrate / 1000).toFixed(1)} Mbps`
-                            : `${sheetSession.bitrate} kbps`}
-                        </Badge>
-                      )}
-                      {sheetSession.optimizedForStreaming != null && (
-                        <Badge variant="secondary" className="text-[10px]">
-                          {sheetSession.optimizedForStreaming ? "Optimized" : "Not Optimized"}
-                        </Badge>
-                      )}
-                      {sheetSession.partSize != null && (
-                        <Badge variant="secondary" className="text-[10px]">
-                          {sheetSession.partSize > 1073741824
-                            ? `${(sheetSession.partSize / 1073741824).toFixed(1)} GB`
-                            : `${(sheetSession.partSize / 1048576).toFixed(0)} MB`}
-                        </Badge>
-                      )}
-                    </div>
-                    {sheetSession.partFile && (
-                      <p className="text-[11px] text-muted-foreground break-all mt-1">{sheetSession.partFile}</p>
-                    )}
-                  </div>
-                )}
-
-                {/* Transcode Details */}
-                {sheetSession.transcoding && (sheetSession.transcoding.videoDecision === "transcode" || sheetSession.transcoding.audioDecision === "transcode") && (
-                  <div className="space-y-2">
-                    <h4 className="text-sm font-medium">Transcode Details</h4>
-                    <div className="flex flex-wrap gap-1.5">
-                      {sheetSession.transcoding.sourceVideoCodec && (
-                        <Badge variant="outline" className="text-[10px] bg-amber/10 text-amber border-amber/30">
-                          Video: {sheetSession.transcoding.sourceVideoCodec.toUpperCase()} &rarr; {sheetSession.transcoding.videoDecision}
-                        </Badge>
-                      )}
-                      {sheetSession.transcoding.sourceAudioCodec && (
-                        <Badge variant="outline" className="text-[10px] bg-amber/10 text-amber border-amber/30">
-                          Audio: {sheetSession.transcoding.sourceAudioCodec.toUpperCase()} &rarr; {sheetSession.transcoding.audioDecision}
-                        </Badge>
-                      )}
-                      {/* HW encode/decode are Plex-only reliable signals; when
-                          absent we cannot tell HW from CPU (Jellyfin/Emby report
-                          only their configured accel), so show nothing rather
-                          than a misleading "No (CPU)". */}
-                      {hardwareEncoder(sheetSession.transcoding) && (
-                        <Badge variant="secondary" className="text-[10px]">
-                          HW Encode: {hardwareEncoder(sheetSession.transcoding)!.toUpperCase()}
-                        </Badge>
-                      )}
-                      {hardwareDecoder(sheetSession.transcoding) && (
-                        <Badge variant="secondary" className="text-[10px]">
-                          HW Decode: {hardwareDecoder(sheetSession.transcoding)!.toUpperCase()}
-                        </Badge>
-                      )}
-                      {sheetSession.transcoding.speed !== undefined && (
-                        <Badge
-                          variant="secondary"
-                          className={cn(
-                            "text-[10px]",
-                            // Below realtime the transcode is losing ground and
-                            // the viewer will buffer, hardware or not.
-                            sheetSession.transcoding.speed < 1 && "bg-amber/15 text-amber border-amber/30"
-                          )}
-                        >
-                          Speed: {sheetSession.transcoding.speed.toFixed(1)}x
-                          {sheetSession.transcoding.speed < 1 && " \u2014 below realtime"}
-                        </Badge>
-                      )}
-                      <Badge variant="secondary" className="text-[10px]">
-                        Throttled: {sheetSession.transcoding.throttled ? "Yes" : "No"}
-                      </Badge>
-                    </div>
-                  </div>
-                )}
+                <SessionStreamDetails session={sheetSession} />
               </div>
             </>
           )}

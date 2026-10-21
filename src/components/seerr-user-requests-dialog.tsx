@@ -31,6 +31,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatRelativeDate } from "@/lib/format";
+import { QualityChip } from "@/components/quality-chips";
 
 interface ResolvedRequest {
   seerrId: number;
@@ -505,9 +506,7 @@ function RequestRow({ req, onClose }: { req: ResolvedRequest; onClose: () => voi
                 )}
               </h4>
               {req.is4k && (
-                <span className="rounded bg-violet-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-violet-300 shrink-0">
-                  4K
-                </span>
+                <QualityChip chip={{ category: "resolution", label: "4K" }} title="Requested in 4K" />
               )}
               {isClickable && (
                 <ArrowUpRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/50 transition-colors group-hover:text-primary" />

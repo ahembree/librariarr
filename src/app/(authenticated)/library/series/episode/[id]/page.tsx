@@ -3,8 +3,8 @@
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import { useRealtime } from "@/hooks/use-realtime";
-import { useChipColors } from "@/components/chip-color-provider";
-import { normalizeResolutionLabel } from "@/lib/resolution";
+import { QualityChip } from "@/components/quality-chips";
+import { qualityChips } from "@/lib/media/quality-chips";
 import { MediaDetailHero } from "@/components/media-detail-hero";
 import { RatingChip } from "@/components/rating-chip";
 import { getRatingLabel } from "@/lib/rating-labels";
@@ -16,15 +16,8 @@ import type { MediaItemWithRelations } from "@/lib/types";
 import { type PlayServer, buildPlayLinks } from "@/lib/play-url";
 import { PlayHistory } from "@/components/play-history";
 
-function formatResolution(resolution: string | null): string {
-  if (!resolution) return "Unknown";
-  const label = normalizeResolutionLabel(resolution);
-  return label === "Other" ? resolution : label;
-}
-
 export default function EpisodeDetailPage() {
   const { id } = useParams<{ id: string }>();
-  const { getBadgeStyle } = useChipColors();
   const [item, setItem] = useState<MediaItemWithRelations | null>(null);
   const [playServers, setPlayServers] = useState<PlayServer[]>([]);
   const [loading, setLoading] = useState(true);
@@ -109,21 +102,9 @@ export default function EpisodeDetailPage() {
       }
       badges={
         <>
-          {item.resolution && (
-            <ColorChip style={getBadgeStyle("resolution", formatResolution(item.resolution))}>
-              {formatResolution(item.resolution)}
-            </ColorChip>
-          )}
-          {item.dynamicRange && (
-            <ColorChip style={getBadgeStyle("dynamicRange", item.dynamicRange)}>
-              {item.dynamicRange}
-            </ColorChip>
-          )}
-          {item.audioProfile && (
-            <ColorChip style={getBadgeStyle("audioProfile", item.audioProfile)}>
-              {item.audioProfile}
-            </ColorChip>
-          )}
+          {qualityChips(item, "video").map((chip) => (
+            <QualityChip key={chip.category} chip={chip} />
+          ))}
           {item.fileSize && (
             <ColorChip className="border-border text-muted-foreground">{formatFileSize(item.fileSize)}</ColorChip>
           )}

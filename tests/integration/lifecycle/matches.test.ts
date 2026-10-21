@@ -179,7 +179,7 @@ describe("GET /api/lifecycle/rules/matches", () => {
       actionEnabled: true,
       actionType: "DELETE_RADARR",
       collectionId: collection.id,
-      rules: [],
+      rules: [{ id: "g1", condition: "AND", rules: [{ id: "r1", field: "playCount", operator: "equals", value: "0", condition: "AND" }], groups: [] }],
     });
 
     await createTestRuleMatch(rs.id, item.id, { id: item.id, title: "A Movie" });
@@ -200,6 +200,7 @@ describe("GET /api/lifecycle/rules/matches", () => {
           actionType: string;
           collectionName: string | null;
           collectionSort: string | null;
+          rules: { id: string; rules: { id: string }[] }[];
         };
       }[];
     }>(response, 200);
@@ -212,6 +213,8 @@ describe("GET /api/lifecycle/rules/matches", () => {
     expect(rsMeta.actionType).toBe("DELETE_RADARR");
     expect(rsMeta.collectionName).toBe("Test Col");
     expect(rsMeta.collectionSort).toBe("ACTION_DATE");
+    // The detail panel's Logic Preview reads the rule set's rules.
+    expect(rsMeta.rules[0].rules[0].id).toBe("r1");
   });
 
   it("returns items with matchedCriteria array", async () => {
