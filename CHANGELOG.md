@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.31.1](https://github.com/ahembree/librariarr/compare/v0.31.0...v0.31.1) (2026-10-21)
+
+
+### Bug Fixes
+
+* keep manual prerolls, announce every held deletion, and prompt for plex login ([75f1c44](https://github.com/ahembree/librariarr/commit/75f1c440466ae2fbacaed6835d9e38cdb5213fc1))
+* **lifecycle:** ignore stale import-exclusion flag in action signature ([75f1c44](https://github.com/ahembree/librariarr/commit/75f1c440466ae2fbacaed6835d9e38cdb5213fc1))
+* **query:** guard whole-record actions across batches and judge arr criteria per type ([75f1c44](https://github.com/ahembree/librariarr/commit/75f1c440466ae2fbacaed6835d9e38cdb5213fc1))
+* **query:** keep a run's acted-on records past a long batch ([75f1c44](https://github.com/ahembree/librariarr/commit/75f1c440466ae2fbacaed6835d9e38cdb5213fc1))
+* **query:** keep run records out of the bounded cache and tighten query action edges ([75f1c44](https://github.com/ahembree/librariarr/commit/75f1c440466ae2fbacaed6835d9e38cdb5213fc1))
+
 ## [0.31.0](https://github.com/ahembree/librariarr/compare/v0.30.1...v0.31.0) (2026-10-17)
 
 
