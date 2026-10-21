@@ -20,9 +20,9 @@ Media library management for Plex, Jellyfin, and Emby. Browse and filter your li
 - **Multi-server** — Connect several Plex, Jellyfin, and Emby servers, with automatic deduplication across them
 - **Authentication** — Plex OAuth, local credentials, or SSO (OIDC or forward-auth from a reverse proxy)
 - **Dashboard** — Library tiles, lifecycle overview, recently added, and a customizable Insights grid with custom chart cards
-- **Library browser** — Movies, series, and music with 20+ filters, grid and table views, alphabet navigation, and per-play watch history
+- **Library browser** — Movies, series, and music with 30+ filters, grid and table views, alphabet navigation, and per-play watch history
 - **Query builder** — Search the library with the same criteria as lifecycle rules, add any criterion as a table column, save queries, and act on the results
-- **Lifecycle rules** — Recursive AND/OR rule groups over 50+ fields (media, play activity, Arr, Seerr), scheduled actions (delete, unmonitor, tag, search, change quality profile), and Plex collection sync
+- **Lifecycle rules** — Recursive AND/OR rule groups over 80+ fields (media, play activity, Arr, Seerr), scheduled actions (delete, unmonitor, tag, search, change quality profile), and Plex collection sync
 - **Deletion safeguards** — Exceptions, rules that pause when the data they read is missing, identity checks before acting, and an optional per-run deletion limit
 - **Real-time sync** — WebSocket connection to each media server, so new items, deletions, and plays show up without waiting for a scheduled sync
 - **Stream Manager** — Active sessions, maintenance mode, transcode manager, and blackout schedules
@@ -31,7 +31,7 @@ Media library management for Plex, Jellyfin, and Emby. Browse and filter your li
 - **AI Analysis** — Read-only assistant that answers questions about your library, using OpenAI-compatible providers (including local models) or Anthropic
 - **Public API** — `/api/v1` authenticated by scoped API keys, with an OpenAPI document
 - **Backup & restore** — Manual or scheduled backups with optional AES-256-GCM encryption
-- **Notifications** — Discord webhooks for lifecycle actions, maintenance mode, and API key changes
+- **Notifications** — Discord webhooks for lifecycle actions, match changes, deletions held by the deletion limit, maintenance mode, and API key changes
 - **Integrations** — Sonarr, Radarr, Lidarr, Seerr (Overseerr/Jellyseerr), and Tracearr as a watch-history source
 
 ## Image Tags
@@ -41,6 +41,7 @@ Media library management for Plex, Jellyfin, and Emby. Browse and filter your li
 | `latest` | The most recent stable release. Recommended for most users. |
 | `X.Y.Z`, `X.Y`, `X` | Specific [releases](https://github.com/ahembree/librariarr/releases). Pin one for reproducible deployments. |
 | `nightly` | Rolling build from the latest commit on `main`. Expect occasional breakage and unreleased database migrations; take a backup first. |
+| `<sha>` | The commit a release was built from. |
 | `nightly-<sha>` | Immutable per-commit nightly build. |
 
 ## Quick Start (Docker Hub)
@@ -124,10 +125,13 @@ Librariarr is meant for your local network. Do not expose it directly to the int
 | Variable | Default | Description |
 | - | - | - |
 | `DATABASE_URL` | — | **Required.** PostgreSQL connection URL |
+| `DB_PASSWORD` | — | Read by Docker Compose, not the app: substituted into `DATABASE_URL` and used as the bundled Postgres password. Letters and digits only |
 | `SESSION_SECRET` | Auto-generated | 32+ character session key. Saved to `/config/.session-secret` if not set |
 | `PUID` / `PGID` | `1000` | User and group the app runs as |
 | `UMASK` | `022` | File permission mask |
 | `LIBRARIARR_PORT` | `3000` | Host port (compose file) |
+| `PORT` / `HOSTNAME` | `3000` / `0.0.0.0` | Set by the image: where the app listens inside the container. Change `LIBRARIARR_PORT` instead |
+| `NEXT_TELEMETRY_DISABLED` | `1` | Set by the image; Next.js telemetry is always off |
 | `TZ` | `UTC` | IANA timezone for scheduled jobs |
 | `LOG_DEBUG` | `false` | Enable debug logging |
 | `BACKUP_DIR` | `/config/backups` | Backup directory |
@@ -159,7 +163,7 @@ No `.env` file needed for development: the dev compose file includes defaults.
 
 This builds and starts the Next.js dev server and PostgreSQL, and pushes the Prisma schema to the database on every start. The app is at [http://localhost:3000](http://localhost:3000).
 
-`src/`, `public/`, `prisma/` and the top-level config files are mounted into the container, so changes hot-reload. After a schema change, run `pnpm docker:dev:db:push` (or restart the container).
+`src/`, `public/`, `prisma/` and the top-level config files are mounted into the container, so changes hot-reload. After a schema change, restart the app container (`docker compose -f docker-compose.dev.yml restart librariarr-dev`): its entrypoint regenerates the Prisma client and pushes the schema. `pnpm docker:dev:db:push` alone updates the database but not the generated client.
 
 ### pnpm Scripts Reference
 
@@ -176,11 +180,11 @@ This builds and starts the Next.js dev server and PostgreSQL, and pushes the Pri
 | `pnpm docker:dev:seed` | Seed the dev database |
 | `pnpm docker:dev:rebuild` | Rebuild and recreate containers |
 | `pnpm docker:dev:clean` | Stop containers and delete DB volume |
-| `pnpm docs:dev` | Start the documentation site (localhost:4321) |
+| `pnpm docs:dev` | Start the documentation site at localhost:4321 (run `pnpm --prefix docs install` once first) |
 
 ### Running Tests
 
-Unit tests need no database; everything else requires the dev DB to be running.
+Integration tests and the full suite need the dev DB running; unit tests need no database, and `e2e:docker` brings up its own.
 
 ```bash
 pnpm test                    # Full test suite
@@ -200,7 +204,7 @@ pnpm e2e:docker              # Browser end-to-end tests (Playwright) against the
 | `pr-title-lint.yml` | PRs | Require a Conventional Commit PR title |
 | `release-please.yml` | Push to `main` | Maintain the release PR; when a release is created, build and push `latest`, `X.Y.Z`, `X.Y`, `X` and `<sha>` tags and update the Docker Hub description |
 | `docker-nightly.yml` | Push to `main`, manual dispatch | Build and push `nightly` and `nightly-<sha>` |
-| `docker-publish.yml` | Manual dispatch only | Fallback publish of `latest` and `<sha>` (plus semver tags when dispatched from a version tag), and update the Docker Hub description |
+| `docker-publish.yml` | Manual dispatch only | Fallback publish of `<sha>`, plus `latest` when dispatched from `main` or semver tags when dispatched from a version tag, and update the Docker Hub description |
 | `docs-deploy.yml` | Push to `main` touching `docs/`, the OpenAPI source or `package.json`; manual dispatch | Build and deploy the docs site to GitHub Pages |
 
 Images are built for `linux/amd64`.
