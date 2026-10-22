@@ -6,6 +6,7 @@ import { apiLogger } from "@/lib/logger";
 import { validateRequest, plexTokenSchema } from "@/lib/validation";
 import { peekAuthRateLimit, reserveAuthAttempt } from "@/lib/rate-limit/rate-limiter";
 import { isSsoOverrideActive } from "@/lib/sso/config";
+import { installedVersion } from "@/lib/version/whats-new";
 
 const PLEX_TOKEN_BUCKET = "plex-token";
 
@@ -123,7 +124,7 @@ export async function POST(request: NextRequest) {
           },
         });
         await tx.appSettings.create({
-          data: { userId: created.id, localAuthEnabled: false },
+          data: { userId: created.id, localAuthEnabled: false, lastSeenVersion: installedVersion() },
         });
         return created;
       },

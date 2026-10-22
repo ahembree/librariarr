@@ -10,6 +10,7 @@ import { Logo } from "@/components/logo";
 import { Button } from "@/components/ui/button";
 import { BackToTop } from "@/components/back-to-top";
 import { ReauthDialogHost } from "@/components/reauth-dialog-host";
+import { WhatsNewDialog } from "@/components/whats-new-dialog";
 import { findScrollContainer } from "@/lib/scroll-utils";
 import { useScrollToTop } from "@/hooks/use-scroll-to-top";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -166,6 +167,8 @@ export function AuthenticatedShell({
       </div>
       {/* The "Confirm it's you" prompt behind fetchWithReauth. */}
       <ReauthDialogHost />
+      {/* Once per upgrade: the release notes since the last version seen. */}
+      <WhatsNewDialog />
     </div>
   );
 }

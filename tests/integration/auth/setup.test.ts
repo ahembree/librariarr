@@ -144,6 +144,24 @@ describe("POST /api/auth/setup", () => {
     expect(settings!.plexLoginEnabled).toBe(false);
   });
 
+  it("records the running version so a fresh install shows no What's new dialog", async () => {
+    vi.stubEnv("NEXT_PUBLIC_APP_VERSION", "1.3.0");
+    try {
+      const response = await callRoute(POST, {
+        url: "/api/auth/setup",
+        method: "POST",
+        // file deepcode ignore NoHardcodedPasswords/test: test file
+        body: { username: "TestAdmin", password: "securepassword123" },
+      });
+      await expectJson(response, 200);
+
+      const settings = await getTestPrisma().appSettings.findFirst();
+      expect(settings!.lastSeenVersion).toBe("1.3.0");
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("creates SystemConfig with setupCompleted on setup", async () => {
     const prisma = getTestPrisma();
 
