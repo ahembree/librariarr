@@ -11,6 +11,8 @@ import os from "os";
 import path from "path";
 import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 
+// Set before the backup service loads: it reads BACKUP_DIR once, at module
+// load, so the service is imported dynamically below rather than hoisted.
 const backupDir = await fs.mkdtemp(path.join(os.tmpdir(), "librariarr-restore-seen-"));
 process.env.BACKUP_DIR = backupDir;
 
@@ -24,7 +26,7 @@ vi.mock("@/lib/logger", () => ({
   dbLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-import { createBackup, restoreBackup } from "@/lib/backup/backup-service";
+const { createBackup, restoreBackup } = await import("@/lib/backup/backup-service");
 
 const prisma = getTestPrisma();
 
