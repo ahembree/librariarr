@@ -28,11 +28,16 @@ export async function GET() {
   const lastSeenVersion = settings?.lastSeenVersion ?? null;
 
   if (!currentVersion || !whatsNewDue(lastSeenVersion, currentVersion)) {
-    return NextResponse.json({ show: false, currentVersion, notes: [] });
+    return NextResponse.json({ show: false, currentVersion, previousVersion: lastSeenVersion, notes: [] });
   }
 
   const notes = notesSinceVersion(await fetchChangelog(), lastSeenVersion, currentVersion);
-  return NextResponse.json({ show: notes.length > 0, currentVersion, notes });
+  return NextResponse.json({
+    show: notes.length > 0,
+    currentVersion,
+    previousVersion: lastSeenVersion,
+    notes,
+  });
 }
 
 /**

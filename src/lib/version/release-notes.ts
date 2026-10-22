@@ -80,3 +80,20 @@ export function notesSinceVersion<T extends { version: string }>(
     })
     .sort((a, b) => compareSemver(b.version, a.version));
 }
+
+/** A release-please item's conventional-commit scope ("sync: keep counts" → "sync"), if it has one. */
+export function splitReleaseItemScope(item: string): { scope: string | null; text: string } {
+  const match = item.match(/^([\w./-]{1,40}):\s+(.+)$/);
+  return match ? { scope: match[1], text: match[2] } : { scope: null, text: item };
+}
+
+export type ReleaseSectionKind = "features" | "fixes" | "performance" | "other";
+
+/** Which kind of change a release-please section heading lists. */
+export function releaseSectionKind(heading: string): ReleaseSectionKind {
+  const h = heading.toLowerCase();
+  if (h.includes("feature")) return "features";
+  if (h.includes("fix")) return "fixes";
+  if (h.includes("perf")) return "performance";
+  return "other";
+}

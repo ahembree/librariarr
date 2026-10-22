@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { cleanReleaseItem, notesSinceVersion, parseReleaseBody } from "@/lib/version/release-notes";
+import {
+  cleanReleaseItem,
+  notesSinceVersion,
+  parseReleaseBody,
+  releaseSectionKind,
+  splitReleaseItemScope,
+} from "@/lib/version/release-notes";
 
 const notes = ["1.4.0", "1.3.0", "1.2.1", "1.2.0", "1.1.0"].map((version) => ({ version }));
 
@@ -48,5 +54,25 @@ describe("parseReleaseBody", () => {
 
   it("decodes GitHub's HTML entities", () => {
     expect(cleanReleaseItem("a &gt; b &amp;&amp; c &lt; d")).toBe("a > b && c < d");
+  });
+});
+
+describe("splitReleaseItemScope", () => {
+  it("splits a conventional-commit scope off the message", () => {
+    expect(splitReleaseItemScope("sync: keep play counts")).toEqual({ scope: "sync", text: "keep play counts" });
+  });
+
+  it("leaves an item without a scope whole", () => {
+    expect(splitReleaseItemScope("keep play counts")).toEqual({ scope: null, text: "keep play counts" });
+    expect(splitReleaseItemScope("ratio 1:2 fixed")).toEqual({ scope: null, text: "ratio 1:2 fixed" });
+  });
+});
+
+describe("releaseSectionKind", () => {
+  it("names the release-please headings", () => {
+    expect(releaseSectionKind("Features")).toBe("features");
+    expect(releaseSectionKind("Bug Fixes")).toBe("fixes");
+    expect(releaseSectionKind("Performance Improvements")).toBe("performance");
+    expect(releaseSectionKind("Miscellaneous Chores")).toBe("other");
   });
 });

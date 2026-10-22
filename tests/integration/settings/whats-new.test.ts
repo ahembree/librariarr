@@ -35,6 +35,7 @@ function note(version: string) {
 interface WhatsNew {
   show: boolean;
   currentVersion: string | null;
+  previousVersion: string | null;
   notes: { version: string }[];
 }
 
@@ -71,6 +72,7 @@ describe("/api/settings/whats-new", () => {
     const body = await expectJson<WhatsNew>(await GET(), 200);
     expect(body.show).toBe(true);
     expect(body.currentVersion).toBe("1.3.0");
+    expect(body.previousVersion).toBe("1.2.0");
     expect(body.notes.map((n) => n.version)).toEqual(["1.3.0", "1.2.1"]);
   });
 
