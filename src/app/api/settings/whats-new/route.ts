@@ -2,17 +2,18 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { validateRequest, whatsNewSeenSchema } from "@/lib/validation";
-import { fetchChangelog } from "@/lib/version/update-checker";
+import { fetchReleaseNotes } from "@/lib/version/update-checker";
 import { compareSemver } from "@/lib/version/semver";
-import { notesSinceVersion } from "@/lib/version/release-notes";
+import { selectWhatsNew } from "@/lib/version/release-notes";
 import { installedVersion, whatsNewDue } from "@/lib/version/whats-new";
 
 /**
  * The release notes the "What's new" dialog shows after an upgrade: every
  * release since the version whose dialog was last closed, up to the running
- * one. `show` is false when nothing is owed, or when GitHub has no notes to
- * give yet (the dialog then waits for a later load rather than being marked
- * seen with nothing in it).
+ * one. `show` is false when nothing is owed, or when GitHub has not yet given
+ * the running version's own notes (the dialog then waits for a later load
+ * rather than being marked seen without them). `truncated` says releases
+ * since the last one seen lie past the page GitHub returned.
  */
 export async function GET() {
   const session = await getSession();
@@ -28,15 +29,26 @@ export async function GET() {
   const lastSeenVersion = settings?.lastSeenVersion ?? null;
 
   if (!currentVersion || !whatsNewDue(lastSeenVersion, currentVersion)) {
-    return NextResponse.json({ show: false, currentVersion, previousVersion: lastSeenVersion, notes: [] });
+    return NextResponse.json({
+      show: false,
+      currentVersion,
+      previousVersion: lastSeenVersion,
+      truncated: false,
+      notes: [],
+    });
   }
 
-  const notes = notesSinceVersion(await fetchChangelog(), lastSeenVersion, currentVersion);
+  const { notes, hasCurrent, truncated } = selectWhatsNew(
+    await fetchReleaseNotes(),
+    lastSeenVersion,
+    currentVersion,
+  );
   return NextResponse.json({
-    show: notes.length > 0,
+    show: hasCurrent,
     currentVersion,
     previousVersion: lastSeenVersion,
-    notes,
+    truncated,
+    notes: hasCurrent ? notes : [],
   });
 }
 
@@ -64,23 +76,28 @@ export async function PUT(request: NextRequest) {
     );
   }
 
-  const settings = await prisma.appSettings.findUnique({
-    where: { userId: session.userId! },
-    select: { lastSeenVersion: true },
+  const userId = session.userId!;
+  // Compare and write under the row's lock: read first and written apart, two
+  // tabs closing their dialogs together each passed the check, and the older
+  // version could land last and bring the newer dialog back.
+  const lastSeenVersion = await prisma.$transaction(async (tx) => {
+    const rows = await tx.$queryRaw<{ lastSeenVersion: string | null }[]>`
+      SELECT "lastSeenVersion" FROM "AppSettings" WHERE "userId" = ${userId} FOR UPDATE`;
+    if (rows.length === 0) {
+      await tx.appSettings.create({ data: { userId, lastSeenVersion: version }, select: { id: true } });
+      return version;
+    }
+    const stored = rows[0].lastSeenVersion;
+    // Never step back: a second tab closing an older dialog must not make the
+    // newer one show again.
+    if (stored !== null && compareSemver(version, stored) <= 0) return stored;
+    await tx.appSettings.update({
+      where: { userId },
+      data: { lastSeenVersion: version },
+      select: { id: true },
+    });
+    return version;
   });
-  const stored = settings?.lastSeenVersion ?? null;
-  // Never step back: a second tab closing an older dialog must not make the
-  // newer one show again.
-  if (stored !== null && compareSemver(version, stored) <= 0) {
-    return NextResponse.json({ lastSeenVersion: stored });
-  }
 
-  await prisma.appSettings.upsert({
-    where: { userId: session.userId! },
-    create: { userId: session.userId!, lastSeenVersion: version },
-    update: { lastSeenVersion: version },
-    select: { id: true },
-  });
-
-  return NextResponse.json({ lastSeenVersion: version });
+  return NextResponse.json({ lastSeenVersion });
 }

@@ -1,7 +1,6 @@
 import { logger } from "@/lib/logger";
 import { compareSemver } from "@/lib/version/semver";
-
-export { compareSemver };
+import { RELEASE_NOTES_PAGE_SIZE } from "@/lib/version/release-notes";
 
 const GITHUB_REPO = "ahembree/librariarr";
 const CACHE_KEY = "version:latest";
@@ -227,6 +226,9 @@ export function deduplicateReleaseBody(body: string): string {
   return result.join("\n");
 }
 
+/** How many of the newest releases the Settings → System changelog lists. */
+const CHANGELOG_LENGTH = 10;
+
 /**
  * Fetch changelog/release notes from GitHub Releases.
  * Returns up to 10 release notes: any newer versions, the current version,
@@ -234,6 +236,16 @@ export function deduplicateReleaseBody(body: string): string {
  * background hourly (see `staleWhileRevalidate`).
  */
 export async function fetchChangelog(): Promise<ReleaseNote[]> {
+  return (await fetchReleaseNotes()).slice(0, CHANGELOG_LENGTH);
+}
+
+/**
+ * Every published release one GitHub page returns (`RELEASE_NOTES_PAGE_SIZE`),
+ * newest first. The "What's new" dialog reads this rather than the 10-note
+ * changelog: an install more than 10 releases behind the latest would find
+ * none of its own notes in those 10 and never see the dialog.
+ */
+export async function fetchReleaseNotes(): Promise<ReleaseNote[]> {
   const currentVersion = process.env.NEXT_PUBLIC_APP_VERSION ?? "unknown";
 
   if (currentVersion === "unknown") return [];
@@ -249,7 +261,7 @@ export async function fetchChangelog(): Promise<ReleaseNote[]> {
       try {
 
         const response = await fetch(
-          `https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=25`,
+          `https://api.github.com/repos/${GITHUB_REPO}/releases?per_page=${RELEASE_NOTES_PAGE_SIZE}`,
           {
             headers: {
               Accept: "application/vnd.github.v3+json",
@@ -301,8 +313,7 @@ export async function fetchChangelog(): Promise<ReleaseNote[]> {
           notes[0].isLatest = true;
         }
 
-        // Keep all newer versions + enough older ones to total 10
-        return notes.slice(0, 10);
+        return notes;
       } catch (error) {
         logger.debug("Changelog", "Failed to fetch changelog", {
           error: String(error),
@@ -321,5 +332,5 @@ export async function fetchChangelog(): Promise<ReleaseNote[]> {
  * Called from instrumentation; a lookup still fresh is left alone.
  */
 export async function warmVersionCache(): Promise<void> {
-  await Promise.all([checkForUpdate(), fetchChangelog()]);
+  await Promise.all([checkForUpdate(), fetchReleaseNotes()]);
 }

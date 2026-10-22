@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { SettingsSection } from "../components";
 import { ReleaseNoteSections } from "@/components/release-note-sections";
+import { formatDate } from "@/lib/format";
 import {
   Collapsible,
   CollapsibleContent,
@@ -45,18 +46,6 @@ interface SystemTabProps {
   loadingChangelog: boolean;
 }
 
-function formatDate(dateStr: string): string {
-  try {
-    return new Date(dateStr).toLocaleDateString(undefined, {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
-    });
-  } catch {
-    return dateStr;
-  }
-}
-
 function ReleaseNoteRow({ note }: { note: ReleaseNote }) {
   const [open, setOpen] = useState(note.isLatest && !note.isCurrent);
 
@@ -76,7 +65,7 @@ function ReleaseNoteRow({ note }: { note: ReleaseNote }) {
             </div>
             {note.publishedAt && (
               <span className="text-xs text-muted-foreground truncate">
-                {formatDate(note.publishedAt)}
+                {formatDate(note.publishedAt, "")}
               </span>
             )}
           </div>

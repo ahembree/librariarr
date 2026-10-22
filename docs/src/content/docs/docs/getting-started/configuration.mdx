@@ -277,9 +277,12 @@ Displays changelog entries fetched from GitHub Releases, including:
 After an upgrade, Librariarr opens a **What's new** dialog the first time you
 load any page, listing the features and fixes of every release since the
 version you last saw (fetched from GitHub Releases). Closing it records the
-running version, so it stays closed until the next upgrade. A fresh install
-does not show it, and if GitHub cannot be reached it waits for a later page
-load rather than showing nothing.
+running version, so it stays closed until the next upgrade. Breaking changes
+are listed first in each release, and a release with any opens expanded. A
+fresh install does not show it, restoring a backup does not reopen it for
+releases already seen, and if GitHub cannot be reached — or has not yet
+published the running version's release — it waits for a later page load
+rather than opening without that version's notes.
 
 ### Image Cache
 

@@ -13,8 +13,8 @@ vi.mock("@/lib/logger", () => ({
   dbLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-const { mockFetchChangelog } = vi.hoisted(() => ({ mockFetchChangelog: vi.fn() }));
-vi.mock("@/lib/version/update-checker", () => ({ fetchChangelog: mockFetchChangelog }));
+const { mockFetchReleaseNotes } = vi.hoisted(() => ({ mockFetchReleaseNotes: vi.fn() }));
+vi.mock("@/lib/version/update-checker", () => ({ fetchReleaseNotes: mockFetchReleaseNotes }));
 
 import { GET, PUT } from "@/app/api/settings/whats-new/route";
 
@@ -36,6 +36,7 @@ interface WhatsNew {
   show: boolean;
   currentVersion: string | null;
   previousVersion: string | null;
+  truncated: boolean;
   notes: { version: string }[];
 }
 
@@ -52,7 +53,7 @@ describe("/api/settings/whats-new", () => {
     clearMockSession();
     vi.clearAllMocks();
     vi.stubEnv("NEXT_PUBLIC_APP_VERSION", "1.3.0");
-    mockFetchChangelog.mockResolvedValue(["1.4.0", "1.3.0", "1.2.1", "1.2.0"].map(note));
+    mockFetchReleaseNotes.mockResolvedValue(["1.4.0", "1.3.0", "1.2.1", "1.2.0"].map(note));
   });
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -64,7 +65,7 @@ describe("/api/settings/whats-new", () => {
   it("refuses an unauthenticated request", async () => {
     expect(await expectJson(await GET(), 401)).toEqual({ error: "Unauthorized" });
     await expectJson(await callRoute(PUT, { method: "PUT", body: { version: "1.3.0" } }), 401);
-    expect(mockFetchChangelog).not.toHaveBeenCalled();
+    expect(mockFetchReleaseNotes).not.toHaveBeenCalled();
   });
 
   it("shows every release since the last one seen, up to the running one", async () => {
@@ -86,7 +87,7 @@ describe("/api/settings/whats-new", () => {
     await signIn("1.3.0");
     const body = await expectJson<WhatsNew>(await GET(), 200);
     expect(body.show).toBe(false);
-    expect(mockFetchChangelog).not.toHaveBeenCalled();
+    expect(mockFetchReleaseNotes).not.toHaveBeenCalled();
   });
 
   it("does not show in a build with no version", async () => {
@@ -96,9 +97,44 @@ describe("/api/settings/whats-new", () => {
   });
 
   it("does not show an empty dialog when GitHub has no notes", async () => {
-    mockFetchChangelog.mockResolvedValue([]);
+    mockFetchReleaseNotes.mockResolvedValue([]);
     await signIn("1.2.0");
     expect((await expectJson<WhatsNew>(await GET(), 200)).show).toBe(false);
+  });
+
+  it("waits while GitHub has not given the running version's own notes", async () => {
+    // Its release was published after the cached lookup: closing a dialog
+    // without it would record it as seen and its notes would never show.
+    mockFetchReleaseNotes.mockResolvedValue(["1.2.1", "1.2.0"].map(note));
+    await signIn("1.2.0");
+    const body = await expectJson<WhatsNew>(await GET(), 200);
+    expect(body.show).toBe(false);
+    expect(body.notes).toEqual([]);
+  });
+
+  it("finds an install more than ten releases behind", async () => {
+    vi.stubEnv("NEXT_PUBLIC_APP_VERSION", "1.0.0");
+    mockFetchReleaseNotes.mockResolvedValue(
+      Array.from({ length: 20 }, (_, i) => note(`1.${19 - i}.0`)),
+    );
+    await signIn("0.9.0");
+    const body = await expectJson<WhatsNew>(await GET(), 200);
+    expect(body.show).toBe(true);
+    expect(body.notes.map((n) => n.version)).toEqual(["1.0.0"]);
+    expect(body.truncated).toBe(false);
+  });
+
+  it("keeps the newest version when two tabs close their dialogs at once", async () => {
+    const user = await signIn("1.1.0");
+    for (let i = 0; i < 5; i++) {
+      await prisma.appSettings.update({ where: { userId: user.id }, data: { lastSeenVersion: "1.1.0" } });
+      await Promise.all([
+        callRoute(PUT, { method: "PUT", body: { version: "1.3.0" } }),
+        callRoute(PUT, { method: "PUT", body: { version: "1.2.0" } }),
+      ]);
+      const settings = await prisma.appSettings.findUnique({ where: { userId: user.id } });
+      expect(settings?.lastSeenVersion).toBe("1.3.0");
+    }
   });
 
   it("records the version closed, and stays closed until the next upgrade", async () => {

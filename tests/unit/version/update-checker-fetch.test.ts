@@ -7,6 +7,7 @@ vi.mock("@/lib/logger", () => ({
 import {
   checkForUpdate,
   fetchChangelog,
+  fetchReleaseNotes,
   deduplicateReleaseBody,
   resetVersionLookups,
 } from "@/lib/version/update-checker";
@@ -340,6 +341,25 @@ describe("update-checker fetch behavior", () => {
       expect(notes.map((n) => n.version)).toEqual(
         Array.from({ length: 10 }, (_, i) => `1.${24 - i}.0`),
       );
+    });
+
+    it("gives the What's new dialog every release from the same single lookup", async () => {
+      const releases = Array.from({ length: 25 }, (_, i) => ({
+        tag_name: `v1.${i}.0`,
+        name: `1.${i}.0`,
+        body: "b",
+        html_url: "u",
+        published_at: "2024-01-01T00:00:00Z",
+      }));
+      vi.mocked(fetch).mockResolvedValueOnce(jsonResponse(releases));
+
+      const all = await fetchReleaseNotes();
+      expect(all).toHaveLength(25);
+      expect(all[0].version).toBe("1.24.0");
+      expect(all[24].version).toBe("1.0.0");
+      expect(await fetchChangelog()).toHaveLength(10);
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(String(vi.mocked(fetch).mock.calls[0][0])).toContain("per_page=100");
     });
 
     it("falls back to created_at when published_at is missing and empty url default", async () => {

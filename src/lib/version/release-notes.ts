@@ -5,6 +5,9 @@
 
 import { compareSemver } from "./semver";
 
+/** How many releases one GitHub lookup returns (the API's per-page maximum). */
+export const RELEASE_NOTES_PAGE_SIZE = 100;
+
 /**
  * Clean a markdown list item for display:
  * - Strip commit hash links: "([abc1234](url))" or "(abc1234)"
@@ -87,13 +90,86 @@ export function splitReleaseItemScope(item: string): { scope: string | null; tex
   return match ? { scope: match[1], text: match[2] } : { scope: null, text: item };
 }
 
-export type ReleaseSectionKind = "features" | "fixes" | "performance" | "other";
+export type ReleaseSectionKind = "breaking" | "features" | "fixes" | "performance" | "other";
+
+/** The kinds in the order a release lists them: breaking changes first. */
+export const RELEASE_SECTION_KIND_ORDER: ReleaseSectionKind[] = [
+  "breaking",
+  "features",
+  "fixes",
+  "performance",
+  "other",
+];
 
 /** Which kind of change a release-please section heading lists. */
 export function releaseSectionKind(heading: string): ReleaseSectionKind {
   const h = heading.toLowerCase();
+  if (h.includes("breaking")) return "breaking";
   if (h.includes("feature")) return "features";
   if (h.includes("fix")) return "fixes";
   if (h.includes("perf")) return "performance";
   return "other";
+}
+
+export interface ReleaseSection {
+  heading: string;
+  kind: ReleaseSectionKind;
+  items: string[];
+}
+
+/**
+ * A release body as its sections, each tagged with its kind, breaking changes
+ * first and the rest in the order the release lists them.
+ */
+export function parseReleaseSections(body: string): ReleaseSection[] {
+  const sections = parseReleaseBody(body).map((section) => ({
+    ...section,
+    kind: releaseSectionKind(section.heading),
+  }));
+  return [
+    ...sections.filter((section) => section.kind === "breaking"),
+    ...sections.filter((section) => section.kind !== "breaking"),
+  ];
+}
+
+/** Item counts per kind of change, in display order, leaving out kinds with none. */
+export function countReleaseItemsByKind(
+  sections: ReleaseSection[],
+): { kind: ReleaseSectionKind; count: number }[] {
+  const counts = new Map<ReleaseSectionKind, number>();
+  for (const section of sections) {
+    counts.set(section.kind, (counts.get(section.kind) ?? 0) + section.items.length);
+  }
+  return RELEASE_SECTION_KIND_ORDER.filter((kind) => (counts.get(kind) ?? 0) > 0).map((kind) => ({
+    kind,
+    count: counts.get(kind)!,
+  }));
+}
+
+/**
+ * What the "What's new" dialog shows: the notes `notesSinceVersion` picks,
+ * whether the running version's own release is among them, and whether older
+ * releases since `lastSeenVersion` lie past the one page GitHub returned.
+ *
+ * Without its own release the dialog must not open: closing it records the
+ * running version as seen, so its notes — published after the cached lookup,
+ * say — would never be shown.
+ */
+export function selectWhatsNew<T extends { version: string }>(
+  allNotes: T[],
+  lastSeenVersion: string | null,
+  currentVersion: string,
+): { notes: T[]; hasCurrent: boolean; truncated: boolean } {
+  const notes = notesSinceVersion(allNotes, lastSeenVersion, currentVersion);
+  const hasCurrent = notes.some((note) => compareSemver(note.version, currentVersion) === 0);
+  const oldest = allNotes.reduce<T | null>(
+    (min, note) => (min === null || compareSemver(note.version, min.version) < 0 ? note : min),
+    null,
+  );
+  const truncated =
+    lastSeenVersion !== null &&
+    allNotes.length >= RELEASE_NOTES_PAGE_SIZE &&
+    oldest !== null &&
+    compareSemver(oldest.version, lastSeenVersion) > 0;
+  return { notes, hasCurrent, truncated };
 }
