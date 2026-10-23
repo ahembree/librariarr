@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { compareSemver } from "@/lib/version/update-checker";
+import { compareSemver } from "@/lib/version/semver";
 
 describe("compareSemver", () => {
   it("compares numeric major/minor/patch", () => {
