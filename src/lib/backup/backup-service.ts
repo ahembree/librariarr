@@ -6,6 +6,7 @@ import path from "path";
 import { gzipSync, gunzipSync } from "zlib";
 import { randomBytes, scryptSync, createCipheriv, createDecipheriv } from "crypto";
 import { invalidateServersWithoutWatchHistory } from "@/lib/media/watch-evidence";
+import { compareSemver } from "@/lib/version/semver";
 
 // Runtime data directory: env-resolved and outside the project (under /config in
 // the container), so Turbopack's build-time tracer cannot resolve it statically and
@@ -284,6 +285,13 @@ export async function restoreBackup(
     // see `revokeRestoredSessions`.
     const sessionVersionInUse =
       (await tx.user.aggregate({ _max: { sessionVersion: true } }))._max.sessionVersion ?? 0;
+    // The newest release-notes version already seen, likewise — see
+    // `keepSeenReleaseNotes`.
+    const seenVersionInUse = newestVersion(
+      (await tx.appSettings.findMany({ select: { lastSeenVersion: true } })).map(
+        (row) => row.lastSeenVersion,
+      ),
+    );
 
     // Step 2: Truncate all tables in reverse dependency order
     onProgress?.({ phase: "truncate", message: "Clearing existing data..." });
@@ -320,6 +328,9 @@ export async function restoreBackup(
       }
       if (table === "user") {
         rows = revokeRestoredSessions(rows, sessionVersionInUse);
+      }
+      if (table === "appSettings") {
+        rows = keepSeenReleaseNotes(rows, seenVersionInUse);
       }
 
       onProgress?.({
@@ -575,6 +586,30 @@ function revokeRestoredSessions(rows: unknown[], versionInUse: number): unknown[
     const restored = typeof r.sessionVersion === "number" ? r.sessionVersion : 0;
     return { ...r, sessionVersion: Math.max(restored, versionInUse, floor) + 1 };
   });
+}
+
+/**
+ * Keep the "What's new" dialog closed for every release already seen. The
+ * file holds `AppSettings.lastSeenVersion` as it was when the backup was taken
+ * (null in any backup from before the column), so restoring it verbatim
+ * reopened the dialog for releases the admin had already read.
+ */
+export function keepSeenReleaseNotes(rows: unknown[], versionInUse: string | null): unknown[] {
+  if (versionInUse === null) return rows;
+  return rows.map((row) => {
+    const r = row as Record<string, unknown>;
+    const restored = typeof r.lastSeenVersion === "string" ? r.lastSeenVersion : null;
+    return { ...r, lastSeenVersion: newestVersion([restored, versionInUse]) };
+  });
+}
+
+/** The highest of some version numbers, ignoring nulls; null when there are none. */
+function newestVersion(versions: (string | null)[]): string | null {
+  let newest: string | null = null;
+  for (const version of versions) {
+    if (version !== null && (newest === null || compareSemver(version, newest) > 0)) newest = version;
+  }
+  return newest;
 }
 
 const SESSION_VERSION_EPOCH_MS = Date.UTC(2024, 0, 1);

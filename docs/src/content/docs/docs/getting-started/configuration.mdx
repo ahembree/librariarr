@@ -272,6 +272,18 @@ Displays changelog entries fetched from GitHub Releases, including:
 - Release notes for any newer versions, if an update is available (auto-expanded)
 - Each release can be expanded/collapsed to view its full changelog
 
+### What's New
+
+After an upgrade, Librariarr opens a **What's new** dialog the first time you
+load any page, listing the features and fixes of every release since the
+version you last saw (fetched from GitHub Releases). Closing it records the
+running version, so it stays closed until the next upgrade. Breaking changes
+are listed first in each release, and a release with any opens expanded. A
+fresh install does not show it, restoring a backup does not reopen it for
+releases already seen, and if GitHub cannot be reached — or has not yet
+published the running version's release — it waits for a later page load
+rather than opening without that version's notes.
+
 ### Image Cache
 
 - Shows the number of cached images and total size

@@ -156,6 +156,14 @@ export const deleteCeilingSchema = z.object({
     .nullable(),
 });
 
+/** Closing the "What's new" dialog: the version whose notes it showed. */
+export const whatsNewSeenSchema = z.object({
+  version: z
+    .string()
+    .max(64)
+    .regex(/^v?\d+\.\d+(\.\d+)?([-+][0-9A-Za-z.-]+)?$/, "Not a version number"),
+});
+
 export const actionRetentionSchema = z.object({
   actionHistoryRetentionDays: z.number().int().min(0).max(365),
 });
