@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.32.0](https://github.com/ahembree/librariarr/compare/v0.31.1...v0.32.0) (2026-10-23)
+
+
+### Features
+
+* show a one-time what's new dialog after an upgrade ([#482](https://github.com/ahembree/librariarr/issues/482)) ([4477546](https://github.com/ahembree/librariarr/commit/4477546c78e20964f48447a42c56afa91c8fc527))
+
 ## [0.31.1](https://github.com/ahembree/librariarr/compare/v0.31.0...v0.31.1) (2026-10-21)
 
 
