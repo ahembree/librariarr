@@ -110,7 +110,7 @@
     "eslint-config-next": "16.4.2",
     "happy-dom": "^21.0.1",
     "husky": "^9.1.7",
-    "prisma": "^7.10.0",
+    "prisma": "^7.10.1",
     "shadcn": "^4.21.5",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.23.15",
