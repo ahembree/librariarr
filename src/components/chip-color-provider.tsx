@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useState, useEffect, useCallback } from "react";
+import { createContext, useContext, useState, useEffect, useCallback, useRef } from "react";
 import type { ChipColorMap, ChipColorCategory } from "@/lib/theme/chip-colors";
 import {
   DEFAULT_CHIP_COLORS,
@@ -44,10 +44,23 @@ function resolveHex(colors: ChipColorMap, category: ChipColorCategory, value: st
   return FALLBACK_HEX;
 }
 
-export function ChipColorProvider({ children }: { children: React.ReactNode }) {
-  const [colors, setColors] = useState<ChipColorMap>(DEFAULT_CHIP_COLORS);
+export function ChipColorProvider({
+  children,
+  initialColors,
+}: {
+  children: React.ReactNode;
+  // The saved colours the server layout read (null: none saved). Undefined
+  // when it could not read them, in which case they are fetched here; fetched
+  // after hydration, every chip drew in the default colours first.
+  initialColors?: Partial<ChipColorMap> | null;
+}) {
+  const [colors, setColors] = useState<ChipColorMap>(() =>
+    initialColors === undefined ? DEFAULT_CHIP_COLORS : mergeChipColors(initialColors),
+  );
+  const known = useRef(initialColors !== undefined);
 
   useEffect(() => {
+    if (known.current) return;
     fetch("/api/settings/chip-colors")
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {

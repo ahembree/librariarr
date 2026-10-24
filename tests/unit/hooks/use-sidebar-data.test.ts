@@ -19,6 +19,7 @@ vi.mock("sonner", () => ({ toast: { error: mocks.toastError, success: mocks.toas
 
 import { useSidebarData } from "@/hooks/use-sidebar-data";
 import { getPageMeta } from "@/lib/nav/page-meta";
+import { shellSettingsWrapper } from "../../setup/shell-settings-wrapper";
 
 type Responses = Record<string, unknown>;
 const fetchMock = vi.fn();
@@ -67,6 +68,13 @@ describe("useSidebarData", () => {
     expect(nav.map((g) => g.label)).toEqual(["Overview", "Library", "Lifecycle", "Tools", "System"]);
     expect(items(nav, "Library")).toEqual(["Movies", "Series", "Music", "History", "Query"]);
     expect(items(nav, "Lifecycle")).toEqual(["Rules", "Rule Matches", "Pending Actions", "Exceptions"]);
+  });
+
+  it("takes the user from the server layout's read without fetching it", async () => {
+    const { result } = renderHook(() => useSidebarData(), { wrapper: shellSettingsWrapper() });
+    expect(result.current.user).toEqual({ username: "server-admin", authMethod: "Plex" });
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/media/library-types"));
+    expect(fetchMock.mock.calls.map(([url]) => url)).not.toContain("/api/auth/me");
   });
 
   it("names every page in the top bar's breadcrumb exactly as the sidebar does", async () => {

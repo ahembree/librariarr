@@ -1,8 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { connection } from "next/server";
 import { ThemeProvider } from "@/components/theme-provider";
-import { getSession } from "@/lib/auth/session";
-import { prisma } from "@/lib/db";
+import { getRequestSession, loadShellSettings } from "@/lib/settings/shell-settings";
 import { accentStyle } from "@/lib/theme/accent-colors";
 import { Toaster } from "sonner";
 // Self-hosted (Fontsource) rather than next/font/google, which downloads the
@@ -79,12 +78,10 @@ export default async function RootLayout({
 
 async function loadAccentColor(): Promise<string | null> {
   try {
-    const session = await getSession();
+    const session = await getRequestSession();
     if (!session.isLoggedIn || !session.userId) return null;
-    const settings = await prisma.appSettings.findUnique({
-      where: { userId: session.userId },
-      select: { accentColor: true },
-    });
+    // Shared with the authenticated layout's read in the same request.
+    const settings = await loadShellSettings(session.userId);
     return settings?.accentColor ?? "default";
   } catch {
     // Signed out, no database yet: the provider fetches it client-side.

@@ -37,6 +37,7 @@ import { getDuplicateServerNames } from "@/lib/server-styles";
 import { ServerTypeChip } from "@/components/server-type-chip";
 import { InsightsSkeleton, LibraryTilesSkeleton } from "@/components/skeletons";
 import { useRealtime } from "@/hooks/use-realtime";
+import { useShellSettings } from "@/components/shell-settings-provider";
 import {
   ALL_SERVERS,
   ALL_TYPES,
@@ -131,16 +132,19 @@ function SectionHeader({ label, children }: { label: string; children?: React.Re
 
 export default function DashboardPage() {
   const router = useRouter();
+  // The saved layout and the user's name, read by the server layout. Null
+  // outside it or when that read failed: both are then fetched as before.
+  const shell = useShellSettings();
   const [stats, setStats] = useState<Stats | null>(null);
   // Whether the latest stats request failed. The page-level error is keyed on
   // this, not on the first load having settled: the server selector is on
   // screen during that load, and a pick made then drops the first answer, so
   // "settled with no stats" would read a request still in flight as a failure.
   const [statsFailed, setStatsFailed] = useState(false);
-  const [layout, setLayout] = useState<DashboardLayout | null>(null);
+  const [layout, setLayout] = useState<DashboardLayout | null>(() => shell?.dashboardLayout() ?? null);
   // Whether the saved layout and the library types have been answered (or
   // failed). The zones that depend on them wait for them; nothing else does.
-  const [layoutSettled, setLayoutSettled] = useState(false);
+  const [layoutSettled, setLayoutSettled] = useState(shell !== null);
   const [typesSettled, setTypesSettled] = useState(false);
   const [scheduleInfo, setScheduleInfo] = useState<ScheduleInfo | null>(null);
   const [editMode, setEditMode] = useState(false);
@@ -149,9 +153,11 @@ export default function DashboardPage() {
   const [selectedMediaType, setSelectedMediaType] = useState<string>(ALL_TYPES);
   const [availableTypes, setAvailableTypes] = useState<string[]>([]);
   const [editingCustomCard, setEditingCustomCard] = useState<{ cardId: string; config: CustomCardConfig } | null>(null);
-  const [userName, setUserName] = useState<string>("");
+  const [userName, setUserName] = useState<string>(shell?.user.username ?? "");
+  const userKnown = useRef(shell !== null);
 
   useEffect(() => {
+    if (userKnown.current) return;
     fetch("/api/auth/me")
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => { if (data?.username) setUserName(data.username); })
@@ -198,7 +204,8 @@ export default function DashboardPage() {
   // could land a GET issued before an in-flight layout PUT and revert the edit
   // the user just made on screen. Marked when the read is ISSUED: the zones no
   // longer wait for it, so a refresh can land while it is still in flight.
-  const layoutReadRef = useRef(false);
+  // The server layout's read counts: it is the same row, read with the page.
+  const layoutReadRef = useRef(shell !== null);
 
   // Each response is applied as it lands. The page used to wait for all five
   // (the stats among them, the slowest by far on a cold cache) before drawing
@@ -304,13 +311,18 @@ export default function DashboardPage() {
         body: JSON.stringify({ layout: newLayout }),
       })
         .then((res) => {
-          if (!res.ok) toast.error("Failed to save dashboard layout");
+          if (!res.ok) {
+            toast.error("Failed to save dashboard layout");
+            return;
+          }
+          // The next visit reads the layout from here, not the server.
+          shell?.setDashboardLayout(newLayout);
         })
         .catch(() => {
           toast.error("Failed to save dashboard layout");
         });
     },
-    [resolvedLayout]
+    [resolvedLayout, shell]
   );
 
   const handleMovieClick = useCallback((movieId: string) => {

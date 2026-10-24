@@ -6,6 +6,7 @@ import { ArrowRight, ChevronDown, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ColorChip } from "@/components/color-chip";
 import { Logo } from "@/components/logo";
+import { useShellSettings } from "@/components/shell-settings-provider";
 import { ReleaseKindCountChips, ReleaseNoteSections } from "@/components/release-note-sections";
 import {
   Collapsible,
@@ -116,12 +117,16 @@ function ReleaseCard({
  * upgrade. Mounted in `AuthenticatedShell`.
  */
 export function WhatsNewDialog() {
+  const shell = useShellSettings();
   const [data, setData] = useState<WhatsNewResponse | null>(null);
   const [open, setOpen] = useState(false);
   const dismissRef = useRef<HTMLButtonElement>(null);
   const recorded = useRef(false);
 
   useEffect(() => {
+    // The server layout already compared the running version with the last
+    // one seen; when nothing is owed there is nothing to ask GitHub about.
+    if (shell && !shell.whatsNewDue()) return;
     let cancelled = false;
     fetch("/api/settings/whats-new", { priority: "low" })
       .then((res) => (res.ok ? res.json() : null))
@@ -134,7 +139,7 @@ export function WhatsNewDialog() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [shell]);
 
   const notes = useMemo<ParsedNote[]>(
     () =>
@@ -158,7 +163,9 @@ export function WhatsNewDialog() {
         // dialog came back on every load.
         if (!res.ok) {
           console.error(`Failed to record the v${version} release notes as seen: HTTP ${res.status}`);
+          return;
         }
+        shell?.setWhatsNewSeen();
       })
       .catch((e) => console.error(`Failed to record the v${version} release notes as seen`, e));
   };

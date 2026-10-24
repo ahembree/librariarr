@@ -1,7 +1,9 @@
 // @vitest-environment happy-dom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { renderHook, act, waitFor } from "@testing-library/react";
+import { createElement } from "react";
+import { render, renderHook, act, waitFor } from "@testing-library/react";
 import { useCardDisplay, TOGGLE_CONFIGS, SEASON_EPISODE_TOGGLES } from "@/hooks/use-card-display";
+import { shellSettingsWrapper } from "../../setup/shell-settings-wrapper";
 
 const KEY = "card-display-preferences";
 const fetchMock = vi.fn();
@@ -77,6 +79,48 @@ describe("useCardDisplay", () => {
     const { result } = renderHook(() => useCardDisplay("MOVIE"));
     await act(async () => {});
     expect(result.current.show("badges", "resolution")).toBe(true);
+  });
+
+  it("takes the server layout's preferences without fetching them", () => {
+    const cardDisplayPreferences = { MOVIE: { badges: { resolution: false }, metadata: {}, servers: true } };
+    const { result } = renderHook(() => useCardDisplay("MOVIE"), {
+      wrapper: shellSettingsWrapper({ cardDisplayPreferences }),
+    });
+    expect(result.current.show("badges", "resolution")).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps local preferences over the server layout's", () => {
+    localStorage.setItem(KEY, JSON.stringify({ MOVIE: { badges: { resolution: true }, metadata: {}, servers: true } }));
+    const { result } = renderHook(() => useCardDisplay("MOVIE"), {
+      wrapper: shellSettingsWrapper({
+        cardDisplayPreferences: { MOVIE: { badges: { resolution: false }, metadata: {}, servers: true } },
+      }),
+    });
+    expect(result.current.show("badges", "resolution")).toBe(true);
+  });
+
+  it("uses the defaults when the server layout found nothing saved", () => {
+    const { result } = renderHook(() => useCardDisplay("MOVIE"), { wrapper: shellSettingsWrapper() });
+    expect(result.current.show("badges", "resolution")).toBe(true);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("hands a change to the next page mounting under the same layout", () => {
+    vi.useFakeTimers();
+    let current!: ReturnType<typeof useCardDisplay>;
+    function Page() {
+      current = useCardDisplay("MOVIE");
+      return null;
+    }
+    // `rerender` keeps the wrapper (the layout) mounted while the new key
+    // remounts the page, as a client-side navigation does.
+    const { rerender } = render(createElement(Page, { key: "first" }), { wrapper: shellSettingsWrapper() });
+    act(() => current.setVisible("badges", "resolution", false));
+    localStorage.clear();
+    rerender(createElement(Page, { key: "second" }));
+    expect(current.show("badges", "resolution")).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("setVisible writes locally at once and syncs to the API once, debounced", async () => {

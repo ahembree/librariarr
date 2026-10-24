@@ -1,4 +1,5 @@
 import { test, expect, type Page, type Request } from "@playwright/test";
+import { storeDashboardLayout } from "./seed";
 
 /**
  * Dashboard behaviour across a realtime refresh. The page reloads its data on
@@ -48,6 +49,13 @@ function statsBody(movieCount: number) {
 function server(id: string, name: string, enabled: boolean) {
   return { id, name, type: "PLEX", enabled, libraries: [], syncJobs: [] };
 }
+
+let restoreLayout: (() => Promise<void>) | undefined;
+
+test.afterEach(async () => {
+  await restoreLayout?.();
+  restoreLayout = undefined;
+});
 
 const isStats = (url: string) => new URL(url).pathname === "/api/media/stats";
 const isPath = (path: string) => (url: URL) => url.pathname === path;
@@ -187,11 +195,12 @@ test.describe("dashboard refresh", () => {
     const h = await setup(page);
     await page.goto("/");
     await expect(movieTile(page)).toContainText(String(ALL_MOVIES));
-    expect(h.layoutGets()).toBe(1);
+    // The saved layout comes with the server render; the page never asks.
+    expect(h.layoutGets()).toBe(0);
 
     await h.fireSyncCompleted();
 
-    expect(h.layoutGets()).toBe(1);
+    expect(h.layoutGets()).toBe(0);
   });
 
   test("a deleted selection falls back to all servers", async ({ page }) => {
@@ -273,7 +282,7 @@ test.describe("dashboard refresh", () => {
     h.setTypes(["MOVIE", "SERIES"]);
     // One custom timeline card, binned by year so its requests are told apart
     // from the library tiles' monthly sparklines; it sends the Insights filter
-    // as `type`. Registered after setup(), so it takes precedence.
+    // as `type`. Stored, not stubbed: the layout comes with the server render.
     const layout = {
       main: [
         {
@@ -286,9 +295,7 @@ test.describe("dashboard refresh", () => {
       series: [],
       music: [],
     };
-    await page.route(isPath("/api/settings/dashboard-layout"), (route) =>
-      route.fulfill({ json: { layout } }),
-    );
+    restoreLayout = await storeDashboardLayout(layout);
     const cardTypes: (string | null)[] = [];
     page.on("request", (req) => {
       const url = new URL(req.url());

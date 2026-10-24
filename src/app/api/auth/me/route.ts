@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
+import { authMethodLabel } from "@/lib/auth/auth-method";
 
 /**
  * Returns the current admin's display identity for UI chrome (sidebar/topbar
@@ -27,17 +28,9 @@ export async function GET() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // Primary method label, mirroring how the login surfaces are gated.
-  const authMethod =
-    user.ssoEnabled && user.ssoProvider
-      ? user.ssoProvider
-      : user.plexId
-        ? "Plex"
-        : "Local";
-
   return NextResponse.json({
     username: user.username,
     email: user.email,
-    authMethod,
+    authMethod: authMethodLabel(user),
   });
 }

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useRealtime } from "@/hooks/use-realtime";
+import { useShellSettings } from "@/components/shell-settings-provider";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import type { LucideIcon } from "lucide-react";
@@ -110,7 +111,11 @@ export function useSidebarData(initialCollapsed = false) {
   const router = useRouter();
   const [availableTypes, setAvailableTypes] = useState<LibraryType[]>(["MOVIE", "SERIES", "MUSIC"]);
   const [allKnownTypes, setAllKnownTypes] = useState<LibraryType[]>(["MOVIE", "SERIES", "MUSIC"]);
-  const [user, setUser] = useState<CurrentUser | null>(null);
+  // The server layout read the user for the first paint; only outside it (or
+  // when that read failed) is it fetched.
+  const shell = useShellSettings();
+  const [user, setUser] = useState<CurrentUser | null>(shell?.user ?? null);
+  const userKnown = useRef(shell !== null);
   // Persisted in a cookie (not localStorage) so the server layout can read
   // it and SSR the correct state — a client-only read here rendered the
   // collapsed sidebar against expanded server HTML and tripped hydration.
@@ -163,6 +168,7 @@ export function useSidebarData(initialCollapsed = false) {
   }, []);
 
   useEffect(() => {
+    if (userKnown.current) return;
     fetch("/api/auth/me")
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {

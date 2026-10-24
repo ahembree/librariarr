@@ -15,12 +15,16 @@ test("logout revokes the session and local login works again", async ({ page, pl
   // The cookie as it was before logging out: what a copy of it would carry.
   const before = await page.context().storageState();
 
-  // The chip names the admin once the shell has hydrated and fetched
-  // /api/auth/me — before that a click on the server-rendered button is lost.
+  // The chip names the admin from the server render.
   await expect(page.getByRole("link", { name: /e2eadmin/i })).toBeVisible();
-  // The logout control is the user chip's "Logout" button in the sidebar.
-  await page.getByRole("button", { name: "Logout", exact: true }).click();
-  await expect(page).toHaveURL(/\/login/, { timeout: 15_000 });
+  // The logout control is the user chip's "Logout" button in the sidebar. It
+  // is server-rendered, so a click before hydration is lost; click again only
+  // while it is still there.
+  const logout = page.getByRole("button", { name: "Logout", exact: true });
+  await expect(async () => {
+    if (await logout.isVisible()) await logout.click();
+    await expect(page).toHaveURL(/\/login/, { timeout: 2_000 });
+  }).toPass({ timeout: 15_000 });
 
   // Revoked, not just forgotten: the old cookie no longer signs anyone in.
   const stale = await playwright.request.newContext({ baseURL, storageState: before });

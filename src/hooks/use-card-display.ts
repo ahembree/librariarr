@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
+import { useShellSettings } from "@/components/shell-settings-provider";
 
 type CardLibraryType =
   | "MOVIE"
@@ -173,11 +174,18 @@ function getPrefs(
 }
 
 export function useCardDisplay(libraryType: CardLibraryType) {
-  const [allPrefs, setAllPrefs] = useState<AllCardDisplayPreferences>(loadFromStorage);
+  // The server layout read the saved preferences; this browser's own copy
+  // still wins, as it did over the fetched one.
+  const shell = useShellSettings();
+  const [allPrefs, setAllPrefs] = useState<AllCardDisplayPreferences>(() => {
+    const local = loadFromStorage();
+    if (!shell || Object.keys(local).length > 0) return local;
+    return (shell.cardDisplayPreferences() ?? {}) as AllCardDisplayPreferences;
+  });
   const syncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const hydrated = useRef(false);
+  const hydrated = useRef(shell !== null);
 
-  // Hydrate from API once (background)
+  // Hydrate from API once (background), only outside the server layout
   useEffect(() => {
     if (hydrated.current) return;
     hydrated.current = true;
@@ -226,6 +234,7 @@ export function useCardDisplay(libraryType: CardLibraryType) {
         }
         const next = { ...prev, [libraryType]: updated };
         localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+        shell?.setCardDisplayPreferences(next);
 
         // Debounced API sync
         if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
@@ -240,7 +249,7 @@ export function useCardDisplay(libraryType: CardLibraryType) {
         return next;
       });
     },
-    [libraryType],
+    [libraryType, shell],
   );
 
   return { show, showServers, setVisible, prefs };
