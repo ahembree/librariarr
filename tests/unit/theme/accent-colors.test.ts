@@ -4,6 +4,7 @@ import {
   ACCENT_PRESETS,
   ACCENT_NAMES,
   getAccentPreset,
+  accentStyle,
 } from "@/lib/theme/accent-colors";
 
 // ThemeProvider's clearAccentColors() clears the union of keys across
@@ -103,5 +104,18 @@ describe("getAccentPreset", () => {
     const dark = css.slice(css.indexOf(".dark {"));
     const brand = /--brand:\s*([^;]+);/.exec(dark)?.[1];
     expect(getAccentPreset("default")!.cssVars["--primary"]).toBe(brand);
+  });
+});
+
+describe("accentStyle", () => {
+  it("is null for the default, a removed preset and no value", () => {
+    expect(accentStyle("default")).toBeNull();
+    expect(accentStyle("blue")).toBeNull();
+    expect(accentStyle(null)).toBeNull();
+    expect(accentStyle(undefined)).toBeNull();
+  });
+
+  it("returns the preset's CSS variables", () => {
+    expect(accentStyle("teal")).toEqual(getAccentPreset("teal")!.cssVars);
   });
 });

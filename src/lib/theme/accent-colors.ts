@@ -113,3 +113,13 @@ export const ACCENT_NAMES = ACCENT_PRESETS.map((p) => p.name);
 export function getAccentPreset(name: string): AccentPreset | undefined {
   return ACCENT_PRESETS.find((p) => p.name === name);
 }
+
+/**
+ * The inline style that applies a stored accent before any script runs, for
+ * the server-rendered `<html>`. `null` for the default (or a removed preset),
+ * since the stylesheet already shows it.
+ */
+export function accentStyle(name: string | null | undefined): Record<string, string> | null {
+  if (!name || name === "default") return null;
+  return getAccentPreset(name)?.cssVars ?? null;
+}
