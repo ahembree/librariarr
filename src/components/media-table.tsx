@@ -34,7 +34,8 @@ import { HoverCard, HoverCardTrigger, HoverCardContent } from "@/components/ui/h
 import type { MediaListItem } from "@/lib/types";
 import { ServerChips } from "@/components/server-chips";
 import { useColumnResize } from "@/hooks/use-column-resize";
-import { useShellSettings } from "@/components/shell-settings-provider";
+import { useShellSettings, useShellSnapshot } from "@/components/shell-settings-provider";
+import { toast } from "sonner";
 import { formatFileSize, formatDuration, formatDate, formatDateOnly } from "@/lib/format";
 import { formatEpisodeCode } from "@/lib/media/display-title";
 
@@ -424,21 +425,23 @@ const VIDEO_COLUMN_IDS = new Set([
 
 function MediaTableInner<T extends MediaListItem>({ items, onItemClick, sortBy, sortOrder, onSort, mediaType, hideParentTitle, scrollToIndexRef, exceptedItemIds, hideServers, rowClassName, renderHoverContent }: MediaTableProps<T>) {
   const allColumns = useMemo(() => buildColumns(), []);
-  // The saved columns come from the server layout's read, so the table opens
-  // with them; fetched after mount, it drew the default columns first. Only
-  // outside the layout (or when that read failed) are they fetched.
+  // Inside the shell the saved columns are the settings store's: the layout
+  // seeded it, so the table opens with them (fetched after mount, it drew the
+  // default columns first), and a save in another tab or on another device
+  // shows here once the store refreshes. Only outside the shell (or when the
+  // layout could not read them) are they fetched and saved here.
   const shell = useShellSettings();
+  const shellSnapshot = useShellSnapshot();
   const prefKey = columnPrefKey(mediaType);
-  const [columnVisibility, setColumnVisibility] = useState<Record<string, boolean>>(() =>
-    visibilityFromPreferences(shell?.columnPreferences(), prefKey, allColumns),
+  const savedColumns = shellSnapshot?.columnPreferences?.[prefKey];
+  const shellVisibility = useMemo(
+    () => (shell ? visibilityFromPreferences({ [prefKey]: savedColumns }, prefKey, allColumns) : null),
+    [shell, savedColumns, prefKey, allColumns],
   );
-  // A table whose media type changes (the rule editor's type tabs) switches
-  // to that type's saved columns.
-  const [visibilityKey, setVisibilityKey] = useState(prefKey);
-  if (shell && visibilityKey !== prefKey) {
-    setVisibilityKey(prefKey);
-    setColumnVisibility(visibilityFromPreferences(shell.columnPreferences(), prefKey, allColumns));
-  }
+  const [fetchedVisibility, setColumnVisibility] = useState<Record<string, boolean>>(() =>
+    getDefaultVisibility(allColumns),
+  );
+  const columnVisibility = shellVisibility ?? fetchedVisibility;
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // --- Row Virtualization ---
@@ -506,7 +509,7 @@ function MediaTableInner<T extends MediaListItem>({ items, onItemClick, sortBy, 
     return () => { ref.current = null; };
   }, [scrollToIndexRef, virtualizer]);
 
-  // Load column preferences from DB on mount, when the layout had none to give
+  // Load column preferences from DB on mount, outside the shell
   useEffect(() => {
     if (shell) return;
     let cancelled = false;
@@ -534,8 +537,6 @@ function MediaTableInner<T extends MediaListItem>({ items, onItemClick, sortBy, 
       const visibleCols = Object.entries(visibility)
         .filter(([, visible]) => visible)
         .map(([id]) => id);
-      // The next table mounted reads them from here, not the server.
-      shell?.setColumnPreferences(prefKey, visibleCols);
       try {
         await fetch("/api/settings/column-preferences", {
           method: "PUT",
@@ -546,15 +547,27 @@ function MediaTableInner<T extends MediaListItem>({ items, onItemClick, sortBy, 
         // Silently fail
       }
     }, 500);
-  }, [shell, prefKey]);
+  }, [prefKey]);
 
   const toggleColumn = useCallback((colId: string, checked: boolean) => {
+    if (shell && shellVisibility) {
+      const next = { ...shellVisibility, [colId]: checked };
+      const visibleCols = allColumns.filter((col) => next[col.id]).map((col) => col.id);
+      // Shown at once, sent after a short pause against the store's revision;
+      // a list another tab or device saved since is loaded in its place.
+      void shell.saveColumns(prefKey, visibleCols).then((outcome) => {
+        if (outcome === "conflict") {
+          toast.error("The column selection was changed in another tab or on another device. The current one has been loaded; make the change again.");
+        }
+      });
+      return;
+    }
     setColumnVisibility((prev) => {
       const next = { ...prev, [colId]: checked };
       savePreferences(next);
       return next;
     });
-  }, [savePreferences]);
+  }, [shell, shellVisibility, allColumns, prefKey, savePreferences]);
 
   const isMusic = mediaType === "MUSIC";
 

@@ -37,7 +37,7 @@ export default async function AuthenticatedLayout({
 
   return (
     <ShellSettingsProvider initial={settings}>
-      <ChipColorProvider initialColors={settings ? settings.chipColors : undefined}>
+      <ChipColorProvider>
         <AuthenticatedShell initialSidebarCollapsed={sidebarCollapsed}>
           {children}
         </AuthenticatedShell>

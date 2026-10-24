@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
+import { announceDisplaySettingsChanged } from "@/lib/settings/display-settings-events";
 import { validateRequest, chipColorsSchema } from "@/lib/validation";
 
 export async function GET() {
@@ -39,5 +40,6 @@ export async function PUT(request: NextRequest) {
     },
   });
 
+  announceDisplaySettingsChanged(session.userId!);
   return NextResponse.json({ success: true });
 }

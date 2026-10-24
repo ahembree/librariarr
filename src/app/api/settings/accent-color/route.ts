@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
+import { announceDisplaySettingsChanged } from "@/lib/settings/display-settings-events";
 import { validateRequest, accentColorSchema } from "@/lib/validation";
 import { ACCENT_NAMES } from "@/lib/theme/accent-colors";
 
@@ -68,5 +69,6 @@ export async function PUT(request: NextRequest) {
     create: { userId: session.userId, accentColor },
   });
 
+  announceDisplaySettingsChanged(session.userId);
   return NextResponse.json({ accentColor: settings.accentColor });
 }

@@ -126,7 +126,7 @@ export function WhatsNewDialog() {
   useEffect(() => {
     // The server layout already compared the running version with the last
     // one seen; when nothing is owed there is nothing to ask GitHub about.
-    if (shell && !shell.whatsNewDue()) return;
+    if (shell && !shell.getSnapshot().whatsNewDue) return;
     let cancelled = false;
     fetch("/api/settings/whats-new", { priority: "low" })
       .then((res) => (res.ok ? res.json() : null))

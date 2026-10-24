@@ -180,7 +180,7 @@ export function useCardDisplay(libraryType: CardLibraryType) {
   const [allPrefs, setAllPrefs] = useState<AllCardDisplayPreferences>(() => {
     const local = loadFromStorage();
     if (!shell || Object.keys(local).length > 0) return local;
-    return (shell.cardDisplayPreferences() ?? {}) as AllCardDisplayPreferences;
+    return (shell.getSnapshot().cardDisplayPreferences ?? {}) as AllCardDisplayPreferences;
   });
   const syncTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hydrated = useRef(shell !== null);

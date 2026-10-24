@@ -37,7 +37,7 @@ import { getDuplicateServerNames } from "@/lib/server-styles";
 import { ServerTypeChip } from "@/components/server-type-chip";
 import { InsightsSkeleton, LibraryTilesSkeleton } from "@/components/skeletons";
 import { useRealtime } from "@/hooks/use-realtime";
-import { useShellSettings } from "@/components/shell-settings-provider";
+import { useShellSettings, useShellSnapshot } from "@/components/shell-settings-provider";
 import {
   ALL_SERVERS,
   ALL_TYPES,
@@ -135,13 +135,17 @@ export default function DashboardPage() {
   // The saved layout and the user's name, read by the server layout. Null
   // outside it or when that read failed: both are then fetched as before.
   const shell = useShellSettings();
+  const shellSnapshot = useShellSnapshot();
   const [stats, setStats] = useState<Stats | null>(null);
   // Whether the latest stats request failed. The page-level error is keyed on
   // this, not on the first load having settled: the server selector is on
   // screen during that load, and a pick made then drops the first answer, so
   // "settled with no stats" would read a request still in flight as a failure.
   const [statsFailed, setStatsFailed] = useState(false);
-  const [layout, setLayout] = useState<DashboardLayout | null>(() => shell?.dashboardLayout() ?? null);
+  // Inside the shell the layout is the store's, so a save in another tab or on
+  // another device shows here as soon as the store refreshes.
+  const [fetchedLayout, setLayout] = useState<DashboardLayout | null>(null);
+  const layout = shellSnapshot ? shellSnapshot.dashboardLayout : fetchedLayout;
   // Whether the saved layout and the library types have been answered (or
   // failed). The zones that depend on them wait for them; nothing else does.
   const [layoutSettled, setLayoutSettled] = useState(shell !== null);
@@ -153,7 +157,8 @@ export default function DashboardPage() {
   const [selectedMediaType, setSelectedMediaType] = useState<string>(ALL_TYPES);
   const [availableTypes, setAvailableTypes] = useState<string[]>([]);
   const [editingCustomCard, setEditingCustomCard] = useState<{ cardId: string; config: CustomCardConfig } | null>(null);
-  const [userName, setUserName] = useState<string>(shell?.user.username ?? "");
+  const [fetchedUserName, setUserName] = useState<string>("");
+  const userName = shellSnapshot?.user.username ?? fetchedUserName;
   const userKnown = useRef(shell !== null);
 
   useEffect(() => {
@@ -204,7 +209,7 @@ export default function DashboardPage() {
   // could land a GET issued before an in-flight layout PUT and revert the edit
   // the user just made on screen. Marked when the read is ISSUED: the zones no
   // longer wait for it, so a refresh can land while it is still in flight.
-  // The server layout's read counts: it is the same row, read with the page.
+  // Inside the shell the store owns the layout and keeps it current.
   const layoutReadRef = useRef(shell !== null);
 
   // Each response is applied as it lands. The page used to wait for all five
@@ -301,22 +306,31 @@ export default function DashboardPage() {
         ...resolvedLayout,
         main: newCards,
       };
-      setLayout(newLayout);
 
-      // Persist to backend; a rejected save (e.g. layout-size cap) would
-      // otherwise look applied and silently evaporate on reload.
+      // A rejected save (e.g. layout-size cap) would otherwise look applied
+      // and silently evaporate on reload.
+      if (shell) {
+        // The store shows it at once and saves it against the revision it
+        // holds; one another tab or device has moved past is refused, and the
+        // store then loads the newer layout in place of this edit.
+        void shell.saveDashboardLayout(newLayout).then((outcome) => {
+          if (outcome === "conflict") {
+            toast.error("The dashboard layout was changed in another tab or on another device. The current one has been loaded; make the change again.");
+          } else if (outcome === "failed") {
+            toast.error("Failed to save dashboard layout");
+          }
+        });
+        return;
+      }
+
+      setLayout(newLayout);
       fetch("/api/settings/dashboard-layout", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ layout: newLayout }),
       })
         .then((res) => {
-          if (!res.ok) {
-            toast.error("Failed to save dashboard layout");
-            return;
-          }
-          // The next visit reads the layout from here, not the server.
-          shell?.setDashboardLayout(newLayout);
+          if (!res.ok) toast.error("Failed to save dashboard layout");
         })
         .catch(() => {
           toast.error("Failed to save dashboard layout");

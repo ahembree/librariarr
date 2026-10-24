@@ -45,8 +45,10 @@ describe("loadShellSettings", () => {
       user: { username: "admin", authMethod: "Plex" },
       chipColors: null,
       columnPreferences: null,
+      columnPreferencesRevision: 0,
       cardDisplayPreferences: null,
       dashboardLayout: null,
+      dashboardLayoutRevision: 0,
       // No version seen yet: the running one's notes are owed once.
       whatsNewDue: true,
     });
@@ -66,6 +68,8 @@ describe("loadShellSettings", () => {
         columnPreferences,
         cardDisplayPreferences,
         dashboardLayout,
+        dashboardLayoutRevision: 6,
+        columnPreferencesRevision: 2,
         lastSeenVersion: "1.2.0",
       },
     });
@@ -75,8 +79,10 @@ describe("loadShellSettings", () => {
       user: { username: "local-admin", authMethod: "Local" },
       chipColors,
       columnPreferences,
+      columnPreferencesRevision: 2,
       cardDisplayPreferences,
       dashboardLayout,
+      dashboardLayoutRevision: 6,
       whatsNewDue: false,
     });
   });

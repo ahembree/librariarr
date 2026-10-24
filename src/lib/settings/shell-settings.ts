@@ -2,6 +2,7 @@ import { cache } from "react";
 import { getSession } from "@/lib/auth/session";
 import { authMethodLabel } from "@/lib/auth/auth-method";
 import { prisma } from "@/lib/db";
+import { ACCENT_NAMES } from "@/lib/theme/accent-colors";
 import { installedVersion, whatsNewDue } from "@/lib/version/whats-new";
 import type { DashboardLayout } from "@/lib/dashboard/card-registry";
 import type { ChipColorMap } from "@/lib/theme/chip-colors";
@@ -34,6 +35,8 @@ export const loadShellSettings = cache(async (userId: string): Promise<ShellSett
           columnPreferences: true,
           cardDisplayPreferences: true,
           dashboardLayout: true,
+          dashboardLayoutRevision: true,
+          columnPreferencesRevision: true,
           lastSeenVersion: true,
         },
       },
@@ -43,12 +46,17 @@ export const loadShellSettings = cache(async (userId: string): Promise<ShellSett
 
   const settings = user.appSettings;
   return {
-    accentColor: settings?.accentColor ?? "default",
+    // A preset that has since been removed reads as the default, as the
+    // accent route answers it.
+    accentColor:
+      settings && ACCENT_NAMES.includes(settings.accentColor) ? settings.accentColor : "default",
     user: { username: user.username, authMethod: authMethodLabel(user) },
     chipColors: (settings?.chipColors ?? null) as Partial<ChipColorMap> | null,
     columnPreferences: (settings?.columnPreferences ?? null) as ColumnPreferences | null,
+    columnPreferencesRevision: settings?.columnPreferencesRevision ?? 0,
     cardDisplayPreferences: (settings?.cardDisplayPreferences ?? null) as Record<string, unknown> | null,
     dashboardLayout: (settings?.dashboardLayout ?? null) as DashboardLayout | null,
+    dashboardLayoutRevision: settings?.dashboardLayoutRevision ?? 0,
     whatsNewDue: whatsNewDue(settings?.lastSeenVersion ?? null, installedVersion()),
   };
 });

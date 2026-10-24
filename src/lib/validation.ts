@@ -183,9 +183,15 @@ export const chipColorsSchema = z.object({
   ),
 });
 
+// The revision a save was based on (`AppSettings.*Revision`): a save carrying
+// an older one is refused with 409, since another tab or device saved since.
+// Optional so a caller that never read one still saves unconditionally.
+const settingsRevisionSchema = z.number().int().min(0).max(2_147_483_647).optional();
+
 export const columnPreferencesSchema = z.object({
   type: z.enum(["MOVIE", "SERIES", "MUSIC"]),
   columns: z.array(z.unknown()).max(50),
+  revision: settingsRevisionSchema,
 });
 
 export const cardDisplayPreferencesSchema = z.object({
@@ -204,6 +210,7 @@ export const dashboardLayoutSchema = z.object({
     (val) => JSON.stringify(val).length <= 10_000,
     "Layout data exceeds maximum size"
   ),
+  revision: settingsRevisionSchema,
 });
 
 const discordWebhookUrlSchema = z

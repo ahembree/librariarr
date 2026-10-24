@@ -60,7 +60,11 @@ model AppSettings {
   lifecycleExecutionSchedule      String    @default("EVERY_6H")
   lastScheduledLifecycleExecution DateTime?
   dashboardLayout                 Json?
+  /// Bumped on every dashboard layout save; a save based on an older one is refused.
+  dashboardLayoutRevision         Int       @default(0)
   columnPreferences               Json?
+  /// Bumped on every column preferences save; a save based on an older one is refused.
+  columnPreferencesRevision       Int       @default(0)
   cardDisplayPreferences          Json?
   chipColors                      Json?
   maintenanceMode                 Boolean   @default(false)

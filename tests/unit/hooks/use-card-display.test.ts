@@ -5,6 +5,10 @@ import { render, renderHook, act, waitFor } from "@testing-library/react";
 import { useCardDisplay, TOGGLE_CONFIGS, SEASON_EPISODE_TOGGLES } from "@/hooks/use-card-display";
 import { shellSettingsWrapper } from "../../setup/shell-settings-wrapper";
 
+vi.mock("@/hooks/use-realtime", () => ({
+  useRealtime: () => ({ connected: true, authExpired: false }),
+}));
+
 const KEY = "card-display-preferences";
 const fetchMock = vi.fn();
 

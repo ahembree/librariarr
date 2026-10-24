@@ -20,8 +20,12 @@ export interface ShellSettings {
   user: ShellUser;
   chipColors: Partial<ChipColorMap> | null;
   columnPreferences: ColumnPreferences | null;
+  /** `AppSettings.columnPreferencesRevision`: sent with a column save, refused (409) once stale. */
+  columnPreferencesRevision: number;
   cardDisplayPreferences: Record<string, unknown> | null;
   dashboardLayout: DashboardLayout | null;
+  /** `AppSettings.dashboardLayoutRevision`: sent with a layout save, refused (409) once stale. */
+  dashboardLayoutRevision: number;
   /** The "What's new" dialog is owed (the running version is newer than the last one seen). */
   whatsNewDue: boolean;
 }

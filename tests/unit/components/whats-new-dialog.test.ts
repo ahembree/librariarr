@@ -5,6 +5,10 @@ import { act, render } from "@testing-library/react";
 import { WhatsNewDialog } from "@/components/whats-new-dialog";
 import { shellSettingsWrapper } from "../../setup/shell-settings-wrapper";
 
+vi.mock("@/hooks/use-realtime", () => ({
+  useRealtime: () => ({ connected: true, authExpired: false }),
+}));
+
 const fetchMock = vi.fn();
 
 beforeEach(() => {

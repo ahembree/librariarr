@@ -7,12 +7,18 @@ export const SHELL_SETTINGS: ShellSettings = {
   user: { username: "server-admin", authMethod: "Plex" },
   chipColors: null,
   columnPreferences: null,
+  columnPreferencesRevision: 0,
   cardDisplayPreferences: null,
   dashboardLayout: null,
+  dashboardLayoutRevision: 0,
   whatsNewDue: false,
 };
 
-/** A `renderHook` wrapper standing in for the authenticated layout's read. */
+/**
+ * A `renderHook` wrapper standing in for the authenticated layout's read. The
+ * provider subscribes to the event stream, so a test using it mocks
+ * `@/hooks/use-realtime`.
+ */
 export function shellSettingsWrapper(overrides: Partial<ShellSettings> = {}) {
   const initial = { ...SHELL_SETTINGS, ...overrides };
   return function Wrapper({ children }: { children: ReactNode }) {
