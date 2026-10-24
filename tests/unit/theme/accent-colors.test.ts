@@ -29,7 +29,6 @@ describe("ACCENT_PRESETS", () => {
     // silently reset affected users to the default accent.
     expect(ACCENT_PRESETS.map((p) => p.name)).toEqual([
       "default",
-      "blue",
       "violet",
       "green",
       "orange",

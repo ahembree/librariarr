@@ -29,7 +29,11 @@ export async function GET() {
     });
   }
 
-  return NextResponse.json({ accentColor: settings.accentColor });
+  // A preset that has since been removed ("blue") reads as the default.
+  const accentColor = ACCENT_NAMES.includes(settings.accentColor)
+    ? settings.accentColor
+    : "default";
+  return NextResponse.json({ accentColor });
 }
 
 export async function PUT(request: NextRequest) {
