@@ -149,13 +149,16 @@ export default function DashboardPage() {
   // Whether the saved layout and the library types have been answered (or
   // failed). The zones that depend on them wait for them; nothing else does.
   const [layoutSettled, setLayoutSettled] = useState(shell !== null);
-  const [typesSettled, setTypesSettled] = useState(false);
+  const [typesSettled, setTypesSettled] = useState(shellSnapshot !== null);
   const [scheduleInfo, setScheduleInfo] = useState<ScheduleInfo | null>(null);
   const [editMode, setEditMode] = useState(false);
   const [servers, setServers] = useState<DashboardServer[]>([]);
   const [selectedServerId, setSelectedServerId] = useState<string>(ALL_SERVERS);
   const [selectedMediaType, setSelectedMediaType] = useState<string>(ALL_TYPES);
-  const [availableTypes, setAvailableTypes] = useState<string[]>([]);
+  // The layout read the library types too (the sidebar's links are built from
+  // them), so the first load takes those and only a refresh asks again.
+  const [availableTypes, setAvailableTypes] = useState<string[]>(() => shellSnapshot?.libraryTypes.types ?? []);
+  const typesFromLayoutRef = useRef(shellSnapshot !== null);
   const [editingCustomCard, setEditingCustomCard] = useState<{ cardId: string; config: CustomCardConfig } | null>(null);
   const [fetchedUserName, setUserName] = useState<string>("");
   const userName = shellSnapshot?.user.username ?? fetchedUserName;
@@ -239,6 +242,21 @@ export default function DashboardPage() {
       layoutReadRef.current = false;
     };
 
+    const readTypes = () => {
+      if (typesFromLayoutRef.current) {
+        typesFromLayoutRef.current = false;
+        return null;
+      }
+      return settle(
+        json("/api/media/library-types").then((data) => {
+          if (!data) return;
+          const types: string[] = data.types ?? [];
+          setAvailableTypes(types);
+          setSelectedMediaType((prev) => reconcileSelectedType(prev, types));
+        }),
+      ).finally(() => setTypesSettled(true));
+    };
+
     await Promise.all([
       settle(fetchStatsRef.current()),
       layoutReadRef.current ? null : readLayout().finally(() => setLayoutSettled(true)),
@@ -250,14 +268,7 @@ export default function DashboardPage() {
           setSelectedServerId((prev) => reconcileSelectedServer(prev, list));
         }),
       ),
-      settle(
-        json("/api/media/library-types").then((data) => {
-          if (!data) return;
-          const types: string[] = data.types ?? [];
-          setAvailableTypes(types);
-          setSelectedMediaType((prev) => reconcileSelectedType(prev, types));
-        }),
-      ).finally(() => setTypesSettled(true)),
+      readTypes(),
       settle(
         json("/api/settings/schedule-info").then((data) => {
           if (data) setScheduleInfo(data);

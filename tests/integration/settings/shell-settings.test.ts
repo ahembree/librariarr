@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterAll, afterEach, vi } from "vitest";
 import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
-import { createTestUser } from "../../setup/test-helpers";
+import { createTestUser, createTestServer, createTestLibrary } from "../../setup/test-helpers";
 
 vi.mock("@/lib/db", async () => {
   const { getTestPrisma } = await import("../../setup/test-db");
@@ -51,6 +51,8 @@ describe("loadShellSettings", () => {
       dashboardLayoutRevision: 0,
       // No version seen yet: the running one's notes are owed once.
       whatsNewDue: true,
+      libraryTypes: { types: [], allTypes: [] },
+      maintenanceActive: false,
     });
   });
 
@@ -84,6 +86,8 @@ describe("loadShellSettings", () => {
       dashboardLayout,
       dashboardLayoutRevision: 6,
       whatsNewDue: false,
+      libraryTypes: { types: [], allTypes: [] },
+      maintenanceActive: false,
     });
   });
 
@@ -94,6 +98,22 @@ describe("loadShellSettings", () => {
 
     vi.stubEnv("NEXT_PUBLIC_APP_VERSION", "unknown");
     expect((await loadShellSettings(user.id))?.whatsNewDue).toBe(false);
+  });
+
+  it("reads the library types and whether maintenance mode is on", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    await createTestLibrary(server.id, { type: "MOVIE", key: "1" });
+    await createTestLibrary(server.id, { type: "MUSIC", key: "2", enabled: false });
+    const off = await createTestServer(user.id, { name: "Off" });
+    await prisma.mediaServer.update({ where: { id: off.id }, data: { enabled: false } });
+    await createTestLibrary(off.id, { type: "SERIES", key: "3" });
+    await prisma.appSettings.create({ data: { userId: user.id, maintenanceMode: true } });
+
+    const settings = await loadShellSettings(user.id);
+    expect(settings?.libraryTypes).toEqual({ types: ["MOVIE"], allTypes: expect.arrayContaining(["MOVIE", "MUSIC"]) });
+    expect(settings?.libraryTypes.allTypes).toHaveLength(2);
+    expect(settings?.maintenanceActive).toBe(true);
   });
 
   it("names the linked SSO provider as the sign-in method", async () => {

@@ -12,6 +12,8 @@ export const SHELL_SETTINGS: ShellSettings = {
   dashboardLayout: null,
   dashboardLayoutRevision: 0,
   whatsNewDue: false,
+  libraryTypes: { types: ["MOVIE"], allTypes: ["MOVIE"] },
+  maintenanceActive: false,
 };
 
 /**

@@ -13,6 +13,8 @@ const initial: ShellSettings = {
   dashboardLayout: null,
   dashboardLayoutRevision: 4,
   whatsNewDue: true,
+  libraryTypes: { types: ["MOVIE"], allTypes: ["MOVIE"] },
+  maintenanceActive: false,
 };
 
 const layoutWith = (id: string) => ({ main: [{ id, size: 12 }], movies: [], series: [], music: [] }) as unknown as DashboardLayout;

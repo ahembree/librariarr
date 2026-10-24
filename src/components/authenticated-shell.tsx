@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
 import { Sidebar } from "@/components/sidebar";
 import { Topbar } from "@/components/topbar";
@@ -14,6 +14,7 @@ import { WhatsNewDialog } from "@/components/whats-new-dialog";
 import { findScrollContainer } from "@/lib/scroll-utils";
 import { useScrollToTop } from "@/hooks/use-scroll-to-top";
 import { useRealtime } from "@/hooks/use-realtime";
+import { useShellSettings } from "@/components/shell-settings-provider";
 import { WifiOff } from "lucide-react";
 
 interface UnreachableServer {
@@ -31,7 +32,13 @@ export function AuthenticatedShell({
 }) {
   const [mobileOpen, setMobileOpen] = useState(false);
   const isMobile = useIsMobile();
-  const [maintenanceActive, setMaintenanceActive] = useState(false);
+  // The layout read whether maintenance is on, so the banner is in the first
+  // paint; only outside the layout's read is it asked for on mount.
+  const shell = useShellSettings();
+  const [maintenanceActive, setMaintenanceActive] = useState(
+    () => shell?.getSnapshot().maintenanceActive ?? false,
+  );
+  const maintenanceKnown = useRef(shell !== null);
   const [unreachableServers, setUnreachableServers] = useState<UnreachableServer[]>([]);
   useScrollToTop();
 
@@ -63,7 +70,7 @@ export function AuthenticatedShell({
   });
 
   useEffect(() => {
-    checkMaintenance();
+    if (!maintenanceKnown.current) checkMaintenance();
     // Fallback only. SSE dies to proxy buffering and idle timeouts, so this
     // stays as a safety net — but at 5 minutes rather than 30 seconds, because
     // the push above is now the primary path.

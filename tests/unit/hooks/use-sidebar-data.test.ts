@@ -70,11 +70,21 @@ describe("useSidebarData", () => {
     expect(items(nav, "Lifecycle")).toEqual(["Rules", "Rule Matches", "Pending Actions", "Exceptions"]);
   });
 
-  it("takes the user from the server layout's read without fetching it", async () => {
+  it("takes the user and the library links from the server layout's read without fetching them", async () => {
     const { result } = renderHook(() => useSidebarData(), { wrapper: shellSettingsWrapper() });
     expect(result.current.user).toEqual({ username: "server-admin", authMethod: "Plex" });
-    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/media/library-types"));
-    expect(fetchMock.mock.calls.map(([url]) => url)).not.toContain("/api/auth/me");
+    // The fixture has movies only: the first render already lists just them.
+    expect(items(result.current.navigation, "Library")).toEqual(["Movies", "History", "Query"]);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith("/api/tools/sessions", { priority: "low" }));
+    const urls = fetchMock.mock.calls.map(([url]) => url);
+    expect(urls).not.toContain("/api/auth/me");
+    expect(urls).not.toContain("/api/media/library-types");
+  });
+
+  it("still refetches the library links on server:changed inside the shell", async () => {
+    renderHook(() => useSidebarData(), { wrapper: shellSettingsWrapper() });
+    await act(async () => mocks.handlers.get("server:changed")!());
+    expect(fetchMock).toHaveBeenCalledWith("/api/media/library-types");
   });
 
   it("names every page in the top bar's breadcrumb exactly as the sidebar does", async () => {
@@ -179,7 +189,19 @@ describe("useSidebarData", () => {
       url === "/api/tools/sessions" ? Promise.reject(new Error("down")) : json({}),
     );
     renderHook(() => useSidebarData());
-    await waitFor(() => expect(error).toHaveBeenCalledWith("Failed to fetch session count", expect.any(Error)));
+    await waitFor(() => expect(error).toHaveBeenCalledWith("Failed to fetch session count"));
+  });
+
+  it("announces no server back online when the session check is refused", async () => {
+    sessionsQueue.push({ sessions: [], unreachableServers: [{ id: "s1", name: "Alpha", type: "PLEX" }] });
+    renderHook(() => useSidebarData());
+    await waitFor(() => expect(mocks.toastError).toHaveBeenCalledTimes(1));
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    fetchMock.mockImplementation((url: string) =>
+      url === "/api/tools/sessions" ? json({ error: "Unauthorized" }, false) : json({}),
+    );
+    await act(async () => mocks.handlers.get("session-changed")!());
+    expect(mocks.toastSuccess).not.toHaveBeenCalled();
   });
 
   it("falls back to a 5-minute session poll and stops it on unmount", async () => {

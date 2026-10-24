@@ -4,6 +4,9 @@ import { useState, useEffect, useCallback, useMemo, useRef, useSyncExternalStore
 import { toast } from "sonner";
 import { usePlexOAuth } from "@/hooks/use-plex-oauth";
 import { fetchWithReauth } from "@/lib/auth/reauth-client";
+import { fetchJsonShared } from "@/lib/shared-fetch";
+import { createRequestBundle, type RequestBundle } from "@/lib/settings/request-bundle";
+import { SETTINGS_BUNDLE_PATHS } from "@/lib/settings/settings-bundle-paths";
 import { responseErrorMessage } from "@/lib/api/error-message";
 import { PlexLoginPrompt } from "@/components/plex-login-prompt";
 import { useRealtime } from "@/hooks/use-realtime";
@@ -169,7 +172,15 @@ function SettingsSubNav({
 
 // ─── Main component ───
 
+// The page's opening reads go out as one request (`GET /api/settings/bundle`);
+// a fetcher's later reads, after a save or an event, go to its route. A fresh
+// bundle per mount (`bundleRef`), so a revisit reads current values.
+function bundleOf(ref: { current: RequestBundle | null }): RequestBundle {
+  return (ref.current ??= createRequestBundle("/api/settings/bundle", SETTINGS_BUNDLE_PATHS));
+}
+
 export default function SettingsPage() {
+  const bundleRef = useRef<RequestBundle | null>(null);
   // The open tab IS the URL hash — see `src/lib/url-hash.ts` for why it is
   // read through a store rather than once on mount.
   const urlHash = useSyncExternalStore(subscribeToUrlHash, readUrlHash, noUrlHash);
@@ -211,7 +222,7 @@ export default function SettingsPage() {
       });
       const linkData = await linkRes.json();
       if (linkData.linked) {
-        const infoRes = await fetch("/api/settings/auth");
+        const infoRes = await bundleOf(bundleRef).get("/api/settings/auth");
         setAuthInfo(await infoRes.json());
         if (linkData.plexLoginEnabled === false) setPlexLoginPrompt({ then: null });
       } else if (linkData.error) {
@@ -490,7 +501,7 @@ export default function SettingsPage() {
 
   const fetchServers = useCallback(async (): Promise<MediaServer[]> => {
     try {
-      const response = await fetch("/api/servers");
+      const response = await bundleOf(bundleRef).get("/api/servers");
       const data = await response.json();
       const fresh: MediaServer[] = data.servers || [];
       setServers(fresh);
@@ -508,7 +519,7 @@ export default function SettingsPage() {
 
   const fetchSettings = useCallback(async () => {
     try {
-      const response = await fetch("/api/settings/sync-schedule");
+      const response = await bundleOf(bundleRef).get("/api/settings/sync-schedule");
       const data = await response.json();
       if (data.settings) {
         const schedule = data.settings.syncSchedule;
@@ -529,7 +540,7 @@ export default function SettingsPage() {
 
   const fetchDedupSetting = useCallback(async () => {
     try {
-      const response = await fetch("/api/settings/dedup");
+      const response = await bundleOf(bundleRef).get("/api/settings/dedup");
       if (response.ok) {
         const data = await response.json();
         setDedupStats(data.dedupStats ?? true);
@@ -541,7 +552,7 @@ export default function SettingsPage() {
 
   const fetchRealtimeSetting = useCallback(async () => {
     try {
-      const response = await fetch("/api/settings/realtime");
+      const response = await bundleOf(bundleRef).get("/api/settings/realtime");
       if (response.ok) {
         const data = await response.json();
         setRealtimeSync(data.realtimeSync ?? true);
@@ -553,7 +564,7 @@ export default function SettingsPage() {
 
   const fetchRealtimeStatus = useCallback(async () => {
     try {
-      const response = await fetch("/api/tools/realtime/status");
+      const response = await bundleOf(bundleRef).get("/api/tools/realtime/status");
       if (response.ok) {
         const data = await response.json();
         setRealtimeServers(data.servers ?? []);
@@ -565,7 +576,7 @@ export default function SettingsPage() {
 
   const fetchSonarrInstances = useCallback(async () => {
     try {
-      const response = await fetch("/api/integrations/sonarr");
+      const response = await bundleOf(bundleRef).get("/api/integrations/sonarr");
       const data = await response.json();
       setSonarrInstances(data.instances || []);
     } catch (error) {
@@ -575,7 +586,7 @@ export default function SettingsPage() {
 
   const fetchRadarrInstances = useCallback(async () => {
     try {
-      const response = await fetch("/api/integrations/radarr");
+      const response = await bundleOf(bundleRef).get("/api/integrations/radarr");
       const data = await response.json();
       setRadarrInstances(data.instances || []);
     } catch (error) {
@@ -585,7 +596,7 @@ export default function SettingsPage() {
 
   const fetchLidarrInstances = useCallback(async () => {
     try {
-      const response = await fetch("/api/integrations/lidarr");
+      const response = await bundleOf(bundleRef).get("/api/integrations/lidarr");
       const data = await response.json();
       setLidarrInstances(data.instances || []);
     } catch (error) {
@@ -595,7 +606,7 @@ export default function SettingsPage() {
 
   const fetchSeerrInstances = useCallback(async () => {
     try {
-      const response = await fetch("/api/integrations/seerr");
+      const response = await bundleOf(bundleRef).get("/api/integrations/seerr");
       const data = await response.json();
       setSeerrInstances(data.instances || []);
     } catch (error) {
@@ -605,7 +616,7 @@ export default function SettingsPage() {
 
   const fetchTracearrInstances = useCallback(async () => {
     try {
-      const response = await fetch("/api/integrations/tracearr");
+      const response = await bundleOf(bundleRef).get("/api/integrations/tracearr");
       const data = await response.json();
       setTracearrInstances(data.instances || []);
     } catch (error) {
@@ -689,8 +700,9 @@ export default function SettingsPage() {
 
   const fetchUpdateCheck = useCallback(async () => {
     try {
-      const response = await fetch("/api/system/update-check", { priority: "low" });
-      if (response.ok) setUpdateCheck(await response.json());
+      // Shared with the sidebar's update dot, which reads it on the same mount.
+      const data = await fetchJsonShared<UpdateCheck>("/api/system/update-check", { priority: "low" });
+      if (data) setUpdateCheck(data);
     } catch {
       // Silent — no update dot and no version status, nothing else
     }
@@ -721,7 +733,7 @@ export default function SettingsPage() {
 
   const fetchAccentColor = useCallback(async () => {
     try {
-      const response = await fetch("/api/settings/accent-color");
+      const response = await bundleOf(bundleRef).get("/api/settings/accent-color");
       const data = await response.json();
       if (data.accentColor) {
         setAccentColor(data.accentColor);
@@ -733,7 +745,7 @@ export default function SettingsPage() {
 
   const fetchChipColors = useCallback(async () => {
     try {
-      const response = await fetch("/api/settings/chip-colors");
+      const response = await bundleOf(bundleRef).get("/api/settings/chip-colors");
       const data = await response.json();
       if (data.chipColors) {
         setChipColors(mergeChipColors(data.chipColors));
@@ -745,7 +757,7 @@ export default function SettingsPage() {
 
   const fetchLogRetention = useCallback(async () => {
     try {
-      const response = await fetch("/api/settings/log-retention");
+      const response = await bundleOf(bundleRef).get("/api/settings/log-retention");
       const data = await response.json();
       setLogRetentionDays(data.logRetentionDays ?? 7);
       setLogRetentionInput(String(data.logRetentionDays ?? 7));
@@ -763,7 +775,7 @@ export default function SettingsPage() {
 
   const fetchDeleteCeiling = useCallback(async () => {
     try {
-      const response = await fetch("/api/settings/delete-ceiling");
+      const response = await bundleOf(bundleRef).get("/api/settings/delete-ceiling");
       const data = await response.json();
       const value = data.maxAutoDeleteItems == null ? "" : String(data.maxAutoDeleteItems);
       setDeleteCeilingInput(value);
@@ -805,7 +817,7 @@ export default function SettingsPage() {
 
   const fetchActionRetention = useCallback(async () => {
     try {
-      const response = await fetch("/api/settings/action-retention");
+      const response = await bundleOf(bundleRef).get("/api/settings/action-retention");
       const data = await response.json();
       setActionRetentionDays(data.actionHistoryRetentionDays ?? 30);
       setActionRetentionInput(String(data.actionHistoryRetentionDays ?? 30));
@@ -818,9 +830,9 @@ export default function SettingsPage() {
     setBackupLoading(true);
     try {
       const [scheduleRes, listRes, encRes] = await Promise.all([
-        fetch("/api/settings/backup-schedule"),
-        fetch("/api/backup"),
-        fetch("/api/settings/backup-encryption-password"),
+        bundleOf(bundleRef).get("/api/settings/backup-schedule"),
+        bundleOf(bundleRef).get("/api/backup"),
+        bundleOf(bundleRef).get("/api/settings/backup-encryption-password"),
       ]);
       if (scheduleRes.ok) {
         const data = await scheduleRes.json();
@@ -844,7 +856,7 @@ export default function SettingsPage() {
 
   const fetchLifecycleSchedule = useCallback(async () => {
     try {
-      const response = await fetch("/api/settings/lifecycle-schedule");
+      const response = await bundleOf(bundleRef).get("/api/settings/lifecycle-schedule");
       const data = await response.json();
       if (data.settings) {
         const detect = data.settings.lifecycleDetectionSchedule;
@@ -876,7 +888,7 @@ export default function SettingsPage() {
 
   const fetchScheduleInfo = useCallback(async () => {
     try {
-      const response = await fetch("/api/settings/schedule-info");
+      const response = await bundleOf(bundleRef).get("/api/settings/schedule-info");
       const data = await response.json();
       setScheduleInfo(data);
       if (data.scheduledJobTime) {
@@ -895,7 +907,7 @@ export default function SettingsPage() {
 
   const fetchDiscordSettings = useCallback(async () => {
     try {
-      const response = await fetch("/api/settings/discord");
+      const response = await bundleOf(bundleRef).get("/api/settings/discord");
       const data = await response.json();
       setDiscordWebhookUrl(data.webhookUrl ?? "");
       setDiscordWebhookUsername(data.webhookUsername ?? "");
@@ -908,7 +920,7 @@ export default function SettingsPage() {
 
   const fetchAiSettings = useCallback(async () => {
     try {
-      const response = await fetch("/api/settings/ai");
+      const response = await bundleOf(bundleRef).get("/api/settings/ai");
       const data = await response.json();
       setAiEnabled(!!data.enabled);
       setAiProvider((data.provider as AiProvider) ?? "openai-compatible");
@@ -922,7 +934,7 @@ export default function SettingsPage() {
 
   const fetchAuthInfo = useCallback(async () => {
     try {
-      const response = await fetch("/api/settings/auth");
+      const response = await bundleOf(bundleRef).get("/api/settings/auth");
       if (response.ok) setAuthInfo(await response.json());
     } catch {
       // Silent
@@ -931,7 +943,7 @@ export default function SettingsPage() {
 
   const fetchTitlePreference = useCallback(async () => {
     try {
-      const response = await fetch("/api/settings/title-preference");
+      const response = await bundleOf(bundleRef).get("/api/settings/title-preference");
       if (response.ok) {
         const data = await response.json();
         setPreferredTitleServerId(data.preferredTitleServerId ?? null);
@@ -2816,7 +2828,7 @@ export default function SettingsPage() {
       if (res.ok) {
         setAuthInfo((prev) => prev ? { ...prev, localAuthEnabled: checked } : prev);
         // Whether the password is now accepted also depends on SSO: re-read it.
-        const infoRes = await fetch("/api/settings/auth");
+        const infoRes = await bundleOf(bundleRef).get("/api/settings/auth");
         if (infoRes.ok) setAuthInfo(await infoRes.json());
         toast.success(checked ? "Local login enabled" : "Local login disabled");
       } else {
@@ -2899,7 +2911,7 @@ export default function SettingsPage() {
       toast.success("Credentials updated");
       setCredentialsForm({ currentPassword: "", newUsername: "", newPassword: "", confirmPassword: "" });
       // Refresh auth info to show updated username
-      const infoRes = await fetch("/api/settings/auth");
+      const infoRes = await bundleOf(bundleRef).get("/api/settings/auth");
       if (infoRes.ok) setAuthInfo(await infoRes.json());
     } catch {
       setCredentialsError("Network error");
@@ -2947,7 +2959,7 @@ export default function SettingsPage() {
       });
       if (authRes.ok) {
         // Refresh auth info
-        const infoRes = await fetch("/api/settings/auth");
+        const infoRes = await bundleOf(bundleRef).get("/api/settings/auth");
         if (infoRes.ok) setAuthInfo(await infoRes.json());
       }
       setShowCredentialPrompt(false);
