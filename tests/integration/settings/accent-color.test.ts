@@ -55,11 +55,30 @@ describe("GET /api/settings/accent-color", () => {
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id});
 
+    await prisma.appSettings.create({ data: { userId: user.id, accentColor: "teal" } });
+
+    const res = await callRoute(GET);
+    const body = await expectJson<{ accentColor: string }>(res);
+    expect(body.accentColor).toBe("teal");
+  });
+
+  it("returns default for a removed preset", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id});
+
     await prisma.appSettings.create({ data: { userId: user.id, accentColor: "blue" } });
 
     const res = await callRoute(GET);
     const body = await expectJson<{ accentColor: string }>(res);
-    expect(body.accentColor).toBe("blue");
+    expect(body.accentColor).toBe("default");
+  });
+
+  it("rejects the removed blue preset", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id});
+
+    const res = await callRoute(PUT, { method: "PUT", body: { accentColor: "blue" } });
+    await expectJson(res, 400);
   });
 });
 
@@ -75,13 +94,13 @@ describe("PUT /api/settings/accent-color", () => {
   });
 
   it("returns 401 when not authenticated", async () => {
-    const res = await callRoute(PUT, { method: "PUT", body: { accentColor: "blue" } });
+    const res = await callRoute(PUT, { method: "PUT", body: { accentColor: "teal" } });
     await expectJson(res, 401);
   });
 
   it("returns 401 when user no longer exists in DB", async () => {
     setMockSession({ isLoggedIn: true, userId: "nonexistent-id"});
-    const res = await callRoute(PUT, { method: "PUT", body: { accentColor: "blue" } });
+    const res = await callRoute(PUT, { method: "PUT", body: { accentColor: "teal" } });
     await expectJson(res, 401);
   });
 
@@ -99,12 +118,12 @@ describe("PUT /api/settings/accent-color", () => {
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id});
 
-    await prisma.appSettings.create({ data: { userId: user.id, accentColor: "blue" } });
+    await prisma.appSettings.create({ data: { userId: user.id, accentColor: "teal" } });
 
     const res = await callRoute(PUT, { method: "PUT", body: { accentColor: "neon-pink" } });
     const body = await expectJson<{ error: string }>(res, 400);
     expect(body.error).toMatch(/^Invalid accent color\. Must be one of: default, /);
-    expect((await prisma.appSettings.findUnique({ where: { userId: user.id } }))?.accentColor).toBe("blue");
+    expect((await prisma.appSettings.findUnique({ where: { userId: user.id } }))?.accentColor).toBe("teal");
   });
 
   it("returns 400 for empty accent color", async () => {

@@ -22,23 +22,6 @@ export const ACCENT_PRESETS: AccentPreset[] = [
     },
   },
   {
-    name: "blue",
-    label: "Blue",
-    color: "#3b82f6",
-    cssVars: {
-      "--primary": "oklch(0.65 0.24 260)",
-      "--primary-foreground": "oklch(0.95 0.008 80)",
-      "--ring": "oklch(0.65 0.24 260)",
-      "--sidebar-primary": "oklch(0.65 0.24 260)",
-      "--sidebar-primary-foreground": "oklch(0.95 0.008 80)",
-      "--chart-1": "oklch(0.65 0.24 260)",
-      "--brand": "oklch(0.65 0.24 260)",
-      "--brand-bright": "oklch(0.73 0.2 260)",
-      "--brand-dim": "color-mix(in oklch, oklch(0.65 0.24 260) 15%, transparent)",
-      "--brand-faint": "color-mix(in oklch, oklch(0.65 0.24 260) 8%, transparent)",
-    },
-  },
-  {
     name: "violet",
     label: "Violet",
     color: "#8b5cf6",
@@ -129,4 +112,14 @@ export const ACCENT_NAMES = ACCENT_PRESETS.map((p) => p.name);
 
 export function getAccentPreset(name: string): AccentPreset | undefined {
   return ACCENT_PRESETS.find((p) => p.name === name);
+}
+
+/**
+ * The inline style that applies a stored accent before any script runs, for
+ * the server-rendered `<html>`. `null` for the default (or a removed preset),
+ * since the stylesheet already shows it.
+ */
+export function accentStyle(name: string | null | undefined): Record<string, string> | null {
+  if (!name || name === "default") return null;
+  return getAccentPreset(name)?.cssVars ?? null;
 }
