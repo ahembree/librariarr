@@ -1,11 +1,12 @@
 import { test, expect, type Page } from "@playwright/test";
+import { storeDashboardLayout } from "./seed";
 
 /**
  * Dashboard rendering details that only show in a real browser: card labels,
  * fill-bar colours past the palette, and the Integrations tile's refresh.
  * (The Recently Added artwork retry lives in dashboard-refresh.spec, which owns
- * the event stream it needs.) Data routes are stubbed; the saved layout is
- * stubbed and saves swallowed so nothing leaks into the shared e2e database.
+ * the event stream it needs.) Data routes are stubbed; the saved layout comes
+ * with the server render, so it is stored for each test and restored after it.
  */
 
 const isPath = (path: string) => (url: URL) => url.pathname === path;
@@ -22,11 +23,16 @@ function stats(overrides: Record<string, unknown> = {}) {
   };
 }
 
+let restoreLayout: (() => Promise<void>) | undefined;
+
+test.afterEach(async () => {
+  await restoreLayout?.();
+  restoreLayout = undefined;
+});
+
 async function stubDashboard(page: Page, cards: string[], statsBody: object) {
   const layout = { main: cards.map((id) => ({ id, size: 12 })), movies: [], series: [], music: [] };
-  await page.route(isPath("/api/settings/dashboard-layout"), (route) =>
-    route.fulfill({ json: { layout } }),
-  );
+  restoreLayout = await storeDashboardLayout(layout);
   await page.route(isPath("/api/media/stats"), (route) => route.fulfill({ json: statsBody }));
   await page.route(isPath("/api/media/library-types"), (route) =>
     route.fulfill({ json: { types: ["MOVIE"], allTypes: ["MOVIE"] } }),

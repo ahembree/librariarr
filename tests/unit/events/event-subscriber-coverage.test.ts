@@ -59,7 +59,7 @@ describe("app event catalogue", () => {
     // the last member (no `|` after it, then `;`) both have to come through.
     expect(types.length).toBeGreaterThan(5);
     expect(types[0]).toBe("sync:started");
-    expect(types.at(-1)).toBe("session-changed");
+    expect(types.at(-1)).toBe("display-settings:changed");
     expect(types).toContain("sync:completed");
     expect(new Set(types).size).toBe(types.length);
   });

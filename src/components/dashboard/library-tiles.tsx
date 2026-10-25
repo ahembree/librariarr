@@ -279,41 +279,33 @@ export function LibraryTiles({
   };
 
   useEffect(() => {
-    const types: (string | null)[] = [
+    const types = [
       ...(show.movie ? ["MOVIE"] : []),
       ...(show.series ? ["SERIES"] : []),
       ...(show.music ? ["MUSIC"] : []),
-      null, // totals tile
     ];
     let cancelled = false;
 
-    Promise.all(
-      types.map(async (type) => {
-        const params = new URLSearchParams({ dateField: "addedAt", bin: "month" });
-        if (type) {
-          params.set("type", type);
-        } else {
-          params.set("measure", "size");
-        }
-        if (serverId) params.set("serverId", serverId);
-        try {
-          const res = await fetch(`/api/media/stats/timeline?${params}`);
-          if (!res.ok) return [type ?? "ALL", []] as const;
-          const data = await res.json();
+    // One request for every tile: they asked one timeline each, four of the
+    // requests the dashboard makes on load.
+    const params = new URLSearchParams({ types: types.join(",") });
+    if (serverId) params.set("serverId", serverId);
+    fetch(`/api/media/stats/sparklines?${params}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .catch(() => null)
+      .then((data: { series?: Record<string, { date: string; total: number }[]> } | null) => {
+        if (cancelled) return;
+        const entries = [...types, "ALL"].map((key) => {
           // The totals tile charts library size over time: per-month byte
           // sums, accumulated so each point is the size at that month.
-          const points = buildSparkPoints(data.points ?? [], {
-            cumulative: !type,
+          const points = buildSparkPoints(data?.series?.[key] ?? [], {
+            cumulative: key === "ALL",
             months: SPARK_MONTHS,
           });
-          return [type ?? "ALL", points] as const;
-        } catch {
-          return [type ?? "ALL", []] as const;
-        }
-      }),
-    ).then((entries) => {
-      if (!cancelled) setSparks(Object.fromEntries(entries));
-    });
+          return [key, points] as const;
+        });
+        setSparks(Object.fromEntries(entries));
+      });
 
     return () => {
       cancelled = true;

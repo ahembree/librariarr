@@ -21,10 +21,19 @@ vi.mock("@/lib/sso/oidc-client", () => ({
 
 import { POST } from "@/app/api/settings/sso/revert/route";
 
+import { eventBus, type AppEvent } from "@/lib/events/event-bus";
+
+// Display-settings announcements, cleared before every test.
+let events: AppEvent[] = [];
+eventBus.subscribe((e) => events.push(e));
+const announced = (userId: string) =>
+  events.filter((e) => e.type === "display-settings:changed" && e.userId === userId).length;
+
 const prisma = getTestPrisma();
 
 describe("POST /api/settings/sso/revert", () => {
   beforeEach(async () => {
+    events = [];
     await cleanDatabase();
     clearMockSession();
     mockInvalidateCache.mockClear();
@@ -203,6 +212,8 @@ describe("POST /api/settings/sso/revert", () => {
     expect(refreshedUser?.sessionVersion).toBe(user.sessionVersion + 1);
     // The session that reverted stays valid.
     expect(getMockSession().sessionVersion).toBe(user.sessionVersion + 1);
+    // The user chip names the sign-in method the revert just unlinked.
+    expect(announced(user.id)).toBe(1);
   });
 
   it("defaults to OIDC when snapshot's ssoMode is hand-edited to garbage", async () => {

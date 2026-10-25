@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db";
 import type { DimensionMeta } from "@/lib/dashboard/custom-dimensions";
 import { excludedTypesSql } from "./breakdown";
+import { appCache } from "@/lib/cache/memory-cache";
 
 export const ALLOWED_DATE_COLUMNS = new Set(["addedAt", "lastPlayedAt", "originallyAvailableAt"]);
 export const VALID_BINS = new Set(["day", "week", "month", "quarter", "year"]);
@@ -347,4 +348,20 @@ export async function computeTimeline(params: {
   }
 
   return { points: fillGaps(points, bin, series), series };
+}
+
+type TimelineParams = Parameters<typeof computeTimeline>[0];
+
+/**
+ * `computeTimeline` behind the 60s `timeline:` cache, keyed on every input
+ * (and dropped by `invalidateMediaCaches()`). Shared by the timeline route and
+ * the dashboard's sparkline route, so the two answer a tile's question from
+ * one cached figure.
+ */
+export function getTimelineCached(
+  params: TimelineParams & { breakdownDim?: string | null },
+): Promise<{ points: TimelinePoint[]; series: string[] }> {
+  const { breakdownDim, ...timeline } = params;
+  const cacheKey = `timeline:${timeline.dateField}:${timeline.bin}:${timeline.measure}:${breakdownDim ?? ""}:${timeline.typeFilter ?? ""}:${timeline.topN ?? ""}:${[...timeline.serverIds].sort().join(",")}:${timeline.dedupEnabled ? "dedup" : "raw"}`;
+  return appCache.getOrSet(cacheKey, () => computeTimeline(timeline), 60_000);
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -37,6 +37,7 @@ import { getDuplicateServerNames } from "@/lib/server-styles";
 import { ServerTypeChip } from "@/components/server-type-chip";
 import { InsightsSkeleton, LibraryTilesSkeleton } from "@/components/skeletons";
 import { useRealtime } from "@/hooks/use-realtime";
+import { useShellSettings, useShellSnapshot } from "@/components/shell-settings-provider";
 import {
   ALL_SERVERS,
   ALL_TYPES,
@@ -129,29 +130,54 @@ function SectionHeader({ label, children }: { label: string; children?: React.Re
   );
 }
 
+const subscribeNothing = () => () => {};
+
 export default function DashboardPage() {
   const router = useRouter();
+  // False only on the render that hydrates server HTML: the visit the layout
+  // was rendered for. A client-side navigation renders the page without the
+  // layout being read again, so the layout's figures are as old as the page
+  // load and a later visit asks for its own.
+  const hydrated = useSyncExternalStore(subscribeNothing, () => true, () => false);
+  // The saved layout and the user's name, read by the server layout. Null
+  // outside it or when that read failed: both are then fetched as before.
+  const shell = useShellSettings();
+  const shellSnapshot = useShellSnapshot();
   const [stats, setStats] = useState<Stats | null>(null);
   // Whether the latest stats request failed. The page-level error is keyed on
   // this, not on the first load having settled: the server selector is on
   // screen during that load, and a pick made then drops the first answer, so
   // "settled with no stats" would read a request still in flight as a failure.
   const [statsFailed, setStatsFailed] = useState(false);
-  const [layout, setLayout] = useState<DashboardLayout | null>(null);
+  // Inside the shell the layout is the store's, so a save in another tab or on
+  // another device shows here as soon as the store refreshes.
+  const [fetchedLayout, setLayout] = useState<DashboardLayout | null>(null);
+  const layout = shellSnapshot ? shellSnapshot.dashboardLayout : fetchedLayout;
   // Whether the saved layout and the library types have been answered (or
   // failed). The zones that depend on them wait for them; nothing else does.
-  const [layoutSettled, setLayoutSettled] = useState(false);
-  const [typesSettled, setTypesSettled] = useState(false);
+  const [layoutSettled, setLayoutSettled] = useState(shell !== null);
+  // The layout read the library types too (the sidebar's links are built from
+  // them). Only the visit it rendered takes them: the types change when a
+  // server or library is added or turned off, which nothing re-reads into the
+  // layout's copy.
+  const [typesFromLayout] = useState(() => shellSnapshot !== null && !hydrated);
+  const [typesSettled, setTypesSettled] = useState(typesFromLayout);
   const [scheduleInfo, setScheduleInfo] = useState<ScheduleInfo | null>(null);
   const [editMode, setEditMode] = useState(false);
   const [servers, setServers] = useState<DashboardServer[]>([]);
   const [selectedServerId, setSelectedServerId] = useState<string>(ALL_SERVERS);
   const [selectedMediaType, setSelectedMediaType] = useState<string>(ALL_TYPES);
-  const [availableTypes, setAvailableTypes] = useState<string[]>([]);
+  const [availableTypes, setAvailableTypes] = useState<string[]>(() =>
+    typesFromLayout ? (shellSnapshot?.libraryTypes.types ?? []) : [],
+  );
+  const typesFromLayoutRef = useRef(typesFromLayout);
   const [editingCustomCard, setEditingCustomCard] = useState<{ cardId: string; config: CustomCardConfig } | null>(null);
-  const [userName, setUserName] = useState<string>("");
+  const [fetchedUserName, setUserName] = useState<string>("");
+  const userName = shellSnapshot?.user.username ?? fetchedUserName;
+  const userKnown = useRef(shell !== null);
 
   useEffect(() => {
+    if (userKnown.current) return;
     fetch("/api/auth/me")
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => { if (data?.username) setUserName(data.username); })
@@ -198,7 +224,8 @@ export default function DashboardPage() {
   // could land a GET issued before an in-flight layout PUT and revert the edit
   // the user just made on screen. Marked when the read is ISSUED: the zones no
   // longer wait for it, so a refresh can land while it is still in flight.
-  const layoutReadRef = useRef(false);
+  // Inside the shell the store owns the layout and keeps it current.
+  const layoutReadRef = useRef(shell !== null);
 
   // Each response is applied as it lands. The page used to wait for all five
   // (the stats among them, the slowest by far on a cold cache) before drawing
@@ -227,6 +254,21 @@ export default function DashboardPage() {
       layoutReadRef.current = false;
     };
 
+    const readTypes = () => {
+      if (typesFromLayoutRef.current) {
+        typesFromLayoutRef.current = false;
+        return null;
+      }
+      return settle(
+        json("/api/media/library-types").then((data) => {
+          if (!data) return;
+          const types: string[] = data.types ?? [];
+          setAvailableTypes(types);
+          setSelectedMediaType((prev) => reconcileSelectedType(prev, types));
+        }),
+      ).finally(() => setTypesSettled(true));
+    };
+
     await Promise.all([
       settle(fetchStatsRef.current()),
       layoutReadRef.current ? null : readLayout().finally(() => setLayoutSettled(true)),
@@ -238,14 +280,7 @@ export default function DashboardPage() {
           setSelectedServerId((prev) => reconcileSelectedServer(prev, list));
         }),
       ),
-      settle(
-        json("/api/media/library-types").then((data) => {
-          if (!data) return;
-          const types: string[] = data.types ?? [];
-          setAvailableTypes(types);
-          setSelectedMediaType((prev) => reconcileSelectedType(prev, types));
-        }),
-      ).finally(() => setTypesSettled(true)),
+      readTypes(),
       settle(
         json("/api/settings/schedule-info").then((data) => {
           if (data) setScheduleInfo(data);
@@ -294,10 +329,24 @@ export default function DashboardPage() {
         ...resolvedLayout,
         main: newCards,
       };
-      setLayout(newLayout);
 
-      // Persist to backend; a rejected save (e.g. layout-size cap) would
-      // otherwise look applied and silently evaporate on reload.
+      // A rejected save (e.g. layout-size cap) would otherwise look applied
+      // and silently evaporate on reload.
+      if (shell) {
+        // The store shows it at once and saves it against the revision it
+        // holds; one another tab or device has moved past is refused, and the
+        // store then loads the newer layout in place of this edit.
+        void shell.saveDashboardLayout(newLayout).then((outcome) => {
+          if (outcome === "conflict") {
+            toast.error("The dashboard layout was changed in another tab or on another device. The current one has been loaded; make the change again.");
+          } else if (outcome === "failed") {
+            toast.error("Failed to save dashboard layout");
+          }
+        });
+        return;
+      }
+
+      setLayout(newLayout);
       fetch("/api/settings/dashboard-layout", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -310,7 +359,7 @@ export default function DashboardPage() {
           toast.error("Failed to save dashboard layout");
         });
     },
-    [resolvedLayout]
+    [resolvedLayout, shell]
   );
 
   const handleMovieClick = useCallback((movieId: string) => {

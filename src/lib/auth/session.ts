@@ -10,6 +10,7 @@ import { dirname } from "path";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { apiKeySession, getApiKeyPrincipal } from "@/lib/api-keys/principal";
+import { sharedSessionRead } from "@/lib/auth/shared-session";
 
 /**
  * What the sealed cookie carries: WHO is signed in and whether that sign-in is
@@ -247,6 +248,12 @@ export async function getRawSession(): Promise<IronSession<SessionData>> {
 export async function getSession(): Promise<IronSession<SessionData>> {
   const principal = getApiKeyPrincipal();
   if (principal) return apiKeySession(principal);
+  // Inside `withSharedSession` (a route answering several handlers at once)
+  // the cookie is unsealed and checked once for all of them.
+  return sharedSessionRead(readValidatedSession);
+}
+
+async function readValidatedSession(): Promise<IronSession<SessionData>> {
   const session = await getRawSession();
   const carriedPlexToken = LEGACY_PLEX_TOKEN_FIELD in session;
   if (carriedPlexToken) delete (session as Record<string, unknown>)[LEGACY_PLEX_TOKEN_FIELD];

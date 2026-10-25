@@ -1,6 +1,7 @@
 "use client";
 
-import { createContext, useContext, useState, useEffect, useCallback } from "react";
+import { createContext, useContext, useState, useEffect, useCallback, useMemo } from "react";
+import { useShellSettings, useShellSnapshot } from "@/components/shell-settings-provider";
 import type { ChipColorMap, ChipColorCategory } from "@/lib/theme/chip-colors";
 import {
   DEFAULT_CHIP_COLORS,
@@ -45,27 +46,44 @@ function resolveHex(colors: ChipColorMap, category: ChipColorCategory, value: st
 }
 
 export function ChipColorProvider({ children }: { children: React.ReactNode }) {
-  const [colors, setColors] = useState<ChipColorMap>(DEFAULT_CHIP_COLORS);
+  // Inside the shell the saved colours come from its settings store, which the
+  // layout seeded and every save elsewhere refreshes; fetched after hydration,
+  // every chip drew in the default colours first. Only outside it (or when the
+  // layout could not read them) are they fetched here.
+  const shell = useShellSettings();
+  const snapshot = useShellSnapshot();
+  // Keyed on the saved map itself, so a refresh that changed something else
+  // keeps every chip's style object.
+  const inShell = snapshot !== null;
+  const savedColors = snapshot?.chipColors ?? null;
+  const shellColors = useMemo(
+    () => (inShell ? mergeChipColors(savedColors) : null),
+    [inShell, savedColors],
+  );
+  const [fetchedColors, setFetchedColors] = useState<ChipColorMap>(DEFAULT_CHIP_COLORS);
+  const colors = shellColors ?? fetchedColors;
 
   useEffect(() => {
+    if (shell) return;
     fetch("/api/settings/chip-colors")
       .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
         if (data?.chipColors) {
-          setColors(mergeChipColors(data.chipColors));
+          setFetchedColors(mergeChipColors(data.chipColors));
         }
       })
       .catch((e) => console.error("Failed to fetch chip colors", e));
-  }, []);
+  }, [shell]);
 
   const updateColors = useCallback((newColors: ChipColorMap) => {
-    setColors(newColors);
+    if (shell) shell.setChipColors(newColors);
+    else setFetchedColors(newColors);
     fetch("/api/settings/chip-colors", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ chipColors: newColors }),
     }).catch((e) => console.error("Failed to save chip colors", e));
-  }, []);
+  }, [shell]);
 
   const getHex = useCallback(
     (category: ChipColorCategory, value: string) => resolveHex(colors, category, value),

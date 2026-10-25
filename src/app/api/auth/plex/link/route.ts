@@ -6,6 +6,7 @@ import { apiLogger } from "@/lib/logger";
 import { validateRequest, plexLinkSchema } from "@/lib/validation";
 import { hasRecentLogin } from "@/lib/auth/recent-login";
 import { reauthRequired } from "@/lib/auth/reauth";
+import { announceDisplaySettingsChanged } from "@/lib/settings/display-settings-events";
 
 export async function POST(request: NextRequest) {
   const session = await getSession();
@@ -83,6 +84,8 @@ export async function POST(request: NextRequest) {
     await session.save();
 
     apiLogger.info("Auth", `Plex account linked for user "${session.userId}"`);
+    // The user chip names the sign-in method.
+    announceDisplaySettingsChanged(session.userId);
 
     // Whether Plex sign-in is on, so the page can offer to turn it on: linking
     // never changes it, and a setup done with a password leaves it off — the

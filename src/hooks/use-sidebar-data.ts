@@ -2,6 +2,8 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useRealtime } from "@/hooks/use-realtime";
+import { useShellSnapshot } from "@/components/shell-settings-provider";
+import { fetchJsonShared } from "@/lib/shared-fetch";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import type { LucideIcon } from "lucide-react";
@@ -106,11 +108,24 @@ export interface CurrentUser {
   authMethod: string;
 }
 
+const ALL_LIBRARY_TYPES: LibraryType[] = ["MOVIE", "SERIES", "MUSIC"];
+
+// A server reporting no types keeps every link, as the fetch always did.
+const typesOrAll = (types: string[] | undefined) =>
+  types && types.length > 0 ? (types as LibraryType[]) : ALL_LIBRARY_TYPES;
+
 export function useSidebarData(initialCollapsed = false) {
   const router = useRouter();
-  const [availableTypes, setAvailableTypes] = useState<LibraryType[]>(["MOVIE", "SERIES", "MUSIC"]);
-  const [allKnownTypes, setAllKnownTypes] = useState<LibraryType[]>(["MOVIE", "SERIES", "MUSIC"]);
-  const [user, setUser] = useState<CurrentUser | null>(null);
+  // The server layout read the user and the library types for the first
+  // paint; only outside it (or when that read failed) are they fetched on
+  // mount. Fetched after hydration, the sidebar drew all three library links
+  // and then dropped the ones the admin has no library for.
+  const shell = useShellSnapshot();
+  const [availableTypes, setAvailableTypes] = useState<LibraryType[]>(() => typesOrAll(shell?.libraryTypes.types));
+  const [allKnownTypes, setAllKnownTypes] = useState<LibraryType[]>(() => typesOrAll(shell?.libraryTypes.allTypes));
+  const [fetchedUser, setUser] = useState<CurrentUser | null>(null);
+  const user = shell?.user ?? fetchedUser;
+  const shellKnown = useRef(shell !== null);
   // Persisted in a cookie (not localStorage) so the server layout can read
   // it and SSR the correct state — a client-only read here rendered the
   // collapsed sidebar against expanded server HTML and tripped hydration.
@@ -138,6 +153,7 @@ export function useSidebarData(initialCollapsed = false) {
   }, []);
 
   useEffect(() => {
+    if (shellKnown.current) return;
     fetchLibraryTypes();
   }, [fetchLibraryTypes]);
 
@@ -151,18 +167,20 @@ export function useSidebarData(initialCollapsed = false) {
   // browser serves a handful of same-origin requests at a time, so at default
   // priority it took a slot from the page's own data on every page load.
   useEffect(() => {
-    fetch("/api/system/update-check", { priority: "low" })
-      .then((res) => res.json())
+    // Shared with any page that reads it on the same mount (the dashboard's
+    // status strip, Settings).
+    fetchJsonShared<{ updateAvailable?: boolean; latestVersion?: string | null }>("/api/system/update-check", { priority: "low" })
       .then((data) => {
-        if (data.updateAvailable) {
+        if (data?.updateAvailable) {
           setUpdateAvailable(true);
-          setLatestVersion(data.latestVersion);
+          setLatestVersion(data.latestVersion ?? null);
         }
       })
       .catch(() => {});
   }, []);
 
   useEffect(() => {
+    if (shellKnown.current) return;
     fetch("/api/auth/me")
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
@@ -177,9 +195,18 @@ export function useSidebarData(initialCollapsed = false) {
   // asks every media server for its sessions, so it can be the slowest request
   // a page load makes.
   const fetchSessionCount = useCallback(() => {
-    fetch("/api/tools/sessions", { priority: "low" })
-      .then((res) => res.json())
-      .then((data: { sessions?: unknown[]; unreachableServers?: { id: string; name: string; type: string }[] }) => {
+    // Shared with the dashboard's status strip, which reads it on the same mount.
+    fetchJsonShared<{ sessions?: unknown[]; unreachableServers?: { id: string; name: string; type: string }[] }>(
+      "/api/tools/sessions",
+      { priority: "low" },
+    )
+      .then((data) => {
+        // A refused or failed answer says nothing about which servers are down:
+        // read as an empty list, it announced every unreachable server back online.
+        if (!data) {
+          console.error("Failed to fetch session count");
+          return;
+        }
         if (data.sessions) setActiveSessionCount(data.sessions.length);
 
         const current = new Map<string, string>(

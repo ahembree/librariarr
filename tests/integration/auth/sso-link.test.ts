@@ -16,10 +16,19 @@ vi.mock("@/lib/logger", () => ({
 
 import { POST, DELETE } from "@/app/api/settings/sso/link/route";
 
+import { eventBus, type AppEvent } from "@/lib/events/event-bus";
+
+// Display-settings announcements, cleared before every test.
+let events: AppEvent[] = [];
+eventBus.subscribe((e) => events.push(e));
+const announced = (userId: string) =>
+  events.filter((e) => e.type === "display-settings:changed" && e.userId === userId).length;
+
 const prisma = getTestPrisma();
 
 describe("POST /api/settings/sso/link — manual subject link", () => {
   beforeEach(async () => {
+    events = [];
     await cleanDatabase();
     clearMockSession();
   });
@@ -115,6 +124,8 @@ describe("POST /api/settings/sso/link — manual subject link", () => {
     expect(refreshed?.ssoSubject).toBe("abc-sub");
     expect(refreshed?.ssoIssuer).toBe("https://idp.example.com");
     expect(refreshed?.ssoEnabled).toBe(true);
+    // The user chip names the sign-in method.
+    expect(announced(user.id)).toBe(1);
   });
 
   it("normalizes the issuer (strips trailing slashes) at link time", async () => {
@@ -229,6 +240,7 @@ describe("POST /api/settings/sso/link — manual subject link", () => {
 
 describe("DELETE /api/settings/sso/link — unlink + lockout guard", () => {
   beforeEach(async () => {
+    events = [];
     await cleanDatabase();
     clearMockSession();
   });
@@ -360,6 +372,7 @@ describe("DELETE /api/settings/sso/link — unlink + lockout guard", () => {
 
     const refreshedSettings = await prisma.appSettings.findFirst();
     expect(refreshedSettings?.ssoEnabled).toBe(false);
+    expect(announced(user.id)).toBe(1);
   });
 
   it("allows unlink when local credentials are the fallback", async () => {

@@ -48,6 +48,14 @@ vi.mock("@/lib/logger", () => ({
 // Import route handler AFTER mocks
 import { POST } from "@/app/api/auth/local/change-password/route";
 
+import { eventBus, type AppEvent } from "@/lib/events/event-bus";
+
+// Display-settings announcements, cleared before every test.
+let events: AppEvent[] = [];
+eventBus.subscribe((e) => events.push(e));
+const announced = (userId: string) =>
+  events.filter((e) => e.type === "display-settings:changed" && e.userId === userId).length;
+
 describe("POST /api/auth/local/change-password", () => {
   const prisma = getTestPrisma();
 
@@ -56,6 +64,7 @@ describe("POST /api/auth/local/change-password", () => {
     prisma.appSettings.create({ data: { userId, localAuthEnabled: true } });
 
   beforeEach(async () => {
+    events = [];
     await cleanDatabase();
     clearMockSession();
     mockBcrypt.hash.mockClear();
@@ -361,6 +370,8 @@ describe("POST /api/auth/local/change-password", () => {
     const updated = await prisma.user.findUnique({ where: { id: user.id } });
     expect(updated?.localUsername).toBe("newname");
     expect(updated?.username).toBe("NewName");
+    // The user chip and the dashboard greeting read the name from the shell.
+    expect(announced(user.id)).toBe(1);
   });
 
   // A username alone is not a way in (an account with no password cannot use

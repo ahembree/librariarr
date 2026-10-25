@@ -34,6 +34,8 @@ import { HoverCard, HoverCardTrigger, HoverCardContent } from "@/components/ui/h
 import type { MediaListItem } from "@/lib/types";
 import { ServerChips } from "@/components/server-chips";
 import { useColumnResize } from "@/hooks/use-column-resize";
+import { useShellSettings, useShellSnapshot } from "@/components/shell-settings-provider";
+import { toast } from "sonner";
 import { formatFileSize, formatDuration, formatDate, formatDateOnly } from "@/lib/format";
 import { formatEpisodeCode } from "@/lib/media/display-title";
 
@@ -389,6 +391,27 @@ function getDefaultVisibility(columns: ColumnDef[]): Record<string, boolean> {
   return vis;
 }
 
+// The key a table's columns are saved under.
+function columnPrefKey(mediaType: string | undefined): string {
+  return mediaType === "MUSIC" ? "MUSIC" : mediaType === "SERIES" ? "SERIES" : "MOVIE";
+}
+
+// Saved columns are visible, every other column hidden; nothing saved for the
+// type keeps the defaults.
+function visibilityFromPreferences(
+  prefs: Record<string, unknown> | null | undefined,
+  prefKey: string,
+  columns: ColumnDef[],
+): Record<string, boolean> {
+  const saved = prefs?.[prefKey];
+  if (!Array.isArray(saved)) return getDefaultVisibility(columns);
+  const vis: Record<string, boolean> = {};
+  for (const col of columns) {
+    vis[col.id] = saved.includes(col.id);
+  }
+  return vis;
+}
+
 // Column IDs that are video-specific and should be hidden for MUSIC
 const VIDEO_COLUMN_IDS = new Set([
   "resolution",
@@ -402,7 +425,23 @@ const VIDEO_COLUMN_IDS = new Set([
 
 function MediaTableInner<T extends MediaListItem>({ items, onItemClick, sortBy, sortOrder, onSort, mediaType, hideParentTitle, scrollToIndexRef, exceptedItemIds, hideServers, rowClassName, renderHoverContent }: MediaTableProps<T>) {
   const allColumns = useMemo(() => buildColumns(), []);
-  const [columnVisibility, setColumnVisibility] = useState<Record<string, boolean>>(() => getDefaultVisibility(allColumns));
+  // Inside the shell the saved columns are the settings store's: the layout
+  // seeded it, so the table opens with them (fetched after mount, it drew the
+  // default columns first), and a save in another tab or on another device
+  // shows here once the store refreshes. Only outside the shell (or when the
+  // layout could not read them) are they fetched and saved here.
+  const shell = useShellSettings();
+  const shellSnapshot = useShellSnapshot();
+  const prefKey = columnPrefKey(mediaType);
+  const savedColumns = shellSnapshot?.columnPreferences?.[prefKey];
+  const shellVisibility = useMemo(
+    () => (shell ? visibilityFromPreferences({ [prefKey]: savedColumns }, prefKey, allColumns) : null),
+    [shell, savedColumns, prefKey, allColumns],
+  );
+  const [fetchedVisibility, setColumnVisibility] = useState<Record<string, boolean>>(() =>
+    getDefaultVisibility(allColumns),
+  );
+  const columnVisibility = shellVisibility ?? fetchedVisibility;
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // --- Row Virtualization ---
@@ -470,8 +509,9 @@ function MediaTableInner<T extends MediaListItem>({ items, onItemClick, sortBy, 
     return () => { ref.current = null; };
   }, [scrollToIndexRef, virtualizer]);
 
-  // Load column preferences from DB on mount
+  // Load column preferences from DB on mount, outside the shell
   useEffect(() => {
+    if (shell) return;
     let cancelled = false;
     async function loadPreferences() {
       try {
@@ -479,27 +519,16 @@ function MediaTableInner<T extends MediaListItem>({ items, onItemClick, sortBy, 
         if (!res.ok) return;
         const data = await res.json();
         if (cancelled) return;
-        const prefs = data.preferences;
-        // Map media type to preference key
-        const prefKey = mediaType === "MUSIC" ? "MUSIC" : mediaType === "SERIES" ? "SERIES" : "MOVIE";
-        if (prefs && Array.isArray(prefs[prefKey])) {
-          const savedColumns = prefs[prefKey] as string[];
-          // Build visibility map: columns in savedColumns are visible, others are not
-          const vis: Record<string, boolean> = {};
-          for (const col of allColumns) {
-            vis[col.id] = savedColumns.includes(col.id);
-          }
-          setColumnVisibility(vis);
+        if (Array.isArray(data.preferences?.[prefKey])) {
+          setColumnVisibility(visibilityFromPreferences(data.preferences, prefKey, allColumns));
         }
       } catch {
         // Keep defaults if fetch fails
-      } finally {
-        // Preferences loaded (or failed)
       }
     }
     loadPreferences();
     return () => { cancelled = true; };
-  }, [mediaType, allColumns]);
+  }, [shell, prefKey, allColumns]);
 
   // Save column preferences to DB (debounced)
   const savePreferences = useCallback((visibility: Record<string, boolean>) => {
@@ -508,26 +537,37 @@ function MediaTableInner<T extends MediaListItem>({ items, onItemClick, sortBy, 
       const visibleCols = Object.entries(visibility)
         .filter(([, visible]) => visible)
         .map(([id]) => id);
-      const type = mediaType === "MUSIC" ? "MUSIC" : mediaType === "SERIES" ? "SERIES" : "MOVIE";
       try {
         await fetch("/api/settings/column-preferences", {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ type, columns: visibleCols }),
+          body: JSON.stringify({ type: prefKey, columns: visibleCols }),
         });
       } catch {
         // Silently fail
       }
     }, 500);
-  }, [mediaType]);
+  }, [prefKey]);
 
   const toggleColumn = useCallback((colId: string, checked: boolean) => {
+    if (shell && shellVisibility) {
+      const next = { ...shellVisibility, [colId]: checked };
+      const visibleCols = allColumns.filter((col) => next[col.id]).map((col) => col.id);
+      // Shown at once, sent after a short pause against the store's revision;
+      // a list another tab or device saved since is loaded in its place.
+      void shell.saveColumns(prefKey, visibleCols).then((outcome) => {
+        if (outcome === "conflict") {
+          toast.error("The column selection was changed in another tab or on another device. The current one has been loaded; make the change again.");
+        }
+      });
+      return;
+    }
     setColumnVisibility((prev) => {
       const next = { ...prev, [colId]: checked };
       savePreferences(next);
       return next;
     });
-  }, [savePreferences]);
+  }, [shell, shellVisibility, allColumns, prefKey, savePreferences]);
 
   const isMusic = mediaType === "MUSIC";
 

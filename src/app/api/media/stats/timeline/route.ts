@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { getDimensionMeta, supportsTimelineBreakdown } from "@/lib/dashboard/custom-dimensions";
-import { appCache } from "@/lib/cache/memory-cache";
 import { resolveStatsScope } from "@/lib/media/stats-scope";
 import {
-  computeTimeline,
+  getTimelineCached,
   ALLOWED_DATE_COLUMNS,
   VALID_BINS,
   VALID_MEASURES,
@@ -65,20 +64,17 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ points: [], series: [] });
   }
 
-  const cacheKey = `timeline:${dateField}:${bin}:${measure}:${breakdownDim ?? ""}:${typeFilter ?? ""}:${topN ?? ""}:${[...scope.serverIds].sort().join(",")}:${scope.dedupEnabled ? "dedup" : "raw"}`;
-
-  const result = await appCache.getOrSet(cacheKey, async () => {
-    return computeTimeline({
-      dateField,
-      bin,
-      measure,
-      breakdownMeta: breakdownMeta ?? null,
-      serverIds: scope.serverIds,
-      typeFilter,
-      topN,
-      dedupEnabled: scope.dedupEnabled,
-    });
-  }, 60_000);
+  const result = await getTimelineCached({
+    dateField,
+    bin,
+    measure,
+    breakdownMeta: breakdownMeta ?? null,
+    breakdownDim,
+    serverIds: scope.serverIds,
+    typeFilter,
+    topN,
+    dedupEnabled: scope.dedupEnabled,
+  });
 
   return NextResponse.json(result);
 }

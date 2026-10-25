@@ -1,9 +1,10 @@
 import { test, expect, type Page, type Route } from "@playwright/test";
+import { storeDashboardLayout } from "./seed";
 
 /**
- * Custom Insights cards. The saved layout is stubbed (and saves are swallowed)
- * so each test starts from a known grid and nothing it adds leaks into the
- * shared e2e database the other specs read.
+ * Custom Insights cards. The saved layout is stored for each test and restored
+ * after it (and saves are swallowed), so each test starts from a known grid
+ * and nothing it adds leaks into the shared e2e database the other specs read.
  *
  * Covers: the dialog only offering combinations the routes accept (a timeline
  * "Color By" the route can express, a heatmap pair the cross-tab can cross),
@@ -13,8 +14,18 @@ import { test, expect, type Page, type Route } from "@playwright/test";
 
 type Layout = { main: unknown[]; movies: unknown[]; series: unknown[]; music: unknown[] };
 
+let restoreLayout: (() => Promise<void>) | undefined;
+
+test.afterEach(async () => {
+  await restoreLayout?.();
+  restoreLayout = undefined;
+});
+
+// The saved layout comes with the server render, so it is stored for the
+// test; the saves the test makes are swallowed.
 async function stubLayout(page: Page, main: unknown[]) {
   const layout: Layout = { main, movies: [], series: [], music: [] };
+  restoreLayout = await storeDashboardLayout(layout);
   await page.route(
     (url) => url.pathname === "/api/settings/dashboard-layout",
     (route: Route) =>

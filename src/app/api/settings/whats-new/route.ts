@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
+import { announceDisplaySettingsChanged } from "@/lib/settings/display-settings-events";
 import { validateRequest, whatsNewSeenSchema } from "@/lib/validation";
 import { fetchReleaseNotes } from "@/lib/version/update-checker";
 import { compareSemver } from "@/lib/version/semver";
@@ -99,5 +100,6 @@ export async function PUT(request: NextRequest) {
     return version;
   });
 
+  announceDisplaySettingsChanged(userId);
   return NextResponse.json({ lastSeenVersion });
 }

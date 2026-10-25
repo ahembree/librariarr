@@ -15,6 +15,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { formatRelativeDate, formatUntil } from "@/lib/format";
 import { useRealtime } from "@/hooks/use-realtime";
 import { fetchSyncStatus } from "@/lib/sync/sync-status-client";
+import { fetchJsonShared } from "@/lib/shared-fetch";
 import type { ScheduleInfo } from "@/components/dashboard/types";
 
 type Tone = "ok" | "warn" | "err" | "idle";
@@ -113,8 +114,8 @@ export function StatusStrip({ scheduleInfo }: { scheduleInfo: ScheduleInfo | nul
   const [updateVersion, setUpdateVersion] = useState<string | null>(null);
 
   const fetchSessions = useCallback(() => {
-    fetch("/api/tools/sessions")
-      .then((res) => (res.ok ? res.json() : null))
+    // Shared with the sidebar's stream badge, which reads it on the same mount.
+    fetchJsonShared<{ sessions?: unknown[]; unreachableServers?: unknown[] }>("/api/tools/sessions")
       .then((data) => {
         if (!data) return setSessions("error");
         setSessions({
@@ -151,8 +152,8 @@ export function StatusStrip({ scheduleInfo }: { scheduleInfo: ScheduleInfo | nul
     fetchSessions();
     fetchHealth();
 
-    fetch("/api/system/update-check", { priority: "low" })
-      .then((res) => (res.ok ? res.json() : null))
+    // Shared with the sidebar's update dot, which reads it on the same mount.
+    fetchJsonShared<{ updateAvailable?: boolean; latestVersion?: string }>("/api/system/update-check", { priority: "low" })
       .then((data) => {
         if (data?.updateAvailable && data.latestVersion) {
           setUpdateVersion(data.latestVersion);

@@ -59,6 +59,28 @@ export async function dropAppCaches(request: APIRequestContext): Promise<void> {
   if (!saved.ok()) throw new Error(`PUT /api/settings/dedup answered ${saved.status()}`);
 }
 
+/**
+ * Store a dashboard layout for the admin, for a spec that needs a known grid.
+ * The dashboard takes its saved layout from the server render, so a stubbed
+ * `/api/settings/dashboard-layout` GET is never requested. Returns the restore,
+ * which puts the previous value (NULL included) back so nothing leaks into the
+ * other specs.
+ */
+export async function storeDashboardLayout(layout: unknown): Promise<() => Promise<void>> {
+  const previous = await withClient(async (c) => {
+    const { rows } = await c.query<{ dashboardLayout: unknown }>(`SELECT "dashboardLayout" FROM "AppSettings"`);
+    if (rows.length !== 1) throw new Error(`expected one AppSettings row, found ${rows.length}`);
+    await c.query(`UPDATE "AppSettings" SET "dashboardLayout" = $1::jsonb`, [JSON.stringify(layout)]);
+    return rows[0].dashboardLayout;
+  });
+  return () =>
+    withClient(async (c) => {
+      await c.query(`UPDATE "AppSettings" SET "dashboardLayout" = $1::jsonb`, [
+        previous === null ? null : JSON.stringify(previous),
+      ]);
+    });
+}
+
 /** Remove any previously seeded rows. Deleting the library cascades its items. */
 export async function cleanupSeed(): Promise<void> {
   await withClient(async (c) => {

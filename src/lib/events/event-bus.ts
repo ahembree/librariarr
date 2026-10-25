@@ -71,7 +71,18 @@ export type AppEventType =
    *
    * Carries no session data — the receiver refetches the route that owns it.
    */
-  | "session-changed";
+  | "session-changed"
+  /**
+   * A display setting the authenticated shell renders was saved (chip colours,
+   * table columns, card display options, the dashboard layout, the accent,
+   * the "What's new" version).
+   *
+   * Carries nothing: every open tab refetches `/api/settings/shell`, the one
+   * place those values are read. The layout renders them only on a full page
+   * load, so without this a second tab or device kept the values it loaded and
+   * its next save overwrote the newer ones.
+   */
+  | "display-settings:changed";
 
 export interface AppEvent {
   type: AppEventType;
