@@ -38,6 +38,22 @@ describe("useMediaDetailPanel", () => {
     expect(result.current.panelProps?.detailLoaded).toBe(true);
   });
 
+  it("hands the record fetch back to the panel's content when it fails over a seed", async () => {
+    fetchMock.mockResolvedValue({ ok: false, status: 500, json: async () => ({ error: "boom" }) });
+    const { result } = renderHook(() => useMediaDetailPanel());
+    const seed = record("a") as unknown as MediaItemWithRelations;
+    let pending!: Promise<void>;
+    act(() => {
+      pending = result.current.open({ id: "a", mediaType: "MOVIE", seed });
+    });
+    // While the hook's own request runs, the content must not ask too.
+    expect(result.current.panelProps?.detailLoaded).toBe(true);
+    await act(() => pending);
+    expect(result.current.panelProps?.item.id).toBe("a");
+    expect(result.current.panelProps?.detailLoaded).toBe(false);
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
   it("opens from a record a hover already fetched, without asking again", async () => {
     fetchMock.mockResolvedValue(respond({ item: record("a") }));
     prefetchMediaRecord("a");

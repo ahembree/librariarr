@@ -27,6 +27,45 @@ const eventHandlers = new Map<string, Set<(e: MessageEvent) => void>>();
 // reconnected page can be correct is to refetch.
 const resyncListeners = new Set<() => void>();
 
+// Run before every subscriber's callback for their event types — once per
+// event, whichever subscriber's listener the event reaches first. EventSource
+// calls listeners in the order they were added, and that order is not stable
+// (a child's effect subscribes before its parent's on the first mount, after
+// it once the child is replaced on a navigation), so a cache the shell clears
+// in its own callback could be read by a page's refetch before the clear ran.
+const preHandlers = new Map<string, Set<() => void>>();
+const preHandledEvents = new WeakSet<Event>();
+
+/**
+ * Run `fn` before any subscriber's callback whenever one of `eventTypes`
+ * arrives, and once before a reconnect's resync. For dropping client-side
+ * caches the callbacks then refetch through. It fires only while something
+ * subscribes to the event type. Returns the unregister function.
+ */
+export function beforeRealtimeEvents(eventTypes: readonly string[], fn: () => void): () => void {
+  for (const type of eventTypes) {
+    let set = preHandlers.get(type);
+    if (!set) {
+      set = new Set();
+      preHandlers.set(type, set);
+    }
+    set.add(fn);
+  }
+  return () => {
+    for (const type of eventTypes) preHandlers.get(type)?.delete(fn);
+  };
+}
+
+function runPreHandlers(fns: Iterable<() => void>) {
+  for (const fn of fns) {
+    try {
+      fn();
+    } catch {
+      // A failing pre-handler must not stop the event reaching subscribers.
+    }
+  }
+}
+
 // A page-level subscriber unmounts before the next page's mounts on every
 // client-side navigation, so refCount transiently hits 0 on every route
 // change. Closing immediately tore the shared connection down and rebuilt it
@@ -107,6 +146,7 @@ function fireResync() {
   if (now - lastResyncAt < MIN_RESYNC_INTERVAL_MS) return;
   lastResyncAt = now;
 
+  runPreHandlers(new Set([...preHandlers.values()].flatMap((set) => [...set])));
   for (const listener of resyncListeners) {
     try {
       listener();
@@ -341,6 +381,10 @@ export function useRealtime(
     }
 
     const handler = (e: MessageEvent) => {
+      if (!preHandledEvents.has(e)) {
+        preHandledEvents.add(e);
+        runPreHandlers(preHandlers.get(eventType) ?? []);
+      }
       try {
         const data = JSON.parse(e.data);
         callbackRef.current(data);

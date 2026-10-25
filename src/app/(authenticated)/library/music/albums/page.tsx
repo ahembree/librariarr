@@ -25,7 +25,7 @@ import { EmptyState } from "@/components/empty-state";
 import { MediaGridSkeleton } from "@/components/skeletons";
 import { LibraryTabs, MUSIC_TABS } from "@/components/library-tabs";
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
-import { clearLibraryListCache, loadCachedList } from "@/lib/media/list-cache";
+import { loadCachedList } from "@/lib/media/list-cache";
 
 const GAP = 16;
 const CARD_BORDER = 2;
@@ -211,11 +211,7 @@ export default function AllAlbumsPage() {
   useListFetch(fetchAlbums);
 
   // Auto-update when real-time sync adds/removes items — no manual refresh.
-  // A sync changes the lists, so every cached one goes before the refetch.
-  useRealtime("sync:completed", () => {
-    clearLibraryListCache();
-    void fetchAlbums();
-  });
+  useRealtime("sync:completed", fetchAlbums);
 
   const rowCount = useMemo(
     () => (albums.length > 0 ? Math.ceil(albums.length / actualColumns) : 0),

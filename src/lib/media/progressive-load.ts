@@ -51,6 +51,9 @@ export async function fetchListProgressively<T>(
   listParams.delete("page");
   listParams.delete("limit");
   const key = listCacheKeyFor(url, listParams);
+  // Read before any request: a clear while one is in flight bumps it, and the
+  // answer is then handed to the caller but not stored.
+  const generation = cache.generation();
   const cached = cache.get<T[]>(key);
   if (cached) {
     onChunk(cached.value, true);
@@ -60,7 +63,7 @@ export async function fetchListProgressively<T>(
     const response = await fetch(`${url}?${allParams}`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const items = ((await response.json()) as ListResponse<T>).items ?? [];
-    cache.set(key, items);
+    cache.set(key, items, generation);
     onChunk(items, true);
     return;
   }
@@ -79,7 +82,7 @@ export async function fetchListProgressively<T>(
   const hasMore = firstBody.pagination?.hasMore ?? firstItems.length >= FIRST_CHUNK_SIZE;
   onChunk(firstItems, !hasMore);
   if (!hasMore) {
-    cache.set(key, firstItems);
+    cache.set(key, firstItems, generation);
     return;
   }
 
@@ -92,6 +95,6 @@ export async function fetchListProgressively<T>(
   if (!restResponse.ok) throw new Error(`HTTP ${restResponse.status}`);
   const restBody = (await restResponse.json()) as ListResponse<T>;
   const all = [...firstItems, ...(restBody.items ?? [])];
-  cache.set(key, all);
+  cache.set(key, all, generation);
   onChunk(all, true);
 }

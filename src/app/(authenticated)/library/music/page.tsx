@@ -32,7 +32,7 @@ import { sameFilters } from "@/lib/filters/same-filters";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useListFetch } from "@/hooks/use-list-fetch";
 import { useDeferredOverscan } from "@/hooks/use-deferred-overscan";
-import { clearLibraryListCache, loadCachedList } from "@/lib/media/list-cache";
+import { loadCachedList } from "@/lib/media/list-cache";
 
 const GAP = 16;
 const CARD_BORDER = 2; // 1px top + 1px bottom border on Card
@@ -241,11 +241,7 @@ export default function MusicPage() {
     }
   }, [sortBy, sortOrder, selectedServerId, filters]);
 
-  // A sync changes the lists, so every cached one goes before the refetch.
-  useRealtime("sync:completed", () => {
-    clearLibraryListCache();
-    void fetchArtists();
-  });
+  useRealtime("sync:completed", fetchArtists);
 
   useListFetch(fetchArtists);
 

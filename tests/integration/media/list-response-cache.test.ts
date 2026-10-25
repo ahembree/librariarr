@@ -182,6 +182,37 @@ describe("library listing response cache", () => {
       ).toBeDefined();
     });
 
+    it("never abandons a listing recomputing under a key an invalidation already emptied", async () => {
+      const user = await createTestUser();
+      setMockSession({ userId: user.id, isLoggedIn: true });
+      let release!: () => void;
+      let slowCalls = 0;
+      let slow0 = false;
+      const handler = withListResponseCache("test-prune", async (request) => {
+        if (slow0 && new URL(request.url).searchParams.get("i") === "0") {
+          slowCalls++;
+          await new Promise<void>((r) => { release = r; });
+        }
+        return NextResponse.json({ url: request.url });
+      });
+      // Fill the bound, then drop every entry as a sync would.
+      for (let i = 0; i < LIST_RESPONSE_CACHE_MAX_ENTRIES; i++) {
+        await handler(new NextRequest(`http://localhost/api/x?i=${i}`));
+      }
+      invalidateMediaCaches();
+      slow0 = true;
+      // Listing 0, the oldest key, recomputes while another listing is stored.
+      const slow = handler(new NextRequest("http://localhost/api/x?i=0"));
+      await vi.waitFor(() => expect(slowCalls).toBe(1));
+      await handler(new NextRequest("http://localhost/api/x?i=new"));
+      release();
+      await slow;
+      expect(appCache.get(listCacheKey("test-prune", "http://localhost/api/x?i=0"))).toBeDefined();
+      // Stored: the next visit is answered without running the handler.
+      await handler(new NextRequest("http://localhost/api/x?i=0"));
+      expect(slowCalls).toBe(1);
+    });
+
     it("names its keys under the prefix invalidateMediaCaches drops", () => {
       expect(listCacheKey("media-movies", "http://localhost/api/media/movies?b=2&a=1")).toBe(
         `${LIST_RESPONSE_CACHE_PREFIX}media-movies?a=1&b=2`,

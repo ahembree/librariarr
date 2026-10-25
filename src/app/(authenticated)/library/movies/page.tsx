@@ -31,7 +31,6 @@ import { useRealtime } from "@/hooks/use-realtime";
 import { useListFetch } from "@/hooks/use-list-fetch";
 import { useDeferredOverscan } from "@/hooks/use-deferred-overscan";
 import { fetchListProgressively } from "@/lib/media/progressive-load";
-import { clearLibraryListCache } from "@/lib/media/list-cache";
 
 const SORT_OPTIONS = [
   { value: "title", label: "Name" },
@@ -303,12 +302,7 @@ export default function MoviesPage() {
     }
   }, [filters, sortBy, sortOrder, selectedServerId]);
 
-  // A sync changes the lists, so every cached one goes before the refetch
-  // (`fetchListProgressively` reads through the tab's list cache).
-  useRealtime("sync:completed", () => {
-    clearLibraryListCache();
-    void fetchMovies();
-  });
+  useRealtime("sync:completed", fetchMovies);
 
   // No debounce on changes: this page has always refetched at once.
   useListFetch(fetchMovies, 0);

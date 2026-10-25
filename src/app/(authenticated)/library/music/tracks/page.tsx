@@ -26,7 +26,6 @@ import { MediaGridSkeleton } from "@/components/skeletons";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
 import { LibraryTabs, MUSIC_TABS } from "@/components/library-tabs";
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
-import { clearLibraryListCache } from "@/lib/media/list-cache";
 
 const GAP = 16;
 const CARD_BORDER = 2;
@@ -140,12 +139,7 @@ export default function AllTracksPage() {
   useListFetch(fetchTracks);
 
   // Auto-update when real-time sync adds/removes items — no manual refresh.
-  // A sync changes the lists, so every cached one goes before the refetch
-  // (`fetchListProgressively` reads through the tab's list cache).
-  useRealtime("sync:completed", () => {
-    clearLibraryListCache();
-    void fetchTracks();
-  });
+  useRealtime("sync:completed", fetchTracks);
 
   useEffect(() => {
     scrollElementRef.current = document.querySelector<HTMLElement>("main");

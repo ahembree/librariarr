@@ -173,4 +173,28 @@ describe("fetchListProgressively", () => {
     expect(onChunk).toHaveBeenCalledTimes(1);
     expect(onChunk).toHaveBeenCalledWith(first, false);
   });
+
+  it("does not store a list whose second pass crossed a clear", async () => {
+    const first = Array.from({ length: FIRST_CHUNK_SIZE }, (_, i) => item(i));
+    let resolveRest!: (v: unknown) => void;
+    const fn = vi.fn(async (url: string) => {
+      if (url.includes("offset=")) {
+        const body = await new Promise((r) => { resolveRest = r; });
+        return { ok: true, status: 200, json: async () => body } as Response;
+      }
+      return { ok: true, status: 200, json: async () => ({ items: first, pagination: { hasMore: true } }) } as Response;
+    });
+    vi.stubGlobal("fetch", fn);
+    const pending = fetchListProgressively("/api/media/movies", new URLSearchParams(), () => {});
+    await vi.waitFor(() => expect(fn).toHaveBeenCalledTimes(2));
+    clearLibraryListCache();
+    resolveRest({ items: [item(1000)] });
+    await pending;
+    const seen: boolean[] = [];
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ items: [] }) }) as unknown as Response));
+    await fetchListProgressively("/api/media/movies", new URLSearchParams(), (_, done) => seen.push(done));
+    // Not served from the cache: the stale list was never stored.
+    expect(seen).toEqual([true]);
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
+  });
 });

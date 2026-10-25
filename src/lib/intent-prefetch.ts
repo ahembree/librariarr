@@ -1,8 +1,10 @@
 /**
  * Event handlers that call `onIntent` when the user looks about to open an
- * element: a mouse pointer resting on it for `INTENT_DELAY_MS`, a press, or
- * keyboard focus. A pointer sweeping across a grid on its way elsewhere starts
- * nothing; touch has no hover, so it is the press.
+ * element: a mouse pointer resting on it for `INTENT_DELAY_MS`, a mouse or pen
+ * press, or keyboard focus. A pointer sweeping across a grid on its way
+ * elsewhere starts nothing. A touch press starts nothing either: every scroll
+ * gesture begins with one, so on a phone it would fetch every card a swipe
+ * started on.
  *
  * Hook-free (the pending timer is kept per element), so a memoised card or a
  * virtualised table row can spread it without state of its own.
@@ -23,7 +25,7 @@ function cancel(element: Element): void {
 interface IntentHandlers {
   onPointerEnter?: (event: { pointerType: string; currentTarget: Element }) => void;
   onPointerLeave?: (event: { currentTarget: Element }) => void;
-  onPointerDown?: () => void;
+  onPointerDown?: (event: { pointerType: string }) => void;
   onFocus?: () => void;
 }
 
@@ -43,7 +45,9 @@ export function intentHandlers(onIntent: (() => void) | undefined): IntentHandle
       );
     },
     onPointerLeave: (event) => cancel(event.currentTarget),
-    onPointerDown: onIntent,
+    onPointerDown: (event) => {
+      if (event.pointerType !== "touch") onIntent();
+    },
     onFocus: onIntent,
   };
 }

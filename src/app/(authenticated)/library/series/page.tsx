@@ -33,7 +33,7 @@ import { sameFilters } from "@/lib/filters/same-filters";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useListFetch } from "@/hooks/use-list-fetch";
 import { useDeferredOverscan } from "@/hooks/use-deferred-overscan";
-import { clearLibraryListCache, loadCachedList } from "@/lib/media/list-cache";
+import { loadCachedList } from "@/lib/media/list-cache";
 
 interface GroupedSeries {
   parentTitle: string;
@@ -243,11 +243,7 @@ export default function SeriesPage() {
     }
   }, [sortBy, sortOrder, selectedServerId, filters]);
 
-  // A sync changes the lists, so every cached one goes before the refetch.
-  useRealtime("sync:completed", () => {
-    clearLibraryListCache();
-    void fetchSeries();
-  });
+  useRealtime("sync:completed", fetchSeries);
 
   useListFetch(fetchSeries);
 

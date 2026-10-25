@@ -26,7 +26,7 @@ import { EmptyState } from "@/components/empty-state";
 import { MediaGridSkeleton } from "@/components/skeletons";
 import { LibraryTabs, SERIES_TABS } from "@/components/library-tabs";
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
-import { clearLibraryListCache, loadCachedList } from "@/lib/media/list-cache";
+import { loadCachedList } from "@/lib/media/list-cache";
 
 interface SeasonEntry {
   parentTitle: string;
@@ -272,11 +272,7 @@ export default function AllSeasonsPage() {
   useListFetch(fetchSeasons);
 
   // Auto-update when real-time sync adds/removes items — no manual refresh.
-  // A sync changes the lists, so every cached one goes before the refetch.
-  useRealtime("sync:completed", () => {
-    clearLibraryListCache();
-    void fetchSeasons();
-  });
+  useRealtime("sync:completed", fetchSeasons);
 
   const toggleSort = (field: string) => {
     if (sortBy === field) {

@@ -41,13 +41,18 @@ export default function EpisodeDetailPage() {
     return label ? { href: from, label } : null;
   }, [searchParams]);
 
+  // The Arr/Seerr cards need only the id, so their requests start beside the
+  // record's instead of after it renders. Once per id, not on every refetch
+  // the sync tick causes: the cards read only on mount, so a later prefetch
+  // would never be taken.
+  useEffect(() => {
+    prefetchMediaDetail(id, { mediaType: "SERIES", plays: false });
+  }, [id]);
+
   useEffect(() => {
     const token = ++reqToken.current;
     async function fetchItem() {
       try {
-        // The play history and the Arr/Seerr cards need only the id, so
-        // their requests start beside the record's instead of after it renders.
-        prefetchMediaDetail(id, { mediaType: "SERIES", plays: false });
         const { body: data } = await detailPrefetch.fetch<{ item?: MediaItemWithRelations; playServers?: PlayServer[] }>(mediaRecordUrl(id));
         if (token !== reqToken.current) return;
         if (data?.item) {

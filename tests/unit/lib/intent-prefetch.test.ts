@@ -33,15 +33,22 @@ describe("intentHandlers", () => {
     expect(onIntent).not.toHaveBeenCalled();
   });
 
-  it("waits for a press on touch, and fires at once on a press or focus", () => {
+  it("fires at once on a mouse or pen press, or focus", () => {
+    const onIntent = vi.fn();
+    const h = intentHandlers(onIntent);
+    h.onPointerDown!({ pointerType: "mouse" });
+    h.onPointerDown!({ pointerType: "pen" });
+    h.onFocus!();
+    expect(onIntent).toHaveBeenCalledTimes(3);
+  });
+
+  it("starts nothing for touch, whose press also begins every scroll", () => {
     const onIntent = vi.fn();
     const h = intentHandlers(onIntent);
     h.onPointerEnter!({ pointerType: "touch", currentTarget: element() });
     vi.advanceTimersByTime(INTENT_DELAY_MS * 2);
+    h.onPointerDown!({ pointerType: "touch" });
     expect(onIntent).not.toHaveBeenCalled();
-    h.onPointerDown!();
-    h.onFocus!();
-    expect(onIntent).toHaveBeenCalledTimes(2);
   });
 
   it("restarts the wait when the pointer re-enters", () => {

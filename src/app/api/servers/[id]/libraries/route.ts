@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { invalidateMediaCaches } from "@/lib/cache/invalidate";
+import { eventBus } from "@/lib/events/event-bus";
 import { createMediaServerClient } from "@/lib/media-server/factory";
 import { validateRequest, serverLibraryUpdateSchema } from "@/lib/validation";
 
@@ -106,8 +107,10 @@ export async function PUT(
     }
   }
 
-  // A library turned on or off changes what every listing and figure holds.
+  // A library turned on or off changes what every listing and figure holds —
+  // here, and in the browser, whose list cache drops on `server:changed`.
   invalidateMediaCaches();
+  eventBus.emit({ type: "server:changed", userId: session.userId!, meta: { serverId: server.id } });
 
   const updated = await prisma.library.findMany({
     where: { mediaServerId: server.id },

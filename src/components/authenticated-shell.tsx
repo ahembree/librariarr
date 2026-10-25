@@ -13,10 +13,32 @@ import { ReauthDialogHost } from "@/components/reauth-dialog-host";
 import { WhatsNewDialog } from "@/components/whats-new-dialog";
 import { findScrollContainer } from "@/lib/scroll-utils";
 import { useScrollToTop } from "@/hooks/use-scroll-to-top";
-import { useRealtime } from "@/hooks/use-realtime";
+import { beforeRealtimeEvents, useRealtime } from "@/hooks/use-realtime";
 import { clearLibraryListCache } from "@/lib/media/list-cache";
+import { detailPrefetch } from "@/lib/media/detail-prefetch";
 import { useShellSettings } from "@/components/shell-settings-provider";
 import { WifiOff } from "lucide-react";
+
+/**
+ * The library pages keep the lists they loaded (`list-cache.ts`) and the
+ * detail views take hover-prefetched records (`detail-prefetch.ts`). Anything
+ * that changes the media drops both, before any page's own refetch for the same
+ * event reads them (`beforeRealtimeEvents`), and on a reconnect's resync, which
+ * stands for every event missed.
+ */
+function dropClientMediaCaches(): void {
+  clearLibraryListCache();
+  detailPrefetch.clear();
+}
+beforeRealtimeEvents(
+  ["sync:completed", "watch-history:updated", "server:changed", "settings:changed"],
+  dropClientMediaCaches,
+);
+
+// The shell's listeners for those events do nothing themselves: the drop runs
+// before every listener, and a second drop here would come after a page's
+// refetch had started and keep its answer out of the list cache.
+function keepAttached(): void {}
 
 interface UnreachableServer {
   id: string;
@@ -58,14 +80,12 @@ export function AuthenticatedShell({
   // route change.
   const { connected: realtimeConnected, authExpired } = useRealtime("settings:changed", checkMaintenance);
 
-  // The library pages keep the lists they loaded (`list-cache.ts`) so coming
-  // back to one paints at once. A mounted page clears them before its own
-  // `sync:completed` refetch; these catch what changes a list while no library
-  // page is mounted to hear it — and, on a reconnect, every event missed.
-  useRealtime("sync:completed", clearLibraryListCache);
-  useRealtime("watch-history:updated", clearLibraryListCache);
-  useRealtime("server:changed", clearLibraryListCache);
-  useRealtime("settings:changed", clearLibraryListCache);
+  // Keep a listener on each event that drops the client caches, so
+  // `dropClientMediaCaches` runs even while no page subscribes to it.
+  useRealtime("sync:completed", keepAttached);
+  useRealtime("watch-history:updated", keepAttached);
+  useRealtime("server:changed", keepAttached);
+  useRealtime("settings:changed", keepAttached);
 
   // A media server's socket dropping or recovering now arrives as a push
   // (bridged from realtimeBus); previously this banner waited on the sidebar's

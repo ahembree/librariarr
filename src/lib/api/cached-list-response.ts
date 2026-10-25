@@ -2,9 +2,11 @@ import { gunzip } from "node:zlib";
 import { promisify } from "node:util";
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
+import { withSharedSession } from "@/lib/auth/shared-session";
 import { appCache } from "@/lib/cache/memory-cache";
 import { LIST_RESPONSE_CACHE_PREFIX } from "@/lib/cache/list-response-prefix";
 import { acceptsGzip } from "@/lib/api/json-response";
+import { sortedQueryString } from "@/lib/sorted-query";
 
 const gunzipAsync = promisify(gunzip);
 
@@ -39,9 +41,11 @@ const PER_RESPONSE_HEADERS = new Set(["content-encoding", "content-length", "var
 
 /**
  * The keys stored, oldest first, so the oldest can be dropped past the bound.
- * A key `invalidateMediaCaches()` already removed may linger here; dropping it
- * again is a no-op. Pinned to `globalThis` like `appCache` itself, so every
- * module copy bounds the same set of entries.
+ * A key `invalidateMediaCaches()` already removed may linger here; such a key
+ * is forgotten without touching `appCache`, since the same listing may be
+ * recomputing under it and invalidating would throw that run's result away.
+ * Pinned to `globalThis` like `appCache` itself, so every module copy bounds
+ * the same set of entries.
  */
 const globalForListKeys = globalThis as unknown as { listResponseCacheKeys: Set<string> | undefined };
 const storedKeys = (globalForListKeys.listResponseCacheKeys ??= new Set<string>());
@@ -49,6 +53,10 @@ const storedKeys = (globalForListKeys.listResponseCacheKeys ??= new Set<string>(
 function remember(key: string): void {
   storedKeys.delete(key);
   storedKeys.add(key);
+  // Keys whose entry is already gone (invalidated or expired) hold no space.
+  for (const stored of storedKeys) {
+    if (stored !== key && appCache.get(stored) === undefined) storedKeys.delete(stored);
+  }
   while (storedKeys.size > LIST_RESPONSE_CACHE_MAX_ENTRIES) {
     const oldest = storedKeys.values().next().value;
     if (oldest === undefined) break;
@@ -63,10 +71,7 @@ function remember(key: string): void {
  * One admin owns every server (see "Single-user model"), so no user is in it.
  */
 export function listCacheKey(name: string, url: string): string {
-  const params = [...new URL(url).searchParams.entries()].sort(([a, av], [b, bv]) =>
-    a === b ? (av < bv ? -1 : av > bv ? 1 : 0) : a < b ? -1 : 1,
-  );
-  return `${LIST_RESPONSE_CACHE_PREFIX}${name}?${new URLSearchParams(params).toString()}`;
+  return `${LIST_RESPONSE_CACHE_PREFIX}${name}?${sortedQueryString(new URL(url).searchParams)}`;
 }
 
 /**
@@ -90,7 +95,11 @@ export function withListResponseCache(
   name: string,
   handler: (request: NextRequest) => Promise<Response>,
 ): (request: NextRequest) => Promise<Response> {
-  return async function cachedListGet(request: NextRequest): Promise<Response> {
+  // One session read for the request: the handler's own `getSession()` on a
+  // miss reads through the same memo instead of checking the cookie again.
+  return (request: NextRequest) => withSharedSession(() => cachedListGet(request));
+
+  async function cachedListGet(request: NextRequest): Promise<Response> {
     const session = await getSession();
     if (!session.isLoggedIn) return handler(request);
 
@@ -119,7 +128,7 @@ export function withListResponseCache(
     );
 
     return toResponse(request, stored);
-  };
+  }
 }
 
 async function toResponse(request: Request, stored: StoredResponse): Promise<Response> {

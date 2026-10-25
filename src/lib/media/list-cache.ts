@@ -17,6 +17,8 @@
  *   filter typed letter by letter cannot keep a library per keystroke.
  */
 
+import { sortedQueryString } from "@/lib/sorted-query";
+
 export const LIST_FRESH_MS = 60_000;
 export const LIST_MAX_AGE_MS = 15 * 60_000;
 const MAX_ENTRIES = 6;
@@ -34,8 +36,15 @@ export interface CachedList<T> {
 
 export interface ListCache {
   get<T>(key: string): CachedList<T> | undefined;
-  set(key: string, value: unknown): void;
+  /**
+   * Store `value` — unless the cache was cleared since `generation` was read.
+   * A request started before a clear answers with the list as it was before
+   * whatever the clear was for; stored, it would read as fresh.
+   */
+  set(key: string, value: unknown, generation?: number): void;
   clear(): void;
+  /** Bumped by every `clear`; read it when a request starts and pass it to `set`. */
+  generation(): number;
 }
 
 export function createListCache(
@@ -43,6 +52,7 @@ export function createListCache(
   now: () => number = Date.now,
 ): ListCache {
   const entries = new Map<string, Entry>();
+  let currentGeneration = 0;
   return {
     get<T>(key: string) {
       const entry = entries.get(key);
@@ -57,7 +67,8 @@ export function createListCache(
       entries.set(key, entry);
       return { value: entry.value as T, fresh: age <= freshMs };
     },
-    set(key, value) {
+    set(key, value, generation) {
+      if (generation !== undefined && generation !== currentGeneration) return;
       entries.delete(key);
       entries.set(key, { value, storedAt: now() });
       while (entries.size > maxEntries) {
@@ -68,6 +79,10 @@ export function createListCache(
     },
     clear() {
       entries.clear();
+      currentGeneration++;
+    },
+    generation() {
+      return currentGeneration;
     },
   };
 }
@@ -80,10 +95,7 @@ export function clearLibraryListCache(): void {
 
 /** `url?params` with the parameters sorted, so their order never splits an entry. */
 export function listCacheKeyFor(url: string, params: URLSearchParams): string {
-  const sorted = [...params.entries()].sort(([a, av], [b, bv]) =>
-    a === b ? (av < bv ? -1 : av > bv ? 1 : 0) : a < b ? -1 : 1,
-  );
-  return `${url}?${new URLSearchParams(sorted).toString()}`;
+  return `${url}?${sortedQueryString(params)}`;
 }
 
 /**
@@ -99,6 +111,7 @@ export async function loadCachedList<T>(
   cache: ListCache = libraryListCache,
 ): Promise<void> {
   const key = listCacheKeyFor(url, params);
+  const generation = cache.generation();
   const cached = cache.get<T>(key);
   if (cached) {
     onData(cached.value);
@@ -107,6 +120,6 @@ export async function loadCachedList<T>(
   const response = await fetch(`${url}?${params}`);
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   const data = (await response.json()) as T;
-  cache.set(key, data);
+  cache.set(key, data, generation);
   onData(data);
 }

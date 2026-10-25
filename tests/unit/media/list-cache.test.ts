@@ -48,6 +48,19 @@ describe("createListCache", () => {
     expect(cache.get("c")?.value).toBe(3);
   });
 
+  it("does not store what was read before a clear", () => {
+    const cache = createListCache();
+    const before = cache.generation();
+    cache.clear();
+    cache.set("a", "old", before);
+    expect(cache.get("a")).toBeUndefined();
+    cache.set("a", "new", cache.generation());
+    expect(cache.get("a")?.value).toBe("new");
+    // Without a generation the value is stored as before.
+    cache.set("b", 1);
+    expect(cache.get("b")?.value).toBe(1);
+  });
+
   it("clear empties it", () => {
     const cache = createListCache();
     cache.set("a", 1);
@@ -91,6 +104,18 @@ describe("loadCachedList", () => {
   it("rejects on an error status and keeps nothing", async () => {
     fetchMock.mockResolvedValueOnce(respond({ error: "x" }, 500));
     await expect(loadCachedList("/l", new URLSearchParams(), () => {})).rejects.toThrow("HTTP 500");
+    expect(libraryListCache.get("/l?")).toBeUndefined();
+  });
+
+  it("hands over but does not store an answer that crossed a clear", async () => {
+    let resolve!: (v: unknown) => void;
+    fetchMock.mockReturnValueOnce(new Promise((r) => { resolve = r; }));
+    const seen: unknown[] = [];
+    const pending = loadCachedList("/l", new URLSearchParams(), (d) => seen.push(d));
+    clearLibraryListCache();
+    resolve(respond({ v: "pre-sync" }));
+    await pending;
+    expect(seen).toEqual([{ v: "pre-sync" }]);
     expect(libraryListCache.get("/l?")).toBeUndefined();
   });
 
