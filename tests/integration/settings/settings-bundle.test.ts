@@ -5,15 +5,6 @@ import { callRoute, expectJson, createTestUser, createTestServer } from "../../s
 
 const failing = vi.hoisted(() => ({ titlePreference: false }));
 
-// The backup listing reads BACKUP_DIR once, when the service loads, and the
-// default `/config/backups` is not writable on every machine the suite runs on.
-await vi.hoisted(async () => {
-  const fs = await import("fs/promises");
-  const os = await import("os");
-  const path = await import("path");
-  process.env.BACKUP_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "librariarr-settings-bundle-"));
-});
-
 vi.mock("@/lib/db", async () => {
   const { getTestPrisma } = await import("../../setup/test-db");
   return { prisma: getTestPrisma() };
