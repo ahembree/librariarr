@@ -38,6 +38,11 @@ class FakeEventSource {
   emit(type: string, data: string) {
     for (const fn of this.listeners.get(type) ?? []) fn({ data } as MessageEvent);
   }
+  /** As the browser dispatches: ONE event object handed to every listener. */
+  dispatch(type: string, data: string) {
+    const event = { data } as MessageEvent;
+    for (const fn of this.listeners.get(type) ?? []) fn(event);
+  }
   open() {
     this.readyState = FakeEventSource.OPEN;
     this.onopen?.();
@@ -50,6 +55,7 @@ class FakeEventSource {
 
 const fetchMock = vi.fn();
 let useRealtime: typeof import("@/hooks/use-realtime").useRealtime;
+let beforeRealtimeEvents: typeof import("@/hooks/use-realtime").beforeRealtimeEvents;
 
 const latest = () => FakeEventSource.instances.at(-1)!;
 
@@ -60,7 +66,7 @@ beforeEach(async () => {
   vi.stubGlobal("EventSource", FakeEventSource);
   vi.stubGlobal("fetch", fetchMock);
   vi.useFakeTimers();
-  ({ useRealtime } = await import("@/hooks/use-realtime"));
+  ({ useRealtime, beforeRealtimeEvents } = await import("@/hooks/use-realtime"));
 });
 
 afterEach(() => {
@@ -191,6 +197,76 @@ describe("useRealtime ref count and idle close", () => {
     expect(FakeEventSource.instances).toHaveLength(2);
     act(() => latest().open());
     expect(cb).not.toHaveBeenCalled();
+  });
+});
+
+describe("beforeRealtimeEvents", () => {
+  it("runs once per event, before every subscriber, whichever subscribed first", () => {
+    const order: string[] = [];
+    // The page subscribes before the shell's registration exists in the order
+    // that matters: a pre-handler must still run ahead of it.
+    renderHook(() => useRealtime("sync:completed", () => order.push("page")));
+    beforeRealtimeEvents(["sync:completed"], () => order.push("drop"));
+    renderHook(() => useRealtime("sync:completed", () => order.push("shell")));
+    act(() => latest().dispatch("sync:completed", "{}"));
+    expect(order).toEqual(["drop", "page", "shell"]);
+  });
+
+  it("runs with no subscriber for its event type, on a source opened before or after it registered", async () => {
+    const drop = vi.fn();
+    renderHook(() => useRealtime("other", () => {}));
+    // Registered with the source already open.
+    beforeRealtimeEvents(["lonely"], drop);
+    act(() => latest().dispatch("lonely", "{}"));
+    expect(drop).toHaveBeenCalledTimes(1);
+    // And re-attached to the source that replaces it.
+    act(() => latest().open());
+    await act(async () => latest().fail(true));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    expect(FakeEventSource.instances).toHaveLength(2);
+    drop.mockClear();
+    act(() => latest().dispatch("lonely", "{}"));
+    expect(drop).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs only for its own event types, and stops once unregistered", () => {
+    const drop = vi.fn();
+    const off = beforeRealtimeEvents(["a"], drop);
+    renderHook(() => useRealtime("a", () => {}));
+    renderHook(() => useRealtime("b", () => {}));
+    act(() => latest().dispatch("b", "{}"));
+    expect(drop).not.toHaveBeenCalled();
+    act(() => latest().dispatch("a", "{}"));
+    expect(drop).toHaveBeenCalledTimes(1);
+    off();
+    act(() => latest().dispatch("a", "{}"));
+    expect(drop).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not stop the event reaching subscribers when it throws", () => {
+    beforeRealtimeEvents(["a"], () => {
+      throw new Error("boom");
+    });
+    const cb = vi.fn();
+    renderHook(() => useRealtime("a", cb));
+    act(() => latest().dispatch("a", '{"n":1}'));
+    expect(cb).toHaveBeenCalledWith({ n: 1 });
+  });
+
+  it("runs once before a reconnect's resync", async () => {
+    const order: string[] = [];
+    beforeRealtimeEvents(["a", "b"], () => order.push("drop"));
+    renderHook(() => useRealtime("a", () => order.push("a")));
+    renderHook(() => useRealtime("b", () => order.push("b")));
+    act(() => latest().open());
+    await act(async () => latest().fail(true));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    act(() => latest().open());
+    expect(order).toEqual(["drop", "a", "b"]);
   });
 });
 

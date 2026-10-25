@@ -33,6 +33,7 @@ import { sameFilters } from "@/lib/filters/same-filters";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useListFetch } from "@/hooks/use-list-fetch";
 import { useDeferredOverscan } from "@/hooks/use-deferred-overscan";
+import { loadCachedList } from "@/lib/media/list-cache";
 
 interface GroupedSeries {
   parentTitle: string;
@@ -211,6 +212,8 @@ export default function SeriesPage() {
   const fetchSeries = useCallback(async () => {
     const token = ++reqToken.current;
     setLoading(true);
+    // Set once this request's list is on screen, from the cache or the server.
+    let applied = false;
     try {
       const params = new URLSearchParams();
       params.set("sortBy", sortBy);
@@ -227,15 +230,22 @@ export default function SeriesPage() {
       for (const [key, value] of Object.entries(filters)) {
         if (value) params.set(key, value);
       }
-      const response = await fetch(`/api/media/series/grouped?${params}`);
-      const data = await response.json();
-      if (token !== reqToken.current) return;
-      startTransition(() => {
-        setSeriesList(data.series || []);
-        setLoading(false);
+      // Through the tab's list cache: a list loaded in the last minute is
+      // shown at once, an older one shown and then refreshed behind it.
+      await loadCachedList<{ series?: typeof seriesList }>("/api/media/series/grouped", params, (data) => {
+        if (token !== reqToken.current) return;
+        applied = true;
+        startTransition(() => {
+          setSeriesList(data.series || []);
+          setLoading(false);
+        });
       });
     } catch (error) {
       console.error("Failed to fetch series:", error);
+      // A failed load with nothing shown for it empties the list, as it did
+      // before the cache: the previous list under the new filters would read
+      // as their result.
+      if (!applied && token === reqToken.current) setSeriesList([]);
       if (token === reqToken.current) setLoading(false);
     }
   }, [sortBy, sortOrder, selectedServerId, filters]);
@@ -443,6 +453,7 @@ export default function SeriesPage() {
                             title={s.parentTitle}
                             fallbackIcon="series"
                             href={`/library/series/show/${s.mediaItemId}`}
+                            prefetchMediaId={s.mediaItemId}
                             onClick={() => { markChildNavigation(); }}
                             metadata={
                               <MetadataLine stacked>

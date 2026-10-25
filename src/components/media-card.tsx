@@ -3,6 +3,8 @@
 import { useState, memo } from "react";
 import type { ReactNode } from "react";
 import Link from "next/link";
+import { intentHandlers } from "@/lib/intent-prefetch";
+import { prefetchMediaRecord } from "@/lib/media/detail-prefetch";
 import { cn } from "@/lib/utils";
 import type { QualitySegment } from "@/lib/media/quality-chips";
 import { Card } from "@/components/ui/card";
@@ -83,6 +85,12 @@ interface MediaCardProps {
   /** Set on the first rows of a grid so the artwork the user is actually
    *  looking at loads eagerly instead of queuing behind off-screen cards. */
   priority?: boolean;
+  /**
+   * The media item the card opens. Its record is fetched when the pointer
+   * rests on the card (or it is pressed or focused), so the detail page or
+   * panel the click opens finds it already loaded.
+   */
+  prefetchMediaId?: string;
 }
 
 const FALLBACK_ICONS = {
@@ -105,9 +113,12 @@ export const MediaCard = memo(function MediaCard({
   fallbackIcon = "movie",
   hoverContent,
   priority = false,
+  prefetchMediaId,
 }: MediaCardProps) {
   const [imgError, setImgError] = useState(false);
   const FallbackComponent = FALLBACK_ICONS[fallbackIcon];
+
+  const intent = intentHandlers(prefetchMediaId ? () => prefetchMediaRecord(prefetchMediaId) : undefined);
 
   const card = (
     <Card
@@ -116,6 +127,7 @@ export const MediaCard = memo(function MediaCard({
         !href && "focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none",
       )}
       {...(!href && {
+        ...intent,
         onClick,
         onKeyDown: (e: React.KeyboardEvent) => {
           if (e.key === "Enter" || e.key === " ") {
@@ -202,6 +214,7 @@ export const MediaCard = memo(function MediaCard({
     <Link
       href={href}
       onClick={onClick}
+      {...intent}
       className="block rounded-xl focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
     >
       {card}

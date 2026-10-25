@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { fetchListProgressively, FIRST_CHUNK_SIZE } from "@/lib/media/progressive-load";
+import { clearLibraryListCache, createListCache, LIST_FRESH_MS } from "@/lib/media/list-cache";
 
 const item = (id: number) => ({ id: `i${id}` });
 
@@ -17,7 +18,10 @@ function stubFetch(responses: Array<{ status?: number; body?: unknown }>) {
 }
 
 describe("fetchListProgressively", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    clearLibraryListCache();
+  });
   afterEach(() => vi.unstubAllGlobals());
 
   it("emits the first screenful before the rest", async () => {
@@ -125,7 +129,8 @@ describe("fetchListProgressively", () => {
     await fetchListProgressively("/api/media/movies", new URLSearchParams(), () => {});
     expect(shortUrls).toHaveLength(1);
 
-    // A full page may have more behind it.
+    // A full page may have more behind it. (The list just loaded is cached.)
+    clearLibraryListCache();
     const first = Array.from({ length: FIRST_CHUNK_SIZE }, (_, i) => item(i));
     const fullUrls = stubFetch([{ body: { items: first } }, { body: { items: [item(1000)] } }]);
     const chunks: boolean[] = [];
@@ -167,5 +172,51 @@ describe("fetchListProgressively", () => {
     // The user still has a usable list rather than an empty page.
     expect(onChunk).toHaveBeenCalledTimes(1);
     expect(onChunk).toHaveBeenCalledWith(first, false);
+  });
+
+  it("does not store a list whose second pass crossed a clear", async () => {
+    const first = Array.from({ length: FIRST_CHUNK_SIZE }, (_, i) => item(i));
+    let resolveRest!: (v: unknown) => void;
+    const fn = vi.fn(async (url: string) => {
+      if (url.includes("offset=")) {
+        const body = await new Promise((r) => { resolveRest = r; });
+        return { ok: true, status: 200, json: async () => body } as Response;
+      }
+      return { ok: true, status: 200, json: async () => ({ items: first, pagination: { hasMore: true } }) } as Response;
+    });
+    vi.stubGlobal("fetch", fn);
+    const pending = fetchListProgressively("/api/media/movies", new URLSearchParams(), () => {});
+    await vi.waitFor(() => expect(fn).toHaveBeenCalledTimes(2));
+    clearLibraryListCache();
+    resolveRest({ items: [item(1000)] });
+    await pending;
+    const seen: boolean[] = [];
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ items: [] }) }) as unknown as Response));
+    await fetchListProgressively("/api/media/movies", new URLSearchParams(), (_, done) => seen.push(done));
+    // Not served from the cache: the stale list was never stored.
+    expect(seen).toEqual([true]);
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes a stale list through the two requests a first load makes, handing over only the whole list", async () => {
+    let now = 0;
+    const cache = createListCache({}, () => now);
+    const first = Array.from({ length: FIRST_CHUNK_SIZE }, (_, i) => item(i));
+    const firstLoad = stubFetch([{ body: { items: first } }, { body: { items: [item(1000)] } }]);
+    await fetchListProgressively("/api/media/movies", new URLSearchParams("sortBy=title"), () => {}, cache);
+    now = LIST_FRESH_MS + 1;
+    const refreshed = Array.from({ length: FIRST_CHUNK_SIZE }, (_, i) => item(i + 5000));
+    const refreshUrls = stubFetch([{ body: { items: refreshed } }, { body: { items: [item(9999)] } }]);
+    const chunks: Array<{ n: number; done: boolean }> = [];
+    await fetchListProgressively("/api/media/movies", new URLSearchParams("sortBy=title"), (items, done) =>
+      chunks.push({ n: items.length, done }),
+    cache);
+    // The same URLs the first load asked for — the keys the server cached.
+    expect(refreshUrls).toEqual(firstLoad);
+    // The stale list at once, then the refreshed whole list; never a first screenful.
+    expect(chunks).toEqual([
+      { n: FIRST_CHUNK_SIZE + 1, done: true },
+      { n: FIRST_CHUNK_SIZE + 1, done: true },
+    ]);
   });
 });

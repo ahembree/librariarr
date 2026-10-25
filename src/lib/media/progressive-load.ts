@@ -12,6 +12,8 @@
  * splitting their fetch would run that aggregation twice for no earlier paint.
  */
 
+import { libraryListCache, listCacheKeyFor, type ListCache } from "./list-cache";
+
 /**
  * Rows in the first pass. Comfortably more than a viewport at any card size or
  * table density, so the second pass lands well before the user scrolls past it.
@@ -39,7 +41,47 @@ export async function fetchListProgressively<T>(
   url: string,
   params: URLSearchParams,
   onChunk: (items: T[], done: boolean) => void,
+  cache: ListCache = libraryListCache,
 ): Promise<void> {
+  // A list this tab loaded recently is shown whole at once (see
+  // `list-cache.ts`); one past fresh is then refreshed behind it through the
+  // same two requests a first load makes — the server keeps its answers to
+  // those (`withListResponseCache`), and a single `limit=0` request would miss
+  // them — and handed over once complete, never as a first screenful after
+  // the whole list.
+  const listParams = new URLSearchParams(params);
+  listParams.delete("offset");
+  listParams.delete("page");
+  listParams.delete("limit");
+  const key = listCacheKeyFor(url, listParams);
+  // Read before any request: a clear while one is in flight bumps it, and the
+  // answer is then handed to the caller but not stored.
+  const generation = cache.generation();
+  const cached = cache.get<T[]>(key);
+  if (cached) {
+    onChunk(cached.value, true);
+    if (cached.fresh) return;
+    const { items } = await fetchBothPasses<T>(url, params);
+    cache.set(key, items, generation);
+    onChunk(items, true);
+    return;
+  }
+
+  const { items, firstWasAll } = await fetchBothPasses<T>(url, params, onChunk);
+  cache.set(key, items, generation);
+  if (!firstWasAll) onChunk(items, true);
+}
+
+/**
+ * The first screenful, then everything after it. `onFirst` sees the first
+ * screenful (with `done` when it was the whole list); the result is the whole
+ * list either way.
+ */
+async function fetchBothPasses<T>(
+  url: string,
+  params: URLSearchParams,
+  onFirst?: (items: T[], done: boolean) => void,
+): Promise<{ items: T[]; firstWasAll: boolean }> {
   const firstParams = new URLSearchParams(params);
   firstParams.delete("offset");
   firstParams.set("page", "1");
@@ -52,8 +94,8 @@ export async function fetchListProgressively<T>(
 
   // Trust hasMore when the endpoint sends it; fall back to a short page.
   const hasMore = firstBody.pagination?.hasMore ?? firstItems.length >= FIRST_CHUNK_SIZE;
-  onChunk(firstItems, !hasMore);
-  if (!hasMore) return;
+  onFirst?.(firstItems, !hasMore);
+  if (!hasMore) return { items: firstItems, firstWasAll: true };
 
   const restParams = new URLSearchParams(params);
   restParams.delete("page");
@@ -63,5 +105,5 @@ export async function fetchListProgressively<T>(
   const restResponse = await fetch(`${url}?${restParams}`);
   if (!restResponse.ok) throw new Error(`HTTP ${restResponse.status}`);
   const restBody = (await restResponse.json()) as ListResponse<T>;
-  onChunk([...firstItems, ...(restBody.items ?? [])], true);
+  return { items: [...firstItems, ...(restBody.items ?? [])], firstWasAll: false };
 }

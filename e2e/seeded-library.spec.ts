@@ -20,6 +20,12 @@ test.describe("populated library", () => {
     await seedMovieLibrary();
   });
 
+  // The rows went in past the app, so a listing an earlier spec cached over the
+  // empty database (the server keeps one for a minute) must go first.
+  test.beforeEach(async ({ page }) => {
+    await dropAppCaches(page.request);
+  });
+
   test.afterAll(async () => {
     await cleanupSeed();
   });
@@ -77,7 +83,6 @@ test.describe("populated library", () => {
   });
 
   test("the filters panel opens with the seeded library's facets", async ({ page }) => {
-    await dropAppCaches(page.request);
     await page.goto("/library/movies");
     await expect(page.getByText(SEED.movieTitle).first()).toBeVisible();
     await page.getByRole("button", { name: /^Filters$/i }).click();

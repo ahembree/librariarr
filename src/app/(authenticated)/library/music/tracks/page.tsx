@@ -290,6 +290,7 @@ export default function AllTracksPage() {
                         aspectRatio="square"
                         fallbackIcon="music"
                         href={`/library/music/track/${track.id}?from=${encodeURIComponent("/library/music/tracks")}`}
+                        prefetchMediaId={track.id}
                         onClick={markChildNavigation}
                         qualityBar={qualitySegments(qualityChips(track, "music"), getHex, (toggle) => show("badges", toggle))}
                         hoverContent={

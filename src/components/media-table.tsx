@@ -38,6 +38,8 @@ import { useShellSettings, useShellSnapshot } from "@/components/shell-settings-
 import { toast } from "sonner";
 import { formatFileSize, formatDuration, formatDate, formatDateOnly } from "@/lib/format";
 import { formatEpisodeCode } from "@/lib/media/display-title";
+import { intentHandlers } from "@/lib/intent-prefetch";
+import { prefetchMediaRecord } from "@/lib/media/detail-prefetch";
 
 /**
  * Generic over the row type so callers keep whatever they actually have.
@@ -774,6 +776,9 @@ function MediaTableInner<T extends MediaListItem>({ items, onItemClick, sortBy, 
                       <TableRow
                         data-index={virtualRow.index}
                         onClick={() => onItemClick(item)}
+                        // A row opens its item — a detail page or the side
+                        // panel — and both read the item's record by this id.
+                        {...intentHandlers(() => prefetchMediaRecord(item.id))}
                         className={`cursor-pointer transition-colors duration-200 hover:bg-white/3 even:bg-white/1.5 hover:ring-1 hover:ring-primary/20 ${rowClassName?.(item) ?? ""}`}
                       >
                         {/* Title cell - always shown */}

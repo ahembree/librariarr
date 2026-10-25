@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
+import { withListResponseCache } from "@/lib/api/cached-list-response";
 import { jsonResponse, mapInSlices } from "@/lib/api/json-response";
 import { prisma } from "@/lib/db";
 import { escapeLike } from "@/lib/filters/escape-like";
@@ -59,7 +60,7 @@ async function findInOrder<T extends { id: string }>(
   return ids.map((id) => byId.get(id)).filter((row): row is T => row !== undefined);
 }
 
-export async function GET(request: NextRequest) {
+async function listGet(request: NextRequest) {
   const session = await getSession();
   if (!session.isLoggedIn) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -212,3 +213,9 @@ export async function GET(request: NextRequest) {
     pagination: { page, limit, hasMore },
   });
 }
+
+/**
+ * Answered from the list response cache when the same listing was asked for
+ * in the last minute (`withListResponseCache`).
+ */
+export const GET = withListResponseCache("media-movies", listGet);

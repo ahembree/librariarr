@@ -70,6 +70,7 @@ const MovieGridCard = memo(function MovieGridCard({ movie, priority, show, getHe
       title={movie.title}
       fallbackIcon="movie"
       href={`/library/movies/${movie.id}`}
+      prefetchMediaId={movie.id}
       onClick={onNavigate}
       metadata={
         <MetadataLine stacked>

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { detailPrefetch, mediaPlaysUrl, PLAY_HISTORY_PAGE_SIZE } from "@/lib/media/detail-prefetch";
 import Link from "next/link";
 import {
   CircleCheck,
@@ -20,7 +21,7 @@ import { SERVER_TYPE_STYLES, DEFAULT_SERVER_STYLE } from "@/lib/server-styles";
 import { cn } from "@/lib/utils";
 
 /** How many plays one page shows; the footer steps between pages. */
-const PAGE_SIZE = 5;
+const PAGE_SIZE = PLAY_HISTORY_PAGE_SIZE;
 
 interface WatchHistoryRow {
   id: string;
@@ -815,18 +816,20 @@ export function PlayHistory({
 
   const fetchPage = useCallback(
     async (target: number): Promise<WatchHistoryResponse> => {
-      const params = new URLSearchParams({
-        page: String(target),
-        limit: String(PAGE_SIZE),
-      });
-      if (serverId) params.set("serverId", serverId);
-
       // Two scopes, two endpoints. An item id is the narrower and more
       // certain of the two, so it wins when both are somehow supplied.
       let url: string;
       if (mediaItemId) {
-        url = `/api/media/${mediaItemId}/plays?${params}`;
+        // The same URL `prefetchMediaDetail` starts, so a detail page's first
+        // page is taken from that request rather than asked for again — the
+        // one builder for this endpoint's paging parameters.
+        url = mediaPlaysUrl(mediaItemId, target, serverId ?? undefined);
       } else {
+        const params = new URLSearchParams({
+          page: String(target),
+          limit: String(PAGE_SIZE),
+        });
+        if (serverId) params.set("serverId", serverId);
         if (seriesKey) params.set("seriesKey", seriesKey);
         else if (parentTitle) params.set("parentTitle", parentTitle);
         if (seasonNumber != null) params.set("seasonNumber", String(seasonNumber));
@@ -834,9 +837,9 @@ export function PlayHistory({
         url = `/api/media/series/watch-history?${params}`;
       }
 
-      const res = await fetch(url);
-      if (!res.ok) throw new Error("Failed to load watch history");
-      return (await res.json()) as WatchHistoryResponse;
+      const res = await detailPrefetch.fetch<WatchHistoryResponse>(url);
+      if (!res.ok || !res.body) throw new Error("Failed to load watch history");
+      return res.body;
     },
     [mediaItemId, seriesKey, parentTitle, seasonNumber, episodeNumber, serverId],
   );

@@ -313,6 +313,7 @@ export default function AllEpisodesPage() {
                             aspectRatio="landscape"
                             fallbackIcon="series"
                             href={`/library/series/episode/${ep.id}?from=${encodeURIComponent("/library/series/episodes")}`}
+                            prefetchMediaId={ep.id}
                             onClick={markChildNavigation}
                             hoverContent={
                               <MediaHoverPopover

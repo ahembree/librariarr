@@ -27,6 +27,74 @@ const eventHandlers = new Map<string, Set<(e: MessageEvent) => void>>();
 // reconnected page can be correct is to refetch.
 const resyncListeners = new Set<() => void>();
 
+// Run before every subscriber's callback for their event types — once per
+// event, whichever subscriber's listener the event reaches first. EventSource
+// calls listeners in the order they were added, and that order is not stable
+// (a child's effect subscribes before its parent's on the first mount, after
+// it once the child is replaced on a navigation), so a cache the shell clears
+// in its own callback could be read by a page's refetch before the clear ran.
+const preHandlers = new Map<string, Set<() => void>>();
+const preHandledEvents = new WeakSet<Event>();
+
+// One listener per pre-handled type, kept so the same function can be attached
+// to every source and removed again. Whichever listener an event reaches
+// first — this one or a subscriber's — runs the pre-handlers, once.
+const preDispatchers = new Map<string, (e: MessageEvent) => void>();
+
+function preDispatcherFor(eventType: string): (e: MessageEvent) => void {
+  let dispatch = preDispatchers.get(eventType);
+  if (!dispatch) {
+    dispatch = (e: MessageEvent) => {
+      if (preHandledEvents.has(e)) return;
+      preHandledEvents.add(e);
+      runPreHandlers(preHandlers.get(eventType) ?? []);
+    };
+    preDispatchers.set(eventType, dispatch);
+  }
+  return dispatch;
+}
+
+/**
+ * Run `fn` before any subscriber's callback whenever one of `eventTypes`
+ * arrives, and once before a reconnect's resync. For dropping client-side
+ * caches the callbacks then refetch through. It has its own listener on the
+ * shared stream, so it runs whether or not anything subscribes to the event
+ * type — while the stream is open, which some subscriber keeps it. Returns the
+ * unregister function.
+ */
+export function beforeRealtimeEvents(eventTypes: readonly string[], fn: () => void): () => void {
+  for (const type of eventTypes) {
+    let set = preHandlers.get(type);
+    if (!set) {
+      set = new Set();
+      preHandlers.set(type, set);
+      sharedSource?.addEventListener(type, preDispatcherFor(type));
+    }
+    set.add(fn);
+  }
+  return () => {
+    for (const type of eventTypes) {
+      const set = preHandlers.get(type);
+      if (!set) continue;
+      set.delete(fn);
+      if (set.size === 0) {
+        preHandlers.delete(type);
+        sharedSource?.removeEventListener(type, preDispatcherFor(type));
+      }
+    }
+  };
+}
+
+function runPreHandlers(fns: Iterable<() => void>) {
+  for (const fn of fns) {
+    try {
+      fn();
+    } catch {
+      // A failing pre-handler must not stop the event reaching subscribers.
+    }
+  }
+}
+
 // A page-level subscriber unmounts before the next page's mounts on every
 // client-side navigation, so refCount transiently hits 0 on every route
 // change. Closing immediately tore the shared connection down and rebuilt it
@@ -107,6 +175,7 @@ function fireResync() {
   if (now - lastResyncAt < MIN_RESYNC_INTERVAL_MS) return;
   lastResyncAt = now;
 
+  runPreHandlers(new Set([...preHandlers.values()].flatMap((set) => [...set])));
   for (const listener of resyncListeners) {
     try {
       listener();
@@ -194,6 +263,10 @@ function createSource(): EventSource | null {
         scheduleReconnect();
       });
     };
+    // The pre-handlers' own listeners first, then every subscriber's.
+    for (const eventType of preHandlers.keys()) {
+      source.addEventListener(eventType, preDispatcherFor(eventType));
+    }
     // Re-attach any subscriber handlers to the new source.
     for (const [eventType, handlers] of eventHandlers) {
       for (const handler of handlers) {
@@ -341,6 +414,7 @@ export function useRealtime(
     }
 
     const handler = (e: MessageEvent) => {
+      preDispatcherFor(eventType)(e);
       try {
         const data = JSON.parse(e.data);
         callbackRef.current(data);

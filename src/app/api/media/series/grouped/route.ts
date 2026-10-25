@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
+import { withListResponseCache } from "@/lib/api/cached-list-response";
 import { jsonResponse } from "@/lib/api/json-response";
 import { MAX_GROUPED_LIST_LIMIT, parseListPagination } from "@/lib/api/pagination";
 import { prisma } from "@/lib/db";
@@ -195,7 +196,7 @@ function applySeriesFilters<T extends SeriesItem>(list: T[], params: URLSearchPa
   return result;
 }
 
-export async function GET(request: NextRequest) {
+async function listGet(request: NextRequest) {
   const session = await getSession();
   if (!session.isLoggedIn) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -462,3 +463,9 @@ export async function GET(request: NextRequest) {
   // `limit=0` is everything — after an explicit `offset`, as on the flat lists.
   return jsonResponse(request, { series: sorted.slice(skip), pagination: { page, limit, hasMore: false } });
 }
+
+/**
+ * Answered from the list response cache when the same listing was asked for
+ * in the last minute (`withListResponseCache`).
+ */
+export const GET = withListResponseCache("media-series-grouped", listGet);

@@ -3,6 +3,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook, act, waitFor } from "@testing-library/react";
 import { useMediaDetailPanel, MEDIA_DETAIL_PANEL_WIDTH_KEY } from "@/hooks/use-media-detail-panel";
 import type { MediaItemWithRelations } from "@/lib/types";
+import { detailPrefetch, prefetchMediaRecord } from "@/lib/media/detail-prefetch";
 
 const toastError = vi.hoisted(() => vi.fn());
 vi.mock("sonner", () => ({ toast: { error: toastError } }));
@@ -22,6 +23,7 @@ beforeEach(() => {
   fetchMock.mockReset();
   toastError.mockReset();
   vi.stubGlobal("fetch", fetchMock);
+  detailPrefetch.clear();
 });
 
 afterEach(() => {
@@ -29,6 +31,41 @@ afterEach(() => {
 });
 
 describe("useMediaDetailPanel", () => {
+  it("tells the panel the record is loaded, so its content does not fetch it again", async () => {
+    fetchMock.mockResolvedValue(respond({ item: record("a") }));
+    const { result } = renderHook(() => useMediaDetailPanel());
+    await act(() => result.current.open({ id: "a", mediaType: "MOVIE" }));
+    expect(result.current.panelProps?.detailLoaded).toBe(true);
+  });
+
+  it("hands the record fetch back to the panel's content when it fails over a seed", async () => {
+    fetchMock.mockResolvedValue({ ok: false, status: 500, json: async () => ({ error: "boom" }) });
+    const { result } = renderHook(() => useMediaDetailPanel());
+    const seed = record("a") as unknown as MediaItemWithRelations;
+    let pending!: Promise<void>;
+    act(() => {
+      pending = result.current.open({ id: "a", mediaType: "MOVIE", seed });
+    });
+    // While the hook's own request runs, the content must not ask too.
+    expect(result.current.panelProps?.detailLoaded).toBe(true);
+    await act(() => pending);
+    expect(result.current.panelProps?.item.id).toBe("a");
+    expect(result.current.panelProps?.detailLoaded).toBe(false);
+    expect(toastError).not.toHaveBeenCalled();
+  });
+
+  it("opens from a record a hover already fetched, without asking again", async () => {
+    fetchMock.mockResolvedValue(respond({ item: record("a") }));
+    prefetchMediaRecord("a");
+    const { result } = renderHook(() => useMediaDetailPanel());
+    await act(() => result.current.open({ id: "a", mediaType: "MOVIE" }));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result.current.panelProps?.item.title).toBe("Title a");
+    // Taken once: opening it again reads the current record.
+    await act(() => result.current.open({ id: "a", mediaType: "MOVIE" }));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it("opens with the fetched record", async () => {
     fetchMock.mockResolvedValue(respond({ item: record("a") }));
     const { result } = renderHook(() => useMediaDetailPanel());

@@ -24,6 +24,7 @@ describe("invalidateMediaCaches", () => {
           "recently-added:",
           "image-meta:",
           "query-action-live:",
+          "media-list:",
         ].sort(),
       );
     } finally {

@@ -13,6 +13,7 @@ import { ColorChip } from "@/components/color-chip";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatFileSize, formatDuration } from "@/lib/format";
 import type { MediaItemWithRelations } from "@/lib/types";
+import { detailPrefetch, mediaRecordUrl, prefetchMediaDetail } from "@/lib/media/detail-prefetch";
 import { type PlayServer, buildPlayLinks } from "@/lib/play-url";
 import { PlayHistory } from "@/components/play-history";
 
@@ -40,14 +41,21 @@ export default function EpisodeDetailPage() {
     return label ? { href: from, label } : null;
   }, [searchParams]);
 
+  // The Arr/Seerr cards need only the id, so their requests start beside the
+  // record's instead of after it renders. Once per id, not on every refetch
+  // the sync tick causes: the cards read only on mount, so a later prefetch
+  // would never be taken.
+  useEffect(() => {
+    prefetchMediaDetail(id, { mediaType: "SERIES", plays: false });
+  }, [id]);
+
   useEffect(() => {
     const token = ++reqToken.current;
     async function fetchItem() {
       try {
-        const res = await fetch(`/api/media/${id}`);
-        const data = await res.json();
+        const { body: data } = await detailPrefetch.fetch<{ item?: MediaItemWithRelations; playServers?: PlayServer[] }>(mediaRecordUrl(id));
         if (token !== reqToken.current) return;
-        if (data.item) {
+        if (data?.item) {
           setItem(data.item);
           setPlayServers(buildPlayLinks(data.playServers || [], [
             ["Episode", "ratingKey"],

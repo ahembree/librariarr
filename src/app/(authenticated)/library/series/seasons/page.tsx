@@ -26,6 +26,7 @@ import { EmptyState } from "@/components/empty-state";
 import { MediaGridSkeleton } from "@/components/skeletons";
 import { LibraryTabs, SERIES_TABS } from "@/components/library-tabs";
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
+import { loadCachedList } from "@/lib/media/list-cache";
 
 interface SeasonEntry {
   parentTitle: string;
@@ -247,6 +248,8 @@ export default function AllSeasonsPage() {
   const fetchSeasons = useCallback(async () => {
     const token = ++reqToken.current;
     setLoading(true);
+    // Set once this request's list is on screen, from the cache or the server.
+    let applied = false;
     try {
       const params = new URLSearchParams();
       params.set("sortBy", sortBy);
@@ -254,12 +257,20 @@ export default function AllSeasonsPage() {
       for (const [key, value] of Object.entries(filters)) {
         if (value) params.set(key, value);
       }
-      const response = await fetch(`/api/media/series/all-seasons?${params}`);
-      const data = await response.json();
-      if (token !== reqToken.current) return;
-      setSeasons(data.seasons || []);
+      // Through the tab's list cache: a list loaded in the last minute is
+      // shown at once, an older one shown and then refreshed behind it.
+      await loadCachedList<{ seasons?: typeof seasons }>("/api/media/series/all-seasons", params, (data) => {
+        if (token !== reqToken.current) return;
+        applied = true;
+        setSeasons(data.seasons || []);
+        setLoading(false);
+      });
     } catch (error) {
       console.error("Failed to fetch seasons:", error);
+      // A failed load with nothing shown for it empties the list, as it did
+      // before the cache: the previous list under the new filters would read
+      // as their result.
+      if (!applied && token === reqToken.current) setSeasons([]);
     } finally {
       if (token === reqToken.current) setLoading(false);
     }
@@ -384,6 +395,7 @@ export default function AllSeasonsPage() {
                             title={`${season.parentTitle} — ${season.seasonNumber === 0 ? "Specials" : `Season ${season.seasonNumber}`}`}
                             fallbackIcon="series"
                             href={`/library/series/season/${season.mediaItemId}${SEASONS_FROM}`}
+                            prefetchMediaId={season.mediaItemId}
                             onClick={markChildNavigation}
                             metadata={
                               <MetadataLine stacked>

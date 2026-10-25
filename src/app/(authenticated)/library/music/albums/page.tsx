@@ -25,6 +25,7 @@ import { EmptyState } from "@/components/empty-state";
 import { MediaGridSkeleton } from "@/components/skeletons";
 import { LibraryTabs, MUSIC_TABS } from "@/components/library-tabs";
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
+import { loadCachedList } from "@/lib/media/list-cache";
 
 const GAP = 16;
 const CARD_BORDER = 2;
@@ -182,6 +183,8 @@ export default function AllAlbumsPage() {
   const fetchAlbums = useCallback(async () => {
     const token = ++reqToken.current;
     setLoading(true);
+    // Set once this request's list is on screen, from the cache or the server.
+    let applied = false;
     try {
       const params = new URLSearchParams();
       params.set("limit", "0");
@@ -193,12 +196,20 @@ export default function AllAlbumsPage() {
       for (const [key, value] of Object.entries(filters)) {
         if (value) params.set(key, value);
       }
-      const response = await fetch(`/api/media/music/albums/all?${params}`);
-      const data = await response.json();
-      if (token !== reqToken.current) return;
-      setAlbums(data.albums || []);
+      // Through the tab's list cache: a list loaded in the last minute is
+      // shown at once, an older one shown and then refreshed behind it.
+      await loadCachedList<{ albums?: typeof albums }>("/api/media/music/albums/all", params, (data) => {
+        if (token !== reqToken.current) return;
+        applied = true;
+        setAlbums(data.albums || []);
+        setLoading(false);
+      });
     } catch (error) {
       console.error("Failed to fetch albums:", error);
+      // A failed load with nothing shown for it empties the list, as it did
+      // before the cache: the previous list under the new filters would read
+      // as their result.
+      if (!applied && token === reqToken.current) setAlbums([]);
     } finally {
       if (token === reqToken.current) setLoading(false);
     }
@@ -360,6 +371,7 @@ export default function AllAlbumsPage() {
                             aspectRatio="square"
                             fallbackIcon="music"
                             href={`/library/music/album/${album.mediaItemId}?from=${encodeURIComponent("/library/music/albums")}`}
+                            prefetchMediaId={album.mediaItemId}
                             onClick={markChildNavigation}
                             qualityBar={qualitySegments(
                               qualityChips({ audioCodecCounts: album.audioCodecCounts }, "music"),

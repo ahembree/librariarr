@@ -22,6 +22,7 @@ import { CardSizeControl } from "@/components/card-size-control";
 import { CardDisplayControl } from "@/components/card-display-control";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import type { MediaItemWithRelations, MediaListItem } from "@/lib/types";
+import { detailPrefetch, mediaRecordUrl } from "@/lib/media/detail-prefetch";
 import { type PlayServer, buildPlayLinks } from "@/lib/play-url";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
 
@@ -81,10 +82,9 @@ export default function AlbumDetailPage() {
     const token = ++reqToken.current;
     async function fetchData() {
       try {
-        const itemRes = await fetch(`/api/media/${id}`);
-        const itemData = await itemRes.json();
+        const { body: itemData } = await detailPrefetch.fetch<{ item?: MediaItemWithRelations & { albumTitle?: string | null }; playServers?: PlayServer[] }>(mediaRecordUrl(id));
         if (token !== reqToken.current) return;
-        if (!itemData.item) return;
+        if (!itemData?.item) return;
         setItem(itemData.item);
         setPlayServers(buildPlayLinks(itemData.playServers || [], [
           ["Album", "parentRatingKey"],
@@ -280,6 +280,7 @@ export default function AlbumDetailPage() {
                   aspectRatio="square"
                   fallbackIcon="music"
                   href={`/library/music/track/${t.id}`}
+                  prefetchMediaId={t.id}
                   hoverContent={
                     <MediaHoverPopover
                       summaryUrl={`/api/media/${t.id}`}

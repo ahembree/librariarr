@@ -13,9 +13,28 @@ import { ReauthDialogHost } from "@/components/reauth-dialog-host";
 import { WhatsNewDialog } from "@/components/whats-new-dialog";
 import { findScrollContainer } from "@/lib/scroll-utils";
 import { useScrollToTop } from "@/hooks/use-scroll-to-top";
-import { useRealtime } from "@/hooks/use-realtime";
+import { beforeRealtimeEvents, useRealtime } from "@/hooks/use-realtime";
+import { clearLibraryListCache } from "@/lib/media/list-cache";
+import { dropMediaDerivedPrefetches } from "@/lib/media/detail-prefetch";
 import { useShellSettings } from "@/components/shell-settings-provider";
 import { WifiOff } from "lucide-react";
+
+/**
+ * The library pages keep the lists they loaded (`list-cache.ts`) and the
+ * detail views take hover-prefetched records (`detail-prefetch.ts`). Anything
+ * that changes the media drops both, before any page's own refetch for the same
+ * event reads them (`beforeRealtimeEvents`), and on a reconnect's resync, which
+ * stands for every event missed.
+ */
+function dropClientMediaCaches(): void {
+  clearLibraryListCache();
+  dropMediaDerivedPrefetches();
+}
+beforeRealtimeEvents(
+  ["sync:completed", "watch-history:updated", "server:changed", "settings:changed"],
+  dropClientMediaCaches,
+);
+
 
 interface UnreachableServer {
   id: string;
@@ -56,6 +75,7 @@ export function AuthenticatedShell({
   // navigation and the connection is no longer torn down and rebuilt on every
   // route change.
   const { connected: realtimeConnected, authExpired } = useRealtime("settings:changed", checkMaintenance);
+
 
   // A media server's socket dropping or recovering now arrives as a push
   // (bridged from realtimeBus); previously this banner waited on the sidebar's

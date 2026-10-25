@@ -19,6 +19,7 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatFileSize } from "@/lib/format";
 import type { MediaItemWithRelations } from "@/lib/types";
+import { detailPrefetch, mediaRecordUrl, prefetchMediaDetail } from "@/lib/media/detail-prefetch";
 import { type PlayServer, buildPlayLinks } from "@/lib/play-url";
 import { IntegrationsSection } from "@/components/integrations-section";
 import { PlayHistory } from "@/components/play-history";
@@ -59,14 +60,21 @@ export default function SeriesDetailPage() {
   // Auto-update on real-time sync (new/removed items) without a manual refresh.
   useRealtime("sync:completed", () => setSyncTick((t) => t + 1));
 
+  // The Arr/Seerr cards need only the id, so their requests start beside the
+  // record's instead of after it renders. Once per id, not on every refetch
+  // the sync tick causes: the cards read only on mount, so a later prefetch
+  // would never be taken.
+  useEffect(() => {
+    prefetchMediaDetail(id, { mediaType: "SERIES", plays: false });
+  }, [id]);
+
   useEffect(() => {
     const token = ++reqToken.current;
     async function fetchData() {
       try {
-        const itemRes = await fetch(`/api/media/${id}`);
-        const itemData = await itemRes.json();
+        const { body: itemData } = await detailPrefetch.fetch<{ item?: MediaItemWithRelations; playServers?: PlayServer[] }>(mediaRecordUrl(id));
         if (token !== reqToken.current) return;
-        if (!itemData.item) return;
+        if (!itemData?.item) return;
         setItem(itemData.item);
         setPlayServers(buildPlayLinks(itemData.playServers || [], [
           ["Series", "grandparentRatingKey"],

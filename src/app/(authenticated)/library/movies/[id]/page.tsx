@@ -14,6 +14,7 @@ import { ColorChip } from "@/components/color-chip";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatFileSize, formatDuration } from "@/lib/format";
 import type { MediaItemWithRelations } from "@/lib/types";
+import { detailPrefetch, mediaRecordUrl, prefetchMediaDetail } from "@/lib/media/detail-prefetch";
 import type { PlayServer } from "@/lib/play-url";
 
 export default function MovieDetailPage() {
@@ -34,10 +35,12 @@ export default function MovieDetailPage() {
     const token = ++reqToken.current;
     async function fetchItem() {
       try {
-        const res = await fetch(`/api/media/${id}`);
-        const data = await res.json();
+        // The play history and the Arr/Seerr cards need only the id, so
+        // their requests start beside the record's instead of after it renders.
+        prefetchMediaDetail(id, { mediaType: "MOVIE", plays: true });
+        const { body: data } = await detailPrefetch.fetch<{ item?: MediaItemWithRelations; playServers?: PlayServer[] }>(mediaRecordUrl(id));
         if (token !== reqToken.current) return;
-        if (data.item) {
+        if (data?.item) {
           setItem(data.item);
           setPlayServers(data.playServers || []);
         }

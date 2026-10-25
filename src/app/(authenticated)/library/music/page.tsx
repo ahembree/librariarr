@@ -32,6 +32,7 @@ import { sameFilters } from "@/lib/filters/same-filters";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useListFetch } from "@/hooks/use-list-fetch";
 import { useDeferredOverscan } from "@/hooks/use-deferred-overscan";
+import { loadCachedList } from "@/lib/media/list-cache";
 
 const GAP = 16;
 const CARD_BORDER = 2; // 1px top + 1px bottom border on Card
@@ -214,6 +215,8 @@ export default function MusicPage() {
   const fetchArtists = useCallback(async () => {
     const token = ++reqToken.current;
     setLoading(true);
+    // Set once this request's list is on screen, from the cache or the server.
+    let applied = false;
     try {
       const params = new URLSearchParams();
       params.set("sortBy", sortBy);
@@ -225,15 +228,22 @@ export default function MusicPage() {
       for (const [key, value] of Object.entries(filters)) {
         if (value) params.set(key, value);
       }
-      const response = await fetch(`/api/media/music/grouped?${params}`);
-      const data = await response.json();
-      if (token !== reqToken.current) return;
-      startTransition(() => {
-        setArtistList(data.artists || []);
-        setLoading(false);
+      // Through the tab's list cache: a list loaded in the last minute is
+      // shown at once, an older one shown and then refreshed behind it.
+      await loadCachedList<{ artists?: typeof artistList }>("/api/media/music/grouped", params, (data) => {
+        if (token !== reqToken.current) return;
+        applied = true;
+        startTransition(() => {
+          setArtistList(data.artists || []);
+          setLoading(false);
+        });
       });
     } catch (error) {
       console.error("Failed to fetch artists:", error);
+      // A failed load with nothing shown for it empties the list, as it did
+      // before the cache: the previous list under the new filters would read
+      // as their result.
+      if (!applied && token === reqToken.current) setArtistList([]);
       if (token === reqToken.current) setLoading(false);
     }
   }, [sortBy, sortOrder, selectedServerId, filters]);
@@ -442,6 +452,7 @@ export default function MusicPage() {
                             aspectRatio="square"
                             fallbackIcon="music"
                             href={`/library/music/artist/${a.mediaItemId}`}
+                            prefetchMediaId={a.mediaItemId}
                             onClick={() => { markChildNavigation(); }}
                             metadata={
                               <MetadataLine stacked>

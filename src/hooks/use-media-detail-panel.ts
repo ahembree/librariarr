@@ -9,6 +9,7 @@ import {
   type DetailPanelMediaType,
 } from "@/lib/media/detail-panel-item";
 import { formatMediaItemTitle } from "@/lib/media/display-title";
+import { detailPrefetch, mediaRecordUrl } from "@/lib/media/detail-prefetch";
 import type { MatchedCriterion } from "@/components/media-detail-side-panel";
 import type { BaseGroup, BaseRule, BuilderConfig } from "@/components/builder/types";
 import type { MediaItemWithRelations } from "@/lib/types";
@@ -51,6 +52,12 @@ export interface MediaDetailPanelSelection {
   allActualValues?: Record<string, string>;
   ruleGroups?: BaseGroup<BaseRule>[];
   builderConfig?: BuilderConfig<BaseRule, BaseGroup<BaseRule>>;
+  /**
+   * The full record is in, or this hook's request for it is still running, so
+   * the panel's content must not fetch the same record again. False once that
+   * request failed with a seed on screen: the content then fetches it itself.
+   */
+  detailLoaded: boolean;
 }
 
 /**
@@ -88,13 +95,20 @@ export function useMediaDetailPanel() {
       builderConfig: request.builderConfig,
     };
     if (request.seed) {
-      setSelection({ ...base, item: buildDetailPanelItem(request.seed, request.group) });
+      setSelection({ ...base, item: buildDetailPanelItem(request.seed, request.group), detailLoaded: true });
     }
     const name = request.label ?? request.title ?? request.group?.title
       ?? (request.seed && formatMediaItemTitle(request.seed));
+    // The seed stays on screen when the record cannot be had; its content then
+    // asks for the record on its own, as it did before this hook loaded it.
+    const fallBackToContent = () => {
+      if (token === reqToken.current && request.seed) {
+        setSelection((prev) => (prev ? { ...prev, detailLoaded: false } : prev));
+      }
+    };
     setLoading(true);
     try {
-      const response = await fetch(`/api/media/${request.id}`);
+      const response = await detailPrefetch.fetch<{ item?: MediaItemWithRelations }>(mediaRecordUrl(request.id));
       if (token !== reqToken.current) return;
       if (response.status === 404) {
         // Gone since the list loaded (a sync or purge removed it). A seed
@@ -107,24 +121,28 @@ export function useMediaDetailPanel() {
         });
         return;
       }
-      if (!response.ok) {
+      if (!response.ok || !response.body) {
         // With a seed on screen the row's own details still stand.
         if (!request.seed) toast.error("Couldn't load this item", { description: name });
+        fallBackToContent();
         return;
       }
-      const data = await response.json();
-      if (token !== reqToken.current) return;
-      const record: MediaItemWithRelations | undefined = data.item ?? data;
-      if (!record?.id) return;
+      const data = response.body;
+      const record: MediaItemWithRelations | undefined = data.item ?? (data as MediaItemWithRelations);
+      if (!record?.id) {
+        fallBackToContent();
+        return;
+      }
       // A grouped row knows which servers hold the GROUP; the record only
       // knows its own copy's.
       const merged = request.seed?.servers ? { ...record, servers: request.seed.servers } : record;
-      setSelection({ ...base, item: buildDetailPanelItem(merged, request.group) });
+      setSelection({ ...base, item: buildDetailPanelItem(merged, request.group), detailLoaded: true });
     } catch (error) {
       console.error("Failed to fetch media item:", error);
       if (token === reqToken.current && !request.seed) {
         toast.error("Couldn't load this item", { description: name });
       }
+      fallBackToContent();
     } finally {
       if (token === reqToken.current) setLoading(false);
     }
