@@ -5,6 +5,7 @@ import { Loader2, Plug } from "lucide-react";
 import { ArrInstanceCard, type ArrInfoResponse, type ArrMatch } from "@/components/arr-link-button";
 import { SeerrInstanceCard, type SeerrInfoResponse, type SeerrMatch } from "@/components/seerr-section";
 import { cn } from "@/lib/utils";
+import { arrInfoUrl, detailPrefetch, seerrInfoUrl } from "@/lib/media/detail-prefetch";
 
 interface IntegrationsSectionProps {
   itemId: string;
@@ -28,19 +29,15 @@ export function IntegrationsSection({ itemId, mediaType, hideQualityProfile, com
 
   useEffect(() => {
     let cancelled = false;
-    fetch(`/api/media/${itemId}/arr-info`)
-      .then((r) => r.json() as Promise<ArrInfoResponse>)
-      .catch(() => ({ matches: [] as ArrMatch[] }))
-      .then((res) => {
-        if (!cancelled) setArrState({ forId: itemId, matches: res.matches ?? [] });
-      });
+    // Through the prefetch store: a detail page starts both requests beside
+    // its record's (`prefetchMediaDetail`) instead of after it renders.
+    void detailPrefetch.fetch<ArrInfoResponse>(arrInfoUrl(itemId)).then((res) => {
+      if (!cancelled) setArrState({ forId: itemId, matches: res.body?.matches ?? [] });
+    });
     if (mediaType !== "MUSIC") {
-      fetch(`/api/media/${itemId}/seerr-info`)
-        .then((r) => r.json() as Promise<SeerrInfoResponse>)
-        .catch(() => ({ matches: [] as SeerrMatch[] }))
-        .then((res) => {
-          if (!cancelled) setSeerrState({ forId: itemId, matches: res.matches ?? [] });
-        });
+      void detailPrefetch.fetch<SeerrInfoResponse>(seerrInfoUrl(itemId)).then((res) => {
+        if (!cancelled) setSeerrState({ forId: itemId, matches: res.body?.matches ?? [] });
+      });
     }
     return () => {
       cancelled = true;

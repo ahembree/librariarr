@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { fetchListProgressively, FIRST_CHUNK_SIZE } from "@/lib/media/progressive-load";
+import { clearLibraryListCache } from "@/lib/media/list-cache";
 
 const item = (id: number) => ({ id: `i${id}` });
 
@@ -17,7 +18,10 @@ function stubFetch(responses: Array<{ status?: number; body?: unknown }>) {
 }
 
 describe("fetchListProgressively", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    clearLibraryListCache();
+  });
   afterEach(() => vi.unstubAllGlobals());
 
   it("emits the first screenful before the rest", async () => {
@@ -125,7 +129,8 @@ describe("fetchListProgressively", () => {
     await fetchListProgressively("/api/media/movies", new URLSearchParams(), () => {});
     expect(shortUrls).toHaveLength(1);
 
-    // A full page may have more behind it.
+    // A full page may have more behind it. (The list just loaded is cached.)
+    clearLibraryListCache();
     const first = Array.from({ length: FIRST_CHUNK_SIZE }, (_, i) => item(i));
     const fullUrls = stubFetch([{ body: { items: first } }, { body: { items: [item(1000)] } }]);
     const chunks: boolean[] = [];

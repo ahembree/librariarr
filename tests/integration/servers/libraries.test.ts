@@ -35,6 +35,8 @@ vi.mock("@/lib/plex/client", () => ({
 
 // Import route handlers AFTER mocks
 import { GET, PUT } from "@/app/api/servers/[id]/libraries/route";
+import { appCache } from "@/lib/cache/memory-cache";
+import { LIST_RESPONSE_CACHE_PREFIX } from "@/lib/cache/list-response-prefix";
 
 describe("Server Libraries endpoints", () => {
   beforeEach(async () => {
@@ -201,6 +203,8 @@ describe("Server Libraries endpoints", () => {
       });
 
       setMockSession({ userId: user.id, isLoggedIn: true });
+      // A listing cached before the change: turning the library off empties it.
+      appCache.set(`${LIST_RESPONSE_CACHE_PREFIX}media-movies?limit=0`, { cached: true });
 
       const response = await callRouteWithParams(
         PUT,
@@ -216,6 +220,7 @@ describe("Server Libraries endpoints", () => {
       }>(response, 200);
 
       expect(body.libraries).toEqual([{ key: "1", title: "Movies", type: "MOVIE", enabled: false }]);
+      expect(appCache.get(`${LIST_RESPONSE_CACHE_PREFIX}media-movies?limit=0`)).toBeUndefined();
       const stored = await getTestPrisma().library.findMany({ where: { mediaServerId: server.id } });
       expect(stored.map((l) => [l.key, l.enabled])).toEqual([["1", false]]);
       // A known library needs no round trip to the server.

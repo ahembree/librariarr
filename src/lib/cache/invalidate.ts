@@ -11,6 +11,7 @@
  */
 
 import { appCache } from "./memory-cache";
+import { LIST_RESPONSE_CACHE_PREFIX } from "./list-response-prefix";
 
 /** Cache-key prefixes that depend on the current media dataset. */
 const MEDIA_CACHE_PREFIXES = [
@@ -36,6 +37,8 @@ const MEDIA_CACHE_PREFIXES = [
   // from the live media set, so a mutation (sync/purge) must drop it — a
   // mid-run batch then recomputes against fresh data rather than a stale set.
   "query-action-live:",
+  // The library listings' finished responses (`withListResponseCache`).
+  LIST_RESPONSE_CACHE_PREFIX,
 ] as const;
 
 export function invalidateMediaCaches(): void {

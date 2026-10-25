@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
+import { invalidateMediaCaches } from "@/lib/cache/invalidate";
 import { createMediaServerClient } from "@/lib/media-server/factory";
 import { validateRequest, serverLibraryUpdateSchema } from "@/lib/validation";
 
@@ -104,6 +105,9 @@ export async function PUT(
       }
     }
   }
+
+  // A library turned on or off changes what every listing and figure holds.
+  invalidateMediaCaches();
 
   const updated = await prisma.library.findMany({
     where: { mediaServerId: server.id },

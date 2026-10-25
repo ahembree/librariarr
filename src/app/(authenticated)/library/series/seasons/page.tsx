@@ -26,6 +26,7 @@ import { EmptyState } from "@/components/empty-state";
 import { MediaGridSkeleton } from "@/components/skeletons";
 import { LibraryTabs, SERIES_TABS } from "@/components/library-tabs";
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
+import { clearLibraryListCache, loadCachedList } from "@/lib/media/list-cache";
 
 interface SeasonEntry {
   parentTitle: string;
@@ -254,10 +255,13 @@ export default function AllSeasonsPage() {
       for (const [key, value] of Object.entries(filters)) {
         if (value) params.set(key, value);
       }
-      const response = await fetch(`/api/media/series/all-seasons?${params}`);
-      const data = await response.json();
-      if (token !== reqToken.current) return;
-      setSeasons(data.seasons || []);
+      // Through the tab's list cache: a list loaded in the last minute is
+      // shown at once, an older one shown and then refreshed behind it.
+      await loadCachedList<{ seasons?: typeof seasons }>("/api/media/series/all-seasons", params, (data) => {
+        if (token !== reqToken.current) return;
+        setSeasons(data.seasons || []);
+        setLoading(false);
+      });
     } catch (error) {
       console.error("Failed to fetch seasons:", error);
     } finally {
@@ -268,7 +272,11 @@ export default function AllSeasonsPage() {
   useListFetch(fetchSeasons);
 
   // Auto-update when real-time sync adds/removes items — no manual refresh.
-  useRealtime("sync:completed", fetchSeasons);
+  // A sync changes the lists, so every cached one goes before the refetch.
+  useRealtime("sync:completed", () => {
+    clearLibraryListCache();
+    void fetchSeasons();
+  });
 
   const toggleSort = (field: string) => {
     if (sortBy === field) {
@@ -384,6 +392,7 @@ export default function AllSeasonsPage() {
                             title={`${season.parentTitle} — ${season.seasonNumber === 0 ? "Specials" : `Season ${season.seasonNumber}`}`}
                             fallbackIcon="series"
                             href={`/library/series/season/${season.mediaItemId}${SEASONS_FROM}`}
+                            prefetchMediaId={season.mediaItemId}
                             onClick={markChildNavigation}
                             metadata={
                               <MetadataLine stacked>

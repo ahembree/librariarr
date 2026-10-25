@@ -2,6 +2,20 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { jsonResponse } from "@/lib/api/json-response";
 import { prisma } from "@/lib/db";
+import type { MediaServerType } from "@/generated/prisma/client";
+
+interface SiblingRow {
+  id: string;
+  ratingKey: string;
+  parentRatingKey: string | null;
+  grandparentRatingKey: string | null;
+  serverId: string;
+  serverName: string;
+  serverUrl: string;
+  externalUrl: string | null;
+  serverType: MediaServerType;
+  machineId: string | null;
+}
 
 export async function GET(
   request: NextRequest,
@@ -14,7 +28,7 @@ export async function GET(
 
   const { id } = await params;
 
-  const item = await prisma.mediaItem.findFirst({
+  const itemQuery = prisma.mediaItem.findFirst({
     where: {
       id,
       library: {
@@ -35,6 +49,27 @@ export async function GET(
       },
     },
   });
+
+  // The copies on other servers, looked up beside the item rather than after
+  // it: they need only its dedupKey, which a self-join reads from the same id,
+  // so the two queries run together instead of one after the other. An item
+  // that is not the caller's is refused below whatever this returns.
+  const siblingsQuery = prisma.$queryRaw<SiblingRow[]>`
+    SELECT s."id", s."ratingKey", s."parentRatingKey", s."grandparentRatingKey",
+           ms."id" AS "serverId", ms."name" AS "serverName", ms."url" AS "serverUrl",
+           ms."externalUrl", ms."type"::text AS "serverType", ms."machineId"
+    FROM "MediaItem" self
+    JOIN "MediaItem" s ON s."dedupKey" = self."dedupKey" AND s."id" <> self."id"
+    JOIN "Library" l ON l."id" = s."libraryId"
+    JOIN "MediaServer" ms ON ms."id" = l."mediaServerId"
+    WHERE self."id" = ${id}
+      AND self."dedupKey" IS NOT NULL
+      AND ms."userId" = ${session.userId}
+      AND ms."enabled" = true
+    ORDER BY s."createdAt" ASC, s."id" ASC
+  `;
+
+  const [item, siblings] = await Promise.all([itemQuery, siblingsQuery]);
 
   if (!item) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -63,51 +98,30 @@ export async function GET(
     { serverId: ms.id, serverName: ms.name, serverType: ms.type, mediaItemId: item.id },
   ];
 
-  // If item has a dedup key, find copies on other servers
+  // If item has a dedup key, list its copies on other servers. One entry per
+  // server, the first copy kept: with two copies on one server, an unordered
+  // read let heap order pick which copy's rating key the play link opens. The
+  // oldest copy, as the grouped listings' presence (`getServerPresenceByGroup`)
+  // picks it, then id — the query's order.
   if (item.dedupKey) {
-    const siblings = await prisma.mediaItem.findMany({
-      where: {
-        dedupKey: item.dedupKey,
-        id: { not: item.id },
-        library: { mediaServer: { userId: session.userId, enabled: true } },
-      },
-      select: {
-        id: true,
-        ratingKey: true,
-        parentRatingKey: true,
-        grandparentRatingKey: true,
-        library: {
-          select: {
-            mediaServer: { select: { id: true, name: true, url: true, externalUrl: true, type: true, machineId: true } },
-          },
-        },
-      },
-      // One entry per server, the first copy kept: with two copies on one
-      // server, an unordered read let heap order pick which copy's rating key
-      // the play link opens. The oldest copy, as the grouped listings'
-      // presence (`getServerPresenceByGroup`) picks it, then id.
-      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-    });
-
     const seenServerIds = new Set([ms.id]);
     for (const sibling of siblings) {
-      const sms = sibling.library.mediaServer;
-      if (sms && !seenServerIds.has(sms.id)) {
-        seenServerIds.add(sms.id);
+      if (!seenServerIds.has(sibling.serverId)) {
+        seenServerIds.add(sibling.serverId);
         playServers.push({
-          serverName: sms.name,
-          serverType: sms.type,
-          serverUrl: sms.url,
-          externalUrl: sms.externalUrl,
-          machineId: sms.machineId,
+          serverName: sibling.serverName,
+          serverType: sibling.serverType,
+          serverUrl: sibling.serverUrl,
+          externalUrl: sibling.externalUrl,
+          machineId: sibling.machineId,
           ratingKey: sibling.ratingKey,
           parentRatingKey: sibling.parentRatingKey,
           grandparentRatingKey: sibling.grandparentRatingKey,
         });
         servers.push({
-          serverId: sms.id,
-          serverName: sms.name,
-          serverType: sms.type,
+          serverId: sibling.serverId,
+          serverName: sibling.serverName,
+          serverType: sibling.serverType,
           mediaItemId: sibling.id,
         });
       }

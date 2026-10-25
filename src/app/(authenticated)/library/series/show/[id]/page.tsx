@@ -19,6 +19,7 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatFileSize } from "@/lib/format";
 import type { MediaItemWithRelations } from "@/lib/types";
+import { detailPrefetch, mediaRecordUrl, prefetchMediaDetail } from "@/lib/media/detail-prefetch";
 import { type PlayServer, buildPlayLinks } from "@/lib/play-url";
 import { IntegrationsSection } from "@/components/integrations-section";
 import { PlayHistory } from "@/components/play-history";
@@ -63,10 +64,10 @@ export default function SeriesDetailPage() {
     const token = ++reqToken.current;
     async function fetchData() {
       try {
-        const itemRes = await fetch(`/api/media/${id}`);
-        const itemData = await itemRes.json();
+        prefetchMediaDetail(id, { mediaType: "SERIES", plays: false });
+        const { body: itemData } = await detailPrefetch.fetch<{ item?: MediaItemWithRelations; playServers?: PlayServer[] }>(mediaRecordUrl(id));
         if (token !== reqToken.current) return;
-        if (!itemData.item) return;
+        if (!itemData?.item) return;
         setItem(itemData.item);
         setPlayServers(buildPlayLinks(itemData.playServers || [], [
           ["Series", "grandparentRatingKey"],

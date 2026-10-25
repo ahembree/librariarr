@@ -25,6 +25,7 @@ import { EmptyState } from "@/components/empty-state";
 import { MediaGridSkeleton } from "@/components/skeletons";
 import { LibraryTabs, MUSIC_TABS } from "@/components/library-tabs";
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
+import { clearLibraryListCache, loadCachedList } from "@/lib/media/list-cache";
 
 const GAP = 16;
 const CARD_BORDER = 2;
@@ -193,10 +194,13 @@ export default function AllAlbumsPage() {
       for (const [key, value] of Object.entries(filters)) {
         if (value) params.set(key, value);
       }
-      const response = await fetch(`/api/media/music/albums/all?${params}`);
-      const data = await response.json();
-      if (token !== reqToken.current) return;
-      setAlbums(data.albums || []);
+      // Through the tab's list cache: a list loaded in the last minute is
+      // shown at once, an older one shown and then refreshed behind it.
+      await loadCachedList<{ albums?: typeof albums }>("/api/media/music/albums/all", params, (data) => {
+        if (token !== reqToken.current) return;
+        setAlbums(data.albums || []);
+        setLoading(false);
+      });
     } catch (error) {
       console.error("Failed to fetch albums:", error);
     } finally {
@@ -207,7 +211,11 @@ export default function AllAlbumsPage() {
   useListFetch(fetchAlbums);
 
   // Auto-update when real-time sync adds/removes items — no manual refresh.
-  useRealtime("sync:completed", fetchAlbums);
+  // A sync changes the lists, so every cached one goes before the refetch.
+  useRealtime("sync:completed", () => {
+    clearLibraryListCache();
+    void fetchAlbums();
+  });
 
   const rowCount = useMemo(
     () => (albums.length > 0 ? Math.ceil(albums.length / actualColumns) : 0),
@@ -360,6 +368,7 @@ export default function AllAlbumsPage() {
                             aspectRatio="square"
                             fallbackIcon="music"
                             href={`/library/music/album/${album.mediaItemId}?from=${encodeURIComponent("/library/music/albums")}`}
+                            prefetchMediaId={album.mediaItemId}
                             onClick={markChildNavigation}
                             qualityBar={qualitySegments(
                               qualityChips({ audioCodecCounts: album.audioCodecCounts }, "music"),

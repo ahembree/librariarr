@@ -12,6 +12,8 @@
  * splitting their fetch would run that aggregation twice for no earlier paint.
  */
 
+import { libraryListCache, listCacheKeyFor, type ListCache } from "./list-cache";
+
 /**
  * Rows in the first pass. Comfortably more than a viewport at any card size or
  * table density, so the second pass lands well before the user scrolls past it.
@@ -39,7 +41,30 @@ export async function fetchListProgressively<T>(
   url: string,
   params: URLSearchParams,
   onChunk: (items: T[], done: boolean) => void,
+  cache: ListCache = libraryListCache,
 ): Promise<void> {
+  // A list this tab loaded recently is shown whole at once (see
+  // `list-cache.ts`); one past fresh is then refreshed in a single request —
+  // two passes would hand the page a first screenful after the whole list.
+  const listParams = new URLSearchParams(params);
+  listParams.delete("offset");
+  listParams.delete("page");
+  listParams.delete("limit");
+  const key = listCacheKeyFor(url, listParams);
+  const cached = cache.get<T[]>(key);
+  if (cached) {
+    onChunk(cached.value, true);
+    if (cached.fresh) return;
+    const allParams = new URLSearchParams(listParams);
+    allParams.set("limit", "0");
+    const response = await fetch(`${url}?${allParams}`);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const items = ((await response.json()) as ListResponse<T>).items ?? [];
+    cache.set(key, items);
+    onChunk(items, true);
+    return;
+  }
+
   const firstParams = new URLSearchParams(params);
   firstParams.delete("offset");
   firstParams.set("page", "1");
@@ -53,7 +78,10 @@ export async function fetchListProgressively<T>(
   // Trust hasMore when the endpoint sends it; fall back to a short page.
   const hasMore = firstBody.pagination?.hasMore ?? firstItems.length >= FIRST_CHUNK_SIZE;
   onChunk(firstItems, !hasMore);
-  if (!hasMore) return;
+  if (!hasMore) {
+    cache.set(key, firstItems);
+    return;
+  }
 
   const restParams = new URLSearchParams(params);
   restParams.delete("page");
@@ -63,5 +91,7 @@ export async function fetchListProgressively<T>(
   const restResponse = await fetch(`${url}?${restParams}`);
   if (!restResponse.ok) throw new Error(`HTTP ${restResponse.status}`);
   const restBody = (await restResponse.json()) as ListResponse<T>;
-  onChunk([...firstItems, ...(restBody.items ?? [])], true);
+  const all = [...firstItems, ...(restBody.items ?? [])];
+  cache.set(key, all);
+  onChunk(all, true);
 }

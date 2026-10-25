@@ -33,6 +33,7 @@ import { sameFilters } from "@/lib/filters/same-filters";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useListFetch } from "@/hooks/use-list-fetch";
 import { useDeferredOverscan } from "@/hooks/use-deferred-overscan";
+import { clearLibraryListCache, loadCachedList } from "@/lib/media/list-cache";
 
 interface GroupedSeries {
   parentTitle: string;
@@ -227,12 +228,14 @@ export default function SeriesPage() {
       for (const [key, value] of Object.entries(filters)) {
         if (value) params.set(key, value);
       }
-      const response = await fetch(`/api/media/series/grouped?${params}`);
-      const data = await response.json();
-      if (token !== reqToken.current) return;
-      startTransition(() => {
-        setSeriesList(data.series || []);
-        setLoading(false);
+      // Through the tab's list cache: a list loaded in the last minute is
+      // shown at once, an older one shown and then refreshed behind it.
+      await loadCachedList<{ series?: typeof seriesList }>("/api/media/series/grouped", params, (data) => {
+        if (token !== reqToken.current) return;
+        startTransition(() => {
+          setSeriesList(data.series || []);
+          setLoading(false);
+        });
       });
     } catch (error) {
       console.error("Failed to fetch series:", error);
@@ -240,7 +243,11 @@ export default function SeriesPage() {
     }
   }, [sortBy, sortOrder, selectedServerId, filters]);
 
-  useRealtime("sync:completed", fetchSeries);
+  // A sync changes the lists, so every cached one goes before the refetch.
+  useRealtime("sync:completed", () => {
+    clearLibraryListCache();
+    void fetchSeries();
+  });
 
   useListFetch(fetchSeries);
 
@@ -443,6 +450,7 @@ export default function SeriesPage() {
                             title={s.parentTitle}
                             fallbackIcon="series"
                             href={`/library/series/show/${s.mediaItemId}`}
+                            prefetchMediaId={s.mediaItemId}
                             onClick={() => { markChildNavigation(); }}
                             metadata={
                               <MetadataLine stacked>

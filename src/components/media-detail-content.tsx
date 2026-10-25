@@ -32,6 +32,7 @@ import { formatFileSize, formatDuration, formatDate, formatDateOnly } from "@/li
 import { SERVER_TYPE_STYLES, DEFAULT_SERVER_STYLE } from "@/lib/server-styles";
 import { FadeImage } from "@/components/ui/fade-image";
 import type { MediaItemWithRelations } from "@/lib/types";
+import { detailPrefetch, mediaRecordUrl } from "@/lib/media/detail-prefetch";
 
 /** The detected range, or the stream's own value when it names none. */
 function streamRangeLabel(raw: string, detected: string): string {
@@ -227,7 +228,10 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
 
   // Fetch full detail data (summary, tagline, genres, directors, etc.)
   const [detailData, setDetailData] = useState<Partial<MediaItemWithRelations> | null>(null);
-  const [streams, setStreams] = useState<MediaItemWithRelations["streams"]>(() => (detailLoaded ? item.streams ?? [] : []));
+  // With `detailLoaded` the streams are the item's own — the caller may swap a
+  // seed for the full record under the same id, so they are read, not copied.
+  const [fetchedStreams, setStreams] = useState<MediaItemWithRelations["streams"]>([]);
+  const streams = detailLoaded ? item.streams ?? [] : fetchedStreams;
   const [history, setHistory] = useState<WatchHistoryEntry[]>([]);
   const [serverHistories, setServerHistories] = useState<ServerHistoryEntry[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -258,10 +262,9 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
 
   const fetchItemDetail = useCallback(async (itemId: string, token: number) => {
     try {
-      const response = await fetch(`/api/media/${itemId}`);
-      const data = await response.json();
+      const { body: data } = await detailPrefetch.fetch<{ item?: MediaItemWithRelations }>(mediaRecordUrl(itemId));
       if (token !== reqToken.current) return;
-      if (data.item) {
+      if (data?.item) {
         const itemStreams = data.item.streams ?? [];
         setStreams(itemStreams);
         setAudioOpen(audioStreamCount(itemStreams) <= 2);
@@ -312,12 +315,20 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
   if (prevItemId !== item.id) {
     setPrevItemId(item.id);
     setDetailData(null);
-    setStreams(detailLoaded ? item.streams ?? [] : []);
-    if (detailLoaded) setAudioOpen(audioStreamCount(item.streams) <= 2);
+    setStreams([]);
     setHistory([]);
     setMetadataMap({});
     setMetadataLoadingMap({});
     setMetadataOpenMap({});
+  }
+
+  // The audio card opens when there are few tracks to list. With the streams
+  // read off `item`, that is decided again whenever they change — the full
+  // record landing over a seed that carried none, or another item.
+  const [prevStreams, setPrevStreams] = useState(item.streams);
+  if (detailLoaded && prevStreams !== item.streams) {
+    setPrevStreams(item.streams);
+    setAudioOpen(audioStreamCount(item.streams) <= 2);
   }
 
   // A boolean, not the node itself: a fresh element every render would re-run

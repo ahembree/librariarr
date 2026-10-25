@@ -10,6 +10,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { MediaDetailContent } from "@/components/media-detail-content";
 import { PlayHistory } from "@/components/play-history";
 import { FadeImage } from "@/components/ui/fade-image";
+import { CACHE_WIDTH_GRID, withImageWidth } from "@/lib/image-url";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import { qualityChips } from "@/lib/media/quality-chips";
 import { formatFileSize, formatDuration } from "@/lib/format";
@@ -64,6 +65,12 @@ interface MediaDetailSidePanelProps {
    * the item's own details.
    */
   contextSection?: React.ReactNode;
+  /**
+   * `item` is the full `/api/media/[id]` record (streams included) — or a
+   * seed standing in until the caller's request for it lands — so the content
+   * below skips its own fetch of the same record. `useMediaDetailPanel` sets it.
+   */
+  detailLoaded?: boolean;
 }
 
 export function MediaDetailSidePanel({
@@ -79,6 +86,7 @@ export function MediaDetailSidePanel({
   builderConfig,
   allActualValues,
   contextSection,
+  detailLoaded,
 }: MediaDetailSidePanelProps) {
   const isMobile = useIsMobile();
 
@@ -111,7 +119,13 @@ export function MediaDetailSidePanel({
   const isAggregate = !!item.matchedEpisodes;
   const detailUrl = detailUrlOverride ?? detailPanelUrl(mediaType, item.id, isAggregate);
   // Aggregated items (series/artist scope) use parentTitle=null but still need the parent image
-  const imageUrl = `/api/media/${item.id}/image${item.parentTitle || isAggregate ? "?type=parent" : ""}`;
+  // The grid width, not the 800px default: the poster is 80px wide and its
+  // blurred copy behind the header needs no detail, and a panel opened from a
+  // card grid finds this variant already in the browser's cache.
+  const imageUrl = withImageWidth(
+    `/api/media/${item.id}/image${item.parentTitle || isAggregate ? "?type=parent" : ""}`,
+    CACHE_WIDTH_GRID,
+  );
   // A missing poster shows the type's icon, as the library cards do, rather
   // than the browser's broken-image text over the box.
   const [posterFailed, setPosterFailed] = useState(false);
@@ -295,6 +309,7 @@ export function MediaDetailSidePanel({
         isAggregate={isAggregate}
         matchedCriteriaSection={combinedMatchSection}
         historySection={historySection}
+        detailLoaded={detailLoaded}
       />
     </div>
   );

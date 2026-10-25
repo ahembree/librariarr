@@ -32,6 +32,7 @@ import { sameFilters } from "@/lib/filters/same-filters";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useListFetch } from "@/hooks/use-list-fetch";
 import { useDeferredOverscan } from "@/hooks/use-deferred-overscan";
+import { clearLibraryListCache, loadCachedList } from "@/lib/media/list-cache";
 
 const GAP = 16;
 const CARD_BORDER = 2; // 1px top + 1px bottom border on Card
@@ -225,12 +226,14 @@ export default function MusicPage() {
       for (const [key, value] of Object.entries(filters)) {
         if (value) params.set(key, value);
       }
-      const response = await fetch(`/api/media/music/grouped?${params}`);
-      const data = await response.json();
-      if (token !== reqToken.current) return;
-      startTransition(() => {
-        setArtistList(data.artists || []);
-        setLoading(false);
+      // Through the tab's list cache: a list loaded in the last minute is
+      // shown at once, an older one shown and then refreshed behind it.
+      await loadCachedList<{ artists?: typeof artistList }>("/api/media/music/grouped", params, (data) => {
+        if (token !== reqToken.current) return;
+        startTransition(() => {
+          setArtistList(data.artists || []);
+          setLoading(false);
+        });
       });
     } catch (error) {
       console.error("Failed to fetch artists:", error);
@@ -238,7 +241,11 @@ export default function MusicPage() {
     }
   }, [sortBy, sortOrder, selectedServerId, filters]);
 
-  useRealtime("sync:completed", fetchArtists);
+  // A sync changes the lists, so every cached one goes before the refetch.
+  useRealtime("sync:completed", () => {
+    clearLibraryListCache();
+    void fetchArtists();
+  });
 
   useListFetch(fetchArtists);
 
@@ -442,6 +449,7 @@ export default function MusicPage() {
                             aspectRatio="square"
                             fallbackIcon="music"
                             href={`/library/music/artist/${a.mediaItemId}`}
+                            prefetchMediaId={a.mediaItemId}
                             onClick={() => { markChildNavigation(); }}
                             metadata={
                               <MetadataLine stacked>

@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { seedGroupedLibraries, cleanupGroupedSeed, GROUPED_SEED as S } from "./seed";
+import { seedGroupedLibraries, cleanupGroupedSeed, dropAppCaches, GROUPED_SEED as S } from "./seed";
 
 /**
  * The detail pages that group rows — a show, a season and an episode; an
@@ -11,6 +11,12 @@ import { seedGroupedLibraries, cleanupGroupedSeed, GROUPED_SEED as S } from "./s
 test.describe("seeded series detail pages", () => {
   test.beforeAll(async () => {
     await seedGroupedLibraries();
+  });
+
+  // The rows went in past the app, so a listing an earlier spec cached over the
+  // empty database (the server keeps one for a minute) must go first.
+  test.beforeEach(async ({ page }) => {
+    await dropAppCaches(page.request);
   });
 
   test.afterAll(async () => {
@@ -57,6 +63,12 @@ test.describe("seeded series detail pages", () => {
 test.describe("seeded music detail pages", () => {
   test.beforeAll(async () => {
     await seedGroupedLibraries();
+  });
+
+  // The rows went in past the app, so a listing an earlier spec cached over the
+  // empty database (the server keeps one for a minute) must go first.
+  test.beforeEach(async ({ page }) => {
+    await dropAppCaches(page.request);
   });
 
   test.afterAll(async () => {

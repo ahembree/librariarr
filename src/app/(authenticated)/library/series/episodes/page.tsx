@@ -27,6 +27,7 @@ import { MediaGridSkeleton } from "@/components/skeletons";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
 import { LibraryTabs, SERIES_TABS } from "@/components/library-tabs";
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
+import { clearLibraryListCache } from "@/lib/media/list-cache";
 
 const GAP = 16;
 const CARD_BORDER = 2;
@@ -204,7 +205,12 @@ export default function AllEpisodesPage() {
   useListFetch(fetchEpisodes);
 
   // Auto-update when real-time sync adds/removes items — no manual refresh.
-  useRealtime("sync:completed", fetchEpisodes);
+  // A sync changes the lists, so every cached one goes before the refetch
+  // (`fetchListProgressively` reads through the tab's list cache).
+  useRealtime("sync:completed", () => {
+    clearLibraryListCache();
+    void fetchEpisodes();
+  });
 
   const virtualRows = virtualizer.getVirtualItems();
 
@@ -313,6 +319,7 @@ export default function AllEpisodesPage() {
                             aspectRatio="landscape"
                             fallbackIcon="series"
                             href={`/library/series/episode/${ep.id}?from=${encodeURIComponent("/library/series/episodes")}`}
+                            prefetchMediaId={ep.id}
                             onClick={markChildNavigation}
                             hoverContent={
                               <MediaHoverPopover

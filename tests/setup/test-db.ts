@@ -1,5 +1,6 @@
 import { PrismaClient } from "@/generated/prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
+import { LIST_RESPONSE_CACHE_PREFIX } from "@/lib/cache/list-response-prefix";
 
 let _prisma: PrismaClient | null = null;
 
@@ -32,6 +33,14 @@ export async function cleanDatabase() {
     appTables = rows.map((r) => `"public"."${r.tablename}"`).join(", ");
   }
   await prisma.$executeRawUnsafe(`TRUNCATE TABLE ${appTables} CASCADE`);
+  // The library listings' cached responses describe the rows just removed. The
+  // app drops them on every media write (`invalidateMediaCaches`); a test that
+  // writes rows directly has to start without them too. Reached through the
+  // `globalThis` pin rather than an import, since many test files mock the
+  // cache modules — and where the real cache was never made, nothing is cached.
+  (globalThis as { appCache?: { invalidatePrefix(prefix: string): void } }).appCache?.invalidatePrefix(
+    LIST_RESPONSE_CACHE_PREFIX,
+  );
 }
 
 export async function disconnectTestDb() {

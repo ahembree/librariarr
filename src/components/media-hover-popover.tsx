@@ -12,6 +12,7 @@ import { FadeImage } from "@/components/ui/fade-image";
 import { QualityChips } from "@/components/quality-chips";
 import { ColorChip } from "@/components/color-chip";
 import { CACHE_WIDTH_GRID, withImageWidth } from "@/lib/image-url";
+import { detailPrefetch } from "@/lib/media/detail-prefetch";
 
 export interface MediaHoverData {
   title: string;
@@ -116,15 +117,17 @@ export function MediaHoverPopover({
   useEffect(() => {
     if (!needsSummary || !summaryUrl || summaryCache.has(summaryUrl)) return;
     let cancelled = false;
-    fetch(summaryUrl)
-      .then((res) => (res.ok ? res.json() : null))
-      .then((json: { item?: { summary?: string | null } } | null) => {
-        const summary = json?.item?.summary ?? null;
+    // `peek` keeps the answer: for a list row the summary URL is the item's
+    // own record, which a click a moment later would otherwise fetch again.
+    // Best-effort enrichment — on a failure the rest of the popover is
+    // already rendered, and nothing is cached so the next hover asks again.
+    void detailPrefetch
+      .peek<{ item?: { summary?: string | null } }>(summaryUrl)
+      .then((res) => {
+        if (!res.ok) return;
+        const summary = res.body?.item?.summary ?? null;
         summaryCache.set(summaryUrl, summary);
         if (!cancelled) setFetchedSummary(summary);
-      })
-      .catch(() => {
-        // Best-effort enrichment — the rest of the popover is already rendered.
       });
     return () => {
       cancelled = true;

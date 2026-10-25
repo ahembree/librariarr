@@ -31,6 +31,7 @@ import { useRealtime } from "@/hooks/use-realtime";
 import { useListFetch } from "@/hooks/use-list-fetch";
 import { useDeferredOverscan } from "@/hooks/use-deferred-overscan";
 import { fetchListProgressively } from "@/lib/media/progressive-load";
+import { clearLibraryListCache } from "@/lib/media/list-cache";
 
 const SORT_OPTIONS = [
   { value: "title", label: "Name" },
@@ -70,6 +71,7 @@ const MovieGridCard = memo(function MovieGridCard({ movie, priority, show, getHe
       title={movie.title}
       fallbackIcon="movie"
       href={`/library/movies/${movie.id}`}
+      prefetchMediaId={movie.id}
       onClick={onNavigate}
       metadata={
         <MetadataLine stacked>
@@ -301,7 +303,12 @@ export default function MoviesPage() {
     }
   }, [filters, sortBy, sortOrder, selectedServerId]);
 
-  useRealtime("sync:completed", fetchMovies);
+  // A sync changes the lists, so every cached one goes before the refetch
+  // (`fetchListProgressively` reads through the tab's list cache).
+  useRealtime("sync:completed", () => {
+    clearLibraryListCache();
+    void fetchMovies();
+  });
 
   // No debounce on changes: this page has always refetched at once.
   useListFetch(fetchMovies, 0);

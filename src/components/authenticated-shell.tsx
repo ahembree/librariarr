@@ -14,6 +14,7 @@ import { WhatsNewDialog } from "@/components/whats-new-dialog";
 import { findScrollContainer } from "@/lib/scroll-utils";
 import { useScrollToTop } from "@/hooks/use-scroll-to-top";
 import { useRealtime } from "@/hooks/use-realtime";
+import { clearLibraryListCache } from "@/lib/media/list-cache";
 import { useShellSettings } from "@/components/shell-settings-provider";
 import { WifiOff } from "lucide-react";
 
@@ -56,6 +57,15 @@ export function AuthenticatedShell({
   // navigation and the connection is no longer torn down and rebuilt on every
   // route change.
   const { connected: realtimeConnected, authExpired } = useRealtime("settings:changed", checkMaintenance);
+
+  // The library pages keep the lists they loaded (`list-cache.ts`) so coming
+  // back to one paints at once. A mounted page clears them before its own
+  // `sync:completed` refetch; these catch what changes a list while no library
+  // page is mounted to hear it — and, on a reconnect, every event missed.
+  useRealtime("sync:completed", clearLibraryListCache);
+  useRealtime("watch-history:updated", clearLibraryListCache);
+  useRealtime("server:changed", clearLibraryListCache);
+  useRealtime("settings:changed", clearLibraryListCache);
 
   // A media server's socket dropping or recovering now arrives as a push
   // (bridged from realtimeBus); previously this banner waited on the sidebar's

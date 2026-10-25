@@ -26,6 +26,7 @@ import { MediaGridSkeleton } from "@/components/skeletons";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
 import { LibraryTabs, MUSIC_TABS } from "@/components/library-tabs";
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
+import { clearLibraryListCache } from "@/lib/media/list-cache";
 
 const GAP = 16;
 const CARD_BORDER = 2;
@@ -139,7 +140,12 @@ export default function AllTracksPage() {
   useListFetch(fetchTracks);
 
   // Auto-update when real-time sync adds/removes items — no manual refresh.
-  useRealtime("sync:completed", fetchTracks);
+  // A sync changes the lists, so every cached one goes before the refetch
+  // (`fetchListProgressively` reads through the tab's list cache).
+  useRealtime("sync:completed", () => {
+    clearLibraryListCache();
+    void fetchTracks();
+  });
 
   useEffect(() => {
     scrollElementRef.current = document.querySelector<HTMLElement>("main");
@@ -290,6 +296,7 @@ export default function AllTracksPage() {
                         aspectRatio="square"
                         fallbackIcon="music"
                         href={`/library/music/track/${track.id}?from=${encodeURIComponent("/library/music/tracks")}`}
+                        prefetchMediaId={track.id}
                         onClick={markChildNavigation}
                         qualityBar={qualitySegments(qualityChips(track, "music"), getHex, (toggle) => show("badges", toggle))}
                         hoverContent={

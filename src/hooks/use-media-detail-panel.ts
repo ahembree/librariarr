@@ -9,6 +9,7 @@ import {
   type DetailPanelMediaType,
 } from "@/lib/media/detail-panel-item";
 import { formatMediaItemTitle } from "@/lib/media/display-title";
+import { detailPrefetch, mediaRecordUrl } from "@/lib/media/detail-prefetch";
 import type { MatchedCriterion } from "@/components/media-detail-side-panel";
 import type { BaseGroup, BaseRule, BuilderConfig } from "@/components/builder/types";
 import type { MediaItemWithRelations } from "@/lib/types";
@@ -94,7 +95,7 @@ export function useMediaDetailPanel() {
       ?? (request.seed && formatMediaItemTitle(request.seed));
     setLoading(true);
     try {
-      const response = await fetch(`/api/media/${request.id}`);
+      const response = await detailPrefetch.fetch<{ item?: MediaItemWithRelations }>(mediaRecordUrl(request.id));
       if (token !== reqToken.current) return;
       if (response.status === 404) {
         // Gone since the list loaded (a sync or purge removed it). A seed
@@ -107,14 +108,13 @@ export function useMediaDetailPanel() {
         });
         return;
       }
-      if (!response.ok) {
+      if (!response.ok || !response.body) {
         // With a seed on screen the row's own details still stand.
         if (!request.seed) toast.error("Couldn't load this item", { description: name });
         return;
       }
-      const data = await response.json();
-      if (token !== reqToken.current) return;
-      const record: MediaItemWithRelations | undefined = data.item ?? data;
+      const data = response.body;
+      const record: MediaItemWithRelations | undefined = data.item ?? (data as MediaItemWithRelations);
       if (!record?.id) return;
       // A grouped row knows which servers hold the GROUP; the record only
       // knows its own copy's.
@@ -130,8 +130,10 @@ export function useMediaDetailPanel() {
     }
   }, []);
 
+  // `detailLoaded`: this hook loads the full record (streams included) for
+  // every open, so the panel's content must not fetch the same record again.
   const panelProps = selection
-    ? { ...selection, onClose: close, width, resizeHandleProps }
+    ? { ...selection, detailLoaded: true, onClose: close, width, resizeHandleProps }
     : null;
 
   return { open, close, loading, selectedId: selection?.item.id ?? null, panelProps };

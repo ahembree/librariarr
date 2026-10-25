@@ -24,6 +24,7 @@ import { CardSizeControl } from "@/components/card-size-control";
 import { CardDisplayControl } from "@/components/card-display-control";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import type { MediaItemWithRelations, MediaListItem } from "@/lib/types";
+import { detailPrefetch, mediaRecordUrl, prefetchMediaDetail } from "@/lib/media/detail-prefetch";
 import { type PlayServer, buildPlayLinks } from "@/lib/play-url";
 import { IntegrationsSection } from "@/components/integrations-section";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
@@ -79,10 +80,10 @@ export default function SeasonDetailPage() {
     const token = ++reqToken.current;
     async function fetchData() {
       try {
-        const itemRes = await fetch(`/api/media/${id}`);
-        const itemData = await itemRes.json();
+        prefetchMediaDetail(id, { mediaType: "SERIES", plays: false });
+        const { body: itemData } = await detailPrefetch.fetch<{ item?: MediaItemWithRelations; playServers?: PlayServer[] }>(mediaRecordUrl(id));
         if (token !== reqToken.current) return;
-        if (!itemData.item) return;
+        if (!itemData?.item) return;
         setItem(itemData.item);
         setPlayServers(buildPlayLinks(itemData.playServers || [], [
           ["Season", "parentRatingKey"],
@@ -286,6 +287,7 @@ export default function SeasonDetailPage() {
                   aspectRatio="landscape"
                   fallbackIcon="series"
                   href={`/library/series/episode/${ep.id}`}
+                  prefetchMediaId={ep.id}
                   hoverContent={
                     <MediaHoverPopover
                       summaryUrl={`/api/media/${ep.id}`}
