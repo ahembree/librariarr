@@ -212,6 +212,25 @@ describe("beforeRealtimeEvents", () => {
     expect(order).toEqual(["drop", "page", "shell"]);
   });
 
+  it("runs with no subscriber for its event type, on a source opened before or after it registered", async () => {
+    const drop = vi.fn();
+    renderHook(() => useRealtime("other", () => {}));
+    // Registered with the source already open.
+    beforeRealtimeEvents(["lonely"], drop);
+    act(() => latest().dispatch("lonely", "{}"));
+    expect(drop).toHaveBeenCalledTimes(1);
+    // And re-attached to the source that replaces it.
+    act(() => latest().open());
+    await act(async () => latest().fail(true));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    expect(FakeEventSource.instances).toHaveLength(2);
+    drop.mockClear();
+    act(() => latest().dispatch("lonely", "{}"));
+    expect(drop).toHaveBeenCalledTimes(1);
+  });
+
   it("runs only for its own event types, and stops once unregistered", () => {
     const drop = vi.fn();
     const off = beforeRealtimeEvents(["a"], drop);

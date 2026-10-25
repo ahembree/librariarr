@@ -41,6 +41,8 @@ export interface PrefetchStore {
   /** `take(url)`, else a plain request that is not stored. */
   fetch<T = unknown>(url: string): Promise<PrefetchedJson<T>>;
   clear(): void;
+  /** Forget every entry whose URL `drop` accepts. */
+  clearWhere(drop: (url: string) => boolean): void;
 }
 
 async function requestJson(url: string): Promise<PrefetchedJson> {
@@ -112,6 +114,9 @@ export function createPrefetchStore(
     clear() {
       entries.clear();
     },
+    clearWhere(drop) {
+      for (const url of [...entries.keys()]) if (drop(url)) entries.delete(url);
+    },
   };
 }
 
@@ -142,6 +147,17 @@ export function arrInfoUrl(id: string): string {
 
 export function seerrInfoUrl(id: string): string {
   return `/api/media/${id}/seerr-info`;
+}
+
+/**
+ * Forget what a change to the media can make stale: item records (titles,
+ * streams, play counts) and play history pages. The Arr and Seerr matches are
+ * kept — a library sync or a new play changes neither, and they are the costly
+ * ones (live calls to every instance) that a detail page still loading has
+ * just started and is about to take.
+ */
+export function dropMediaDerivedPrefetches(): void {
+  detailPrefetch.clearWhere((url) => !/\/(arr|seerr)-info$/.test(url));
 }
 
 /** Warm the item's record — a card the pointer rests on, a row about to open. */

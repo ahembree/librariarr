@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { fetchListProgressively, FIRST_CHUNK_SIZE } from "@/lib/media/progressive-load";
-import { clearLibraryListCache } from "@/lib/media/list-cache";
+import { clearLibraryListCache, createListCache, LIST_FRESH_MS } from "@/lib/media/list-cache";
 
 const item = (id: number) => ({ id: `i${id}` });
 
@@ -196,5 +196,27 @@ describe("fetchListProgressively", () => {
     // Not served from the cache: the stale list was never stored.
     expect(seen).toEqual([true]);
     expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
+  });
+
+  it("refreshes a stale list through the two requests a first load makes, handing over only the whole list", async () => {
+    let now = 0;
+    const cache = createListCache({}, () => now);
+    const first = Array.from({ length: FIRST_CHUNK_SIZE }, (_, i) => item(i));
+    const firstLoad = stubFetch([{ body: { items: first } }, { body: { items: [item(1000)] } }]);
+    await fetchListProgressively("/api/media/movies", new URLSearchParams("sortBy=title"), () => {}, cache);
+    now = LIST_FRESH_MS + 1;
+    const refreshed = Array.from({ length: FIRST_CHUNK_SIZE }, (_, i) => item(i + 5000));
+    const refreshUrls = stubFetch([{ body: { items: refreshed } }, { body: { items: [item(9999)] } }]);
+    const chunks: Array<{ n: number; done: boolean }> = [];
+    await fetchListProgressively("/api/media/movies", new URLSearchParams("sortBy=title"), (items, done) =>
+      chunks.push({ n: items.length, done }),
+    cache);
+    // The same URLs the first load asked for — the keys the server cached.
+    expect(refreshUrls).toEqual(firstLoad);
+    // The stale list at once, then the refreshed whole list; never a first screenful.
+    expect(chunks).toEqual([
+      { n: FIRST_CHUNK_SIZE + 1, done: true },
+      { n: FIRST_CHUNK_SIZE + 1, done: true },
+    ]);
   });
 });

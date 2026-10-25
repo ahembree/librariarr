@@ -816,20 +816,20 @@ export function PlayHistory({
 
   const fetchPage = useCallback(
     async (target: number): Promise<WatchHistoryResponse> => {
-      const params = new URLSearchParams({
-        page: String(target),
-        limit: String(PAGE_SIZE),
-      });
-      if (serverId) params.set("serverId", serverId);
-
       // Two scopes, two endpoints. An item id is the narrower and more
       // certain of the two, so it wins when both are somehow supplied.
       let url: string;
       if (mediaItemId) {
         // The same URL `prefetchMediaDetail` starts, so a detail page's first
-        // page is taken from that request rather than asked for again.
+        // page is taken from that request rather than asked for again — the
+        // one builder for this endpoint's paging parameters.
         url = mediaPlaysUrl(mediaItemId, target, serverId ?? undefined);
       } else {
+        const params = new URLSearchParams({
+          page: String(target),
+          limit: String(PAGE_SIZE),
+        });
+        if (serverId) params.set("serverId", serverId);
         if (seriesKey) params.set("seriesKey", seriesKey);
         else if (parentTitle) params.set("parentTitle", parentTitle);
         if (seasonNumber != null) params.set("seasonNumber", String(seasonNumber));

@@ -44,6 +44,8 @@ vi.mock("@/lib/dedup/recompute-canonical", () => ({
 
 // Import route handler AFTER mocks
 import { DELETE } from "@/app/api/servers/[id]/route";
+import { appCache } from "@/lib/cache/memory-cache";
+import { recomputeCanonical } from "@/lib/dedup/recompute-canonical";
 
 describe("DELETE /api/servers/[id] lifecycle cleanup", () => {
   const prisma = getTestPrisma();
@@ -56,6 +58,31 @@ describe("DELETE /api/servers/[id] lifecycle cleanup", () => {
 
   afterAll(async () => {
     await disconnectTestDb();
+  });
+
+  it("recomputes the canonical copies before dropping the caches built on them", async () => {
+    // Dropped first, a listing asked for during the recompute was cached with
+    // the old flags and served to every tab's server:changed refetch.
+    const order: string[] = [];
+    vi.mocked(recomputeCanonical).mockImplementation(async () => {
+      order.push("recompute");
+      return undefined as never;
+    });
+    vi.mocked(appCache.invalidatePrefix).mockImplementation(() => {
+      order.push("invalidate");
+    });
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    setMockSession({ userId: user.id, isLoggedIn: true });
+
+    const response = await callRouteWithParams(
+      DELETE,
+      { id: server.id },
+      { url: `/api/servers/${server.id}`, method: "DELETE" }
+    );
+    expect(response.status).toBe(200);
+    expect(order[0]).toBe("recompute");
+    expect(order).toContain("invalidate");
   });
 
   it("removes deleted server ID from rule set serverIds", async () => {

@@ -337,11 +337,12 @@ export async function DELETE(
 
   apiLogger.info("Auth", `Media server "${server.name}" removed (deleteData=${deleteData})`);
 
-  // Invalidate caches that depend on server/media data
-  invalidateMediaCaches();
-
-  // Recompute canonical flags for remaining items
+  // Recompute canonical flags for remaining items, then invalidate the caches
+  // that depend on them. In the other order a listing asked for during the
+  // recompute was cached with the old flags (titles whose shown copy was on
+  // this server missing) and served to every tab's `server:changed` refetch.
   await recomputeCanonical(userId);
+  invalidateMediaCaches();
 
   // Close the realtime WebSocket for the removed server.
   eventBus.emit({ type: "server:changed", userId, meta: { serverId: server.id } });

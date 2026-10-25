@@ -15,7 +15,7 @@ import { findScrollContainer } from "@/lib/scroll-utils";
 import { useScrollToTop } from "@/hooks/use-scroll-to-top";
 import { beforeRealtimeEvents, useRealtime } from "@/hooks/use-realtime";
 import { clearLibraryListCache } from "@/lib/media/list-cache";
-import { detailPrefetch } from "@/lib/media/detail-prefetch";
+import { dropMediaDerivedPrefetches } from "@/lib/media/detail-prefetch";
 import { useShellSettings } from "@/components/shell-settings-provider";
 import { WifiOff } from "lucide-react";
 
@@ -28,17 +28,13 @@ import { WifiOff } from "lucide-react";
  */
 function dropClientMediaCaches(): void {
   clearLibraryListCache();
-  detailPrefetch.clear();
+  dropMediaDerivedPrefetches();
 }
 beforeRealtimeEvents(
   ["sync:completed", "watch-history:updated", "server:changed", "settings:changed"],
   dropClientMediaCaches,
 );
 
-// The shell's listeners for those events do nothing themselves: the drop runs
-// before every listener, and a second drop here would come after a page's
-// refetch had started and keep its answer out of the list cache.
-function keepAttached(): void {}
 
 interface UnreachableServer {
   id: string;
@@ -80,12 +76,6 @@ export function AuthenticatedShell({
   // route change.
   const { connected: realtimeConnected, authExpired } = useRealtime("settings:changed", checkMaintenance);
 
-  // Keep a listener on each event that drops the client caches, so
-  // `dropClientMediaCaches` runs even while no page subscribes to it.
-  useRealtime("sync:completed", keepAttached);
-  useRealtime("watch-history:updated", keepAttached);
-  useRealtime("server:changed", keepAttached);
-  useRealtime("settings:changed", keepAttached);
 
   // A media server's socket dropping or recovering now arrives as a push
   // (bridged from realtimeBus); previously this banner waited on the sidebar's

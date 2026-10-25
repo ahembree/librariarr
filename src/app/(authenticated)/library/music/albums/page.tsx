@@ -183,6 +183,8 @@ export default function AllAlbumsPage() {
   const fetchAlbums = useCallback(async () => {
     const token = ++reqToken.current;
     setLoading(true);
+    // Set once this request's list is on screen, from the cache or the server.
+    let applied = false;
     try {
       const params = new URLSearchParams();
       params.set("limit", "0");
@@ -198,11 +200,16 @@ export default function AllAlbumsPage() {
       // shown at once, an older one shown and then refreshed behind it.
       await loadCachedList<{ albums?: typeof albums }>("/api/media/music/albums/all", params, (data) => {
         if (token !== reqToken.current) return;
+        applied = true;
         setAlbums(data.albums || []);
         setLoading(false);
       });
     } catch (error) {
       console.error("Failed to fetch albums:", error);
+      // A failed load with nothing shown for it empties the list, as it did
+      // before the cache: the previous list under the new filters would read
+      // as their result.
+      if (!applied && token === reqToken.current) setAlbums([]);
     } finally {
       if (token === reqToken.current) setLoading(false);
     }

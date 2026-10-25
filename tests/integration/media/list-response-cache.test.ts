@@ -31,6 +31,8 @@ import {
   listCacheKey,
   withListResponseCache,
   LIST_RESPONSE_CACHE_MAX_ENTRIES,
+  LIST_RESPONSE_CACHE_MAX_BYTES,
+  LIST_RESPONSE_CACHE_MAX_TOTAL_BYTES,
 } from "@/lib/api/cached-list-response";
 import { NextRequest, NextResponse } from "next/server";
 
@@ -211,6 +213,23 @@ describe("library listing response cache", () => {
       // Stored: the next visit is answered without running the handler.
       await handler(new NextRequest("http://localhost/api/x?i=0"));
       expect(slowCalls).toBe(1);
+    });
+
+    it("keeps the listings under their total byte budget, dropping the oldest", async () => {
+      const user = await createTestUser();
+      setMockSession({ userId: user.id, isLoggedIn: true });
+      // Incompressible bodies just under the per-entry cap, sent as-is (no
+      // gzip), so each entry stores its full size.
+      const size = LIST_RESPONSE_CACHE_MAX_BYTES - 1024;
+      const handler = withListResponseCache("test-bytes", async () =>
+        new NextResponse(new Uint8Array(size), { headers: { "Content-Type": "application/octet-stream" } }),
+      );
+      const fit = Math.floor(LIST_RESPONSE_CACHE_MAX_TOTAL_BYTES / size);
+      for (let i = 0; i <= fit; i++) {
+        await handler(new NextRequest(`http://localhost/api/x?i=${i}`));
+      }
+      expect(appCache.get(listCacheKey("test-bytes", "http://localhost/api/x?i=0"))).toBeUndefined();
+      expect(appCache.get(listCacheKey("test-bytes", `http://localhost/api/x?i=${fit}`))).toBeDefined();
     });
 
     it("names its keys under the prefix invalidateMediaCaches drops", () => {

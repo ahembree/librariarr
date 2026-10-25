@@ -29,6 +29,13 @@ export const LIST_RESPONSE_CACHE_MAX_ENTRIES = 24;
  */
 export const LIST_RESPONSE_CACHE_MAX_BYTES = 8 * 1024 * 1024;
 
+/**
+ * What every kept listing may hold together (compressed). The entry bound
+ * alone let two dozen near-limit bodies hold ~190 MB on a small NAS; past this
+ * the oldest are dropped, as past the entry bound.
+ */
+export const LIST_RESPONSE_CACHE_MAX_TOTAL_BYTES = 48 * 1024 * 1024;
+
 interface StoredResponse {
   status: number;
   headers: [string, string][];
@@ -40,27 +47,34 @@ interface StoredResponse {
 const PER_RESPONSE_HEADERS = new Set(["content-encoding", "content-length", "vary"]);
 
 /**
- * The keys stored, oldest first, so the oldest can be dropped past the bound.
+ * The keys stored, oldest first, with each body's size, so the oldest can be
+ * dropped past either bound.
  * A key `invalidateMediaCaches()` already removed may linger here; such a key
  * is forgotten without touching `appCache`, since the same listing may be
  * recomputing under it and invalidating would throw that run's result away.
  * Pinned to `globalThis` like `appCache` itself, so every module copy bounds
  * the same set of entries.
  */
-const globalForListKeys = globalThis as unknown as { listResponseCacheKeys: Set<string> | undefined };
-const storedKeys = (globalForListKeys.listResponseCacheKeys ??= new Set<string>());
+const globalForListKeys = globalThis as unknown as { listResponseCacheSizes: Map<string, number> | undefined };
+const storedSizes = (globalForListKeys.listResponseCacheSizes ??= new Map<string, number>());
 
-function remember(key: string): void {
-  storedKeys.delete(key);
-  storedKeys.add(key);
+function remember(key: string, bytes: number): void {
+  storedSizes.delete(key);
+  storedSizes.set(key, bytes);
   // Keys whose entry is already gone (invalidated or expired) hold no space.
-  for (const stored of storedKeys) {
-    if (stored !== key && appCache.get(stored) === undefined) storedKeys.delete(stored);
+  for (const stored of storedSizes.keys()) {
+    if (stored !== key && appCache.get(stored) === undefined) storedSizes.delete(stored);
   }
-  while (storedKeys.size > LIST_RESPONSE_CACHE_MAX_ENTRIES) {
-    const oldest = storedKeys.values().next().value;
+  let total = 0;
+  for (const size of storedSizes.values()) total += size;
+  while (
+    storedSizes.size > 1 &&
+    (storedSizes.size > LIST_RESPONSE_CACHE_MAX_ENTRIES || total > LIST_RESPONSE_CACHE_MAX_TOTAL_BYTES)
+  ) {
+    const oldest = storedSizes.keys().next().value;
     if (oldest === undefined) break;
-    storedKeys.delete(oldest);
+    total -= storedSizes.get(oldest) ?? 0;
+    storedSizes.delete(oldest);
     appCache.invalidate(oldest);
   }
 }
@@ -121,7 +135,7 @@ export function withListResponseCache(
       {
         shouldCache: (value) => {
           const keep = value.status === 200 && value.body.byteLength <= LIST_RESPONSE_CACHE_MAX_BYTES;
-          if (keep) remember(key);
+          if (keep) remember(key, value.body.byteLength);
           return keep;
         },
       },

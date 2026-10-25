@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   createPrefetchStore,
   detailPrefetch,
+  dropMediaDerivedPrefetches,
   mediaPlaysUrl,
   prefetchMediaDetail,
   prefetchMediaRecord,
@@ -99,6 +100,16 @@ describe("createPrefetchStore", () => {
     expect(store.take("/c")).not.toBeNull();
   });
 
+  it("clearWhere forgets only what it is asked to", () => {
+    fetchMock.mockResolvedValue(respond({}));
+    const store = createPrefetchStore(30_000, 10);
+    store.prefetch("/a");
+    store.prefetch("/b");
+    store.clearWhere((url) => url === "/a");
+    expect(store.take("/a")).toBeNull();
+    expect(store.take("/b")).not.toBeNull();
+  });
+
   it("clear forgets everything", () => {
     fetchMock.mockResolvedValue(respond({}));
     const store = createPrefetchStore(30_000, 10);
@@ -139,5 +150,15 @@ describe("detail prefetches", () => {
     prefetchMediaRecord("m1");
     prefetchMediaDetail("m1", { mediaType: "MOVIE", plays: false });
     expect(fetchMock.mock.calls.filter((c) => c[0] === "/api/media/m1")).toHaveLength(1);
+  });
+
+  it("drops records and play pages on a media change but keeps the Arr/Seerr matches", () => {
+    fetchMock.mockResolvedValue(respond({}));
+    prefetchMediaDetail("m1", { mediaType: "MOVIE", plays: true });
+    dropMediaDerivedPrefetches();
+    expect(detailPrefetch.take("/api/media/m1")).toBeNull();
+    expect(detailPrefetch.take(mediaPlaysUrl("m1", 1))).toBeNull();
+    expect(detailPrefetch.take("/api/media/m1/arr-info")).not.toBeNull();
+    expect(detailPrefetch.take("/api/media/m1/seerr-info")).not.toBeNull();
   });
 });

@@ -36,11 +36,31 @@ const resyncListeners = new Set<() => void>();
 const preHandlers = new Map<string, Set<() => void>>();
 const preHandledEvents = new WeakSet<Event>();
 
+// One listener per pre-handled type, kept so the same function can be attached
+// to every source and removed again. Whichever listener an event reaches
+// first — this one or a subscriber's — runs the pre-handlers, once.
+const preDispatchers = new Map<string, (e: MessageEvent) => void>();
+
+function preDispatcherFor(eventType: string): (e: MessageEvent) => void {
+  let dispatch = preDispatchers.get(eventType);
+  if (!dispatch) {
+    dispatch = (e: MessageEvent) => {
+      if (preHandledEvents.has(e)) return;
+      preHandledEvents.add(e);
+      runPreHandlers(preHandlers.get(eventType) ?? []);
+    };
+    preDispatchers.set(eventType, dispatch);
+  }
+  return dispatch;
+}
+
 /**
  * Run `fn` before any subscriber's callback whenever one of `eventTypes`
  * arrives, and once before a reconnect's resync. For dropping client-side
- * caches the callbacks then refetch through. It fires only while something
- * subscribes to the event type. Returns the unregister function.
+ * caches the callbacks then refetch through. It has its own listener on the
+ * shared stream, so it runs whether or not anything subscribes to the event
+ * type — while the stream is open, which some subscriber keeps it. Returns the
+ * unregister function.
  */
 export function beforeRealtimeEvents(eventTypes: readonly string[], fn: () => void): () => void {
   for (const type of eventTypes) {
@@ -48,11 +68,20 @@ export function beforeRealtimeEvents(eventTypes: readonly string[], fn: () => vo
     if (!set) {
       set = new Set();
       preHandlers.set(type, set);
+      sharedSource?.addEventListener(type, preDispatcherFor(type));
     }
     set.add(fn);
   }
   return () => {
-    for (const type of eventTypes) preHandlers.get(type)?.delete(fn);
+    for (const type of eventTypes) {
+      const set = preHandlers.get(type);
+      if (!set) continue;
+      set.delete(fn);
+      if (set.size === 0) {
+        preHandlers.delete(type);
+        sharedSource?.removeEventListener(type, preDispatcherFor(type));
+      }
+    }
   };
 }
 
@@ -234,6 +263,10 @@ function createSource(): EventSource | null {
         scheduleReconnect();
       });
     };
+    // The pre-handlers' own listeners first, then every subscriber's.
+    for (const eventType of preHandlers.keys()) {
+      source.addEventListener(eventType, preDispatcherFor(eventType));
+    }
     // Re-attach any subscriber handlers to the new source.
     for (const [eventType, handlers] of eventHandlers) {
       for (const handler of handlers) {
@@ -381,10 +414,7 @@ export function useRealtime(
     }
 
     const handler = (e: MessageEvent) => {
-      if (!preHandledEvents.has(e)) {
-        preHandledEvents.add(e);
-        runPreHandlers(preHandlers.get(eventType) ?? []);
-      }
+      preDispatcherFor(eventType)(e);
       try {
         const data = JSON.parse(e.data);
         callbackRef.current(data);
