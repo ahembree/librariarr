@@ -203,6 +203,22 @@ test.describe("dashboard refresh", () => {
     expect(h.layoutGets()).toBe(0);
   });
 
+  test("a visit after a client-side navigation reads the library types again", async ({ page }) => {
+    const h = await setup(page);
+    // The layout read none (the e2e database has no libraries), which the
+    // dashboard reads as every tile. Since then only Series is left.
+    h.setTypes(["SERIES"]);
+    await page.goto("/system/logs");
+    await page.getByRole("link", { name: /^Dashboard$/ }).first().click();
+    await page.waitForURL((url) => url.pathname === "/");
+
+    const library = page.locator("section", {
+      has: page.getByRole("heading", { name: "Library", exact: true }),
+    });
+    await expect(library.locator('a[href="/library/series"]')).toBeVisible();
+    await expect(movieTile(page)).toHaveCount(0);
+  });
+
   test("a deleted selection falls back to all servers", async ({ page }) => {
     const h = await setup(page);
     await page.goto("/");

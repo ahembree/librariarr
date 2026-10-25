@@ -12,6 +12,7 @@ import {
 } from "@/lib/auth/password-sign-in";
 import { hasRecentLogin } from "@/lib/auth/recent-login";
 import { reauthRequired } from "@/lib/auth/reauth";
+import { announceDisplaySettingsChanged } from "@/lib/settings/display-settings-events";
 
 /**
  * Restore the previously-saved SSO configuration from the snapshot taken on
@@ -164,6 +165,8 @@ export async function POST(request: NextRequest) {
   }
 
   apiLogger.info("Auth", "SSO configuration reverted to previous snapshot");
+  // The revert unlinks the SSO identity, which the user chip names.
+  announceDisplaySettingsChanged(userId);
 
   return NextResponse.json({ ok: true });
 }

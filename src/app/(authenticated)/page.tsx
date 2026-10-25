@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -130,8 +130,15 @@ function SectionHeader({ label, children }: { label: string; children?: React.Re
   );
 }
 
+const subscribeNothing = () => () => {};
+
 export default function DashboardPage() {
   const router = useRouter();
+  // False only on the render that hydrates server HTML: the visit the layout
+  // was rendered for. A client-side navigation renders the page without the
+  // layout being read again, so the layout's figures are as old as the page
+  // load and a later visit asks for its own.
+  const hydrated = useSyncExternalStore(subscribeNothing, () => true, () => false);
   // The saved layout and the user's name, read by the server layout. Null
   // outside it or when that read failed: both are then fetched as before.
   const shell = useShellSettings();
@@ -149,16 +156,21 @@ export default function DashboardPage() {
   // Whether the saved layout and the library types have been answered (or
   // failed). The zones that depend on them wait for them; nothing else does.
   const [layoutSettled, setLayoutSettled] = useState(shell !== null);
-  const [typesSettled, setTypesSettled] = useState(shellSnapshot !== null);
+  // The layout read the library types too (the sidebar's links are built from
+  // them). Only the visit it rendered takes them: the types change when a
+  // server or library is added or turned off, which nothing re-reads into the
+  // layout's copy.
+  const [typesFromLayout] = useState(() => shellSnapshot !== null && !hydrated);
+  const [typesSettled, setTypesSettled] = useState(typesFromLayout);
   const [scheduleInfo, setScheduleInfo] = useState<ScheduleInfo | null>(null);
   const [editMode, setEditMode] = useState(false);
   const [servers, setServers] = useState<DashboardServer[]>([]);
   const [selectedServerId, setSelectedServerId] = useState<string>(ALL_SERVERS);
   const [selectedMediaType, setSelectedMediaType] = useState<string>(ALL_TYPES);
-  // The layout read the library types too (the sidebar's links are built from
-  // them), so the first load takes those and only a refresh asks again.
-  const [availableTypes, setAvailableTypes] = useState<string[]>(() => shellSnapshot?.libraryTypes.types ?? []);
-  const typesFromLayoutRef = useRef(shellSnapshot !== null);
+  const [availableTypes, setAvailableTypes] = useState<string[]>(() =>
+    typesFromLayout ? (shellSnapshot?.libraryTypes.types ?? []) : [],
+  );
+  const typesFromLayoutRef = useRef(typesFromLayout);
   const [editingCustomCard, setEditingCustomCard] = useState<{ cardId: string; config: CustomCardConfig } | null>(null);
   const [fetchedUserName, setUserName] = useState<string>("");
   const userName = shellSnapshot?.user.username ?? fetchedUserName;

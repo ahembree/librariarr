@@ -30,6 +30,14 @@ vi.mock("@/lib/logger", () => ({
 // Import route handler AFTER mocks
 import { POST } from "@/app/api/auth/plex/link/route";
 
+import { eventBus, type AppEvent } from "@/lib/events/event-bus";
+
+// Display-settings announcements, cleared before every test.
+let events: AppEvent[] = [];
+eventBus.subscribe((e) => events.push(e));
+const announced = (userId: string) =>
+  events.filter((e) => e.type === "display-settings:changed" && e.userId === userId).length;
+
 const prisma = getTestPrisma();
 
 /** An admin with no Plex account linked yet (the factory always fills one in). */
@@ -40,6 +48,7 @@ async function createUserWithoutPlex() {
 
 describe("POST /api/auth/plex/link", () => {
   beforeEach(async () => {
+    events = [];
     await cleanDatabase();
     clearMockSession();
     mockCheckPlexPin.mockReset();
@@ -159,6 +168,8 @@ describe("POST /api/auth/plex/link", () => {
     expect(linked.plexId).toBe("99999");
     expect(linked.plexToken).toBe("tok123");
     expect(linked.email).toBe("plexuser@example.com");
+    // The user chip names the sign-in method.
+    expect(announced(user.id)).toBe(1);
   });
 
   it("returns 500 when checkPlexPin throws an error", async () => {

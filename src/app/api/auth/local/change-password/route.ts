@@ -12,6 +12,7 @@ import {
 import { hasRecentLogin } from "@/lib/auth/recent-login";
 import { reauthRequired } from "@/lib/auth/reauth";
 import { isPasswordSignInEnabled } from "@/lib/auth/password-sign-in";
+import { announceDisplaySettingsChanged } from "@/lib/settings/display-settings-events";
 
 export async function POST(request: NextRequest) {
   const session = await getSession();
@@ -131,6 +132,8 @@ export async function POST(request: NextRequest) {
 
     const changes = [hasNewUsername && "username", hasNewPassword && "password"].filter(Boolean).join(" and ");
     apiLogger.info("Auth", `Credentials updated (${changes}) for "${user.username}"`);
+    // The user chip and the dashboard greeting show the display name.
+    if (hasNewUsername) announceDisplaySettingsChanged(user.id);
 
     return NextResponse.json({
       success: true,

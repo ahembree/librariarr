@@ -12,6 +12,7 @@ import {
   lockSignInSettings,
   turnsPasswordSignInOn,
 } from "@/lib/auth/password-sign-in";
+import { announceDisplaySettingsChanged } from "@/lib/settings/display-settings-events";
 
 /**
  * Link an SSO subject identifier to the currently signed-in admin account.
@@ -96,6 +97,8 @@ export async function POST(request: NextRequest) {
   await session.save();
 
   apiLogger.info("Auth", `SSO linked: ${trimmedSubject}`);
+  // The user chip names the sign-in method.
+  announceDisplaySettingsChanged(session.userId);
 
   return NextResponse.json({
     ssoSubject: user.ssoSubject,
@@ -215,6 +218,7 @@ export async function DELETE(request: NextRequest) {
   await session.save();
 
   apiLogger.info("Auth", "SSO unlinked");
+  announceDisplaySettingsChanged(userId);
 
   return NextResponse.json({
     ssoSubject: null,
