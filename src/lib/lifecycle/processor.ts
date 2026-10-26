@@ -3,7 +3,7 @@ import type { LibraryType, Prisma } from "@/generated/prisma/client";
 import { hasArrRules, hasSeerrRules, hasAnyActiveRules } from "@/lib/rules/lifecycle-engine";
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import { logger } from "@/lib/logger";
-import { executeAction, extractActionError, describeActionError } from "@/lib/lifecycle/actions";
+import { ArrExecutionContext, executeAction, extractActionError, describeActionError } from "@/lib/lifecycle/actions";
 import { actionTargetTitle, actionTitleSnapshot, type ActionTargetParts } from "@/lib/lifecycle/action-target";
 import { loadMemberEpisodes } from "@/lib/lifecycle/member-episodes";
 import { formatMediaItemTitle, seriesTitleOf } from "@/lib/media/display-title";
@@ -879,8 +879,10 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
   // Actions left because an ad-hoc query action was running: logged once,
   // not once per action — a query run can span the whole of pass 2.
   let leftForQuery = 0;
-  // Actions handed to the Arr apps this run.
+  // Actions handed to the Arr apps this run, and what they share: each
+  // instance's family and tag list, read once for the run.
   let attempted = 0;
+  const arrContext = new ArrExecutionContext();
   for (const { action, mediaItem, filteredMatchedIds } of executable) {
     // Held by the ceiling: leave it PENDING and untouched so the Pending page
     // can execute it after review. Only destructive actions are held — an
@@ -991,7 +993,7 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
     // what its log line, notifications and history name (see `executedTitle`).
     const running = { ...action, matchedMediaItemIds: filteredMatchedIds, mediaItem, memberEpisodes: runningEpisodes };
     try {
-      const outcome = await executeAction({ ...running, targetTitle: actionTargetTitle(running) });
+      const outcome = await executeAction({ ...running, targetTitle: actionTargetTitle(running) }, undefined, arrContext);
 
       // Compute deleted bytes for stats tracking (only for delete actions)
       const deletedBytes = await computeDeletedBytes(action.actionType, mediaItem, filteredMatchedIds, outcome);

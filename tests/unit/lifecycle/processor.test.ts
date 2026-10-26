@@ -87,6 +87,7 @@ vi.mock("@/lib/lifecycle/actions", async (importOriginal) => {
     executeAction: mockExecuteAction,
     extractActionError: mockExtractActionError,
     describeActionError: actual.describeActionError,
+    ArrExecutionContext: actual.ArrExecutionContext,
   };
 });
 vi.mock("@/lib/lifecycle/collections", () => ({
@@ -134,6 +135,7 @@ import {
   processLifecycleRules,
   executeLifecycleActions,
 } from "@/lib/lifecycle/processor";
+import { ArrExecutionContext } from "@/lib/lifecycle/actions";
 
 /**
  * Every test starts from `vi.resetAllMocks()` (so no test inherits another's
@@ -1776,6 +1778,9 @@ describe("executeLifecycleActions", () => {
 
     expect(mockExecuteAction).toHaveBeenCalledWith(
       expect.objectContaining({ id: "a1", mediaItem }),
+      undefined,
+      // One context for the whole run: each instance's tags are read once.
+      expect.any(ArrExecutionContext),
     );
     expect(mockPrisma.lifecycleAction.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -2111,7 +2116,7 @@ describe("executeLifecycleActions", () => {
 
       await executeLifecycleActions("u1");
 
-      expect(mockExecuteAction).toHaveBeenCalledWith(expect.objectContaining({ matchedMediaItemIds: ["ep2"] }));
+      expect(mockExecuteAction).toHaveBeenCalledWith(expect.objectContaining({ matchedMediaItemIds: ["ep2"] }), undefined, expect.anything());
       expect(mockPrisma.lifecycleAction.updateMany).toHaveBeenCalledWith(expect.objectContaining({
         data: expect.objectContaining({
           status: "COMPLETED",

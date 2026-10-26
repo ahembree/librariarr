@@ -87,6 +87,7 @@ vi.mock("@/lib/lifecycle/actions", async (importOriginal) => {
     executeAction: mockExecuteAction,
     extractActionError: mockExtractActionError,
     describeActionError: actual.describeActionError,
+    ArrExecutionContext: actual.ArrExecutionContext,
   };
 });
 vi.mock("@/lib/lifecycle/collections", () => ({

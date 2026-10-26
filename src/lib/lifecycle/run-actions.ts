@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
-import { executeAction, extractActionError, describeActionError } from "@/lib/lifecycle/actions";
+import { ArrExecutionContext, executeAction, extractActionError, describeActionError } from "@/lib/lifecycle/actions";
 import { UnreachableInstances } from "@/lib/lifecycle/unreachable-instances";
 import { actionTargetTitle, actionTitleSnapshot } from "@/lib/lifecycle/action-target";
 import { loadMemberEpisodes } from "@/lib/lifecycle/member-episodes";
@@ -146,6 +146,8 @@ export async function executeActionsForItems(
   // Once the Arr instance fails at the host level, the remaining items fail
   // with that same error instead of each paying the retry budget again.
   const unreachable = new UnreachableInstances();
+  // The instance's tag list, read once for the run rather than per item.
+  const arrContext = new ArrExecutionContext();
   // An item acted on through exactly one OTHER episode is named after it.
   const memberEpisodes = await loadMemberEpisodes(
     items.map((item) => ({ actionType, matchedMediaItemIds: episodeIdMap.get(item.id), mediaItem: item })),
@@ -178,7 +180,7 @@ export async function executeActionsForItems(
         removeArrTags: config.removeArrTags,
         targetTitle: title,
         mediaItem: item,
-      }, reportStep);
+      }, reportStep, arrContext);
 
       // Compute deleted bytes for stats tracking (only for delete actions)
       const deletedBytes = await computeDeletedBytes(actionType, item, matchedMediaItemIds, outcome);
