@@ -196,7 +196,8 @@ describe("executeQuery — paths", () => {
       user.id, 1, 50, (u) => progress.push(u),
     );
     expect(titles(res)).toEqual(["Big Movie"]);
-    expect(mockFetchArr).toHaveBeenCalledWith(user.id, { radarr: "radarr-1" }, ["MOVIE"], expect.any(Function));
+    // No criterion reads Custom Format Score, so Radarr's /moviefile sweep is skipped.
+    expect(mockFetchArr).toHaveBeenCalledWith(user.id, { radarr: "radarr-1" }, ["MOVIE"], expect.any(Function), { customFormatScores: false });
     expect(mockFetchSeerr).toHaveBeenCalledWith(user.id, ["MOVIE"], expect.any(Function));
     const plan = progress.find((p) => p.type === "plan") as { phases: Array<{ key: string }> };
     expect(plan.phases.map((p) => p.key)).toEqual(["servers", "arr", "seerr", "query", "evaluate", "finalize"]);
@@ -227,7 +228,7 @@ describe("executeQuery — paths", () => {
     expect(res.items.map((i) => i.type)).not.toContain("SERIES");
     expect(titles(res)).toEqual(["Big Movie", "Small Movie"]);
     expect(res.warnings).toEqual(["SERIES left out"]);
-    expect(mockFetchArr).toHaveBeenCalledWith(user.id, { radarr: "radarr-1" }, ["MOVIE"], undefined);
+    expect(mockFetchArr).toHaveBeenCalledWith(user.id, { radarr: "radarr-1" }, ["MOVIE"], undefined, { customFormatScores: false });
   });
 
   it("warns only about a left-out type the user has a library for", async () => {

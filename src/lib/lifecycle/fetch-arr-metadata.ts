@@ -1,13 +1,13 @@
-import { prisma } from "@/lib/db";
-import { RadarrClient } from "@/lib/arr/radarr-client";
-import { SonarrClient } from "@/lib/arr/sonarr-client";
-import { LidarrClient } from "@/lib/arr/lidarr-client";
-import { mapRadarrMovie, mapSonarrSeries, mapLidarrArtist } from "@/lib/arr/metadata";
-import { splitProgress, subProgress, type FractionReporter } from "@/lib/progress/fraction";
+import { appCache } from "@/lib/cache/memory-cache";
+import { loadArrFamilyData, loadArrRecord } from "@/lib/arr/family-data";
+import {
+  ARR_FAMILY_FOR_TYPE,
+  countArrInstances,
+  findArrInstance,
+  findArrInstances,
+} from "@/lib/arr/instances";
+import type { FractionReporter } from "@/lib/progress/fraction";
 import type { ArrDataMap } from "@/lib/rules/lifecycle-engine";
-
-// How often (in items) the in-memory mapping loop reports sub-progress.
-const MAP_PROGRESS_INTERVAL = 500;
 
 /** Human label for the Arr family that serves a library type. */
 export function arrFamilyLabel(type: "MOVIE" | "SERIES" | "MUSIC"): string {
@@ -34,11 +34,11 @@ export async function resolveArrInstanceScope(
   arrInstanceId?: string | null,
 ): Promise<{ id: string; name: string; enabled: boolean } | null> {
   if (!arrInstanceId) return null;
-  const where = { id: arrInstanceId, userId };
-  const select = { id: true, name: true, enabled: true } as const;
-  if (type === "MOVIE") return prisma.radarrInstance.findFirst({ where, select });
-  if (type === "MUSIC") return prisma.lidarrInstance.findFirst({ where, select });
-  return prisma.sonarrInstance.findFirst({ where, select });
+  return findArrInstance(
+    ARR_FAMILY_FOR_TYPE[type],
+    { id: arrInstanceId, userId },
+    { id: true, name: true, enabled: true },
+  );
 }
 
 /**
@@ -63,13 +63,41 @@ export async function hasEnabledArrInstances(
 ): Promise<boolean> {
   const scoped = await resolveArrInstanceScope(userId, type, arrInstanceId);
   if (scoped) return scoped.enabled;
-  if (type === "MOVIE") {
-    return (await prisma.radarrInstance.count({ where: { userId, enabled: true } })) > 0;
-  }
-  if (type === "MUSIC") {
-    return (await prisma.lidarrInstance.count({ where: { userId, enabled: true } })) > 0;
-  }
-  return (await prisma.sonarrInstance.count({ where: { userId, enabled: true } })) > 0;
+  return (await countArrInstances(ARR_FAMILY_FOR_TYPE[type], { userId, enabled: true })) > 0;
+}
+
+export interface FetchArrMetadataOptions {
+  /**
+   * Read Radarr's custom-format scores (`ArrFamilyLoadOptions`). Pass
+   * `hasCustomFormatScoreRules(rules)`; defaults to true, the complete answer.
+   */
+  customFormatScores?: boolean;
+}
+
+/** The instance scope as a cache key part: the named instance, or every one. */
+async function scopeKey(
+  userId: string,
+  type: "MOVIE" | "SERIES" | "MUSIC",
+  arrInstanceId?: string | null,
+): Promise<{ scoped: { id: string } | null; key: string }> {
+  const scoped = await resolveArrInstanceScope(userId, type, arrInstanceId);
+  return { scoped, key: scoped?.id ?? "*" };
+}
+
+async function loadScoped(
+  userId: string,
+  type: "MOVIE" | "SERIES" | "MUSIC",
+  scoped: { id: string } | null,
+  onProgress: FractionReporter | undefined,
+  options: FetchArrMetadataOptions,
+): Promise<ArrDataMap> {
+  const family = ARR_FAMILY_FOR_TYPE[type];
+  const where = scoped ? { id: scoped.id, userId, enabled: true } : { userId, enabled: true };
+  const instances = await findArrInstances(family, where);
+  return loadArrFamilyData(family, instances, {
+    customFormatScores: options.customFormatScores ?? true,
+    onProgress,
+  });
 }
 
 /**
@@ -78,118 +106,107 @@ export async function hasEnabledArrInstances(
  * `resolveArrInstanceScope`); otherwise every enabled instance is, oldest
  * first, and an item on several keeps the OLDEST instance's record — a fixed
  * order, where the unordered query let the answer change from run to run.
+ * The instances are read in parallel (`loadArrFamilyData`).
+ *
+ * Always read fresh: detection and execution decide what to delete from it.
+ * The rule editor's previews read through `fetchArrMetadataForPreview`.
  */
 export async function fetchArrMetadata(
   userId: string,
   type: "MOVIE" | "SERIES" | "MUSIC",
   onProgress?: FractionReporter,
   arrInstanceId?: string | null,
+  options: FetchArrMetadataOptions = {},
 ): Promise<ArrDataMap> {
-  const arrData: ArrDataMap = {};
-  const scoped = await resolveArrInstanceScope(userId, type, arrInstanceId);
-  const instanceWhere = scoped
-    ? { id: scoped.id, userId, enabled: true }
-    : { userId, enabled: true };
-  const instanceOrder = { createdAt: "asc" } as const;
-  const put = (key: string, meta: ArrDataMap[string]) => {
-    if (!(key in arrData)) arrData[key] = meta;
-  };
+  const { scoped } = await scopeKey(userId, type, arrInstanceId);
+  return loadScoped(userId, type, scoped, onProgress, options);
+}
 
-  if (type === "MOVIE") {
-    const instances = await prisma.radarrInstance.findMany({
-      where: instanceWhere,
-      orderBy: instanceOrder,
-    });
-    const reporters = splitProgress(onProgress, instances.length);
-    for (let idx = 0; idx < instances.length; idx++) {
-      const inst = instances[idx];
-      const report = reporters[idx];
-      const client = new RadarrClient(inst.url, inst.apiKey);
-      const [movies, profiles, tags] = await Promise.all([
-        client.getMovies(),
-        client.getQualityProfiles(),
-        client.getTags(),
-      ]);
-      report(0.1);
-      const tagMap = new Map(tags.map((t) => [t.id, t.label]));
-      const profileMap = new Map(profiles.map((p) => [p.id, p.name]));
-      // customFormatScore is only computed by Radarr's /moviefile endpoint,
-      // never on the /movie listing — fetch it separately and merge it in.
-      // This chunked sweep is the slow part, so it owns the bulk of the bar.
-      const scores = await client.getCustomFormatScores(
-        movies.filter((m) => m.hasFile).map((m) => m.id),
-        subProgress(report, 0.1, 0.85),
-      );
-      const mapReport = subProgress(report, 0.85, 1);
-      for (let i = 0; i < movies.length; i++) {
-        const movie = movies[i];
-        put(String(movie.tmdbId), mapRadarrMovie(
-          movie, profileMap, tagMap, scores.get(movie.id) ?? null,
-        ));
-        if (mapReport && (i + 1) % MAP_PROGRESS_INTERVAL === 0) {
-          mapReport((i + 1) / movies.length);
-        }
-      }
-      report(1);
-    }
-  } else if (type === "MUSIC") {
-    const instances = await prisma.lidarrInstance.findMany({
-      where: instanceWhere,
-      orderBy: instanceOrder,
-    });
-    const reporters = splitProgress(onProgress, instances.length);
-    for (let idx = 0; idx < instances.length; idx++) {
-      const inst = instances[idx];
-      const report = reporters[idx];
-      const client = new LidarrClient(inst.url, inst.apiKey);
-      const [artists, profiles, tags] = await Promise.all([
-        client.getArtists(),
-        client.getQualityProfiles(),
-        client.getTags(),
-      ]);
-      report(0.5);
-      const tagMap = new Map(tags.map((t) => [t.id, t.label]));
-      const profileMap = new Map(profiles.map((p) => [p.id, p.name]));
-      const mapReport = subProgress(report, 0.5, 1);
-      for (let i = 0; i < artists.length; i++) {
-        const a = artists[i];
-        put(a.foreignArtistId, mapLidarrArtist(a, profileMap, tagMap));
-        if (mapReport && (i + 1) % MAP_PROGRESS_INTERVAL === 0) {
-          mapReport((i + 1) / artists.length);
-        }
-      }
-      report(1);
-    }
-  } else {
-    const instances = await prisma.sonarrInstance.findMany({
-      where: instanceWhere,
-      orderBy: instanceOrder,
-    });
-    const reporters = splitProgress(onProgress, instances.length);
-    for (let idx = 0; idx < instances.length; idx++) {
-      const inst = instances[idx];
-      const report = reporters[idx];
-      const client = new SonarrClient(inst.url, inst.apiKey);
-      const [series, profiles, tags, upcoming] = await Promise.all([
-        client.getSeries(),
-        client.getQualityProfiles(),
-        client.getTags(),
-        client.getSeriesIdsWithUpcomingEpisodes(),
-      ]);
-      report(0.5);
-      const tagMap = new Map(tags.map((t) => [t.id, t.label]));
-      const profileMap = new Map(profiles.map((p) => [p.id, p.name]));
-      const mapReport = subProgress(report, 0.5, 1);
-      for (let i = 0; i < series.length; i++) {
-        const s = series[i];
-        put(String(s.tvdbId), mapSonarrSeries(s, profileMap, tagMap, upcoming));
-        if (mapReport && (i + 1) % MAP_PROGRESS_INTERVAL === 0) {
-          mapReport((i + 1) / series.length);
-        }
-      }
-      report(1);
+const ARR_METADATA_CACHE_PREFIX = "arr-metadata:";
+// Long enough that the rule editor's preview, diff and Test Media — often
+// pressed in a row, each reading the whole Arr library — share one read; short
+// enough that a tag changed in the Arr app shows up in the next preview.
+const ARR_METADATA_PREVIEW_TTL_MS = 45_000;
+
+/**
+ * `fetchArrMetadata` for the rule editor's preview, diff and Test Media: the
+ * same answer, shared for `ARR_METADATA_PREVIEW_TTL_MS` (single-flight, so two
+ * previews started together read the Arr library once). A preview only shows
+ * what detection would do; detection and execution never read this cache.
+ *
+ * A read with scores serves a later read without them; one without never
+ * stands in for one that needs them.
+ */
+export async function fetchArrMetadataForPreview(
+  userId: string,
+  type: "MOVIE" | "SERIES" | "MUSIC",
+  onProgress?: FractionReporter,
+  arrInstanceId?: string | null,
+  options: FetchArrMetadataOptions = {},
+): Promise<ArrDataMap> {
+  const { scoped, key } = await scopeKey(userId, type, arrInstanceId);
+  const withScores = options.customFormatScores ?? true;
+  const fullKey = `${ARR_METADATA_CACHE_PREFIX}${type}:${key}:scores`;
+  if (!withScores) {
+    const full = appCache.get<ArrDataMap>(fullKey);
+    if (full) {
+      onProgress?.(1);
+      return full;
     }
   }
+  const cacheKey = withScores ? fullKey : `${ARR_METADATA_CACHE_PREFIX}${type}:${key}:base`;
+  let computed = false;
+  const data = await appCache.getOrSet(
+    cacheKey,
+    () => {
+      computed = true;
+      return loadScoped(userId, type, scoped, onProgress, { customFormatScores: withScores });
+    },
+    ARR_METADATA_PREVIEW_TTL_MS,
+  );
+  if (!computed) onProgress?.(1);
+  return data;
+}
 
-  return arrData;
+/**
+ * The Arr data for ONE item, for Test Media: a map holding at most the record
+ * `fetchArrMetadataForPreview` would hold under `externalId`. Served from the
+ * preview cache when a preview has just read the library; otherwise each
+ * instance in scope is asked for that one record (`loadArrRecord`) rather
+ * than for its whole library, and — as the library read merges them — the
+ * oldest instance holding it answers.
+ */
+export async function fetchArrRecordForPreview(
+  userId: string,
+  type: "MOVIE" | "SERIES" | "MUSIC",
+  externalId: string,
+  arrInstanceId?: string | null,
+  options: FetchArrMetadataOptions = {},
+): Promise<ArrDataMap> {
+  const { scoped, key } = await scopeKey(userId, type, arrInstanceId);
+  const withScores = options.customFormatScores ?? true;
+  const pick = (map: ArrDataMap): ArrDataMap =>
+    externalId in map ? { [externalId]: map[externalId] } : {};
+  const cached =
+    appCache.get<ArrDataMap>(`${ARR_METADATA_CACHE_PREFIX}${type}:${key}:scores`) ??
+    (withScores ? undefined : appCache.get<ArrDataMap>(`${ARR_METADATA_CACHE_PREFIX}${type}:${key}:base`));
+  if (cached) return pick(cached);
+
+  const family = ARR_FAMILY_FOR_TYPE[type];
+  const where = scoped ? { id: scoped.id, userId, enabled: true } : { userId, enabled: true };
+  const instances = await findArrInstances(family, where);
+  const records = await Promise.all(
+    instances.map((instance) => loadArrRecord(family, instance, externalId, { customFormatScores: withScores })),
+  );
+  const found = records.find((record) => record !== null);
+  return found ? { [externalId]: found } : {};
+}
+
+/**
+ * Drop every cached preview read. Called whenever an Arr instance is added,
+ * edited, enabled, disabled or deleted, and after an execution run changed
+ * records in an Arr app (tags, monitoring, quality profiles).
+ */
+export function invalidateArrMetadataCache(): void {
+  appCache.invalidatePrefix(ARR_METADATA_CACHE_PREFIX);
 }

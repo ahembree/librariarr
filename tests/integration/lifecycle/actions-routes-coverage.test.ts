@@ -115,6 +115,38 @@ describe("GET /api/lifecycle/actions — history", () => {
     expect(orphan.items[0].mediaItem).toMatchObject({ id: null, title: "Vanished", type: "MOVIE" });
     expect(body.groups).toHaveLength(2);
   });
+
+  it("keeps the latest action per item across statuses for ALL, newest first, and never pairs two vanished items", async () => {
+    const { user, item } = await movieSetup();
+    await prisma.lifecycleAction.createMany({
+      data: [
+        { userId: user.id, mediaItemId: item.id, ruleSetName: "Gone rule", ruleSetType: "MOVIE", actionType: "DELETE_RADARR", status: "FAILED", scheduledFor: new Date("2025-01-01"), mediaItemTitle: "Heat" },
+        { userId: user.id, mediaItemId: item.id, ruleSetName: "Gone rule", ruleSetType: "MOVIE", actionType: "DELETE_RADARR", status: "COMPLETED", scheduledFor: new Date("2025-03-01"), mediaItemTitle: "Heat" },
+        // Two actions whose items are gone: each is its own row.
+        { userId: user.id, mediaItemId: null, ruleSetName: "Gone rule", ruleSetType: "MOVIE", actionType: "DELETE_RADARR", status: "COMPLETED", scheduledFor: new Date("2025-02-01"), mediaItemTitle: "One" },
+        { userId: user.id, mediaItemId: null, ruleSetName: "Gone rule", ruleSetType: "MOVIE", actionType: "DELETE_RADARR", status: "COMPLETED", scheduledFor: new Date("2025-02-01"), mediaItemTitle: "Two" },
+      ],
+    });
+    setMockSession({ isLoggedIn: true, userId: user.id });
+
+    const body = await expectJson<{ groups: Array<{ ruleSet: { name: string }; items: Array<{ status: string; scheduledFor: string; mediaItem: { title: string } }> }> }>(
+      await callRoute(GET, { url: "/api/lifecycle/actions", searchParams: { status: "ALL" } }),
+      200,
+    );
+
+    expect(body.groups).toHaveLength(1);
+    const items = body.groups[0].items;
+    expect(items).toHaveLength(3);
+    expect(items[0]).toMatchObject({ status: "COMPLETED", scheduledFor: new Date("2025-03-01").toISOString() });
+    expect(new Set(items.slice(1).map((i) => i.mediaItem.title))).toEqual(new Set(["One", "Two"]));
+
+    // Filtered to FAILED, the older failure is the latest of its status.
+    const failed = await expectJson<{ groups: Array<{ items: Array<{ status: string }> }> }>(
+      await callRoute(GET, { url: "/api/lifecycle/actions", searchParams: { status: "FAILED" } }),
+      200,
+    );
+    expect(failed.groups.flatMap((g) => g.items.map((i) => i.status))).toEqual(["FAILED"]);
+  });
 });
 
 describe("POST /api/lifecycle/actions/[id] — refusals", () => {

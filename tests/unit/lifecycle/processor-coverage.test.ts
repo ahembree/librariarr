@@ -54,6 +54,16 @@ const mockPrisma = vi.hoisted(() => ({
   }),
 }));
 
+
+/** Every action id the executor cancelled, in a single-id or a batched delete. */
+function cancelledActionIds(): string[] {
+  return mockPrisma.lifecycleAction.deleteMany.mock.calls.flatMap(([args]) => {
+    const id = (args as { where?: { id?: string | { in?: string[] } } } | undefined)?.where?.id;
+    if (typeof id === "string") return [id];
+    return id?.in ?? [];
+  });
+}
+
 const mockDetectAndSaveMatches = vi.hoisted(() => vi.fn());
 const mockExecuteAction = vi.hoisted(() => vi.fn());
 const mockExtractActionError = vi.hoisted(() => vi.fn());
@@ -63,6 +73,7 @@ const mockFetchSeerrMetadata = vi.hoisted(() => vi.fn());
 const mockHasEnabledArrInstances = vi.hoisted(() => vi.fn());
 const mockHasEnabledSeerrInstances = vi.hoisted(() => vi.fn());
 const mockSyncMediaServer = vi.hoisted(() => vi.fn());
+const mockSyncMediaServerItems = vi.hoisted(() => vi.fn());
 const mockSendDiscordNotification = vi.hoisted(() => vi.fn());
 const mockBuildSuccessSummaryEmbed = vi.hoisted(() => vi.fn());
 const mockBuildMatchChangeEmbed = vi.hoisted(() => vi.fn());
@@ -72,6 +83,32 @@ const mockHasSeerrRules = vi.hoisted(() => vi.fn());
 const mockHasAnyActiveRules = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/db", () => ({ prisma: mockPrisma }));
+// The stored matches are read with SQL (`match-snapshot.ts`); answered here
+// from the rows `ruleMatch.findMany` is stubbed with, projected as the SQL
+// projects them, so every stub below keeps describing the stored matches.
+vi.mock("@/lib/lifecycle/match-snapshot", () => {
+  type Row = { ruleSetId?: string; mediaItemId: string; itemData?: unknown };
+  const stored = async (ruleSetIds: readonly string[]): Promise<Row[]> =>
+    (((await mockPrisma.ruleMatch.findMany()) ?? []) as Row[]).map((r) => ({ ...r, ruleSetId: r.ruleSetId ?? ruleSetIds[0] }));
+  const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+  return {
+    loadStoredMatches: async (ruleSetIds: readonly string[], keys: readonly string[] | null) =>
+      (await stored(ruleSetIds)).map((r) => ({
+        ruleSetId: r.ruleSetId,
+        mediaItemId: r.mediaItemId,
+        itemData:
+          keys && isObject(r.itemData)
+            ? Object.fromEntries(Object.entries(r.itemData).filter(([k]) => keys.includes(k)))
+            : (r.itemData ?? null),
+      })),
+    loadStoredMatchMembers: async (ruleSetIds: readonly string[]) =>
+      (await stored(ruleSetIds)).map((r) => ({
+        ruleSetId: r.ruleSetId,
+        mediaItemId: r.mediaItemId,
+        memberIds: isObject(r.itemData) ? (r.itemData.memberIds ?? null) : null,
+      })),
+  };
+});
 vi.mock("@/lib/logger", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   dbLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -87,6 +124,7 @@ vi.mock("@/lib/lifecycle/actions", async (importOriginal) => {
     executeAction: mockExecuteAction,
     extractActionError: mockExtractActionError,
     describeActionError: actual.describeActionError,
+    ArrExecutionContext: actual.ArrExecutionContext,
   };
 });
 vi.mock("@/lib/lifecycle/collections", () => ({
@@ -99,13 +137,21 @@ vi.mock("@/lib/lifecycle/fetch-arr-metadata", () => ({
   resolveArrInstanceScope: vi.fn().mockResolvedValue(null),
   arrFamilyLabel: (type: string) =>
     type === "MOVIE" ? "Radarr" : type === "MUSIC" ? "Lidarr" : "Sonarr",
+  invalidateArrMetadataCache: () => {},
 }));
 vi.mock("@/lib/lifecycle/fetch-seerr-metadata", () => ({
   fetchSeerrMetadata: mockFetchSeerrMetadata,
+  // One walk for every type a run needs; delegated per type so each
+  // test can keep stubbing the per-type answer.
+  fetchSeerrMetadataByType: async (userId: string, types: string[]) =>
+    Object.fromEntries(await Promise.all(types.map(async (t) => [t, await mockFetchSeerrMetadata(userId, t)]))),
   hasEnabledSeerrInstances: mockHasEnabledSeerrInstances,
 }));
 vi.mock("@/lib/sync/sync-server", () => ({
   syncMediaServer: mockSyncMediaServer,
+}));
+vi.mock("@/lib/sync/sync-incremental", () => ({
+  syncMediaServerItems: mockSyncMediaServerItems,
 }));
 vi.mock("@/lib/discord/client", () => ({
   sendDiscordNotification: mockSendDiscordNotification,
@@ -121,6 +167,7 @@ vi.mock("@/lib/rules/lifecycle-engine", () => ({
   hasWatchedByUserRules: vi.fn(() => false),
   hasPlayActivityRules: vi.fn(() => false),
   hasAnyActiveRules: mockHasAnyActiveRules,
+  hasCustomFormatScoreRules: () => false,
 }));
 
 import {
@@ -136,6 +183,7 @@ import {
  * failing, and the match-change notification ordering.
  */
 import { logger } from "@/lib/logger";
+import { CollectionSyncCache } from "@/lib/lifecycle/collection-sync-cache";
 
 const show = {
   id: "show1", title: "Pilot", parentTitle: "Show", type: "SERIES", seriesKey: "title:show", year: 2020,
@@ -185,7 +233,28 @@ describe("executeLifecycleActions — narrowing and late exceptions", () => {
     await executeLifecycleActions("u1");
 
     expect(mockExecuteAction).not.toHaveBeenCalled();
-    expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledWith({ where: { id: "a1" } });
+    expect(cancelledActionIds()).toContain("a1");
+  });
+
+  it("cancels every doomed action of a run in one statement, logging each", async () => {
+    mockPrisma.lifecycleAction.findMany.mockResolvedValue([
+      seriesAction({ id: "gone1", mediaItemId: null, mediaItem: null }),
+      seriesAction({ id: "stale" }),
+      seriesAction({ id: "gone2", mediaItemId: null, mediaItem: null }),
+    ]);
+    // No current match: "stale" is no longer matched.
+    mockPrisma.ruleMatch.findMany.mockResolvedValue([]);
+    mockPrisma.lifecycleException.findMany.mockResolvedValue([]);
+
+    await executeLifecycleActions("u1");
+
+    expect(mockExecuteAction).not.toHaveBeenCalled();
+    expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledTimes(1);
+    expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledWith({ where: { id: { in: ["gone1", "stale", "gone2"] } } });
+    const info = vi.mocked(logger.info).mock.calls.map((c) => c[1] as string);
+    expect(info).toContain("Deleted action gone1 — media item no longer exists");
+    expect(info).toContain("Deleted action gone2 — media item no longer exists");
+    expect(info.some((m) => m.startsWith("Deleted stale action stale"))).toBe(true);
   });
 
   it("acts only on the members that still match", async () => {
@@ -217,7 +286,7 @@ describe("executeLifecycleActions — narrowing and late exceptions", () => {
     await executeLifecycleActions("u1");
 
     expect(mockExecuteAction).not.toHaveBeenCalled();
-    expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledWith({ where: { id: "a1" } });
+    expect(cancelledActionIds()).toContain("a1");
   });
 
   it("leaves an action PENDING when one of its members was excepted after the run started", async () => {
@@ -272,9 +341,19 @@ describe("executeLifecycleActions — narrowing and late exceptions", () => {
     mockPrisma.ruleMatch.findMany.mockResolvedValue([{ ruleSetId: "rs1", mediaItemId: "show1", itemData: null }]);
     mockPrisma.lifecycleException.findMany.mockResolvedValue([]);
     mockPrisma.mediaItem.aggregate.mockResolvedValue({ _sum: { fileSize: null } });
+    // The show's episodes in the library, then their rating keys.
+    mockPrisma.mediaItem.findMany
+      .mockResolvedValueOnce([{ id: "show1" }, { id: "e2" }])
+      .mockResolvedValueOnce([
+        { ratingKey: "rk-show1", library: { key: "2", mediaServerId: "s1" } },
+        { ratingKey: "rk-e2", library: { key: "2", mediaServerId: "s1" } },
+      ]);
+    // The server cannot be asked about them, so the library is synced — and that fails too.
+    mockSyncMediaServerItems.mockRejectedValue(new Error("plex down"));
     mockSyncMediaServer.mockRejectedValue(new Error("plex down"));
 
     await expect(executeLifecycleActions("u1")).resolves.toBeUndefined();
+    expect(mockSyncMediaServerItems).toHaveBeenCalledWith("s1", ["rk-show1", "rk-e2"], []);
 
     // The delete itself is recorded as done before the re-sync is attempted.
     expect(mockPrisma.lifecycleAction.updateMany).toHaveBeenCalledWith({
@@ -347,7 +426,7 @@ describe("processLifecycleRules — match-change notification", () => {
     expect(mockPrisma.ruleSet.findMany.mock.calls[0][0].where).toEqual({ enabled: true });
     expect(mockBuildMatchChangeEmbed).toHaveBeenCalledWith("Old movies", 3, 0, "MOVIE", ["No Sort", "The Abyss", "Zodiac"], []);
     expect(mockSendDiscordNotification).toHaveBeenCalledWith("https://discord.example/hook", expect.objectContaining({ username: "Bot", avatar_url: "https://a/x.png" }));
-    expect(mockSyncAllCollections).toHaveBeenCalledWith(undefined, expect.any(Map));
+    expect(mockSyncAllCollections).toHaveBeenCalledWith(undefined, expect.any(CollectionSyncCache));
   });
 
   it("sends nothing when the match set did not change, or no webhook is set", async () => {

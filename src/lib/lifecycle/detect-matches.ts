@@ -1,13 +1,16 @@
 import { prisma } from "@/lib/db";
+import { compareIds } from "@/lib/conditions/compare-ids";
+import { findInChunks, inChunks } from "@/lib/conditions/in-chunks";
 import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasArrRules, hasSeerrRules, hasAnyActiveRules, hasWatchedByUserRules, hasSeriesAggregateRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
-import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
-import { fetchSeerrMetadata } from "@/lib/lifecycle/fetch-seerr-metadata";
+import { createRunMetadata } from "@/lib/lifecycle/run-metadata";
 import { checkLifecycleRuleEvaluability } from "@/lib/lifecycle/evaluability";
 import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
 import { logger } from "@/lib/logger";
 import { syncCollectionById, syncAllCollections } from "@/lib/lifecycle/collections";
+import { CollectionSyncCache } from "@/lib/lifecycle/collection-sync-cache";
+import { loadStoredMatches } from "@/lib/lifecycle/match-snapshot";
 import { describePlexError } from "@/lib/plex/errors";
 import { findExceptedItemIds, findExceptionProtectedGroups, isGroupProtected, type ProtectionTarget } from "@/lib/lifecycle/exception-guard";
 import type { Prisma } from "@/generated/prisma/client";
@@ -38,6 +41,9 @@ function formatCriteria(criteria: Array<{ field: string; operator: string; value
 }
 
 // BigInt-safe JSON serializer for Prisma Json columns
+/** Refreshed match snapshots per UPDATE (~2 KB each). */
+const REFRESH_CHUNK = 500;
+
 function jsonSafe(value: unknown): string | number | boolean | object {
   return JSON.parse(JSON.stringify(value, (_, v) =>
     typeof v === "bigint" ? v.toString() : v,
@@ -60,10 +66,12 @@ async function planActionCarryOver(
   carried: Map<string, Record<string, unknown>>,
 ): Promise<Array<{ id: string; data: Prisma.LifecycleActionUncheckedUpdateManyInput }>> {
   if (carried.size === 0) return [];
-  const actions = await prisma.lifecycleAction.findMany({
-    where: { ruleSetId, status: "PENDING", mediaItemId: { in: [...carried.keys()] } },
-    select: { id: true, mediaItemId: true, matchedMediaItemIds: true },
-  });
+  const actions = await findInChunks([...carried.keys()], (ids) =>
+    prisma.lifecycleAction.findMany({
+      where: { ruleSetId, status: "PENDING", mediaItemId: { in: ids } },
+      select: { id: true, mediaItemId: true, matchedMediaItemIds: true },
+    }),
+  );
   if (actions.length === 0) return [];
 
   const memberIds = new Set<string>();
@@ -74,10 +82,9 @@ async function planActionCarryOver(
   }
   const keyOf = new Map<string, string | null>();
   if (memberIds.size > 0) {
-    const rows = await prisma.mediaItem.findMany({
-      where: { id: { in: [...memberIds] } },
-      select: { id: true, dedupKey: true },
-    });
+    const rows = await findInChunks([...memberIds], (ids) =>
+      prisma.mediaItem.findMany({ where: { id: { in: ids } }, select: { id: true, dedupKey: true } }),
+    );
     for (const r of rows) keyOf.set(r.id, r.dedupKey);
   }
 
@@ -151,10 +158,9 @@ async function collapseCopies(
   const allMemberIds = [...new Set(groups.flat().flatMap(membersOf))];
   const memberKeys = new Map<string, string | null>();
   if (allMemberIds.length > 0) {
-    const rows = await prisma.mediaItem.findMany({
-      where: { id: { in: allMemberIds } },
-      select: { id: true, dedupKey: true },
-    });
+    const rows = await findInChunks(allMemberIds, (ids) =>
+      prisma.mediaItem.findMany({ where: { id: { in: ids } }, select: { id: true, dedupKey: true } }),
+    );
     for (const r of rows) memberKeys.set(r.id, r.dedupKey);
   }
 
@@ -164,7 +170,7 @@ async function collapseCopies(
       const idb = String(b.id);
       const byRank = copyRank(ida, alreadyMatched, heldCopies) - copyRank(idb, alreadyMatched, heldCopies);
       if (byRank !== 0) return byRank;
-      return ida < idb ? -1 : ida > idb ? 1 : 0;
+      return compareIds(ida, idb);
     });
     const [rep, ...others] = group;
 
@@ -211,6 +217,23 @@ async function collapseCopies(
 }
 
 /** Order-insensitive fingerprint of the fields `collapseCopies` derives. */
+/**
+ * The keys of a held match's snapshot detection reads: its copies (`copyIdsOf`,
+ * the carry-over), what `collapseFingerprint` and `identityFingerprint`
+ * compare, and the title and criteria a stale match is logged with.
+ */
+const HELD_MATCH_KEYS = [
+  "id",
+  "title",
+  "parentTitle",
+  "year",
+  "externalIds",
+  "memberIds",
+  "servers",
+  "copies",
+  "matchedCriteria",
+] as const;
+
 function collapseFingerprint(item: Record<string, unknown> | undefined): string {
   const members = [...((item?.memberIds as string[] | undefined) ?? [])].sort();
   const servers = ((item?.servers as Array<{ serverId?: string }> | undefined) ?? [])
@@ -463,7 +486,7 @@ export async function detectAndSaveMatches(
             // rescheduled `actionDelayDays` out, and a sticky rule set kept
             // both and armed two actions against one series.
             if (excludedIds.has(item.id as string)) {
-              updated.id = remainingMembers.reduce((min, id) => (id.localeCompare(min) < 0 ? id : min));
+              updated.id = remainingMembers.reduce((min, id) => (compareIds(id, min) < 0 ? id : min));
             }
             filtered.push(updated);
           }
@@ -513,11 +536,10 @@ export async function detectAndSaveMatches(
   // Every match the rule set held before this run: the copy already matched
   // stays a title's representative, a title carries over to another copy when
   // the kept one stops matching (below), and the incremental write tells new,
-  // stale and refreshed matches apart from it.
-  const heldMatches = await prisma.ruleMatch.findMany({
-    where: { ruleSetId: ruleSet.id },
-    select: { mediaItemId: true, itemData: true },
-  });
+  // stale and refreshed matches apart from it. Only the snapshot keys that
+  // bookkeeping reads — unless the rule set is sticky, whose held matches are
+  // returned (and scheduled from) as stored.
+  const heldMatches = await loadStoredMatches([ruleSet.id], ruleSet.stickyMatches ? null : HELD_MATCH_KEYS);
   const heldIds = new Set(heldMatches.map((m) => m.mediaItemId));
   const heldCopyIds = new Set(
     heldMatches.flatMap((m) => copyIdsOf(m.itemData as Record<string, unknown>)),
@@ -658,11 +680,21 @@ export async function detectAndSaveMatches(
     // exception filed, a manual Execute's cleanup) is simply skipped, where a
     // P2025 would roll back every new match and stale removal in the batch.
     await prisma.$transaction([
-      ...refreshed.map((item) =>
-        prisma.ruleMatch.updateMany({
-          where: { ruleSetId: ruleSet.id, mediaItemId: item.id as string },
-          data: { itemData: jsonSafe(item), copyIds: copyIdsOf(item) },
-        }),
+      // The refreshed snapshots, a slice of rows per statement rather than one
+      // statement per match. An UPDATE … FROM skips a row deleted since it was
+      // read, as updateMany did.
+      ...inChunks(refreshed, REFRESH_CHUNK).map((chunk) =>
+        prisma.$executeRawUnsafe(
+          `UPDATE "RuleMatch" rm
+              SET "itemData" = r."itemData", "copyIds" = r."copyIds"
+             FROM jsonb_to_recordset($2::jsonb) AS r("mediaItemId" text, "itemData" jsonb, "copyIds" text[])
+            WHERE rm."ruleSetId" = $1 AND rm."mediaItemId" = r."mediaItemId"`,
+          ruleSet.id,
+          JSON.stringify(
+            chunk.map((item) => ({ mediaItemId: item.id as string, itemData: item, copyIds: copyIdsOf(item) })),
+            (_, v) => (typeof v === "bigint" ? v.toString() : v),
+          ),
+        ),
       ),
       ...[...carried].map(([from, item]) =>
         prisma.ruleMatch.updateMany({
@@ -688,11 +720,11 @@ export async function detectAndSaveMatches(
           ]
         : []),
       ...(removeStale
-        ? [
+        ? inChunks(staleIds).map((ids) =>
             prisma.ruleMatch.deleteMany({
-              where: { ruleSetId: ruleSet.id, mediaItemId: { in: staleIds } },
+              where: { ruleSetId: ruleSet.id, mediaItemId: { in: ids } },
             }),
-          ]
+          )
         : []),
     ]);
   }
@@ -701,34 +733,49 @@ export async function detectAndSaveMatches(
     // Fetch current state of stale items to determine which criteria changed.
     // Scope by the rule set's serverIds so logs can never refer to items outside
     // the rule set's intended library scope.
-    const staleItems = await prisma.mediaItem.findMany({
-      where: {
-        id: { in: staleIds },
-        library: { mediaServerId: { in: serverIds } },
-      },
-      include: {
-        externalIds: true,
-        streams: true,
-        // Re-evaluation needs per-user play history to compute accurate
-        // "no longer matching" reasons for watchedByUser rules. Filtered to
-        // completed plays for the same reason the engines' eager loads are:
-        // this re-runs the Phase 2 evaluator over rows Phase 1 already
-        // filtered, so an unfiltered load makes a partial Tracearr play look
-        // like a watch here and nowhere else — the item would be reported as
-        // "was matching" (i.e. dropped for some unexplained reason) when in
-        // fact it dropped precisely because the abandoned play never counted.
-        ...(hasWatchedByUserRules(rules)
-          ? { watchHistory: { where: COMPLETED_PLAY_FILTER, select: { serverUsername: true } } }
-          : {}),
-        library: {
-          select: {
-            title: true,
-            mediaServer: { select: { id: true, name: true, type: true } },
+    const staleItems = await findInChunks(staleIds, (ids) =>
+      prisma.mediaItem.findMany({
+        where: {
+          id: { in: ids },
+          library: { mediaServerId: { in: serverIds } },
+        },
+        include: {
+          externalIds: true,
+          streams: true,
+          // Re-evaluation needs per-user play history to compute accurate
+          // "no longer matching" reasons for watchedByUser rules. Filtered to
+          // completed plays for the same reason the engines' eager loads are:
+          // this re-runs the Phase 2 evaluator over rows Phase 1 already
+          // filtered, so an unfiltered load makes a partial Tracearr play look
+          // like a watch here and nowhere else — the item would be reported as
+          // "was matching" (i.e. dropped for some unexplained reason) when in
+          // fact it dropped precisely because the abandoned play never counted.
+          ...(hasWatchedByUserRules(rules)
+            ? { watchHistory: { where: COMPLETED_PLAY_FILTER, select: { serverUsername: true } } }
+            : {}),
+          library: {
+            select: {
+              title: true,
+              mediaServer: { select: { id: true, name: true, type: true } },
+            },
           },
         },
-      },
-    });
+      }),
+    );
     const staleItemMap = new Map(staleItems.map((item) => [item.id, item as unknown as Record<string, unknown>]));
+    // Each rule re-evaluated against the current rows of the stale matches
+    // that recorded criteria — in one call, which evaluates every item on its
+    // own exactly as one call per item did.
+    const currentCriteriaMap = getMatchedCriteriaForItems(
+      staleIds
+        .filter((id) => (existingDataMap.get(id)?.matchedCriteria as unknown[] | undefined)?.length)
+        .map((id) => staleItemMap.get(id))
+        .filter((item): item is Record<string, unknown> => !!item),
+      rules,
+      ruleSet.type,
+      arrData,
+      seerrData,
+    );
 
     for (const id of staleIds) {
       const oldData = existingDataMap.get(id);
@@ -746,8 +793,6 @@ export async function detectAndSaveMatches(
         continue;
       }
 
-      // Re-evaluate each rule independently against current item data
-      const currentCriteriaMap = getMatchedCriteriaForItems([currentItem], rules, ruleSet.type, arrData, seerrData);
       const currentRuleIds = new Set((currentCriteriaMap.get(id) ?? []).map((c) => c.ruleId));
 
       // Criteria in old set but not current = the rules that caused the item to drop
@@ -827,29 +872,12 @@ export async function runDetection(
     },
   });
 
-  // Lazy metadata caches (shared across rule sets of the same type). A failed
+  // Lazy metadata reads shared across rule sets of the same type (and, for
+  // Arr, the rule set's instance — see `resolveArrInstanceScope`). A failed
   // fetch is remembered too, so later rule sets of that type skip at once
-  // instead of re-walking an instance that just failed — and never see the
+  // instead of re-walking an instance that just failed — and never see an
   // empty placeholder map as if it were data.
-  type MetaCache<T> = { fetched: boolean; data: T; error?: unknown };
-  const loadOnce = async <T,>(cache: MetaCache<T>, load: () => Promise<T>): Promise<T> => {
-    if (cache.error !== undefined) throw cache.error;
-    if (!cache.fetched) {
-      try {
-        cache.data = await load();
-      } catch (error) {
-        cache.error = error;
-        throw error;
-      }
-      cache.fetched = true;
-    }
-    return cache.data;
-  };
-  // Keyed by type AND the rule set's Arr instance: a rule set's Arr criteria
-  // are read from its own instance alone (see `resolveArrInstanceScope`).
-  const arrCaches = new Map<string, MetaCache<ArrDataMap>>();
-  const movieSeerrCache: MetaCache<SeerrDataMap> = { fetched: false, data: {} };
-  const seriesSeerrCache: MetaCache<SeerrDataMap> = { fetched: false, data: {} };
+  const metadata = createRunMetadata(ruleSets);
 
   const results: Array<{
     ruleSet: {
@@ -914,24 +942,13 @@ export async function runDetection(
       // Resolve Arr metadata
       let arrData: ArrDataMap | undefined;
       if (hasArrRules(rules)) {
-        const type = rs.type === "MOVIE" ? "MOVIE" : rs.type === "MUSIC" ? "MUSIC" : "SERIES";
-        const cacheKey = `${type}:${rs.arrInstanceId ?? "*"}`;
-        let cache = arrCaches.get(cacheKey);
-        if (!cache) {
-          cache = { fetched: false, data: {} };
-          arrCaches.set(cacheKey, cache);
-        }
-        arrData = await loadOnce(cache, () => fetchArrMetadata(userId, type, undefined, rs.arrInstanceId));
+        arrData = await metadata.arr(userId, rs.type, rs.arrInstanceId);
       }
 
       // Resolve Seerr metadata (not applicable for MUSIC)
       let seerrData: SeerrDataMap | undefined;
       if (hasSeerrRules(rules) && rs.type !== "MUSIC") {
-        const type = rs.type === "MOVIE" ? "MOVIE" : "SERIES";
-        seerrData = await loadOnce(
-          type === "MOVIE" ? movieSeerrCache : seriesSeerrCache,
-          () => fetchSeerrMetadata(userId, type),
-        );
+        seerrData = await metadata.seerr(userId, rs.type === "MOVIE" ? "MOVIE" : "SERIES");
       }
 
       const result = await detectAndSaveMatches(
@@ -1005,19 +1022,19 @@ export async function syncCollectionsAfterDetection(
   ruleSetId: string | undefined,
   results: Array<{ ruleSet: { collectionId: string | null } }>,
 ): Promise<void> {
-  const plexItemsCache = new Map<string, Array<{ title: string; ratingKey: string }>>();
+  const collectionCache = new CollectionSyncCache();
   if (ruleSetId) {
     const collectionIds = [
       ...new Set(results.map((r) => r.ruleSet.collectionId).filter((id): id is string => !!id)),
     ];
     for (const id of collectionIds) {
       try {
-        await syncCollectionById(id, plexItemsCache);
+        await syncCollectionById(id, collectionCache);
       } catch (error) {
         logger.error("Lifecycle", `Collection sync failed for collection ${id} during detection`, { error: describePlexError(error) });
       }
     }
   } else {
-    await syncAllCollections(userId, plexItemsCache);
+    await syncAllCollections(userId, collectionCache);
   }
 }

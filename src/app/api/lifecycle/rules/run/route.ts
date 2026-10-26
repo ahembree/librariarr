@@ -172,5 +172,13 @@ export async function POST(request: NextRequest) {
     ...(await explainSkippedRuleSets(session.userId!, data.ruleSetId, evaluatedIds)),
   ];
 
-  return NextResponse.json({ ruleMatches: results, skipped });
+  // Each evaluated rule set and how many items it matched — not the matched
+  // rows themselves. Nothing reads those (the Matches page and the editor
+  // re-read the stored matches, which carry what they render), and for a
+  // library-wide Re-evaluate All they were the whole response: 39.6 MB on
+  // 170k items, serialised on top of the run's own memory.
+  return NextResponse.json({
+    ruleMatches: results.map(({ ruleSet, count }) => ({ ruleSet, count })),
+    skipped,
+  });
 }

@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
+import { SEERR_REQUEST_PAGE_SIZE as P, SEERR_REQUEST_PAGE_OVERLAP as O } from "@/lib/seerr/request-walk";
 import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
 import {
@@ -494,11 +495,11 @@ describe("GET /api/seerr/request-stats", () => {
     await createTestSeerrInstance(user.id);
     setMockSession({ userId: user.id, isLoggedIn: true });
 
-    // Newest-first listing of 101 requests. Pages overlap by 10 rows (skip 0,
-    // then 90) and the overlap is deduped by request id.
+    // Newest-first listing of a page and one more request. Pages overlap by
+    // O rows (skip 0, then P - O) and the overlap is deduped by request id.
     const all = [
-      ...Array.from({ length: 100 }, (_, i) =>
-        makeRequest(500 - i, "movie", { id: 1, username: "alice", plexUsername: "alice" }, { tmdbId: 1000 + i })
+      ...Array.from({ length: P }, (_, i) =>
+        makeRequest(5_000 - i, "movie", { id: 1, username: "alice", plexUsername: "alice" }, { tmdbId: 10_000 + i })
       ),
       makeRequest(1, "tv", { id: 1, username: "alice", plexUsername: "alice" }, { tmdbId: 5000, tvdbId: 999 }),
     ];
@@ -516,11 +517,11 @@ describe("GET /api/seerr/request-stats", () => {
 
     expect(mockGetRequests).toHaveBeenCalledTimes(2);
     expect(mockGetRequests.mock.calls.map(([params]) => params)).toEqual([
-      { take: 100, skip: 0 },
-      { take: 100, skip: 90 },
+      { take: P, skip: 0 },
+      { take: P, skip: P - O },
     ]);
-    expect(body.users[0].requestCount).toBe(101);
-    expect(body.users[0].movieCount).toBe(100);
+    expect(body.users[0].requestCount).toBe(P + 1);
+    expect(body.users[0].movieCount).toBe(P);
     expect(body.users[0].seriesCount).toBe(1);
   });
 });

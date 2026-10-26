@@ -54,6 +54,16 @@ const mockPrisma = vi.hoisted(() => ({
   }),
 }));
 
+
+/** Every action id the executor cancelled, in a single-id or a batched delete. */
+function cancelledActionIds(): string[] {
+  return mockPrisma.lifecycleAction.deleteMany.mock.calls.flatMap(([args]) => {
+    const id = (args as { where?: { id?: string | { in?: string[] } } } | undefined)?.where?.id;
+    if (typeof id === "string") return [id];
+    return id?.in ?? [];
+  });
+}
+
 const mockDetectAndSaveMatches = vi.hoisted(() => vi.fn());
 const mockExecuteAction = vi.hoisted(() => vi.fn());
 const mockExtractActionError = vi.hoisted(() => vi.fn());
@@ -63,6 +73,7 @@ const mockFetchSeerrMetadata = vi.hoisted(() => vi.fn());
 const mockHasEnabledArrInstances = vi.hoisted(() => vi.fn());
 const mockHasEnabledSeerrInstances = vi.hoisted(() => vi.fn());
 const mockSyncMediaServer = vi.hoisted(() => vi.fn());
+const mockSyncMediaServerItems = vi.hoisted(() => vi.fn());
 const mockSendDiscordNotification = vi.hoisted(() => vi.fn());
 const mockBuildSuccessSummaryEmbed = vi.hoisted(() => vi.fn());
 const mockBuildMatchChangeEmbed = vi.hoisted(() => vi.fn());
@@ -72,6 +83,32 @@ const mockHasSeerrRules = vi.hoisted(() => vi.fn());
 const mockHasAnyActiveRules = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/db", () => ({ prisma: mockPrisma }));
+// The stored matches are read with SQL (`match-snapshot.ts`); answered here
+// from the rows `ruleMatch.findMany` is stubbed with, projected as the SQL
+// projects them, so every stub below keeps describing the stored matches.
+vi.mock("@/lib/lifecycle/match-snapshot", () => {
+  type Row = { ruleSetId?: string; mediaItemId: string; itemData?: unknown };
+  const stored = async (ruleSetIds: readonly string[]): Promise<Row[]> =>
+    (((await mockPrisma.ruleMatch.findMany()) ?? []) as Row[]).map((r) => ({ ...r, ruleSetId: r.ruleSetId ?? ruleSetIds[0] }));
+  const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+  return {
+    loadStoredMatches: async (ruleSetIds: readonly string[], keys: readonly string[] | null) =>
+      (await stored(ruleSetIds)).map((r) => ({
+        ruleSetId: r.ruleSetId,
+        mediaItemId: r.mediaItemId,
+        itemData:
+          keys && isObject(r.itemData)
+            ? Object.fromEntries(Object.entries(r.itemData).filter(([k]) => keys.includes(k)))
+            : (r.itemData ?? null),
+      })),
+    loadStoredMatchMembers: async (ruleSetIds: readonly string[]) =>
+      (await stored(ruleSetIds)).map((r) => ({
+        ruleSetId: r.ruleSetId,
+        mediaItemId: r.mediaItemId,
+        memberIds: isObject(r.itemData) ? (r.itemData.memberIds ?? null) : null,
+      })),
+  };
+});
 vi.mock("@/lib/logger", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   dbLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -87,6 +124,7 @@ vi.mock("@/lib/lifecycle/actions", async (importOriginal) => {
     executeAction: mockExecuteAction,
     extractActionError: mockExtractActionError,
     describeActionError: actual.describeActionError,
+    ArrExecutionContext: actual.ArrExecutionContext,
   };
 });
 vi.mock("@/lib/lifecycle/collections", () => ({
@@ -99,13 +137,21 @@ vi.mock("@/lib/lifecycle/fetch-arr-metadata", () => ({
   resolveArrInstanceScope: vi.fn().mockResolvedValue(null),
   arrFamilyLabel: (type: string) =>
     type === "MOVIE" ? "Radarr" : type === "MUSIC" ? "Lidarr" : "Sonarr",
+  invalidateArrMetadataCache: () => {},
 }));
 vi.mock("@/lib/lifecycle/fetch-seerr-metadata", () => ({
   fetchSeerrMetadata: mockFetchSeerrMetadata,
+  // One walk for every type a run needs; delegated per type so each
+  // test can keep stubbing the per-type answer.
+  fetchSeerrMetadataByType: async (userId: string, types: string[]) =>
+    Object.fromEntries(await Promise.all(types.map(async (t) => [t, await mockFetchSeerrMetadata(userId, t)]))),
   hasEnabledSeerrInstances: mockHasEnabledSeerrInstances,
 }));
 vi.mock("@/lib/sync/sync-server", () => ({
   syncMediaServer: mockSyncMediaServer,
+}));
+vi.mock("@/lib/sync/sync-incremental", () => ({
+  syncMediaServerItems: mockSyncMediaServerItems,
 }));
 vi.mock("@/lib/discord/client", () => ({
   sendDiscordNotification: mockSendDiscordNotification,
@@ -121,6 +167,7 @@ vi.mock("@/lib/rules/lifecycle-engine", () => ({
   hasWatchedByUserRules: vi.fn(() => false),
   hasPlayActivityRules: vi.fn(() => false),
   hasAnyActiveRules: mockHasAnyActiveRules,
+  hasCustomFormatScoreRules: () => false,
 }));
 
 import {
@@ -128,6 +175,7 @@ import {
   processLifecycleRules,
   executeLifecycleActions,
 } from "@/lib/lifecycle/processor";
+import { ArrExecutionContext } from "@/lib/lifecycle/actions";
 
 /**
  * Every test starts from `vi.resetAllMocks()` (so no test inherits another's
@@ -971,7 +1019,7 @@ describe("processLifecycleRules", () => {
 
     await processLifecycleRules("u1");
 
-    expect(mockFetchArrMetadata).toHaveBeenCalledWith("u1", "MOVIE", undefined, null);
+    expect(mockFetchArrMetadata).toHaveBeenCalledWith("u1", "MOVIE", undefined, null, { customFormatScores: false });
     expect(mockDetectAndSaveMatches).toHaveBeenCalled();
   });
 
@@ -1297,9 +1345,7 @@ describe("executeLifecycleActions", () => {
 
     await executeLifecycleActions("u1");
 
-    expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledWith({
-      where: { id: "a1" },
-    });
+    expect(cancelledActionIds()).toContain("a1");
     expect(mockExecuteAction).not.toHaveBeenCalled();
   });
 
@@ -1325,9 +1371,7 @@ describe("executeLifecycleActions", () => {
 
     await executeLifecycleActions("u1");
 
-    expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledWith({
-      where: { id: "a1" },
-    });
+    expect(cancelledActionIds()).toContain("a1");
     expect(mockExecuteAction).not.toHaveBeenCalled();
   });
 
@@ -1351,9 +1395,9 @@ describe("executeLifecycleActions", () => {
 
     await executeLifecycleActions("u1");
 
-    expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledWith({ where: { id: "a1" } });
+    expect(cancelledActionIds()).toContain("a1");
     // The match went stale with it: the next detection evaluates the new title.
-    expect(mockPrisma.ruleMatch.deleteMany).toHaveBeenCalledWith({ where: { ruleSetId: "rs1", mediaItemId: "item1" } });
+    expect(mockPrisma.ruleMatch.deleteMany).toHaveBeenCalledWith({ where: { OR: [{ ruleSetId: "rs1", mediaItemId: "item1" }] } });
     expect(mockExecuteAction).not.toHaveBeenCalled();
   });
 
@@ -1452,7 +1496,7 @@ describe("executeLifecycleActions", () => {
 
       await executeLifecycleActions("u1");
 
-      expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledWith({ where: { id: "a1" } });
+      expect(cancelledActionIds()).toContain("a1");
       expect(mockExecuteAction).not.toHaveBeenCalled();
     });
 
@@ -1467,7 +1511,7 @@ describe("executeLifecycleActions", () => {
 
       await executeLifecycleActions("u1");
 
-      expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledWith({ where: { id: "a1" } });
+      expect(cancelledActionIds()).toContain("a1");
       expect(mockExecuteAction).not.toHaveBeenCalled();
     });
   });
@@ -1499,7 +1543,7 @@ describe("executeLifecycleActions", () => {
 
     await executeLifecycleActions("u1");
 
-    expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledWith({ where: { id: "a1" } });
+    expect(cancelledActionIds()).toContain("a1");
     expect(mockExecuteAction).not.toHaveBeenCalled();
   });
 
@@ -1526,7 +1570,7 @@ describe("executeLifecycleActions", () => {
 
     await executeLifecycleActions("u1");
 
-    expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledWith({ where: { id: "a1" } });
+    expect(cancelledActionIds()).toContain("a1");
     expect(mockExecuteAction).not.toHaveBeenCalled();
   });
 
@@ -1550,7 +1594,7 @@ describe("executeLifecycleActions", () => {
 
     await executeLifecycleActions("u1");
 
-    expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledWith({ where: { id: "a1" } });
+    expect(cancelledActionIds()).toContain("a1");
     expect(mockExecuteAction).not.toHaveBeenCalled();  // whole series NOT deleted
   });
 
@@ -1619,7 +1663,7 @@ describe("executeLifecycleActions", () => {
 
     await executeLifecycleActions("u1");
 
-    expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledWith({ where: { id: "a1" } });
+    expect(cancelledActionIds()).toContain("a1");
     expect(mockExecuteAction).not.toHaveBeenCalled();
   });
 
@@ -1666,7 +1710,7 @@ describe("executeLifecycleActions", () => {
 
     await executeLifecycleActions("u1");
 
-    expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledWith({ where: { id: "a1" } });
+    expect(cancelledActionIds()).toContain("a1");
     expect(mockExecuteAction).not.toHaveBeenCalled();
   });
 
@@ -1732,9 +1776,7 @@ describe("executeLifecycleActions", () => {
 
     await executeLifecycleActions("u1");
 
-    expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledWith({
-      where: { id: "a1" },
-    });
+    expect(cancelledActionIds()).toContain("a1");
     expect(mockExecuteAction).not.toHaveBeenCalled();
   });
 
@@ -1770,6 +1812,9 @@ describe("executeLifecycleActions", () => {
 
     expect(mockExecuteAction).toHaveBeenCalledWith(
       expect.objectContaining({ id: "a1", mediaItem }),
+      undefined,
+      // One context for the whole run: each instance's tags are read once.
+      expect.any(ArrExecutionContext),
     );
     expect(mockPrisma.lifecycleAction.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1865,9 +1910,10 @@ describe("executeLifecycleActions", () => {
     expect(updatedIds).not.toContain("a2");
   });
 
-  it("triggers library sync after destructive DELETE actions", async () => {
+  it("re-checks a deleted item with the media server instead of listing its library", async () => {
     const mediaItem = {
       id: "item1",
+      ratingKey: "rk1",
       title: "Movie",
       parentTitle: null,
       year: 2024,
@@ -1893,10 +1939,56 @@ describe("executeLifecycleActions", () => {
     mockPrisma.lifecycleAction.updateMany.mockResolvedValue({ count: 1 });
     mockPrisma.ruleMatch.deleteMany.mockResolvedValue({ count: 1 });
     mockPrisma.appSettings.findMany.mockResolvedValue([]);
+    mockPrisma.mediaItem.findMany.mockResolvedValue([
+      { ratingKey: "rk1", library: { key: "1", mediaServerId: "s1" } },
+    ]);
+    mockSyncMediaServerItems.mockResolvedValue({ status: "done", upserted: 0, deleted: 1 });
+
+    await executeLifecycleActions("u1");
+
+    // A 404 for the item removes its row; nothing else in the library is read.
+    expect(mockSyncMediaServerItems).toHaveBeenCalledWith("s1", ["rk1"], []);
+    expect(mockSyncMediaServer).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the targeted library sync when the re-check cannot settle it", async () => {
+    const mediaItem = {
+      id: "item1",
+      ratingKey: "rk1",
+      title: "Movie",
+      parentTitle: null,
+      year: 2024,
+      library: { key: "1", mediaServerId: "s1" },
+      externalIds: [],
+    };
+    mockPrisma.lifecycleAction.findMany.mockResolvedValue([
+      {
+        id: "a1",
+        userId: "u1",
+        mediaItemId: "item1",
+        mediaItem,
+        ruleSetId: "rs1",
+        actionType: "DELETE_RADARR",
+        ruleSet: { name: "Test", discordNotifyOnAction: false, userId: "u1" },
+      },
+    ]);
+    mockPrisma.ruleMatch.findMany.mockResolvedValue([
+      { ruleSetId: "rs1", mediaItemId: "item1" },
+    ]);
+    mockPrisma.lifecycleException.findMany.mockResolvedValue([]);
+    mockExecuteAction.mockResolvedValue(undefined);
+    mockPrisma.lifecycleAction.updateMany.mockResolvedValue({ count: 1 });
+    mockPrisma.ruleMatch.deleteMany.mockResolvedValue({ count: 1 });
+    mockPrisma.appSettings.findMany.mockResolvedValue([]);
+    mockPrisma.mediaItem.findMany.mockResolvedValue([
+      { ratingKey: "rk1", library: { key: "1", mediaServerId: "s1" } },
+    ]);
+    mockSyncMediaServerItems.mockResolvedValue({ status: "fell-back", upserted: 0, deleted: 0, reason: "fetch failed" });
     mockSyncMediaServer.mockResolvedValue(undefined);
 
     await executeLifecycleActions("u1");
 
+    expect(mockSyncMediaServerItems).toHaveBeenCalledWith("s1", ["rk1"], []);
     // The re-sync says why it runs, and skips the server-wide watch-history
     // scan: a deletion changes no play, and with several libraries touched the
     // scan ran once per library.
@@ -2105,7 +2197,7 @@ describe("executeLifecycleActions", () => {
 
       await executeLifecycleActions("u1");
 
-      expect(mockExecuteAction).toHaveBeenCalledWith(expect.objectContaining({ matchedMediaItemIds: ["ep2"] }));
+      expect(mockExecuteAction).toHaveBeenCalledWith(expect.objectContaining({ matchedMediaItemIds: ["ep2"] }), undefined, expect.anything());
       expect(mockPrisma.lifecycleAction.updateMany).toHaveBeenCalledWith(expect.objectContaining({
         data: expect.objectContaining({
           status: "COMPLETED",
@@ -2266,7 +2358,7 @@ describe("executeLifecycleActions", () => {
       expect(mockExecuteAction).toHaveBeenCalledTimes(1);
       // ...and the stale one is cleaned up rather than left to inflate the
       // next run's count too.
-      expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledWith({ where: { id: "a2" } });
+      expect(cancelledActionIds()).toContain("a2");
     });
 
     it("cancels doomed actions even when the ceiling holds the run", async () => {
@@ -2307,10 +2399,10 @@ describe("executeLifecycleActions", () => {
       expect(mockExecuteAction).not.toHaveBeenCalled();
       // ...but the filtering still ran, so the stale action is gone and the
       // hold cannot feed on its own leftovers.
-      expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledWith({ where: { id: "a3" } });
+      expect(cancelledActionIds()).toContain("a3");
       // The surviving actions are untouched, waiting for the Pending page.
-      expect(mockPrisma.lifecycleAction.deleteMany).not.toHaveBeenCalledWith({ where: { id: "a1" } });
-      expect(mockPrisma.lifecycleAction.deleteMany).not.toHaveBeenCalledWith({ where: { id: "a2" } });
+      expect(cancelledActionIds()).not.toContain("a1");
+      expect(cancelledActionIds()).not.toContain("a2");
     });
 
     it("runs normally at exactly the ceiling", async () => {

@@ -1,7 +1,6 @@
-import axios, { type AxiosInstance, type AxiosRequestConfig } from "axios";
-import { logger } from "@/lib/logger";
-import { IntegrationError } from "@/lib/integration-error";
-import { configureRetry, NO_RETRY } from "@/lib/http-retry";
+import type { AxiosInstance, AxiosRequestConfig } from "axios";
+import { NO_RETRY } from "@/lib/http-retry";
+import { apiKeyHeaders, createIntegrationHttp } from "@/lib/integrations/http";
 
 /**
  * Seerr's `MediaRequestStatus`. Seerr moves an APPROVED (or FAILED) request to
@@ -153,43 +152,7 @@ export class SeerrClient {
   private client: AxiosInstance;
 
   constructor(baseURL: string, apiKey: string) {
-    this.client = axios.create({
-      baseURL: baseURL.replace(/\/+$/, ""),
-      headers: {
-        "X-Api-Key": apiKey,
-        Accept: "application/json",
-        "Content-Type": "application/json",
-      },
-      timeout: 15000,
-    });
-
-    this.client.interceptors.request.use((config) => {
-      (config as unknown as Record<string, unknown>).__startTime = Date.now();
-      return config;
-    });
-
-    // Must be registered BEFORE the IntegrationError conversion below: axios
-    // runs response interceptors in registration order, and the retry handler
-    // needs the raw AxiosError (`config`/`response`). Registered after it, the
-    // retry only ever saw an IntegrationError and rethrew every failure.
-    configureRetry(this.client, "Seerr", logger);
-
-    this.client.interceptors.response.use(
-      (response) => response,
-      (error) => {
-        if (axios.isAxiosError(error)) {
-          const start = (error.config as unknown as Record<string, unknown>)?.__startTime as number | undefined;
-          const duration = start ? ` (${Date.now() - start}ms)` : "";
-          logger.debug(
-            "Seerr",
-            `ERROR ${error.response?.status ?? "NETWORK"} ${error.config?.url}${duration}`,
-            { message: error.message }
-          );
-          return Promise.reject(new IntegrationError("Seerr", error));
-        }
-        return Promise.reject(error);
-      }
-    );
+    this.client = createIntegrationHttp("Seerr", baseURL, apiKeyHeaders(apiKey), { timeout: 15000 });
   }
 
   async testConnection(): Promise<{ ok: boolean; error?: string; appName?: string }> {

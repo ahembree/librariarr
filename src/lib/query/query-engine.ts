@@ -1,14 +1,9 @@
 import { prisma } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
 import type { QueryRule, QueryGroup, QueryDefinition, LifecycleRuleCondition } from "./types";
-import { GENRE_FIELD, LABELS_FIELD, COUNTRY_FIELD, EXTERNAL_ID_FIELD, ARR_QUERY_FIELDS, SEERR_QUERY_FIELDS, isExternalQueryField, isCrossSystemQueryField, hasArrRules, hasSeerrRules, hasCrossSystemRules, hasSeriesAggregateRules, hasWatchedByUserRules, hasResolutionRules, hasArrayFieldRules, hasStreamCountRules } from "./types";
-import {
-  isStreamQueryField, isStreamQueryGroup, isStreamQueryComputedField,
-  streamQueryFieldToColumn, STREAM_TYPE_INT_MAP,
-} from "@/lib/rules/types";
+import { GENRE_FIELD, LABELS_FIELD, COUNTRY_FIELD, EXTERNAL_ID_FIELD, ARR_QUERY_FIELDS, SEERR_QUERY_FIELDS, isCrossSystemQueryField, hasArrRules, hasSeerrRules, hasCrossSystemRules, hasSeriesAggregateRules, hasWatchedByUserRules, hasResolutionRules, hasArrayFieldRules, hasStreamCountRules } from "./types";
+import { isStreamQueryField, isStreamQueryGroup } from "@/lib/rules/types";
 import { normalizeResolutionLabel } from "@/lib/resolution";
-import type { StreamQueryField } from "@/lib/rules/types";
-import { detectStreamAudioProfile, detectStreamDynamicRange } from "@/lib/rules/stream-detection";
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
 import { evaluateQueryArrRule } from "./arr-filter";
 import { evaluateQuerySeerrRule } from "./seerr-filter";
@@ -28,13 +23,14 @@ import {
   serializeSeriesAggregateForEval,
   type AggregableEpisode,
 } from "@/lib/conditions";
-import { isEnumerableField, isOperatorApplicable, isValueValidForRule } from "@/lib/conditions/helpers";
+import { isEnumerableField, isOperatorApplicable, isValueValidForRule, hasWildcardRules, hasCustomFormatScoreRules, hasStreamRules } from "@/lib/conditions/helpers";
 import {
   isUnconfiguredContainsRule,
   ruleToWhere,
 } from "@/lib/conditions/where-builder";
 import { fetchCrossSystemData, foldCrossSystemData } from "@/lib/conditions/cross-system-data";
-import { streamQueryNeedsInMemory } from "@/lib/conditions/stream-query-where";
+import { hasStreamQueryInMemoryRules } from "@/lib/conditions/stream-query-where";
+import { evaluateStreamQueryGroupInMemory } from "@/lib/conditions/stream-query-eval";
 import { buildGroupConditions, buildGroupConditionsPreFilter } from "@/lib/conditions/group-composition";
 import { pushDownGroupNegation } from "@/lib/conditions/negation";
 import { nullValueResult } from "@/lib/conditions/helpers";
@@ -42,35 +38,9 @@ import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
 
 // Phase 1 rule → WHERE conversion is shared with the lifecycle rule engine via
 // `ruleToWhere` in where-builder.ts (the query and lifecycle dispatchers were
-// equivalent — their field classifiers resolve to the same sets).
-
-
-/** Check if any group tree contains stream query groups needing in-memory eval */
-function hasStreamQueryInMemoryRules(groups: QueryGroup[]): boolean {
-  for (const group of groups) {
-    if (group.enabled === false) continue;
-    if (isStreamQueryGroup(group) && streamQueryNeedsInMemory(group)) return true;
-    if (group.groups?.length && hasStreamQueryInMemoryRules(group.groups)) return true;
-  }
-  return false;
-}
-
-
-
-/** Check if rules reference any wildcard operators on non-external fields */
-function hasWildcardRules(groups: QueryGroup[]): boolean {
-  for (const group of groups) {
-    if (group.enabled === false) continue;
-    if (group.rules.some((r) =>
-      r.enabled !== false &&
-      !isExternalQueryField(r.field) &&
-      (r.operator === "matchesWildcard" || r.operator === "notMatchesWildcard")
-    )) return true;
-    if (group.groups?.length && hasWildcardRules(group.groups)) return true;
-  }
-  return false;
-}
-
+// equivalent — their field classifiers resolve to the same sets). So are the
+// `has*Rules` gates (`conditions/helpers.ts`, `hasStreamQueryInMemoryRules` in
+// stream-query-where.ts).
 
 export interface QueryResult {
   items: Array<Record<string, unknown>>;
@@ -129,7 +99,7 @@ const ITEM_SELECT = {
   },
 } as const;
 
-/** Full select for in-memory evaluation — includes streams, labels, and externalIds */
+/** Full select for in-memory evaluation — includes labels and externalIds (streams: see below) */
 const ITEM_SELECT_FULL = {
   ...ITEM_SELECT,
   labels: true,
@@ -145,37 +115,46 @@ const ITEM_SELECT_FULL = {
   albumTitle: true,
   videoProfile: true,
   scanType: true,
-  streams: {
-    select: {
-      streamType: true, language: true, languageCode: true, codec: true,
-      profile: true, bitrate: true, isDefault: true, displayTitle: true,
-      extendedDisplayTitle: true, channels: true, samplingRate: true,
-      audioChannelLayout: true, bitDepth: true, width: true, height: true,
-      frameRate: true, scanType: true, videoRangeType: true, forced: true,
-      colorPrimaries: true, colorRange: true, chromaSubsampling: true,
-    },
-  },
   externalIds: { select: { source: true, externalId: true } },
 };
 
+/** An item's streams, for the rules that read them (`hasStreamRules`). */
+const STREAMS_SELECT = {
+  select: {
+    streamType: true, language: true, languageCode: true, codec: true,
+    profile: true, bitrate: true, isDefault: true, displayTitle: true,
+    extendedDisplayTitle: true, channels: true, samplingRate: true,
+    audioChannelLayout: true, bitDepth: true, width: true, height: true,
+    frameRate: true, scanType: true, videoRangeType: true, forced: true,
+    colorPrimaries: true, colorRange: true, chromaSubsampling: true,
+  },
+} as const;
+
 /**
- * Build a full-select object, optionally including the `watchHistory` relation.
- * `watchHistory` is only meaningful when a `watchedByUser` rule is present;
- * joining it unconditionally costs O(plays) per query on large libraries.
+ * Build a full-select object, optionally including the `streams` and
+ * `watchHistory` relations. Streams are read only by stream fields and stream
+ * queries — the rows a query returns never show them, and every other rule
+ * reads columns — so they are loaded only for a query with such a rule (as
+ * the lifecycle engine does), not for every query evaluated in memory (any
+ * Arr, Seerr, wildcard, resolution or genre criterion). `watchHistory` is only
+ * meaningful when a `watchedByUser` rule is present; joining it
+ * unconditionally costs O(plays) per query on large libraries.
  */
-function buildItemSelectFull(opts: { includeWatchHistory: boolean }) {
-  if (!opts.includeWatchHistory) return ITEM_SELECT_FULL;
+function buildItemSelectFull(groups: QueryGroup[]) {
   return {
     ...ITEM_SELECT_FULL,
-    watchHistory: {
-          // Phase 2 must see the same rows Phase 1 filtered on, or a
-          // `watchedByUser` rule matches a different set depending on
-          // whether something else forced in-memory re-evaluation.
-          where: COMPLETED_PLAY_FILTER,
-          select: { serverUsername: true },
-        } as const,
+    ...(hasStreamRules(groups) ? { streams: STREAMS_SELECT } : {}),
+    ...(hasWatchedByUserRules(groups) ? { watchHistory: WATCH_HISTORY_SELECT } : {}),
   };
 }
+
+const WATCH_HISTORY_SELECT = {
+  // Phase 2 must see the same rows Phase 1 filtered on, or a
+  // `watchedByUser` rule matches a different set depending on
+  // whether something else forced in-memory re-evaluation.
+  where: COMPLETED_PLAY_FILTER,
+  select: { serverUsername: true },
+} as const;
 
 /** Build the shared WHERE clause from a query definition and resolved server IDs */
 function buildBaseWhere(
@@ -499,7 +478,10 @@ async function runQueryDefinition(
   let arrDataByType: Record<string, ArrDataMap> | undefined;
   if (needsArr) {
     onProgress?.({ type: "phase", key: "arr", fraction: 0 });
-    arrDataByType = await fetchArrDataForQuery(userId, definition.arrServerIds!, mediaTypes, phaseReporter("arr"));
+    arrDataByType = await fetchArrDataForQuery(userId, definition.arrServerIds!, mediaTypes, phaseReporter("arr"), {
+      // Radarr's /moviefile sweep, only for a query filtering on the score.
+      customFormatScores: hasCustomFormatScoreRules(groups),
+    });
   }
 
   // Fetch Seerr data (every enabled instance) if the query uses Seerr rules
@@ -546,10 +528,7 @@ async function runQueryDefinition(
     : mediaTypes.filter((t) => t !== "SERIES");
   const hasFlatTypes = flatTypes.length > 0;
 
-  const needsWatchHistory = hasWatchedByUserRules(groups);
-  const selectToUse = needsFullInMemoryEval
-    ? buildItemSelectFull({ includeWatchHistory: needsWatchHistory })
-    : ITEM_SELECT;
+  const selectToUse = needsFullInMemoryEval ? buildItemSelectFull(groups) : ITEM_SELECT;
 
   // Run queries in parallel
   const flatWhere: Prisma.MediaItemWhereInput = { ...where, type: { in: [...flatTypes] } };
@@ -649,14 +628,14 @@ async function computeAggregateSurvivingEpisodeIds(
 
   const episodes = await prisma.mediaItem.findMany({
     where: seriesWhere,
-    select: buildItemSelectFull({ includeWatchHistory: hasWatchedByUserRules(groups) }),
+    select: buildItemSelectFull(groups),
   });
 
   if (episodes.length === 0) return [];
 
   const aggregates = aggregateEpisodesIntoSeries(
     episodes as unknown as AggregableEpisode[],
-    { includeStreams: true },
+    { includeStreams: hasStreamRules(groups) },
   );
   // Cross-system fields, read across each show's episodes (foldCrossSystemData).
   const crossSystem = hasCrossSystemRules(groups)
@@ -720,7 +699,7 @@ async function executeEpisodesWithSeriesAggregate(
     effectiveServerIds, groups, arrDataByType, seerrDataByType,
   );
 
-  const selectToUse = buildItemSelectFull({ includeWatchHistory: hasWatchedByUserRules(groups) });
+  const selectToUse = buildItemSelectFull(groups);
 
   // Flat (movie/music) types are unaffected by aggregate rules but may still be
   // in scope when mediaTypes is empty — evaluate them the normal way.
@@ -800,7 +779,7 @@ async function filterAndGroupSeriesEpisodes(
   // Fetch full episode data for unified in-memory evaluation
   const episodes = await prisma.mediaItem.findMany({
     where: seriesWhere,
-    select: buildItemSelectFull({ includeWatchHistory: hasWatchedByUserRules(groups) }),
+    select: buildItemSelectFull(groups),
   });
 
   if (episodes.length === 0) return [];
@@ -842,7 +821,7 @@ async function executeUngrouped(
   const needsFullInMemoryEval = !!arrDataByType || !!seerrDataByType || hasWildcardRules(groups) || hasStreamQueryInMemoryRules(groups) || hasCrossSystem || hasArrRules(groups) || hasSeerrRules(groups) || hasSeriesAggregateRules(groups) || hasResolutionRules(groups) || hasArrayFieldRules(groups) || hasStreamCountRules(groups);
   const useInMemoryPagination = needsFullInMemoryEval;
   const selectToUse = needsFullInMemoryEval
-    ? buildItemSelectFull({ includeWatchHistory: hasWatchedByUserRules(groups) })
+    ? buildItemSelectFull(groups)
     : ITEM_SELECT;
 
   let orderBy: Prisma.MediaItemOrderByWithRelationInput | Prisma.MediaItemOrderByWithRelationInput[];
@@ -1423,164 +1402,6 @@ function evaluateQueryRuleInMemory(
     }
   }
   return negate ? !result : result;
-}
-
-/** Evaluate a single stream query rule against a single stream record */
-function evaluateStreamQueryRuleAgainstStream(
-  rule: QueryRule,
-  stream: Record<string, unknown>,
-): boolean {
-  // Safety: unconfigured contains/notContains matches nothing (ignoring negate).
-  if (isUnconfiguredContainsRule(rule.operator, rule.value)) return false;
-  // Safety: unknown operator or wrong-type combo → match nothing (bypass negate).
-  if (!isOperatorApplicable(rule.operator, rule.field)) return false;
-  // Safety: malformed value → match nothing.
-  if (!isValueValidForRule(rule.operator, rule.value, rule.field)) return false;
-  const field = rule.field as StreamQueryField;
-  const { operator, value, negate } = rule;
-
-  // Get the value from the stream
-  let streamValue: unknown;
-  if (field === "sqAudioProfile") {
-    streamValue = detectStreamAudioProfile(stream as Record<string, string | null>);
-  } else if (field === "sqDynamicRange") {
-    streamValue = detectStreamDynamicRange(stream as Record<string, string | null>);
-  } else {
-    const column = streamQueryFieldToColumn(field);
-    if (!column) return false;
-    streamValue = stream[column];
-  }
-
-  // Boolean fields
-  if (field === "sqIsDefault" || field === "sqForced") {
-    if (operator === "isNull" || operator === "isNotNull") {
-      const result = operator === "isNull" ? streamValue == null : streamValue != null;
-      return negate ? !result : result;
-    }
-    const boolVal = String(value).toLowerCase() === "true";
-    const actual = !!streamValue;
-    let result: boolean;
-    switch (operator) {
-      case "equals": result = actual === boolVal; break;
-      case "notEquals": result = actual !== boolVal; break;
-      default: return false;
-    }
-    return negate ? !result : result;
-  }
-
-  // Numeric fields
-  if (["sqChannels", "sqBitrate", "sqBitDepth", "sqWidth", "sqHeight", "sqFrameRate", "sqSamplingRate"].includes(field)) {
-    const numValue = Number(value);
-    const actual = streamValue != null ? Number(streamValue) : null;
-    let result: boolean;
-    switch (operator) {
-      case "isNull": result = actual == null; break;
-      case "isNotNull": result = actual != null; break;
-      case "between": {
-        if (actual == null) return negate ? true : false;
-        const [minStr, maxStr] = String(value).split(",");
-        result = actual >= Number(minStr) && actual <= Number(maxStr);
-        break;
-      }
-      default: {
-        if (actual == null) return negate ? true : false;
-        result = compareNumeric(actual, operator, numValue);
-      }
-    }
-    return negate ? !result : result;
-  }
-
-  // Text fields (including computed)
-  const strActual = streamValue != null ? String(streamValue).toLowerCase() : "";
-  const strValue = String(value).toLowerCase();
-  const streamEnumerable = isEnumerableField(field);
-
-  let result: boolean;
-  switch (operator) {
-    case "isNull": result = streamValue == null || strActual === ""; break;
-    case "isNotNull": result = streamValue != null && strActual !== ""; break;
-    case "equals": result = strActual === strValue; break;
-    case "notEquals": result = strActual !== strValue; break;
-    case "contains": {
-      if (streamEnumerable) {
-        const parts = strValue.split("|").filter(Boolean);
-        result = parts.length > 0
-          ? parts.some((p) => strActual === p)
-          : strActual === strValue;
-      } else {
-        result = strActual.includes(strValue);
-      }
-      break;
-    }
-    case "notContains": {
-      if (streamEnumerable) {
-        const parts = strValue.split("|").filter(Boolean);
-        result = parts.length > 0
-          ? !parts.some((p) => strActual === p)
-          : strActual !== strValue;
-      } else {
-        result = !strActual.includes(strValue);
-      }
-      break;
-    }
-    case "matchesWildcard": {
-      const re = wildcardToRegex(strValue);
-      result = re.test(strActual);
-      break;
-    }
-    case "notMatchesWildcard": {
-      const re = wildcardToRegex(strValue);
-      result = !re.test(strActual);
-      break;
-    }
-    default: return false;
-  }
-  return negate ? !result : result;
-}
-
-/**
- * Evaluate a stream query group in memory: check if ANY stream of the
- * matching type satisfies ALL active rules (existential semantics).
- */
-function evaluateStreamQueryGroupInMemory(
-  group: QueryGroup,
-  item: Record<string, unknown>,
-): boolean {
-  if (!group.streamQuery) return false;
-  const streamTypeInt = STREAM_TYPE_INT_MAP[group.streamQuery.streamType as keyof typeof STREAM_TYPE_INT_MAP];
-  const streams = (item.streams as Array<Record<string, unknown>>) ?? [];
-  const matchingStreams = streams.filter((s) => s.streamType === streamTypeInt);
-
-  const activeRules = group.rules.filter((r) => r.enabled !== false);
-  if (activeRules.length === 0) return false;
-
-  // Safety: an unconfigured contains/notContains rule, an operator that
-  // doesn't apply to the field type, or a malformed value makes the entire
-  // group unsatisfiable. Without this guard, quantifier="none" would be
-  // vacuously true ("no stream matches false") and sweep the library.
-  if (activeRules.some((rule) =>
-    isUnconfiguredContainsRule(rule.operator, rule.value) ||
-    !isOperatorApplicable(rule.operator, rule.field) ||
-    !isValueValidForRule(rule.operator, rule.value, rule.field) ||
-    // Misplaced field (no stream column, not computed) — same vacuous-"none"
-    // hazard; mirrors buildStreamQueryClause returning UNSATISFIABLE_WHERE.
-    (!isStreamQueryComputedField(rule.field) && !streamQueryFieldToColumn(rule.field as StreamQueryField))
-  )) {
-    return false;
-  }
-
-  const quantifier = group.streamQuery.quantifier ?? "any";
-  const streamMatches = (stream: Record<string, unknown>) =>
-    activeRules.every((rule) => evaluateStreamQueryRuleAgainstStream(rule, stream));
-
-  if (quantifier === "none") {
-    return !matchingStreams.some(streamMatches);
-  }
-  if (quantifier === "all") {
-    return matchingStreams.length > 0 && matchingStreams.every(streamMatches);
-  }
-  // Default: "any" (EXISTS)
-  return matchingStreams.some(streamMatches);
 }
 
 /** Recursively evaluate a query group in memory */

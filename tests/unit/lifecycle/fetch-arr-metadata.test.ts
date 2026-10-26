@@ -8,6 +8,7 @@ const mockPrisma = vi.hoisted(() => ({
 
 const mockRadarrClient = vi.hoisted(() => ({
   getMovies: vi.fn(),
+  getMovieByTmdbId: vi.fn(),
   getQualityProfiles: vi.fn(),
   getTags: vi.fn(),
   getCustomFormatScores: vi.fn(),
@@ -37,7 +38,14 @@ vi.mock("@/lib/arr/lidarr-client", () => ({
   LidarrClient: function () { return mockLidarrClient; },
 }));
 
-import { fetchArrMetadata, hasEnabledArrInstances, arrFamilyLabel } from "@/lib/lifecycle/fetch-arr-metadata";
+import {
+  fetchArrMetadata,
+  fetchArrMetadataForPreview,
+  fetchArrRecordForPreview,
+  invalidateArrMetadataCache,
+  hasEnabledArrInstances,
+  arrFamilyLabel,
+} from "@/lib/lifecycle/fetch-arr-metadata";
 
 describe("hasEnabledArrInstances", () => {
   beforeEach(() => {
@@ -292,7 +300,7 @@ describe("fetchArrMetadata", () => {
 
       expect(mockPrisma.radarrInstance.findMany).toHaveBeenCalledWith({
         where: { userId: "u1", enabled: true },
-        orderBy: { createdAt: "asc" },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
       });
       expect(result["100"].arrId).toBe(1);
       expect(result["100"].tags).toEqual(["keep"]);
@@ -315,7 +323,7 @@ describe("fetchArrMetadata", () => {
       });
       expect(mockPrisma.radarrInstance.findMany).toHaveBeenCalledWith({
         where: { id: "r2", userId: "u1", enabled: true },
-        orderBy: { createdAt: "asc" },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
       });
       expect(result["100"].arrId).toBe(9);
     });
@@ -328,7 +336,7 @@ describe("fetchArrMetadata", () => {
 
       expect(mockPrisma.radarrInstance.findMany).toHaveBeenCalledWith({
         where: { userId: "u1", enabled: true },
-        orderBy: { createdAt: "asc" },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
       });
     });
   });
@@ -513,5 +521,126 @@ describe("fetchArrMetadata", () => {
       expect(result["a74b1b7f-71a5-4011-9441-d0b5e4122711"].releaseDate).toBeNull();
       expect(result["a74b1b7f-71a5-4011-9441-d0b5e4122711"].firstAired).toBeNull();
     });
+  });
+});
+
+describe("custom-format scores and parallel instances", () => {
+  const movie = (id: number, tmdbId: number) => ({
+    id, tmdbId, tags: [], qualityProfileId: 1, monitored: true, ratings: {}, hasFile: true, movieFile: null,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockRadarrClient.getQualityProfiles.mockResolvedValue([]);
+    mockRadarrClient.getTags.mockResolvedValue([]);
+    mockRadarrClient.getCustomFormatScores.mockResolvedValue(new Map([[1, 70]]));
+  });
+
+  it("skips the /moviefile sweep when no rule reads the score", async () => {
+    mockPrisma.radarrInstance.findMany.mockResolvedValue([{ id: "r1", url: "http://r1", apiKey: "k" }]);
+    mockRadarrClient.getMovies.mockResolvedValue([movie(1, 100)]);
+
+    const result = await fetchArrMetadata("u1", "MOVIE", undefined, null, { customFormatScores: false });
+
+    expect(mockRadarrClient.getCustomFormatScores).not.toHaveBeenCalled();
+    expect(result["100"].customFormatScore).toBeNull();
+  });
+
+  it("reads every instance before the first one answers, keeping the oldest's record", async () => {
+    mockPrisma.radarrInstance.findMany.mockResolvedValue([
+      { id: "old", url: "http://old", apiKey: "k" },
+      { id: "new", url: "http://new", apiKey: "k" },
+    ]);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let started = 0;
+    mockRadarrClient.getMovies.mockImplementation(async () => {
+      started += 1;
+      const mine = started;
+      if (mine === 1) await gate; // the oldest instance answers last
+      return [movie(mine === 1 ? 1 : 9, 100)];
+    });
+
+    const pending = fetchArrMetadata("u1", "MOVIE", undefined, null, { customFormatScores: false });
+    await vi.waitFor(() => expect(started).toBe(2));
+    release();
+    const result = await pending;
+    expect(result["100"].arrId).toBe(1);
+  });
+});
+
+describe("fetchArrMetadataForPreview", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    invalidateArrMetadataCache();
+    mockPrisma.radarrInstance.findMany.mockResolvedValue([{ id: "r1", url: "http://r1", apiKey: "k" }]);
+    mockRadarrClient.getMovies.mockResolvedValue([
+      { id: 1, tmdbId: 100, tags: [], qualityProfileId: 1, monitored: true, ratings: {}, hasFile: true, movieFile: null },
+    ]);
+    mockRadarrClient.getQualityProfiles.mockResolvedValue([]);
+    mockRadarrClient.getTags.mockResolvedValue([]);
+    mockRadarrClient.getCustomFormatScores.mockResolvedValue(new Map([[1, 70]]));
+  });
+
+  it("shares one read between previews until invalidated", async () => {
+    const [a, b] = await Promise.all([
+      fetchArrMetadataForPreview("u1", "MOVIE"),
+      fetchArrMetadataForPreview("u1", "MOVIE"),
+    ]);
+    expect(a).toBe(b);
+    const fractions: number[] = [];
+    await fetchArrMetadataForPreview("u1", "MOVIE", (f) => fractions.push(f));
+    expect(fractions).toEqual([1]);
+    expect(mockRadarrClient.getMovies).toHaveBeenCalledTimes(1);
+
+    invalidateArrMetadataCache();
+    await fetchArrMetadataForPreview("u1", "MOVIE");
+    expect(mockRadarrClient.getMovies).toHaveBeenCalledTimes(2);
+  });
+
+  it("serves a read without scores from one with them, never the reverse", async () => {
+    await fetchArrMetadataForPreview("u1", "MOVIE", undefined, null, { customFormatScores: false });
+    const full = await fetchArrMetadataForPreview("u1", "MOVIE", undefined, null, { customFormatScores: true });
+    expect(full["100"].customFormatScore).toBe(70);
+    expect(mockRadarrClient.getMovies).toHaveBeenCalledTimes(2);
+
+    invalidateArrMetadataCache();
+    await fetchArrMetadataForPreview("u1", "MOVIE");
+    await fetchArrMetadataForPreview("u1", "MOVIE", undefined, null, { customFormatScores: false });
+    expect(mockRadarrClient.getMovies).toHaveBeenCalledTimes(3);
+  });
+
+  it("answers one item from a library a preview just read", async () => {
+    await fetchArrMetadataForPreview("u1", "MOVIE");
+    expect(await fetchArrRecordForPreview("u1", "MOVIE", "100", null, { customFormatScores: false })).toEqual({
+      "100": expect.objectContaining({ arrId: 1, customFormatScore: 70 }),
+    });
+    expect(await fetchArrRecordForPreview("u1", "MOVIE", "999")).toEqual({});
+    expect(mockRadarrClient.getMovies).toHaveBeenCalledTimes(1);
+    expect(mockRadarrClient.getMovieByTmdbId).not.toHaveBeenCalled();
+  });
+
+  it("otherwise asks each instance for that one record, the oldest holding it answering", async () => {
+    mockPrisma.radarrInstance.findMany.mockResolvedValue([
+      { id: "r1", url: "http://r1", apiKey: "k" },
+      { id: "r2", url: "http://r2", apiKey: "k" },
+    ]);
+    mockRadarrClient.getMovieByTmdbId
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: 9, tmdbId: 100, tags: [], qualityProfileId: 1, monitored: false, ratings: {}, hasFile: false });
+    const result = await fetchArrRecordForPreview("u1", "MOVIE", "100", null, { customFormatScores: false });
+    expect(result["100"].arrId).toBe(9);
+    expect(mockRadarrClient.getMovies).not.toHaveBeenCalled();
+    expect(mockRadarrClient.getMovieByTmdbId).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps instance scopes apart, and never serves detection from the cache", async () => {
+    mockPrisma.radarrInstance.findFirst.mockResolvedValue({ id: "r1", name: "4K", enabled: true });
+    await fetchArrMetadataForPreview("u1", "MOVIE", undefined, "r1");
+    mockPrisma.radarrInstance.findFirst.mockResolvedValue(null);
+    await fetchArrMetadataForPreview("u1", "MOVIE");
+    expect(mockRadarrClient.getMovies).toHaveBeenCalledTimes(2);
+    await fetchArrMetadata("u1", "MOVIE");
+    expect(mockRadarrClient.getMovies).toHaveBeenCalledTimes(3);
   });
 });

@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { SEERR_REQUEST_PAGE_SIZE as P, SEERR_REQUEST_PAGE_OVERLAP as O } from "@/lib/seerr/request-walk";
 
 const mockPrisma = vi.hoisted(() => ({
   seerrInstance: { findMany: vi.fn() },
@@ -167,8 +168,8 @@ describe("getSeerrRequestStats", () => {
     ]);
     // Newest-first listing; pages overlap by 10 rows and are deduped by id.
     const all = [
-      ...Array.from({ length: 100 }, (_, i) =>
-        req(500 - i, "movie", { id: 1, username: "alice", plexUsername: "alice" }, { tmdbId: 1000 + i })
+      ...Array.from({ length: P }, (_, i) =>
+        req(5_000 - i, "movie", { id: 1, username: "alice", plexUsername: "alice" }, { tmdbId: 1000 + i })
       ),
       req(1, "tv", { id: 1, username: "alice", plexUsername: "alice" }, { tmdbId: 5000, tvdbId: 9 }),
     ];
@@ -183,9 +184,9 @@ describe("getSeerrRequestStats", () => {
 
     expect(mockSeerrClient.getRequests).toHaveBeenCalledTimes(2);
     // The dashboard fails fast on the first page only (see walkSeerrRequests).
-    expect(mockSeerrClient.getRequests).toHaveBeenNthCalledWith(1, { take: 100, skip: 0 }, { retry: false });
-    expect(mockSeerrClient.getRequests).toHaveBeenNthCalledWith(2, { take: 100, skip: 90 }, {});
-    expect(result.users[0].requestCount).toBe(101);
+    expect(mockSeerrClient.getRequests).toHaveBeenNthCalledWith(1, { take: P, skip: 0 }, { retry: false });
+    expect(mockSeerrClient.getRequests).toHaveBeenNthCalledWith(2, { take: P, skip: P - O }, {});
+    expect(result.users[0].requestCount).toBe(P + 1);
     expect(result.partial).toBe(false);
   });
 

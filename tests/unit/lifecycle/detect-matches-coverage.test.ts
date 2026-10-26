@@ -64,6 +64,32 @@ const mockSyncCollectionById = vi.hoisted(() => vi.fn());
 const mockSyncAllCollections = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/db", () => ({ prisma: mockPrisma }));
+// The stored matches are read with SQL (`match-snapshot.ts`); answered here
+// from the rows `ruleMatch.findMany` is stubbed with, projected as the SQL
+// projects them, so every stub below keeps describing the stored matches.
+vi.mock("@/lib/lifecycle/match-snapshot", () => {
+  type Row = { ruleSetId?: string; mediaItemId: string; itemData?: unknown };
+  const stored = async (ruleSetIds: readonly string[]): Promise<Row[]> =>
+    (((await mockPrisma.ruleMatch.findMany()) ?? []) as Row[]).map((r) => ({ ...r, ruleSetId: r.ruleSetId ?? ruleSetIds[0] }));
+  const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+  return {
+    loadStoredMatches: async (ruleSetIds: readonly string[], keys: readonly string[] | null) =>
+      (await stored(ruleSetIds)).map((r) => ({
+        ruleSetId: r.ruleSetId,
+        mediaItemId: r.mediaItemId,
+        itemData:
+          keys && isObject(r.itemData)
+            ? Object.fromEntries(Object.entries(r.itemData).filter(([k]) => keys.includes(k)))
+            : (r.itemData ?? null),
+      })),
+    loadStoredMatchMembers: async (ruleSetIds: readonly string[]) =>
+      (await stored(ruleSetIds)).map((r) => ({
+        ruleSetId: r.ruleSetId,
+        mediaItemId: r.mediaItemId,
+        memberIds: isObject(r.itemData) ? (r.itemData.memberIds ?? null) : null,
+      })),
+  };
+});
 vi.mock("@/lib/logger", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
@@ -73,6 +99,7 @@ vi.mock("@/lib/rules/lifecycle-engine", () => ({
   evaluateMusicScope: mockEvaluateMusicScope,
   groupSeriesResults: mockGroupSeriesResults,
   hasAnyActiveRules: mockHasAnyActiveRules,
+  hasCustomFormatScoreRules: () => false,
   hasArrRules: mockHasArrRules,
   hasSeerrRules: mockHasSeerrRules,
   hasSeriesAggregateRules: mockHasSeriesAggregateRules,
@@ -90,6 +117,10 @@ vi.mock("@/lib/lifecycle/fetch-arr-metadata", () => ({
 }));
 vi.mock("@/lib/lifecycle/fetch-seerr-metadata", () => ({
   fetchSeerrMetadata: mockFetchSeerrMetadata,
+  // One walk for every type a run needs; delegated per type so each
+  // test can keep stubbing the per-type answer.
+  fetchSeerrMetadataByType: async (userId: string, types: string[]) =>
+    Object.fromEntries(await Promise.all(types.map(async (t) => [t, await mockFetchSeerrMetadata(userId, t)]))),
   hasEnabledSeerrInstances: mockHasEnabledSeerrInstances,
 }));
 vi.mock("@/lib/lifecycle/collections", () => ({
@@ -173,15 +204,24 @@ describe("stale match explanations", () => {
       return ids.filter((id) => id === "dropped" || id === "unexplained").map((id) => ({ id, title: id }));
     });
     mockGetMatchedCriteriaForItems.mockImplementation((items: Array<{ id: string }>) => {
-      const id = items[0]?.id;
-      if (id === "dropped") return new Map([["dropped", [criteria[0]]]]);
-      if (id === "unexplained") return new Map([["unexplained", criteria]]);
-      return new Map();
+      const current = new Map<string, typeof criteria>();
+      for (const { id } of items) {
+        if (id === "dropped") current.set("dropped", [criteria[0]]);
+        if (id === "unexplained") current.set("unexplained", criteria);
+      }
+      return current;
     });
 
     const result = await detectAndSaveMatches(makeRuleSetConfig(), ["s1"]);
 
     expect(result.items).toHaveLength(0);
+    // One evaluation for every stale match that recorded criteria and still
+    // exists (the run's own matches are enriched by another call).
+    const staleCalls = mockGetMatchedCriteriaForItems.mock.calls.filter((c) =>
+      (c[0] as Array<{ id: string }>).some((i) => i.id === "dropped" || i.id === "unexplained"),
+    );
+    expect(staleCalls).toHaveLength(1);
+    expect((staleCalls[0][0] as Array<{ id: string }>).map((i) => i.id)).toEqual(["dropped", "unexplained"]);
     const info = vi.mocked(logger.info).mock.calls.map((c) => c[1] as string);
     expect(info).toContain(`Removed stale match "Dropped" from rule set "Test Rule Set" (no longer matching: NOT playCount equals 0)`);
     expect(info).toContain(`Removed stale match "Some Show" from rule set "Test Rule Set" (was matching: resolution equals 4K, NOT playCount equals 0)`);

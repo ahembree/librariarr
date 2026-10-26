@@ -27,6 +27,7 @@ import { MediaDetailSidePanel, type MatchedCriterion } from "@/components/media-
 import { useMediaDetailPanel } from "@/hooks/use-media-detail-panel";
 import { groupOfRow } from "@/lib/media/detail-panel-item";
 import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
+import { legacyRulesToEditorGroups } from "@/lib/rules/legacy";
 import { deletesArrRecord } from "@/lib/lifecycle/action-types";
 import type { MediaItemWithRelations } from "@/lib/types";
 import { Label } from "@/components/ui/label";
@@ -189,25 +190,11 @@ function isQualityProfileChangeAction(actionType: string): boolean {
   return actionType.startsWith("CHANGE_QUALITY_PROFILE_");
 }
 
+// The engine's legacy conversion, keeping disabled rules (`legacy.ts`): the
+// editor shows a legacy rule set as it is evaluated, and saving it neither
+// loses a disabled rule nor changes what matches.
 function legacyToGroups(rules: LifecycleRule[] | LifecycleRuleGroup[]): LifecycleRuleGroup[] {
-  if (rules.length === 0) return [];
-  if ("rules" in rules[0]) {
-    return (rules as LifecycleRuleGroup[]).map((g) => ({
-      ...g,
-      groups: g.groups ?? [],
-    }));
-  }
-  const flat = rules as LifecycleRule[];
-  const groups: LifecycleRuleGroup[] = [
-    { id: generateId(), condition: "AND", rules: [], groups: [] },
-  ];
-  for (let i = 0; i < flat.length; i++) {
-    groups[groups.length - 1].rules.push(flat[i]);
-    if (i < flat.length - 1 && flat[i].condition === "AND") {
-      groups.push({ id: generateId(), condition: "AND", rules: [], groups: [] });
-    }
-  }
-  return groups;
+  return legacyRulesToEditorGroups(rules, generateId);
 }
 
 function countRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): number {

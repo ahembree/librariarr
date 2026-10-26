@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db";
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
 import { CONDITION_FIELDS } from "@/lib/conditions/fields";
+import { CUSTOM_FORMAT_SCORE_FIELD } from "@/lib/conditions/helpers";
 import { fetchCrossSystemData, foldCrossSystemData, type CrossSystemDataEntry } from "@/lib/conditions/cross-system-data";
 import {
   aggregateEpisodesIntoSeries,
@@ -310,7 +311,10 @@ export async function computeQueryColumnValues(
       warnings.push("Select an Arr server in the query scope to show Arr columns.");
     } else {
       try {
-        arrByType = await fetchArrDataForQuery(userId, arrServerIds, types);
+        arrByType = await fetchArrDataForQuery(userId, arrServerIds, types, undefined, {
+          // Radarr's /moviefile sweep, only when that column is on screen.
+          customFormatScores: fields.includes(CUSTOM_FORMAT_SCORE_FIELD),
+        });
       } catch (error) {
         logger.warn("Query", "Arr data for query columns could not be fetched", { error: String(error) });
         warnings.push(`Arr columns are empty: ${sanitizeErrorDetail(error instanceof Error ? error.message : String(error))}`);

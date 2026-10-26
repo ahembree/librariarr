@@ -31,6 +31,17 @@ const mockPrisma = vi.hoisted(() => ({
     // and why, so it has to read the rows rather than tally them.
     findMany: vi.fn().mockResolvedValue([]),
   },
+  // Refreshed match snapshots are written in one UPDATE … FROM per slice.
+  $executeRawUnsafe: vi.fn().mockResolvedValue(0),
+  // The exception guard reads the candidates' dedupKeys with one `= ANY($1)`
+  // statement; answered from the rows `mediaItem.findMany` is stubbed with,
+  // as that SQL would answer them.
+  $queryRawUnsafe: async (sql: string, ids?: unknown) => {
+    if (!sql.includes(`"dedupKey" IS NOT NULL`) || !Array.isArray(ids)) return [];
+    const wanted = new Set(ids as string[]);
+    const rows = ((await mockPrisma.mediaItem.findMany()) ?? []) as Array<{ id: string; dedupKey?: string | null }>;
+    return rows.filter((r) => wanted.has(r.id) && r.dedupKey).map((r) => ({ id: r.id, dedupKey: r.dedupKey }));
+  },
   // Detection runs its match writes inside a transaction in two shapes:
   //   - callback form: $transaction(async (tx) => { ... }) (full re-eval)
   //   - array form:    $transaction([p1, p2])              (incremental)
@@ -43,6 +54,13 @@ const mockPrisma = vi.hoisted(() => ({
     return Promise.resolve(undefined);
   }),
 }));
+
+/** The rows each snapshot-refresh statement carried, per statement. */
+function refreshStatements(): Array<{ ruleSetId: unknown; rows: Array<{ mediaItemId: string; itemData: Record<string, unknown>; copyIds: string[] }> }> {
+  return mockPrisma.$executeRawUnsafe.mock.calls
+    .filter(([sql]) => String(sql).includes(`UPDATE "RuleMatch"`))
+    .map(([, ruleSetId, json]) => ({ ruleSetId, rows: JSON.parse(json as string) }));
+}
 
 const mockEvaluateRules = vi.hoisted(() => vi.fn());
 const mockEvaluateSeriesScope = vi.hoisted(() => vi.fn());
@@ -64,6 +82,32 @@ const mockSyncCollectionById = vi.hoisted(() => vi.fn());
 const mockSyncAllCollections = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/db", () => ({ prisma: mockPrisma }));
+// The stored matches are read with SQL (`match-snapshot.ts`); answered here
+// from the rows `ruleMatch.findMany` is stubbed with, projected as the SQL
+// projects them, so every stub below keeps describing the stored matches.
+vi.mock("@/lib/lifecycle/match-snapshot", () => {
+  type Row = { ruleSetId?: string; mediaItemId: string; itemData?: unknown };
+  const stored = async (ruleSetIds: readonly string[]): Promise<Row[]> =>
+    (((await mockPrisma.ruleMatch.findMany()) ?? []) as Row[]).map((r) => ({ ...r, ruleSetId: r.ruleSetId ?? ruleSetIds[0] }));
+  const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+  return {
+    loadStoredMatches: async (ruleSetIds: readonly string[], keys: readonly string[] | null) =>
+      (await stored(ruleSetIds)).map((r) => ({
+        ruleSetId: r.ruleSetId,
+        mediaItemId: r.mediaItemId,
+        itemData:
+          keys && isObject(r.itemData)
+            ? Object.fromEntries(Object.entries(r.itemData).filter(([k]) => keys.includes(k)))
+            : (r.itemData ?? null),
+      })),
+    loadStoredMatchMembers: async (ruleSetIds: readonly string[]) =>
+      (await stored(ruleSetIds)).map((r) => ({
+        ruleSetId: r.ruleSetId,
+        mediaItemId: r.mediaItemId,
+        memberIds: isObject(r.itemData) ? (r.itemData.memberIds ?? null) : null,
+      })),
+  };
+});
 vi.mock("@/lib/logger", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
@@ -73,6 +117,7 @@ vi.mock("@/lib/rules/lifecycle-engine", () => ({
   evaluateMusicScope: mockEvaluateMusicScope,
   groupSeriesResults: mockGroupSeriesResults,
   hasAnyActiveRules: mockHasAnyActiveRules,
+  hasCustomFormatScoreRules: () => false,
   hasArrRules: mockHasArrRules,
   hasSeerrRules: mockHasSeerrRules,
   hasSeriesAggregateRules: mockHasSeriesAggregateRules,
@@ -90,6 +135,10 @@ vi.mock("@/lib/lifecycle/fetch-arr-metadata", () => ({
 }));
 vi.mock("@/lib/lifecycle/fetch-seerr-metadata", () => ({
   fetchSeerrMetadata: mockFetchSeerrMetadata,
+  // One walk for every type a run needs; delegated per type so each
+  // test can keep stubbing the per-type answer.
+  fetchSeerrMetadataByType: async (userId: string, types: string[]) =>
+    Object.fromEntries(await Promise.all(types.map(async (t) => [t, await mockFetchSeerrMetadata(userId, t)]))),
   hasEnabledSeerrInstances: mockHasEnabledSeerrInstances,
 }));
 vi.mock("@/lib/lifecycle/collections", () => ({
@@ -592,13 +641,16 @@ describe("detectAndSaveMatches", () => {
 
       await detectAndSaveMatches(armed, ["s1", "s2"]);
 
-      // updateMany, not update: a row deleted since it was read (an exception
-      // filed meanwhile) must not fail — and roll back — the whole write.
-      expect(mockPrisma.ruleMatch.updateMany).toHaveBeenCalledTimes(1);
-      const arg = mockPrisma.ruleMatch.updateMany.mock.calls[0][0];
-      expect(arg.where).toEqual({ ruleSetId: "rs1", mediaItemId: "a" });
-      expect(arg.data.itemData.copies).toHaveLength(1);
-      expect(arg.data.copyIds).toEqual(["b"]);
+      // One UPDATE … FROM, which skips a row deleted since it was read (an
+      // exception filed meanwhile) rather than fail — and roll back — the write.
+      const statements = refreshStatements();
+      expect(statements).toHaveLength(1);
+      expect(statements[0].ruleSetId).toBe("rs1");
+      expect(statements[0].rows).toHaveLength(1);
+      expect(statements[0].rows[0].mediaItemId).toBe("a");
+      expect(statements[0].rows[0].itemData.copies).toHaveLength(1);
+      expect(statements[0].rows[0].copyIds).toEqual(["b"]);
+      expect(mockPrisma.ruleMatch.updateMany).not.toHaveBeenCalled();
       expect(mockPrisma.ruleMatch.createMany).not.toHaveBeenCalled();
     });
 
@@ -607,10 +659,12 @@ describe("detectAndSaveMatches", () => {
       mockPrisma.ruleMatch.findMany.mockResolvedValue([
         { mediaItemId: "a", itemData: { id: "a", servers: [{ serverId: "s1" }] } },
       ]);
-      mockPrisma.ruleMatch.updateMany.mockResolvedValue({ count: 0 });
+      // The held row is gone: the refresh updates nothing.
+      mockPrisma.$executeRawUnsafe.mockResolvedValueOnce(0);
 
       await detectAndSaveMatches(armed, ["s1", "s2"]);
 
+      expect(refreshStatements()).toHaveLength(1);
       // The new match is still written.
       expect(mockPrisma.ruleMatch.createMany).toHaveBeenCalledTimes(1);
       expect(mockPrisma.ruleMatch.createMany.mock.calls[0][0].data.map((d: { mediaItemId: string }) => d.mediaItemId)).toEqual(["c"]);
@@ -807,6 +861,7 @@ describe("detectAndSaveMatches", () => {
       await detectAndSaveMatches(armed, ["s1", "s2"]);
 
       expect(mockPrisma.ruleMatch.updateMany).not.toHaveBeenCalled();
+      expect(refreshStatements()).toEqual([]);
     });
 
     // The direct-execute identity check compares the item with this snapshot;
@@ -835,10 +890,11 @@ describe("detectAndSaveMatches", () => {
 
       await detectAndSaveMatches(armed, ["s1", "s2"]);
 
-      expect(mockPrisma.ruleMatch.updateMany).toHaveBeenCalledTimes(1);
-      const arg = mockPrisma.ruleMatch.updateMany.mock.calls[0][0];
-      expect(arg.where).toEqual({ ruleSetId: "rs1", mediaItemId: "a" });
-      expect(arg.data.itemData).toMatchObject({
+      const statements = refreshStatements();
+      expect(statements).toHaveLength(1);
+      expect(statements[0].ruleSetId).toBe("rs1");
+      expect(statements[0].rows.map((r) => r.mediaItemId)).toEqual(["a"]);
+      expect(statements[0].rows[0].itemData).toMatchObject({
         title: "Movie",
         year: 2021,
         externalIds: [{ source: "TMDB", externalId: "111" }],
@@ -1105,7 +1161,7 @@ describe("runDetection", () => {
 
     // fetchArrMetadata should only be called once for MOVIE type
     expect(mockFetchArrMetadata).toHaveBeenCalledTimes(1);
-    expect(mockFetchArrMetadata).toHaveBeenCalledWith("u1", "MOVIE", undefined, null);
+    expect(mockFetchArrMetadata).toHaveBeenCalledWith("u1", "MOVIE", undefined, null, { customFormatScores: false });
     // ...and both rule sets were evaluated against it.
     expect(results.map((r) => r.ruleSet.id)).toEqual(["rs1", "rs2"]);
     expect(mockEvaluateRules).toHaveBeenCalledTimes(2);

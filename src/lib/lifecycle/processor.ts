@@ -1,9 +1,10 @@
 import { prisma } from "@/lib/db";
+import { findInChunks, inChunks } from "@/lib/conditions/in-chunks";
 import type { LibraryType, Prisma } from "@/generated/prisma/client";
 import { hasArrRules, hasSeerrRules, hasAnyActiveRules } from "@/lib/rules/lifecycle-engine";
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import { logger } from "@/lib/logger";
-import { executeAction, extractActionError, describeActionError } from "@/lib/lifecycle/actions";
+import { ArrExecutionContext, executeAction, extractActionError, describeActionError } from "@/lib/lifecycle/actions";
 import { actionTargetTitle, actionTitleSnapshot, type ActionTargetParts } from "@/lib/lifecycle/action-target";
 import { loadMemberEpisodes } from "@/lib/lifecycle/member-episodes";
 import { formatMediaItemTitle, seriesTitleOf } from "@/lib/media/display-title";
@@ -30,12 +31,14 @@ import {
   type ProtectionTarget,
 } from "@/lib/lifecycle/exception-guard";
 import { actionConfigSignature } from "@/lib/lifecycle/action-signature";
-import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
-import { fetchSeerrMetadata } from "@/lib/lifecycle/fetch-seerr-metadata";
+import { createRunMetadata } from "@/lib/lifecycle/run-metadata";
+import { invalidateArrMetadataCache } from "@/lib/lifecycle/fetch-arr-metadata";
 import { checkLifecycleRuleEvaluability } from "@/lib/lifecycle/evaluability";
 import { detectAndSaveMatches } from "@/lib/lifecycle/detect-matches";
 import { syncAllCollections } from "@/lib/lifecycle/collections";
-import { syncMediaServer } from "@/lib/sync/sync-server";
+import { CollectionSyncCache } from "@/lib/lifecycle/collection-sync-cache";
+import { loadStoredMatchMembers } from "@/lib/lifecycle/match-snapshot";
+import { PostDeleteResync } from "@/lib/lifecycle/post-delete-resync";
 import { sendDiscordNotification, buildSuccessSummaryEmbed, buildMatchChangeEmbed, buildFailureSummaryEmbed } from "@/lib/discord/client";
 import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
 import { eventBus } from "@/lib/events/event-bus";
@@ -123,9 +126,11 @@ export async function scheduleActionsForRuleSet(
   const stalePendingIds = [...pendingIds].filter((id) => !currentIds.has(id));
 
   if (stalePendingIds.length > 0) {
-    await prisma.lifecycleAction.deleteMany({
-      where: { ruleSetId: ruleSet.id, status: "PENDING", mediaItemId: { in: stalePendingIds } },
-    });
+    for (const ids of inChunks(stalePendingIds)) {
+      await prisma.lifecycleAction.deleteMany({
+        where: { ruleSetId: ruleSet.id, status: "PENDING", mediaItemId: { in: ids } },
+      });
+    }
     logger.info("Lifecycle", `Deleted ${stalePendingIds.length} pending actions for items no longer matching rule set "${ruleSet.name}"`);
   }
 
@@ -155,7 +160,9 @@ export async function scheduleActionsForRuleSet(
     seenItems.add(action.mediaItemId);
   }
   if (duplicateIds.length > 0) {
-    await prisma.lifecycleAction.deleteMany({ where: { id: { in: duplicateIds } } });
+    for (const ids of inChunks(duplicateIds)) {
+      await prisma.lifecycleAction.deleteMany({ where: { id: { in: ids } } });
+    }
     logger.info("Lifecycle", `Removed ${duplicateIds.length} duplicate pending actions for rule set "${ruleSet.name}"`);
   }
 
@@ -185,24 +192,26 @@ export async function scheduleActionsForRuleSet(
       actionType: ruleSet.actionType!,
     });
   }
-  const existingActions = await prisma.lifecycleAction.findMany({
-    where: {
-      ruleSetId: ruleSet.id,
-      mediaItemId: { in: matchedItemIds },
-      OR: existingActionConditions,
-    },
-    select: {
-      mediaItemId: true,
-      status: true,
-      actionType: true,
-      arrInstanceId: true,
-      targetQualityProfileId: true,
-      addImportExclusion: true,
-      searchAfterAction: true,
-      addArrTags: true,
-      removeArrTags: true,
-    },
-  });
+  const existingActions = await findInChunks(matchedItemIds, (ids) =>
+    prisma.lifecycleAction.findMany({
+      where: {
+        ruleSetId: ruleSet.id,
+        mediaItemId: { in: ids },
+        OR: existingActionConditions,
+      },
+      select: {
+        mediaItemId: true,
+        status: true,
+        actionType: true,
+        arrInstanceId: true,
+        targetQualityProfileId: true,
+        addImportExclusion: true,
+        searchAfterAction: true,
+        addArrTags: true,
+        removeArrTags: true,
+      },
+    }),
+  );
   const existingItemIds = new Set<string | null>();
   for (const action of existingActions) {
     // A PENDING action always blocks (dedup). A completed/failed action only
@@ -270,23 +279,16 @@ export async function processLifecycleRules(userId?: string) {
     },
   });
 
-  // Cache Plex library items across rule sets to avoid redundant API calls
-  const plexItemsCache = new Map<string, Array<{ title: string; ratingKey: string }>>();
+  // Plex shows and collection listings, read once per library by the
+  // collection pass at the end rather than once per collection
+  const collectionCache = new CollectionSyncCache();
   // Arr/Seerr metadata shared across rule sets of the same owner + type
   // (mirrors runDetection). Each Seerr request page makes Seerr query every
   // Arr instance it knows, so re-walking the whole request list once per rule
   // set multiplied the cost — and let rule sets in one run read different
   // snapshots. A failed fetch is cached too, so the remaining rule sets of that
   // type skip immediately (each through its own catch below).
-  const metadataCache = new Map<string, Promise<ArrDataMap | SeerrDataMap>>();
-  const loadMetadata = <T extends ArrDataMap | SeerrDataMap>(key: string, load: () => Promise<T>): Promise<T> => {
-    let pending = metadataCache.get(key);
-    if (!pending) {
-      pending = load();
-      metadataCache.set(key, pending);
-    }
-    return pending as Promise<T>;
-  };
+  const metadata = createRunMetadata(ruleSets);
 
   for (const ruleSet of ruleSets) {
     try {
@@ -336,20 +338,14 @@ export async function processLifecycleRules(userId?: string) {
 
       let arrData: ArrDataMap | undefined;
       if (hasArrRules(rules)) {
-        const type = ruleSet.type;
         // Keyed by the rule set's instance too: its Arr criteria are read from
         // that instance alone (see `resolveArrInstanceScope`).
-        arrData = await loadMetadata(`arr:${ruleSet.userId}:${type}:${ruleSet.arrInstanceId ?? "*"}`, () =>
-          fetchArrMetadata(ruleSet.userId, type, undefined, ruleSet.arrInstanceId),
-        );
+        arrData = await metadata.arr(ruleSet.userId, ruleSet.type, ruleSet.arrInstanceId);
       }
 
       let seerrData: SeerrDataMap | undefined;
       if (hasSeerrRules(rules) && ruleSet.type !== "MUSIC") {
-        const type = ruleSet.type;
-        seerrData = await loadMetadata(`seerr:${ruleSet.userId}:${type}`, () =>
-          fetchSeerrMetadata(ruleSet.userId, type),
-        );
+        seerrData = await metadata.seerr(ruleSet.userId, ruleSet.type === "MOVIE" ? "MOVIE" : "SERIES");
       }
 
       // Snapshot previous match IDs before detection writes new ones (for notifications)
@@ -402,18 +398,24 @@ export async function processLifecycleRules(userId?: string) {
                 select: { discordWebhookUrl: true, discordWebhookUsername: true, discordWebhookAvatarUrl: true },
               });
               if (settings?.discordWebhookUrl) {
+                const added = new Set(addedIds);
                 const addedTitles = matchedItems
-                  .filter((item) => addedIds.includes(item.id as string))
+                  .filter((item) => added.has(item.id as string))
                   .sort((a, b) => ((a.titleSort as string) ?? "").localeCompare((b.titleSort as string) ?? ""))
                   .map((item) => item.title as string);
 
                 let removedTitles: string[] = [];
                 if (removedIds.length > 0) {
-                  const removedItems = await prisma.mediaItem.findMany({
-                    where: { id: { in: removedIds } },
-                    select: { title: true, parentTitle: true, titleSort: true },
-                    orderBy: { titleSort: "asc" },
-                  });
+                  // In slices (a re-evaluation can drop a whole library's
+                  // matches), sorted here as the added titles are.
+                  const removedItems = (
+                    await findInChunks(removedIds, (ids) =>
+                      prisma.mediaItem.findMany({
+                        where: { id: { in: ids } },
+                        select: { title: true, parentTitle: true, titleSort: true },
+                      }),
+                    )
+                  ).sort((a, b) => (a.titleSort ?? "").localeCompare(b.titleSort ?? ""));
                   // A series match is its show in either scope, stored against
                   // one representative episode — never name it by that episode.
                   removedTitles = removedItems.map((item) =>
@@ -446,7 +448,7 @@ export async function processLifecycleRules(userId?: string) {
   // rule sets (and their actions) are processed — never per rule set. Collections
   // with no remaining enabled rule sets resolve to an empty union and are removed
   // from Plex (replacing the old "disabled collection cleanup" pass).
-  await syncAllCollections(userId, plexItemsCache);
+  await syncAllCollections(userId, collectionCache);
 
   // Notify connected clients that detection is done
   const affectedUserIds = userId ? [userId] : [...new Set(ruleSets.map((rs) => rs.userId))];
@@ -548,10 +550,8 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
   // the RuleMatch table for its rule set. Cancel stale actions whose items
   // no longer match, preventing execution on items that shouldn't be actioned.
   const ruleSetIds = [...new Set(pendingActions.map((a) => a.ruleSetId).filter((id): id is string => id !== null))];
-  const currentMatches = await prisma.ruleMatch.findMany({
-    where: { ruleSetId: { in: ruleSetIds } },
-    select: { ruleSetId: true, mediaItemId: true, itemData: true },
-  });
+  // Each match's `memberIds` alone — the rest of its snapshot is not read here.
+  const currentMatches = await loadStoredMatchMembers(ruleSetIds);
   const matchSet = new Set(currentMatches.map((m) => `${m.ruleSetId}:${m.mediaItemId}`));
   // Current member (episode/track) ids per match, so execution can drop members
   // that have since stopped matching. Incremental detection refreshes
@@ -561,7 +561,7 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
   // a size threshold). Only populated when the match actually tracks members.
   const currentMemberIds = new Map<string, Set<string>>();
   for (const m of currentMatches) {
-    const members = (m.itemData as { memberIds?: string[] } | null)?.memberIds;
+    const members = Array.isArray(m.memberIds) ? (m.memberIds as string[]) : null;
     if (members && members.length > 0) {
       currentMemberIds.set(`${m.ruleSetId}:${m.mediaItemId}`, new Set(members));
     }
@@ -606,8 +606,9 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
     }
   }
 
-  // Track server/library pairs that need a sync after destructive actions
-  const librariesToSync = new Map<string, { serverId: string; libraryKey: string }>();
+  // What the run's destructive actions deleted, re-checked with the media
+  // server once the run is done (see PostDeleteResync).
+  const postDeleteResync = new PostDeleteResync();
 
   // Collect successes per rule set for batched Discord notifications
   const successesByRuleSet = new Map<string, {
@@ -646,10 +647,16 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
     filteredMatchedIds: string[];
   }> = [];
 
+  // The cancellations pass 1 decides on, written together once it is done —
+  // one statement per slice, where there was one per cancelled action (each
+  // still logged where it is decided). Still `deleteMany`, for the reason above.
+  const cancelled: string[] = [];
+  const identityCancelled: Array<{ id: string; ruleSetId: string; mediaItemId: string }> = [];
+
   for (const action of pendingActions) {
     // Delete actions whose media item no longer exists
     if (!action.mediaItem || !action.mediaItemId) {
-      await prisma.lifecycleAction.deleteMany({ where: { id: action.id } });
+      cancelled.push(action.id);
       logger.info("Lifecycle", `Deleted action ${action.id} — media item no longer exists`);
       continue;
     }
@@ -667,21 +674,21 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
       action.ruleSet?.type === "MUSIC" &&
       hasSeerrRules(action.ruleSet.rules as unknown as LifecycleRuleGroup[])
     ) {
-      await prisma.lifecycleAction.deleteMany({ where: { id: action.id } });
+      cancelled.push(action.id);
       logger.warn("Lifecycle", `Cancelled action ${action.id} — rule set "${action.ruleSet.name}" uses Seerr criteria on a music library, which can never evaluate (its matches are vacuous)`);
       continue;
     }
 
     // Delete actions for items excluded via LifecycleException
     if (exceptionSet.has(`${action.userId}:${action.mediaItemId}`)) {
-      await prisma.lifecycleAction.deleteMany({ where: { id: action.id } });
+      cancelled.push(action.id);
       logger.info("Lifecycle", `Deleted action ${action.id} — "${formatMediaItemTitle(mediaItem)}" is excluded via lifecycle exception`);
       continue;
     }
 
     // Delete actions for items that are no longer a current match
     if (!matchSet.has(`${action.ruleSetId}:${action.mediaItemId}`)) {
-      await prisma.lifecycleAction.deleteMany({ where: { id: action.id } });
+      cancelled.push(action.id);
       logger.info("Lifecycle", `Deleted stale action ${action.id} — "${target}" is no longer a match for rule set "${action.ruleSet?.name ?? action.ruleSetId}"`);
       continue;
     }
@@ -719,10 +726,7 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
       // now. Left in place, a sticky rule set would re-schedule from that old
       // snapshot every run and this check would cancel it every time it came
       // due — and a kept match's snapshot is otherwise never rewritten.
-      await prisma.$transaction([
-        prisma.lifecycleAction.deleteMany({ where: { id: action.id } }),
-        prisma.ruleMatch.deleteMany({ where: { ruleSetId: action.ruleSetId!, mediaItemId: mediaItem.id } }),
-      ]);
+      identityCancelled.push({ id: action.id, ruleSetId: action.ruleSetId!, mediaItemId: mediaItem.id });
       logger.warn("Lifecycle", `Cancelled action ${action.id} — item identity changed since scheduling (${identityChange}); will re-evaluate on next detection`);
       continue;
     }
@@ -746,7 +750,7 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
       if (currentMembers) {
         const stillMatching = filteredMatchedIds.filter((mid) => currentMembers.has(mid));
         if (stillMatching.length === 0) {
-          await prisma.lifecycleAction.deleteMany({ where: { id: action.id } });
+          cancelled.push(action.id);
           logger.info("Lifecycle", `Deleted action ${action.id} — none of the originally targeted members for "${target}" still match`);
           continue;
         }
@@ -762,7 +766,7 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
       );
       if (filteredMatchedIds.length === 0) {
         // All targeted episodes/tracks are now excepted — cancel the action
-        await prisma.lifecycleAction.deleteMany({ where: { id: action.id } });
+        cancelled.push(action.id);
         logger.info("Lifecycle", `Deleted action ${action.id} — all targeted episodes/tracks for "${target}" are excluded via lifecycle exceptions`);
         continue;
       }
@@ -774,7 +778,7 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
         // protected item. Member-scoped file deletes honor the filtered set
         // below and are safe to proceed.
         if (isDestructiveActionType(action.actionType) && !actionHonorsMemberIds(action.actionType)) {
-          await prisma.lifecycleAction.deleteMany({ where: { id: action.id } });
+          cancelled.push(action.id);
           logger.warn("Lifecycle", `Cancelled whole-record action ${action.id} on "${target}" — ${original.length - filteredMatchedIds.length} member(s) are excepted and a ${action.actionType} cannot exclude them`);
           continue;
         }
@@ -797,12 +801,25 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
       protectedGroups &&
       isGroupProtected(protectedGroups, mediaItem)
     ) {
-      await prisma.lifecycleAction.deleteMany({ where: { id: action.id } });
+      cancelled.push(action.id);
       logger.warn("Lifecycle", `Cancelled whole-record action ${action.id} on "${target}" — an episode/track of it is excluded via lifecycle exception and a ${action.actionType} cannot exclude it`);
       continue;
     }
 
     executable.push({ action, mediaItem, filteredMatchedIds });
+  }
+
+  for (const ids of inChunks(cancelled)) {
+    await prisma.lifecycleAction.deleteMany({ where: { id: { in: ids } } });
+  }
+  // An identity-swapped action takes its stored match with it, atomically.
+  for (const chunk of inChunks(identityCancelled, 1_000)) {
+    await prisma.$transaction([
+      prisma.lifecycleAction.deleteMany({ where: { id: { in: chunk.map((c) => c.id) } } }),
+      prisma.ruleMatch.deleteMany({
+        where: { OR: chunk.map(({ ruleSetId, mediaItemId }) => ({ ruleSetId, mediaItemId })) },
+      }),
+    ]);
   }
 
   // BLAST-RADIUS CEILING, counted over the pass-1 survivors.
@@ -893,6 +910,10 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
   // Actions left because an ad-hoc query action was running: logged once,
   // not once per action — a query run can span the whole of pass 2.
   let leftForQuery = 0;
+  // Actions handed to the Arr apps this run, and what they share: each
+  // instance's family and tag list, read once for the run.
+  let attempted = 0;
+  const arrContext = new ArrExecutionContext();
   for (const { action, mediaItem, filteredMatchedIds } of executable) {
     // Held by the ceiling: leave it PENDING and untouched so the Pending page
     // can execute it after review. Only destructive actions are held — an
@@ -998,11 +1019,12 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
     mediaItem: (typeof executable)[number]["mediaItem"],
     filteredMatchedIds: string[],
   ): Promise<void> {
+    attempted += 1;
     // The action as it runs — with the members pass 1 left it — which is also
     // what its log line, notifications and history name (see `executedTitle`).
     const running = { ...action, matchedMediaItemIds: filteredMatchedIds, mediaItem, memberEpisodes: runningEpisodes };
     try {
-      const outcome = await executeAction({ ...running, targetTitle: actionTargetTitle(running) });
+      const outcome = await executeAction({ ...running, targetTitle: actionTargetTitle(running) }, undefined, arrContext);
 
       // Compute deleted bytes for stats tracking (only for delete actions)
       const deletedBytes = await computeDeletedBytes(action.actionType, mediaItem, filteredMatchedIds, outcome);
@@ -1036,14 +1058,8 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
 
       logger.info("Lifecycle", `Executed ${action.actionType} for "${executedTitle(running)}" in rule set "${action.ruleSet?.name ?? action.ruleSetId}"`);
 
-      // Queue a targeted library sync for destructive actions
-      if (action.actionType.includes("DELETE") && mediaItem.library?.mediaServerId) {
-        const { mediaServerId, key } = mediaItem.library;
-        const syncKey = `${mediaServerId}:${key}`;
-        if (!librariesToSync.has(syncKey)) {
-          librariesToSync.set(syncKey, { serverId: mediaServerId, libraryKey: key });
-        }
-      }
+      // Note what a destructive action deleted, for the re-check below.
+      await postDeleteResync.record(action.actionType, mediaItem, filteredMatchedIds, outcome);
 
       if (action.ruleSet?.discordNotifyOnAction) {
         const key = action.ruleSetId!;
@@ -1107,6 +1123,10 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
     );
   }
 
+  // Actions changed records in the Arr apps; a rule-editor preview must not
+  // explain matches from the records as they were.
+  if (attempted > 0) invalidateArrMetadataCache();
+
   for (const [instanceId, count] of deferredByInstance) {
     logger.warn(
       "Lifecycle",
@@ -1163,23 +1183,10 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
     }
   }
 
-  // Trigger targeted library syncs for servers affected by destructive actions
-  if (librariesToSync.size > 0) {
-    logger.info("Lifecycle", `Triggering targeted sync for ${librariesToSync.size} affected ${librariesToSync.size === 1 ? "library" : "libraries"}`);
-    for (const [, { serverId, libraryKey }] of librariesToSync) {
-      try {
-        await syncMediaServer(serverId, libraryKey, {
-          trigger: "lifecycle execution: re-sync after destructive actions",
-          // A deletion changes no play, and the native watch-history refresh
-          // is a SERVER-WIDE scan — with several libraries touched in one run
-          // it ran once per library. The stored history is reconciled instead.
-          skipWatchHistory: true,
-        });
-      } catch (error) {
-        logger.error("Lifecycle", `Failed to sync library ${libraryKey} on server ${serverId} after action execution`, { error: String(error) });
-      }
-    }
-  }
+  // Bring the rows of what the destructive actions deleted up to date: each
+  // deleted item is asked about (a 404 removes its row), falling back to the
+  // targeted library sync where that is the cheaper way (see PostDeleteResync).
+  await postDeleteResync.run();
 
   // Notify connected clients that actions were executed
   if (pendingActions.length > 0) {

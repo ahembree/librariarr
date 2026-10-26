@@ -8,9 +8,9 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 const mockPrisma = vi.hoisted(() => ({
-  radarrInstance: { findUnique: vi.fn() },
-  sonarrInstance: { findUnique: vi.fn() },
-  lidarrInstance: { findUnique: vi.fn() },
+  radarrInstance: { findFirst: vi.fn() },
+  sonarrInstance: { findFirst: vi.fn() },
+  lidarrInstance: { findFirst: vi.fn() },
   mediaItem: { findMany: vi.fn(), findUnique: vi.fn() },
   mediaItemExternalId: { findMany: vi.fn() },
 }));
@@ -25,6 +25,7 @@ const mockRadarr = vi.hoisted(() => ({
   createTag: vi.fn(),
   deleteTag: vi.fn(),
   getMovies: vi.fn(),
+  removeTagsFromMovies: vi.fn(),
 }));
 
 const mockSonarr = vi.hoisted(() => ({
@@ -40,6 +41,7 @@ const mockSonarr = vi.hoisted(() => ({
   createTag: vi.fn(),
   deleteTag: vi.fn(),
   getSeries: vi.fn(),
+  removeTagsFromSeries: vi.fn(),
 }));
 
 const mockLidarr = vi.hoisted(() => ({
@@ -54,6 +56,7 @@ const mockLidarr = vi.hoisted(() => ({
   createTag: vi.fn(),
   deleteTag: vi.fn(),
   getArtists: vi.fn(),
+  removeTagsFromArtists: vi.fn(),
 }));
 
 const mockLogger = vi.hoisted(() => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }));
@@ -65,6 +68,7 @@ vi.mock("@/lib/arr/sonarr-client", () => ({ SonarrClient: function () { return m
 vi.mock("@/lib/arr/lidarr-client", () => ({ LidarrClient: function () { return mockLidarr; } }));
 
 import {
+  ArrExecutionContext,
   executeAction,
   describeActionError,
   extractActionError,
@@ -126,9 +130,9 @@ const ARTIST = { id: 5, artistName: "Radiohead", foreignArtistId: "a74b1b7f-71a5
 
 beforeEach(() => {
   vi.resetAllMocks();
-  mockPrisma.radarrInstance.findUnique.mockResolvedValue(enabled("http://radarr"));
-  mockPrisma.sonarrInstance.findUnique.mockResolvedValue(enabled("http://sonarr"));
-  mockPrisma.lidarrInstance.findUnique.mockResolvedValue(enabled("http://lidarr"));
+  mockPrisma.radarrInstance.findFirst.mockResolvedValue(enabled("http://radarr"));
+  mockPrisma.sonarrInstance.findFirst.mockResolvedValue(enabled("http://sonarr"));
+  mockPrisma.lidarrInstance.findFirst.mockResolvedValue(enabled("http://lidarr"));
   mockRadarr.getMovieByTmdbId.mockResolvedValue({ ...MOVIE });
   mockSonarr.getSeriesByTvdbId.mockResolvedValue({ ...SERIES });
   mockLidarr.getArtistByMusicBrainzId.mockResolvedValue({ ...ARTIST });
@@ -180,8 +184,8 @@ describe("validateArrItem", () => {
 
 describe("Arr resolution refusals", () => {
   it.each([
-    ["Sonarr", showAction, mockPrisma.sonarrInstance.findUnique],
-    ["Lidarr", artistAction, mockPrisma.lidarrInstance.findUnique],
+    ["Sonarr", showAction, mockPrisma.sonarrInstance.findFirst],
+    ["Lidarr", artistAction, mockPrisma.lidarrInstance.findFirst],
   ])("%s: refuses with no instance configured, a missing instance, or a disabled one", async (_name, make, find) => {
     await expect(executeAction(make({ arrInstanceId: null }))).rejects.toThrow("No Arr instance configured");
     find.mockResolvedValueOnce(null);
@@ -237,32 +241,32 @@ describe("tag operations", () => {
   });
 
   it("DO_NOTHING resolves the Arr family from the instance — Sonarr", async () => {
-    mockPrisma.radarrInstance.findUnique.mockResolvedValue(null);
-    mockPrisma.lidarrInstance.findUnique.mockResolvedValue(null);
+    mockPrisma.radarrInstance.findFirst.mockResolvedValue(null);
+    mockPrisma.lidarrInstance.findFirst.mockResolvedValue(null);
     mockSonarr.getTags.mockResolvedValue([{ id: 1, label: "old" }, { id: 2, label: "Keep" }]);
     mockSonarr.createTag.mockResolvedValue({ id: 9, label: "new" });
 
     await executeAction(showAction({ actionType: "DO_NOTHING", addArrTags: ["keep", "new"], removeArrTags: ["OLD", "missing"] }));
 
     expect(mockSonarr.createTag).toHaveBeenCalledWith("new");
-    expect(mockSonarr.updateSeries).toHaveBeenCalledWith(2, { tags: [2, 9] });
+    expect(mockSonarr.updateSeries).toHaveBeenCalledWith(2, { tags: [2, 9] }, expect.objectContaining({ id: 2 }));
   });
 
   it("DO_NOTHING resolves the Arr family from the instance — Lidarr", async () => {
-    mockPrisma.radarrInstance.findUnique.mockResolvedValue(null);
-    mockPrisma.sonarrInstance.findUnique.mockResolvedValue(null);
+    mockPrisma.radarrInstance.findFirst.mockResolvedValue(null);
+    mockPrisma.sonarrInstance.findFirst.mockResolvedValue(null);
     mockLidarr.getTags.mockResolvedValue([{ id: 1, label: "old" }]);
     mockLidarr.createTag.mockResolvedValue({ id: 3, label: "fresh" });
 
     await executeAction(artistAction({ actionType: "DO_NOTHING", addArrTags: ["fresh"], removeArrTags: ["old"] }));
 
-    expect(mockLidarr.updateArtist).toHaveBeenCalledWith(5, { tags: [3] });
+    expect(mockLidarr.updateArtist).toHaveBeenCalledWith(5, { tags: [3] }, expect.objectContaining({ id: 5 }));
   });
 
   it("DO_NOTHING with an instance no family owns throws", async () => {
-    mockPrisma.radarrInstance.findUnique.mockResolvedValue(null);
-    mockPrisma.sonarrInstance.findUnique.mockResolvedValue(null);
-    mockPrisma.lidarrInstance.findUnique.mockResolvedValue(null);
+    mockPrisma.radarrInstance.findFirst.mockResolvedValue(null);
+    mockPrisma.sonarrInstance.findFirst.mockResolvedValue(null);
+    mockPrisma.lidarrInstance.findFirst.mockResolvedValue(null);
     await expect(executeAction(movieAction({ actionType: "DO_NOTHING", addArrTags: ["x"] })))
       .rejects.toThrow("Arr instance not found");
   });
@@ -288,7 +292,7 @@ describe("tag operations", () => {
     mockRadarr.getTags.mockResolvedValue([{ id: 1, label: "a" }, { id: 2, label: "b" }]);
     const steps: string[] = [];
     await executeAction(movieAction({ actionType: "UNMONITOR_RADARR", addArrTags: ["b"], removeArrTags: ["a"] }), (s) => steps.push(s));
-    expect(mockRadarr.updateMovie).toHaveBeenCalledWith(7, { tags: [2] });
+    expect(mockRadarr.updateMovie).toHaveBeenCalledWith(7, { tags: [2] }, expect.objectContaining({ id: 7 }));
     expect(steps[0]).toBe("Updating tags");
     expect(mockLogger.info).toHaveBeenCalledWith("Lifecycle", expect.stringContaining("+tags: b; -tags: a"));
   });
@@ -303,40 +307,42 @@ describe("cleanupArrTags", () => {
   });
 
   it("strips the tag from every Sonarr series that carries it, then deletes it", async () => {
-    mockPrisma.radarrInstance.findUnique.mockResolvedValue(null);
+    mockPrisma.radarrInstance.findFirst.mockResolvedValue(null);
     mockSonarr.getTags.mockResolvedValue([{ id: 4, label: "Librariarr" }, { id: 5, label: "other" }]);
     mockSonarr.getSeries.mockResolvedValue([{ id: 1, tags: [4, 5] }, { id: 2, tags: [5] }]);
 
     await cleanupArrTags("arr1", "SERIES", ["librariarr"]);
 
-    expect(mockSonarr.updateSeries).toHaveBeenCalledTimes(1);
-    expect(mockSonarr.updateSeries).toHaveBeenCalledWith(1, { tags: [5] });
+    // One bulk-editor request for the series carrying it, not a PUT per series.
+    expect(mockSonarr.removeTagsFromSeries).toHaveBeenCalledTimes(1);
+    expect(mockSonarr.removeTagsFromSeries).toHaveBeenCalledWith([1], [4]);
+    expect(mockSonarr.updateSeries).not.toHaveBeenCalled();
     expect(mockSonarr.deleteTag).toHaveBeenCalledWith(4);
   });
 
   it("returns early on Sonarr when none of the labels exist", async () => {
-    mockPrisma.radarrInstance.findUnique.mockResolvedValue(null);
+    mockPrisma.radarrInstance.findFirst.mockResolvedValue(null);
     mockSonarr.getTags.mockResolvedValue([]);
     await cleanupArrTags("arr1", "SERIES", ["x"]);
     expect(mockSonarr.getSeries).not.toHaveBeenCalled();
   });
 
   it("strips the tag from Lidarr artists, then deletes it", async () => {
-    mockPrisma.radarrInstance.findUnique.mockResolvedValue(null);
-    mockPrisma.sonarrInstance.findUnique.mockResolvedValue(null);
+    mockPrisma.radarrInstance.findFirst.mockResolvedValue(null);
+    mockPrisma.sonarrInstance.findFirst.mockResolvedValue(null);
     mockLidarr.getTags.mockResolvedValue([{ id: 8, label: "cleanup" }]);
     mockLidarr.getArtists.mockResolvedValue([{ id: 1, tags: [8] }, { id: 2, tags: [] }]);
 
     await cleanupArrTags("arr1", "MUSIC", ["CLEANUP"]);
 
-    expect(mockLidarr.updateArtist).toHaveBeenCalledTimes(1);
-    expect(mockLidarr.updateArtist).toHaveBeenCalledWith(1, { tags: [] });
+    expect(mockLidarr.removeTagsFromArtists).toHaveBeenCalledWith([1], [8]);
+    expect(mockLidarr.updateArtist).not.toHaveBeenCalled();
     expect(mockLidarr.deleteTag).toHaveBeenCalledWith(8);
   });
 
   it("returns early on Lidarr when none of the labels exist", async () => {
-    mockPrisma.radarrInstance.findUnique.mockResolvedValue(null);
-    mockPrisma.sonarrInstance.findUnique.mockResolvedValue(null);
+    mockPrisma.radarrInstance.findFirst.mockResolvedValue(null);
+    mockPrisma.sonarrInstance.findFirst.mockResolvedValue(null);
     mockLidarr.getTags.mockResolvedValue([]);
     await cleanupArrTags("arr1", "MUSIC", ["x"]);
     expect(mockLidarr.getArtists).not.toHaveBeenCalled();
@@ -346,12 +352,12 @@ describe("cleanupArrTags", () => {
 describe("whole-record and monitoring executors", () => {
   it("UNMONITOR_SONARR unmonitors the series", async () => {
     await executeAction(showAction({ actionType: "UNMONITOR_SONARR", addImportExclusion: true }));
-    expect(mockSonarr.updateSeries).toHaveBeenCalledWith(2, { monitored: false });
+    expect(mockSonarr.updateSeries).toHaveBeenCalledWith(2, { monitored: false }, expect.objectContaining({ id: 2 }));
   });
 
   it("UNMONITOR_LIDARR unmonitors the artist", async () => {
     await executeAction(artistAction({ actionType: "UNMONITOR_LIDARR", addImportExclusion: true }));
-    expect(mockLidarr.updateArtist).toHaveBeenCalledWith(5, { monitored: false });
+    expect(mockLidarr.updateArtist).toHaveBeenCalledWith(5, { monitored: false }, expect.objectContaining({ id: 5 }));
   });
 
   it("UNMONITOR_DELETE_FILES_RADARR skips the file delete when the movie has no file", async () => {
@@ -364,7 +370,7 @@ describe("whole-record and monitoring executors", () => {
   it("MONITOR_DELETE_FILES_RADARR re-monitors an unmonitored movie and searches", async () => {
     mockRadarr.getMovieByTmdbId.mockResolvedValueOnce({ ...MOVIE, monitored: false, hasFile: false });
     await executeAction(movieAction({ actionType: "MONITOR_DELETE_FILES_RADARR", addImportExclusion: true, searchAfterAction: true }));
-    expect(mockRadarr.updateMovie).toHaveBeenCalledWith(7, { monitored: true });
+    expect(mockRadarr.updateMovie).toHaveBeenCalledWith(7, { monitored: true }, expect.objectContaining({ id: 7 }));
     expect(mockRadarr.deleteMovieFile).not.toHaveBeenCalled();
     expect(mockRadarr.triggerMovieSearch).toHaveBeenCalledWith(7);
   });
@@ -389,9 +395,9 @@ describe("whole-record and monitoring executors", () => {
     await executeAction(showAction({ actionType: "CHANGE_QUALITY_PROFILE_SONARR", targetQualityProfileId: 4 }));
     await executeAction(artistAction({ actionType: "CHANGE_QUALITY_PROFILE_LIDARR", targetQualityProfileId: 4 }));
     await executeAction(movieAction({ actionType: "CHANGE_QUALITY_PROFILE_RADARR", targetQualityProfileId: 4 }));
-    expect(mockSonarr.updateSeries).toHaveBeenCalledWith(2, { qualityProfileId: 4 });
-    expect(mockLidarr.updateArtist).toHaveBeenCalledWith(5, { qualityProfileId: 4 });
-    expect(mockRadarr.updateMovie).toHaveBeenCalledWith(7, { qualityProfileId: 4 });
+    expect(mockSonarr.updateSeries).toHaveBeenCalledWith(2, { qualityProfileId: 4 }, expect.objectContaining({ id: 2 }));
+    expect(mockLidarr.updateArtist).toHaveBeenCalledWith(5, { qualityProfileId: 4 }, expect.objectContaining({ id: 5 }));
+    expect(mockRadarr.updateMovie).toHaveBeenCalledWith(7, { qualityProfileId: 4 }, expect.objectContaining({ id: 7 }));
     expect(mockSonarr.triggerSeriesSearch).not.toHaveBeenCalled();
     expect(mockLidarr.triggerArtistSearch).not.toHaveBeenCalled();
     expect(mockRadarr.triggerMovieSearch).not.toHaveBeenCalled();
@@ -462,7 +468,7 @@ describe("Sonarr member-scoped file deletes", () => {
 
     await executeAction(showAction({ actionType: "MONITOR_DELETE_FILES_SONARR", matchedMediaItemIds: ["e1"], addImportExclusion: true }));
 
-    expect(mockSonarr.updateSeries).toHaveBeenCalledWith(2, { monitored: true });
+    expect(mockSonarr.updateSeries).toHaveBeenCalledWith(2, { monitored: true }, expect.objectContaining({ id: 2 }));
     expect(mockSonarr.triggerEpisodeSearch).not.toHaveBeenCalled();
   });
 
@@ -574,7 +580,7 @@ describe("Lidarr member-scoped file deletes", () => {
     const outcome = await executeAction(artistAction({
       actionType: "UNMONITOR_DELETE_FILES_LIDARR", matchedMediaItemIds: ["t1"], addImportExclusion: true, searchAfterAction: true,
     }));
-    expect(mockLidarr.updateArtist).toHaveBeenCalledWith(5, { monitored: false });
+    expect(mockLidarr.updateArtist).toHaveBeenCalledWith(5, { monitored: false }, expect.objectContaining({ id: 5 }));
     expect(mockLidarr.deleteTrackFiles).toHaveBeenCalledWith([101]);
     expect(mockLidarr.triggerArtistSearch).toHaveBeenCalledWith(5);
     expect(outcome.deletedMemberIds).toEqual(["t1"]);
@@ -589,7 +595,7 @@ describe("Lidarr member-scoped file deletes", () => {
     await executeAction(artistAction({
       actionType: "MONITOR_DELETE_FILES_LIDARR", matchedMediaItemIds: ["t1"], addImportExclusion: true, searchAfterAction: true,
     }));
-    expect(mockLidarr.updateArtist).toHaveBeenCalledWith(5, { monitored: true });
+    expect(mockLidarr.updateArtist).toHaveBeenCalledWith(5, { monitored: true }, expect.objectContaining({ id: 5 }));
     expect(mockLidarr.triggerArtistSearch).toHaveBeenCalledWith(5);
   });
 
@@ -602,5 +608,67 @@ describe("Lidarr member-scoped file deletes", () => {
       actionType: "DELETE_FILES_LIDARR", matchedMediaItemIds: ["t1"], addImportExclusion: true, searchAfterAction: true,
     }));
     expect(mockLidarr.triggerArtistSearch).toHaveBeenCalledWith(5);
+  });
+});
+
+describe("one record per action, one tag list per run", () => {
+  it("resolves the record once for the tags and the main action, and PUTs the tags it wrote", async () => {
+    mockRadarr.getTags.mockResolvedValue([{ id: 1, label: "old" }, { id: 2, label: "keep" }]);
+    mockRadarr.updateMovie.mockImplementation(async (_id: number, patch: object, current: object) => ({ ...current, ...patch }));
+
+    await executeAction(movieAction({ actionType: "UNMONITOR_RADARR", addArrTags: ["keep"], removeArrTags: ["old"] }));
+
+    expect(mockRadarr.getMovieByTmdbId).toHaveBeenCalledTimes(1);
+    expect(mockRadarr.updateMovie).toHaveBeenCalledTimes(2);
+    expect(mockRadarr.updateMovie.mock.calls[0][1]).toEqual({ tags: [2] });
+    // The unmonitor PUT goes over the record the tag PUT left, so it keeps the new tags.
+    expect(mockRadarr.updateMovie.mock.calls[1][2]).toMatchObject({ tags: [2] });
+    expect(mockRadarr.updateMovie.mock.calls[1][1]).toEqual({ monitored: false });
+  });
+
+  it("keeps the record as sent when the PUT answers with less than a record", async () => {
+    mockRadarr.getTags.mockResolvedValue([{ id: 2, label: "keep" }]);
+    mockRadarr.updateMovie.mockResolvedValue({});
+    await executeAction(movieAction({ actionType: "UNMONITOR_RADARR", addArrTags: ["keep"] }));
+    expect(mockRadarr.updateMovie.mock.calls[1][2]).toMatchObject({ id: 7, tags: [1, 2] });
+  });
+
+  it("reads each instance's tags and family once per run, remembering a tag it created", async () => {
+    mockPrisma.radarrInstance.findFirst.mockResolvedValue(null);
+    mockPrisma.lidarrInstance.findFirst.mockResolvedValue(null);
+    mockSonarr.getTags.mockResolvedValue([]);
+    mockSonarr.createTag.mockResolvedValue({ id: 9, label: "leaving" });
+    mockSonarr.updateSeries.mockImplementation(async (_id: number, patch: object, current: object) => ({ ...current, ...patch }));
+    const ctx = new ArrExecutionContext();
+    const tagOnly = showAction({ actionType: "DO_NOTHING", addArrTags: ["leaving"] });
+
+    await executeAction(tagOnly, undefined, ctx);
+    await executeAction(tagOnly, undefined, ctx);
+
+    expect(mockSonarr.getTags).toHaveBeenCalledTimes(1);
+    expect(mockSonarr.createTag).toHaveBeenCalledTimes(1);
+    expect(mockSonarr.updateSeries).toHaveBeenLastCalledWith(2, { tags: [1, 9] }, expect.objectContaining({ id: 2 }));
+    // The family probe ran once; the instance row is still read per action.
+    expect(mockPrisma.radarrInstance.findFirst).toHaveBeenCalledTimes(1);
+    expect(mockPrisma.sonarrInstance.findFirst).toHaveBeenCalledTimes(3);
+  });
+
+  it("asks for the tags again after a failed read", async () => {
+    mockRadarr.getTags.mockRejectedValueOnce(new Error("Radarr 500")).mockResolvedValue([{ id: 2, label: "keep" }]);
+    mockRadarr.updateMovie.mockResolvedValue({ ...MOVIE });
+    const ctx = new ArrExecutionContext();
+    const action = movieAction({ actionType: "DO_NOTHING", addArrTags: ["keep"] });
+    await expect(executeAction(action, undefined, ctx)).rejects.toThrow("Radarr 500");
+    await executeAction(action, undefined, ctx);
+    expect(mockRadarr.getTags).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops acting on an instance disabled mid-run", async () => {
+    const ctx = new ArrExecutionContext();
+    await executeAction(movieAction({ actionType: "SEARCH_RADARR" }), undefined, ctx);
+    mockPrisma.radarrInstance.findFirst.mockResolvedValue({ ...enabled("http://radarr"), enabled: false });
+    await expect(executeAction(movieAction({ actionType: "SEARCH_RADARR" }), undefined, ctx)).rejects.toThrow(
+      "Radarr instance is disabled",
+    );
   });
 });

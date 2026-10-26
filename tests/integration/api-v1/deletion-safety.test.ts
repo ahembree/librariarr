@@ -61,11 +61,15 @@ vi.mock("@/lib/discord/client", async (importOriginal) => ({
   sendDiscordNotification: mockSendDiscord,
 }));
 vi.mock("@/lib/sync/sync-server", () => ({ syncMediaServer: vi.fn() }));
+vi.mock("@/lib/sync/sync-incremental", () => ({
+  syncMediaServerItems: vi.fn().mockResolvedValue({ status: "fell-back", upserted: 0, deleted: 0, reason: "test" }),
+}));
 vi.mock("@/lib/lifecycle/collections", () => ({
   syncCollection: vi.fn(),
   syncCollectionById: vi.fn(),
   syncAllCollections: vi.fn(),
   removeItemFromCollections: vi.fn(),
+  removeItemsFromCollections: vi.fn(),
 }));
 
 import * as v1Execute from "@/app/api/v1/lifecycle/actions/execute/route";

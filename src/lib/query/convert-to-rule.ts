@@ -1,4 +1,4 @@
-import { z } from "zod/v4";
+import type { z } from "zod/v4";
 import type { ConditionGroup, LibraryType } from "@/lib/conditions";
 import type { ruleSetCreateSchema } from "@/lib/validation";
 import type { QueryDefinition } from "@/lib/query/types";
