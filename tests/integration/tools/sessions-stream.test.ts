@@ -35,6 +35,7 @@ import { createMediaServerClient } from "@/lib/media-server/factory";
 // Same singleton the route subscribes to (bus.ts is one module regardless of import path).
 import { realtimeBus } from "@/lib/media-server/realtime/bus";
 import { _resetFirstSeen } from "@/lib/media-server/session-first-seen";
+import { _resetSessionsSnapshot } from "@/app/api/tools/sessions/snapshot";
 
 describe("GET /api/tools/sessions/stream", () => {
   beforeEach(async () => {
@@ -48,6 +49,8 @@ describe("GET /api/tools/sessions/stream", () => {
     });
     // First-seen stamps are process-wide; start each stream from a clean map.
     _resetFirstSeen();
+    // So is the poll the streams share.
+    _resetSessionsSnapshot();
   });
 
   afterAll(async () => {
@@ -141,6 +144,39 @@ describe("GET /api/tools/sessions/stream", () => {
     expect(text).toContain("rt-1");
 
     await reader.cancel();
+  });
+
+  it("answers a realtime change on every open stream from one poll that began after it", async () => {
+    const user = await createTestUser();
+    await createTestServer(user.id);
+    setMockSession({ userId: user.id, isLoggedIn: true });
+    const getSessions = vi.fn().mockResolvedValue([]);
+    vi.mocked(createMediaServerClient).mockImplementation(function () {
+      return { getSessions } as never;
+    });
+
+    const readers = [];
+    for (let i = 0; i < 3; i++) {
+      const response = await callRoute(GET, { url: "/api/tools/sessions/stream" });
+      const reader = response.body!.getReader();
+      await reader.read(); // the opening (empty) event
+      readers.push(reader);
+    }
+    // The three opened within the share window: one poll answered them all.
+    expect(getSessions).toHaveBeenCalledTimes(1);
+
+    getSessions.mockResolvedValue([
+      { sessionId: "rt-2", player: { state: "playing", local: true }, session: { bandwidth: 0, location: "lan" } },
+    ]);
+    realtimeBus.emit({ kind: "session-changed", serverId: "x", serverType: "PLEX", at: Date.now() });
+
+    for (const reader of readers) {
+      const text = new TextDecoder().decode((await reader.read()).value);
+      // Every stream shows the change: none was handed the poll from before it.
+      expect(text).toContain("rt-2");
+    }
+    expect(getSessions).toHaveBeenCalledTimes(2);
+    for (const reader of readers) await reader.cancel();
   });
 
   it("keeps a session's start time when a server poll fails and recovers", async () => {

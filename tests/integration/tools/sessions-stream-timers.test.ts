@@ -28,6 +28,7 @@ vi.mock("@/lib/media-server/factory", () => ({
 import { GET } from "@/app/api/tools/sessions/stream/route";
 import { realtimeBus } from "@/lib/media-server/realtime/bus";
 import { _resetFirstSeen } from "@/lib/media-server/session-first-seen";
+import { _resetSessionsSnapshot } from "@/app/api/tools/sessions/snapshot";
 
 // Captured before fake timers replace it: drain() needs a real macrotask turn.
 const setImmediateReal = globalThis.setImmediate;
@@ -96,6 +97,8 @@ describe("GET /api/tools/sessions/stream — timers and throttling", () => {
     getSessions.mockReset().mockResolvedValue([playing("s-1")]);
     // First-seen stamps are process-wide; start each stream from a clean map.
     _resetFirstSeen();
+    // So is the poll the streams share.
+    _resetSessionsSnapshot();
   });
 
   afterEach(() => {
@@ -116,6 +119,19 @@ describe("GET /api/tools/sessions/stream — timers and throttling", () => {
     expect(await drain()).toContain('"viewOffset":60000');
 
     await reader.cancel();
+  });
+
+  it("polls once per tick however many streams are open", async () => {
+    const streams = [await open(), await open(), await open()];
+    for (const s of streams) await s.drain();
+    expect(getSessions).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(getSessions).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(getSessions).toHaveBeenCalledTimes(3);
+
+    for (const s of streams) await s.reader.cancel();
   });
 
   it("writes a heartbeat comment every 30 seconds", async () => {
