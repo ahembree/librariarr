@@ -10,6 +10,9 @@ import { SETTINGS_BUNDLE_PATHS } from "@/lib/settings/settings-bundle-paths";
 import { responseErrorMessage } from "@/lib/api/error-message";
 import { PlexLoginPrompt } from "@/components/plex-login-prompt";
 import { useRealtime } from "@/hooks/use-realtime";
+import { useFallbackPoll } from "@/hooks/use-fallback-poll";
+import { fetchSyncStatus } from "@/lib/sync/sync-status-client";
+import { mergeSyncProgress } from "./sync-progress";
 import {
   DEFAULT_CHIP_COLORS,
   mergeChipColors,
@@ -499,11 +502,15 @@ export default function SettingsPage() {
 
   // ─── Fetchers ───
 
+  // Bumped each time a server list is applied: a progress read that was asked
+  // for before it may be older than that list (see `fetchSyncProgress`).
+  const serversRead = useRef(0);
   const fetchServers = useCallback(async (): Promise<MediaServer[]> => {
     try {
       const response = await bundleOf(bundleRef).get("/api/servers");
       const data = await response.json();
       const fresh: MediaServer[] = data.servers || [];
+      serversRead.current += 1;
       setServers(fresh);
       // Drop a request whose run has ended. Deriving that during render is not
       // enough on its own: a request left stored after its run finished would
@@ -1086,10 +1093,26 @@ export default function SettingsPage() {
   const hasActiveSync = servers.some(
     (s) => s.syncJobs[0]?.status === "RUNNING" || s.syncJobs[0]?.status === "PENDING"
   );
-  // Pushed. `/api/servers` COUNTs MediaItem per library on every call, so the
-  // old 2s tick ran that aggregate ~30 times a minute for the whole of a sync.
+  // A running sync's progress, from the sync status rather than the server
+  // list: `/api/servers` COUNTs MediaItem per library on every call, and a sync
+  // announces progress every two seconds per server. Only the newest read is
+  // applied, and only when no server list landed after it was asked for — that
+  // list may already say the sync finished, which an older RUNNING row must
+  // never undo.
+  const progressRead = useRef(0);
+  const fetchSyncProgress = useCallback(async () => {
+    const seq = ++progressRead.current;
+    const listsBefore = serversRead.current;
+    const data = await fetchSyncStatus();
+    if (!data?.jobs || seq !== progressRead.current || listsBefore !== serversRead.current) return;
+    const jobs = data.jobs;
+    setServers((current) => mergeSyncProgress(current, jobs));
+  }, []);
+
+  // Pushed. A sync starting, ending or a server changing re-reads the list;
+  // progress in between only moves the running row (above).
   useRealtime("sync:started", fetchServers);
-  useRealtime("sync:progress", fetchServers);
+  useRealtime("sync:progress", fetchSyncProgress);
   useRealtime("sync:completed", fetchServers);
   useRealtime("sync:failed", fetchServers);
   useRealtime("server:changed", fetchServers);
@@ -1114,16 +1137,15 @@ export default function SettingsPage() {
     [servers, syncRequest],
   );
 
-  // Fallback only, for a dropped stream. Armed by a pending request as well as
-  // by a job row: between pressing Sync and the first refetch that sees the
-  // new row, `hasActiveSync` is still false, so with the stream down nothing
-  // refetched at all and the button spun to its 5-minute timeout.
+  // Fallback only, for a dropped stream: it runs while pushes are not arriving
+  // (`useFallbackPoll`), since with the stream up `sync:started`/`completed`/
+  // `failed` re-read the list and a reconnect's resync covers a gap. Armed by
+  // a pending request as well as by a job row: between pressing Sync and the
+  // first refetch that sees the new row, `hasActiveSync` is still false, so
+  // with the stream down nothing refetched at all and the button spun to its
+  // 5-minute timeout.
   const pollServers = hasActiveSync || activeSyncingServer !== null;
-  useEffect(() => {
-    if (!pollServers) return;
-    const interval = setInterval(fetchServers, 15000);
-    return () => clearInterval(interval);
-  }, [pollServers, fetchServers]);
+  useFallbackPoll(() => { void fetchServers(); }, 15000, pollServers);
 
   // The import readout is PUSHED, not polled. The importer emits
   // `tracearr:import-progress` after each page commits (throttled there, since
@@ -1153,15 +1175,10 @@ export default function SettingsPage() {
   const tracearrBackfillRunning = visibleTracearrImportStatus.some(
     (s) => !s.backfillComplete || s.activeImport !== null,
   );
+  // Gated on the stream (`useFallbackPoll`): while pushes arrive, the
+  // importer's own events already refetch.
   const pollTracearrImport = hasTracearrInstance && tracearrBackfillRunning;
-  useEffect(() => {
-    if (!pollTracearrImport) return;
-    const interval = setInterval(
-      () => { void fetchTracearrImportStatus(); },
-      TRACEARR_IMPORT_POLL_MS,
-    );
-    return () => clearInterval(interval);
-  }, [pollTracearrImport, fetchTracearrImportStatus]);
+  useFallbackPoll(() => { void fetchTracearrImportStatus(); }, TRACEARR_IMPORT_POLL_MS, pollTracearrImport);
 
   // ─── Server handlers ───
 
