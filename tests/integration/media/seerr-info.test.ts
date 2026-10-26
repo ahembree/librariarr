@@ -39,6 +39,7 @@ vi.mock("@/lib/seerr/seerr-client", async (importOriginal) => ({
 }));
 
 import { GET } from "@/app/api/media/[id]/seerr-info/route";
+import { SEERR_REQUEST_PAGE_SIZE } from "@/lib/seerr/request-walk";
 
 function seerrRequest(id: number, overrides: { status?: number; is4k?: boolean; tvdbId?: number | null; tmdbId?: number; type?: "movie" | "tv"; media?: Record<string, unknown> } = {}) {
   return {
@@ -194,7 +195,7 @@ describe("GET /api/media/[id]/seerr-info", () => {
     // Only the request for this show's TVDB id.
     expect(body.matches[0].requests.map((r) => r.id)).toEqual([2]);
     expect(mockGetTvShow).not.toHaveBeenCalled();
-    expect(mockGetRequests).toHaveBeenCalledWith("http://seerr.test:5055", { take: 100, skip: 0, mediaType: "tv" });
+    expect(mockGetRequests).toHaveBeenCalledWith("http://seerr.test:5055", { take: SEERR_REQUEST_PAGE_SIZE, skip: 0, mediaType: "tv" });
   });
 
   it("does not walk the request list for a movie with no TMDB id", async () => {
