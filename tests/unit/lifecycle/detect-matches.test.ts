@@ -31,6 +31,15 @@ const mockPrisma = vi.hoisted(() => ({
     // and why, so it has to read the rows rather than tally them.
     findMany: vi.fn().mockResolvedValue([]),
   },
+  // The exception guard reads the candidates' dedupKeys with one `= ANY($1)`
+  // statement; answered from the rows `mediaItem.findMany` is stubbed with,
+  // as that SQL would answer them.
+  $queryRawUnsafe: async (sql: string, ids?: unknown) => {
+    if (!sql.includes(`"dedupKey" IS NOT NULL`) || !Array.isArray(ids)) return [];
+    const wanted = new Set(ids as string[]);
+    const rows = ((await mockPrisma.mediaItem.findMany()) ?? []) as Array<{ id: string; dedupKey?: string | null }>;
+    return rows.filter((r) => wanted.has(r.id) && r.dedupKey).map((r) => ({ id: r.id, dedupKey: r.dedupKey }));
+  },
   // Detection runs its match writes inside a transaction in two shapes:
   //   - callback form: $transaction(async (tx) => { ... }) (full re-eval)
   //   - array form:    $transaction([p1, p2])              (incremental)

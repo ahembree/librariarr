@@ -124,39 +124,55 @@ export async function findExceptionProtectedGroups(
   // artist, by its MusicBrainz id), `seriesKey` alone misses one on a row that
   // predates the column. Each hit is then re-keyed, so a same-titled DIFFERENT
   // show comes back under its own key and never matches the caller's.
-  const exceptions = await prisma.lifecycleException.findMany({
-    where: {
-      userId,
-      mediaItem: {
-        OR: [
-          // Case-insensitively, as the keys compare: an exception filed under
-          // "nirvana" on one server protects "Nirvana" on another.
-          ...(parents.length > 0 ? [{ parentTitle: { in: parents, mode: "insensitive" as const } }] : []),
-          ...(seriesKeys.length > 0 ? [{ seriesKey: { in: seriesKeys } }] : []),
-          ...(artistMbids.length > 0
-            ? [{
-                type: MUSIC as MediaType,
-                externalIds: { some: { source: "MUSICBRAINZ", externalId: { in: artistMbids } } },
-              }]
-            : []),
-        ],
-        ...(types.length > 0 ? { type: { in: types } } : {}),
-      },
-    },
-    select: {
-      mediaItem: {
-        select: {
-          parentTitle: true,
-          seriesKey: true,
-          type: true,
-          externalIds: { where: { source: "MUSICBRAINZ" }, select: { source: true, externalId: true } },
+  //
+  // In slices: the three lists share one statement, and a library-wide target
+  // set (every artist of a music library) would put them past Postgres'
+  // bind-parameter limit together. A third of a slice per list keeps any one
+  // statement under it; the keys found are the union over the slices.
+  const per = Math.floor(GROUP_LIST_CHUNK / 3);
+  const slices = Math.max(parents.length, seriesKeys.length, artistMbids.length);
+  const keys = new Set<string>();
+  for (let at = 0; at < slices; at += per) {
+    const parentSlice = parents.slice(at, at + per);
+    const seriesKeySlice = seriesKeys.slice(at, at + per);
+    const mbidSlice = artistMbids.slice(at, at + per);
+    const exceptions = await prisma.lifecycleException.findMany({
+      where: {
+        userId,
+        mediaItem: {
+          OR: [
+            // Case-insensitively, as the keys compare: an exception filed under
+            // "nirvana" on one server protects "Nirvana" on another.
+            ...(parentSlice.length > 0 ? [{ parentTitle: { in: parentSlice, mode: "insensitive" as const } }] : []),
+            ...(seriesKeySlice.length > 0 ? [{ seriesKey: { in: seriesKeySlice } }] : []),
+            ...(mbidSlice.length > 0
+              ? [{
+                  type: MUSIC as MediaType,
+                  externalIds: { some: { source: "MUSICBRAINZ", externalId: { in: mbidSlice } } },
+                }]
+              : []),
+          ],
+          ...(types.length > 0 ? { type: { in: types } } : {}),
         },
       },
-    },
-  });
-
-  return new Set(exceptions.flatMap((e) => protectionKeys(e.mediaItem)));
+      select: {
+        mediaItem: {
+          select: {
+            parentTitle: true,
+            seriesKey: true,
+            type: true,
+            externalIds: { where: { source: "MUSICBRAINZ" }, select: { source: true, externalId: true } },
+          },
+        },
+      },
+    });
+    for (const e of exceptions) for (const key of protectionKeys(e.mediaItem)) keys.add(key);
+  }
+  return keys;
 }
+
+/** Values per `findExceptionProtectedGroups` statement, across its three lists. */
+const GROUP_LIST_CHUNK = 15_000;
 
 /**
  * The ids among `candidateIds` that a `LifecycleException` protects: one filed
@@ -196,18 +212,23 @@ export async function findExceptedItemIds(
     // Only the candidates are looked up: materialising every copy of every
     // excepted key would cost a whole-library read per call when thousands of
     // episodes are excepted and the caller asks about a handful of items. The
-    // keys are intersected here rather than sent as a second IN list: Prisma
-    // splits only one oversized list per query, so two large ones together
-    // overflow the bind-parameter limit (P2029) and fail the whole run.
-    const rows = await prisma.mediaItem.findMany({
-      where: {
-        id: { in: [...candidates] },
-        dedupKey: { not: null },
-        library: { mediaServer: { userId } },
-      },
-      select: { id: true, dedupKey: true },
-    });
-    for (const r of rows) if (r.dedupKey && dedupKeys.has(r.dedupKey)) excepted.add(r.id);
+    // keys are intersected here rather than sent as a second list. The ids go
+    // as ONE array parameter (`= ANY($1)`), never an IN list: with the owner
+    // filter beside it Prisma did not split the list, and a track-scope music
+    // rule set matching 38k tracks passed Postgres' 32,767 bind-parameter
+    // limit (P2029) and failed the whole run.
+    const rows = await prisma.$queryRawUnsafe<Array<{ id: string; dedupKey: string }>>(
+      `SELECT mi."id", mi."dedupKey"
+         FROM "MediaItem" mi
+         JOIN "Library" l ON l."id" = mi."libraryId"
+         JOIN "MediaServer" ms ON ms."id" = l."mediaServerId"
+        WHERE mi."id" = ANY($1::text[])
+          AND mi."dedupKey" IS NOT NULL
+          AND ms."userId" = $2`,
+      [...candidates],
+      userId,
+    );
+    for (const r of rows) if (dedupKeys.has(r.dedupKey)) excepted.add(r.id);
   }
   return excepted;
 }

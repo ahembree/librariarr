@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import { findInChunks, inChunks } from "@/lib/conditions/in-chunks";
 import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasArrRules, hasSeerrRules, hasAnyActiveRules, hasWatchedByUserRules, hasSeriesAggregateRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
@@ -60,10 +61,12 @@ async function planActionCarryOver(
   carried: Map<string, Record<string, unknown>>,
 ): Promise<Array<{ id: string; data: Prisma.LifecycleActionUncheckedUpdateManyInput }>> {
   if (carried.size === 0) return [];
-  const actions = await prisma.lifecycleAction.findMany({
-    where: { ruleSetId, status: "PENDING", mediaItemId: { in: [...carried.keys()] } },
-    select: { id: true, mediaItemId: true, matchedMediaItemIds: true },
-  });
+  const actions = await findInChunks([...carried.keys()], (ids) =>
+    prisma.lifecycleAction.findMany({
+      where: { ruleSetId, status: "PENDING", mediaItemId: { in: ids } },
+      select: { id: true, mediaItemId: true, matchedMediaItemIds: true },
+    }),
+  );
   if (actions.length === 0) return [];
 
   const memberIds = new Set<string>();
@@ -74,10 +77,9 @@ async function planActionCarryOver(
   }
   const keyOf = new Map<string, string | null>();
   if (memberIds.size > 0) {
-    const rows = await prisma.mediaItem.findMany({
-      where: { id: { in: [...memberIds] } },
-      select: { id: true, dedupKey: true },
-    });
+    const rows = await findInChunks([...memberIds], (ids) =>
+      prisma.mediaItem.findMany({ where: { id: { in: ids } }, select: { id: true, dedupKey: true } }),
+    );
     for (const r of rows) keyOf.set(r.id, r.dedupKey);
   }
 
@@ -151,10 +153,9 @@ async function collapseCopies(
   const allMemberIds = [...new Set(groups.flat().flatMap(membersOf))];
   const memberKeys = new Map<string, string | null>();
   if (allMemberIds.length > 0) {
-    const rows = await prisma.mediaItem.findMany({
-      where: { id: { in: allMemberIds } },
-      select: { id: true, dedupKey: true },
-    });
+    const rows = await findInChunks(allMemberIds, (ids) =>
+      prisma.mediaItem.findMany({ where: { id: { in: ids } }, select: { id: true, dedupKey: true } }),
+    );
     for (const r of rows) memberKeys.set(r.id, r.dedupKey);
   }
 
@@ -688,11 +689,11 @@ export async function detectAndSaveMatches(
           ]
         : []),
       ...(removeStale
-        ? [
+        ? inChunks(staleIds).map((ids) =>
             prisma.ruleMatch.deleteMany({
-              where: { ruleSetId: ruleSet.id, mediaItemId: { in: staleIds } },
+              where: { ruleSetId: ruleSet.id, mediaItemId: { in: ids } },
             }),
-          ]
+          )
         : []),
     ]);
   }
@@ -701,33 +702,35 @@ export async function detectAndSaveMatches(
     // Fetch current state of stale items to determine which criteria changed.
     // Scope by the rule set's serverIds so logs can never refer to items outside
     // the rule set's intended library scope.
-    const staleItems = await prisma.mediaItem.findMany({
-      where: {
-        id: { in: staleIds },
-        library: { mediaServerId: { in: serverIds } },
-      },
-      include: {
-        externalIds: true,
-        streams: true,
-        // Re-evaluation needs per-user play history to compute accurate
-        // "no longer matching" reasons for watchedByUser rules. Filtered to
-        // completed plays for the same reason the engines' eager loads are:
-        // this re-runs the Phase 2 evaluator over rows Phase 1 already
-        // filtered, so an unfiltered load makes a partial Tracearr play look
-        // like a watch here and nowhere else — the item would be reported as
-        // "was matching" (i.e. dropped for some unexplained reason) when in
-        // fact it dropped precisely because the abandoned play never counted.
-        ...(hasWatchedByUserRules(rules)
-          ? { watchHistory: { where: COMPLETED_PLAY_FILTER, select: { serverUsername: true } } }
-          : {}),
-        library: {
-          select: {
-            title: true,
-            mediaServer: { select: { id: true, name: true, type: true } },
+    const staleItems = await findInChunks(staleIds, (ids) =>
+      prisma.mediaItem.findMany({
+        where: {
+          id: { in: ids },
+          library: { mediaServerId: { in: serverIds } },
+        },
+        include: {
+          externalIds: true,
+          streams: true,
+          // Re-evaluation needs per-user play history to compute accurate
+          // "no longer matching" reasons for watchedByUser rules. Filtered to
+          // completed plays for the same reason the engines' eager loads are:
+          // this re-runs the Phase 2 evaluator over rows Phase 1 already
+          // filtered, so an unfiltered load makes a partial Tracearr play look
+          // like a watch here and nowhere else — the item would be reported as
+          // "was matching" (i.e. dropped for some unexplained reason) when in
+          // fact it dropped precisely because the abandoned play never counted.
+          ...(hasWatchedByUserRules(rules)
+            ? { watchHistory: { where: COMPLETED_PLAY_FILTER, select: { serverUsername: true } } }
+            : {}),
+          library: {
+            select: {
+              title: true,
+              mediaServer: { select: { id: true, name: true, type: true } },
+            },
           },
         },
-      },
-    });
+      }),
+    );
     const staleItemMap = new Map(staleItems.map((item) => [item.id, item as unknown as Record<string, unknown>]));
 
     for (const id of staleIds) {

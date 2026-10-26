@@ -11,6 +11,7 @@
  * without null checks even when the relevant tables have no rows.
  */
 import { prisma } from "@/lib/db";
+import { inChunks } from "@/lib/conditions/in-chunks";
 
 export interface CrossSystemDataEntry {
   serverCount: number;
@@ -19,20 +20,6 @@ export interface CrossSystemDataEntry {
 }
 
 type CrossSystemDataMap = Map<string, CrossSystemDataEntry>;
-
-/**
- * Postgres takes at most 32,767 bind parameters. Prisma splits a lone `in`
- * list on a plain findMany, but not on a groupBy, so a list built from a whole
- * library — every episode or track the series- and artist-scope engines pass —
- * is sent in slices.
- */
-const IN_CHUNK = 10_000;
-
-function inChunks<T>(values: readonly T[]): T[][] {
-  const out: T[][] = [];
-  for (let i = 0; i < values.length; i += IN_CHUNK) out.push(values.slice(i, i + IN_CHUNK));
-  return out;
-}
 
 export interface CrossSystemDataOptions {
   /**

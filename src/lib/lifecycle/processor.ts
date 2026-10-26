@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import { findInChunks, inChunks } from "@/lib/conditions/in-chunks";
 import type { LibraryType, Prisma } from "@/generated/prisma/client";
 import { hasArrRules, hasSeerrRules, hasAnyActiveRules } from "@/lib/rules/lifecycle-engine";
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
@@ -124,9 +125,11 @@ export async function scheduleActionsForRuleSet(
   const stalePendingIds = [...pendingIds].filter((id) => !currentIds.has(id));
 
   if (stalePendingIds.length > 0) {
-    await prisma.lifecycleAction.deleteMany({
-      where: { ruleSetId: ruleSet.id, status: "PENDING", mediaItemId: { in: stalePendingIds } },
-    });
+    for (const ids of inChunks(stalePendingIds)) {
+      await prisma.lifecycleAction.deleteMany({
+        where: { ruleSetId: ruleSet.id, status: "PENDING", mediaItemId: { in: ids } },
+      });
+    }
     logger.info("Lifecycle", `Deleted ${stalePendingIds.length} pending actions for items no longer matching rule set "${ruleSet.name}"`);
   }
 
@@ -156,7 +159,9 @@ export async function scheduleActionsForRuleSet(
     seenItems.add(action.mediaItemId);
   }
   if (duplicateIds.length > 0) {
-    await prisma.lifecycleAction.deleteMany({ where: { id: { in: duplicateIds } } });
+    for (const ids of inChunks(duplicateIds)) {
+      await prisma.lifecycleAction.deleteMany({ where: { id: { in: ids } } });
+    }
     logger.info("Lifecycle", `Removed ${duplicateIds.length} duplicate pending actions for rule set "${ruleSet.name}"`);
   }
 
@@ -186,24 +191,26 @@ export async function scheduleActionsForRuleSet(
       actionType: ruleSet.actionType!,
     });
   }
-  const existingActions = await prisma.lifecycleAction.findMany({
-    where: {
-      ruleSetId: ruleSet.id,
-      mediaItemId: { in: matchedItemIds },
-      OR: existingActionConditions,
-    },
-    select: {
-      mediaItemId: true,
-      status: true,
-      actionType: true,
-      arrInstanceId: true,
-      targetQualityProfileId: true,
-      addImportExclusion: true,
-      searchAfterAction: true,
-      addArrTags: true,
-      removeArrTags: true,
-    },
-  });
+  const existingActions = await findInChunks(matchedItemIds, (ids) =>
+    prisma.lifecycleAction.findMany({
+      where: {
+        ruleSetId: ruleSet.id,
+        mediaItemId: { in: ids },
+        OR: existingActionConditions,
+      },
+      select: {
+        mediaItemId: true,
+        status: true,
+        actionType: true,
+        arrInstanceId: true,
+        targetQualityProfileId: true,
+        addImportExclusion: true,
+        searchAfterAction: true,
+        addArrTags: true,
+        removeArrTags: true,
+      },
+    }),
+  );
   const existingItemIds = new Set<string | null>();
   for (const action of existingActions) {
     // A PENDING action always blocks (dedup). A completed/failed action only
@@ -390,18 +397,24 @@ export async function processLifecycleRules(userId?: string) {
                 select: { discordWebhookUrl: true, discordWebhookUsername: true, discordWebhookAvatarUrl: true },
               });
               if (settings?.discordWebhookUrl) {
+                const added = new Set(addedIds);
                 const addedTitles = matchedItems
-                  .filter((item) => addedIds.includes(item.id as string))
+                  .filter((item) => added.has(item.id as string))
                   .sort((a, b) => ((a.titleSort as string) ?? "").localeCompare((b.titleSort as string) ?? ""))
                   .map((item) => item.title as string);
 
                 let removedTitles: string[] = [];
                 if (removedIds.length > 0) {
-                  const removedItems = await prisma.mediaItem.findMany({
-                    where: { id: { in: removedIds } },
-                    select: { title: true, parentTitle: true, titleSort: true },
-                    orderBy: { titleSort: "asc" },
-                  });
+                  // In slices (a re-evaluation can drop a whole library's
+                  // matches), sorted here as the added titles are.
+                  const removedItems = (
+                    await findInChunks(removedIds, (ids) =>
+                      prisma.mediaItem.findMany({
+                        where: { id: { in: ids } },
+                        select: { title: true, parentTitle: true, titleSort: true },
+                      }),
+                    )
+                  ).sort((a, b) => (a.titleSort ?? "").localeCompare(b.titleSort ?? ""));
                   // A series match is its show in either scope, stored against
                   // one representative episode — never name it by that episode.
                   removedTitles = removedItems.map((item) =>
