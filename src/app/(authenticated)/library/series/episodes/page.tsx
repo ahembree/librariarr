@@ -1,41 +1,56 @@
 "use client";
 
-import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, useTransition } from "react";
+import { useState, useCallback, useMemo, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { useVirtualizer } from "@tanstack/react-virtual";
 import { qualityChips, qualitySegments } from "@/lib/media/quality-chips";
 import { useChipColors } from "@/components/chip-color-provider";
 import { MediaTable } from "@/components/media-table";
 import { MediaFilters } from "@/components/media-filters";
-import { sameFilters } from "@/lib/filters/same-filters";
-import { MediaCard, CARD_CONTENT_HEIGHT, PRIORITY_ROWS } from "@/components/media-card";
+import { MediaCard } from "@/components/media-card";
 import { Tv, Clock, HardDrive } from "lucide-react";
 import { LibraryToolbar } from "@/components/library-toolbar";
 import type { MediaListItem } from "@/lib/types";
 import { useCardSize, BREAKPOINTS, estimateContentWidth } from "@/hooks/use-card-size";
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { useServers } from "@/hooks/use-servers";
-import { useRealtime } from "@/hooks/use-realtime";
 import { useListFetch } from "@/hooks/use-list-fetch";
-import { useDeferredOverscan } from "@/hooks/use-deferred-overscan";
+import { useLibraryListState } from "@/hooks/use-library-list-state";
+import { useFilterPanelReset } from "@/hooks/use-filter-panel-reset";
+import { useLatestRequest } from "@/hooks/use-latest-request";
+import { useLibrarySyncRefetch } from "@/hooks/use-library-sync-refetch";
+import { useVirtualPosterGrid, GRID_GAP, WIDE_ASPECT } from "@/hooks/use-virtual-poster-grid";
+import { LIBRARY_CARD_CONTENT_HEIGHT } from "@/hooks/use-library-grid";
 import { fetchListProgressively } from "@/lib/media/progressive-load";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { formatFileSize, formatDuration } from "@/lib/format";
 import { formatEpisodeCode, formatEpisodeTitle } from "@/lib/media/display-title";
-import { EmptyState } from "@/components/empty-state";
+import { LibraryEmptyState } from "@/components/library-empty-state";
+import { PageHeader } from "@/components/page-header";
 import { MediaGridSkeleton } from "@/components/skeletons";
-import { MediaHoverPopover } from "@/components/media-hover-popover";
+import { MediaHoverPopover, hoverDataFromListItem, hoverSummaryUrl } from "@/components/media-hover-popover";
 import { LibraryTabs, SERIES_TABS } from "@/components/library-tabs";
+import { VirtualCardGrid, type GridCardContext } from "@/components/virtual-card-grid";
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
-
-const GAP = 16;
-const CARD_BORDER = 2;
-const QUALITY_BAR_HEIGHT = 12;
 
 // Landscape card min widths (matches useCardSize internals)
 const LANDSCAPE_MIN_WIDTHS: Record<string, number> = { small: 140, medium: 200, large: 260 };
 const MOBILE_LANDSCAPE_MIN_WIDTHS: Record<string, number> = { small: 110, medium: 140, large: 200 };
 
+const EPISODES_FROM = `?from=${encodeURIComponent("/library/series/episodes")}`;
+
+const episodeKey = (ep: MediaListItem) => ep.id;
+
+// The table's popover carries the show's poster as its hero; the card's passes
+// the same fields (the card already shows the still).
+function episodeTableHover(item: MediaListItem) {
+  return (
+    <MediaHoverPopover
+      summaryUrl={hoverSummaryUrl(item.id)}
+      imageUrl={`/api/media/${item.id}/image?type=parent`}
+      data={hoverDataFromListItem(item, { title: formatEpisodeTitle(item) })}
+    />
+  );
+}
 
 export default function AllEpisodesPage() {
   const router = useRouter();
@@ -43,24 +58,19 @@ export default function AllEpisodesPage() {
   const { show, showServers, setVisible, prefs } = useCardDisplay("SERIES_EPISODES");
   const { servers } = useServers();
   const [items, setItems] = useState<MediaListItem[]>([]);
-  const [filters, setFilters] = useState<Record<string, string>>({});
   // Cards are headed "<Show> SxxExx", so they list by show, then SxxExx.
-  const [sortBy, setSortBy] = useState("parentTitle");
-  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
+  const { viewMode, setViewMode, sortBy, sortOrder, toggleSort, filters, onFilterChange, clearFilters, hasFilters } =
+    useLibraryListState("episodes", "parentTitle", { defaultViewMode: "table" });
+  const filterPanel = useFilterPanelReset(undefined, clearFilters);
   const [loading, setLoading] = useState(true);
   // The first screenful arrives before the rest of the library; consumers that
   // need the complete list (item count, scroll restoration) wait for this.
   const [loadingRest, setLoadingRest] = useState(true);
-  const [viewMode, setViewMode] = useState<"cards" | "table">("table");
   const [, startTransition] = useTransition();
   const { size, setSize, columns: actualColumns } = useCardSize();
-
-  const gridContainerRef = useRef<HTMLDivElement>(null);
-  const scrollElementRef = useRef<HTMLElement | null>(null);
-  const [scrollMargin, setScrollMargin] = useState(0);
-  // Token guards against a stale slow response landing after a quick
-  // filter/sort flip and overwriting state with the wrong items.
-  const reqToken = useRef(0);
+  // Guards against a stale slow response landing after a quick filter/sort
+  // flip and overwriting state with the wrong items.
+  const latest = useLatestRequest();
 
   // Compute landscape column count from screen width and landscape min widths
   const landscapeColumns = useMemo(() => {
@@ -68,102 +78,26 @@ export default function AllEpisodesPage() {
     const isMobile = screenWidth < BREAKPOINTS.md;
     const minWidth = isMobile ? MOBILE_LANDSCAPE_MIN_WIDTHS[size] : LANDSCAPE_MIN_WIDTHS[size];
     const contentWidth = estimateContentWidth(screenWidth);
-    return Math.max(2, Math.floor((contentWidth + GAP) / (minWidth + GAP)));
+    return Math.max(2, Math.floor((contentWidth + GRID_GAP) / (minWidth + GRID_GAP)));
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [size, actualColumns]); // actualColumns changes on resize, so we recompute
 
+  const grid = useVirtualPosterGrid({
+    count: items.length,
+    columns: landscapeColumns,
+    aspect: WIDE_ASPECT,
+    contentHeight: LIBRARY_CARD_CONTENT_HEIGHT,
+    scrollElement: "main",
+    layoutKey: `${viewMode}:${loading}`,
+  });
+
   const { markChildNavigation } = useScrollRestoration("/library/series/episodes", !loadingRest && items.length > 0, undefined, undefined, {
-    getFirstVisibleIndex: () => {
-      if (!gridContainerRef.current) return -1;
-      const main = document.querySelector<HTMLElement>("main");
-      if (!main) return -1;
-      const containerWidth = gridContainerRef.current.offsetWidth;
-      const columnWidth = (containerWidth - GAP * (landscapeColumns - 1)) / landscapeColumns;
-      const rowHeight = Math.round(columnWidth * 0.5625 + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
-      if (rowHeight <= 0) return -1;
-      const gridTop = gridContainerRef.current.getBoundingClientRect().top - main.getBoundingClientRect().top + main.scrollTop;
-      const centerInGrid = main.scrollTop + main.clientHeight / 2 - gridTop;
-      return Math.max(0, Math.floor(centerInGrid / rowHeight)) * landscapeColumns;
-    },
-    scrollToIndex: (index) => {
-      if (!gridContainerRef.current) return false;
-      const main = document.querySelector<HTMLElement>("main");
-      if (!main) return false;
-      const row = Math.floor(index / landscapeColumns);
-      const containerWidth = gridContainerRef.current.offsetWidth;
-      const columnWidth = (containerWidth - GAP * (landscapeColumns - 1)) / landscapeColumns;
-      const rowHeight = Math.round(columnWidth * 0.5625 + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
-      const gridTop = gridContainerRef.current.getBoundingClientRect().top - main.getBoundingClientRect().top + main.scrollTop;
-      main.scrollTo({ top: Math.max(0, gridTop + row * rowHeight + rowHeight / 2 - main.clientHeight / 2), behavior: "instant" });
-      return true;
-    },
+    getFirstVisibleIndex: grid.getFirstVisibleIndex,
+    scrollToIndex: grid.scrollToIndex,
   });
-
-  // Find the <main> scroll container on mount
-  useEffect(() => {
-    scrollElementRef.current = document.querySelector<HTMLElement>("main");
-  }, []);
-
-  // Re-measure scrollMargin once the grid mounts (it's hidden behind the
-  // skeleton while loading, so the ref is null on the initial pass).
-  useLayoutEffect(() => {
-    if (gridContainerRef.current) {
-      setScrollMargin(gridContainerRef.current.offsetTop);
-    }
-  }, [loading, items.length]);
-
-  // Compute row count for virtualizer
-  const rowCount = useMemo(
-    () => (items.length > 0 ? Math.ceil(items.length / landscapeColumns) : 0),
-    [items.length, landscapeColumns],
-  );
-
-  const estimateSize = useCallback(() => {
-    const container = gridContainerRef.current;
-    const containerWidth = container?.offsetWidth || estimateContentWidth(window.innerWidth);
-    const columnWidth = (containerWidth - GAP * (landscapeColumns - 1)) / landscapeColumns;
-    const posterHeight = columnWidth * 0.5625; // 16:9 landscape aspect ratio
-    return Math.round(posterHeight + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
-  }, [landscapeColumns]);
-
-  const overscan = useDeferredOverscan(!loading && rowCount > 0);
-  const virtualizer = useVirtualizer({
-    count: rowCount,
-    getScrollElement: () => scrollElementRef.current,
-    estimateSize,
-    overscan,
-    scrollMargin,
-  });
-
-  // Re-measure when columns change
-  useEffect(() => {
-    virtualizer.measure();
-  }, [landscapeColumns, virtualizer]);
-
-  useEffect(() => {
-    const stored = localStorage.getItem("episodes-view-mode") as "cards" | "table" | null;
-    if (stored) setViewMode(stored);
-  }, []);
-
-  const handleViewModeChange = (mode: "cards" | "table") => {
-    setViewMode(mode);
-    localStorage.setItem("episodes-view-mode", mode);
-  };
-
-  const handleSort = useCallback(
-    (field: string) => {
-      if (field === sortBy) {
-        setSortOrder((o) => (o === "asc" ? "desc" : "asc"));
-      } else {
-        setSortBy(field);
-        setSortOrder("asc");
-      }
-    },
-    [sortBy]
-  );
 
   const fetchEpisodes = useCallback(async () => {
-    const token = ++reqToken.current;
+    const token = latest.begin();
     setLoading(true);
     setLoadingRest(true);
     try {
@@ -179,7 +113,7 @@ export default function AllEpisodesPage() {
         "/api/media/series",
         params,
         (loaded, done) => {
-          if (token !== reqToken.current) return;
+          if (!latest.isCurrent(token)) return;
           const apply = () => {
             setItems(loaded);
             setLoading(false);
@@ -194,33 +128,75 @@ export default function AllEpisodesPage() {
       );
     } catch (error) {
       console.error("Failed to fetch episodes:", error);
-      if (token === reqToken.current) {
+      if (latest.isCurrent(token)) {
         setLoading(false);
         setLoadingRest(false);
       }
     }
-  }, [filters, sortBy, sortOrder]);
+  }, [filters, sortBy, sortOrder, latest]);
 
   useListFetch(fetchEpisodes);
 
   // Auto-update when real-time sync adds/removes items — no manual refresh.
-  useRealtime("sync:completed", fetchEpisodes);
+  useLibrarySyncRefetch({ types: "SERIES" }, fetchEpisodes);
 
-  const virtualRows = virtualizer.getVirtualItems();
+  const openEpisode = useCallback(
+    (item: MediaListItem) => {
+      markChildNavigation();
+      router.push(`/library/series/episode/${item.id}${EPISODES_FROM}`);
+    },
+    [markChildNavigation, router],
+  );
+
+  const serverChips = showServers && servers.length > 1;
+  const renderCard = useCallback(
+    (ep: MediaListItem, { priority }: GridCardContext) => (
+      <MediaCard
+        priority={priority}
+        imageUrl={`/api/media/${ep.id}/image`}
+        title={formatEpisodeTitle(ep)}
+        aspectRatio="landscape"
+        fallbackIcon="series"
+        href={`/library/series/episode/${ep.id}${EPISODES_FROM}`}
+        prefetchMediaId={ep.id}
+        onClick={markChildNavigation}
+        hoverContent={
+          <MediaHoverPopover
+            summaryUrl={hoverSummaryUrl(ep.id)}
+            data={hoverDataFromListItem(ep, { title: formatEpisodeTitle(ep) })}
+          />
+        }
+        metadata={
+          <MetadataLine stacked>
+            {/* The heading already names the show and SxxExx (or, unnumbered, the episode title). */}
+            {show("metadata", "episodeTitle") && ep.title && formatEpisodeCode(ep.seasonNumber, ep.episodeNumber) && (
+              <MetadataItem icon={<Tv />}>{ep.title}</MetadataItem>
+            )}
+            {show("metadata", "duration") && formatDuration(ep.duration) && <MetadataItem icon={<Clock />}>{formatDuration(ep.duration)}</MetadataItem>}
+            {show("metadata", "fileSize") && formatFileSize(ep.fileSize) && <MetadataItem icon={<HardDrive />}>{formatFileSize(ep.fileSize)}</MetadataItem>}
+          </MetadataLine>
+        }
+        qualityBar={qualitySegments(qualityChips(ep, "video"), getHex, (toggle) => show("badges", toggle))}
+        servers={serverChips ? ep.servers : undefined}
+      />
+    ),
+    [show, getHex, serverChips, markChildNavigation],
+  );
 
   return (
     <div className="p-4 sm:p-6 lg:p-8">
-      <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight mb-4">Series</h1>
+      <PageHeader className="mb-4" title="Series" />
 
       <LibraryTabs tabs={SERIES_TABS} active="/library/series/episodes" />
 
       <MediaFilters
-        onFilterChange={(f) => setFilters((prev) => (sameFilters(prev, f) ? prev : f))}
+        key={filterPanel.panelKey}
+        onFilterChange={onFilterChange}
         mediaType="SERIES"
         prefix={
           <LibraryToolbar
             viewMode={viewMode}
-            onViewModeChange={handleViewModeChange}
+            onViewModeChange={setViewMode}
             cardSize={size}
             onCardSizeChange={setSize}
             cardDisplayPrefs={prefs}
@@ -233,137 +209,20 @@ export default function AllEpisodesPage() {
       {loading ? (
         <MediaGridSkeleton />
       ) : items.length === 0 ? (
-        <EmptyState icon={Tv} title="No episodes found." />
+        <LibraryEmptyState icon={Tv} noun="episodes" hasFilters={hasFilters} onClear={filterPanel.clear} />
+      ) : viewMode === "table" ? (
+        <MediaTable
+          items={items}
+          onItemClick={openEpisode}
+          sortBy={sortBy}
+          sortOrder={sortOrder}
+          onSort={toggleSort}
+          mediaType="SERIES"
+          renderHoverContent={episodeTableHover}
+        />
       ) : (
-        <>
-          {viewMode === "table" ? (
-            <MediaTable
-              items={items}
-              onItemClick={(item) => { markChildNavigation(); router.push(`/library/series/episode/${item.id}?from=${encodeURIComponent("/library/series/episodes")}`); }}
-              sortBy={sortBy}
-              sortOrder={sortOrder}
-              onSort={handleSort}
-              mediaType="SERIES"
-              renderHoverContent={(item) => (
-                <MediaHoverPopover
-                  summaryUrl={`/api/media/${item.id}`}
-                  imageUrl={`/api/media/${item.id}/image?type=parent`}
-                  data={{
-                    title: formatEpisodeTitle(item),
-                    year: item.year,
-                    contentRating: item.contentRating,
-                    rating: item.rating,
-                    audienceRating: item.audienceRating,
-                    ratingImage: item.ratingImage,
-                    audienceRatingImage: item.audienceRatingImage,
-                    duration: item.duration,
-                    resolution: item.resolution,
-                    dynamicRange: item.dynamicRange,
-                    audioProfile: item.audioProfile,
-                    fileSize: item.fileSize,
-                    genres: item.genres,
-                    studio: item.studio,
-                    playCount: item.playCount,
-                    lastPlayedAt: item.lastPlayedAt,
-                    addedAt: item.addedAt,
-                    servers: item.servers,
-                  }}
-                />
-              )}
-            />
-          ) : (
-            <div ref={gridContainerRef}>
-              <div
-                style={{
-                  height: virtualizer.getTotalSize(),
-                  width: "100%",
-                  position: "relative",
-                }}
-              >
-                {virtualRows.map((virtualRow) => {
-                  const rowStart = virtualRow.index * landscapeColumns;
-                  const rowItems = items.slice(rowStart, rowStart + landscapeColumns);
-                  return (
-                    <div
-                      key={virtualRow.key}
-                      data-index={virtualRow.index}
-                      ref={virtualizer.measureElement}
-                      style={{
-                        position: "absolute",
-                        top: 0,
-                        left: 0,
-                        width: "100%",
-                        paddingBottom: GAP,
-                        transform: `translateY(${virtualRow.start - virtualizer.options.scrollMargin}px)`,
-                      }}
-                    >
-                      <div
-                        style={{
-                          display: "grid",
-                          gap: `${GAP}px`,
-                          gridTemplateColumns: `repeat(${landscapeColumns}, minmax(0, 1fr))`,
-                        }}
-                      >
-                        {rowItems.map((ep) => (
-                          <MediaCard
-                            key={ep.id}
-                            priority={virtualRow.index < PRIORITY_ROWS}
-                            imageUrl={`/api/media/${ep.id}/image`}
-                            title={formatEpisodeTitle(ep)}
-                            aspectRatio="landscape"
-                            fallbackIcon="series"
-                            href={`/library/series/episode/${ep.id}?from=${encodeURIComponent("/library/series/episodes")}`}
-                            prefetchMediaId={ep.id}
-                            onClick={markChildNavigation}
-                            hoverContent={
-                              <MediaHoverPopover
-                                summaryUrl={`/api/media/${ep.id}`}
-                                data={{
-                                  title: formatEpisodeTitle(ep),
-                                  year: ep.year,
-                                  contentRating: ep.contentRating,
-                                  rating: ep.rating,
-                                  audienceRating: ep.audienceRating,
-                                  ratingImage: ep.ratingImage,
-                                  audienceRatingImage: ep.audienceRatingImage,
-                                  duration: ep.duration,
-                                  resolution: ep.resolution,
-                                  dynamicRange: ep.dynamicRange,
-                                  audioProfile: ep.audioProfile,
-                                  fileSize: ep.fileSize,
-                                  genres: ep.genres,
-                                  studio: ep.studio,
-                                  playCount: ep.playCount,
-                                  lastPlayedAt: ep.lastPlayedAt,
-                                  addedAt: ep.addedAt,
-                                  servers: ep.servers,
-                                }}
-                              />
-                            }
-                            metadata={
-                              <MetadataLine stacked>
-                                {/* The heading already names the show and SxxExx (or, unnumbered, the episode title). */}
-                                {show("metadata", "episodeTitle") && ep.title && formatEpisodeCode(ep.seasonNumber, ep.episodeNumber) && (
-                                  <MetadataItem icon={<Tv />}>{ep.title}</MetadataItem>
-                                )}
-                                {show("metadata", "duration") && formatDuration(ep.duration) && <MetadataItem icon={<Clock />}>{formatDuration(ep.duration)}</MetadataItem>}
-                                {show("metadata", "fileSize") && formatFileSize(ep.fileSize) && <MetadataItem icon={<HardDrive />}>{formatFileSize(ep.fileSize)}</MetadataItem>}
-                              </MetadataLine>
-                            }
-                            qualityBar={qualitySegments(qualityChips(ep, "video"), getHex, (toggle) => show("badges", toggle))}
-                            servers={showServers && servers.length > 1 ? ep.servers : undefined}
-                          />
-                        ))}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-        </>
+        <VirtualCardGrid grid={grid} items={items} getKey={episodeKey} renderItem={renderCard} />
       )}
-
     </div>
   );
 }
