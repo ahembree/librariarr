@@ -384,96 +384,6 @@ describe("PlexClient", () => {
     });
   });
 
-  describe("getWatchCounts", () => {
-    it("aggregates watch counts by ratingKey", async () => {
-      mockAxiosInstance.get.mockResolvedValueOnce({
-        data: {
-          MediaContainer: {
-            Metadata: [
-              { ratingKey: "1", viewedAt: 1700000000 },
-              { ratingKey: "1", viewedAt: 1700001000 },
-              { ratingKey: "2", viewedAt: 1700002000 },
-            ],
-          },
-        },
-      });
-
-      const result = await client.getWatchCounts();
-      expect(result).toEqual(
-        new Map([
-          ["1", { count: 2, lastWatchedAt: 1700001000 }],
-          ["2", { count: 1, lastWatchedAt: 1700002000 }],
-        ]),
-      );
-    });
-
-    it("filters partial plays from counts", async () => {
-      mockAxiosInstance.get.mockResolvedValueOnce({
-        data: {
-          MediaContainer: {
-            Metadata: [
-              { ratingKey: "1", viewedAt: 1700000000, viewOffset: 100, duration: 1000 }, // 10% — skip
-              { ratingKey: "1", viewedAt: 1700001000 }, // no viewOffset — count it
-            ],
-          },
-        },
-      });
-
-      const result = await client.getWatchCounts();
-      expect(result).toEqual(new Map([["1", { count: 1, lastWatchedAt: 1700001000 }]]));
-    });
-
-    it("returns empty map on error", async () => {
-      mockAxiosInstance.get.mockRejectedValueOnce(new Error("fail"));
-      const result = await client.getWatchCounts();
-      expect(result.size).toBe(0);
-    });
-
-    it("keeps paging past a short page while totalSize says more remain", async () => {
-      // A server that caps the page below the 5,000 asked for must not
-      // truncate the history to its first page: the native watch-history sync
-      // commits whatever this returns with a full replace.
-      mockAxiosInstance.get
-        .mockResolvedValueOnce({
-          data: { MediaContainer: { totalSize: 3, Metadata: [{ ratingKey: "1", viewedAt: 1 }, { ratingKey: "2", viewedAt: 2 }] } },
-        })
-        .mockResolvedValueOnce({
-          data: { MediaContainer: { totalSize: 3, Metadata: [{ ratingKey: "3", viewedAt: 3 }] } },
-        });
-
-      const result = await client.getWatchCounts();
-      expect(result.size).toBe(3);
-      expect(mockAxiosInstance.get).toHaveBeenCalledTimes(2);
-      // The second request starts where the first page actually ended.
-      expect(mockAxiosInstance.get.mock.calls[1][1].params["X-Plex-Container-Start"]).toBe(2);
-    });
-
-    it("stops on a short page when the server reports no total", async () => {
-      mockAxiosInstance.get.mockResolvedValueOnce({
-        data: { MediaContainer: { Metadata: [{ ratingKey: "1", viewedAt: 1 }] } },
-      });
-      const result = await client.getWatchCounts();
-      expect(result.size).toBe(1);
-      expect(mockAxiosInstance.get).toHaveBeenCalledTimes(1);
-    });
-
-    it("paginates when metadata length equals PAGE_SIZE", async () => {
-      // First page: 5000 items (full page)
-      const page1 = Array.from({ length: 5000 }, (_, i) => ({
-        ratingKey: String(i),
-        viewedAt: 1700000000 + i,
-      }));
-      // Second page: empty (end of data)
-      mockAxiosInstance.get
-        .mockResolvedValueOnce({ data: { MediaContainer: { Metadata: page1 } } })
-        .mockResolvedValueOnce({ data: { MediaContainer: { Metadata: [] } } });
-
-      const result = await client.getWatchCounts();
-      expect(result.size).toBe(5000);
-      expect(mockAxiosInstance.get).toHaveBeenCalledTimes(2);
-    });
-  });
-
   describe("getCollections", () => {
     it("returns collections for section", async () => {
       mockAxiosInstance.get.mockResolvedValueOnce({
@@ -1181,6 +1091,53 @@ describe("PlexClient", () => {
         String(c[0]).startsWith("/status/sessions/history/all"),
       )!;
       expect(historyCall[0]).toBe("/status/sessions/history/all");
+    });
+
+    // The pager behind it: a short page is the end only when the container
+    // reports no total, or the total has been reached.
+    it("keeps paging past a short page while totalSize says more remain", async () => {
+      // A server that caps the page below the 5,000 asked for must not
+      // truncate the history to its first page: the native watch-history sync
+      // commits whatever this returns with a full replace.
+      mockAxiosInstance.get
+        .mockResolvedValueOnce(emptyContainer) // /accounts
+        .mockResolvedValueOnce(emptyContainer) // /devices
+        .mockResolvedValueOnce({
+          data: { MediaContainer: { totalSize: 3, Metadata: [{ ratingKey: "1", viewedAt: 1 }, { ratingKey: "2", viewedAt: 2 }] } },
+        })
+        .mockResolvedValueOnce({
+          data: { MediaContainer: { totalSize: 3, Metadata: [{ ratingKey: "3", viewedAt: 3 }] } },
+        });
+
+      const entries = await client.getDetailedWatchHistory();
+      expect(entries.map((e) => e.ratingKey)).toEqual(["1", "2", "3"]);
+      const pages = mockAxiosInstance.get.mock.calls.filter((c) => String(c[0]).startsWith("/status/sessions/history/all"));
+      expect(pages).toHaveLength(2);
+      // The second request starts where the first page actually ended.
+      expect(pages[1][1].params["X-Plex-Container-Start"]).toBe(2);
+    });
+
+    it("stops on a short page when the server reports no total", async () => {
+      mockAxiosInstance.get
+        .mockResolvedValueOnce(emptyContainer) // /accounts
+        .mockResolvedValueOnce(emptyContainer) // /devices
+        .mockResolvedValueOnce({ data: { MediaContainer: { Metadata: [{ ratingKey: "1", viewedAt: 1 }] } } });
+      const entries = await client.getDetailedWatchHistory();
+      expect(entries).toHaveLength(1);
+      expect(mockAxiosInstance.get).toHaveBeenCalledTimes(3);
+    });
+
+    it("asks for another page when a page with no total is full", async () => {
+      const page1 = Array.from({ length: 5000 }, (_, i) => ({ ratingKey: String(i), viewedAt: 1700000000 + i }));
+      mockAxiosInstance.get
+        .mockResolvedValueOnce(emptyContainer) // /accounts
+        .mockResolvedValueOnce(emptyContainer) // /devices
+        .mockResolvedValueOnce({ data: { MediaContainer: { Metadata: page1 } } })
+        .mockResolvedValueOnce({ data: { MediaContainer: { Metadata: [] } } });
+
+      const entries = await client.getDetailedWatchHistory();
+      expect(entries).toHaveLength(5000);
+      expect(mockAxiosInstance.get).toHaveBeenCalledTimes(4);
     });
 
     it("passes the cancel signal to every request it makes", async () => {

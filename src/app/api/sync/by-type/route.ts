@@ -134,11 +134,11 @@ export const POST = withSession(async (session, request: NextRequest) => {
     // so running it once per library would repeat the same work N times), which
     // leaves them writing `MediaItem.playCount`/`lastPlayedAt` from
     // *account-scoped* item metadata only — the admin token's own views on Plex,
-    // and nothing at all on Jellyfin/Emby (`getWatchCounts()` returns an empty
-    // map by design). Without the follow-up refresh below, a library synced from
-    // this route reports the owner's last play instead of the household's most
-    // recent one everywhere those columns are read: the hover card, the Last
-    // Played column, and the `Series Last Played` rule/query criterion.
+    // and the admin user's `UserData` on Jellyfin/Emby. Without the follow-up
+    // refresh below, a library synced from this route reports the owner's last
+    // play instead of the household's most recent one everywhere those columns
+    // are read: the hover card, the Last Played column, and the `Series Last
+    // Played` rule/query criterion.
     //
     // MAIN_QUEUE is serial and ordered by priority, then enqueue time, so this
     // (default priority) runs *after* every library job for the server has

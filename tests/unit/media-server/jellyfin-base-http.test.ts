@@ -320,14 +320,6 @@ describe("bulk item listings", () => {
   });
 });
 
-describe("getWatchCounts", () => {
-  it("returns an empty map by design", async () => {
-    const url = await serve(() => undefined);
-    expect((await new JellyfinClient(url, "t").getWatchCounts()).size).toBe(0);
-    expect(requests).toHaveLength(0);
-  });
-});
-
 describe("getWatchHistory (Jellyfin)", () => {
   it("emits one entry per play, dated first play newest, undated last; skips users it cannot read", async () => {
     const url = await serve((_req, u) => {

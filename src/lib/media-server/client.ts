@@ -94,9 +94,6 @@ export interface MediaServerClient {
   resolveLibraryKey?(ratingKey: string): Promise<string | null>;
 
   // Watch data
-  getWatchCounts(): Promise<
-    Map<string, { count: number; lastWatchedAt: number }>
-  >;
   getWatchHistory(
     ratingKey: string,
     itemDuration?: number

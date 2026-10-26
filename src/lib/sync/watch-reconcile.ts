@@ -14,9 +14,8 @@ import { completedPlaySql } from "@/lib/media/watch-completion";
  *  - Plex: `viewCount`/`lastViewedAt` on `/library/sections/…` reflect the
  *    admin token's own views. Plays by other Plex Home / shared users are only
  *    visible through `/status/sessions/history/all`.
- *  - Jellyfin/Emby: `UserData` is fetched with the admin `UserId`, and
- *    `getWatchCounts()` returns an empty map by design, so plays by any other
- *    Jellyfin user never reached these columns at all.
+ *  - Jellyfin/Emby: `UserData` is fetched with the admin `UserId`, so plays
+ *    by any other Jellyfin user never reached these columns at all.
  *
  * `WatchHistory`, by contrast, is populated from the server-wide, per-user
  * history (`getDetailedWatchHistory`). So the History page could show an

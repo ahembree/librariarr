@@ -67,7 +67,6 @@ vi.mock("@/lib/media-server/factory", async () => {
       bulkListingIncomplete: false,
       testConnection: vi.fn(async () => ({ ok: true })),
       getLibraries: vi.fn(async () => state.libraries),
-      getWatchCounts: vi.fn(async () => new Map()),
       getLibraryItemsPage: vi.fn(async (section: string, _t: string, offset: number, limit: number) => {
         const all = state.catalog[section] ?? [];
         return {

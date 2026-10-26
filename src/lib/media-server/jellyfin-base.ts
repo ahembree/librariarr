@@ -372,14 +372,6 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
     return this.normalizeItem(response.data);
   }
 
-  async getWatchCounts(): Promise<
-    Map<string, { count: number; lastWatchedAt: number }>
-  > {
-    // Jellyfin items include UserData.PlayCount during normal item queries,
-    // so the sync engine gets accurate counts directly from item normalization.
-    return new Map();
-  }
-
   async getWatchHistory(
     ratingKey: string
   ): Promise<WatchHistoryEntry[]> {
