@@ -9,7 +9,8 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { NextRequest } from "next/server";
 
 const mockPrisma = vi.hoisted(() => ({
-  lifecycleException: { findMany: vi.fn(), upsert: vi.fn(), createMany: vi.fn() },
+  lifecycleException: { findMany: vi.fn(), upsert: vi.fn(), createMany: vi.fn(), deleteMany: vi.fn(), updateMany: vi.fn() },
+  $transaction: vi.fn(async (ops: Promise<unknown>[]) => Promise.all(ops)),
   library: { findMany: vi.fn() },
   mediaItem: { findFirst: vi.fn(), findMany: vi.fn() },
   ruleMatch: { findMany: vi.fn(), deleteMany: vi.fn() },
@@ -28,7 +29,7 @@ vi.mock("@/lib/logger", () => ({
   apiLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-import { GET, POST } from "@/app/api/lifecycle/exceptions/route";
+import { GET, POST, DELETE, PATCH } from "@/app/api/lifecycle/exceptions/route";
 
 const get = (query = "") => GET(new NextRequest(`http://localhost/api/lifecycle/exceptions${query}`));
 const post = (body: unknown) =>
@@ -189,5 +190,47 @@ describe("POST — collection clean-up", () => {
     mockRemoveItems.mockRejectedValue(new Error("plex down"));
 
     expect((await post({ mediaItemId: "m1" })).status).toBe(201);
+  });
+});
+
+describe("bulk DELETE and PATCH — a row past the bind-parameter limit", () => {
+  const send = (handler: typeof DELETE, body: unknown) =>
+    handler(
+      new NextRequest("http://localhost/api/lifecycle/exceptions", {
+        method: handler === DELETE ? "DELETE" : "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      }),
+    );
+  const ids = Array.from({ length: 40_000 }, (_, i) => `e${i}`);
+
+  beforeEach(() => {
+    mockPrisma.$transaction.mockImplementation(async (ops: Promise<unknown>[]) => Promise.all(ops));
+  });
+
+  it("removes in slices, in one transaction, and counts every removal once", async () => {
+    mockPrisma.lifecycleException.deleteMany.mockImplementation(async (args: { where: { id: { in: string[] } } }) => ({
+      count: args.where.id.in.length,
+    }));
+
+    const response = await send(DELETE, { ids: [...ids, "e0"] });
+
+    expect(await response.json()).toEqual({ deleted: 40_000 });
+    expect(mockPrisma.$transaction).toHaveBeenCalledTimes(1);
+    const slices = mockPrisma.lifecycleException.deleteMany.mock.calls.map(([a]) => a.where.id.in.length);
+    expect(slices).toEqual([10_000, 10_000, 10_000, 10_000]);
+    for (const [args] of mockPrisma.lifecycleException.deleteMany.mock.calls) expect(args.where.userId).toBe("u1");
+  });
+
+  it("re-words in slices, never counting a repeated id twice", async () => {
+    mockPrisma.lifecycleException.updateMany.mockImplementation(async (args: { where: { id: { in: string[] } } }) => ({
+      count: args.where.id.in.length,
+    }));
+
+    const response = await send(PATCH, { ids: [...ids, "e1"], reason: "keep" });
+
+    expect(await response.json()).toEqual({ updated: 40_000 });
+    expect(mockPrisma.lifecycleException.updateMany).toHaveBeenCalledTimes(4);
+    expect(mockPrisma.lifecycleException.updateMany.mock.calls[0][0].data).toEqual({ reason: "keep" });
   });
 });

@@ -629,6 +629,25 @@ describe("Lifecycle Exceptions API", () => {
       expect(body.deleted).toBe(2);
       expect(await prisma.lifecycleException.count({ where: { id: { in: realIds } } })).toBe(0);
     });
+
+    // Past Postgres' 32,767 bind parameters in one IN list.
+    it("removes and re-words a row of 40,000 ids", async () => {
+      const { ids, realIds } = await rowOfExceptions();
+      const many = [...ids, ...Array.from({ length: 40_000 - ids.length }, (_, i) => `beyond-${i}`)];
+
+      const patched = await expectJson<{ updated: number }>(
+        await callRoute(BULK_PATCH, { method: "PATCH", body: { ids: many, reason: "renamed" } }),
+        200,
+      );
+      expect(patched.updated).toBe(2);
+
+      const deleted = await expectJson<{ deleted: number }>(
+        await callRoute(BULK_DELETE, { method: "DELETE", body: { ids: many } }),
+        200,
+      );
+      expect(deleted.deleted).toBe(2);
+      expect(await prisma.lifecycleException.count({ where: { id: { in: realIds } } })).toBe(0);
+    });
   });
 });
 

@@ -9,6 +9,7 @@ import {
 } from "@/lib/validation";
 import { removeItemsFromCollections, type CollectionRemoval } from "@/lib/lifecycle/collections";
 import { jsonResponse } from "@/lib/api/json-response";
+import { inChunks } from "@/lib/conditions/in-chunks";
 import { protectionKeys, isGroupProtected } from "@/lib/lifecycle/exception-guard";
 import { artistMbidOf } from "@/lib/media/artist-key";
 import type { Prisma } from "@/generated/prisma/client";
@@ -438,16 +439,17 @@ export async function DELETE(request: NextRequest) {
   const { data, error } = await validateRequest(request, exceptionBulkDeleteSchema);
   if (error) return error;
 
-  const { ids } = data;
+  // A grouped row can name up to MAX_EXCEPTION_IDS_PER_REQUEST ids, past
+  // Postgres' bind-parameter limit in one IN list: removed in slices, in one
+  // transaction so the request still removes all or nothing.
+  const ids = [...new Set(data.ids)];
+  const results = await prisma.$transaction(
+    inChunks(ids).map((chunk) =>
+      prisma.lifecycleException.deleteMany({ where: { id: { in: chunk }, userId: session.userId! } }),
+    ),
+  );
 
-  const { count } = await prisma.lifecycleException.deleteMany({
-    where: {
-      id: { in: ids },
-      userId: session.userId!,
-    },
-  });
-
-  return NextResponse.json({ deleted: count });
+  return NextResponse.json({ deleted: results.reduce((n, r) => n + r.count, 0) });
 }
 
 export async function PATCH(request: NextRequest) {
@@ -459,15 +461,17 @@ export async function PATCH(request: NextRequest) {
   const { data, error } = await validateRequest(request, exceptionBulkUpdateSchema);
   if (error) return error;
 
-  const { ids, reason } = data;
+  const { reason } = data;
+  // In slices, as the DELETE above (distinct ids, so no row is counted twice).
+  const ids = [...new Set(data.ids)];
+  const results = await prisma.$transaction(
+    inChunks(ids).map((chunk) =>
+      prisma.lifecycleException.updateMany({
+        where: { id: { in: chunk }, userId: session.userId! },
+        data: { reason: reason ?? null },
+      }),
+    ),
+  );
 
-  const { count } = await prisma.lifecycleException.updateMany({
-    where: {
-      id: { in: ids },
-      userId: session.userId!,
-    },
-    data: { reason: reason ?? null },
-  });
-
-  return NextResponse.json({ updated: count });
+  return NextResponse.json({ updated: results.reduce((n, r) => n + r.count, 0) });
 }
