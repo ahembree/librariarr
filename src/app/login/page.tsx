@@ -74,16 +74,13 @@ export default function LoginPage() {
   const [restoreError, setRestoreError] = useState<string | null>(null);
   const [restoreProgress, setRestoreProgress] = useState<string | null>(null);
 
-  const completeAuth = useCallback(async () => {
-    try {
-      const serversRes = await fetch("/api/servers");
-      const serversData = await serversRes.json();
-      if (serversData.servers?.length > 0) {
-        router.push("/");
-        return;
-      }
-    } catch {}
-    router.push("/onboarding");
+  // Where a sign-in goes next: the dashboard with a server, onboarding
+  // without. The sign-in routes answer `hasServers`; this used to ask
+  // `/api/servers` (every server with its libraries' item counts and latest
+  // sync job) after signing in just to count them. Anything but `true` reads
+  // as none, as a failed `/api/servers` read did.
+  const completeAuth = useCallback((hasServers: unknown) => {
+    router.push(hasServers === true ? "/" : "/onboarding");
   }, [router]);
 
   const { startAuth: handlePlexLogin, cancel: cancelPlexAuth, isLoading: plexLoading, error: plexError, authUrl } = usePlexOAuth({
@@ -95,7 +92,7 @@ export default function LoginPage() {
       });
       const result = await res.json();
       if (result.authenticated) {
-        await completeAuth();
+        completeAuth(result.hasServers);
       } else if (result.error) {
         throw new Error(result.error);
       }
@@ -153,15 +150,7 @@ export default function LoginPage() {
         return;
       }
 
-      try {
-        const serversRes = await fetch("/api/servers");
-        const serversData = await serversRes.json();
-        if (serversData.servers?.length > 0) {
-          router.push("/");
-          return;
-        }
-      } catch {}
-      router.push("/onboarding");
+      completeAuth(data.hasServers);
     } catch {
       setLocalError("Login failed. Please try again.");
       setLocalLoading(false);
