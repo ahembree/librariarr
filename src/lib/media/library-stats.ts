@@ -222,7 +222,7 @@ export async function computeLibraryStats(serverIds: string[], dedupEnabled: boo
   // play count, which the unordered pick left to the heap order.
   const [seriesReps, musicDetails] = await Promise.all([
     topSeriesKeys.length > 0
-      ? prisma.$queryRaw<{ id: string; seriesKey: string; parentTitle: string | null; parentThumbUrl: string | null }[]>`
+      ? prisma.$queryRaw<{ id: string; seriesKey: string | null; parentTitle: string | null; parentThumbUrl: string | null }[]>`
           SELECT DISTINCT ON (mi."seriesKey") mi.id, mi."seriesKey", mi."parentTitle", mi."parentThumbUrl"
           FROM "MediaItem" mi
           JOIN "Library" l ON mi."libraryId" = l.id

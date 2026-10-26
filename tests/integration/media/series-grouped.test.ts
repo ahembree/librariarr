@@ -1118,7 +1118,7 @@ describe("GET /api/media/series/grouped", () => {
       expect(whole.get("tvdb:1")!.map((s) => s.serverName)).toEqual(["Jellyfin", "Plex"]);
       expect(whole.get("tvdb:2")!.map((s) => s.serverName)).toEqual(["Plex"]);
 
-      const cases = [
+      const cases: Record<string, string>[] = [
         { limit: "1", page: "2" },
         { limit: "0", search: "amm" },
         { limit: "0", startsWith: "B" },
