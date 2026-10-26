@@ -38,16 +38,11 @@ import { isSyncRequestSettled, type PendingSyncRequest } from "@/lib/sync/sync-r
 import { readUrlHash, replaceUrlHash, subscribeToUrlHash } from "@/lib/url-hash";
 
 // ─── Tab components ───
-import { GeneralTab } from "./tabs/general-tab";
-import { SchedulingTab } from "./tabs/scheduling-tab";
-import { ServersTab } from "./tabs/servers-tab";
+// Each tab's code loads on demand (`lazySettingsTab`), with its data: the
+// page's own script carries none of them. Types only, from the tab modules.
+import { lazySettingsTab } from "./lazy-tab";
 import type { AddServerDialogState, AddServerFormState, PurgeDialogState, SyncPromptState, RemoveServerDialogState, ServerTestResult, WatchHistorySourceDialogState } from "./tabs/servers-tab";
-import { IntegrationsTab } from "./tabs/integrations-tab";
-import { NotificationsTab } from "./tabs/notifications-tab";
-import { AuthenticationTab } from "./tabs/authentication-tab";
 import type { CredentialsForm, PromptForm } from "./tabs/authentication-tab";
-import { SystemTab } from "./tabs/system-tab";
-import { AiTab } from "./tabs/ai-tab";
 import type { AiProvider } from "./tabs/ai-tab";
 
 // ─── Shared types ───
@@ -99,6 +94,26 @@ const SETTINGS_TABS: { value: SettingsTab; label: string; icon: typeof SettingsI
 ];
 
 const VALID_SETTINGS_TABS = new Set<string>(SETTINGS_TABS.map((t) => t.value));
+
+const TAB_CODE = {
+  general: lazySettingsTab(() => import("./tabs/general-tab").then((m) => m.GeneralTab)),
+  scheduling: lazySettingsTab(() => import("./tabs/scheduling-tab").then((m) => m.SchedulingTab)),
+  servers: lazySettingsTab(() => import("./tabs/servers-tab").then((m) => m.ServersTab)),
+  integrations: lazySettingsTab(() => import("./tabs/integrations-tab").then((m) => m.IntegrationsTab)),
+  notifications: lazySettingsTab(() => import("./tabs/notifications-tab").then((m) => m.NotificationsTab)),
+  authentication: lazySettingsTab(() => import("./tabs/authentication-tab").then((m) => m.AuthenticationTab)),
+  ai: lazySettingsTab(() => import("./tabs/ai-tab").then((m) => m.AiTab)),
+  system: lazySettingsTab(() => import("./tabs/system-tab").then((m) => m.SystemTab)),
+} satisfies Record<SettingsTab, { load: () => Promise<unknown> }>;
+
+const GeneralTab = TAB_CODE.general.View;
+const SchedulingTab = TAB_CODE.scheduling.View;
+const ServersTab = TAB_CODE.servers.View;
+const IntegrationsTab = TAB_CODE.integrations.View;
+const NotificationsTab = TAB_CODE.notifications.View;
+const AuthenticationTab = TAB_CODE.authentication.View;
+const AiTab = TAB_CODE.ai.View;
+const SystemTab = TAB_CODE.system.View;
 
 /**
  * How often the Tracearr import status is re-read while a backfill is still
@@ -879,9 +894,11 @@ export default function SettingsPage() {
   // tabs load behind them, so switching tabs afterwards is still instant —
   // except System, whose figures (release notes from GitHub, a scan of the
   // image cache, whole-table counts) are requested only once it is opened.
+  // A tab's own code is one of its loaders (`TAB_CODE`), first in its list.
   const tabLoaders = useMemo<Record<SettingsTab, Array<() => Promise<unknown>>>>(
     () => ({
       general: [
+        TAB_CODE.general.load,
         fetchAccentColor,
         fetchChipColors,
         fetchDedupSetting,
@@ -894,13 +911,13 @@ export default function SettingsPage() {
         fetchServers,
         fetchTitlePreference,
       ],
-      scheduling: [fetchSettings, fetchLifecycleSchedule, fetchScheduleInfo],
-      servers: [fetchServers, integrationFetchers.tracearr, fetchAuthInfo],
-      integrations: INTEGRATION_TYPES.map((type) => integrationFetchers[type]),
-      notifications: [fetchDiscordSettings],
-      authentication: [fetchAuthInfo, preloadAuthSections],
-      ai: [fetchAiSettings],
-      system: [fetchSystemInfo, fetchImageCacheStats],
+      scheduling: [TAB_CODE.scheduling.load, fetchSettings, fetchLifecycleSchedule, fetchScheduleInfo],
+      servers: [TAB_CODE.servers.load, fetchServers, integrationFetchers.tracearr, fetchAuthInfo],
+      integrations: [TAB_CODE.integrations.load, ...INTEGRATION_TYPES.map((type) => integrationFetchers[type])],
+      notifications: [TAB_CODE.notifications.load, fetchDiscordSettings],
+      authentication: [TAB_CODE.authentication.load, fetchAuthInfo, preloadAuthSections],
+      ai: [TAB_CODE.ai.load, fetchAiSettings],
+      system: [TAB_CODE.system.load, fetchSystemInfo, fetchImageCacheStats],
     }),
     [fetchServers, fetchSettings, integrationFetchers, fetchSystemInfo, fetchAccentColor, fetchChipColors, fetchLogRetention, fetchActionRetention, fetchDeleteCeiling, fetchBackupSettings, fetchLifecycleSchedule, fetchScheduleInfo, fetchDiscordSettings, fetchAiSettings, fetchDedupSetting, fetchRealtimeSetting, fetchRealtimeStatus, fetchImageCacheStats, fetchAuthInfo, fetchTitlePreference, preloadAuthSections],
   );
