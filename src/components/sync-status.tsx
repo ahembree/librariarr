@@ -35,18 +35,18 @@ interface SyncJob {
   mediaServer: { name: string; type: string };
 }
 
-interface SyncStatusProps {
-  onSyncComplete?: () => void;
-}
-
-export function SyncStatus({ onSyncComplete }: SyncStatusProps) {
+/**
+ * The Library Sync card: running syncs with their progress, then the recent
+ * results for 30 s. It refreshes nothing else — it used to refresh the
+ * dashboard's stats on its own 10 s throttle beside the sync indicator's, and
+ * again at the end of a sync beside the page's own `sync:completed` refetch.
+ */
+export function SyncStatus() {
   const [jobs, setJobs] = useState<SyncJob[]>([]);
   const [hasActiveSync, setHasActiveSync] = useState(false);
   const [initialCheckDone, setInitialCheckDone] = useState(false);
   const [visible, setVisible] = useState(true);
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const wasActiveRef = useRef(false);
-  const lastStatsRefreshRef = useRef(0);
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -61,20 +61,6 @@ export function SyncStatus({ onSyncComplete }: SyncStatusProps) {
         (j) => j.status === "RUNNING" || j.status === "PENDING"
       );
 
-      if (onSyncComplete) {
-        // Detect transition from active to idle
-        if (wasActiveRef.current && !isActive) {
-          onSyncComplete();
-          lastStatsRefreshRef.current = Date.now();
-        }
-        // Live-refresh stats every 10s during active sync
-        else if (isActive && Date.now() - lastStatsRefreshRef.current >= 10000) {
-          onSyncComplete();
-          lastStatsRefreshRef.current = Date.now();
-        }
-      }
-
-      wasActiveRef.current = isActive;
       setHasActiveSync(isActive);
 
       if (!isActive && newJobs.length > 0) {
@@ -98,7 +84,7 @@ export function SyncStatus({ onSyncComplete }: SyncStatusProps) {
     } finally {
       setInitialCheckDone(true);
     }
-  }, [onSyncComplete]);
+  }, []);
 
   // Initial fetch on mount
   useEffect(() => {

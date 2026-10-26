@@ -140,7 +140,6 @@ interface DashboardCardGridProps {
   onTrackClick: (trackId: string) => void;
   onSeasonClick?: (mediaItemId: string) => void;
   onAlbumClick?: (mediaItemId: string) => void;
-  onSyncComplete: () => void;
   onConfigChange?: (cardId: string, config: CustomCardConfig) => void;
 }
 
@@ -161,7 +160,6 @@ export function DashboardCardGrid({
   onTrackClick,
   onSeasonClick,
   onAlbumClick,
-  onSyncComplete,
   onConfigChange,
 }: DashboardCardGridProps) {
   const { colors: chipColors } = useChipColors();
@@ -190,7 +188,8 @@ export function DashboardCardGrid({
       case "stats":
         return <StatsCards stats={stats} availableTypes={availableTypes} />;
       case "sync-status":
-        return <SyncStatus onSyncComplete={onSyncComplete} />;
+        // The stats refresh during and after a sync is the page's own.
+        return <SyncStatus />;
       case "quality-breakdown":
         return (
           <QualityChart

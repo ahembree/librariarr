@@ -29,7 +29,6 @@ const props = (editMode: boolean) => ({
   onArtistClick: noop,
   onEpisodeClick: noop,
   onTrackClick: noop,
-  onSyncComplete: noop,
 });
 
 describe("DashboardCardGrid", () => {
