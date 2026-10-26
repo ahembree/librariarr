@@ -218,13 +218,20 @@ interface MediaDetailContentProps {
    * round trip after the first, before the streams and credits appeared.
    */
   detailLoaded?: boolean;
+  /**
+   * The `/api/media/[id]` record the caller already loaded, exactly as the
+   * route sent it: the "All Database Metadata" section shows it without
+   * fetching the same record again. (A record this component fetched itself
+   * is used the same way.)
+   */
+  record?: MediaItemWithRelations | null;
 }
 
 function audioStreamCount(streams: MediaItemWithRelations["streams"] | undefined): number {
   return (streams ?? []).filter((s) => s.streamType === 2).length;
 }
 
-export function MediaDetailContent({ item, children, hideVideo, compact, matchedCriteriaSection, isAggregate, historySection, detailLoaded }: MediaDetailContentProps) {
+export function MediaDetailContent({ item, children, hideVideo, compact, matchedCriteriaSection, isAggregate, historySection, detailLoaded, record }: MediaDetailContentProps) {
 
   // Fetch full detail data (summary, tagline, genres, directors, etc.)
   const [detailData, setDetailData] = useState<Partial<MediaItemWithRelations> | null>(null);
@@ -294,8 +301,22 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
     }
   }, []);
 
+  // The record already in hand for this item: the caller's, else the one
+  // fetched above (which lacks `streams` and `library` — both left out of the
+  // metadata list anyway).
+  const loadedRecord: Record<string, unknown> | null =
+    record && record.id === item.id
+      ? (record as unknown as Record<string, unknown>)
+      : detailData && detailData.id === item.id
+        ? (detailData as Record<string, unknown>)
+        : null;
+
   const fetchAllMetadata = useCallback(async (cacheKey: string, mediaItemId?: string) => {
     const fetchId = mediaItemId ?? cacheKey;
+    if (loadedRecord && loadedRecord.id === fetchId) {
+      setMetadataMap((prev) => ({ ...prev, [cacheKey]: loadedRecord }));
+      return;
+    }
     setMetadataLoadingMap((prev) => ({ ...prev, [cacheKey]: true }));
     try {
       const response = await fetch(`/api/media/${fetchId}`);
@@ -306,7 +327,7 @@ export function MediaDetailContent({ item, children, hideVideo, compact, matched
     } finally {
       setMetadataLoadingMap((prev) => ({ ...prev, [cacheKey]: false }));
     }
-  }, []);
+  }, [loadedRecord]);
 
   // Reset cached detail/history/metadata when the underlying item changes.
   // (set-state-during-render is React 19's idiom for "reset state on prop change" — see

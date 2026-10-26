@@ -168,15 +168,18 @@ export function prefetchMediaRecord(id: string): void {
 /**
  * Everything a detail page reads that needs only the id, started together.
  * `plays` is the per-item play history (movie and track pages; an episode's is
- * scoped by series identity, which only its record carries). Seerr knows no
- * music.
+ * scoped by series identity, which only its record carries). `integrations`
+ * (default true) is the Arr/Seerr cards, which a grouped artist view does not
+ * show. Seerr knows no music.
  */
 export function prefetchMediaDetail(
   id: string,
-  options: { mediaType: "MOVIE" | "SERIES" | "MUSIC"; plays: boolean },
+  options: { mediaType: "MOVIE" | "SERIES" | "MUSIC"; plays: boolean; integrations?: boolean },
 ): void {
   detailPrefetch.prefetch(mediaRecordUrl(id));
-  detailPrefetch.prefetch(arrInfoUrl(id));
-  if (options.mediaType !== "MUSIC") detailPrefetch.prefetch(seerrInfoUrl(id));
+  if (options.integrations !== false) {
+    detailPrefetch.prefetch(arrInfoUrl(id));
+    if (options.mediaType !== "MUSIC") detailPrefetch.prefetch(seerrInfoUrl(id));
+  }
   if (options.plays) detailPrefetch.prefetch(mediaPlaysUrl(id, 1));
 }
