@@ -1614,13 +1614,19 @@ async function resolveImportWindow(
       oldestOpenChain: Date | null;
     }[]
   >(
-    `SELECT MAX("watchedAt") AS "maxWatchedAt",
-            MIN("watchedAt") AS "minWatchedAt",
-            MIN("watchedAt") FILTER (
-              WHERE "watched" IS NOT TRUE OR "state" <> 'stopped'
-            ) AS "oldestOpenChain"
-       FROM "WatchHistory"
-      WHERE "mediaServerId"=$1 AND "source"='TRACEARR'`,
+    // Three subqueries rather than one aggregate with a FILTER: a FILTER clause
+    // keeps Postgres from answering MIN/MAX off the end of an index, so the one
+    // statement read every one of the server's imported plays (27 ms at 80k
+    // rows). Split, each is a walk of `(mediaServerId, source, watchedAt)` that
+    // stops at its first row (0.8 ms). Same answers: MIN/MAX ignore NULLs either
+    // way, and a FILTER is exactly a WHERE on that one aggregate's input.
+    `SELECT (SELECT MAX("watchedAt") FROM "WatchHistory"
+              WHERE "mediaServerId"=$1 AND "source"='TRACEARR') AS "maxWatchedAt",
+            (SELECT MIN("watchedAt") FROM "WatchHistory"
+              WHERE "mediaServerId"=$1 AND "source"='TRACEARR') AS "minWatchedAt",
+            (SELECT MIN("watchedAt") FROM "WatchHistory"
+              WHERE "mediaServerId"=$1 AND "source"='TRACEARR'
+                AND ("watched" IS NOT TRUE OR "state" <> 'stopped')) AS "oldestOpenChain"`,
     serverId,
   );
 
