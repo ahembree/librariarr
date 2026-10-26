@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { fetchJsonShared, newRequestScope, runInRequestScope } from "@/lib/shared-fetch";
+import { fetchJsonShared, fetchShared, newRequestScope, runInRequestScope } from "@/lib/shared-fetch";
 
 let fetchMock: ReturnType<typeof vi.fn>;
 
@@ -42,6 +42,24 @@ describe("fetchJsonShared", () => {
     await Promise.resolve();
     fetchMock.mockRejectedValueOnce(new Error("offline"));
     expect(await fetchJsonShared("/api/x")).toBeNull();
+  });
+});
+
+describe("fetchShared", () => {
+  it("shares the request with fetchJsonShared and keeps an error status's body", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ error: "nope" }), { status: 409 }));
+    const [detailed, json] = await Promise.all([fetchShared("/api/x"), fetchJsonShared("/api/x")]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(detailed).toEqual({ ok: false, status: 409, body: { error: "nope" } });
+    expect(json).toBeNull();
+  });
+
+  it("answers status 0 for a failed request and a null body for one that is not JSON", async () => {
+    fetchMock.mockRejectedValueOnce(new Error("offline"));
+    expect(await fetchShared("/api/x")).toEqual({ ok: false, status: 0, body: null });
+    await Promise.resolve();
+    fetchMock.mockResolvedValueOnce(new Response("<html>", { status: 200 }));
+    expect(await fetchShared("/api/x")).toEqual({ ok: true, status: 200, body: null });
   });
 });
 

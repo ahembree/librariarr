@@ -1,4 +1,19 @@
-const inFlight = new Map<string, Promise<unknown>>();
+/** A response as `fetchShared` hands it over: never a rejection. */
+export interface SharedResponse<T = unknown> {
+  ok: boolean;
+  /** 0 when the request itself failed (offline, aborted). */
+  status: number;
+  /** The parsed body — an error status's too — or null when it was not JSON. */
+  body: T | null;
+}
+
+interface InFlight {
+  response: Promise<SharedResponse>;
+  /** `fetchJsonShared`'s view of the same request, one promise for every caller. */
+  json: Promise<unknown>;
+}
+
+const inFlight = new Map<string, InFlight>();
 
 // The realtime event whose subscribers are running right now, if any (see
 // `runInRequestScope`). Null outside an event.
@@ -52,20 +67,47 @@ export function runInRequestScope<T>(scope: number, fn: () => T): T {
  * Callers share the parsed body, so none may mutate it.
  */
 export function fetchJsonShared<T>(url: string, init?: RequestInit): Promise<T | null> {
+  return shared(url, init).json as Promise<T | null>;
+}
+
+/**
+ * `fetchJsonShared` with the status and an error status's body, for a reader
+ * that reports why a request failed. Shares the same request with
+ * `fetchJsonShared` callers, on the same rules.
+ */
+export function fetchShared<T>(url: string, init?: RequestInit): Promise<SharedResponse<T>> {
+  return shared(url, init).response as Promise<SharedResponse<T>>;
+}
+
+async function request(url: string, init?: RequestInit): Promise<SharedResponse> {
+  try {
+    const res = await (init ? fetch(url, init) : fetch(url));
+    let body: unknown = null;
+    try {
+      body = await res.json();
+    } catch {
+      body = null;
+    }
+    return { ok: res.ok, status: res.status, body };
+  } catch {
+    return { ok: false, status: 0, body: null };
+  }
+}
+
+function shared(url: string, init?: RequestInit): InFlight {
   const scope = activeScope;
   const key = scope === null ? `turn ${url}` : `event:${scope} ${url}`;
-  let shared = inFlight.get(key) as Promise<T | null> | undefined;
-  if (!shared) {
-    const request = (init ? fetch(url, init) : fetch(url))
-      .then((res) => (res.ok ? (res.json() as Promise<T>) : null))
-      .catch(() => null);
-    shared = request;
-    inFlight.set(key, request);
+  let entry = inFlight.get(key);
+  if (!entry) {
+    const response = request(url, init);
+    const current: InFlight = { response, json: response.then((r) => (r.ok ? r.body : null)) };
+    entry = current;
+    inFlight.set(key, current);
     const drop = () => {
-      if (inFlight.get(key) === request) inFlight.delete(key);
+      if (inFlight.get(key) === current) inFlight.delete(key);
     };
     if (scope === null) queueMicrotask(drop);
-    else void request.then(drop);
+    else void response.then(drop);
   }
-  return shared;
+  return entry;
 }

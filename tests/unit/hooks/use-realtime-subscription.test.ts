@@ -58,6 +58,7 @@ let useRealtime: typeof import("@/hooks/use-realtime").useRealtime;
 let beforeRealtimeEvents: typeof import("@/hooks/use-realtime").beforeRealtimeEvents;
 let isRealtimeLive: typeof import("@/hooks/use-realtime").isRealtimeLive;
 let useRealtimeLive: typeof import("@/hooks/use-realtime").useRealtimeLive;
+let useRealtimeEvents: typeof import("@/hooks/use-realtime").useRealtimeEvents;
 let fetchJsonShared: typeof import("@/lib/shared-fetch").fetchJsonShared;
 
 const latest = () => FakeEventSource.instances.at(-1)!;
@@ -69,7 +70,9 @@ beforeEach(async () => {
   vi.stubGlobal("EventSource", FakeEventSource);
   vi.stubGlobal("fetch", fetchMock);
   vi.useFakeTimers();
-  ({ useRealtime, beforeRealtimeEvents, isRealtimeLive, useRealtimeLive } = await import("@/hooks/use-realtime"));
+  ({ useRealtime, beforeRealtimeEvents, isRealtimeLive, useRealtimeLive, useRealtimeEvents } = await import(
+    "@/hooks/use-realtime"
+  ));
   // The same module instance the hook just loaded.
   ({ fetchJsonShared } = await import("@/lib/shared-fetch"));
 });
@@ -409,6 +412,41 @@ describe("request sharing across one event's subscribers", () => {
     act(() => latest().dispatch("sync:progress", "{}"));
     void fetchJsonShared("/api/sync/status");
     expect(callsTo("/api/sync/status")).toBe(2);
+  });
+});
+
+describe("useRealtimeEvents", () => {
+  it("delivers every listed type to one callback, resyncs it once, and moves with the list", async () => {
+    const cb = vi.fn();
+    const { rerender, unmount } = renderHook(({ types }) => useRealtimeEvents(types, cb), {
+      initialProps: { types: ["a", "b"] as readonly string[] },
+    });
+    expect(FakeEventSource.instances).toHaveLength(1);
+    act(() => latest().emit("a", '{"n":1}'));
+    act(() => latest().emit("b", '{"n":2}'));
+    expect(cb.mock.calls).toEqual([[{ n: 1 }], [{ n: 2 }]]);
+
+    act(() => latest().open());
+    await act(async () => latest().fail(true));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_000);
+    });
+    cb.mockClear();
+    act(() => latest().open());
+    expect(cb).toHaveBeenCalledTimes(1);
+
+    rerender({ types: ["c"] });
+    cb.mockClear();
+    act(() => latest().emit("a", "{}"));
+    act(() => latest().emit("c", "{}"));
+    expect(cb).toHaveBeenCalledTimes(1);
+    unmount();
+    expect(latest().listeners.get("c")?.size ?? 0).toBe(0);
+  });
+
+  it("subscribes to nothing, and opens no stream, for an empty list", () => {
+    renderHook(() => useRealtimeEvents([], () => {}));
+    expect(FakeEventSource.instances).toHaveLength(0);
   });
 });
 

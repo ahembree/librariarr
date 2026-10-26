@@ -461,6 +461,27 @@ export function useRealtime(
   eventType: string,
   callback: RealtimeCallback,
 ): { connected: boolean; authExpired: boolean } {
+  return useRealtimeSubscription(eventType, callback);
+}
+
+/**
+ * `useRealtime` for several event types at once — for a hook that takes its
+ * event list as an argument (hooks cannot be called in a loop). One
+ * subscription: the callback runs once per event, and once per reconnect's
+ * resync. An empty list subscribes to nothing.
+ */
+export function useRealtimeEvents(
+  eventTypes: readonly string[],
+  callback: RealtimeCallback,
+): { connected: boolean; authExpired: boolean } {
+  return useRealtimeSubscription(eventTypes.join("\n"), callback);
+}
+
+/** `typesKey`: the event types, newline-joined (no event type contains one). */
+function useRealtimeSubscription(
+  typesKey: string,
+  callback: RealtimeCallback,
+): { connected: boolean; authExpired: boolean } {
   const [connected, setLocalConnected] = useState(connectedState);
   const [authExpired, setLocalAuthExpired] = useState(authFailed);
   const callbackRef = useRef(callback);
@@ -470,6 +491,9 @@ export function useRealtime(
   });
 
   useEffect(() => {
+    const eventTypes = typesKey.split("\n").filter(Boolean);
+    if (eventTypes.length === 0) return;
+
     // Track connected state
     const onConnectedChange = (value: boolean) => setLocalConnected(value);
     connectedListeners.add(onConnectedChange);
@@ -485,25 +509,28 @@ export function useRealtime(
       return;
     }
 
-    const handler = (e: MessageEvent) => {
-      const scope = firstSight(eventType, e);
-      try {
-        const data = JSON.parse(e.data);
-        runInRequestScope(scope, () => callbackRef.current(data));
-      } catch {
-        // Ignore malformed events
-      }
-    };
+    const attached = eventTypes.map((eventType) => {
+      const handler = (e: MessageEvent) => {
+        const scope = firstSight(eventType, e);
+        try {
+          const data = JSON.parse(e.data);
+          runInRequestScope(scope, () => callbackRef.current(data));
+        } catch {
+          // Ignore malformed events
+        }
+      };
 
-    // Track the handler in the shared registry so it can be re-attached to a
-    // fresh source on reconnect, then attach it to the current source.
-    let handlers = eventHandlers.get(eventType);
-    if (!handlers) {
-      handlers = new Set();
-      eventHandlers.set(eventType, handlers);
-    }
-    handlers.add(handler);
-    source.addEventListener(eventType, handler);
+      // Track the handler in the shared registry so it can be re-attached to a
+      // fresh source on reconnect, then attach it to the current source.
+      let handlers = eventHandlers.get(eventType);
+      if (!handlers) {
+        handlers = new Set();
+        eventHandlers.set(eventType, handlers);
+      }
+      handlers.add(handler);
+      source.addEventListener(eventType, handler);
+      return { eventType, handler, handlers };
+    });
 
     // Recover from a gap: after a reconnect the same callback runs as though
     // the event had arrived, because whatever was emitted while the stream was
@@ -513,17 +540,19 @@ export function useRealtime(
     resyncListeners.add(resync);
 
     return () => {
-      // The shared source may have been replaced during reconnection;
-      // removeEventListener on a stale/closed source is safe (no-op).
-      handlers.delete(handler);
-      if (handlers.size === 0) eventHandlers.delete(eventType);
-      sharedSource?.removeEventListener(eventType, handler);
+      for (const { eventType, handler, handlers } of attached) {
+        // The shared source may have been replaced during reconnection;
+        // removeEventListener on a stale/closed source is safe (no-op).
+        handlers.delete(handler);
+        if (handlers.size === 0) eventHandlers.delete(eventType);
+        sharedSource?.removeEventListener(eventType, handler);
+      }
       resyncListeners.delete(resync);
       connectedListeners.delete(onConnectedChange);
       authFailedListeners.delete(onAuthChange);
       releaseSource();
     };
-  }, [eventType]);
+  }, [typesKey]);
 
   return { connected, authExpired };
 }
