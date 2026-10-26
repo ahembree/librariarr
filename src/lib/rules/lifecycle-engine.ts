@@ -206,6 +206,30 @@ function hasSeriesAggregateRules(rules: LifecycleRule[] | LifecycleRuleGroup[]):
   return hasSeriesAggregateGroupRules(asGroups(rules));
 }
 
+/**
+ * Columns of a candidate row no rule reads, nothing in the series or artist
+ * aggregation uses and detection's bookkeeping never consults: the cast and
+ * crew lists (often the largest part of a row once a sync has enriched it),
+ * the tagline and original title, the file path, and the server's playback
+ * and analysis bookkeeping. The engines load every candidate of a library, so
+ * each is read for every row; a match's stored snapshot is still the rest of
+ * the row, and the detail panel a match opens reads the full record from
+ * `/api/media/[id]`.
+ */
+export const UNREAD_ITEM_COLUMNS = {
+  roles: true,
+  directors: true,
+  writers: true,
+  tagline: true,
+  originalTitle: true,
+  filePath: true,
+  viewOffset: true,
+  chapterSource: true,
+  absoluteIndex: true,
+  optimizedForStreaming: true,
+  serverUpdatedAt: true,
+} as const;
+
 /** Check if any rule uses stream fields or stream query groups */
 function hasStreamRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): boolean {
   return hasStreamGroupRules(asGroups(rules));
@@ -1984,6 +2008,7 @@ export async function evaluateSeriesScope(
       type: "SERIES",
       library: { mediaServerId: { in: serverIds } },
     },
+    omit: UNREAD_ITEM_COLUMNS,
     include: {
       externalIds: true,
       ...(needsStreams ? { streams: true } : {}),
@@ -2278,6 +2303,7 @@ export async function evaluateMusicScope(
       type: "MUSIC",
       library: { mediaServerId: { in: serverIds } },
     },
+    omit: UNREAD_ITEM_COLUMNS,
     include: {
       externalIds: true,
       ...(needsStreams ? { streams: true } : {}),
@@ -2503,6 +2529,7 @@ export async function evaluateLifecycleRules(
 
   const items = await prisma.mediaItem.findMany({
     where,
+    omit: UNREAD_ITEM_COLUMNS,
     include: {
       ...(needsExternalIds ? { externalIds: true } : {}),
       ...(needsStreams ? { streams: true } : {}),
