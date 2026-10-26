@@ -1,17 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useRef } from "react";
 import { toast } from "sonner";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { fetchWithReauth } from "@/lib/auth/reauth-client";
 import { readResponseError } from "@/lib/api/error-message";
 
@@ -29,10 +20,12 @@ export function PlexLoginPrompt({
   /** Called when the prompt closes; `enabled` is true when Plex login was turned on. */
   onDone: (enabled: boolean) => void;
 }) {
-  const [saving, setSaving] = useState(false);
+  // Whether the confirm turned it on. The dialog closes itself once the save
+  // has answered, either way — a failure is reported by toast, and the setting
+  // is still there under Settings → Authentication.
+  const enabled = useRef(false);
 
   const enable = async () => {
-    setSaving(true);
     try {
       const res = await fetchWithReauth("/api/settings/auth", {
         method: "PUT",
@@ -41,46 +34,36 @@ export function PlexLoginPrompt({
       });
       if (res.ok) {
         toast.success("Plex login enabled");
-        onDone(true);
+        enabled.current = true;
       } else {
         toast.error("Couldn't enable Plex login", {
           description: await readResponseError(res, "Turn it on under Settings → Authentication instead."),
         });
-        onDone(false);
       }
     } catch {
       toast.error("Couldn't enable Plex login", { description: "Network error" });
-      onDone(false);
-    } finally {
-      setSaving(false);
     }
   };
 
   return (
-    <AlertDialog open={open} onOpenChange={(next) => { if (!next && !saving) onDone(false); }}>
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Allow signing in with Plex?</AlertDialogTitle>
-          <AlertDialogDescription>
-            Your Plex account is linked, but Plex login is turned off, so the login page offers no Plex
-            button. Turn it on to sign in with this Plex account. Leave it off if other people share the
-            Plex account — anyone who can sign in to it could then sign in to Librariarr. You can change
-            this any time under Settings → Authentication.
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel disabled={saving}>Keep it off</AlertDialogCancel>
-          <AlertDialogAction
-            disabled={saving}
-            onClick={(e) => {
-              e.preventDefault();
-              void enable();
-            }}
-          >
-            Enable Plex login
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
+    <ConfirmDialog
+      open={open}
+      onOpenChange={(next) => {
+        if (next) return;
+        const result = enabled.current;
+        enabled.current = false;
+        onDone(result);
+      }}
+      title="Allow signing in with Plex?"
+      description={
+        "Your Plex account is linked, but Plex login is turned off, so the login page offers no Plex " +
+        "button. Turn it on to sign in with this Plex account. Leave it off if other people share the " +
+        "Plex account — anyone who can sign in to it could then sign in to Librariarr. You can change " +
+        "this any time under Settings → Authentication."
+      }
+      cancelLabel="Keep it off"
+      confirmLabel="Enable Plex login"
+      onConfirm={enable}
+    />
   );
 }

@@ -22,6 +22,8 @@ import {
 } from "@/components/ui/select";
 import { AlertCircle, RotateCcw, Loader2, LogIn } from "lucide-react";
 import { Logo } from "@/components/logo";
+import { InlineError } from "@/components/inline-error";
+import { LoadingButton } from "@/components/loading-button";
 import { newPasswordProblem } from "@/lib/auth/password-rules";
 
 const SSO_ERROR_MESSAGES: Record<string, string> = {
@@ -368,10 +370,7 @@ export default function LoginPage() {
                 </p>
               )}
               {plexError && (
-                <div className="flex items-center gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-                  <AlertCircle className="h-4 w-4 shrink-0" />
-                  {plexError}
-                </div>
+                <InlineError>{plexError}</InlineError>
               )}
             </>
           )}
@@ -411,16 +410,10 @@ export default function LoginPage() {
               refused because SSO can no longer be offered lands here with the
               button gone, and the message is what says why. */}
           {ssoError && (
-            <div className="flex items-center gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-              <AlertCircle className="h-4 w-4 shrink-0" />
-              {ssoError}
-            </div>
+            <InlineError>{ssoError}</InlineError>
           )}
           {ssoUnavailable && !setupRequired && (
-            <div className="flex items-start gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-              <span>SSO login is turned on but cannot be offered: {ssoUnavailable}</span>
-            </div>
+            <InlineError multiline>SSO login is turned on but cannot be offered: {ssoUnavailable}</InlineError>
           )}
           {/* Setup prompt when no account exists */}
           {setupRequired && (
@@ -480,19 +473,16 @@ export default function LoginPage() {
                     />
                   </div>
                   {setupError && (
-                    <div className="flex items-center gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-                      <AlertCircle className="h-4 w-4 shrink-0" />
-                      {setupError}
-                    </div>
+                    <InlineError>{setupError}</InlineError>
                   )}
-                  <Button
+                  <LoadingButton
                     type="submit"
                     className="w-full cursor-pointer"
                     size="lg"
-                    disabled={setupLoading}
+                    loading={setupLoading}
                   >
                     {setupLoading ? "Creating account..." : "Create Account"}
-                  </Button>
+                  </LoadingButton>
                 </form>
               )}
               {/* Restore from backup option */}
@@ -562,31 +552,22 @@ export default function LoginPage() {
                           />
                         </div>
                       )}
-                      <Button
+                      <LoadingButton
                         onClick={handleRestore}
                         className="w-full cursor-pointer"
                         size="lg"
-                        disabled={restoreLoading || !selectedBackup || (selectedBackupEncrypted && !restorePassphrase)}
+                        loading={restoreLoading}
+                        disabled={!selectedBackup || (selectedBackupEncrypted && !restorePassphrase)}
                       >
-                        {restoreLoading ? (
-                          <>
-                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                            Restoring...
-                          </>
-                        ) : (
-                          "Restore Selected Backup"
-                        )}
-                      </Button>
+                        {restoreLoading ? "Restoring..." : "Restore Selected Backup"}
+                      </LoadingButton>
                       {restoreLoading && restoreProgress && (
                         <p className="text-xs text-muted-foreground text-center">{restoreProgress}</p>
                       )}
                     </>
                   )}
                   {restoreError && (
-                    <div className="flex items-center gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-                      <AlertCircle className="h-4 w-4 shrink-0" />
-                      {restoreError}
-                    </div>
+                    <InlineError>{restoreError}</InlineError>
                   )}
                   <Button
                     variant="ghost"
@@ -640,19 +621,16 @@ export default function LoginPage() {
                   />
                 </div>
                 {localError && (
-                  <div className="flex items-center gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-                    <AlertCircle className="h-4 w-4 shrink-0" />
-                    {localError}
-                  </div>
+                  <InlineError>{localError}</InlineError>
                 )}
-                <Button
+                <LoadingButton
                   type="submit"
                   className="w-full cursor-pointer"
                   size="lg"
-                  disabled={localLoading}
+                  loading={localLoading}
                 >
                   {localLoading ? "Signing in..." : "Sign In"}
-                </Button>
+                </LoadingButton>
               </form>
             </>
           )}
