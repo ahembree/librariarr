@@ -24,7 +24,6 @@ vi.mock("axios", () => {
 });
 
 import { SonarrClient } from "@/lib/arr/sonarr-client";
-import { IntegrationError } from "@/lib/integration-error";
 
 describe("SonarrClient", () => {
   let client: SonarrClient;

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { SEERR_REQUEST_PAGE_SIZE as P, SEERR_REQUEST_PAGE_OVERLAP as O } from "@/lib/seerr/request-walk";
+import { SEERR_REQUEST_PAGE_SIZE as P } from "@/lib/seerr/request-walk";
 
 const mockPrisma = vi.hoisted(() => ({
   seerrInstance: { findMany: vi.fn() },

@@ -24,7 +24,6 @@ vi.mock("axios", () => {
 });
 
 import { LidarrClient } from "@/lib/arr/lidarr-client";
-import { IntegrationError } from "@/lib/integration-error";
 
 describe("LidarrClient", () => {
   let client: LidarrClient;

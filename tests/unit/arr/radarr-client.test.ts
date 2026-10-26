@@ -24,7 +24,6 @@ vi.mock("axios", () => {
 });
 
 import { RadarrClient } from "@/lib/arr/radarr-client";
-import { IntegrationError } from "@/lib/integration-error";
 
 describe("RadarrClient", () => {
   let client: RadarrClient;
