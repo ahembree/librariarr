@@ -6,6 +6,7 @@ import { walkSeerrRequests } from "@/lib/seerr/request-walk";
 import { seerrRequesterName } from "@/lib/seerr/seerr-data-map";
 import { apiLogger } from "@/lib/logger";
 import { withTimeout } from "@/lib/api/bounded";
+import { stripTrailingSlashes } from "@/lib/url-normalize";
 
 interface SeerrRequestSummary {
   id: number;
@@ -163,7 +164,7 @@ export const GET = withSession(async (
       // The browser follows this link, so prefer the browser-facing URL. Seerr
       // pages are keyed by TMDB id; a series matched through its TVDB id alone
       // still has one — on the Seerr media the requests belong to.
-      const baseUrl = (instance.externalUrl || instance.url || "").replace(/\/+$/, "");
+      const baseUrl = stripTrailingSlashes(instance.externalUrl || instance.url || "");
       const linkTmdbId = tmdbId ?? (media?.tmdbId != null ? String(media.tmdbId) : null);
       const seerrUrl = linkTmdbId ? `${baseUrl}/${mediaType}/${linkTmdbId}` : null;
 

@@ -26,6 +26,7 @@ import {
   tracearrInstanceCreateSchema,
   tracearrInstanceUpdateSchema,
 } from "@/lib/validation";
+import { stripTrailingSlashes } from "@/lib/url-normalize";
 
 /**
  * The routes every integration instance type answers — the list and create,
@@ -193,8 +194,6 @@ function delegateOf(config: IntegrationConfig, db: Prisma.TransactionClient = pr
   return (db as unknown as Record<InstanceModel, InstanceDelegate>)[config.model];
 }
 
-const withoutTrailingSlash = (value: string) => value.replace(/\/+$/, "");
-
 /**
  * The key a request brings, or `undefined` for "keep the stored one": the
  * settings form shows the stored key masked and echoes whatever it holds back,
@@ -259,9 +258,9 @@ export function instanceCollectionRoutes(config: IntegrationConfig) {
       data: {
         userId: session.userId,
         name,
-        url: withoutTrailingSlash(url),
+        url: stripTrailingSlashes(url),
         apiKey,
-        ...(config.hasExternalUrl && { externalUrl: externalUrl ? withoutTrailingSlash(externalUrl) : null }),
+        ...(config.hasExternalUrl && { externalUrl: externalUrl ? stripTrailingSlashes(externalUrl) : null }),
       },
     });
     config.afterChange?.();
@@ -292,7 +291,7 @@ export function instanceItemRoutes(config: IntegrationConfig) {
     // just toggling enabled). The edit form sends its URL on every save, so
     // testing on its mere presence refused a rename or a new external URL
     // whenever the instance happened to be unreachable.
-    const urlChanged = url !== undefined && withoutTrailingSlash(url) !== existing.url;
+    const urlChanged = url !== undefined && stripTrailingSlashes(url) !== existing.url;
     if ((urlChanged || apiKey) && enabled !== false) {
       const result = await config.client(url ?? existing.url, apiKey ?? existing.apiKey).testConnection();
       if (!result.ok) return failedToConnect(config, result);
@@ -302,10 +301,10 @@ export function instanceItemRoutes(config: IntegrationConfig) {
       where: { id },
       data: {
         ...(name && { name }),
-        ...(url && { url: withoutTrailingSlash(url) }),
+        ...(url && { url: stripTrailingSlashes(url) }),
         ...(apiKey && { apiKey }),
         ...(config.hasExternalUrl &&
-          externalUrl !== undefined && { externalUrl: externalUrl ? withoutTrailingSlash(externalUrl) : null }),
+          externalUrl !== undefined && { externalUrl: externalUrl ? stripTrailingSlashes(externalUrl) : null }),
         ...(enabled !== undefined && { enabled }),
       },
     });

@@ -1,3 +1,5 @@
+import { stripTrailingSlashes } from "@/lib/url-normalize";
+
 const FAILURE_TTL_MS = 45_000;
 
 interface FailureEntry {
@@ -34,7 +36,7 @@ declare module "axios" {
 }
 
 function normalize(baseURL: string): string {
-  return baseURL.replace(/\/+$/, "");
+  return stripTrailingSlashes(baseURL);
 }
 
 export class ServerUnreachableError extends Error {

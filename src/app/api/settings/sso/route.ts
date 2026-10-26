@@ -16,6 +16,7 @@ import {
 } from "@/lib/auth/password-sign-in";
 import { hasRecentLogin } from "@/lib/auth/recent-login";
 import { reauthRequired, ssoLinkedToIssuer } from "@/lib/auth/reauth";
+import { stripTrailingSlashes } from "@/lib/url-normalize";
 
 const SSO_SELECT = {
   ssoEnabled: true,
@@ -303,7 +304,7 @@ export async function PUT(request: NextRequest) {
   // with the admin's subject and come back with a fresh sign-in. While SSO is
   // off nothing reads the issuer — no login, no confirmation, and linking or
   // turning SSO on asks for a recent sign-in itself — so setup is not prompted.
-  const issuerOf = (issuer: string | null) => (issuer ?? "").replace(/\/+$/, "");
+  const issuerOf = (issuer: string | null) => stripTrailingSlashes(issuer ?? "");
   const changesIdentitySource =
     writeData.ssoMode !== current.ssoMode ||
     writeData.forwardAuthUserHeader !== current.forwardAuthUserHeader ||

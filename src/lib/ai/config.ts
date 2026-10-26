@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db";
 import { AI_PROVIDERS } from "@/lib/validation";
 import type { AiConfig, AiProvider } from "./types";
+import { stripTrailingSlashes } from "@/lib/url-normalize";
 
 const DEFAULT_BASE_URLS: Record<AiProvider, string> = {
   "openai-compatible": "https://api.openai.com/v1",
@@ -34,7 +35,7 @@ interface AiConfigInput {
 export function resolveAiConfig(input: AiConfigInput): AiConfig | null {
   const model = (input.model ?? "").trim();
   if (!model) return null;
-  const baseUrl = ((input.baseUrl ?? "").trim() || defaultBaseUrl(input.provider)).replace(/\/+$/, "");
+  const baseUrl = stripTrailingSlashes((input.baseUrl ?? "").trim() || defaultBaseUrl(input.provider));
   const apiKey = (input.apiKey ?? "").trim();
   return { provider: input.provider, baseUrl, apiKey, model };
 }

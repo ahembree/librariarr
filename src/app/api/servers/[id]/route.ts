@@ -14,8 +14,7 @@ import {
 } from "@/lib/media/watch-evidence";
 import { hasRecentLogin } from "@/lib/auth/recent-login";
 import { reauthRequired } from "@/lib/auth/reauth";
-
-const withoutTrailingSlash = (value: string) => value.replace(/\/+$/, "");
+import { stripTrailingSlashes } from "@/lib/url-normalize";
 
 export const PUT = withSession(async (
   session,
@@ -81,7 +80,7 @@ export const PUT = withSession(async (
   // at the URL, and the default one onboarding picks is the remote
   // plex.direct address. Sending a replacement token, or re-saving the same
   // settings (the edit form always sends the URL), needs nothing.
-  const urlChanged = url !== undefined && withoutTrailingSlash(url) !== withoutTrailingSlash(server.url);
+  const urlChanged = url !== undefined && stripTrailingSlashes(url) !== stripTrailingSlashes(server.url);
   const turnsTlsChecksOff = tlsSkipVerify === true && !server.tlsSkipVerify;
   const keepsStoredToken = accessToken === undefined || accessToken === "";
   if ((urlChanged || turnsTlsChecksOff) && keepsStoredToken && !hasRecentLogin(session)) {
