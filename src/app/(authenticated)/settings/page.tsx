@@ -12,6 +12,7 @@ import { PlexLoginPrompt } from "@/components/plex-login-prompt";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useFallbackPoll } from "@/hooks/use-fallback-poll";
 import { useCronScheduleSetting } from "@/hooks/use-cron-schedule-setting";
+import { useSetState } from "@/hooks/use-set-state";
 import { fetchSyncStatus } from "@/lib/sync/sync-status-client";
 import { mergeSyncProgress } from "./sync-progress";
 import { createPreloadedReads, type PreloadedReads } from "./preloaded-reads";
@@ -230,7 +231,7 @@ export default function SettingsPage() {
   const [integrationsOpened, setIntegrationsOpened] = useState(false);
   if (activeTab === "integrations" && !integrationsOpened) setIntegrationsOpened(true);
   // Tabs whose data has loaded — each tab renders once its own requests are in.
-  const [loadedTabs, setLoadedTabs] = useState<ReadonlySet<SettingsTab>>(() => new Set());
+  const [loadedTabs, { add: markTabLoaded }] = useSetState<SettingsTab>();
   // The manual sync this page last requested, until its own run ends — see
   // `isSyncRequestSettled` for how that run is told apart from the previous one.
   const [syncRequest, setSyncRequest] = useState<PendingSyncRequest | null>(null);
@@ -924,9 +925,9 @@ export default function SettingsPage() {
   const loadTab = useCallback(
     async (tab: SettingsTab) => {
       await Promise.allSettled(tabLoaders[tab].map(startOnce));
-      setLoadedTabs((prev) => (prev.has(tab) ? prev : new Set(prev).add(tab)));
+      markTabLoaded(tab);
     },
-    [tabLoaders, startOnce],
+    [tabLoaders, startOnce, markTabLoaded],
   );
 
   // Declared before the effect below so that, with the page opened at #system,
