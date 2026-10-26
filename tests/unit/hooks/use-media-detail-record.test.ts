@@ -101,6 +101,23 @@ describe("useMediaDetailRecord", () => {
     expect(urls().filter((u) => u === "/api/media/e1/arr-info")).toHaveLength(1);
   });
 
+  it("does not tick for a sync of another library type", async () => {
+    const { result } = renderHook(() =>
+      useMediaDetailRecord("m1", { mediaType: "MOVIE", plays: true, tickOn: ["sync:completed", "watch-history:updated"] }),
+    );
+    await waitFor(() => expect(result.current.item).not.toBeNull());
+    const fire = (data: Record<string, unknown>) =>
+      act(() => (mocks.ticks.at(-1)!.cb as (d: Record<string, unknown>) => void)(data));
+    fire({ timestamp: 1, serverId: "s1", libraryTypes: ["MUSIC"] });
+    expect(result.current.syncTick).toBe(0);
+    fire({ timestamp: 2, serverId: "s1", libraryTypes: ["MOVIE", "MUSIC"] });
+    expect(result.current.syncTick).toBe(1);
+    // Plays moving carry no library types, nor does a resync.
+    fire({ timestamp: 3, serverId: "s1", imported: 4 });
+    fire({});
+    expect(result.current.syncTick).toBe(3);
+  });
+
   it("starts the child list with the record, and no integration lookups when the page shows none", async () => {
     const { result } = renderHook(() =>
       useMediaDetailRecord("a1", { mediaType: "MUSIC", plays: false, integrations: false, children: "albums" }),

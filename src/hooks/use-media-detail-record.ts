@@ -7,6 +7,7 @@ import { useRealtimeEvents } from "@/hooks/use-realtime";
 import { useLatestRequest } from "@/hooks/use-latest-request";
 import { detailPrefetch, mediaRecordUrl, prefetchMediaDetail, type DetailChildList } from "@/lib/media/detail-prefetch";
 import { buildPlayLinks, type PlayServer } from "@/lib/play-url";
+import { syncCompletedConcerns } from "@/lib/media/sync-scope";
 import type { MediaItemWithRelations } from "@/lib/types";
 
 /** `buildPlayLinks`' link spec: `[label, rating-key field]` per link. */
@@ -69,7 +70,13 @@ export function useMediaDetailRecord(id: string, options: MediaDetailRecordOptio
     playLinksRef.current = options.playLinks;
   });
 
-  useRealtimeEvents(tickOn, () => setSyncTick((t) => t + 1));
+  useRealtimeEvents(tickOn, (data) => {
+    // A sync that names the library types it wrote, none of them this page's,
+    // changed nothing here (only `sync:completed` carries `libraryTypes`; any
+    // other event, and a reconnect's resync, still ticks).
+    if (!syncCompletedConcerns(data, { types: mediaType })) return;
+    setSyncTick((t) => t + 1);
+  });
 
   // Before the record's own effect, so the record request below is the one
   // started here and is taken from the store rather than asked for twice.
