@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo, useRef, useSyncExternalStore } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { toast } from "sonner";
 import { usePlexOAuth } from "@/hooks/use-plex-oauth";
 import { fetchWithReauth } from "@/lib/auth/reauth-client";
@@ -35,7 +35,9 @@ import {
 import { cn } from "@/lib/utils";
 import { SettingsPanelSkeleton, SettingsSkeleton } from "@/components/skeletons";
 import { isSyncRequestSettled, type PendingSyncRequest } from "@/lib/sync/sync-request";
-import { readUrlHash, replaceUrlHash, subscribeToUrlHash } from "@/lib/url-hash";
+import { readUrlHash } from "@/lib/url-hash";
+import { tabFromHash, useHashTab } from "@/hooks/use-hash-tab";
+import { useHydrated } from "@/hooks/use-hydrated";
 
 // ─── Tab components ───
 // Each tab's code loads on demand (`lazySettingsTab`), with its data: the
@@ -93,7 +95,7 @@ const SETTINGS_TABS: { value: SettingsTab; label: string; icon: typeof SettingsI
   { value: "system", label: "System", icon: Monitor },
 ];
 
-const VALID_SETTINGS_TABS = new Set<string>(SETTINGS_TABS.map((t) => t.value));
+const VALID_SETTINGS_TABS: readonly SettingsTab[] = SETTINGS_TABS.map((t) => t.value);
 
 const TAB_CODE = {
   general: lazySettingsTab(() => import("./tabs/general-tab").then((m) => m.GeneralTab)),
@@ -132,17 +134,6 @@ const REALTIME_STATUS_POLL_MS = 60_000;
 const integrationSaveError = responseErrorMessage;
 
 
-/** `useSyncExternalStore` subscriber for a value that never changes. */
-const subscribeNothing = () => () => {};
-
-/** The tab a URL hash names, or null for no hash or one that names none. */
-function tabFromHash(hash: string): SettingsTab | null {
-  const tab = hash.slice(1);
-  return VALID_SETTINGS_TABS.has(tab) ? (tab as SettingsTab) : null;
-}
-
-/** Server snapshot for the URL hash: the server never sees it. */
-const noUrlHash = () => "";
 
 // ─── Tab navigation helpers ───
 
@@ -228,13 +219,11 @@ export default function SettingsPage() {
   const readAuthSectionData = useCallback((path: string) => authSectionReads().get(path), [authSectionReads]);
   // The open tab IS the URL hash — see `src/lib/url-hash.ts` for why it is
   // read through a store rather than once on mount.
-  const urlHash = useSyncExternalStore(subscribeToUrlHash, readUrlHash, noUrlHash);
-  const activeTab: SettingsTab = tabFromHash(urlHash) ?? "general";
-  const setActiveTab = useCallback((tab: SettingsTab) => replaceUrlHash(`#${tab}`), []);
+  const [activeTab, setActiveTab] = useHashTab(VALID_SETTINGS_TABS, "general");
   // False only while server-rendering and hydrating. The open tab comes from
   // the URL hash, which the server cannot see, so until then the page renders
   // the skeleton the server did; a client-side navigation skips straight past.
-  const hydrated = useSyncExternalStore(subscribeNothing, () => true, () => false);
+  const hydrated = useHydrated();
   const [servers, setServers] = useState<MediaServer[]>([]);
   // Whether the Integrations tab has been open (see its TabsContent). Set
   // during render, the way React derives state from a changed value.
@@ -437,15 +426,6 @@ export default function SettingsPage() {
   const [aiSaving, setAiSaving] = useState(false);
   const [aiTesting, setAiTesting] = useState(false);
   const [aiTestResult, setAiTestResult] = useState<TestResult | null>(null);
-
-  // A URL naming no tab (/settings alone, or an unknown hash) is pointed at
-  // the General tab it shows. Read live, not from this render's `activeTab`:
-  // on a client-side navigation this runs before the store has re-read the
-  // hash the router just wrote, and normalising from the render's value
-  // overwrote #authentication with #general.
-  useEffect(() => {
-    if (!tabFromHash(readUrlHash())) replaceUrlHash("#general");
-  }, [urlHash]);
 
   // ─── Fetchers ───
 
@@ -961,7 +941,7 @@ export default function SettingsPage() {
   }, [activeTab, loadTab, startOnce, fetchChangelog]);
 
   useEffect(() => {
-    const openTab = tabFromHash(readUrlHash()) ?? "general";
+    const openTab = tabFromHash(readUrlHash(), VALID_SETTINGS_TABS) ?? "general";
     const eager = [openTab, ...SETTINGS_TABS.map((t) => t.value).filter((tab) => tab !== openTab)].filter(
       (tab) => tab !== "system",
     );
