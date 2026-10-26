@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   createPrefetchStore,
+  detailChildrenUrl,
   detailPrefetch,
   dropMediaDerivedPrefetches,
   mediaPlaysUrl,
@@ -143,6 +144,29 @@ describe("detail prefetches", () => {
     fetchMock.mockResolvedValue(respond({}));
     prefetchMediaDetail("t1", { mediaType: "MUSIC", plays: false });
     expect(fetchMock.mock.calls.map((c) => c[0]).sort()).toEqual(["/api/media/t1", "/api/media/t1/arr-info"]);
+  });
+
+  it("names each detail page's child list by the page's own id", () => {
+    expect(detailChildrenUrl("seasons", "s 1")).toBe("/api/media/series/seasons?itemId=s%201");
+    expect(detailChildrenUrl("episodes", "e1")).toBe("/api/media/series?itemId=e1&sortBy=episodeNumber&sortOrder=asc&limit=0");
+    expect(detailChildrenUrl("tracks", "t1")).toBe("/api/media/music?itemId=t1&sortBy=episodeNumber&sortOrder=asc&limit=0");
+    expect(detailChildrenUrl("albums", "a1")).toBe("/api/media/music/albums?itemId=a1");
+  });
+
+  it("starts the child list with the record, and no integrations when the page shows none", () => {
+    fetchMock.mockResolvedValue(respond({}));
+    prefetchMediaDetail("a1", { mediaType: "MUSIC", plays: false, integrations: false, children: "albums" });
+    expect(fetchMock.mock.calls.map((c) => c[0]).sort()).toEqual(
+      ["/api/media/a1", detailChildrenUrl("albums", "a1")].sort(),
+    );
+    expect(detailPrefetch.take(detailChildrenUrl("albums", "a1"))).not.toBeNull();
+  });
+
+  it("drops a child list on a media change, like the record", () => {
+    fetchMock.mockResolvedValue(respond({}));
+    prefetchMediaDetail("s1", { mediaType: "SERIES", plays: false, children: "seasons" });
+    dropMediaDerivedPrefetches();
+    expect(detailPrefetch.take(detailChildrenUrl("seasons", "s1"))).toBeNull();
   });
 
   it("reuses a record the hover already warmed", async () => {

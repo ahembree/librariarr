@@ -1,7 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
-import { useRealtime } from "@/hooks/use-realtime";
+import { useState, useEffect } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useChipColors } from "@/components/chip-color-provider";
@@ -9,18 +8,15 @@ import { QualityChip } from "@/components/quality-chips";
 import { QualityBar } from "@/components/media-card";
 import { qualityChips, qualitySegments } from "@/lib/media/quality-chips";
 import { MediaDetailHero } from "@/components/media-detail-hero";
-import { RatingChip } from "@/components/rating-chip";
-import { getRatingLabel } from "@/lib/rating-labels";
+import { DetailPageStates, RatingChips, genreChips } from "@/components/media-detail-parts";
 import { FadeImage } from "@/components/ui/fade-image";
 import { ColorChip } from "@/components/color-chip";
-import { MediaHoverPopover } from "@/components/media-hover-popover";
+import { MediaHoverPopover, hoverDataFromSeriesGroup } from "@/components/media-hover-popover";
 import { HoverCard, HoverCardTrigger, HoverCardContent } from "@/components/ui/hover-card";
 import { Separator } from "@/components/ui/separator";
-import { Skeleton } from "@/components/ui/skeleton";
 import { formatFileSize } from "@/lib/format";
-import type { MediaItemWithRelations } from "@/lib/types";
-import { detailPrefetch, mediaRecordUrl, prefetchMediaDetail } from "@/lib/media/detail-prefetch";
-import { type PlayServer, buildPlayLinks } from "@/lib/play-url";
+import { useMediaDetailRecord } from "@/hooks/use-media-detail-record";
+import { useDetailChildren } from "@/hooks/use-detail-children";
 import { IntegrationsSection } from "@/components/integrations-section";
 import { PlayHistory } from "@/components/play-history";
 
@@ -45,62 +41,31 @@ interface SeasonData {
   year?: number | null;
 }
 
+const PLAY_LINKS: Parameters<typeof useMediaDetailRecord>[1]["playLinks"] = [
+  ["Series", "grandparentRatingKey"],
+  ["Season", "parentRatingKey"],
+  ["Episode", "ratingKey"],
+];
+
+const pickSeasons = (body: Record<string, unknown>) => body.seasons as SeasonData[] | undefined;
+
 export default function SeriesDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { getHex } = useChipColors();
-  const [item, setItem] = useState<MediaItemWithRelations | null>(null);
-  const [playServers, setPlayServers] = useState<PlayServer[]>([]);
-  const [seasons, setSeasons] = useState<SeasonData[]>([]);
+  // The seasons are asked for by this page's id, beside the record — they used
+  // to wait for it, to read its series key — and both are re-read together on
+  // every `sync:completed` (new/removed items) without a manual refresh. The
+  // Arr/Seerr cards need only the id, so their requests start with them, once
+  // per id.
+  const { item, playServers, loading, syncTick } = useMediaDetailRecord(id, {
+    mediaType: "SERIES",
+    plays: false,
+    playLinks: PLAY_LINKS,
+    refetchOnTick: true,
+    children: "seasons",
+  });
+  const seasonList = useDetailChildren(id, "seasons", syncTick, pickSeasons);
   const [seriesSummary, setSeriesSummary] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  // Token guards against a stale slow response landing after a quick id change.
-  const reqToken = useRef(0);
-
-  const [syncTick, setSyncTick] = useState(0);
-  // Auto-update on real-time sync (new/removed items) without a manual refresh.
-  useRealtime("sync:completed", () => setSyncTick((t) => t + 1));
-
-  // The Arr/Seerr cards need only the id, so their requests start beside the
-  // record's instead of after it renders. Once per id, not on every refetch
-  // the sync tick causes: the cards read only on mount, so a later prefetch
-  // would never be taken.
-  useEffect(() => {
-    prefetchMediaDetail(id, { mediaType: "SERIES", plays: false });
-  }, [id]);
-
-  useEffect(() => {
-    const token = ++reqToken.current;
-    async function fetchData() {
-      try {
-        const { body: itemData } = await detailPrefetch.fetch<{ item?: MediaItemWithRelations; playServers?: PlayServer[] }>(mediaRecordUrl(id));
-        if (token !== reqToken.current) return;
-        if (!itemData?.item) return;
-        setItem(itemData.item);
-        setPlayServers(buildPlayLinks(itemData.playServers || [], [
-          ["Series", "grandparentRatingKey"],
-          ["Season", "parentRatingKey"],
-          ["Episode", "ratingKey"],
-        ]));
-
-        // Prefer the series identity key (disambiguates two same-titled shows);
-        // fall back to the title for a legacy row without a seriesKey.
-        const seriesParam = itemData.item.seriesKey
-          ? `seriesKey=${encodeURIComponent(itemData.item.seriesKey)}`
-          : `parentTitle=${encodeURIComponent(itemData.item.parentTitle || itemData.item.title)}`;
-        const seasonsRes = await fetch(
-          `/api/media/series/seasons?${seriesParam}`
-        );
-        const seasonsData = await seasonsRes.json();
-        if (token !== reqToken.current) return;
-        setSeasons(seasonsData.seasons || []);
-      } catch {
-        // Failed to load
-      } finally {
-        if (token === reqToken.current) setLoading(false);
-      }
-    }
-    fetchData();
-  }, [id, syncTick]);
 
   // Series summary comes from the live media server — fetch independently so it
   // never blocks the page render when the server is unreachable.
@@ -119,23 +84,11 @@ export default function SeriesDetailPage() {
     };
   }, [id]);
 
-  if (loading) {
-    return (
-      <div className="p-4 sm:p-6 lg:p-8 space-y-4">
-        <Skeleton className="h-8 w-48" />
-        <Skeleton className="h-[400px] w-full rounded-lg" />
-      </div>
-    );
-  }
+  // The page renders with its seasons, as it did when it waited for both in turn.
+  const pending = loading || (item !== null && !seasonList.loaded);
+  if (pending || !item) return <DetailPageStates loading={pending} notFoundLabel="Series not found" />;
 
-  if (!item) {
-    return (
-      <div className="flex items-center justify-center min-h-[50vh]">
-        <p className="text-muted-foreground">Series not found</p>
-      </div>
-    );
-  }
-
+  const seasons = seasonList.items;
   const seriesTitle = item.parentTitle || item.title;
   const totalEpisodes = seasons.reduce((sum, s) => sum + s.episodeCount, 0);
   const totalSize = seasons.reduce((sum, s) => sum + Number(s.totalSize), 0);
@@ -147,30 +100,6 @@ export default function SeriesDetailPage() {
       qualityCounts[label] = (qualityCounts[label] || 0) + count;
     }
   }
-
-  const seasonItems = seasons.map((s) => ({
-    id: s.mediaItemId,
-    title: s.seasonNumber === 0 ? "Specials" : `Season ${s.seasonNumber}`,
-    imageUrl: `/api/media/${s.mediaItemId}/image?type=season`,
-    href: `/library/series/season/${s.mediaItemId}`,
-    subtitle: `${s.episodeCount} episode${s.episodeCount !== 1 ? "s" : ""}`,
-    qualityCounts: s.qualityCounts,
-    episodeCount: s.episodeCount,
-    totalSize: s.totalSize,
-    totalPlayCount: s.totalPlayCount,
-    lastPlayed: s.lastPlayed,
-    addedAt: s.addedAt,
-    servers: s.servers,
-    year: s.year,
-    summary: s.summary,
-    contentRating: s.contentRating,
-    rating: s.rating,
-    ratingImage: s.ratingImage,
-    audienceRating: s.audienceRating,
-    audienceRatingImage: s.audienceRatingImage,
-    genres: s.genres,
-    studio: s.studio,
-  }));
 
   return (
     <MediaDetailHero
@@ -193,22 +122,8 @@ export default function SeriesDetailPage() {
           )}
         </>
       }
-      ratings={
-        <>
-          {item.rating != null && <RatingChip label={getRatingLabel(item.ratingImage, item.library?.mediaServer?.type, "rating", "Critic")} value={item.rating} />}
-          {item.audienceRating != null && <RatingChip label={getRatingLabel(item.audienceRatingImage, item.library?.mediaServer?.type, "audienceRating", "Audience")} value={item.audienceRating} />}
-          {item.userRating != null && <RatingChip label="You" value={item.userRating} />}
-        </>
-      }
-      genres={
-        item.genres && item.genres.length > 0
-          ? item.genres.map((genre) => (
-              <ColorChip key={genre} className="bg-white/10 text-white/80 border-white/20">
-                {genre}
-              </ColorChip>
-            ))
-          : undefined
-      }
+      ratings={<RatingChips item={item} />}
+      genres={genreChips(item.genres)}
       backHref="/library/series"
       backLabel="Series"
       useParentArt
@@ -224,75 +139,60 @@ export default function SeriesDetailPage() {
         <IntegrationsSection itemId={item.id} mediaType="SERIES" />
       </div>
 
-      {seasonItems.length > 0 && (
+      {seasons.length > 0 && (
         <section className="mt-6">
           <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
             Seasons
           </h2>
           <div className="flex flex-wrap gap-3">
-            {seasonItems.map((s) => (
-              <HoverCard key={s.id} openDelay={400} closeDelay={150}>
-                <HoverCardTrigger asChild>
-                  <Link
-                    href={s.href}
-                    className="group w-[110px] sm:w-[130px] lg:w-[150px] rounded-lg transition-transform duration-200 hover:scale-[1.03]"
-                  >
-                    <div
-                      className="relative overflow-hidden rounded-t-lg bg-muted"
-                      style={{ aspectRatio: "2/3" }}
+            {seasons.map((s) => {
+              const title = s.seasonNumber === 0 ? "Specials" : `Season ${s.seasonNumber}`;
+              const imageUrl = `/api/media/${s.mediaItemId}/image?type=season`;
+              return (
+                <HoverCard key={s.mediaItemId} openDelay={400} closeDelay={150}>
+                  <HoverCardTrigger asChild>
+                    <Link
+                      href={`/library/series/season/${s.mediaItemId}`}
+                      className="group w-[110px] sm:w-[130px] lg:w-[150px] rounded-lg transition-transform duration-200 hover:scale-[1.03]"
                     >
-                      <FadeImage
-                        src={s.imageUrl}
-                        alt={s.title}
-                        loading="lazy"
-                        className="absolute inset-0 h-full w-full object-cover group-hover:opacity-80"
-                        onError={(e) => {
-                          (e.target as HTMLImageElement).style.display = "none";
-                        }}
-                      />
-                    </div>
-                    {Object.keys(s.qualityCounts).length > 0 && (
-                      <QualityBar
-                        segments={qualitySegments(qualityChips({ qualityCounts: s.qualityCounts }, "video"), getHex)}
-                        className="px-1 py-0.5 bg-transparent"
-                      />
-                    )}
-                    <p className="mt-1 truncate text-xs font-medium text-foreground px-0.5">
-                      {s.title}
-                    </p>
-                    {s.subtitle && (
-                      <p className="truncate text-[11px] text-muted-foreground px-0.5">
-                        {s.subtitle}
+                      <div
+                        className="relative overflow-hidden rounded-t-lg bg-muted"
+                        style={{ aspectRatio: "2/3" }}
+                      >
+                        <FadeImage
+                          src={imageUrl}
+                          alt={title}
+                          loading="lazy"
+                          className="absolute inset-0 h-full w-full object-cover group-hover:opacity-80"
+                          onError={(e) => {
+                            (e.target as HTMLImageElement).style.display = "none";
+                          }}
+                        />
+                      </div>
+                      {Object.keys(s.qualityCounts).length > 0 && (
+                        <QualityBar
+                          segments={qualitySegments(qualityChips({ qualityCounts: s.qualityCounts }, "video"), getHex)}
+                          className="px-1 py-0.5 bg-transparent"
+                        />
+                      )}
+                      <p className="mt-1 truncate text-xs font-medium text-foreground px-0.5">
+                        {title}
                       </p>
-                    )}
-                  </Link>
-                </HoverCardTrigger>
-                <HoverCardContent side="right" align="start" sideOffset={8} className="w-72 p-0 duration-200">
-                  <MediaHoverPopover
-                    imageUrl={s.imageUrl}
-                    data={{
-                      title: s.title,
-                      year: s.year,
-                      summary: s.summary,
-                      contentRating: s.contentRating,
-                      rating: s.rating,
-                      ratingImage: s.ratingImage,
-                      audienceRating: s.audienceRating,
-                      audienceRatingImage: s.audienceRatingImage,
-                      genres: s.genres,
-                      studio: s.studio,
-                      episodeCount: s.episodeCount,
-                      qualityCounts: s.qualityCounts,
-                      fileSize: s.totalSize,
-                      playCount: s.totalPlayCount,
-                      lastPlayedAt: s.lastPlayed,
-                      addedAt: s.addedAt,
-                      servers: s.servers,
-                    }}
-                  />
-                </HoverCardContent>
-              </HoverCard>
-            ))}
+                      <p className="truncate text-[11px] text-muted-foreground px-0.5">
+                        {`${s.episodeCount} episode${s.episodeCount !== 1 ? "s" : ""}`}
+                      </p>
+                    </Link>
+                  </HoverCardTrigger>
+                  <HoverCardContent side="right" align="start" sideOffset={8} className="w-72 p-0 duration-200">
+                    {/* Named as the tile is: the show is the page's own heading. */}
+                    <MediaHoverPopover
+                      imageUrl={imageUrl}
+                      data={hoverDataFromSeriesGroup({ ...s, parentTitle: seriesTitle }, { title })}
+                    />
+                  </HoverCardContent>
+                </HoverCard>
+              );
+            })}
           </div>
         </section>
       )}
