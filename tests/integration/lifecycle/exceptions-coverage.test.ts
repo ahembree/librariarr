@@ -22,10 +22,20 @@ vi.mock("@/lib/logger", () => ({
   apiLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   dbLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
-const mockRemoveItemFromCollections = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const mockRemoveItemsFromCollections = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock("@/lib/lifecycle/collections", () => ({
-  removeItemFromCollections: mockRemoveItemFromCollections,
+  removeItemsFromCollections: mockRemoveItemsFromCollections,
 }));
+
+/** Every removal the route asked for, as `[userId, ...entry]` like the old one-at-a-time calls. */
+function removalCalls(): unknown[][] {
+  return (mockRemoveItemsFromCollections.mock.calls as Array<[
+    string,
+    Array<{ type: string; collectionName: string; itemRatingKey: string; seriesTitle: string | null; libraryId?: string }>,
+  ]>).flatMap(([userId, removals]) =>
+    removals.map((r) => [userId, r.type, r.collectionName, r.itemRatingKey, r.seriesTitle, r.libraryId]),
+  );
+}
 
 import { POST, DELETE as BULK_DELETE, PATCH as BULK_PATCH } from "@/app/api/lifecycle/exceptions/route";
 
@@ -129,9 +139,14 @@ describe("POST /api/lifecycle/exceptions — bulk scopes", () => {
     expect(await prisma.lifecycleAction.count({ where: { status: "PENDING" } })).toBe(0);
     // The kept copy in its own library, and the listed copy in ITS library; the
     // malformed copy entry is skipped. Music is never removed by series title.
-    expect(mockRemoveItemFromCollections).toHaveBeenCalledWith(user.id, "MUSIC", "Leaving", rep.ratingKey, null, lib.id);
-    expect(mockRemoveItemFromCollections).toHaveBeenCalledWith(user.id, "MUSIC", "Leaving", "rk-other", null, "lib-other");
-    expect(mockRemoveItemFromCollections).toHaveBeenCalledTimes(2);
+    expect(mockRemoveItemsFromCollections).toHaveBeenCalledTimes(1);
+    expect(removalCalls()).toEqual(
+      expect.arrayContaining([
+        [user.id, "MUSIC", "Leaving", rep.ratingKey, null, lib.id],
+        [user.id, "MUSIC", "Leaving", "rk-other", null, "lib-other"],
+      ]),
+    );
+    expect(removalCalls()).toHaveLength(2);
   });
 
   it("does not fail the exclusion when collection removal throws", async () => {
@@ -141,14 +156,13 @@ describe("POST /api/lifecycle/exceptions — bulk scopes", () => {
     const collection = await createTestCollection(user.id, { name: "Leaving", type: "SERIES" });
     const ruleSet = await createTestRuleSet(user.id, { type: "SERIES", seriesScope: true, collectionId: collection.id });
     await createTestRuleMatch(ruleSet.id, ep.id, { title: "Lost" });
-    mockRemoveItemFromCollections.mockRejectedValueOnce(new Error("plex down"));
+    mockRemoveItemsFromCollections.mockRejectedValueOnce(new Error("plex down"));
     setMockSession({ isLoggedIn: true, userId: user.id });
 
     expect(await expectJson(await post({ mediaItemId: ep.id, scope: "series" }), 201)).toEqual({ count: 1, scope: "series" });
 
     // Series scope resolves the show by its title.
-    expect(mockRemoveItemFromCollections).toHaveBeenCalledWith(user.id, "SERIES", "Leaving", ep.ratingKey, "Lost", lib.id);
-    expect(mockRemoveItemFromCollections).toHaveBeenCalledTimes(1);
+    expect(removalCalls()).toEqual([[user.id, "SERIES", "Leaving", ep.ratingKey, "Lost", lib.id]]);
     expect(await prisma.lifecycleException.count()).toBe(1);
     expect(await prisma.ruleMatch.count({ where: { ruleSetId: ruleSet.id } })).toBe(0);
   });

@@ -66,6 +66,7 @@ vi.mock("@/lib/lifecycle/collections", () => ({
   syncCollectionById: vi.fn(),
   syncAllCollections: vi.fn(),
   removeItemFromCollections: vi.fn(),
+  removeItemsFromCollections: vi.fn(),
 }));
 
 import * as v1Execute from "@/app/api/v1/lifecycle/actions/execute/route";

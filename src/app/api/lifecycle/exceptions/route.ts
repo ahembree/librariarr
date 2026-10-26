@@ -7,7 +7,8 @@ import {
   exceptionBulkDeleteSchema,
   exceptionBulkUpdateSchema,
 } from "@/lib/validation";
-import { removeItemFromCollections } from "@/lib/lifecycle/collections";
+import { removeItemsFromCollections, type CollectionRemoval } from "@/lib/lifecycle/collections";
+import { jsonResponse } from "@/lib/api/json-response";
 import { protectionKeys, isGroupProtected } from "@/lib/lifecycle/exception-guard";
 import { artistMbidOf } from "@/lib/media/artist-key";
 import type { Prisma } from "@/generated/prisma/client";
@@ -27,12 +28,20 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const where: Record<string, unknown> = {
+  const where: Prisma.LifecycleExceptionWhereInput = {
     userId: session.userId,
+    ...(type && type !== "ALL" ? { mediaItem: { type: type as "MOVIE" | "SERIES" | "MUSIC" } } : {}),
   };
 
-  if (type && type !== "ALL") {
-    where.mediaItem = { type };
+  // Which items are excepted, and nothing else — what the Matches, Pending and
+  // rule editor pages mark their rows with.
+  if (isTruthyFlag(searchParams.get("idsOnly"))) {
+    const rows = await prisma.lifecycleException.findMany({
+      where,
+      select: { mediaItemId: true },
+      orderBy: [{ createdAt: "desc" }, { id: "asc" }],
+    });
+    return jsonResponse(request, { mediaItemIds: rows.map((r) => r.mediaItemId) });
   }
 
   const exceptions = await prisma.lifecycleException.findMany({
@@ -50,6 +59,7 @@ export async function GET(request: NextRequest) {
           type: true,
           year: true,
           thumbUrl: true,
+          // The Exceptions page's hover popover renders it.
           summary: true,
           contentRating: true,
           rating: true,
@@ -69,33 +79,44 @@ export async function GET(request: NextRequest) {
           episodeNumber: true,
           lastPlayedAt: true,
           addedAt: true,
-          library: {
-            select: {
-              mediaServer: {
-                select: {
-                  id: true,
-                  name: true,
-                  type: true,
-                },
-              },
-            },
-          },
+          libraryId: true,
         },
       },
     },
-    orderBy: { createdAt: "desc" },
+    orderBy: [{ createdAt: "desc" }, { id: "asc" }],
   });
 
-  // Serialize BigInt fileSize to string for JSON compatibility
-  const serialized = exceptions.map((e) => ({
-    ...e,
-    mediaItem: {
-      ...e.mediaItem,
-      fileSize: e.mediaItem.fileSize?.toString() ?? null,
-    },
-  }));
+  // Each row's server, from one lookup of the handful of libraries the rows
+  // sit in rather than a library → server relation read per row.
+  const libraryIds = [...new Set(exceptions.map((e) => e.mediaItem.libraryId))];
+  const libraries =
+    libraryIds.length > 0
+      ? await prisma.library.findMany({
+          where: { id: { in: libraryIds } },
+          select: { id: true, mediaServer: { select: { id: true, name: true, type: true } } },
+        })
+      : [];
+  const serverByLibrary = new Map(libraries.map((l) => [l.id, l.mediaServer]));
 
-  return NextResponse.json({ exceptions: serialized });
+  // Serialize BigInt fileSize to string for JSON compatibility
+  const serialized = exceptions.map((e) => {
+    const { libraryId, ...mediaItem } = e.mediaItem;
+    return {
+      ...e,
+      mediaItem: {
+        ...mediaItem,
+        fileSize: mediaItem.fileSize?.toString() ?? null,
+        library: { mediaServer: serverByLibrary.get(libraryId) ?? null },
+      },
+    };
+  });
+
+  return jsonResponse(request, { exceptions: serialized });
+}
+
+/** `?idsOnly=1` / `?idsOnly=true`. */
+function isTruthyFlag(value: string | null): boolean {
+  return value === "1" || value === "true";
 }
 
 export async function POST(request: NextRequest) {
@@ -311,10 +332,10 @@ async function disarmExcludedItems(userId: string, items: ExcludedItem[]): Promi
       ],
     },
     select: {
+      id: true,
       ruleSetId: true,
       mediaItemId: true,
-      itemData: true,
-      mediaItem: { select: { parentTitle: true, seriesKey: true, externalIds: { where: { source: "MUSICBRAINZ" }, select: { source: true, externalId: true } } } },
+      mediaItem:{ select: { parentTitle: true, seriesKey: true, externalIds: { where: { source: "MUSICBRAINZ" }, select: { source: true, externalId: true } } } },
       ruleSet: {
         select: {
           type: true,
@@ -341,6 +362,18 @@ async function disarmExcludedItems(userId: string, items: ExcludedItem[]): Promi
   const matches = [...candidates.filter((m) => affected.has(m.mediaItemId)), ...groupHits];
   const pairs = groupHits.map((m) => ({ ruleSetId: m.ruleSetId, mediaItemId: m.mediaItemId }));
 
+  // The copies each collection-fed match lists, read (only for those, and only
+  // that path of the snapshot) before the matches go.
+  const withCollection = matches.filter((m) => m.ruleSet.collection);
+  const copiesByMatch = new Map<string, unknown>();
+  if (withCollection.length > 0) {
+    const rows = await prisma.$queryRawUnsafe<Array<{ id: string; copies: unknown }>>(
+      `SELECT id, "itemData"->'copies' AS copies FROM "RuleMatch" WHERE id = ANY($1)`,
+      withCollection.map((m) => m.id),
+    );
+    for (const row of rows) copiesByMatch.set(row.id, row.copies);
+  }
+
   await prisma.ruleMatch.deleteMany({
     where: { ruleSet: { userId }, OR: [{ mediaItemId: { in: [...affected] } }, ...pairs] },
   });
@@ -350,19 +383,20 @@ async function disarmExcludedItems(userId: string, items: ExcludedItem[]): Promi
 
   // Take each match's items out of its Plex collection: the kept copy and the
   // copies it listed — each from its OWN library, since a rating key only
-  // identifies an item within one server.
-  const withCollection = matches.filter((m) => m.ruleSet.collection);
+  // identifies an item within one server. One batch, so each library's
+  // collections and each collection's members are read once, not per entry.
   if (withCollection.length === 0) return;
   const reps = await prisma.mediaItem.findMany({
     where: { id: { in: withCollection.map((m) => m.mediaItemId) } },
     select: { id: true, ratingKey: true, libraryId: true, title: true, parentTitle: true },
   });
   const repById = new Map(reps.map((r) => [r.id, r]));
+  const removals = new Map<string, CollectionRemoval>();
   for (const match of withCollection) {
     const rep = repById.get(match.mediaItemId);
-    const data = match.itemData as Record<string, unknown> | null;
-    const copies = Array.isArray(data?.copies)
-      ? (data.copies as Array<{ libraryId?: unknown; ratingKey?: unknown; title?: unknown; parentTitle?: unknown }>)
+    const listed = copiesByMatch.get(match.id);
+    const copies = Array.isArray(listed)
+      ? (listed as Array<{ libraryId?: unknown; ratingKey?: unknown; title?: unknown; parentTitle?: unknown }>)
       : [];
     const entries = [
       ...(rep ? [rep] : []),
@@ -377,17 +411,21 @@ async function disarmExcludedItems(userId: string, items: ExcludedItem[]): Promi
     ];
     const { type, collection, seriesScope } = match.ruleSet;
     for (const entry of entries) {
-      await removeItemFromCollections(
-        userId,
+      const removal: CollectionRemoval = {
         type,
-        collection!.name,
-        entry.ratingKey,
-        seriesScope && type === "SERIES" ? (entry.parentTitle ?? entry.title) : null,
-        entry.libraryId,
-      ).catch(() => {
-        // Collection removal is best-effort; don't fail the exclusion
-      });
+        collectionName: collection!.name,
+        itemRatingKey: entry.ratingKey,
+        seriesTitle: seriesScope && type === "SERIES" ? (entry.parentTitle ?? entry.title) : null,
+        libraryId: entry.libraryId,
+      };
+      const key = [removal.type, removal.collectionName, removal.itemRatingKey, removal.seriesTitle, removal.libraryId].join("\u0000");
+      removals.set(key, removal);
     }
+  }
+  try {
+    await removeItemsFromCollections(userId, [...removals.values()]);
+  } catch {
+    // Collection removal is best-effort; don't fail the exclusion
   }
 }
 
