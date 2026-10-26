@@ -1199,3 +1199,46 @@ export const aiChatSchema = z.object({
  * here: each of the four routes carried its own.
  */
 export const TIME_REGEX = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+/** Most cards one `POST /api/media/stats/custom-batch` answers. */
+export const MAX_CUSTOM_STATS_BATCH = 50;
+
+const statsServerIdSchema = z.string().min(1).max(200).optional();
+const statsDimensionSchema = z.string().min(1).max(64);
+
+/**
+ * One custom dashboard card's data request, as the card sends it to the route
+ * named by `kind` (`timeline`, `crossTab`, `custom`). Only the shape is
+ * checked here; what each value may be is that route's own check, so a card
+ * the route refuses comes back as that route's 400.
+ */
+const customStatsCardRequestSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("timeline"),
+    dateField: statsDimensionSchema,
+    bin: z.string().max(16).optional(),
+    measure: z.string().max(16).optional(),
+    breakdown: statsDimensionSchema.optional(),
+    topN: z.number().int().min(0).max(10_000).nullable().optional(),
+    type: z.string().max(16).optional(),
+    serverId: statsServerIdSchema,
+  }),
+  z.object({
+    kind: z.literal("crossTab"),
+    dimension1: statsDimensionSchema,
+    dimension2: statsDimensionSchema,
+    serverId: statsServerIdSchema,
+  }),
+  z.object({
+    kind: z.literal("custom"),
+    dimension: statsDimensionSchema,
+    serverId: statsServerIdSchema,
+  }),
+]);
+
+export type CustomStatsCardRequest = z.infer<typeof customStatsCardRequestSchema>;
+
+/** The custom dashboard cards' data requests, answered together. */
+export const customStatsBatchSchema = z.object({
+  cards: z.array(customStatsCardRequestSchema).min(1).max(MAX_CUSTOM_STATS_BATCH),
+});
