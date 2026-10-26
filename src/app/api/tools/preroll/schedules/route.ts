@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { validateRequest, prerollScheduleCreateSchema, TIME_REGEX } from "@/lib/validation";
 import { checkConflict } from "@/lib/preroll/schedule-conflict";
@@ -65,12 +65,7 @@ function validateScheduleInput(body: ScheduleInput) {
   return null;
 }
 
-export async function POST(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const POST = withSession(async (session, request: NextRequest) => {
   const { data, error } = await validateRequest(request, prerollScheduleCreateSchema);
   if (error) return error;
   const body = data as ScheduleInput;
@@ -83,7 +78,7 @@ export async function POST(request: NextRequest) {
   // a disabled one never plays, and enabling it later is checked then.
   if (body.enabled !== false) {
     const existingSchedules = await prisma.prerollSchedule.findMany({
-      where: { userId: session.userId! },
+      where: { userId: session.userId },
     });
 
     const conflict = checkConflict(body, existingSchedules);
@@ -103,7 +98,7 @@ export async function POST(request: NextRequest) {
 
   const schedule = await prisma.prerollSchedule.create({
     data: {
-      userId: session.userId!,
+      userId: session.userId,
       name: body.name!.trim(),
       prerollPath: body.prerollPath!.trim(),
       scheduleType: body.scheduleType!,
@@ -118,4 +113,4 @@ export async function POST(request: NextRequest) {
   });
 
   return NextResponse.json({ schedule }, { status: 201 });
-}
+});

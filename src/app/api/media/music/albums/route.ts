@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { jsonResponse } from "@/lib/api/json-response";
 import { prisma } from "@/lib/db";
 import type { Prisma } from "@/generated/prisma/client";
@@ -10,12 +10,7 @@ import { resolveServerFilter } from "@/lib/dedup/server-filter";
 import { loadDetailScope } from "@/lib/api/detail-scope";
 import { loadMissingSummaries } from "@/lib/media/group-summaries";
 
-export async function GET(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async (session, request: NextRequest) => {
   const { searchParams } = new URL(request.url);
   // `itemId` names the artist page's record instead of its artist: the artist
   // is read here (`loadDetailScope`), so the page need not wait for the record.
@@ -24,7 +19,7 @@ export async function GET(request: NextRequest) {
   const serverId = searchParams.get("serverId");
 
   if (itemId) {
-    const scope = await loadDetailScope(session.userId!, itemId, "MUSIC");
+    const scope = await loadDetailScope(session.userId, itemId, "MUSIC");
     if (!scope) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
@@ -36,7 +31,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "parentTitle is required" }, { status: 400 });
   }
 
-  const sf = await resolveServerFilter(session.userId!, serverId, "MUSIC");
+  const sf = await resolveServerFilter(session.userId, serverId, "MUSIC");
   if (!sf) {
     return NextResponse.json({ albums: [] });
   }
@@ -248,4 +243,4 @@ export async function GET(request: NextRequest) {
     .sort((a, b) => a.albumTitle.localeCompare(b.albumTitle));
 
   return jsonResponse(request, { albums });
-}
+});

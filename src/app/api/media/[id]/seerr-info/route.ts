@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { SeerrClient, type SeerrMediaInfo, type SeerrRequest } from "@/lib/seerr/seerr-client";
 import { walkSeerrRequests } from "@/lib/seerr/request-walk";
@@ -86,15 +86,11 @@ function pickMediaStatus(media: SeerrMediaInfo | null | undefined, requests: See
 // the bound is looser than the health check's 5s.
 const PER_INSTANCE_TIMEOUT_MS = 10_000;
 
-export async function GET(
+export const GET = withSession(async (
+  session,
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+) => {
   const { id } = await params;
 
   const item = await prisma.mediaItem.findFirst({
@@ -126,7 +122,7 @@ export async function GET(
   const externalId = item.type === "MOVIE" ? tmdbId! : (tvdbId ?? tmdbId)!;
 
   const seerrInstances = await prisma.seerrInstance.findMany({
-    where: { userId: session.userId!, enabled: true },
+    where: { userId: session.userId, enabled: true },
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
   });
 
@@ -203,4 +199,4 @@ export async function GET(
   const matches = settled.filter((m): m is SeerrMatch => m !== null);
 
   return NextResponse.json({ matches });
-}
+});

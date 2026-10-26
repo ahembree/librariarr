@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import bcrypt from "bcryptjs";
 import { apiLogger } from "@/lib/logger";
 import { validateRequest, changePasswordSchema } from "@/lib/validation";
@@ -14,12 +14,7 @@ import { reauthRequired } from "@/lib/auth/reauth";
 import { isPasswordSignInEnabled } from "@/lib/auth/password-sign-in";
 import { announceDisplaySettingsChanged } from "@/lib/settings/display-settings-events";
 
-export async function POST(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn || !session.userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const POST = withSession(async (session, request: NextRequest) => {
   try {
     const { data, error } = await validateRequest(request, changePasswordSchema);
     if (error) return error;
@@ -80,14 +75,14 @@ export async function POST(request: NextRequest) {
       // Password sign-in is off, so the current password proves nothing. Any
       // credential change still needs proof, as it does with the password on:
       // a recent sign-in by another method.
-      return reauthRequired(session.userId!, "Changing your local credentials");
+      return reauthRequired(session.userId, "Changing your local credentials");
     } else if (hasNewPassword && !hasRecentLogin(session)) {
       // There is no current password to confirm, and a first password is a
       // lasting way in that outlives this session (see recent-login.ts): a
       // stolen cookie must not be able to set one, nor use it to get past the
       // API-key step-up, which accepts the password in place of a recent
       // sign-in.
-      return reauthRequired(session.userId!, "Setting a password");
+      return reauthRequired(session.userId, "Setting a password");
     }
 
     if (hasNewUsername) {
@@ -146,4 +141,4 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   }
-}
+});

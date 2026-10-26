@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { createMediaServerClient } from "@/lib/media-server/factory";
 import { apiLogger } from "@/lib/logger";
@@ -20,15 +20,11 @@ import {
 const IMAGE_META_TTL = 5 * 60 * 1000; // 5 minutes
 const IMAGE_FAIL_TTL = 60 * 1000; // negative cache for fetch failures
 
-export async function GET(
+export const GET = withSession(async (
+  session,
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+) => {
   const { id } = await params;
   const { searchParams } = new URL(request.url);
   const type = searchParams.get("type");
@@ -168,4 +164,4 @@ export async function GET(
       { status: 502 }
     );
   }
-}
+});

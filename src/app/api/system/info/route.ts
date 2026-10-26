@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { checkForUpdate } from "@/lib/version/update-checker";
 
@@ -23,12 +23,7 @@ async function readLatestMigration(): Promise<string> {
   return migrations[0]?.migration_name ?? "N/A (db push)";
 }
 
-export async function GET(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async (session, request: NextRequest) => {
   const appVersion = process.env.NEXT_PUBLIC_APP_VERSION ?? "unknown";
 
   // `updateCheck=false` leaves out the GitHub release lookup: the Settings page
@@ -58,4 +53,4 @@ export async function GET(request: NextRequest) {
     stats: { mediaItems, enabledLibraries, totalLibraries, servers },
     updateInfo,
   });
-}
+});

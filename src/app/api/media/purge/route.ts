@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { apiLogger } from "@/lib/logger";
 import { invalidateMediaCaches } from "@/lib/cache/invalidate";
@@ -10,12 +10,7 @@ import {
 } from "@/lib/media/watch-evidence";
 import { eventBus } from "@/lib/events/event-bus";
 
-export async function DELETE(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const DELETE = withSession(async (session, request: NextRequest) => {
   const { searchParams } = request.nextUrl;
   const libraryId = searchParams.get("libraryId");
   const type = searchParams.get("type");
@@ -54,7 +49,7 @@ export async function DELETE(request: NextRequest) {
     // Recompute canonical so surviving duplicates on other servers don't stay
     // non-canonical (and therefore vanish from multi-server listings) when the
     // purged library held the canonical copy.
-    await recomputeCanonical(session.userId!);
+    await recomputeCanonical(session.userId);
     invalidateMediaCaches();
 
     apiLogger.info(
@@ -68,7 +63,7 @@ export async function DELETE(request: NextRequest) {
     // is the event the 16 library subscribers already refetch on.
     eventBus.emit({
       type: "sync:completed",
-      userId: session.userId!,
+      userId: session.userId,
       meta: { purged: result.count },
     });
 
@@ -120,7 +115,7 @@ export async function DELETE(request: NextRequest) {
     ),
   ]);
 
-  await recomputeCanonical(session.userId!);
+  await recomputeCanonical(session.userId);
   invalidateMediaCaches();
 
   apiLogger.info(
@@ -134,9 +129,9 @@ export async function DELETE(request: NextRequest) {
   // is the event the 16 library subscribers already refetch on.
   eventBus.emit({
     type: "sync:completed",
-    userId: session.userId!,
+    userId: session.userId,
     meta: { purged: result.count },
   });
 
   return NextResponse.json({ deleted: result.count });
-}
+});

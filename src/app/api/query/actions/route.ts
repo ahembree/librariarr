@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { executeQuery } from "@/lib/query/query-engine";
@@ -64,12 +64,8 @@ async function typeForArrInstance(arrInstanceId: string, userId: string): Promis
   return found ? ARR_TYPE_FOR_FAMILY[found.family] : null;
 }
 
-export async function POST(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-  const userId = session.userId!;
+export const POST = withSession(async (session, request: NextRequest) => {
+  const userId = session.userId;
 
   const { data, error } = await validateRequest(request, queryActionSchema);
   if (error) return error;
@@ -633,11 +629,11 @@ export async function POST(request: NextRequest) {
     if (executed > 0 || failed > 0) {
       eventBus.emit({
         type: "lifecycle:action-executed",
-        userId: session.userId!,
+        userId: session.userId,
         meta: { executed, failed, source: "query" },
       });
     }
 
     return { executed, failed, skipped, errors };
   }
-}
+});

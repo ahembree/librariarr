@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import {
   runDetection,
@@ -93,12 +93,7 @@ async function explainSkip(
   return evaluability.evaluable ? null : evaluability.reason;
 }
 
-export async function POST(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const POST = withSession(async (session, request: NextRequest) => {
   const { data, error } = await validateRequest(request, ruleRunSchema);
   if (error) return error;
 
@@ -108,7 +103,7 @@ export async function POST(request: NextRequest) {
   // instance IS configured; without this "Re-evaluate All" answered as if every
   // rule set had been evaluated.
   const failures: DetectionFailure[] = [];
-  const results = await runDetection(session.userId!, data.ruleSetId, data.fullReEval ?? false, failures);
+  const results = await runDetection(session.userId, data.ruleSetId, data.fullReEval ?? false, failures);
 
   // Immediately schedule/cancel actions instead of waiting for next scheduler cycle
   if (data.processActions) {
@@ -144,7 +139,7 @@ export async function POST(request: NextRequest) {
 
   // Sync Plex collections last, so ACTION_DATE ordering reflects any actions
   // just scheduled above.
-  await syncCollectionsAfterDetection(session.userId!, data.ruleSetId, results);
+  await syncCollectionsAfterDetection(session.userId, data.ruleSetId, results);
 
   // Same event the scheduled processor emits. Without it, a detection run the
   // user triggered by hand updated nothing outside the calling component,
@@ -152,7 +147,7 @@ export async function POST(request: NextRequest) {
   // dashboard — the opposite of what anyone expects from pressing a button.
   eventBus.emit({
     type: "lifecycle:detection-completed",
-    userId: session.userId!,
+    userId: session.userId,
     meta: { ruleSetId: data.ruleSetId ?? null, manual: true },
   });
 
@@ -169,7 +164,7 @@ export async function POST(request: NextRequest) {
       name: f.name,
       reason: sanitizeErrorDetail(f.reason) ?? "Detection failed.",
     })),
-    ...(await explainSkippedRuleSets(session.userId!, data.ruleSetId, evaluatedIds)),
+    ...(await explainSkippedRuleSets(session.userId, data.ruleSetId, evaluatedIds)),
   ];
 
   // Each evaluated rule set and how many items it matched — not the matched
@@ -181,4 +176,4 @@ export async function POST(request: NextRequest) {
     ruleMatches: results.map(({ ruleSet, count }) => ({ ruleSet, count })),
     skipped,
   });
-}
+});

@@ -1,16 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { clampSkip } from "@/lib/api/pagination";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { escapeLike } from "@/lib/filters/escape-like";
 import type { Prisma } from "@/generated/prisma/client";
 
-export async function GET(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async (session, request: NextRequest) => {
   const searchParams = request.nextUrl.searchParams;
   const level = searchParams.get("level");
   const source = searchParams.get("source");
@@ -86,4 +81,4 @@ export async function GET(request: NextRequest) {
     pages: Math.ceil(total / limit),
     hasMore: skip + logs.length < total,
   });
-}
+});

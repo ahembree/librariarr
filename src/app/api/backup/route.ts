@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { createBackup, getBackupPassphrase, listBackups } from "@/lib/backup/backup-service";
 import { validateRequest, backupCreateSchema } from "@/lib/validation";
 import { sanitizeErrorDetail } from "@/lib/api/sanitize";
@@ -7,29 +7,19 @@ import { apiLogger } from "@/lib/logger";
 import { hasRecentLogin } from "@/lib/auth/recent-login";
 import { reauthRequired } from "@/lib/auth/reauth";
 
-export async function GET() {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async () => {
   const backups = await listBackups();
   return NextResponse.json({ backups });
-}
+});
 
-export async function POST(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const POST = withSession(async (session, request: NextRequest) => {
   // A backup holds every credential the instance stores — the Plex token
   // among them — and `passphrase` lets the caller choose the key it is
   // encrypted with. Signing in with that Plex token stamps a fresh
   // `authenticatedAt`, so a stolen cookie that could make and download a
   // backup could also pass every recent-login check (see recent-login.ts).
   if (!hasRecentLogin(session)) {
-    return reauthRequired(session.userId!, "Creating a backup");
+    return reauthRequired(session.userId, "Creating a backup");
   }
 
   const { data, error } = await validateRequest(request, backupCreateSchema);
@@ -54,4 +44,4 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   }
-}
+});

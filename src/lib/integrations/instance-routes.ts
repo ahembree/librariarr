@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { z } from "zod/v4";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import type { Prisma } from "@/generated/prisma/client";
 import { appCache } from "@/lib/cache/memory-cache";
@@ -49,10 +49,11 @@ import {
  *   test's error through `sanitizeErrorDetail`;
  * - the External URL is validated by `externalLinkUrlSchema` in the schemas.
  *
- * Each builder declares its handlers as named `async function`s on purpose:
- * `tests/unit/auth/reauth-callers.test.ts` finds the routes that can answer
- * `reauth_required` by reading the guard call in each method's body, and
- * follows a route file's `export const { … } = builder(…)` into the builder.
+ * Each builder declares its handlers as `const METHOD = withSession(…)` on
+ * purpose: `tests/unit/auth/reauth-callers.test.ts` finds the routes that can
+ * answer `reauth_required` by reading the guard call in each method's body,
+ * and follows a route file's `export const { … } = builder(…)` into the
+ * builder.
  */
 
 export type IntegrationType = "radarr" | "sonarr" | "lidarr" | "seerr" | "tracearr";
@@ -204,7 +205,6 @@ function newApiKey(apiKey: string | undefined): string | undefined {
   return apiKey === undefined || apiKey === "" || apiKey === MASKED_VALUE ? undefined : apiKey;
 }
 
-const unauthorized = () => NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 const failedToConnect = (config: IntegrationConfig, result: ConnectionResult) =>
   NextResponse.json(
     { error: `Failed to connect to ${config.label}`, detail: sanitizeErrorDetail(result.error) },
@@ -240,19 +240,14 @@ function instanceChanged(config: IntegrationConfig, id: string): void {
 
 /** `GET` (the user's instances) and `POST` (add one, after a passing test). */
 export function instanceCollectionRoutes(config: IntegrationConfig) {
-  // The request is optional: the settings bundle runs this handler with no
+  // Reads no request: the settings bundle runs this handler with no
   // arguments, as it runs every bundled one.
-  async function GET(_request?: NextRequest) {
-    const session = await getSession();
-    if (!session.isLoggedIn) return unauthorized();
-    const instances = await listInstances(config, session.userId!);
+  const GET = withSession(async (session) => {
+    const instances = await listInstances(config, session.userId);
     return NextResponse.json({ instances: sanitize(instances) });
-  }
+  });
 
-  async function POST(request: NextRequest) {
-    const session = await getSession();
-    if (!session.isLoggedIn) return unauthorized();
-
+  const POST = withSession(async (session, request: NextRequest) => {
     const { data, error } = await validateRequest(request, config.createSchema);
     if (error) return error;
     const { name, url, apiKey, externalUrl } = data;
@@ -262,7 +257,7 @@ export function instanceCollectionRoutes(config: IntegrationConfig) {
 
     const instance = await delegateOf(config).create({
       data: {
-        userId: session.userId!,
+        userId: session.userId,
         name,
         url: withoutTrailingSlash(url),
         apiKey,
@@ -272,17 +267,14 @@ export function instanceCollectionRoutes(config: IntegrationConfig) {
     config.afterChange?.();
 
     return NextResponse.json({ instance: sanitize(instance) }, { status: 201 });
-  }
+  });
 
   return { GET, POST };
 }
 
 /** `PUT` (edit, re-testing a changed connection) and `DELETE` for one instance. */
 export function instanceItemRoutes(config: IntegrationConfig) {
-  async function PUT(request: NextRequest, { params }: RouteContext) {
-    const session = await getSession();
-    if (!session.isLoggedIn) return unauthorized();
-
+  const PUT = withSession(async (session, request: NextRequest, { params }: RouteContext) => {
     const { id } = await params;
 
     const { data, error } = await validateRequest(request, config.updateSchema);
@@ -290,7 +282,7 @@ export function instanceItemRoutes(config: IntegrationConfig) {
     const { name, url, externalUrl, enabled } = data;
     const apiKey = newApiKey(data.apiKey);
 
-    const existing = await delegateOf(config).findFirst({ where: { id, userId: session.userId! } });
+    const existing = await delegateOf(config).findFirst({ where: { id, userId: session.userId } });
     if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
     const refused = await refuseStoredKeyToNewUrl(session, existing.url, url, apiKey, config.label);
@@ -320,20 +312,17 @@ export function instanceItemRoutes(config: IntegrationConfig) {
     instanceChanged(config, id);
 
     return NextResponse.json({ instance: sanitize(instance) });
-  }
+  });
 
-  async function DELETE(_request: NextRequest, { params }: RouteContext) {
-    const session = await getSession();
-    if (!session.isLoggedIn) return unauthorized();
-
+  const DELETE = withSession(async (session, _request: NextRequest, { params }: RouteContext) => {
     const { id } = await params;
 
-    const existing = await delegateOf(config).findFirst({ where: { id, userId: session.userId! } });
+    const existing = await delegateOf(config).findFirst({ where: { id, userId: session.userId } });
     if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
     if (config.detachOnDelete) {
       await prisma.$transaction(async (tx) => {
-        await detachDeletedArrInstance(tx, session.userId!, id, config.label);
+        await detachDeletedArrInstance(tx, session.userId, id, config.label);
         await delegateOf(config, tx).delete({ where: { id } });
       });
     } else {
@@ -342,23 +331,20 @@ export function instanceItemRoutes(config: IntegrationConfig) {
     instanceChanged(config, id);
 
     return NextResponse.json({ success: true });
-  }
+  });
 
   return { PUT, DELETE };
 }
 
 /** `POST [id]/test-connection`: re-test a saved instance, optionally at a new URL or key. */
 export function instanceTestConnectionRoutes(config: IntegrationConfig) {
-  async function POST(request: NextRequest, { params }: RouteContext) {
-    const session = await getSession();
-    if (!session.isLoggedIn) return unauthorized();
-
+  const POST = withSession(async (session, request: NextRequest, { params }: RouteContext) => {
     const { id } = await params;
     const { data, error } = await validateRequest(request, arrTestConnectionSchema);
     if (error) return error;
     const apiKey = newApiKey(data.apiKey);
 
-    const existing = await delegateOf(config).findFirst({ where: { id, userId: session.userId! } });
+    const existing = await delegateOf(config).findFirst({ where: { id, userId: session.userId } });
     if (!existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
     const refused = await refuseStoredKeyToNewUrl(session, existing.url, data.url, apiKey, config.label);
@@ -366,22 +352,19 @@ export function instanceTestConnectionRoutes(config: IntegrationConfig) {
 
     const result = await config.client(data.url ?? existing.url, apiKey ?? existing.apiKey).testConnection();
     return testResponse(result);
-  }
+  });
 
   return { POST };
 }
 
 /** `POST test`: test an unsaved URL and key (the add form). */
 export function instanceTestRoutes(config: IntegrationConfig) {
-  async function POST(request: NextRequest) {
-    const session = await getSession();
-    if (!session.isLoggedIn) return unauthorized();
-
+  const POST = withSession(async (session, request: NextRequest) => {
     const { data, error } = await validateRequest(request, arrTestSchema);
     if (error) return error;
 
     return testResponse(await config.client(data.url, data.apiKey).testConnection());
-  }
+  });
 
   return { POST };
 }
@@ -395,10 +378,7 @@ interface RecycleBinClient extends ConnectionClient {
  * recycle bin. `arrUrl` is the browser-facing base the rule editor links to.
  */
 export function instanceRecycleBinRoutes(config: IntegrationConfig<RecycleBinClient>) {
-  async function GET(_request: NextRequest, { params }: RouteContext) {
-    const session = await getSession();
-    if (!session.isLoggedIn) return unauthorized();
-
+  const GET = withSession(async (session, _request: NextRequest, { params }: RouteContext) => {
     const { id } = await params;
     const instance = await delegateOf(config).findFirst({ where: { id, userId: session.userId } });
     if (!instance) return NextResponse.json({ error: "Instance not found" }, { status: 404 });
@@ -418,7 +398,7 @@ export function instanceRecycleBinRoutes(config: IntegrationConfig<RecycleBinCli
       const raw = error instanceof Error ? error.message : fallback;
       return NextResponse.json({ enabled: null, error: sanitizeErrorDetail(raw) ?? fallback, arrUrl });
     }
-  }
+  });
 
   return { GET };
 }
@@ -474,10 +454,7 @@ export function instanceMetadataRoutes<C extends ConnectionClient>(
   config: IntegrationConfig<C>,
   load: (client: C, instance: InstanceRow) => Promise<Record<string, unknown>>,
 ) {
-  async function GET(request: NextRequest, { params }: RouteContext) {
-    const session = await getSession();
-    if (!session.isLoggedIn) return unauthorized();
-
+  const GET = withSession(async (session, request: NextRequest, { params }: RouteContext) => {
     const { id } = await params;
     const instance = await delegateOf(config).findFirst({ where: { id, userId: session.userId } });
     if (!instance) return NextResponse.json({ error: "Instance not found" }, { status: 404 });
@@ -485,7 +462,7 @@ export function instanceMetadataRoutes<C extends ConnectionClient>(
     const result = await readInstanceMetadata(config, instance, load);
     if (!result.ok) return NextResponse.json({ error: result.error }, { status: 502 });
     return jsonResponse(request, result.body);
-  }
+  });
 
   return { GET };
 }

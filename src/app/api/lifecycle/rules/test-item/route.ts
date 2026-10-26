@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import {
   evaluateAllRulesInMemory,
@@ -26,12 +26,7 @@ import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
 import { resolveSeriesKey } from "@/lib/media/series-key";
 import { artistMbidOf, splitArtistGroupByMbid } from "@/lib/media/artist-key";
 
-export async function POST(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const POST = withSession(async (session, request: NextRequest) => {
   const { data, error } = await validateRequest(request, ruleTestItemSchema);
   if (error) return error;
 
@@ -92,7 +87,7 @@ export async function POST(request: NextRequest) {
   // (An orphaned library — its server deleted with `onDelete: SetNull` — has no
   // server to scope to, so fall back to the rule set's own targets.)
   const evaluability = await checkLifecycleRuleEvaluability(
-    session.userId!,
+    session.userId,
     type,
     typedRules,
     item.library.mediaServer ? [item.library.mediaServer.id] : serverIds,
@@ -112,13 +107,13 @@ export async function POST(request: NextRequest) {
   const [arrData, seerrData]: [ArrDataMap | undefined, SeerrDataMap | undefined] = await Promise.all([
     hasArrRules(typedRules)
       ? arrLookupId
-        ? fetchArrRecordForPreview(session.userId!, type, arrLookupId, arrInstanceId, {
+        ? fetchArrRecordForPreview(session.userId, type, arrLookupId, arrInstanceId, {
             customFormatScores: hasCustomFormatScoreRules(typedRules),
           })
         : Promise.resolve({})
       : Promise.resolve(undefined),
     hasSeerrRules(typedRules) && type !== "MUSIC"
-      ? fetchSeerrMetadataForPreview(session.userId!, type)
+      ? fetchSeerrMetadataForPreview(session.userId, type)
       : Promise.resolve(undefined),
   ]);
 
@@ -349,4 +344,4 @@ export async function POST(request: NextRequest) {
       thumbUrl: item.thumbUrl,
     },
   });
-}
+});

@@ -1,23 +1,18 @@
 import { NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { createMediaServerClient } from "@/lib/media-server/factory";
 import { getPlexFriends } from "@/lib/plex/auth";
 import { apiLogger } from "@/lib/logger";
 
-export async function GET() {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async (session) => {
   const [servers, user] = await Promise.all([
     prisma.mediaServer.findMany({
-      where: { userId: session.userId!, enabled: true },
+      where: { userId: session.userId, enabled: true },
       select: { type: true, url: true, accessToken: true, tlsSkipVerify: true },
     }),
     prisma.user.findUnique({
-      where: { id: session.userId! },
+      where: { id: session.userId },
       select: { username: true, plexToken: true },
     }),
   ]);
@@ -94,4 +89,4 @@ export async function GET() {
   return NextResponse.json({
     users: Array.from(usernames).sort((a, b) => a.localeCompare(b)),
   });
-}
+});

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import {
   buildAuthorizationUrl,
   discoverOidc,
@@ -24,12 +24,7 @@ import { validateRequest, reauthOidcStartSchema } from "@/lib/validation";
  * Takes `{ nonce }` and returns `{ authorizationUrl }` for the client to
  * navigate to.
  */
-export async function POST(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn || !session.userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const POST = withSession(async (session, request: NextRequest) => {
   const rateLimited = checkAuthRateLimit(request, "sso-oidc-reauth");
   if (rateLimited) return rateLimited;
 
@@ -72,4 +67,4 @@ export async function POST(request: NextRequest) {
     apiLogger.error("Auth", "OIDC re-authentication init failed", { error: String(error) });
     return NextResponse.json({ error: "Failed to start SSO sign-in" }, { status: 500 });
   }
-}
+});

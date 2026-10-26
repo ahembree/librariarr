@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { withListResponseCache } from "@/lib/api/cached-list-response";
 import { jsonResponse } from "@/lib/api/json-response";
 import { MAX_GROUPED_LIST_LIMIT, parseListPagination } from "@/lib/api/pagination";
@@ -46,12 +46,7 @@ interface AlbumRepresentativeRow {
   summary: string | null;
 }
 
-async function listGet(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+const listGet = withSession(async (session, request: NextRequest) => {
   const { searchParams } = new URL(request.url);
   const serverId = searchParams.get("serverId");
   const search = searchParams.get("search");
@@ -62,7 +57,7 @@ async function listGet(request: NextRequest) {
   // `hasMore: true` forever, nothing capped a page, and `offset` was ignored.
   const { page, limit, skip } = parseListPagination(searchParams, { maxLimit: MAX_GROUPED_LIST_LIMIT });
 
-  const sf = await resolveServerFilter(session.userId!, serverId, "MUSIC");
+  const sf = await resolveServerFilter(session.userId, serverId, "MUSIC");
   if (!sf) {
     return NextResponse.json({ albums: [], pagination: { page, limit, hasMore: false } });
   }
@@ -242,7 +237,7 @@ async function listGet(request: NextRequest) {
   }
   // `limit=0` is everything — after an explicit `offset`, as on the flat lists.
   return jsonResponse(request, { albums: albums.slice(skip), pagination: { page, limit, hasMore: false } });
-}
+});
 
 /**
  * Answered from the list response cache when the same listing was asked for

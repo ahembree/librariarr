@@ -1,23 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { validateRequest, lifecycleScheduleSchema } from "@/lib/validation";
 // The dispatcher's own rule: a cron it cannot evaluate would save and never run.
 import { isValidSchedule } from "@/lib/jobs/schedule";
 
-export async function GET() {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async (session) => {
   let settings = await prisma.appSettings.findUnique({
-    where: { userId: session.userId! },
+    where: { userId: session.userId },
   });
 
   if (!settings) {
     settings = await prisma.appSettings.create({
-      data: { userId: session.userId! },
+      data: { userId: session.userId },
     });
   }
 
@@ -27,14 +22,9 @@ export async function GET() {
     lifecycleExecutionSchedule: settings.lifecycleExecutionSchedule,
     lastScheduledLifecycleExecution: settings.lastScheduledLifecycleExecution,
   });
-}
+});
 
-export async function PUT(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const PUT = withSession(async (session, request: NextRequest) => {
   const { data, error } = await validateRequest(request, lifecycleScheduleSchema);
   if (error) return error;
 
@@ -67,13 +57,13 @@ export async function PUT(request: NextRequest) {
   }
 
   const settings = await prisma.appSettings.upsert({
-    where: { userId: session.userId! },
+    where: { userId: session.userId },
     update: updateData,
-    create: { userId: session.userId!, ...updateData },
+    create: { userId: session.userId, ...updateData },
   });
 
   return NextResponse.json({
     lifecycleDetectionSchedule: settings.lifecycleDetectionSchedule,
     lifecycleExecutionSchedule: settings.lifecycleExecutionSchedule,
   });
-}
+});

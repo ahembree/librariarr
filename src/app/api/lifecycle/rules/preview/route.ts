@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasAnyActiveRules, hasSeriesAggregateRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRuleGroup, LifecycleRule } from "@/lib/rules/types";
@@ -14,12 +14,7 @@ import type { ProgressPhase } from "@/lib/progress/types";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-export async function POST(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const POST = withSession(async (session, request: NextRequest) => {
   const { data, error } = await validateRequest(request, rulePreviewSchema);
   if (error) return error;
 
@@ -38,7 +33,7 @@ export async function POST(request: NextRequest) {
   // ("foundInArr = false" / "seerrRequested = false" go vacuously true).
   // Detection skips such rule sets, so error here instead of previewing a
   // result detection would never produce.
-  const evaluability = await checkLifecycleRuleEvaluability(session.userId!, type, typedRules, serverIds, arrInstanceId);
+  const evaluability = await checkLifecycleRuleEvaluability(session.userId, type, typedRules, serverIds, arrInstanceId);
   if (!evaluability.evaluable) {
     return NextResponse.json({ error: evaluability.reason }, { status: 400 });
   }
@@ -59,7 +54,7 @@ export async function POST(request: NextRequest) {
     if (metadataPhase) {
       emit({ type: "phase", key: metadataPhase.key, fraction: 0 });
       ({ arrData, seerrData } = await loadPreviewMetadata(
-        session.userId!,
+        session.userId,
         type,
         typedRules,
         arrInstanceId,
@@ -141,4 +136,4 @@ export async function POST(request: NextRequest) {
 
     return { items: itemsWithCriteria, count: itemsWithCriteria.length };
   }, { request });
-}
+});

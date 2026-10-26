@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { fetchPlayHistory, parsePlayHistoryPaging } from "@/lib/media/play-history";
 
@@ -30,22 +30,18 @@ import { fetchPlayHistory, parsePlayHistoryPaging } from "@/lib/media/play-histo
  * owns the server record, not a media-server account, and nothing filters on
  * `serverUsername`.
  */
-export async function GET(
+export const GET = withSession(async (
+  session,
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
-) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+) => {
   const { id } = await params;
 
   // Ownership guard on the ITEM, before any history is read — `findFirst`
   // through the library→server chain rather than a bare `findUnique`, so an id
   // belonging to another owner 404s instead of leaking its plays.
   const item = await prisma.mediaItem.findFirst({
-    where: { id, library: { mediaServer: { userId: session.userId! } } },
+    where: { id, library: { mediaServer: { userId: session.userId } } },
     select: { id: true },
   });
   if (!item) {
@@ -61,11 +57,11 @@ export async function GET(
   // here would attribute another server's plays to this page.
   return NextResponse.json(
     await fetchPlayHistory({
-      userId: session.userId!,
+      userId: session.userId,
       mediaItemIds: [item.id],
       serverId,
       page,
       limit,
     }),
   );
-}
+});

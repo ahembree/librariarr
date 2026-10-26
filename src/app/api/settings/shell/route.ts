@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { loadShellSettings } from "@/lib/settings/shell-settings";
 
 /**
@@ -7,15 +7,10 @@ import { loadShellSettings } from "@/lib/settings/shell-settings";
  * re-read when `display-settings:changed` says one was saved elsewhere. The
  * same read as the layout's, so the two cannot disagree.
  */
-export async function GET() {
-  const session = await getSession();
-  if (!session.isLoggedIn || !session.userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async (session) => {
   const settings = await loadShellSettings(session.userId);
   if (!settings) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   return NextResponse.json(settings, { headers: { "Cache-Control": "no-store" } });
-}
+});

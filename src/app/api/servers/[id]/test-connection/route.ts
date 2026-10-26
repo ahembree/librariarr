@@ -1,18 +1,14 @@
 import { NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { createMediaServerClient } from "@/lib/media-server/factory";
 import { sanitizeErrorDetail } from "@/lib/api/sanitize";
 
-export async function POST(
+export const POST = withSession(async (
+  session,
   _request: Request,
   { params }: { params: Promise<{ id: string }> }
-) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+) => {
   const { id } = await params;
 
   const server = await prisma.mediaServer.findFirst({
@@ -34,4 +30,4 @@ export async function POST(
     error: sanitizeErrorDetail(result.error) ?? null,
     serverName: result.serverName ?? null,
   });
-}
+});

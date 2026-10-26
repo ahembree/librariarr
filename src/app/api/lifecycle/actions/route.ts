@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { jsonResponse } from "@/lib/api/json-response";
 import { prisma } from "@/lib/db";
 import { isDestructiveActionType } from "@/lib/lifecycle/action-types";
@@ -216,12 +216,7 @@ async function backfillTitleSnapshots(
   );
 }
 
-export async function GET(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async (session, request: NextRequest) => {
   const { searchParams } = new URL(request.url);
   const status = searchParams.get("status") || "PENDING";
   if (!["PENDING", "COMPLETED", "FAILED", "ALL"].includes(status)) {
@@ -232,11 +227,11 @@ export async function GET(request: NextRequest) {
   }
 
   if (status === "PENDING") {
-    return handlePendingGrouped(request, session.userId!);
+    return handlePendingGrouped(request, session.userId);
   }
 
-  return handleStatusGrouped(request, session.userId!, status);
-}
+  return handleStatusGrouped(request, session.userId, status);
+});
 
 /**
  * PENDING: merge actual LifecycleAction PENDING records with RuleMatch-based

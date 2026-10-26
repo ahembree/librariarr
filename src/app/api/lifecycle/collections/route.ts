@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { validateRequest, collectionCreateSchema } from "@/lib/validation";
 
@@ -8,15 +8,10 @@ import { validateRequest, collectionCreateSchema } from "@/lib/validation";
  * `?type=MOVIE|SERIES|MUSIC` so the lifecycle rule editor only offers
  * collections matching the rule set's library type.
  */
-export async function GET(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async (session, request: NextRequest) => {
   const type = request.nextUrl.searchParams.get("type");
   const where: { userId: string; type?: "MOVIE" | "SERIES" | "MUSIC" } = {
-    userId: session.userId!,
+    userId: session.userId,
   };
   if (type === "MOVIE" || type === "SERIES" || type === "MUSIC") {
     where.type = type;
@@ -29,14 +24,9 @@ export async function GET(request: NextRequest) {
   });
 
   return NextResponse.json({ collections });
-}
+});
 
-export async function POST(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const POST = withSession(async (session, request: NextRequest) => {
   const { data, error } = await validateRequest(request, collectionCreateSchema);
   if (error) return error;
 
@@ -54,7 +44,7 @@ export async function POST(request: NextRequest) {
 
   const collection = await prisma.collection.create({
     data: {
-      userId: session.userId!,
+      userId: session.userId,
       name,
       type,
       sortName: sortName ?? null,
@@ -65,4 +55,4 @@ export async function POST(request: NextRequest) {
   });
 
   return NextResponse.json({ collection }, { status: 201 });
-}
+});

@@ -1,28 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { validateRequest, blackoutCreateSchema, TIME_REGEX } from "@/lib/validation";
 
-export async function GET() {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async (session) => {
   const schedules = await prisma.blackoutSchedule.findMany({
-    where: { userId: session.userId! },
+    where: { userId: session.userId },
     orderBy: { createdAt: "desc" },
   });
 
   return NextResponse.json({ schedules });
-}
+});
 
-export async function POST(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const POST = withSession(async (session, request: NextRequest) => {
   const { data, error } = await validateRequest(request, blackoutCreateSchema);
   if (error) return error;
   const { name, scheduleType, startDate, endDate, daysOfWeek, startTime, endTime, action, message, delay, enabled, excludedUsers } = data;
@@ -56,7 +46,7 @@ export async function POST(request: NextRequest) {
 
   const schedule = await prisma.blackoutSchedule.create({
     data: {
-      userId: session.userId!,
+      userId: session.userId,
       name: name.trim(),
       scheduleType,
       startDate: scheduleType === "one_time" ? new Date(startDate!) : null,
@@ -73,4 +63,4 @@ export async function POST(request: NextRequest) {
   });
 
   return NextResponse.json({ schedule }, { status: 201 });
-}
+});

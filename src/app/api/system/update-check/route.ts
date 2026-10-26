@@ -1,13 +1,8 @@
 import { NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { checkForUpdate } from "@/lib/version/update-checker";
 
-export async function GET() {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async () => {
   const result = await checkForUpdate();
 
   return NextResponse.json({
@@ -15,4 +10,4 @@ export async function GET() {
     latestVersion: result.latestVersion,
     releaseUrl: result.releaseUrl,
   });
-}
+});

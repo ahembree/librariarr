@@ -1,16 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { announceDisplaySettingsChanged } from "@/lib/settings/display-settings-events";
 import { validateRequest, accentColorSchema } from "@/lib/validation";
 import { ACCENT_NAMES } from "@/lib/theme/accent-colors";
 
-export async function GET() {
-  const session = await getSession();
-  if (!session.isLoggedIn || !session.userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async (session) => {
   // Verify user still exists (handles stale sessions after DB reset)
   const user = await prisma.user.findUnique({
     where: { id: session.userId },
@@ -35,14 +30,9 @@ export async function GET() {
     ? settings.accentColor
     : "default";
   return NextResponse.json({ accentColor });
-}
+});
 
-export async function PUT(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn || !session.userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const PUT = withSession(async (session, request: NextRequest) => {
   const user = await prisma.user.findUnique({
     where: { id: session.userId },
     select: { id: true },
@@ -71,4 +61,4 @@ export async function PUT(request: NextRequest) {
 
   announceDisplaySettingsChanged(session.userId);
   return NextResponse.json({ accentColor: settings.accentColor });
-}
+});

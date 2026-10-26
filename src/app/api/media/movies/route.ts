@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { withListResponseCache } from "@/lib/api/cached-list-response";
 import { jsonResponse, mapInSlices } from "@/lib/api/json-response";
 import { prisma } from "@/lib/db";
@@ -60,12 +60,7 @@ async function findInOrder<T extends { id: string }>(
   return ids.map((id) => byId.get(id)).filter((row): row is T => row !== undefined);
 }
 
-async function listGet(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+const listGet = withSession(async (session, request: NextRequest) => {
   const { searchParams } = new URL(request.url);
   const { page, limit, skip } = parseListPagination(searchParams);
   const search = searchParams.get("search");
@@ -75,7 +70,7 @@ async function listGet(request: NextRequest) {
   const serverId = searchParams.get("serverId");
   const startsWith = searchParams.get("startsWith");
 
-  const sf = await resolveServerFilter(session.userId!, serverId, "MOVIE");
+  const sf = await resolveServerFilter(session.userId, serverId, "MOVIE");
   if (!sf) {
     return NextResponse.json({ items: [], pagination: { page, limit, hasMore: false } });
   }
@@ -212,7 +207,7 @@ async function listGet(request: NextRequest) {
     items: serializedItems,
     pagination: { page, limit, hasMore },
   });
-}
+});
 
 /**
  * Answered from the list response cache when the same listing was asked for

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { syncCollectionById } from "@/lib/lifecycle/collections";
 import { cleanupArrTags } from "@/lib/lifecycle/actions";
@@ -10,15 +10,11 @@ import { invalidateRuleSetNameCaches } from "@/lib/cache/invalidate";
 import { hasArrRules } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
 
-export async function PUT(
+export const PUT = withSession(async (
+  session,
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+) => {
   const { id } = await params;
   const { data, error } = await validateRequest(request, ruleSetUpdateSchema);
   if (error) return error;
@@ -114,7 +110,7 @@ export async function PUT(
     });
     if (current) {
       const actionConfigError = await validateActionConfig({
-        userId: session.userId!,
+        userId: session.userId,
         libraryType: current.type,
         actionType: actionType !== undefined ? actionType : current.actionType,
         arrInstanceId: arrInstanceId !== undefined ? arrInstanceId : current.arrInstanceId,
@@ -238,17 +234,13 @@ export async function PUT(
   if (name !== undefined) invalidateRuleSetNameCaches();
 
   return NextResponse.json({ ruleSet: updated });
-}
+});
 
-export async function DELETE(
+export const DELETE = withSession(async (
+  session,
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+) => {
   const { id } = await params;
   const cleanupTags = request.nextUrl.searchParams.get("cleanupTags") === "true";
 
@@ -296,4 +288,4 @@ export async function DELETE(
   }
 
   return NextResponse.json({ success: true });
-}
+});
