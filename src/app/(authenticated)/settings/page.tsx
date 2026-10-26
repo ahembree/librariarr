@@ -823,12 +823,20 @@ export default function SettingsPage() {
   const fetchLifecycleSchedule = useCallback(async () => {
     try {
       const response = await bundleOf(bundleRef).get("/api/settings/lifecycle-schedule");
-      const data = await response.json();
-      if (data.settings) {
-        loadDetectionSchedule(data.settings.lifecycleDetectionSchedule);
-        setLastLcDetect(data.settings.lastScheduledLifecycleDetection);
-        loadExecutionSchedule(data.settings.lifecycleExecutionSchedule);
-        setLastLcExec(data.settings.lastScheduledLifecycleExecution);
+      // The route answers the fields at the top level, not under `settings` as
+      // the sync schedule's does: read under `settings`, a stored schedule was
+      // never shown, and both pickers read "Every 6 hours" whatever was saved.
+      const data = (await response.json()) as {
+        lifecycleDetectionSchedule?: string;
+        lastScheduledLifecycleDetection?: string | null;
+        lifecycleExecutionSchedule?: string;
+        lastScheduledLifecycleExecution?: string | null;
+      };
+      if (response.ok && data.lifecycleDetectionSchedule && data.lifecycleExecutionSchedule) {
+        loadDetectionSchedule(data.lifecycleDetectionSchedule);
+        setLastLcDetect(data.lastScheduledLifecycleDetection ?? null);
+        loadExecutionSchedule(data.lifecycleExecutionSchedule);
+        setLastLcExec(data.lastScheduledLifecycleExecution ?? null);
       }
     } catch (error) {
       console.error("Failed to fetch lifecycle schedule:", error);
