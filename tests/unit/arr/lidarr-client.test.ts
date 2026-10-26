@@ -154,6 +154,26 @@ describe("LidarrClient", () => {
       // The whole resource goes back, with only the changed field replaced.
       expect(mockAxiosInstance.put).toHaveBeenCalledWith("/api/v1/artist/5", updated);
     });
+
+    it("puts over a record the caller already holds without re-reading it", async () => {
+      const current = { id: 5, artistName: "Radiohead", monitored: true, qualityProfileId: 1, tags: [3] };
+      mockAxiosInstance.put.mockResolvedValueOnce({ data: current });
+      await client.updateArtist(5, { qualityProfileId: 2 }, current as never);
+      expect(mockAxiosInstance.get).not.toHaveBeenCalled();
+      expect(mockAxiosInstance.put).toHaveBeenCalledWith("/api/v1/artist/5", { ...current, qualityProfileId: 2 });
+    });
+  });
+
+  describe("removeTagsFromArtists", () => {
+    it("removes the tags through the v1 artist bulk editor", async () => {
+      mockAxiosInstance.put.mockResolvedValueOnce({});
+      await client.removeTagsFromArtists([9], [3]);
+      expect(mockAxiosInstance.put).toHaveBeenCalledWith("/api/v1/artist/editor", {
+        artistIds: [9],
+        tags: [3],
+        applyTags: "remove",
+      });
+    });
   });
 
   describe("deleteTrackFiles", () => {

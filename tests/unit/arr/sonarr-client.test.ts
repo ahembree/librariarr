@@ -167,6 +167,26 @@ describe("SonarrClient", () => {
         { ...current, monitored: false }
       );
     });
+
+    it("puts over a record the caller already holds without re-reading it", async () => {
+      const current = { id: 5, title: "Breaking Bad", tvdbId: 81189, monitored: true, tags: [2] };
+      mockAxiosInstance.put.mockResolvedValueOnce({ data: current });
+      await client.updateSeries(5, { monitored: false }, current as never);
+      expect(mockAxiosInstance.get).not.toHaveBeenCalled();
+      expect(mockAxiosInstance.put).toHaveBeenCalledWith("/api/v3/series/5", { ...current, monitored: false });
+    });
+  });
+
+  describe("removeTagsFromSeries", () => {
+    it("removes the tags through the series bulk editor", async () => {
+      mockAxiosInstance.put.mockResolvedValueOnce({});
+      await client.removeTagsFromSeries([4, 5], [2, 3]);
+      expect(mockAxiosInstance.put).toHaveBeenCalledWith("/api/v3/series/editor", {
+        seriesIds: [4, 5],
+        tags: [2, 3],
+        applyTags: "remove",
+      });
+    });
   });
 
   describe("getEpisodes", () => {

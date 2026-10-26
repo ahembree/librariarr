@@ -171,6 +171,44 @@ describe("RadarrClient", () => {
         { ...current, monitored: false }
       );
     });
+
+    it("puts over a record the caller already holds without re-reading it", async () => {
+      const current = { id: 5, title: "Arrival", tmdbId: 329865, monitored: true, tags: [1] };
+      mockAxiosInstance.put.mockResolvedValueOnce({ data: { ...current, tags: [1, 2] } });
+
+      await client.updateMovie(5, { tags: [1, 2] }, current as never);
+      expect(mockAxiosInstance.get).not.toHaveBeenCalled();
+      expect(mockAxiosInstance.put).toHaveBeenCalledWith("/api/v3/movie/5", { ...current, tags: [1, 2] });
+    });
+  });
+
+  describe("removeTagsFromMovies", () => {
+    it("removes the tags through one bulk-editor request", async () => {
+      mockAxiosInstance.put.mockResolvedValueOnce({});
+      await client.removeTagsFromMovies([1, 2, 3], [7]);
+      expect(mockAxiosInstance.put).toHaveBeenCalledTimes(1);
+      expect(mockAxiosInstance.put).toHaveBeenCalledWith("/api/v3/movie/editor", {
+        movieIds: [1, 2, 3],
+        tags: [7],
+        applyTags: "remove",
+      });
+    });
+
+    it("slices a large id list into requests of 500", async () => {
+      mockAxiosInstance.put.mockResolvedValue({});
+      const ids = Array.from({ length: 1001 }, (_, i) => i + 1);
+      await client.removeTagsFromMovies(ids, [7]);
+      expect(mockAxiosInstance.put).toHaveBeenCalledTimes(3);
+      expect(mockAxiosInstance.put.mock.calls[0][1].movieIds).toHaveLength(500);
+      expect(mockAxiosInstance.put.mock.calls[2][1].movieIds).toEqual([1001]);
+      mockAxiosInstance.put.mockReset();
+    });
+
+    it("sends nothing when there is nothing to remove", async () => {
+      await client.removeTagsFromMovies([], [7]);
+      await client.removeTagsFromMovies([1], []);
+      expect(mockAxiosInstance.put).not.toHaveBeenCalled();
+    });
   });
 
   describe("getCustomFormatScores", () => {
