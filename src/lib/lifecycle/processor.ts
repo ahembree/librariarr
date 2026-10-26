@@ -35,6 +35,7 @@ import { invalidateArrMetadataCache } from "@/lib/lifecycle/fetch-arr-metadata";
 import { checkLifecycleRuleEvaluability } from "@/lib/lifecycle/evaluability";
 import { detectAndSaveMatches } from "@/lib/lifecycle/detect-matches";
 import { syncAllCollections } from "@/lib/lifecycle/collections";
+import { CollectionSyncCache } from "@/lib/lifecycle/collection-sync-cache";
 import { syncMediaServer } from "@/lib/sync/sync-server";
 import { sendDiscordNotification, buildSuccessSummaryEmbed, buildMatchChangeEmbed, buildFailureSummaryEmbed } from "@/lib/discord/client";
 import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
@@ -270,8 +271,9 @@ export async function processLifecycleRules(userId?: string) {
     },
   });
 
-  // Cache Plex library items across rule sets to avoid redundant API calls
-  const plexItemsCache = new Map<string, Array<{ title: string; ratingKey: string }>>();
+  // Plex shows and collection listings, read once per library by the
+  // collection pass at the end rather than once per collection
+  const collectionCache = new CollectionSyncCache();
   // Arr/Seerr metadata shared across rule sets of the same owner + type
   // (mirrors runDetection). Each Seerr request page makes Seerr query every
   // Arr instance it knows, so re-walking the whole request list once per rule
@@ -432,7 +434,7 @@ export async function processLifecycleRules(userId?: string) {
   // rule sets (and their actions) are processed — never per rule set. Collections
   // with no remaining enabled rule sets resolve to an empty union and are removed
   // from Plex (replacing the old "disabled collection cleanup" pass).
-  await syncAllCollections(userId, plexItemsCache);
+  await syncAllCollections(userId, collectionCache);
 
   // Notify connected clients that detection is done
   const affectedUserIds = userId ? [userId] : [...new Set(ruleSets.map((rs) => rs.userId))];

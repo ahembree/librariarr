@@ -143,6 +143,7 @@ import {
  * failing, and the match-change notification ordering.
  */
 import { logger } from "@/lib/logger";
+import { CollectionSyncCache } from "@/lib/lifecycle/collection-sync-cache";
 
 const show = {
   id: "show1", title: "Pilot", parentTitle: "Show", type: "SERIES", seriesKey: "title:show", year: 2020,
@@ -354,7 +355,7 @@ describe("processLifecycleRules — match-change notification", () => {
     expect(mockPrisma.ruleSet.findMany.mock.calls[0][0].where).toEqual({ enabled: true });
     expect(mockBuildMatchChangeEmbed).toHaveBeenCalledWith("Old movies", 3, 0, "MOVIE", ["No Sort", "The Abyss", "Zodiac"], []);
     expect(mockSendDiscordNotification).toHaveBeenCalledWith("https://discord.example/hook", expect.objectContaining({ username: "Bot", avatar_url: "https://a/x.png" }));
-    expect(mockSyncAllCollections).toHaveBeenCalledWith(undefined, expect.any(Map));
+    expect(mockSyncAllCollections).toHaveBeenCalledWith(undefined, expect.any(CollectionSyncCache));
   });
 
   it("sends nothing when the match set did not change, or no webhook is set", async () => {

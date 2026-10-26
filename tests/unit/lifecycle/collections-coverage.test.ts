@@ -11,6 +11,7 @@ const mockPrisma = vi.hoisted(() => ({
   lifecycleAction: { findMany: vi.fn() },
   collection: { findUnique: vi.fn(), findMany: vi.fn() },
   ruleSet: { findMany: vi.fn() },
+  $queryRawUnsafe: vi.fn(),
 }));
 
 const mockPlex = vi.hoisted(() => ({
@@ -23,6 +24,7 @@ const mockPlex = vi.hoisted(() => ({
   editCollectionSortTitle: vi.fn(),
   editCollectionSort: vi.fn(),
   updateCollectionVisibility: vi.fn(),
+  getCollectionVisibility: vi.fn(),
   moveCollectionItem: vi.fn(),
   getLibraryItems: vi.fn(),
   renameCollection: vi.fn(),
@@ -133,7 +135,7 @@ describe("action-date ordering", () => {
 
   it("clears the sort title and falls back to alphabetical for an unknown sort", async () => {
     mockPrisma.library.findMany.mockResolvedValue([movieLib]);
-    mockPlex.getCollections.mockResolvedValue([{ ratingKey: "col1", title: "Leaving Soon" }]);
+    mockPlex.getCollections.mockResolvedValue([{ ratingKey: "col1", title: "Leaving Soon", titleSort: "old" }]);
     mockPlex.getCollectionItems.mockResolvedValue([{ ratingKey: "x" }]);
 
     await syncCollection(collectionDef({ sort: "SOMETHING", sortName: null }), [{
@@ -153,8 +155,10 @@ describe("action-date ordering", () => {
 describe("syncCollectionById / syncAllCollections", () => {
   it("syncs a match whose stored snapshot carries no title", async () => {
     mockPrisma.collection.findUnique.mockResolvedValue(collectionDef({ sort: "ALPHABETICAL" }));
-    mockPrisma.ruleSet.findMany.mockResolvedValue([
-      { id: "rs1", seriesScope: false, ruleMatches: [{ mediaItemId: "m", itemData: { libraryId: "lib1", ratingKey: "rk" } }] },
+    mockPrisma.ruleSet.findMany.mockResolvedValue([{ id: "rs1", seriesScope: false }]);
+    // What the snapshot paths read back for a match stored without a title.
+    mockPrisma.$queryRawUnsafe.mockResolvedValue([
+      { ruleSetId: "rs1", mediaItemId: "m", libraryId: "lib1", ratingKey: "rk", title: null, parentTitle: null, copies: null },
     ]);
     mockPrisma.library.findMany.mockResolvedValue([movieLib]);
     mockPlex.getCollections.mockResolvedValue([]);

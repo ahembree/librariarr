@@ -7,6 +7,7 @@ import { checkLifecycleRuleEvaluability } from "@/lib/lifecycle/evaluability";
 import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
 import { logger } from "@/lib/logger";
 import { syncCollectionById, syncAllCollections } from "@/lib/lifecycle/collections";
+import { CollectionSyncCache } from "@/lib/lifecycle/collection-sync-cache";
 import { describePlexError } from "@/lib/plex/errors";
 import { findExceptedItemIds, findExceptionProtectedGroups, isGroupProtected, type ProtectionTarget } from "@/lib/lifecycle/exception-guard";
 import type { Prisma } from "@/generated/prisma/client";
@@ -976,19 +977,19 @@ export async function syncCollectionsAfterDetection(
   ruleSetId: string | undefined,
   results: Array<{ ruleSet: { collectionId: string | null } }>,
 ): Promise<void> {
-  const plexItemsCache = new Map<string, Array<{ title: string; ratingKey: string }>>();
+  const collectionCache = new CollectionSyncCache();
   if (ruleSetId) {
     const collectionIds = [
       ...new Set(results.map((r) => r.ruleSet.collectionId).filter((id): id is string => !!id)),
     ];
     for (const id of collectionIds) {
       try {
-        await syncCollectionById(id, plexItemsCache);
+        await syncCollectionById(id, collectionCache);
       } catch (error) {
         logger.error("Lifecycle", `Collection sync failed for collection ${id} during detection`, { error: describePlexError(error) });
       }
     }
   } else {
-    await syncAllCollections(userId, plexItemsCache);
+    await syncAllCollections(userId, collectionCache);
   }
 }
