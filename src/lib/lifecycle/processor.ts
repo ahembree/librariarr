@@ -37,6 +37,7 @@ import { checkLifecycleRuleEvaluability } from "@/lib/lifecycle/evaluability";
 import { detectAndSaveMatches } from "@/lib/lifecycle/detect-matches";
 import { syncAllCollections } from "@/lib/lifecycle/collections";
 import { CollectionSyncCache } from "@/lib/lifecycle/collection-sync-cache";
+import { loadStoredMatchMembers } from "@/lib/lifecycle/match-snapshot";
 import { PostDeleteResync } from "@/lib/lifecycle/post-delete-resync";
 import { sendDiscordNotification, buildSuccessSummaryEmbed, buildMatchChangeEmbed, buildFailureSummaryEmbed } from "@/lib/discord/client";
 import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
@@ -549,10 +550,8 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
   // the RuleMatch table for its rule set. Cancel stale actions whose items
   // no longer match, preventing execution on items that shouldn't be actioned.
   const ruleSetIds = [...new Set(pendingActions.map((a) => a.ruleSetId).filter((id): id is string => id !== null))];
-  const currentMatches = await prisma.ruleMatch.findMany({
-    where: { ruleSetId: { in: ruleSetIds } },
-    select: { ruleSetId: true, mediaItemId: true, itemData: true },
-  });
+  // Each match's `memberIds` alone — the rest of its snapshot is not read here.
+  const currentMatches = await loadStoredMatchMembers(ruleSetIds);
   const matchSet = new Set(currentMatches.map((m) => `${m.ruleSetId}:${m.mediaItemId}`));
   // Current member (episode/track) ids per match, so execution can drop members
   // that have since stopped matching. Incremental detection refreshes
@@ -562,7 +561,7 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
   // a size threshold). Only populated when the match actually tracks members.
   const currentMemberIds = new Map<string, Set<string>>();
   for (const m of currentMatches) {
-    const members = (m.itemData as { memberIds?: string[] } | null)?.memberIds;
+    const members = Array.isArray(m.memberIds) ? (m.memberIds as string[]) : null;
     if (members && members.length > 0) {
       currentMemberIds.set(`${m.ruleSetId}:${m.mediaItemId}`, new Set(members));
     }

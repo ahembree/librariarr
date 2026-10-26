@@ -73,6 +73,32 @@ const mockSyncCollectionById = vi.hoisted(() => vi.fn());
 const mockSyncAllCollections = vi.hoisted(() => vi.fn());
 
 vi.mock("@/lib/db", () => ({ prisma: mockPrisma }));
+// The stored matches are read with SQL (`match-snapshot.ts`); answered here
+// from the rows `ruleMatch.findMany` is stubbed with, projected as the SQL
+// projects them, so every stub below keeps describing the stored matches.
+vi.mock("@/lib/lifecycle/match-snapshot", () => {
+  type Row = { ruleSetId?: string; mediaItemId: string; itemData?: unknown };
+  const stored = async (ruleSetIds: readonly string[]): Promise<Row[]> =>
+    (((await mockPrisma.ruleMatch.findMany()) ?? []) as Row[]).map((r) => ({ ...r, ruleSetId: r.ruleSetId ?? ruleSetIds[0] }));
+  const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+  return {
+    loadStoredMatches: async (ruleSetIds: readonly string[], keys: readonly string[] | null) =>
+      (await stored(ruleSetIds)).map((r) => ({
+        ruleSetId: r.ruleSetId,
+        mediaItemId: r.mediaItemId,
+        itemData:
+          keys && isObject(r.itemData)
+            ? Object.fromEntries(Object.entries(r.itemData).filter(([k]) => keys.includes(k)))
+            : (r.itemData ?? null),
+      })),
+    loadStoredMatchMembers: async (ruleSetIds: readonly string[]) =>
+      (await stored(ruleSetIds)).map((r) => ({
+        ruleSetId: r.ruleSetId,
+        mediaItemId: r.mediaItemId,
+        memberIds: isObject(r.itemData) ? (r.itemData.memberIds ?? null) : null,
+      })),
+  };
+});
 vi.mock("@/lib/logger", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));

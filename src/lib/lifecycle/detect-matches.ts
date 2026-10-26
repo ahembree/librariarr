@@ -9,6 +9,7 @@ import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
 import { logger } from "@/lib/logger";
 import { syncCollectionById, syncAllCollections } from "@/lib/lifecycle/collections";
 import { CollectionSyncCache } from "@/lib/lifecycle/collection-sync-cache";
+import { loadStoredMatches } from "@/lib/lifecycle/match-snapshot";
 import { describePlexError } from "@/lib/plex/errors";
 import { findExceptedItemIds, findExceptionProtectedGroups, isGroupProtected, type ProtectionTarget } from "@/lib/lifecycle/exception-guard";
 import type { Prisma } from "@/generated/prisma/client";
@@ -212,6 +213,23 @@ async function collapseCopies(
 }
 
 /** Order-insensitive fingerprint of the fields `collapseCopies` derives. */
+/**
+ * The keys of a held match's snapshot detection reads: its copies (`copyIdsOf`,
+ * the carry-over), what `collapseFingerprint` and `identityFingerprint`
+ * compare, and the title and criteria a stale match is logged with.
+ */
+const HELD_MATCH_KEYS = [
+  "id",
+  "title",
+  "parentTitle",
+  "year",
+  "externalIds",
+  "memberIds",
+  "servers",
+  "copies",
+  "matchedCriteria",
+] as const;
+
 function collapseFingerprint(item: Record<string, unknown> | undefined): string {
   const members = [...((item?.memberIds as string[] | undefined) ?? [])].sort();
   const servers = ((item?.servers as Array<{ serverId?: string }> | undefined) ?? [])
@@ -514,11 +532,10 @@ export async function detectAndSaveMatches(
   // Every match the rule set held before this run: the copy already matched
   // stays a title's representative, a title carries over to another copy when
   // the kept one stops matching (below), and the incremental write tells new,
-  // stale and refreshed matches apart from it.
-  const heldMatches = await prisma.ruleMatch.findMany({
-    where: { ruleSetId: ruleSet.id },
-    select: { mediaItemId: true, itemData: true },
-  });
+  // stale and refreshed matches apart from it. Only the snapshot keys that
+  // bookkeeping reads — unless the rule set is sticky, whose held matches are
+  // returned (and scheduled from) as stored.
+  const heldMatches = await loadStoredMatches([ruleSet.id], ruleSet.stickyMatches ? null : HELD_MATCH_KEYS);
   const heldIds = new Set(heldMatches.map((m) => m.mediaItemId));
   const heldCopyIds = new Set(
     heldMatches.flatMap((m) => copyIdsOf(m.itemData as Record<string, unknown>)),
