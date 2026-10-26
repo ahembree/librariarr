@@ -34,6 +34,9 @@ export const SETTINGS_BUNDLE_PATHS = [
   "/api/settings/ai",
   "/api/settings/auth",
   "/api/settings/title-preference",
+  "/api/settings/sso",
+  "/api/settings/sso/me",
+  "/api/settings/api-keys",
 ] as const;
 
 export type SettingsBundlePath = (typeof SETTINGS_BUNDLE_PATHS)[number];
