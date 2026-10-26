@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import { compareIds } from "@/lib/conditions/compare-ids";
 import type { LifecycleRule, LifecycleRuleGroup, LifecycleRuleCondition, StreamQueryField } from "./types";
 import {
   isArrField, isSeerrField,
@@ -2040,7 +2041,7 @@ export async function evaluateSeriesScope(
 
   for (const [, episodes] of seriesMap) {
     // Sort by id for a stable representative across syncs (prevents false match churn)
-    episodes.sort((a, b) => a.id.localeCompare(b.id));
+    episodes.sort((a, b) => compareIds(a.id, b.id));
     const representative = episodes[0];
     if (restrictMembersToEpisodeMatches) episodesByRepId.set(representative.id, episodes);
     const totalPlays = episodes.reduce((sum, ep) => sum + ep.playCount, 0);
@@ -2325,7 +2326,7 @@ export async function evaluateMusicScope(
 
   for (const [, tracks] of artistMap) {
     // Sort by id for a stable representative across syncs (prevents false match churn)
-    tracks.sort((a, b) => a.id.localeCompare(b.id));
+    tracks.sort((a, b) => compareIds(a.id, b.id));
     const representative = tracks[0];
     const totalPlays = tracks.reduce((sum, t) => sum + t.playCount, 0);
     const totalSize = tracks.reduce(
@@ -2607,7 +2608,7 @@ export function groupSeriesResults<
         existing.latestPlayed = playedDate;
       }
       // Keep representative with lowest id for stability across syncs
-      if (item.id.localeCompare(existing.representative.id) < 0) {
+      if (compareIds(item.id, existing.representative.id) < 0) {
         existing.representative = item;
       }
     }

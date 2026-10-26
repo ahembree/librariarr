@@ -204,15 +204,24 @@ describe("stale match explanations", () => {
       return ids.filter((id) => id === "dropped" || id === "unexplained").map((id) => ({ id, title: id }));
     });
     mockGetMatchedCriteriaForItems.mockImplementation((items: Array<{ id: string }>) => {
-      const id = items[0]?.id;
-      if (id === "dropped") return new Map([["dropped", [criteria[0]]]]);
-      if (id === "unexplained") return new Map([["unexplained", criteria]]);
-      return new Map();
+      const current = new Map<string, typeof criteria>();
+      for (const { id } of items) {
+        if (id === "dropped") current.set("dropped", [criteria[0]]);
+        if (id === "unexplained") current.set("unexplained", criteria);
+      }
+      return current;
     });
 
     const result = await detectAndSaveMatches(makeRuleSetConfig(), ["s1"]);
 
     expect(result.items).toHaveLength(0);
+    // One evaluation for every stale match that recorded criteria and still
+    // exists (the run's own matches are enriched by another call).
+    const staleCalls = mockGetMatchedCriteriaForItems.mock.calls.filter((c) =>
+      (c[0] as Array<{ id: string }>).some((i) => i.id === "dropped" || i.id === "unexplained"),
+    );
+    expect(staleCalls).toHaveLength(1);
+    expect((staleCalls[0][0] as Array<{ id: string }>).map((i) => i.id)).toEqual(["dropped", "unexplained"]);
     const info = vi.mocked(logger.info).mock.calls.map((c) => c[1] as string);
     expect(info).toContain(`Removed stale match "Dropped" from rule set "Test Rule Set" (no longer matching: NOT playCount equals 0)`);
     expect(info).toContain(`Removed stale match "Some Show" from rule set "Test Rule Set" (was matching: resolution equals 4K, NOT playCount equals 0)`);

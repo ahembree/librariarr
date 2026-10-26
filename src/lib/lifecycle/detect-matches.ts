@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import { compareIds } from "@/lib/conditions/compare-ids";
 import { findInChunks, inChunks } from "@/lib/conditions/in-chunks";
 import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasArrRules, hasSeerrRules, hasAnyActiveRules, hasWatchedByUserRules, hasSeriesAggregateRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
@@ -166,7 +167,7 @@ async function collapseCopies(
       const idb = String(b.id);
       const byRank = copyRank(ida, alreadyMatched, heldCopies) - copyRank(idb, alreadyMatched, heldCopies);
       if (byRank !== 0) return byRank;
-      return ida < idb ? -1 : ida > idb ? 1 : 0;
+      return compareIds(ida, idb);
     });
     const [rep, ...others] = group;
 
@@ -482,7 +483,7 @@ export async function detectAndSaveMatches(
             // rescheduled `actionDelayDays` out, and a sticky rule set kept
             // both and armed two actions against one series.
             if (excludedIds.has(item.id as string)) {
-              updated.id = remainingMembers.reduce((min, id) => (id.localeCompare(min) < 0 ? id : min));
+              updated.id = remainingMembers.reduce((min, id) => (compareIds(id, min) < 0 ? id : min));
             }
             filtered.push(updated);
           }
@@ -749,6 +750,19 @@ export async function detectAndSaveMatches(
       }),
     );
     const staleItemMap = new Map(staleItems.map((item) => [item.id, item as unknown as Record<string, unknown>]));
+    // Each rule re-evaluated against the current rows of the stale matches
+    // that recorded criteria — in one call, which evaluates every item on its
+    // own exactly as one call per item did.
+    const currentCriteriaMap = getMatchedCriteriaForItems(
+      staleIds
+        .filter((id) => (existingDataMap.get(id)?.matchedCriteria as unknown[] | undefined)?.length)
+        .map((id) => staleItemMap.get(id))
+        .filter((item): item is Record<string, unknown> => !!item),
+      rules,
+      ruleSet.type,
+      arrData,
+      seerrData,
+    );
 
     for (const id of staleIds) {
       const oldData = existingDataMap.get(id);
@@ -766,8 +780,6 @@ export async function detectAndSaveMatches(
         continue;
       }
 
-      // Re-evaluate each rule independently against current item data
-      const currentCriteriaMap = getMatchedCriteriaForItems([currentItem], rules, ruleSet.type, arrData, seerrData);
       const currentRuleIds = new Set((currentCriteriaMap.get(id) ?? []).map((c) => c.ruleId));
 
       // Criteria in old set but not current = the rules that caused the item to drop
