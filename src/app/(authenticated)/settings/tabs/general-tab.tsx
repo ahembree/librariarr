@@ -20,16 +20,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import {
   CheckCircle,
   DatabaseBackup,
@@ -685,7 +676,7 @@ export function GeneralTab({
       </SettingsSection>
 
       {/* Restore confirmation — destructive: wipes all data and logs out. */}
-      <AlertDialog
+      <ConfirmDialog
         open={!!confirmRestore}
         onOpenChange={(open) => {
           if (!open) {
@@ -693,15 +684,22 @@ export function GeneralTab({
             setRestorePassphraseInput("");
           }
         }}
+        title="Restore backup?"
+        description={
+          <>
+            Restoring &quot;{confirmRestore?.filename}&quot; will replace all current data and log you out. This
+            cannot be undone.
+          </>
+        }
+        confirmLabel="Restore"
+        confirmIcon={RotateCcw}
+        destructive
+        confirmDisabled={!!confirmRestore?.encrypted && !restorePassphraseInput}
+        onConfirm={() => {
+          if (!confirmRestore) return;
+          onRestoreBackup(confirmRestore.filename, confirmRestore.encrypted ? restorePassphraseInput : undefined);
+        }}
       >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Restore backup?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Restoring &quot;{confirmRestore?.filename}&quot; will replace all current data and
-              log you out. This cannot be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
           {confirmRestore?.encrypted && (
             <div className="space-y-1.5">
               <Label htmlFor="restore-passphrase">Passphrase</Label>
@@ -718,55 +716,21 @@ export function GeneralTab({
               </p>
             </div>
           )}
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              variant="destructive"
-              disabled={!!confirmRestore?.encrypted && !restorePassphraseInput}
-              onClick={() => {
-                if (!confirmRestore) return;
-                onRestoreBackup(
-                  confirmRestore.filename,
-                  confirmRestore.encrypted ? restorePassphraseInput : undefined,
-                );
-                setConfirmRestore(null);
-                setRestorePassphraseInput("");
-              }}
-            >
-              <RotateCcw className="mr-2 h-4 w-4" />
-              Restore
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      </ConfirmDialog>
 
       {/* Delete backup confirmation */}
-      <AlertDialog
+      <ConfirmDialog
         open={!!confirmDelete}
         onOpenChange={(open) => { if (!open) setConfirmDelete(null); }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete backup?</AlertDialogTitle>
-            <AlertDialogDescription>
-              &quot;{confirmDelete}&quot; will be permanently deleted.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              variant="destructive"
-              onClick={() => {
-                if (confirmDelete) onDeleteBackup(confirmDelete);
-                setConfirmDelete(null);
-              }}
-            >
-              <Trash2 className="mr-2 h-4 w-4" />
-              Delete
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+        title="Delete backup?"
+        description={<>&quot;{confirmDelete}&quot; will be permanently deleted.</>}
+        confirmLabel="Delete"
+        confirmIcon={Trash2}
+        destructive
+        onConfirm={() => {
+          if (confirmDelete) onDeleteBackup(confirmDelete);
+        }}
+      />
     </div>
   );
 }

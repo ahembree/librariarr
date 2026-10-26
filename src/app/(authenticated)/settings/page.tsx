@@ -1400,8 +1400,9 @@ export default function SettingsPage() {
    * what the dialog warned about, so the servers refetch afterwards keeps the
    * dropdown honest about what is actually stored.
    */
-  const confirmWatchHistorySource = async () => {
-    if (!watchHistorySourceDialog) return;
+  // Resolves false when the change was refused, which keeps the dialog open.
+  const confirmWatchHistorySource = async (): Promise<boolean> => {
+    if (!watchHistorySourceDialog) return false;
     const { serverId, tracearrServerId, sourceLabel } = watchHistorySourceDialog;
     setSavingWatchHistorySource(serverId);
     try {
@@ -1415,7 +1416,7 @@ export default function SettingsPage() {
         toast.error("Failed to change watch history source", {
           description: data?.detail ?? data?.error,
         });
-        return;
+        return false;
       }
       setWatchHistorySourceDialog(null);
       // The PUT clears the stored history AND resets the backfill flag, so the
@@ -1423,9 +1424,11 @@ export default function SettingsPage() {
       // refetch rather than leave a "fully imported" tick over an empty table.
       await Promise.all([fetchServers(), fetchTracearrImportStatus()]);
       toast.success("Watch history source changed", { description: `Now using ${sourceLabel}.` });
+      return true;
     } catch (error) {
       console.error("Failed to change watch history source:", error);
       toast.error("Failed to change watch history source");
+      return false;
     } finally {
       setSavingWatchHistorySource(null);
     }

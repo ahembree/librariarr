@@ -14,8 +14,13 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Server, Loader2, Check, AlertCircle, Pencil, ShieldOff, ArrowLeft, Plug, CheckCircle, XCircle } from "lucide-react";
+import { Server, Loader2, Check, Pencil, ShieldOff, ArrowLeft, Plug, CheckCircle } from "lucide-react";
 import { Logo } from "@/components/logo";
+import { ConnectionTestResult } from "@/components/connection-test-result";
+import { InlineError } from "@/components/inline-error";
+import { LoadingButton } from "@/components/loading-button";
+import { useSetState } from "@/hooks/use-set-state";
+import { MediaServerConnectionFields } from "@/app/(authenticated)/settings/media-server-connection-fields";
 import { usePlexOAuth } from "@/hooks/use-plex-oauth";
 import { fetchWithReauth } from "@/lib/auth/reauth-client";
 import { ReauthDialogHost } from "@/components/reauth-dialog-host";
@@ -82,7 +87,7 @@ function OnboardingContent({ onAskPlexLogin }: { onAskPlexLogin: () => void }) {
   // Plex-specific state
   const [plexServers, setPlexServers] = useState<PlexServer[]>([]);
   const [addingServer, setAddingServer] = useState<string | null>(null);
-  const [addedServers, setAddedServers] = useState<Set<string>>(new Set());
+  const [addedServers, addedServerActions] = useSetState<string>();
   const [editingServer, setEditingServer] = useState<string | null>(null);
   const [customUrls, setCustomUrls] = useState<Record<string, string>>({});
   const [tlsSkipVerify, setTlsSkipVerify] = useState<Record<string, boolean>>({});
@@ -135,7 +140,7 @@ function OnboardingContent({ onAskPlexLogin }: { onAskPlexLogin: () => void }) {
       for (const s of fetched) {
         if (existingMachineIds.has(s.clientIdentifier)) alreadyAdded.add(s.clientIdentifier);
       }
-      if (alreadyAdded.size > 0) setAddedServers(alreadyAdded);
+      if (alreadyAdded.size > 0) addedServerActions.replace(alreadyAdded);
 
       setMode("plex");
       return true;
@@ -143,7 +148,7 @@ function OnboardingContent({ onAskPlexLogin }: { onAskPlexLogin: () => void }) {
       // Network error
       return false;
     }
-  }, []);
+  }, [addedServerActions]);
 
   const { startAuth: startPlexAuth, isLoading: plexAuthLoading, error: plexAuthError, authUrl: plexAuthUrl } = usePlexOAuth({
     onSuccess: async (authToken) => {
@@ -223,7 +228,7 @@ function OnboardingContent({ onAskPlexLogin }: { onAskPlexLogin: () => void }) {
       }
 
       if (data.updated) {
-        setAddedServers((prev) => new Set(prev).add(server.clientIdentifier));
+        addedServerActions.add(server.clientIdentifier);
         setEditingServer(null);
         return;
       }
@@ -241,7 +246,7 @@ function OnboardingContent({ onAskPlexLogin }: { onAskPlexLogin: () => void }) {
         setLibrarySelections((prev) => ({ ...prev, [server.clientIdentifier]: selections }));
         setSelectingLibraries(server.clientIdentifier);
       } catch {
-        setAddedServers((prev) => new Set(prev).add(server.clientIdentifier));
+        addedServerActions.add(server.clientIdentifier);
         await fetch(`/api/servers/${data.server.id}/sync`, { method: "POST" });
       }
 
@@ -271,7 +276,7 @@ function OnboardingContent({ onAskPlexLogin }: { onAskPlexLogin: () => void }) {
         }),
       });
       await fetch(`/api/servers/${serverId}/sync`, { method: "POST" });
-      setAddedServers((prev) => new Set(prev).add(clientIdentifier));
+      addedServerActions.add(clientIdentifier);
       setSelectingLibraries(null);
     } catch (error) {
       console.error("Failed to save library selection:", error);
@@ -482,10 +487,9 @@ function OnboardingContent({ onAskPlexLogin }: { onAskPlexLogin: () => void }) {
           </div>
 
           {plexAuthError && (
-            <div className="mx-auto max-w-md flex items-center gap-2 rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
-              <AlertCircle className="h-4 w-4 shrink-0" />
+            <InlineError className="mx-auto max-w-md rounded-lg">
               <p>{plexAuthError}</p>
-            </div>
+            </InlineError>
           )}
 
           {plexAuthUrl && plexAuthLoading && (
@@ -635,10 +639,9 @@ function OnboardingContent({ onAskPlexLogin }: { onAskPlexLogin: () => void }) {
                       )}
 
                       {error && (
-                        <div className="flex gap-2 rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
-                          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-                          <p>{error}</p>
-                        </div>
+                        <InlineError multiline className="rounded-lg">
+                          {error}
+                        </InlineError>
                       )}
 
                       {isSelectingLibs && (
@@ -784,87 +787,42 @@ function OnboardingContent({ onAskPlexLogin }: { onAskPlexLogin: () => void }) {
             ) : (
               /* Entry form */
               <>
-                <div className="space-y-1">
-                  <Label htmlFor="manual-name">Server Name (optional)</Label>
-                  <Input
-                    id="manual-name"
-                    placeholder={`My ${typeLabel} Server`}
-                    value={manualForm.name}
-                    onChange={(e) => { setManualForm((f) => ({ ...f, name: e.target.value })); setManualTestResult(null); }}
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label htmlFor="manual-url">URL</Label>
-                  <Input
-                    id="manual-url"
-                    placeholder={`http://your-server:${manualType === "JELLYFIN" ? "8096" : "8096"}`}
-                    value={manualForm.url}
-                    onChange={(e) => { setManualForm((f) => ({ ...f, url: e.target.value })); setManualTestResult(null); }}
-                  />
-                  <p className="text-xs text-muted-foreground">Must include http:// or https://</p>
-                </div>
-                <div className="space-y-1">
-                  <Label htmlFor="manual-apikey">API Key</Label>
-                  <Input
-                    id="manual-apikey"
-                    placeholder="API key from dashboard"
-                    value={manualForm.apiKey}
-                    onChange={(e) => { setManualForm((f) => ({ ...f, apiKey: e.target.value })); setManualTestResult(null); }}
-                  />
-                </div>
-                <div className="flex items-center gap-2">
-                  <Switch
-                    id="manual-tls"
-                    checked={manualForm.tlsSkipVerify}
-                    onCheckedChange={(checked) => { setManualForm((f) => ({ ...f, tlsSkipVerify: checked })); setManualTestResult(null); }}
-                  />
-                  <Label htmlFor="manual-tls" className="text-sm">Skip TLS verification</Label>
-                </div>
+                <MediaServerConnectionFields
+                  idPrefix="manual"
+                  value={manualForm}
+                  namePlaceholder={`My ${typeLabel} Server`}
+                  onChange={(next) => {
+                    // Any edit, the name included, needs a new Connect: the
+                    // server is created from what Connect tested.
+                    setManualForm(next);
+                    setManualTestResult(null);
+                  }}
+                />
 
-                {manualTestResult && (
-                  <div className={`flex items-center gap-2 rounded-md p-3 text-sm ${
-                    manualTestResult.ok ? "bg-green-500/10 text-green-500" : "bg-destructive/10 text-destructive"
-                  }`}>
-                    {manualTestResult.ok ? (
-                      <>
-                        <CheckCircle className="h-4 w-4 shrink-0" />
-                        Connection successful
-                      </>
-                    ) : (
-                      <>
-                        <XCircle className="h-4 w-4 shrink-0" />
-                        Connection failed{manualTestResult.error ? ` — ${manualTestResult.error}` : ""}
-                      </>
-                    )}
-                  </div>
-                )}
+                {manualTestResult && <ConnectionTestResult result={manualTestResult} />}
 
-                {manualError && (
-                  <div className="flex items-center gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-                    <AlertCircle className="h-4 w-4 shrink-0" />
-                    {manualError}
-                  </div>
-                )}
+                {manualError && <InlineError>{manualError}</InlineError>}
 
                 <div className="flex gap-2">
                   {!manualTestResult?.ok ? (
-                    <Button
+                    <LoadingButton
+                      icon={Plug}
+                      loading={manualTesting}
                       onClick={testManualConnection}
-                      disabled={manualTesting || !manualForm.url || !manualForm.apiKey}
+                      disabled={!manualForm.url || !manualForm.apiKey}
                       className={`flex-1 ${colors.btn} ${colors.btnHover} ${colors.btnText}`}
                     >
-                      {manualTesting ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Plug className="mr-2 h-4 w-4" />}
                       Connect
-                    </Button>
+                    </LoadingButton>
                   ) : (
-                    <Button
+                    <LoadingButton
+                      icon={Check}
+                      loading={manualAdding}
                       onClick={proceedToManualLibraries}
-                      disabled={manualAdding}
                       className={`flex-1 ${colors.btn} ${colors.btnHover} ${colors.btnText}`}
                     >
-                      {manualAdding ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Check className="mr-2 h-4 w-4" />}
                       Select Libraries
-                    </Button>
+                    </LoadingButton>
                   )}
                 </div>
               </>

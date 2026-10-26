@@ -3,16 +3,7 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ColorChip } from "@/components/color-chip";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { SettingsSection } from "../components";
 import { ReleaseNoteSections } from "@/components/release-note-sections";
 import { formatDate } from "@/lib/format";
@@ -191,30 +182,18 @@ export function SystemTab({
             </Button>
           </div>
 
-          <AlertDialog open={confirmClearCache} onOpenChange={setConfirmClearCache}>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>Clear image cache?</AlertDialogTitle>
-                <AlertDialogDescription>
-                  All cached artwork will be deleted and re-fetched from your media servers as
-                  pages are viewed. This may briefly slow down library browsing.
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <AlertDialogFooter>
-                <AlertDialogCancel>Cancel</AlertDialogCancel>
-                <AlertDialogAction
-                  variant="destructive"
-                  onClick={() => {
-                    setConfirmClearCache(false);
-                    onClearImageCache();
-                  }}
-                >
-                  <Trash2 className="mr-2 h-4 w-4" />
-                  Clear Cache
-                </AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
+          <ConfirmDialog
+            open={confirmClearCache}
+            onOpenChange={setConfirmClearCache}
+            title="Clear image cache?"
+            description="All cached artwork will be deleted and re-fetched from your media servers as pages are viewed. This may briefly slow down library browsing."
+            confirmLabel="Clear Cache"
+            confirmIcon={Trash2}
+            destructive
+            onConfirm={() => {
+              onClearImageCache();
+            }}
+          />
       </SettingsSection>
 
       {/* Release Notes */}
