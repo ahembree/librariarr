@@ -647,10 +647,16 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
     filteredMatchedIds: string[];
   }> = [];
 
+  // The cancellations pass 1 decides on, written together once it is done —
+  // one statement per slice, where there was one per cancelled action (each
+  // still logged where it is decided). Still `deleteMany`, for the reason above.
+  const cancelled: string[] = [];
+  const identityCancelled: Array<{ id: string; ruleSetId: string; mediaItemId: string }> = [];
+
   for (const action of pendingActions) {
     // Delete actions whose media item no longer exists
     if (!action.mediaItem || !action.mediaItemId) {
-      await prisma.lifecycleAction.deleteMany({ where: { id: action.id } });
+      cancelled.push(action.id);
       logger.info("Lifecycle", `Deleted action ${action.id} — media item no longer exists`);
       continue;
     }
@@ -668,21 +674,21 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
       action.ruleSet?.type === "MUSIC" &&
       hasSeerrRules(action.ruleSet.rules as unknown as LifecycleRuleGroup[])
     ) {
-      await prisma.lifecycleAction.deleteMany({ where: { id: action.id } });
+      cancelled.push(action.id);
       logger.warn("Lifecycle", `Cancelled action ${action.id} — rule set "${action.ruleSet.name}" uses Seerr criteria on a music library, which can never evaluate (its matches are vacuous)`);
       continue;
     }
 
     // Delete actions for items excluded via LifecycleException
     if (exceptionSet.has(`${action.userId}:${action.mediaItemId}`)) {
-      await prisma.lifecycleAction.deleteMany({ where: { id: action.id } });
+      cancelled.push(action.id);
       logger.info("Lifecycle", `Deleted action ${action.id} — "${formatMediaItemTitle(mediaItem)}" is excluded via lifecycle exception`);
       continue;
     }
 
     // Delete actions for items that are no longer a current match
     if (!matchSet.has(`${action.ruleSetId}:${action.mediaItemId}`)) {
-      await prisma.lifecycleAction.deleteMany({ where: { id: action.id } });
+      cancelled.push(action.id);
       logger.info("Lifecycle", `Deleted stale action ${action.id} — "${target}" is no longer a match for rule set "${action.ruleSet?.name ?? action.ruleSetId}"`);
       continue;
     }
@@ -720,10 +726,7 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
       // now. Left in place, a sticky rule set would re-schedule from that old
       // snapshot every run and this check would cancel it every time it came
       // due — and a kept match's snapshot is otherwise never rewritten.
-      await prisma.$transaction([
-        prisma.lifecycleAction.deleteMany({ where: { id: action.id } }),
-        prisma.ruleMatch.deleteMany({ where: { ruleSetId: action.ruleSetId!, mediaItemId: mediaItem.id } }),
-      ]);
+      identityCancelled.push({ id: action.id, ruleSetId: action.ruleSetId!, mediaItemId: mediaItem.id });
       logger.warn("Lifecycle", `Cancelled action ${action.id} — item identity changed since scheduling (${identityChange}); will re-evaluate on next detection`);
       continue;
     }
@@ -747,7 +750,7 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
       if (currentMembers) {
         const stillMatching = filteredMatchedIds.filter((mid) => currentMembers.has(mid));
         if (stillMatching.length === 0) {
-          await prisma.lifecycleAction.deleteMany({ where: { id: action.id } });
+          cancelled.push(action.id);
           logger.info("Lifecycle", `Deleted action ${action.id} — none of the originally targeted members for "${target}" still match`);
           continue;
         }
@@ -763,7 +766,7 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
       );
       if (filteredMatchedIds.length === 0) {
         // All targeted episodes/tracks are now excepted — cancel the action
-        await prisma.lifecycleAction.deleteMany({ where: { id: action.id } });
+        cancelled.push(action.id);
         logger.info("Lifecycle", `Deleted action ${action.id} — all targeted episodes/tracks for "${target}" are excluded via lifecycle exceptions`);
         continue;
       }
@@ -775,7 +778,7 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
         // protected item. Member-scoped file deletes honor the filtered set
         // below and are safe to proceed.
         if (isDestructiveActionType(action.actionType) && !actionHonorsMemberIds(action.actionType)) {
-          await prisma.lifecycleAction.deleteMany({ where: { id: action.id } });
+          cancelled.push(action.id);
           logger.warn("Lifecycle", `Cancelled whole-record action ${action.id} on "${target}" — ${original.length - filteredMatchedIds.length} member(s) are excepted and a ${action.actionType} cannot exclude them`);
           continue;
         }
@@ -798,12 +801,25 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
       protectedGroups &&
       isGroupProtected(protectedGroups, mediaItem)
     ) {
-      await prisma.lifecycleAction.deleteMany({ where: { id: action.id } });
+      cancelled.push(action.id);
       logger.warn("Lifecycle", `Cancelled whole-record action ${action.id} on "${target}" — an episode/track of it is excluded via lifecycle exception and a ${action.actionType} cannot exclude it`);
       continue;
     }
 
     executable.push({ action, mediaItem, filteredMatchedIds });
+  }
+
+  for (const ids of inChunks(cancelled)) {
+    await prisma.lifecycleAction.deleteMany({ where: { id: { in: ids } } });
+  }
+  // An identity-swapped action takes its stored match with it, atomically.
+  for (const chunk of inChunks(identityCancelled, 1_000)) {
+    await prisma.$transaction([
+      prisma.lifecycleAction.deleteMany({ where: { id: { in: chunk.map((c) => c.id) } } }),
+      prisma.ruleMatch.deleteMany({
+        where: { OR: chunk.map(({ ruleSetId, mediaItemId }) => ({ ruleSetId, mediaItemId })) },
+      }),
+    ]);
   }
 
   // BLAST-RADIUS CEILING, counted over the pass-1 survivors.

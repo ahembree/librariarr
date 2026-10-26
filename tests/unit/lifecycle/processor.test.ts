@@ -54,6 +54,16 @@ const mockPrisma = vi.hoisted(() => ({
   }),
 }));
 
+
+/** Every action id the executor cancelled, in a single-id or a batched delete. */
+function cancelledActionIds(): string[] {
+  return mockPrisma.lifecycleAction.deleteMany.mock.calls.flatMap(([args]) => {
+    const id = (args as { where?: { id?: string | { in?: string[] } } } | undefined)?.where?.id;
+    if (typeof id === "string") return [id];
+    return id?.in ?? [];
+  });
+}
+
 const mockDetectAndSaveMatches = vi.hoisted(() => vi.fn());
 const mockExecuteAction = vi.hoisted(() => vi.fn());
 const mockExtractActionError = vi.hoisted(() => vi.fn());
@@ -1335,9 +1345,7 @@ describe("executeLifecycleActions", () => {
 
     await executeLifecycleActions("u1");
 
-    expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledWith({
-      where: { id: "a1" },
-    });
+    expect(cancelledActionIds()).toContain("a1");
     expect(mockExecuteAction).not.toHaveBeenCalled();
   });
 
@@ -1363,9 +1371,7 @@ describe("executeLifecycleActions", () => {
 
     await executeLifecycleActions("u1");
 
-    expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledWith({
-      where: { id: "a1" },
-    });
+    expect(cancelledActionIds()).toContain("a1");
     expect(mockExecuteAction).not.toHaveBeenCalled();
   });
 
@@ -1389,9 +1395,9 @@ describe("executeLifecycleActions", () => {
 
     await executeLifecycleActions("u1");
 
-    expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledWith({ where: { id: "a1" } });
+    expect(cancelledActionIds()).toContain("a1");
     // The match went stale with it: the next detection evaluates the new title.
-    expect(mockPrisma.ruleMatch.deleteMany).toHaveBeenCalledWith({ where: { ruleSetId: "rs1", mediaItemId: "item1" } });
+    expect(mockPrisma.ruleMatch.deleteMany).toHaveBeenCalledWith({ where: { OR: [{ ruleSetId: "rs1", mediaItemId: "item1" }] } });
     expect(mockExecuteAction).not.toHaveBeenCalled();
   });
 
@@ -1490,7 +1496,7 @@ describe("executeLifecycleActions", () => {
 
       await executeLifecycleActions("u1");
 
-      expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledWith({ where: { id: "a1" } });
+      expect(cancelledActionIds()).toContain("a1");
       expect(mockExecuteAction).not.toHaveBeenCalled();
     });
 
@@ -1505,7 +1511,7 @@ describe("executeLifecycleActions", () => {
 
       await executeLifecycleActions("u1");
 
-      expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledWith({ where: { id: "a1" } });
+      expect(cancelledActionIds()).toContain("a1");
       expect(mockExecuteAction).not.toHaveBeenCalled();
     });
   });
@@ -1537,7 +1543,7 @@ describe("executeLifecycleActions", () => {
 
     await executeLifecycleActions("u1");
 
-    expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledWith({ where: { id: "a1" } });
+    expect(cancelledActionIds()).toContain("a1");
     expect(mockExecuteAction).not.toHaveBeenCalled();
   });
 
@@ -1564,7 +1570,7 @@ describe("executeLifecycleActions", () => {
 
     await executeLifecycleActions("u1");
 
-    expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledWith({ where: { id: "a1" } });
+    expect(cancelledActionIds()).toContain("a1");
     expect(mockExecuteAction).not.toHaveBeenCalled();
   });
 
@@ -1588,7 +1594,7 @@ describe("executeLifecycleActions", () => {
 
     await executeLifecycleActions("u1");
 
-    expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledWith({ where: { id: "a1" } });
+    expect(cancelledActionIds()).toContain("a1");
     expect(mockExecuteAction).not.toHaveBeenCalled();  // whole series NOT deleted
   });
 
@@ -1657,7 +1663,7 @@ describe("executeLifecycleActions", () => {
 
     await executeLifecycleActions("u1");
 
-    expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledWith({ where: { id: "a1" } });
+    expect(cancelledActionIds()).toContain("a1");
     expect(mockExecuteAction).not.toHaveBeenCalled();
   });
 
@@ -1704,7 +1710,7 @@ describe("executeLifecycleActions", () => {
 
     await executeLifecycleActions("u1");
 
-    expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledWith({ where: { id: "a1" } });
+    expect(cancelledActionIds()).toContain("a1");
     expect(mockExecuteAction).not.toHaveBeenCalled();
   });
 
@@ -1770,9 +1776,7 @@ describe("executeLifecycleActions", () => {
 
     await executeLifecycleActions("u1");
 
-    expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledWith({
-      where: { id: "a1" },
-    });
+    expect(cancelledActionIds()).toContain("a1");
     expect(mockExecuteAction).not.toHaveBeenCalled();
   });
 
@@ -2354,7 +2358,7 @@ describe("executeLifecycleActions", () => {
       expect(mockExecuteAction).toHaveBeenCalledTimes(1);
       // ...and the stale one is cleaned up rather than left to inflate the
       // next run's count too.
-      expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledWith({ where: { id: "a2" } });
+      expect(cancelledActionIds()).toContain("a2");
     });
 
     it("cancels doomed actions even when the ceiling holds the run", async () => {
@@ -2395,10 +2399,10 @@ describe("executeLifecycleActions", () => {
       expect(mockExecuteAction).not.toHaveBeenCalled();
       // ...but the filtering still ran, so the stale action is gone and the
       // hold cannot feed on its own leftovers.
-      expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledWith({ where: { id: "a3" } });
+      expect(cancelledActionIds()).toContain("a3");
       // The surviving actions are untouched, waiting for the Pending page.
-      expect(mockPrisma.lifecycleAction.deleteMany).not.toHaveBeenCalledWith({ where: { id: "a1" } });
-      expect(mockPrisma.lifecycleAction.deleteMany).not.toHaveBeenCalledWith({ where: { id: "a2" } });
+      expect(cancelledActionIds()).not.toContain("a1");
+      expect(cancelledActionIds()).not.toContain("a2");
     });
 
     it("runs normally at exactly the ceiling", async () => {

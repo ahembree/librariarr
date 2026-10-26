@@ -54,6 +54,16 @@ const mockPrisma = vi.hoisted(() => ({
   }),
 }));
 
+
+/** Every action id the executor cancelled, in a single-id or a batched delete. */
+function cancelledActionIds(): string[] {
+  return mockPrisma.lifecycleAction.deleteMany.mock.calls.flatMap(([args]) => {
+    const id = (args as { where?: { id?: string | { in?: string[] } } } | undefined)?.where?.id;
+    if (typeof id === "string") return [id];
+    return id?.in ?? [];
+  });
+}
+
 const mockDetectAndSaveMatches = vi.hoisted(() => vi.fn());
 const mockExecuteAction = vi.hoisted(() => vi.fn());
 const mockExtractActionError = vi.hoisted(() => vi.fn());
@@ -223,7 +233,28 @@ describe("executeLifecycleActions — narrowing and late exceptions", () => {
     await executeLifecycleActions("u1");
 
     expect(mockExecuteAction).not.toHaveBeenCalled();
-    expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledWith({ where: { id: "a1" } });
+    expect(cancelledActionIds()).toContain("a1");
+  });
+
+  it("cancels every doomed action of a run in one statement, logging each", async () => {
+    mockPrisma.lifecycleAction.findMany.mockResolvedValue([
+      seriesAction({ id: "gone1", mediaItemId: null, mediaItem: null }),
+      seriesAction({ id: "stale" }),
+      seriesAction({ id: "gone2", mediaItemId: null, mediaItem: null }),
+    ]);
+    // No current match: "stale" is no longer matched.
+    mockPrisma.ruleMatch.findMany.mockResolvedValue([]);
+    mockPrisma.lifecycleException.findMany.mockResolvedValue([]);
+
+    await executeLifecycleActions("u1");
+
+    expect(mockExecuteAction).not.toHaveBeenCalled();
+    expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledTimes(1);
+    expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledWith({ where: { id: { in: ["gone1", "stale", "gone2"] } } });
+    const info = vi.mocked(logger.info).mock.calls.map((c) => c[1] as string);
+    expect(info).toContain("Deleted action gone1 — media item no longer exists");
+    expect(info).toContain("Deleted action gone2 — media item no longer exists");
+    expect(info.some((m) => m.startsWith("Deleted stale action stale"))).toBe(true);
   });
 
   it("acts only on the members that still match", async () => {
@@ -255,7 +286,7 @@ describe("executeLifecycleActions — narrowing and late exceptions", () => {
     await executeLifecycleActions("u1");
 
     expect(mockExecuteAction).not.toHaveBeenCalled();
-    expect(mockPrisma.lifecycleAction.deleteMany).toHaveBeenCalledWith({ where: { id: "a1" } });
+    expect(cancelledActionIds()).toContain("a1");
   });
 
   it("leaves an action PENDING when one of its members was excepted after the run started", async () => {
