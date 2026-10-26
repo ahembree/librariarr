@@ -5,6 +5,7 @@ import { useRealtime } from "@/hooks/use-realtime";
 import { useFallbackPoll } from "@/hooks/use-fallback-poll";
 import { useLibraryTypes } from "@/hooks/use-library-types";
 import { useShellSnapshot } from "@/components/shell-settings-provider";
+import { getLiveSessionCount, subscribeLiveSessionCount } from "@/hooks/use-live-session-count";
 import { fetchJsonShared } from "@/lib/shared-fetch";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
@@ -223,10 +224,26 @@ export function useSidebarData(initialCollapsed = false) {
       .catch((e) => console.error("Failed to fetch session count", e));
   }, []);
 
+  // While a page holds the live session list (the Stream Manager, over its own
+  // stream), the badge takes its count from it and `session-changed` asks no
+  // media server for anything.
+  useEffect(
+    () =>
+      subscribeLiveSessionCount(() => {
+        const count = getLiveSessionCount();
+        if (count !== null) setActiveSessionCount(count);
+      }),
+    [],
+  );
+  const onSessionChanged = useCallback(() => {
+    if (getLiveSessionCount() !== null) return;
+    fetchSessionCount();
+  }, [fetchSessionCount]);
+
   // Pushed: `session-changed` is bridged from the media-server WebSocket layer
   // (throttled 2s per server), so a stream starting or stopping updates the
   // badge in about half a second.
-  useRealtime("session-changed", fetchSessionCount);
+  useRealtime("session-changed", onSessionChanged);
   // A server socket dropping changes the unreachable set this same route
   // reports, so recheck on that too.
   useRealtime("server-status", fetchSessionCount);

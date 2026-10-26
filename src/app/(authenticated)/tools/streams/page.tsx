@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, memo } from "react";
 import { toast } from "sonner";
 import {
   Card,
@@ -18,16 +18,15 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import { ConfirmDialog } from "@/components/confirm-dialog";
+import { LoadingButton } from "@/components/loading-button";
+import { PageHeader } from "@/components/page-header";
+import { DayOfWeekPicker } from "@/components/day-of-week-picker";
+import { useShellSnapshot } from "@/components/shell-settings-provider";
+import { publishLiveSessionCount } from "@/hooks/use-live-session-count";
+import { fetchJsonShared } from "@/lib/shared-fetch";
+import { formatScheduleWindow } from "@/lib/schedule-format";
+import { streamDecision, decisionChipClass, type StreamDecision } from "@/lib/media/stream-decision";
 import {
   Sheet,
   SheetContent,
@@ -99,7 +98,7 @@ import { useMediaDetailPanel } from "@/hooks/use-media-detail-panel";
 import { sessionMediaType } from "@/lib/media/detail-panel-item";
 import { qualityChips, resolutionChipLabel } from "@/lib/media/quality-chips";
 import { QualityChip } from "@/components/quality-chips";
-import { formatDurationClock } from "@/lib/format";
+import { formatDurationClock, toDatetimeLocalValue } from "@/lib/format";
 import { hardwareEncoder, hardwareDecoder } from "@/lib/media-server/hardware-transcode";
 import { formatSessionMediaTitle } from "@/lib/media-server/session-title";
 import { formatEpisodeCode } from "@/lib/media/display-title";
@@ -258,8 +257,6 @@ const BLACKOUT_ACTION_LABELS: Record<string, string> = {
   block_new_only: "Block New Only",
 };
 
-const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-
 const DEFAULT_BLACKOUT_FORM = {
   name: "",
   scheduleType: "recurring" as string,
@@ -275,45 +272,6 @@ const DEFAULT_BLACKOUT_FORM = {
 };
 
 // --- Helpers ---
-
-/** Format a Date as a datetime-local input value using the browser's local timezone. */
-function toDatetimeLocalValue(date: Date): string {
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
-
-function formatBlackoutScheduleDescription(schedule: BlackoutSchedule): string {
-  if (schedule.scheduleType === "one_time") {
-    const start = schedule.startDate
-      ? new Date(schedule.startDate).toLocaleString([], {
-          month: "short",
-          day: "numeric",
-          year: "numeric",
-          hour: "numeric",
-          minute: "2-digit",
-        })
-      : "?";
-    const end = schedule.endDate
-      ? new Date(schedule.endDate).toLocaleString([], {
-          month: "short",
-          day: "numeric",
-          year: "numeric",
-          hour: "numeric",
-          minute: "2-digit",
-        })
-      : "?";
-    return `${start} - ${end}`;
-  }
-
-  // Recurring
-  const days =
-    schedule.daysOfWeek && schedule.daysOfWeek.length > 0
-      ? schedule.daysOfWeek.map((d) => DAY_LABELS[d]).join(", ")
-      : "No days selected";
-  const start = schedule.startTime || "?";
-  const end = schedule.endTime || "?";
-  return `Every ${days} ${start} - ${end}`;
-}
 
 /** Split a session into a primary line (what to lead with) and a
  *  secondary context line, per media type. */
@@ -401,21 +359,13 @@ function getStateConfig(state: string) {
   }
 }
 
-function getStreamDecision(transcoding?: SessionTranscoding): { label: string; direct: boolean } {
-  if (!transcoding) return { label: "Direct Play", direct: true };
-  // Any transcode — video OR audio — is a real transcode, not a direct stream.
-  // Treating an audio-only transcode (video copied, audio re-encoded) as
-  // "Direct Stream" contradicted the enforcer, which terminates it under the
-  // Audio/Any criteria, and mislabeled it with green direct-play styling.
-  if (transcoding.videoDecision === "transcode" || transcoding.audioDecision === "transcode") {
-    return { label: "Transcode", direct: false };
-  }
-  // Nothing is being re-encoded. A "copy" decision means remux/direct-stream
-  // (container change), everything else is direct play.
-  if (transcoding.videoDecision === "copy" || transcoding.audioDecision === "copy") {
-    return { label: "Direct Stream", direct: true };
-  }
-  return { label: "Direct Play", direct: true };
+/**
+ * A live session's stream decision, decided as a recorded play's is
+ * (`streamDecision`): any re-encode, audio-only included, is a transcode. A
+ * session with no transcode details is direct play.
+ */
+function sessionStreamDecision(transcoding?: SessionTranscoding): StreamDecision {
+  return streamDecision(transcoding) ?? { kind: "direct-play", label: "Direct Play" };
 }
 
 function getSessionArtworkUrl(session: SessionWithServer): string | null {
@@ -583,12 +533,9 @@ function MessageSelector({
 
 // --- Session stream details ---
 
-/** The card's stream-decision colours, shared with the transcode details. */
-const AMBER_CHIP = "bg-amber-dim text-amber border-amber/25";
-const GREEN_CHIP = "bg-green-dim text-green border-green/25";
-
-function decisionChipClass(decision: string | undefined): string {
-  return decision === "transcode" ? AMBER_CHIP : GREEN_CHIP;
+/** One stream's chip colour by its own decision, as the card's stream chip is coloured. */
+function streamChipClass(decision: string | undefined): string {
+  return decisionChipClass(streamDecision({ videoDecision: decision })?.kind ?? "direct-play");
 }
 
 /**
@@ -707,14 +654,14 @@ function SessionStreamDetails({ session }: { session: SessionWithServer }) {
           <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Transcode Details</h4>
           <div className="flex flex-wrap gap-1.5">
             {/* Each stream coloured by its decision, as the card's stream
-                chip is: a transcode amber, a copy or direct stream green. */}
+                chip is: a transcode amber, a copy sky, direct play green. */}
             {transcoding.sourceVideoCodec && (
-              <ColorChip className={decisionChipClass(transcoding.videoDecision)}>
+              <ColorChip className={streamChipClass(transcoding.videoDecision)}>
                 Video: {transcoding.sourceVideoCodec.toUpperCase()} &rarr; {transcoding.videoDecision}
               </ColorChip>
             )}
             {transcoding.sourceAudioCodec && (
-              <ColorChip className={decisionChipClass(transcoding.audioDecision)}>
+              <ColorChip className={streamChipClass(transcoding.audioDecision)}>
                 Audio: {transcoding.sourceAudioCodec.toUpperCase()} &rarr; {transcoding.audioDecision}
               </ColorChip>
             )}
@@ -734,7 +681,7 @@ function SessionStreamDetails({ session }: { session: SessionWithServer }) {
                   "font-mono tabular-nums",
                   // Below realtime the transcode is losing ground and
                   // the viewer will buffer, hardware or not.
-                  transcoding.speed < 1 && AMBER_CHIP,
+                  transcoding.speed < 1 && decisionChipClass("transcode"),
                 )}
               >
                 Speed: {transcoding.speed.toFixed(1)}x
@@ -755,7 +702,12 @@ function sessionKey(s: SessionWithServer): string {
   return `${s.serverId}-${s.sessionId}`;
 }
 
-function SessionCard({
+/**
+ * One stream's card, memoised: the session list re-renders on every message
+ * the stream pushes (and on a selection change), and a card whose session
+ * and selection are unchanged has nothing to redraw.
+ */
+const SessionCard = memo(function SessionCard({
   session,
   selected,
   onToggleSelect,
@@ -771,7 +723,8 @@ function SessionCard({
   const stateConfig = getStateConfig(session.player.state);
   const StateIcon = stateConfig.icon;
 
-  const streamInfo = getStreamDecision(session.transcoding);
+  const streamInfo = sessionStreamDecision(session.transcoding);
+  const direct = streamInfo.kind !== "transcode";
   const duration = session.duration ?? 0;
   const hasDuration = duration > 0;
   const progress = hasDuration
@@ -890,14 +843,8 @@ function SessionCard({
 
         {/* Stream facts */}
         <div className="flex flex-wrap items-center gap-1.5">
-          <ColorChip
-            className={`gap-1 ${
-              streamInfo.direct
-                ? GREEN_CHIP
-                : AMBER_CHIP
-            }`}
-          >
-            {streamInfo.direct ? (
+          <ColorChip className={`gap-1 ${decisionChipClass(streamInfo.kind)}`}>
+            {direct ? (
               <Zap className="h-2.5 w-2.5" />
             ) : (
               <Radio className="h-2.5 w-2.5" />
@@ -981,11 +928,19 @@ function SessionCard({
       )}
     </div>
   );
-}
+});
 
-// --- Main Page ---
+// --- Active Sessions ---
 
-export default function StreamManagerPage() {
+type TerminateTarget = SessionWithServer | "all" | "selected";
+
+/**
+ * The live session list with its selection, the terminate dialog and the
+ * detail panel. The list is pushed over `/api/tools/sessions/stream` every
+ * time it changes, so it lives here, apart from the maintenance, transcode
+ * and blackout panels, which a session update no longer re-renders.
+ */
+function ActiveSessionsSection() {
   const [sessions, setSessions] = useState<SessionWithServer[]>([]);
   const [loading, setLoading] = useState(true);
   const [terminating, setTerminating] = useState(false);
@@ -995,42 +950,9 @@ export default function StreamManagerPage() {
 
   // Terminate dialog state
   const [terminateDialogOpen, setTerminateDialogOpen] = useState(false);
-  const [terminateTarget, setTerminateTarget] = useState<SessionWithServer | "all" | "selected" | null>(null);
+  const [terminateTarget, setTerminateTarget] = useState<TerminateTarget | null>(null);
   const [selectedMessage, setSelectedMessage] = useState(PRESET_MESSAGES[0]);
   const [customMessage, setCustomMessage] = useState("");
-
-  // Maintenance mode state
-  const [maintenanceEnabled, setMaintenanceEnabled] = useState(false);
-  const [maintenanceMessage, setMaintenanceMessage] = useState(PRESET_MESSAGES[0]);
-  const [maintenanceCustom, setMaintenanceCustom] = useState("");
-  const [maintenanceDelay, setMaintenanceDelay] = useState(30);
-  const [maintenanceLoading, setMaintenanceLoading] = useState(true);
-  const [maintenanceSaving, setMaintenanceSaving] = useState(false);
-  const [discordNotifyMaintenance, setDiscordNotifyMaintenance] = useState(false);
-  const [maintenanceExcludedUsers, setMaintenanceExcludedUsers] = useState<string[]>([]);
-
-  // Transcode manager state
-  const [transcodeEnabled, setTranscodeEnabled] = useState(false);
-  const [transcodeMessage, setTranscodeMessage] = useState(TRANSCODE_PRESET_MESSAGES[0]);
-  const [transcodeCustom, setTranscodeCustom] = useState("");
-  const [transcodeDelay, setTranscodeDelay] = useState(30);
-  const [transcodeCriteria, setTranscodeCriteria] = useState<TranscodeCriteria>(DEFAULT_CRITERIA);
-  const [transcodeLoading, setTranscodeLoading] = useState(true);
-  const [transcodeSaving, setTranscodeSaving] = useState(false);
-  const [transcodeExcludedUsers, setTranscodeExcludedUsers] = useState<string[]>([]);
-  const [transcodeExemptHardware, setTranscodeExemptHardware] = useState(false);
-
-  // Known users from media servers (for exclusion dropdowns)
-  const [knownUsers, setKnownUsers] = useState<string[]>([]);
-
-  // Blackout schedules state
-  const [blackoutSchedules, setBlackoutSchedules] = useState<BlackoutSchedule[]>([]);
-  const [blackoutLoading, setBlackoutLoading] = useState(false);
-  const [showBlackoutDialog, setShowBlackoutDialog] = useState(false);
-  const [editingBlackout, setEditingBlackout] = useState<BlackoutSchedule | null>(null);
-  const [blackoutForm, setBlackoutForm] = useState({ ...DEFAULT_BLACKOUT_FORM });
-  const [blackoutSaving, setBlackoutSaving] = useState(false);
-  const [deleteBlackoutId, setDeleteBlackoutId] = useState<string | null>(null);
 
   // Media detail: the shared library panel for a synced item, with the
   // session's playback details on top; the sheet only for an item the library
@@ -1096,6 +1018,9 @@ export default function StreamManagerPage() {
           setSessions(incoming);
           setLoading(false);
           setConnected(true);
+          // The sidebar's stream badge reads this instead of asking every
+          // media server again on each `session-changed`.
+          publishLiveSessionCount(incoming.length);
           // Successful payload — reset the backoff window.
           reconnectDelayRef.current = SSE_RECONNECT_DELAY;
 
@@ -1115,6 +1040,8 @@ export default function StreamManagerPage() {
 
       es.onerror = () => {
         setConnected(false);
+        // While the stream is down the sidebar reads the count itself.
+        publishLiveSessionCount(null);
         es.close();
         eventSourceRef.current = null;
 
@@ -1129,6 +1056,7 @@ export default function StreamManagerPage() {
     connect();
 
     return () => {
+      publishLiveSessionCount(null);
       if (eventSourceRef.current) {
         eventSourceRef.current.close();
         eventSourceRef.current = null;
@@ -1146,19 +1074,356 @@ export default function StreamManagerPage() {
       const res = await fetch("/api/tools/sessions");
       if (res.ok) {
         const data = await res.json();
-        setSessions(data.sessions ?? []);
+        const next: SessionWithServer[] = data.sessions ?? [];
+        setSessions(next);
+        if (eventSourceRef.current) publishLiveSessionCount(next.length);
       }
     } catch {
       // SSE will pick up changes on next cycle
     }
   }, []);
 
-  // Fetch maintenance mode
+  // Selection helpers
+  const toggleSelect = useCallback((session: SessionWithServer) => {
+    const key = sessionKey(session);
+    setSelectedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }, []);
+
+  const selectAll = () => {
+    setSelectedKeys(new Set(sessions.map(sessionKey)));
+  };
+
+  const deselectAll = () => {
+    setSelectedKeys(new Set());
+  };
+
+  const allSelected = sessions.length > 0 && selectedKeys.size === sessions.length;
+
+  // Open terminate dialog
+  const handleTerminateClick = useCallback((target: TerminateTarget) => {
+    setTerminateTarget(target);
+    setTerminateDialogOpen(true);
+  }, []);
+
+  // Resolve which sessions the current target refers to
+  const getTargetSessions = (): SessionWithServer[] => {
+    if (terminateTarget === "all") return sessions;
+    if (terminateTarget === "selected") return sessions.filter((s) => selectedKeys.has(sessionKey(s)));
+    if (terminateTarget) return [terminateTarget];
+    return [];
+  };
+
+  // Execute termination
+  const executeTerminate = async () => {
+    if (!terminateTarget || !selectedMessage) return;
+    setTerminating(true);
+    const targetCount = getTargetSessions().length || (terminateTarget === "all" ? sessions.length : 0);
+
+    try {
+      // The terminate endpoint returns 200 with { terminated, errors } even
+      // when individual terminations fail, so read the bodies rather than
+      // assuming success from a resolved fetch.
+      const requests: Array<Promise<Response>> = [];
+      if (terminateTarget === "all") {
+        requests.push(
+          fetch("/api/tools/sessions/terminate", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ serverId: "all", message: selectedMessage }),
+          })
+        );
+      } else {
+        // Group target sessions by serverId for efficient batch calls
+        const targets = getTargetSessions();
+        const byServer = new Map<string, string[]>();
+        for (const s of targets) {
+          const ids = byServer.get(s.serverId) ?? [];
+          ids.push(s.sessionId);
+          byServer.set(s.serverId, ids);
+        }
+
+        for (const [serverId, sessionIds] of byServer) {
+          requests.push(
+            fetch("/api/tools/sessions/terminate", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ serverId, sessionIds, message: selectedMessage }),
+            })
+          );
+        }
+      }
+
+      const responses = await Promise.all(requests);
+      let terminated = 0;
+      const failures: string[] = [];
+      for (const res of responses) {
+        if (!res.ok) {
+          failures.push(`Request failed (${res.status})`);
+          continue;
+        }
+        const body = (await res.json().catch(() => null)) as
+          | { terminated?: number; errors?: string[] }
+          | null;
+        terminated += body?.terminated ?? 0;
+        if (body?.errors?.length) failures.push(...body.errors);
+      }
+
+      setSelectedKeys(new Set());
+      await refreshSessions();
+
+      if (failures.length > 0) {
+        toast.error(
+          terminated > 0
+            ? `Terminated ${terminated}, but ${failures.length} failed`
+            : `Couldn't terminate ${failures.length === 1 ? "the session" : "sessions"}`
+        );
+      } else {
+        toast.success(
+          `Terminated ${terminated || targetCount} session${(terminated || targetCount) !== 1 ? "s" : ""}`
+        );
+      }
+    } catch {
+      // SSE stream will pick up changes on next cycle
+      toast.error("Couldn't terminate sessions");
+    } finally {
+      setTerminating(false);
+      setTerminateDialogOpen(false);
+      setTerminateTarget(null);
+    }
+  };
+
+  return (
+    <>
+      <div className="space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <h2 className="text-lg font-semibold flex items-center gap-2">
+              <Monitor className="h-5 w-5" />
+              Active Sessions
+            </h2>
+            {!loading && (
+              <Badge variant="secondary" className="text-xs">
+                {sessions.length}
+              </Badge>
+            )}
+            {loading && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+            <span
+              className={`h-2 w-2 rounded-full ${connected ? "bg-green animate-pulse shadow-[0_0_8px_var(--green)]" : "bg-muted-foreground"}`}
+              title={connected ? "Live — connected to server" : "Connecting..."}
+              role="status"
+              aria-label={connected ? "Live — connected to server" : "Connecting to server"}
+            />
+            {connected && <span className="text-xs text-green hidden sm:inline">Live</span>}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {sessions.length > 0 && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={allSelected ? deselectAll : selectAll}
+              >
+                {allSelected ? (
+                  <SquareCheck className="h-4 w-4 mr-1.5" />
+                ) : (
+                  <Square className="h-4 w-4 mr-1.5" />
+                )}
+                {allSelected ? "Deselect All" : "Select All"}
+              </Button>
+            )}
+            {selectedKeys.size > 0 && (
+              <Button
+                variant="destructive"
+                size="sm"
+                disabled={terminating}
+                onClick={() => handleTerminateClick("selected")}
+              >
+                <XCircle className="h-4 w-4 mr-1.5" />
+                Terminate Selected ({selectedKeys.size})
+              </Button>
+            )}
+            <LoadingButton
+              variant="outline"
+              size="sm"
+              className="text-destructive hover:text-destructive hover:bg-destructive/10"
+              disabled={sessions.length === 0}
+              loading={terminating}
+              icon={XCircle}
+              iconClassName="h-4 w-4 mr-1.5"
+              onClick={() => handleTerminateClick("all")}
+            >
+              Terminate All
+            </LoadingButton>
+          </div>
+        </div>
+
+        {/* Session list */}
+        {!loading && sessions.length === 0 ? (
+          <EmptyState
+            icon={Monitor}
+            title="No active streams"
+            description="Streams will appear here when users start playing media."
+          />
+        ) : (
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3 stagger-children">
+            {sessions.map((s) => (
+              <SessionCard
+                key={sessionKey(s)}
+                session={s}
+                selected={selectedKeys.has(sessionKey(s))}
+                onToggleSelect={toggleSelect}
+                onTerminate={handleTerminateClick}
+                onOpenDetail={openSessionDetail}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Terminate Dialog */}
+      <ConfirmDialog
+        open={terminateDialogOpen}
+        onOpenChange={setTerminateDialogOpen}
+        title={
+          terminateTarget === "all"
+            ? `Terminate All Streams (${sessions.length})`
+            : terminateTarget === "selected"
+              ? `Terminate Selected Streams (${selectedKeys.size})`
+              : terminateTarget
+                ? `Terminate Stream — ${terminateTarget.username}`
+                : "Terminate Stream"
+        }
+        description="Select a message to display on the client when the stream is terminated."
+        confirmLabel="Terminate"
+        confirmIcon={XCircle}
+        destructive
+        pending={terminating}
+        confirmDisabled={!selectedMessage}
+        onConfirm={executeTerminate}
+      >
+        <MessageSelector
+          selectedMessage={selectedMessage}
+          onSelect={setSelectedMessage}
+          customMessage={customMessage}
+          onCustomChange={setCustomMessage}
+        />
+      </ConfirmDialog>
+
+      {detailPanel.panelProps && (
+        <MediaDetailSidePanel
+          {...detailPanel.panelProps}
+          contextSection={panelSession && panelSession.itemId === detailPanel.selectedId && (
+            // The live session while it plays; the last one seen once it ends.
+            <SessionStreamDetails
+              session={sessions.find((x) => sessionKey(x) === sessionKey(panelSession.session)) ?? panelSession.session}
+            />
+          )}
+        />
+      )}
+
+      {/* Media Detail Sheet — a session whose item the library has not synced */}
+      <Sheet open={!!sheetSession} onOpenChange={(open) => { if (!open) setSheetSession(null); }}>
+        <SheetContent side="right" className="pb-safe overflow-y-auto">
+          {sheetSession && (
+            <>
+              <SheetHeader>
+                <SheetTitle className="wrap-break-word">{formatSessionMediaTitle(sheetSession)}</SheetTitle>
+                <SheetDescription>
+                  {sheetSession.type === "episode" ? "TV Episode" : sheetSession.type === "movie" ? "Movie" : sheetSession.type === "track" ? "Track" : sheetSession.type}
+                  {sheetSession.year ? ` (${sheetSession.year})` : ""}
+                </SheetDescription>
+              </SheetHeader>
+
+              <div className="space-y-5 px-4 pb-4">
+                {/* Large artwork */}
+                {(() => {
+                  const artUrl = getSessionArtworkUrl(sheetSession);
+                  return artUrl ? (
+                    <div className="flex justify-center px-4">
+                      <div className="overflow-hidden rounded-xl">
+                        <FadeImage
+                          src={artUrl}
+                          alt={formatSessionMediaTitle(sheetSession)}
+                          loading="lazy"
+                          className="block max-w-full"
+                          style={{ maxHeight: "400px" }}
+                          onError={(e) => {
+                            (e.target as HTMLImageElement).style.display = "none";
+                          }}
+                        />
+                      </div>
+                    </div>
+                  ) : null;
+                })()}
+
+                {/* Overview */}
+                {(sheetSession.tagline || sheetSession.summary || sheetSession.contentRating || sheetSession.studio || sheetSession.genres) && (
+                  <div className="space-y-2">
+                    <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Overview</h4>
+                    {sheetSession.tagline && (
+                      <p className="text-xs italic text-muted-foreground">{sheetSession.tagline}</p>
+                    )}
+                    {sheetSession.summary && (
+                      <p className="text-sm text-muted-foreground leading-relaxed">{sheetSession.summary}</p>
+                    )}
+                    <div className="flex flex-wrap gap-1.5">
+                      {sheetSession.contentRating && <ColorChip>{sheetSession.contentRating}</ColorChip>}
+                      {sheetSession.studio && <ColorChip>{sheetSession.studio}</ColorChip>}
+                      {/* The ratings chips the detail pages show. */}
+                      {sheetSession.rating != null && <RatingChip label="Critic" value={sheetSession.rating} />}
+                      {sheetSession.audienceRating != null && <RatingChip label="Audience" value={sheetSession.audienceRating} />}
+                    </div>
+                    {sheetSession.genres && sheetSession.genres.length > 0 && (
+                      <div className="flex flex-wrap gap-1">
+                        {sheetSession.genres.map(g => (
+                          <ColorChip key={g} className="bg-white/10 text-white/80 border-white/20">{g}</ColorChip>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                <SessionStreamDetails session={sheetSession} />
+              </div>
+            </>
+          )}
+        </SheetContent>
+      </Sheet>
+    </>
+  );
+}
+
+// --- Maintenance Mode ---
+
+function MaintenanceModePanel({ knownUsers }: { knownUsers: string[] }) {
+  // The layout read whether maintenance is on, so the switch is right in the
+  // first paint; the rest of the form comes with the read below.
+  const shell = useShellSnapshot();
+  const [maintenanceEnabled, setMaintenanceEnabled] = useState(() => shell?.maintenanceActive ?? false);
+  const [maintenanceMessage, setMaintenanceMessage] = useState(PRESET_MESSAGES[0]);
+  const [maintenanceCustom, setMaintenanceCustom] = useState("");
+  const [maintenanceDelay, setMaintenanceDelay] = useState(30);
+  const [maintenanceLoading, setMaintenanceLoading] = useState(true);
+  const [maintenanceSaving, setMaintenanceSaving] = useState(false);
+  const [discordNotifyMaintenance, setDiscordNotifyMaintenance] = useState(false);
+  const [maintenanceExcludedUsers, setMaintenanceExcludedUsers] = useState<string[]>([]);
+
+  // Fetch maintenance mode. Shared with the shell's banner check, which reads
+  // the same route.
   const fetchMaintenance = useCallback(async () => {
     try {
-      const res = await fetch("/api/tools/maintenance");
-      if (res.ok) {
-        const data = await res.json();
+      const data = await fetchJsonShared<{
+        enabled: boolean;
+        delay?: number;
+        message?: string;
+        discordNotifyMaintenance?: boolean;
+        excludedUsers?: string[];
+      }>("/api/tools/maintenance");
+      if (data) {
         setMaintenanceEnabled(data.enabled);
         setMaintenanceDelay(data.delay ?? 30);
         if (data.message) {
@@ -1170,12 +1435,184 @@ export default function StreamManagerPage() {
         setDiscordNotifyMaintenance(data.discordNotifyMaintenance ?? false);
         setMaintenanceExcludedUsers(data.excludedUsers ?? []);
       }
-    } catch {
-      // Silent
     } finally {
       setMaintenanceLoading(false);
     }
   }, []);
+
+  useEffect(() => {
+    void (async () => { await fetchMaintenance(); })();
+  }, [fetchMaintenance]);
+
+  const saveMaintenance = async (overrides: { enabled?: boolean; message?: string; delay?: number; discordNotifyMaintenance?: boolean; excludedUsers?: string[] }) => {
+    const payload = {
+      enabled: overrides.enabled ?? maintenanceEnabled,
+      message: overrides.message ?? maintenanceMessage,
+      delay: overrides.delay ?? maintenanceDelay,
+      ...(overrides.discordNotifyMaintenance !== undefined && { discordNotifyMaintenance: overrides.discordNotifyMaintenance }),
+      ...(overrides.excludedUsers !== undefined && { excludedUsers: overrides.excludedUsers }),
+    };
+    try {
+      const res = await fetch("/api/tools/maintenance", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  };
+
+  const toggleMaintenance = async (enabled: boolean) => {
+    setMaintenanceSaving(true);
+    setMaintenanceEnabled(enabled);
+    try {
+      const ok = await saveMaintenance({ enabled });
+      if (!ok) {
+        setMaintenanceEnabled(!enabled);
+        toast.error("Couldn't update maintenance mode");
+        return;
+      }
+      window.dispatchEvent(new CustomEvent("maintenance-changed", { detail: { enabled } }));
+      toast.success(enabled ? "Maintenance mode enabled" : "Maintenance mode disabled");
+    } finally {
+      setMaintenanceSaving(false);
+    }
+  };
+
+  // Persist a maintenance edit and, if the server rejects it, tell the user and
+  // resync the form from the server so the UI never silently diverges from what
+  // the enforcer will actually apply.
+  const persistMaintenance = async (overrides: Parameters<typeof saveMaintenance>[0]) => {
+    const ok = await saveMaintenance(overrides);
+    if (!ok) {
+      toast.error("Couldn't save maintenance settings");
+      await fetchMaintenance();
+    }
+  };
+
+  const updateMaintenanceMessage = (message: string) => {
+    setMaintenanceMessage(message);
+    if (maintenanceEnabled) void persistMaintenance({ message });
+  };
+
+  const updateMaintenanceDelay = (delay: number) => {
+    setMaintenanceDelay(delay);
+    if (maintenanceEnabled) void persistMaintenance({ delay });
+  };
+
+  return (
+    <div className="space-y-4 min-w-0">
+      <h2 className="text-lg font-semibold flex items-center gap-2">
+        <Shield className="h-5 w-5" />
+        Maintenance Mode
+      </h2>
+
+      <Card className={`overflow-hidden transition-colors ${maintenanceEnabled ? "border-amber/40 bg-amber/5" : ""}`}>
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="space-y-1 min-w-0">
+              <CardTitle className="text-base flex items-center gap-2">
+                {maintenanceEnabled && (
+                  <AlertTriangle className="h-4 w-4 text-amber shrink-0" />
+                )}
+                {maintenanceEnabled ? "Maintenance Mode Active" : "Maintenance Mode"}
+              </CardTitle>
+              <CardDescription>
+                {maintenanceEnabled
+                  ? `New streams will be automatically terminated after ${maintenanceDelay} seconds`
+                  : "When enabled, all new streams will be automatically terminated with your chosen message"}
+              </CardDescription>
+            </div>
+            <Switch
+              checked={maintenanceEnabled}
+              onCheckedChange={toggleMaintenance}
+              disabled={maintenanceLoading || maintenanceSaving}
+              className="shrink-0"
+            />
+          </div>
+        </CardHeader>
+
+        <CardContent className="space-y-4">
+          {/* Delay input */}
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground uppercase tracking-wider">
+              Termination Delay (seconds)
+            </Label>
+            <Input
+              type="number"
+              min={0}
+              max={MAX_TERMINATION_DELAY_SECONDS}
+              value={maintenanceDelay}
+              onChange={(e) => {
+                const val = parseInt(e.target.value, 10);
+                if (!isNaN(val) && val >= 0) updateMaintenanceDelay(Math.min(val, MAX_TERMINATION_DELAY_SECONDS));
+              }}
+              className="w-full sm:w-24"
+            />
+            <p className="text-[11px] text-muted-foreground">
+              Time before a new stream is terminated (0 for immediate)
+            </p>
+          </div>
+
+          {/* Message selector */}
+          <MessageSelector
+            selectedMessage={maintenanceMessage}
+            onSelect={updateMaintenanceMessage}
+            customMessage={maintenanceCustom}
+            onCustomChange={(msg) => {
+              setMaintenanceCustom(msg);
+              if (msg) updateMaintenanceMessage(msg);
+            }}
+          />
+
+          {/* Discord notification toggle */}
+          <div className="flex items-center justify-between gap-3 rounded-md bg-muted/30 px-3 py-2.5">
+            <div className="min-w-0">
+              <p className="text-sm font-medium">Notify Discord</p>
+              <p className="text-[11px] text-muted-foreground">
+                Send a Discord notification when maintenance mode is toggled
+              </p>
+            </div>
+            <Switch
+              checked={discordNotifyMaintenance}
+              onCheckedChange={(checked) => {
+                setDiscordNotifyMaintenance(checked);
+                void persistMaintenance({ discordNotifyMaintenance: checked });
+              }}
+              disabled={maintenanceLoading}
+              className="shrink-0"
+            />
+          </div>
+
+          {/* Excluded users */}
+          <ExcludedUsersSelect
+            selected={maintenanceExcludedUsers}
+            onChange={(users) => {
+              setMaintenanceExcludedUsers(users);
+              void persistMaintenance({ excludedUsers: users });
+            }}
+            knownUsers={knownUsers}
+          />
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+// --- Transcode Manager ---
+
+function TranscodeManagerPanel({ knownUsers }: { knownUsers: string[] }) {
+  const [transcodeEnabled, setTranscodeEnabled] = useState(false);
+  const [transcodeMessage, setTranscodeMessage] = useState(TRANSCODE_PRESET_MESSAGES[0]);
+  const [transcodeCustom, setTranscodeCustom] = useState("");
+  const [transcodeDelay, setTranscodeDelay] = useState(30);
+  const [transcodeCriteria, setTranscodeCriteria] = useState<TranscodeCriteria>(DEFAULT_CRITERIA);
+  const [transcodeLoading, setTranscodeLoading] = useState(true);
+  const [transcodeSaving, setTranscodeSaving] = useState(false);
+  const [transcodeExcludedUsers, setTranscodeExcludedUsers] = useState<string[]>([]);
+  const [transcodeExemptHardware, setTranscodeExemptHardware] = useState(false);
 
   // Fetch transcode manager settings
   const fetchTranscodeManager = useCallback(async () => {
@@ -1202,6 +1639,214 @@ export default function StreamManagerPage() {
     }
   }, []);
 
+  useEffect(() => {
+    void (async () => { await fetchTranscodeManager(); })();
+  }, [fetchTranscodeManager]);
+
+  const saveTranscodeManager = async (overrides: {
+    enabled?: boolean;
+    message?: string;
+    delay?: number;
+    criteria?: TranscodeCriteria;
+    excludedUsers?: string[];
+    exemptHardware?: boolean;
+  }) => {
+    const payload = {
+      enabled: overrides.enabled ?? transcodeEnabled,
+      message: overrides.message ?? transcodeMessage,
+      delay: overrides.delay ?? transcodeDelay,
+      criteria: overrides.criteria ?? transcodeCriteria,
+      ...(overrides.excludedUsers !== undefined && { excludedUsers: overrides.excludedUsers }),
+      exemptHardware: overrides.exemptHardware ?? transcodeExemptHardware,
+    };
+    try {
+      const res = await fetch("/api/tools/transcode-manager", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  };
+
+  const toggleTranscodeManager = async (enabled: boolean) => {
+    setTranscodeSaving(true);
+    setTranscodeEnabled(enabled);
+    try {
+      const ok = await saveTranscodeManager({ enabled });
+      if (!ok) {
+        setTranscodeEnabled(!enabled);
+        toast.error("Couldn't update transcode manager");
+        return;
+      }
+      toast.success(enabled ? "Transcode manager enabled" : "Transcode manager disabled");
+    } finally {
+      setTranscodeSaving(false);
+    }
+  };
+
+  // As persistMaintenance, but for the transcode manager.
+  const persistTranscode = async (overrides: Parameters<typeof saveTranscodeManager>[0]) => {
+    const ok = await saveTranscodeManager(overrides);
+    if (!ok) {
+      toast.error("Couldn't save transcode settings");
+      await fetchTranscodeManager();
+    }
+  };
+
+  const updateTranscodeMessage = (message: string) => {
+    setTranscodeMessage(message);
+    if (transcodeEnabled) void persistTranscode({ message });
+  };
+
+  const updateTranscodeDelay = (delay: number) => {
+    setTranscodeDelay(delay);
+    if (transcodeEnabled) void persistTranscode({ delay });
+  };
+
+  const updateTranscodeCriteria = (key: keyof TranscodeCriteria, checked: boolean) => {
+    const updated = { ...transcodeCriteria, [key]: checked };
+    setTranscodeCriteria(updated);
+    if (transcodeEnabled) void persistTranscode({ criteria: updated });
+  };
+
+  return (
+    <div className="space-y-4 min-w-0">
+      <h2 className="text-lg font-semibold flex items-center gap-2">
+        <Radio className="h-5 w-5" />
+        Transcode Manager
+      </h2>
+
+      <Card className={`overflow-hidden transition-colors ${transcodeEnabled ? "border-amber/40 bg-amber/5" : ""}`}>
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="space-y-1 min-w-0">
+              <CardTitle className="text-base flex items-center gap-2">
+                {transcodeEnabled && (
+                  <AlertTriangle className="h-4 w-4 text-amber shrink-0" />
+                )}
+                {transcodeEnabled ? "Transcode Manager Active" : "Transcode Manager"}
+              </CardTitle>
+              <CardDescription>
+                {transcodeEnabled
+                  ? `Matching transcoding streams will be terminated after ${transcodeDelay} seconds`
+                  : "When enabled, streams matching selected criteria will be automatically terminated"}
+              </CardDescription>
+            </div>
+            <Switch
+              checked={transcodeEnabled}
+              onCheckedChange={toggleTranscodeManager}
+              disabled={transcodeLoading || transcodeSaving}
+              className="shrink-0"
+            />
+          </div>
+        </CardHeader>
+
+        <CardContent className="space-y-4">
+          {/* Delay input */}
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground uppercase tracking-wider">
+              Termination Delay (seconds)
+            </Label>
+            <Input
+              type="number"
+              min={0}
+              max={MAX_TERMINATION_DELAY_SECONDS}
+              value={transcodeDelay}
+              onChange={(e) => {
+                const val = parseInt(e.target.value, 10);
+                if (!isNaN(val) && val >= 0) updateTranscodeDelay(Math.min(val, MAX_TERMINATION_DELAY_SECONDS));
+              }}
+              className="w-full sm:w-24"
+            />
+            <p className="text-[11px] text-muted-foreground">
+              Time before a matching stream is terminated (0 for immediate)
+            </p>
+          </div>
+
+          {/* Criteria toggles */}
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground uppercase tracking-wider">
+              Termination Criteria
+            </Label>
+            <p className="text-[11px] text-muted-foreground pb-1">
+              If any enabled criterion matches a stream, it will be terminated after the delay
+            </p>
+            {CRITERIA_OPTIONS.map(({ key, label, desc }) => (
+              <div key={key} className="flex items-center justify-between gap-3 rounded-md bg-muted/50 px-3 py-2">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium">{label}</p>
+                  <p className="text-[11px] text-muted-foreground">{desc}</p>
+                </div>
+                <Switch
+                  checked={transcodeCriteria[key]}
+                  onCheckedChange={(checked) => updateTranscodeCriteria(key, checked)}
+                  className="shrink-0"
+                />
+              </div>
+            ))}
+          </div>
+
+          {/* Hardware exemption */}
+          <div className="flex items-center justify-between gap-3 rounded-md bg-muted/50 px-3 py-2">
+            <div className="min-w-0">
+              <p className="text-sm font-medium">Skip hardware transcodes</p>
+              <p className="text-[11px] text-muted-foreground">
+                Never terminate a stream the server is encoding on a GPU, whatever the criteria say.
+                Hardware encoding spares the CPU but not the GPU &mdash; check the stream&apos;s speed
+                (below 1.0&times; means it isn&apos;t keeping up).
+              </p>
+            </div>
+            <Switch
+              checked={transcodeExemptHardware}
+              onCheckedChange={(checked) => {
+                setTranscodeExemptHardware(checked);
+                void persistTranscode({ exemptHardware: checked });
+              }}
+              className="shrink-0"
+            />
+          </div>
+
+          {/* Termination message */}
+          <MessageSelector
+            selectedMessage={transcodeMessage}
+            onSelect={updateTranscodeMessage}
+            customMessage={transcodeCustom}
+            messages={TRANSCODE_PRESET_MESSAGES}
+            onCustomChange={(msg) => {
+              setTranscodeCustom(msg);
+              if (msg) updateTranscodeMessage(msg);
+            }}
+          />
+
+          {/* Excluded users */}
+          <ExcludedUsersSelect
+            selected={transcodeExcludedUsers}
+            onChange={(users) => {
+              setTranscodeExcludedUsers(users);
+              void persistTranscode({ excludedUsers: users });
+            }}
+            knownUsers={knownUsers}
+          />
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+// --- Blackout Schedules ---
+
+function BlackoutSchedulesSection({ knownUsers }: { knownUsers: string[] }) {
+  const [blackoutSchedules, setBlackoutSchedules] = useState<BlackoutSchedule[]>([]);
+  const [blackoutLoading, setBlackoutLoading] = useState(false);
+  const [showBlackoutDialog, setShowBlackoutDialog] = useState(false);
+  const [editingBlackout, setEditingBlackout] = useState<BlackoutSchedule | null>(null);
+  const [blackoutForm, setBlackoutForm] = useState({ ...DEFAULT_BLACKOUT_FORM });
+  const [blackoutSaving, setBlackoutSaving] = useState(false);
+  const [deleteBlackoutId, setDeleteBlackoutId] = useState<string | null>(null);
+
   // Fetch blackout schedules
   const fetchBlackoutSchedules = useCallback(async () => {
     setBlackoutLoading(true);
@@ -1217,6 +1862,10 @@ export default function StreamManagerPage() {
       setBlackoutLoading(false);
     }
   }, []);
+
+  useEffect(() => {
+    void (async () => { await fetchBlackoutSchedules(); })();
+  }, [fetchBlackoutSchedules]);
 
   // Save (create or update) a blackout schedule
   const saveBlackout = async () => {
@@ -1339,601 +1988,13 @@ export default function StreamManagerPage() {
     setBlackoutForm((prev) => {
       const days = prev.daysOfWeek.includes(day)
         ? prev.daysOfWeek.filter((d) => d !== day)
-        : [...prev.daysOfWeek, day].sort();
+        : [...prev.daysOfWeek, day].sort((a, b) => a - b);
       return { ...prev, daysOfWeek: days };
     });
   };
 
-  // Load on mount
-  useEffect(() => {
-    void (async () => { await fetchMaintenance(); })();
-  }, [fetchMaintenance]);
-
-  useEffect(() => {
-    void (async () => { await fetchTranscodeManager(); })();
-  }, [fetchTranscodeManager]);
-
-  useEffect(() => {
-    void (async () => { await fetchBlackoutSchedules(); })();
-  }, [fetchBlackoutSchedules]);
-
-  useEffect(() => {
-    fetch("/api/tools/users")
-      .then((res) => (res.ok ? res.json() : { users: [] }))
-      .then((data) => setKnownUsers(data.users ?? []))
-      .catch(() => {});
-  }, []);
-
-  // Selection helpers
-  const toggleSelect = (session: SessionWithServer) => {
-    const key = sessionKey(session);
-    setSelectedKeys((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  };
-
-  const selectAll = () => {
-    setSelectedKeys(new Set(sessions.map(sessionKey)));
-  };
-
-  const deselectAll = () => {
-    setSelectedKeys(new Set());
-  };
-
-  const allSelected = sessions.length > 0 && selectedKeys.size === sessions.length;
-
-  // Open terminate dialog
-  const handleTerminateClick = (target: SessionWithServer | "all" | "selected") => {
-    setTerminateTarget(target);
-    setTerminateDialogOpen(true);
-  };
-
-  // Resolve which sessions the current target refers to
-  const getTargetSessions = (): SessionWithServer[] => {
-    if (terminateTarget === "all") return sessions;
-    if (terminateTarget === "selected") return sessions.filter((s) => selectedKeys.has(sessionKey(s)));
-    if (terminateTarget) return [terminateTarget];
-    return [];
-  };
-
-  // Execute termination
-  const executeTerminate = async () => {
-    if (!terminateTarget || !selectedMessage) return;
-    setTerminating(true);
-    const targetCount = getTargetSessions().length || (terminateTarget === "all" ? sessions.length : 0);
-
-    try {
-      // The terminate endpoint returns 200 with { terminated, errors } even
-      // when individual terminations fail, so read the bodies rather than
-      // assuming success from a resolved fetch.
-      const requests: Array<Promise<Response>> = [];
-      if (terminateTarget === "all") {
-        requests.push(
-          fetch("/api/tools/sessions/terminate", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ serverId: "all", message: selectedMessage }),
-          })
-        );
-      } else {
-        // Group target sessions by serverId for efficient batch calls
-        const targets = getTargetSessions();
-        const byServer = new Map<string, string[]>();
-        for (const s of targets) {
-          const ids = byServer.get(s.serverId) ?? [];
-          ids.push(s.sessionId);
-          byServer.set(s.serverId, ids);
-        }
-
-        for (const [serverId, sessionIds] of byServer) {
-          requests.push(
-            fetch("/api/tools/sessions/terminate", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ serverId, sessionIds, message: selectedMessage }),
-            })
-          );
-        }
-      }
-
-      const responses = await Promise.all(requests);
-      let terminated = 0;
-      const failures: string[] = [];
-      for (const res of responses) {
-        if (!res.ok) {
-          failures.push(`Request failed (${res.status})`);
-          continue;
-        }
-        const body = (await res.json().catch(() => null)) as
-          | { terminated?: number; errors?: string[] }
-          | null;
-        terminated += body?.terminated ?? 0;
-        if (body?.errors?.length) failures.push(...body.errors);
-      }
-
-      setSelectedKeys(new Set());
-      await refreshSessions();
-
-      if (failures.length > 0) {
-        toast.error(
-          terminated > 0
-            ? `Terminated ${terminated}, but ${failures.length} failed`
-            : `Couldn't terminate ${failures.length === 1 ? "the session" : "sessions"}`
-        );
-      } else {
-        toast.success(
-          `Terminated ${terminated || targetCount} session${(terminated || targetCount) !== 1 ? "s" : ""}`
-        );
-      }
-    } catch {
-      // SSE stream will pick up changes on next cycle
-      toast.error("Couldn't terminate sessions");
-    } finally {
-      setTerminating(false);
-      setTerminateDialogOpen(false);
-      setTerminateTarget(null);
-    }
-  };
-
-  // --- Maintenance mode handlers ---
-
-  const saveMaintenance = async (overrides: { enabled?: boolean; message?: string; delay?: number; discordNotifyMaintenance?: boolean; excludedUsers?: string[] }) => {
-    const payload = {
-      enabled: overrides.enabled ?? maintenanceEnabled,
-      message: overrides.message ?? maintenanceMessage,
-      delay: overrides.delay ?? maintenanceDelay,
-      ...(overrides.discordNotifyMaintenance !== undefined && { discordNotifyMaintenance: overrides.discordNotifyMaintenance }),
-      ...(overrides.excludedUsers !== undefined && { excludedUsers: overrides.excludedUsers }),
-    };
-    try {
-      const res = await fetch("/api/tools/maintenance", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      return res.ok;
-    } catch {
-      return false;
-    }
-  };
-
-  const toggleMaintenance = async (enabled: boolean) => {
-    setMaintenanceSaving(true);
-    setMaintenanceEnabled(enabled);
-    try {
-      const ok = await saveMaintenance({ enabled });
-      if (!ok) {
-        setMaintenanceEnabled(!enabled);
-        toast.error("Couldn't update maintenance mode");
-        return;
-      }
-      window.dispatchEvent(new CustomEvent("maintenance-changed", { detail: { enabled } }));
-      toast.success(enabled ? "Maintenance mode enabled" : "Maintenance mode disabled");
-    } finally {
-      setMaintenanceSaving(false);
-    }
-  };
-
-  // Persist a maintenance edit and, if the server rejects it, tell the user and
-  // resync the form from the server so the UI never silently diverges from what
-  // the enforcer will actually apply.
-  const persistMaintenance = async (overrides: Parameters<typeof saveMaintenance>[0]) => {
-    const ok = await saveMaintenance(overrides);
-    if (!ok) {
-      toast.error("Couldn't save maintenance settings");
-      await fetchMaintenance();
-    }
-  };
-
-  const updateMaintenanceMessage = (message: string) => {
-    setMaintenanceMessage(message);
-    if (maintenanceEnabled) void persistMaintenance({ message });
-  };
-
-  const updateMaintenanceDelay = (delay: number) => {
-    setMaintenanceDelay(delay);
-    if (maintenanceEnabled) void persistMaintenance({ delay });
-  };
-
-  // --- Transcode manager handlers ---
-
-  const saveTranscodeManager = async (overrides: {
-    enabled?: boolean;
-    message?: string;
-    delay?: number;
-    criteria?: TranscodeCriteria;
-    excludedUsers?: string[];
-    exemptHardware?: boolean;
-  }) => {
-    const payload = {
-      enabled: overrides.enabled ?? transcodeEnabled,
-      message: overrides.message ?? transcodeMessage,
-      delay: overrides.delay ?? transcodeDelay,
-      criteria: overrides.criteria ?? transcodeCriteria,
-      ...(overrides.excludedUsers !== undefined && { excludedUsers: overrides.excludedUsers }),
-      exemptHardware: overrides.exemptHardware ?? transcodeExemptHardware,
-    };
-    try {
-      const res = await fetch("/api/tools/transcode-manager", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-      return res.ok;
-    } catch {
-      return false;
-    }
-  };
-
-  const toggleTranscodeManager = async (enabled: boolean) => {
-    setTranscodeSaving(true);
-    setTranscodeEnabled(enabled);
-    try {
-      const ok = await saveTranscodeManager({ enabled });
-      if (!ok) {
-        setTranscodeEnabled(!enabled);
-        toast.error("Couldn't update transcode manager");
-        return;
-      }
-      toast.success(enabled ? "Transcode manager enabled" : "Transcode manager disabled");
-    } finally {
-      setTranscodeSaving(false);
-    }
-  };
-
-  // As persistMaintenance, but for the transcode manager.
-  const persistTranscode = async (overrides: Parameters<typeof saveTranscodeManager>[0]) => {
-    const ok = await saveTranscodeManager(overrides);
-    if (!ok) {
-      toast.error("Couldn't save transcode settings");
-      await fetchTranscodeManager();
-    }
-  };
-
-  const updateTranscodeMessage = (message: string) => {
-    setTranscodeMessage(message);
-    if (transcodeEnabled) void persistTranscode({ message });
-  };
-
-  const updateTranscodeDelay = (delay: number) => {
-    setTranscodeDelay(delay);
-    if (transcodeEnabled) void persistTranscode({ delay });
-  };
-
-  const updateTranscodeCriteria = (key: keyof TranscodeCriteria, checked: boolean) => {
-    const updated = { ...transcodeCriteria, [key]: checked };
-    setTranscodeCriteria(updated);
-    if (transcodeEnabled) void persistTranscode({ criteria: updated });
-  };
-
   return (
-    <div className="p-4 sm:p-6 lg:p-8 space-y-6 min-w-0">
-      {/* Header */}
-      <div>
-        <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Stream Manager</h1>
-        <p className="text-muted-foreground mt-1">
-          Monitor and manage active streams across your media servers
-        </p>
-      </div>
-
-      {/* Active Sessions */}
-      <div className="space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <h2 className="text-lg font-semibold flex items-center gap-2">
-              <Monitor className="h-5 w-5" />
-              Active Sessions
-            </h2>
-            {!loading && (
-              <Badge variant="secondary" className="text-xs">
-                {sessions.length}
-              </Badge>
-            )}
-            {loading && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
-            <span
-              className={`h-2 w-2 rounded-full ${connected ? "bg-green animate-pulse shadow-[0_0_8px_var(--green)]" : "bg-muted-foreground"}`}
-              title={connected ? "Live — connected to server" : "Connecting..."}
-              role="status"
-              aria-label={connected ? "Live — connected to server" : "Connecting to server"}
-            />
-            {connected && <span className="text-xs text-green hidden sm:inline">Live</span>}
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            {sessions.length > 0 && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={allSelected ? deselectAll : selectAll}
-              >
-                {allSelected ? (
-                  <SquareCheck className="h-4 w-4 mr-1.5" />
-                ) : (
-                  <Square className="h-4 w-4 mr-1.5" />
-                )}
-                {allSelected ? "Deselect All" : "Select All"}
-              </Button>
-            )}
-            {selectedKeys.size > 0 && (
-              <Button
-                variant="destructive"
-                size="sm"
-                disabled={terminating}
-                onClick={() => handleTerminateClick("selected")}
-              >
-                <XCircle className="h-4 w-4 mr-1.5" />
-                Terminate Selected ({selectedKeys.size})
-              </Button>
-            )}
-            <Button
-              variant="outline"
-              size="sm"
-              className="text-destructive hover:text-destructive hover:bg-destructive/10"
-              disabled={sessions.length === 0 || terminating}
-              onClick={() => handleTerminateClick("all")}
-            >
-              {terminating ? (
-                <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
-              ) : (
-                <XCircle className="h-4 w-4 mr-1.5" />
-              )}
-              Terminate All
-            </Button>
-          </div>
-        </div>
-
-        {/* Session list */}
-        {!loading && sessions.length === 0 ? (
-          <EmptyState
-            icon={Monitor}
-            title="No active streams"
-            description="Streams will appear here when users start playing media."
-          />
-        ) : (
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3 stagger-children">
-            {sessions.map((s) => (
-              <SessionCard
-                key={sessionKey(s)}
-                session={s}
-                selected={selectedKeys.has(sessionKey(s))}
-                onToggleSelect={toggleSelect}
-                onTerminate={handleTerminateClick}
-                onOpenDetail={openSessionDetail}
-              />
-            ))}
-          </div>
-        )}
-      </div>
-
-      <Separator />
-
-      {/* Maintenance Mode + Transcode Manager grid */}
-      <div className="grid gap-6 lg:grid-cols-2 min-w-0 animate-fade-in-up">
-        {/* Maintenance Mode */}
-        <div className="space-y-4 min-w-0">
-          <h2 className="text-lg font-semibold flex items-center gap-2">
-            <Shield className="h-5 w-5" />
-            Maintenance Mode
-          </h2>
-
-          <Card className={`overflow-hidden transition-colors ${maintenanceEnabled ? "border-amber/40 bg-amber/5" : ""}`}>
-            <CardHeader className="pb-3">
-              <div className="flex items-center justify-between gap-3">
-                <div className="space-y-1 min-w-0">
-                  <CardTitle className="text-base flex items-center gap-2">
-                    {maintenanceEnabled && (
-                      <AlertTriangle className="h-4 w-4 text-amber shrink-0" />
-                    )}
-                    {maintenanceEnabled ? "Maintenance Mode Active" : "Maintenance Mode"}
-                  </CardTitle>
-                  <CardDescription>
-                    {maintenanceEnabled
-                      ? `New streams will be automatically terminated after ${maintenanceDelay} seconds`
-                      : "When enabled, all new streams will be automatically terminated with your chosen message"}
-                  </CardDescription>
-                </div>
-                <Switch
-                  checked={maintenanceEnabled}
-                  onCheckedChange={toggleMaintenance}
-                  disabled={maintenanceLoading || maintenanceSaving}
-                  className="shrink-0"
-                />
-              </div>
-            </CardHeader>
-
-            <CardContent className="space-y-4">
-              {/* Delay input */}
-              <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground uppercase tracking-wider">
-                  Termination Delay (seconds)
-                </Label>
-                <Input
-                  type="number"
-                  min={0}
-                  max={MAX_TERMINATION_DELAY_SECONDS}
-                  value={maintenanceDelay}
-                  onChange={(e) => {
-                    const val = parseInt(e.target.value, 10);
-                    if (!isNaN(val) && val >= 0) updateMaintenanceDelay(Math.min(val, MAX_TERMINATION_DELAY_SECONDS));
-                  }}
-                  className="w-full sm:w-24"
-                />
-                <p className="text-[11px] text-muted-foreground">
-                  Time before a new stream is terminated (0 for immediate)
-                </p>
-              </div>
-
-              {/* Message selector */}
-              <MessageSelector
-                selectedMessage={maintenanceMessage}
-                onSelect={updateMaintenanceMessage}
-                customMessage={maintenanceCustom}
-                onCustomChange={(msg) => {
-                  setMaintenanceCustom(msg);
-                  if (msg) updateMaintenanceMessage(msg);
-                }}
-              />
-
-              {/* Discord notification toggle */}
-              <div className="flex items-center justify-between gap-3 rounded-md bg-muted/30 px-3 py-2.5">
-                <div className="min-w-0">
-                  <p className="text-sm font-medium">Notify Discord</p>
-                  <p className="text-[11px] text-muted-foreground">
-                    Send a Discord notification when maintenance mode is toggled
-                  </p>
-                </div>
-                <Switch
-                  checked={discordNotifyMaintenance}
-                  onCheckedChange={(checked) => {
-                    setDiscordNotifyMaintenance(checked);
-                    void persistMaintenance({ discordNotifyMaintenance: checked });
-                  }}
-                  disabled={maintenanceLoading}
-                  className="shrink-0"
-                />
-              </div>
-
-              {/* Excluded users */}
-              <ExcludedUsersSelect
-                selected={maintenanceExcludedUsers}
-                onChange={(users) => {
-                  setMaintenanceExcludedUsers(users);
-                  void persistMaintenance({ excludedUsers: users });
-                }}
-                knownUsers={knownUsers}
-              />
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* Transcode Manager */}
-        <div className="space-y-4 min-w-0">
-          <h2 className="text-lg font-semibold flex items-center gap-2">
-            <Radio className="h-5 w-5" />
-            Transcode Manager
-          </h2>
-
-          <Card className={`overflow-hidden transition-colors ${transcodeEnabled ? "border-amber/40 bg-amber/5" : ""}`}>
-            <CardHeader className="pb-3">
-              <div className="flex items-center justify-between gap-3">
-                <div className="space-y-1 min-w-0">
-                  <CardTitle className="text-base flex items-center gap-2">
-                    {transcodeEnabled && (
-                      <AlertTriangle className="h-4 w-4 text-amber shrink-0" />
-                    )}
-                    {transcodeEnabled ? "Transcode Manager Active" : "Transcode Manager"}
-                  </CardTitle>
-                  <CardDescription>
-                    {transcodeEnabled
-                      ? `Matching transcoding streams will be terminated after ${transcodeDelay} seconds`
-                      : "When enabled, streams matching selected criteria will be automatically terminated"}
-                  </CardDescription>
-                </div>
-                <Switch
-                  checked={transcodeEnabled}
-                  onCheckedChange={toggleTranscodeManager}
-                  disabled={transcodeLoading || transcodeSaving}
-                  className="shrink-0"
-                />
-              </div>
-            </CardHeader>
-
-            <CardContent className="space-y-4">
-              {/* Delay input */}
-              <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground uppercase tracking-wider">
-                  Termination Delay (seconds)
-                </Label>
-                <Input
-                  type="number"
-                  min={0}
-                  max={MAX_TERMINATION_DELAY_SECONDS}
-                  value={transcodeDelay}
-                  onChange={(e) => {
-                    const val = parseInt(e.target.value, 10);
-                    if (!isNaN(val) && val >= 0) updateTranscodeDelay(Math.min(val, MAX_TERMINATION_DELAY_SECONDS));
-                  }}
-                  className="w-full sm:w-24"
-                />
-                <p className="text-[11px] text-muted-foreground">
-                  Time before a matching stream is terminated (0 for immediate)
-                </p>
-              </div>
-
-              {/* Criteria toggles */}
-              <div className="space-y-1.5">
-                <Label className="text-xs text-muted-foreground uppercase tracking-wider">
-                  Termination Criteria
-                </Label>
-                <p className="text-[11px] text-muted-foreground pb-1">
-                  If any enabled criterion matches a stream, it will be terminated after the delay
-                </p>
-                {CRITERIA_OPTIONS.map(({ key, label, desc }) => (
-                  <div key={key} className="flex items-center justify-between gap-3 rounded-md bg-muted/50 px-3 py-2">
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium">{label}</p>
-                      <p className="text-[11px] text-muted-foreground">{desc}</p>
-                    </div>
-                    <Switch
-                      checked={transcodeCriteria[key]}
-                      onCheckedChange={(checked) => updateTranscodeCriteria(key, checked)}
-                      className="shrink-0"
-                    />
-                  </div>
-                ))}
-              </div>
-
-              {/* Hardware exemption */}
-              <div className="flex items-center justify-between gap-3 rounded-md bg-muted/50 px-3 py-2">
-                <div className="min-w-0">
-                  <p className="text-sm font-medium">Skip hardware transcodes</p>
-                  <p className="text-[11px] text-muted-foreground">
-                    Never terminate a stream the server is encoding on a GPU, whatever the criteria say.
-                    Hardware encoding spares the CPU but not the GPU &mdash; check the stream&apos;s speed
-                    (below 1.0&times; means it isn&apos;t keeping up).
-                  </p>
-                </div>
-                <Switch
-                  checked={transcodeExemptHardware}
-                  onCheckedChange={(checked) => {
-                    setTranscodeExemptHardware(checked);
-                    void persistTranscode({ exemptHardware: checked });
-                  }}
-                  className="shrink-0"
-                />
-              </div>
-
-              {/* Termination message */}
-              <MessageSelector
-                selectedMessage={transcodeMessage}
-                onSelect={updateTranscodeMessage}
-                customMessage={transcodeCustom}
-                messages={TRANSCODE_PRESET_MESSAGES}
-                onCustomChange={(msg) => {
-                  setTranscodeCustom(msg);
-                  if (msg) updateTranscodeMessage(msg);
-                }}
-              />
-
-              {/* Excluded users */}
-              <ExcludedUsersSelect
-                selected={transcodeExcludedUsers}
-                onChange={(users) => {
-                  setTranscodeExcludedUsers(users);
-                  void persistTranscode({ excludedUsers: users });
-                }}
-                knownUsers={knownUsers}
-              />
-            </CardContent>
-          </Card>
-        </div>
-      </div>
-
-      <Separator />
-
-      {/* Blackout Schedules */}
+    <>
       <div className="space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold flex items-center gap-2">
@@ -1981,7 +2042,7 @@ export default function StreamManagerPage() {
                         </ColorChip>
                       </div>
                       <p className="text-xs text-muted-foreground">
-                        {formatBlackoutScheduleDescription(schedule)}
+                        {formatScheduleWindow(schedule)}
                       </p>
                       {schedule.action === "warn_then_terminate" && (
                         <p className="text-[10px] text-muted-foreground">
@@ -2087,21 +2148,7 @@ export default function StreamManagerPage() {
               <>
                 <div className="space-y-1.5">
                   <Label>Days of Week</Label>
-                  <div className="flex flex-wrap gap-2">
-                    {DAY_LABELS.map((label, idx) => (
-                      <button
-                        key={idx}
-                        onClick={() => toggleBlackoutDay(idx)}
-                        className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors border ${
-                          blackoutForm.daysOfWeek.includes(idx)
-                            ? "border-primary bg-primary/10 text-primary"
-                            : "border-muted bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground"
-                        }`}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
+                  <DayOfWeekPicker value={blackoutForm.daysOfWeek} onToggle={toggleBlackoutDay} />
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div className="space-y-1.5">
@@ -2188,163 +2235,67 @@ export default function StreamManagerPage() {
             <Button variant="outline" onClick={() => setShowBlackoutDialog(false)}>
               Cancel
             </Button>
-            <Button
+            <LoadingButton
               onClick={saveBlackout}
-              disabled={blackoutSaving || !blackoutForm.name.trim()}
+              loading={blackoutSaving}
+              disabled={!blackoutForm.name.trim()}
+              iconClassName="h-4 w-4 mr-1.5"
             >
-              {blackoutSaving && <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />}
               {editingBlackout ? "Update" : "Create"}
-            </Button>
+            </LoadingButton>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
       {/* Blackout Delete Confirmation */}
-      <AlertDialog open={!!deleteBlackoutId} onOpenChange={(open) => { if (!open) setDeleteBlackoutId(null); }}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete Blackout Schedule</AlertDialogTitle>
-            <AlertDialogDescription>
-              This will permanently delete this blackout schedule. This action cannot be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-              onClick={() => {
-                if (deleteBlackoutId) deleteBlackout(deleteBlackoutId);
-              }}
-            >
-              Delete
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ConfirmDialog
+        open={!!deleteBlackoutId}
+        onOpenChange={(open) => { if (!open) setDeleteBlackoutId(null); }}
+        title="Delete Blackout Schedule"
+        description="This will permanently delete this blackout schedule. This action cannot be undone."
+        confirmLabel="Delete"
+        destructive
+        onConfirm={() => {
+          if (deleteBlackoutId) void deleteBlackout(deleteBlackoutId);
+        }}
+      />
+    </>
+  );
+}
 
-      {/* Terminate Dialog */}
-      <AlertDialog open={terminateDialogOpen} onOpenChange={setTerminateDialogOpen}>
-        <AlertDialogContent className="max-w-lg max-h-[85dvh] overflow-y-auto">
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              {terminateTarget === "all"
-                ? `Terminate All Streams (${sessions.length})`
-                : terminateTarget === "selected"
-                  ? `Terminate Selected Streams (${selectedKeys.size})`
-                  : terminateTarget
-                    ? `Terminate Stream \u2014 ${terminateTarget.username}`
-                    : "Terminate Stream"}
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              Select a message to display on the client when the stream is terminated.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
+// --- Main Page ---
 
-          <MessageSelector
-            selectedMessage={selectedMessage}
-            onSelect={setSelectedMessage}
-            customMessage={customMessage}
-            onCustomChange={setCustomMessage}
-          />
+export default function StreamManagerPage() {
+  // Known users from media servers (for exclusion dropdowns)
+  const [knownUsers, setKnownUsers] = useState<string[]>([]);
 
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={executeTerminate}
-              disabled={!selectedMessage || terminating}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            >
-              {terminating ? (
-                <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
-              ) : (
-                <XCircle className="h-4 w-4 mr-1.5" />
-              )}
-              Terminate
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+  useEffect(() => {
+    fetch("/api/tools/users")
+      .then((res) => (res.ok ? res.json() : { users: [] }))
+      .then((data) => setKnownUsers(data.users ?? []))
+      .catch(() => {});
+  }, []);
 
-      {detailPanel.panelProps && (
-        <MediaDetailSidePanel
-          {...detailPanel.panelProps}
-          contextSection={panelSession && panelSession.itemId === detailPanel.selectedId && (
-            // The live session while it plays; the last one seen once it ends.
-            <SessionStreamDetails
-              session={sessions.find((x) => sessionKey(x) === sessionKey(panelSession.session)) ?? panelSession.session}
-            />
-          )}
-        />
-      )}
+  return (
+    <div className="p-4 sm:p-6 lg:p-8 space-y-6 min-w-0">
+      <PageHeader
+        title="Stream Manager"
+        description="Monitor and manage active streams across your media servers"
+      />
 
-      {/* Media Detail Sheet — a session whose item the library has not synced */}
-      <Sheet open={!!sheetSession} onOpenChange={(open) => { if (!open) setSheetSession(null); }}>
-        <SheetContent side="right" className="pb-safe overflow-y-auto">
-          {sheetSession && (
-            <>
-              <SheetHeader>
-                <SheetTitle className="wrap-break-word">{formatSessionMediaTitle(sheetSession)}</SheetTitle>
-                <SheetDescription>
-                  {sheetSession.type === "episode" ? "TV Episode" : sheetSession.type === "movie" ? "Movie" : sheetSession.type === "track" ? "Track" : sheetSession.type}
-                  {sheetSession.year ? ` (${sheetSession.year})` : ""}
-                </SheetDescription>
-              </SheetHeader>
+      <ActiveSessionsSection />
 
-              <div className="space-y-5 px-4 pb-4">
-                {/* Large artwork */}
-                {(() => {
-                  const artUrl = getSessionArtworkUrl(sheetSession);
-                  return artUrl ? (
-                    <div className="flex justify-center px-4">
-                      <div className="overflow-hidden rounded-xl">
-                        <FadeImage
-                          src={artUrl}
-                          alt={formatSessionMediaTitle(sheetSession)}
-                          loading="lazy"
-                          className="block max-w-full"
-                          style={{ maxHeight: "400px" }}
-                          onError={(e) => {
-                            (e.target as HTMLImageElement).style.display = "none";
-                          }}
-                        />
-                      </div>
-                    </div>
-                  ) : null;
-                })()}
+      <Separator />
 
-                {/* Overview */}
-                {(sheetSession.tagline || sheetSession.summary || sheetSession.contentRating || sheetSession.studio || sheetSession.genres) && (
-                  <div className="space-y-2">
-                    <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Overview</h4>
-                    {sheetSession.tagline && (
-                      <p className="text-xs italic text-muted-foreground">{sheetSession.tagline}</p>
-                    )}
-                    {sheetSession.summary && (
-                      <p className="text-sm text-muted-foreground leading-relaxed">{sheetSession.summary}</p>
-                    )}
-                    <div className="flex flex-wrap gap-1.5">
-                      {sheetSession.contentRating && <ColorChip>{sheetSession.contentRating}</ColorChip>}
-                      {sheetSession.studio && <ColorChip>{sheetSession.studio}</ColorChip>}
-                      {/* The ratings chips the detail pages show. */}
-                      {sheetSession.rating != null && <RatingChip label="Critic" value={sheetSession.rating} />}
-                      {sheetSession.audienceRating != null && <RatingChip label="Audience" value={sheetSession.audienceRating} />}
-                    </div>
-                    {sheetSession.genres && sheetSession.genres.length > 0 && (
-                      <div className="flex flex-wrap gap-1">
-                        {sheetSession.genres.map(g => (
-                          <ColorChip key={g} className="bg-white/10 text-white/80 border-white/20">{g}</ColorChip>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
+      {/* Maintenance Mode + Transcode Manager grid */}
+      <div className="grid gap-6 lg:grid-cols-2 min-w-0 animate-fade-in-up">
+        <MaintenanceModePanel knownUsers={knownUsers} />
+        <TranscodeManagerPanel knownUsers={knownUsers} />
+      </div>
 
-                <SessionStreamDetails session={sheetSession} />
-              </div>
-            </>
-          )}
-        </SheetContent>
-      </Sheet>
+      <Separator />
+
+      <BlackoutSchedulesSection knownUsers={knownUsers} />
     </div>
   );
 }

@@ -172,6 +172,28 @@ describe("useSidebarData", () => {
     expect(streams()).toBe(0);
   });
 
+  it("takes the badge from a published live count, asking no media server on session-changed meanwhile", async () => {
+    // The same module copy the hook loaded (modules are reset per test).
+    const { publishLiveSessionCount } = await import("@/hooks/use-live-session-count");
+    sessionsQueue = [{ sessions: [] }, { sessions: [{ sessionId: "z" }] }];
+    const { result } = renderHook(() => useSidebarData());
+    const streams = () => result.current.navigation.find((g) => g.label === "Tools")!.items[0].badge;
+    const sessionReads = () => fetchMock.mock.calls.filter(([url]) => url === "/api/tools/sessions").length;
+    await waitFor(() => expect(sessionReads()).toBe(1));
+
+    act(() => publishLiveSessionCount(4));
+    expect(streams()).toBe(4);
+    await act(async () => mocks.handlers.get("session-changed")!());
+    expect(sessionReads()).toBe(1);
+
+    // The publisher left: the last count stays, and the next event reads again.
+    act(() => publishLiveSessionCount(null));
+    expect(streams()).toBe(4);
+    await act(async () => mocks.handlers.get("session-changed")!());
+    expect(sessionReads()).toBe(2);
+    expect(streams()).toBe(1);
+  });
+
   it("toasts a server going down and coming back, once each, and broadcasts health", async () => {
     const health = vi.fn();
     window.addEventListener("server-health-changed", health);
