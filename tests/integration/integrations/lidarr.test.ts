@@ -437,7 +437,7 @@ describe("Lidarr integration endpoints", () => {
       expect(body.error).toBe("Instance not found");
     });
 
-    it("returns artist lookup, tags, and quality profiles", async () => {
+    it("returns tags, quality profiles and statuses, without a per-artist map", async () => {
       const user = await createTestUser();
       const instance = await createTestLidarrInstance(user.id);
       setMockSession({ userId: user.id, isLoggedIn: true });
@@ -461,18 +461,12 @@ describe("Lidarr integration endpoints", () => {
       const body = await expectJson(response, 200);
 
       expect(body).toEqual({
-        artists: {
-          "a74b1b7f-71a5-4011-9441-d0b5e4122711": {
-            tags: ["test-tag"],
-            qualityProfile: "Lossless",
-            monitored: true,
-            rating: 9.1,
-          },
-        },
         tags: [{ id: 1, label: "test-tag" }],
         qualityProfiles: [{ id: 1, name: "Lossless" }],
         statuses: ["continuing"],
       });
+      // No caller read the per-artist map, so it is no longer sent.
+      expect(body).not.toHaveProperty("artists");
     });
   });
 });
