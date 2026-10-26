@@ -460,38 +460,50 @@ async function handlePendingGrouped(request: NextRequest, userId: string) {
 /**
  * COMPLETED / FAILED / CANCELLED / ALL: group LifecycleAction records by rule set.
  */
-async function handleStatusGrouped(request: NextRequest, userId: string, status: string) {
-  const where: Record<string, unknown> = { userId };
-  if (status !== "ALL") {
-    where.status = status;
-  }
+/**
+ * The most recent action (by `scheduledFor`, then id) of each (rule set, item)
+ * pair, newest first — picked in SQL, so the older actions of a pair, and
+ * their media rows, are never read. A deleted rule set's actions pair by the
+ * name they recorded; an action whose item is gone pairs with nothing but
+ * itself.
+ */
+async function latestActionIdPerPair(userId: string, status: string): Promise<string[]> {
+  const pairKey = `COALESCE("ruleSetId", 'deleted:' || COALESCE("ruleSetName", 'unknown')), COALESCE("mediaItemId", id)`;
+  const filterStatus = status !== "ALL";
+  const rows = await prisma.$queryRawUnsafe<Array<{ id: string }>>(
+    `SELECT id FROM (
+       SELECT DISTINCT ON (${pairKey}) id, "scheduledFor"
+         FROM "LifecycleAction"
+        WHERE "userId" = $1${filterStatus ? ` AND status = $2::"LifecycleActionStatus"` : ""}
+        ORDER BY ${pairKey}, "scheduledFor" DESC, id
+     ) latest
+     ORDER BY "scheduledFor" DESC, id`,
+    ...(filterStatus ? [userId, status] : [userId]),
+  );
+  return rows.map((r) => r.id);
+}
 
-  const [actions, { ruleSetById, servers }] = await Promise.all([
-    prisma.lifecycleAction.findMany({
-      where,
-      include: {
-        mediaItem: {
-          select: MEDIA_ITEM_SELECT,
-        },
-      },
-      orderBy: { scheduledFor: "desc" },
-    }),
+async function handleStatusGrouped(request: NextRequest, userId: string, status: string) {
+  const [ids, { ruleSetById, servers }] = await Promise.all([
+    latestActionIdPerPair(userId, status),
     loadActionLookups(userId),
   ]);
 
-  await backfillTitleSnapshots(actions);
+  // Only the latest action per (rule set, item) is listed (see above).
+  const deduped =
+    ids.length === 0
+      ? []
+      : await prisma.lifecycleAction.findMany({
+          where: { id: { in: ids } },
+          include: {
+            mediaItem: {
+              select: MEDIA_ITEM_SELECT,
+            },
+          },
+          orderBy: [{ scheduledFor: "desc" }, { id: "asc" }],
+        });
 
-  // Dedup: keep only the most recent record per (ruleSetId, mediaItemId).
-  // Actions are ordered by scheduledFor desc, so the first seen per pair is the latest.
-  const seenPairs = new Set<string>();
-  const deduped = actions.filter((a) => {
-    const groupKey = a.ruleSetId ?? `deleted:${a.ruleSetName ?? "unknown"}`;
-    // Use action id for orphaned records (null mediaItemId) to prevent merging
-    const key = `${groupKey}:${a.mediaItemId ?? a.id}`;
-    if (seenPairs.has(key)) return false;
-    seenPairs.add(key);
-    return true;
-  });
+  await backfillTitleSnapshots(deduped);
 
   // Pre-aggregate series/music member data for actions with matchedMediaItemIds
   const memberStats = await loadGroupMemberStats(deduped.flatMap((a) => a.matchedMediaItemIds));
