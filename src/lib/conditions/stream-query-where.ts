@@ -26,8 +26,9 @@
 import { Prisma } from "@/generated/prisma/client";
 import type { ConditionGroup } from "./types";
 import { escapeLike, UNSATISFIABLE_WHERE, isUnconfiguredContainsRule } from "./where-builder";
-import { isEnumerableField, isOperatorApplicable, isValueValidForRule } from "./helpers";
+import { anyEnabled, isEnumerableField, isOperatorApplicable, isValueValidForRule } from "./helpers";
 import {
+  isStreamQueryGroup,
   isStreamQueryComputedField,
   streamQueryFieldToColumn,
   STREAM_TYPE_INT_MAP,
@@ -53,6 +54,11 @@ export function streamQueryNeedsInMemory(group: ConditionGroup): boolean {
       r.operator === "notMatchesWildcard"
     ),
   );
+}
+
+/** Whether any enabled stream query group in the tree needs Phase 2 (see above). */
+export function hasStreamQueryInMemoryRules(groups: ConditionGroup[]): boolean {
+  return anyEnabled(groups, () => false, (g) => isStreamQueryGroup(g) && streamQueryNeedsInMemory(g));
 }
 
 export function buildStreamQueryClause(group: ConditionGroup): Prisma.MediaItemWhereInput | null {

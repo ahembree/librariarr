@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
 import type { QueryRule, QueryGroup, QueryDefinition, LifecycleRuleCondition } from "./types";
-import { GENRE_FIELD, LABELS_FIELD, COUNTRY_FIELD, EXTERNAL_ID_FIELD, ARR_QUERY_FIELDS, SEERR_QUERY_FIELDS, isExternalQueryField, isCrossSystemQueryField, hasArrRules, hasSeerrRules, hasCrossSystemRules, hasSeriesAggregateRules, hasWatchedByUserRules, hasResolutionRules, hasArrayFieldRules, hasStreamCountRules } from "./types";
+import { GENRE_FIELD, LABELS_FIELD, COUNTRY_FIELD, EXTERNAL_ID_FIELD, ARR_QUERY_FIELDS, SEERR_QUERY_FIELDS, isCrossSystemQueryField, hasArrRules, hasSeerrRules, hasCrossSystemRules, hasSeriesAggregateRules, hasWatchedByUserRules, hasResolutionRules, hasArrayFieldRules, hasStreamCountRules } from "./types";
 import {
   isStreamQueryField, isStreamQueryGroup, isStreamQueryComputedField,
   streamQueryFieldToColumn, STREAM_TYPE_INT_MAP,
@@ -28,13 +28,13 @@ import {
   serializeSeriesAggregateForEval,
   type AggregableEpisode,
 } from "@/lib/conditions";
-import { isEnumerableField, isOperatorApplicable, isValueValidForRule } from "@/lib/conditions/helpers";
+import { isEnumerableField, isOperatorApplicable, isValueValidForRule, hasWildcardRules } from "@/lib/conditions/helpers";
 import {
   isUnconfiguredContainsRule,
   ruleToWhere,
 } from "@/lib/conditions/where-builder";
 import { fetchCrossSystemData, foldCrossSystemData } from "@/lib/conditions/cross-system-data";
-import { streamQueryNeedsInMemory } from "@/lib/conditions/stream-query-where";
+import { hasStreamQueryInMemoryRules } from "@/lib/conditions/stream-query-where";
 import { buildGroupConditions, buildGroupConditionsPreFilter } from "@/lib/conditions/group-composition";
 import { pushDownGroupNegation } from "@/lib/conditions/negation";
 import { nullValueResult } from "@/lib/conditions/helpers";
@@ -42,35 +42,9 @@ import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
 
 // Phase 1 rule → WHERE conversion is shared with the lifecycle rule engine via
 // `ruleToWhere` in where-builder.ts (the query and lifecycle dispatchers were
-// equivalent — their field classifiers resolve to the same sets).
-
-
-/** Check if any group tree contains stream query groups needing in-memory eval */
-function hasStreamQueryInMemoryRules(groups: QueryGroup[]): boolean {
-  for (const group of groups) {
-    if (group.enabled === false) continue;
-    if (isStreamQueryGroup(group) && streamQueryNeedsInMemory(group)) return true;
-    if (group.groups?.length && hasStreamQueryInMemoryRules(group.groups)) return true;
-  }
-  return false;
-}
-
-
-
-/** Check if rules reference any wildcard operators on non-external fields */
-function hasWildcardRules(groups: QueryGroup[]): boolean {
-  for (const group of groups) {
-    if (group.enabled === false) continue;
-    if (group.rules.some((r) =>
-      r.enabled !== false &&
-      !isExternalQueryField(r.field) &&
-      (r.operator === "matchesWildcard" || r.operator === "notMatchesWildcard")
-    )) return true;
-    if (group.groups?.length && hasWildcardRules(group.groups)) return true;
-  }
-  return false;
-}
-
+// equivalent — their field classifiers resolve to the same sets). So are the
+// `has*Rules` gates (`conditions/helpers.ts`, `hasStreamQueryInMemoryRules` in
+// stream-query-where.ts).
 
 export interface QueryResult {
   items: Array<Record<string, unknown>>;
