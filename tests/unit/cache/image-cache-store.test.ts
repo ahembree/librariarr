@@ -234,7 +234,65 @@ describe("getImageCacheStats", () => {
   });
 });
 
+describe("invalidateCachedUrls", () => {
+  it("removes every width of every distinct artwork, counting each file once", async () => {
+    const widths = [400, 640, 1920];
+    const keys: string[] = [];
+    for (const url of ["/library/metadata/1/thumb/111", "/library/metadata/2/thumb"]) {
+      keys.push((await ic.cacheImage(LIB, url, async () => ({ data: await png(), contentType: "image/png" }))).cacheKey);
+      for (const maxWidth of widths) {
+        keys.push(
+          (await ic.cacheImage(LIB, url, async () => ({ data: await png(), contentType: "image/png" }), { maxWidth })).cacheKey,
+        );
+      }
+    }
+    await vi.waitFor(() => expect(statsOnDisk()?.fileCount).toBe(8));
+    const kept = await ic.cacheImage("other-lib", "/library/metadata/2/thumb", async () => ({ data: await png(), contentType: "image/png" }));
+    await vi.waitFor(() => expect(statsOnDisk()?.fileCount).toBe(9));
+
+    // The same artwork named many times (episodes sharing a season poster),
+    // under two spellings of the Plex URL.
+    await ic.invalidateCachedUrls(LIB, [
+      "/library/metadata/1/thumb/111",
+      "/library/metadata/1/thumb/222",
+      "/library/metadata/1/thumb",
+      "/library/metadata/2/thumb",
+      "/library/metadata/2/thumb",
+      null,
+    ]);
+
+    for (const key of keys) expect(existsSync(fileFor(key))).toBe(false);
+    expect(existsSync(fileFor(kept.cacheKey))).toBe(true);
+    await vi.waitFor(() =>
+      expect(statsOnDisk()).toEqual({ fileCount: 1, totalSize: statSync(fileFor(kept.cacheKey)).size }),
+    );
+  });
+
+  it("does nothing for a list with no artwork", async () => {
+    writeFileSync(path.join(cacheDir, "_stats.json"), JSON.stringify({ fileCount: 3, totalSize: 30 }));
+    await ic.invalidateCachedUrls(LIB, [null, undefined, ""]);
+    await ic.invalidateCachedUrls(LIB, ["/never-cached"]);
+    expect(statsOnDisk()).toEqual({ fileCount: 3, totalSize: 30 });
+  });
+});
+
 describe("pruneImageCache", () => {
+  it("walks every shard, skipping stray files, and counts what it keeps", async () => {
+    const shards = ["aa/bb", "aa/cc", "dd/ee"];
+    for (const shard of shards) {
+      mkdirSync(path.join(cacheDir, shard), { recursive: true });
+      writeFileSync(path.join(cacheDir, shard, `${shard.replace("/", "")}-new.webp`), Buffer.alloc(4));
+      const old = path.join(cacheDir, shard, `${shard.replace("/", "")}-old.webp`);
+      writeFileSync(old, Buffer.alloc(9));
+      utimesSync(old, EIGHT_DAYS_AGO, EIGHT_DAYS_AGO);
+    }
+    writeFileSync(path.join(cacheDir, "aa", "bb", "readme.txt"), "not a cached image");
+
+    expect(await ic.pruneImageCache()).toEqual({ removed: 3 });
+    expect(statsOnDisk()).toEqual({ fileCount: 3, totalSize: 12 });
+    expect(existsSync(path.join(cacheDir, "aa", "bb", "readme.txt"))).toBe(true);
+  });
+
   it("removes only expired files and reconciles the stats from disk", async () => {
     const fresh = await ic.cacheImage(LIB, "/fresh", async () => ({ data: await png(), contentType: "image/png" }));
     const stale = await ic.cacheImage(LIB, "/stale", async () => ({ data: await png(60, 60), contentType: "image/png" }));

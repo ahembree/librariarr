@@ -5,6 +5,7 @@ import { createHash } from "crypto";
 import sharp from "sharp";
 import { logger } from "@/lib/logger";
 import { ALL_CACHE_WIDTHS, CACHE_WIDTH_DEFAULT } from "@/lib/image-url";
+import { mapWithConcurrency } from "@/lib/media-server/concurrency";
 
 // Runtime data directory: env-resolved and outside the project (under /config in
 // the container), so Turbopack's build-time tracer cannot resolve it statically and
@@ -112,42 +113,70 @@ function updateStats(fn: (s: { fileCount: number; totalSize: number }) => void):
   }).catch(() => {});
 }
 
+/**
+ * How many filesystem operations a cache-wide pass keeps in flight. The walks
+ * below used to fan out over every leaf directory and every file at once — up
+ * to 65,536 leaves — which flooded the libuv threadpool the artwork routes'
+ * own reads queue on, and opened a handle per entry in one burst.
+ */
+const FILE_OP_CONCURRENCY = 8;
+
+/**
+ * Visit every cached `.webp` file with its stat, a bounded number of leaf
+ * directories at a time. A file or directory that vanishes mid-walk (a clear,
+ * an invalidation) is skipped.
+ */
+async function forEachCachedFile(
+  visit: (filePath: string, stat: { size: number; mtimeMs: number }) => Promise<void> | void,
+): Promise<void> {
+  await ensureCacheDir();
+  const shard1Entries = await fs.readdir(/* turbopackIgnore: true */ IMAGE_CACHE_DIR, { withFileTypes: true });
+  const leafDirs: string[] = [];
+  for (const s1 of shard1Entries) {
+    if (!s1.isDirectory()) continue;
+    const s1Path = path.join(/* turbopackIgnore: true */ IMAGE_CACHE_DIR, s1.name);
+    let shard2Entries;
+    try {
+      shard2Entries = await fs.readdir(/* turbopackIgnore: true */ s1Path, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const s2 of shard2Entries) {
+      if (s2.isDirectory()) leafDirs.push(path.join(/* turbopackIgnore: true */ s1Path, s2.name));
+    }
+  }
+
+  await mapWithConcurrency(leafDirs, FILE_OP_CONCURRENCY, async (leafDir) => {
+    let files;
+    try {
+      files = await fs.readdir(/* turbopackIgnore: true */ leafDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const f of files) {
+      if (!f.isFile() || !f.name.endsWith(".webp")) continue;
+      const filePath = path.join(/* turbopackIgnore: true */ leafDir, f.name);
+      let st;
+      try {
+        st = await fs.stat(/* turbopackIgnore: true */ filePath);
+      } catch {
+        continue;
+      }
+      await visit(filePath, st);
+    }
+  });
+}
+
 /** Walk the cache directory tree to compute stats from scratch. */
 async function scanCacheStats(): Promise<{ fileCount: number; totalSize: number }> {
   let fileCount = 0;
   let totalSize = 0;
 
   try {
-    await ensureCacheDir();
-    const shard1Entries = await fs.readdir(/* turbopackIgnore: true */ IMAGE_CACHE_DIR, { withFileTypes: true });
-
-    await Promise.all(
-      shard1Entries
-        .filter((e) => e.isDirectory())
-        .map(async (s1) => {
-          const s1Path = path.join(/* turbopackIgnore: true */ IMAGE_CACHE_DIR, s1.name);
-          const shard2Entries = await fs.readdir(/* turbopackIgnore: true */ s1Path, { withFileTypes: true });
-
-          await Promise.all(
-            shard2Entries
-              .filter((e) => e.isDirectory())
-              .map(async (s2) => {
-                const s2Path = path.join(/* turbopackIgnore: true */ s1Path, s2.name);
-                const files = await fs.readdir(/* turbopackIgnore: true */ s2Path, { withFileTypes: true });
-                const webpFiles = files.filter((f) => f.isFile() && f.name.endsWith(".webp"));
-
-                const fileSizes = await Promise.all(
-                  webpFiles.map((f) => fs.stat(/* turbopackIgnore: true */ path.join(/* turbopackIgnore: true */ s2Path, f.name)).then((st) => st.size)),
-                );
-
-                for (const size of fileSizes) {
-                  fileCount++;
-                  totalSize += size;
-                }
-              }),
-          );
-        }),
-    );
+    await forEachCachedFile((_filePath, st) => {
+      fileCount++;
+      totalSize += st.size;
+    });
   } catch {
     // Directory doesn't exist yet
   }
@@ -313,6 +342,11 @@ export async function invalidateCachedUrls(
   scope: string,
   urls: (string | null | undefined)[],
 ): Promise<void> {
+  // One file per distinct artwork and width. Episodes of a show share their
+  // season's and show's artwork, so a batch of them names the same URL many
+  // times over (and the key normalizes the URL, so two spellings of one
+  // artwork are one file too).
+  const cachePaths = new Set<string>();
   for (const url of urls) {
     if (!url) continue;
     // Every width variant of this artwork has to go, not just the default one.
@@ -322,19 +356,32 @@ export async function invalidateCachedUrls(
     // grid would keep serving the old artwork from its own width until the TTL
     // expired even though the default-width file was purged.
     for (const width of ALL_CACHE_WIDTHS) {
-      const cachePath = getCachePath(computeCacheKey(scope, url, width));
-      try {
-        const fileStat = await fs.stat(cachePath);
-        await fs.unlink(cachePath);
-        const fileSize = fileStat.size;
-        updateStats((s) => {
-          s.fileCount--;
-          s.totalSize -= fileSize;
-        });
-      } catch {
-        // File doesn't exist, that's fine
-      }
+      cachePaths.add(getCachePath(computeCacheKey(scope, url, width)));
     }
+  }
+  if (cachePaths.size === 0) return;
+
+  let removedCount = 0;
+  let removedBytes = 0;
+  await mapWithConcurrency([...cachePaths], FILE_OP_CONCURRENCY, async (cachePath) => {
+    try {
+      const fileStat = await fs.stat(cachePath);
+      await fs.unlink(cachePath);
+      removedCount++;
+      removedBytes += fileStat.size;
+    } catch {
+      // File doesn't exist, that's fine
+    }
+  });
+
+  // One stats write for the whole call: each update is a read-modify-write of
+  // `_stats.json`, and a purge of a few hundred items used to queue one per
+  // deleted file.
+  if (removedCount > 0) {
+    updateStats((s) => {
+      s.fileCount -= removedCount;
+      s.totalSize -= removedBytes;
+    });
   }
 }
 
@@ -387,44 +434,34 @@ export async function getImageCacheStats(): Promise<{ fileCount: number; totalSi
 export async function pruneImageCache(): Promise<{ removed: number }> {
   const cutoff = Date.now() - CACHE_MAX_AGE_MS;
   let removed = 0;
+  // What is left on disk, counted in the same pass as the deletions. The prune
+  // used to re-walk the whole tree afterwards just to count it again.
+  let keptCount = 0;
+  let keptBytes = 0;
   try {
-    await ensureCacheDir();
-    const shard1Entries = await fs.readdir(/* turbopackIgnore: true */ IMAGE_CACHE_DIR, { withFileTypes: true });
-    await Promise.all(
-      shard1Entries
-        .filter((e) => e.isDirectory())
-        .map(async (s1) => {
-          const s1Path = path.join(/* turbopackIgnore: true */ IMAGE_CACHE_DIR, s1.name);
-          const shard2Entries = await fs.readdir(/* turbopackIgnore: true */ s1Path, { withFileTypes: true });
-          await Promise.all(
-            shard2Entries
-              .filter((e) => e.isDirectory())
-              .map(async (s2) => {
-                const s2Path = path.join(/* turbopackIgnore: true */ s1Path, s2.name);
-                const files = await fs.readdir(/* turbopackIgnore: true */ s2Path, { withFileTypes: true });
-                await Promise.all(
-                  files
-                    .filter((f) => f.isFile() && f.name.endsWith(".webp"))
-                    .map(async (f) => {
-                      const fp = path.join(/* turbopackIgnore: true */ s2Path, f.name);
-                      try {
-                        const st = await fs.stat(/* turbopackIgnore: true */ fp);
-                        if (st.mtimeMs < cutoff) {
-                          await fs.unlink(fp);
-                          removed++;
-                        }
-                      } catch {
-                        // File vanished concurrently — ignore.
-                      }
-                    }),
-                );
-              }),
-          );
-        }),
-    );
+    await forEachCachedFile(async (filePath, st) => {
+      if (st.mtimeMs >= cutoff) {
+        keptCount++;
+        keptBytes += st.size;
+        return;
+      }
+      try {
+        await fs.unlink(/* turbopackIgnore: true */ filePath);
+        removed++;
+      } catch {
+        // File vanished concurrently — ignore.
+      }
+    });
+
     if (removed > 0) {
       // Reconcile the counters from disk truth (avoids long-term drift).
-      await writeStatsFile(await scanCacheStats());
+      // Through the stats lock, so the write cannot interleave with an update
+      // a request queued meanwhile.
+      updateStats((s) => {
+        s.fileCount = keptCount;
+        s.totalSize = keptBytes;
+      });
+      await state.statsLock;
       logger.info("ImageCache", `Pruned ${removed} expired cached image(s)`);
     }
   } catch (error) {
