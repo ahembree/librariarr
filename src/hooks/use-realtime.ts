@@ -1,6 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { newRequestScope, runInRequestScope } from "@/lib/shared-fetch";
+
+type RealtimeCallback = (data: Record<string, unknown>) => void;
 
 // Shared singleton EventSource — ref-counted across all hook instances in the same tab
 let sharedSource: EventSource | null = null;
@@ -20,12 +23,28 @@ let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 // to a freshly created source on reconnect.
 const eventHandlers = new Map<string, Set<(e: MessageEvent) => void>>();
 
-// Every subscriber's callback, keyed by nothing — fired once after a *re*-open
-// so a page recovers the events that were emitted while the stream was down.
-// The SSE protocol gives us no replay (the route sends no event ids, so
-// Last-Event-ID can't be honoured either), which means the only way a
-// reconnected page can be correct is to refetch.
-const resyncListeners = new Set<() => void>();
+// Every subscriber's current callback, keyed by nothing — fired once after a
+// *re*-open so a page recovers the events that were emitted while the stream
+// was down. The SSE protocol gives us no replay (the route sends no event ids,
+// so Last-Event-ID can't be honoured either), which means the only way a
+// reconnected page can be correct is to refetch. Each entry returns the
+// subscriber's callback rather than calling it, so a callback subscribed to
+// several event types (a sync card listens to four) runs once, not once per type.
+const resyncListeners = new Set<() => RealtimeCallback>();
+
+// Whether the current source has delivered an event — the route's own
+// `connected` event or any other. `connected` turns true on the response
+// headers alone, which a buffering proxy passes on while it holds every event
+// back; the fallback polls gate on this instead, so they keep running exactly
+// when pushes are not arriving.
+let liveState = false;
+const liveListeners = new Set<() => void>();
+
+function setLive(value: boolean) {
+  if (liveState === value) return;
+  liveState = value;
+  for (const listener of liveListeners) listener();
+}
 
 // Run before every subscriber's callback for their event types — once per
 // event, whichever subscriber's listener the event reaches first. EventSource
@@ -34,7 +53,28 @@ const resyncListeners = new Set<() => void>();
 // it once the child is replaced on a navigation), so a cache the shell clears
 // in its own callback could be read by a page's refetch before the clear ran.
 const preHandlers = new Map<string, Set<() => void>>();
-const preHandledEvents = new WeakSet<Event>();
+
+// The request scope each event was given when a listener first saw it (see
+// `fetchJsonShared`): every subscriber's callback for one event runs in the
+// same scope, so the components that refetch one route on it share one
+// request. The browser runs microtasks between listeners, so without the scope
+// each listener was its own turn and asked separately.
+const eventScopes = new WeakMap<Event, number>();
+
+/**
+ * The event's request scope, assigned — and the pre-handlers run — the first
+ * time any listener sees it.
+ */
+function firstSight(eventType: string, e: Event): number {
+  let scope = eventScopes.get(e);
+  if (scope === undefined) {
+    scope = newRequestScope();
+    eventScopes.set(e, scope);
+    setLive(true);
+    runPreHandlers(preHandlers.get(eventType) ?? []);
+  }
+  return scope;
+}
 
 // One listener per pre-handled type, kept so the same function can be attached
 // to every source and removed again. Whichever listener an event reaches
@@ -45,9 +85,7 @@ function preDispatcherFor(eventType: string): (e: MessageEvent) => void {
   let dispatch = preDispatchers.get(eventType);
   if (!dispatch) {
     dispatch = (e: MessageEvent) => {
-      if (preHandledEvents.has(e)) return;
-      preHandledEvents.add(e);
-      runPreHandlers(preHandlers.get(eventType) ?? []);
+      firstSight(eventType, e);
     };
     preDispatchers.set(eventType, dispatch);
   }
@@ -168,7 +206,9 @@ function clearIdleCloseTimer() {
 /**
  * Fire every subscriber's callback once, as though the event it listens for
  * had just arrived. Called after a re-open, because events emitted while the
- * stream was down are gone for good.
+ * stream was down are gone for good. A callback subscribed to several event
+ * types runs once, and every callback runs in one request scope, so the
+ * subscribers that refetch the same route share the request.
  */
 function fireResync() {
   const now = Date.now();
@@ -176,9 +216,12 @@ function fireResync() {
   lastResyncAt = now;
 
   runPreHandlers(new Set([...preHandlers.values()].flatMap((set) => [...set])));
-  for (const listener of resyncListeners) {
+  const callbacks = new Set<RealtimeCallback>();
+  for (const current of resyncListeners) callbacks.add(current());
+  const scope = newRequestScope();
+  for (const callback of callbacks) {
     try {
-      listener();
+      runInRequestScope(scope, () => callback({}));
     } catch {
       // A failing subscriber must not stop the others resyncing.
     }
@@ -211,7 +254,10 @@ async function checkAuthFailure(): Promise<boolean> {
 function createSource(): EventSource | null {
   try {
     const source = new EventSource("/api/events/stream");
-    source.addEventListener("connected", () => setConnected(true));
+    source.addEventListener("connected", () => {
+      setConnected(true);
+      setLive(true);
+    });
     source.onopen = () => {
       // Successful (re)open — reset backoff.
       reconnectDelay = RECONNECT_BASE_MS;
@@ -228,6 +274,7 @@ function createSource(): EventSource | null {
     };
     source.onerror = () => {
       setConnected(false);
+      setLive(false);
       // Only the browser's native auto-reconnect runs while the source is
       // still CONNECTING/OPEN. When the server hard-closes the stream the
       // source transitions to CLOSED and stays dead — rebuild it ourselves.
@@ -359,6 +406,7 @@ function releaseSource() {
     everConnected = false;
     lastResyncAt = 0;
     setConnected(false);
+    setLive(false);
   }, IDLE_CLOSE_DELAY_MS);
 }
 
@@ -374,8 +422,32 @@ function releaseSource() {
 export const __testing = {
   acquireSource,
   releaseSource,
-  registerResync: (fn: () => void) => resyncListeners.add(fn),
+  registerResync: (fn: () => void) => resyncListeners.add(() => fn),
 };
+
+/**
+ * Whether pushes are arriving right now: the current stream has delivered an
+ * event since it opened. False while it connects, after a drop, and behind a
+ * proxy that passes the headers but holds the events back.
+ */
+export function isRealtimeLive(): boolean {
+  return liveState;
+}
+
+function subscribeLive(listener: () => void): () => void {
+  liveListeners.add(listener);
+  return () => liveListeners.delete(listener);
+}
+
+const notLive = () => false;
+
+/**
+ * `isRealtimeLive()`, re-rendering when it changes. Reads only — it does not
+ * keep the stream open (the shell's subscription does).
+ */
+export function useRealtimeLive(): boolean {
+  return useSyncExternalStore(subscribeLive, isRealtimeLive, notLive);
+}
 
 /**
  * Subscribe to real-time server events via SSE.
@@ -387,7 +459,7 @@ export const __testing = {
  */
 export function useRealtime(
   eventType: string,
-  callback: (data: Record<string, unknown>) => void,
+  callback: RealtimeCallback,
 ): { connected: boolean; authExpired: boolean } {
   const [connected, setLocalConnected] = useState(connectedState);
   const [authExpired, setLocalAuthExpired] = useState(authFailed);
@@ -414,10 +486,10 @@ export function useRealtime(
     }
 
     const handler = (e: MessageEvent) => {
-      preDispatcherFor(eventType)(e);
+      const scope = firstSight(eventType, e);
       try {
         const data = JSON.parse(e.data);
-        callbackRef.current(data);
+        runInRequestScope(scope, () => callbackRef.current(data));
       } catch {
         // Ignore malformed events
       }
@@ -437,7 +509,7 @@ export function useRealtime(
     // the event had arrived, because whatever was emitted while the stream was
     // down is unrecoverable. Callbacks here are refetches, so re-running one is
     // exactly the right recovery.
-    const resync = () => callbackRef.current({});
+    const resync = () => callbackRef.current;
     resyncListeners.add(resync);
 
     return () => {
