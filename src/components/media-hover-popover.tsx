@@ -13,45 +13,20 @@ import { QualityChips } from "@/components/quality-chips";
 import { ColorChip } from "@/components/color-chip";
 import { CACHE_WIDTH_GRID, withImageWidth } from "@/lib/image-url";
 import { detailPrefetch } from "@/lib/media/detail-prefetch";
+import type { MediaHoverData } from "@/lib/media/hover-data";
 
-export interface MediaHoverData {
-  title: string;
-  year?: number | null;
-  summary?: string | null;
-  contentRating?: string | null;
-  rating?: number | null;
-  ratingImage?: string | null;
-  audienceRating?: number | null;
-  audienceRatingImage?: string | null;
-  duration?: number | null;
-  resolution?: string | null;
-  dynamicRange?: string | null;
-  audioProfile?: string | null;
-  /** A track's codec (music-only, like `audioCodecCounts` for a group). */
-  audioCodec?: string | null;
-  fileSize?: string | null;
-  genres?: string[] | null;
-  studio?: string | null;
-  playCount?: number;
-  lastPlayedAt?: string | null;
-  addedAt?: string | null;
-  seasonCount?: number;
-  episodeCount?: number;
-  albumCount?: number;
-  trackCount?: number;
-  audioCodecCounts?: Record<string, number> | null;
-  qualityCounts?: Record<string, number> | null;
-  servers?: Array<{ serverId: string; serverName: string; serverType: string }>;
-}
-
-/**
- * Hover data straight from a `/api/media/[id]` record. The record carries an
- * audio codec for every item, but only a track shows it as its chip — a film
- * keeps its resolution, dynamic range and audio profile.
- */
-export function hoverDataFromRecord(record: MediaHoverData & { type?: string | null }): MediaHoverData {
-  return record.type === "MUSIC" ? record : { ...record, audioCodec: undefined };
-}
+// The data shape and its builders live in `src/lib/media/hover-data.ts`, one
+// builder per kind of row; re-exported for the callers that import them here.
+export type { MediaHoverData } from "@/lib/media/hover-data";
+export {
+  hoverDataFromAlbum,
+  hoverDataFromArtistGroup,
+  hoverDataFromListItem,
+  hoverDataFromRecord,
+  hoverDataFromSeason,
+  hoverDataFromSeriesGroup,
+  hoverSummaryUrl,
+} from "@/lib/media/hover-data";
 
 function Dot() {
   return <span className="text-muted-foreground/40">·</span>;
