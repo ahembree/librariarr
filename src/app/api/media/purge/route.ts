@@ -27,7 +27,7 @@ export async function DELETE(request: NextRequest) {
         id: libraryId,
         mediaServer: { userId: session.userId },
       },
-      select: { id: true, title: true, type: true },
+      select: { id: true, title: true, type: true, mediaServerId: true },
     });
 
     if (!library) {
@@ -42,16 +42,13 @@ export async function DELETE(request: NextRequest) {
     // server's plays went with them. Mark it un-evidenced until a sync refills
     // it, or the next detection run reads the empty relation as "nobody
     // watched anything" and `watchedByUser`'s negative forms match everything
-    // the re-sync brings back.
-    const purgedServer = await prisma.library.findUnique({
-      where: { id: library.id },
-      select: { mediaServerId: true },
-    });
-    if (purgedServer?.mediaServerId) {
-      await invalidateWatchHistoryEvidence([purgedServer.mediaServerId]);
+    // the re-sync brings back. The server id came with the library above:
+    // deleting its items leaves the library row, and the id, as they were.
+    if (library.mediaServerId) {
+      await invalidateWatchHistoryEvidence([library.mediaServerId]);
       // Tracearr still holds those plays; re-walk the archive to bring them
       // back once the re-sync recreates the items.
-      await restartTracearrBackfill([purgedServer.mediaServerId]);
+      await restartTracearrBackfill([library.mediaServerId]);
     }
 
     // Recompute canonical so surviving duplicates on other servers don't stay

@@ -8,39 +8,35 @@ export async function GET() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const servers = await prisma.mediaServer.findMany({
-    where: { userId: session.userId },
-    select: { id: true },
-  });
-  const serverIds = servers.map((s) => s.id);
-
-  if (serverIds.length === 0) {
-    return NextResponse.json({ jobs: [] });
-  }
+  // Scoped to the user's servers through the relation, so the two reads run
+  // side by side: they waited on a lookup of the server ids first. A user with
+  // no servers matches no job, as the early return for that case answered.
+  const ownJobs = { mediaServer: { userId: session.userId } };
 
   // Get all running/pending jobs, plus the most recent completed/failed per server
-  const activeJobs = await prisma.syncJob.findMany({
-    where: {
-      mediaServerId: { in: serverIds },
-      status: { in: ["RUNNING", "PENDING"] },
-    },
-    include: {
-      mediaServer: { select: { name: true, type: true } },
-    },
-    orderBy: { startedAt: "desc" },
-  });
-
-  const recentJobs = await prisma.syncJob.findMany({
-    where: {
-      mediaServerId: { in: serverIds },
-      status: { in: ["COMPLETED", "FAILED", "CANCELLED"] },
-    },
-    include: {
-      mediaServer: { select: { name: true, type: true } },
-    },
-    orderBy: { startedAt: "desc" },
-    take: 3,
-  });
+  const [activeJobs, recentJobs] = await Promise.all([
+    prisma.syncJob.findMany({
+      where: {
+        ...ownJobs,
+        status: { in: ["RUNNING", "PENDING"] },
+      },
+      include: {
+        mediaServer: { select: { name: true, type: true } },
+      },
+      orderBy: { startedAt: "desc" },
+    }),
+    prisma.syncJob.findMany({
+      where: {
+        ...ownJobs,
+        status: { in: ["COMPLETED", "FAILED", "CANCELLED"] },
+      },
+      include: {
+        mediaServer: { select: { name: true, type: true } },
+      },
+      orderBy: { startedAt: "desc" },
+      take: 3,
+    }),
+  ]);
 
   return NextResponse.json({
     jobs: [...activeJobs, ...recentJobs],
