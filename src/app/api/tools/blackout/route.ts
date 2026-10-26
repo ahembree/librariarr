@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
-import { validateRequest, blackoutCreateSchema } from "@/lib/validation";
+import { validateRequest, blackoutCreateSchema, TIME_REGEX } from "@/lib/validation";
 
 export async function GET() {
   const session = await getSession();
@@ -16,10 +16,6 @@ export async function GET() {
 
   return NextResponse.json({ schedules });
 }
-
-// HH:mm, 00:00–23:59. The looser \d{2}:\d{2} accepted e.g. "27:99", which
-// stored a schedule whose window never activates.
-const TIME_REGEX = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 export async function POST(request: NextRequest) {
   const session = await getSession();

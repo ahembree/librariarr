@@ -1189,3 +1189,13 @@ export const aiChatSchema = z.object({
     .min(1, "At least one message is required")
     .max(40, "Conversation is too long"),
 });
+
+// ─── API routes (perf sweep, area C) ───
+
+/**
+ * HH:mm, 00:00–23:59, as the blackout and preroll schedule routes accept it.
+ * The looser \d{2}:\d{2} accepted e.g. "27:99", which stored a schedule whose
+ * window never activates and gave the enforcer wrong minute math. One copy
+ * here: each of the four routes carried its own.
+ */
+export const TIME_REGEX = /^([01]\d|2[0-3]):[0-5]\d$/;
