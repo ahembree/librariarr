@@ -155,17 +155,17 @@ function PaletteBody({ onOpenChange }: { onOpenChange: (open: boolean) => void }
     const q = query.trim();
     if (!q) return;
     const timeout = setTimeout(async () => {
-      const fetchType = (params: string) =>
-        fetch(`/api/media/search?q=${encodeURIComponent(q)}&${params}`)
-          .then((res) => (res.ok ? res.json() : { items: [] }))
-          .then((data) => (data.items ?? []) as SearchResult[])
-          .catch(() => [] as SearchResult[]);
-
-      const [movies, series, music] = await Promise.all([
-        fetchType("type=MOVIE"),
-        fetchType("type=SERIES&seriesScope=true"),
-        fetchType("type=MUSIC&musicScope=true"),
-      ]);
+      // One request for the three lists: it was a request per type on every
+      // keystroke. `seriesScope` applies to series only and `musicScope` to
+      // music only, so each list is what its own `type=` request returned.
+      const params = new URLSearchParams({ q, types: "MOVIE,SERIES,MUSIC", seriesScope: "true", musicScope: "true" });
+      const results = await fetch(`/api/media/search?${params}`)
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data: { results?: Partial<Record<SearchResult["type"], SearchResult[]>> } | null) => data?.results ?? {})
+        .catch(() => ({}) as Partial<Record<SearchResult["type"], SearchResult[]>>);
+      const movies = results.MOVIE ?? [];
+      const series = results.SERIES ?? [];
+      const music = results.MUSIC ?? [];
       if (token !== reqToken.current) return;
       // Movies arrive per-copy (one row per server) — series/artists/albums
       // are already grouped by the API. Collapse duplicates by title+year.
