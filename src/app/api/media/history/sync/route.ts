@@ -146,6 +146,7 @@ export async function POST(request: Request) {
       // lifetime cap, and the user needs to know one more run will finish it.
       return { success: true, counts, cancelled: signal.aborted };
     },
-    { signal: request.signal, maxLifetimeMs: MAX_SYNC_LIFETIME_MS },
+    // `request`: its signal, and gzip when the client accepts it.
+    { request, maxLifetimeMs: MAX_SYNC_LIFETIME_MS },
   );
 }

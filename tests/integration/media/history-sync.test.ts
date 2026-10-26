@@ -17,6 +17,7 @@
  *    `{ success: true, counts }`, with -1 for a server whose sync threw.
  */
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
+import { gunzipSync } from "node:zlib";
 import { NextRequest } from "next/server";
 import { cleanDatabase, disconnectTestDb } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
@@ -187,6 +188,25 @@ describe("POST /api/media/history/sync", () => {
       counts: { [server.id]: 120 },
       cancelled: false,
     });
+  });
+
+  it("gzips the stream for a client that accepts it", async () => {
+    const server = await createTestServer(userId, { name: "Plex Main" });
+    mockSyncWatchHistory.mockResolvedValue({ count: 7 });
+
+    const response = await callRoute(POST, {
+      method: "POST",
+      body: { serverId: server.id },
+      headers: { "Accept-Encoding": "gzip" },
+    });
+    expect(response.headers.get("Content-Encoding")).toBe("gzip");
+    const lines = gunzipSync(Buffer.from(await response.arrayBuffer()))
+      .toString()
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { type: string; result?: SyncResult });
+    expect(lines.map((l) => l.type)).toEqual(["plan", "phase", "result"]);
+    expect(lines[2].result).toEqual({ success: true, counts: { [server.id]: 7 }, cancelled: false });
   });
 
   it("drops every media-derived cache, not only the filter dropdowns", async () => {
