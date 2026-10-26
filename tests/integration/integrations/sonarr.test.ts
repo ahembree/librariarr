@@ -463,7 +463,7 @@ describe("Sonarr integration endpoints", () => {
       expect(body.error).toBe("Instance not found");
     });
 
-    it("returns series lookup, tags, and quality profiles", async () => {
+    it("returns tags, quality profiles, statuses and series types, without a per-series map", async () => {
       const user = await createTestUser();
       const instance = await createTestSonarrInstance(user.id);
       setMockSession({ userId: user.id, isLoggedIn: true });
@@ -489,15 +489,14 @@ describe("Sonarr integration endpoints", () => {
       const body = await expectJson(response, 200);
 
       expect(body).toEqual({
-        series: {
-          "371980": { tags: ["test-tag"], qualityProfile: "HD-1080p", monitored: true, rating: 8.5 },
-        },
         tags: [{ id: 1, label: "test-tag" }],
         qualityProfiles: [{ id: 1, name: "HD-1080p" }],
         languages: ["English"],
         statuses: ["continuing"],
         seriesTypes: ["standard"],
       });
+      // No caller read the per-series map, so it is no longer sent.
+      expect(body).not.toHaveProperty("series");
     });
   });
 });

@@ -10,6 +10,7 @@ import { loadGenreSpellings } from "@/lib/filters/genre-spellings";
 import { loadResolutionSpellings } from "@/lib/filters/resolution-spellings";
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
 import { parseListPagination } from "@/lib/api/pagination";
+import { loadDetailScope } from "@/lib/api/detail-scope";
 import { getServerPresenceByDedupKey } from "@/lib/dedup/server-presence";
 
 // Valid MediaItem scalar sort columns; anything else falls back to title.
@@ -58,13 +59,32 @@ async function listGet(request: NextRequest) {
   const search = searchParams.get("search");
   // `seriesKey` (series identity) is preferred; `parentTitle` stays as a
   // backward-compatible fallback (ambiguous across same-titled shows).
-  const seriesKey = searchParams.get("seriesKey");
-  const parentTitle = searchParams.get("parentTitle");
-  const seasonNumber = searchParams.get("seasonNumber");
+  let seriesKey = searchParams.get("seriesKey");
+  let parentTitle = searchParams.get("parentTitle");
+  let seasonNumber = searchParams.get("seasonNumber");
   const rawSortBy = searchParams.get("sortBy") ?? "title";
   const sortBy = SORT_COLUMNS.has(rawSortBy) ? rawSortBy : "title";
   const sortOrder = searchParams.get("sortOrder") === "desc" ? "desc" : "asc";
   const serverId = searchParams.get("serverId");
+
+  // `itemId` names a season page's record: the list is that season of its
+  // show, read here (`loadDetailScope`) so the page need not wait for the
+  // record. It replaces `seriesKey`, `parentTitle` and `seasonNumber`.
+  const itemId = searchParams.get("itemId");
+  if (itemId) {
+    const scope = await loadDetailScope(session.userId!, itemId, "SERIES");
+    if (!scope) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+    // An episode with no show title belongs to no season list (the page
+    // listed nothing for one).
+    if (!scope.parentTitle) {
+      return NextResponse.json({ items: [], pagination: { page, limit, total: 0, pages: 0, hasMore: false } });
+    }
+    seriesKey = scope.seriesKey;
+    parentTitle = scope.parentTitle;
+    seasonNumber = String(scope.seasonNumber ?? 0);
+  }
 
   const sf = await resolveServerFilter(session.userId!, serverId, "SERIES");
   if (!sf) {

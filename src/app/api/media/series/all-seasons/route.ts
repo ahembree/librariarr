@@ -131,7 +131,10 @@ async function listGet(request: NextRequest) {
     resolutionOtherIncludesNull: true,
   });
   if (Object.keys(narrowing).length > 0) {
-    const qualifying = await prisma.mediaItem.findMany({
+    // `groupBy`, not `findMany({ distinct })`: Prisma applies `distinct` in
+    // Node, reading one row per matching episode to keep one per season.
+    const qualifying = await prisma.mediaItem.groupBy({
+      by: ["seriesKey", "seasonNumber"],
       where: {
         AND: [
           narrowing,
@@ -144,8 +147,6 @@ async function listGet(request: NextRequest) {
           },
         ],
       },
-      select: { seriesKey: true, seasonNumber: true },
-      distinct: ["seriesKey", "seasonNumber"],
     });
     params.push(qualifying.map((r) => r.seriesKey));
     const keysParam = params.length;

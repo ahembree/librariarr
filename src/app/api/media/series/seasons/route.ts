@@ -1,12 +1,27 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
+import { jsonResponse } from "@/lib/api/json-response";
+import { loadDetailScope, seriesOfScope } from "@/lib/api/detail-scope";
 import { prisma } from "@/lib/db";
+import type { Prisma } from "@/generated/prisma/client";
 import { normalizeResolutionLabel } from "@/lib/resolution";
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
+import { loadMissingSummaries } from "@/lib/media/group-summaries";
 
 function getResolutionLabel(resolution: string | null): string {
   return normalizeResolutionLabel(resolution);
 }
+
+/**
+ * An episode carrying a blurb: its show's (`parentSummary`) or its own, blank
+ * text counting as none — what the fold below takes a season's summary from.
+ */
+const HAS_SUMMARY: Prisma.MediaItemWhereInput = {
+  OR: [
+    { AND: [{ parentSummary: { not: null } }, { NOT: { parentSummary: "" } }] },
+    { AND: [{ summary: { not: null } }, { NOT: { summary: "" } }] },
+  ],
+};
 
 export async function GET(request: NextRequest) {
   const session = await getSession();
@@ -18,10 +33,22 @@ export async function GET(request: NextRequest) {
   // Series identity is `seriesKey` (see src/lib/media/series-key.ts); the legacy
   // `parentTitle` param is still accepted so old links keep working, but it is
   // ambiguous (two shows can share a title), so `seriesKey` wins when both are
-  // present.
-  const seriesKey = searchParams.get("seriesKey");
-  const parentTitle = searchParams.get("parentTitle");
+  // present. `itemId` names the show page's record instead, and its series is
+  // read here (`loadDetailScope`) so the page need not wait for the record.
+  const itemId = searchParams.get("itemId");
+  let seriesKey = searchParams.get("seriesKey");
+  let parentTitle = searchParams.get("parentTitle");
   const serverId = searchParams.get("serverId");
+
+  if (itemId) {
+    const scope = await loadDetailScope(session.userId!, itemId, "SERIES");
+    if (!scope) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+    const series = seriesOfScope(scope);
+    seriesKey = "seriesKey" in series ? series.seriesKey : null;
+    parentTitle = "parentTitle" in series ? series.parentTitle : null;
+  }
 
   if (!seriesKey && !parentTitle) {
     return NextResponse.json({ error: "seriesKey or parentTitle is required" }, { status: 400 });
@@ -32,50 +59,59 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ seasons: [] });
   }
 
-  const items = await prisma.mediaItem.findMany({
-    where: {
-      type: "SERIES",
-      ...(seriesKey ? { seriesKey } : { parentTitle: parentTitle! }),
-      library: { mediaServerId: { in: sf.serverIds } },
-      ...(!sf.isSingleServer && { dedupCanonical: true }),
-    },
-    select: {
-      id: true,
-      seasonNumber: true,
-      episodeNumber: true,
-      resolution: true,
-      fileSize: true,
-      thumbUrl: true,
-      seasonThumbUrl: true,
-      lastPlayedAt: true,
-      addedAt: true,
-      playCount: true,
-      summary: true,
-      parentSummary: true,
-      genres: true,
-      studio: true,
-      contentRating: true,
-      rating: true,
-      ratingImage: true,
-      audienceRating: true,
-      audienceRatingImage: true,
-      year: true,
-      library: {
-        select: {
-          mediaServer: { select: { id: true, name: true, type: true } },
+  const where: Prisma.MediaItemWhereInput = {
+    type: "SERIES",
+    ...(seriesKey ? { seriesKey } : { parentTitle: parentTitle! }),
+    library: { mediaServerId: { in: sf.serverIds } },
+    ...(!sf.isSingleServer && { dedupCanonical: true }),
+  };
+
+  // The episodes without their blurbs, beside the ids of the ones that have
+  // one: the fold keeps one summary per season out of every episode's, so
+  // reading the prose of every episode (two paragraphs each, for hundreds of
+  // episodes) to use a dozen was most of what this route transferred. The
+  // dozen are read by id afterwards (`loadMissingSummaries`).
+  const [items, summarised] = await Promise.all([
+    prisma.mediaItem.findMany({
+      where,
+      select: {
+        id: true,
+        seasonNumber: true,
+        episodeNumber: true,
+        resolution: true,
+        fileSize: true,
+        thumbUrl: true,
+        seasonThumbUrl: true,
+        lastPlayedAt: true,
+        addedAt: true,
+        playCount: true,
+        genres: true,
+        studio: true,
+        contentRating: true,
+        rating: true,
+        ratingImage: true,
+        audienceRating: true,
+        audienceRatingImage: true,
+        year: true,
+        library: {
+          select: {
+            mediaServer: { select: { id: true, name: true, type: true } },
+          },
         },
       },
-    },
-    // The fold below keeps the FIRST episode carrying each field (summary, year,
-    // rating, the linked item), so the rows need a fixed order: unordered,
-    // Postgres returned them in heap order and an UPDATE could change which
-    // episode's values a season showed.
-    orderBy: [
-      { seasonNumber: { sort: "asc", nulls: "last" } },
-      { episodeNumber: { sort: "asc", nulls: "last" } },
-      { id: "asc" },
-    ],
-  });
+      // The fold below keeps the FIRST episode carrying each field (summary, year,
+      // rating, the linked item), so the rows need a fixed order: unordered,
+      // Postgres returned them in heap order and an UPDATE could change which
+      // episode's values a season showed.
+      orderBy: [
+        { seasonNumber: { sort: "asc", nulls: "last" } },
+        { episodeNumber: { sort: "asc", nulls: "last" } },
+        { id: "asc" },
+      ],
+    }),
+    prisma.mediaItem.findMany({ where: { AND: [where, HAS_SUMMARY] }, select: { id: true } }),
+  ]);
+  const hasSummary = new Set(summarised.map((row) => row.id));
 
   // Group by season number (canonical items are already deduped)
   const seasonMap = new Map<
@@ -90,7 +126,8 @@ export async function GET(request: NextRequest) {
       addedAt: Date | null;
       totalPlayCount: number;
       servers: { serverId: string; serverName: string; serverType: string }[];
-      summary: string | null;
+      /** The first episode, in episode order, that has a summary. */
+      summaryItemId: string | null;
       genres: string[] | null;
       studio: string | null;
       contentRating: string | null;
@@ -116,7 +153,7 @@ export async function GET(request: NextRequest) {
         addedAt: null,
         totalPlayCount: 0,
         servers: [],
-        summary: null,
+        summaryItemId: null,
         genres: null,
         studio: null,
         contentRating: null,
@@ -153,7 +190,7 @@ export async function GET(request: NextRequest) {
       season.mediaItemId = item.id;
     }
 
-    if (!season.summary && (item.parentSummary || item.summary)) season.summary = item.parentSummary || item.summary;
+    if (!season.summaryItemId && hasSummary.has(item.id)) season.summaryItemId = item.id;
     if (!season.genres && item.genres) season.genres = item.genres as string[];
     if (!season.studio && item.studio) season.studio = item.studio;
     if (!season.contentRating && item.contentRating) season.contentRating = item.contentRating;
@@ -169,6 +206,13 @@ export async function GET(request: NextRequest) {
     }
   }
 
+  // The show's blurb where an episode has it, else the episode's own — the
+  // order the fold read `parentSummary || summary` in.
+  const summaries = await loadMissingSummaries(
+    [...seasonMap.values()].flatMap((s) => (s.summaryItemId ? [[String(s.seasonNumber), s.summaryItemId] as const] : [])),
+    "show",
+  );
+
   const seasons = Array.from(seasonMap.values())
     .map((s) => ({
       seasonNumber: s.seasonNumber,
@@ -180,7 +224,7 @@ export async function GET(request: NextRequest) {
       addedAt: s.addedAt,
       totalPlayCount: s.totalPlayCount,
       servers: s.servers,
-      summary: s.summary,
+      summary: summaries.get(String(s.seasonNumber)) ?? null,
       genres: s.genres,
       studio: s.studio,
       contentRating: s.contentRating,
@@ -192,5 +236,5 @@ export async function GET(request: NextRequest) {
     }))
     .sort((a, b) => a.seasonNumber - b.seasonNumber);
 
-  return NextResponse.json({ seasons });
+  return jsonResponse(request, { seasons });
 }

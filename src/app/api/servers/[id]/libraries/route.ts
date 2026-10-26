@@ -78,6 +78,15 @@ export async function PUT(
     server.libraries.map((lib) => [lib.key, lib])
   );
 
+  // The server's library list, asked for once — on the first library this
+  // request has no row for, and only then. It was fetched again for every such
+  // library, so enabling five new libraries made five identical requests.
+  let serverLibraries: ReturnType<ReturnType<typeof createMediaServerClient>["getLibraries"]> | null = null;
+  const loadServerLibraries = () =>
+    (serverLibraries ??= createMediaServerClient(server.type, server.url, server.accessToken, {
+      skipTlsVerify: server.tlsSkipVerify,
+    }).getLibraries());
+
   for (const { key, enabled } of libraries) {
     const existing = existingByKey.get(key);
     if (existing) {
@@ -88,10 +97,7 @@ export async function PUT(
     } else {
       // Pre-create library record so enabled state is persisted before first sync
       // We need title and type — fetch from server
-      const client = createMediaServerClient(server.type, server.url, server.accessToken, {
-        skipTlsVerify: server.tlsSkipVerify,
-      });
-      const plexLibraries = await client.getLibraries();
+      const plexLibraries = await loadServerLibraries();
       const plib = plexLibraries.find((l) => l.key === key);
       if (plib) {
         await prisma.library.create({

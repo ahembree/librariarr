@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { clearMockSession, getMockSession } from "../../setup/mock-session";
-import { callRoute, expectJson, createTestUser } from "../../setup/test-helpers";
+import { callRoute, expectJson, createTestUser, createTestServer } from "../../setup/test-helpers";
 
 // Mock bcrypt
 const mockCompare = vi.hoisted(() => vi.fn());
@@ -236,6 +236,30 @@ describe("POST /api/auth/local/login", () => {
     const body = await expectJson<{ authenticated: boolean }>(response, 200);
     expect(body.authenticated).toBe(true);
     expect(getMockSession().userId).toBe(user.id);
+  });
+
+  it("says whether the user has a media server, so the login page knows where to go", async () => {
+    const prisma = getTestPrisma();
+    const user = await createTestUser({ username: "localuser" });
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { localUsername: "localuser", passwordHash: "hashed_password" },
+    });
+    await prisma.appSettings.create({ data: { userId: user.id, localAuthEnabled: true } });
+    mockCompare.mockResolvedValue(true);
+    const login = async () =>
+      expectJson<{ hasServers: boolean }>(
+        await callRoute(POST, {
+          url: "/api/auth/local/login",
+          method: "POST",
+          body: { username: "localuser", password: "correctpassword" },
+        }),
+        200,
+      );
+
+    expect((await login()).hasServers).toBe(false);
+    await createTestServer(user.id, { enabled: false });
+    expect((await login()).hasServers).toBe(true);
   });
 
   it("returns 429 when rate limited, before reading the body", async () => {

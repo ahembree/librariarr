@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
-import { cleanDatabase, disconnectTestDb } from "../../setup/test-db";
+import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
 import {
   callRouteWithParams,
@@ -53,6 +53,18 @@ describe("GET /api/media/[id]/series-summary", () => {
   afterAll(async () => {
     await disconnectTestDb();
   });
+
+  /** An episode with the show key the sync stores on every episode row. */
+  async function createEpisodeOfShow(
+    overrides: { parentTitle?: string; ratingKey: string; summary?: string },
+    showRatingKey: string,
+  ) {
+    const item = await createTestMediaItem(libraryId, { type: "SERIES", ...overrides });
+    return getTestPrisma().mediaItem.update({
+      where: { id: item.id },
+      data: { grandparentRatingKey: showRatingKey },
+    });
+  }
 
   it("returns 401 without auth", async () => {
     clearMockSession();
@@ -111,6 +123,56 @@ describe("GET /api/media/[id]/series-summary", () => {
       year: 2020,
     });
     expect(mockGetItemMetadata.mock.calls).toEqual([["48213"], ["48190"]]);
+  });
+
+  it("reads the show key stored on the episode instead of asking for the episode", async () => {
+    const item = await createEpisodeOfShow({ parentTitle: "The Show", ratingKey: "48213" }, "48190");
+    mockGetItemMetadata.mockResolvedValueOnce({
+      ratingKey: "48190",
+      type: "show",
+      summary: "Show blurb",
+      Genre: [{ tag: "Drama" }],
+      studio: "HBO",
+      contentRating: "TV-MA",
+      year: 2020,
+    });
+
+    const response = await callRouteWithParams(GET, { id: item.id });
+    expect(await response.json()).toEqual({
+      summary: "Show blurb",
+      genres: ["Drama"],
+      studio: "HBO",
+      contentRating: "TV-MA",
+      year: 2020,
+    });
+    expect(mockGetItemMetadata.mock.calls).toEqual([["48190"]]);
+  });
+
+  it("answers another episode of the same show from the cache, and refetches once the media caches drop", async () => {
+    const first = await createEpisodeOfShow({ parentTitle: "The Show", ratingKey: "1" }, "777");
+    const second = await createEpisodeOfShow({ parentTitle: "The Show", ratingKey: "2" }, "777");
+    mockGetItemMetadata.mockResolvedValue({ ratingKey: "777", summary: "Cached blurb", year: 2001 });
+
+    await callRouteWithParams(GET, { id: first.id });
+    const again = await callRouteWithParams(GET, { id: second.id });
+    expect((await again.json()).summary).toBe("Cached blurb");
+    expect(mockGetItemMetadata).toHaveBeenCalledTimes(1);
+
+    const { invalidateMediaCaches } = await import("@/lib/cache/invalidate");
+    invalidateMediaCaches();
+    await callRouteWithParams(GET, { id: second.id });
+    expect(mockGetItemMetadata).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not keep a failed show lookup", async () => {
+    const item = await createEpisodeOfShow({ ratingKey: "9", summary: "Episode text" }, "900");
+    mockGetItemMetadata.mockRejectedValueOnce(new Error("Plex unavailable"));
+    const failed = await callRouteWithParams(GET, { id: item.id });
+    expect((await failed.json()).summary).toBe("Episode text");
+
+    mockGetItemMetadata.mockResolvedValueOnce({ ratingKey: "900", summary: "Live blurb" });
+    const retried = await callRouteWithParams(GET, { id: item.id });
+    expect((await retried.json()).summary).toBe("Live blurb");
   });
 
   it("falls back to stored data when Plex call fails", async () => {

@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
 import type { DimensionMeta } from "@/lib/dashboard/custom-dimensions";
+import { escapeSqlLiteral } from "./sql-literal";
 
 type BreakdownRow = { value: string | null; type: string; _count: number };
 
@@ -21,10 +22,6 @@ function assertAllowedColumn(column: string, allowed: Set<string>): void {
   if (!allowed.has(column)) {
     throw new Error(`Disallowed column name in raw SQL: ${column}`);
   }
-}
-
-function escapeSqlLiteral(value: string): string {
-  return value.replace(/'/g, "''");
 }
 
 const LIBRARY_TYPES = new Set(["MOVIE", "SERIES", "MUSIC"]);

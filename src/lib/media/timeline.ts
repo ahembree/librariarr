@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/db";
 import type { DimensionMeta } from "@/lib/dashboard/custom-dimensions";
 import { excludedTypesSql } from "./breakdown";
+import { escapeSqlLiteral } from "./sql-literal";
 import { appCache } from "@/lib/cache/memory-cache";
 
 export const ALLOWED_DATE_COLUMNS = new Set(["addedAt", "lastPlayedAt", "originallyAvailableAt"]);
@@ -22,10 +23,6 @@ function aggregateExpr(measure: string): string {
   return measure === "size"
     ? `COALESCE(SUM(mi."fileSize"), 0)::float8`
     : `COUNT(*)::int`;
-}
-
-function escapeSqlLiteral(value: string): string {
-  return value.replace(/'/g, "''");
 }
 
 function dateBucketExpr(col: string, bin: string): string {

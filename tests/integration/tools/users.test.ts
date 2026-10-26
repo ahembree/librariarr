@@ -243,4 +243,30 @@ describe("GET /api/tools/users", () => {
     // Offline past streamers AND the live one are all offered for exclusion.
     expect(body.users).toEqual(["admin", "another_viewer", "live_viewer", "past_viewer"]);
   });
+
+  it("asks plex.tv and every server at once rather than one after another", async () => {
+    const user = await createTestUser({ username: "admin", plexToken: "plex-tok" });
+    await createTestServer(user.id, { name: "One" });
+    await createTestServer(user.id, { name: "Two" });
+    setMockSession({ userId: user.id, isLoggedIn: true });
+
+    // Every lookup hangs until all five have been asked: run one after another,
+    // the first would never be answered and the request would never finish.
+    const asked: string[] = [];
+    let release!: () => void;
+    const allAsked = new Promise<void>((resolve) => (release = resolve));
+    const hold = <T,>(label: string, value: T) => async () => {
+      asked.push(label);
+      if (asked.length === 5) release();
+      await allAsked;
+      return value;
+    };
+    mockGetPlexFriends.mockImplementation(hold("friends", ["friend"]));
+    mockListUsernames.mockImplementation(hold("accounts", ["account"]));
+    mockGetSessions.mockImplementation(hold("sessions", []));
+
+    const body = await expectJson<{ users: string[] }>(await callRoute(GET, { url: "/api/tools/users" }), 200);
+    expect(asked.sort()).toEqual(["accounts", "accounts", "friends", "sessions", "sessions"]);
+    expect(body.users).toEqual(["account", "admin", "friend"]);
+  });
 });

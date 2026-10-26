@@ -1017,5 +1017,49 @@ describe("GET /api/media/music/grouped", () => {
       expect(sade.trackCount).toBe(1);
       expect(sade.servers.map((s) => s.serverName).sort()).toEqual(["Alpha", "Beta"]);
     });
+
+    it("gives each artist the same presence whether the listing is whole, paged or filtered", async () => {
+      const user = await createTestUser();
+      const a = await createTestServer(user.id, { name: "Alpha" });
+      const b = await createTestServer(user.id, { name: "Beta" });
+      const libA = await createTestLibrary(a.id, { type: "MUSIC" });
+      const libB = await createTestLibrary(b.id, { type: "MUSIC" });
+      const prisma = getTestPrisma();
+      // Air and Can on both servers (the copy spelt differently), Beak on Alpha only.
+      const artistsOn = [
+        { name: "Air", libs: [libA, libB], spelling: "air " },
+        { name: "Beak", libs: [libA], spelling: "Beak" },
+        { name: "Can", libs: [libA, libB], spelling: "CAN" },
+      ];
+      for (const artist of artistsOn) {
+        for (const lib of artist.libs) {
+          const track = await createTestMediaItem(lib.id, {
+            type: "MUSIC", title: "Song", parentTitle: lib === libA ? artist.name : artist.spelling, albumTitle: "LP",
+            fileSize: BigInt(artist.name === "Can" ? 5_000_000 : 100),
+          });
+          await prisma.mediaItem.update({
+            where: { id: track.id },
+            data: { dedupKey: `music:${artist.name}:song`, dedupCanonical: lib === libA },
+          });
+        }
+      }
+      setMockSession({ userId: user.id, isLoggedIn: true });
+
+      const whole = new Map((await artists()).map((r) => [r.parentTitle, r.servers]));
+      expect(whole.get("Air")!.map((s) => s.serverName)).toEqual(["Alpha", "Beta"]);
+      expect(whole.get("Beak")!.map((s) => s.serverName)).toEqual(["Alpha"]);
+
+      for (const query of ["&search=ea", "&startsWith=C", "&fileSizeMin=1000000"]) {
+        const list = await artists(query);
+        expect(list.length, query).toBeGreaterThan(0);
+        for (const row of list) expect(row.servers, query).toEqual(whole.get(row.parentTitle));
+      }
+      const paged = await expectJson<{ artists: Artist[] }>(
+        await callRoute(GET, { url: "/api/media/music/grouped?limit=1&page=3" }),
+        200,
+      );
+      expect(paged.artists.map((r) => r.parentTitle)).toEqual(["Can"]);
+      expect(paged.artists[0].servers).toEqual(whole.get("Can"));
+    });
   });
 });

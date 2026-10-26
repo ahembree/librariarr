@@ -1,69 +1,20 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
-import { prisma } from "@/lib/db";
-import { createMediaServerClient } from "@/lib/media-server/factory";
-import { stampFirstSeen, rememberSession } from "@/lib/media-server/session-first-seen";
-import type { MediaSession } from "@/lib/media-server/types";
-import type { MediaServerType } from "@/generated/prisma/client";
+import { readSessionsSnapshot } from "./snapshot";
 
-export interface SessionWithServer extends MediaSession {
-  serverId: string;
-  serverName: string;
-  serverType: MediaServerType;
-  startedAt: number;
-}
-
-export interface UnreachableServer {
-  id: string;
-  name: string;
-  type: MediaServerType;
-}
-
+/**
+ * Every enabled server's playback sessions, and the servers that could not be
+ * reached. Read through the poll the Stream Manager's event stream shares
+ * (`readSessionsSnapshot`), so a refresh here — the sidebar's stream badge on
+ * every session change — does not ask every server again when a poll that
+ * began after the last pushed change is a few seconds old.
+ */
 export async function GET() {
   const session = await getSession();
   if (!session.isLoggedIn) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const servers = await prisma.mediaServer.findMany({
-    where: { userId: session.userId!, enabled: true },
-    select: { id: true, name: true, url: true, accessToken: true, tlsSkipVerify: true, type: true },
-  });
-
-  const now = Date.now();
-  const unreachableServers: UnreachableServer[] = [];
-
-  const results = await Promise.allSettled(
-    servers.map(async (server) => {
-      const client = createMediaServerClient(server.type, server.url, server.accessToken, {
-        skipTlsVerify: server.tlsSkipVerify,
-      });
-      const sessions = await client.getSessions();
-      return sessions.map<SessionWithServer>((s) => {
-        // Keeps the label the terminate route logs with current.
-        rememberSession(server.id, s);
-        return {
-          ...s,
-          serverId: server.id,
-          serverName: server.name,
-          serverType: server.type,
-          // Share the SSE stream's first-seen timing so a manual refresh here
-          // doesn't reset the displayed stream durations.
-          startedAt: stampFirstSeen(server.id, s.sessionId, now),
-        };
-      });
-    }),
-  );
-
-  const allSessions: SessionWithServer[] = [];
-  results.forEach((result, idx) => {
-    if (result.status === "fulfilled") {
-      allSessions.push(...result.value);
-    } else {
-      const server = servers[idx];
-      unreachableServers.push({ id: server.id, name: server.name, type: server.type });
-    }
-  });
-
-  return NextResponse.json({ sessions: allSessions, unreachableServers });
+  const { sessions, unreachableServers } = await readSessionsSnapshot(session.userId!);
+  return NextResponse.json({ sessions, unreachableServers });
 }

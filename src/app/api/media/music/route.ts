@@ -10,6 +10,7 @@ import { loadGenreSpellings } from "@/lib/filters/genre-spellings";
 import { loadResolutionSpellings } from "@/lib/filters/resolution-spellings";
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
 import { parseListPagination } from "@/lib/api/pagination";
+import { loadDetailScope } from "@/lib/api/detail-scope";
 import { getServerPresenceByDedupKey } from "@/lib/dedup/server-presence";
 
 // Valid MediaItem scalar sort columns; anything else falls back to title.
@@ -54,13 +55,31 @@ async function listGet(request: NextRequest) {
 
   const { searchParams } = new URL(request.url);
   const { page, limit, skip } = parseListPagination(searchParams);
-  const parentTitle = searchParams.get("parentTitle");
-  const albumTitle = searchParams.get("albumTitle");
+  let parentTitle = searchParams.get("parentTitle");
+  let albumTitle = searchParams.get("albumTitle");
   const search = searchParams.get("search");
   const rawSortBy = searchParams.get("sortBy") ?? "title";
   const sortBy = SORT_COLUMNS.has(rawSortBy) ? rawSortBy : "title";
   const sortOrder = searchParams.get("sortOrder") === "desc" ? "desc" : "asc";
   const serverId = searchParams.get("serverId");
+
+  // `itemId` names an album page's record: the list is that album of its
+  // artist, read here (`loadDetailScope`) so the page need not wait for the
+  // record. It replaces `parentTitle` and `albumTitle`.
+  const itemId = searchParams.get("itemId");
+  if (itemId) {
+    const scope = await loadDetailScope(session.userId!, itemId, "MUSIC");
+    if (!scope) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+    // A track with no artist or no album belongs to no album list (the page
+    // listed nothing for one).
+    if (!scope.parentTitle || !scope.albumTitle) {
+      return NextResponse.json({ items: [], pagination: { page, limit, hasMore: false } });
+    }
+    parentTitle = scope.parentTitle;
+    albumTitle = scope.albumTitle;
+  }
 
   const sf = await resolveServerFilter(session.userId!, serverId, "MUSIC");
   if (!sf) {

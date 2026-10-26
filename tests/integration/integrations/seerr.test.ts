@@ -364,7 +364,8 @@ describe("Seerr integration endpoints", () => {
         }
       );
       const body = await expectJson<{ error: string; detail: string }>(response, 400);
-      expect(body).toEqual({ error: "Failed to connect", detail: "Timeout" });
+      // Named like every other type's (this one alone said just "Failed to connect").
+      expect(body).toEqual({ error: "Failed to connect to Seerr", detail: "Timeout" });
 
       const stored = await getTestPrisma().seerrInstance.findUnique({ where: { id: instance.id } });
       expect(stored!.url).toBe(instance.url);

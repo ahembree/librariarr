@@ -159,6 +159,54 @@ describe("Server CRUD endpoints", () => {
 
       expect(body.servers[0].syncJobs).toEqual([expect.objectContaining({ status: "RUNNING", itemsProcessed: 40 })]);
     });
+
+    it("reads every server's latest job in two statements however many servers there are", async () => {
+      const user = await createTestUser();
+      const prisma = getTestPrisma();
+      const servers = [];
+      for (let i = 0; i < 4; i++) servers.push(await createTestServer(user.id, { name: `Server ${i}` }));
+      await prisma.syncJob.createMany({
+        data: servers.flatMap((server, i) => [
+          { mediaServerId: server.id, status: "COMPLETED" as const, startedAt: new Date(`2026-01-0${i + 1}T00:00:00Z`) },
+          { mediaServerId: server.id, status: "FAILED" as const, startedAt: new Date(`2026-01-0${i + 1}T06:00:00Z`) },
+        ]),
+      });
+      setMockSession({ userId: user.id, isLoggedIn: true });
+
+      const findFirst = vi.spyOn(prisma.syncJob, "findFirst");
+      const findMany = vi.spyOn(prisma.syncJob, "findMany");
+      try {
+        const body = await expectJson<{ servers: { id: string; syncJobs: { status: string; startedAt: string }[] }[] }>(
+          await callRoute(GET, { url: "/api/servers" }),
+          200,
+        );
+        expect(findFirst).not.toHaveBeenCalled();
+        expect(findMany).toHaveBeenCalledTimes(1);
+        for (const [i, server] of servers.entries()) {
+          const row = body.servers.find((s) => s.id === server.id)!;
+          expect(row.syncJobs).toEqual([
+            expect.objectContaining({ status: "FAILED", startedAt: `2026-01-0${i + 1}T06:00:00.000Z` }),
+          ]);
+        }
+      } finally {
+        findFirst.mockRestore();
+        findMany.mockRestore();
+      }
+    });
+
+    it("answers fields=basic with each server's id, name, type and enabled flag only", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id, { name: "My Plex", enabled: false });
+      await createTestLibrary(server.id, { title: "Movies", type: "MOVIE" });
+      await getTestPrisma().syncJob.create({ data: { mediaServerId: server.id, status: "COMPLETED" } });
+      setMockSession({ userId: user.id, isLoggedIn: true });
+
+      const body = await expectJson<{ servers: Record<string, unknown>[] }>(
+        await callRoute(GET, { url: "/api/servers", searchParams: { fields: "basic" } }),
+        200,
+      );
+      expect(body.servers).toEqual([{ id: server.id, name: "My Plex", type: "PLEX", enabled: false }]);
+    });
   });
 
   // ----- POST /api/servers -----

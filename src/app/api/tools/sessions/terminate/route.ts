@@ -7,6 +7,7 @@ import { logTermination, terminationFailureMessage } from "@/lib/media-server/te
 import type { MediaSession } from "@/lib/media-server/types";
 import { validateRequest, terminateSessionSchema } from "@/lib/validation";
 import { sanitizeErrorDetail } from "@/lib/api/sanitize";
+import { noteSessionsChanged } from "../snapshot";
 
 export async function POST(request: NextRequest) {
   const session = await getSession();
@@ -98,6 +99,10 @@ export async function POST(request: NextRequest) {
       errors.push(`Failed to connect to server "${server.name}": ${sanitizeErrorDetail(String(error))}`);
     }
   }
+
+  // The Stream Manager refreshes the moment this answers; the shared poll it
+  // reads through (`readSessionsSnapshot`) may predate the termination.
+  if (terminated > 0) noteSessionsChanged();
 
   return NextResponse.json({ terminated, errors });
 }

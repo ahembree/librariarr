@@ -557,7 +557,7 @@ describe("Radarr integration endpoints", () => {
       expect(body.error).toBe("Instance not found");
     });
 
-    it("returns movie lookup, tags, and quality profiles", async () => {
+    it("returns tags, quality profiles and the library's quality names, without a per-movie map", async () => {
       const user = await createTestUser();
       const instance = await createTestRadarrInstance(user.id);
       setMockSession({ userId: user.id, isLoggedIn: true });
@@ -589,15 +589,14 @@ describe("Radarr integration endpoints", () => {
       const body = await expectJson(response, 200);
 
       expect(body).toEqual({
-        movies: {
-          "329865": { tags: ["test-tag"], qualityProfile: "HD-1080p", monitored: true, rating: 7.9 },
-        },
         tags: [{ id: 1, label: "test-tag" }],
         qualityProfiles: [{ id: 1, name: "HD-1080p" }],
         languages: ["English"],
         qualityNames: ["Bluray-1080p"],
         statuses: ["released"],
       });
+      // No caller read the per-movie map, so it is no longer sent.
+      expect(body).not.toHaveProperty("movies");
     });
   });
 });

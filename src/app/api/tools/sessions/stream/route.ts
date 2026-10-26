@@ -1,15 +1,7 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
-import { prisma } from "@/lib/db";
-import { createMediaServerClient } from "@/lib/media-server/factory";
-import {
-  stampFirstSeen,
-  pruneFirstSeen,
-  rememberSession,
-} from "@/lib/media-server/session-first-seen";
 import { realtimeBus } from "@/lib/media-server/realtime";
-import type { MediaSession } from "@/lib/media-server/types";
-import type { MediaServerType } from "@/generated/prisma/client";
+import { readSessionsSnapshot, type SessionWithServer } from "../snapshot";
 
 export const dynamic = "force-dynamic";
 
@@ -18,64 +10,18 @@ export const dynamic = "force-dynamic";
 // getSessions() per second per active stream — worse than plain polling.
 const EVENT_POLL_MIN_MS = 2000;
 
-interface SessionWithServer extends MediaSession {
-  serverId: string;
-  serverName: string;
-  serverType: MediaServerType;
-  startedAt: number;
-}
-
 const POLL_INTERVAL = 5000;
 const HEARTBEAT_INTERVAL = 30000;
 const MAX_STREAM_LIFETIME = 3600000; // 1 hour safety limit
 
+/**
+ * The sessions, from the poll every open stream shares (`readSessionsSnapshot`):
+ * each connection polled every server on its own 5-second tick. A pushed
+ * change is noted there before any stream hears of it, so a realtime-triggered
+ * poll is never handed one that began before the change.
+ */
 async function fetchAllSessions(userId: string): Promise<SessionWithServer[]> {
-  const servers = await prisma.mediaServer.findMany({
-    where: { userId, enabled: true },
-    select: { id: true, name: true, url: true, accessToken: true, tlsSkipVerify: true, type: true },
-  });
-
-  const now = Date.now();
-
-  const results = await Promise.allSettled(
-    servers.map(async (server) => {
-      const client = createMediaServerClient(server.type, server.url, server.accessToken, {
-        skipTlsVerify: server.tlsSkipVerify,
-      });
-      const sessions = await client.getSessions();
-      return {
-        serverId: server.id,
-        sessions: sessions.map<SessionWithServer>((s) => {
-          rememberSession(server.id, s);
-          return {
-            ...s,
-            serverId: server.id,
-            serverName: server.name,
-            serverType: server.type,
-            startedAt: stampFirstSeen(server.id, s.sessionId, now),
-          };
-        }),
-      };
-    }),
-  );
-
-  const allSessions: SessionWithServer[] = [];
-  // Servers we actually reached. One failed poll must not look like "every
-  // session on that server ended" — dropping their first-seen timestamps
-  // restarts the displayed stream duration from zero when the server returns.
-  const polledServerIds = new Set<string>();
-  for (const result of results) {
-    if (result.status === "fulfilled") {
-      polledServerIds.add(result.value.serverId);
-      allSessions.push(...result.value.sessions);
-    }
-  }
-
-  const activeKeys = new Set(allSessions.map((s) => `${s.serverId}:${s.sessionId}`));
-  const knownServerIds = new Set(servers.map((s) => s.id));
-  pruneFirstSeen(activeKeys, knownServerIds, polledServerIds);
-
-  return allSessions;
+  return (await readSessionsSnapshot(userId)).sessions;
 }
 
 // Both transcode decisions are included: a paused stream has a frozen
@@ -140,6 +86,8 @@ export async function GET() {
 
       // Real-time: push within ~EVENT_POLL_MIN_MS of any session change pushed
       // by a media-server WebSocket, instead of waiting for the next poll tick.
+      // Every open stream hears the same push and shares the one poll it
+      // causes (see `readSessionsSnapshot`).
       let lastEventPoll = 0;
       let trailingTimer: ReturnType<typeof setTimeout> | null = null;
       const onRealtimeSession = () => {

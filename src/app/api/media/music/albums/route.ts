@@ -7,6 +7,8 @@ import { applyCommonFilters } from "@/lib/filters/build-where";
 import { loadGenreSpellings } from "@/lib/filters/genre-spellings";
 import { loadResolutionSpellings } from "@/lib/filters/resolution-spellings";
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
+import { loadDetailScope } from "@/lib/api/detail-scope";
+import { loadMissingSummaries } from "@/lib/media/group-summaries";
 
 export async function GET(request: NextRequest) {
   const session = await getSession();
@@ -15,8 +17,20 @@ export async function GET(request: NextRequest) {
   }
 
   const { searchParams } = new URL(request.url);
-  const parentTitle = searchParams.get("parentTitle");
+  // `itemId` names the artist page's record instead of its artist: the artist
+  // is read here (`loadDetailScope`), so the page need not wait for the record.
+  const itemId = searchParams.get("itemId");
+  let parentTitle = searchParams.get("parentTitle");
   const serverId = searchParams.get("serverId");
+
+  if (itemId) {
+    const scope = await loadDetailScope(session.userId!, itemId, "MUSIC");
+    if (!scope) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+    // The artist the page names: the track's artist, else its own title.
+    parentTitle = scope.parentTitle || scope.title;
+  }
 
   if (!parentTitle) {
     return NextResponse.json({ error: "parentTitle is required" }, { status: 400 });
@@ -54,45 +68,57 @@ export async function GET(request: NextRequest) {
   ]);
   applyCommonFilters(where, searchParams, genreSpellings, resolutionSpellings);
 
-  const items = await prisma.mediaItem.findMany({
-    where,
-    select: {
-      id: true,
-      title: true,
-      albumTitle: true,
-      audioCodec: true,
-      fileSize: true,
-      playCount: true,
-      lastPlayedAt: true,
-      addedAt: true,
-      thumbUrl: true,
-      parentThumbUrl: true,
-      summary: true,
-      genres: true,
-      studio: true,
-      contentRating: true,
-      rating: true,
-      ratingImage: true,
-      audienceRating: true,
-      audienceRatingImage: true,
-      year: true,
-      library: {
-        select: {
-          mediaServer: { select: { id: true, name: true, type: true } },
+  // The tracks without their blurbs, beside the ids of the ones that have one:
+  // an album keeps the first track's summary of all its tracks', and every
+  // track of an artist carries the same artist bio, so reading the prose of
+  // each was most of what this route transferred. The few kept are read by id
+  // afterwards (`loadMissingSummaries`).
+  const [items, summarised] = await Promise.all([
+    prisma.mediaItem.findMany({
+      where,
+      select: {
+        id: true,
+        title: true,
+        albumTitle: true,
+        audioCodec: true,
+        fileSize: true,
+        playCount: true,
+        lastPlayedAt: true,
+        addedAt: true,
+        thumbUrl: true,
+        parentThumbUrl: true,
+        genres: true,
+        studio: true,
+        contentRating: true,
+        rating: true,
+        ratingImage: true,
+        audienceRating: true,
+        audienceRatingImage: true,
+        year: true,
+        library: {
+          select: {
+            mediaServer: { select: { id: true, name: true, type: true } },
+          },
         },
       },
-    },
-    // The fold below keeps the FIRST track carrying each field (summary, year,
-    // rating, the linked item), so the rows need a fixed order: unordered,
-    // Postgres returned them in heap order and an UPDATE could change which
-    // track's values an album showed. Track order as the album listing reads
-    // it: disc (seasonNumber), then track number (episodeNumber), then id.
-    orderBy: [
-      { seasonNumber: { sort: "asc", nulls: "last" } },
-      { episodeNumber: { sort: "asc", nulls: "last" } },
-      { id: "asc" },
-    ],
-  });
+      // The fold below keeps the FIRST track carrying each field (summary, year,
+      // rating, the linked item), so the rows need a fixed order: unordered,
+      // Postgres returned them in heap order and an UPDATE could change which
+      // track's values an album showed. Track order as the album listing reads
+      // it: disc (seasonNumber), then track number (episodeNumber), then id.
+      orderBy: [
+        { seasonNumber: { sort: "asc", nulls: "last" } },
+        { episodeNumber: { sort: "asc", nulls: "last" } },
+        { id: "asc" },
+      ],
+    }),
+    // Blank text counts as none, as the fold's truthiness check read it.
+    prisma.mediaItem.findMany({
+      where: { AND: [where, { summary: { not: null } }, { NOT: { summary: "" } }] },
+      select: { id: true },
+    }),
+  ]);
+  const hasSummary = new Set(summarised.map((row) => row.id));
 
   // Group by album title (canonical items are already deduped)
   const albumMap = new Map<
@@ -109,7 +135,8 @@ export async function GET(request: NextRequest) {
       lastPlayed: Date | null;
       addedAt: Date | null;
       servers: { serverId: string; serverName: string; serverType: string }[];
-      summary: string | null;
+      /** The first track, in track order, that has a summary. */
+      summaryItemId: string | null;
       genres: string[] | null;
       studio: string | null;
       contentRating: string | null;
@@ -137,7 +164,7 @@ export async function GET(request: NextRequest) {
         lastPlayed: null,
         addedAt: null,
         servers: [],
-        summary: null,
+        summaryItemId: null,
         genres: null,
         studio: null,
         contentRating: null,
@@ -175,7 +202,7 @@ export async function GET(request: NextRequest) {
       albumGroup.hasArt = true;
     }
 
-    if (!albumGroup.summary && item.summary) albumGroup.summary = item.summary;
+    if (!albumGroup.summaryItemId && hasSummary.has(item.id)) albumGroup.summaryItemId = item.id;
     if (!albumGroup.genres && item.genres) albumGroup.genres = item.genres as string[];
     if (!albumGroup.studio && item.studio) albumGroup.studio = item.studio;
     if (!albumGroup.contentRating && item.contentRating) albumGroup.contentRating = item.contentRating;
@@ -191,8 +218,14 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  const albums = Array.from(albumMap.values())
-    .map((a) => ({
+  // Each album's blurb, read for the one track it is taken from.
+  const summaries = await loadMissingSummaries(
+    [...albumMap].flatMap(([key, a]) => (a.summaryItemId ? [[key, a.summaryItemId] as const] : [])),
+    "episode",
+  );
+
+  const albums = Array.from(albumMap)
+    .map(([key, a]) => ({
       albumTitle: a.albumTitle,
       trackCount: a.trackCount,
       totalSize: a.totalSize.toString(),
@@ -202,7 +235,7 @@ export async function GET(request: NextRequest) {
       lastPlayed: a.lastPlayed,
       addedAt: a.addedAt,
       servers: a.servers,
-      summary: a.summary,
+      summary: summaries.get(key) ?? null,
       genres: a.genres,
       studio: a.studio,
       contentRating: a.contentRating,

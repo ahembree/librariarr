@@ -19,6 +19,19 @@ const copyNumber = (group: Prisma.Sql) =>
   Prisma.sql`ROW_NUMBER() OVER (PARTITION BY ${group}, l."mediaServerId", ${dedupKey} ORDER BY mi.id)`;
 const itemCount = Prisma.sql`COUNT(DISTINCT (m.k, m.copy))::int`;
 
+type SearchType = "MOVIE" | "SERIES" | "MUSIC";
+const SEARCH_TYPES = new Set<string>(["MOVIE", "SERIES", "MUSIC"]);
+
+/**
+ * `?q=&type=` searches one media type and answers `{ items }`.
+ *
+ * `?q=&types=MOVIE,SERIES,MUSIC` searches several in one request, side by side,
+ * and answers `{ results: { MOVIE: [...], SERIES: [...], MUSIC: [...] } }` —
+ * each list exactly what `type=` gives for it with the same `seriesScope` /
+ * `musicScope` flags (`musicScope` only ever applies to MUSIC, `seriesScope`
+ * never to MOVIE). The command palette asked for its three lists one request
+ * each, on every keystroke.
+ */
 export async function GET(request: NextRequest) {
   const session = await getSession();
   if (!session.isLoggedIn) {
@@ -30,20 +43,43 @@ export async function GET(request: NextRequest) {
   // because `contains` is a LIKE pattern Prisma does not escape — a `%` or
   // `_` in `q` is otherwise a wildcard (see escape-like.ts for the live case).
   const q = searchParams.get("q")?.trim();
+  const typesParam = searchParams.get("types");
   const type = searchParams.get("type");
   const seriesScope = searchParams.get("seriesScope") === "true";
   const musicScope = searchParams.get("musicScope") === "true";
 
+  if (typesParam !== null) {
+    const types = [...new Set(typesParam.split(",").map((t) => t.trim()).filter(Boolean))];
+    if (types.length === 0 || types.some((t) => !SEARCH_TYPES.has(t))) {
+      return NextResponse.json({ error: "Invalid type" }, { status: 400 });
+    }
+    const lists = await Promise.all(
+      types.map((t) => (q ? searchType(session.userId!, q, t as SearchType, seriesScope, musicScope) : [])),
+    );
+    return NextResponse.json({ results: Object.fromEntries(types.map((t, i) => [t, lists[i]])) });
+  }
+
   if (!q || q.length === 0) {
     return NextResponse.json({ items: [] });
   }
-  if (!type || !["MOVIE", "SERIES", "MUSIC"].includes(type)) {
+  if (!type || !SEARCH_TYPES.has(type)) {
     return NextResponse.json({ error: "Invalid type" }, { status: 400 });
   }
 
+  return NextResponse.json({ items: await searchType(session.userId!, q, type as SearchType, seriesScope, musicScope) });
+}
+
+/** One media type's matches for `q`, as `GET ?type=` lists them. */
+async function searchType(
+  userId: string,
+  q: string,
+  type: SearchType,
+  seriesScope: boolean,
+  musicScope: boolean,
+): Promise<Record<string, unknown>[]> {
   const ownershipFilter: Prisma.MediaItemWhereInput = {
-    library: { mediaServer: { userId: session.userId } },
-    type: type as "MOVIE" | "SERIES" | "MUSIC",
+    library: { mediaServer: { userId } },
+    type,
   };
 
   // Music scope: search by artist (parentTitle) and album (albumTitle), return deduplicated grouped results
@@ -63,7 +99,7 @@ export async function GET(request: NextRequest) {
           FROM "MediaItem" mi
           JOIN "Library" l ON l.id = mi."libraryId"
           JOIN "MediaServer" ms ON ms.id = l."mediaServerId"
-          WHERE ms."userId" = ${session.userId} AND mi.type = 'MUSIC'::"LibraryType"
+          WHERE ms."userId" = ${userId} AND mi.type = 'MUSIC'::"LibraryType"
             AND mi."parentTitle" ILIKE '%' || ${pattern} || '%'
         ) m
         GROUP BY m."parentTitle"
@@ -77,7 +113,7 @@ export async function GET(request: NextRequest) {
           FROM "MediaItem" mi
           JOIN "Library" l ON l.id = mi."libraryId"
           JOIN "MediaServer" ms ON ms.id = l."mediaServerId"
-          WHERE ms."userId" = ${session.userId} AND mi.type = 'MUSIC'::"LibraryType"
+          WHERE ms."userId" = ${userId} AND mi.type = 'MUSIC'::"LibraryType"
             AND mi."albumTitle" ILIKE '%' || ${pattern} || '%'
         ) m
         GROUP BY m."parentTitle", m."albumTitle"
@@ -146,7 +182,7 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    return NextResponse.json({ items: results.slice(0, 20) });
+    return results.slice(0, 20);
   }
 
   // Series (or artist) scope: one row per show, grouped and counted in SQL.
@@ -168,7 +204,7 @@ export async function GET(request: NextRequest) {
         FROM "MediaItem" mi
         JOIN "Library" l ON l.id = mi."libraryId"
         JOIN "MediaServer" ms ON ms.id = l."mediaServerId"
-        WHERE ms."userId" = ${session.userId} AND mi.type = ${type}::"LibraryType"
+        WHERE ms."userId" = ${userId} AND mi.type = ${type}::"LibraryType"
           AND mi."parentTitle" ILIKE '%' || ${escapeLike(q)} || '%'
       ) m
       GROUP BY m.g
@@ -194,7 +230,7 @@ export async function GET(request: NextRequest) {
         itemCount: g.n,
       }];
     });
-    return NextResponse.json({ items: grouped });
+    return grouped;
   }
 
   const where: Prisma.MediaItemWhereInput = { ...ownershipFilter };
@@ -234,5 +270,5 @@ export async function GET(request: NextRequest) {
     scope: "individual",
   }));
 
-  return NextResponse.json({ items: withScope });
+  return withScope;
 }

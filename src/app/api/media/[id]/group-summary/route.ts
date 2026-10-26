@@ -4,7 +4,7 @@ import { prisma } from "@/lib/db";
 import { appCache } from "@/lib/cache/memory-cache";
 import { normalizeResolutionLabel } from "@/lib/resolution";
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
-import { getServerPresenceByGroup } from "@/lib/dedup/server-presence";
+import { getServerPresenceForGroup } from "@/lib/dedup/server-presence";
 
 type GroupType = "SERIES" | "MUSIC";
 
@@ -27,25 +27,28 @@ export async function GET(
   }
   const type: GroupType = typeParam;
 
-  // Ownership check + resolve grouping key
-  const repItem = await prisma.mediaItem.findFirst({
-    where: {
-      id,
-      type,
-      library: { mediaServer: { userId: session.userId } },
-    },
-    select: {
-      parentTitle: true,
-      seriesKey: true,
-      grandparentRatingKey: true,
-    },
-  });
+  // Ownership check + resolve grouping key, beside the server scope (cached,
+  // and independent of the item).
+  const [repItem, sf] = await Promise.all([
+    prisma.mediaItem.findFirst({
+      where: {
+        id,
+        type,
+        library: { mediaServer: { userId: session.userId } },
+      },
+      select: {
+        parentTitle: true,
+        seriesKey: true,
+        grandparentRatingKey: true,
+      },
+    }),
+    resolveServerFilter(session.userId!, null, type),
+  ]);
 
   if (!repItem || !repItem.parentTitle) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
 
-  const sf = await resolveServerFilter(session.userId!, null, type);
   if (!sf) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
@@ -72,20 +75,22 @@ export async function GET(
   return NextResponse.json(result);
 }
 
-async function computeGroupSummary(
+/**
+ * All sibling items in this group across the user's servers. For
+ * multi-server, restricted to canonical copies to avoid double-counting
+ * episodes/size/playCount across duplicate items. SERIES matches by identity
+ * (`seriesKey`) when the representative has one; MUSIC (and a keyless legacy
+ * SERIES row) matches by the artist/series title — ignoring case and
+ * surrounding spaces, as the artist list and getServerPresenceByGroup group
+ * it, so an artist merged from "Air" and "air " sums every track.
+ */
+async function loadGroupItems(
   type: GroupType,
   parentTitle: string,
   seriesKey: string | null,
   serverIds: string[],
   isSingleServer: boolean,
 ) {
-  // Fetch all sibling items in this group across the user's servers.
-  // For multi-server, restrict to canonical copies to avoid double-counting
-  // episodes/size/playCount across duplicate items. SERIES matches by identity
-  // (`seriesKey`) when the representative has one; MUSIC (and a keyless legacy
-  // SERIES row) matches by the artist/series title — ignoring case and
-  // surrounding spaces, as the artist list and getServerPresenceByGroup group
-  // it, so an artist merged from "Air" and "air " sums every track.
   const spellings = seriesKey
     ? []
     : (
@@ -98,7 +103,7 @@ async function computeGroupSummary(
             AND LOWER(TRIM(mi."parentTitle")) = LOWER(TRIM(${parentTitle}))
         `
       ).map((r) => r.parentTitle);
-  const items = await prisma.mediaItem.findMany({
+  return prisma.mediaItem.findMany({
     where: {
       type,
       ...(seriesKey ? { seriesKey } : { parentTitle: { in: spellings } }),
@@ -144,12 +149,23 @@ async function computeGroupSummary(
       { id: "asc" },
     ],
   });
+}
 
-  // Server presence — keyed the same way getServerPresenceByGroup groups:
-  // seriesKey for SERIES, normalized parentTitle for MUSIC.
-  const presenceMap = await getServerPresenceByGroup(type, serverIds);
-  const servers =
-    presenceMap.get(seriesKey ?? parentTitle.toLowerCase().trim()) ?? [];
+async function computeGroupSummary(
+  type: GroupType,
+  parentTitle: string,
+  seriesKey: string | null,
+  serverIds: string[],
+  isSingleServer: boolean,
+) {
+  // Server presence for this one group (keyed as the listings key it:
+  // seriesKey for SERIES, the normalized artist title for MUSIC) is read
+  // beside the items — it used to be computed for every group of the library,
+  // after the items had loaded, and then looked up for this one.
+  const [servers, items] = await Promise.all([
+    getServerPresenceForGroup(type, serverIds, seriesKey ? { seriesKey } : { parentTitle }),
+    loadGroupItems(type, parentTitle, seriesKey, serverIds, isSingleServer),
+  ]);
 
   // Pick first non-null descriptive metadata (parent-level fields tend to repeat across siblings)
   let summary: string | null = null;

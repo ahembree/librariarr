@@ -42,6 +42,28 @@ interface GuardedRoute {
   guarded: Set<string>;
 }
 
+// A route file whose methods a shared builder makes:
+// `export const { PUT, DELETE } = instanceItemRoutes(RADARR);`
+const BUILT_EXPORT = /^export\s+const\s+\{([^}]+)\}\s*=\s*(\w+)\(/gm;
+const BUILDER_METHOD = /^\s*async\s+function\s+(GET|HEAD|POST|PUT|PATCH|DELETE)\(/gm;
+
+/**
+ * The methods a builder imported by a route file defines, each with its body.
+ * Follows the import to the builder's module and reads its `export function
+ * <builder>(…)`, whose handlers are `async function METHOD(…)` declarations.
+ */
+function builderMethods(routeSource: string, builder: string): Map<string, string> {
+  const spec = new RegExp(`import\\s*\\{[^}]*\\b${builder}\\b[^}]*\\}\\s*from\\s*"(@/[^"]+)"`).exec(routeSource)?.[1];
+  if (!spec) throw new Error(`cannot find where ${builder} is imported from`);
+  const moduleSource = readFileSync(path.join(SRC, `${spec.slice(2)}.ts`), "utf8");
+  const start = moduleSource.search(new RegExp(`export function ${builder}[<(]`));
+  if (start === -1) throw new Error(`${spec} does not export function ${builder}`);
+  const next = moduleSource.indexOf("\nexport ", start + 1);
+  const body = moduleSource.slice(start, next === -1 ? moduleSource.length : next);
+  const methods = [...body.matchAll(BUILDER_METHOD)];
+  return new Map(methods.map((m, i) => [m[1], body.slice(m.index, methods[i + 1]?.index ?? body.length)]));
+}
+
 function guardedRoutes(): GuardedRoute[] {
   return walk(API, (f) => f.endsWith(`${path.sep}route.ts`))
     .filter((f) => !f.startsWith(path.join(API, "v1") + path.sep))
@@ -53,6 +75,14 @@ function guardedRoutes(): GuardedRoute[] {
         const body = source.slice(m.index, exports[i + 1]?.index ?? source.length);
         if (GUARD_CALL.test(body)) guarded.add(m[1]);
       });
+      for (const [, names, builder] of source.matchAll(BUILT_EXPORT)) {
+        const methods = builderMethods(source, builder);
+        for (const name of names.split(",").map((n) => n.trim()).filter(Boolean)) {
+          const body = methods.get(name);
+          if (body === undefined) throw new Error(`${builder} defines no ${name} (exported by ${file})`);
+          if (GUARD_CALL.test(body)) guarded.add(name);
+        }
+      }
       if (guarded.size === 0) return [];
       const routePath = "/" + path.relative(path.join(SRC, "app"), path.dirname(file)).split(path.sep).join("/");
       return [{ path: routePath, segments: routePath.split("/").filter(Boolean), guarded }];
@@ -236,6 +266,14 @@ describe("callers of recent-login-guarded routes", () => {
     expect(paths).toEqual(expect.arrayContaining(["/api/settings/ai", "/api/servers/[id]", "/api/backup/restore"]));
     expect(routes.find((r) => r.path === "/api/backup")?.guarded).toEqual(new Set(["POST"]));
     expect(routes.find((r) => r.path === "/api/backup/[filename]")?.guarded).toEqual(new Set(["GET"]));
+    // The integration routes are built by a shared builder; their guard is
+    // found in the builder's handler bodies.
+    for (const type of ["lidarr", "radarr", "seerr", "sonarr", "tracearr"]) {
+      expect(routes.find((r) => r.path === `/api/integrations/${type}/[id]`)?.guarded, type).toEqual(new Set(["PUT"]));
+      expect(routes.find((r) => r.path === `/api/integrations/${type}/[id]/test-connection`)?.guarded, type).toEqual(
+        new Set(["POST"]),
+      );
+    }
     expect(calls.filter((c) => c.wrapped).length).toBeGreaterThan(20);
     expect(calls.map((c) => `${c.method} ${c.url}`)).toEqual(
       expect.arrayContaining(["PUT /api/settings/ai", "POST /api/settings/ai/test", "PUT /api/servers/${serverId}"]),

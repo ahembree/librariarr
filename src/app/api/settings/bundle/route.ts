@@ -33,6 +33,9 @@ import { GET as getDiscord } from "@/app/api/settings/discord/route";
 import { GET as getAi } from "@/app/api/settings/ai/route";
 import { GET as getAuth } from "@/app/api/settings/auth/route";
 import { GET as getTitlePreference } from "@/app/api/settings/title-preference/route";
+import { GET as getSso } from "@/app/api/settings/sso/route";
+import { GET as getSsoMe } from "@/app/api/settings/sso/me/route";
+import { GET as getApiKeys } from "@/app/api/settings/api-keys/route";
 
 const HANDLERS: Record<SettingsBundlePath, () => Promise<Response>> = {
   "/api/servers": getServers,
@@ -59,6 +62,9 @@ const HANDLERS: Record<SettingsBundlePath, () => Promise<Response>> = {
   "/api/settings/ai": getAi,
   "/api/settings/auth": getAuth,
   "/api/settings/title-preference": getTitlePreference,
+  "/api/settings/sso": getSso,
+  "/api/settings/sso/me": getSsoMe,
+  "/api/settings/api-keys": getApiKeys,
 };
 
 const KNOWN = new Set<string>(SETTINGS_BUNDLE_PATHS);
