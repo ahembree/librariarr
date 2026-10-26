@@ -11,6 +11,7 @@ import { responseErrorMessage } from "@/lib/api/error-message";
 import { PlexLoginPrompt } from "@/components/plex-login-prompt";
 import { useRealtime } from "@/hooks/use-realtime";
 import { useFallbackPoll } from "@/hooks/use-fallback-poll";
+import { useCronScheduleSetting } from "@/hooks/use-cron-schedule-setting";
 import { fetchSyncStatus } from "@/lib/sync/sync-status-client";
 import { mergeSyncProgress } from "./sync-progress";
 import {
@@ -306,13 +307,11 @@ export default function SettingsPage() {
   const [scheduledJobTime, setScheduledJobTime] = useState("00:00");
   const [savingJobTime, setSavingJobTime] = useState(false);
 
-  // Sync schedule
-  const [syncSchedule, setSyncSchedule] = useState("DAILY");
+  // When each schedule last ran (the schedules themselves: useCronScheduleSetting below)
   const [lastScheduledSync, setLastScheduledSync] = useState<string | null>(null);
-  const [savingSchedule, setSavingSchedule] = useState(false);
-  const [isCustomSchedule, setIsCustomSchedule] = useState(false);
-  const [customCron, setCustomCron] = useState("");
-  const [cronError, setCronError] = useState("");
+  const [lastLcDetect, setLastLcDetect] = useState<string | null>(null);
+  const [lastLcExec, setLastLcExec] = useState<string | null>(null);
+  const [runningJob, setRunningJob] = useState<"sync" | "detection" | "execution" | null>(null);
 
   // Each integration type's instances (the forms live in the Integrations tab)
   const [integrationInstances, setIntegrationInstances] = useState<IntegrationInstanceLists>(NO_INTEGRATION_INSTANCES);
@@ -356,22 +355,6 @@ export default function SettingsPage() {
   const [chipColors, setChipColors] = useState<ChipColorMap>(DEFAULT_CHIP_COLORS);
   const { updateColors: updateChipColorContext } = useChipColors();
 
-  // Lifecycle detection schedule
-  const [lcDetectSchedule, setLcDetectSchedule] = useState("EVERY_6H");
-  const [lastLcDetect, setLastLcDetect] = useState<string | null>(null);
-  const [savingLcDetect, setSavingLcDetect] = useState(false);
-  const [isCustomLcDetect, setIsCustomLcDetect] = useState(false);
-  const [customLcDetectCron, setCustomLcDetectCron] = useState("");
-  const [lcDetectCronError, setLcDetectCronError] = useState("");
-
-  // Lifecycle execution schedule
-  const [lcExecSchedule, setLcExecSchedule] = useState("EVERY_6H");
-  const [lastLcExec, setLastLcExec] = useState<string | null>(null);
-  const [savingLcExec, setSavingLcExec] = useState(false);
-  const [isCustomLcExec, setIsCustomLcExec] = useState(false);
-  const [customLcExecCron, setCustomLcExecCron] = useState("");
-  const [lcExecCronError, setLcExecCronError] = useState("");
-  const [runningJob, setRunningJob] = useState<"sync" | "detection" | "execution" | null>(null);
 
   // Log retention
   const [logRetentionDays, setLogRetentionDays] = useState(7);
@@ -454,26 +437,68 @@ export default function SettingsPage() {
     }
   }, []);
 
+  const fetchScheduleInfo = useCallback(async () => {
+    try {
+      const response = await bundleOf(bundleRef).get("/api/settings/schedule-info");
+      const data = await response.json();
+      setScheduleInfo(data);
+      if (data.scheduledJobTime) {
+        setScheduledJobTime(data.scheduledJobTime);
+      }
+      // Keep the cards' "Last run" values in sync. These states are otherwise
+      // only populated by fetchSettings/fetchLifecycleSchedule, so without
+      // this a "Run Now" (which refreshes schedule-info) wouldn't update them.
+      if (data.sync) setLastScheduledSync(data.sync.lastRun ?? null);
+      if (data.detection) setLastLcDetect(data.detection.lastRun ?? null);
+      if (data.execution) setLastLcExec(data.execution.lastRun ?? null);
+    } catch (error) {
+      console.error("Failed to fetch schedule info:", error);
+    }
+  }, []);
+
+
+  // The three schedules: a preset picker or a custom cron expression each,
+  // saved to its route, after which the next-run times are re-read.
+  const syncSchedule = useCronScheduleSetting({
+    endpoint: "/api/settings/sync-schedule",
+    bodyKey: "syncSchedule",
+    successMsg: "Sync schedule saved",
+    refresh: fetchScheduleInfo,
+    presets: PRESET_VALUES,
+    initial: "DAILY",
+  });
+  const detectionSchedule = useCronScheduleSetting({
+    endpoint: "/api/settings/lifecycle-schedule",
+    bodyKey: "lifecycleDetectionSchedule",
+    successMsg: "Detection schedule saved",
+    refresh: fetchScheduleInfo,
+    presets: PRESET_VALUES,
+    initial: "EVERY_6H",
+  });
+  const executionSchedule = useCronScheduleSetting({
+    endpoint: "/api/settings/lifecycle-schedule",
+    bodyKey: "lifecycleExecutionSchedule",
+    successMsg: "Execution schedule saved",
+    refresh: fetchScheduleInfo,
+    presets: PRESET_VALUES,
+    initial: "EVERY_6H",
+  });
+  const { load: loadSyncSchedule } = syncSchedule;
+  const { load: loadDetectionSchedule } = detectionSchedule;
+  const { load: loadExecutionSchedule } = executionSchedule;
+
   const fetchSettings = useCallback(async () => {
     try {
       const response = await bundleOf(bundleRef).get("/api/settings/sync-schedule");
       const data = await response.json();
       if (data.settings) {
-        const schedule = data.settings.syncSchedule;
-        if (PRESET_VALUES.includes(schedule)) {
-          setSyncSchedule(schedule);
-          setIsCustomSchedule(false);
-        } else {
-          setSyncSchedule("CUSTOM");
-          setIsCustomSchedule(true);
-          setCustomCron(schedule);
-        }
+        loadSyncSchedule(data.settings.syncSchedule);
         setLastScheduledSync(data.settings.lastScheduledSync);
       }
     } catch (error) {
       console.error("Failed to fetch settings:", error);
     }
-  }, []);
+  }, [loadSyncSchedule]);
 
   const fetchDedupSetting = useCallback(async () => {
     try {
@@ -766,51 +791,15 @@ export default function SettingsPage() {
       const response = await bundleOf(bundleRef).get("/api/settings/lifecycle-schedule");
       const data = await response.json();
       if (data.settings) {
-        const detect = data.settings.lifecycleDetectionSchedule;
-        if (PRESET_VALUES.includes(detect)) {
-          setLcDetectSchedule(detect);
-          setIsCustomLcDetect(false);
-        } else {
-          setLcDetectSchedule("CUSTOM");
-          setIsCustomLcDetect(true);
-          setCustomLcDetectCron(detect);
-        }
+        loadDetectionSchedule(data.settings.lifecycleDetectionSchedule);
         setLastLcDetect(data.settings.lastScheduledLifecycleDetection);
-
-        const exec = data.settings.lifecycleExecutionSchedule;
-        if (PRESET_VALUES.includes(exec)) {
-          setLcExecSchedule(exec);
-          setIsCustomLcExec(false);
-        } else {
-          setLcExecSchedule("CUSTOM");
-          setIsCustomLcExec(true);
-          setCustomLcExecCron(exec);
-        }
+        loadExecutionSchedule(data.settings.lifecycleExecutionSchedule);
         setLastLcExec(data.settings.lastScheduledLifecycleExecution);
       }
     } catch (error) {
       console.error("Failed to fetch lifecycle schedule:", error);
     }
-  }, []);
-
-  const fetchScheduleInfo = useCallback(async () => {
-    try {
-      const response = await bundleOf(bundleRef).get("/api/settings/schedule-info");
-      const data = await response.json();
-      setScheduleInfo(data);
-      if (data.scheduledJobTime) {
-        setScheduledJobTime(data.scheduledJobTime);
-      }
-      // Keep the cards' "Last run" values in sync. These states are otherwise
-      // only populated by fetchSyncSchedule/fetchLifecycleSchedule, so without
-      // this a "Run Now" (which refreshes schedule-info) wouldn't update them.
-      if (data.sync) setLastScheduledSync(data.sync.lastRun ?? null);
-      if (data.detection) setLastLcDetect(data.detection.lastRun ?? null);
-      if (data.execution) setLastLcExec(data.execution.lastRun ?? null);
-    } catch (error) {
-      console.error("Failed to fetch schedule info:", error);
-    }
-  }, []);
+  }, [loadDetectionSchedule, loadExecutionSchedule]);
 
   const fetchDiscordSettings = useCallback(async () => {
     try {
@@ -1492,118 +1481,6 @@ export default function SettingsPage() {
   };
 
   // ─── Schedule handlers ───
-
-  const saveSyncSchedule = async (value: string) => {
-    setCronError("");
-    setSavingSchedule(true);
-    try {
-      const response = await fetch("/api/settings/sync-schedule", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ syncSchedule: value }),
-      });
-      if (!response.ok) {
-        const data = await response.json();
-        setCronError(data.error || "Failed to save schedule");
-        return;
-      }
-      await fetchScheduleInfo();
-      toast.success("Sync schedule saved");
-    } catch (error) {
-      console.error("Failed to save schedule:", error);
-      setCronError("Failed to save schedule");
-    } finally {
-      setSavingSchedule(false);
-    }
-  };
-
-  const saveLcDetectSchedule = async (value: string) => {
-    setLcDetectCronError("");
-    setSavingLcDetect(true);
-    try {
-      const response = await fetch("/api/settings/lifecycle-schedule", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lifecycleDetectionSchedule: value }),
-      });
-      if (!response.ok) {
-        const data = await response.json();
-        setLcDetectCronError(data.error || "Failed to save schedule");
-      } else {
-        toast.success("Detection schedule saved");
-      }
-      await fetchScheduleInfo();
-    } catch {
-      setLcDetectCronError("Failed to save schedule");
-    } finally {
-      setSavingLcDetect(false);
-    }
-  };
-
-  const saveLcExecSchedule = async (value: string) => {
-    setLcExecCronError("");
-    setSavingLcExec(true);
-    try {
-      const response = await fetch("/api/settings/lifecycle-schedule", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lifecycleExecutionSchedule: value }),
-      });
-      if (!response.ok) {
-        const data = await response.json();
-        setLcExecCronError(data.error || "Failed to save schedule");
-      } else {
-        toast.success("Execution schedule saved");
-      }
-      await fetchScheduleInfo();
-    } catch {
-      setLcExecCronError("Failed to save schedule");
-    } finally {
-      setSavingLcExec(false);
-    }
-  };
-
-  const handleScheduleChange = (value: string) => {
-    if (value === "CUSTOM") {
-      setSyncSchedule("CUSTOM");
-      setIsCustomSchedule(true);
-      setCronError("");
-    } else {
-      setSyncSchedule(value);
-      setIsCustomSchedule(false);
-      setCustomCron("");
-      setCronError("");
-      saveSyncSchedule(value);
-    }
-  };
-
-  const handleLcDetectScheduleChange = (value: string) => {
-    if (value === "CUSTOM") {
-      setLcDetectSchedule("CUSTOM");
-      setIsCustomLcDetect(true);
-      setLcDetectCronError("");
-    } else {
-      setLcDetectSchedule(value);
-      setIsCustomLcDetect(false);
-      setCustomLcDetectCron("");
-      setLcDetectCronError("");
-      saveLcDetectSchedule(value);
-    }
-  };
-
-  const handleLcExecScheduleChange = (value: string) => {
-    if (value === "CUSTOM") {
-      setLcExecSchedule("CUSTOM");
-      setIsCustomLcExec(true);
-      setLcExecCronError("");
-    } else {
-      setLcExecSchedule(value);
-      setIsCustomLcExec(false);
-      setCustomLcExecCron("");
-      setLcExecCronError("");
-      saveLcExecSchedule(value);
-    }
-  };
 
   const handleScheduledJobTimeChange = async (value: string) => {
     if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(value)) {
@@ -2339,30 +2216,6 @@ export default function SettingsPage() {
     }
   };
 
-  // ─── Helpers ───
-
-  const formatDate = (date: string | null) => {
-    if (!date) return "Never";
-    return new Date(date).toLocaleString();
-  };
-
-  const formatNextRun = (nextRun: string | null, lastRun: string | null) => {
-    if (!nextRun) return "Manual only";
-    const d = new Date(nextRun);
-    const diffMs = d.getTime() - Date.now();
-    if (diffMs > 0) return d.toLocaleString();
-    // Never run before — waiting for first scheduler tick
-    if (!lastRun) return "Pending";
-    // Past date — scheduler hasn't picked it up yet
-    const overdueMs = Math.abs(diffMs);
-    if (overdueMs <= 15 * 60 * 1000) return "Due now";
-    const mins = Math.round(overdueMs / 60000);
-    if (mins < 60) return `Overdue (${mins}m ago)`;
-    const hrs = Math.round(mins / 60);
-    if (hrs < 24) return `Overdue (${hrs}h ago)`;
-    return `Overdue (${Math.round(hrs / 24)}d ago)`;
-  };
-
   // ─── Loading gate ───
 
   if (!hydrated) {
@@ -2458,38 +2311,15 @@ export default function SettingsPage() {
               savingJobTime={savingJobTime}
               onScheduledJobTimeChange={handleScheduledJobTimeChange}
               syncSchedule={syncSchedule}
-              isCustomSchedule={isCustomSchedule}
-              customCron={customCron}
-              cronError={cronError}
-              savingSchedule={savingSchedule}
               lastScheduledSync={lastScheduledSync}
-              onSyncScheduleChange={handleScheduleChange}
-              onCustomCronChange={setCustomCron}
-              onSaveSyncSchedule={saveSyncSchedule}
-              lcDetectSchedule={lcDetectSchedule}
-              isCustomLcDetect={isCustomLcDetect}
-              customLcDetectCron={customLcDetectCron}
-              lcDetectCronError={lcDetectCronError}
-              savingLcDetect={savingLcDetect}
+              detectionSchedule={detectionSchedule}
               lastLcDetect={lastLcDetect}
-              onLcDetectScheduleChange={handleLcDetectScheduleChange}
-              onCustomLcDetectCronChange={setCustomLcDetectCron}
-              onSaveLcDetectSchedule={saveLcDetectSchedule}
-              lcExecSchedule={lcExecSchedule}
-              isCustomLcExec={isCustomLcExec}
-              customLcExecCron={customLcExecCron}
-              lcExecCronError={lcExecCronError}
-              savingLcExec={savingLcExec}
+              executionSchedule={executionSchedule}
               lastLcExec={lastLcExec}
-              onLcExecScheduleChange={handleLcExecScheduleChange}
-              onCustomLcExecCronChange={setCustomLcExecCron}
-              onSaveLcExecSchedule={saveLcExecSchedule}
               timezone={scheduleInfo?.timezone ?? null}
               scheduleInfo={scheduleInfo}
               runningJob={runningJob}
               onRunNow={handleRunNow}
-              formatDate={formatDate}
-              formatNextRun={formatNextRun}
             />
           ) : (
             <SettingsPanelSkeleton />

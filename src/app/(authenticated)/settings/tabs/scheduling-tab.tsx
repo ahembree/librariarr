@@ -12,11 +12,31 @@ import {
 } from "@/components/ui/select";
 import { Separator } from "@/components/ui/separator";
 import { Clock, Loader2, Play, RefreshCw, Workflow } from "lucide-react";
+import type { CronScheduleSetting } from "@/hooks/use-cron-schedule-setting";
+import { formatDateTime } from "@/lib/format";
 import { SettingsSection } from "../components";
 import { SCHEDULE_OPTIONS } from "../types";
 import type { ScheduleInfo } from "../types";
 
 type JobKey = "sync" | "detection" | "execution";
+
+/** A run's next time: its date, or how a schedule the dispatcher has not picked up reads. */
+function formatNextRun(nextRun: string | null, lastRun: string | null): string {
+  if (!nextRun) return "Manual only";
+  const d = new Date(nextRun);
+  const diffMs = d.getTime() - Date.now();
+  if (diffMs > 0) return d.toLocaleString();
+  // Never run before — waiting for first scheduler tick
+  if (!lastRun) return "Pending";
+  // Past date — scheduler hasn't picked it up yet
+  const overdueMs = Math.abs(diffMs);
+  if (overdueMs <= 15 * 60 * 1000) return "Due now";
+  const mins = Math.round(overdueMs / 60000);
+  if (mins < 60) return `Overdue (${mins}m ago)`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `Overdue (${hrs}h ago)`;
+  return `Overdue (${Math.round(hrs / 24)}d ago)`;
+}
 
 interface SchedulingTabProps {
   // Daily run time
@@ -24,38 +44,13 @@ interface SchedulingTabProps {
   savingJobTime: boolean;
   onScheduledJobTimeChange: (value: string) => void;
 
-  // Sync schedule
-  syncSchedule: string;
-  isCustomSchedule: boolean;
-  customCron: string;
-  cronError: string;
-  savingSchedule: boolean;
+  // The three schedules (`useCronScheduleSetting`) and when each last ran
+  syncSchedule: CronScheduleSetting;
   lastScheduledSync: string | null;
-  onSyncScheduleChange: (value: string) => void;
-  onCustomCronChange: (value: string) => void;
-  onSaveSyncSchedule: (value: string) => void;
-
-  // Lifecycle detection schedule
-  lcDetectSchedule: string;
-  isCustomLcDetect: boolean;
-  customLcDetectCron: string;
-  lcDetectCronError: string;
-  savingLcDetect: boolean;
+  detectionSchedule: CronScheduleSetting;
   lastLcDetect: string | null;
-  onLcDetectScheduleChange: (value: string) => void;
-  onCustomLcDetectCronChange: (value: string) => void;
-  onSaveLcDetectSchedule: (value: string) => void;
-
-  // Lifecycle execution schedule
-  lcExecSchedule: string;
-  isCustomLcExec: boolean;
-  customLcExecCron: string;
-  lcExecCronError: string;
-  savingLcExec: boolean;
+  executionSchedule: CronScheduleSetting;
   lastLcExec: string | null;
-  onLcExecScheduleChange: (value: string) => void;
-  onCustomLcExecCronChange: (value: string) => void;
-  onSaveLcExecSchedule: (value: string) => void;
 
   // Timezone
   timezone: string | null;
@@ -64,10 +59,6 @@ interface SchedulingTabProps {
   scheduleInfo: ScheduleInfo | null;
   runningJob: JobKey | null;
   onRunNow: (job: JobKey) => void;
-
-  // Helpers
-  formatDate: (date: string | null) => string;
-  formatNextRun: (nextRun: string | null, lastRun: string | null) => string;
 }
 
 interface ScheduleRowProps {
@@ -75,20 +66,11 @@ interface ScheduleRowProps {
   selectId: string;
   label: string;
   description?: string;
-  schedule: string;
-  isCustom: boolean;
-  customCron: string;
-  cronError: string;
-  saving: boolean;
+  setting: CronScheduleSetting;
   lastRun: string | null;
   nextRun: string | null;
   runningJob: JobKey | null;
-  onScheduleChange: (value: string) => void;
-  onCustomCronChange: (value: string) => void;
-  onSaveCustomCron: (value: string) => void;
   onRunNow: (job: JobKey) => void;
-  formatDate: (date: string | null) => string;
-  formatNextRun: (nextRun: string | null, lastRun: string | null) => string;
 }
 
 function ScheduleRow({
@@ -96,21 +78,13 @@ function ScheduleRow({
   selectId,
   label,
   description,
-  schedule,
-  isCustom,
-  customCron,
-  cronError,
-  saving,
+  setting,
   lastRun,
   nextRun,
   runningJob,
-  onScheduleChange,
-  onCustomCronChange,
-  onSaveCustomCron,
   onRunNow,
-  formatDate,
-  formatNextRun,
 }: ScheduleRowProps) {
+  const { schedule, isCustom, customCron, error: cronError, saving } = setting;
   return (
     <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
       <div className="flex-1 min-w-0">
@@ -118,7 +92,7 @@ function ScheduleRow({
         {description && (
           <p className="text-xs text-muted-foreground mb-1.5">{description}</p>
         )}
-        <Select value={schedule} onValueChange={onScheduleChange}>
+        <Select value={schedule} onValueChange={setting.onScheduleChange}>
           <SelectTrigger id={selectId} className="mt-1.5 w-full sm:w-64">
             <SelectValue />
           </SelectTrigger>
@@ -136,12 +110,12 @@ function ScheduleRow({
               <Input
                 placeholder="0 */4 * * *"
                 value={customCron}
-                onChange={(e) => onCustomCronChange(e.target.value)}
+                onChange={(e) => setting.setCustomCron(e.target.value)}
                 className="w-48 font-mono"
               />
               <Button
                 size="sm"
-                onClick={() => onSaveCustomCron(customCron)}
+                onClick={() => void setting.save(customCron)}
                 disabled={!customCron || saving}
               >
                 {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
@@ -162,7 +136,7 @@ function ScheduleRow({
           <Loader2 className="h-4 w-4 animate-spin sm:ml-auto" />
         ) : (
           <>
-            <div>Last run: {formatDate(lastRun)}</div>
+            <div>Last run: {formatDateTime(lastRun, "Never")}</div>
             <div>Next run: {formatNextRun(nextRun, lastRun)}</div>
             <Button
               variant="outline"
@@ -190,38 +164,15 @@ export function SchedulingTab({
   savingJobTime,
   onScheduledJobTimeChange,
   syncSchedule,
-  isCustomSchedule,
-  customCron,
-  cronError,
-  savingSchedule,
   lastScheduledSync,
-  onSyncScheduleChange,
-  onCustomCronChange,
-  onSaveSyncSchedule,
-  lcDetectSchedule,
-  isCustomLcDetect,
-  customLcDetectCron,
-  lcDetectCronError,
-  savingLcDetect,
+  detectionSchedule,
   lastLcDetect,
-  onLcDetectScheduleChange,
-  onCustomLcDetectCronChange,
-  onSaveLcDetectSchedule,
-  lcExecSchedule,
-  isCustomLcExec,
-  customLcExecCron,
-  lcExecCronError,
-  savingLcExec,
+  executionSchedule,
   lastLcExec,
-  onLcExecScheduleChange,
-  onCustomLcExecCronChange,
-  onSaveLcExecSchedule,
   timezone,
   scheduleInfo,
   runningJob,
   onRunNow,
-  formatDate,
-  formatNextRun,
 }: SchedulingTabProps) {
   return (
     <div className="space-y-6">
@@ -278,20 +229,11 @@ export function SchedulingTab({
             jobKey="sync"
             selectId="sync-schedule"
             label="Automatic sync frequency"
-            schedule={syncSchedule}
-            isCustom={isCustomSchedule}
-            customCron={customCron}
-            cronError={cronError}
-            saving={savingSchedule}
+            setting={syncSchedule}
             lastRun={lastScheduledSync}
             nextRun={scheduleInfo?.sync.nextRun ?? null}
             runningJob={runningJob}
-            onScheduleChange={onSyncScheduleChange}
-            onCustomCronChange={onCustomCronChange}
-            onSaveCustomCron={onSaveSyncSchedule}
             onRunNow={onRunNow}
-            formatDate={formatDate}
-            formatNextRun={formatNextRun}
           />
       </SettingsSection>
 
@@ -309,20 +251,11 @@ export function SchedulingTab({
               selectId="lc-detect-schedule"
               label="Rule detection frequency"
               description="How often to scan for media matching lifecycle rules."
-              schedule={lcDetectSchedule}
-              isCustom={isCustomLcDetect}
-              customCron={customLcDetectCron}
-              cronError={lcDetectCronError}
-              saving={savingLcDetect}
+              setting={detectionSchedule}
               lastRun={lastLcDetect}
               nextRun={scheduleInfo?.detection.nextRun ?? null}
               runningJob={runningJob}
-              onScheduleChange={onLcDetectScheduleChange}
-              onCustomCronChange={onCustomLcDetectCronChange}
-              onSaveCustomCron={onSaveLcDetectSchedule}
               onRunNow={onRunNow}
-              formatDate={formatDate}
-              formatNextRun={formatNextRun}
             />
           </div>
 
@@ -335,20 +268,11 @@ export function SchedulingTab({
               selectId="lc-exec-schedule"
               label="Action execution frequency"
               description="How often to execute scheduled lifecycle actions."
-              schedule={lcExecSchedule}
-              isCustom={isCustomLcExec}
-              customCron={customLcExecCron}
-              cronError={lcExecCronError}
-              saving={savingLcExec}
+              setting={executionSchedule}
               lastRun={lastLcExec}
               nextRun={scheduleInfo?.execution.nextRun ?? null}
               runningJob={runningJob}
-              onScheduleChange={onLcExecScheduleChange}
-              onCustomCronChange={onCustomLcExecCronChange}
-              onSaveCustomCron={onSaveLcExecSchedule}
               onRunNow={onRunNow}
-              formatDate={formatDate}
-              formatNextRun={formatNextRun}
             />
           </div>
       </SettingsSection>
