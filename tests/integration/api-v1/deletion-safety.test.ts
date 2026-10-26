@@ -61,6 +61,9 @@ vi.mock("@/lib/discord/client", async (importOriginal) => ({
   sendDiscordNotification: mockSendDiscord,
 }));
 vi.mock("@/lib/sync/sync-server", () => ({ syncMediaServer: vi.fn() }));
+vi.mock("@/lib/sync/sync-incremental", () => ({
+  syncMediaServerItems: vi.fn().mockResolvedValue({ status: "fell-back", upserted: 0, deleted: 0, reason: "test" }),
+}));
 vi.mock("@/lib/lifecycle/collections", () => ({
   syncCollection: vi.fn(),
   syncCollectionById: vi.fn(),

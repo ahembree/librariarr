@@ -49,6 +49,12 @@ vi.mock("@/lib/discord/client", async (importOriginal) => ({
   sendDiscordNotification: vi.fn().mockResolvedValue({ ok: true }),
 }));
 vi.mock("@/lib/sync/sync-server", () => ({ syncMediaServer: mockSyncMediaServer }));
+// The post-delete re-check asks the media server about each deleted item; with
+// no server to ask it falls back to the library sync, which is what the
+// assertions below watch for.
+vi.mock("@/lib/sync/sync-incremental", () => ({
+  syncMediaServerItems: vi.fn().mockResolvedValue({ status: "fell-back", upserted: 0, deleted: 0, reason: "test" }),
+}));
 vi.mock("@/lib/lifecycle/collections", () => ({
   syncCollection: vi.fn(),
   syncCollectionById: vi.fn(),

@@ -63,6 +63,7 @@ const mockFetchSeerrMetadata = vi.hoisted(() => vi.fn());
 const mockHasEnabledArrInstances = vi.hoisted(() => vi.fn());
 const mockHasEnabledSeerrInstances = vi.hoisted(() => vi.fn());
 const mockSyncMediaServer = vi.hoisted(() => vi.fn());
+const mockSyncMediaServerItems = vi.hoisted(() => vi.fn());
 const mockSendDiscordNotification = vi.hoisted(() => vi.fn());
 const mockBuildSuccessSummaryEmbed = vi.hoisted(() => vi.fn());
 const mockBuildMatchChangeEmbed = vi.hoisted(() => vi.fn());
@@ -112,6 +113,9 @@ vi.mock("@/lib/lifecycle/fetch-seerr-metadata", () => ({
 }));
 vi.mock("@/lib/sync/sync-server", () => ({
   syncMediaServer: mockSyncMediaServer,
+}));
+vi.mock("@/lib/sync/sync-incremental", () => ({
+  syncMediaServerItems: mockSyncMediaServerItems,
 }));
 vi.mock("@/lib/discord/client", () => ({
   sendDiscordNotification: mockSendDiscordNotification,
@@ -1876,9 +1880,10 @@ describe("executeLifecycleActions", () => {
     expect(updatedIds).not.toContain("a2");
   });
 
-  it("triggers library sync after destructive DELETE actions", async () => {
+  it("re-checks a deleted item with the media server instead of listing its library", async () => {
     const mediaItem = {
       id: "item1",
+      ratingKey: "rk1",
       title: "Movie",
       parentTitle: null,
       year: 2024,
@@ -1904,10 +1909,56 @@ describe("executeLifecycleActions", () => {
     mockPrisma.lifecycleAction.updateMany.mockResolvedValue({ count: 1 });
     mockPrisma.ruleMatch.deleteMany.mockResolvedValue({ count: 1 });
     mockPrisma.appSettings.findMany.mockResolvedValue([]);
+    mockPrisma.mediaItem.findMany.mockResolvedValue([
+      { ratingKey: "rk1", library: { key: "1", mediaServerId: "s1" } },
+    ]);
+    mockSyncMediaServerItems.mockResolvedValue({ status: "done", upserted: 0, deleted: 1 });
+
+    await executeLifecycleActions("u1");
+
+    // A 404 for the item removes its row; nothing else in the library is read.
+    expect(mockSyncMediaServerItems).toHaveBeenCalledWith("s1", ["rk1"], []);
+    expect(mockSyncMediaServer).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the targeted library sync when the re-check cannot settle it", async () => {
+    const mediaItem = {
+      id: "item1",
+      ratingKey: "rk1",
+      title: "Movie",
+      parentTitle: null,
+      year: 2024,
+      library: { key: "1", mediaServerId: "s1" },
+      externalIds: [],
+    };
+    mockPrisma.lifecycleAction.findMany.mockResolvedValue([
+      {
+        id: "a1",
+        userId: "u1",
+        mediaItemId: "item1",
+        mediaItem,
+        ruleSetId: "rs1",
+        actionType: "DELETE_RADARR",
+        ruleSet: { name: "Test", discordNotifyOnAction: false, userId: "u1" },
+      },
+    ]);
+    mockPrisma.ruleMatch.findMany.mockResolvedValue([
+      { ruleSetId: "rs1", mediaItemId: "item1" },
+    ]);
+    mockPrisma.lifecycleException.findMany.mockResolvedValue([]);
+    mockExecuteAction.mockResolvedValue(undefined);
+    mockPrisma.lifecycleAction.updateMany.mockResolvedValue({ count: 1 });
+    mockPrisma.ruleMatch.deleteMany.mockResolvedValue({ count: 1 });
+    mockPrisma.appSettings.findMany.mockResolvedValue([]);
+    mockPrisma.mediaItem.findMany.mockResolvedValue([
+      { ratingKey: "rk1", library: { key: "1", mediaServerId: "s1" } },
+    ]);
+    mockSyncMediaServerItems.mockResolvedValue({ status: "fell-back", upserted: 0, deleted: 0, reason: "fetch failed" });
     mockSyncMediaServer.mockResolvedValue(undefined);
 
     await executeLifecycleActions("u1");
 
+    expect(mockSyncMediaServerItems).toHaveBeenCalledWith("s1", ["rk1"], []);
     // The re-sync says why it runs, and skips the server-wide watch-history
     // scan: a deletion changes no play, and with several libraries touched the
     // scan ran once per library.

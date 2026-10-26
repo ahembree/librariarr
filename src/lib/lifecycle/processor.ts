@@ -36,7 +36,7 @@ import { checkLifecycleRuleEvaluability } from "@/lib/lifecycle/evaluability";
 import { detectAndSaveMatches } from "@/lib/lifecycle/detect-matches";
 import { syncAllCollections } from "@/lib/lifecycle/collections";
 import { CollectionSyncCache } from "@/lib/lifecycle/collection-sync-cache";
-import { syncMediaServer } from "@/lib/sync/sync-server";
+import { PostDeleteResync } from "@/lib/lifecycle/post-delete-resync";
 import { sendDiscordNotification, buildSuccessSummaryEmbed, buildMatchChangeEmbed, buildFailureSummaryEmbed } from "@/lib/discord/client";
 import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
 import { eventBus } from "@/lib/events/event-bus";
@@ -594,8 +594,9 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
     }
   }
 
-  // Track server/library pairs that need a sync after destructive actions
-  const librariesToSync = new Map<string, { serverId: string; libraryKey: string }>();
+  // What the run's destructive actions deleted, re-checked with the media
+  // server once the run is done (see PostDeleteResync).
+  const postDeleteResync = new PostDeleteResync();
 
   // Collect successes per rule set for batched Discord notifications
   const successesByRuleSet = new Map<string, {
@@ -1029,14 +1030,8 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
 
       logger.info("Lifecycle", `Executed ${action.actionType} for "${executedTitle(running)}" in rule set "${action.ruleSet?.name ?? action.ruleSetId}"`);
 
-      // Queue a targeted library sync for destructive actions
-      if (action.actionType.includes("DELETE") && mediaItem.library?.mediaServerId) {
-        const { mediaServerId, key } = mediaItem.library;
-        const syncKey = `${mediaServerId}:${key}`;
-        if (!librariesToSync.has(syncKey)) {
-          librariesToSync.set(syncKey, { serverId: mediaServerId, libraryKey: key });
-        }
-      }
+      // Note what a destructive action deleted, for the re-check below.
+      await postDeleteResync.record(action.actionType, mediaItem, filteredMatchedIds, outcome);
 
       if (action.ruleSet?.discordNotifyOnAction) {
         const key = action.ruleSetId!;
@@ -1160,23 +1155,10 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
     }
   }
 
-  // Trigger targeted library syncs for servers affected by destructive actions
-  if (librariesToSync.size > 0) {
-    logger.info("Lifecycle", `Triggering targeted sync for ${librariesToSync.size} affected ${librariesToSync.size === 1 ? "library" : "libraries"}`);
-    for (const [, { serverId, libraryKey }] of librariesToSync) {
-      try {
-        await syncMediaServer(serverId, libraryKey, {
-          trigger: "lifecycle execution: re-sync after destructive actions",
-          // A deletion changes no play, and the native watch-history refresh
-          // is a SERVER-WIDE scan — with several libraries touched in one run
-          // it ran once per library. The stored history is reconciled instead.
-          skipWatchHistory: true,
-        });
-      } catch (error) {
-        logger.error("Lifecycle", `Failed to sync library ${libraryKey} on server ${serverId} after action execution`, { error: String(error) });
-      }
-    }
-  }
+  // Bring the rows of what the destructive actions deleted up to date: each
+  // deleted item is asked about (a 404 removes its row), falling back to the
+  // targeted library sync where that is the cheaper way (see PostDeleteResync).
+  await postDeleteResync.run();
 
   // Notify connected clients that actions were executed
   if (pendingActions.length > 0) {

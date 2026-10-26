@@ -63,6 +63,7 @@ const mockFetchSeerrMetadata = vi.hoisted(() => vi.fn());
 const mockHasEnabledArrInstances = vi.hoisted(() => vi.fn());
 const mockHasEnabledSeerrInstances = vi.hoisted(() => vi.fn());
 const mockSyncMediaServer = vi.hoisted(() => vi.fn());
+const mockSyncMediaServerItems = vi.hoisted(() => vi.fn());
 const mockSendDiscordNotification = vi.hoisted(() => vi.fn());
 const mockBuildSuccessSummaryEmbed = vi.hoisted(() => vi.fn());
 const mockBuildMatchChangeEmbed = vi.hoisted(() => vi.fn());
@@ -112,6 +113,9 @@ vi.mock("@/lib/lifecycle/fetch-seerr-metadata", () => ({
 }));
 vi.mock("@/lib/sync/sync-server", () => ({
   syncMediaServer: mockSyncMediaServer,
+}));
+vi.mock("@/lib/sync/sync-incremental", () => ({
+  syncMediaServerItems: mockSyncMediaServerItems,
 }));
 vi.mock("@/lib/discord/client", () => ({
   sendDiscordNotification: mockSendDiscordNotification,
@@ -280,9 +284,19 @@ describe("executeLifecycleActions — narrowing and late exceptions", () => {
     mockPrisma.ruleMatch.findMany.mockResolvedValue([{ ruleSetId: "rs1", mediaItemId: "show1", itemData: null }]);
     mockPrisma.lifecycleException.findMany.mockResolvedValue([]);
     mockPrisma.mediaItem.aggregate.mockResolvedValue({ _sum: { fileSize: null } });
+    // The show's episodes in the library, then their rating keys.
+    mockPrisma.mediaItem.findMany
+      .mockResolvedValueOnce([{ id: "show1" }, { id: "e2" }])
+      .mockResolvedValueOnce([
+        { ratingKey: "rk-show1", library: { key: "2", mediaServerId: "s1" } },
+        { ratingKey: "rk-e2", library: { key: "2", mediaServerId: "s1" } },
+      ]);
+    // The server cannot be asked about them, so the library is synced — and that fails too.
+    mockSyncMediaServerItems.mockRejectedValue(new Error("plex down"));
     mockSyncMediaServer.mockRejectedValue(new Error("plex down"));
 
     await expect(executeLifecycleActions("u1")).resolves.toBeUndefined();
+    expect(mockSyncMediaServerItems).toHaveBeenCalledWith("s1", ["rk-show1", "rk-e2"], []);
 
     // The delete itself is recorded as done before the re-sync is attempted.
     expect(mockPrisma.lifecycleAction.updateMany).toHaveBeenCalledWith({
