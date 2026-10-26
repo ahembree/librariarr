@@ -176,6 +176,14 @@ export async function buildTracearrJoinIndex(
 
   // Scoped to the same server (and to the three sources resolution uses) so the
   // index stays proportional to one server's library rather than the whole DB.
+  //
+  // Episodes are left out: nothing reads their provider ids. An episode record
+  // is corroborated on the show's rating key and never takes the provider-id
+  // fallback, and a movie/track record's candidates are narrowed to its own
+  // type before anything is read off them (`narrowCandidates`, and a rating-key
+  // hit of the wrong type is refused before `contradictsIdentity`). On a TV
+  // library those rows — three series-level ids copied onto every episode —
+  // were most of what this query loaded.
   const externalIds = await prisma.$queryRawUnsafe<
     Array<{ mediaItemId: string; source: string; externalId: string }>
   >(
@@ -184,6 +192,7 @@ export async function buildTracearrJoinIndex(
        JOIN "MediaItem" mi ON mi."id" = e."mediaItemId"
        JOIN "Library" l ON mi."libraryId" = l."id"
       WHERE l."mediaServerId" = $1
+        AND mi."type" <> 'SERIES'::"LibraryType"
         AND UPPER(e."source") IN ('TVDB','TMDB','IMDB')`,
     serverId,
   );

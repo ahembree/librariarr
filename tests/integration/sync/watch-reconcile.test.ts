@@ -19,6 +19,7 @@ vi.mock("@/lib/logger", () => ({
 }));
 
 import {
+  loadLibraryWatchCountsFromHistory,
   loadWatchCountsFromHistory,
   reconcileWatchStateFromHistory,
 } from "@/lib/sync/watch-reconcile";
@@ -406,6 +407,76 @@ describe("watch-reconcile", () => {
           ],
         ]),
       );
+      // ...and so must the full sync's whole-library read.
+      expect(await loadLibraryWatchCountsFromHistory(server.id, library.id)).toEqual(
+        new Map([
+          [
+            "rk-provenance-mix",
+            { count: 3, lastWatchedAt: Math.floor(newestCompleted.getTime() / 1000) },
+          ],
+        ]),
+      );
+    });
+  });
+
+  describe("loadLibraryWatchCountsFromHistory", () => {
+    it("rolls up every played item of one library, and nothing of another", async () => {
+      const { server, library } = await setup();
+      const other = await createTestLibrary(server.id, { type: "MOVIE", key: "other" });
+      const a = await createTestMediaItem(library.id, { ratingKey: "a" });
+      const b = await createTestMediaItem(library.id, { ratingKey: "b" });
+      await createTestMediaItem(library.id, { ratingKey: "never-played" });
+      // Same rating key in the other library: its plays are not this library's.
+      const twin = await createTestMediaItem(other.id, { ratingKey: "a" });
+      await addPlay(a.id, server.id, "alice", daysAgo(5));
+      await addPlay(a.id, server.id, "bob", daysAgo(2));
+      await addPlay(b.id, server.id, "alice", null);
+      await addTracearrPlay(b.id, server.id, "carol", daysAgo(1), false);
+      await addPlay(twin.id, server.id, "dave", daysAgo(1));
+
+      const counts = await loadLibraryWatchCountsFromHistory(server.id, library.id);
+
+      expect(counts).toEqual(
+        new Map([
+          ["a", { count: 2, lastWatchedAt: Math.floor(daysAgo(2).getTime() / 1000) }],
+          ["b", { count: 1, lastWatchedAt: 0 }],
+        ]),
+      );
+    });
+  });
+
+  describe("reconcileWatchStateFromHistory scoped to items", () => {
+    it("reconciles only the named items, and does nothing for an empty list", async () => {
+      const { server, library } = await setup();
+      const named = await createTestMediaItem(library.id, { ratingKey: "named", playCount: 0 });
+      const untouched = await createTestMediaItem(library.id, { ratingKey: "untouched", playCount: 0 });
+      await addPlay(named.id, server.id, "alice", daysAgo(3));
+      await addPlay(untouched.id, server.id, "alice", daysAgo(4));
+
+      expect(await reconcileWatchStateFromHistory(server.id, { mediaItemIds: [] })).toBe(0);
+      expect(await reconcileWatchStateFromHistory(server.id, { mediaItemIds: [named.id, named.id] })).toBe(1);
+
+      const rows = new Map((await prisma.mediaItem.findMany()).map((m) => [m.id, m.playCount]));
+      expect(rows.get(named.id)).toBe(1);
+      expect(rows.get(untouched.id)).toBe(0);
+
+      // The unscoped pass still reaches everything.
+      expect(await reconcileWatchStateFromHistory(server.id)).toBe(1);
+      expect((await prisma.mediaItem.findUniqueOrThrow({ where: { id: untouched.id } })).playCount).toBe(1);
+    });
+
+    it("counts every stored play of a named item, not only the ones just written", async () => {
+      const { server, library } = await setup();
+      const item = await createTestMediaItem(library.id, { playCount: 0 });
+      await addPlay(item.id, server.id, "alice", daysAgo(30));
+      await addPlay(item.id, server.id, "bob", daysAgo(20));
+      await addTracearrPlay(item.id, server.id, "carol", daysAgo(1), false);
+
+      await reconcileWatchStateFromHistory(server.id, { mediaItemIds: [item.id] });
+
+      const after = await prisma.mediaItem.findUniqueOrThrow({ where: { id: item.id } });
+      expect(after.playCount).toBe(2);
+      expect(after.lastPlayedAt?.getTime()).toBe(daysAgo(20).getTime());
     });
   });
 });

@@ -142,11 +142,24 @@ describe("syncWatchHistory", () => {
         passes: "forward",
       });
       expect(mockClient.getDetailedWatchHistory).not.toHaveBeenCalled();
-      // The forward pass may have left `playCount`/`lastPlayedAt` where the full
-      // sync's account-scoped values put them, so it reconciles, and tells open
-      // pages the plays moved.
-      expect(mockReconcile).toHaveBeenCalledWith("server-1");
+      // The importer reconciles the items it wrote plays for itself; a caller
+      // that is not a full sync asks for no server-wide pass on top. Open pages
+      // are told the plays moved.
+      expect(mockReconcile).not.toHaveBeenCalled();
       expect(mockEmitUpdated).toHaveBeenCalledWith("server-1", { imported: 7 });
+    });
+
+    it("reconciles the whole server after the import when the full sync asks for it, even with nothing imported", async () => {
+      mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([
+        serverRow({ tracearrServerId: "srv-uuid" }),
+      ]);
+      mockPrisma.tracearrInstance.findFirst.mockResolvedValueOnce({ id: "t1" });
+      mockSyncTracearr.mockResolvedValueOnce({ count: 0, backfillPending: false });
+
+      await syncWatchHistory("server-1", undefined, undefined, { reconcileAll: true });
+
+      expect(mockReconcile).toHaveBeenCalledWith("server-1");
+      expect(mockEmitUpdated).not.toHaveBeenCalled();
     });
 
     it("skips entirely — never falls back to native — when the instance is disabled", async () => {
@@ -290,9 +303,12 @@ describe("syncWatchHistory", () => {
     const insertCalls = mockPrisma.$queryRawUnsafe.mock.calls
       .filter((args) => (args[0] as string).includes('INSERT INTO "WatchHistory"'));
     expect(insertCalls.length).toBe(1);
-    const params = insertCalls[0].slice(1);
+    // One array per column (`unnest`), so flatten before looking for values.
+    const params = insertCalls[0].slice(1).flat();
     expect(params).toEqual(expect.arrayContaining(["item-1", "Admin", "item-2", "User1"]));
     expect(params).not.toContain("User2");
+    // Timestamps go as UTC ISO text, cast to timestamp(3) in SQL.
+    expect(params).toEqual(expect.arrayContaining(["2024-01-01T00:00:00.000Z", "2024-01-02T00:00:00.000Z"]));
     expect(mockEmitUpdated).toHaveBeenCalledWith("server-1", { imported: 2 });
   });
 
@@ -308,8 +324,8 @@ describe("syncWatchHistory", () => {
       enabled: true,
     }]);
 
-    // Generate 600 entries (batch size is 500 → splits into 2 batches)
-    const entries = Array.from({ length: 600 }, (_, i) => ({
+    // Generate 6000 entries (batch size is 5000 → splits into 2 batches)
+    const entries = Array.from({ length: 6000 }, (_, i) => ({
       ratingKey: String(i),
       username: "Admin",
       watchedAt: "2024-01-01T00:00:00Z",
@@ -319,26 +335,29 @@ describe("syncWatchHistory", () => {
     mockClient.getDetailedWatchHistory.mockResolvedValueOnce(entries);
 
     // Media items (all match)
-    const mediaItems = Array.from({ length: 600 }, (_, i) => ({
+    const mediaItems = Array.from({ length: 6000 }, (_, i) => ({
       id: `item-${i}`,
       ratingKey: String(i),
     }));
     mockPrisma.$queryRawUnsafe.mockResolvedValueOnce(mediaItems);
 
-    // pg_advisory_xact_lock, the DELETE, then INSERT batch 1 (500 items) and
-    // batch 2 (100 items)
+    // pg_advisory_xact_lock, the DELETE, then INSERT batch 1 (5000 items) and
+    // batch 2 (1000 items)
     mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]);
     mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]);
     mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]);
     mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]);
 
     const result = await syncWatchHistory("server-1");
-    expect(result).toEqual({ count: 600 });
+    expect(result).toEqual({ count: 6000 });
 
-    // Should have 2 INSERT calls (batches of 500 + 100)
+    // Should have 2 INSERT calls (batches of 5000 + 1000), each with one array
+    // per column and the bind-parameter count fixed whatever the batch size.
     const insertCalls = mockPrisma.$queryRawUnsafe.mock.calls
       .filter((args) => (args[0] as string).includes('INSERT INTO "WatchHistory"'));
     expect(insertCalls.length).toBe(2);
+    expect(insertCalls.map((args) => args.length - 1)).toEqual([8, 8]);
+    expect(insertCalls.map((args) => (args[1] as string[]).length)).toEqual([5000, 1000]);
   });
 
   it("returns 0 when no media items match", async () => {
@@ -552,22 +571,22 @@ describe("syncWatchHistory", () => {
     it("reports a rising determinate fraction that ends at 1 while writing", async () => {
       const { updates, report } = progressRecorder();
       mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([serverRow()]);
-      armEntries(600); // BATCH_SIZE is 500 → two batches
+      armEntries(6000); // BATCH_SIZE is 5000 → two batches
       mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // pg_advisory_xact_lock
       mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // DELETE
       mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // INSERT batch 1
       mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // INSERT batch 2
 
       await expect(syncWatchHistory("server-1", report)).resolves.toEqual({
-        count: 600,
+        count: 6000,
       });
 
       // This is the one place a real percentage is honest — the fetch has
       // returned, so the denominator is a counted set of play events.
       const batches = updates.filter((u) => u.fraction !== undefined);
       expect(batches).toEqual([
-        { imported: 500, fraction: 500 / 600, detail: "Stored 500 of 600 plays" },
-        { imported: 600, fraction: 1, detail: "Stored 600 of 600 plays" },
+        { imported: 5000, fraction: 5000 / 6000, detail: "Stored 5,000 of 6,000 plays" },
+        { imported: 6000, fraction: 1, detail: "Stored 6,000 of 6,000 plays" },
       ]);
       const fractions = batches.map((u) => u.fraction!);
       expect(fractions).toEqual([...fractions].sort((a, b) => a - b));
@@ -713,7 +732,7 @@ describe("syncWatchHistory", () => {
       const tx = watchTransaction();
 
       mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([serverRow()]);
-      armEntries(600); // BATCH_SIZE is 500 → two batches
+      armEntries(6000); // BATCH_SIZE is 5000 → two batches
       mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // pg_advisory_xact_lock
       mockPrisma.$queryRawUnsafe.mockResolvedValueOnce([]); // DELETE
       // The user hits Stop while the first batch is in flight.
@@ -1069,12 +1088,13 @@ describe("syncWatchHistory — incremental refresh", () => {
     // Append-only: the stored history is never dropped on this path.
     expect(deleteCalls()).toHaveLength(0);
     expect(insertCalls()).toHaveLength(1);
-    const insertParams = insertCalls()[0].slice(1);
-    expect(insertParams).toContain("item-2");
-    expect(insertParams).not.toContain("item-1");
-    // One value set: the in-window new play only.
-    expect(((insertCalls()[0][0] as string).match(/\(\$/g) ?? []).length).toBe(1);
-    expect(mockReconcile).toHaveBeenCalledWith("server-1");
+    // One array per column; the in-window new play only.
+    const insertIds = insertCalls()[0][1] as string[];
+    const insertItems = insertCalls()[0][3] as string[];
+    expect(insertIds).toHaveLength(1);
+    expect(insertItems).toEqual(["item-2"]);
+    // Only the item that gained a play is reconciled, not the whole server.
+    expect(mockReconcile).toHaveBeenCalledWith("server-1", { mediaItemIds: ["item-2"] });
     // The append runs under the same per-server lock as the full replace.
     const lockCalls = mockPrisma.$queryRawUnsafe.mock.calls.filter((args) =>
       (args[0] as string).includes("pg_advisory_xact_lock"),

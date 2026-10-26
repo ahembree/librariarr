@@ -98,12 +98,47 @@ afterAll(async () => {
   await disconnectTestDb();
 });
 
+describe("buildTracearrJoinIndex", () => {
+  it("loads no provider ids for episodes, which are joined on the show's rating key alone", async () => {
+    const { server, a } = await setup();
+    await prisma.mediaItemExternalId.create({ data: { mediaItemId: a.id, source: "TMDB", externalId: "550" } });
+    const tv = await createTestLibrary(server.id, { key: "2", type: "SERIES" });
+    const ep = await createTestMediaItem(tv.id, { ratingKey: "ep-1", type: "SERIES", title: "Pilot", seasonNumber: 1, episodeNumber: 1 });
+    await prisma.mediaItem.update({ where: { id: ep.id }, data: { grandparentRatingKey: "show-1" } });
+    await prisma.mediaItemExternalId.createMany({
+      data: [
+        { mediaItemId: ep.id, source: "TVDB", externalId: "81189" },
+        { mediaItemId: ep.id, source: "TMDB", externalId: "1396" },
+      ],
+    });
+
+    const index = await buildTracearrJoinIndex(server.id);
+
+    expect(index.itemCount).toBe(3);
+    // Only the movie's id: the episode's series-level ids are never read.
+    expect(index.externalIdCount).toBe(1);
+    expect([...index.byExternalId.keys()]).toEqual(["TMDB:550"]);
+    expect(index.byRatingKey.get("ep-1")?.[0].providerIds.size).toBe(0);
+
+    // The episode still resolves, by its rating key and show.
+    const episodePlay = record("e1", "ep-1", { media_type: "episode", grandparent_rating_key: "show-1", tvdb_id: 999, tmdb_id: 1396 });
+    await expect(
+      importTracearrRecords(server.id, [episodePlay], index, new Map([["u1", "weingart"]]), T),
+    ).resolves.toMatchObject({ inserted: 1 });
+    // And a movie play carrying the show's TMDB number never lands on the episode.
+    const moviePlay = record("m1", "unknown-rk", { tmdb_id: 1396 });
+    await expect(
+      importTracearrRecords(server.id, [moviePlay], index, new Map([["u1", "weingart"]]), T),
+    ).resolves.toMatchObject({ inserted: 0, skipped: 1 });
+  });
+});
+
 describe("importTracearrRecords", () => {
   it("writes nothing and reports zeros for an empty record set", async () => {
     const { server } = await setup();
     const index = await buildTracearrJoinIndex(server.id);
     await expect(importTracearrRecords(server.id, [], index, undefined, T)).resolves.toEqual({
-      inserted: 0, updated: 0, skipped: 0,
+      inserted: 0, updated: 0, skipped: 0, mediaItemIds: [],
     });
     expect(await prisma.watchHistory.count()).toBe(0);
   });
@@ -126,7 +161,9 @@ describe("importTracearrRecords", () => {
       T,
     );
 
-    expect(result).toEqual({ inserted: 2, updated: 0, skipped: 2 });
+    expect(result).toEqual({ inserted: 2, updated: 0, skipped: 2, mediaItemIds: expect.any(Array) });
+    // The items a play landed on — what the caller's reconcile is scoped to.
+    expect([...result.mediaItemIds].sort()).toEqual([a.id, b.id].sort());
     const rows = await prisma.watchHistory.findMany({ orderBy: { sourceEventId: "asc" } });
     expect(rows.map((r) => [r.sourceEventId, r.mediaItemId, r.serverUsername, r.source])).toEqual([
       ["c1", a.id, "weingart", "TRACEARR"],
@@ -154,7 +191,8 @@ describe("importTracearrRecords", () => {
       index, names, T,
     );
 
-    expect(second).toEqual({ inserted: 0, updated: 1, skipped: 0 });
+    expect(second).toMatchObject({ inserted: 0, updated: 1, skipped: 0 });
+    expect(second.mediaItemIds).toHaveLength(1);
     const row = await prisma.watchHistory.findFirstOrThrow({ where: { sourceEventId: "c1" } });
     expect(row.watched).toBe(true);
     expect(row.percentComplete).toBe(95);
@@ -223,7 +261,10 @@ describe("importTracearrRecords", () => {
       [record("c1", "rk-a"), record("c2", "rk-b")],
       index, undefined, T,
     );
-    expect(result).toEqual({ inserted: 1, updated: 0, skipped: 0 });
+    expect(result).toMatchObject({ inserted: 1, updated: 0, skipped: 0 });
+    // The vanished item is not among those reported written.
+    expect(result.mediaItemIds).not.toContain(a.id);
+    expect(result.mediaItemIds).toHaveLength(1);
     expect((await prisma.watchHistory.findMany()).map((r) => r.sourceEventId)).toEqual(["c2"]);
   });
 
@@ -234,7 +275,7 @@ describe("importTracearrRecords", () => {
 
     await expect(
       importTracearrRecords(server.id, [record("c1", "rk-a")], index, undefined, T),
-    ).resolves.toEqual({ inserted: 0, updated: 0, skipped: 0 });
+    ).resolves.toEqual({ inserted: 0, updated: 0, skipped: 0, mediaItemIds: [] });
     expect(await prisma.watchHistory.count()).toBe(0);
   });
 });

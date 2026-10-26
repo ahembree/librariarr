@@ -1,14 +1,11 @@
 import axios, { type AxiosInstance } from "axios";
 import https from "https";
-import { configureRetry, NO_BREAKER_MARK, NO_RETRY } from "@/lib/http-retry";
+import { NO_BREAKER_MARK, NO_RETRY } from "@/lib/http-retry";
+import { BYPASS_BREAKER } from "@/lib/media-server/health-cache";
 import {
-  BYPASS_BREAKER,
-  isUnreachable,
-  markUnreachable,
-  clearUnreachable,
-  getLastFailureMessage,
-  ServerUnreachableError,
-} from "@/lib/media-server/health-cache";
+  instrumentMediaServerClient,
+  normalizeMediaServerUrl,
+} from "@/lib/media-server/http-instrumentation";
 import type {
   PlexLibrarySection,
   PlexMetadataItem,
@@ -68,10 +65,10 @@ export class PlexClient implements MediaServerClient {
   private token: string;
 
   constructor(baseURL: string, token: string, options?: PlexClientOptions) {
-    this.baseURL = baseURL;
+    this.baseURL = normalizeMediaServerUrl(baseURL);
     this.token = token;
     const axiosConfig: Record<string, unknown> = {
-      baseURL,
+      baseURL: this.baseURL,
       headers: {
         "X-Plex-Token": token,
         Accept: "application/json",
@@ -88,42 +85,11 @@ export class PlexClient implements MediaServerClient {
 
     this.client = axios.create(axiosConfig);
 
-    const baseURLForHealth = this.baseURL;
-    this.client.interceptors.request.use((config) => {
-      if (!config.__bypassBreaker && isUnreachable(baseURLForHealth)) {
-        return Promise.reject(
-          new ServerUnreachableError(baseURLForHealth, getLastFailureMessage(baseURLForHealth)),
-        ) as never;
-      }
-      (config as unknown as Record<string, unknown>).__startTime = Date.now();
-      if (!config.url?.includes("/library/metadata/")) {
-        logger.debug("Plex", `${config.method?.toUpperCase()} ${config.url}`);
-      }
-      return config;
-    });
-
-    this.client.interceptors.response.use(
-      (response) => {
-        clearUnreachable(baseURLForHealth);
-        const start = (response.config as unknown as Record<string, unknown>).__startTime as number;
-        const duration = start ? Date.now() - start : 0;
-        if (!response.config.url?.includes("/library/metadata/")) {
-          logger.debug("Plex", `${response.status} ${response.config.url} (${duration}ms)`);
-        }
-        return response;
-      },
-      (error) => {
-        if (axios.isAxiosError(error)) {
-          logger.debug("Plex", `ERROR ${error.response?.status ?? "NETWORK"} ${error.config?.url}`, {
-            message: error.message,
-          });
-        }
-        return Promise.reject(error);
-      }
-    );
-
-    configureRetry(this.client, "Plex", logger, {
-      onTerminalNetworkError: (error) => markUnreachable(baseURLForHealth, error),
+    instrumentMediaServerClient(this.client, {
+      baseURL: this.baseURL,
+      logPrefix: () => "Plex",
+      // A sync fetches every item's metadata; logging each would drown the log.
+      quiet: (url) => url?.includes("/library/metadata/") ?? false,
     });
   }
 

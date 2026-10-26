@@ -81,8 +81,38 @@ export async function loadWatchCountsFromHistory(
    */
   libraryId: string,
 ): Promise<Map<string, WatchCountEntry>> {
+  if (ratingKeys.length === 0) return new Map();
+  return aggregateStoredPlays(serverId, libraryId, ratingKeys);
+}
+
+/**
+ * The same per-rating-key roll-up for EVERY item of one library — what the
+ * full sync feeds `buildItemData` instead of a live scan of the server's whole
+ * play history.
+ *
+ * That scan (Plex's `/status/sessions/history/all`) used to run at the start of
+ * every full sync and then AGAIN in the watch-history pass the same sync ends
+ * with, which re-reads the identical endpoint to rewrite `WatchHistory` and
+ * reconciles both columns from it. Reading the stored rows here costs one query
+ * per library and no server round trip; the trailing pass still brings the
+ * plays recorded since the last sync. Per library for the reason
+ * `loadWatchCountsFromHistory` takes one: a rating key is unique only within a
+ * library.
+ */
+export async function loadLibraryWatchCountsFromHistory(
+  serverId: string,
+  libraryId: string,
+): Promise<Map<string, WatchCountEntry>> {
+  return aggregateStoredPlays(serverId, libraryId, null);
+}
+
+async function aggregateStoredPlays(
+  serverId: string,
+  libraryId: string,
+  /** Restrict to these rating keys, or `null` for the whole library. */
+  ratingKeys: string[] | null,
+): Promise<Map<string, WatchCountEntry>> {
   const counts = new Map<string, WatchCountEntry>();
-  if (ratingKeys.length === 0) return counts;
 
   // `wh."watched" IS DISTINCT FROM false` — the completed-plays-only predicate
   // documented in the file header, and the reason this function matters as much
@@ -101,12 +131,10 @@ export async function loadWatchCountsFromHistory(
        JOIN "MediaItem" mi ON mi."id" = wh."mediaItemId"
       WHERE wh."mediaServerId"=$1
         AND ${completedPlaySql("wh")}
-        AND mi."ratingKey" = ANY($2)
-        AND mi."libraryId" = $3
+        AND mi."libraryId" = $2
+        ${ratingKeys ? `AND mi."ratingKey" = ANY($3)` : ""}
       GROUP BY mi."ratingKey"`,
-    serverId,
-    ratingKeys,
-    libraryId,
+    ...(ratingKeys ? [serverId, libraryId, ratingKeys] : [serverId, libraryId]),
   );
 
   for (const row of rows) {
@@ -133,7 +161,22 @@ export async function loadWatchCountsFromHistory(
  */
 export async function reconcileWatchStateFromHistory(
   serverId: string,
+  /**
+   * `mediaItemIds` limits the reconcile to those items — for a caller that
+   * just APPENDED plays and knows exactly which items they landed on (the
+   * incremental native append, the Tracearr importer). Each item's aggregate
+   * still covers every one of its stored rows, so the result for those items is
+   * identical to the unscoped pass; the other items' rows were not touched and
+   * were already reconciled. An empty list is a no-op. Omitted, the whole
+   * server is reconciled — which the full sync keeps doing, as the backstop
+   * that repairs a reconcile an earlier run failed to finish.
+   */
+  options: { mediaItemIds?: string[] } = {},
 ): Promise<number> {
+  const scoped = options.mediaItemIds !== undefined;
+  const mediaItemIds = scoped ? [...new Set(options.mediaItemIds)] : [];
+  if (scoped && mediaItemIds.length === 0) return 0;
+
   // `"watched" IS DISTINCT FROM false` restricts the aggregate to plays that
   // actually happened: `true` (a Tracearr chain past its completion threshold)
   // or `NULL` (a native row — the server only reports finished plays, so those
@@ -154,12 +197,13 @@ export async function reconcileWatchStateFromHistory(
            FROM "WatchHistory"
           WHERE "mediaServerId"=$1
             AND ${completedPlaySql()}
+            ${scoped ? `AND "mediaItemId" = ANY($2::text[])` : ""}
           GROUP BY "mediaItemId"
        ) hist
       WHERE mi."id" = hist."mediaItemId"
         AND (mi."playCount" < hist."plays"
              OR mi."lastPlayedAt" IS DISTINCT FROM GREATEST(mi."lastPlayedAt", hist."lastWatched"))`,
-    serverId,
+    ...(scoped ? [serverId, mediaItemIds] : [serverId]),
   );
 
   if (updated > 0) {

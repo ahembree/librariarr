@@ -258,6 +258,15 @@ describe("tracearr-backfill task", () => {
     expect(m.recoverHistoryForNewItems).toHaveBeenCalledWith(SERVER_ID);
   });
 
+  it("hands the recovery pass the join index the finishing slice already built", async () => {
+    const joinIndex = { serverId: SERVER_ID, byRatingKey: new Map(), byExternalId: new Map(), itemCount: 0, externalIdCount: 0 };
+    syncTracearrHistory.mockResolvedValue({ count: 9, backfillPending: false, backfillOutcome: "exhausted", joinIndex });
+
+    await runBackfill();
+
+    expect(m.recoverHistoryForNewItems).toHaveBeenCalledWith(SERVER_ID, { joinIndex });
+  });
+
   it("keeps a slice whose recovery pass fails, logging it instead", async () => {
     syncTracearrHistory.mockResolvedValue({ count: 3, backfillPending: false });
     m.recoverHistoryForNewItems.mockRejectedValueOnce(new Error("tracearr 503"));

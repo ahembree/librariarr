@@ -14,10 +14,16 @@ import { TASK_TRACEARR_BACKFILL, MAIN_QUEUE } from "@/lib/jobs/constants";
 import { markWatchHistoryEstablished } from "@/lib/media/watch-evidence";
 import { emitWatchHistoryUpdated } from "./watch-history-events";
 
-// 500 rows × 8 params = 4000 bind params per INSERT — well under Postgres's
-// 65535 limit, but ~5× fewer round-trips than 100, which keeps the full-replace
-// transaction comfortably inside its timeout on large histories.
-const BATCH_SIZE = 500;
+// Rows per INSERT. Each statement sends one array per column (`unnest`), so
+// the bind-parameter count is fixed at 8 whatever the batch size and the only
+// limit is the payload. 5,000 is ten times fewer round trips than the 500-row
+// multi-VALUES statement it replaced: inside the full-replace transaction a
+// 160k-play history was ~320 sequential statements, and on a database a few
+// milliseconds away the round trips, not the inserts, were what ran the
+// transaction toward its timeout. Locally the two shapes cost about the same
+// (150k rows: 6.6–7.3 s as VALUES×500, 6.2–6.6 s as unnest×5000 — index
+// maintenance dominates), so the gain is the latency, not the CPU.
+const BATCH_SIZE = 5_000;
 
 /**
  * How far behind the newest stored play an incremental refresh starts. A play
@@ -50,6 +56,18 @@ interface WatchHistorySyncOptions {
    * what reconciles plays the server has since deleted.
    */
   incremental?: boolean;
+  /**
+   * Reconcile `playCount`/`lastPlayedAt` for the WHOLE server afterwards, not
+   * only for the items this sync wrote plays for.
+   *
+   * Set by the full item sync, which keeps that pass as its backstop: an item
+   * whose reconcile an earlier run did not finish is repaired on the next full
+   * sync. Every other caller (the realtime job, the History page's Refresh)
+   * reconciles just what it wrote, and nothing when it wrote nothing — the
+   * reconcile is a server-wide aggregate, and those run per finished playback.
+   * The native full replace rewrites every row, so it always reconciles all.
+   */
+  reconcileAll?: boolean;
 }
 
 // The full-replace runs as a single interactive transaction (DELETE + all
@@ -228,23 +246,22 @@ export async function syncWatchHistory(
       );
     }
 
-    // Reconcile even when nothing was imported. `syncMediaServer` calls this at
-    // the end of a full sync having just overwritten `playCount`/`lastPlayedAt`
-    // from ACCOUNT-SCOPED server metadata (the admin's own views), and relies on
-    // the watch-history sync to put the all-users values back. The importer only
-    // reconciles when it wrote rows — which a steady-state forward pass usually
-    // does not — so returning here without one leaves every item the full sync
-    // touched reporting the connected account's play state until something else
-    // happens to import a row. Non-fatal, as everywhere else: the rows are
-    // already committed.
-    try {
-      await reconcileWatchStateFromHistory(serverId);
-    } catch (error) {
-      logger.warn(
-        "WatchHistory",
-        `Failed to reconcile play state after the Tracearr sync for "${server.name}"`,
-        { error: String(error) }
-      );
+    // The importer reconciles the items it wrote plays for. After a full item
+    // sync (`reconcileAll`) the whole server is reconciled too, even when
+    // nothing was imported — a steady-state forward pass usually imports
+    // nothing, and the full sync relies on this pass as the backstop that
+    // repairs every item's play state. Non-fatal, as everywhere else: the rows
+    // are already committed.
+    if (options.reconcileAll) {
+      try {
+        await reconcileWatchStateFromHistory(serverId);
+      } catch (error) {
+        logger.warn(
+          "WatchHistory",
+          `Failed to reconcile play state after the Tracearr sync for "${server.name}"`,
+          { error: String(error) }
+        );
+      }
     }
 
     // Tell open pages the stored plays changed. Emitted from here, not from the
@@ -321,16 +338,24 @@ export async function syncWatchHistory(
   );
 
   if (incrementalSince) {
-    const count = await appendNewEntries(serverId, server.name, entries, incrementalSince);
+    const { count, mediaItemIds } = await appendNewEntries(serverId, server.name, entries, incrementalSince);
     await markHistoryEstablished(serverId);
     logger.info(
       "WatchHistory",
       `Appended ${count} new watch history entries for "${server.name}"`
     );
     // Nothing appended means nothing to reconcile or announce: this runs per
-    // finished playback, and the reconcile is a server-wide aggregate.
+    // finished playback. Only the items that gained a play are reconciled —
+    // every other item's rows are exactly as the last reconcile left them —
+    // unless the caller asked for the whole server.
+    if (count > 0 || options.reconcileAll) {
+      await reconcileAfterNativeWrite(
+        serverId,
+        server.name,
+        options.reconcileAll ? undefined : mediaItemIds,
+      );
+    }
     if (count > 0) {
-      await reconcileAfterNativeWrite(serverId, server.name);
       await emitWatchHistoryUpdated(serverId, { imported: count });
     }
     return { count };
@@ -483,9 +508,15 @@ export async function syncWatchHistory(
   return { count: insertedCount };
 }
 
-async function reconcileAfterNativeWrite(serverId: string, serverName: string): Promise<void> {
+async function reconcileAfterNativeWrite(
+  serverId: string,
+  serverName: string,
+  /** Reconcile only these items; omitted, the whole server. */
+  mediaItemIds?: string[],
+): Promise<void> {
   try {
-    await reconcileWatchStateFromHistory(serverId);
+    if (mediaItemIds) await reconcileWatchStateFromHistory(serverId, { mediaItemIds });
+    else await reconcileWatchStateFromHistory(serverId);
   } catch (error) {
     logger.warn(
       "WatchHistory",
@@ -533,7 +564,7 @@ async function appendNewEntries(
   serverName: string,
   entries: DetailedWatchHistoryEntry[],
   since: Date
-): Promise<number> {
+): Promise<{ count: number; mediaItemIds: string[] }> {
   // Fail closed on the server's filter: a play older than `since` in the
   // response means the `viewedAt>=` parameter was not honoured (a proxy that
   // re-encodes the query, a build without the filter), and appending the
@@ -543,7 +574,7 @@ async function appendNewEntries(
   const dated = entries.filter(
     (e) => e.watchedAt && new Date(e.watchedAt).getTime() >= sinceMs
   );
-  if (dated.length === 0) return 0;
+  if (dated.length === 0) return { count: 0, mediaItemIds: [] };
 
   const ratingKeys = [...new Set(dated.map((e) => e.ratingKey))];
   const mediaItems = await prisma.$queryRawUnsafe<
@@ -592,7 +623,7 @@ async function appendNewEntries(
       inserted += await insertNativeRows(tx, serverId, fresh.slice(i, i + BATCH_SIZE));
     }
     warnAmbiguousSkipped(resolver.ambiguousSkipped, serverName);
-    return inserted;
+    return { count: inserted, mediaItemIds: [...new Set(fresh.map((row) => row.mediaItemId))] };
   }, TX_OPTIONS);
 }
 
@@ -667,35 +698,46 @@ async function lockServerHistory(db: RawWriter, serverId: string): Promise<void>
 }
 
 /**
- * One multi-row INSERT of native play rows. The single column list both the
- * full replace and the incremental append write through, so a column added
- * to one path cannot go missing from the other.
+ * One INSERT of native play rows, one array parameter per column. The single
+ * column list both the full replace and the incremental append write through,
+ * so a column added to one path cannot go missing from the other.
+ *
+ * Timestamps travel as ISO-8601 text cast to `timestamp(3)`: Prisma stores a
+ * `DateTime` as UTC in a column without a time zone, and a `timestamp` cast
+ * ignores the `Z`, so the stored wall-clock value is the UTC instant whatever
+ * the session's `TimeZone` — the same value the old per-row Date parameters
+ * produced.
  */
 async function insertNativeRows(db: RawWriter, serverId: string, rows: NativeRow[]): Promise<number> {
   if (rows.length === 0) return 0;
   const { randomUUID } = await import("crypto");
-  const values: string[] = [];
-  const params: unknown[] = [];
-  let paramIndex = 1;
+  const ids: string[] = [];
+  const mediaItemIds: string[] = [];
+  const usernames: string[] = [];
+  const watchedAts: (string | null)[] = [];
+  const deviceNames: (string | null)[] = [];
+  const platforms: (string | null)[] = [];
   for (const { mediaItemId, entry } of rows) {
-    values.push(
-      `($${paramIndex++},$${paramIndex++},$${paramIndex++},$${paramIndex++},$${paramIndex++},$${paramIndex++},$${paramIndex++},$${paramIndex++})`
-    );
-    params.push(
-      randomUUID(),
-      mediaItemId,
-      serverId,
-      entry.username,
-      entry.watchedAt ? new Date(entry.watchedAt) : null,
-      entry.deviceName,
-      entry.platform,
-      new Date()
-    );
+    ids.push(randomUUID());
+    mediaItemIds.push(mediaItemId);
+    usernames.push(entry.username);
+    watchedAts.push(entry.watchedAt ? new Date(entry.watchedAt).toISOString() : null);
+    deviceNames.push(entry.deviceName);
+    platforms.push(entry.platform);
   }
   await db.$executeRawUnsafe(
     `INSERT INTO "WatchHistory" ("id","mediaItemId","mediaServerId","serverUsername","watchedAt","deviceName","platform","createdAt")
-     VALUES ${values.join(",")}`,
-    ...params
+     SELECT u."id", u."mediaItemId", $2, u."serverUsername", u."watchedAt", u."deviceName", u."platform", $8::timestamp(3)
+       FROM unnest($1::text[], $3::text[], $4::text[], $5::timestamp(3)[], $6::text[], $7::text[])
+            AS u("id", "mediaItemId", "serverUsername", "watchedAt", "deviceName", "platform")`,
+    ids,
+    serverId,
+    mediaItemIds,
+    usernames,
+    watchedAts,
+    deviceNames,
+    platforms,
+    new Date().toISOString()
   );
   return rows.length;
 }

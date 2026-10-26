@@ -130,4 +130,29 @@ describe("native watch history with a rating key two libraries hold", () => {
     expect(await playsOn(inMovies.id)).toBe(1);
     expect(await playsOn(inKids.id)).toBe(0);
   });
+
+  it("stores each play's instant exactly, and reconciles the items an append wrote to", async () => {
+    const { ms, inMovies, inKids, unique } = await seed();
+    plays = [{ ratingKey: "r2", accountID: 1, viewedAt: T0 }];
+    await syncWatchHistory(ms.id);
+    const stored = await prisma.watchHistory.findFirstOrThrow({ where: { mediaItemId: unique.id } });
+    // The unnest INSERT sends text cast to timestamp(3); Prisma reads it back
+    // as the same UTC instant the server reported.
+    expect(stored.watchedAt?.getTime()).toBe(T0 * 1000);
+    expect((await prisma.mediaItem.findUniqueOrThrow({ where: { id: unique.id } })).playCount).toBe(1);
+
+    // A drifted item the append does not touch stays as it is: the append
+    // reconciles only what it wrote.
+    await prisma.watchHistory.create({
+      data: { mediaItemId: inKids.id, mediaServerId: ms.id, serverUsername: "alice", watchedAt: new Date((T0 - 600) * 1000) },
+    });
+    plays.push({ ratingKey: "r1", accountID: 1, viewedAt: T0 + 60, librarySectionID: "1" });
+    await syncWatchHistory(ms.id, undefined, undefined, { incremental: true });
+
+    const after = new Map(
+      (await prisma.mediaItem.findMany()).map((m) => [m.id, { plays: m.playCount, last: m.lastPlayedAt?.getTime() }]),
+    );
+    expect(after.get(inMovies.id)).toEqual({ plays: 1, last: (T0 + 60) * 1000 });
+    expect(after.get(inKids.id)).toEqual({ plays: 0, last: undefined });
+  });
 });
