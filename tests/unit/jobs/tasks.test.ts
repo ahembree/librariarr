@@ -16,6 +16,7 @@ const m = vi.hoisted(() => ({
   syncJob: { findFirst: vi.fn(), updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
   appSettings: { findFirst: vi.fn() },
   lifecycleAction: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
+  executeRaw: vi.fn().mockResolvedValue(0),
 }));
 const {
   syncMediaServer, syncWatchHistory, syncMediaServerItems, enqueueJob, invalidateMediaCaches,
@@ -45,10 +46,22 @@ vi.mock("@/lib/logger", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 vi.mock("@/lib/db", () => ({
-  prisma: { syncJob: m.syncJob, appSettings: m.appSettings, lifecycleAction: m.lifecycleAction },
+  prisma: {
+    syncJob: m.syncJob,
+    appSettings: m.appSettings,
+    lifecycleAction: m.lifecycleAction,
+    $executeRawUnsafe: m.executeRaw,
+  },
 }));
 
-import { taskList, cleanupOldActions, runScheduledBackup } from "@/lib/jobs/tasks";
+import {
+  taskList,
+  cleanupOldActions,
+  runScheduledBackup,
+  pruneSyncJobs,
+  SYNC_JOB_KEEP_PER_SERVER,
+  SYNC_JOB_RETENTION_DAYS,
+} from "@/lib/jobs/tasks";
 import {
   TASK_DISPATCH,
   TASK_SYNC_SERVER,
@@ -283,6 +296,39 @@ describe("taskList", () => {
     expect(archiveLogs).toHaveBeenCalledOnce();
     // Orphan sweep + retention deletion.
     expect(lifecycleAction.deleteMany).toHaveBeenCalledTimes(2);
+    // ...and the sync-job retention, in the same housekeeping run.
+    expect(m.executeRaw).toHaveBeenCalledWith(
+      expect.stringContaining('DELETE FROM "SyncJob"'),
+      SYNC_JOB_KEEP_PER_SERVER,
+      expect.any(Date),
+    );
+  });
+
+  it("keeps the action cleanup when the sync-job retention fails", async () => {
+    const { logger } = await import("@/lib/logger");
+    m.executeRaw.mockRejectedValueOnce(new Error("db busy"));
+    await expect(
+      (taskList[TASK_CLEANUP_ACTIONS] as (p: unknown, h: unknown) => Promise<void>)({}, helpers),
+    ).resolves.toBeUndefined();
+    expect(lifecycleAction.deleteMany).toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith("Jobs", "Sync job cleanup failed", { error: "Error: db busy" });
+  });
+});
+
+describe("pruneSyncJobs", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("keeps the newest jobs per server and anything younger than the retention, never an active one", async () => {
+    const now = new Date("2026-10-26T12:00:00Z");
+    m.executeRaw.mockResolvedValueOnce(12);
+
+    await expect(pruneSyncJobs(now)).resolves.toBe(12);
+
+    const [sql, keep, cutoff] = m.executeRaw.mock.calls[0] as [string, number, Date];
+    expect(sql).toContain("PARTITION BY \"mediaServerId\" ORDER BY \"startedAt\" DESC");
+    expect(sql).toContain("NOT IN ('PENDING', 'RUNNING')");
+    expect(keep).toBe(SYNC_JOB_KEEP_PER_SERVER);
+    expect(cutoff).toEqual(new Date(now.getTime() - SYNC_JOB_RETENTION_DAYS * 24 * 60 * 60 * 1000));
   });
 });
 
