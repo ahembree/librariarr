@@ -2,6 +2,8 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useRealtime } from "@/hooks/use-realtime";
+import { useFallbackPoll } from "@/hooks/use-fallback-poll";
+import { useLibraryTypes } from "@/hooks/use-library-types";
 import { useShellSnapshot } from "@/components/shell-settings-provider";
 import { fetchJsonShared } from "@/lib/shared-fetch";
 import { useRouter } from "next/navigation";
@@ -121,8 +123,13 @@ export function useSidebarData(initialCollapsed = false) {
   // mount. Fetched after hydration, the sidebar drew all three library links
   // and then dropped the ones the admin has no library for.
   const shell = useShellSnapshot();
-  const [availableTypes, setAvailableTypes] = useState<LibraryType[]>(() => typesOrAll(shell?.libraryTypes.types));
-  const [allKnownTypes, setAllKnownTypes] = useState<LibraryType[]>(() => typesOrAll(shell?.libraryTypes.allTypes));
+  // Seeded from the layout's read, kept current by `server:changed` and
+  // `sync:completed` (this was a one-shot mount fetch, so adding a server,
+  // enabling a library or finishing a first sync never added the group until a
+  // full reload), and shared with every page that reads the types.
+  const libraryTypes = useLibraryTypes();
+  const availableTypes = typesOrAll(libraryTypes?.types);
+  const allKnownTypes = typesOrAll(libraryTypes?.allTypes);
   const [fetchedUser, setUser] = useState<CurrentUser | null>(null);
   const user = shell?.user ?? fetchedUser;
   const shellKnown = useRef(shell !== null);
@@ -137,31 +144,6 @@ export function useSidebarData(initialCollapsed = false) {
   useEffect(() => {
     document.cookie = `sidebar-collapsed=${collapsed ? "1" : "0"}; path=/; max-age=31536000; samesite=lax`;
   }, [collapsed]);
-
-  const fetchLibraryTypes = useCallback(() => {
-    fetch("/api/media/library-types")
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.types && data.types.length > 0) {
-          setAvailableTypes(data.types);
-        }
-        if (data.allTypes && data.allTypes.length > 0) {
-          setAllKnownTypes(data.allTypes);
-        }
-      })
-      .catch(() => {});
-  }, []);
-
-  useEffect(() => {
-    if (shellKnown.current) return;
-    fetchLibraryTypes();
-  }, [fetchLibraryTypes]);
-
-  // The nav groups are derived from which library types exist. This was a
-  // one-shot mount fetch, so adding a server, enabling a library or finishing a
-  // first sync never added the group until a full reload.
-  useRealtime("server:changed", fetchLibraryTypes);
-  useRealtime("sync:completed", fetchLibraryTypes);
 
   // Low priority, like the session count below: it only feeds a dot, and the
   // browser serves a handful of same-origin requests at a time, so at default
@@ -251,15 +233,14 @@ export function useSidebarData(initialCollapsed = false) {
 
   useEffect(() => {
     fetchSessionCount();
-    // Fallback only, and deliberately slow. This is the most expensive poll in
-    // the app: it runs in the sidebar, which is mounted on every page for the
-    // life of the tab, and each tick calls getSessions() against every media
-    // server — a live outbound HTTP request per server. At 30s that cost was
-    // paid ~2,880 times a day per open tab to render a badge. The pushes above
-    // are now the primary path; this only covers a dropped SSE stream.
-    const interval = setInterval(fetchSessionCount, 300000);
-    return () => clearInterval(interval);
   }, [fetchSessionCount]);
+  // Fallback only, and deliberately slow. This is the most expensive poll in
+  // the app: it runs in the sidebar, which is mounted on every page for the
+  // life of the tab, and each tick calls getSessions() against every media
+  // server — a live outbound HTTP request per server. At 30s that cost was
+  // paid ~2,880 times a day per open tab to render a badge. The pushes above
+  // are the primary path; this runs only while they are not arriving.
+  useFallbackPoll(fetchSessionCount, 300000);
 
   const navigation = buildNavigation(
     availableTypes,

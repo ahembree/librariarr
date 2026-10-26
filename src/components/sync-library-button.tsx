@@ -1,8 +1,11 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { RefreshCw } from "lucide-react";
+import { isRealtimeLive, useRealtime } from "@/hooks/use-realtime";
+import { useFallbackPoll } from "@/hooks/use-fallback-poll";
+import { fetchSyncStatus } from "@/lib/sync/sync-status-client";
 
 const TYPE_LABELS: Record<string, string> = {
   MOVIE: "Movies",
@@ -16,13 +19,24 @@ interface SyncJob {
   totalItems: number;
 }
 
+// Only while pushes are not arriving: `sync:progress` (throttled 2s per
+// server) drives the bar otherwise.
+const FALLBACK_POLL_MS = 5000;
+
+/**
+ * Sync every library of one type, with the run's progress on the button.
+ *
+ * `onSyncComplete` runs when the sync finishes while the event stream is NOT
+ * delivering: the pages that pass it also refetch on `sync:completed`, so
+ * calling it beside a delivered event fetched the whole list twice. With the
+ * stream down, the button's own check is the only thing that sees the end.
+ */
 export function SyncLibraryButton({ libraryType, onSyncComplete }: { libraryType: "MOVIE" | "SERIES" | "MUSIC"; onSyncComplete?: () => void }) {
   const [syncing, setSyncing] = useState(false);
   const [progress, setProgress] = useState<{ processed: number; total: number } | null>(null);
-  const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const syncingRef = useRef(false);
   const mountedRef = useRef(true);
   const onSyncCompleteRef = useRef(onSyncComplete);
-  const pollRef = useRef<(() => void) | undefined>(undefined);
 
   useEffect(() => {
     onSyncCompleteRef.current = onSyncComplete;
@@ -30,45 +44,43 @@ export function SyncLibraryButton({ libraryType, onSyncComplete }: { libraryType
 
   useEffect(() => {
     mountedRef.current = true;
-
-    pollRef.current = async () => {
-      try {
-        const res = await fetch("/api/sync/status");
-        if (!res.ok) return;
-        const data = await res.json();
-        const activeJobs = (data.jobs ?? []).filter((j: SyncJob) => j.status === "RUNNING" || j.status === "PENDING");
-        if (activeJobs.length === 0) {
-          if (mountedRef.current) {
-            setSyncing(false);
-            setProgress(null);
-            onSyncCompleteRef.current?.();
-          }
-          return;
-        }
-        if (mountedRef.current) {
-          const processed = activeJobs.reduce((sum: number, j: SyncJob) => sum + (j.itemsProcessed || 0), 0);
-          const total = activeJobs.reduce((sum: number, j: SyncJob) => sum + (j.totalItems || 0), 0);
-          setProgress(total > 0 ? { processed, total } : null);
-        }
-      } catch {
-        // ignore poll errors
-      }
-      if (mountedRef.current) {
-        pollTimer.current = setTimeout(() => pollRef.current?.(), 2000);
-      }
-    };
-
     return () => {
       mountedRef.current = false;
-      if (pollTimer.current) clearTimeout(pollTimer.current);
     };
   }, []);
 
-  const startPolling = () => {
-    pollTimer.current = setTimeout(() => pollRef.current?.(), 2000);
-  };
+  const finish = useCallback(() => {
+    syncingRef.current = false;
+    setSyncing(false);
+    setProgress(null);
+  }, []);
+
+  const checkStatus = useCallback(async () => {
+    if (!syncingRef.current) return;
+    // Shared with every other reader of `/api/sync/status` on the same event.
+    const data = await fetchSyncStatus();
+    if (!data || !mountedRef.current || !syncingRef.current) return;
+    const jobs = (data.jobs ?? []) as unknown as SyncJob[];
+    const activeJobs = jobs.filter((j) => j.status === "RUNNING" || j.status === "PENDING");
+    if (activeJobs.length === 0) {
+      finish();
+      if (!isRealtimeLive()) onSyncCompleteRef.current?.();
+      return;
+    }
+    const processed = activeJobs.reduce((sum, j) => sum + (j.itemsProcessed || 0), 0);
+    const total = activeJobs.reduce((sum, j) => sum + (j.totalItems || 0), 0);
+    setProgress(total > 0 ? { processed, total } : null);
+  }, [finish]);
+
+  // Every sync event may move this run's bar or end it.
+  useRealtime("sync:started", checkStatus);
+  useRealtime("sync:progress", checkStatus);
+  useRealtime("sync:completed", checkStatus);
+  useRealtime("sync:failed", checkStatus);
+  useFallbackPoll(checkStatus, FALLBACK_POLL_MS, syncing);
 
   const handleSync = async () => {
+    syncingRef.current = true;
     setSyncing(true);
     setProgress(null);
     try {
@@ -79,12 +91,14 @@ export function SyncLibraryButton({ libraryType, onSyncComplete }: { libraryType
       });
       const data = await res.json();
       if (data.syncedCount > 0) {
-        startPolling();
+        // The route created the PENDING rows before answering, so the first
+        // check already sees this run — and a short sync may be over by now.
+        void checkStatus();
       } else {
-        setSyncing(false);
+        finish();
       }
     } catch {
-      setSyncing(false);
+      finish();
     }
   };
 

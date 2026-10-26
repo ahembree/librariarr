@@ -14,6 +14,8 @@ import { WhatsNewDialog } from "@/components/whats-new-dialog";
 import { findScrollContainer } from "@/lib/scroll-utils";
 import { useScrollToTop } from "@/hooks/use-scroll-to-top";
 import { beforeRealtimeEvents, useRealtime } from "@/hooks/use-realtime";
+import { useFallbackPoll } from "@/hooks/use-fallback-poll";
+import { fetchJsonShared } from "@/lib/shared-fetch";
 import { clearLibraryListCache } from "@/lib/media/list-cache";
 import { dropMediaDerivedPrefetches } from "@/lib/media/detail-prefetch";
 import { useShellSettings } from "@/components/shell-settings-provider";
@@ -62,10 +64,12 @@ export function AuthenticatedShell({
   useScrollToTop();
 
   const checkMaintenance = useCallback(() => {
-    fetch("/api/tools/maintenance")
-      .then((res) => res.json())
-      .then((data) => setMaintenanceActive(data.enabled === true))
-      .catch((e) => console.error("Failed to check maintenance status", e));
+    // Shared with the Stream Manager, which reads it on the same event.
+    fetchJsonShared<{ enabled?: boolean }>("/api/tools/maintenance").then((data) => {
+      // A failed check keeps the banner as it is.
+      if (data) setMaintenanceActive(data.enabled === true);
+      else console.error("Failed to check maintenance status");
+    });
   }, []);
 
   // Push-driven: `/api/tools/maintenance` emits `settings:changed` on an actual
@@ -73,28 +77,22 @@ export function AuthenticatedShell({
   // subscription is also what keeps the shared EventSource alive — it lives in
   // the shell, which never unmounts, so refCount never hits zero on a
   // navigation and the connection is no longer torn down and rebuilt on every
-  // route change.
+  // route change. Do not remove it.
   const { connected: realtimeConnected, authExpired } = useRealtime("settings:changed", checkMaintenance);
 
+  // Fallback only. SSE dies to proxy buffering and idle timeouts, so this
+  // stays as a safety net — at 5 minutes, and only while pushes are not
+  // arriving, because the push above is the primary path.
+  useFallbackPoll(checkMaintenance, 300000);
 
-  // A media server's socket dropping or recovering now arrives as a push
-  // (bridged from realtimeBus); previously this banner waited on the sidebar's
-  // 30s session poll failing.
-  useRealtime("server-status", () => {
-    fetch("/api/tools/sessions")
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        if (data) setUnreachableServers(data.unreachableServers ?? []);
-      })
-      .catch(() => {});
-  });
-
+  // The unreachable-server banner follows the sidebar's session check, which
+  // re-reads `/api/tools/sessions` on `server-status` (a media server's socket
+  // dropping or recovering, bridged from realtimeBus) and announces the answer
+  // as `server-health-changed` below. The shell used to fetch the same route on
+  // the same event itself — a second request that asks every media server for
+  // its sessions.
   useEffect(() => {
     if (!maintenanceKnown.current) checkMaintenance();
-    // Fallback only. SSE dies to proxy buffering and idle timeouts, so this
-    // stays as a safety net — but at 5 minutes rather than 30 seconds, because
-    // the push above is now the primary path.
-    const interval = setInterval(checkMaintenance, 300000);
 
     const onMaintenanceChanged = (e: Event) => {
       const detail = (e as CustomEvent<{ enabled: boolean }>).detail;
@@ -109,7 +107,6 @@ export function AuthenticatedShell({
     window.addEventListener("server-health-changed", onServerHealthChanged);
 
     return () => {
-      clearInterval(interval);
       window.removeEventListener("maintenance-changed", onMaintenanceChanged);
       window.removeEventListener("server-health-changed", onServerHealthChanged);
     };

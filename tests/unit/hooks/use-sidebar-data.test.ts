@@ -8,7 +8,10 @@ const mocks = vi.hoisted(() => ({
   toastError: vi.fn(),
   toastSuccess: vi.fn(),
 }));
-vi.mock("@/hooks/use-realtime", () => ({
+// The real module for everything but the subscription: no stream ever opens,
+// so pushes never arrive (`isRealtimeLive()` false) and the fallback poll runs.
+vi.mock("@/hooks/use-realtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/use-realtime")>()),
   useRealtime: (type: string, cb: () => void) => {
     mocks.handlers.set(type, cb);
     return { connected: true, authExpired: false };
@@ -17,9 +20,12 @@ vi.mock("@/hooks/use-realtime", () => ({
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: mocks.push }) }));
 vi.mock("sonner", () => ({ toast: { error: mocks.toastError, success: mocks.toastSuccess } }));
 
-import { useSidebarData } from "@/hooks/use-sidebar-data";
 import { getPageMeta } from "@/lib/nav/page-meta";
-import { shellSettingsWrapper } from "../../setup/shell-settings-wrapper";
+
+// Loaded fresh per test: the library types are held for the tab, in a module.
+// The wrapper too, so its provider is the one the hook reads.
+let useSidebarData: typeof import("@/hooks/use-sidebar-data").useSidebarData;
+let shellSettingsWrapper: typeof import("../../setup/shell-settings-wrapper").shellSettingsWrapper;
 
 type Responses = Record<string, unknown>;
 const fetchMock = vi.fn();
@@ -30,7 +36,10 @@ function json(body: unknown, ok = true) {
   return Promise.resolve({ ok, json: async () => body });
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  vi.resetModules();
+  ({ useSidebarData } = await import("@/hooks/use-sidebar-data"));
+  ({ shellSettingsWrapper } = await import("../../setup/shell-settings-wrapper"));
   mocks.handlers.clear();
   mocks.push.mockReset();
   mocks.toastError.mockReset();

@@ -2,7 +2,9 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useRealtime } from "@/hooks/use-realtime";
+import { useFallbackPoll } from "@/hooks/use-fallback-poll";
 import { fetchSyncStatus } from "@/lib/sync/sync-status-client";
+import { formatRelativeDate, formatSyncEta } from "@/lib/format";
 import { toast } from "sonner";
 import {
   Tooltip,
@@ -32,35 +34,14 @@ interface SyncIndicatorProps {
   onSyncComplete?: () => void;
 }
 
-function formatTimeAgo(date: Date): string {
-  const seconds = Math.round((Date.now() - date.getTime()) / 1000);
-  if (seconds < 60) return "just now";
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.floor(hours / 24)}d ago`;
-}
-
-function formatEta(startedAt: string, processed: number, total: number): string | null {
-  if (processed <= 0 || total <= 0) return null;
-  const elapsed = (Date.now() - new Date(startedAt).getTime()) / 1000;
-  if (elapsed < 5) return null; // too early to estimate
-  const rate = processed / elapsed;
-  const remaining = Math.ceil((total - processed) / rate);
-  if (remaining < 60) return `~${remaining}s left`;
-  const mins = Math.ceil(remaining / 60);
-  if (mins < 60) return `~${mins}m left`;
-  const hrs = Math.floor(mins / 60);
-  return `~${hrs}h ${mins % 60}m left`;
-}
+const formatTimeAgo = (date: Date) => formatRelativeDate(date, { largestUnit: "day" });
 
 function ActiveSyncBar({ job }: { job: SyncJob }) {
   const progress =
     job.totalItems > 0
       ? Math.round((job.itemsProcessed / job.totalItems) * 100)
       : 0;
-  const eta = formatEta(job.startedAt, job.itemsProcessed, job.totalItems);
+  const eta = formatSyncEta(job.startedAt, job.itemsProcessed, job.totalItems);
 
   return (
     <TooltipProvider>
@@ -204,15 +185,12 @@ export function SyncIndicator({ onSyncComplete }: SyncIndicatorProps) {
     void (async () => { await fetchStatus(); })();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Fallback poll only — `sync:progress` above is the primary path now. The
-  // active-sync case no longer needs 2s (that existed solely because there was
-  // no progress event), but stays quicker than idle so an SSE-down environment
-  // still shows a moving bar.
-  useEffect(() => {
-    if (!initialCheckDone) return;
-    const interval = setInterval(fetchStatus, hasActiveSync ? 15000 : 60000);
-    return () => clearInterval(interval);
-  }, [fetchStatus, hasActiveSync, initialCheckDone]);
+  // Fallback poll only — `sync:progress` above is the primary path, and the
+  // poll runs only while pushes are not arriving. The active-sync case no
+  // longer needs 2s (that existed solely because there was no progress event),
+  // but stays quicker than idle so an SSE-down environment still shows a
+  // moving bar.
+  useFallbackPoll(fetchStatus, hasActiveSync ? 15000 : 60000, initialCheckDone);
 
   // Update relative times every minute
   useEffect(() => {
