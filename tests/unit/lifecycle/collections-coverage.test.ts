@@ -91,7 +91,8 @@ describe("action-date ordering", () => {
     expect(new Set(order.slice(2))).toEqual(new Set(["rk-undated", "rk-undated-2"]));
     expect(mockPlex.moveCollectionItem.mock.calls[0][2]).toBeUndefined();
     expect(mockPlex.editCollectionSortTitle).toHaveBeenCalledWith("1", "col1", "zz");
-    expect(mockPlex.updateCollectionVisibility).toHaveBeenCalledWith("1", "col1", true, true, true);
+    // Nothing was read (the mock answers undefined), so the client reads it itself.
+    expect(mockPlex.updateCollectionVisibility).toHaveBeenCalledWith("1", "col1", true, true, true, undefined);
   });
 
   it("maps a series-scope action to its show's rating key, and skips a show Plex does not list", async () => {

@@ -14,7 +14,7 @@ import type {
   PlexSession,
 } from "./types";
 import type { MediaServerClient, LibraryItemType } from "@/lib/media-server/client";
-import type { DetailedWatchHistoryEntry } from "@/lib/media-server/types";
+import type { CollectionVisibility, DetailedWatchHistoryEntry } from "@/lib/media-server/types";
 import { MediaItemNotFoundError } from "@/lib/media-server/client";
 import { isMediaItem } from "@/lib/media-server/item-types";
 import { normalizeResolutionFromDimensions } from "@/lib/resolution";
@@ -701,7 +701,7 @@ export class PlexClient implements MediaServerClient {
   async getCollectionVisibility(
     sectionKey: string,
     collectionRatingKey: string
-  ): Promise<{ identifier: string | null; home: boolean; shared: boolean; recommended: boolean }> {
+  ): Promise<CollectionVisibility> {
     const response = await this.client.get(
       `/hubs/sections/${sectionKey}/manage`,
       { params: { metadataItemId: collectionRatingKey } }
@@ -726,17 +726,20 @@ export class PlexClient implements MediaServerClient {
   }
 
   /**
-   * Update a collection's visibility on home screens and library recommended.
-   * Reads current state from Plex first, then applies the desired state.
+   * Update a collection's visibility on home screens and library recommended,
+   * from its current state: `known` when the caller has just read it (the
+   * collection sync reads it to see whether anything changed, and a second
+   * read here cost one more request per change), else read from Plex first.
    */
   async updateCollectionVisibility(
     sectionKey: string,
     collectionRatingKey: string,
     home: boolean,
     shared: boolean,
-    recommended: boolean
+    recommended: boolean,
+    known?: CollectionVisibility
   ): Promise<void> {
-    const current = await this.getCollectionVisibility(sectionKey, collectionRatingKey);
+    const current = known ?? (await this.getCollectionVisibility(sectionKey, collectionRatingKey));
     const wantAny = home || shared || recommended;
 
     const params = {

@@ -398,6 +398,32 @@ describe("collections", () => {
       expect(post.query.get("promotedToSharedHome")).toBe("1");
     });
 
+    // The collection sync reads the hub to see whether anything changed and
+    // hands that state over, so the update makes no second read.
+    it("applies the state the caller already read without reading it again", async () => {
+      const url = await hubServer([{ identifier: "custom.collection.2.48211" }]);
+      await new PlexClient(url, "t").updateCollectionVisibility("2", "48211", true, true, false, {
+        identifier: "custom.collection.2.48211",
+        home: false,
+        shared: false,
+        recommended: false,
+      });
+      expect(requests.map((r) => `${r.method} ${r.path}`)).toEqual([
+        "PUT /hubs/sections/2/manage/custom.collection.2.48211",
+      ]);
+    });
+
+    it("creates a hub from a known state that has none, without reading it", async () => {
+      const url = await hubServer([]);
+      await new PlexClient(url, "t").updateCollectionVisibility("2", "48211", true, true, false, {
+        identifier: null,
+        home: false,
+        shared: false,
+        recommended: false,
+      });
+      expect(requests.map((r) => `${r.method} ${r.path}`)).toEqual(["POST /hubs/sections/2/manage"]);
+    });
+
     it("does nothing when there is no hub and no promotion is wanted", async () => {
       const url = await hubServer([]);
       await new PlexClient(url, "t").updateCollectionVisibility("2", "48211", false, false, false);

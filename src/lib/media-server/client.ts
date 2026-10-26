@@ -3,6 +3,7 @@ import type {
   MediaMetadataItem,
   MediaLibrarySection,
   MediaCollection,
+  CollectionVisibility,
   WatchHistoryEntry,
   DetailedWatchHistoryEntry,
 } from "./types";
@@ -189,18 +190,15 @@ export interface MediaServerClient {
   getCollectionVisibility?(
     sectionKey: string,
     collectionRatingKey: string
-  ): Promise<{
-    identifier: string | null;
-    home: boolean;
-    shared: boolean;
-    recommended: boolean;
-  }>;
+  ): Promise<CollectionVisibility>;
+  /** `known`: the state the caller just read, so it is not read again. */
   updateCollectionVisibility?(
     sectionKey: string,
     collectionRatingKey: string,
     home: boolean,
     shared: boolean,
-    recommended: boolean
+    recommended: boolean,
+    known?: CollectionVisibility
   ): Promise<void>;
   getPrerollSetting?(): Promise<string>;
   setPrerollPath?(path: string): Promise<void>;
