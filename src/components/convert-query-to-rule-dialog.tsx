@@ -112,6 +112,22 @@ function ConvertDialogBody({
     initialTypes.length === 1,
   );
   const userEditedNameRef = useRef(false);
+  // The existing rule sets, read once per opening: every change of target type
+  // re-read the whole list only to filter it by the new type. A failed read is
+  // dropped so the next type change asks again.
+  const ruleSetsRef = useRef<Promise<Array<{ name: string; type: string }>> | null>(null);
+  const loadRuleSets = () => {
+    ruleSetsRef.current ??= fetch("/api/lifecycle/rules")
+      .then(async (res) => {
+        if (!res.ok) throw new Error("fetch failed");
+        return ((await res.json()) as { ruleSets: Array<{ name: string; type: string }> }).ruleSets;
+      })
+      .catch((error: unknown) => {
+        ruleSetsRef.current = null;
+        throw error;
+      });
+    return ruleSetsRef.current;
+  };
   const [useAllServers, setUseAllServers] = useState(
     query.serverIds.length === 0,
   );
@@ -145,12 +161,10 @@ function ConvertDialogBody({
     let cancelled = false;
     void (async () => {
       try {
-        const res = await fetch("/api/lifecycle/rules");
-        if (!res.ok) throw new Error("fetch failed");
-        const data = (await res.json()) as { ruleSets: Array<{ name: string; type: string }> };
+        const ruleSets = await loadRuleSets();
         if (cancelled || !mountedRef.current || userEditedNameRef.current) return;
         const existing = new Set(
-          data.ruleSets.filter((rs) => rs.type === targetType).map((rs) => rs.name),
+          ruleSets.filter((rs) => rs.type === targetType).map((rs) => rs.name),
         );
         setName((current) => {
           if (!existing.has(current)) return current;
