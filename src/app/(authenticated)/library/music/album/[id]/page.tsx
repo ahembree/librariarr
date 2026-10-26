@@ -1,19 +1,18 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
-import { useRealtime } from "@/hooks/use-realtime";
-import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useState, useCallback, useMemo } from "react";
+import { useParams, useRouter } from "next/navigation";
 import { useLocalStorage } from "@/hooks/use-local-storage";
 import { cn } from "@/lib/utils";
 import { useChipColors } from "@/components/chip-color-provider";
 import { QualityChip } from "@/components/quality-chips";
 import { qualityChips, qualitySegments } from "@/lib/media/quality-chips";
 import { MediaDetailHero } from "@/components/media-detail-hero";
+import { DetailPageStates, genreChips } from "@/components/media-detail-parts";
 import { MediaTable } from "@/components/media-table";
 import { MediaCard } from "@/components/media-card";
 import { ColorChip } from "@/components/color-chip";
 import { Separator } from "@/components/ui/separator";
-import { Skeleton } from "@/components/ui/skeleton";
 import { LayoutGrid, TableProperties, List, Clock, HardDrive } from "lucide-react";
 import { formatFileSize, formatDuration } from "@/lib/format";
 import { useCardSize } from "@/hooks/use-card-size";
@@ -22,13 +21,38 @@ import { CardSizeControl } from "@/components/card-size-control";
 import { CardDisplayControl } from "@/components/card-display-control";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import type { MediaItemWithRelations, MediaListItem } from "@/lib/types";
-import { detailPrefetch, mediaRecordUrl } from "@/lib/media/detail-prefetch";
-import { type PlayServer, buildPlayLinks } from "@/lib/play-url";
-import { MediaHoverPopover } from "@/components/media-hover-popover";
+import { useBackOverride, useMediaDetailRecord } from "@/hooks/use-media-detail-record";
+import { useDetailChildren } from "@/hooks/use-detail-children";
+import { MediaHoverPopover, hoverDataFromListItem, hoverSummaryUrl } from "@/components/media-hover-popover";
 
 // Numeric string fields (fileSize is BigInt-as-string) must compare as
 // numbers, not lexicographically ("9000" must sort before "10000").
 const NUMERIC_STRING_FIELDS = new Set(["fileSize"]);
+
+const PLAY_LINKS: Parameters<typeof useMediaDetailRecord>[1]["playLinks"] = [
+  ["Album", "parentRatingKey"],
+  ["Artist", "grandparentRatingKey"],
+  ["Track", "ratingKey"],
+];
+
+const BACK_LABELS = {
+  "/library/music/albums": "All Albums",
+  "/library/music/tracks": "All Tracks",
+};
+
+const pickTracks = (body: Record<string, unknown>) => body.items as MediaListItem[] | undefined;
+
+// Named by its own title: the artist and album are the page's heading.
+function trackTableHover(track: MediaListItem) {
+  return (
+    <MediaHoverPopover
+      summaryUrl={hoverSummaryUrl(track.id)}
+      imageUrl={`/api/media/${track.id}/image`}
+      imageAspect="square"
+      data={hoverDataFromListItem(track)}
+    />
+  );
+}
 
 export default function AlbumDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -36,27 +60,27 @@ export default function AlbumDetailPage() {
   const { getHex } = useChipColors();
   const { show, setVisible, prefs } = useCardDisplay("MUSIC_TRACKS");
   const { size, setSize, gridStyle } = useCardSize();
-  const [item, setItem] = useState<(MediaItemWithRelations & { albumTitle?: string | null }) | null>(null);
-  const [playServers, setPlayServers] = useState<PlayServer[]>([]);
-  const [tracks, setTracks] = useState<MediaListItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  // The tracks are asked for by this page's id, beside the record — they used
+  // to wait for it, to read its artist and album — and both are re-read
+  // together on every `sync:completed` (new/removed items) without a manual
+  // refresh. No integration cards here, so no Lidarr lookup is started.
+  const { item, playServers, loading, syncTick } = useMediaDetailRecord(id, {
+    mediaType: "MUSIC",
+    plays: false,
+    integrations: false,
+    playLinks: PLAY_LINKS,
+    refetchOnTick: true,
+    children: "tracks",
+  });
+  const trackList = useDetailChildren(id, "tracks", syncTick, pickTracks);
+  const tracks = trackList.items;
   const [viewMode, handleViewModeChange] = useLocalStorage<"cards" | "table">(
     "album-detail-view-mode",
     "table",
   );
   const [sortBy, setSortBy] = useState("episodeNumber");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
-  const searchParams = useSearchParams();
-  const backOverride = useMemo(() => {
-    const from = searchParams.get("from");
-    if (!from) return null;
-    const labels: Record<string, string> = {
-      "/library/music/albums": "All Albums",
-      "/library/music/tracks": "All Tracks",
-    };
-    const label = labels[from];
-    return label ? { href: from, label } : null;
-  }, [searchParams]);
+  const backOverride = useBackOverride(BACK_LABELS);
 
   const handleSort = useCallback(
     (field: string) => {
@@ -70,46 +94,7 @@ export default function AlbumDetailPage() {
     [sortBy]
   );
 
-  // Token guards against a stale slow response landing after the id changes
-  // and overwriting the current album's tracks.
-  const reqToken = useRef(0);
-
-  const [syncTick, setSyncTick] = useState(0);
-  // Auto-update on real-time sync (new/removed items) without a manual refresh.
-  useRealtime("sync:completed", () => setSyncTick((t) => t + 1));
-
-  useEffect(() => {
-    const token = ++reqToken.current;
-    async function fetchData() {
-      try {
-        const { body: itemData } = await detailPrefetch.fetch<{ item?: MediaItemWithRelations & { albumTitle?: string | null }; playServers?: PlayServer[] }>(mediaRecordUrl(id));
-        if (token !== reqToken.current) return;
-        if (!itemData?.item) return;
-        setItem(itemData.item);
-        setPlayServers(buildPlayLinks(itemData.playServers || [], [
-          ["Album", "parentRatingKey"],
-          ["Artist", "grandparentRatingKey"],
-          ["Track", "ratingKey"],
-        ]));
-
-        const artistName = itemData.item.parentTitle;
-        const albumTitle = itemData.item.albumTitle;
-        if (!artistName || !albumTitle) return;
-
-        const tracksRes = await fetch(
-          `/api/media/music?parentTitle=${encodeURIComponent(artistName)}&albumTitle=${encodeURIComponent(albumTitle)}&sortBy=episodeNumber&sortOrder=asc&limit=0`
-        );
-        const tracksData = await tracksRes.json();
-        if (token !== reqToken.current) return;
-        setTracks(tracksData.items || []);
-      } catch {
-        // Failed to load
-      } finally {
-        if (token === reqToken.current) setLoading(false);
-      }
-    }
-    fetchData();
-  }, [id, syncTick]);
+  const openTrack = useCallback((track: MediaListItem) => router.push(`/library/music/track/${track.id}`), [router]);
 
   const sortedTracks = useMemo(() => {
     const sorted = [...tracks].sort((a, b) => {
@@ -126,25 +111,12 @@ export default function AlbumDetailPage() {
     return sortOrder === "desc" ? sorted.reverse() : sorted;
   }, [tracks, sortBy, sortOrder]);
 
-  if (loading) {
-    return (
-      <div className="p-4 sm:p-6 lg:p-8 space-y-4">
-        <Skeleton className="h-8 w-48" />
-        <Skeleton className="h-[400px] w-full rounded-lg" />
-      </div>
-    );
-  }
-
-  if (!item) {
-    return (
-      <div className="flex items-center justify-center min-h-[50vh]">
-        <p className="text-muted-foreground">Album not found</p>
-      </div>
-    );
-  }
+  // The page renders with its tracks, as it did when it waited for both in turn.
+  const pending = loading || (item !== null && !trackList.loaded);
+  if (pending || !item) return <DetailPageStates loading={pending} notFoundLabel="Album not found" />;
 
   const artistName = item.parentTitle || "Unknown Artist";
-  const albumTitle = item.albumTitle || item.title;
+  const albumTitle = (item as MediaItemWithRelations & { albumTitle?: string | null }).albumTitle || item.title;
   const totalSize = tracks.reduce((sum, t) => sum + (t.fileSize ? Number(t.fileSize) : 0), 0);
 
   // Audio codec breakdown
@@ -175,15 +147,7 @@ export default function AlbumDetailPage() {
           )}
         </>
       }
-      genres={
-        item.genres && item.genres.length > 0
-          ? item.genres.map((genre) => (
-              <ColorChip key={genre} className="bg-white/10 text-white/80 border-white/20">
-                {genre}
-              </ColorChip>
-            ))
-          : undefined
-      }
+      genres={genreChips(item.genres)}
       backHref={backOverride?.href ?? `/library/music/artist/${item.id}`}
       backLabel={backOverride?.label ?? artistName}
       useParentArt
@@ -235,40 +199,13 @@ export default function AlbumDetailPage() {
           {viewMode === "table" ? (
             <MediaTable
               items={sortedTracks}
-              onItemClick={(track) => router.push(`/library/music/track/${track.id}`)}
+              onItemClick={openTrack}
               sortBy={sortBy}
               sortOrder={sortOrder}
               onSort={handleSort}
               mediaType="MUSIC"
               hideParentTitle
-              renderHoverContent={(track) => (
-                <MediaHoverPopover
-                  summaryUrl={`/api/media/${track.id}`}
-                  imageUrl={`/api/media/${track.id}/image`}
-                  imageAspect="square"
-                  data={{
-                    title: track.title,
-                    year: track.year,
-                    contentRating: track.contentRating,
-                    rating: track.rating,
-                    audienceRating: track.audienceRating,
-                    ratingImage: track.ratingImage,
-                    audienceRatingImage: track.audienceRatingImage,
-                    duration: track.duration,
-                    resolution: track.resolution,
-                    dynamicRange: track.dynamicRange,
-                    audioProfile: track.audioProfile,
-                    audioCodec: track.audioCodec,
-                    fileSize: track.fileSize,
-                    genres: track.genres,
-                    studio: track.studio,
-                    playCount: track.playCount,
-                    lastPlayedAt: track.lastPlayedAt,
-                    addedAt: track.addedAt,
-                    servers: track.servers,
-                  }}
-                />
-              )}
+              renderHoverContent={trackTableHover}
             />
           ) : (
             <div style={gridStyle}>
@@ -281,32 +218,7 @@ export default function AlbumDetailPage() {
                   fallbackIcon="music"
                   href={`/library/music/track/${t.id}`}
                   prefetchMediaId={t.id}
-                  hoverContent={
-                    <MediaHoverPopover
-                      summaryUrl={`/api/media/${t.id}`}
-                      data={{
-                        title: t.title,
-                        year: t.year,
-                        contentRating: t.contentRating,
-                        rating: t.rating,
-                        audienceRating: t.audienceRating,
-                        ratingImage: t.ratingImage,
-                        audienceRatingImage: t.audienceRatingImage,
-                        duration: t.duration,
-                        resolution: t.resolution,
-                        dynamicRange: t.dynamicRange,
-                        audioProfile: t.audioProfile,
-                        audioCodec: t.audioCodec,
-                        fileSize: t.fileSize,
-                        genres: t.genres,
-                        studio: t.studio,
-                        playCount: t.playCount,
-                        lastPlayedAt: t.lastPlayedAt,
-                        addedAt: t.addedAt,
-                        servers: t.servers,
-                      }}
-                    />
-                  }
+                  hoverContent={<MediaHoverPopover summaryUrl={hoverSummaryUrl(t.id)} data={hoverDataFromListItem(t)} />}
                   metadata={
                     <MetadataLine stacked>
                       {show("metadata", "trackNumber") && t.episodeNumber != null && (

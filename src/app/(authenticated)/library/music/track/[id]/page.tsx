@@ -1,89 +1,44 @@
 "use client";
 
-import { useState, useEffect, useMemo, useRef } from "react";
-import { useRealtime } from "@/hooks/use-realtime";
-import { useParams, useSearchParams } from "next/navigation";
+import { useParams } from "next/navigation";
 import { MediaDetailHero } from "@/components/media-detail-hero";
 import { MediaDetailContent } from "@/components/media-detail-content";
+import { DetailPageStates } from "@/components/media-detail-parts";
 import { PlayHistory } from "@/components/play-history";
 import { ColorChip } from "@/components/color-chip";
 import { QualityChip } from "@/components/quality-chips";
 import { qualityChips } from "@/lib/media/quality-chips";
-import { Skeleton } from "@/components/ui/skeleton";
 import { formatFileSize, formatDuration } from "@/lib/format";
-import type { MediaItemWithRelations } from "@/lib/types";
-import { detailPrefetch, mediaRecordUrl, prefetchMediaDetail } from "@/lib/media/detail-prefetch";
-import { type PlayServer, buildPlayLinks } from "@/lib/play-url";
+import { useBackOverride, useMediaDetailRecord } from "@/hooks/use-media-detail-record";
+
+// The play-history card below reads the *stored* WatchHistory table, so it
+// only changes when a sync or an import lands.
+const TICK_ON = ["sync:completed", "watch-history:updated"] as const;
+
+const PLAY_LINKS: Parameters<typeof useMediaDetailRecord>[1]["playLinks"] = [
+  ["Track", "ratingKey"],
+  ["Album", "parentRatingKey"],
+  ["Artist", "grandparentRatingKey"],
+];
+
+const BACK_LABELS = {
+  "/library/music/tracks": "All Tracks",
+  "/library/music/albums": "All Albums",
+};
 
 export default function TrackDetailPage() {
-  // The play-history card below reads the *stored* WatchHistory table, so it
-  // only changes when a sync or an import lands. These were the only two media
-  // detail pages with no subscription at all.
-  const [syncTick, setSyncTick] = useState(0);
-  useRealtime("sync:completed", () => setSyncTick((t) => t + 1));
-  useRealtime("watch-history:updated", () => setSyncTick((t) => t + 1));
   const { id } = useParams<{ id: string }>();
-  const [item, setItem] = useState<MediaItemWithRelations | null>(null);
-  const [playServers, setPlayServers] = useState<PlayServer[]>([]);
-  const [loading, setLoading] = useState(true);
-  const searchParams = useSearchParams();
-  const backOverride = useMemo(() => {
-    const from = searchParams.get("from");
-    if (!from) return null;
-    const labels: Record<string, string> = {
-      "/library/music/tracks": "All Tracks",
-      "/library/music/albums": "All Albums",
-    };
-    const label = labels[from];
-    return label ? { href: from, label } : null;
-  }, [searchParams]);
+  // The play history and the Arr card need only the id, so their requests
+  // start beside the record's instead of after it renders.
+  const { item, playServers, loading, syncTick } = useMediaDetailRecord(id, {
+    mediaType: "MUSIC",
+    plays: true,
+    playLinks: PLAY_LINKS,
+    tickOn: TICK_ON,
+  });
+  const backOverride = useBackOverride(BACK_LABELS);
 
-  // Token guards against a stale slow response landing after the id changes
-  // and overwriting the current track's data.
-  const reqToken = useRef(0);
-
-  useEffect(() => {
-    const token = ++reqToken.current;
-    async function fetchItem() {
-      try {
-        // The play history and the Arr/Seerr cards need only the id, so
-        // their requests start beside the record's instead of after it renders.
-        prefetchMediaDetail(id, { mediaType: "MUSIC", plays: true });
-        const { body: data } = await detailPrefetch.fetch<{ item?: MediaItemWithRelations; playServers?: PlayServer[] }>(mediaRecordUrl(id));
-        if (token !== reqToken.current) return;
-        if (data?.item) {
-          setItem(data.item);
-          setPlayServers(buildPlayLinks(data.playServers || [], [
-            ["Track", "ratingKey"],
-            ["Album", "parentRatingKey"],
-            ["Artist", "grandparentRatingKey"],
-          ]));
-        }
-      } catch {
-        // Failed to load
-      } finally {
-        if (token === reqToken.current) setLoading(false);
-      }
-    }
-    fetchItem();
-  }, [id]);
-
-  if (loading) {
-    return (
-      <div className="p-4 sm:p-6 lg:p-8 space-y-4">
-        <Skeleton className="h-8 w-48" />
-        <Skeleton className="h-[400px] w-full rounded-lg" />
-      </div>
-    );
-  }
-
-  if (!item) {
-    return (
-      <div className="flex items-center justify-center min-h-[50vh]">
-        <p className="text-muted-foreground">Track not found</p>
-      </div>
-    );
-  }
+  if (loading || !item) return <DetailPageStates loading={loading} notFoundLabel="Track not found" />;
 
   return (
     <MediaDetailHero
@@ -114,7 +69,11 @@ export default function TrackDetailPage() {
       posterAspectRatio="1/1"
       playServers={playServers}
     >
-      <MediaDetailContent item={item} hideVideo detailLoaded 
+      <MediaDetailContent
+        item={item}
+        record={item}
+        hideVideo
+        detailLoaded
         // The per-play list *is* this track's Listen History card. It replaces the
         // per-user aggregate card, which reads the same plays live from the
         // server but without their timestamps, device, or any of the

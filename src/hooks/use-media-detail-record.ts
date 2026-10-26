@@ -5,8 +5,9 @@ import { useSearchParams } from "next/navigation";
 import type { AppEventType } from "@/lib/events/event-bus";
 import { useRealtimeEvents } from "@/hooks/use-realtime";
 import { useLatestRequest } from "@/hooks/use-latest-request";
-import { detailPrefetch, mediaRecordUrl, prefetchMediaDetail } from "@/lib/media/detail-prefetch";
+import { detailPrefetch, mediaRecordUrl, prefetchMediaDetail, type DetailChildList } from "@/lib/media/detail-prefetch";
 import { buildPlayLinks, type PlayServer } from "@/lib/play-url";
+import { syncCompletedConcerns } from "@/lib/media/sync-scope";
 import type { MediaItemWithRelations } from "@/lib/types";
 
 /** `buildPlayLinks`' link spec: `[label, rating-key field]` per link. */
@@ -16,6 +17,14 @@ export interface MediaDetailRecordOptions {
   mediaType: "MOVIE" | "SERIES" | "MUSIC";
   /** Start the per-item play list with the record (movie and track pages). */
   plays: boolean;
+  /**
+   * Start the Arr/Seerr matches with the record (default true). False on the
+   * artist and album pages, which show no integration cards: the prefetch
+   * would ask every Lidarr instance for an answer nothing reads.
+   */
+  integrations?: boolean;
+  /** Start the page's child list with the record (`detailChildrenUrl`; read it with `useDetailChildren`). */
+  children?: DetailChildList;
   /** The play links to build from the record's `playServers`; none keeps them as sent. */
   playLinks?: PlayLinkSpec;
   /**
@@ -50,7 +59,7 @@ const DEFAULT_TICK_ON: readonly AppEventType[] = ["sync:completed"];
  * id never replacing a later one.
  */
 export function useMediaDetailRecord(id: string, options: MediaDetailRecordOptions): MediaDetailRecord {
-  const { mediaType, plays, refetchOnTick = false, tickOn = DEFAULT_TICK_ON } = options;
+  const { mediaType, plays, integrations = true, children, refetchOnTick = false, tickOn = DEFAULT_TICK_ON } = options;
   const [item, setItem] = useState<MediaItemWithRelations | null>(null);
   const [playServers, setPlayServers] = useState<PlayServer[]>([]);
   const [loading, setLoading] = useState(true);
@@ -61,13 +70,19 @@ export function useMediaDetailRecord(id: string, options: MediaDetailRecordOptio
     playLinksRef.current = options.playLinks;
   });
 
-  useRealtimeEvents(tickOn, () => setSyncTick((t) => t + 1));
+  useRealtimeEvents(tickOn, (data) => {
+    // A sync that names the library types it wrote, none of them this page's,
+    // changed nothing here (only `sync:completed` carries `libraryTypes`; any
+    // other event, and a reconnect's resync, still ticks).
+    if (!syncCompletedConcerns(data, { types: mediaType })) return;
+    setSyncTick((t) => t + 1);
+  });
 
   // Before the record's own effect, so the record request below is the one
   // started here and is taken from the store rather than asked for twice.
   useEffect(() => {
-    prefetchMediaDetail(id, { mediaType, plays });
-  }, [id, mediaType, plays]);
+    prefetchMediaDetail(id, { mediaType, plays, integrations, children });
+  }, [id, mediaType, plays, integrations, children]);
 
   const recordTick = refetchOnTick ? syncTick : 0;
   useEffect(() => {

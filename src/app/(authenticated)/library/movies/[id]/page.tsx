@@ -1,74 +1,31 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
-import { useRealtime } from "@/hooks/use-realtime";
 import { useParams } from "next/navigation";
 import { QualityChip } from "@/components/quality-chips";
 import { qualityChips } from "@/lib/media/quality-chips";
 import { MediaDetailHero } from "@/components/media-detail-hero";
-import { RatingChip } from "@/components/rating-chip";
-import { getRatingLabel } from "@/lib/rating-labels";
 import { MediaDetailContent } from "@/components/media-detail-content";
+import { DetailPageStates, RatingChips, genreChips } from "@/components/media-detail-parts";
 import { PlayHistory } from "@/components/play-history";
 import { ColorChip } from "@/components/color-chip";
-import { Skeleton } from "@/components/ui/skeleton";
 import { formatFileSize, formatDuration } from "@/lib/format";
-import type { MediaItemWithRelations } from "@/lib/types";
-import { detailPrefetch, mediaRecordUrl, prefetchMediaDetail } from "@/lib/media/detail-prefetch";
-import type { PlayServer } from "@/lib/play-url";
+import { useMediaDetailRecord } from "@/hooks/use-media-detail-record";
+
+// The play-history card below reads the *stored* WatchHistory table, so it
+// only changes when a sync or an import lands.
+const TICK_ON = ["sync:completed", "watch-history:updated"] as const;
 
 export default function MovieDetailPage() {
-  // The play-history card below reads the *stored* WatchHistory table, so it
-  // only changes when a sync or an import lands. These were the only two media
-  // detail pages with no subscription at all.
-  const [syncTick, setSyncTick] = useState(0);
-  useRealtime("sync:completed", () => setSyncTick((t) => t + 1));
-  useRealtime("watch-history:updated", () => setSyncTick((t) => t + 1));
   const { id } = useParams<{ id: string }>();
-  const [item, setItem] = useState<MediaItemWithRelations | null>(null);
-  const [playServers, setPlayServers] = useState<PlayServer[]>([]);
-  const [loading, setLoading] = useState(true);
-  // Token guards against a stale slow response landing after a quick id change.
-  const reqToken = useRef(0);
+  // The play history and the Arr/Seerr cards need only the id, so their
+  // requests start beside the record's instead of after it renders.
+  const { item, playServers, loading, syncTick } = useMediaDetailRecord(id, {
+    mediaType: "MOVIE",
+    plays: true,
+    tickOn: TICK_ON,
+  });
 
-  useEffect(() => {
-    const token = ++reqToken.current;
-    async function fetchItem() {
-      try {
-        // The play history and the Arr/Seerr cards need only the id, so
-        // their requests start beside the record's instead of after it renders.
-        prefetchMediaDetail(id, { mediaType: "MOVIE", plays: true });
-        const { body: data } = await detailPrefetch.fetch<{ item?: MediaItemWithRelations; playServers?: PlayServer[] }>(mediaRecordUrl(id));
-        if (token !== reqToken.current) return;
-        if (data?.item) {
-          setItem(data.item);
-          setPlayServers(data.playServers || []);
-        }
-      } catch {
-        // Failed to load
-      } finally {
-        if (token === reqToken.current) setLoading(false);
-      }
-    }
-    fetchItem();
-  }, [id]);
-
-  if (loading) {
-    return (
-      <div className="p-4 sm:p-6 lg:p-8 space-y-4">
-        <Skeleton className="h-8 w-48" />
-        <Skeleton className="h-[400px] w-full rounded-lg" />
-      </div>
-    );
-  }
-
-  if (!item) {
-    return (
-      <div className="flex items-center justify-center min-h-[50vh]">
-        <p className="text-muted-foreground">Movie not found</p>
-      </div>
-    );
-  }
+  if (loading || !item) return <DetailPageStates loading={loading} notFoundLabel="Movie not found" />;
 
   return (
     <MediaDetailHero
@@ -94,28 +51,17 @@ export default function MovieDetailPage() {
           )}
         </>
       }
-      ratings={
-        <>
-          {item.rating != null && <RatingChip label={getRatingLabel(item.ratingImage, item.library?.mediaServer?.type, "rating", "Critic")} value={item.rating} />}
-          {item.audienceRating != null && <RatingChip label={getRatingLabel(item.audienceRatingImage, item.library?.mediaServer?.type, "audienceRating", "Audience")} value={item.audienceRating} />}
-          {item.userRating != null && <RatingChip label="You" value={item.userRating} />}
-        </>
-      }
-      genres={
-        item.genres && item.genres.length > 0
-          ? item.genres.map((genre) => (
-              <ColorChip key={genre} className="bg-white/10 text-white/80 border-white/20">
-                {genre}
-              </ColorChip>
-            ))
-          : undefined
-      }
+      ratings={<RatingChips item={item} />}
+      genres={genreChips(item.genres)}
       filePath={item.filePath}
       backHref="/library/movies"
       backLabel="Movies"
       playServers={playServers}
     >
-      <MediaDetailContent item={item} detailLoaded 
+      <MediaDetailContent
+        item={item}
+        record={item}
+        detailLoaded
         // The per-play list *is* this movie's Watch History card. It replaces the
         // per-user aggregate card, which reads the same plays live from the
         // server but without their timestamps, device, or any of the
