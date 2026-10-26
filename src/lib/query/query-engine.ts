@@ -28,7 +28,7 @@ import {
   serializeSeriesAggregateForEval,
   type AggregableEpisode,
 } from "@/lib/conditions";
-import { isEnumerableField, isOperatorApplicable, isValueValidForRule, hasWildcardRules, hasCustomFormatScoreRules } from "@/lib/conditions/helpers";
+import { isEnumerableField, isOperatorApplicable, isValueValidForRule, hasWildcardRules, hasCustomFormatScoreRules, hasStreamRules } from "@/lib/conditions/helpers";
 import {
   isUnconfiguredContainsRule,
   ruleToWhere,
@@ -103,7 +103,7 @@ const ITEM_SELECT = {
   },
 } as const;
 
-/** Full select for in-memory evaluation — includes streams, labels, and externalIds */
+/** Full select for in-memory evaluation — includes labels and externalIds (streams: see below) */
 const ITEM_SELECT_FULL = {
   ...ITEM_SELECT,
   labels: true,
@@ -119,37 +119,46 @@ const ITEM_SELECT_FULL = {
   albumTitle: true,
   videoProfile: true,
   scanType: true,
-  streams: {
-    select: {
-      streamType: true, language: true, languageCode: true, codec: true,
-      profile: true, bitrate: true, isDefault: true, displayTitle: true,
-      extendedDisplayTitle: true, channels: true, samplingRate: true,
-      audioChannelLayout: true, bitDepth: true, width: true, height: true,
-      frameRate: true, scanType: true, videoRangeType: true, forced: true,
-      colorPrimaries: true, colorRange: true, chromaSubsampling: true,
-    },
-  },
   externalIds: { select: { source: true, externalId: true } },
 };
 
+/** An item's streams, for the rules that read them (`hasStreamRules`). */
+const STREAMS_SELECT = {
+  select: {
+    streamType: true, language: true, languageCode: true, codec: true,
+    profile: true, bitrate: true, isDefault: true, displayTitle: true,
+    extendedDisplayTitle: true, channels: true, samplingRate: true,
+    audioChannelLayout: true, bitDepth: true, width: true, height: true,
+    frameRate: true, scanType: true, videoRangeType: true, forced: true,
+    colorPrimaries: true, colorRange: true, chromaSubsampling: true,
+  },
+} as const;
+
 /**
- * Build a full-select object, optionally including the `watchHistory` relation.
- * `watchHistory` is only meaningful when a `watchedByUser` rule is present;
- * joining it unconditionally costs O(plays) per query on large libraries.
+ * Build a full-select object, optionally including the `streams` and
+ * `watchHistory` relations. Streams are read only by stream fields and stream
+ * queries — the rows a query returns never show them, and every other rule
+ * reads columns — so they are loaded only for a query with such a rule (as
+ * the lifecycle engine does), not for every query evaluated in memory (any
+ * Arr, Seerr, wildcard, resolution or genre criterion). `watchHistory` is only
+ * meaningful when a `watchedByUser` rule is present; joining it
+ * unconditionally costs O(plays) per query on large libraries.
  */
-function buildItemSelectFull(opts: { includeWatchHistory: boolean }) {
-  if (!opts.includeWatchHistory) return ITEM_SELECT_FULL;
+function buildItemSelectFull(groups: QueryGroup[]) {
   return {
     ...ITEM_SELECT_FULL,
-    watchHistory: {
-          // Phase 2 must see the same rows Phase 1 filtered on, or a
-          // `watchedByUser` rule matches a different set depending on
-          // whether something else forced in-memory re-evaluation.
-          where: COMPLETED_PLAY_FILTER,
-          select: { serverUsername: true },
-        } as const,
+    ...(hasStreamRules(groups) ? { streams: STREAMS_SELECT } : {}),
+    ...(hasWatchedByUserRules(groups) ? { watchHistory: WATCH_HISTORY_SELECT } : {}),
   };
 }
+
+const WATCH_HISTORY_SELECT = {
+  // Phase 2 must see the same rows Phase 1 filtered on, or a
+  // `watchedByUser` rule matches a different set depending on
+  // whether something else forced in-memory re-evaluation.
+  where: COMPLETED_PLAY_FILTER,
+  select: { serverUsername: true },
+} as const;
 
 /** Build the shared WHERE clause from a query definition and resolved server IDs */
 function buildBaseWhere(
@@ -523,10 +532,7 @@ async function runQueryDefinition(
     : mediaTypes.filter((t) => t !== "SERIES");
   const hasFlatTypes = flatTypes.length > 0;
 
-  const needsWatchHistory = hasWatchedByUserRules(groups);
-  const selectToUse = needsFullInMemoryEval
-    ? buildItemSelectFull({ includeWatchHistory: needsWatchHistory })
-    : ITEM_SELECT;
+  const selectToUse = needsFullInMemoryEval ? buildItemSelectFull(groups) : ITEM_SELECT;
 
   // Run queries in parallel
   const flatWhere: Prisma.MediaItemWhereInput = { ...where, type: { in: [...flatTypes] } };
@@ -626,14 +632,14 @@ async function computeAggregateSurvivingEpisodeIds(
 
   const episodes = await prisma.mediaItem.findMany({
     where: seriesWhere,
-    select: buildItemSelectFull({ includeWatchHistory: hasWatchedByUserRules(groups) }),
+    select: buildItemSelectFull(groups),
   });
 
   if (episodes.length === 0) return [];
 
   const aggregates = aggregateEpisodesIntoSeries(
     episodes as unknown as AggregableEpisode[],
-    { includeStreams: true },
+    { includeStreams: hasStreamRules(groups) },
   );
   // Cross-system fields, read across each show's episodes (foldCrossSystemData).
   const crossSystem = hasCrossSystemRules(groups)
@@ -697,7 +703,7 @@ async function executeEpisodesWithSeriesAggregate(
     effectiveServerIds, groups, arrDataByType, seerrDataByType,
   );
 
-  const selectToUse = buildItemSelectFull({ includeWatchHistory: hasWatchedByUserRules(groups) });
+  const selectToUse = buildItemSelectFull(groups);
 
   // Flat (movie/music) types are unaffected by aggregate rules but may still be
   // in scope when mediaTypes is empty — evaluate them the normal way.
@@ -777,7 +783,7 @@ async function filterAndGroupSeriesEpisodes(
   // Fetch full episode data for unified in-memory evaluation
   const episodes = await prisma.mediaItem.findMany({
     where: seriesWhere,
-    select: buildItemSelectFull({ includeWatchHistory: hasWatchedByUserRules(groups) }),
+    select: buildItemSelectFull(groups),
   });
 
   if (episodes.length === 0) return [];
@@ -819,7 +825,7 @@ async function executeUngrouped(
   const needsFullInMemoryEval = !!arrDataByType || !!seerrDataByType || hasWildcardRules(groups) || hasStreamQueryInMemoryRules(groups) || hasCrossSystem || hasArrRules(groups) || hasSeerrRules(groups) || hasSeriesAggregateRules(groups) || hasResolutionRules(groups) || hasArrayFieldRules(groups) || hasStreamCountRules(groups);
   const useInMemoryPagination = needsFullInMemoryEval;
   const selectToUse = needsFullInMemoryEval
-    ? buildItemSelectFull({ includeWatchHistory: hasWatchedByUserRules(groups) })
+    ? buildItemSelectFull(groups)
     : ITEM_SELECT;
 
   let orderBy: Prisma.MediaItemOrderByWithRelationInput | Prisma.MediaItemOrderByWithRelationInput[];
