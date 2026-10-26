@@ -25,17 +25,9 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { Loader2, Play, X, Tag, ChevronDown } from "lucide-react";
+import { ConfirmDialog } from "@/components/confirm-dialog";
+import { LoadingButton } from "@/components/loading-button";
+import { Play, X, Tag, ChevronDown } from "lucide-react";
 import {
   MOVIE_ACTION_TYPES,
   SERIES_ACTION_TYPES,
@@ -377,10 +369,17 @@ export function QueryActionBar({
         </label>
       )}
 
-      <Button size="sm" className="h-8" disabled={!canRun} onClick={() => setConfirmOpen(true)}>
-        {executing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
+      <LoadingButton
+        size="sm"
+        className="h-8"
+        disabled={!canRun}
+        loading={executing}
+        icon={Play}
+        iconClassName="h-3.5 w-3.5"
+        onClick={() => setConfirmOpen(true)}
+      >
         Run action
-      </Button>
+      </LoadingButton>
 
       {noSelection ? (
         <span className="text-xs text-muted-foreground">Select results below to run an action.</span>
@@ -390,30 +389,27 @@ export function QueryActionBar({
         </span>
       ) : null}
 
-      <AlertDialog open={confirmOpen} onOpenChange={setConfirmOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Run “{actionLabel}”?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This will run <strong>{actionLabel}</strong> on <strong>{targetCount.toLocaleString()}</strong>{" "}
-              {family ? FAMILY_LABEL[family].toLowerCase() : ""} item{targetCount === 1 ? "" : "s"} immediately.
-              {skippedCount > 0 && (
-                <> {skippedCount.toLocaleString()} other selected item{skippedCount === 1 ? "" : "s"} of a different media type will be skipped.</>
-              )}{" "}
-              {willBatch && (
-                <> Your selection runs in <strong>{batchCount}</strong> sequential batches of up to {MAX_QUERY_ACTION_ITEMS.toLocaleString()} items.</>
-              )}{" "}
-              {submittedActionType.includes("DELETE") && "This cannot be undone."}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleConfirm} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
-              Run action
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ConfirmDialog
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        title={<>Run “{actionLabel}”?</>}
+        description={
+          <>
+            This will run <strong>{actionLabel}</strong> on <strong>{targetCount.toLocaleString()}</strong>{" "}
+            {family ? FAMILY_LABEL[family].toLowerCase() : ""} item{targetCount === 1 ? "" : "s"} immediately.
+            {skippedCount > 0 && (
+              <> {skippedCount.toLocaleString()} other selected item{skippedCount === 1 ? "" : "s"} of a different media type will be skipped.</>
+            )}{" "}
+            {willBatch && (
+              <> Your selection runs in <strong>{batchCount}</strong> sequential batches of up to {MAX_QUERY_ACTION_ITEMS.toLocaleString()} items.</>
+            )}{" "}
+            {submittedActionType.includes("DELETE") && "This cannot be undone."}
+          </>
+        }
+        confirmLabel="Run action"
+        destructive
+        onConfirm={handleConfirm}
+      />
     </div>
   );
 }
