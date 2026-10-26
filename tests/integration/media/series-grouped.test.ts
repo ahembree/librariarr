@@ -1083,5 +1083,53 @@ describe("GET /api/media/series/grouped", () => {
       expect(body.series[0].episodeCount).toBe(1);
       expect(body.series[0].servers.map((s) => s.serverName).sort()).toEqual(["Jellyfin", "Plex"]);
     });
+
+    it("gives each show the same presence whether the listing is whole, paged, searched or filtered", async () => {
+      const user = await createTestUser();
+      const plex = await createTestServer(user.id, { name: "Plex" });
+      const jelly = await createTestServer(user.id, { name: "Jellyfin" });
+      const libP = await createTestLibrary(plex.id, { type: "SERIES" });
+      const libJ = await createTestLibrary(jelly.id, { type: "SERIES" });
+      // Alpha and Gamma on both servers, Beta on Plex only; Gamma in 4K.
+      const shows = [
+        { key: "tvdb:1", title: "Alpha", libs: [libP, libJ], resolution: "1080" },
+        { key: "tvdb:2", title: "Beta", libs: [libP], resolution: "1080" },
+        { key: "tvdb:3", title: "Gamma", libs: [libP, libJ], resolution: "2160" },
+      ];
+      for (const show of shows) {
+        for (const lib of show.libs) {
+          const item = await createTestMediaItem(lib.id, {
+            type: "SERIES", parentTitle: show.title, seriesKey: show.key,
+            seasonNumber: 1, episodeNumber: 1, resolution: show.resolution,
+          });
+          // One canonical copy per show, as recomputeCanonical leaves it.
+          await getTestPrisma().mediaItem.update({
+            where: { id: item.id },
+            data: { dedupKey: `${show.key}:s1e1`, dedupCanonical: lib === show.libs[0] },
+          });
+        }
+      }
+      setMockSession({ userId: user.id, isLoggedIn: true });
+
+      type Row = { seriesKey: string; servers: { serverName: string; mediaItemId: string }[] };
+      const list = async (searchParams: Record<string, string>) =>
+        (await expectJson<{ series: Row[] }>(await callRoute(GET, { url: "/api/media/series/grouped", searchParams }), 200)).series;
+      const whole = new Map((await list({ limit: "0" })).map((r) => [r.seriesKey, r.servers]));
+      expect(whole.get("tvdb:1")!.map((s) => s.serverName)).toEqual(["Jellyfin", "Plex"]);
+      expect(whole.get("tvdb:2")!.map((s) => s.serverName)).toEqual(["Plex"]);
+
+      const cases = [
+        { limit: "1", page: "2" },
+        { limit: "0", search: "amm" },
+        { limit: "0", startsWith: "B" },
+        { limit: "0", resolution: "4K" },
+        { limit: "2", resolution: "4K|1080P" },
+      ];
+      for (const params of cases) {
+        const rows = await list(params);
+        expect(rows.length, JSON.stringify(params)).toBeGreaterThan(0);
+        for (const row of rows) expect(row.servers, JSON.stringify(params)).toEqual(whole.get(row.seriesKey));
+      }
+    });
   });
 });
