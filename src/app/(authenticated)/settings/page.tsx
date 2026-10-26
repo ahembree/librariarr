@@ -14,6 +14,7 @@ import { useFallbackPoll } from "@/hooks/use-fallback-poll";
 import { useCronScheduleSetting } from "@/hooks/use-cron-schedule-setting";
 import { fetchSyncStatus } from "@/lib/sync/sync-status-client";
 import { mergeSyncProgress } from "./sync-progress";
+import { createPreloadedReads, type PreloadedReads } from "./preloaded-reads";
 import {
   DEFAULT_CHIP_COLORS,
   mergeChipColors,
@@ -190,8 +191,26 @@ function bundleOf(ref: { current: RequestBundle | null }): RequestBundle {
   return (ref.current ??= createRequestBundle("/api/settings/bundle", SETTINGS_BUNDLE_PATHS));
 }
 
+/**
+ * The opening reads of the Authentication tab's SSO and API key sections,
+ * which fetch their own data when they mount: started with the tab's other
+ * loaders (so the tab waits for them, and the bundle answers them), then
+ * handed to the sections (`preloaded-reads.ts`).
+ */
+const AUTH_SECTION_PATHS = ["/api/settings/sso", "/api/settings/sso/me", "/api/settings/api-keys"] as const;
+
 export default function SettingsPage() {
   const bundleRef = useRef<RequestBundle | null>(null);
+  const authSectionReadsRef = useRef<PreloadedReads | null>(null);
+  const authSectionReads = useCallback(
+    () => (authSectionReadsRef.current ??= createPreloadedReads((path) => bundleOf(bundleRef).get(path))),
+    [],
+  );
+  const preloadAuthSections = useCallback(
+    () => Promise.all(AUTH_SECTION_PATHS.map((path) => authSectionReads().preload(path))),
+    [authSectionReads],
+  );
+  const readAuthSectionData = useCallback((path: string) => authSectionReads().get(path), [authSectionReads]);
   // The open tab IS the URL hash — see `src/lib/url-hash.ts` for why it is
   // read through a store rather than once on mount.
   const urlHash = useSyncExternalStore(subscribeToUrlHash, readUrlHash, noUrlHash);
@@ -879,11 +898,11 @@ export default function SettingsPage() {
       servers: [fetchServers, integrationFetchers.tracearr, fetchAuthInfo],
       integrations: INTEGRATION_TYPES.map((type) => integrationFetchers[type]),
       notifications: [fetchDiscordSettings],
-      authentication: [fetchAuthInfo],
+      authentication: [fetchAuthInfo, preloadAuthSections],
       ai: [fetchAiSettings],
       system: [fetchSystemInfo, fetchImageCacheStats],
     }),
-    [fetchServers, fetchSettings, integrationFetchers, fetchSystemInfo, fetchAccentColor, fetchChipColors, fetchLogRetention, fetchActionRetention, fetchDeleteCeiling, fetchBackupSettings, fetchLifecycleSchedule, fetchScheduleInfo, fetchDiscordSettings, fetchAiSettings, fetchDedupSetting, fetchRealtimeSetting, fetchRealtimeStatus, fetchImageCacheStats, fetchAuthInfo, fetchTitlePreference],
+    [fetchServers, fetchSettings, integrationFetchers, fetchSystemInfo, fetchAccentColor, fetchChipColors, fetchLogRetention, fetchActionRetention, fetchDeleteCeiling, fetchBackupSettings, fetchLifecycleSchedule, fetchScheduleInfo, fetchDiscordSettings, fetchAiSettings, fetchDedupSetting, fetchRealtimeSetting, fetchRealtimeStatus, fetchImageCacheStats, fetchAuthInfo, fetchTitlePreference, preloadAuthSections],
   );
 
   // A fetcher two tabs share, or a tab opened twice, runs once.
@@ -2467,6 +2486,7 @@ export default function SettingsPage() {
               onPlexLink={handlePlexLink}
               onCreateCredentialsAndEnable={handleCreateCredentialsAndEnable}
               onAuthSettingsChanged={refreshAuthInfo}
+              readSectionData={readAuthSectionData}
             />
           ) : (
             <SettingsPanelSkeleton />

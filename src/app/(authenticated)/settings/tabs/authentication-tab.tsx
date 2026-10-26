@@ -65,6 +65,8 @@ interface AuthenticationTabProps {
   onCreateCredentialsAndEnable: () => void;
   /** Re-reads the auth info after an SSO change (see SsoSection). */
   onAuthSettingsChanged: () => void;
+  /** The SSO and API key sections' opening reads (see `preloaded-reads.ts`). */
+  readSectionData?: (path: string) => Promise<Response>;
 }
 
 export function AuthenticationTab({
@@ -90,6 +92,7 @@ export function AuthenticationTab({
   onPlexLink,
   onCreateCredentialsAndEnable,
   onAuthSettingsChanged,
+  readSectionData,
 }: AuthenticationTabProps) {
   return (
     <div className="space-y-6">
@@ -324,11 +327,12 @@ export function AuthenticationTab({
       </SettingsSection>
 
       {/* SSO (OIDC + Forward Auth) */}
-      <SsoSection onChanged={onAuthSettingsChanged} />
+      <SsoSection onChanged={onAuthSettingsChanged} read={readSectionData} />
 
       {/* API keys for the public /api/v1 API */}
       <ApiKeysSection
         confirmsWithPassword={!!authInfo?.hasPassword && !!authInfo?.passwordSignInEnabled}
+        read={readSectionData}
       />
 
       {/* Create Credentials Dialog -- shown when enabling local auth without existing credentials */}
