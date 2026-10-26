@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { ResizeHandle } from "@/components/resize-handle";
 import { VerticalResizeHandle } from "@/components/vertical-resize-handle";
 import { useIsMobile } from "@/hooks/use-is-mobile";
+import { dashboardCardStyle, StaticDashboardCard } from "@/components/dashboard-card-cell";
 
 interface SortableCardProps {
   id: string;
@@ -52,16 +53,13 @@ export function SortableCard({
   const displayHeight = previewHeight ?? heightPx;
 
   // On mobile (single-column grid), don't apply gridColumn span
-  const gridStyle: React.CSSProperties = {
-    ...(isMobile ? {} : { gridColumn: `span ${displaySize}` }),
-    ...(displayHeight != null ? { height: displayHeight } : {}),
-  };
+  const gridStyle = dashboardCardStyle(displaySize, displayHeight, isMobile);
 
   if (!editMode) {
     return (
-      <div style={gridStyle} className={`col-span-full md:col-auto${displayHeight != null ? " flex flex-col" : ""}`}>
+      <StaticDashboardCard size={displaySize} heightPx={displayHeight}>
         {children}
-      </div>
+      </StaticDashboardCard>
     );
   }
 
