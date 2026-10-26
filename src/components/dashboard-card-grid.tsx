@@ -17,8 +17,8 @@ import {
   type CardEntry,
   type CustomCardConfig,
 } from "@/lib/dashboard/card-registry";
-import { ChartCardSkeleton } from "@/components/skeletons";
 import { lazyComponent } from "@/components/lazy-component";
+import { CustomCardSlot } from "@/components/dashboard/custom-card-slot";
 import { formatChannels } from "@/lib/format";
 
 /** What the grid draws while the edit-mode grid's code loads: the cards as they were. */
@@ -54,14 +54,6 @@ function cardLimits(card: CardEntry): { minSize: number; maxSize: number } {
   const def = isCustomCardId(card.id) ? CUSTOM_CARD_DEFINITION : getCardDefinition(card.id);
   return { minSize: def?.minSize ?? 2, maxSize: def?.maxSize ?? 12 };
 }
-
-// Loaded on demand: it is the only dashboard card built on recharts (~500 KB
-// of script), and most dashboards have no custom card at all, so importing it
-// here put the whole chart library on the landing page for nothing.
-const CustomChartCard = lazyComponent(
-  () => import("@/components/custom-chart-card").then((m) => m.CustomChartCard),
-  ChartCardSkeleton,
-);
 
 interface Stats {
   movieCount: number;
@@ -183,7 +175,7 @@ export function DashboardCardGrid({
   function renderCard(cardId: string, config?: CustomCardConfig) {
     if (isCustomCardId(cardId) && config) {
       return (
-        <CustomChartCard
+        <CustomCardSlot
           config={config}
           filterType={filterType}
           lockedFilterType={lockedFilterType}

@@ -312,11 +312,14 @@ test.describe("dashboard refresh", () => {
       music: [],
     };
     restoreLayout = await storeDashboardLayout(layout);
+    // Every custom card's data comes in one batch request; this card's entry
+    // is the timeline binned by year.
     const cardTypes: (string | null)[] = [];
     page.on("request", (req) => {
-      const url = new URL(req.url());
-      if (url.pathname === "/api/media/stats/timeline" && url.searchParams.get("bin") === "year") {
-        cardTypes.push(url.searchParams.get("type"));
+      if (new URL(req.url()).pathname !== "/api/media/stats/custom-batch") return;
+      const { cards } = req.postDataJSON() as { cards: { kind: string; bin?: string; type?: string }[] };
+      for (const card of cards) {
+        if (card.kind === "timeline" && card.bin === "year") cardTypes.push(card.type ?? null);
       }
     });
 
