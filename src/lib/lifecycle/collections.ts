@@ -3,7 +3,7 @@ import { PlexClient } from "@/lib/plex/client";
 import { describePlexError } from "@/lib/plex/errors";
 import { logger } from "@/lib/logger";
 import { markSelfWrites } from "@/lib/media-server/realtime/self-writes";
-import { mapWithConcurrency } from "@/lib/integrations/concurrency";
+import { mapWithConcurrency } from "@/lib/concurrency";
 import { CollectionSyncCache, type PlexCollectionRow } from "@/lib/lifecycle/collection-sync-cache";
 
 /** A saved, reusable Plex collection definition. */

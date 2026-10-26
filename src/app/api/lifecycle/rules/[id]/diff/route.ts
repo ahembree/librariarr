@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
+import { jsonResponse } from "@/lib/api/json-response";
 import { prisma } from "@/lib/db";
 import { findExceptedItemIds } from "@/lib/lifecycle/exception-guard";
 import { copyRank, crossServerCopyKeys } from "@/lib/lifecycle/cross-server-copies";
@@ -311,7 +312,7 @@ export async function POST(
     );
   }
 
-  return NextResponse.json({
+  return jsonResponse(request, {
     added,
     removed,
     retained,

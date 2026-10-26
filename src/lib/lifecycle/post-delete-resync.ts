@@ -13,6 +13,8 @@ export const POST_DELETE_SYNC_TRIGGER = "lifecycle execution: re-sync after dest
  * applies itself (it answers "fell-back" past it), so a set this records as
  * small is one the incremental sync accepts.
  */
+// Repeated rather than imported so a test mocking the incremental sync need
+// not supply it; `tests/unit/lifecycle/post-delete-limit.test.ts` pins the two.
 export const POST_DELETE_INCREMENTAL_LIMIT = 100;
 
 export interface DeletedActionItem extends DeletedItem {

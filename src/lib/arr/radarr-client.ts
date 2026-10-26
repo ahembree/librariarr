@@ -1,5 +1,5 @@
 import { ArrClientBase } from "@/lib/arr/arr-client-base";
-import { mapWithConcurrency } from "@/lib/integrations/concurrency";
+import { mapWithConcurrency } from "@/lib/concurrency";
 
 export interface RadarrMovie {
   id: number;

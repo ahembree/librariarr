@@ -5,7 +5,7 @@ import { createHash } from "crypto";
 import sharp from "sharp";
 import { logger } from "@/lib/logger";
 import { ALL_CACHE_WIDTHS, CACHE_WIDTH_DEFAULT } from "@/lib/image-url";
-import { mapWithConcurrency } from "@/lib/media-server/concurrency";
+import { mapWithConcurrency } from "@/lib/concurrency";
 
 // Runtime data directory: env-resolved and outside the project (under /config in
 // the container), so Turbopack's build-time tracer cannot resolve it statically and

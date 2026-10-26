@@ -101,12 +101,12 @@ describe("RuleSetGroupCard", () => {
 });
 
 describe("useLifecycleExceptions", () => {
-  const list = (ids: string[]) => ({ ok: true, json: async () => ({ exceptions: ids.map((id) => ({ mediaItem: { id } })) }) });
+  const list = (ids: string[]) => ({ ok: true, json: async () => ({ mediaItemIds: ids }) });
 
   it("reads the excepted ids, null when the listing fails", async () => {
     fetchMock.mockResolvedValueOnce(list(["a", "b"]));
     expect(await fetchExceptedItemIds()).toEqual(new Set(["a", "b"]));
-    expect(fetchMock).toHaveBeenCalledWith(LIFECYCLE_EXCEPTIONS_URL);
+    expect(fetchMock).toHaveBeenCalledWith(`${LIFECYCLE_EXCEPTIONS_URL}?idsOnly=1`);
     fetchMock.mockResolvedValueOnce({ ok: false, json: async () => ({}) });
     expect(await fetchExceptedItemIds()).toBeNull();
     fetchMock.mockRejectedValueOnce(new Error("offline"));

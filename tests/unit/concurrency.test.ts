@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mapWithConcurrency, settleWithConcurrency } from "@/lib/media-server/concurrency";
+import { mapWithConcurrency, settleWithConcurrency } from "@/lib/concurrency";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;

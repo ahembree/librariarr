@@ -11,10 +11,9 @@ export interface ServerInfo {
   enabled: boolean;
 }
 
-// TODO(fields=basic): switch to `/api/servers?fields=basic` once the route
-// offers it — the pickers read only these four fields, and the full answer
-// carries every server's libraries and latest sync job.
-export const SERVERS_URL = "/api/servers";
+// The pickers read only these four fields; the full answer carries every
+// server's libraries, item counts and latest sync job.
+export const SERVERS_URL = "/api/servers?fields=basic";
 
 const NO_SERVERS: ServerInfo[] = [];
 

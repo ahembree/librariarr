@@ -22,7 +22,7 @@ vi.mock("@/hooks/use-realtime", () => ({
 let useServers: typeof import("@/hooks/use-servers").useServers;
 
 const fetchMock = vi.fn();
-const serverCalls = () => fetchMock.mock.calls.filter(([url]) => url === "/api/servers").length;
+const serverCalls = () => fetchMock.mock.calls.filter(([url]) => url === "/api/servers?fields=basic").length;
 
 /** An event as the stream delivers it: the pre-handler, then the subscriber. */
 function emit(type: string) {
@@ -62,7 +62,7 @@ describe("useServers", () => {
     const { result } = renderHook(() => useServers());
     expect(result.current.selectedServerId).toBe("all");
     await waitFor(() => expect(result.current.servers).toHaveLength(2));
-    expect(fetchMock).toHaveBeenCalledWith("/api/servers");
+    expect(fetchMock).toHaveBeenCalledWith("/api/servers?fields=basic");
     expect(result.current.servers).toEqual([
       { id: "1", name: "Plex", type: "PLEX", enabled: true },
       { id: "2", name: "Jelly", type: "JELLYFIN", enabled: false },

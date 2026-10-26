@@ -26,7 +26,7 @@ import type {
 } from "@/lib/jellyfin/types";
 import { logger } from "@/lib/logger";
 import { isPrivateAddress } from "@/lib/media-server/local-address";
-import { mapWithConcurrency } from "@/lib/media-server/concurrency";
+import { mapWithConcurrency } from "@/lib/concurrency";
 import { normalizeResolutionFromDimensions } from "@/lib/resolution";
 
 /**

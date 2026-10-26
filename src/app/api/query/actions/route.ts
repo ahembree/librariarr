@@ -274,7 +274,7 @@ export async function POST(request: NextRequest) {
           endQueryExecution(userId);
         }
       },
-      { signal: request.signal },
+      { request },
     );
   } catch (err) {
     // Only reachable if the stream itself failed to start — the run's own

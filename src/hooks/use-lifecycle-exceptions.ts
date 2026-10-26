@@ -4,20 +4,18 @@ import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { useSetState } from "@/hooks/use-set-state";
 
-// TODO(idsOnly): ask `/api/lifecycle/exceptions?idsOnly=1` once the route
-// offers it — these readers want the ids alone, and the full listing carries
-// every exception's item record and reason.
 export const LIFECYCLE_EXCEPTIONS_URL = "/api/lifecycle/exceptions";
+// The readers want the ids alone; the full listing carries every exception's
+// item record and reason.
+const EXCEPTED_IDS_URL = `${LIFECYCLE_EXCEPTIONS_URL}?idsOnly=1`;
 
 /** Every excepted media item id, or null when the listing could not be read. */
 export async function fetchExceptedItemIds(): Promise<Set<string> | null> {
   try {
-    const response = await fetch(LIFECYCLE_EXCEPTIONS_URL);
+    const response = await fetch(EXCEPTED_IDS_URL);
     if (!response.ok) return null;
-    const data = (await response.json()) as { exceptions?: { mediaItem?: { id?: string } | null }[] };
-    const ids = new Set<string>();
-    for (const e of data.exceptions ?? []) if (e.mediaItem?.id) ids.add(e.mediaItem.id);
-    return ids;
+    const data = (await response.json()) as { mediaItemIds?: string[] };
+    return new Set(data.mediaItemIds ?? []);
   } catch {
     return null;
   }

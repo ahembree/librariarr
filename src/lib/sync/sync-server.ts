@@ -24,7 +24,7 @@ import { syncWatchHistory } from "@/lib/sync/sync-watch-history";
 import { loadLibraryWatchCountsFromHistory, reconcileWatchStateFromHistory } from "@/lib/sync/watch-reconcile";
 import { mbidFromGuids, withArtistMbid } from "@/lib/media/musicbrainz";
 import { writeArtistMbids } from "@/lib/sync/artist-mbid";
-import { mapWithConcurrency, settleWithConcurrency } from "@/lib/media-server/concurrency";
+import { mapWithConcurrency, settleWithConcurrency } from "@/lib/concurrency";
 import { syncCompletedMeta, type SyncLibraryType } from "@/lib/sync/sync-completed-meta";
 
 // --- Filename-based detection using Trash-Guides naming conventions ---

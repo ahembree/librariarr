@@ -12,7 +12,7 @@ import { invalidateMediaCaches } from "@/lib/cache/invalidate";
 import { invalidateCachedUrls } from "@/lib/image-cache/image-cache";
 import { eventBus } from "@/lib/events/event-bus";
 import { mbidFromGuids, withArtistMbid } from "@/lib/media/musicbrainz";
-import { mapWithConcurrency, settleWithConcurrency } from "@/lib/media-server/concurrency";
+import { mapWithConcurrency, settleWithConcurrency } from "@/lib/concurrency";
 import { syncCompletedMeta, type SyncLibraryType } from "@/lib/sync/sync-completed-meta";
 
 /**
@@ -69,7 +69,7 @@ interface IncrementalSyncResult {
 
 // Above this many changed items, listing the library is cheaper than fetching
 // each item on its own — the caller runs a full sync instead.
-const MAX_INCREMENTAL_ITEMS = 100;
+export const MAX_INCREMENTAL_ITEMS = 100;
 
 interface ServerRow {
   id: string;

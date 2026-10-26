@@ -140,5 +140,5 @@ export async function POST(request: NextRequest) {
       });
 
     return { items: itemsWithCriteria, count: itemsWithCriteria.length };
-  }, { signal: request.signal });
+  }, { request });
 }

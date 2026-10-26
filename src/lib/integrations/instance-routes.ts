@@ -8,6 +8,7 @@ import { jsonResponse } from "@/lib/api/json-response";
 import { MASKED_VALUE, sanitize, sanitizeErrorDetail } from "@/lib/api/sanitize";
 import { refuseStoredKeyToNewUrl } from "@/lib/integrations/stored-key-guard";
 import { detachDeletedArrInstance } from "@/lib/arr/detach-instance";
+import { invalidateArrMetadataCache } from "@/lib/lifecycle/fetch-arr-metadata";
 import { RadarrClient } from "@/lib/arr/radarr-client";
 import { SonarrClient } from "@/lib/arr/sonarr-client";
 import { LidarrClient } from "@/lib/arr/lidarr-client";
@@ -231,10 +232,9 @@ export function listInstances(
  */
 function instanceChanged(config: IntegrationConfig, id: string): void {
   invalidateInstanceMetadata(config.type, id);
-  // TODO(lifecycle Arr metadata cache): agent B is adding an
-  // `invalidateArrMetadataCache()` for the lifecycle/query Arr metadata
-  // fetches; an Arr instance's edit or delete should call it here (Radarr,
-  // Sonarr and Lidarr only — `config.detachOnDelete` marks them).
+  // The rule editor's preview, diff and Test Media read Arr data through a
+  // short cache; an edited or deleted instance must not answer from it.
+  if (config.detachOnDelete) invalidateArrMetadataCache();
   config.afterChange?.();
 }
 

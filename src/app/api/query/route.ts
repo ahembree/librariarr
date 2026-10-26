@@ -31,6 +31,6 @@ export async function POST(request: Request) {
         data.limit,
         emit,
       ),
-    { signal: request.signal },
+    { request },
   );
 }
