@@ -493,6 +493,96 @@ describe("preroll edge cases", () => {
   });
 });
 
+describe("one session poll per server per tick", () => {
+  const maintenanceOn = {
+    maintenanceMode: true,
+    maintenanceDelay: 0,
+    maintenanceMessage: "Maintenance",
+    maintenanceExcludedUsers: ["vip"],
+    transcodeManagerEnabled: false,
+    transcodeManagerDelay: null,
+    transcodeManagerMessage: "",
+    transcodeManagerCriteria: null,
+    transcodeManagerExcludedUsers: [],
+    transcodeManagerExemptHardware: null,
+    userId: "u1",
+    user: { mediaServers: [SERVER] },
+  };
+
+  it("asks each server for its sessions once, however many loops read them", async () => {
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue([maintenanceOn] as never);
+    setBlackouts([
+      blackout({ id: "b1", excludedUsers: [] }),
+      blackout({ id: "b2", action: "warn_then_terminate", delay: 60, excludedUsers: [] }),
+      blackout({ id: "b3", action: "block_new_only", excludedUsers: [] }),
+    ]);
+    const c = client({ getSessions: vi.fn().mockResolvedValue([session("s1", "vip")]) });
+
+    await runEnforcerTick();
+
+    expect(c.getSessions).toHaveBeenCalledTimes(1);
+    expect(createMediaServerClient).toHaveBeenCalledTimes(1);
+    // Maintenance spares the VIP; the first blackout stops the stream.
+    expect(c.terminateSession).toHaveBeenCalledExactlyOnceWith("s1", DEFAULT_BLACKOUT_MSG);
+  });
+
+  it("never stops a session twice in one tick, or lets a later loop count it", async () => {
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue([maintenanceOn] as never);
+    setBlackouts([
+      blackout({ id: "b1", excludedUsers: [] }),
+      blackout({ id: "b2", action: "block_new_only", excludedUsers: [] }),
+    ]);
+    const c = client({ getSessions: vi.fn().mockResolvedValue([session("s1"), session("s2", "vip")]) });
+
+    await runEnforcerTick();
+
+    // s1: stopped by maintenance and by nothing else; s2: by the first blackout.
+    expect(c.terminateSession.mock.calls).toEqual([
+      ["s1", "Maintenance"],
+      ["s2", DEFAULT_BLACKOUT_MSG],
+    ]);
+    expect(vi.mocked(logger.error)).not.toHaveBeenCalled();
+
+    // The block_new_only snapshot taken that tick grandfathered neither:
+    // both were already stopped, so if s1's device comes back with the same
+    // session and title, it is a new stream.
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue([]);
+    setBlackouts([blackout({ id: "b2", action: "block_new_only", excludedUsers: [] })]);
+    c.terminateSession.mockClear();
+    await runEnforcerTick();
+    expect(c.terminateSession.mock.calls).toEqual([
+      ["s1", DEFAULT_BLACKOUT_MSG],
+      ["s2", DEFAULT_BLACKOUT_MSG],
+    ]);
+  });
+
+  it("treats a server that could not be asked as unreachable in every loop of the tick", async () => {
+    vi.mocked(prisma.appSettings.findMany).mockResolvedValue([maintenanceOn] as never);
+    setBlackouts([blackout({ id: "b1", excludedUsers: [] })]);
+    const c = client({ getSessions: vi.fn().mockRejectedValue(new Error("ECONNREFUSED")) });
+
+    await runEnforcerTick();
+
+    expect(c.getSessions).toHaveBeenCalledTimes(1);
+    expect(c.terminateSession).not.toHaveBeenCalled();
+    expect(vi.mocked(logger.debug)).toHaveBeenCalledWith(
+      "Enforcer",
+      'Blackout "Night": could not reach server',
+      { error: "Error: ECONNREFUSED" },
+    );
+  });
+
+  it("polls afresh on the next tick", async () => {
+    setBlackouts([blackout({ id: "b1", excludedUsers: ["bob"] })]);
+    const c = client({ getSessions: vi.fn().mockResolvedValue([session("s1")]) });
+
+    await runEnforcerTick();
+    await runEnforcerTick();
+
+    expect(c.getSessions).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe("initializers", () => {
   it("start one 30s interval each, only once", async () => {
     vi.useFakeTimers();
