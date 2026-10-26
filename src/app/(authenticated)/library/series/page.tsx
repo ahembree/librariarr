@@ -297,7 +297,7 @@ export default function SeriesPage() {
       <LibraryTabs tabs={SERIES_TABS} active="/library/series" />
 
       <MediaFilters
-        key={filterPanel.panelKey}
+        resetKey={filterPanel.resetKey}
         onFilterChange={onFilterChange}
         externalFilters={filterPanel.externalFilters}
         mediaType="SERIES"

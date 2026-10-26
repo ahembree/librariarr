@@ -190,7 +190,7 @@ export default function AllEpisodesPage() {
       <LibraryTabs tabs={SERIES_TABS} active="/library/series/episodes" />
 
       <MediaFilters
-        key={filterPanel.panelKey}
+        resetKey={filterPanel.resetKey}
         onFilterChange={onFilterChange}
         mediaType="SERIES"
         prefix={

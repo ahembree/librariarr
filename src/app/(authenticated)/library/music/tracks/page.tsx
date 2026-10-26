@@ -167,7 +167,7 @@ export default function AllTracksPage() {
       <LibraryTabs tabs={MUSIC_TABS} active="/library/music/tracks" />
 
       <MediaFilters
-        key={filterPanel.panelKey}
+        resetKey={filterPanel.resetKey}
         onFilterChange={onFilterChange}
         mediaType="MUSIC"
         prefix={
