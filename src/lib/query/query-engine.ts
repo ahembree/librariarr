@@ -2,13 +2,8 @@ import { prisma } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
 import type { QueryRule, QueryGroup, QueryDefinition, LifecycleRuleCondition } from "./types";
 import { GENRE_FIELD, LABELS_FIELD, COUNTRY_FIELD, EXTERNAL_ID_FIELD, ARR_QUERY_FIELDS, SEERR_QUERY_FIELDS, isCrossSystemQueryField, hasArrRules, hasSeerrRules, hasCrossSystemRules, hasSeriesAggregateRules, hasWatchedByUserRules, hasResolutionRules, hasArrayFieldRules, hasStreamCountRules } from "./types";
-import {
-  isStreamQueryField, isStreamQueryGroup, isStreamQueryComputedField,
-  streamQueryFieldToColumn, STREAM_TYPE_INT_MAP,
-} from "@/lib/rules/types";
+import { isStreamQueryField, isStreamQueryGroup } from "@/lib/rules/types";
 import { normalizeResolutionLabel } from "@/lib/resolution";
-import type { StreamQueryField } from "@/lib/rules/types";
-import { detectStreamAudioProfile, detectStreamDynamicRange } from "@/lib/rules/stream-detection";
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
 import { evaluateQueryArrRule } from "./arr-filter";
 import { evaluateQuerySeerrRule } from "./seerr-filter";
@@ -35,6 +30,7 @@ import {
 } from "@/lib/conditions/where-builder";
 import { fetchCrossSystemData, foldCrossSystemData } from "@/lib/conditions/cross-system-data";
 import { hasStreamQueryInMemoryRules } from "@/lib/conditions/stream-query-where";
+import { evaluateStreamQueryGroupInMemory } from "@/lib/conditions/stream-query-eval";
 import { buildGroupConditions, buildGroupConditionsPreFilter } from "@/lib/conditions/group-composition";
 import { pushDownGroupNegation } from "@/lib/conditions/negation";
 import { nullValueResult } from "@/lib/conditions/helpers";
@@ -1406,164 +1402,6 @@ function evaluateQueryRuleInMemory(
     }
   }
   return negate ? !result : result;
-}
-
-/** Evaluate a single stream query rule against a single stream record */
-function evaluateStreamQueryRuleAgainstStream(
-  rule: QueryRule,
-  stream: Record<string, unknown>,
-): boolean {
-  // Safety: unconfigured contains/notContains matches nothing (ignoring negate).
-  if (isUnconfiguredContainsRule(rule.operator, rule.value)) return false;
-  // Safety: unknown operator or wrong-type combo → match nothing (bypass negate).
-  if (!isOperatorApplicable(rule.operator, rule.field)) return false;
-  // Safety: malformed value → match nothing.
-  if (!isValueValidForRule(rule.operator, rule.value, rule.field)) return false;
-  const field = rule.field as StreamQueryField;
-  const { operator, value, negate } = rule;
-
-  // Get the value from the stream
-  let streamValue: unknown;
-  if (field === "sqAudioProfile") {
-    streamValue = detectStreamAudioProfile(stream as Record<string, string | null>);
-  } else if (field === "sqDynamicRange") {
-    streamValue = detectStreamDynamicRange(stream as Record<string, string | null>);
-  } else {
-    const column = streamQueryFieldToColumn(field);
-    if (!column) return false;
-    streamValue = stream[column];
-  }
-
-  // Boolean fields
-  if (field === "sqIsDefault" || field === "sqForced") {
-    if (operator === "isNull" || operator === "isNotNull") {
-      const result = operator === "isNull" ? streamValue == null : streamValue != null;
-      return negate ? !result : result;
-    }
-    const boolVal = String(value).toLowerCase() === "true";
-    const actual = !!streamValue;
-    let result: boolean;
-    switch (operator) {
-      case "equals": result = actual === boolVal; break;
-      case "notEquals": result = actual !== boolVal; break;
-      default: return false;
-    }
-    return negate ? !result : result;
-  }
-
-  // Numeric fields
-  if (["sqChannels", "sqBitrate", "sqBitDepth", "sqWidth", "sqHeight", "sqFrameRate", "sqSamplingRate"].includes(field)) {
-    const numValue = Number(value);
-    const actual = streamValue != null ? Number(streamValue) : null;
-    let result: boolean;
-    switch (operator) {
-      case "isNull": result = actual == null; break;
-      case "isNotNull": result = actual != null; break;
-      case "between": {
-        if (actual == null) return negate ? true : false;
-        const [minStr, maxStr] = String(value).split(",");
-        result = actual >= Number(minStr) && actual <= Number(maxStr);
-        break;
-      }
-      default: {
-        if (actual == null) return negate ? true : false;
-        result = compareNumeric(actual, operator, numValue);
-      }
-    }
-    return negate ? !result : result;
-  }
-
-  // Text fields (including computed)
-  const strActual = streamValue != null ? String(streamValue).toLowerCase() : "";
-  const strValue = String(value).toLowerCase();
-  const streamEnumerable = isEnumerableField(field);
-
-  let result: boolean;
-  switch (operator) {
-    case "isNull": result = streamValue == null || strActual === ""; break;
-    case "isNotNull": result = streamValue != null && strActual !== ""; break;
-    case "equals": result = strActual === strValue; break;
-    case "notEquals": result = strActual !== strValue; break;
-    case "contains": {
-      if (streamEnumerable) {
-        const parts = strValue.split("|").filter(Boolean);
-        result = parts.length > 0
-          ? parts.some((p) => strActual === p)
-          : strActual === strValue;
-      } else {
-        result = strActual.includes(strValue);
-      }
-      break;
-    }
-    case "notContains": {
-      if (streamEnumerable) {
-        const parts = strValue.split("|").filter(Boolean);
-        result = parts.length > 0
-          ? !parts.some((p) => strActual === p)
-          : strActual !== strValue;
-      } else {
-        result = !strActual.includes(strValue);
-      }
-      break;
-    }
-    case "matchesWildcard": {
-      const re = wildcardToRegex(strValue);
-      result = re.test(strActual);
-      break;
-    }
-    case "notMatchesWildcard": {
-      const re = wildcardToRegex(strValue);
-      result = !re.test(strActual);
-      break;
-    }
-    default: return false;
-  }
-  return negate ? !result : result;
-}
-
-/**
- * Evaluate a stream query group in memory: check if ANY stream of the
- * matching type satisfies ALL active rules (existential semantics).
- */
-function evaluateStreamQueryGroupInMemory(
-  group: QueryGroup,
-  item: Record<string, unknown>,
-): boolean {
-  if (!group.streamQuery) return false;
-  const streamTypeInt = STREAM_TYPE_INT_MAP[group.streamQuery.streamType as keyof typeof STREAM_TYPE_INT_MAP];
-  const streams = (item.streams as Array<Record<string, unknown>>) ?? [];
-  const matchingStreams = streams.filter((s) => s.streamType === streamTypeInt);
-
-  const activeRules = group.rules.filter((r) => r.enabled !== false);
-  if (activeRules.length === 0) return false;
-
-  // Safety: an unconfigured contains/notContains rule, an operator that
-  // doesn't apply to the field type, or a malformed value makes the entire
-  // group unsatisfiable. Without this guard, quantifier="none" would be
-  // vacuously true ("no stream matches false") and sweep the library.
-  if (activeRules.some((rule) =>
-    isUnconfiguredContainsRule(rule.operator, rule.value) ||
-    !isOperatorApplicable(rule.operator, rule.field) ||
-    !isValueValidForRule(rule.operator, rule.value, rule.field) ||
-    // Misplaced field (no stream column, not computed) — same vacuous-"none"
-    // hazard; mirrors buildStreamQueryClause returning UNSATISFIABLE_WHERE.
-    (!isStreamQueryComputedField(rule.field) && !streamQueryFieldToColumn(rule.field as StreamQueryField))
-  )) {
-    return false;
-  }
-
-  const quantifier = group.streamQuery.quantifier ?? "any";
-  const streamMatches = (stream: Record<string, unknown>) =>
-    activeRules.every((rule) => evaluateStreamQueryRuleAgainstStream(rule, stream));
-
-  if (quantifier === "none") {
-    return !matchingStreams.some(streamMatches);
-  }
-  if (quantifier === "all") {
-    return matchingStreams.length > 0 && matchingStreams.every(streamMatches);
-  }
-  // Default: "any" (EXISTS)
-  return matchingStreams.some(streamMatches);
 }
 
 /** Recursively evaluate a query group in memory */
