@@ -31,7 +31,6 @@ import {
   Sparkles,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { MASKED_VALUE } from "@/lib/api/sanitize";
 import { SettingsPanelSkeleton, SettingsSkeleton } from "@/components/skeletons";
 import { isSyncRequestSettled, type PendingSyncRequest } from "@/lib/sync/sync-request";
 import { readUrlHash, replaceUrlHash, subscribeToUrlHash } from "@/lib/url-hash";
@@ -52,8 +51,6 @@ import type { AiProvider } from "./tabs/ai-tab";
 // ─── Shared types ───
 import type {
   MediaServer,
-  ArrInstance,
-  SeerrInstance,
   TracearrInstance,
   TracearrImportStatus,
   TracearrServerListState,
@@ -69,7 +66,17 @@ import type {
   ReleaseNote,
 } from "./types";
 import { PRESET_VALUES } from "./types";
+import { INTEGRATION_TYPES, type IntegrationInstance, type IntegrationType } from "./integration-instances";
 import { newPasswordProblem } from "@/lib/auth/password-rules";
+
+type IntegrationInstanceLists = Record<IntegrationType, IntegrationInstance[]>;
+const NO_INTEGRATION_INSTANCES: IntegrationInstanceLists = {
+  sonarr: [],
+  radarr: [],
+  lidarr: [],
+  seerr: [],
+  tracearr: [],
+};
 
 /** Stable empty reference — see `visibleTracearrImportStatus`. */
 const NO_TRACEARR_IMPORT_STATUS: TracearrImportStatus[] = [];
@@ -194,6 +201,10 @@ export default function SettingsPage() {
   // the skeleton the server did; a client-side navigation skips straight past.
   const hydrated = useSyncExternalStore(subscribeNothing, () => true, () => false);
   const [servers, setServers] = useState<MediaServer[]>([]);
+  // Whether the Integrations tab has been open (see its TabsContent). Set
+  // during render, the way React derives state from a changed value.
+  const [integrationsOpened, setIntegrationsOpened] = useState(false);
+  if (activeTab === "integrations" && !integrationsOpened) setIntegrationsOpened(true);
   // Tabs whose data has loaded — each tab renders once its own requests are in.
   const [loadedTabs, setLoadedTabs] = useState<ReadonlySet<SettingsTab>>(() => new Set());
   // The manual sync this page last requested, until its own run ends — see
@@ -303,40 +314,9 @@ export default function SettingsPage() {
   const [customCron, setCustomCron] = useState("");
   const [cronError, setCronError] = useState("");
 
-  // Sonarr instances
-  const [sonarrInstances, setSonarrInstances] = useState<ArrInstance[]>([]);
-  const [showSonarrForm, setShowSonarrForm] = useState(false);
-  const [sonarrForm, setSonarrForm] = useState({ name: "", url: "", apiKey: "", externalUrl: "" });
-  const [sonarrSaving, setSonarrSaving] = useState(false);
-  const [sonarrError, setSonarrError] = useState("");
-
-  // Radarr instances
-  const [radarrInstances, setRadarrInstances] = useState<ArrInstance[]>([]);
-  const [showRadarrForm, setShowRadarrForm] = useState(false);
-  const [radarrForm, setRadarrForm] = useState({ name: "", url: "", apiKey: "", externalUrl: "" });
-  const [radarrSaving, setRadarrSaving] = useState(false);
-  const [radarrError, setRadarrError] = useState("");
-
-  // Lidarr instances
-  const [lidarrInstances, setLidarrInstances] = useState<ArrInstance[]>([]);
-  const [showLidarrForm, setShowLidarrForm] = useState(false);
-  const [lidarrForm, setLidarrForm] = useState({ name: "", url: "", apiKey: "", externalUrl: "" });
-  const [lidarrSaving, setLidarrSaving] = useState(false);
-  const [lidarrError, setLidarrError] = useState("");
-
-  // Seerr instances
-  const [seerrInstances, setSeerrInstances] = useState<SeerrInstance[]>([]);
-  const [showSeerrForm, setShowSeerrForm] = useState(false);
-  const [seerrForm, setSeerrForm] = useState({ name: "", url: "", apiKey: "", externalUrl: "" });
-  const [seerrSaving, setSeerrSaving] = useState(false);
-  const [seerrError, setSeerrError] = useState("");
-
-  // Tracearr instances
-  const [tracearrInstances, setTracearrInstances] = useState<TracearrInstance[]>([]);
-  const [showTracearrForm, setShowTracearrForm] = useState(false);
-  const [tracearrForm, setTracearrForm] = useState({ name: "", url: "", apiKey: "" });
-  const [tracearrSaving, setTracearrSaving] = useState(false);
-  const [tracearrError, setTracearrError] = useState("");
+  // Each integration type's instances (the forms live in the Integrations tab)
+  const [integrationInstances, setIntegrationInstances] = useState<IntegrationInstanceLists>(NO_INTEGRATION_INSTANCES);
+  const tracearrInstances: TracearrInstance[] = integrationInstances.tracearr;
 
   // System info
   const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null);
@@ -419,16 +399,6 @@ export default function SettingsPage() {
   const [savingRealtime, setSavingRealtime] = useState(false);
   const [realtimeServers, setRealtimeServers] = useState<RealtimeServerStatus[]>([]);
 
-  // Connection test state (add form)
-  const [sonarrTesting, setSonarrTesting] = useState(false);
-  const [sonarrTestResult, setSonarrTestResult] = useState<TestResult | null>(null);
-  const [radarrTesting, setRadarrTesting] = useState(false);
-  const [radarrTestResult, setRadarrTestResult] = useState<TestResult | null>(null);
-  const [lidarrTesting, setLidarrTesting] = useState(false);
-  const [lidarrTestResult, setLidarrTestResult] = useState<TestResult | null>(null);
-  const [seerrTesting, setSeerrTesting] = useState(false);
-  const [seerrTestResult, setSeerrTestResult] = useState<TestResult | null>(null);
-
   // Schedule info (next run times)
   const [scheduleInfo, setScheduleInfo] = useState<ScheduleInfo | null>(null);
 
@@ -450,46 +420,6 @@ export default function SettingsPage() {
   const [aiSaving, setAiSaving] = useState(false);
   const [aiTesting, setAiTesting] = useState(false);
   const [aiTestResult, setAiTestResult] = useState<TestResult | null>(null);
-
-  // Sonarr edit state
-  const [editingSonarrId, setEditingSonarrId] = useState<string | null>(null);
-  const [editSonarrForm, setEditSonarrForm] = useState({ name: "", url: "", apiKey: "", externalUrl: "" });
-  const [editSonarrSaving, setEditSonarrSaving] = useState(false);
-  const [editSonarrError, setEditSonarrError] = useState("");
-  const [editSonarrTesting, setEditSonarrTesting] = useState(false);
-  const [editSonarrTestResult, setEditSonarrTestResult] = useState<TestResult | null>(null);
-
-  // Radarr edit state
-  const [editingRadarrId, setEditingRadarrId] = useState<string | null>(null);
-  const [editRadarrForm, setEditRadarrForm] = useState({ name: "", url: "", apiKey: "", externalUrl: "" });
-  const [editRadarrSaving, setEditRadarrSaving] = useState(false);
-  const [editRadarrError, setEditRadarrError] = useState("");
-  const [editRadarrTesting, setEditRadarrTesting] = useState(false);
-  const [editRadarrTestResult, setEditRadarrTestResult] = useState<TestResult | null>(null);
-
-  // Lidarr edit state
-  const [editingLidarrId, setEditingLidarrId] = useState<string | null>(null);
-  const [editLidarrForm, setEditLidarrForm] = useState({ name: "", url: "", apiKey: "", externalUrl: "" });
-  const [editLidarrSaving, setEditLidarrSaving] = useState(false);
-  const [editLidarrError, setEditLidarrError] = useState("");
-  const [editLidarrTesting, setEditLidarrTesting] = useState(false);
-  const [editLidarrTestResult, setEditLidarrTestResult] = useState<TestResult | null>(null);
-
-  // Seerr edit state
-  const [editingSeerrId, setEditingSeerrId] = useState<string | null>(null);
-  const [editSeerrForm, setEditSeerrForm] = useState({ name: "", url: "", apiKey: "", externalUrl: "" });
-  const [editSeerrSaving, setEditSeerrSaving] = useState(false);
-  const [editSeerrError, setEditSeerrError] = useState("");
-  const [editSeerrTesting, setEditSeerrTesting] = useState(false);
-  const [editSeerrTestResult, setEditSeerrTestResult] = useState<TestResult | null>(null);
-
-  // Tracearr edit state
-  const [editingTracearrId, setEditingTracearrId] = useState<string | null>(null);
-  const [editTracearrForm, setEditTracearrForm] = useState({ name: "", url: "", apiKey: "" });
-  const [editTracearrSaving, setEditTracearrSaving] = useState(false);
-  const [editTracearrError, setEditTracearrError] = useState("");
-  const [editTracearrTesting, setEditTracearrTesting] = useState(false);
-  const [editTracearrTestResult, setEditTracearrTestResult] = useState<TestResult | null>(null);
 
   // A URL naming no tab (/settings alone, or an unknown hash) is pointed at
   // the General tab it shows. Read live, not from this render's `activeTab`:
@@ -581,55 +511,25 @@ export default function SettingsPage() {
     }
   }, []);
 
-  const fetchSonarrInstances = useCallback(async () => {
+  const fetchIntegrationInstances = useCallback(async (type: IntegrationType) => {
     try {
-      const response = await bundleOf(bundleRef).get("/api/integrations/sonarr");
+      const response = await bundleOf(bundleRef).get(`/api/integrations/${type}`);
       const data = await response.json();
-      setSonarrInstances(data.instances || []);
+      const instances: IntegrationInstance[] = data.instances || [];
+      setIntegrationInstances((current) => ({ ...current, [type]: instances }));
     } catch (error) {
-      console.error("Failed to fetch Sonarr instances:", error);
+      console.error(`Failed to fetch ${type} instances:`, error);
     }
   }, []);
-
-  const fetchRadarrInstances = useCallback(async () => {
-    try {
-      const response = await bundleOf(bundleRef).get("/api/integrations/radarr");
-      const data = await response.json();
-      setRadarrInstances(data.instances || []);
-    } catch (error) {
-      console.error("Failed to fetch Radarr instances:", error);
-    }
-  }, []);
-
-  const fetchLidarrInstances = useCallback(async () => {
-    try {
-      const response = await bundleOf(bundleRef).get("/api/integrations/lidarr");
-      const data = await response.json();
-      setLidarrInstances(data.instances || []);
-    } catch (error) {
-      console.error("Failed to fetch Lidarr instances:", error);
-    }
-  }, []);
-
-  const fetchSeerrInstances = useCallback(async () => {
-    try {
-      const response = await bundleOf(bundleRef).get("/api/integrations/seerr");
-      const data = await response.json();
-      setSeerrInstances(data.instances || []);
-    } catch (error) {
-      console.error("Failed to fetch Seerr instances:", error);
-    }
-  }, []);
-
-  const fetchTracearrInstances = useCallback(async () => {
-    try {
-      const response = await bundleOf(bundleRef).get("/api/integrations/tracearr");
-      const data = await response.json();
-      setTracearrInstances(data.instances || []);
-    } catch (error) {
-      console.error("Failed to fetch Tracearr instances:", error);
-    }
-  }, []);
+  // One fetcher per type, kept stable: `startOnce` runs each once by identity.
+  const integrationFetchers = useMemo(
+    () =>
+      Object.fromEntries(INTEGRATION_TYPES.map((type) => [type, () => fetchIntegrationInstances(type)])) as Record<
+        IntegrationType,
+        () => Promise<void>
+      >,
+    [fetchIntegrationInstances],
+  );
 
   /**
    * The media servers one Tracearr instance monitors, for the per-server
@@ -987,20 +887,14 @@ export default function SettingsPage() {
         fetchTitlePreference,
       ],
       scheduling: [fetchSettings, fetchLifecycleSchedule, fetchScheduleInfo],
-      servers: [fetchServers, fetchTracearrInstances, fetchAuthInfo],
-      integrations: [
-        fetchSonarrInstances,
-        fetchRadarrInstances,
-        fetchLidarrInstances,
-        fetchSeerrInstances,
-        fetchTracearrInstances,
-      ],
+      servers: [fetchServers, integrationFetchers.tracearr, fetchAuthInfo],
+      integrations: INTEGRATION_TYPES.map((type) => integrationFetchers[type]),
       notifications: [fetchDiscordSettings],
       authentication: [fetchAuthInfo],
       ai: [fetchAiSettings],
       system: [fetchSystemInfo, fetchImageCacheStats],
     }),
-    [fetchServers, fetchSettings, fetchSonarrInstances, fetchRadarrInstances, fetchLidarrInstances, fetchSeerrInstances, fetchTracearrInstances, fetchSystemInfo, fetchAccentColor, fetchChipColors, fetchLogRetention, fetchActionRetention, fetchDeleteCeiling, fetchBackupSettings, fetchLifecycleSchedule, fetchScheduleInfo, fetchDiscordSettings, fetchAiSettings, fetchDedupSetting, fetchRealtimeSetting, fetchRealtimeStatus, fetchImageCacheStats, fetchAuthInfo, fetchTitlePreference],
+    [fetchServers, fetchSettings, integrationFetchers, fetchSystemInfo, fetchAccentColor, fetchChipColors, fetchLogRetention, fetchActionRetention, fetchDeleteCeiling, fetchBackupSettings, fetchLifecycleSchedule, fetchScheduleInfo, fetchDiscordSettings, fetchAiSettings, fetchDedupSetting, fetchRealtimeSetting, fetchRealtimeStatus, fetchImageCacheStats, fetchAuthInfo, fetchTitlePreference],
   );
 
   // A fetcher two tabs share, or a tab opened twice, runs once.
@@ -1501,65 +1395,6 @@ export default function SettingsPage() {
       toast.error("Failed to change watch history source");
     } finally {
       setSavingWatchHistorySource(null);
-    }
-  };
-
-  const toggleArrEnabled = async (type: string, id: string, enabled: boolean) => {
-    try {
-      const res = await fetch(`/api/integrations/${type}/${id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled }),
-      });
-      if (res.ok) {
-        if (type === "sonarr") await fetchSonarrInstances();
-        else if (type === "radarr") await fetchRadarrInstances();
-        else if (type === "lidarr") await fetchLidarrInstances();
-        toast.success(enabled ? "Integration enabled" : "Integration disabled");
-      } else {
-        toast.error("Failed to update integration");
-      }
-    } catch (error) {
-      console.error("Failed to toggle integration enabled:", error);
-      toast.error("Failed to update integration");
-    }
-  };
-
-  const toggleSeerrEnabled = async (id: string, enabled: boolean) => {
-    try {
-      const res = await fetch(`/api/integrations/seerr/${id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled }),
-      });
-      if (res.ok) {
-        await fetchSeerrInstances();
-        toast.success(enabled ? "Seerr enabled" : "Seerr disabled");
-      } else {
-        toast.error("Failed to update Seerr");
-      }
-    } catch (error) {
-      console.error("Failed to toggle Seerr enabled:", error);
-      toast.error("Failed to update Seerr");
-    }
-  };
-
-  const toggleTracearrEnabled = async (id: string, enabled: boolean) => {
-    try {
-      const res = await fetch(`/api/integrations/tracearr/${id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled }),
-      });
-      if (res.ok) {
-        await fetchTracearrInstances();
-        toast.success(enabled ? "Tracearr enabled" : "Tracearr disabled");
-      } else {
-        toast.error("Failed to update Tracearr");
-      }
-    } catch (error) {
-      console.error("Failed to toggle Tracearr enabled:", error);
-      toast.error("Failed to update Tracearr");
     }
   };
 
@@ -2182,509 +2017,6 @@ export default function SettingsPage() {
     }
   };
 
-  // ─── Integration handlers ───
-
-  const addSonarrInstance = async () => {
-    setSonarrSaving(true);
-    setSonarrError("");
-    try {
-      const response = await fetch("/api/integrations/sonarr", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(sonarrForm),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        setSonarrError(integrationSaveError(data, "Failed to add Sonarr instance"));
-        return;
-      }
-      setSonarrForm({ name: "", url: "", apiKey: "", externalUrl: "" });
-      setShowSonarrForm(false);
-      await fetchSonarrInstances();
-      toast.success("Sonarr instance added");
-    } catch (error) {
-      setSonarrError("Failed to add Sonarr instance");
-      console.error(error);
-    } finally {
-      setSonarrSaving(false);
-    }
-  };
-
-  const deleteSonarrInstance = async (id: string) => {
-    try {
-      const res = await fetch(`/api/integrations/sonarr/${id}`, { method: "DELETE" });
-      if (!res.ok) {
-        toast.error("Failed to remove Sonarr instance");
-        return;
-      }
-      toast.success("Sonarr instance removed");
-      await fetchSonarrInstances();
-    } catch {
-      toast.error("Failed to remove Sonarr instance");
-    }
-  };
-
-  const addRadarrInstance = async () => {
-    setRadarrSaving(true);
-    setRadarrError("");
-    try {
-      const response = await fetch("/api/integrations/radarr", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(radarrForm),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        setRadarrError(integrationSaveError(data, "Failed to add Radarr instance"));
-        return;
-      }
-      setRadarrForm({ name: "", url: "", apiKey: "", externalUrl: "" });
-      setShowRadarrForm(false);
-      await fetchRadarrInstances();
-      toast.success("Radarr instance added");
-    } catch (error) {
-      setRadarrError("Failed to add Radarr instance");
-      console.error(error);
-    } finally {
-      setRadarrSaving(false);
-    }
-  };
-
-  const deleteRadarrInstance = async (id: string) => {
-    try {
-      const res = await fetch(`/api/integrations/radarr/${id}`, { method: "DELETE" });
-      if (!res.ok) {
-        toast.error("Failed to remove Radarr instance");
-        return;
-      }
-      toast.success("Radarr instance removed");
-      await fetchRadarrInstances();
-    } catch {
-      toast.error("Failed to remove Radarr instance");
-    }
-  };
-
-  const addLidarrInstance = async () => {
-    setLidarrSaving(true);
-    setLidarrError("");
-    try {
-      const response = await fetch("/api/integrations/lidarr", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(lidarrForm),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        setLidarrError(integrationSaveError(data, "Failed to add Lidarr instance"));
-        return;
-      }
-      setLidarrForm({ name: "", url: "", apiKey: "", externalUrl: "" });
-      setShowLidarrForm(false);
-      await fetchLidarrInstances();
-      toast.success("Lidarr instance added");
-    } catch (error) {
-      setLidarrError("Failed to add Lidarr instance");
-      console.error(error);
-    } finally {
-      setLidarrSaving(false);
-    }
-  };
-
-  const deleteLidarrInstance = async (id: string) => {
-    try {
-      const res = await fetch(`/api/integrations/lidarr/${id}`, { method: "DELETE" });
-      if (!res.ok) {
-        toast.error("Failed to remove Lidarr instance");
-        return;
-      }
-      toast.success("Lidarr instance removed");
-      await fetchLidarrInstances();
-    } catch {
-      toast.error("Failed to remove Lidarr instance");
-    }
-  };
-
-  const addSeerrInstance = async () => {
-    setSeerrSaving(true);
-    setSeerrError("");
-    try {
-      const response = await fetch("/api/integrations/seerr", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(seerrForm),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        setSeerrError(integrationSaveError(data, "Failed to add Seerr instance"));
-        return;
-      }
-      setSeerrForm({ name: "", url: "", apiKey: "", externalUrl: "" });
-      setShowSeerrForm(false);
-      await fetchSeerrInstances();
-      toast.success("Seerr instance added");
-    } catch (error) {
-      setSeerrError("Failed to add Seerr instance");
-      console.error(error);
-    } finally {
-      setSeerrSaving(false);
-    }
-  };
-
-  const deleteSeerrInstance = async (id: string) => {
-    try {
-      const res = await fetch(`/api/integrations/seerr/${id}`, { method: "DELETE" });
-      if (!res.ok) {
-        toast.error("Failed to remove Seerr instance");
-        return;
-      }
-      toast.success("Seerr instance removed");
-      await fetchSeerrInstances();
-    } catch {
-      toast.error("Failed to remove Seerr instance");
-    }
-  };
-
-  const testArrConnection = async (type: "sonarr" | "radarr" | "lidarr" | "seerr", url: string, apiKey: string, setTesting: (v: boolean) => void, setResult: (v: TestResult | null) => void) => {
-    setTesting(true);
-    setResult(null);
-    try {
-      const response = await fetch(`/api/integrations/${type}/test`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url, apiKey }),
-      });
-      const data = await response.json();
-      setResult(data);
-    } catch {
-      setResult({ ok: false, error: "Request failed" });
-    } finally {
-      setTesting(false);
-    }
-  };
-
-  // Per-form sequence for the edit-form connection test. Only the latest test
-  // may write its result: an auto-test still in flight for another instance
-  // (Edit A → Cancel → Edit B) or for credentials since edited used to land
-  // afterwards and overwrite the form's result — disabling Save on a healthy
-  // instance, or enabling it on one whose new credentials were never tested.
-  const editTestSeq = useRef<Record<"sonarr" | "radarr" | "lidarr" | "seerr", number>>({
-    sonarr: 0, radarr: 0, lidarr: 0, seerr: 0,
-  });
-  const invalidateEditTest = (type: "sonarr" | "radarr" | "lidarr" | "seerr", setTesting: (v: boolean) => void) => {
-    editTestSeq.current[type]++;
-    setTesting(false);
-  };
-
-  // Test connection for existing instances (uses server-side stored credentials)
-  const testEditArrConnection = async (type: "sonarr" | "radarr" | "lidarr" | "seerr", id: string, overrides: { url?: string; apiKey?: string }, setTesting: (v: boolean) => void, setResult: (v: TestResult | null) => void) => {
-    const seq = ++editTestSeq.current[type];
-    const current = () => editTestSeq.current[type] === seq;
-    setTesting(true);
-    setResult(null);
-    try {
-      const body: Record<string, string> = {};
-      if (overrides.url) body.url = overrides.url;
-      if (overrides.apiKey) body.apiKey = overrides.apiKey;
-      const response = await fetchWithReauth(`/api/integrations/${type}/${id}/test-connection`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const data = await response.json();
-      if (current()) setResult(data);
-    } catch {
-      if (current()) setResult({ ok: false, error: "Request failed" });
-    } finally {
-      if (current()) setTesting(false);
-    }
-  };
-
-  // Sonarr edit handlers
-  const startEditSonarr = (instance: ArrInstance) => {
-    setEditingSonarrId(instance.id);
-    setEditSonarrForm({ name: instance.name, url: instance.url, apiKey: "", externalUrl: instance.externalUrl ?? "" });
-    setEditSonarrError("");
-    setEditSonarrTestResult(null);
-    testEditArrConnection("sonarr", instance.id, {}, setEditSonarrTesting, setEditSonarrTestResult);
-  };
-
-  const saveEditSonarr = async () => {
-    setEditSonarrSaving(true);
-    setEditSonarrError("");
-    try {
-      const body: Record<string, string> = {};
-      if (editSonarrForm.name) body.name = editSonarrForm.name;
-      if (editSonarrForm.url) body.url = editSonarrForm.url;
-      if (editSonarrForm.apiKey) body.apiKey = editSonarrForm.apiKey;
-      // Only when changed: an External URL stored under an older, looser rule
-      // must not make every rename or re-point of the instance fail validation.
-      const storedSonarrExternalUrl = sonarrInstances.find((i) => i.id === editingSonarrId)?.externalUrl ?? "";
-      if (editSonarrForm.externalUrl !== storedSonarrExternalUrl) body.externalUrl = editSonarrForm.externalUrl;
-
-      const response = await fetchWithReauth(`/api/integrations/sonarr/${editingSonarrId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        setEditSonarrError(integrationSaveError(data, "Failed to update"));
-        return;
-      }
-      setEditingSonarrId(null);
-      await fetchSonarrInstances();
-      toast.success("Sonarr instance updated");
-    } catch {
-      setEditSonarrError("Failed to update Sonarr instance");
-    } finally {
-      setEditSonarrSaving(false);
-    }
-  };
-
-  // Radarr edit handlers
-  const startEditRadarr = (instance: ArrInstance) => {
-    setEditingRadarrId(instance.id);
-    setEditRadarrForm({ name: instance.name, url: instance.url, apiKey: "", externalUrl: instance.externalUrl ?? "" });
-    setEditRadarrError("");
-    setEditRadarrTestResult(null);
-    testEditArrConnection("radarr", instance.id, {}, setEditRadarrTesting, setEditRadarrTestResult);
-  };
-
-  const saveEditRadarr = async () => {
-    setEditRadarrSaving(true);
-    setEditRadarrError("");
-    try {
-      const body: Record<string, string> = {};
-      if (editRadarrForm.name) body.name = editRadarrForm.name;
-      if (editRadarrForm.url) body.url = editRadarrForm.url;
-      if (editRadarrForm.apiKey) body.apiKey = editRadarrForm.apiKey;
-      // Only when changed: an External URL stored under an older, looser rule
-      // must not make every rename or re-point of the instance fail validation.
-      const storedRadarrExternalUrl = radarrInstances.find((i) => i.id === editingRadarrId)?.externalUrl ?? "";
-      if (editRadarrForm.externalUrl !== storedRadarrExternalUrl) body.externalUrl = editRadarrForm.externalUrl;
-
-      const response = await fetchWithReauth(`/api/integrations/radarr/${editingRadarrId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        setEditRadarrError(integrationSaveError(data, "Failed to update"));
-        return;
-      }
-      setEditingRadarrId(null);
-      await fetchRadarrInstances();
-      toast.success("Radarr instance updated");
-    } catch {
-      setEditRadarrError("Failed to update Radarr instance");
-    } finally {
-      setEditRadarrSaving(false);
-    }
-  };
-
-  // Lidarr edit handlers
-  const startEditLidarr = (instance: ArrInstance) => {
-    setEditingLidarrId(instance.id);
-    setEditLidarrForm({ name: instance.name, url: instance.url, apiKey: "", externalUrl: instance.externalUrl ?? "" });
-    setEditLidarrError("");
-    setEditLidarrTestResult(null);
-    testEditArrConnection("lidarr", instance.id, {}, setEditLidarrTesting, setEditLidarrTestResult);
-  };
-
-  const saveEditLidarr = async () => {
-    setEditLidarrSaving(true);
-    setEditLidarrError("");
-    try {
-      const body: Record<string, string> = {};
-      if (editLidarrForm.name) body.name = editLidarrForm.name;
-      if (editLidarrForm.url) body.url = editLidarrForm.url;
-      if (editLidarrForm.apiKey) body.apiKey = editLidarrForm.apiKey;
-      // Only when changed: an External URL stored under an older, looser rule
-      // must not make every rename or re-point of the instance fail validation.
-      const storedLidarrExternalUrl = lidarrInstances.find((i) => i.id === editingLidarrId)?.externalUrl ?? "";
-      if (editLidarrForm.externalUrl !== storedLidarrExternalUrl) body.externalUrl = editLidarrForm.externalUrl;
-
-      const response = await fetchWithReauth(`/api/integrations/lidarr/${editingLidarrId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        setEditLidarrError(integrationSaveError(data, "Failed to update"));
-        return;
-      }
-      setEditingLidarrId(null);
-      await fetchLidarrInstances();
-      toast.success("Lidarr instance updated");
-    } catch {
-      setEditLidarrError("Failed to update Lidarr instance");
-    } finally {
-      setEditLidarrSaving(false);
-    }
-  };
-
-  // Seerr edit handlers
-  const startEditSeerr = (instance: SeerrInstance) => {
-    setEditingSeerrId(instance.id);
-    setEditSeerrForm({ name: instance.name, url: instance.url, apiKey: "", externalUrl: instance.externalUrl ?? "" });
-    setEditSeerrError("");
-    setEditSeerrTestResult(null);
-    testEditArrConnection("seerr", instance.id, {}, setEditSeerrTesting, setEditSeerrTestResult);
-  };
-
-  const saveEditSeerr = async () => {
-    setEditSeerrSaving(true);
-    setEditSeerrError("");
-    try {
-      const body: Record<string, string> = {};
-      if (editSeerrForm.name) body.name = editSeerrForm.name;
-      if (editSeerrForm.url) body.url = editSeerrForm.url;
-      if (editSeerrForm.apiKey) body.apiKey = editSeerrForm.apiKey;
-      // Only when changed: an External URL stored under an older, looser rule
-      // must not make every rename or re-point of the instance fail validation.
-      const storedSeerrExternalUrl = seerrInstances.find((i) => i.id === editingSeerrId)?.externalUrl ?? "";
-      if (editSeerrForm.externalUrl !== storedSeerrExternalUrl) body.externalUrl = editSeerrForm.externalUrl;
-
-      const response = await fetchWithReauth(`/api/integrations/seerr/${editingSeerrId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        setEditSeerrError(integrationSaveError(data, "Failed to update"));
-        return;
-      }
-      setEditingSeerrId(null);
-      await fetchSeerrInstances();
-      toast.success("Seerr instance updated");
-    } catch {
-      setEditSeerrError("Failed to update Seerr instance");
-    } finally {
-      setEditSeerrSaving(false);
-    }
-  };
-
-  // ─── Tracearr handlers ───
-
-  const addTracearrInstance = async () => {
-    setTracearrSaving(true);
-    setTracearrError("");
-    try {
-      const response = await fetch("/api/integrations/tracearr", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(tracearrForm),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        // There is no unsaved-instance test endpoint for Tracearr, so the POST
-        // is the connection test — surface its detail or a bad URL/key gives
-        // the user nothing to act on.
-        setTracearrError(data.detail ? `${data.error} — ${data.detail}` : (data.error || "Failed to add Tracearr instance"));
-        return;
-      }
-      setTracearrForm({ name: "", url: "", apiKey: "" });
-      setShowTracearrForm(false);
-      await fetchTracearrInstances();
-      toast.success("Tracearr instance added");
-    } catch (error) {
-      setTracearrError("Failed to add Tracearr instance");
-      console.error(error);
-    } finally {
-      setTracearrSaving(false);
-    }
-  };
-
-  const deleteTracearrInstance = async (id: string) => {
-    try {
-      const res = await fetch(`/api/integrations/tracearr/${id}`, { method: "DELETE" });
-      if (!res.ok) {
-        toast.error("Failed to remove Tracearr instance");
-        return;
-      }
-      toast.success("Tracearr instance removed");
-      await fetchTracearrInstances();
-    } catch {
-      toast.error("Failed to remove Tracearr instance");
-    }
-  };
-
-  /**
-   * Tests a saved instance. The edited URL is passed as an override so the
-   * button tests what is on screen, but a `MASKED_VALUE` key is dropped rather
-   * than sent: it is the placeholder the GET returned, not a credential. The
-   * route treats the mask as "use the stored key" too — this just keeps the
-   * placeholder from travelling at all.
-   */
-  const testTracearrConnection = async (id: string, overrides: { url?: string; apiKey?: string }) => {
-    setEditTracearrTesting(true);
-    setEditTracearrTestResult(null);
-    try {
-      const body: Record<string, string> = {};
-      if (overrides.url) body.url = overrides.url;
-      if (overrides.apiKey && overrides.apiKey !== MASKED_VALUE) body.apiKey = overrides.apiKey;
-      const response = await fetchWithReauth(`/api/integrations/tracearr/${id}/test-connection`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const data = await response.json();
-      setEditTracearrTestResult(data);
-    } catch {
-      setEditTracearrTestResult({ ok: false, error: "Request failed" });
-    } finally {
-      setEditTracearrTesting(false);
-    }
-  };
-
-  const startEditTracearr = (instance: TracearrInstance) => {
-    setEditingTracearrId(instance.id);
-    // The key is pre-filled with the mask the GET returned and echoed back on
-    // save, which the update schema reads as "keep the stored key".
-    setEditTracearrForm({ name: instance.name, url: instance.url, apiKey: instance.apiKey });
-    setEditTracearrError("");
-    setEditTracearrTestResult(null);
-    testTracearrConnection(instance.id, {});
-  };
-
-  const saveEditTracearr = async () => {
-    if (!editingTracearrId) return;
-    setEditTracearrSaving(true);
-    setEditTracearrError("");
-    try {
-      const body: Record<string, string> = {};
-      if (editTracearrForm.name) body.name = editTracearrForm.name;
-      if (editTracearrForm.url) body.url = editTracearrForm.url;
-      if (editTracearrForm.apiKey) body.apiKey = editTracearrForm.apiKey;
-
-      const response = await fetchWithReauth(`/api/integrations/tracearr/${editingTracearrId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        setEditTracearrError(data.detail ? `${data.error} — ${data.detail}` : (data.error || "Failed to update"));
-        return;
-      }
-      const savedId = editingTracearrId;
-      setEditingTracearrId(null);
-      await fetchTracearrInstances();
-      // The URL may now point at a different Tracearr, so the cached server
-      // list for this instance is stale — the mapping dropdown would otherwise
-      // keep offering servers that instance no longer monitors.
-      await fetchTracearrServers(savedId);
-      toast.success("Tracearr instance updated");
-    } catch {
-      setEditTracearrError("Failed to update Tracearr instance");
-    } finally {
-      setEditTracearrSaving(false);
-    }
-  };
-
   // ─── Notification handlers ───
 
   const saveDiscordSettings = async () => {
@@ -3237,197 +2569,21 @@ export default function SettingsPage() {
           )}
         </TabsContent>
 
-        <TabsContent value="integrations" id="settings-panel-integrations" aria-labelledby="settings-tab-integrations">
+        {/* Kept mounted (hidden) once opened: the forms hold their own state
+            (useIntegrationInstances), which a switch to another tab would
+            otherwise drop mid-edit. */}
+        <TabsContent
+          value="integrations"
+          id="settings-panel-integrations"
+          aria-labelledby="settings-tab-integrations"
+          forceMount={integrationsOpened || undefined}
+          className="data-[state=inactive]:hidden"
+        >
           {loadedTabs.has("integrations") ? (
             <IntegrationsTab
-              sonarr={{
-                instances: sonarrInstances,
-                showForm: showSonarrForm,
-                form: sonarrForm,
-                saving: sonarrSaving,
-                error: sonarrError,
-                testing: sonarrTesting,
-                testResult: sonarrTestResult,
-                editing: {
-                  id: editingSonarrId,
-                  form: editSonarrForm,
-                  saving: editSonarrSaving,
-                  error: editSonarrError,
-                  testing: editSonarrTesting,
-                  testResult: editSonarrTestResult,
-                },
-                onShowForm: setShowSonarrForm,
-                onFormChange: (form) => {
-                  if (form.url !== sonarrForm.url || form.apiKey !== sonarrForm.apiKey) setSonarrTestResult(null);
-                  setSonarrForm(form);
-                },
-                onAdd: addSonarrInstance,
-                onDelete: deleteSonarrInstance,
-                onTest: () => testArrConnection("sonarr", sonarrForm.url, sonarrForm.apiKey, setSonarrTesting, setSonarrTestResult),
-                onStartEdit: startEditSonarr,
-                onSaveEdit: saveEditSonarr,
-                onCancelEdit: () => {
-                  invalidateEditTest("sonarr", setEditSonarrTesting);
-                  setEditingSonarrId(null);
-                },
-                onEditFormChange: (form) => {
-                  if (form.url !== editSonarrForm.url || form.apiKey !== editSonarrForm.apiKey) {
-                    invalidateEditTest("sonarr", setEditSonarrTesting);
-                    setEditSonarrTestResult(null);
-                  }
-                  setEditSonarrForm(form);
-                },
-                onEditTest: () => testEditArrConnection("sonarr", editingSonarrId!, { url: editSonarrForm.url, apiKey: editSonarrForm.apiKey }, setEditSonarrTesting, setEditSonarrTestResult),
-                onToggleEnabled: (id: string, enabled: boolean) => toggleArrEnabled("sonarr", id, enabled),
-              }}
-              radarr={{
-                instances: radarrInstances,
-                showForm: showRadarrForm,
-                form: radarrForm,
-                saving: radarrSaving,
-                error: radarrError,
-                testing: radarrTesting,
-                testResult: radarrTestResult,
-                editing: {
-                  id: editingRadarrId,
-                  form: editRadarrForm,
-                  saving: editRadarrSaving,
-                  error: editRadarrError,
-                  testing: editRadarrTesting,
-                  testResult: editRadarrTestResult,
-                },
-                onShowForm: setShowRadarrForm,
-                onFormChange: (form) => {
-                  if (form.url !== radarrForm.url || form.apiKey !== radarrForm.apiKey) setRadarrTestResult(null);
-                  setRadarrForm(form);
-                },
-                onAdd: addRadarrInstance,
-                onDelete: deleteRadarrInstance,
-                onTest: () => testArrConnection("radarr", radarrForm.url, radarrForm.apiKey, setRadarrTesting, setRadarrTestResult),
-                onStartEdit: startEditRadarr,
-                onSaveEdit: saveEditRadarr,
-                onCancelEdit: () => {
-                  invalidateEditTest("radarr", setEditRadarrTesting);
-                  setEditingRadarrId(null);
-                },
-                onEditFormChange: (form) => {
-                  if (form.url !== editRadarrForm.url || form.apiKey !== editRadarrForm.apiKey) {
-                    invalidateEditTest("radarr", setEditRadarrTesting);
-                    setEditRadarrTestResult(null);
-                  }
-                  setEditRadarrForm(form);
-                },
-                onEditTest: () => testEditArrConnection("radarr", editingRadarrId!, { url: editRadarrForm.url, apiKey: editRadarrForm.apiKey }, setEditRadarrTesting, setEditRadarrTestResult),
-                onToggleEnabled: (id: string, enabled: boolean) => toggleArrEnabled("radarr", id, enabled),
-              }}
-              lidarr={{
-                instances: lidarrInstances,
-                showForm: showLidarrForm,
-                form: lidarrForm,
-                saving: lidarrSaving,
-                error: lidarrError,
-                testing: lidarrTesting,
-                testResult: lidarrTestResult,
-                editing: {
-                  id: editingLidarrId,
-                  form: editLidarrForm,
-                  saving: editLidarrSaving,
-                  error: editLidarrError,
-                  testing: editLidarrTesting,
-                  testResult: editLidarrTestResult,
-                },
-                onShowForm: setShowLidarrForm,
-                onFormChange: (form) => {
-                  if (form.url !== lidarrForm.url || form.apiKey !== lidarrForm.apiKey) setLidarrTestResult(null);
-                  setLidarrForm(form);
-                },
-                onAdd: addLidarrInstance,
-                onDelete: deleteLidarrInstance,
-                onTest: () => testArrConnection("lidarr", lidarrForm.url, lidarrForm.apiKey, setLidarrTesting, setLidarrTestResult),
-                onStartEdit: startEditLidarr,
-                onSaveEdit: saveEditLidarr,
-                onCancelEdit: () => {
-                  invalidateEditTest("lidarr", setEditLidarrTesting);
-                  setEditingLidarrId(null);
-                },
-                onEditFormChange: (form) => {
-                  if (form.url !== editLidarrForm.url || form.apiKey !== editLidarrForm.apiKey) {
-                    invalidateEditTest("lidarr", setEditLidarrTesting);
-                    setEditLidarrTestResult(null);
-                  }
-                  setEditLidarrForm(form);
-                },
-                onEditTest: () => testEditArrConnection("lidarr", editingLidarrId!, { url: editLidarrForm.url, apiKey: editLidarrForm.apiKey }, setEditLidarrTesting, setEditLidarrTestResult),
-                onToggleEnabled: (id: string, enabled: boolean) => toggleArrEnabled("lidarr", id, enabled),
-              }}
-              seerr={{
-                instances: seerrInstances,
-                showForm: showSeerrForm,
-                form: seerrForm,
-                saving: seerrSaving,
-                error: seerrError,
-                testing: seerrTesting,
-                testResult: seerrTestResult,
-                editing: {
-                  id: editingSeerrId,
-                  form: editSeerrForm,
-                  saving: editSeerrSaving,
-                  error: editSeerrError,
-                  testing: editSeerrTesting,
-                  testResult: editSeerrTestResult,
-                },
-                onShowForm: setShowSeerrForm,
-                onFormChange: (form) => {
-                  if (form.url !== seerrForm.url || form.apiKey !== seerrForm.apiKey) setSeerrTestResult(null);
-                  setSeerrForm(form);
-                },
-                onAdd: addSeerrInstance,
-                onDelete: deleteSeerrInstance,
-                onTest: () => testArrConnection("seerr", seerrForm.url, seerrForm.apiKey, setSeerrTesting, setSeerrTestResult),
-                onStartEdit: startEditSeerr,
-                onSaveEdit: saveEditSeerr,
-                onCancelEdit: () => {
-                  invalidateEditTest("seerr", setEditSeerrTesting);
-                  setEditingSeerrId(null);
-                },
-                onEditFormChange: (form) => {
-                  if (form.url !== editSeerrForm.url || form.apiKey !== editSeerrForm.apiKey) {
-                    invalidateEditTest("seerr", setEditSeerrTesting);
-                    setEditSeerrTestResult(null);
-                  }
-                  setEditSeerrForm(form);
-                },
-                onEditTest: () => testEditArrConnection("seerr", editingSeerrId!, { url: editSeerrForm.url, apiKey: editSeerrForm.apiKey }, setEditSeerrTesting, setEditSeerrTestResult),
-                onToggleEnabled: (id: string, enabled: boolean) => toggleSeerrEnabled(id, enabled),
-              }}
-              tracearr={{
-                instances: tracearrInstances,
-                showForm: showTracearrForm,
-                form: tracearrForm,
-                saving: tracearrSaving,
-                error: tracearrError,
-                editing: {
-                  id: editingTracearrId,
-                  form: editTracearrForm,
-                  saving: editTracearrSaving,
-                  error: editTracearrError,
-                  testing: editTracearrTesting,
-                  testResult: editTracearrTestResult,
-                },
-                onShowForm: setShowTracearrForm,
-                onFormChange: setTracearrForm,
-                onAdd: addTracearrInstance,
-                onDelete: deleteTracearrInstance,
-                onStartEdit: startEditTracearr,
-                onSaveEdit: saveEditTracearr,
-                onCancelEdit: () => setEditingTracearrId(null),
-                onEditFormChange: (form) => {
-                  if (form.url !== editTracearrForm.url || form.apiKey !== editTracearrForm.apiKey) setEditTracearrTestResult(null);
-                  setEditTracearrForm(form);
-                },
-                onEditTest: () => testTracearrConnection(editingTracearrId!, { url: editTracearrForm.url, apiKey: editTracearrForm.apiKey }),
-                onToggleEnabled: (id: string, enabled: boolean) => toggleTracearrEnabled(id, enabled),
-              }}
+              instances={integrationInstances}
+              onRefresh={fetchIntegrationInstances}
+              onTracearrUpdated={fetchTracearrServers}
             />
           ) : (
             <SettingsPanelSkeleton />
