@@ -49,6 +49,18 @@ describe("ChipColorProvider", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("hands every re-render the same context value until the colours change", async () => {
+    const { result, rerender } = renderHook(() => ({ chips: useChipColors(), store: useShellSettings()! }), {
+      wrapper: inShell(),
+    });
+    const first = result.current.chips;
+    rerender();
+    expect(result.current.chips).toBe(first);
+    act(() => result.current.store.setChipColors({ ...DEFAULT_CHIP_COLORS, resolution: { "4K": "#abcdef" } }));
+    await waitFor(() => expect(result.current.chips).not.toBe(first));
+    expect(result.current.chips.getHex("resolution", "4K")).toBe("#abcdef");
+  });
+
   it("uses the defaults when the shell found nothing saved", () => {
     const { result } = renderHook(() => useChipColors(), { wrapper: inShell({ chipColors: null }) });
     expect(result.current.colors).toEqual(DEFAULT_CHIP_COLORS);
