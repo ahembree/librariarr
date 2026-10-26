@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, type ComponentProps } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, memo, type ComponentProps } from "react";
 import {
   Card,
   CardContent,
@@ -25,7 +25,7 @@ import { formatEpisodeCode, formatEpisodeTitle } from "@/lib/media/display-title
 import { getDuplicateServerNames } from "@/lib/server-styles";
 import { ServerTypeChip } from "@/components/server-type-chip";
 import { LazyMediaHoverPopover } from "@/components/lazy-media-hover-popover";
-import { useRealtime } from "@/hooks/use-realtime";
+import { useLibrarySyncRefetch } from "@/hooks/use-library-sync-refetch";
 import { hoverDataFromRecord, type MediaHoverData } from "@/components/media-hover-popover";
 
 interface RecentItem {
@@ -203,6 +203,44 @@ function ShelfTile({
   );
 }
 
+/** The item's record for the popover, named the way the tile names it. */
+function shelfHoverData(item: RecentItem, json: unknown): MediaHoverData {
+  const data = hoverDataFromRecord((json as { item: MediaHoverData }).item);
+  return item.type === "MOVIE" ? data : { ...data, title: formatEpisode(item) };
+}
+
+/**
+ * One shelf entry, memoised on its row and the shelf's stable click handler:
+ * the shelf re-renders when its chevrons change and on every refetch, and
+ * each entry used to be rebuilt each time with new handlers and a new popover
+ * placeholder.
+ */
+const ShelfEntry = memo(function ShelfEntry({ item, onOpen }: { item: RecentItem; onOpen: (item: RecentItem) => void }) {
+  const onClick = useCallback(() => onOpen(item), [onOpen, item]);
+  const extractData = useCallback((json: unknown) => shelfHoverData(item, json), [item]);
+  const placeholder = useMemo<MediaHoverData>(
+    () => ({ title: formatEpisode(item), year: item.year, addedAt: item.addedAt }),
+    [item],
+  );
+
+  // A collapsed tile gets no popover: the popover describes ONE media item
+  // (its file size, resolution, codecs), and showing the representative
+  // episode's numbers under a "Season 27 · 27 episodes" heading would
+  // attribute one file's properties to the whole season.
+  if (isGroup(item)) return <ShelfTile item={item} onClick={onClick} />;
+  return (
+    <LazyMediaHoverPopover
+      fetchUrl={`/api/media/${item.id}`}
+      extractData={extractData}
+      placeholder={placeholder}
+      imageUrl={artworkUrl(item)}
+      imageAspect={item.type === "MUSIC" ? "square" : "poster"}
+    >
+      <ShelfTile item={item} onClick={onClick} />
+    </LazyMediaHoverPopover>
+  );
+});
+
 export function RecentlyAdded({
   filterType,
   lockedFilterType,
@@ -269,16 +307,24 @@ export function RecentlyAdded({
   // without a page reload. `sync:completed` is emitted by both the full and the
   // incremental sync (the latter within a second of a server reporting an add),
   // and is only emitted when something actually changed — a no-op sync returns
-  // before emitting, so this doesn't refetch on every scan.
-  useRealtime("sync:completed", fetchData);
+  // before emitting, so this doesn't refetch on every scan. A shelf narrowed to
+  // one type or one server skips a sync that touched neither.
+  useLibrarySyncRefetch({ types: effectiveType ?? null, serverId: effectiveServerId }, fetchData);
+
+  // Read through a ref so the handler the tiles hold stays the same across
+  // renders: the dashboard hands new click callbacks on each of its own.
+  const clickHandlers = useRef({ onMovieClick, onEpisodeClick, onTrackClick, onSeasonClick, onAlbumClick });
+  useEffect(() => {
+    clickHandlers.current = { onMovieClick, onEpisodeClick, onTrackClick, onSeasonClick, onAlbumClick };
+  });
 
   const updateScroll = useCallback(() => {
     const el = shelfRef.current;
     if (!el) return;
-    setCanScroll({
-      left: el.scrollLeft > 4,
-      right: el.scrollLeft + el.clientWidth < el.scrollWidth - 4,
-    });
+    const left = el.scrollLeft > 4;
+    const right = el.scrollLeft + el.clientWidth < el.scrollWidth - 4;
+    // Fires on every scroll event: only a chevron that changes re-renders.
+    setCanScroll((prev) => (prev.left === left && prev.right === right ? prev : { left, right }));
   }, []);
 
   // Reset to the start only when the USER changed the selection. Doing it on
@@ -305,7 +351,8 @@ export function RecentlyAdded({
     el.scrollBy({ left: dir * el.clientWidth * 0.8, behavior: "smooth" });
   };
 
-  const handleClick = (item: RecentItem) => {
+  const handleClick = useCallback((item: RecentItem) => {
+    const { onMovieClick, onEpisodeClick, onTrackClick, onSeasonClick, onAlbumClick } = clickHandlers.current;
     // A collapsed tile represents a season / an album, so it opens that rather
     // than the one member row that happens to represent it.
     if (item.type === "MOVIE") {
@@ -317,7 +364,7 @@ export function RecentlyAdded({
       if (isGroup(item) && onAlbumClick) onAlbumClick(item.id);
       else onTrackClick?.(item.id);
     }
-  };
+  }, []);
 
   return (
     <Card className="h-full flex flex-col gap-3">
@@ -428,36 +475,9 @@ export function RecentlyAdded({
             onScroll={updateScroll}
             className="flex snap-x gap-3 overflow-x-auto pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
           >
-            {items.map((item) =>
-              // A collapsed tile gets no popover: the popover describes ONE
-              // media item (its file size, resolution, codecs), and showing the
-              // representative episode's numbers under a "Season 27 · 27
-              // episodes" heading would attribute one file's properties to the
-              // whole season.
-              isGroup(item) ? (
-                <ShelfTile key={item.groupKey} item={item} onClick={() => handleClick(item)} />
-              ) : (
-                <LazyMediaHoverPopover
-                  key={item.groupKey}
-                  fetchUrl={`/api/media/${item.id}`}
-                  extractData={(json) => {
-                    const data = hoverDataFromRecord((json as { item: MediaHoverData }).item);
-                    return item.type === "MOVIE"
-                      ? data
-                      : { ...data, title: formatEpisode(item) };
-                  }}
-                  placeholder={{
-                    title: formatEpisode(item),
-                    year: item.year,
-                    addedAt: item.addedAt,
-                  }}
-                  imageUrl={artworkUrl(item)}
-                  imageAspect={item.type === "MUSIC" ? "square" : "poster"}
-                >
-                  <ShelfTile item={item} onClick={() => handleClick(item)} />
-                </LazyMediaHoverPopover>
-              ),
-            )}
+            {items.map((item) => (
+              <ShelfEntry key={item.groupKey} item={item} onOpen={handleClick} />
+            ))}
           </div>
         )}
       </CardContent>
