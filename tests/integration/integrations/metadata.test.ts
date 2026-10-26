@@ -140,7 +140,7 @@ describe("Integration metadata endpoints", () => {
       expect(await expectJson(response, 404)).toEqual({ error: "Instance not found" });
     });
 
-    it("returns artists, tags, and quality profiles", async () => {
+    it("returns tags and quality profiles, and no per-artist map", async () => {
       const user = await createTestUser();
       const instance = await createTestLidarrInstance(user.id);
       setMockSession({ userId: user.id, isLoggedIn: true });
@@ -163,22 +163,18 @@ describe("Integration metadata endpoints", () => {
 
       const response = await callRouteWithParams(LidarrMetadataGET, { id: instance.id });
       const body = await expectJson<{
-        artists: Record<string, { tags: string[]; qualityProfile: string; monitored: boolean; rating: number | null }>;
+        artists?: unknown;
         tags: { id: number; label: string }[];
         qualityProfiles: { id: number; name: string }[];
       }>(response, 200);
 
-      expect(body.artists["056e4f3e-d505-4dad-8ec1-d04f521cbb56"]).toEqual({
-        tags: ["favorite"],
-        qualityProfile: "Lossless",
-        monitored: true,
-        rating: 8.5,
-      });
+      // The per-artist map no caller read is gone: it was most of the response.
+      expect(body.artists).toBeUndefined();
       expect(body.tags).toEqual([{ id: 1, label: "favorite" }]);
       expect(body.qualityProfiles).toEqual([{ id: 1, name: "Lossless" }]);
     });
 
-    it("falls back to tag id string when tag not found", async () => {
+    it("lists only the tags Lidarr defines, whatever ids its artists carry", async () => {
       const user = await createTestUser();
       const instance = await createTestLidarrInstance(user.id);
       setMockSession({ userId: user.id, isLoggedIn: true });
@@ -190,11 +186,10 @@ describe("Integration metadata endpoints", () => {
       mockLidarrGetTags.mockResolvedValue([]);
 
       const response = await callRouteWithParams(LidarrMetadataGET, { id: instance.id });
-      const body = await expectJson<{
-        artists: Record<string, { tags: string[] }>;
-      }>(response, 200);
+      const body = await expectJson<{ tags: unknown[]; artists?: unknown }>(response, 200);
 
-      expect(body.artists["cc197bad-dc9c-440d-a5b5-d52ba2e14234"].tags).toEqual(["99"]);
+      expect(body.tags).toEqual([]);
+      expect(body.artists).toBeUndefined();
     });
 
     it("derives distinct artist statuses for the enumerable arrStatus field", async () => {
@@ -250,7 +245,7 @@ describe("Integration metadata endpoints", () => {
       expect(await expectJson(response, 404)).toEqual({ error: "Instance not found" });
     });
 
-    it("returns movies, tags, quality profiles, and languages", async () => {
+    it("returns tags, quality profiles and languages, and no per-movie map", async () => {
       const user = await createTestUser();
       const instance = await createTestRadarrInstance(user.id);
       setMockSession({ userId: user.id, isLoggedIn: true });
@@ -279,18 +274,14 @@ describe("Integration metadata endpoints", () => {
 
       const response = await callRouteWithParams(RadarrMetadataGET, { id: instance.id });
       const body = await expectJson<{
-        movies: Record<string, { tags: string[]; qualityProfile: string; monitored: boolean; rating: number | null }>;
+        movies?: unknown;
         tags: { id: number; label: string }[];
         qualityProfiles: { id: number; name: string }[];
         languages: string[];
       }>(response, 200);
 
-      expect(body.movies["550"]).toEqual({
-        tags: ["action"],
-        qualityProfile: "HD-1080p",
-        monitored: true,
-        rating: 8.8,
-      });
+      // The per-movie map no caller read is gone: it was most of the response.
+      expect(body.movies).toBeUndefined();
       expect(body.tags).toEqual([{ id: 2, label: "action" }]);
       expect(body.qualityProfiles).toEqual([{ id: 1, name: "HD-1080p" }]);
       // Only real languages — no title's original language is Unknown, Any or
@@ -318,7 +309,7 @@ describe("Integration metadata endpoints", () => {
       expect(body.statuses).toEqual(["announced", "released"]);
     });
 
-    it("handles movie with no ratings", async () => {
+    it("answers a library whose movies carry no ratings, files or statuses", async () => {
       const user = await createTestUser();
       const instance = await createTestRadarrInstance(user.id);
       setMockSession({ userId: user.id, isLoggedIn: true });
@@ -331,12 +322,37 @@ describe("Integration metadata endpoints", () => {
       mockRadarrGetLanguages.mockResolvedValue([]);
 
       const response = await callRouteWithParams(RadarrMetadataGET, { id: instance.id });
-      const body = await expectJson<{
-        movies: Record<string, { rating: number | null; qualityProfile: string }>;
-      }>(response, 200);
+      expect(await expectJson(response, 200)).toEqual({
+        tags: [],
+        qualityProfiles: [],
+        languages: [],
+        qualityNames: [],
+        statuses: [],
+      });
+    });
 
-      expect(body.movies["100"].rating).toBeNull();
-      expect(body.movies["100"].qualityProfile).toBe("Unknown");
+    it("keeps an answer a minute, never a failure, and re-reads after the instance is edited", async () => {
+      const user = await createTestUser();
+      const instance = await createTestRadarrInstance(user.id);
+      setMockSession({ userId: user.id, isLoggedIn: true });
+      const read = () => callRouteWithParams(RadarrMetadataGET, { id: instance.id });
+
+      mockRadarrGetTags.mockRejectedValueOnce(new Error("timeout"));
+      await expectJson(await read(), 502);
+      mockRadarrGetTags.mockResolvedValue([{ id: 1, label: "keep" }]);
+      expect((await expectJson<{ tags: unknown[] }>(await read(), 200)).tags).toEqual([{ id: 1, label: "keep" }]);
+      expect(mockRadarrGetMovies).toHaveBeenCalledTimes(2);
+
+      // Answered from the cache: the library is not walked again.
+      mockRadarrGetTags.mockResolvedValue([{ id: 2, label: "new" }]);
+      expect((await expectJson<{ tags: unknown[] }>(await read(), 200)).tags).toEqual([{ id: 1, label: "keep" }]);
+      expect(mockRadarrGetMovies).toHaveBeenCalledTimes(2);
+
+      // An edit of the instance drops it.
+      const { PUT } = await import("@/app/api/integrations/radarr/[id]/route");
+      await callRouteWithParams(PUT, { id: instance.id }, { method: "PUT", body: { name: "Renamed" } });
+      expect((await expectJson<{ tags: unknown[] }>(await read(), 200)).tags).toEqual([{ id: 2, label: "new" }]);
+      expect(mockRadarrGetMovies).toHaveBeenCalledTimes(3);
     });
 
     it("derives distinct downloaded-file quality names for the enumerable arrQualityName field", async () => {
@@ -392,7 +408,7 @@ describe("Integration metadata endpoints", () => {
       expect(await expectJson(response, 404)).toEqual({ error: "Instance not found" });
     });
 
-    it("returns series, tags, quality profiles, and languages", async () => {
+    it("returns tags, quality profiles and languages, and no per-series map", async () => {
       const user = await createTestUser();
       const instance = await createTestSonarrInstance(user.id);
       setMockSession({ userId: user.id, isLoggedIn: true });
@@ -422,18 +438,14 @@ describe("Integration metadata endpoints", () => {
 
       const response = await callRouteWithParams(SonarrMetadataGET, { id: instance.id });
       const body = await expectJson<{
-        series: Record<string, { tags: string[]; qualityProfile: string; monitored: boolean; rating: number | null }>;
+        series?: unknown;
         tags: { id: number; label: string }[];
         qualityProfiles: { id: number; name: string }[];
         languages: string[];
       }>(response, 200);
 
-      expect(body.series["81189"]).toEqual({
-        tags: ["drama", "hbo"],
-        qualityProfile: "Ultra-HD",
-        monitored: true,
-        rating: 9.3,
-      });
+      // The per-series map no caller read is gone: it was most of the response.
+      expect(body.series).toBeUndefined();
       expect(body.tags).toEqual([
         { id: 1, label: "drama" },
         { id: 3, label: "hbo" },
@@ -476,7 +488,7 @@ describe("Integration metadata endpoints", () => {
       expect(body.seriesTypes).toEqual([]);
     });
 
-    it("handles series with no ratings", async () => {
+    it("answers a library whose series carry no ratings or statuses", async () => {
       const user = await createTestUser();
       const instance = await createTestSonarrInstance(user.id);
       setMockSession({ userId: user.id, isLoggedIn: true });
@@ -489,11 +501,13 @@ describe("Integration metadata endpoints", () => {
       mockSonarrGetLanguages.mockResolvedValue([]);
 
       const response = await callRouteWithParams(SonarrMetadataGET, { id: instance.id });
-      const body = await expectJson<{
-        series: Record<string, { rating: number | null }>;
-      }>(response, 200);
-
-      expect(body.series["999"].rating).toBeNull();
+      expect(await expectJson(response, 200)).toEqual({
+        tags: [],
+        qualityProfiles: [{ id: 1, name: "SD" }],
+        languages: [],
+        statuses: [],
+        seriesTypes: [],
+      });
     });
 
     it("returns 502 with the address scrubbed when Sonarr cannot be reached", async () => {
