@@ -10,8 +10,8 @@ import { storeDashboardLayout } from "./seed";
  *
  * The data routes are stubbed so the spec controls exactly which servers exist
  * and what each one's stats say, and `/api/events/stream` is held open until
- * the test releases one `sync:completed` event — the same event a real sync
- * delivers.
+ * the test releases one event — `sync:completed` as a real sync delivers it,
+ * or `server:changed` as every server add, edit, disable and delete does.
  */
 
 const ALL_MOVIES = 111;
@@ -69,8 +69,10 @@ interface Harness {
   setServers: (list: ReturnType<typeof server>[]) => void;
   /** Library types `/api/media/library-types` reports from now on. */
   setTypes: (types: string[]) => void;
-  /** Deliver one `sync:completed` event and wait for the page to refetch. */
+  /** Deliver one `sync:completed` event and wait for the page to refetch its stats. */
   fireSyncCompleted: () => Promise<void>;
+  /** Deliver one `server:changed` event and wait for the page to re-read the servers. */
+  fireServerChanged: () => Promise<void>;
 }
 
 async function setup(page: Page): Promise<Harness> {
@@ -82,7 +84,7 @@ async function setup(page: Page): Promise<Harness> {
   let types = ["MOVIE"];
   let layoutGets = 0;
   const statsRequests: Request[] = [];
-  let releaseStream: (() => void) | null = null;
+  let releaseStream: ((event: string) => void) | null = null;
 
   await page.route(isPath("/api/servers"), (route) =>
     route.request().method() === "GET"
@@ -109,11 +111,12 @@ async function setup(page: Page): Promise<Harness> {
     if (route.request().method() === "GET") layoutGets++;
     return route.continue();
   });
-  // Held open until the test releases it; `retry` keeps the browser from
-  // reconnecting (and resyncing every subscriber) for the rest of the test.
+  // Held open until the test releases it with one event; `retry` keeps the
+  // browser from reconnecting (and resyncing every subscriber) for the rest of
+  // the test.
   await page.route(isPath("/api/events/stream"), async (route) => {
     if (route.request().method() !== "GET") return route.fulfill({ status: 200 });
-    await new Promise<void>((resolve) => {
+    const event = await new Promise<string>((resolve) => {
       releaseStream = resolve;
     });
     await route.fulfill({
@@ -123,9 +126,16 @@ async function setup(page: Page): Promise<Harness> {
         "retry: 600000\n\n" +
         `event: connected\ndata: ${JSON.stringify({ timestamp: Date.now() })}\n\n` +
         // The route's own framing: the event name, then `{ timestamp, ...meta }`.
-        `event: sync:completed\ndata: ${JSON.stringify({ timestamp: Date.now(), serverId: "srv-b" })}\n\n`,
+        `event: ${event}\ndata: ${JSON.stringify({ timestamp: Date.now(), serverId: "srv-b" })}\n\n`,
     });
   });
+
+  const fire = async (event: string, refetched: (url: URL) => boolean) => {
+    await expect.poll(() => releaseStream !== null).toBe(true);
+    const response = page.waitForResponse((res) => refetched(new URL(res.url())));
+    releaseStream!(event);
+    await response;
+  };
 
   return {
     statsRequests,
@@ -136,14 +146,10 @@ async function setup(page: Page): Promise<Harness> {
     setTypes: (list) => {
       types = list;
     },
-    fireSyncCompleted: async () => {
-      await expect.poll(() => releaseStream !== null).toBe(true);
-      const refetched = page.waitForResponse(
-        (res) => new URL(res.url()).pathname === "/api/servers",
-      );
-      releaseStream!();
-      await refetched;
-    },
+    // A sync moves the figures; the server list is `server:changed`'s.
+    fireSyncCompleted: () => fire("sync:completed", (url) => url.pathname === "/api/media/stats"),
+    // Every route that adds, edits, disables or deletes a server emits it.
+    fireServerChanged: () => fire("server:changed", (url) => url.pathname === "/api/servers"),
   };
 }
 
@@ -191,6 +197,35 @@ test.describe("dashboard refresh", () => {
     await expect(movieTile(page)).toContainText(String(SERVER_A_MOVIES));
   });
 
+  test("the end of a sync asks for the stats once", async ({ page }) => {
+    const h = await setup(page);
+    let finished = false;
+    const job = () => ({
+      id: "job-1",
+      mediaServerId: "srv-b",
+      status: finished ? "COMPLETED" : "RUNNING",
+      startedAt: new Date(Date.now() - 60_000).toISOString(),
+      completedAt: finished ? new Date().toISOString() : null,
+      error: null,
+      itemsProcessed: 5,
+      totalItems: 10,
+      currentLibrary: null,
+      mediaServer: { name: "Bravo", type: "PLEX" },
+    });
+    await page.route(isPath("/api/sync/status"), (route) => route.fulfill({ json: { jobs: [job()] } }));
+    await page.goto("/");
+    await expect(movieTile(page)).toContainText(String(ALL_MOVIES));
+    await expect(page.getByText(/Syncing Bravo/)).toBeVisible();
+    const before = h.statsRequests.length;
+
+    finished = true;
+    await h.fireSyncCompleted();
+    // The indicator has seen the sync end by the time it announces it. It used
+    // to refresh the stats itself there, beside the page's own refetch.
+    await expect(page.getByText("Sync complete: Bravo")).toBeVisible();
+    expect(h.statsRequests.length - before).toBe(1);
+  });
+
   test("a refresh does not re-read the saved layout", async ({ page }) => {
     const h = await setup(page);
     await page.goto("/");
@@ -227,7 +262,7 @@ test.describe("dashboard refresh", () => {
 
     h.setServers([server("srv-b", "Bravo", true), server("srv-c", "Charlie", true)]);
     const before = h.statsRequests.length;
-    await h.fireSyncCompleted();
+    await h.fireServerChanged();
 
     await expect(
       page.getByRole("combobox").filter({ hasText: "All Servers" }).first(),
@@ -312,11 +347,14 @@ test.describe("dashboard refresh", () => {
       music: [],
     };
     restoreLayout = await storeDashboardLayout(layout);
+    // Every custom card's data comes in one batch request; this card's entry
+    // is the timeline binned by year.
     const cardTypes: (string | null)[] = [];
     page.on("request", (req) => {
-      const url = new URL(req.url());
-      if (url.pathname === "/api/media/stats/timeline" && url.searchParams.get("bin") === "year") {
-        cardTypes.push(url.searchParams.get("type"));
+      if (new URL(req.url()).pathname !== "/api/media/stats/custom-batch") return;
+      const { cards } = req.postDataJSON() as { cards: { kind: string; bin?: string; type?: string }[] };
+      for (const card of cards) {
+        if (card.kind === "timeline" && card.bin === "year") cardTypes.push(card.type ?? null);
       }
     });
 

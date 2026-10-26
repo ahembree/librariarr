@@ -31,6 +31,20 @@ interface SyncJob {
 }
 
 interface SyncIndicatorProps {
+  /**
+   * Called after every check that finds a sync running: on each sync event,
+   * and on each fallback poll while the event stream is down. The dashboard
+   * throttles its live stats refresh on it.
+   */
+  onSyncActive?: () => void;
+  /**
+   * Called when a check sees the last running sync end and no event announced
+   * it: the fallback poll, which runs only while the event stream is not
+   * delivering. An end seen on an event is the page's own `sync:completed`
+   * (or `sync:failed`) subscription's to handle, and calling this beside it
+   * fetched the stats twice; with the stream down this poll is the only thing
+   * that sees the end.
+   */
   onSyncComplete?: () => void;
 }
 
@@ -85,14 +99,21 @@ function ActiveSyncBar({ job }: { job: SyncJob }) {
   );
 }
 
-export function SyncIndicator({ onSyncComplete }: SyncIndicatorProps) {
+export function SyncIndicator({ onSyncActive, onSyncComplete }: SyncIndicatorProps) {
   const [jobs, setJobs] = useState<SyncJob[]>([]);
   const [hasActiveSync, setHasActiveSync] = useState(false);
   const [initialCheckDone, setInitialCheckDone] = useState(false);
   const [, setTick] = useState(0);
   const wasActiveRef = useRef(false);
-  const lastStatsRefreshRef = useRef(0);
   const isFirstFetchRef = useRef(true);
+  // Read through refs so `fetchStatus` stays stable: it is the realtime
+  // subscriptions' callback.
+  const onSyncActiveRef = useRef(onSyncActive);
+  const onSyncCompleteRef = useRef(onSyncComplete);
+  useEffect(() => {
+    onSyncActiveRef.current = onSyncActive;
+    onSyncCompleteRef.current = onSyncComplete;
+  }, [onSyncActive, onSyncComplete]);
   // IDs of jobs seen RUNNING/PENDING on the previous poll. Used to attribute
   // completion/failure toasts to the job that actually just finished — the
   // jobs list also carries historical COMPLETED/FAILED rows (for the idle
@@ -100,7 +121,11 @@ export function SyncIndicator({ onSyncComplete }: SyncIndicatorProps) {
   // be re-announced on every successful sync.
   const prevActiveIdsRef = useRef<Set<string>>(new Set());
 
-  const fetchStatus = useCallback(async () => {
+  // `announced`: the check runs on a delivered event (or a reconnect's
+  // resync), so the page's own subscriptions saw the same event. Decided by
+  // what triggered the check, not by `isRealtimeLive()` when it answers: the
+  // stream can drop between the event and the answer.
+  const fetchStatus = useCallback(async (announced: boolean) => {
     try {
       const data = await fetchSyncStatus();
       // A failed check keeps what is on screen (background polling).
@@ -147,20 +172,10 @@ export function SyncIndicator({ onSyncComplete }: SyncIndicatorProps) {
         }
       }
 
-      if (onSyncComplete) {
-        // Detect transition from active to idle
-        if (wasActiveRef.current && !isActive) {
-          onSyncComplete();
-          lastStatsRefreshRef.current = Date.now();
-        }
-        // Live-refresh stats every 10s during active sync
-        else if (
-          isActive &&
-          Date.now() - lastStatsRefreshRef.current >= 10000
-        ) {
-          onSyncComplete();
-          lastStatsRefreshRef.current = Date.now();
-        }
+      if (wasActiveRef.current && !isActive) {
+        if (!announced) onSyncCompleteRef.current?.();
+      } else if (isActive) {
+        onSyncActiveRef.current?.();
       }
 
       prevActiveIdsRef.current = activeIds;
@@ -172,17 +187,20 @@ export function SyncIndicator({ onSyncComplete }: SyncIndicatorProps) {
     } finally {
       setInitialCheckDone(true);
     }
-  }, [onSyncComplete]);
+  }, []);
+
+  const onEvent = useCallback(() => void fetchStatus(true), [fetchStatus]);
+  const onPoll = useCallback(() => void fetchStatus(false), [fetchStatus]);
 
   // Instant updates via SSE (supplements polling — if SSE is unavailable, polling still works)
-  useRealtime("sync:started", fetchStatus);
-  useRealtime("sync:completed", fetchStatus);
-  useRealtime("sync:failed", fetchStatus);
+  useRealtime("sync:started", onEvent);
+  useRealtime("sync:completed", onEvent);
+  useRealtime("sync:failed", onEvent);
   // Progress within a run, so the bar advances on a push instead of a 2s poll.
-  useRealtime("sync:progress", fetchStatus);
+  useRealtime("sync:progress", onEvent);
 
   useEffect(() => {
-    void (async () => { await fetchStatus(); })();
+    void (async () => { await fetchStatus(false); })();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fallback poll only — `sync:progress` above is the primary path, and the
@@ -190,7 +208,7 @@ export function SyncIndicator({ onSyncComplete }: SyncIndicatorProps) {
   // longer needs 2s (that existed solely because there was no progress event),
   // but stays quicker than idle so an SSE-down environment still shows a
   // moving bar.
-  useFallbackPoll(fetchStatus, hasActiveSync ? 15000 : 60000, initialCheckDone);
+  useFallbackPoll(onPoll, hasActiveSync ? 15000 : 60000, initialCheckDone);
 
   // Update relative times every minute
   useEffect(() => {

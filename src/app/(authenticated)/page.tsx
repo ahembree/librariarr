@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, useSyncExternalStore } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -36,7 +36,10 @@ import { generateId } from "@/lib/utils";
 import { getDuplicateServerNames } from "@/lib/server-styles";
 import { ServerTypeChip } from "@/components/server-type-chip";
 import { InsightsSkeleton, LibraryTilesSkeleton } from "@/components/skeletons";
-import { useRealtime } from "@/hooks/use-realtime";
+import { isRealtimeLive, useRealtime, useRealtimeEvents } from "@/hooks/use-realtime";
+import { serversResource, useServers } from "@/hooks/use-servers";
+import { libraryTypesResource, useLibraryTypes } from "@/hooks/use-library-types";
+import { fetchJsonShared, fetchShared } from "@/lib/shared-fetch";
 import { useShellSettings, useShellSnapshot } from "@/components/shell-settings-provider";
 import {
   ALL_SERVERS,
@@ -132,6 +135,16 @@ function SectionHeader({ label, children }: { label: string; children?: React.Re
 
 const subscribeNothing = () => () => {};
 
+const NO_TYPES: string[] = [];
+
+/** How often the figures refresh while a sync runs. */
+const LIVE_STATS_INTERVAL_MS = 10_000;
+
+/** Events after which only the figures may have moved (see `refresh`). */
+const FIGURE_EVENTS = ["sync:failed", "server:changed", "watch-history:updated"] as const;
+/** Events after which only the schedule may have moved. */
+const LIFECYCLE_RUN_EVENTS = ["lifecycle:detection-completed", "lifecycle:action-executed"] as const;
+
 export default function DashboardPage() {
   const router = useRouter();
   // False only on the render that hydrates server HTML: the visit the layout
@@ -156,22 +169,42 @@ export default function DashboardPage() {
   // Whether the saved layout and the library types have been answered (or
   // failed). The zones that depend on them wait for them; nothing else does.
   const [layoutSettled, setLayoutSettled] = useState(shell !== null);
-  // The layout read the library types too (the sidebar's links are built from
-  // them). Only the visit it rendered takes them: the types change when a
-  // server or library is added or turned off, which nothing re-reads into the
-  // layout's copy.
-  const [typesFromLayout] = useState(() => shellSnapshot !== null && !hydrated);
-  const [typesSettled, setTypesSettled] = useState(typesFromLayout);
+  // The library types come from the tab's store (`useLibraryTypes`): seeded
+  // with the layout's read, which the visit the layout rendered takes as it
+  // is, and kept current by `server:changed` and `sync:completed`. The layout's
+  // own copy is never re-read, so a later visit trusts the store only while
+  // the stream is delivering those events and has not marked it stale;
+  // otherwise it is re-read before the zones that depend on it mount, as this
+  // page re-read the types on every later visit.
+  const libraryTypes = useLibraryTypes();
+  const availableTypes = libraryTypes?.types ?? NO_TYPES;
+  const [typesSettled, setTypesSettled] = useState(() =>
+    hydrated ? isRealtimeLive() && !libraryTypesResource.needsRefresh() : libraryTypes !== null,
+  );
   const [scheduleInfo, setScheduleInfo] = useState<ScheduleInfo | null>(null);
   const [editMode, setEditMode] = useState(false);
-  const [servers, setServers] = useState<DashboardServer[]>([]);
+  // The tab's server list (`useServers`), re-read on `server:changed` — and
+  // shared with every library page's picker instead of fetched on each visit
+  // and on every sync and lifecycle event.
+  const { servers: serverList } = useServers();
+  const servers = useMemo<DashboardServer[]>(() => selectableServers(serverList), [serverList]);
   const [selectedServerId, setSelectedServerId] = useState<string>(ALL_SERVERS);
   const [selectedMediaType, setSelectedMediaType] = useState<string>(ALL_TYPES);
-  const [availableTypes, setAvailableTypes] = useState<string[]>(() =>
-    typesFromLayout ? (shellSnapshot?.libraryTypes.types ?? []) : [],
-  );
-  const typesFromLayoutRef = useRef(typesFromLayout);
   const [editingCustomCard, setEditingCustomCard] = useState<{ cardId: string; config: CustomCardConfig } | null>(null);
+
+  // A deleted or disabled selection falls back to every server, and a type
+  // filter whose type has left the library to every type, whenever the list
+  // they were picked from changes.
+  const [serversSeen, setServersSeen] = useState(servers);
+  if (serversSeen !== servers) {
+    setServersSeen(servers);
+    setSelectedServerId((prev) => reconcileSelectedServer(prev, servers));
+  }
+  const [typesSeen, setTypesSeen] = useState(availableTypes);
+  if (typesSeen !== availableTypes) {
+    setTypesSeen(availableTypes);
+    setSelectedMediaType((prev) => reconcileSelectedType(prev, availableTypes));
+  }
   const [fetchedUserName, setUserName] = useState<string>("");
   const userName = shellSnapshot?.user.username ?? fetchedUserName;
   const userKnown = useRef(shell !== null);
@@ -187,34 +220,38 @@ export default function DashboardPage() {
   // Monotonic token guards against out-of-order responses when the server
   // filter flips quickly (a stale slow response must not win).
   const statsReqToken = useRef(0);
+  // When the last stats request was sent: the live refresh during a sync is
+  // throttled against every stats request, not only its own.
+  const lastStatsAtRef = useRef(0);
 
+  // The ONE place the stats are asked for — on load, on a server pick, on the
+  // events below, and while a sync runs. The sync indicator used to ask on its
+  // own 10 s throttle and again when it saw a sync end, beside this page's own
+  // `sync:completed` refetch, so every sync ended in two identical requests
+  // (and the Library Sync card had a copy of the same logic).
   const fetchStats = useCallback(async () => {
     const token = ++statsReqToken.current;
-    try {
-      const url = dashboardStatsUrl(selectedServerId);
-      const res = await fetch(url);
-      // An error body ({error}) is truthy — setting it as stats would crash
-      // the tiles. Leave stats as they were (null on first load, so the retry
-      // empty-state renders).
-      if (token !== statsReqToken.current) return;
-      if (!res.ok) {
-        setStatsFailed(true);
-        return;
-      }
-      const data = await res.json();
-      if (token !== statsReqToken.current) return;
-      setStats(data);
-      setStatsFailed(false);
-    } catch (error) {
-      console.error("Failed to fetch stats:", error);
-      if (token === statsReqToken.current) setStatsFailed(true);
+    lastStatsAtRef.current = Date.now();
+    // Shared by every refresh asked for in one event's callbacks (a
+    // reconnect's resync runs them all at once).
+    const res = await fetchShared<Stats>(dashboardStatsUrl(selectedServerId));
+    if (token !== statsReqToken.current) return;
+    // An error body ({error}) is truthy — setting it as stats would crash the
+    // tiles. Leave stats as they were (null on first load, so the retry
+    // empty-state renders).
+    if (!res.ok || !res.body) {
+      if (res.status === 0) console.error("Failed to fetch stats");
+      setStatsFailed(true);
+      return;
     }
+    setStats(res.body);
+    setStatsFailed(false);
   }, [selectedServerId]);
 
-  // `fetchData` is stable (it backs the realtime subscriptions), but its stats
-  // refresh must honour the CURRENT server filter: fetching unfiltered stats
-  // there replaced one server's figures with every server's on each sync or
-  // lifecycle event while the selector still named the one server.
+  // The realtime callbacks are stable, but their stats refresh must honour the
+  // CURRENT server filter: fetching unfiltered stats there replaced one
+  // server's figures with every server's on each sync or lifecycle event while
+  // the selector still named the one server.
   const fetchStatsRef = useRef(fetchStats);
   useEffect(() => {
     fetchStatsRef.current = fetchStats;
@@ -227,85 +264,102 @@ export default function DashboardPage() {
   // Inside the shell the store owns the layout and keeps it current.
   const layoutReadRef = useRef(shell !== null);
 
-  // Each response is applied as it lands. The page used to wait for all five
-  // (the stats among them, the slowest by far on a cold cache) before drawing
-  // anything, and only then mounted the zones — which started their own
-  // requests a full round trip late.
-  const fetchData = useCallback(async () => {
-    const settle = (work: Promise<unknown>) =>
-      work.catch((error) => console.error("Failed to fetch dashboard data:", error));
-    const json = async (url: string) => {
-      const res = await fetch(url);
-      return res.ok ? res.json() : null;
-    };
-
-    const readLayout = async () => {
-      layoutReadRef.current = true;
-      try {
-        const data = await json("/api/settings/dashboard-layout");
-        if (data) {
-          setLayout(data.layout);
-          return;
-        }
-      } catch (error) {
-        console.error("Failed to fetch dashboard layout:", error);
+  const readLayout = useCallback(async () => {
+    if (layoutReadRef.current) return;
+    layoutReadRef.current = true;
+    try {
+      const res = await fetch("/api/settings/dashboard-layout");
+      if (res.ok) {
+        const data = await res.json();
+        setLayout(data.layout);
+        return;
       }
-      // A failed read is retried by the next refresh.
-      layoutReadRef.current = false;
-    };
-
-    const readTypes = () => {
-      if (typesFromLayoutRef.current) {
-        typesFromLayoutRef.current = false;
-        return null;
-      }
-      return settle(
-        json("/api/media/library-types").then((data) => {
-          if (!data) return;
-          const types: string[] = data.types ?? [];
-          setAvailableTypes(types);
-          setSelectedMediaType((prev) => reconcileSelectedType(prev, types));
-        }),
-      ).finally(() => setTypesSettled(true));
-    };
-
-    await Promise.all([
-      settle(fetchStatsRef.current()),
-      layoutReadRef.current ? null : readLayout().finally(() => setLayoutSettled(true)),
-      settle(
-        json("/api/servers").then((data) => {
-          if (!data) return;
-          const list = selectableServers(data.servers ?? []);
-          setServers(list);
-          setSelectedServerId((prev) => reconcileSelectedServer(prev, list));
-        }),
-      ),
-      readTypes(),
-      settle(
-        json("/api/settings/schedule-info").then((data) => {
-          if (data) setScheduleInfo(data);
-        }),
-      ),
-    ]);
+    } catch (error) {
+      console.error("Failed to fetch dashboard layout:", error);
+    } finally {
+      setLayoutSettled(true);
+    }
+    // A failed read is retried by the next refresh.
+    layoutReadRef.current = false;
   }, []);
 
-  // `fetchStats` refreshes only the headline tiles. `fetchData` also reloads the
-  // server list, library types and schedule info — all of which a sync, a
-  // server change or a scheduler run can move, and none of which had any
-  // refresh path at all.
-  useRealtime("sync:completed", fetchData);
-  useRealtime("server:changed", fetchData);
-  // Play data feeds the watch-derived tiles and charts. Fires about once per
-  // backfill slice, not per imported page.
-  useRealtime("watch-history:updated", fetchStats);
-  // Detection and execution change the figures the pipeline zone and schedule
-  // info render.
-  useRealtime("lifecycle:detection-completed", fetchData);
-  useRealtime("lifecycle:action-executed", fetchData);
+  const fetchScheduleInfo = useCallback(() => {
+    void fetchJsonShared<ScheduleInfo>("/api/settings/schedule-info").then((data) => {
+      if (data) setScheduleInfo(data);
+    });
+  }, []);
 
+  // What each event can move. A sync moves the figures and the next scheduled
+  // run; a failed sync, a server change or new plays move the figures; a
+  // lifecycle run moves only the schedule (deleted media leaves the library
+  // through the sync it triggers). The server list and the library types are
+  // their stores' own (`server:changed`; `server:changed` and
+  // `sync:completed`) — this page fetched both, and the schedule and the
+  // stats, on every one of these events.
+  const refresh = useCallback(
+    (parts: { stats?: boolean; schedule?: boolean }) => {
+      if (parts.stats) void fetchStatsRef.current();
+      if (parts.schedule) fetchScheduleInfo();
+      void readLayout();
+    },
+    [fetchScheduleInfo, readLayout],
+  );
+  const onSyncCompleted = useCallback(() => refresh({ stats: true, schedule: true }), [refresh]);
+  const onFiguresChanged = useCallback(() => refresh({ stats: true }), [refresh]);
+  const onLifecycleRun = useCallback(() => refresh({ schedule: true }), [refresh]);
+  useRealtime("sync:completed", onSyncCompleted);
+  // Play data feeds the watch-derived tiles and charts; `watch-history:updated`
+  // fires about once per backfill slice, not per imported page. A failed sync
+  // settles what it wrote before announcing the failure.
+  useRealtimeEvents(FIGURE_EVENTS, onFiguresChanged);
+  useRealtimeEvents(LIFECYCLE_RUN_EVENTS, onLifecycleRun);
+
+  // While a sync runs the indicator reports each check that finds it running;
+  // the figures beside it refresh at most every LIVE_STATS_INTERVAL_MS.
+  const onSyncActive = useCallback(() => {
+    if (Date.now() - lastStatsAtRef.current < LIVE_STATS_INTERVAL_MS) return;
+    void fetchStatsRef.current();
+  }, []);
+  // The end of a sync the stream did not announce (it is down): what
+  // `sync:completed` would have done, plus the types its store would have
+  // re-read.
+  const onUnannouncedSyncEnd = useCallback(() => {
+    onSyncCompleted();
+    void libraryTypesResource.refresh();
+  }, [onSyncCompleted]);
+
+  // Each response is applied as it lands. The page used to wait for all of
+  // them (the stats among them, the slowest by far on a cold cache) before
+  // drawing anything, and only then mounted the zones — which started their
+  // own requests a full round trip late.
   useEffect(() => {
-    void (async () => { await fetchData(); })();
-  }, [fetchData]);
+    void (async () => {
+      await Promise.all([fetchStatsRef.current(), fetchScheduleInfo(), readLayout()]);
+    })();
+  }, [fetchScheduleInfo, readLayout]);
+
+  // A later visit whose store copy of the types cannot be vouched for re-reads
+  // it; the zones that depend on the types wait for that (see above).
+  useEffect(() => {
+    if (typesSettled) return;
+    let active = true;
+    void libraryTypesResource.refresh().finally(() => {
+      if (active) setTypesSettled(true);
+    });
+    return () => {
+      active = false;
+    };
+    // Decided once, for the visit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const retry = () => {
+    setStatsFailed(false);
+    void fetchStats();
+    fetchScheduleInfo();
+    void serversResource.refresh();
+    void libraryTypesResource.refresh();
+  };
 
   // Re-fetch stats when the server filter changes. Keyed on the selection the
   // last fetch was for, not on the first load having finished: the selector is
@@ -438,7 +492,7 @@ export default function DashboardPage() {
           title="Failed to load dashboard"
           description="We couldn't fetch your library statistics. Check the server connection or try again."
           action={
-            <Button variant="outline" size="sm" onClick={() => { setStatsFailed(false); fetchData(); }}>
+            <Button variant="outline" size="sm" onClick={retry}>
               Retry
             </Button>
           }
@@ -489,7 +543,7 @@ export default function DashboardPage() {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2 shrink-0">
-          <SyncIndicator onSyncComplete={fetchStats} />
+          <SyncIndicator onSyncActive={onSyncActive} onSyncComplete={onUnannouncedSyncEnd} />
           {servers.length > 1 && (() => {
             const dupeNames = getDuplicateServerNames(servers);
             return (
@@ -635,7 +689,6 @@ export default function DashboardPage() {
             onTrackClick={handleTrackClick}
             onSeasonClick={handleSeasonClick}
             onAlbumClick={handleAlbumClick}
-            onSyncComplete={fetchStats}
             onConfigChange={handleConfigChange}
           />
           )}
