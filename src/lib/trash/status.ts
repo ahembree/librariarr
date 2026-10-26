@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import { findArrInstance } from "@/lib/arr/instances";
 import { sanitizeErrorDetail } from "@/lib/api/sanitize";
 import { GuideArrClient } from "./arr-guide-client";
 import { fetchTrashCatalog } from "./catalog";
@@ -36,11 +37,7 @@ export async function resolveInstance(
   serviceType: ServiceType,
   instanceId: string,
 ): Promise<ResolvedInstance | null> {
-  if (serviceType === "SONARR") {
-    const i = await prisma.sonarrInstance.findFirst({ where: { id: instanceId, userId } });
-    return i ? { serviceType, id: i.id, name: i.name, url: i.url, apiKey: i.apiKey, enabled: i.enabled } : null;
-  }
-  const i = await prisma.radarrInstance.findFirst({ where: { id: instanceId, userId } });
+  const i = await findArrInstance(serviceType, { id: instanceId, userId });
   return i ? { serviceType, id: i.id, name: i.name, url: i.url, apiKey: i.apiKey, enabled: i.enabled } : null;
 }
 
