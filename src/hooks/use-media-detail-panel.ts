@@ -9,7 +9,7 @@ import {
   type DetailPanelMediaType,
 } from "@/lib/media/detail-panel-item";
 import { formatMediaItemTitle } from "@/lib/media/display-title";
-import { detailPrefetch, mediaRecordUrl } from "@/lib/media/detail-prefetch";
+import { detailPrefetch, mediaRecordUrl, prefetchMediaDetail } from "@/lib/media/detail-prefetch";
 import type { MatchedCriterion } from "@/components/media-detail-side-panel";
 import type { BaseGroup, BaseRule, BuilderConfig } from "@/components/builder/types";
 import type { MediaItemWithRelations } from "@/lib/types";
@@ -58,6 +58,12 @@ export interface MediaDetailPanelSelection {
    * request failed with a seed on screen: the content then fetches it itself.
    */
   detailLoaded: boolean;
+  /**
+   * The `/api/media/[id]` record exactly as loaded — before a group's figures
+   * or the row's servers are laid over it — for the panel's database metadata.
+   * Absent while it loads.
+   */
+  record?: MediaItemWithRelations;
 }
 
 /**
@@ -94,6 +100,17 @@ export function useMediaDetailPanel() {
       ruleGroups: request.ruleGroups,
       builderConfig: request.builderConfig,
     };
+    // Everything the panel's sections read by id starts with the record, not
+    // after it renders — as the detail pages do. A grouped row (a show, an
+    // artist) shows no per-item play list, and an episode's is scoped by
+    // series identity, which only its record carries; an artist shows no
+    // Arr/Seerr cards.
+    const grouped = !!request.group || !!request.seed?.matchedEpisodes;
+    prefetchMediaDetail(request.id, {
+      mediaType: request.mediaType,
+      plays: !grouped && request.mediaType !== "SERIES",
+      integrations: !grouped || request.mediaType === "SERIES",
+    });
     if (request.seed) {
       setSelection({ ...base, item: buildDetailPanelItem(request.seed, request.group), detailLoaded: true });
     }
@@ -136,7 +153,7 @@ export function useMediaDetailPanel() {
       // A grouped row knows which servers hold the GROUP; the record only
       // knows its own copy's.
       const merged = request.seed?.servers ? { ...record, servers: request.seed.servers } : record;
-      setSelection({ ...base, item: buildDetailPanelItem(merged, request.group), detailLoaded: true });
+      setSelection({ ...base, item: buildDetailPanelItem(merged, request.group), detailLoaded: true, record });
     } catch (error) {
       console.error("Failed to fetch media item:", error);
       if (token === reqToken.current && !request.seed) {

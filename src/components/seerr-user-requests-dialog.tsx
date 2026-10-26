@@ -30,6 +30,7 @@ import {
   Calendar,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { UserAvatar } from "@/components/user-avatar";
 import { formatRelativeDate } from "@/lib/format";
 import { QualityChip } from "@/components/quality-chips";
 
@@ -139,41 +140,6 @@ function requestStatusLabel(s: number): string | null {
   if (s === 3) return "Declined";
   if (s === 4) return "Failed";
   return null;
-}
-
-const AVATAR_PALETTE = [
-  "bg-rose-500/15 text-rose-300 ring-rose-500/30",
-  "bg-orange-500/15 text-orange-300 ring-orange-500/30",
-  "bg-amber-500/15 text-amber-300 ring-amber-500/30",
-  "bg-emerald-500/15 text-emerald-300 ring-emerald-500/30",
-  "bg-teal-500/15 text-teal-300 ring-teal-500/30",
-  "bg-cyan-500/15 text-cyan-300 ring-cyan-500/30",
-  "bg-sky-500/15 text-sky-300 ring-sky-500/30",
-  "bg-indigo-500/15 text-indigo-300 ring-indigo-500/30",
-  "bg-violet-500/15 text-violet-300 ring-violet-500/30",
-  "bg-fuchsia-500/15 text-fuchsia-300 ring-fuchsia-500/30",
-];
-
-function hashString(s: string): number {
-  let h = 0;
-  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
-  return Math.abs(h);
-}
-
-function UserAvatar({ name }: { name: string }) {
-  const initial = (name.trim().charAt(0) || "?").toUpperCase();
-  const color = AVATAR_PALETTE[hashString(name) % AVATAR_PALETTE.length];
-  return (
-    <span
-      className={cn(
-        "inline-flex h-9 w-9 items-center justify-center rounded-full text-sm font-semibold ring-1 shrink-0",
-        color
-      )}
-      aria-hidden
-    >
-      {initial}
-    </span>
-  );
 }
 
 function PosterThumb({ url, type }: { url: string | null; type: "movie" | "tv" }) {
@@ -333,7 +299,7 @@ function DialogBody({ userKey, onClose }: { userKey: string; onClose: () => void
     <>
       <DialogHeader className="border-b border-border bg-muted/20 px-6 py-4">
         <div className="flex items-start gap-3">
-          <UserAvatar name={displayName} />
+          <UserAvatar name={displayName} size="lg" />
           <div className="flex-1 min-w-0">
             <DialogTitle className="text-base font-display tracking-tight flex items-center gap-2">
               <span className="truncate">{displayName}</span>

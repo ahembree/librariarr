@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ColorChip } from "@/components/color-chip";
+import { formatChannels } from "@/lib/format";
 import { Separator } from "@/components/ui/separator";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Slider } from "@/components/ui/slider";
@@ -80,18 +81,6 @@ function sortContentRatings(ratings: string[]): string[] {
     if (bi !== -1) return 1;
     return a.localeCompare(b);
   });
-}
-
-const CHANNEL_LABELS: Record<number, string> = {
-  1: "Mono",
-  2: "Stereo",
-  3: "2.1",
-  6: "5.1",
-  8: "7.1",
-};
-
-function formatChannels(ch: number): string {
-  return CHANNEL_LABELS[ch] ?? `${ch}ch`;
 }
 
 const MB = 1024 * 1024;

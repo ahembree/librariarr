@@ -71,6 +71,8 @@ interface MediaDetailSidePanelProps {
    * below skips its own fetch of the same record. `useMediaDetailPanel` sets it.
    */
   detailLoaded?: boolean;
+  /** The record as loaded, for the database metadata (`useMediaDetailPanel` sets it). */
+  record?: MediaItemWithRelations;
 }
 
 export function MediaDetailSidePanel({
@@ -87,6 +89,7 @@ export function MediaDetailSidePanel({
   allActualValues,
   contextSection,
   detailLoaded,
+  record,
 }: MediaDetailSidePanelProps) {
   const isMobile = useIsMobile();
 
@@ -310,6 +313,7 @@ export function MediaDetailSidePanel({
         matchedCriteriaSection={combinedMatchSection}
         historySection={historySection}
         detailLoaded={detailLoaded}
+        record={record}
       />
     </div>
   );

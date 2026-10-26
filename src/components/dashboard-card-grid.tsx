@@ -1,23 +1,8 @@
 "use client";
 
-import { useCallback, useMemo } from "react";
+import { createContext, useContext, useMemo } from "react";
 import { useChipColors } from "@/components/chip-color-provider";
-import {
-  DndContext,
-  closestCenter,
-  KeyboardSensor,
-  PointerSensor,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-} from "@dnd-kit/core";
-import {
-  arrayMove,
-  SortableContext,
-  sortableKeyboardCoordinates,
-  rectSortingStrategy,
-} from "@dnd-kit/sortable";
-import { SortableCard } from "@/components/sortable-card";
+import { StaticDashboardCard } from "@/components/dashboard-card-cell";
 import { StatsCards } from "@/components/stats-cards";
 import { SyncStatus } from "@/components/sync-status";
 import { QualityChart } from "@/components/quality-chart";
@@ -34,6 +19,41 @@ import {
 } from "@/lib/dashboard/card-registry";
 import { ChartCardSkeleton } from "@/components/skeletons";
 import { lazyComponent } from "@/components/lazy-component";
+import { formatChannels } from "@/lib/format";
+
+/** What the grid draws while the edit-mode grid's code loads: the cards as they were. */
+const StaticGridContext = createContext<{ cards: CardEntry[]; renderCard: (card: CardEntry) => React.ReactNode } | null>(null);
+
+function StaticCards({ cards, renderCard }: { cards: CardEntry[]; renderCard: (card: CardEntry) => React.ReactNode }) {
+  return (
+    <>
+      {cards.map((card) => (
+        <StaticDashboardCard key={card.id} size={card.size} heightPx={card.heightPx}>
+          {renderCard(card)}
+        </StaticDashboardCard>
+      ))}
+    </>
+  );
+}
+
+function StaticCardsFallback() {
+  const grid = useContext(StaticGridContext);
+  return grid ? <StaticCards {...grid} /> : null;
+}
+
+// Loaded on demand: drag-and-drop is needed only while customizing, and
+// imported here the library (~55 KB of minified script) loaded with every
+// dashboard.
+// Until it arrives the cards stay as they are.
+const SortableCardGrid = lazyComponent(
+  () => import("@/components/sortable-card-grid").then((m) => m.SortableCardGrid),
+  StaticCardsFallback,
+);
+
+function cardLimits(card: CardEntry): { minSize: number; maxSize: number } {
+  const def = isCustomCardId(card.id) ? CUSTOM_CARD_DEFINITION : getCardDefinition(card.id);
+  return { minSize: def?.minSize ?? 2, maxSize: def?.maxSize ?? 12 };
+}
 
 // Loaded on demand: it is the only dashboard card built on recharts (~500 KB
 // of script), and most dashboards have no custom card at all, so importing it
@@ -42,19 +62,6 @@ const CustomChartCard = lazyComponent(
   () => import("@/components/custom-chart-card").then((m) => m.CustomChartCard),
   ChartCardSkeleton,
 );
-
-const CHANNEL_LABELS: Record<number, string> = {
-  1: "Mono (1.0)",
-  2: "Stereo (2.0)",
-  3: "2.1",
-  6: "5.1 Surround",
-  8: "7.1 Surround",
-};
-
-function formatChannels(channels: number | null): string | null {
-  if (channels == null) return null;
-  return CHANNEL_LABELS[channels] ?? `${channels}ch`;
-}
 
 interface Stats {
   movieCount: number;
@@ -170,64 +177,6 @@ export function DashboardCardGrid({
   // Build hex color maps for breakdown charts from chip color context
   const dynamicRangeHex = useMemo(() => chipColors.dynamicRange, [chipColors.dynamicRange]);
   const audioCodecHex = useMemo(() => chipColors.audioCodec, [chipColors.audioCodec]);
-
-  const sensors = useSensors(
-    useSensor(PointerSensor, {
-      activationConstraint: { distance: 8 },
-    }),
-    useSensor(KeyboardSensor, {
-      coordinateGetter: sortableKeyboardCoordinates,
-    })
-  );
-
-  const handleDragEnd = useCallback(
-    (event: DragEndEvent) => {
-      const { active, over } = event;
-      if (!over || active.id === over.id) return;
-
-      const oldIndex = cards.findIndex((c) => c.id === active.id);
-      const newIndex = cards.findIndex((c) => c.id === over.id);
-      if (oldIndex === -1 || newIndex === -1) return;
-      onLayoutChange(arrayMove(cards, oldIndex, newIndex));
-    },
-    [cards, onLayoutChange]
-  );
-
-  const handleRemove = useCallback(
-    (cardId: string) => {
-      onLayoutChange(cards.filter((c) => c.id !== cardId));
-    },
-    [cards, onLayoutChange]
-  );
-
-  const handleResize = useCallback(
-    (cardId: string, newSize: number) => {
-      onLayoutChange(
-        cards.map((c) => (c.id === cardId ? { ...c, size: newSize } : c))
-      );
-    },
-    [cards, onLayoutChange]
-  );
-
-  const handleHeightResize = useCallback(
-    (cardId: string, newHeight: number) => {
-      onLayoutChange(
-        cards.map((c) => (c.id === cardId ? { ...c, heightPx: newHeight } : c))
-      );
-    },
-    [cards, onLayoutChange]
-  );
-
-  const handleHeightReset = useCallback(
-    (cardId: string) => {
-      onLayoutChange(
-        cards.map((c) =>
-          c.id === cardId ? { id: c.id, size: c.size, ...(c.config && { config: c.config }) } : c
-        )
-      );
-    },
-    [cards, onLayoutChange]
-  );
 
   const noMusicTypes = availableTypes?.filter((t) => t !== "MUSIC");
 
@@ -356,7 +305,7 @@ export function DashboardCardGrid({
             title="Audio Channels Breakdown"
             icon={getCardDefinition("audio-channels")?.icon}
             breakdown={(stats.audioChannelsBreakdown ?? []).map((b) => ({
-              value: formatChannels(b.audioChannels),
+              value: b.audioChannels == null ? null : formatChannels(b.audioChannels, { verbose: true }),
               type: b.type,
               _count: b._count,
             }))}
@@ -404,42 +353,22 @@ export function DashboardCardGrid({
     }
   }
 
-  const cardIds = cards.map((c) => c.id);
+  const renderEntry = (card: CardEntry) => renderCard(card.id, card.config);
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-12 gap-6">
-      <DndContext
-        sensors={sensors}
-        collisionDetection={closestCenter}
-        onDragEnd={handleDragEnd}
-      >
-        <SortableContext
-          items={cardIds}
-          strategy={rectSortingStrategy}
-        >
-          {cards.map((card) => {
-            const isCustom = isCustomCardId(card.id);
-            const def = isCustom ? CUSTOM_CARD_DEFINITION : getCardDefinition(card.id);
-            return (
-              <SortableCard
-                key={card.id}
-                id={card.id}
-                size={card.size}
-                heightPx={card.heightPx}
-                minSize={def?.minSize ?? 2}
-                maxSize={def?.maxSize ?? 12}
-                editMode={editMode}
-                onRemove={() => handleRemove(card.id)}
-                onResize={(newSize) => handleResize(card.id, newSize)}
-                onHeightResize={(newHeight) => handleHeightResize(card.id, newHeight)}
-                onHeightReset={() => handleHeightReset(card.id)}
-              >
-                {renderCard(card.id, card.config)}
-              </SortableCard>
-            );
-          })}
-        </SortableContext>
-      </DndContext>
+      {editMode ? (
+        <StaticGridContext.Provider value={{ cards, renderCard: renderEntry }}>
+          <SortableCardGrid
+            cards={cards}
+            limitsOf={cardLimits}
+            renderCard={renderEntry}
+            onLayoutChange={onLayoutChange}
+          />
+        </StaticGridContext.Provider>
+      ) : (
+        <StaticCards cards={cards} renderCard={renderEntry} />
+      )}
     </div>
   );
 }
