@@ -12,6 +12,7 @@ const { mockPrisma, mockClient, mockEmit, cancelWatch } = vi.hoisted(() => ({
   },
   mockPrisma: {
     $queryRawUnsafe: vi.fn(),
+    $executeRawUnsafe: vi.fn().mockResolvedValue(0),
     lifecycleException: { count: vi.fn() },
   },
   mockClient: {
@@ -85,6 +86,7 @@ vi.mock("@/lib/sync/sync-watch-history", () => ({
 vi.mock("@/lib/sync/watch-reconcile", () => ({
   reconcileWatchStateFromHistory: vi.fn().mockResolvedValue(0),
   loadWatchCountsFromHistory: vi.fn().mockResolvedValue(new Map()),
+  loadLibraryWatchCountsFromHistory: vi.fn(async () => new Map()),
 }));
 
 vi.mock("@/lib/http-retry", () => ({
@@ -290,8 +292,9 @@ describe("syncMediaServer", () => {
 
     await syncMediaServer("server-1");
 
-    expect(syncWatchHistory).toHaveBeenCalledWith("server-1", undefined, expect.any(AbortSignal));
-    // syncWatchHistory reconciles internally, so the sync must not do it twice.
+    // `reconcileAll`: after a full item sync the whole server is reconciled,
+    // inside syncWatchHistory — so the sync must not do it twice itself.
+    expect(syncWatchHistory).toHaveBeenCalledWith("server-1", undefined, expect.any(AbortSignal), { reconcileAll: true });
     expect(reconcileWatchStateFromHistory).not.toHaveBeenCalled();
   });
 
@@ -1426,14 +1429,17 @@ describe("syncMediaServer job lifecycle events", () => {
     expect(emitsOfType("sync:completed").length).toBe(0);
   });
 
-  it("honours a Stop before the play-count scan and announces sync:failed when nothing changed", async () => {
+  it("honours a Stop before the libraries and announces sync:failed when nothing changed", async () => {
+    const { loadLibraryWatchCountsFromHistory } = await import("@/lib/sync/watch-reconcile");
     mockSyncDb({ cancel: () => true });
     mockClient.getLibraries.mockResolvedValue([MOVIES]);
 
     await syncMediaServer("server-1");
 
-    // The scan pages a large server's whole history; a Stop pressed before it
-    // must not wait it out.
+    // A Stop pressed before the library loop must not start it.
+    expect(mockClient.getWatchlistGuids).not.toHaveBeenCalled();
+    expect(loadLibraryWatchCountsFromHistory).not.toHaveBeenCalled();
+    // The full sync never pages the server's whole play history for counts.
     expect(mockClient.getWatchCounts).not.toHaveBeenCalled();
     expect(findDbCalls('UPDATE "SyncJob"', "CANCELLED").length).toBe(1);
     // Nothing was written, so no listing should re-pull its whole list.

@@ -21,9 +21,11 @@ import { emitSyncProgress, clearSyncProgressThrottle } from "./sync-progress";
 import { watchForCancel } from "./cancel-watch";
 import { acquireSyncSlot, releaseSyncSlot } from "@/lib/sync/sync-semaphore";
 import { syncWatchHistory } from "@/lib/sync/sync-watch-history";
-import { reconcileWatchStateFromHistory } from "@/lib/sync/watch-reconcile";
+import { loadLibraryWatchCountsFromHistory, reconcileWatchStateFromHistory } from "@/lib/sync/watch-reconcile";
 import { mbidFromGuids, withArtistMbid } from "@/lib/media/musicbrainz";
 import { writeArtistMbids } from "@/lib/sync/artist-mbid";
+import { mapWithConcurrency, settleWithConcurrency } from "@/lib/media-server/concurrency";
+import { syncCompletedMeta, type SyncLibraryType } from "@/lib/sync/sync-completed-meta";
 
 // --- Filename-based detection using Trash-Guides naming conventions ---
 // These regex patterns are derived from Trash-Guides custom format definitions:
@@ -183,7 +185,9 @@ const ENRICHMENT_CONCURRENCY = 10;
 /**
  * Enrich a single batch of items by fetching detailed per-item metadata.
  * Mutates the batch array in-place to avoid holding two large copies.
- * Uses concurrency-limited parallel requests to avoid overwhelming the server.
+ * At most `ENRICHMENT_CONCURRENCY` requests are in flight, as a pool: a slot
+ * that finishes takes the next item rather than waiting for the slowest
+ * request of a fixed wave of ten.
  * Leaves the original bulk listing item in place if a per-item fetch fails, and
  * returns the rating keys of those items: the caller must not let a bulk item
  * pass for an enriched one (see the call site).
@@ -193,38 +197,36 @@ async function enrichBatch(
   batch: MediaMetadataItem[],
 ): Promise<Set<string>> {
   const failed = new Set<string>();
-  for (let i = 0; i < batch.length; i += ENRICHMENT_CONCURRENCY) {
-    const end = Math.min(i + ENRICHMENT_CONCURRENCY, batch.length);
-    const results = await Promise.allSettled(
-      batch.slice(i, end).map((item) => client.getItemMetadata(item.ratingKey))
-    );
-    for (let j = 0; j < results.length; j++) {
-      const settled = results[j];
-      // A falsy resolved value would overwrite a perfectly good bulk-listing row
-      // with `undefined`, which `buildItemData` then dereferences — aborting the
-      // whole library sync mid-page. `getItemMetadata` is contracted to throw
-      // rather than resolve nothing, but this batch is only as safe as the
-      // weakest client implementation, so don't rely on it.
-      const value = settled.status === "fulfilled" ? settled.value : undefined;
-      if (value) batch[i + j] = value;
-      else failed.add(batch[i + j].ratingKey);
-    }
-    // Yield between enrichment chunks to allow GC
-    if (end < batch.length) {
-      await new Promise<void>((resolve) => { setImmediate(resolve); });
-    }
+  const results = await settleWithConcurrency(batch, ENRICHMENT_CONCURRENCY, (item) =>
+    client.getItemMetadata(item.ratingKey),
+  );
+  for (let j = 0; j < results.length; j++) {
+    const settled = results[j];
+    // A falsy resolved value would overwrite a perfectly good bulk-listing row
+    // with `undefined`, which `buildItemData` then dereferences — aborting the
+    // whole library sync mid-page. `getItemMetadata` is contracted to throw
+    // rather than resolve nothing, but this batch is only as safe as the
+    // weakest client implementation, so don't rely on it.
+    const value = settled.status === "fulfilled" ? settled.value : undefined;
+    if (value) batch[j] = value;
+    else failed.add(batch[j].ratingKey);
   }
   return failed;
 }
 
 /**
- * Log V8 heap statistics and optionally force garbage collection.
+ * Log V8 heap statistics and, by default, force garbage collection.
  * When --expose-gc is enabled, calls global.gc() to reclaim memory from the
  * previous page's metadata objects instead of letting V8 defer collection.
+ *
+ * `collect: false` only logs. A forced collection is a full, stop-the-world
+ * mark-compact, so it belongs at the boundaries where a large set of objects
+ * has just been released (between pages and libraries) — not every ~250
+ * items, which paid one per five upsert batches for a log line.
  */
-function logHeapAndCollect(label: string): { usedMB: number; rss: number } {
+function logHeapAndCollect(label: string, { collect = true }: { collect?: boolean } = {}): { usedMB: number; rss: number } {
   const gcAvailable = typeof globalThis.gc === "function";
-  if (gcAvailable) {
+  if (gcAvailable && collect) {
     globalThis.gc!();
   }
   const heap = v8.getHeapStatistics();
@@ -306,9 +308,10 @@ const SKIP_ON_UPDATE = new Set(["id", "libraryId", "ratingKey", "type", "created
 // `buildItemData` maxes the fetched metadata against the stored watch history,
 // but both of its inputs are account-scoped or table-derived and can legitimately
 // read zero for an item somebody else watched: Plex metadata carries only the
-// admin token's own `viewCount`, `JellyfinCompatClient.getWatchCounts()` returns an
-// empty map by design, and `loadWatchCountsFromHistory` returns nothing while
-// `WatchHistory` is empty. A plain `= EXCLUDED` then writes `playCount = 0,
+// admin token's own `viewCount` (Jellyfin/Emby's `UserData` the admin user's),
+// and the stored-history counts (`loadLibraryWatchCountsFromHistory`,
+// `loadWatchCountsFromHistory`) are empty while `WatchHistory` is. A plain
+// `= EXCLUDED` then writes `playCount = 0,
 // lastPlayedAt = null` over a real, higher stored value.
 //
 // That is reachable on purpose, not just in theory: changing a server's
@@ -349,7 +352,7 @@ function buildUpsertSql(rowCount: number): string {
   return (
     `INSERT INTO "MediaItem" (${cols}) VALUES ${rows.join(",")} ` +
     `ON CONFLICT ("libraryId","ratingKey") DO UPDATE SET ${sets.join(",")} ` +
-    `RETURNING "id","ratingKey"`
+    `RETURNING "id","ratingKey","dedupKey"`
   );
 }
 
@@ -518,6 +521,10 @@ function buildRowParams(
  * Isolated as a separate function so ALL local variables (Prisma results, Maps,
  * intermediate arrays) are definitively out of scope when it returns, making them
  * immediately eligible for garbage collection.
+ *
+ * Returns the `dedupKey` of every row it wrote, so a caller that recomputes
+ * canonical copies for just the groups it touched (the incremental sync) knows
+ * which groups those are.
  */
 export async function processBatch(
   items: MediaMetadataItem[],
@@ -529,8 +536,8 @@ export async function processBatch(
   showGuidsMap?: Map<string, Array<{ id: string }>>,
   watchlistGuids?: Set<string>,
   showSummaryMap?: Map<string, string>,
-): Promise<void> {
-  if (items.length === 0) return;
+): Promise<{ dedupKeys: string[] }> {
+  if (items.length === 0) return { dedupKeys: [] };
 
   // Raw SQL upsert — single INSERT ON CONFLICT query replaces N individual
   // Prisma upserts, eliminating per-operation internal state retention.
@@ -540,7 +547,7 @@ export async function processBatch(
     params.push(...buildRowParams(item, libraryId, libraryType, watchCounts, showGenreMap, showGuidsMap, now, watchlistGuids, showSummaryMap));
   }
   const upsertResults = await withDeadlockRetry("processBatch upsert", () =>
-    prisma.$queryRawUnsafe<{ id: string; ratingKey: string }[]>(
+    prisma.$queryRawUnsafe<{ id: string; ratingKey: string; dedupKey: string | null }[]>(
       buildUpsertSql(items.length), ...params
     ),
   );
@@ -549,16 +556,18 @@ export async function processBatch(
   // Invalidate image cache for items with changed artwork URLs.
   // Normalize URLs before comparing to ignore Plex timestamp-only changes
   // (e.g. /library/metadata/123/thumb/OLD vs /library/metadata/123/thumb/NEW).
+  // One call for the whole batch: episodes share their season's and show's
+  // artwork, so a re-titled season names the same file once per episode.
+  const changedUrls: string[] = [];
   for (const item of items) {
     const old = existingThumbUrls.get(item.ratingKey);
     if (!old) continue;
-    const changedUrls: (string | null)[] = [];
     if (normalizeCacheUrl(old.thumbUrl ?? "") !== normalizeCacheUrl(item.thumb ?? "") && old.thumbUrl) changedUrls.push(old.thumbUrl);
     if (normalizeCacheUrl(old.parentThumbUrl ?? "") !== normalizeCacheUrl(item.grandparentThumb ?? "") && old.parentThumbUrl) changedUrls.push(old.parentThumbUrl);
     if (normalizeCacheUrl(old.seasonThumbUrl ?? "") !== normalizeCacheUrl(item.parentThumb ?? "") && old.seasonThumbUrl) changedUrls.push(old.seasonThumbUrl);
-    if (changedUrls.length > 0) {
-      await invalidateCachedUrls(libraryId, changedUrls);
-    }
+  }
+  if (changedUrls.length > 0) {
+    await invalidateCachedUrls(libraryId, changedUrls);
   }
 
   // Collect external IDs and streams from the batch
@@ -698,6 +707,10 @@ export async function processBatch(
       ...streamParams,
     );
   }
+
+  return {
+    dedupKeys: upsertResults.map((r) => r.dedupKey).filter((key): key is string => key !== null),
+  };
 }
 
 interface SyncMediaServerOptions {
@@ -789,12 +802,24 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
     invalidateMediaCaches();
   };
 
+  // The library types whose rows this run wrote or removed. Announced with
+  // `sync:completed` (see `SyncCompletedMeta`) so a page showing another type
+  // can skip its refetch. Filled as each library is entered — before any write
+  // to it — so a run that stops part-way still names everything it touched.
+  const touchedTypes = new Set<SyncLibraryType>();
+
   // Cleared on every announcement: at the start so a leftover window cannot
   // swallow this run's first progress tick, at the end so it cannot swallow
   // the next run's.
   const announce = (type: "sync:started" | "sync:completed" | "sync:failed", userId: string) => {
     clearSyncProgressThrottle(serverId);
-    eventBus.emit({ type, userId, meta: { serverId } });
+    eventBus.emit({
+      type,
+      userId,
+      meta: type === "sync:completed"
+        ? syncCompletedMeta(serverId, touchedTypes)
+        : { serverId },
+    });
   };
 
   const cancelRequested = async (): Promise<boolean> => {
@@ -913,8 +938,10 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
     // likely a bad answer than "delete everything" — the same fail-toward-
     // keeping stance as the item purge.
     if (!libraryKey && libraries.length > 0) {
-      if (await purgeVanishedLibraries(serverId, libraries.map((l) => l.key)) > 0) {
+      const purgedTypes = await purgeVanishedLibraries(serverId, libraries.map((l) => l.key));
+      if (purgedTypes.length > 0) {
         datasetChanged = true;
+        for (const type of purgedTypes) touchedTypes.add(type);
       }
     }
 
@@ -936,23 +963,22 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
     });
 
     // Honour a Stop pressed during the connection test, the library listing or
-    // the purge before starting the play-count scan, which pages a large Plex
-    // server's entire history (tens of seconds).
+    // the purge before going on to the watchlist and the libraries.
     if (await cancelRequested()) {
       await finishCancelled(server.userId);
       return;
     }
 
-    // Fetch play counts (one Map kept in memory for the whole sync)
-    await prisma.$queryRawUnsafe(
-      `UPDATE "SyncJob" SET "currentLibrary"=$1 WHERE "id"=$2`,
-      "Fetching play counts...", syncJob.id,
-    );
-    const opStart = Date.now();
-    const watchCounts = await client.getWatchCounts();
-    completedOps.push(`Play counts: ${formatDuration(Date.now() - opStart)}`);
-    logger.info("Sync", `Play counts loaded (${watchCounts.size} items with plays)`);
-    logHeapAndCollect("after play counts");
+    // Play counts come from the STORED watch history, one library at a time
+    // (see `loadLibraryWatchCountsFromHistory`), not from a live scan of the
+    // server's whole play history. That scan read the same endpoint the
+    // watch-history pass at the end of this sync reads again to rewrite
+    // `WatchHistory` and reconcile both columns from it — every full sync paged
+    // a large Plex server's entire history twice. A Tracearr-mapped server's
+    // plays are Tracearr's, so the native scan there was not even the right
+    // source. A run that skips the watch-history pass (the per-library fan-out)
+    // still reconciles from the stored rows below, and its follow-up job brings
+    // the new plays.
 
     // Fetch Plex watchlist GUIDs for cross-referencing during sync.
     // Jellyfin/Emby set isWatchlisted via IsFavorite in the item data directly.
@@ -1065,12 +1091,17 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
 
       // Skip disabled libraries
       if (!library.enabled) continue;
+      touchedTypes.add(libraryType);
 
       await prisma.$queryRawUnsafe(
         `UPDATE "SyncJob" SET "currentLibrary"=$1 WHERE "id"=$2`,
         syncStatus(lib.title), syncJob.id,
       );
       const libOpStart = Date.now();
+
+      // This library's stored plays, all users — see the note above the
+      // watchlist fetch. One map per library, released with it.
+      const watchCounts = await loadLibraryWatchCountsFromHistory(serverId, library.id);
 
       // Record when this library sync started so we can identify stale items
       // (items not touched by upserts will have updatedAt < syncStartTime).
@@ -1145,6 +1176,35 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
           }
         };
 
+        // Split a batch: skip enrichment for items unchanged on the server
+        // (Plex's updatedAt, epoch, against the stored serverUpdatedAt), and
+        // start fetching the details of the rest. Enrich only changed/new
+        // items — keeps peak memory low and avoids unnecessary per-item calls.
+        const page = pageItems;
+        const startEnrichment = (start: number) => {
+          const toEnrich: MediaMetadataItem[] = [];
+          const unchangedKeys: string[] = [];
+          for (const item of page.slice(start, Math.min(start + UPSERT_BATCH_SIZE, page.length))) {
+            const existing = existingThumbUrls.get(item.ratingKey);
+            const storedMs = existing?.serverUpdatedAt?.getTime();
+            const itemMs = item.updatedAt ? item.updatedAt * 1000 : null;
+            if (storedMs != null && itemMs != null && storedMs === itemMs) {
+              unchangedKeys.push(item.ratingKey);
+            } else {
+              toEnrich.push(item);
+            }
+          }
+          const fetched = toEnrich.length > 0 ? enrichBatch(client, toEnrich) : Promise.resolve(new Set<string>());
+          const enrichment = fetched.then((failedKeys) => ({ toEnrich, unchangedKeys, failedKeys }));
+          // Never left unobserved if a Stop or a failed write drops it.
+          enrichment.catch(() => {});
+          return enrichment;
+        };
+        // The NEXT batch's detail fetches run while this one is written, so the
+        // server and the database work at the same time instead of in turn.
+        // At most two batches are held at once.
+        let nextEnrichment: ReturnType<typeof startEnrichment> | null = null;
+
         // Process this page in DB batches
         for (let i = 0; i < pageItems.length; i += UPSERT_BATCH_SIZE) {
           // Check for cancellation between batches
@@ -1159,28 +1219,13 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
           const batch = pageItems.slice(i, batchEnd);
 
           if (shouldEnrich) {
-            // Split batch: skip enrichment for items unchanged on the server.
-            // Compare Plex's updatedAt (epoch) against stored serverUpdatedAt.
-            const toEnrich: MediaMetadataItem[] = [];
-            const unchangedKeys: string[] = [];
-            for (const item of batch) {
-              const existing = existingThumbUrls.get(item.ratingKey);
-              const storedMs = existing?.serverUpdatedAt?.getTime();
-              const itemMs = item.updatedAt ? item.updatedAt * 1000 : null;
-              if (storedMs != null && itemMs != null && storedMs === itemMs) {
-                unchangedKeys.push(item.ratingKey);
-              } else {
-                toEnrich.push(item);
-              }
-            }
+            const { toEnrich, unchangedKeys, failedKeys } = await (nextEnrichment ?? startEnrichment(i));
+            nextEnrichment = batchEnd < page.length ? startEnrichment(batchEnd) : null;
 
             // Items whose detail fetch failed and that are already stored: kept
             // exactly as they are and only touched below, like unchanged ones.
             const keptKeys: string[] = [];
             if (toEnrich.length > 0) {
-              // Enrich only changed/new items — keeps peak memory low and
-              // avoids unnecessary per-item API calls.
-              const failedKeys = await enrichBatch(client, toEnrich);
               // A failed fetch leaves the BULK listing item, which carries no
               // stream detail. Upserting it overwrote every stream-derived
               // column of a good row (`dynamicRange` fell back to the filename,
@@ -1253,9 +1298,11 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
           // on the nulled-out items and processBatch's released locals.
           await new Promise<void>((resolve) => { setImmediate(resolve); });
 
-          // Log memory every 250 items to track climb within a library
+          // Log memory every 250 items to track climb within a library. Log
+          // only: the forced collections stay at the page and library
+          // boundaries, where a page's worth of objects has just been released.
           if (processedItems % 250 < UPSERT_BATCH_SIZE) {
-            logHeapAndCollect(`batch ${processedItems}/${totalItems} (${lib.title})`);
+            logHeapAndCollect(`batch ${processedItems}/${totalItems} (${lib.title})`, { collect: false });
           }
         }
 
@@ -1365,10 +1412,12 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
       }
 
       if (staleItems.length > 0) {
-        // Invalidate image cache for items being removed
-        for (const staleItem of staleItems) {
-          await invalidateCachedUrls(library.id, [staleItem.thumbUrl, staleItem.parentThumbUrl, staleItem.seasonThumbUrl]);
-        }
+        // Invalidate image cache for items being removed — one call for all of
+        // them, since removed episodes share their season's and show's artwork.
+        await invalidateCachedUrls(
+          library.id,
+          staleItems.flatMap((s) => [s.thumbUrl, s.parentThumbUrl, s.seasonThumbUrl]),
+        );
         const staleIds = staleItems.map((s) => s.id);
         // Purging cascades away lifecycle exceptions tied to these rows — that
         // protection does NOT come back if the item later reappears under a new
@@ -1426,13 +1475,21 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
       if (showSummaryMap && showSummaryMap.size > 0) {
         // Maps are keyed by series ratingKey; match episodes via their stored
         // grandparentRatingKey rather than parentTitle (titles can collide).
-        for (const [seriesId, summary] of showSummaryMap) {
-          await prisma.$queryRawUnsafe(
-            `UPDATE "MediaItem" SET "parentSummary"=$1 WHERE "libraryId"=$2 AND "grandparentRatingKey"=$3 AND ("parentSummary" IS DISTINCT FROM $1)`,
-            summary, library.id, seriesId,
-          );
-        }
-        logger.info("Sync", `Library "${lib.title}": updated parentSummary for ${showSummaryMap.size} shows`);
+        // One statement for every show: it was one UPDATE per show, each
+        // scanning the library's rows for its grandparentRatingKey.
+        const updated = await prisma.$executeRawUnsafe(
+          `UPDATE "MediaItem" mi
+              SET "parentSummary" = s."summary"
+             FROM unnest($2::text[], $3::text[]) AS s("seriesId", "summary")
+            WHERE mi."libraryId" = $1
+              AND mi."grandparentRatingKey" = s."seriesId"
+              AND mi."parentSummary" IS DISTINCT FROM s."summary"`,
+          library.id, [...showSummaryMap.keys()], [...showSummaryMap.values()],
+        );
+        logger.info(
+          "Sync",
+          `Library "${lib.title}": parentSummary checked for ${showSummaryMap.size} shows (${updated} episode(s) updated)`,
+        );
       }
 
       await prisma.$queryRawUnsafe(
@@ -1449,15 +1506,15 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
       }
       completedOps.push(`${lib.title}: ${formatDuration(Date.now() - libOpStart)}`);
 
-      // Release show maps between libraries and force GC
+      // Release show maps and play counts between libraries and force GC
       showGenreMap = undefined;
       showGuidsMap = undefined;
       showSummaryMap = undefined;
+      watchCounts.clear();
       logHeapAndCollect("between libraries");
     }
 
-    // Release watch counts and watchlist after all libraries are done
-    watchCounts.clear();
+    // Release the watchlist after all libraries are done
     watchlistGuids?.clear();
 
     // Covers a Stop during the last library's post-processing, and a run with
@@ -1482,7 +1539,10 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
       // its next write batch, so the previous history stays intact.
       const cancelWatch = watchForCancel(cancelRequested);
       try {
-        const { count: whCount } = await syncWatchHistory(serverId, undefined, cancelWatch.signal);
+        // `reconcileAll`: after a full item sync the whole server is
+        // reconciled, not only the items this pass wrote plays for — the
+        // backstop for a reconcile an earlier run did not finish.
+        const { count: whCount } = await syncWatchHistory(serverId, undefined, cancelWatch.signal, { reconcileAll: true });
         completedOps.push(`Watch history: ${whCount} plays (${formatDuration(Date.now() - whStart)})`);
         logger.info("Sync", `Watch history sync completed: ${whCount} play events`);
       } catch (whError) {
@@ -1499,16 +1559,14 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
         return;
       }
     } else {
-      // The item upserts above wrote `playCount`/`lastPlayedAt` from
-      // *account-scoped* metadata — the admin token's own views on Plex, and
-      // nothing at all on Jellyfin/Emby, whose `getWatchCounts()` returns an
-      // empty map by design. `syncWatchHistory` normally repairs that at the
-      // end of a sync, so a run that skips it (the per-library fan-out from
-      // /api/sync/by-type, which defers one server-wide scan to a follow-up
-      // job) would otherwise leave every item it touched reporting the owner's
-      // last play instead of the household's. Reconciling from the *stored*
-      // history needs no server round-trip and is monotonic, so it can only
-      // restore play state the upsert just overwrote, never lower it.
+      // The item upserts above maxed *account-scoped* metadata (the admin's
+      // own views) with the stored history's counts. `syncWatchHistory`
+      // normally reconciles the whole server at the end of a sync; a run that
+      // skips it (the per-library fan-out from /api/sync/by-type, which defers
+      // the one server-wide scan to a follow-up job) keeps that backstop here,
+      // so an item whose earlier reconcile never finished is still repaired.
+      // Reconciling from the *stored* history needs no server round-trip and
+      // is monotonic, so it can only restore play state, never lower it.
       try {
         await reconcileWatchStateFromHistory(serverId);
       } catch (reconcileError) {
@@ -1631,15 +1689,16 @@ async function confirmGoneFromLibrary(
   const gone: StaleCandidate[] = [];
   let stillPresent = 0;
   let unconfirmed = 0;
-  for (let i = 0; i < candidates.length; i += ENRICHMENT_CONCURRENCY) {
-    const chunk = candidates.slice(i, i + ENRICHMENT_CONCURRENCY);
-    const verdicts = await Promise.all(chunk.map((candidate) => classify(candidate.ratingKey)));
-    verdicts.forEach((verdict, j) => {
-      if (verdict === "gone") gone.push(chunk[j]);
-      else if (verdict === "present") stillPresent++;
-      else unconfirmed++;
-    });
-  }
+  // `classify` never throws (every failure is "unknown"), so the pool runs
+  // every candidate.
+  const verdicts = await mapWithConcurrency(candidates, ENRICHMENT_CONCURRENCY, (candidate) =>
+    classify(candidate.ratingKey),
+  );
+  verdicts.forEach((verdict, j) => {
+    if (verdict === "gone") gone.push(candidates[j]);
+    else if (verdict === "present") stillPresent++;
+    else unconfirmed++;
+  });
   if (stillPresent > 0) {
     logger.warn(
       "Sync",
@@ -1662,12 +1721,12 @@ async function confirmGoneFromLibrary(
  * reports. See the call site in `syncMediaServer` for why leaving them was a
  * lifecycle hazard. Logs each removal at WARN with the cascaded exception
  * count, as the stale-item purge does — that protection does not come back if
- * the media reappears under another library. Returns how many it removed, so
- * the caller knows the dataset changed.
+ * the media reappears under another library. Returns the type of each library
+ * it removed, so the caller knows the dataset changed and which part of it.
  */
-async function purgeVanishedLibraries(serverId: string, serverKeys: string[]): Promise<number> {
-  const vanished = await prisma.$queryRawUnsafe<{ id: string; key: string; title: string }[]>(
-    `SELECT "id","key","title" FROM "Library" WHERE "mediaServerId"=$1 AND NOT ("key" = ANY($2::text[]))`,
+async function purgeVanishedLibraries(serverId: string, serverKeys: string[]): Promise<SyncLibraryType[]> {
+  const vanished = await prisma.$queryRawUnsafe<{ id: string; key: string; title: string; type: SyncLibraryType }[]>(
+    `SELECT "id","key","title","type"::text AS "type" FROM "Library" WHERE "mediaServerId"=$1 AND NOT ("key" = ANY($2::text[]))`,
     serverId, serverKeys,
   );
   for (const lib of vanished) {
@@ -1684,9 +1743,10 @@ async function purgeVanishedLibraries(serverId: string, serverKeys: string[]): P
       lib.id,
     );
     const exceptions = Number(exceptionRows[0]?.count ?? 0);
-    for (const item of items) {
-      await invalidateCachedUrls(lib.id, [item.thumbUrl, item.parentThumbUrl, item.seasonThumbUrl]);
-    }
+    await invalidateCachedUrls(
+      lib.id,
+      items.flatMap((item) => [item.thumbUrl, item.parentThumbUrl, item.seasonThumbUrl]),
+    );
     await prisma.$queryRawUnsafe(`DELETE FROM "Library" WHERE "id"=$1`, lib.id);
     logger.warn(
       "Sync",
@@ -1694,7 +1754,7 @@ async function purgeVanishedLibraries(serverId: string, serverKeys: string[]): P
         (exceptions > 0 ? `, deleting ${exceptions} lifecycle exception(s) attached to them` : ""),
     );
   }
-  return vanished.length;
+  return vanished.map((lib) => lib.type);
 }
 
 /**
