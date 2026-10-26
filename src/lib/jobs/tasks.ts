@@ -254,7 +254,10 @@ const tracearrBackfill: Task = async (payload) => {
   // anyway, so there is nothing to lose by simply logging it.
   if (!result.backfillPending) {
     try {
-      await recoverHistoryForNewItems(serverId);
+      // The slice that just finished the walk built a join index; reuse it
+      // rather than load every item on the server a second time.
+      if (result.joinIndex) await recoverHistoryForNewItems(serverId, { joinIndex: result.joinIndex });
+      else await recoverHistoryForNewItems(serverId);
     } catch (error) {
       logger.warn(
         "Jobs",

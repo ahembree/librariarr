@@ -483,6 +483,12 @@ interface TracearrImportResult {
    * both the job's self-re-enqueue and the UI's "still importing" state.
    */
   backfillPending: boolean;
+  /**
+   * The join index this run built, when it built one (only a run that met a
+   * page of this server's records does). Handed on so the backfill task's
+   * recovery pass can reuse it instead of loading every item again.
+   */
+  joinIndex?: TracearrJoinIndex;
 }
 
 /**
@@ -655,24 +661,58 @@ async function runTracearrImport(
     cursorAtStart = null;
   }
 
+  // Which passes can run at all, decided before anything expensive. The
+  // backfill task is queued after every forward sync and, once the archive is
+  // walked, has nothing to walk — it used to build the join index (every item
+  // on the server, with its provider ids) and load the account map anyway.
+  const wantsForward = passes === "forward" || passes === "both";
+  const wantsBackfill = passes === "backfill" || passes === "both";
+  // `complete` with no stored rows is a contradiction — the rows are what the
+  // flag describes. It means something removed them out from under the flag (a
+  // manual delete, a partial restore), so treat it as never-backfilled and let
+  // the pass below rebuild from scratch rather than importing nothing forever.
+  const backfillCompleteAtStart = server.tracearrBackfillComplete && window.hasRows;
+  const forwardPlanned = wantsForward && window.since !== undefined;
+  const backfillPlanned = wantsBackfill && !backfillCompleteAtStart;
+
   // One index for the whole run: a first import is tens of thousands of
-  // records, so resolution must not cost a query per record.
-  const joinIndex = await buildTracearrJoinIndex(serverId);
+  // records, so resolution must not cost a query per record. Built on the
+  // first page that holds one of this server's records, so a run that walks
+  // nothing — or finds nothing — never pays for it.
+  // On an object for the same reason as `walked` below: written inside a
+  // closure that TypeScript's control-flow analysis cannot see.
+  const built: { joinIndex?: TracearrJoinIndex } = {};
+  const ensureJoinIndex = async (): Promise<TracearrJoinIndex> => {
+    if (!built.joinIndex) {
+      const joinIndex = await buildTracearrJoinIndex(serverId);
+      built.joinIndex = joinIndex;
+      logger.info(
+        "WatchHistory",
+        `Tracearr join index for "${serverName}": ${joinIndex.itemCount} candidate items, ` +
+          `${joinIndex.externalIdCount} provider id(s)`,
+      );
+    }
+    return built.joinIndex;
+  };
 
   // One map per run, for the same reason as the join index: it is small (users,
   // not plays) and the alternative is guessing at a username per record.
   //
   // A failure here is recorded rather than shrugged off: neither pass writes
-  // without the map (see `accountMapUsable` below).
+  // without the map (see `accountMapUsable` below). Loaded whenever a pass may
+  // write, and on a walked archive even when none will, because the healthy
+  // run's release of the evidence marker (below) is conditioned on it.
   let accountNames: Map<string, string> | undefined;
-  try {
-    accountNames = await client.getServerAccountNames(mappedServerId, { signal });
-  } catch (error) {
-    logger.warn(
-      "WatchHistory",
-      `Could not load Tracearr account names for "${serverName}"`,
-      { error: String(error) },
-    );
+  if (forwardPlanned || backfillPlanned || backfillCompleteAtStart) {
+    try {
+      accountNames = await client.getServerAccountNames(mappedServerId, { signal });
+    } catch (error) {
+      logger.warn(
+        "WatchHistory",
+        `Could not load Tracearr account names for "${serverName}"`,
+        { error: String(error) },
+      );
+    }
   }
 
   // NOTHING IS WRITTEN WITHOUT A USABLE MAP — by either pass.
@@ -699,7 +739,7 @@ async function runTracearrImport(
   // has since removed is legitimately absent from a healthy map, and that
   // fallback is permanent and correct.
   const accountMapUsable = accountNames !== undefined && accountNames.size > 0;
-  if (!accountMapUsable) {
+  if (!accountMapUsable && (forwardPlanned || backfillPlanned)) {
     logger.warn(
       "WatchHistory",
       `Not importing Tracearr plays for "${serverName}" this run — the account-name ` +
@@ -711,8 +751,9 @@ async function runTracearrImport(
 
   logger.info(
     "WatchHistory",
-    `Importing Tracearr history for "${server.name}" from "${instance.name}" ` +
-      `(${describeWindow(window)}, ${joinIndex.itemCount} candidate items)`,
+    forwardPlanned || backfillPlanned
+      ? `Importing Tracearr history for "${server.name}" from "${instance.name}" (${describeWindow(window)})`
+      : `Nothing to walk in the Tracearr history for "${server.name}" this run (${passes} pass requested)`,
   );
 
   const counters: ImportCounters = {
@@ -724,6 +765,8 @@ async function runTracearrImport(
     duplicate: 0,
     vanished: 0,
   };
+  /** Items this run wrote a play for — the only ones the reconcile must visit. */
+  const writtenItemIds = new Set<string>();
 
   // `pages` is shared across both passes on purpose: it is the run's page
   // counter, and the progress bar should keep climbing rather than restarting
@@ -778,6 +821,61 @@ async function runTracearrImport(
     // never marked complete) but advancing only one page per run, which for a
     // large library is indistinguishable from being stuck.
     const seenCursors = new Set<string>();
+
+    // The NEXT page, requested while this one is written. `nextCursor` is known
+    // the moment a page arrives, so the walk need not leave Tracearr idle for
+    // the length of every write. It changes nothing about what is committed or
+    // when: the cursor still advances only after the current page's rows are
+    // written, "exhausted" is still only `nextCursor === null`, and a prefetch
+    // the walk does not go on to use (a Stop, a spent slice, a yield, a failed
+    // write) is aborted and dropped. Its own signal, so dropping it cancels
+    // only it; an abort of the run's signal reaches it too.
+    type Prefetch = { cursor: string; page: ReturnType<typeof client.getHistoryPage>; abort: () => void };
+    // On an object: written inside closures TypeScript's control-flow
+    // analysis cannot see (see `walked`).
+    const ahead: { page: Prefetch | null } = { page: null };
+    const requestPage = (pageCursor: string | undefined, pageSignal: AbortSignal | undefined) =>
+      client.getHistoryPage(mappedServerId, {
+        cursor: pageCursor,
+        since: options.since,
+        until: options.until,
+        pageSize: MAX_PAGE_SIZE,
+        // A bulk walk needs a larger 429 budget than a one-off call: the
+        // limiter is a rolling 1-minute window and a first import is thousands
+        // of sequential requests, so it WILL be throttled and should wait the
+        // window out rather than abandon the run.
+        bulk: true,
+        signal: pageSignal,
+      });
+    const prefetch = (pageCursor: string) => {
+      const controller = new AbortController();
+      const forward = () => controller.abort();
+      signal?.addEventListener("abort", forward, { once: true });
+      const page = requestPage(pageCursor, controller.signal);
+      page.then(
+        () => signal?.removeEventListener("abort", forward),
+        () => signal?.removeEventListener("abort", forward),
+      );
+      return {
+        cursor: pageCursor,
+        page,
+        abort: () => {
+          signal?.removeEventListener("abort", forward);
+          controller.abort();
+        },
+      };
+    };
+    const dropPrefetch = () => {
+      ahead.page?.abort();
+      ahead.page = null;
+    };
+    /** Whether the walk will go on to fetch another page right now. */
+    const wouldContinue = () =>
+      !(deadlineMs !== undefined && Date.now() >= deadlineMs) &&
+      !(yieldTo !== undefined && yieldTo()) &&
+      !signal?.aborted &&
+      pages < MAX_PAGES;
+
     try {
       for (;;) {
         // Cancelled (client disconnected, user hit Stop, or the stream's lifetime
@@ -839,24 +937,33 @@ async function runTracearrImport(
           return "stopped";
         }
 
-        const page = await client.getHistoryPage(mappedServerId, {
-          cursor,
-          since: options.since,
-          until: options.until,
-          pageSize: MAX_PAGE_SIZE,
-          // A bulk walk needs a larger 429 budget than a one-off call: the
-          // limiter is a rolling 1-minute window and a first import is thousands
-          // of sequential requests, so it WILL be throttled and should wait the
-          // window out rather than abandon the run.
-          bulk: true,
-          signal,
-        });
+        const pending = ahead.page;
+        ahead.page = null;
+        let pageRequest: ReturnType<typeof requestPage>;
+        if (pending && pending.cursor === cursor) {
+          pageRequest = pending.page;
+        } else {
+          pending?.abort();
+          pageRequest = requestPage(cursor, signal);
+        }
+        const page = await pageRequest;
         pages++;
         pagesThisWalk++;
         // Recorded before any filtering: this only answers "did the mapping
         // return history at all", which is what separates a genuinely exhausted
         // archive from a mapping pointing at the wrong Tracearr server.
         if (page.records.length > 0) walked.sawAnyRecord = true;
+
+        // Ask for the next page now, so it travels while this one is resolved
+        // and written — but only when the walk would fetch it anyway.
+        const upcoming = page.nextCursor;
+        if (upcoming && !seenCursors.has(upcoming) && wouldContinue()) {
+          ahead.page = prefetch(upcoming);
+        }
+
+        const index = page.records.some((record) => record.server_id === tracearrServerId)
+          ? await ensureJoinIndex()
+          : null;
 
         const rows: PendingRow[] = [];
         const now = new Date();
@@ -903,7 +1010,8 @@ async function runTracearrImport(
             continue;
           }
 
-          const resolved = resolveMediaItemId(joinIndex, record);
+          // Non-null: built above because this page holds a record of this server.
+          const resolved = resolveMediaItemId(index!, record);
           if ("skipped" in resolved) {
             counters.skipped[resolved.skipped]++;
             continue;
@@ -922,7 +1030,8 @@ async function runTracearrImport(
           );
         }
 
-        // Write this page's rows before fetching the next one. The model is
+        // Write this page's rows before going on to the next one (which may
+        // already be on its way — see `prefetch`). The model is
         // append/upsert-only, so a failure on a later page leaves these durably
         // imported rather than rolling back the run.
         for (let i = 0; i < rows.length; i += BATCH_SIZE) {
@@ -934,6 +1043,7 @@ async function runTracearrImport(
           counters.inserted += written.inserted;
           counters.updated += written.updated;
           counters.vanished += written.vanished;
+          for (const id of written.mediaItemIds) writtenItemIds.add(id);
         }
 
         // The page is committed, so its position is now safe to keep. Doing this
@@ -1014,15 +1124,16 @@ async function runTracearrImport(
         { error: String(error) },
       );
       return "errored";
+    } finally {
+      // Every exit but "exhausted" can leave the next page in flight; nothing
+      // will read it.
+      dropPrefetch();
     }
   }
 
   // FORWARD pass: new plays since the last run. Skipped on a first import,
   // where there is no watermark and the backfill below covers everything.
-  const wantsForward = passes === "forward" || passes === "both";
-  const wantsBackfill = passes === "backfill" || passes === "both";
-
-  if (wantsForward && window.since && accountMapUsable) {
+  if (forwardPlanned && accountMapUsable) {
     await walk("forward", { since: window.since });
   }
 
@@ -1030,11 +1141,7 @@ async function runTracearrImport(
   // the one that survives an interruption — `until` is derived from the OLDEST
   // row we hold, so a run that died halfway through 2021 picks up there instead
   // of resuming at "now" and calling it done.
-  // `complete` with no stored rows is a contradiction — the rows are what the
-  // flag describes. It means something removed them out from under the flag (a
-  // manual delete, a partial restore), so treat it as never-backfilled and let
-  // the pass below rebuild from scratch rather than importing nothing forever.
-  let backfillComplete = server.tracearrBackfillComplete && window.hasRows;
+  let backfillComplete = backfillCompleteAtStart;
   let backfillOutcome: WalkOutcome | undefined;
   /**
    * Whether the completion write below already re-established the evidence
@@ -1270,9 +1377,13 @@ async function runTracearrImport(
 
     // Same non-fatal contract as the native path: the history rows are already
     // committed, so a reconcile failure is corrected by the next run rather
-    // than worth failing this one over.
+    // than worth failing this one over. Scoped to the items this run wrote:
+    // every other item's rows are as the last reconcile left them (the purge
+    // above only removes rows, and the reconcile never lowers anything), and a
+    // whole-server aggregate per forward pass or backfill slice was the
+    // dominant cost of a small import.
     try {
-      await reconcileWatchStateFromHistory(serverId);
+      await reconcileWatchStateFromHistory(serverId, { mediaItemIds: [...writtenItemIds] });
     } catch (error) {
       logger.warn(
         "WatchHistory",
@@ -1312,7 +1423,12 @@ async function runTracearrImport(
   // Derived from the flag, not from this run's outcome: a forward-only run
   // never touches the backfill and must still report that one is owed, so the
   // caller can queue it.
-  return { count: total, backfillPending: !backfillComplete, backfillOutcome };
+  return {
+    count: total,
+    backfillPending: !backfillComplete,
+    backfillOutcome,
+    ...(built.joinIndex ? { joinIndex: built.joinIndex } : {}),
+  };
 }
 
 /**
@@ -1408,19 +1524,25 @@ export async function resolveInstanceForServer(
 
   if (instances.length === 1) return instances[0];
 
-  for (const candidate of instances) {
-    try {
-      const servers = await new TracearrClient(
-        candidate.url,
-        candidate.apiKey,
-      ).listServers();
-      if (servers.some((s) => s.id === tracearrServerId)) return candidate;
-    } catch (error) {
+  // Every instance is asked at once — a slow or dead one used to delay the
+  // probe of each instance after it — and the pick is the same as before: the
+  // oldest instance that answers and monitors the server.
+  const probes = await Promise.allSettled(
+    instances.map((candidate) =>
+      new TracearrClient(candidate.url, candidate.apiKey).listServers(),
+    ),
+  );
+  for (let i = 0; i < instances.length; i++) {
+    const candidate = instances[i];
+    const probe = probes[i];
+    if (probe.status === "fulfilled") {
+      if (probe.value.some((s) => s.id === tracearrServerId)) return candidate;
+    } else {
       logger.warn(
         "WatchHistory",
         `Could not list servers on Tracearr instance "${candidate.name}" while ` +
           `resolving the mapping for "${serverName}" — skipping this instance`,
-        { error: String(error) },
+        { error: String(probe.reason) },
       );
     }
   }
@@ -1624,7 +1746,7 @@ export async function importTracearrRecords(
    * media server is still mapped to it — see `writeBatch`.
    */
   tracearrServerId: string,
-): Promise<{ inserted: number; updated: number; skipped: number }> {
+): Promise<{ inserted: number; updated: number; skipped: number; mediaItemIds: string[] }> {
   const now = new Date();
   const rows: PendingRow[] = [];
   // Statement scope, exactly as in the walk: one INSERT may not touch the same
@@ -1656,6 +1778,7 @@ export async function importTracearrRecords(
 
   let inserted = 0;
   let updated = 0;
+  const mediaItemIds = new Set<string>();
   for (let i = 0; i < rows.length; i += BATCH_SIZE) {
     const written = await writeBatch(
       serverId,
@@ -1664,9 +1787,10 @@ export async function importTracearrRecords(
     );
     inserted += written.inserted;
     updated += written.updated;
+    for (const id of written.mediaItemIds) mediaItemIds.add(id);
   }
 
-  return { inserted, updated, skipped };
+  return { inserted, updated, skipped, mediaItemIds: [...mediaItemIds] };
 }
 
 /**
@@ -1683,8 +1807,8 @@ async function writeBatch(
   serverId: string,
   tracearrServerId: string,
   pending: PendingRow[],
-): Promise<{ inserted: number; updated: number; vanished: number }> {
-  if (pending.length === 0) return { inserted: 0, updated: 0, vanished: 0 };
+): Promise<{ inserted: number; updated: number; vanished: number; mediaItemIds: string[] }> {
+  if (pending.length === 0) return { inserted: 0, updated: 0, vanished: 0, mediaItemIds: [] };
 
   return prisma.$transaction(async (tx) => {
     // Still mapped to the Tracearr server these rows came from? A run reads
@@ -1708,7 +1832,7 @@ async function writeBatch(
     const vanished = pending.length - batch.length;
     // Nothing survived the check. `INSERT … VALUES` with no tuples is a syntax
     // error, not a no-op, so there is no statement to send at all.
-    if (batch.length === 0) return { inserted: 0, updated: 0, vanished };
+    if (batch.length === 0) return { inserted: 0, updated: 0, vanished, mediaItemIds: [] };
 
     const eventIds = batch.map((entry) => entry.row.sourceEventId as string);
     const existing = await tx.$queryRawUnsafe<
@@ -1737,7 +1861,12 @@ async function writeBatch(
       await insertRows(tx, fallback, WATCH_HISTORY_UPSERT_SUFFIX_FALLBACK_USERNAME);
     }
 
-    return { inserted: batch.length - updated, updated, vanished };
+    return {
+      inserted: batch.length - updated,
+      updated,
+      vanished,
+      mediaItemIds: [...new Set(batch.map((entry) => entry.row.mediaItemId as string))],
+    };
   });
 }
 

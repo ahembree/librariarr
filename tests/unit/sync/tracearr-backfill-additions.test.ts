@@ -148,6 +148,7 @@ describe("recoverHistoryForNewItems", () => {
       inserted: 0,
       updated: 0,
       skipped: 0,
+      mediaItemIds: [],
     });
     m.reconcileWatchStateFromHistory.mockResolvedValue(0);
   });
@@ -282,6 +283,7 @@ describe("recoverHistoryForNewItems", () => {
         inserted: 2,
         updated: 0,
         skipped: 0,
+        mediaItemIds: ["item-1"],
       });
 
       const result = await recoverHistoryForNewItems(SERVER_ID);
@@ -311,6 +313,7 @@ describe("recoverHistoryForNewItems", () => {
         inserted: 1,
         updated: 0,
         skipped: 0,
+        mediaItemIds: ["item-1"],
       });
 
       await recoverHistoryForNewItems(SERVER_ID);
@@ -321,12 +324,61 @@ describe("recoverHistoryForNewItems", () => {
       expect(m.buildTracearrJoinIndex).toHaveBeenCalledWith(SERVER_ID);
     });
 
+    /** A real-shaped index holding the given candidates under their rating keys. */
+    function indexOf(rows: Array<{ id: string; ratingKey: string }>, serverId = SERVER_ID) {
+      const byRatingKey = new Map(rows.map((r) => [r.ratingKey, [{ id: r.id }]]));
+      return { serverId, byRatingKey, byExternalId: new Map(), itemCount: rows.length, externalIdCount: 0 } as never;
+    }
+
+    it("reuses a join index it is handed when every candidate is in it", async () => {
+      candidates = [candidate(1), candidate(2)];
+      m.getHistoryForItem.mockResolvedValue([play("chain-1")]);
+      const given = indexOf([...candidates, { id: "other", ratingKey: "9" }]);
+
+      await recoverHistoryForNewItems(SERVER_ID, { joinIndex: given });
+
+      expect(m.buildTracearrJoinIndex).not.toHaveBeenCalled();
+      expect(m.importTracearrRecords).toHaveBeenCalledWith(
+        SERVER_ID, expect.any(Array), given, expect.any(Map), TRACEARR_SERVER_ID,
+      );
+    });
+
+    it("builds its own index when the one handed in misses a candidate, or is another server's", async () => {
+      candidates = [candidate(1), candidate(2)];
+      m.getHistoryForItem.mockResolvedValue([play("chain-1")]);
+
+      // Item 2 was added after the index was built: resolving its plays
+      // against that index would drop them as unresolved, and the item would
+      // then be recorded as answered with its plays never imported.
+      await recoverHistoryForNewItems(SERVER_ID, { joinIndex: indexOf([candidates[0]]) });
+      expect(m.buildTracearrJoinIndex).toHaveBeenCalledTimes(1);
+      expect(m.importTracearrRecords).toHaveBeenCalledWith(
+        SERVER_ID, expect.any(Array), JOIN_INDEX, expect.any(Map), TRACEARR_SERVER_ID,
+      );
+
+      vi.clearAllMocks();
+      resetRecoveryAnswers();
+      m.buildTracearrJoinIndex.mockResolvedValue(JOIN_INDEX);
+      // A rating key now held by a DIFFERENT row (a delete and re-add reused it).
+      await recoverHistoryForNewItems(SERVER_ID, {
+        joinIndex: indexOf([{ id: "item-1", ratingKey: "1001" }, { id: "stale", ratingKey: "1002" }]),
+      });
+      expect(m.buildTracearrJoinIndex).toHaveBeenCalledTimes(1);
+
+      vi.clearAllMocks();
+      resetRecoveryAnswers();
+      m.buildTracearrJoinIndex.mockResolvedValue(JOIN_INDEX);
+      await recoverHistoryForNewItems(SERVER_ID, { joinIndex: indexOf(candidates, "another-server") });
+      expect(m.buildTracearrJoinIndex).toHaveBeenCalledTimes(1);
+    });
+
     it("counts merged rows as imported, not just new ones", async () => {
       m.getHistoryForItem.mockResolvedValue([play("chain-1")]);
       m.importTracearrRecords.mockResolvedValue({
         inserted: 1,
         updated: 3,
         skipped: 2,
+        mediaItemIds: ["item-1"],
       });
 
       expect(await recoverHistoryForNewItems(SERVER_ID)).toEqual({
@@ -368,14 +420,15 @@ describe("recoverHistoryForNewItems", () => {
         inserted: 1,
         updated: 0,
         skipped: 0,
+        mediaItemIds: ["item-1"],
       });
 
       await recoverHistoryForNewItems(SERVER_ID);
 
       // Without the reconcile the recovered item still reports playCount 0 —
       // the column the lifecycle rules actually read — so the pass would have
-      // achieved nothing the rules can see.
-      expect(m.reconcileWatchStateFromHistory).toHaveBeenCalledWith(SERVER_ID);
+      // achieved nothing the rules can see. Scoped to the items it wrote to.
+      expect(m.reconcileWatchStateFromHistory).toHaveBeenCalledWith(SERVER_ID, { mediaItemIds: ["item-1"] });
       expect(m.invalidateMediaCaches).toHaveBeenCalledTimes(1);
     });
 
@@ -385,6 +438,7 @@ describe("recoverHistoryForNewItems", () => {
         inserted: 1,
         updated: 0,
         skipped: 0,
+        mediaItemIds: ["item-1"],
       });
       m.reconcileWatchStateFromHistory.mockRejectedValueOnce(new Error("db down"));
 
@@ -438,6 +492,7 @@ describe("recoverHistoryForNewItems", () => {
         inserted: 1,
         updated: 0,
         skipped: 0,
+        mediaItemIds: ["item-1"],
       });
 
       const result = await recoverHistoryForNewItems(SERVER_ID);
@@ -485,7 +540,7 @@ describe("recoverHistoryForNewItems", () => {
         response: { status: 500, data: {} },
       } as never);
       m.getHistoryForItem.mockRejectedValueOnce(itemError).mockResolvedValue([play("chain-1")]);
-      m.importTracearrRecords.mockResolvedValue({ inserted: 1, updated: 0, skipped: 0 });
+      m.importTracearrRecords.mockResolvedValue({ inserted: 1, updated: 0, skipped: 0, mediaItemIds: ["item-1"] });
 
       const result = await recoverHistoryForNewItems(SERVER_ID);
 
@@ -545,7 +600,7 @@ describe("recoverHistoryForNewItems", () => {
       // query and the write rejects its own batch, and only its own.
       m.importTracearrRecords
         .mockRejectedValueOnce(new Error("foreign key violation"))
-        .mockResolvedValue({ inserted: 1, updated: 0, skipped: 0 });
+        .mockResolvedValue({ inserted: 1, updated: 0, skipped: 0, mediaItemIds: ["item-1"] });
 
       expect(await recoverHistoryForNewItems(SERVER_ID)).toEqual({
         checked: 2,
@@ -560,6 +615,7 @@ describe("recoverHistoryForNewItems", () => {
         inserted: 1,
         updated: 0,
         skipped: 4,
+        mediaItemIds: ["item-1"],
       });
 
       await recoverHistoryForNewItems(SERVER_ID);
@@ -709,7 +765,7 @@ describe("recoverHistoryForNewItems", () => {
       const names = new Map([["srv-user-1", "weingart"]]);
       m.getServerAccountNames.mockResolvedValue(names);
       m.getHistoryForItem.mockResolvedValue([play("chain-1")]);
-      m.importTracearrRecords.mockResolvedValue({ inserted: 1, updated: 0, skipped: 0 });
+      m.importTracearrRecords.mockResolvedValue({ inserted: 1, updated: 0, skipped: 0, mediaItemIds: ["item-1"] });
 
       await recoverHistoryForNewItems(SERVER_ID);
 
@@ -755,7 +811,7 @@ describe("recoverHistoryForNewItems", () => {
 
     it("records an item whose plays were imported", async () => {
       m.getHistoryForItem.mockResolvedValue([play("chain-1")]);
-      m.importTracearrRecords.mockResolvedValue({ inserted: 1, updated: 0, skipped: 0 });
+      m.importTracearrRecords.mockResolvedValue({ inserted: 1, updated: 0, skipped: 0, mediaItemIds: ["item-1"] });
       await recoverHistoryForNewItems(SERVER_ID);
 
       m.prisma.$queryRawUnsafe.mockClear();

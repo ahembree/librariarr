@@ -2,7 +2,7 @@ import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { invalidateMediaCaches } from "@/lib/cache/invalidate";
 import { reconcileWatchStateFromHistory } from "@/lib/sync/watch-reconcile";
-import { buildTracearrJoinIndex } from "@/lib/sync/tracearr-join";
+import { buildTracearrJoinIndex, type TracearrJoinIndex } from "@/lib/sync/tracearr-join";
 import {
   importTracearrRecords,
   resolveInstanceForServer,
@@ -126,6 +126,14 @@ interface RecoverNewItemHistoryOptions {
    * that still have no Tracearr plays.
    */
   signal?: AbortSignal;
+  /**
+   * A join index the caller already built for this server (the backfill slice
+   * that ran just before). Used only when it covers every candidate — each
+   * candidate's id is in it under its rating key — since an item added after
+   * it was built would otherwise resolve as `unresolved` and be recorded as
+   * answered with its plays never imported. Otherwise the pass builds its own.
+   */
+  joinIndex?: TracearrJoinIndex;
 }
 
 interface RecoverNewItemHistoryResult {
@@ -153,7 +161,7 @@ export async function recoverHistoryForNewItems(
   serverId: string,
   options: RecoverNewItemHistoryOptions = {},
 ): Promise<RecoverNewItemHistoryResult> {
-  const { limit = DEFAULT_CANDIDATE_LIMIT, signal } = options;
+  const { limit = DEFAULT_CANDIDATE_LIMIT, signal, joinIndex: givenIndex } = options;
   const empty: RecoverNewItemHistoryResult = { checked: 0, imported: 0 };
 
   const server = await prisma.mediaServer.findFirst({
@@ -193,7 +201,10 @@ export async function recoverHistoryForNewItems(
   // collides with a second row resolves to `ambiguous` and is dropped, which is
   // the safe direction, because `playCount`/`lastPlayedAt` are monotonic and a
   // play attributed to the wrong item can never be walked back.
-  const joinIndex = await buildTracearrJoinIndex(serverId);
+  const joinIndex =
+    givenIndex && givenIndex.serverId === serverId && indexCovers(givenIndex, candidates)
+      ? givenIndex
+      : await buildTracearrJoinIndex(serverId);
 
   // The recovered rows must use the same username vocabulary as every other
   // row on this server, or a re-added item's plays would be attributed to a
@@ -238,6 +249,8 @@ export async function recoverHistoryForNewItems(
 
   let checked = 0;
   let imported = 0;
+  /** Items a recovered play landed on — the only ones the reconcile visits. */
+  const recoveredItemIds = new Set<string>();
   let withoutPlays = 0;
   let failed = 0;
   let skipped = 0;
@@ -302,6 +315,7 @@ export async function recoverHistoryForNewItems(
         tracearrServerId,
       );
       imported += written.inserted + written.updated;
+      for (const id of written.mediaItemIds) recoveredItemIds.add(id);
       skipped += written.skipped;
       answeredItems.set(candidate.id, Date.now());
     } catch (error) {
@@ -356,7 +370,7 @@ export async function recoverHistoryForNewItems(
     // tail — the history rows are committed, so a failure here is corrected by
     // the next run rather than worth failing the pass over.
     try {
-      await reconcileWatchStateFromHistory(serverId);
+      await reconcileWatchStateFromHistory(serverId, { mediaItemIds: [...recoveredItemIds] });
     } catch (error) {
       logger.warn(
         "WatchHistory",
@@ -429,6 +443,13 @@ async function findCandidates(
     addedAfter,
     cap,
     answered,
+  );
+}
+
+/** Whether every candidate is in the index, under its own rating key. */
+function indexCovers(index: TracearrJoinIndex, candidates: CandidateItem[]): boolean {
+  return candidates.every((candidate) =>
+    index.byRatingKey.get(candidate.ratingKey)?.some((row) => row.id === candidate.id) ?? false,
   );
 }
 
