@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
-import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasArrRules, hasSeerrRules, hasAnyActiveRules, hasSeriesAggregateRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
+import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasAnyActiveRules, hasSeriesAggregateRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRuleGroup, LifecycleRule } from "@/lib/rules/types";
-import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
-import { fetchSeerrMetadata } from "@/lib/lifecycle/fetch-seerr-metadata";
+import { loadPreviewMetadata, previewMetadataPhase } from "@/lib/lifecycle/preview-metadata";
 import { checkLifecycleRuleEvaluability } from "@/lib/lifecycle/evaluability";
 import { validateRequest, rulePreviewSchema } from "@/lib/validation";
 import { progressStreamResponse } from "@/lib/progress/stream";
@@ -44,11 +43,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: evaluability.reason }, { status: 400 });
   }
 
-  const willFetchArr = hasArrRules(typedRules);
-  const willFetchSeerr = hasSeerrRules(typedRules) && type !== "MUSIC";
+  const metadataPhase = previewMetadataPhase(typedRules, type);
   const phases: ProgressPhase[] = [
-    ...(willFetchArr ? [{ key: "arr", label: "Fetching Arr metadata" }] : []),
-    ...(willFetchSeerr ? [{ key: "seerr", label: "Fetching Seerr metadata" }] : []),
+    ...(metadataPhase ? [metadataPhase] : []),
     { key: "evaluate", label: "Evaluating rules" },
     { key: "finalize", label: "Computing matched criteria" },
   ];
@@ -58,23 +55,16 @@ export async function POST(request: NextRequest) {
     // (request.signal passed below aborts this run on client disconnect.)
 
     let arrData: ArrDataMap | undefined;
-    if (willFetchArr) {
-      emit({ type: "phase", key: "arr", fraction: 0 });
-      arrData = await fetchArrMetadata(
+    let seerrData: SeerrDataMap | undefined;
+    if (metadataPhase) {
+      emit({ type: "phase", key: metadataPhase.key, fraction: 0 });
+      ({ arrData, seerrData } = await loadPreviewMetadata(
         session.userId!,
         type,
-        (f) => emit({ type: "phase", key: "arr", fraction: f }),
+        typedRules,
         arrInstanceId,
-      );
-    }
-
-    let seerrData: SeerrDataMap | undefined;
-    if (willFetchSeerr) {
-      emit({ type: "phase", key: "seerr", fraction: 0 });
-      // willFetchSeerr already guarantees type !== "MUSIC".
-      seerrData = await fetchSeerrMetadata(session.userId!, type as "MOVIE" | "SERIES", (f) =>
-        emit({ type: "phase", key: "seerr", fraction: f }),
-      );
+        (f) => emit({ type: "phase", key: metadataPhase.key, fraction: f }),
+      ));
     }
 
     emit({ type: "phase", key: "evaluate" });

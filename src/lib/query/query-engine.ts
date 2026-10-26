@@ -28,7 +28,7 @@ import {
   serializeSeriesAggregateForEval,
   type AggregableEpisode,
 } from "@/lib/conditions";
-import { isEnumerableField, isOperatorApplicable, isValueValidForRule, hasWildcardRules } from "@/lib/conditions/helpers";
+import { isEnumerableField, isOperatorApplicable, isValueValidForRule, hasWildcardRules, hasCustomFormatScoreRules } from "@/lib/conditions/helpers";
 import {
   isUnconfiguredContainsRule,
   ruleToWhere,
@@ -473,7 +473,10 @@ async function runQueryDefinition(
   let arrDataByType: Record<string, ArrDataMap> | undefined;
   if (needsArr) {
     onProgress?.({ type: "phase", key: "arr", fraction: 0 });
-    arrDataByType = await fetchArrDataForQuery(userId, definition.arrServerIds!, mediaTypes, phaseReporter("arr"));
+    arrDataByType = await fetchArrDataForQuery(userId, definition.arrServerIds!, mediaTypes, phaseReporter("arr"), {
+      // Radarr's /moviefile sweep, only for a query filtering on the score.
+      customFormatScores: hasCustomFormatScoreRules(groups),
+    });
   }
 
   // Fetch Seerr data (every enabled instance) if the query uses Seerr rules

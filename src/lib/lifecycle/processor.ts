@@ -30,8 +30,8 @@ import {
   type ProtectionTarget,
 } from "@/lib/lifecycle/exception-guard";
 import { actionConfigSignature } from "@/lib/lifecycle/action-signature";
-import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
-import { fetchSeerrMetadata } from "@/lib/lifecycle/fetch-seerr-metadata";
+import { createRunMetadata } from "@/lib/lifecycle/run-metadata";
+import { invalidateArrMetadataCache } from "@/lib/lifecycle/fetch-arr-metadata";
 import { checkLifecycleRuleEvaluability } from "@/lib/lifecycle/evaluability";
 import { detectAndSaveMatches } from "@/lib/lifecycle/detect-matches";
 import { syncAllCollections } from "@/lib/lifecycle/collections";
@@ -278,15 +278,7 @@ export async function processLifecycleRules(userId?: string) {
   // set multiplied the cost — and let rule sets in one run read different
   // snapshots. A failed fetch is cached too, so the remaining rule sets of that
   // type skip immediately (each through its own catch below).
-  const metadataCache = new Map<string, Promise<ArrDataMap | SeerrDataMap>>();
-  const loadMetadata = <T extends ArrDataMap | SeerrDataMap>(key: string, load: () => Promise<T>): Promise<T> => {
-    let pending = metadataCache.get(key);
-    if (!pending) {
-      pending = load();
-      metadataCache.set(key, pending);
-    }
-    return pending as Promise<T>;
-  };
+  const metadata = createRunMetadata(ruleSets);
 
   for (const ruleSet of ruleSets) {
     try {
@@ -336,20 +328,14 @@ export async function processLifecycleRules(userId?: string) {
 
       let arrData: ArrDataMap | undefined;
       if (hasArrRules(rules)) {
-        const type = ruleSet.type;
         // Keyed by the rule set's instance too: its Arr criteria are read from
         // that instance alone (see `resolveArrInstanceScope`).
-        arrData = await loadMetadata(`arr:${ruleSet.userId}:${type}:${ruleSet.arrInstanceId ?? "*"}`, () =>
-          fetchArrMetadata(ruleSet.userId, type, undefined, ruleSet.arrInstanceId),
-        );
+        arrData = await metadata.arr(ruleSet.userId, ruleSet.type, ruleSet.arrInstanceId);
       }
 
       let seerrData: SeerrDataMap | undefined;
       if (hasSeerrRules(rules) && ruleSet.type !== "MUSIC") {
-        const type = ruleSet.type;
-        seerrData = await loadMetadata(`seerr:${ruleSet.userId}:${type}`, () =>
-          fetchSeerrMetadata(ruleSet.userId, type),
-        );
+        seerrData = await metadata.seerr(ruleSet.userId, ruleSet.type === "MOVIE" ? "MOVIE" : "SERIES");
       }
 
       // Snapshot previous match IDs before detection writes new ones (for notifications)
@@ -893,6 +879,8 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
   // Actions left because an ad-hoc query action was running: logged once,
   // not once per action — a query run can span the whole of pass 2.
   let leftForQuery = 0;
+  // Actions handed to the Arr apps this run.
+  let attempted = 0;
   for (const { action, mediaItem, filteredMatchedIds } of executable) {
     // Held by the ceiling: leave it PENDING and untouched so the Pending page
     // can execute it after review. Only destructive actions are held — an
@@ -998,6 +986,7 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
     mediaItem: (typeof executable)[number]["mediaItem"],
     filteredMatchedIds: string[],
   ): Promise<void> {
+    attempted += 1;
     // The action as it runs — with the members pass 1 left it — which is also
     // what its log line, notifications and history name (see `executedTitle`).
     const running = { ...action, matchedMediaItemIds: filteredMatchedIds, mediaItem, memberEpisodes: runningEpisodes };
@@ -1106,6 +1095,10 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
       `Left ${leftForQuery} action(s) for the next run — an ad-hoc query action was running`,
     );
   }
+
+  // Actions changed records in the Arr apps; a rule-editor preview must not
+  // explain matches from the records as they were.
+  if (attempted > 0) invalidateArrMetadataCache();
 
   for (const [instanceId, count] of deferredByInstance) {
     logger.warn(

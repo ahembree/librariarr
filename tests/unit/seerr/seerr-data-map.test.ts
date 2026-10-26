@@ -78,6 +78,44 @@ describe("SeerrDataMapBuilder", () => {
     b.add(r({ tmdbId: null }));
     expect(b.build()).toEqual({});
   });
+
+  it("absorbs another builder exactly as if its requests had been added after", () => {
+    // Deterministic pseudo-random requests over a few ids and dates, some with
+    // an unparseable date, split between two "instances".
+    let seed = 7;
+    const rand = (n: number) => ((seed = (seed * 1103515245 + 12345) % 2 ** 31) % n);
+    const dates = ["2021-01-01T00:00:00.000Z", "2024-06-01T00:00:00.000Z", "garbage", "2023-03-03T00:00:00.000Z"];
+    const make = () =>
+      r({
+        tmdbId: rand(3) === 0 ? null : rand(4),
+        tvdbId: rand(2) === 0 ? null : 50 + rand(3),
+        status: 1 + rand(5),
+        createdAt: dates[rand(4)],
+        updatedAt: dates[rand(4)],
+        by: ["a", "b", "c"][rand(3)],
+      });
+    for (let trial = 0; trial < 25; trial++) {
+      const first = Array.from({ length: 1 + rand(8) }, make);
+      const second = Array.from({ length: 1 + rand(8) }, make);
+
+      const sequential = new SeerrDataMapBuilder("SERIES");
+      for (const req of [...first, ...second]) sequential.add(req);
+
+      const one = new SeerrDataMapBuilder("SERIES");
+      const two = new SeerrDataMapBuilder("SERIES");
+      first.forEach((req) => one.add(req));
+      second.forEach((req) => two.add(req));
+      const folded = new SeerrDataMapBuilder("SERIES");
+      folded.absorb(one);
+      folded.absorb(two);
+
+      expect(folded.build()).toEqual(sequential.build());
+      // Absorbing copies: the source builders are left as they were.
+      const oneAlone = new SeerrDataMapBuilder("SERIES");
+      first.forEach((req) => oneAlone.add(req));
+      expect(one.build()).toEqual(oneAlone.build());
+    }
+  });
 });
 
 describe("seerrRequesterName", () => {

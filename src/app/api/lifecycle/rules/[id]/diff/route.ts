@@ -3,11 +3,9 @@ import { getSession } from "@/lib/auth/session";
 import { prisma } from "@/lib/db";
 import { findExceptedItemIds } from "@/lib/lifecycle/exception-guard";
 import { copyRank, crossServerCopyKeys } from "@/lib/lifecycle/cross-server-copies";
-import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasArrRules, hasSeerrRules, hasAnyActiveRules, hasWatchedByUserRules, hasSeriesAggregateRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
-import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
+import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasAnyActiveRules, hasWatchedByUserRules, hasSeriesAggregateRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRuleGroup, LifecycleRule } from "@/lib/rules/types";
-import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
-import { fetchSeerrMetadata } from "@/lib/lifecycle/fetch-seerr-metadata";
+import { loadPreviewMetadata } from "@/lib/lifecycle/preview-metadata";
 import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
 import { checkLifecycleRuleEvaluability } from "@/lib/lifecycle/evaluability";
 import { validateRequest, ruleDiffSchema } from "@/lib/validation";
@@ -152,15 +150,7 @@ export async function POST(
   }
 
   // Evaluate the new rules to get candidate matches
-  let arrData: ArrDataMap | undefined;
-  if (hasArrRules(typedRules)) {
-    arrData = await fetchArrMetadata(session.userId!, type, undefined, arrInstanceId);
-  }
-
-  let seerrData: SeerrDataMap | undefined;
-  if (hasSeerrRules(typedRules) && type !== "MUSIC") {
-    seerrData = await fetchSeerrMetadata(session.userId!, type);
-  }
+  const { arrData, seerrData } = await loadPreviewMetadata(session.userId!, type, typedRules, arrInstanceId);
 
   let items;
   // Routed exactly as detection routes it: a series-aggregate field forces the

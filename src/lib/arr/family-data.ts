@@ -124,6 +124,70 @@ export async function loadArrInstanceData(
 }
 
 /**
+ * One record of one instance, by the family's external id, mapped exactly as
+ * `loadArrInstanceData` maps it — for a caller that needs a single item
+ * (Test Media) rather than the whole library. A record whose own id is not
+ * exactly `externalId` is not it: `loadArrInstanceData` keys by that id, so
+ * Lidarr answering an old MusicBrainz id with the merged artist (which
+ * `getArtistByMusicBrainzId` accepts) is not found here either.
+ */
+export async function loadArrRecord(
+  family: ArrFamily,
+  instance: ArrInstanceCredentials,
+  externalId: string,
+  options: Pick<ArrFamilyLoadOptions, "customFormatScores"> = {},
+): Promise<ArrMetadata | null> {
+  if (family === "RADARR") {
+    const tmdbId = Number(externalId);
+    if (!Number.isSafeInteger(tmdbId)) return null;
+    const client = new RadarrClient(instance.url, instance.apiKey);
+    const movie = await client.getMovieByTmdbId(tmdbId);
+    if (!movie || String(movie.tmdbId) !== externalId) return null;
+    const [profiles, tags, scores] = await Promise.all([
+      client.getQualityProfiles(),
+      client.getTags(),
+      // As the library read asks: only for a movie with a file.
+      options.customFormatScores && movie.hasFile
+        ? client.getCustomFormatScores([movie.id])
+        : Promise.resolve(new Map<number, number>()),
+    ]);
+    return mapRadarrMovie(
+      movie,
+      new Map(profiles.map((p) => [p.id, p.name])),
+      new Map(tags.map((t) => [t.id, t.label])),
+      scores.get(movie.id) ?? null,
+    );
+  }
+  if (family === "SONARR") {
+    const tvdbId = Number(externalId);
+    if (!Number.isSafeInteger(tvdbId)) return null;
+    const client = new SonarrClient(instance.url, instance.apiKey);
+    const series = await client.getSeriesByTvdbId(tvdbId);
+    if (!series || String(series.tvdbId) !== externalId) return null;
+    const [profiles, tags, upcoming] = await Promise.all([
+      client.getQualityProfiles(),
+      client.getTags(),
+      client.getSeriesIdsWithUpcomingEpisodes(),
+    ]);
+    return mapSonarrSeries(
+      series,
+      new Map(profiles.map((p) => [p.id, p.name])),
+      new Map(tags.map((t) => [t.id, t.label])),
+      upcoming,
+    );
+  }
+  const client = new LidarrClient(instance.url, instance.apiKey);
+  const artist = await client.getArtistByMusicBrainzId(externalId);
+  if (!artist || artist.foreignArtistId !== externalId) return null;
+  const [profiles, tags] = await Promise.all([client.getQualityProfiles(), client.getTags()]);
+  return mapLidarrArtist(
+    artist,
+    new Map(profiles.map((p) => [p.id, p.name])),
+    new Map(tags.map((t) => [t.id, t.label])),
+  );
+}
+
+/**
  * Several instances' records merged into one map. The instances are read in
  * parallel and merged in the order given, so an item on several keeps the
  * record of the FIRST instance listing it — callers pass them oldest first,

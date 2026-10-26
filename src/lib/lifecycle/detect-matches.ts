@@ -2,8 +2,7 @@ import { prisma } from "@/lib/db";
 import { evaluateLifecycleRules, evaluateSeriesScope, evaluateMusicScope, hasArrRules, hasSeerrRules, hasAnyActiveRules, hasWatchedByUserRules, hasSeriesAggregateRules, groupSeriesResults, getMatchedCriteriaForItems, getActualValuesForAllRules } from "@/lib/rules/lifecycle-engine";
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
-import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
-import { fetchSeerrMetadata } from "@/lib/lifecycle/fetch-seerr-metadata";
+import { createRunMetadata } from "@/lib/lifecycle/run-metadata";
 import { checkLifecycleRuleEvaluability } from "@/lib/lifecycle/evaluability";
 import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
 import { logger } from "@/lib/logger";
@@ -827,29 +826,12 @@ export async function runDetection(
     },
   });
 
-  // Lazy metadata caches (shared across rule sets of the same type). A failed
+  // Lazy metadata reads shared across rule sets of the same type (and, for
+  // Arr, the rule set's instance — see `resolveArrInstanceScope`). A failed
   // fetch is remembered too, so later rule sets of that type skip at once
-  // instead of re-walking an instance that just failed — and never see the
+  // instead of re-walking an instance that just failed — and never see an
   // empty placeholder map as if it were data.
-  type MetaCache<T> = { fetched: boolean; data: T; error?: unknown };
-  const loadOnce = async <T,>(cache: MetaCache<T>, load: () => Promise<T>): Promise<T> => {
-    if (cache.error !== undefined) throw cache.error;
-    if (!cache.fetched) {
-      try {
-        cache.data = await load();
-      } catch (error) {
-        cache.error = error;
-        throw error;
-      }
-      cache.fetched = true;
-    }
-    return cache.data;
-  };
-  // Keyed by type AND the rule set's Arr instance: a rule set's Arr criteria
-  // are read from its own instance alone (see `resolveArrInstanceScope`).
-  const arrCaches = new Map<string, MetaCache<ArrDataMap>>();
-  const movieSeerrCache: MetaCache<SeerrDataMap> = { fetched: false, data: {} };
-  const seriesSeerrCache: MetaCache<SeerrDataMap> = { fetched: false, data: {} };
+  const metadata = createRunMetadata(ruleSets);
 
   const results: Array<{
     ruleSet: {
@@ -914,24 +896,13 @@ export async function runDetection(
       // Resolve Arr metadata
       let arrData: ArrDataMap | undefined;
       if (hasArrRules(rules)) {
-        const type = rs.type === "MOVIE" ? "MOVIE" : rs.type === "MUSIC" ? "MUSIC" : "SERIES";
-        const cacheKey = `${type}:${rs.arrInstanceId ?? "*"}`;
-        let cache = arrCaches.get(cacheKey);
-        if (!cache) {
-          cache = { fetched: false, data: {} };
-          arrCaches.set(cacheKey, cache);
-        }
-        arrData = await loadOnce(cache, () => fetchArrMetadata(userId, type, undefined, rs.arrInstanceId));
+        arrData = await metadata.arr(userId, rs.type, rs.arrInstanceId);
       }
 
       // Resolve Seerr metadata (not applicable for MUSIC)
       let seerrData: SeerrDataMap | undefined;
       if (hasSeerrRules(rules) && rs.type !== "MUSIC") {
-        const type = rs.type === "MOVIE" ? "MOVIE" : "SERIES";
-        seerrData = await loadOnce(
-          type === "MOVIE" ? movieSeerrCache : seriesSeerrCache,
-          () => fetchSeerrMetadata(userId, type),
-        );
+        seerrData = await metadata.seerr(userId, rs.type === "MOVIE" ? "MOVIE" : "SERIES");
       }
 
       const result = await detectAndSaveMatches(

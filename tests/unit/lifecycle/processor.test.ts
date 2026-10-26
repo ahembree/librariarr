@@ -99,9 +99,14 @@ vi.mock("@/lib/lifecycle/fetch-arr-metadata", () => ({
   resolveArrInstanceScope: vi.fn().mockResolvedValue(null),
   arrFamilyLabel: (type: string) =>
     type === "MOVIE" ? "Radarr" : type === "MUSIC" ? "Lidarr" : "Sonarr",
+  invalidateArrMetadataCache: () => {},
 }));
 vi.mock("@/lib/lifecycle/fetch-seerr-metadata", () => ({
   fetchSeerrMetadata: mockFetchSeerrMetadata,
+  // One walk for every type a run needs; delegated per type so each
+  // test can keep stubbing the per-type answer.
+  fetchSeerrMetadataByType: async (userId: string, types: string[]) =>
+    Object.fromEntries(await Promise.all(types.map(async (t) => [t, await mockFetchSeerrMetadata(userId, t)]))),
   hasEnabledSeerrInstances: mockHasEnabledSeerrInstances,
 }));
 vi.mock("@/lib/sync/sync-server", () => ({
@@ -121,6 +126,7 @@ vi.mock("@/lib/rules/lifecycle-engine", () => ({
   hasWatchedByUserRules: vi.fn(() => false),
   hasPlayActivityRules: vi.fn(() => false),
   hasAnyActiveRules: mockHasAnyActiveRules,
+  hasCustomFormatScoreRules: () => false,
 }));
 
 import {
@@ -971,7 +977,7 @@ describe("processLifecycleRules", () => {
 
     await processLifecycleRules("u1");
 
-    expect(mockFetchArrMetadata).toHaveBeenCalledWith("u1", "MOVIE", undefined, null);
+    expect(mockFetchArrMetadata).toHaveBeenCalledWith("u1", "MOVIE", undefined, null, { customFormatScores: false });
     expect(mockDetectAndSaveMatches).toHaveBeenCalled();
   });
 

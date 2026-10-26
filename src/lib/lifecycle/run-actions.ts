@@ -5,6 +5,7 @@ import { UnreachableInstances } from "@/lib/lifecycle/unreachable-instances";
 import { actionTargetTitle, actionTitleSnapshot } from "@/lib/lifecycle/action-target";
 import { loadMemberEpisodes } from "@/lib/lifecycle/member-episodes";
 import { computeDeletedBytes } from "@/lib/lifecycle/deleted-bytes";
+import { invalidateArrMetadataCache } from "@/lib/lifecycle/fetch-arr-metadata";
 import type { Prisma } from "@/generated/prisma/client";
 
 /**
@@ -259,6 +260,10 @@ export async function executeActionsForItems(
       onProgress?.({ done: processed, total });
     }
   }
+
+  // The run changed records in the Arr app (tags, monitoring, profiles, the
+  // records themselves); a preview must not explain matches from before it.
+  if (executed > 0 || failed > notAttempted) invalidateArrMetadataCache();
 
   return { executed, failed, errors, failures, notAttempted };
 }

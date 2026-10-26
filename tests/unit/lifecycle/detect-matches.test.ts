@@ -73,6 +73,7 @@ vi.mock("@/lib/rules/lifecycle-engine", () => ({
   evaluateMusicScope: mockEvaluateMusicScope,
   groupSeriesResults: mockGroupSeriesResults,
   hasAnyActiveRules: mockHasAnyActiveRules,
+  hasCustomFormatScoreRules: () => false,
   hasArrRules: mockHasArrRules,
   hasSeerrRules: mockHasSeerrRules,
   hasSeriesAggregateRules: mockHasSeriesAggregateRules,
@@ -90,6 +91,10 @@ vi.mock("@/lib/lifecycle/fetch-arr-metadata", () => ({
 }));
 vi.mock("@/lib/lifecycle/fetch-seerr-metadata", () => ({
   fetchSeerrMetadata: mockFetchSeerrMetadata,
+  // One walk for every type a run needs; delegated per type so each
+  // test can keep stubbing the per-type answer.
+  fetchSeerrMetadataByType: async (userId: string, types: string[]) =>
+    Object.fromEntries(await Promise.all(types.map(async (t) => [t, await mockFetchSeerrMetadata(userId, t)]))),
   hasEnabledSeerrInstances: mockHasEnabledSeerrInstances,
 }));
 vi.mock("@/lib/lifecycle/collections", () => ({
@@ -1105,7 +1110,7 @@ describe("runDetection", () => {
 
     // fetchArrMetadata should only be called once for MOVIE type
     expect(mockFetchArrMetadata).toHaveBeenCalledTimes(1);
-    expect(mockFetchArrMetadata).toHaveBeenCalledWith("u1", "MOVIE", undefined, null);
+    expect(mockFetchArrMetadata).toHaveBeenCalledWith("u1", "MOVIE", undefined, null, { customFormatScores: false });
     // ...and both rule sets were evaluated against it.
     expect(results.map((r) => r.ruleSet.id)).toEqual(["rs1", "rs2"]);
     expect(mockEvaluateRules).toHaveBeenCalledTimes(2);
