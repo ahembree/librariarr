@@ -41,6 +41,9 @@ function formatCriteria(criteria: Array<{ field: string; operator: string; value
 }
 
 // BigInt-safe JSON serializer for Prisma Json columns
+/** Refreshed match snapshots per UPDATE (~2 KB each). */
+const REFRESH_CHUNK = 500;
+
 function jsonSafe(value: unknown): string | number | boolean | object {
   return JSON.parse(JSON.stringify(value, (_, v) =>
     typeof v === "bigint" ? v.toString() : v,
@@ -677,11 +680,21 @@ export async function detectAndSaveMatches(
     // exception filed, a manual Execute's cleanup) is simply skipped, where a
     // P2025 would roll back every new match and stale removal in the batch.
     await prisma.$transaction([
-      ...refreshed.map((item) =>
-        prisma.ruleMatch.updateMany({
-          where: { ruleSetId: ruleSet.id, mediaItemId: item.id as string },
-          data: { itemData: jsonSafe(item), copyIds: copyIdsOf(item) },
-        }),
+      // The refreshed snapshots, a slice of rows per statement rather than one
+      // statement per match. An UPDATE … FROM skips a row deleted since it was
+      // read, as updateMany did.
+      ...inChunks(refreshed, REFRESH_CHUNK).map((chunk) =>
+        prisma.$executeRawUnsafe(
+          `UPDATE "RuleMatch" rm
+              SET "itemData" = r."itemData", "copyIds" = r."copyIds"
+             FROM jsonb_to_recordset($2::jsonb) AS r("mediaItemId" text, "itemData" jsonb, "copyIds" text[])
+            WHERE rm."ruleSetId" = $1 AND rm."mediaItemId" = r."mediaItemId"`,
+          ruleSet.id,
+          JSON.stringify(
+            chunk.map((item) => ({ mediaItemId: item.id as string, itemData: item, copyIds: copyIdsOf(item) })),
+            (_, v) => (typeof v === "bigint" ? v.toString() : v),
+          ),
+        ),
       ),
       ...[...carried].map(([from, item]) =>
         prisma.ruleMatch.updateMany({

@@ -31,6 +31,8 @@ const mockPrisma = vi.hoisted(() => ({
     // and why, so it has to read the rows rather than tally them.
     findMany: vi.fn().mockResolvedValue([]),
   },
+  // Refreshed match snapshots are written in one UPDATE … FROM per slice.
+  $executeRawUnsafe: vi.fn().mockResolvedValue(0),
   // The exception guard reads the candidates' dedupKeys with one `= ANY($1)`
   // statement; answered from the rows `mediaItem.findMany` is stubbed with,
   // as that SQL would answer them.
@@ -52,6 +54,13 @@ const mockPrisma = vi.hoisted(() => ({
     return Promise.resolve(undefined);
   }),
 }));
+
+/** The rows each snapshot-refresh statement carried, per statement. */
+function refreshStatements(): Array<{ ruleSetId: unknown; rows: Array<{ mediaItemId: string; itemData: Record<string, unknown>; copyIds: string[] }> }> {
+  return mockPrisma.$executeRawUnsafe.mock.calls
+    .filter(([sql]) => String(sql).includes(`UPDATE "RuleMatch"`))
+    .map(([, ruleSetId, json]) => ({ ruleSetId, rows: JSON.parse(json as string) }));
+}
 
 const mockEvaluateRules = vi.hoisted(() => vi.fn());
 const mockEvaluateSeriesScope = vi.hoisted(() => vi.fn());
@@ -632,13 +641,16 @@ describe("detectAndSaveMatches", () => {
 
       await detectAndSaveMatches(armed, ["s1", "s2"]);
 
-      // updateMany, not update: a row deleted since it was read (an exception
-      // filed meanwhile) must not fail — and roll back — the whole write.
-      expect(mockPrisma.ruleMatch.updateMany).toHaveBeenCalledTimes(1);
-      const arg = mockPrisma.ruleMatch.updateMany.mock.calls[0][0];
-      expect(arg.where).toEqual({ ruleSetId: "rs1", mediaItemId: "a" });
-      expect(arg.data.itemData.copies).toHaveLength(1);
-      expect(arg.data.copyIds).toEqual(["b"]);
+      // One UPDATE … FROM, which skips a row deleted since it was read (an
+      // exception filed meanwhile) rather than fail — and roll back — the write.
+      const statements = refreshStatements();
+      expect(statements).toHaveLength(1);
+      expect(statements[0].ruleSetId).toBe("rs1");
+      expect(statements[0].rows).toHaveLength(1);
+      expect(statements[0].rows[0].mediaItemId).toBe("a");
+      expect(statements[0].rows[0].itemData.copies).toHaveLength(1);
+      expect(statements[0].rows[0].copyIds).toEqual(["b"]);
+      expect(mockPrisma.ruleMatch.updateMany).not.toHaveBeenCalled();
       expect(mockPrisma.ruleMatch.createMany).not.toHaveBeenCalled();
     });
 
@@ -647,10 +659,12 @@ describe("detectAndSaveMatches", () => {
       mockPrisma.ruleMatch.findMany.mockResolvedValue([
         { mediaItemId: "a", itemData: { id: "a", servers: [{ serverId: "s1" }] } },
       ]);
-      mockPrisma.ruleMatch.updateMany.mockResolvedValue({ count: 0 });
+      // The held row is gone: the refresh updates nothing.
+      mockPrisma.$executeRawUnsafe.mockResolvedValueOnce(0);
 
       await detectAndSaveMatches(armed, ["s1", "s2"]);
 
+      expect(refreshStatements()).toHaveLength(1);
       // The new match is still written.
       expect(mockPrisma.ruleMatch.createMany).toHaveBeenCalledTimes(1);
       expect(mockPrisma.ruleMatch.createMany.mock.calls[0][0].data.map((d: { mediaItemId: string }) => d.mediaItemId)).toEqual(["c"]);
@@ -847,6 +861,7 @@ describe("detectAndSaveMatches", () => {
       await detectAndSaveMatches(armed, ["s1", "s2"]);
 
       expect(mockPrisma.ruleMatch.updateMany).not.toHaveBeenCalled();
+      expect(refreshStatements()).toEqual([]);
     });
 
     // The direct-execute identity check compares the item with this snapshot;
@@ -875,10 +890,11 @@ describe("detectAndSaveMatches", () => {
 
       await detectAndSaveMatches(armed, ["s1", "s2"]);
 
-      expect(mockPrisma.ruleMatch.updateMany).toHaveBeenCalledTimes(1);
-      const arg = mockPrisma.ruleMatch.updateMany.mock.calls[0][0];
-      expect(arg.where).toEqual({ ruleSetId: "rs1", mediaItemId: "a" });
-      expect(arg.data.itemData).toMatchObject({
+      const statements = refreshStatements();
+      expect(statements).toHaveLength(1);
+      expect(statements[0].ruleSetId).toBe("rs1");
+      expect(statements[0].rows.map((r) => r.mediaItemId)).toEqual(["a"]);
+      expect(statements[0].rows[0].itemData).toMatchObject({
         title: "Movie",
         year: 2021,
         externalIds: [{ source: "TMDB", externalId: "111" }],
