@@ -114,7 +114,14 @@ export const API_OPERATIONS: readonly Operation[] = [
       },
     ],
   },
-  { method: "get", path: "/servers", scope: "servers:read", tag: "Servers and syncs", summary: "Media servers with their libraries and latest sync (tokens masked; addresses, machine ids and owner omitted)" },
+  {
+    method: "get",
+    path: "/servers",
+    scope: "servers:read",
+    tag: "Servers and syncs",
+    summary: "Media servers with their libraries and latest sync (tokens masked; addresses, machine ids and owner omitted)",
+    query: [{ name: "fields", description: "`basic` returns only each server's `id`, `name`, `type` and `enabled`, without its libraries, item counts or sync jobs.", schema: { type: "string", enum: ["basic"] } }],
+  },
   { method: "get", path: "/sync/status", scope: "servers:read", tag: "Servers and syncs", summary: "Running and recent sync jobs (server addresses and machine ids omitted, errors redacted)" },
   {
     method: "post",
@@ -153,7 +160,13 @@ export const API_OPERATIONS: readonly Operation[] = [
     scope: "media:read",
     tag: "Library",
     summary: "Episodes",
-    query: [...LIST_PAGING, ...LIBRARY_FILTERS, { name: "seriesKey", description: "One show." }, { name: "seasonNumber", description: "One season.", schema: { type: "integer" } }],
+    query: [
+      ...LIST_PAGING,
+      ...LIBRARY_FILTERS,
+      { name: "seriesKey", description: "One show." },
+      { name: "seasonNumber", description: "One season.", schema: { type: "integer" } },
+      { name: "itemId", description: "An episode's id: the season it belongs to, in place of `seriesKey` and `seasonNumber`. `404` if it is not one of your episodes." },
+    ],
   },
   {
     method: "get",
@@ -169,7 +182,11 @@ export const API_OPERATIONS: readonly Operation[] = [
     scope: "media:read",
     tag: "Library",
     summary: "Seasons of one show",
-    query: [{ name: "seriesKey", description: "From the grouped listing.", required: true }, SERVER_ID],
+    query: [
+      { name: "seriesKey", description: "From the grouped listing. Required unless `itemId` is given." },
+      { name: "itemId", description: "An episode's id: the seasons of its show. `404` if it is not one of your episodes." },
+      SERVER_ID,
+    ],
   },
   {
     method: "get",
@@ -177,7 +194,13 @@ export const API_OPERATIONS: readonly Operation[] = [
     scope: "media:read",
     tag: "Library",
     summary: "Tracks",
-    query: [...LIST_PAGING, ...LIBRARY_FILTERS, { name: "parentTitle", description: "Artist." }, { name: "albumTitle", description: "Album." }],
+    query: [
+      ...LIST_PAGING,
+      ...LIBRARY_FILTERS,
+      { name: "parentTitle", description: "Artist." },
+      { name: "albumTitle", description: "Album." },
+      { name: "itemId", description: "A track's id: the album it belongs to, in place of `parentTitle` and `albumTitle`. `404` if it is not one of your tracks." },
+    ],
   },
   {
     method: "get",
@@ -193,7 +216,11 @@ export const API_OPERATIONS: readonly Operation[] = [
     scope: "media:read",
     tag: "Library",
     summary: "Albums of one artist",
-    query: [{ name: "parentTitle", description: "Artist.", required: true }, SERVER_ID],
+    query: [
+      { name: "parentTitle", description: "Artist. Required unless `itemId` is given." },
+      { name: "itemId", description: "A track's id: the albums of its artist. `404` if it is not one of your tracks." },
+      SERVER_ID,
+    ],
   },
   {
     method: "get",
@@ -203,7 +230,13 @@ export const API_OPERATIONS: readonly Operation[] = [
     summary: "Search by title",
     query: [
       { name: "q", description: "Search text.", required: true },
-      { name: "type", description: "Library type.", schema: MEDIA_TYPE, required: true },
+      { name: "type", description: "Library type. Required unless `types` is given; the answer is `{ items }`.", schema: MEDIA_TYPE },
+      {
+        name: "types",
+        description:
+          "Several library types, comma-separated (`MOVIE,SERIES,MUSIC`), searched in one request; the answer is " +
+          "`{ results: { MOVIE: [...], ... } }`, each list what `type` returns for it.",
+      },
       { name: "seriesScope", description: "With `type=SERIES`, return shows rather than episodes.", schema: { type: "boolean", default: false } },
       { name: "musicScope", description: "With `type=MUSIC`, return artists and albums rather than tracks.", schema: { type: "boolean", default: false } },
     ],
@@ -258,7 +291,7 @@ export const API_OPERATIONS: readonly Operation[] = [
     ],
   },
   { method: "get", path: "/lifecycle/rules", scope: "lifecycle:read", tag: "Lifecycle", summary: "Rule sets" },
-  { method: "get", path: "/lifecycle/rules/matches", scope: "lifecycle:read", tag: "Lifecycle", summary: "Current matches per rule set", description: `Each match carries the item snapshot detection stored, without its file path. Not paged: every read counts as ${FULL_LISTING_REQUEST_COST} requests.` },
+  { method: "get", path: "/lifecycle/rules/matches", scope: "lifecycle:read", tag: "Lifecycle", summary: "Current matches per rule set", description: `Each match carries the item snapshot detection stored, without its file path, cast and crew lists, tagline or original title (read \`/media/{id}\` for those). Not paged: every read counts as ${FULL_LISTING_REQUEST_COST} requests.` },
   {
     method: "get",
     path: "/lifecycle/actions",

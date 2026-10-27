@@ -100,13 +100,13 @@ Most endpoints are the same routes the web app uses, served under `/api/v1`: the
 | Method | Path | Description |
 |--------|------|-------------|
 | `GET` | `/api/v1/media/movies` | Movies. Pagination: `page`, `limit` (default 50, at most 100, `0` = all), `offset` (overrides `page`); sorting: `sortBy`, `sortOrder`; `search`, `startsWith` (a letter or `#`), `serverId`, plus the library filters (`resolution=4K\|1080P`, `genre`, `yearConditions=gte:2020`, …) |
-| `GET` | `/api/v1/media/series` | Episodes, with the same parameters as movies except `startsWith`, plus `seriesKey` and `seasonNumber` |
+| `GET` | `/api/v1/media/series` | Episodes, with the same parameters as movies except `startsWith`, plus `seriesKey` and `seasonNumber`, or `itemId` (an episode's id) for the season that episode belongs to |
 | `GET` | `/api/v1/media/series/grouped` | Shows, with episode and watched counts. `page`, `limit` (default 50, at most 200, `0` = all), `offset`, `search`, `startsWith`, `sortBy`, `sortOrder`, `serverId` |
-| `GET` | `/api/v1/media/series/seasons` | Seasons of one show: `seriesKey` (from the grouped listing); `serverId` optional |
-| `GET` | `/api/v1/media/music` | Tracks, with the same parameters as movies except `startsWith`; `parentTitle` (artist) and `albumTitle` narrow the list |
+| `GET` | `/api/v1/media/series/seasons` | Seasons of one show: `seriesKey` (from the grouped listing), or `itemId` (an episode's id) for that episode's show; `serverId` optional |
+| `GET` | `/api/v1/media/music` | Tracks, with the same parameters as movies except `startsWith`; `parentTitle` (artist) and `albumTitle` narrow the list, or `itemId` (a track's id) lists the album that track is on |
 | `GET` | `/api/v1/media/music/grouped` | Artists, with track and album counts. `page`, `limit` (default 50, at most 200, `0` = all), `offset`, `search`, `startsWith`, `sortBy`, `sortOrder`, `serverId` |
-| `GET` | `/api/v1/media/music/albums` | Albums of one artist: `parentTitle`; `serverId` optional |
-| `GET` | `/api/v1/media/search` | Search by title: `q`, `type` (`MOVIE`, `SERIES` or `MUSIC`). `seriesScope=true` returns shows instead of episodes, `musicScope=true` artists and albums instead of tracks |
+| `GET` | `/api/v1/media/music/albums` | Albums of one artist: `parentTitle`, or `itemId` (a track's id) for that track's artist; `serverId` optional |
+| `GET` | `/api/v1/media/search` | Search by title: `q`, `type` (`MOVIE`, `SERIES` or `MUSIC`). `seriesScope=true` returns shows instead of episodes, `musicScope=true` artists and albums instead of tracks. `types=MOVIE,SERIES,MUSIC` (in place of `type`) searches several types in one request and answers `{ "results": { "MOVIE": [...], ... } }`, each list what `type` returns for it |
 | `GET` | `/api/v1/media/recently-added` | Newest additions: `limit` (1–50, default 10), `type`, `serverId` |
 | `GET` | `/api/v1/media/stats` | Library totals: counts, size, and resolution, codec and other breakdowns. `serverId` optional |
 | `GET` | `/api/v1/media/history` | Play history: `page`, `limit` (≤ 200), `search`, `username`, `type` (`MOVIE`, `SERIES` or `MUSIC`; several separated by `\|`), `serverId`, `sortBy`, `sortOrder` |
@@ -118,7 +118,7 @@ Most endpoints are the same routes the web app uses, served under `/api/v1`: the
 
 | Method | Path | Scope | Description |
 |--------|------|-------|-------------|
-| `GET` | `/api/v1/servers` | `servers:read` | Media servers with their libraries and latest sync. Tokens, the servers' addresses, machine ids and owner are omitted |
+| `GET` | `/api/v1/servers` | `servers:read` | Media servers with their libraries and latest sync. Tokens, the servers' addresses, machine ids and owner are omitted. `fields=basic` returns only each server's `id`, `name`, `type` and `enabled` |
 | `GET` | `/api/v1/sync/status` | `servers:read` | Running and recent sync jobs. Server addresses and machine ids are omitted, and a failed job's error has internal paths and addresses redacted |
 | `POST` | `/api/v1/servers/{id}/sync` | `sync:write` | Sync one server. Optional body `{ "libraryKey": "…" }` to sync one library. `409` if a sync is already running |
 | `POST` | `/api/v1/sync/cancel` | `sync:write` | Stop a server's running or queued sync: `{ "serverId": "…" }`. `404` if the server has no running or queued sync |
@@ -129,7 +129,7 @@ Most endpoints are the same routes the web app uses, served under `/api/v1`: the
 | Method | Path | Scope | Description |
 |--------|------|-------|-------------|
 | `GET` | `/api/v1/lifecycle/rules` | `lifecycle:read` | Rule sets |
-| `GET` | `/api/v1/lifecycle/rules/matches` | `lifecycle:read` | Current matches per rule set. Each match carries the item as detection stored it, without its file path. Not paged: each call counts as 20 requests |
+| `GET` | `/api/v1/lifecycle/rules/matches` | `lifecycle:read` | Current matches per rule set. Each match carries the item as detection stored it, without its file path. The stored item leaves out what no rule reads — the cast and crew lists, tagline and original title among them — so read `/api/v1/media/{id}` for those (a match detected by an earlier version may still carry them). Not paged: each call counts as 20 requests |
 | `GET` | `/api/v1/lifecycle/actions` | `lifecycle:read` | Actions by `status`: `PENDING` (default), `COMPLETED`, `FAILED` or `ALL`. A series action's `mediaItem.title` is the show, or `<Show> SxxExx` (for example `Breaking Bad S03E10`) when the action acts on a single episode; its `parentTitle` is `null`. A failed action's error has internal paths and addresses redacted. Not paged: each call counts as 20 requests |
 | `GET` | `/api/v1/lifecycle/exceptions` | `lifecycle:read` | Exceptions; `type` = `MOVIE`, `SERIES`, `MUSIC` or `ALL`. Not paged: each call counts as 20 requests |
 | `GET` | `/api/v1/lifecycle/stats` | `lifecycle:read` | Deletion statistics |
