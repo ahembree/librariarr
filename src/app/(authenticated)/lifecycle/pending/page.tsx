@@ -49,6 +49,7 @@ import { LIBRARY_CARD_CONTENT_HEIGHT } from "@/hooks/use-library-grid";
 import { useRuleSetTypeFilter } from "@/hooks/use-rule-set-type-filter";
 import { useLifecycleExceptions } from "@/hooks/use-lifecycle-exceptions";
 import { useRealtimeRefetch } from "@/hooks/use-realtime-refetch";
+import { useSetState } from "@/hooks/use-set-state";
 
 interface ActionItem {
   id: string;
@@ -175,7 +176,7 @@ function VirtualizedActionTable({
   isDeletedRuleSet?: boolean;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
-  const [expandedErrors, setExpandedErrors] = useState<Set<string>>(new Set());
+  const [expandedErrors, { toggle: toggleError }] = useSetState<string>();
 
   const virtualizer = useVirtualizer({
     count: items.length,
@@ -314,15 +315,7 @@ function VirtualizedActionTable({
                             className="text-[10px] text-muted-foreground hover:text-foreground mt-0.5"
                             onClick={(e) => {
                               e.stopPropagation();
-                              setExpandedErrors((prev) => {
-                                const next = new Set(prev);
-                                if (next.has(action.id)) {
-                                  next.delete(action.id);
-                                } else {
-                                  next.add(action.id);
-                                }
-                                return next;
-                              });
+                              toggleError(action.id);
                             }}
                           >
                             {expandedErrors.has(action.id) ? "Show less" : "Show more"}
@@ -576,9 +569,9 @@ export default function PendingActionsPage() {
   const [statusFilter, setStatusFilter] = useState("PENDING");
   const [viewMode, setViewMode] = useState<"table" | "cards">("table");
   const { size: cardSize, setSize: setCardSize } = useCardSize();
-  const [expandedRules, setExpandedRules] = useState<Set<string>>(new Set());
-  const [executingRules, setExecutingRules] = useState<Set<string>>(new Set());
-  const [executingItems, setExecutingItems] = useState<Set<string>>(new Set());
+  const [expandedRules, { toggle: toggleExpand }] = useSetState<string>();
+  const [executingRules, executingRuleActions] = useSetState<string>();
+  const [executingItems, executingItemActions] = useSetState<string>();
   const [executeResults, setExecuteResults] = useState<Record<string, { executed: number; failed: number; errors: string[] }>>({});
   const [confirmExecuteRuleSetId, setConfirmExecuteRuleSetId] = useState<string | null>(null);
 
@@ -682,18 +675,6 @@ export default function PendingActionsPage() {
     fetchActions();
   }, [fetchActions]);
 
-  const toggleExpand = (ruleSetId: string) => {
-    setExpandedRules((prev) => {
-      const next = new Set(prev);
-      if (next.has(ruleSetId)) {
-        next.delete(ruleSetId);
-      } else {
-        next.add(ruleSetId);
-      }
-      return next;
-    });
-  };
-
   const removeAction = async (id: string) => {
     try {
       const response = await fetch(`/api/lifecycle/actions/${id}`, { method: "DELETE" });
@@ -724,7 +705,7 @@ export default function PendingActionsPage() {
     if (!action) return;
     setConfirmRetryAction(null);
 
-    setRetryingItems((prev) => new Set(prev).add(action.id));
+    retryingActions.add(action.id);
     try {
       const params = retrySkipTitle ? "?skipTitleValidation=true" : "";
       const response = await fetch(`/api/lifecycle/actions/${action.id}${params}`, { method: "POST" });
@@ -742,11 +723,7 @@ export default function PendingActionsPage() {
       console.error("Failed to retry action:", error);
       toast.error("Retry failed");
     } finally {
-      setRetryingItems((prev) => {
-        const next = new Set(prev);
-        next.delete(action.id);
-        return next;
-      });
+      retryingActions.remove(action.id);
     }
   };
 
@@ -756,7 +733,7 @@ export default function PendingActionsPage() {
   // reaches the page (`useRealtimeRefetch`); a refusal re-reads at once.
   const executeAll = async (ruleSetId: string) => {
     setConfirmExecuteRuleSetId(null);
-    setExecutingRules((prev) => new Set(prev).add(ruleSetId));
+    executingRuleActions.add(ruleSetId);
     setExecuteResults((prev) => {
       const next = { ...prev };
       delete next[ruleSetId];
@@ -800,17 +777,13 @@ export default function PendingActionsPage() {
       }));
     } finally {
       ticket.cancel();
-      setExecutingRules((prev) => {
-        const next = new Set(prev);
-        next.delete(ruleSetId);
-        return next;
-      });
+      executingRuleActions.remove(ruleSetId);
     }
   };
 
   const executeItem = async (ruleSetId: string, mediaItemId: string) => {
     const key = `${ruleSetId}:${mediaItemId}`;
-    setExecutingItems((prev) => new Set(prev).add(key));
+    executingItemActions.add(key);
     const ticket = pageRefetch.begin();
     try {
       const response = await fetch("/api/lifecycle/actions/execute", {
@@ -837,18 +810,14 @@ export default function PendingActionsPage() {
       toast.error("Failed to execute action");
     } finally {
       ticket.cancel();
-      setExecutingItems((prev) => {
-        const next = new Set(prev);
-        next.delete(key);
-        return next;
-      });
+      executingItemActions.remove(key);
     }
   };
 
   // Which items have lifecycle exceptions, and filing new ones.
   const { exceptedIds: exceptedItemIds, excludingIds: excludingItems, exclude } =
     useLifecycleExceptions({ announce: true });
-  const [retryingItems, setRetryingItems] = useState<Set<string>>(new Set());
+  const [retryingItems, retryingActions] = useSetState<string>();
   const [excludePromptAction, setExcludePromptAction] = useState<ActionItem | null>(null);
 
   const confirmExclude = async (action: ActionItem, reason: string) => {

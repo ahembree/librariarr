@@ -60,6 +60,7 @@ import { LIBRARY_CARD_CONTENT_HEIGHT } from "@/hooks/use-library-grid";
 import { useRuleSetTypeFilter } from "@/hooks/use-rule-set-type-filter";
 import { useLifecycleExceptions } from "@/hooks/use-lifecycle-exceptions";
 import { useRealtimeRefetch } from "@/hooks/use-realtime-refetch";
+import { useSetState } from "@/hooks/use-set-state";
 
 interface MatchedCriterion {
   ruleId: string;
@@ -585,9 +586,9 @@ export default function RuleMatchesPage() {
     [ruleMatches],
   );
   const [loading, setLoading] = useState(true);
-  const [expandedRules, setExpandedRules] = useState<Set<string>>(new Set());
+  const [expandedRules, { toggle: toggleExpand }] = useSetState<string>();
   const [viewMode, handleViewModeChange] = useLocalStorage<"cards" | "table">("matches-view-mode", "table");
-  const [runningRules, setRunningRules] = useState<Set<string>>(new Set());
+  const [runningRules, { add: markRunning, remove: unmarkRunning }] = useSetState<string>();
   const [reEvalRunning, setReEvalRunning] = useState(false);
   const { size, setSize } = useCardSize();
   const { getHex } = useChipColors();
@@ -724,17 +725,13 @@ export default function RuleMatchesPage() {
   }, [matchesRefetch, reportSkipped]);
 
   const runRule = useCallback(async (ruleSetId: string) => {
-    setRunningRules((prev) => new Set(prev).add(ruleSetId));
+    markRunning(ruleSetId);
     try {
       await runDetection(ruleSetId, "Couldn't run the rule");
     } finally {
-      setRunningRules((prev) => {
-        const next = new Set(prev);
-        next.delete(ruleSetId);
-        return next;
-      });
+      unmarkRunning(ruleSetId);
     }
-  }, [runDetection]);
+  }, [runDetection, markRunning, unmarkRunning]);
 
   const reEvalAllRules = useCallback(async () => {
     setReEvalRunning(true);
@@ -744,18 +741,6 @@ export default function RuleMatchesPage() {
       setReEvalRunning(false);
     }
   }, [runDetection]);
-
-  const toggleExpand = (ruleSetId: string) => {
-    setExpandedRules((prev) => {
-      const next = new Set(prev);
-      if (next.has(ruleSetId)) {
-        next.delete(ruleSetId);
-      } else {
-        next.add(ruleSetId);
-      }
-      return next;
-    });
-  };
 
   if (loading) {
     return (
