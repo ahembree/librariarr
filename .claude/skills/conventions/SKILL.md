@@ -80,6 +80,7 @@ Every route handler must:
 | All Zod schemas | `src/lib/validation.ts` |
 | Response sanitization | `src/lib/api/sanitize.ts` |
 | Session/auth | `src/lib/auth/session.ts` |
+| Route session guard | `src/lib/auth/with-session.ts` |
 | Multi-server dedup | `src/lib/dedup/server-filter.ts` |
 | Filter utilities | `src/lib/filters/build-where.ts` |
 | Memory cache | `src/lib/cache/memory-cache.ts` |
