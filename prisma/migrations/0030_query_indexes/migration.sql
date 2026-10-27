@@ -15,9 +15,11 @@ CREATE INDEX "LifecycleException_mediaItemId_idx" ON "LifecycleException"("media
 -- returns its newest rows in order. Where a filter's rows are old (a source
 -- that last logged days ago) the planner walked the createdAt index instead
 -- and read the whole table: 47 ms -> 0.14 ms. The composites serve every
--- lookup the single-column indexes did, so those go.
+-- lookup the level and source indexes did, so those go. The category index
+-- stays: three values deduplicate to a 2 MB index, the smallest on the table,
+-- and the page's unfiltered row count is an index-only scan of it (~15 ms on
+-- 300k rows, against ~25 ms seq-scanning without it).
 DROP INDEX IF EXISTS "LogEntry_level_idx";
-DROP INDEX IF EXISTS "LogEntry_category_idx";
 DROP INDEX IF EXISTS "LogEntry_source_idx";
 CREATE INDEX "LogEntry_level_createdAt_idx" ON "LogEntry"("level", "createdAt");
 CREATE INDEX "LogEntry_category_createdAt_idx" ON "LogEntry"("category", "createdAt");

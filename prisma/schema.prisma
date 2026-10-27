@@ -742,6 +742,7 @@ model LogEntry {
   // order, where the single-column index could only find them all and sort.
   // They also serve every lookup the single-column ones did.
   @@index([level, createdAt])
+  @@index([category])
   @@index([category, createdAt])
   @@index([source, createdAt])
   @@index([createdAt])
