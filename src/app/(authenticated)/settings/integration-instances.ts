@@ -1,4 +1,5 @@
 import { MASKED_VALUE } from "@/lib/api/sanitize";
+import { stripTrailingSlashes } from "@/lib/url-normalize";
 
 /**
  * The integration instance types Settings → Integrations lists, in the order
@@ -52,7 +53,7 @@ function isNewKey(apiKey: string): boolean {
   return apiKey !== "" && apiKey !== MASKED_VALUE;
 }
 
-const withoutTrailingSlash = (url: string) => url.trim().replace(/\/+$/, "");
+const withoutTrailingSlash = (url: string) => stripTrailingSlashes(url.trim());
 
 /**
  * Whether an edit changes how the instance is reached: a new API key, or a URL

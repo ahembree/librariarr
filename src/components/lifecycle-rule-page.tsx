@@ -95,6 +95,7 @@ function RulePreviewSkeleton() {
   return <Skeleton className="mt-8 h-64 w-full rounded-lg" />;
 }
 import { ExportRuleSetDialog, ImportRuleSetDialog, TestMediaDialog } from "@/components/lifecycle-rule-dialogs";
+import { stripTrailingSlashes } from "@/lib/url-normalize";
 import type {
   CollectionDefinition,
   RuleEditorData,
@@ -2770,7 +2771,7 @@ export function LifecycleRulePage({
           <p className="text-sm text-muted-foreground">
             You can configure a recycle bin path in{" "}
             <a
-              href={`${recycleBinStatus.arrUrl.replace(/\/+$/, "")}/settings/mediamanagement`}
+              href={`${stripTrailingSlashes(recycleBinStatus.arrUrl)}/settings/mediamanagement`}
               target="_blank"
               rel="noopener noreferrer"
               className="underline inline-flex items-center gap-1"
