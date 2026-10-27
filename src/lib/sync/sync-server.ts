@@ -1531,6 +1531,11 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
         syncStatus("Syncing detailed watch history..."), syncJob.id,
       );
       const whStart = Date.now();
+      // The pass is server-wide: it writes plays and reconciles play state for
+      // every library on the server, not only the ones the item loop entered,
+      // so a library-scoped sync must announce every type the server holds or
+      // a page of another type skips the refetch that shows the new plays.
+      await addServerLibraryTypes(serverId, touchedTypes);
       // Stop has to reach this phase too: it can run for minutes, and nothing
       // else checks the flag while it does, so a Stop pressed here used to be
       // ignored outright and the run finished COMPLETED. The Tracearr importer
@@ -1755,6 +1760,23 @@ async function purgeVanishedLibraries(serverId: string, serverKeys: string[]): P
     );
   }
   return vanished.map((lib) => lib.type);
+}
+
+/**
+ * Add the type of every enabled library on the server to `types`. When the
+ * read fails, every type is added: over-announcing costs a refetch, while
+ * leaving a type out leaves its pages showing play state the sync replaced.
+ */
+async function addServerLibraryTypes(serverId: string, types: Set<SyncLibraryType>): Promise<void> {
+  try {
+    const rows = await prisma.$queryRawUnsafe<{ type: SyncLibraryType }[]>(
+      `SELECT DISTINCT "type"::text AS "type" FROM "Library" WHERE "mediaServerId"=$1 AND "enabled"=true`,
+      serverId,
+    );
+    for (const row of rows) types.add(row.type);
+  } catch {
+    for (const type of ["MOVIE", "SERIES", "MUSIC"] as const) types.add(type);
+  }
 }
 
 /**

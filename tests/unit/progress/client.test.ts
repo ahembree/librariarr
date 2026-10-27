@@ -96,4 +96,13 @@ describe("consumeProgressStream", () => {
     const response = new Response("<html>502</html>", { status: 502 });
     await expect(consumeProgressStream(response, () => {})).rejects.toThrow("status 502");
   });
+  it("reports the error event that follows a result line the server could not finish", async () => {
+    const response = streamingResponse(['{"type":"result","result":{"rows":[1,2\n', ndjson({ type: "error", message: "boom" })]);
+    await expect(consumeProgressStream(response, () => {})).rejects.toThrow("boom");
+  });
+
+  it("still fails on an unreadable line with nothing after it", async () => {
+    const response = streamingResponse(['{"type":"result","result":{"rows":[1,2\n']);
+    await expect(consumeProgressStream(response, () => {})).rejects.toThrow(SyntaxError);
+  });
 });

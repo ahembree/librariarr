@@ -157,10 +157,13 @@ export class PostDeleteResync {
     } else if (ratingKeys.length > 0) {
       try {
         const result = await syncMediaServerItems(serverId, ratingKeys, []);
-        if (result.status === "fell-back") {
+        // "skipped" is a fallback too: the incremental sync skips while ANY
+        // sync of the server is queued or running, which may be another
+        // library's and so re-check none of these items.
+        if (result.status !== "done") {
           logger.info(
             "Lifecycle",
-            `Re-check of ${ratingKeys.length} deleted item(s) on server ${serverId} fell back to a library sync: ${result.reason ?? "no reason given"}`,
+            `Re-check of ${ratingKeys.length} deleted item(s) on server ${serverId} ${result.status === "skipped" ? "was skipped" : "fell back"}, so the libraries are synced instead: ${result.reason ?? "no reason given"}`,
           );
           for (const key of byLibrary.keys()) full.add(key);
         }

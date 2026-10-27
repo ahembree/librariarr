@@ -45,6 +45,20 @@ describe("progressStreamResponse", () => {
     expect(events.some((e) => e.type === "result")).toBe(false);
   });
 
+  it("ends a result line that failed to serialize part-way, so the error event is its own line", async () => {
+    // A long list is written a slice at a time, so slices before the bad row
+    // are already sent when serializing it throws.
+    const rows: unknown[] = Array.from({ length: 3000 }, (_, i) => ({ i }));
+    rows[2500] = { i: 10n };
+    const response = progressStreamResponse(async () => ({ rows }));
+
+    const lines = (await response.text()).split("\n").filter((l) => l.trim());
+    expect(lines).toHaveLength(2);
+    expect(lines[0].startsWith('{"type":"result"')).toBe(true);
+    expect(() => JSON.parse(lines[0])).toThrow();
+    expect(JSON.parse(lines[1])).toEqual({ type: "error", message: expect.stringContaining("BigInt") });
+  });
+
   it("falls back to a generic message for non-Error throws", async () => {
     const response = progressStreamResponse(async () => {
       throw "nope";

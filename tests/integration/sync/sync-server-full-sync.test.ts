@@ -276,6 +276,14 @@ describe("SERIES libraries", () => {
     expect(eventBus.emit).toHaveBeenLastCalledWith(
       expect.objectContaining({ type: "sync:completed", meta: { serverId: server.id, libraryTypes: ["MOVIE"] } }),
     );
+
+    // Unless it runs the watch-history pass, which writes plays for every
+    // library on the server.
+    vi.mocked(eventBus.emit).mockClear();
+    await syncMediaServer(server.id, "1");
+    expect(eventBus.emit).toHaveBeenLastCalledWith(
+      expect.objectContaining({ type: "sync:completed", meta: { serverId: server.id, libraryTypes: ["MOVIE", "SERIES"] } }),
+    );
   });
 
   it("omits the library types when the run touched no library", async () => {

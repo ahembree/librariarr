@@ -941,6 +941,15 @@ describe("collection writes Plex already holds", () => {
     expect(mockPlexClient.updateCollectionVisibility).toHaveBeenCalledWith("1", "col1", false, false, false, {
       identifier: "custom.collection.1.col1", home: true, shared: true, recommended: true,
     });
+
+    // A hub left with every promotion off (a Plex that refused the DELETE)
+    // already shows nothing: it is not written again.
+    mockPlexClient.updateCollectionVisibility.mockClear();
+    mockPlexClient.getCollectionVisibility.mockResolvedValue({
+      identifier: "custom.collection.1.col1", home: false, shared: false, recommended: false,
+    });
+    await syncCollection(makeCollection({ sortName: "Sort Me" }), items);
+    expect(mockPlexClient.updateCollectionVisibility).not.toHaveBeenCalled();
   });
 });
 

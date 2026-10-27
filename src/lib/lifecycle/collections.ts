@@ -425,10 +425,12 @@ export async function syncCollection(
       const home = collection.homeScreen;
       const recommended = collection.recommended;
       const visible = await client.getCollectionVisibility(library.key, plexCollection.ratingKey);
-      const wantAny = home || recommended;
+      // A hub with every promotion off shows nothing, as no hub does: it is
+      // what a Plex that refuses the hub DELETE is left with, and writing it
+      // again would repeat that DELETE and its fallback on every run.
       const alreadySet = visible?.identifier
-        ? wantAny && visible.home === home && visible.shared === home && visible.recommended === recommended
-        : !wantAny;
+        ? visible.home === home && visible.shared === home && visible.recommended === recommended
+        : !(home || recommended);
       if (!alreadySet) {
         await client.updateCollectionVisibility(
           library.key,

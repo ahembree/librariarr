@@ -173,7 +173,9 @@ describe("PostDeleteResync", () => {
     expect(mockSyncMediaServer.mock.calls).toEqual([fullSync("s1", "1")]);
   });
 
-  it("leaves a run the incremental sync skipped to the sync that covers it", async () => {
+  it("syncs the library when the incremental sync skipped the re-check", async () => {
+    // It skips while any sync of the server is queued or running — possibly
+    // another library's, which re-checks none of these items.
     const resync = new PostDeleteResync();
     await resync.record("DELETE_RADARR", movie("m1"), []);
     mockPrisma.mediaItem.findMany.mockResolvedValueOnce(rowsFor([["m1", "s1", "1"]]));
@@ -181,7 +183,7 @@ describe("PostDeleteResync", () => {
 
     await resync.run();
 
-    expect(mockSyncMediaServer).not.toHaveBeenCalled();
+    expect(mockSyncMediaServer.mock.calls).toEqual([fullSync("s1", "1")]);
   });
 
   it("asks a member's own server about it, and syncs every recorded library when the rows cannot be read", async () => {

@@ -263,7 +263,9 @@ export function instanceCollectionRoutes(config: IntegrationConfig) {
         ...(config.hasExternalUrl && { externalUrl: externalUrl ? stripTrailingSlashes(externalUrl) : null }),
       },
     });
-    config.afterChange?.();
+    // A new instance changes what an unscoped Arr read covers, so the preview
+    // cache must not answer from the instances that existed before it.
+    instanceChanged(config, instance.id);
 
     return NextResponse.json({ instance: sanitize(instance) }, { status: 201 });
   });

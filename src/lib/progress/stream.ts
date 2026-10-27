@@ -61,9 +61,11 @@ export function progressStreamResponse<T>(
         const lifetimeTimer = setTimeout(() => abort.abort(), maxLifetime);
 
         if (gzipped) {
-          // Every write is followed by a sync flush, so what was written is on
-          // the wire (and decodable) before the next event exists.
-          gzip = createGzip({ level: GZIP_LEVEL, flush: zlibConstants.Z_SYNC_FLUSH });
+          // Every finished line is followed by a sync flush, so it is on the
+          // wire (and decodable) before the next event exists. The pieces of
+          // a result line are not: a flush per piece would cost a block
+          // boundary per "," and key the serializer writes.
+          gzip = createGzip({ level: GZIP_LEVEL });
           gzip.on("data", (chunk: Buffer) => {
             if (closed) return;
             try {
@@ -76,28 +78,37 @@ export function progressStreamResponse<T>(
           gzip.on("error", () => {});
         }
 
-        const write = (line: string) => {
+        const write = (chunk: string, endsLine = true) => {
           if (closed) return;
           if (gzip) {
-            gzip.write(line);
+            gzip.write(chunk);
+            if (endsLine) gzip.flush(zlibConstants.Z_SYNC_FLUSH);
             return;
           }
           try {
-            controller.enqueue(encoder.encode(line));
+            controller.enqueue(encoder.encode(chunk));
           } catch {
             // Stream may already be closed (client navigated away).
           }
         };
         const send = (event: unknown) => write(JSON.stringify(event) + "\n");
 
+        // Set once the result line has begun: it is written a piece at a time,
+        // so a value that fails to serialize part-way leaves it unterminated.
+        let resultLineOpen = false;
         try {
           const result = await run((update) => send(update), abort.signal);
-          await writeJsonYielding({ type: "result", result }, write);
+          resultLineOpen = true;
+          await writeJsonYielding({ type: "result", result }, (piece) => write(piece, false));
+          resultLineOpen = false;
           write("\n");
         } catch (err) {
           // If we aborted (client gone / lifetime cap), there's no one to read
           // an error line — skip it.
           if (!abort.signal.aborted) {
+            // End the broken result line, so the error event is a line of its
+            // own the reader can still parse.
+            if (resultLineOpen) write("\n", false);
             send({
               type: "error",
               message: err instanceof Error ? err.message : "Request failed",
