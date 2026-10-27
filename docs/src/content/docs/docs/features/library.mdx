@@ -133,6 +133,8 @@ Over 30 filters are available, grouped into Video, Audio, Streams, Content, File
 
 When multiple values are selected within a single filter (e.g., Resolution: 4K and 1080P), they're combined with **OR** logic — items matching either value are shown. **Genre** is the exception: an item must carry every selected genre. When multiple different filters are active, they combine with **AND** logic.
 
+When the filters leave a page with nothing to show, its **Clear Filters** button empties the filter panel as well as the list, so no filter carries over into the next one you set.
+
 ## Sorting
 
 The sort menu offers, in ascending or descending order:
@@ -177,7 +179,8 @@ Library pages and detail pages avoid repeating work the browser or server has al
 - **Going back to a library page is instant.** Each library page keeps the list it last loaded for the rest of the browser tab's life. Coming back within a minute (from a detail page, for example) shows it at once without asking the server. After a minute, the kept list still appears at once and is then refreshed in the background. After 15 minutes it is discarded. A sync, a watch-history update or a server change clears every kept list, so a refreshed library is never hidden behind an old one. Your scroll position is restored straight away too, since the whole list is already there.
 - **The server remembers recent listings.** The server keeps a library listing's answer for up to a minute, so moving between pages or switching back to an earlier sort doesn't recompute it. Any change to the media (a sync, a purge, a server or library being turned on or off, a title or deduplication setting) discards those answers immediately.
 - **Items load as you point at them.** When the mouse pointer rests on a card or a table row, or you press or focus it, the item's details are fetched before you click. On a touch screen only the tap that opens an item loads it, since every swipe starts with a touch. The detail page or panel then opens with them already in hand. The hover card's summary uses that same request.
-- **A detail page loads everything at once.** The page asks for the item, its play history and its Radarr/Sonarr/Lidarr and Seerr matches together, instead of waiting for the item before asking for the rest.
+- **A detail page loads everything at once.** The page asks for the item, its play history and its Radarr/Sonarr/Lidarr and Seerr matches together, instead of waiting for the item before asking for the rest. A show, season, artist or album page asks for its seasons, episodes, albums or tracks at the same time too.
+- **A sync elsewhere leaves an open page alone.** An open library or detail page re-reads what it shows after a sync only when that sync could have changed it: a sync that wrote only another type of library (music while you browse movies), or a sync of another server while the page is filtered to one server, does not reload it.
 - **Posters appear immediately.** A detail page shows the poster the library grid already loaded while the full-size one arrives, and the detail panel uses the grid's poster size, which is already in the browser's cache.
 
 ## Multi-Server Deduplication
@@ -283,6 +286,10 @@ The history table supports column visibility controls with columns grouped into 
 | Stream | Transcode, Completion, Player, Stream Resolution |
 
 Every column sorts, HDR, the codecs and Server (by server name) included.
+
+**Watched At** shows the time of the play as well as the day: *Today 21:14* and *Yesterday 08:02* for the last two days, otherwise the date and time (*Oct 3 21:14*), with the year added for a play from an earlier year. Hover it for the exact timestamp.
+
+**Transcode** reads the same way as in the [Stream Manager](/docs/features/stream-manager/), so a play keeps the label it had while it was live: **Transcode** (amber) for any re-encode, an audio-only one included; **Direct Stream** (sky) for a remux that changes only the container; **Direct Play** (green) otherwise. The play lists on detail pages use the same labels.
 
 The **Stream** columns default to **hidden**. They are only populated for a server whose [watch-history source](#watch-history-sources) is Tracearr, so on a native-history setup they would be an empty block of columns — turn them on from the column controls once a server is linked. **Stream Resolution** is what was actually delivered to the client and is a separate column from **Resolution**, which is the file's own; the two disagree on any transcoded play.
 

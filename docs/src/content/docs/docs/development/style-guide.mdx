@@ -370,6 +370,19 @@ Border-bottom style tabs with icon support:
 
 Dialogs use `backdrop-blur-sm` on the overlay and `border-white/6` on the content panel.
 
+An "Are you sure?" prompt is a `ConfirmDialog` (`src/components/confirm-dialog.tsx`), never an `AlertDialog` written out by hand:
+
+- `title`, `description` (text or inline content) and, for block content such as a checkbox or a list, `children`
+- `confirmLabel` and an optional `confirmIcon`; `destructive` for an action that removes something (a red confirm button)
+- `onConfirm` may return a promise: the dialog stays open with the confirm button spinning until it settles, closes when it resolves, and stays open when it resolves to `false` or rejects, so a failed save is not dismissed. Pass `pending` instead when the caller tracks the running state itself
+- `confirmDisabled` for a requirement in `children` that is not met yet
+
+### Forms: Buttons, Errors and Connection Tests
+
+- **A button that starts an action is a `LoadingButton`** (`src/components/loading-button.tsx`): its `icon` turns into a spinner of the same size while `loading`, and the button is disabled meanwhile, so the label never moves. Don't write `{busy ? <Loader2 … /> : <Icon … />}` by hand.
+- **A failure message inside a form or a card is an `InlineError`** (`src/components/inline-error.tsx`): the red box with an alert icon. Use `multiline` when the message can wrap, so the icon stays on the first line. A failure that is not tied to a form is a toast.
+- **A connection test's answer is a `ConnectionTestResult`** (`src/components/connection-test-result.tsx`): `variant="banner"` under a server form ("Connection successful" / "Connection failed — reason"), `variant="badge"` beside an integration's **Test** button, naming what answered ("Connected to Radarr v5.2").
+
 ### Toasts
 
 Transient feedback uses [sonner](https://sonner.emilkowal.ski/) via the global `<Toaster>` mounted in `src/app/layout.tsx` (`position="bottom-right"`, `richColors`, `closeButton`, `duration={4000}`, and a `mobileOffset` that keeps toasts clear of the phone safe area). Import `toast` from `sonner` in any client component.
@@ -405,8 +418,20 @@ The coloured resolution, dynamic-range, audio-profile and audio-codec chips — 
 - **Labels**: a resolution shows its standard label (`4K`, `1080P`…) and a value that maps to none its own spelling; SDR is shown like any other dynamic range; an audio codec is upper-cased; a count reads `label: n` in the chip's colour.
 - **Order**: counts follow `QUALITY_ORDER` and `AUDIO_CODEC_ORDER`, then the rest by name, with empty buckets dropped.
 - **Card bars**: `qualitySegments(chips, getHex, show)` — one segment per chip, weighted by its count, filtered by the card-display toggles. Use the exported `QualityBar` for a bar outside `MediaCard`.
-- **Every other info pill beside them is a `ColorChip` too**, never a shadcn `Badge` (see Chips vs Badges): neutral facts (user, player, codec, container, bitrate) are a plain `ColorChip` (`font-mono tabular-nums` for figures), a stream decision is green for a copy or direct stream and amber for a transcode, a server is coloured by its type (`SERVER_TYPE_STYLES`), and ratings are `RatingChip`. A resolution named outside a media item (a Seerr request's "4K") is a `QualityChip` too, so it takes the user's resolution colour.
+- **Every other info pill beside them is a `ColorChip` too**, never a shadcn `Badge` (see Chips vs Badges): neutral facts (user, player, codec, container, bitrate) are a plain `ColorChip` (`font-mono tabular-nums` for figures), a stream decision follows [Stream Decisions](#stream-decisions) below, a server is coloured by its type (`SERVER_TYPE_STYLES`), and ratings are `RatingChip`. A resolution named outside a media item (a Seerr request's "4K") is a `QualityChip` too, so it takes the user's resolution colour.
 - **Per-stream values** (a stream's `videoRangeType`, an audio stream's profile) are the server's own spellings; colour them by the range or profile they name (`detectStreamDynamicRange`, `detectStreamAudioProfile`), with the raw value as the chip's title.
+
+### Stream Decisions
+
+Whether a play was transcoded is decided in one place, `streamDecision` in `src/lib/media/stream-decision.ts`, for a live session in the Stream Manager, a row on the History page and a play in a detail page's play list alike, so a play keeps its label after it ends:
+
+| Decision | When | Chip (`decisionChipClass`) |
+|-|-|-|
+| **Transcode** | Any re-encode, video or audio — an audio-only transcode included | `bg-amber-dim text-amber border-amber/25` |
+| **Direct Stream** | A `copy` decision: a remux, the container changes and nothing is re-encoded | `bg-sky-dim text-sky border-sky/25` |
+| **Direct Play** | Everything else | `bg-green-dim text-green border-green/25` |
+
+`streamDecision` returns `null` when nothing is known (every row from a server's native history); show no chip then. Never decide on `isTranscode` alone, and never colour a Direct Stream green.
 
 ### Hover Popovers
 
@@ -418,11 +443,13 @@ Every `MediaHoverPopover` must pass the **same universal set of fields** regardl
 
 For grouped data sources (series shows, seasons, music artists, albums), metadata fields (`summary`, `genres`, `studio`, `contentRating`, `rating`, etc.) are aggregated from a representative child item via first-non-null picking in the API.
 
+**Build the data, don't write it.** `src/lib/media/hover-data.ts` has one builder per kind of row — `hoverDataFromListItem` (a film, an episode, a track, or a Query row that may be grouped), `hoverDataFromSeriesGroup`, `hoverDataFromSeason`, `hoverDataFromArtistGroup`, `hoverDataFromAlbum` and `hoverDataFromRecord` (a full `/api/media/[id]` record). Pass the builder's result as `data`; a hand-written `data={{ … }}` object is how a grouped music row once came to say "episodes".
+
 **Rules:**
 
 - **Table and card views within the same page must always pass identical fields** — no exceptions
 - Pages fed by the flat list endpoints type their rows as `MediaListItem`, which has no `summary` — passing one is a compile error, so this cannot silently regress
-- `summary` may be passed **or** fetched: the large list endpoints (movies, all-episodes, all-tracks) leave it out of their payloads because it is a paragraph of prose per row that only this popover renders. Those pages pass `summaryUrl` instead and the popover fetches the summary for the one hovered item when it opens, caching it. Every other field still comes from the list, so the popover paints immediately either way
+- `summary` may be passed **or** fetched: the large list endpoints (movies, all-episodes, all-tracks) leave it out of their payloads because it is a paragraph of prose per row that only this popover renders. Those pages pass `summaryUrl={hoverSummaryUrl(item.id)}` instead and the popover fetches the summary for the one hovered item when it opens. The URL is the item's own record, the one the detail panel and page read, so a click that follows the hover reuses that request instead of making another. Every other field still comes from the list, so the popover paints immediately either way
 - `imageAspect="square"` for music items; `"poster"` (default) for everything else
 - `audioCodec` (one track) and `audioCodecCounts` (an artist or album) are music-only; `qualityCounts` is series-only. A popover given an `audioCodec` shows the track's codec chip instead of the video chips, so never pass it for a film or episode — `hoverDataFromRecord` strips it from a raw `/api/media/[id]` record that is not a track
 - A grouped row (a show, artist or album standing for its members) passes its counts, never its representative episode's or track's own `resolution`, `dynamicRange`, `audioProfile` or `audioCodec`
@@ -444,16 +471,17 @@ The main content area includes the atmospheric radial gradient and a 1px `border
 
 ### Page Headers
 
-Every page follows this heading pattern:
+Every page's heading is a `PageHeader` (`src/components/page-header.tsx`):
 
-```html
-<h1 class="text-2xl sm:text-3xl font-bold font-display tracking-tight">
-  Page Title
-</h1>
-<p class="text-muted-foreground mt-1">
-  Brief description of the page purpose.
-</p>
+```tsx
+<PageHeader
+  title="Lifecycle Rules"
+  description="Define rules to automatically manage your media library."
+  actions={<Button>New Rule Set</Button>}
+/>
 ```
+
+It renders the `<h1>` in the required style, `text-2xl sm:text-3xl font-bold font-display tracking-tight`, with the description under it in `text-muted-foreground`. `icon` goes before the title, `meta` (a count, a status chip) beside it, wrapping under it on a narrow screen. `actions` sit to the right of the heading and drop below it on a phone, so a row of buttons never pushes the page sideways at 320px; `actionsInline` keeps a single small control (a library page's **Sync** button) beside the heading on a phone too.
 
 ### Lifecycle Pages
 

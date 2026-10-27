@@ -32,6 +32,8 @@ Slow data sources (streams and integration health probe your servers) load in th
 
 One tile per media type — Movies, Series, Music — plus a Library Size total. Each type tile shows the item count, a **12-month additions sparkline** (the last 12 calendar months up to this one, so months with no additions show as zero) (hover it to see the exact count for each month), and size/runtime details, and clicks through to that library's browse page. The Library Size tile charts total size over the same window instead — hovering shows what your library size was at each month.
 
+The figures refresh on their own: while a sync runs they update at most every 10 seconds, and once more when it finishes. They also update when a server is added, changed or removed, and when new plays arrive in the watch history.
+
 ### Lifecycle Pipeline
 
 The lifecycle system as a funnel, each stage linking to its page:

@@ -63,6 +63,22 @@ Librariarr uses Docker Compose for development to provide a PostgreSQL database 
 | `pnpm docker:dev:db:studio` | Open Prisma Studio (DB browser) |
 | `pnpm docker:dev:db:reset` | Reset DB completely |
 
+#### Indexes outside the Prisma schema
+
+Most indexes are declared in `prisma/schema.prisma`, but a few exist only as SQL in a migration (`prisma/migrations/0030_query_indexes`), because Prisma cannot declare them: an expression index on `MediaItem` (`type`, `LOWER(TRIM("parentTitle"))`) for artist lookups, and three partial trigram (`pg_trgm`) indexes on `title`, `parentTitle` and `albumTitle` for title search. `prisma db push` neither creates nor drops them — it leaves alone an expression or partial index it cannot represent — so a production install, which runs the migrations and then `db push`, keeps them.
+
+A database built by `db push` alone does not have them: the dev container (which pushes the schema on start), the test database and the end-to-end database. Queries return the same results without them, only slower, so a query plan or timing measured there is not what production sees. To add them to such a database (or to an install where `pg_trgm` became available after the migration had run), run:
+
+```sql
+CREATE INDEX IF NOT EXISTS "MediaItem_type_parentTitle_norm_idx" ON "MediaItem" ("type", LOWER(TRIM("parentTitle")));
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE INDEX IF NOT EXISTS "MediaItem_title_trgm_idx" ON "MediaItem" USING GIN ("title" gin_trgm_ops) WHERE "title" IS NOT NULL;
+CREATE INDEX IF NOT EXISTS "MediaItem_parentTitle_trgm_idx" ON "MediaItem" USING GIN ("parentTitle" gin_trgm_ops) WHERE "parentTitle" IS NOT NULL;
+CREATE INDEX IF NOT EXISTS "MediaItem_albumTitle_trgm_idx" ON "MediaItem" USING GIN ("albumTitle" gin_trgm_ops) WHERE "albumTitle" IS NOT NULL;
+```
+
+Do not turn on Prisma's `partialIndexes` preview feature: `db push` would then manage partial indexes itself and drop these, since the schema does not declare them.
+
 ### Mock Data
 
 Populate the database with fictional media data for testing or taking screenshots without exposing personal data.

@@ -41,7 +41,7 @@ Librariarr can use Tracearr as the **watch-history source** for a media server i
    - **Name**: A label (e.g., "Tracearr")
    - **URL**: Tracearr base URL (e.g., `http://192.168.1.100:3000`). If Tracearr sits under a sub-path on a reverse proxy, include it (e.g., `https://media.example.com/tracearr`)
    - **API Key**: The `trr_pub_…` key from step 1
-5. Click **Save**. The connection is tested before the instance is saved, so a bad URL or key fails here with the reason rather than being stored and silently doing nothing. Editing a saved instance gets a **Test** button of its own.
+5. Click **Save**. The connection is tested before the instance is saved, so a bad URL or key fails here with the reason rather than being stored and silently doing nothing. Editing a saved instance gets a **Test** button of its own. An edit that changes the URL or the key must pass that test before it saves; renaming the instance does not, so it works while Tracearr is down. Leave the key field empty to keep the saved key.
 
 </Steps>
 
@@ -209,7 +209,7 @@ Everything else — filters, the detail side panel, lifecycle criteria such as *
 
 | Symptom | Cause |
 |-|-|
-| **Saving or Test fails with 401** | The API key is wrong, expired, or was regenerated in Tracearr. Generate a fresh key in **Settings → General** and paste it again — the field shows a mask (`••••••••`) for the saved key, and saving without changing it keeps the stored key. |
+| **Saving or Test fails with 401** | The API key is wrong, expired, or was regenerated in Tracearr. Generate a fresh key in **Settings → General** and paste it again — the edit form's key field starts empty, and saving with it left empty keeps the stored key. |
 | **Saving or Test fails with a network error** | Librariarr can't reach the URL. Check the port, and include the sub-path if Tracearr is proxied under one. |
 | **The Watch history source dropdown is empty** | The instance is disabled, or Tracearr monitors no servers yet. The list comes straight from Tracearr's health response. |
 | **A server's history is empty after a sync** | That server has no Tracearr mapping and is still on its native history, or it's mapped to the wrong Tracearr server. If you run more than one Tracearr instance, Librariarr asks each of them which servers it monitors and uses the one that owns the mapped server, so an unreachable instance shows up in [System Logs](/docs/features/system-logs/) rather than silently importing nothing. Both look identical in the UI — check the mapping against the server names Tracearr reports. |
