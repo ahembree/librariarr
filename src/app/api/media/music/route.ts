@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { withListResponseCache } from "@/lib/api/cached-list-response";
 import { jsonResponse, mapInSlices } from "@/lib/api/json-response";
 import { prisma } from "@/lib/db";
@@ -47,12 +47,7 @@ const SORT_COLUMNS = new Set([
   "originallyAvailableAt",
 ]);
 
-async function listGet(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+const listGet = withSession(async (session, request: NextRequest) => {
   const { searchParams } = new URL(request.url);
   const { page, limit, skip } = parseListPagination(searchParams);
   let parentTitle = searchParams.get("parentTitle");
@@ -68,7 +63,7 @@ async function listGet(request: NextRequest) {
   // record. It replaces `parentTitle` and `albumTitle`.
   const itemId = searchParams.get("itemId");
   if (itemId) {
-    const scope = await loadDetailScope(session.userId!, itemId, "MUSIC");
+    const scope = await loadDetailScope(session.userId, itemId, "MUSIC");
     if (!scope) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
@@ -81,7 +76,7 @@ async function listGet(request: NextRequest) {
     albumTitle = scope.albumTitle;
   }
 
-  const sf = await resolveServerFilter(session.userId!, serverId, "MUSIC");
+  const sf = await resolveServerFilter(session.userId, serverId, "MUSIC");
   if (!sf) {
     return NextResponse.json({ items: [], pagination: { page, limit, hasMore: false } });
   }
@@ -199,7 +194,7 @@ async function listGet(request: NextRequest) {
     items: serializedItems,
     pagination: { page, limit, hasMore },
   });
-}
+});
 
 /**
  * Answered from the list response cache when the same listing was asked for

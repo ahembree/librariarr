@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { createMediaServerClient } from "@/lib/media-server/factory";
 import { validateRequest, serverAddSchema } from "@/lib/validation";
@@ -23,12 +23,7 @@ import type { SyncJob } from "@/generated/prisma/client";
  * The request is optional so the settings bundle can run this handler as it
  * runs every bundled one, with no arguments.
  */
-export async function GET(request?: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async (session, request?: NextRequest) => {
   if (request?.nextUrl.searchParams.get("fields") === "basic") {
     const servers = await prisma.mediaServer.findMany({
       where: { userId: session.userId },
@@ -56,7 +51,7 @@ export async function GET(request?: NextRequest) {
       }),
     ),
   });
-}
+});
 
 /**
  * Each server's newest sync job — a RUNNING one ahead of any newer row — by
@@ -96,12 +91,7 @@ async function latestSyncJobs(serverIds: string[]): Promise<Map<string, SyncJob>
   return new Map(jobs.map((job) => [job.mediaServerId, job]));
 }
 
-export async function POST(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const POST = withSession(async (session, request: NextRequest) => {
   const { data, error } = await validateRequest(request, serverAddSchema);
   if (error) return error;
 
@@ -117,7 +107,7 @@ export async function POST(request: NextRequest) {
     // token, which signs in to Librariarr. A stolen cookie must not be able to
     // send it somewhere of its choosing (see recent-login.ts).
     // Checked first: confirming who you are cannot supply a Plex account.
-    const plexToken = await getStoredPlexToken(session.userId!);
+    const plexToken = await getStoredPlexToken(session.userId);
     if (!plexToken) {
       return NextResponse.json(
         { error: "Sign in with Plex to add a server from your Plex account" },
@@ -125,7 +115,7 @@ export async function POST(request: NextRequest) {
       );
     }
     if (!hasRecentLogin(session)) {
-      return reauthRequired(session.userId!, "Adding a Plex server");
+      return reauthRequired(session.userId, "Adding a Plex server");
     }
     let resources;
     try {
@@ -170,7 +160,7 @@ export async function POST(request: NextRequest) {
   // Check if a server with the same machineId already exists for this user
   if (machineId) {
     const existing = await prisma.mediaServer.findFirst({
-      where: { userId: session.userId!, machineId },
+      where: { userId: session.userId, machineId },
     });
     if (existing) {
       const server = await prisma.mediaServer.update({
@@ -182,14 +172,14 @@ export async function POST(request: NextRequest) {
       // mutations).
       invalidateMediaCaches();
       // Reconcile the realtime WebSocket (url/token may have changed).
-      eventBus.emit({ type: "server:changed", userId: session.userId!, meta: { serverId: server.id } });
+      eventBus.emit({ type: "server:changed", userId: session.userId, meta: { serverId: server.id } });
       return NextResponse.json({ server: sanitize(server), updated: true }, { status: 200 });
     }
   }
 
   const server = await prisma.mediaServer.create({
     data: {
-      userId: session.userId!,
+      userId: session.userId,
       type: serverType,
       name: name || "Media Server",
       url,
@@ -205,7 +195,7 @@ export async function POST(request: NextRequest) {
   invalidateMediaCaches();
 
   // Open a realtime WebSocket for the newly-added server.
-  eventBus.emit({ type: "server:changed", userId: session.userId!, meta: { serverId: server.id } });
+  eventBus.emit({ type: "server:changed", userId: session.userId, meta: { serverId: server.id } });
 
   return NextResponse.json({ server: sanitize(server) }, { status: 201 });
-}
+});

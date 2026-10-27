@@ -1,15 +1,10 @@
-import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { NextRequest } from "next/server";
+import { withSession } from "@/lib/auth/with-session";
 import { jsonTextResponse } from "@/lib/api/json-response";
 import { prisma } from "@/lib/db";
 import { matchItemJson } from "@/lib/lifecycle/match-json";
 
-export async function GET(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async (session, request: NextRequest) => {
   // Read persisted matches grouped by rule set
   const ruleSets = await prisma.ruleSet.findMany({
     where: { userId: session.userId, enabled: true },
@@ -78,4 +73,4 @@ export async function GET(request: NextRequest) {
   });
 
   return jsonTextResponse(request, `{"ruleMatches":[${groups.join(",")}]}`);
-}
+});

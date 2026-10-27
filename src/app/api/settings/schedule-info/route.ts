@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { CronExpressionParser } from "cron-parser";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { presetToCron, getSystemTimezone } from "@/lib/jobs/schedule";
 
@@ -21,14 +21,9 @@ function getNextRun(schedule: string, scheduledJobTime: string): string | null {
   }
 }
 
-export async function GET() {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async (session) => {
   const settings = await prisma.appSettings.findFirst({
-    where: { userId: session.userId! },
+    where: { userId: session.userId },
   });
 
   const timezone = getSystemTimezone();
@@ -61,4 +56,4 @@ export async function GET() {
       lastRun: settings.lastScheduledLifecycleExecution?.toISOString() ?? null,
     },
   });
-}
+});

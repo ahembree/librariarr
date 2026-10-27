@@ -55,7 +55,13 @@ export function SyncLibraryButton({ libraryType, onSyncComplete }: { libraryType
     setProgress(null);
   }, []);
 
-  const checkStatus = useCallback(async () => {
+  // `announced`: whether the page saw the run's end on the stream. A check
+  // run on a sync event (or a reconnect's resync, which calls the same
+  // subscribers) shares that event with the page's own `sync:completed`
+  // subscription, which refetches. Decided by what triggered the check, not by
+  // `isRealtimeLive()` when it answers: the stream can drop between the event
+  // and the answer, and the list was then fetched twice.
+  const checkStatus = useCallback(async (announced: boolean) => {
     if (!syncingRef.current) return;
     // Shared with every other reader of `/api/sync/status` on the same event.
     const data = await fetchSyncStatus();
@@ -64,7 +70,7 @@ export function SyncLibraryButton({ libraryType, onSyncComplete }: { libraryType
     const activeJobs = jobs.filter((j) => j.status === "RUNNING" || j.status === "PENDING");
     if (activeJobs.length === 0) {
       finish();
-      if (!isRealtimeLive()) onSyncCompleteRef.current?.();
+      if (!announced) onSyncCompleteRef.current?.();
       return;
     }
     const processed = activeJobs.reduce((sum, j) => sum + (j.itemsProcessed || 0), 0);
@@ -72,12 +78,16 @@ export function SyncLibraryButton({ libraryType, onSyncComplete }: { libraryType
     setProgress(total > 0 ? { processed, total } : null);
   }, [finish]);
 
+  const onEvent = useCallback(() => void checkStatus(true), [checkStatus]);
+  // A poll runs only while no pushes arrive, so the page saw nothing.
+  const onPoll = useCallback(() => void checkStatus(false), [checkStatus]);
+
   // Every sync event may move this run's bar or end it.
-  useRealtime("sync:started", checkStatus);
-  useRealtime("sync:progress", checkStatus);
-  useRealtime("sync:completed", checkStatus);
-  useRealtime("sync:failed", checkStatus);
-  useFallbackPoll(checkStatus, FALLBACK_POLL_MS, syncing);
+  useRealtime("sync:started", onEvent);
+  useRealtime("sync:progress", onEvent);
+  useRealtime("sync:completed", onEvent);
+  useRealtime("sync:failed", onEvent);
+  useFallbackPoll(onPoll, FALLBACK_POLL_MS, syncing);
 
   const handleSync = async () => {
     syncingRef.current = true;
@@ -93,7 +103,10 @@ export function SyncLibraryButton({ libraryType, onSyncComplete }: { libraryType
       if (data.syncedCount > 0) {
         // The route created the PENDING rows before answering, so the first
         // check already sees this run — and a short sync may be over by now.
-        void checkStatus();
+        // No event triggered this check: a run already over sent its
+        // `sync:completed` before it, which the page received if pushes are
+        // arriving.
+        void checkStatus(isRealtimeLive());
       } else {
         finish();
       }

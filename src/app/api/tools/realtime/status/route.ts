@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { getRealtimeManager } from "@/lib/media-server/realtime";
 import type { RealtimeConnectionStatus } from "@/lib/media-server/realtime/types";
@@ -17,14 +17,9 @@ export const dynamic = "force-dynamic";
  * reads `connecting` — the manager reconciles on that change and every 60s.
  * Read-only and free of secrets.
  */
-export async function GET() {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async (session) => {
   const settings = await prisma.appSettings.findUnique({
-    where: { userId: session.userId! },
+    where: { userId: session.userId },
     select: { realtimeSync: true },
   });
   const enabled = settings?.realtimeSync ?? true;
@@ -33,7 +28,7 @@ export async function GET() {
   }
 
   const servers = await prisma.mediaServer.findMany({
-    where: { userId: session.userId!, enabled: true },
+    where: { userId: session.userId, enabled: true },
     select: { id: true, name: true, type: true },
     orderBy: [{ createdAt: "asc" }, { id: "asc" }],
   });
@@ -50,4 +45,4 @@ export async function GET() {
       status: (statusById.get(server.id) ?? "connecting") satisfies RealtimeConnectionStatus,
     })),
   });
-}
+});

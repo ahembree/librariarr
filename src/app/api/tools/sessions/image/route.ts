@@ -1,15 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { createMediaServerClient } from "@/lib/media-server/factory";
 import { isSessionArtworkPath } from "@/lib/media-server/artwork-path";
 
-export async function GET(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async (session, request: NextRequest) => {
   const { searchParams } = new URL(request.url);
   const serverId = searchParams.get("serverId");
   const path = searchParams.get("path");
@@ -24,7 +19,7 @@ export async function GET(request: NextRequest) {
   }
 
   const server = await prisma.mediaServer.findFirst({
-    where: { id: serverId, userId: session.userId! },
+    where: { id: serverId, userId: session.userId },
     select: { url: true, accessToken: true, tlsSkipVerify: true, type: true },
   });
 
@@ -59,4 +54,4 @@ export async function GET(request: NextRequest) {
   } catch {
     return NextResponse.json({ error: "Failed to fetch image" }, { status: 502 });
   }
-}
+});

@@ -54,7 +54,6 @@ vi.mock("@/lib/media-server/factory", () => ({
     bulkListingIncomplete: true,
     testConnection: vi.fn(async () => ({ ok: true })),
     getLibraries: vi.fn(async () => [{ key: "1", title: "Movies", type: "movie" }]),
-    getWatchCounts: vi.fn(async () => new Map()),
     getLibraryItemsPage: vi.fn(async () => ({ items: [bulk()], total: 1 })),
     getItemMetadata: vi.fn(async () => {
       if (state.enrichFails) throw new Error("timeout of 30000ms exceeded");

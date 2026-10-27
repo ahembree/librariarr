@@ -1,5 +1,4 @@
-import { NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { validateRequest, executeQuerySchema } from "@/lib/validation";
 import { executeQuery } from "@/lib/query/query-engine";
 import { progressStreamResponse } from "@/lib/progress/stream";
@@ -10,12 +9,7 @@ import type { QueryDefinition } from "@/lib/query/types";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-export async function POST(request: Request) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const POST = withSession(async (session, request: Request) => {
   const { data, error } = await validateRequest(request, executeQuerySchema);
   if (error) return error;
 
@@ -26,11 +20,11 @@ export async function POST(request: Request) {
     (emit) =>
       executeQuery(
         data.query as QueryDefinition,
-        session.userId!,
+        session.userId,
         data.page,
         data.limit,
         emit,
       ),
     { request },
   );
-}
+});

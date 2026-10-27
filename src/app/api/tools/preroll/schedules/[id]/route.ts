@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { Prisma } from "@/generated/prisma/client";
 import { validateRequest, prerollScheduleUpdateSchema, TIME_REGEX } from "@/lib/validation";
@@ -21,15 +21,11 @@ interface ScheduleInput {
   enabled?: boolean;
 }
 
-export async function PUT(
+export const PUT = withSession(async (
+  session,
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+) => {
   const { id } = await params;
   const { data, error } = await validateRequest(request, prerollScheduleUpdateSchema);
   if (error) return error;
@@ -37,7 +33,7 @@ export async function PUT(
 
   // Verify ownership
   const existing = await prisma.prerollSchedule.findFirst({
-    where: { id, userId: session.userId! },
+    where: { id, userId: session.userId },
   });
   if (!existing) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -130,7 +126,7 @@ export async function PUT(
   // Conflict detection (exclude self)
   if (merged.enabled !== false) {
     const allSchedules = await prisma.prerollSchedule.findMany({
-      where: { userId: session.userId! },
+      where: { userId: session.userId },
     });
     const conflict = checkConflict(merged, allSchedules, id);
     if (conflict) {
@@ -180,22 +176,18 @@ export async function PUT(
   });
 
   return NextResponse.json({ schedule });
-}
+});
 
-export async function DELETE(
+export const DELETE = withSession(async (
+  session,
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+) => {
   const { id } = await params;
 
   // Verify ownership
   const existing = await prisma.prerollSchedule.findFirst({
-    where: { id, userId: session.userId! },
+    where: { id, userId: session.userId },
     select: { id: true },
   });
   if (!existing) {
@@ -205,4 +197,4 @@ export async function DELETE(
   await prisma.prerollSchedule.delete({ where: { id } });
 
   return NextResponse.json({ success: true });
-}
+});

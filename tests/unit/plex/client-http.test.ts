@@ -190,48 +190,27 @@ describe("getWatchHistory", () => {
 });
 
 describe("history paging", () => {
-  it("getWatchCounts walks every page until totalSize, counting full plays per key", async () => {
+  it("getDetailedWatchHistory walks every history page until totalSize", async () => {
     const url = await serve((u) => {
+      if (u.pathname !== "/status/sessions/history/all") return mc({});
       const start = Number(u.searchParams.get("X-Plex-Container-Start"));
       if (start === 0) {
         // A server capping the page below the 5,000 asked for: a short page that
         // is NOT the end, because totalSize says more follow.
-        return mc({
-          totalSize: 4,
-          Metadata: [
-            { ratingKey: "a", viewedAt: 100 },
-            { ratingKey: "a", viewedAt: 50 },
-          ],
-        });
+        return mc({ totalSize: 4, Metadata: [{ ratingKey: "a" }, { ratingKey: "b" }] });
       }
-      return mc({
-        totalSize: 4,
-        Metadata: [
-          { ratingKey: "a", viewedAt: 200, viewOffset: 99, duration: 100 },
-          { ratingKey: "b", viewOffset: 10, duration: 100 }, // partial
-        ],
-      });
+      return mc({ totalSize: 4, Metadata: [{ ratingKey: "c" }, { ratingKey: "d" }] });
     });
-    const counts = await new PlexClient(url, "t").getWatchCounts();
-    expect(counts.get("a")).toEqual({ count: 3, lastWatchedAt: 200 });
-    expect(counts.has("b")).toBe(false);
-    expect(requests.map((r) => r.query.get("X-Plex-Container-Start"))).toEqual(["0", "2"]);
+    const rows = await new PlexClient(url, "t").getDetailedWatchHistory();
+    expect(rows.map((r) => r.ratingKey)).toEqual(["a", "b", "c", "d"]);
+    const history = requests.filter((r) => r.path === "/status/sessions/history/all");
+    expect(history.map((r) => r.query.get("X-Plex-Container-Start"))).toEqual(["0", "2"]);
   });
 
-  it("getWatchCounts skips entries without a rating key and records a missing viewedAt as 0", async () => {
-    const url = await serve(() => mc({ Metadata: [{ viewedAt: 5 }, { ratingKey: "c" }, { ratingKey: 7, viewOffset: 0 }] }));
-    const counts = await new PlexClient(url, "t").getWatchCounts();
-    expect([...counts.entries()]).toEqual([
-      ["c", { count: 1, lastWatchedAt: 0 }],
-      ["7", { count: 1, lastWatchedAt: 0 }],
-    ]);
-    // No totalSize and a short page → the walk ends after one request.
-    expect(requests).toHaveLength(1);
-  });
-
-  it("getWatchCounts stops on an empty first page", async () => {
-    const url = await serve(() => ({ body: {} }));
-    expect((await new PlexClient(url, "t").getWatchCounts()).size).toBe(0);
+  it("getDetailedWatchHistory stops on an empty first page", async () => {
+    const url = await serve(() => mc({}));
+    expect(await new PlexClient(url, "t").getDetailedWatchHistory()).toEqual([]);
+    expect(requests.filter((r) => r.path === "/status/sessions/history/all")).toHaveLength(1);
   });
 
   it("getDetailedWatchHistory sends viewedAt>= verbatim and labels plays by account and device", async () => {
@@ -396,6 +375,32 @@ describe("collections", () => {
       expect(post.path).toBe("/hubs/sections/2/manage");
       expect(post.query.get("metadataItemId")).toBe("48211");
       expect(post.query.get("promotedToSharedHome")).toBe("1");
+    });
+
+    // The collection sync reads the hub to see whether anything changed and
+    // hands that state over, so the update makes no second read.
+    it("applies the state the caller already read without reading it again", async () => {
+      const url = await hubServer([{ identifier: "custom.collection.2.48211" }]);
+      await new PlexClient(url, "t").updateCollectionVisibility("2", "48211", true, true, false, {
+        identifier: "custom.collection.2.48211",
+        home: false,
+        shared: false,
+        recommended: false,
+      });
+      expect(requests.map((r) => `${r.method} ${r.path}`)).toEqual([
+        "PUT /hubs/sections/2/manage/custom.collection.2.48211",
+      ]);
+    });
+
+    it("creates a hub from a known state that has none, without reading it", async () => {
+      const url = await hubServer([]);
+      await new PlexClient(url, "t").updateCollectionVisibility("2", "48211", true, true, false, {
+        identifier: null,
+        home: false,
+        shared: false,
+        recommended: false,
+      });
+      expect(requests.map((r) => `${r.method} ${r.path}`)).toEqual(["POST /hubs/sections/2/manage"]);
     });
 
     it("does nothing when there is no hub and no promotion is wanted", async () => {

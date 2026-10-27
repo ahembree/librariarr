@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { escapeLike } from "@/lib/filters/escape-like";
 import { RESOLUTION_DB_VALUES } from "@/lib/conditions/constants";
@@ -17,12 +17,7 @@ const SPLIT_MAX_REACH = 10_000;
 /** Upper bound for the cached filter dropdown values (see below). */
 const FILTER_VALUES_TTL_MS = 10 * 60_000;
 
-export async function GET(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async (session, request: NextRequest) => {
   const { searchParams } = new URL(request.url);
   const page = parsePage(searchParams);
   const rawLimit = parseInt(searchParams.get("limit") ?? "50");
@@ -487,4 +482,4 @@ export async function GET(request: NextRequest) {
     pagination: { page, limit, hasMore, totalCount },
     ...filterValues,
   });
-}
+});

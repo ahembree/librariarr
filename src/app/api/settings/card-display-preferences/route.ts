@@ -1,15 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { announceDisplaySettingsChanged } from "@/lib/settings/display-settings-events";
 import { validateRequest, cardDisplayPreferencesSchema } from "@/lib/validation";
 
-export async function GET() {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async (session) => {
   const settings = await prisma.appSettings.findUnique({
     where: { userId: session.userId },
     select: { cardDisplayPreferences: true },
@@ -18,14 +13,9 @@ export async function GET() {
   return NextResponse.json({
     preferences: settings?.cardDisplayPreferences ?? null,
   });
-}
+});
 
-export async function PUT(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const PUT = withSession(async (session, request: NextRequest) => {
   const { data, error } = await validateRequest(request, cardDisplayPreferencesSchema);
   if (error) return error;
 
@@ -35,11 +25,11 @@ export async function PUT(request: NextRequest) {
     where: { userId: session.userId },
     update: { cardDisplayPreferences: json },
     create: {
-      userId: session.userId!,
+      userId: session.userId,
       cardDisplayPreferences: json,
     },
   });
 
-  announceDisplaySettingsChanged(session.userId!);
+  announceDisplaySettingsChanged(session.userId);
   return NextResponse.json({ success: true });
-}
+});

@@ -391,7 +391,11 @@ describe("syncCollection", () => {
       contribution([{ libraryId: "lib1", ratingKey: "rk1", title: "Movie 1", parentTitle: null }]),
     ]);
 
-    expect(mockPlexClient.updateCollectionVisibility).toHaveBeenCalledWith("1", "col1", true, true, true);
+    // The state the sync read is handed over, so the client does not read it again.
+    expect(mockPlexClient.getCollectionVisibility).toHaveBeenCalledTimes(1);
+    expect(mockPlexClient.updateCollectionVisibility).toHaveBeenCalledWith("1", "col1", true, true, true, {
+      identifier: null, home: false, shared: false, recommended: false,
+    });
   });
 
   it("handles MUSIC type with plexType 2", async () => {
@@ -910,7 +914,9 @@ describe("collection writes Plex already holds", () => {
     // A stored sort title is cleared, the sort mode changed, recommended turned on.
     expect(mockPlexClient.editCollectionSortTitle).toHaveBeenCalledWith("1", "col1", "");
     expect(mockPlexClient.editCollectionSort).toHaveBeenCalledWith("col1", 1);
-    expect(mockPlexClient.updateCollectionVisibility).toHaveBeenCalledWith("1", "col1", true, true, true);
+    expect(mockPlexClient.updateCollectionVisibility).toHaveBeenCalledWith("1", "col1", true, true, true, {
+      identifier: "custom.collection.1.col1", home: true, shared: true, recommended: false,
+    });
   });
 
   it("leaves visibility alone when Plex already holds it, and turns off a hub no longer wanted", async () => {
@@ -932,7 +938,9 @@ describe("collection writes Plex already holds", () => {
 
     // The hub exists but nothing is wanted any more: it is removed.
     await syncCollection(makeCollection({ sortName: "Sort Me" }), items);
-    expect(mockPlexClient.updateCollectionVisibility).toHaveBeenCalledWith("1", "col1", false, false, false);
+    expect(mockPlexClient.updateCollectionVisibility).toHaveBeenCalledWith("1", "col1", false, false, false, {
+      identifier: "custom.collection.1.col1", home: true, shared: true, recommended: true,
+    });
   });
 });
 

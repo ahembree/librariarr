@@ -1,3 +1,5 @@
+import { stripTrailingSlashes } from "@/lib/url-normalize";
+
 export interface PlayServer {
   serverName: string;
   serverType: string;
@@ -14,7 +16,7 @@ export interface PlayServer {
  * Builds a deep link URL to open/play an item in its media server's web UI.
  */
 export function buildPlayUrl(server: PlayServer): string {
-  const baseUrl = (server.externalUrl || server.serverUrl).replace(/\/+$/, "");
+  const baseUrl = stripTrailingSlashes(server.externalUrl || server.serverUrl);
 
   switch (server.serverType) {
     case "PLEX":

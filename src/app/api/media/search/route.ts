@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { escapeLike } from "@/lib/filters/escape-like";
 import { Prisma } from "@/generated/prisma/client";
@@ -32,12 +32,7 @@ const SEARCH_TYPES = new Set<string>(["MOVIE", "SERIES", "MUSIC"]);
  * never to MOVIE). The command palette asked for its three lists one request
  * each, on every keystroke.
  */
-export async function GET(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async (session, request: NextRequest) => {
   const { searchParams } = new URL(request.url);
   // Trimmed for the empty check; every `contains` below gets `escapeLike(q)`
   // because `contains` is a LIKE pattern Prisma does not escape — a `%` or
@@ -54,7 +49,7 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "Invalid type" }, { status: 400 });
     }
     const lists = await Promise.all(
-      types.map((t) => (q ? searchType(session.userId!, q, t as SearchType, seriesScope, musicScope) : [])),
+      types.map((t) => (q ? searchType(session.userId, q, t as SearchType, seriesScope, musicScope) : [])),
     );
     return NextResponse.json({ results: Object.fromEntries(types.map((t, i) => [t, lists[i]])) });
   }
@@ -66,8 +61,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Invalid type" }, { status: 400 });
   }
 
-  return NextResponse.json({ items: await searchType(session.userId!, q, type as SearchType, seriesScope, musicScope) });
-}
+  return NextResponse.json({ items: await searchType(session.userId, q, type as SearchType, seriesScope, musicScope) });
+});
 
 /** One media type's matches for `q`, as `GET ?type=` lists them. */
 async function searchType(

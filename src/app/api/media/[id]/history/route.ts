@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { createMediaServerClient } from "@/lib/media-server/factory";
 import { apiLogger } from "@/lib/logger";
@@ -28,15 +28,11 @@ const COPY_SELECT = {
   },
 } satisfies Prisma.MediaItemSelect;
 
-export async function GET(
+export const GET = withSession(async (
+  session,
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+) => {
   const { id } = await params;
 
   // Only what the live lookup needs: each copy's rating key and duration, and
@@ -156,4 +152,4 @@ export async function GET(
     .sort((a, b) => b.playCount - a.playCount);
 
   return NextResponse.json({ history, serverHistories });
-}
+});

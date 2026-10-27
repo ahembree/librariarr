@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { jsonResponse } from "@/lib/api/json-response";
 import { loadDetailScope, seriesOfScope } from "@/lib/api/detail-scope";
 import { prisma } from "@/lib/db";
@@ -23,12 +23,7 @@ const HAS_SUMMARY: Prisma.MediaItemWhereInput = {
   ],
 };
 
-export async function GET(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async (session, request: NextRequest) => {
   const { searchParams } = new URL(request.url);
   // Series identity is `seriesKey` (see src/lib/media/series-key.ts); the legacy
   // `parentTitle` param is still accepted so old links keep working, but it is
@@ -41,7 +36,7 @@ export async function GET(request: NextRequest) {
   const serverId = searchParams.get("serverId");
 
   if (itemId) {
-    const scope = await loadDetailScope(session.userId!, itemId, "SERIES");
+    const scope = await loadDetailScope(session.userId, itemId, "SERIES");
     if (!scope) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
@@ -54,7 +49,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "seriesKey or parentTitle is required" }, { status: 400 });
   }
 
-  const sf = await resolveServerFilter(session.userId!, serverId, "SERIES");
+  const sf = await resolveServerFilter(session.userId, serverId, "SERIES");
   if (!sf) {
     return NextResponse.json({ seasons: [] });
   }
@@ -237,4 +232,4 @@ export async function GET(request: NextRequest) {
     .sort((a, b) => a.seasonNumber - b.seasonNumber);
 
   return jsonResponse(request, { seasons });
-}
+});

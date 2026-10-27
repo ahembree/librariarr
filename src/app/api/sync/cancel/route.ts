@@ -1,15 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { validateRequest, syncCancelSchema } from "@/lib/validation";
 import { eventBus } from "@/lib/events/event-bus";
 
-export async function POST(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const POST = withSession(async (session, request: NextRequest) => {
   const { data, error } = await validateRequest(request, syncCancelSchema);
   if (error) return error;
 
@@ -17,7 +12,7 @@ export async function POST(request: NextRequest) {
 
   // Verify user owns this server
   const server = await prisma.mediaServer.findFirst({
-    where: { id: serverId, userId: session.userId! },
+    where: { id: serverId, userId: session.userId },
     select: { id: true },
   });
 
@@ -63,8 +58,8 @@ export async function POST(request: NextRequest) {
 
   // Status surfaces refetch on it and drop the rows ended here at once.
   if (stopped.count > 0) {
-    eventBus.emit({ type: "sync:failed", userId: session.userId!, meta: { serverId } });
+    eventBus.emit({ type: "sync:failed", userId: session.userId, meta: { serverId } });
   }
 
   return NextResponse.json({ success: true });
-}
+});

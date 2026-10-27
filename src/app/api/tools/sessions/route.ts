@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { readSessionsSnapshot } from "./snapshot";
 
 /**
@@ -9,12 +9,7 @@ import { readSessionsSnapshot } from "./snapshot";
  * every session change — does not ask every server again when a poll that
  * began after the last pushed change is a few seconds old.
  */
-export async function GET() {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const { sessions, unreachableServers } = await readSessionsSnapshot(session.userId!);
+export const GET = withSession(async (session) => {
+  const { sessions, unreachableServers } = await readSessionsSnapshot(session.userId);
   return NextResponse.json({ sessions, unreachableServers });
-}
+});

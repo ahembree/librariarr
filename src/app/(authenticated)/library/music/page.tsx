@@ -294,7 +294,7 @@ export default function MusicPage() {
       <LibraryTabs tabs={MUSIC_TABS} active="/library/music" />
 
       <MediaFilters
-        key={filterPanel.panelKey}
+        resetKey={filterPanel.resetKey}
         onFilterChange={onFilterChange}
         externalFilters={filterPanel.externalFilters}
         mediaType="MUSIC"

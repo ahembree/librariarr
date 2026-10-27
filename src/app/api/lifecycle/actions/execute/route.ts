@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession, type LoggedInSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { executeActionsForItems } from "@/lib/lifecycle/run-actions";
@@ -53,12 +53,7 @@ function storedMemberIds(
   return byItem;
 }
 
-export async function POST(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const POST = withSession(async (session, request: NextRequest) => {
   const { data, error } = await validateRequest(request, actionExecuteSchema);
   if (error) return error;
 
@@ -112,7 +107,7 @@ export async function POST(request: NextRequest) {
   }
   // Kept apart from an ad-hoc query action, which can act on another copy or
   // track of the same Arr record (see `execute-in-flight.ts`).
-  if (!tryBeginRuleSetExecution(session.userId!)) {
+  if (!tryBeginRuleSetExecution(session.userId)) {
     endExecute(ruleSet.id, lockedItems);
     return NextResponse.json(
       { error: "A query action is running — wait for it to finish" },
@@ -122,10 +117,10 @@ export async function POST(request: NextRequest) {
   try {
     return await executeRuleSet(session, ruleSet, mediaItemIds);
   } finally {
-    endRuleSetExecution(session.userId!);
+    endRuleSetExecution(session.userId);
     endExecute(ruleSet.id, lockedItems);
   }
-}
+});
 
 type RuleSetRow = NonNullable<Awaited<ReturnType<typeof prisma.ruleSet.findFirst>>>;
 
@@ -135,7 +130,7 @@ type RuleSetRow = NonNullable<Awaited<ReturnType<typeof prisma.ruleSet.findFirst
  * few of them (the MUSIC+Seerr disarm) write before they refuse.
  */
 async function executeRuleSet(
-  session: Awaited<ReturnType<typeof getSession>>,
+  session: LoggedInSession,
   ruleSet: RuleSetRow,
   mediaItemIds: string[] | undefined,
 ): Promise<NextResponse> {
@@ -278,7 +273,7 @@ async function executeRuleSet(
   // they must be collected from episodeIdMap and checked too).
   // An exception on another server's copy of an item (same dedupKey) counts.
   const memberIds = [...episodeIdMap.values()].flat();
-  const excludedIds = await findExceptedItemIds(session.userId!, [...itemIds, ...memberIds]);
+  const excludedIds = await findExceptedItemIds(session.userId, [...itemIds, ...memberIds]);
   if (excludedIds.size > 0) {
 
     // Drop excepted members from each item's member list; if a whole-record
@@ -348,7 +343,7 @@ async function executeRuleSet(
   // destroys the entire series/artist — including siblings the rule never
   // matched — so an exception on ANY item of the same parent must refuse it.
   if (isWholeRecordDestructiveAction(ruleSet.actionType ?? "")) {
-    const protectedGroups = await findExceptionProtectedGroups(session.userId!, items);
+    const protectedGroups = await findExceptionProtectedGroups(session.userId, items);
     if (protectedGroups.size > 0) {
       const before = items.length;
       // Keyed as the guard keys it (`isGroupProtected`): SERIES identity is
@@ -379,13 +374,13 @@ async function executeRuleSet(
   // dialog.
   {
     const verdict = await checkDeleteCeiling(
-      session.userId!,
+      session.userId,
       items.map(() => ruleSet.actionType ?? "DO_NOTHING"),
       "manual",
     );
     if (!verdict.allowed) {
       logger.warn("Lifecycle", `Refused manual execute for rule set "${ruleSet.id}" — ${verdict.reason}`);
-      void notifyDeleteCeilingHeld(session.userId!, verdict, "manual", `Execute on rule set "${ruleSet.name}"`).catch(() => {});
+      void notifyDeleteCeilingHeld(session.userId, verdict, "manual", `Execute on rule set "${ruleSet.name}"`).catch(() => {});
       return NextResponse.json({ error: verdict.reason }, { status: 400 });
     }
   }
@@ -408,7 +403,7 @@ async function executeRuleSet(
   logger.info("Lifecycle", `Executing ${ruleSet.actionType ?? "DO_NOTHING"} on ${items.length} items for rule set "${ruleSet.id}" (${itemIds.length} match IDs, ${items.length} ownership-verified)`);
 
   const { executed, failed, errors, failures, notAttempted } = await executeActionsForItems(
-    session.userId!,
+    session.userId,
     items,
     {
       actionType: ruleSet.actionType ?? "DO_NOTHING",
@@ -437,7 +432,7 @@ async function executeRuleSet(
   if (failed > 0 && ruleSet.discordNotifyOnAction) {
     try {
       const settings = await prisma.appSettings.findUnique({
-        where: { userId: session.userId! },
+        where: { userId: session.userId },
         select: { discordWebhookUrl: true, discordWebhookUsername: true, discordWebhookAvatarUrl: true },
       });
       if (settings?.discordWebhookUrl) {
@@ -459,7 +454,7 @@ async function executeRuleSet(
   if (executed > 0 || failed > 0) {
     eventBus.emit({
       type: "lifecycle:action-executed",
-      userId: session.userId!,
+      userId: session.userId,
       meta: { executed, failed, manual: true },
     });
   }

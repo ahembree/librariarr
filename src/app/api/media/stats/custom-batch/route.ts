@@ -1,5 +1,5 @@
-import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { NextRequest } from "next/server";
+import { withSession } from "@/lib/auth/with-session";
 import { withSharedSession } from "@/lib/auth/shared-session";
 import { jsonResponse } from "@/lib/api/json-response";
 import { apiLogger } from "@/lib/logger";
@@ -40,27 +40,24 @@ const ROUTES = {
  * them (`withSharedSession`).
  */
 export async function POST(request: NextRequest) {
-  return withSharedSession(async () => {
-    const session = await getSession();
-    if (!session.isLoggedIn) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
-
-    const { data, error } = await validateRequest(request, customStatsBatchSchema);
-    if (error) return error;
-
-    const cards = new Array<CardAnswer>(data.cards.length);
-    let next = 0;
-    const worker = async () => {
-      while (next < data.cards.length) {
-        const index = next++;
-        cards[index] = await answerCard(request, data.cards[index]);
-      }
-    };
-    await Promise.all(Array.from({ length: Math.min(CARD_CONCURRENCY, data.cards.length) }, worker));
-    return jsonResponse(request, { cards });
-  });
+  return withSharedSession(() => answerCards(request));
 }
+
+const answerCards = withSession(async (_session, request: NextRequest) => {
+  const { data, error } = await validateRequest(request, customStatsBatchSchema);
+  if (error) return error;
+
+  const cards = new Array<CardAnswer>(data.cards.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < data.cards.length) {
+      const index = next++;
+      cards[index] = await answerCard(request, data.cards[index]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(CARD_CONCURRENCY, data.cards.length) }, worker));
+  return jsonResponse(request, { cards });
+});
 
 async function answerCard(request: NextRequest, card: CustomStatsCardRequest): Promise<CardAnswer> {
   const { kind, ...fields } = card;

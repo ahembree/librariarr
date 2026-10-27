@@ -33,7 +33,8 @@ function walk(dir: string, keep: (file: string) => boolean): string[] {
 // ─── Routes ───
 
 const GUARD_CALL = /\b(?:reauthRequired|refuseStoredKeyToNewUrl)\(/;
-const METHOD_EXPORT = /^export\s+async\s+function\s+(GET|HEAD|POST|PUT|PATCH|DELETE)\b/gm;
+// `export async function POST(…)` or `export const POST = withSession(…)`.
+const METHOD_EXPORT = /^export\s+(?:async\s+function|const)\s+(GET|HEAD|POST|PUT|PATCH|DELETE)\b/gm;
 
 interface GuardedRoute {
   /** `/api/servers/[id]` */
@@ -45,12 +46,13 @@ interface GuardedRoute {
 // A route file whose methods a shared builder makes:
 // `export const { PUT, DELETE } = instanceItemRoutes(RADARR);`
 const BUILT_EXPORT = /^export\s+const\s+\{([^}]+)\}\s*=\s*(\w+)\(/gm;
-const BUILDER_METHOD = /^\s*async\s+function\s+(GET|HEAD|POST|PUT|PATCH|DELETE)\(/gm;
+const BUILDER_METHOD = /^\s*(?:async\s+function|const)\s+(GET|HEAD|POST|PUT|PATCH|DELETE)\b/gm;
 
 /**
  * The methods a builder imported by a route file defines, each with its body.
  * Follows the import to the builder's module and reads its `export function
- * <builder>(…)`, whose handlers are `async function METHOD(…)` declarations.
+ * <builder>(…)`, whose handlers are `const METHOD = withSession(…)` (or
+ * `async function METHOD(…)`) declarations.
  */
 function builderMethods(routeSource: string, builder: string): Map<string, string> {
   const spec = new RegExp(`import\\s*\\{[^}]*\\b${builder}\\b[^}]*\\}\\s*from\\s*"(@/[^"]+)"`).exec(routeSource)?.[1];

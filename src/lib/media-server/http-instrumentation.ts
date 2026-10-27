@@ -8,6 +8,7 @@ import {
   ServerUnreachableError,
 } from "./health-cache";
 import { logger } from "@/lib/logger";
+import { stripTrailingSlashes } from "@/lib/url-normalize";
 
 /**
  * A media server's base URL without trailing slashes — the one spelling every
@@ -17,7 +18,7 @@ import { logger } from "@/lib/logger";
  * with a double slash and named itself differently in breaker errors.
  */
 export function normalizeMediaServerUrl(baseURL: string): string {
-  return baseURL.replace(/\/+$/, "");
+  return stripTrailingSlashes(baseURL);
 }
 
 interface InstrumentOptions {

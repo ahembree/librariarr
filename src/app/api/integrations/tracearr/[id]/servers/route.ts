@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { TracearrClient } from "@/lib/tracearr/tracearr-client";
 import { sanitize, sanitizeErrorDetail } from "@/lib/api/sanitize";
@@ -14,19 +14,15 @@ import { sanitize, sanitizeErrorDetail } from "@/lib/api/sanitize";
  * unhandled 500 gives the UI nothing to render but "something went wrong",
  * which is the least useful thing to say about an unreachable Tracearr.
  */
-export async function GET(
+export const GET = withSession(async (
+  session,
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+) => {
   const { id } = await params;
 
   const instance = await prisma.tracearrInstance.findFirst({
-    where: { id, userId: session.userId! },
+    where: { id, userId: session.userId },
   });
   if (!instance) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -45,4 +41,4 @@ export async function GET(
       { status: 400 }
     );
   }
-}
+});

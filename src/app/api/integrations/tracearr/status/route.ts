@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { sanitize } from "@/lib/api/sanitize";
 import { computeBackfillFraction } from "./backfill-fraction";
@@ -25,16 +25,11 @@ import { getTracearrImportActivity } from "@/lib/sync/tracearr-import-activity";
  * rather than as 0. See `./backfill-fraction` for the arithmetic and, more
  * importantly, for why it measures time coverage instead of imported records.
  */
-export async function GET() {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async (session) => {
   // Only mapped servers have an import to report on; an unmapped server uses
   // its own native watch history and has no Tracearr state at all.
   const servers = await prisma.mediaServer.findMany({
-    where: { userId: session.userId!, tracearrServerId: { not: null } },
+    where: { userId: session.userId, tracearrServerId: { not: null } },
     select: {
       id: true,
       name: true,
@@ -118,4 +113,4 @@ export async function GET() {
   // sanitize() — keeping it here means a future field addition can't quietly
   // become the one uncovered leak on the surface.
   return NextResponse.json({ servers: sanitize(payload) });
-}
+});

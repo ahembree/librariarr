@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { appCache } from "@/lib/cache/memory-cache";
 import { normalizeResolutionLabel } from "@/lib/resolution";
@@ -8,15 +8,11 @@ import { getServerPresenceForGroup } from "@/lib/dedup/server-presence";
 
 type GroupType = "SERIES" | "MUSIC";
 
-export async function GET(
+export const GET = withSession(async (
+  session,
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
-) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+) => {
   const { id } = await params;
   const typeParam = request.nextUrl.searchParams.get("type");
   if (typeParam !== "SERIES" && typeParam !== "MUSIC") {
@@ -42,7 +38,7 @@ export async function GET(
         grandparentRatingKey: true,
       },
     }),
-    resolveServerFilter(session.userId!, null, type),
+    resolveServerFilter(session.userId, null, type),
   ]);
 
   if (!repItem || !repItem.parentTitle) {
@@ -73,7 +69,7 @@ export async function GET(
   );
 
   return NextResponse.json(result);
-}
+});
 
 /**
  * All sibling items in this group across the user's servers. For

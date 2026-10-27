@@ -3,6 +3,7 @@
 import { useState, useCallback } from "react";
 import { HoverCard, HoverCardTrigger, HoverCardContent } from "@/components/ui/hover-card";
 import { MediaHoverPopover, type MediaHoverData } from "@/components/media-hover-popover";
+import { detailPrefetch } from "@/lib/media/detail-prefetch";
 
 interface LazyMediaHoverPopoverProps {
   children: React.ReactNode;
@@ -13,6 +14,12 @@ interface LazyMediaHoverPopoverProps {
   imageAspect?: "poster" | "square";
 }
 
+/**
+ * A hover card that fetches its item on first open. It reads through
+ * `detailPrefetch.peek`, which keeps the answer: a click that follows the
+ * hover (the detail panel, the item's page) takes the record it already
+ * fetched instead of asking for it again.
+ */
 export function LazyMediaHoverPopover({
   children,
   fetchUrl,
@@ -29,11 +36,11 @@ export function LazyMediaHoverPopover({
     (open: boolean) => {
       if (!open || data || loading || errored) return;
       setLoading(true);
-      fetch(fetchUrl)
-        .then(async (res) => {
+      detailPrefetch
+        .peek(fetchUrl)
+        .then((res) => {
           if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          const json = await res.json();
-          setData(extractData(json));
+          setData(extractData(res.body));
         })
         .catch(() => setErrored(true))
         .finally(() => setLoading(false));

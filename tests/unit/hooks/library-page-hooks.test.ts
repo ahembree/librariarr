@@ -52,17 +52,17 @@ describe("useLibrarySyncRefetch", () => {
 });
 
 describe("useFilterPanelReset", () => {
-  it("hands the panel the restored filters until a clear, which remounts it empty", () => {
+  it("hands the panel the restored filters until a clear, which empties it", () => {
     const clearFilters = vi.fn();
     const restored = { resolution: "4K" };
     const { result } = renderHook(() => useFilterPanelReset(restored, clearFilters));
     expect(result.current.externalFilters).toBe(restored);
-    const before = result.current.panelKey;
+    const before = result.current.resetKey;
 
     act(() => result.current.clear());
     expect(clearFilters).toHaveBeenCalledTimes(1);
-    expect(result.current.panelKey).not.toBe(before);
-    // Handed again, the remounted panel would re-apply them.
+    expect(result.current.resetKey).not.toBe(before);
+    // Handed again, the emptied panel would re-apply them.
     expect(result.current.externalFilters).toBeUndefined();
   });
 });

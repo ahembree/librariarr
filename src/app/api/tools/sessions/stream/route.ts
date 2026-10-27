@@ -1,5 +1,4 @@
-import { NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { realtimeBus } from "@/lib/media-server/realtime";
 import { readSessionsSnapshot, type SessionWithServer } from "../snapshot";
 
@@ -37,13 +36,8 @@ function sessionsFingerprint(sessions: SessionWithServer[]): string {
     .join("|");
 }
 
-export async function GET() {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const userId = session.userId!;
+export const GET = withSession(async (session) => {
+  const userId = session.userId;
   let closed = false;
 
   const stream = new ReadableStream({
@@ -154,4 +148,4 @@ export async function GET() {
       "X-Accel-Buffering": "no",
     },
   });
-}
+});

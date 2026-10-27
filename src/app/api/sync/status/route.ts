@@ -1,13 +1,8 @@
 import { NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 
-export async function GET() {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async (session) => {
   // Scoped to the user's servers through the relation, so the two reads run
   // side by side: they waited on a lookup of the server ids first. A user with
   // no servers matches no job, as the early return for that case answered.
@@ -41,4 +36,4 @@ export async function GET() {
   return NextResponse.json({
     jobs: [...activeJobs, ...recentJobs],
   });
-}
+});

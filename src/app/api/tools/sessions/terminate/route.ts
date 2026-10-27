@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { createMediaServerClient } from "@/lib/media-server/factory";
 import { getRememberedSession, rememberSession } from "@/lib/media-server/session-first-seen";
@@ -9,12 +9,7 @@ import { validateRequest, terminateSessionSchema } from "@/lib/validation";
 import { sanitizeErrorDetail } from "@/lib/api/sanitize";
 import { noteSessionsChanged } from "../snapshot";
 
-export async function POST(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const POST = withSession(async (session, request: NextRequest) => {
   const { data, error } = await validateRequest(request, terminateSessionSchema);
   if (error) return error;
   const { serverId, sessionIds, message } = data;
@@ -31,7 +26,7 @@ export async function POST(request: NextRequest) {
 
   const servers = await prisma.mediaServer.findMany({
     where: {
-      userId: session.userId!,
+      userId: session.userId,
       enabled: true,
       ...(serverId !== "all" && { id: serverId }),
     },
@@ -105,4 +100,4 @@ export async function POST(request: NextRequest) {
   if (terminated > 0) noteSessionsChanged();
 
   return NextResponse.json({ terminated, errors });
-}
+});

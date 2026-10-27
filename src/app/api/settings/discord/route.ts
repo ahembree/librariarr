@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { validateRequest, discordSettingsSchema } from "@/lib/validation";
 import { MASKED_VALUE } from "@/lib/api/sanitize";
@@ -17,14 +17,9 @@ function presentWebhookUrl(stored: string | null | undefined) {
   };
 }
 
-export async function GET() {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async (session) => {
   const settings = await prisma.appSettings.findUnique({
-    where: { userId: session.userId! },
+    where: { userId: session.userId },
   });
 
   return NextResponse.json({
@@ -34,14 +29,9 @@ export async function GET() {
     notifyMaintenance: settings?.discordNotifyMaintenance ?? false,
     notifyApiKeys: settings?.discordNotifyApiKeys ?? true,
   });
-}
+});
 
-export async function PUT(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const PUT = withSession(async (session, request: NextRequest) => {
   const { data, error } = await validateRequest(request, discordSettingsSchema);
   if (error) return error;
   const { webhookUrl, webhookUsername, webhookAvatarUrl, notifyMaintenance, notifyApiKeys } = data;
@@ -57,9 +47,9 @@ export async function PUT(request: NextRequest) {
   if (notifyApiKeys !== undefined) fields.discordNotifyApiKeys = !!notifyApiKeys;
 
   const settings = await prisma.appSettings.upsert({
-    where: { userId: session.userId! },
+    where: { userId: session.userId },
     update: fields,
-    create: { userId: session.userId!, ...fields },
+    create: { userId: session.userId, ...fields },
   });
 
   return NextResponse.json({
@@ -69,4 +59,4 @@ export async function PUT(request: NextRequest) {
     notifyMaintenance: settings.discordNotifyMaintenance,
     notifyApiKeys: settings.discordNotifyApiKeys,
   });
-}
+});

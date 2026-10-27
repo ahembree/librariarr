@@ -1,13 +1,8 @@
 import { NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 
-export async function GET() {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async () => {
   // The distinct sources, walked down the `source` index one value at a time
   // (a "loose index scan": each step asks for the first source after the
   // last). Prisma's `distinct` is applied in Node — it read every log row's
@@ -29,4 +24,4 @@ export async function GET() {
     sources: sources.map((s) => s.source),
     categories: ["BACKEND", "API", "DB"],
   });
-}
+});

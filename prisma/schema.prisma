@@ -700,8 +700,8 @@ model LifecycleException {
   reason      String?
   createdAt   DateTime  @default(now())
 
+  // Also serves every lookup by userId alone (it leads with the column).
   @@unique([userId, mediaItemId])
-  @@index([userId])
   // The cascade from a MediaItem delete and `mediaItemId IN (…)` counts that
   // name no user — the unique above leads with userId, so neither could use it.
   @@index([mediaItemId])
@@ -916,7 +916,8 @@ model WatchHistory {
   @@index([mediaServerId, watchedAt])
   @@index([deviceName])
   @@index([platform])
-  @@index([source])
+  // No [source] index: every filter on it also names the server (the
+  // composite above) or the item, and two values are never selective alone.
   @@index([watched])
   @@index([isTranscode])
   @@index([player])

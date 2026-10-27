@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { withListResponseCache } from "@/lib/api/cached-list-response";
 import { jsonResponse } from "@/lib/api/json-response";
 import { MAX_GROUPED_LIST_LIMIT, parseListPagination } from "@/lib/api/pagination";
@@ -197,12 +197,7 @@ function applySeriesFilters<T extends SeriesItem>(list: T[], params: URLSearchPa
   return result;
 }
 
-async function listGet(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+const listGet = withSession(async (session, request: NextRequest) => {
   const { searchParams } = new URL(request.url);
   // The shared parser, so `offset` (documented for every paged listing, and
   // what an offset-based client pages with) is honoured here too: these routes
@@ -217,7 +212,7 @@ async function listGet(request: NextRequest) {
   const serverId = searchParams.get("serverId");
   const startsWith = searchParams.get("startsWith");
 
-  const sf = await resolveServerFilter(session.userId!, serverId, "SERIES");
+  const sf = await resolveServerFilter(session.userId, serverId, "SERIES");
   if (!sf) {
     return NextResponse.json({ series: [], pagination: { page, limit, hasMore: false } });
   }
@@ -488,7 +483,7 @@ async function listGet(request: NextRequest) {
   }
   // `limit=0` is everything — after an explicit `offset`, as on the flat lists.
   return jsonResponse(request, { series: await withPresence(sorted.slice(skip)), pagination: { page, limit, hasMore: false } });
-}
+});
 
 /**
  * Above this many shows, presence is read for the whole library instead: past

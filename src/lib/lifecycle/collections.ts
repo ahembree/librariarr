@@ -435,7 +435,8 @@ export async function syncCollection(
           plexCollection.ratingKey,
           home,
           home, // shared = same as home
-          recommended
+          recommended,
+          visible, // just read: not read again
         );
       }
     } catch (error) {

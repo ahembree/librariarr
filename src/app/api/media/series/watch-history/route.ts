@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { fetchPlayHistory, parsePlayHistoryPaging } from "@/lib/media/play-history";
 import { INT_MAX, INT_MIN } from "@/lib/filters/build-where";
@@ -27,12 +27,7 @@ import { INT_MAX, INT_MIN } from "@/lib/filters/build-where";
  * `serverUsername` — `session.userId` is the Librariarr admin who owns the
  * server record, not a media-server account.
  */
-export async function GET(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async (session, request: NextRequest) => {
   const { searchParams } = new URL(request.url);
   // `seriesKey` (series identity) is preferred; `parentTitle` is still accepted
   // for backward compatibility but is ambiguous across same-titled shows.
@@ -62,7 +57,7 @@ export async function GET(request: NextRequest) {
   const outOfRange = (n: number | null) => n != null && (n < INT_MIN || n > INT_MAX);
   if (outOfRange(seasonNumber) || outOfRange(episodeNumber)) {
     return NextResponse.json(
-      await fetchPlayHistory({ userId: session.userId!, mediaItemIds: [], serverId, page, limit }),
+      await fetchPlayHistory({ userId: session.userId, mediaItemIds: [], serverId, page, limit }),
     );
   }
 
@@ -83,7 +78,7 @@ export async function GET(request: NextRequest) {
     FROM "MediaItem" mi
     JOIN "Library" l ON l."id" = mi."libraryId"
     JOIN "MediaServer" ms ON ms."id" = l."mediaServerId"
-    WHERE ms."userId" = ${session.userId!}
+    WHERE ms."userId" = ${session.userId}
       AND mi."type" = 'SERIES'::"LibraryType"
       AND (
         (${seriesKey}::text IS NOT NULL AND mi."seriesKey" = ${seriesKey}::text)
@@ -96,11 +91,11 @@ export async function GET(request: NextRequest) {
 
   return NextResponse.json(
     await fetchPlayHistory({
-      userId: session.userId!,
+      userId: session.userId,
       mediaItemIds: scopedItems.map((i) => i.id),
       serverId,
       page,
       limit,
     }),
   );
-}
+});

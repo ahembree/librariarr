@@ -207,7 +207,7 @@ export default function MoviesPage() {
       />
 
       <MediaFilters
-        key={filterPanel.panelKey}
+        resetKey={filterPanel.resetKey}
         onFilterChange={onFilterChange}
         externalFilters={filterPanel.externalFilters}
         streamCountFilters

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { appCache } from "@/lib/cache/memory-cache";
 import { INTEGRATIONS_HEALTH_CACHE_KEY } from "@/lib/cache/invalidate";
 import { LIDARR, RADARR, SEERR, SONARR, listInstances } from "@/lib/integrations/instance-routes";
@@ -102,12 +102,7 @@ async function computeHealth(userId: string): Promise<IntegrationsHealth> {
   };
 }
 
-export async function GET(request: Request) {
-  const session = await getSession();
-  if (!session.isLoggedIn || !session.userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async (session, request: Request) => {
   // Allow the UI to bypass the cache on demand (e.g. after editing an
   // integration). With no flag, repeat calls within the TTL window are
   // served from cache.
@@ -126,7 +121,7 @@ export async function GET(request: Request) {
 
   let health: IntegrationsHealth;
   try {
-    health = await appCache.getOrSet(INTEGRATIONS_HEALTH_CACHE_KEY, () => computeHealth(session.userId!), HEALTH_TTL_MS);
+    health = await appCache.getOrSet(INTEGRATIONS_HEALTH_CACHE_KEY, () => computeHealth(session.userId), HEALTH_TTL_MS);
   } catch {
     // If everything blew up (DB error, etc.), don't 500 — return an empty
     // shape so the UI can fall back to the existing "not configured" path.
@@ -134,4 +129,4 @@ export async function GET(request: Request) {
   }
 
   return NextResponse.json(health);
-}
+});

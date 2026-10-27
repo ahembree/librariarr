@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { appCache } from "@/lib/cache/memory-cache";
 import { createMediaServerClient } from "@/lib/media-server/factory";
@@ -23,15 +23,11 @@ const SHOW_SUMMARY_TTL_MS = 5 * 60_000;
 const showSummaryKey = (serverId: string, showRatingKey: string) =>
   `group-summary:series-summary:${serverId}:${showRatingKey}`;
 
-export async function GET(
+export const GET = withSession(async (
+  session,
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+) => {
   const { id } = await params;
 
   const item = await prisma.mediaItem.findUnique({
@@ -117,4 +113,4 @@ export async function GET(
     // lookup throws out of `getOrSet` before anything is stored).
     return NextResponse.json(episodeFallback);
   }
-}
+});

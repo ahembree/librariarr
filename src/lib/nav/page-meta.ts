@@ -1,3 +1,5 @@
+import { stripTrailingSlashes } from "@/lib/url-normalize";
+
 /**
  * Maps an App Router pathname to its breadcrumb metadata for the topbar.
  *
@@ -46,7 +48,7 @@ const DASHBOARD: PageMeta = { group: "Overview", title: "Dashboard" };
  */
 export function getPageMeta(pathname: string): PageMeta {
   // Normalize away any trailing slash (except the root itself).
-  const path = pathname.length > 1 ? pathname.replace(/\/+$/, "") : pathname;
+  const path = pathname.length > 1 ? stripTrailingSlashes(pathname) : pathname;
 
   if (path === "/" || path === "") return DASHBOARD;
 

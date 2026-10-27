@@ -1,5 +1,5 @@
-import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { NextRequest } from "next/server";
+import { withSession } from "@/lib/auth/with-session";
 import { jsonResponse } from "@/lib/api/json-response";
 import { getDistinctValues } from "@/lib/media/distinct-values";
 
@@ -9,11 +9,6 @@ import { getDistinctValues } from "@/lib/media/distinct-values";
  * it), computed once however many requests miss together — see
  * `src/lib/media/distinct-values.ts`, shared with the Query builder's route.
  */
-export async function GET(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  return jsonResponse(request, await getDistinctValues(session.userId!, "library"));
-}
+export const GET = withSession(async (session, request: NextRequest) => {
+  return jsonResponse(request, await getDistinctValues(session.userId, "library"));
+});

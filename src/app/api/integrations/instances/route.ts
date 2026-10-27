@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { sanitize } from "@/lib/api/sanitize";
 import { INTEGRATIONS, SEERR, listInstances, readInstanceMetadata } from "@/lib/integrations/instance-routes";
 import { loadSeerrMetadata } from "@/lib/integrations/instance-metadata";
@@ -16,12 +16,8 @@ import { loadSeerrMetadata } from "@/lib/integrations/instance-metadata";
  * same per-instance cache that route uses; an instance that cannot be read
  * adds no names, as the pages treated a failed fetch.
  */
-export async function GET(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-  const userId = session.userId!;
+export const GET = withSession(async (session, request: NextRequest) => {
+  const userId = session.userId;
 
   const entries = await Promise.all(
     Object.entries(INTEGRATIONS).map(async ([type, config]) => [type, await listInstances(config, userId)] as const),
@@ -37,4 +33,4 @@ export async function GET(request: NextRequest) {
   }
 
   return NextResponse.json(body);
-}
+});

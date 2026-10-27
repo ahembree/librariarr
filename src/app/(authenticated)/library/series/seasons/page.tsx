@@ -262,7 +262,7 @@ export default function AllSeasonsPage() {
       <LibraryTabs tabs={SERIES_TABS} active="/library/series/seasons" />
 
       <MediaFilters
-        key={filterPanel.panelKey}
+        resetKey={filterPanel.resetKey}
         onFilterChange={onFilterChange}
         mediaType="SERIES"
         prefix={

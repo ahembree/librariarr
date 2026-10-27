@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { jsonResponse } from "@/lib/api/json-response";
 import { prisma } from "@/lib/db";
 import type { MediaServerType } from "@/generated/prisma/client";
@@ -17,15 +17,11 @@ interface SiblingRow {
   machineId: string | null;
 }
 
-export async function GET(
+export const GET = withSession(async (
+  session,
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+) => {
   const { id } = await params;
 
   const itemQuery = prisma.mediaItem.findFirst({
@@ -139,4 +135,4 @@ export async function GET(
     },
     playServers,
   });
-}
+});

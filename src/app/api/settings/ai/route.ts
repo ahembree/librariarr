@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { validateRequest, aiSettingsUpdateSchema } from "@/lib/validation";
 import { MASKED_VALUE } from "@/lib/api/sanitize";
@@ -22,25 +22,16 @@ function shape(settings: StoredAi) {
   };
 }
 
-export async function GET() {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-  const settings = await getStoredAiSettings(session.userId!);
+export const GET = withSession(async (session) => {
+  const settings = await getStoredAiSettings(session.userId);
   return NextResponse.json(shape(settings));
-}
+});
 
-export async function PUT(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const PUT = withSession(async (session, request: NextRequest) => {
   const { data, error } = await validateRequest(request, aiSettingsUpdateSchema);
   if (error) return error;
 
-  const current = await getStoredAiSettings(session.userId!);
+  const current = await getStoredAiSettings(session.userId);
 
   // A new base URL saved with the stored key kept sends that key there on the
   // next chat, so it needs a recent sign-in (stored-key-guard.ts).
@@ -71,10 +62,10 @@ export async function PUT(request: NextRequest) {
   }
 
   const settings = await prisma.appSettings.upsert({
-    where: { userId: session.userId! },
+    where: { userId: session.userId },
     update: fields,
-    create: { userId: session.userId!, ...fields },
+    create: { userId: session.userId, ...fields },
   });
 
   return NextResponse.json(shape(settings));
-}
+});

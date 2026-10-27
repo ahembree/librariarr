@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { sessionMediaType } from "@/lib/media/detail-panel-item";
 
@@ -10,12 +10,7 @@ import { sessionMediaType } from "@/lib/media/detail-panel-item";
  * and an answer still naming more than one item is a 404: opening the wrong
  * item's panel is worse than opening none.
  */
-export async function GET(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async (session, request: NextRequest) => {
   const params = request.nextUrl.searchParams;
   const serverId = params.get("serverId");
   const ratingKey = params.get("ratingKey");
@@ -44,4 +39,4 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
   }
   return NextResponse.json({ id: items[0].id, type: items[0].type });
-}
+});

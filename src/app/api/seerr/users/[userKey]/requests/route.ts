@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import {
   SeerrClient,
@@ -54,14 +54,11 @@ interface ResolveResult {
   requests: ResolvedRequest[];
 }
 
-export async function GET(
+export const GET = withSession(async (
+  session,
   _request: NextRequest,
   { params }: { params: Promise<{ userKey: string }> }
-) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
+) => {
   // Next.js has already URL-decoded dynamic params. Decoding again threw on a
   // key containing a literal '%' ("100%Dad" → 500) and rewrote a literal
   // "%41" to "A", resolving a different user.
@@ -70,12 +67,12 @@ export async function GET(
   // Never cache a truncated walk — the next load retries it.
   const result = await appCache.getOrSet(
     `${USER_REQUESTS_CACHE_PREFIX}${userKey}`,
-    () => resolveUserRequests(session.userId!, userKey),
+    () => resolveUserRequests(session.userId, userKey),
     CACHE_TTL_MS,
     { shouldCache: (r) => !r.partial }
   );
   return NextResponse.json(result);
-}
+});
 
 async function resolveUserRequests(
   userId: string,

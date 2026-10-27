@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import {
   validateRequest,
@@ -14,12 +14,7 @@ import { protectionKeys, isGroupProtected } from "@/lib/lifecycle/exception-guar
 import { artistMbidOf } from "@/lib/media/artist-key";
 import type { Prisma } from "@/generated/prisma/client";
 
-export async function GET(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async (session, request: NextRequest) => {
   const { searchParams } = new URL(request.url);
   const type = searchParams.get("type");
   if (type && !["ALL", "MOVIE", "SERIES", "MUSIC"].includes(type)) {
@@ -113,19 +108,14 @@ export async function GET(request: NextRequest) {
   });
 
   return jsonResponse(request, { exceptions: serialized });
-}
+});
 
 /** `?idsOnly=1` / `?idsOnly=true`. */
 function isTruthyFlag(value: string | null): boolean {
   return value === "1" || value === "true";
 }
 
-export async function POST(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const POST = withSession(async (session, request: NextRequest) => {
   const { data, error } = await validateRequest(request, exceptionCreateSchema);
   if (error) return error;
 
@@ -155,7 +145,7 @@ export async function POST(request: NextRequest) {
 
   // Individual scope: original single-item behavior
   if (scope === "individual") {
-    return handleIndividualException(session.userId!, mediaItem, reason ?? null);
+    return handleIndividualException(session.userId, mediaItem, reason ?? null);
   }
 
   // Bulk scopes: resolve all related media item IDs
@@ -219,17 +209,17 @@ export async function POST(request: NextRequest) {
   // Bulk create exceptions
   await prisma.lifecycleException.createMany({
     data: mediaItemIds.map((id) => ({
-      userId: session.userId!,
+      userId: session.userId,
       mediaItemId: id,
       reason: reason ?? null,
     })),
     skipDuplicates: true,
   });
 
-  await disarmExcludedItems(session.userId!, relatedItems);
+  await disarmExcludedItems(session.userId, relatedItems);
 
   return NextResponse.json({ count: mediaItemIds.length, scope }, { status: 201 });
-}
+});
 
 async function handleIndividualException(
   userId: string,
@@ -430,12 +420,7 @@ async function disarmExcludedItems(userId: string, items: ExcludedItem[]): Promi
   }
 }
 
-export async function DELETE(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const DELETE = withSession(async (session, request: NextRequest) => {
   const { data, error } = await validateRequest(request, exceptionBulkDeleteSchema);
   if (error) return error;
 
@@ -445,19 +430,14 @@ export async function DELETE(request: NextRequest) {
   const ids = [...new Set(data.ids)];
   const results = await prisma.$transaction(
     inChunks(ids).map((chunk) =>
-      prisma.lifecycleException.deleteMany({ where: { id: { in: chunk }, userId: session.userId! } }),
+      prisma.lifecycleException.deleteMany({ where: { id: { in: chunk }, userId: session.userId } }),
     ),
   );
 
   return NextResponse.json({ deleted: results.reduce((n, r) => n + r.count, 0) });
-}
+});
 
-export async function PATCH(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const PATCH = withSession(async (session, request: NextRequest) => {
   const { data, error } = await validateRequest(request, exceptionBulkUpdateSchema);
   if (error) return error;
 
@@ -467,11 +447,11 @@ export async function PATCH(request: NextRequest) {
   const results = await prisma.$transaction(
     inChunks(ids).map((chunk) =>
       prisma.lifecycleException.updateMany({
-        where: { id: { in: chunk }, userId: session.userId! },
+        where: { id: { in: chunk }, userId: session.userId },
         data: { reason: reason ?? null },
       }),
     ),
   );
 
   return NextResponse.json({ updated: results.reduce((n, r) => n + r.count, 0) });
-}
+});

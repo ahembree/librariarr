@@ -2,6 +2,7 @@ import axios, { type AxiosInstance } from "axios";
 import { logger } from "@/lib/logger";
 import { IntegrationError } from "@/lib/integration-error";
 import { configureRetry } from "@/lib/http-retry";
+import { stripTrailingSlashes } from "@/lib/url-normalize";
 
 interface IntegrationHttpOptions {
   /** Per-request timeout in milliseconds. */
@@ -30,7 +31,7 @@ export function createIntegrationHttp(
   opts: IntegrationHttpOptions,
 ): AxiosInstance {
   const client = axios.create({
-    baseURL: baseURL.replace(/\/+$/, ""),
+    baseURL: stripTrailingSlashes(baseURL),
     headers,
     timeout: opts.timeout,
   });
