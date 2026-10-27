@@ -33,6 +33,16 @@ CREATE INDEX "LogEntry_source_createdAt_idx" ON "LogEntry"("source", "createdAt"
 DROP INDEX IF EXISTS "WatchHistory_mediaServerId_idx";
 CREATE INDEX "WatchHistory_mediaServerId_source_watchedAt_idx" ON "WatchHistory"("mediaServerId", "source", "watchedAt");
 
+-- Two indexes no plan chose on the same database, each paid for on every write
+-- to its table. Every lookup by LifecycleException "userId" (the exceptions
+-- listing, counts, the per-item checks, the cascade from a User delete) is
+-- served by the ("userId", "mediaItemId") unique, which leads with the same
+-- column. WatchHistory "source" has two values: every query that filters on it
+-- also names the server (served by the index above) or the item (served by
+-- ("mediaItemId")), and alone it is never selective enough to pick.
+DROP INDEX IF EXISTS "LifecycleException_userId_idx";
+DROP INDEX IF EXISTS "WatchHistory_source_idx";
+
 -- Artist lookups match the artist the way the music listings group it,
 -- `LOWER(TRIM("parentTitle"))` (album list, artist summary, series watch
 -- history): a scan of every item of the type before, 20 ms -> 0.1 ms.
