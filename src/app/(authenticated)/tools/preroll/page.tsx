@@ -21,16 +21,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import { ConfirmDialog } from "@/components/confirm-dialog";
+import { PageHeader } from "@/components/page-header";
+import { DayOfWeekPicker } from "@/components/day-of-week-picker";
+import { formatScheduleWindow } from "@/lib/schedule-format";
+import { toDatetimeLocalValue } from "@/lib/format";
 import {
   Dialog,
   DialogContent,
@@ -104,8 +99,6 @@ interface PrerollSchedule {
 
 // --- Constants ---
 
-const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-
 // Holiday presets: month/day based, year gets filled dynamically
 const HOLIDAYS = [
   { name: "New Year's Day", startMonth: 1, startDay: 1, endMonth: 1, endDay: 2 },
@@ -121,12 +114,6 @@ const HOLIDAYS = [
   { name: "New Year's Eve", startMonth: 12, startDay: 31, endMonth: 12, endDay: 31 },
 ];
 
-/** Format a Date as a datetime-local input value using the browser's local timezone. */
-function toDatetimeLocalValue(date: Date): string {
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
-
 function getHolidayDates(holiday: typeof HOLIDAYS[number], year: number) {
   const startDate = new Date(year, holiday.startMonth - 1, holiday.startDay, 0, 0);
   const endYear = holiday.endMonth < holiday.startMonth ? year + 1 : year;
@@ -139,42 +126,19 @@ function getHolidayDates(holiday: typeof HOLIDAYS[number], year: number) {
 
 // --- Helpers ---
 
+/**
+ * The schedule's window as the enforcer reads it: a recurring window with no
+ * times set runs all day. `formatScheduleWindow` copies the day list before
+ * sorting it — this page's copy sorted the schedule's own `daysOfWeek`, which
+ * is its state, in place.
+ */
 function formatScheduleDescription(schedule: PrerollSchedule): string {
-  if (schedule.scheduleType === "recurring") {
-    const days = (schedule.daysOfWeek || [])
-      .sort((a, b) => a - b)
-      .map((d) => DAY_LABELS[d])
-      .join(", ");
-    const start = formatTimeDisplay(schedule.startTime || "00:00");
-    const end = formatTimeDisplay(schedule.endTime || "23:59");
-    return `Every ${days} ${start} - ${end}`;
-  }
-
-  if (schedule.scheduleType === "one_time" || schedule.scheduleType === "seasonal") {
-    const dateTimeOpts: Intl.DateTimeFormatOptions = {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-      hour: "numeric",
-      minute: "2-digit",
-    };
-    const start = schedule.startDate
-      ? new Date(schedule.startDate).toLocaleString(undefined, dateTimeOpts)
-      : "N/A";
-    const end = schedule.endDate
-      ? new Date(schedule.endDate).toLocaleString(undefined, dateTimeOpts)
-      : "N/A";
-    return `${start} - ${end}`;
-  }
-
-  return "Unknown schedule type";
-}
-
-function formatTimeDisplay(time: string): string {
-  const [h, m] = time.split(":").map(Number);
-  const period = h >= 12 ? "PM" : "AM";
-  const displayHour = h === 0 ? 12 : h > 12 ? h - 12 : h;
-  return `${displayHour}:${String(m).padStart(2, "0")} ${period}`;
+  return formatScheduleWindow(schedule, {
+    timeStyle: "12h",
+    defaultStartTime: "00:00",
+    defaultEndTime: "23:59",
+    missing: "N/A",
+  });
 }
 
 // The enforcer's own rule (seasonal = every year, an overnight window belongs
@@ -689,15 +653,11 @@ export default function PrerollManagerPage() {
   return (
     <div className="p-4 sm:p-6 lg:p-8 space-y-6">
       {/* Header */}
-      <div>
-        <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight flex items-center gap-2">
-          <Clapperboard className="h-7 w-7" />
-          Preroll Manager
-        </h1>
-        <p className="text-muted-foreground mt-1">
-          Configure preroll presets and schedules for your Plex servers.
-        </p>
-      </div>
+      <PageHeader
+        title="Preroll Manager"
+        icon={Clapperboard}
+        description="Configure preroll presets and schedules for your Plex servers."
+      />
 
       {!loading && !hasPlexServers && (
         <Card className="border-yellow-500/50 bg-yellow-500/5">
@@ -1418,23 +1378,7 @@ export default function PrerollManagerPage() {
               <div className="space-y-3">
                 <div className="space-y-2">
                   <Label>Days of Week</Label>
-                  <div className="flex flex-wrap gap-2">
-                    {DAY_LABELS.map((label, index) => (
-                      <button
-                        key={index}
-                        type="button"
-                        onClick={() => toggleDay(index)}
-                        className={cn(
-                          "rounded-md px-3 py-1.5 text-sm font-medium transition-colors border",
-                          scheduleForm.daysOfWeek.includes(index)
-                            ? "border-primary bg-primary/10 text-primary"
-                            : "border-muted bg-muted/50 text-muted-foreground hover:bg-muted hover:text-foreground"
-                        )}
-                      >
-                        {label}
-                      </button>
-                    ))}
-                  </div>
+                  <DayOfWeekPicker value={scheduleForm.daysOfWeek} onToggle={toggleDay} />
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-2">
@@ -1533,86 +1477,60 @@ export default function PrerollManagerPage() {
       </Dialog>
 
       {/* File Validation Warning Dialog */}
-      <AlertDialog
+      <ConfirmDialog
         open={!!validationDialog?.open}
         onOpenChange={(open) => {
           if (!open) setValidationDialog(null);
         }}
+        title={
+          <span className="flex items-center gap-2">
+            <AlertTriangle className="h-5 w-5 text-amber" />
+            File Not Found
+          </span>
+        }
+        description="The following file path(s) could not be found:"
+        confirmLabel="Continue"
+        onConfirm={() => validationDialog?.onContinue()}
       >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle className="flex items-center gap-2">
-              <AlertTriangle className="h-5 w-5 text-amber" />
-              File Not Found
-            </AlertDialogTitle>
-            <AlertDialogDescription className="space-y-2">
-              <span className="block">
-                The following file path(s) could not be found:
-              </span>
-              <code className="block rounded-md bg-muted px-3 py-2 text-xs font-mono break-all">
-                {validationDialog?.path}
-              </code>
-              <span className="block">
-                Make sure the Plex media directory is mounted into the Librariarr container so file paths align. You can mount the media directory as read-only (e.g., <code className="text-xs">/media:/media:ro</code>).
-              </span>
-              <span className="block">Do you want to continue anyway?</span>
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={() => validationDialog?.onContinue()}>
-              Continue
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+        <div className="space-y-2 text-sm text-muted-foreground">
+          <code className="block rounded-md bg-muted px-3 py-2 text-xs font-mono break-all">
+            {validationDialog?.path}
+          </code>
+          <p>
+            Make sure the Plex media directory is mounted into the Librariarr container so file paths align. You can mount the media directory as read-only (e.g., <code className="text-xs">/media:/media:ro</code>).
+          </p>
+          <p>Do you want to continue anyway?</p>
+        </div>
+      </ConfirmDialog>
 
       {/* Delete Confirmation Dialog */}
-      <AlertDialog
+      <ConfirmDialog
         open={!!deleteTarget}
         onOpenChange={(open) => {
           if (!open) setDeleteTarget(null);
         }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              Delete {deleteTarget?.type === "preset" ? "Preset" : "Schedule"}
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              Are you sure you want to delete &ldquo;{deleteTarget?.name}&rdquo;? This
-              action cannot be undone.
-              {deleteTarget?.type === "preset" && (
-                <span className="block mt-2 text-muted-foreground">
-                  The video file will not be deleted.
-                </span>
-              )}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                if (!deleteTarget) return;
-                if (deleteTarget.type === "preset") {
-                  deletePreset(deleteTarget.id);
-                } else {
-                  deleteSchedule(deleteTarget.id);
-                }
-              }}
-              disabled={deleting}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            >
-              {deleting ? (
-                <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />
-              ) : (
-                <Trash2 className="h-4 w-4 mr-1.5" />
-              )}
-              Delete
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+        title={`Delete ${deleteTarget?.type === "preset" ? "Preset" : "Schedule"}`}
+        description={
+          <>
+            Are you sure you want to delete &ldquo;{deleteTarget?.name}&rdquo;? This
+            action cannot be undone.
+            {deleteTarget?.type === "preset" && (
+              <span className="block mt-2 text-muted-foreground">
+                The video file will not be deleted.
+              </span>
+            )}
+          </>
+        }
+        confirmLabel="Delete"
+        confirmIcon={Trash2}
+        destructive
+        pending={deleting}
+        onConfirm={() => {
+          if (!deleteTarget) return;
+          // The handlers close the dialog once the request has answered.
+          return deleteTarget.type === "preset" ? deletePreset(deleteTarget.id) : deleteSchedule(deleteTarget.id);
+        }}
+      />
     </div>
   );
 }

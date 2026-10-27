@@ -47,16 +47,9 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import { ConfirmDialog } from "@/components/confirm-dialog";
+import { LoadingButton } from "@/components/loading-button";
+import { useSetState } from "@/hooks/use-set-state";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
@@ -1084,19 +1077,27 @@ export default function TrashSyncPage() {
               )}
             </div>
             <div className="flex items-center gap-2">
-              <Button
+              <LoadingButton
                 variant="outline"
                 size="sm"
                 onClick={() => preview()}
+                loading={busyIds.has("__all__")}
+                icon={Eye}
+                iconClassName="mr-1.5 h-4 w-4"
                 disabled={syncing || counts.managed === 0 || busyIds.size > 0}
               >
-                {busyIds.has("__all__") ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Eye className="mr-1.5 h-4 w-4" />}
                 Dry run
-              </Button>
-              <Button size="sm" onClick={applySync} disabled={syncing || counts.managed === 0 || busyIds.size > 0}>
-                {syncing ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Play className="mr-1.5 h-4 w-4" />}
+              </LoadingButton>
+              <LoadingButton
+                size="sm"
+                onClick={applySync}
+                loading={syncing}
+                icon={Play}
+                iconClassName="mr-1.5 h-4 w-4"
+                disabled={counts.managed === 0 || busyIds.size > 0}
+              >
                 Sync managed
-              </Button>
+              </LoadingButton>
             </div>
           </div>
 
@@ -1185,30 +1186,24 @@ export default function TrashSyncPage() {
       )}
 
       {/* Take-over confirmation */}
-      <AlertDialog open={!!confirmItem} onOpenChange={(o) => !o && setConfirmTarget(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Let Librariarr manage this?</AlertDialogTitle>
-            <AlertDialogDescription>
-              <span className="font-medium text-foreground">{confirmItem?.name}</span> already exists in{" "}
-              {selected?.name}. Assigning it to Librariarr means the next sync will{" "}
-              <span className="font-medium text-amber">overwrite</span> it with the TRaSH Guides
-              version. You can preview the exact changes before syncing.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                if (confirmTarget) void assign(confirmTarget.item, confirmTarget.selection);
-                setConfirmTarget(null);
-              }}
-            >
-              Manage &amp; allow overwrite
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ConfirmDialog
+        open={!!confirmItem}
+        onOpenChange={(o) => { if (!o) setConfirmTarget(null); }}
+        title="Let Librariarr manage this?"
+        description={
+          <>
+            <span className="font-medium text-foreground">{confirmItem?.name}</span> already exists in{" "}
+            {selected?.name}. Assigning it to Librariarr means the next sync will{" "}
+            <span className="font-medium text-amber">overwrite</span> it with the TRaSH Guides
+            version. You can preview the exact changes before syncing.
+          </>
+        }
+        confirmLabel={<>Manage &amp; allow overwrite</>}
+        onConfirm={() => {
+          if (confirmTarget) void assign(confirmTarget.item, confirmTarget.selection);
+          setConfirmTarget(null);
+        }}
+      />
 
       {/* Per-profile options (score set + reset unmatched scores) */}
       <QualityProfileOptionsDialog
@@ -1299,8 +1294,8 @@ function ResourceList({
 }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<"all" | "managed" | "unmanaged" | "new">("all");
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [expanded, expandedActions] = useSetState<string>();
+  const [selected, selectedActions] = useSetState<string>();
   const [confirmManage, setConfirmManage] = useState(false);
 
   const filtered = items.filter((i) => {
@@ -1323,21 +1318,13 @@ function ResourceList({
   const selectedNew = selectedItems.filter((i) => i.status === "NEW");
   const selectedExisting = selectedItems.filter((i) => i.status === "UNMANAGED_CONFLICT");
 
-  const toggleOne = (id: string) =>
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  const toggleAll = () =>
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (allSelected) selectableFiltered.forEach((i) => next.delete(i.trashId));
-      else selectableFiltered.forEach((i) => next.add(i.trashId));
-      return next;
-    });
-  const clearSelection = () => setSelected(new Set());
+  const toggleOne = selectedActions.toggle;
+  const toggleAll = () => {
+    const ids = selectableFiltered.map((i) => i.trashId);
+    if (allSelected) selectedActions.remove(...ids);
+    else selectedActions.add(...ids);
+  };
+  const clearSelection = selectedActions.clear;
 
   // Clear the selection once the action went through; on a failure (already
   // toasted by the caller) keep it so the user can simply retry.
@@ -1353,13 +1340,7 @@ function ResourceList({
   // While searching, auto-expand everything so matches are visible.
   const searching = query.trim().length > 0;
   const isOpen = (name: string) => searching || expanded.has(name);
-  const toggle = (name: string) =>
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(name)) next.delete(name);
-      else next.add(name);
-      return next;
-    });
+  const toggle = expandedActions.toggle;
 
   const renderRow = (item: StatusItem) => (
     <ResourceRow
@@ -1425,11 +1406,10 @@ function ResourceList({
               variant="ghost"
               size="sm"
               className="text-muted-foreground"
-              onClick={() =>
-                setExpanded((prev) =>
-                  prev.size >= grouped.length ? new Set() : new Set(grouped.map((g) => g.name)),
-                )
-              }
+              onClick={() => {
+                if (expanded.size >= grouped.length) expandedActions.clear();
+                else expandedActions.replace(grouped.map((g) => g.name));
+              }}
             >
               {expanded.size >= grouped.length ? "Collapse all" : "Expand all"}
             </Button>
@@ -1444,10 +1424,9 @@ function ResourceList({
             </span>
             <div className="ml-auto flex flex-wrap items-center gap-2">
               {selectedNew.length > 0 && (
-                <Button size="sm" onClick={doAdd} disabled={syncing}>
-                  {syncing ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <Plus className="mr-1.5 h-4 w-4" />}
+                <LoadingButton size="sm" onClick={doAdd} loading={syncing} icon={Plus} iconClassName="mr-1.5 h-4 w-4">
                   Add ({selectedNew.length})
-                </Button>
+                </LoadingButton>
               )}
               {selectedExisting.length > 0 && (
                 <Button
@@ -1496,24 +1475,22 @@ function ResourceList({
       </CardContent>
 
       {/* Bulk take-over confirmation */}
-      <AlertDialog open={confirmManage} onOpenChange={(o) => !o && setConfirmManage(false)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              Manage {selectedExisting.length} existing item{selectedExisting.length === 1 ? "" : "s"}?
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              These already exist in the app. Assigning them to Librariarr means the next sync will{" "}
-              <span className="font-medium text-amber">overwrite</span> them with the TRaSH Guides
-              versions. Nothing changes in the app until you sync.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={doManage}>Manage &amp; allow overwrite</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ConfirmDialog
+        open={confirmManage}
+        onOpenChange={setConfirmManage}
+        title={`Manage ${selectedExisting.length} existing item${selectedExisting.length === 1 ? "" : "s"}?`}
+        description={
+          <>
+            These already exist in the app. Assigning them to Librariarr means the next sync will{" "}
+            <span className="font-medium text-amber">overwrite</span> them with the TRaSH Guides
+            versions. Nothing changes in the app until you sync.
+          </>
+        }
+        confirmLabel={<>Manage &amp; allow overwrite</>}
+        onConfirm={() => {
+          void doManage();
+        }}
+      />
     </Card>
   );
 }
@@ -2629,29 +2606,24 @@ function ProfileFormatsTab({
       </CardContent>
 
       {/* Switching profile with unsaved edits */}
-      <AlertDialog open={pendingProfile !== null} onOpenChange={(o) => !o && setPendingProfile(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Discard unsaved changes?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Your edits to <span className="font-medium text-foreground">{selectedProfile}</span> haven&apos;t
-              been saved. Switching to{" "}
-              <span className="font-medium text-foreground">{pendingProfile}</span> discards them.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Keep editing</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                if (pendingProfile !== null) selectProfile(pendingProfile);
-                setPendingProfile(null);
-              }}
-            >
-              Discard &amp; switch
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ConfirmDialog
+        open={pendingProfile !== null}
+        onOpenChange={(o) => { if (!o) setPendingProfile(null); }}
+        title="Discard unsaved changes?"
+        description={
+          <>
+            Your edits to <span className="font-medium text-foreground">{selectedProfile}</span> haven&apos;t
+            been saved. Switching to{" "}
+            <span className="font-medium text-foreground">{pendingProfile}</span> discards them.
+          </>
+        }
+        cancelLabel="Keep editing"
+        confirmLabel={<>Discard &amp; switch</>}
+        onConfirm={() => {
+          if (pendingProfile !== null) selectProfile(pendingProfile);
+          setPendingProfile(null);
+        }}
+      />
     </Card>
   );
 }

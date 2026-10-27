@@ -10,16 +10,9 @@ import { EmptyState } from "@/components/empty-state";
 import { TabNav } from "@/components/tab-nav";
 import { MediaHoverPopover } from "@/components/media-hover-popover";
 import { Button } from "@/components/ui/button";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import { ConfirmDialog } from "@/components/confirm-dialog";
+import { LoadingButton } from "@/components/loading-button";
+import { PageHeader } from "@/components/page-header";
 import {
   Dialog,
   DialogContent,
@@ -312,6 +305,242 @@ function groupExceptions(
   });
 }
 
+const exceptionRowKey = (row: GroupedExceptionRow) => row.id;
+
+function getSearchResultLabel(item: SearchResult): string {
+  if (item.scope === "artist") return item.title;
+  if (item.scope === "album")
+    return item.parentTitle ? `${item.parentTitle} — ${item.title}` : item.title;
+  if (item.scope === "series") return item.title;
+  // individual (movies)
+  return item.parentTitle
+    ? `${item.parentTitle} — ${item.title}`
+    : item.title;
+}
+
+function getSearchResultSubtitle(item: SearchResult): string | null {
+  if (item.scope === "artist")
+    return `Artist · ${item.itemCount} ${item.itemCount === 1 ? "track" : "tracks"}`;
+  if (item.scope === "album")
+    return `Album · ${item.itemCount} ${item.itemCount === 1 ? "track" : "tracks"}`;
+  if (item.scope === "series")
+    return `${item.itemCount} ${item.itemCount === 1 ? "episode" : "episodes"}`;
+  return item.year ? String(item.year) : null;
+}
+
+/**
+ * "Add Exception": search the tab's media and file exceptions from the
+ * results. Its search box and reason live here, so typing re-renders the
+ * dialog alone — at the page, every keystroke re-rendered the table behind it.
+ */
+function AddExceptionDialog({
+  open,
+  onOpenChange,
+  activeTab,
+  existingMediaItemIds,
+  existingGroupTitles,
+  onAdded,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  activeTab: TabType;
+  existingMediaItemIds: ReadonlySet<string>;
+  existingGroupTitles: ReadonlySet<string>;
+  /** An exception was filed: re-read the listing. */
+  onAdded: () => Promise<void>;
+}) {
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [addingItemId, setAddingItemId] = useState<string | null>(null);
+  const [addReason, setAddReason] = useState("");
+  const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Every opening starts with an empty search.
+  const [wasOpen, setWasOpen] = useState(open);
+  if (wasOpen !== open) {
+    setWasOpen(open);
+    if (open) {
+      setSearchQuery("");
+      setSearchResults([]);
+      setAddReason("");
+    }
+  }
+
+  // Search for media items to add manually
+  const handleSearch = useCallback(async (query: string) => {
+    if (!query.trim()) {
+      setSearchResults([]);
+      return;
+    }
+    setSearching(true);
+    try {
+      const params = new URLSearchParams({ q: query, type: activeTab });
+      if (activeTab === "SERIES") params.set("seriesScope", "true");
+      if (activeTab === "MUSIC") params.set("musicScope", "true");
+      const response = await fetch(`/api/media/search?${params}`);
+      if (response.ok) {
+        const data = await response.json();
+        setSearchResults(data.items || []);
+      }
+    } catch (error) {
+      console.error("Failed to search media:", error);
+    } finally {
+      setSearching(false);
+    }
+  }, [activeTab]);
+
+  const handleSearchInput = (value: string) => {
+    setSearchQuery(value);
+    if (searchTimeoutRef.current) {
+      clearTimeout(searchTimeoutRef.current);
+    }
+    searchTimeoutRef.current = setTimeout(() => {
+      handleSearch(value);
+    }, 300);
+  };
+
+  const handleAddException = async (item: SearchResult) => {
+    setAddingItemId(item.id);
+    try {
+      const response = await fetch("/api/lifecycle/exceptions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mediaItemId: item.id,
+          reason: addReason || undefined,
+          scope: item.scope,
+        }),
+      });
+      if (response.ok) {
+        // Remove from search results and refresh exceptions
+        setSearchResults((prev) => prev.filter((r) => r.id !== item.id));
+        await onAdded();
+        toast.success("Exception added", { description: getSearchResultLabel(item) });
+      } else {
+        const data = await response.json().catch(() => ({}));
+        toast.error("Couldn't add exception", { description: data.error });
+      }
+    } catch (error) {
+      console.error("Failed to add exception:", error);
+      toast.error("Couldn't add exception");
+    } finally {
+      setAddingItemId(null);
+    }
+  };
+
+  const searchPlaceholder =
+    activeTab === "MOVIE"
+      ? "Search by title..."
+      : activeTab === "SERIES"
+        ? "Search by series name..."
+        : "Search by artist or album...";
+
+  const dialogDescription =
+    activeTab === "MOVIE"
+      ? "Search for a movie to exclude from lifecycle actions."
+      : activeTab === "SERIES"
+        ? "Search for a series to exclude all its episodes from lifecycle actions."
+        : "Search for an artist or album to exclude from lifecycle actions.";
+
+  return (
+    <Dialog open={open} onOpenChange={(next) => { if (!next) onOpenChange(false); }}>
+      <DialogContent className="sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Add Exception</DialogTitle>
+          <DialogDescription>
+            {dialogDescription}
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="exception-search">Search</Label>
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                id="exception-search"
+                placeholder={searchPlaceholder}
+                className="pl-9"
+                value={searchQuery}
+                onChange={(e) => handleSearchInput(e.target.value)}
+                autoFocus
+              />
+            </div>
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="exception-reason">Reason</Label>
+            <Input
+              id="exception-reason"
+              placeholder="Optional — applied to anything you add below"
+              value={addReason}
+              onChange={(e) => setAddReason(e.target.value)}
+            />
+          </div>
+          <div className="max-h-64 overflow-y-auto rounded-md border">
+            {searching ? (
+              <div className="flex items-center justify-center py-8">
+                <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+              </div>
+            ) : searchResults.length === 0 ? (
+              <div className="py-8 text-center text-sm text-muted-foreground">
+                {searchQuery.trim() ? "No results found." : "Type to search for media items."}
+              </div>
+            ) : (
+              <div className="divide-y">
+                {searchResults.map((item) => {
+                  // For grouped scopes, match against display titles of existing
+                  // groups: the search's representative id differs from the
+                  // exceptions' own.
+                  const alreadyExcluded = item.scope === "individual"
+                    ? existingMediaItemIds.has(item.id)
+                    : existingGroupTitles.has(getSearchResultLabel(item));
+                  const subtitle = getSearchResultSubtitle(item);
+                  return (
+                    <div
+                      key={item.id}
+                      className="flex items-center justify-between px-4 py-2.5 hover:bg-muted/50"
+                    >
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium truncate">
+                          {getSearchResultLabel(item)}
+                        </p>
+                        {subtitle && (
+                          <p className="text-xs text-muted-foreground">{subtitle}</p>
+                        )}
+                      </div>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="ml-3 shrink-0"
+                        disabled={alreadyExcluded || addingItemId === item.id}
+                        onClick={() => handleAddException(item)}
+                      >
+                        {addingItemId === item.id ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : alreadyExcluded ? (
+                          <>
+                            <Check className="h-3.5 w-3.5 mr-1 text-emerald-400" />
+                            Excluded
+                          </>
+                        ) : (
+                          <>
+                            <Plus className="h-3.5 w-3.5 mr-1" />
+                            Add
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export default function LifecycleExceptionsPage() {
   const [activeTab, setActiveTab] = useState<TabType>("MOVIE");
   const [exceptions, setExceptions] = useState<ExceptionItem[]>([]);
@@ -326,12 +555,6 @@ export default function LifecycleExceptionsPage() {
 
   // Add manually
   const [showAddDialog, setShowAddDialog] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
-  const [searching, setSearching] = useState(false);
-  const [addingItemId, setAddingItemId] = useState<string | null>(null);
-  const [addReason, setAddReason] = useState("");
-  const searchTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Media detail panel
   const detailPanel = useMediaDetailPanel();
@@ -357,12 +580,12 @@ export default function LifecycleExceptionsPage() {
     }
   }, [activeTab]);
 
-// Exceptions cascade away with the media they protect, so a purge or a sync
+  // Exceptions cascade away with the media they protect, so a purge or a sync
   // that removes items silently invalidates rows this page is still rendering.
   useRealtime("sync:completed", fetchExceptions);
   useRealtime("lifecycle:action-executed", fetchExceptions);
 
-    useEffect(() => {
+  useEffect(() => {
     void (async () => { await fetchExceptions(); })();
   }, [fetchExceptions]);
 
@@ -371,9 +594,10 @@ export default function LifecycleExceptionsPage() {
     [exceptions, activeTab]
   );
 
-  const openDetailPanel = (row: GroupedExceptionRow) => {
+  const { open: openPanel } = detailPanel;
+  const openDetailPanel = useCallback((row: GroupedExceptionRow) => {
     const mediaType = toDetailPanelMediaType(row.mediaItem.type);
-    void detailPanel.open({
+    void openPanel({
       id: row.mediaItem.id,
       mediaType,
       label: row.displayTitle,
@@ -389,7 +613,7 @@ export default function LifecycleExceptionsPage() {
         addedAt: row.addedAt,
       },
     });
-  };
+  }, [openPanel]);
 
   const handleRemove = async (row: GroupedExceptionRow) => {
     setRemoving(row.id);
@@ -450,89 +674,6 @@ export default function LifecycleExceptionsPage() {
     } finally {
       setSavingReason(false);
     }
-  };
-
-  // Search for media items to add manually
-  const handleSearch = useCallback(async (query: string) => {
-    if (!query.trim()) {
-      setSearchResults([]);
-      return;
-    }
-    setSearching(true);
-    try {
-      const params = new URLSearchParams({ q: query, type: activeTab });
-      if (activeTab === "SERIES") params.set("seriesScope", "true");
-      if (activeTab === "MUSIC") params.set("musicScope", "true");
-      const response = await fetch(`/api/media/search?${params}`);
-      if (response.ok) {
-        const data = await response.json();
-        setSearchResults(data.items || []);
-      }
-    } catch (error) {
-      console.error("Failed to search media:", error);
-    } finally {
-      setSearching(false);
-    }
-  }, [activeTab]);
-
-  const handleSearchInput = (value: string) => {
-    setSearchQuery(value);
-    if (searchTimeoutRef.current) {
-      clearTimeout(searchTimeoutRef.current);
-    }
-    searchTimeoutRef.current = setTimeout(() => {
-      handleSearch(value);
-    }, 300);
-  };
-
-  const handleAddException = async (item: SearchResult) => {
-    setAddingItemId(item.id);
-    try {
-      const response = await fetch("/api/lifecycle/exceptions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          mediaItemId: item.id,
-          reason: addReason || undefined,
-          scope: item.scope,
-        }),
-      });
-      if (response.ok) {
-        // Remove from search results and refresh exceptions
-        setSearchResults((prev) => prev.filter((r) => r.id !== item.id));
-        await fetchExceptions();
-        toast.success("Exception added", { description: getSearchResultLabel(item) });
-      } else {
-        const data = await response.json().catch(() => ({}));
-        toast.error("Couldn't add exception", { description: data.error });
-      }
-    } catch (error) {
-      console.error("Failed to add exception:", error);
-      toast.error("Couldn't add exception");
-    } finally {
-      setAddingItemId(null);
-    }
-  };
-
-  const getSearchResultLabel = (item: SearchResult) => {
-    if (item.scope === "artist") return item.title;
-    if (item.scope === "album")
-      return item.parentTitle ? `${item.parentTitle} — ${item.title}` : item.title;
-    if (item.scope === "series") return item.title;
-    // individual (movies)
-    return item.parentTitle
-      ? `${item.parentTitle} — ${item.title}`
-      : item.title;
-  };
-
-  const getSearchResultSubtitle = (item: SearchResult) => {
-    if (item.scope === "artist")
-      return `Artist · ${item.itemCount} ${item.itemCount === 1 ? "track" : "tracks"}`;
-    if (item.scope === "album")
-      return `Album · ${item.itemCount} ${item.itemCount === 1 ? "track" : "tracks"}`;
-    if (item.scope === "series")
-      return `${item.itemCount} ${item.itemCount === 1 ? "episode" : "episodes"}`;
-    return item.year ? String(item.year) : null;
   };
 
   const renderHoverContent = useCallback((row: GroupedExceptionRow) => {
@@ -634,7 +775,9 @@ export default function LifecycleExceptionsPage() {
 
   const isGrouped = activeTab !== "MOVIE";
 
-  const exceptionColumns: DataTableColumn<GroupedExceptionRow>[] = [
+  // Memoised: the table re-sorts whenever its sort column's `sortValue`
+  // changes, and built inline every render re-sorted on any state change.
+  const exceptionColumns = useMemo<DataTableColumn<GroupedExceptionRow>[]>(() => [
     {
       id: "title",
       header: "Title",
@@ -718,51 +861,30 @@ export default function LifecycleExceptionsPage() {
         </div>
       ),
     },
-  ];
+  ], [activeTab, isGrouped, removing]);
 
-  const existingMediaItemIds = new Set(exceptions.map((e) => e.mediaItem.id));
+  const existingMediaItemIds = useMemo(() => new Set(exceptions.map((e) => e.mediaItem.id)), [exceptions]);
   // For grouped tabs, track existing group display titles so the "already excluded"
   // check works even when the search representative ID differs from exception IDs
   const existingGroupTitles = useMemo(() => {
     return new Set(groupedRows.map((r) => r.displayTitle));
   }, [groupedRows]);
 
-  const searchPlaceholder =
-    activeTab === "MOVIE"
-      ? "Search by title..."
-      : activeTab === "SERIES"
-        ? "Search by series name..."
-        : "Search by artist or album...";
-
-  const dialogDescription =
-    activeTab === "MOVIE"
-      ? "Search for a movie to exclude from lifecycle actions."
-      : activeTab === "SERIES"
-        ? "Search for a series to exclude all its episodes from lifecycle actions."
-        : "Search for an artist or album to exclude from lifecycle actions.";
-
-  const openAddDialog = () => {
-    setShowAddDialog(true);
-    setSearchQuery("");
-    setSearchResults([]);
-    setAddReason("");
-  };
+  const openAddDialog = () => setShowAddDialog(true);
 
   return (
     <>
       <div className="space-y-6 p-4 sm:p-6 lg:p-8 overflow-y-auto h-full">
-        <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
-          <div>
-            <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Lifecycle Exceptions</h1>
-            <p className="text-muted-foreground mt-1">
-              Media items excluded from lifecycle actions. These items will not be matched or actioned by any rule set.
-            </p>
-          </div>
-          <Button onClick={openAddDialog} className="shrink-0">
-            <Plus className="h-4 w-4 mr-2" />
-            Add Exception
-          </Button>
-        </div>
+        <PageHeader
+          title="Lifecycle Exceptions"
+          description="Media items excluded from lifecycle actions. These items will not be matched or actioned by any rule set."
+          actions={
+            <Button onClick={openAddDialog} className="shrink-0">
+              <Plus className="h-4 w-4 mr-2" />
+              Add Exception
+            </Button>
+          }
+        />
 
         {/* Tab navigation */}
         <TabNav tabs={TABS} activeTab={activeTab} onTabChange={setActiveTab} />
@@ -796,38 +918,34 @@ export default function LifecycleExceptionsPage() {
             <DataTable<GroupedExceptionRow>
               columns={exceptionColumns}
               data={groupedRows}
-              keyExtractor={(row) => row.id}
+              keyExtractor={exceptionRowKey}
               defaultSortId="title"
               resizeStorageKey="dt-widths-exceptions"
-              onRowClick={(row) => openDetailPanel(row)}
+              onRowClick={openDetailPanel}
               renderHoverContent={renderHoverContent}
             />
           </div>
         )}
 
         {/* Confirm removal dialog */}
-        <AlertDialog open={!!confirmRemove} onOpenChange={() => setConfirmRemove(null)}>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Remove exception?</AlertDialogTitle>
-              <AlertDialogDescription>
-                This will allow &quot;{confirmRemove?.displayTitle}&quot;
-                {confirmRemove && confirmRemove.itemCount > 1
-                  ? ` (${confirmRemove.itemCount} ${activeTab === "SERIES" ? "episodes" : "tracks"})`
-                  : ""}
-                {" "}to be matched and actioned by lifecycle rules again.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <AlertDialogAction
-                onClick={() => confirmRemove && handleRemove(confirmRemove)}
-              >
-                Remove
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
+        <ConfirmDialog
+          open={!!confirmRemove}
+          onOpenChange={(open) => { if (!open) setConfirmRemove(null); }}
+          title="Remove exception?"
+          description={
+            <>
+              This will allow &quot;{confirmRemove?.displayTitle}&quot;
+              {confirmRemove && confirmRemove.itemCount > 1
+                ? ` (${confirmRemove.itemCount} ${activeTab === "SERIES" ? "episodes" : "tracks"})`
+                : ""}
+              {" "}to be matched and actioned by lifecycle rules again.
+            </>
+          }
+          confirmLabel="Remove"
+          onConfirm={() => {
+            if (confirmRemove) void handleRemove(confirmRemove);
+          }}
+        />
 
         {/* Edit reason dialog */}
         <Dialog open={!!editingGroup} onOpenChange={(open) => { if (!open) setEditingGroup(null); }}>
@@ -857,110 +975,21 @@ export default function LifecycleExceptionsPage() {
               <Button variant="outline" onClick={() => setEditingGroup(null)}>
                 Cancel
               </Button>
-              <Button onClick={handleEditReason} disabled={savingReason}>
-                {savingReason ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
+              <LoadingButton onClick={handleEditReason} loading={savingReason} iconClassName="h-4 w-4 mr-2">
                 Save
-              </Button>
+              </LoadingButton>
             </DialogFooter>
           </DialogContent>
         </Dialog>
 
-        {/* Add exception dialog */}
-        <Dialog open={showAddDialog} onOpenChange={(open) => { if (!open) setShowAddDialog(false); }}>
-          <DialogContent className="sm:max-w-lg">
-            <DialogHeader>
-              <DialogTitle>Add Exception</DialogTitle>
-              <DialogDescription>
-                {dialogDescription}
-              </DialogDescription>
-            </DialogHeader>
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="exception-search">Search</Label>
-                <div className="relative">
-                  <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                  <Input
-                    id="exception-search"
-                    placeholder={searchPlaceholder}
-                    className="pl-9"
-                    value={searchQuery}
-                    onChange={(e) => handleSearchInput(e.target.value)}
-                    autoFocus
-                  />
-                </div>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="exception-reason">Reason</Label>
-                <Input
-                  id="exception-reason"
-                  placeholder="Optional — applied to anything you add below"
-                  value={addReason}
-                  onChange={(e) => setAddReason(e.target.value)}
-                />
-              </div>
-              <div className="max-h-64 overflow-y-auto rounded-md border">
-                {searching ? (
-                  <div className="flex items-center justify-center py-8">
-                    <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
-                  </div>
-                ) : searchResults.length === 0 ? (
-                  <div className="py-8 text-center text-sm text-muted-foreground">
-                    {searchQuery.trim() ? "No results found." : "Type to search for media items."}
-                  </div>
-                ) : (
-                  <div className="divide-y">
-                    {searchResults.map((item) => {
-                      const alreadyExcluded = (() => {
-                        if (item.scope === "individual")
-                          return existingMediaItemIds.has(item.id);
-                        // For grouped scopes, match against display titles of existing groups
-                        const label = getSearchResultLabel(item);
-                        return existingGroupTitles.has(label);
-                      })();
-                      const subtitle = getSearchResultSubtitle(item);
-                      return (
-                        <div
-                          key={item.id}
-                          className="flex items-center justify-between px-4 py-2.5 hover:bg-muted/50"
-                        >
-                          <div className="min-w-0">
-                            <p className="text-sm font-medium truncate">
-                              {getSearchResultLabel(item)}
-                            </p>
-                            {subtitle && (
-                              <p className="text-xs text-muted-foreground">{subtitle}</p>
-                            )}
-                          </div>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="ml-3 shrink-0"
-                            disabled={alreadyExcluded || addingItemId === item.id}
-                            onClick={() => handleAddException(item)}
-                          >
-                            {addingItemId === item.id ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            ) : alreadyExcluded ? (
-                              <>
-                                <Check className="h-3.5 w-3.5 mr-1 text-emerald-400" />
-                                Excluded
-                              </>
-                            ) : (
-                              <>
-                                <Plus className="h-3.5 w-3.5 mr-1" />
-                                Add
-                              </>
-                            )}
-                          </Button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            </div>
-          </DialogContent>
-        </Dialog>
+        <AddExceptionDialog
+          open={showAddDialog}
+          onOpenChange={setShowAddDialog}
+          activeTab={activeTab}
+          existingMediaItemIds={existingMediaItemIds}
+          existingGroupTitles={existingGroupTitles}
+          onAdded={fetchExceptions}
+        />
       </div>
 
       {/* Media detail side panel */}
