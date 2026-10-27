@@ -103,6 +103,49 @@ describe("SyncLibraryButton", () => {
     expect(statusCalls()).toBe(3);
   });
 
+  // The page refetches on the same event, so the button must not as well —
+  // even when the stream drops between the event and the check's answer.
+  it("leaves the refetch to the page when an event ended the run, whatever the stream does meanwhile", async () => {
+    realtime.live = true;
+    statusQueue = [running(2, 10)];
+    const onSyncComplete = vi.fn();
+    render(createElement(SyncLibraryButton, { libraryType: "MOVIE", onSyncComplete }));
+    await clickSync();
+
+    let answer!: (body: unknown) => void;
+    fetchMock.mockImplementation((url: string) => {
+      if (url === "/api/sync/status") return new Promise((resolve) => (answer = (body) => resolve({ ok: true, json: async () => body })));
+      return Promise.reject(new Error(`unexpected ${url}`));
+    });
+    await act(async () => {
+      realtime.handlers.get("sync:completed")!();
+    });
+    realtime.live = false;
+    await act(async () => answer(done));
+
+    expect(screen.getByRole("button").textContent).toBe("Sync");
+    expect(onSyncComplete).not.toHaveBeenCalled();
+  });
+
+  it("tells the page when the run was already over at the first check and no pushes arrive", async () => {
+    statusQueue = [done];
+    const onSyncComplete = vi.fn();
+    render(createElement(SyncLibraryButton, { libraryType: "MOVIE", onSyncComplete }));
+    await clickSync();
+    expect(screen.getByRole("button").textContent).toBe("Sync");
+    expect(onSyncComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves it to the page when the run was already over at the first check and pushes arrive", async () => {
+    realtime.live = true;
+    statusQueue = [done];
+    const onSyncComplete = vi.fn();
+    render(createElement(SyncLibraryButton, { libraryType: "MOVIE", onSyncComplete }));
+    await clickSync();
+    expect(screen.getByRole("button").textContent).toBe("Sync");
+    expect(onSyncComplete).not.toHaveBeenCalled();
+  });
+
   it("ignores sync events while it has not started a sync", async () => {
     render(createElement(SyncLibraryButton, { libraryType: "MUSIC" }));
     await act(async () => realtime.handlers.get("sync:progress")!());
