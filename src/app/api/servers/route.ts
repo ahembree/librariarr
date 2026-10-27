@@ -59,8 +59,9 @@ export const GET = withSession(async (session, request?: NextRequest) => {
  *
  * Not a nested `syncJobs: { orderBy, take: 1 }` include: Prisma cannot push a
  * per-parent `take` into SQL, so that loaded every job the server had ever run
- * and dropped all but one — and nothing prunes SyncJob, so this route (behind
- * most pages) got slower for as long as the install ran.
+ * and dropped all but one, so this route (behind most pages) slowed with every
+ * job kept (finished jobs are pruned only past 30 days and each server's newest
+ * 50).
  *
  * A running sync wins over a newer row: the library pages' Sync queues behind
  * a running sync under a PENDING row of its own, and showing that row hid the
