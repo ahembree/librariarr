@@ -1399,7 +1399,10 @@ export default function SettingsPage() {
         });
         return false;
       }
-      setWatchHistorySourceDialog(null);
+      // The dialog stays open (spinning) until the refetch below is in, and
+      // ConfirmDialog closes it on `true`: closed here, another server's
+      // source change could open it again in the meantime, greyed out by
+      // this run, and have it closed under the user when this run answered.
       // The PUT clears the stored history AND resets the backfill flag, so the
       // status line under the dropdown is stale the instant it returns —
       // refetch rather than leave a "fully imported" tick over an empty table.
