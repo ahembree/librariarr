@@ -14,6 +14,8 @@ const m = vi.hoisted(() => ({
   archiveLogs: vi.fn().mockResolvedValue(undefined),
   dispatchScheduledJobs: vi.fn().mockResolvedValue(undefined),
   syncJob: { findFirst: vi.fn(), updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
+  mediaServer: { findUnique: vi.fn().mockResolvedValue({ userId: "u1" }) },
+  emit: vi.fn(),
   appSettings: { findFirst: vi.fn() },
   lifecycleAction: { deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
   executeRaw: vi.fn().mockResolvedValue(0),
@@ -42,12 +44,14 @@ vi.mock("@/lib/backup/backup-service", () => ({
 }));
 vi.mock("@/lib/logs/archive", () => ({ archiveLogs: m.archiveLogs }));
 vi.mock("@/lib/jobs/dispatch", () => ({ dispatchScheduledJobs: m.dispatchScheduledJobs }));
+vi.mock("@/lib/events/event-bus", () => ({ eventBus: { emit: m.emit } }));
 vi.mock("@/lib/logger", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 vi.mock("@/lib/db", () => ({
   prisma: {
     syncJob: m.syncJob,
+    mediaServer: m.mediaServer,
     appSettings: m.appSettings,
     lifecycleAction: m.lifecycleAction,
     $executeRawUnsafe: m.executeRaw,
@@ -264,6 +268,8 @@ describe("taskList", () => {
         error: "Another sync of this server was already running",
       },
     });
+    // Announced, so a page showing the queued row sees it end.
+    expect(m.emit).toHaveBeenCalledWith({ type: "sync:failed", userId: "u1", meta: { serverId: "server-1" } });
   });
 
   it("sync task leaves rows alone when it skips a job no route asked for", async () => {

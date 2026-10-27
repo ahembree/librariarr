@@ -1,6 +1,7 @@
 import type { Task, TaskList } from "graphile-worker";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
+import { eventBus } from "@/lib/events/event-bus";
 import { syncMediaServer } from "@/lib/sync/sync-server";
 import { syncWatchHistory } from "@/lib/sync/sync-watch-history";
 import { syncMediaServerItems } from "@/lib/sync/sync-incremental";
@@ -159,10 +160,16 @@ const syncServer: Task = async (payload) => {
     // with nothing left to claim it, and a PENDING row makes every Sync button
     // answer as though a sync were queued.
     if (syncJobId) {
-      await prisma.syncJob.updateMany({
+      const closed = await prisma.syncJob.updateMany({
         where: { id: syncJobId, status: "PENDING" },
         data: { status: "FAILED", completedAt: new Date(), error: "Another sync of this server was already running" },
       });
+      // The pages showing the queued row poll only while pushes are not
+      // arriving, so its end has to be announced like any other sync's.
+      if (closed.count > 0) {
+        const server = await prisma.mediaServer.findUnique({ where: { id: serverId }, select: { userId: true } });
+        if (server) eventBus.emit({ type: "sync:failed", userId: server.userId, meta: { serverId } });
+      }
     }
     return;
   }

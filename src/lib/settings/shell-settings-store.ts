@@ -92,7 +92,12 @@ export function createShellSettingsStore(
 
   function enqueue(kind: Kind, send: () => Promise<SaveOutcome>): Promise<SaveOutcome> {
     const run = queue.then(async (): Promise<SaveOutcome> => {
-      if (conflicted.has(kind)) return "conflict";
+      if (conflicted.has(kind)) {
+        // The refresh that would clear it failed (or has not run): ask again,
+        // or every later save of this kind is refused without being sent.
+        refreshWanted = true;
+        return "conflict";
+      }
       try {
         const outcome = await send();
         if (outcome === "conflict") {

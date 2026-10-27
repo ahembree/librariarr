@@ -14,6 +14,7 @@ vi.mock("@/hooks/use-realtime", () => ({
 }));
 
 import { SyncLibraryButton } from "@/components/sync-library-button";
+import { libraryListCache } from "@/lib/media/list-cache";
 
 const fetchMock = vi.fn();
 let statusQueue: unknown[];
@@ -125,6 +126,42 @@ describe("SyncLibraryButton", () => {
 
     expect(screen.getByRole("button").textContent).toBe("Sync");
     expect(onSyncComplete).not.toHaveBeenCalled();
+  });
+
+  it("drops the tab's cached lists before telling the page, so its refetch reaches the server", async () => {
+    statusQueue = [done];
+    libraryListCache.set("/api/media/movies?", [{ id: "old" }]);
+    let cachedAtCallback: unknown = "unread";
+    const onSyncComplete = vi.fn(() => {
+      cachedAtCallback = libraryListCache.get("/api/media/movies?");
+    });
+    render(createElement(SyncLibraryButton, { libraryType: "MOVIE", onSyncComplete }));
+    await clickSync();
+    expect(onSyncComplete).toHaveBeenCalledTimes(1);
+    expect(cachedAtCallback).toBeUndefined();
+  });
+
+  it("does not end the run on another sync's event that arrives before the request answers", async () => {
+    realtime.live = true;
+    let answerRequest!: () => void;
+    statusQueue = [running(1, 10)];
+    fetchMock.mockImplementation((url: string) => {
+      if (url === "/api/sync/by-type") {
+        return new Promise((resolve) => (answerRequest = () => resolve({ ok: true, json: async () => ({ syncedCount: 1 }) })));
+      }
+      if (url === "/api/sync/status") return json(statusQueue.shift() ?? done);
+      return Promise.reject(new Error(`unexpected ${url}`));
+    });
+    render(createElement(SyncLibraryButton, { libraryType: "MOVIE" }));
+    await clickSync();
+    // Another server's sync ends while this request's rows do not exist yet.
+    await act(async () => realtime.handlers.get("sync:completed")!());
+    expect(statusCalls()).toBe(0);
+    expect((screen.getByRole("button") as HTMLButtonElement).disabled).toBe(true);
+
+    await act(async () => answerRequest());
+    expect(statusCalls()).toBe(1);
+    expect((screen.getByRole("button") as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("tells the page when the run was already over at the first check and no pushes arrive", async () => {

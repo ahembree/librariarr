@@ -6,6 +6,8 @@ import { RefreshCw } from "lucide-react";
 import { isRealtimeLive, useRealtime } from "@/hooks/use-realtime";
 import { useFallbackPoll } from "@/hooks/use-fallback-poll";
 import { fetchSyncStatus } from "@/lib/sync/sync-status-client";
+import { clearLibraryListCache } from "@/lib/media/list-cache";
+import { dropMediaDerivedPrefetches } from "@/lib/media/detail-prefetch";
 
 const TYPE_LABELS: Record<string, string> = {
   MOVIE: "Movies",
@@ -35,6 +37,10 @@ export function SyncLibraryButton({ libraryType, onSyncComplete }: { libraryType
   const [syncing, setSyncing] = useState(false);
   const [progress, setProgress] = useState<{ processed: number; total: number } | null>(null);
   const syncingRef = useRef(false);
+  // While the sync request is unanswered its rows may not exist yet, so a
+  // check run on another server's sync event would read "nothing active" and
+  // end this run before it started.
+  const requestingRef = useRef(false);
   const mountedRef = useRef(true);
   const onSyncCompleteRef = useRef(onSyncComplete);
 
@@ -62,7 +68,7 @@ export function SyncLibraryButton({ libraryType, onSyncComplete }: { libraryType
   // `isRealtimeLive()` when it answers: the stream can drop between the event
   // and the answer, and the list was then fetched twice.
   const checkStatus = useCallback(async (announced: boolean) => {
-    if (!syncingRef.current) return;
+    if (!syncingRef.current || requestingRef.current) return;
     // Shared with every other reader of `/api/sync/status` on the same event.
     const data = await fetchSyncStatus();
     if (!data || !mountedRef.current || !syncingRef.current) return;
@@ -70,7 +76,14 @@ export function SyncLibraryButton({ libraryType, onSyncComplete }: { libraryType
     const activeJobs = jobs.filter((j) => j.status === "RUNNING" || j.status === "PENDING");
     if (activeJobs.length === 0) {
       finish();
-      if (!announced) onSyncCompleteRef.current?.();
+      if (!announced) {
+        // No event dropped the tab's cached lists for this sync's end (the
+        // shell does that for a delivered one), and the page's refetch would
+        // otherwise be answered from them.
+        clearLibraryListCache();
+        dropMediaDerivedPrefetches();
+        onSyncCompleteRef.current?.();
+      }
       return;
     }
     const processed = activeJobs.reduce((sum, j) => sum + (j.itemsProcessed || 0), 0);
@@ -91,6 +104,7 @@ export function SyncLibraryButton({ libraryType, onSyncComplete }: { libraryType
 
   const handleSync = async () => {
     syncingRef.current = true;
+    requestingRef.current = true;
     setSyncing(true);
     setProgress(null);
     try {
@@ -100,6 +114,7 @@ export function SyncLibraryButton({ libraryType, onSyncComplete }: { libraryType
         body: JSON.stringify({ libraryType }),
       });
       const data = await res.json();
+      requestingRef.current = false;
       if (data.syncedCount > 0) {
         // The route created the PENDING rows before answering, so the first
         // check already sees this run — and a short sync may be over by now.
@@ -111,6 +126,7 @@ export function SyncLibraryButton({ libraryType, onSyncComplete }: { libraryType
         finish();
       }
     } catch {
+      requestingRef.current = false;
       finish();
     }
   };
