@@ -80,12 +80,20 @@ import { LoadingButton } from "@/components/loading-button";
 import { generateId } from "@/lib/utils";
 import { QueryProgress, useStreamProgress } from "@/components/query-progress";
 import { consumeProgressStream } from "@/lib/progress/client";
-import {
-  RulePreviewSection,
-  type PreviewDiffCounts,
-  type PreviewDiffStatus,
-  type PreviewItem,
-} from "@/components/rule-preview-section";
+import type { PreviewDiffCounts, PreviewDiffStatus, PreviewItem } from "@/components/rule-preview-section";
+import { lazyComponent } from "@/components/lazy-component";
+import { Skeleton } from "@/components/ui/skeleton";
+
+// Loaded on demand: the results table and card grid (MediaTable, the card and
+// hover components) render only once a preview has answered.
+const RulePreviewSection = lazyComponent(
+  () => import("@/components/rule-preview-section").then((m) => m.RulePreviewSection),
+  RulePreviewSkeleton,
+);
+
+function RulePreviewSkeleton() {
+  return <Skeleton className="mt-8 h-64 w-full rounded-lg" />;
+}
 import { ExportRuleSetDialog, ImportRuleSetDialog, TestMediaDialog } from "@/components/lifecycle-rule-dialogs";
 import type {
   CollectionDefinition,
