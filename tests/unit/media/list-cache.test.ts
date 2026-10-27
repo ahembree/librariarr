@@ -1,4 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+
+const realtime = vi.hoisted(() => ({ live: true }));
+vi.mock("@/hooks/use-realtime", () => ({ isRealtimeLive: () => realtime.live }));
 import {
   clearLibraryListCache,
   createListCache,
@@ -19,6 +22,7 @@ beforeEach(() => {
   fetchMock.mockReset();
   vi.stubGlobal("fetch", fetchMock);
   clearLibraryListCache();
+  realtime.live = true;
 });
 
 afterEach(() => {
@@ -35,6 +39,15 @@ describe("createListCache", () => {
     expect(cache.get("k")).toEqual({ value: [1], fresh: false });
     now = LIST_MAX_AGE_MS + 1;
     expect(cache.get("k")).toBeUndefined();
+  });
+
+  it("never reports an entry fresh while the events that clear it are not arriving", () => {
+    let live = false;
+    const cache = createListCache({ cleared: () => live });
+    cache.set("k", [1]);
+    expect(cache.get("k")).toEqual({ value: [1], fresh: false });
+    live = true;
+    expect(cache.get("k")).toEqual({ value: [1], fresh: true });
   });
 
   it("evicts the least recently used past its bound", () => {
@@ -86,6 +99,11 @@ describe("loadCachedList", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledWith("/api/media/series/grouped?limit=0");
     expect(seen).toEqual([{ series: [1, 2] }, { series: [1, 2] }]);
+
+    // With pushes not arriving nothing would have cleared it: asked again.
+    realtime.live = false;
+    await loadCachedList("/api/media/series/grouped", new URLSearchParams("limit=0"), (d) => seen.push(d));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("shows a stale entry at once, then the server's answer", async () => {

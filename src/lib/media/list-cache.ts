@@ -7,7 +7,9 @@
  * 28k-episode one) and scroll restoration waited for all of it to arrive, so
  * "back" from a detail page showed a skeleton for as long as a cold load.
  *
- * - An entry younger than `LIST_FRESH_MS` is shown and nothing is fetched.
+ * - An entry younger than `LIST_FRESH_MS` is shown and nothing is fetched —
+ *   while pushes are arriving. With the event stream down (or held back by a
+ *   proxy) nothing clears the cache, so every entry is treated as past fresh.
  * - An older one, up to `LIST_MAX_AGE_MS`, is shown at once and then
  *   refreshed behind it; past that it is dropped and the page loads as before.
  * - Anything that can change a list clears every entry: the pages' own
@@ -18,6 +20,7 @@
  */
 
 import { sortedQueryString } from "@/lib/sorted-query";
+import { isRealtimeLive } from "@/hooks/use-realtime";
 
 export const LIST_FRESH_MS = 60_000;
 export const LIST_MAX_AGE_MS = 15 * 60_000;
@@ -48,7 +51,13 @@ export interface ListCache {
 }
 
 export function createListCache(
-  { freshMs = LIST_FRESH_MS, maxAgeMs = LIST_MAX_AGE_MS, maxEntries = MAX_ENTRIES } = {},
+  {
+    freshMs = LIST_FRESH_MS,
+    maxAgeMs = LIST_MAX_AGE_MS,
+    maxEntries = MAX_ENTRIES,
+    // Whether the events that clear the cache are reaching this tab.
+    cleared = () => true,
+  }: { freshMs?: number; maxAgeMs?: number; maxEntries?: number; cleared?: () => boolean } = {},
   now: () => number = Date.now,
 ): ListCache {
   const entries = new Map<string, Entry>();
@@ -65,7 +74,7 @@ export function createListCache(
       // Most recently used moves to the end, so eviction takes the oldest use.
       entries.delete(key);
       entries.set(key, entry);
-      return { value: entry.value as T, fresh: age <= freshMs };
+      return { value: entry.value as T, fresh: age <= freshMs && cleared() };
     },
     set(key, value, generation) {
       if (generation !== undefined && generation !== currentGeneration) return;
@@ -87,7 +96,7 @@ export function createListCache(
   };
 }
 
-export const libraryListCache = createListCache();
+export const libraryListCache = createListCache({ cleared: isRealtimeLive });
 
 export function clearLibraryListCache(): void {
   libraryListCache.clear();
