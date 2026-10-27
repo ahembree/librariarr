@@ -1,5 +1,5 @@
 import { constants as zlibConstants, createGzip, type Gzip } from "node:zlib";
-import { acceptsGzip, stringifyYielding } from "@/lib/api/json-response";
+import { acceptsGzip, writeJsonYielding } from "@/lib/api/json-response";
 import type { ProgressEmit } from "./types";
 
 // Hard cap so a single progress stream can never pin a connection / keep doing
@@ -32,9 +32,9 @@ const GZIP_LEVEL = 3;
  * Handler responses uncompressed. Every line is written with a zlib SYNC
  * flush, so each progress event leaves as soon as it is emitted, as a
  * complete, decodable block: a browser's `fetch` reader gets it at once, and a
- * proxy has nothing held back to wait on. The result line is serialised a
- * slice at a time (`stringifyYielding`), so a long one never holds the event
- * loop for the whole list.
+ * proxy has nothing held back to wait on. The result line is serialised and
+ * written a slice at a time (`writeJsonYielding`), so a long one never holds
+ * the event loop for the whole list, nor exists as one string.
  */
 export function progressStreamResponse<T>(
   run: (emit: ProgressEmit, signal: AbortSignal) => Promise<T>,
@@ -92,7 +92,8 @@ export function progressStreamResponse<T>(
 
         try {
           const result = await run((update) => send(update), abort.signal);
-          write((await stringifyYielding({ type: "result", result })) + "\n");
+          await writeJsonYielding({ type: "result", result }, write);
+          write("\n");
         } catch (err) {
           // If we aborted (client gone / lifetime cap), there's no one to read
           // an error line — skip it.
