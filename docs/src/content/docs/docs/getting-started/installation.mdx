@@ -175,7 +175,7 @@ If you already have a PostgreSQL server (e.g., a shared instance on your network
 - **PostgreSQL** — any currently-supported release
 - A dedicated database for Librariarr (the app manages its own schema)
 - A user with full privileges on that database (`CREATE`, `ALTER`, `DROP`, `INSERT`, `UPDATE`, `DELETE`). The `CREATE` privilege is required: in addition to the application tables, Librariarr's background job queue ([Graphile Worker](https://worker.graphile.org/)) creates and manages a separate `graphile_worker` schema automatically on first start.
-- No PostgreSQL extensions are required
+- **`pg_trgm` is recommended, not required.** Librariarr uses it for fast title search (library search, the search palette, album lists). It is a trusted extension, so the migration adds it by itself when the Librariarr user has `CREATE` on the database (the setup below gives it that) and your PostgreSQL build includes the standard contrib extensions, as the official images do. Where it cannot be added — a database the user does not own, a build without contrib — the migration skips those search indexes with a notice and everything still works; searches on a large library are just slower. The migration runs only once, so to add the extension later, create it in the Librariarr database as a user allowed to (`CREATE EXTENSION pg_trgm;`) and then create the indexes by hand, as described under [Development](/docs/advanced/development/#indexes-outside-the-prisma-schema).
 
 ### Setup
 

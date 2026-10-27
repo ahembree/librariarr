@@ -2,8 +2,7 @@ import type { NextResponse } from "next/server";
 import { MASKED_VALUE } from "@/lib/api/sanitize";
 import { hasRecentLogin } from "@/lib/auth/recent-login";
 import { reauthRequired } from "@/lib/auth/reauth";
-
-const withoutTrailingSlash = (value: string) => value.replace(/\/+$/, "");
+import { stripTrailingSlashes } from "@/lib/url-normalize";
 
 /**
  * Whether a request would send an integration's STORED API key to a URL other
@@ -15,7 +14,7 @@ export function sendsStoredKeyToNewUrl(
   url: string | undefined,
   apiKey: string | undefined,
 ): boolean {
-  if (url === undefined || withoutTrailingSlash(url) === withoutTrailingSlash(storedUrl)) return false;
+  if (url === undefined || stripTrailingSlashes(url) === stripTrailingSlashes(storedUrl)) return false;
   return apiKey === undefined || apiKey === "" || apiKey === MASKED_VALUE;
 }
 

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { apiLogger } from "@/lib/logger";
 import { invalidateMediaCaches } from "@/lib/cache/invalidate";
@@ -10,12 +10,7 @@ import {
 } from "@/lib/media/watch-evidence";
 import { eventBus } from "@/lib/events/event-bus";
 
-export async function DELETE(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const DELETE = withSession(async (session, request: NextRequest) => {
   const { searchParams } = request.nextUrl;
   const libraryId = searchParams.get("libraryId");
   const type = searchParams.get("type");
@@ -27,7 +22,7 @@ export async function DELETE(request: NextRequest) {
         id: libraryId,
         mediaServer: { userId: session.userId },
       },
-      select: { id: true, title: true, type: true },
+      select: { id: true, title: true, type: true, mediaServerId: true },
     });
 
     if (!library) {
@@ -42,22 +37,19 @@ export async function DELETE(request: NextRequest) {
     // server's plays went with them. Mark it un-evidenced until a sync refills
     // it, or the next detection run reads the empty relation as "nobody
     // watched anything" and `watchedByUser`'s negative forms match everything
-    // the re-sync brings back.
-    const purgedServer = await prisma.library.findUnique({
-      where: { id: library.id },
-      select: { mediaServerId: true },
-    });
-    if (purgedServer?.mediaServerId) {
-      await invalidateWatchHistoryEvidence([purgedServer.mediaServerId]);
+    // the re-sync brings back. The server id came with the library above:
+    // deleting its items leaves the library row, and the id, as they were.
+    if (library.mediaServerId) {
+      await invalidateWatchHistoryEvidence([library.mediaServerId]);
       // Tracearr still holds those plays; re-walk the archive to bring them
       // back once the re-sync recreates the items.
-      await restartTracearrBackfill([purgedServer.mediaServerId]);
+      await restartTracearrBackfill([library.mediaServerId]);
     }
 
     // Recompute canonical so surviving duplicates on other servers don't stay
     // non-canonical (and therefore vanish from multi-server listings) when the
     // purged library held the canonical copy.
-    await recomputeCanonical(session.userId!);
+    await recomputeCanonical(session.userId);
     invalidateMediaCaches();
 
     apiLogger.info(
@@ -71,7 +63,7 @@ export async function DELETE(request: NextRequest) {
     // is the event the 16 library subscribers already refetch on.
     eventBus.emit({
       type: "sync:completed",
-      userId: session.userId!,
+      userId: session.userId,
       meta: { purged: result.count },
     });
 
@@ -123,7 +115,7 @@ export async function DELETE(request: NextRequest) {
     ),
   ]);
 
-  await recomputeCanonical(session.userId!);
+  await recomputeCanonical(session.userId);
   invalidateMediaCaches();
 
   apiLogger.info(
@@ -137,9 +129,9 @@ export async function DELETE(request: NextRequest) {
   // is the event the 16 library subscribers already refetch on.
   eventBus.emit({
     type: "sync:completed",
-    userId: session.userId!,
+    userId: session.userId,
     meta: { purged: result.count },
   });
 
   return NextResponse.json({ deleted: result.count });
-}
+});

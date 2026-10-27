@@ -1,7 +1,8 @@
-import axios, { AxiosInstance, isAxiosError } from "axios";
+import { type AxiosInstance, isAxiosError } from "axios";
 import { logger } from "@/lib/logger";
 import { IntegrationError } from "@/lib/integration-error";
-import { configureRetry, NO_RETRY } from "@/lib/http-retry";
+import { NO_RETRY } from "@/lib/http-retry";
+import { createIntegrationHttp } from "@/lib/integrations/http";
 
 /**
  * Client for Tracearr's read-only public REST API.
@@ -320,45 +321,14 @@ export class TracearrClient {
   private client: AxiosInstance;
 
   constructor(baseURL: string, apiKey: string) {
-    this.client = axios.create({
-      // Strip only trailing slashes — an instance may sit under a base path
-      // (`https://host/tracearr`), and axios joins that with the relative
-      // request paths below, so the prefix must survive.
-      baseURL: baseURL.replace(/\/+$/, ""),
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        Accept: "application/json",
-      },
-      timeout: REQUEST_TIMEOUT_MS,
-    });
-
-    this.client.interceptors.request.use((config) => {
-      (config as unknown as Record<string, unknown>).__startTime = Date.now();
-      return config;
-    });
-
-    // Must be registered BEFORE the IntegrationError conversion below: axios
-    // runs response interceptors in registration order, and the retry handler
-    // needs the raw AxiosError (`config`/`response`). Registered after it, the
-    // retry only ever saw an IntegrationError and rethrew every failure.
-    configureRetry(this.client, "Tracearr", logger);
-
-    this.client.interceptors.response.use(
-      (response) => response,
-      (error) => {
-        if (isAxiosError(error)) {
-          const start = (error.config as unknown as Record<string, unknown>)
-            ?.__startTime as number | undefined;
-          const duration = start ? ` (${Date.now() - start}ms)` : "";
-          logger.debug(
-            "Tracearr",
-            `ERROR ${error.response?.status ?? "NETWORK"} ${error.config?.url}${duration}`,
-            { message: error.message },
-          );
-          return Promise.reject(new IntegrationError("Tracearr", error));
-        }
-        return Promise.reject(error);
-      },
+    // Only trailing slashes are stripped — an instance may sit under a base
+    // path (`https://host/tracearr`), and axios joins that with the relative
+    // request paths below, so the prefix must survive.
+    this.client = createIntegrationHttp(
+      "Tracearr",
+      baseURL,
+      { Authorization: `Bearer ${apiKey}`, Accept: "application/json" },
+      { timeout: REQUEST_TIMEOUT_MS },
     );
   }
 

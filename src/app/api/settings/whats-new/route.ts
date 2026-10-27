@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { announceDisplaySettingsChanged } from "@/lib/settings/display-settings-events";
 import { validateRequest, whatsNewSeenSchema } from "@/lib/validation";
@@ -16,15 +16,10 @@ import { installedVersion, whatsNewDue } from "@/lib/version/whats-new";
  * rather than being marked seen without them). `truncated` says releases
  * since the last one seen lie past the page GitHub returned.
  */
-export async function GET() {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async (session) => {
   const currentVersion = installedVersion();
   const settings = await prisma.appSettings.findUnique({
-    where: { userId: session.userId! },
+    where: { userId: session.userId },
     select: { lastSeenVersion: true },
   });
   const lastSeenVersion = settings?.lastSeenVersion ?? null;
@@ -51,7 +46,7 @@ export async function GET() {
     truncated,
     notes: hasCurrent ? notes : [],
   });
-}
+});
 
 /**
  * Closing the dialog: remember the version it showed, so it stays closed until
@@ -59,12 +54,7 @@ export async function GET() {
  * server taking its own, so an upgrade landing while the dialog was open still
  * gets its own dialog.
  */
-export async function PUT(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const PUT = withSession(async (session, request: NextRequest) => {
   const { data, error } = await validateRequest(request, whatsNewSeenSchema);
   if (error) return error;
 
@@ -77,7 +67,7 @@ export async function PUT(request: NextRequest) {
     );
   }
 
-  const userId = session.userId!;
+  const userId = session.userId;
   // Compare and write under the row's lock: read first and written apart, two
   // tabs closing their dialogs together each passed the check, and the older
   // version could land last and bring the newer dialog back.
@@ -102,4 +92,4 @@ export async function PUT(request: NextRequest) {
 
   announceDisplaySettingsChanged(userId);
   return NextResponse.json({ lastSeenVersion });
-}
+});

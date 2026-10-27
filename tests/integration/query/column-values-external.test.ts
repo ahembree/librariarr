@@ -82,9 +82,23 @@ describe("computeQueryColumnValues — Arr and Seerr columns", () => {
       arrServerIds: { radarr: "r1" },
     });
     expect(warnings).toEqual([]);
-    expect(fetchArr).toHaveBeenCalledWith(userId, { radarr: "r1" }, ["MOVIE"]);
+    // Custom Format Score is not among the columns: no /moviefile sweep.
+    expect(fetchArr).toHaveBeenCalledWith(userId, { radarr: "r1" }, ["MOVIE"], undefined, { customFormatScores: false });
     expect(values[found.id]).toEqual({ foundInArr: true, arrMonitored: true, arrTag: ["keep"], studio: "WB" });
     expect(values[missing.id]).toEqual({ foundInArr: false, arrMonitored: null, arrTag: null, studio: "WB" });
+  });
+
+  it("asks for custom-format scores only with that column on screen", async () => {
+    const found = await movie("603");
+    fetchArr.mockResolvedValue({ MOVIE: { "603": { customFormatScore: 75 } } });
+    const { values } = await computeQueryColumnValues(userId, {
+      items: [{ id: found.id }],
+      fields: ["arrCustomFormatScore"],
+      serverIds: [serverId],
+      arrServerIds: { radarr: "r1" },
+    });
+    expect(fetchArr).toHaveBeenCalledWith(userId, { radarr: "r1" }, ["MOVIE"], undefined, { customFormatScores: true });
+    expect(values[found.id]).toEqual({ arrCustomFormatScore: 75 });
   });
 
   it("warns, and leaves Arr columns empty, when the Arr fetch fails", async () => {

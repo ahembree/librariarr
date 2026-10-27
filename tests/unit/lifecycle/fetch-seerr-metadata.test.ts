@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { SEERR_REQUEST_PAGE_SIZE as P, SEERR_REQUEST_PAGE_OVERLAP as O } from "@/lib/seerr/request-walk";
 
 const mockPrisma = vi.hoisted(() => ({
   seerrInstance: { findMany: vi.fn(), count: vi.fn() },
@@ -17,7 +18,13 @@ vi.mock("@/lib/seerr/seerr-client", async (importOriginal) => ({
   SeerrClient: function () { return mockSeerrClient; },
 }));
 
-import { fetchSeerrMetadata, hasEnabledSeerrInstances } from "@/lib/lifecycle/fetch-seerr-metadata";
+import {
+  fetchSeerrMetadata,
+  fetchSeerrMetadataByType,
+  fetchSeerrMetadataForPreview,
+  invalidateSeerrMetadataCache,
+  hasEnabledSeerrInstances,
+} from "@/lib/lifecycle/fetch-seerr-metadata";
 
 let nextId = 1;
 function request(overrides: {
@@ -286,7 +293,7 @@ describe("fetchSeerrMetadata", () => {
 
   it("paginates through all results with overlapping pages", async () => {
     mockPrisma.seerrInstance.findMany.mockResolvedValue(ONE_INSTANCE);
-    const all = Array.from({ length: 101 }, (_, i) => request({ id: 1000 - i, media: { tmdbId: i + 1 } }));
+    const all = Array.from({ length: P + 1 }, (_, i) => request({ id: 10_000 - i, media: { tmdbId: i + 1 } }));
     mockSeerrClient.getRequests.mockImplementation(({ take, skip }: { take: number; skip: number }) =>
       Promise.resolve({ results: all.slice(skip, skip + take) }),
     );
@@ -295,18 +302,18 @@ describe("fetchSeerrMetadata", () => {
 
     expect(mockSeerrClient.getRequests).toHaveBeenCalledTimes(2);
     // Background detection keeps transport retries on every page (no failFast).
-    expect(mockSeerrClient.getRequests).toHaveBeenNthCalledWith(1, { take: 100, skip: 0, mediaType: "movie" }, {});
-    expect(mockSeerrClient.getRequests).toHaveBeenNthCalledWith(2, { take: 100, skip: 90, mediaType: "movie" }, {});
-    expect(Object.keys(result)).toHaveLength(101);
+    expect(mockSeerrClient.getRequests).toHaveBeenNthCalledWith(1, { take: P, skip: 0, mediaType: "movie" }, {});
+    expect(mockSeerrClient.getRequests).toHaveBeenNthCalledWith(2, { take: P, skip: P - O, mediaType: "movie" }, {});
+    expect(Object.keys(result)).toHaveLength(P + 1);
     // Overlapping rows are counted once.
     expect(Object.values(result).every((m) => m.requestCount === 1)).toBe(true);
   });
 
   it("reports determinate progress from pageInfo.results, ending at 1", async () => {
     mockPrisma.seerrInstance.findMany.mockResolvedValue(ONE_INSTANCE);
-    const all = Array.from({ length: 101 }, (_, i) => request({ id: 5000 - i, media: { tmdbId: i + 1 } }));
+    const all = Array.from({ length: P + 1 }, (_, i) => request({ id: 50_000 - i, media: { tmdbId: i + 1 } }));
     mockSeerrClient.getRequests.mockImplementation(({ take, skip }: { take: number; skip: number }) =>
-      Promise.resolve({ results: all.slice(skip, skip + take), pageInfo: { page: 1, pages: 2, results: 101 } }),
+      Promise.resolve({ results: all.slice(skip, skip + take), pageInfo: { page: 1, pages: 2, results: P + 1 } }),
     );
 
     const fractions: number[] = [];
@@ -331,7 +338,7 @@ describe("fetchSeerrMetadata", () => {
   it("propagates a failed walk instead of returning a partial map", async () => {
     // A missing request reads as "never requested" — a partial map fails open.
     mockPrisma.seerrInstance.findMany.mockResolvedValue(ONE_INSTANCE);
-    const firstPage = Array.from({ length: 100 }, (_, i) => request({ id: 900 - i, media: { tmdbId: i + 1 } }));
+    const firstPage = Array.from({ length: P }, (_, i) => request({ id: 9_000 - i, media: { tmdbId: i + 1 } }));
     mockSeerrClient.getRequests
       .mockResolvedValueOnce({ results: firstPage })
       .mockRejectedValueOnce(new Error("Seerr HTTP 502"));
@@ -358,5 +365,82 @@ describe("fetchSeerrMetadata", () => {
     expect(mockSeerrClient.getRequests).toHaveBeenCalledTimes(2);
     expect(result["TMDB:100"]).toMatchObject({ requestCount: 1, requestedBy: ["user1"] });
     expect(result["TMDB:200"]).toMatchObject({ requestCount: 1, requestedBy: ["user2"] });
+  });
+
+  it("merges in instance order even when the newer instance answers first", async () => {
+    mockPrisma.seerrInstance.findMany.mockResolvedValue([
+      { id: "s1", name: "Old", url: "http://seerr1", apiKey: "key1" },
+      { id: "s2", name: "New", url: "http://seerr2", apiKey: "key2" },
+    ]);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let call = 0;
+    mockSeerrClient.getRequests.mockImplementation(async () => {
+      const mine = ++call;
+      if (mine === 1) await gate;
+      return {
+        results: [request({ id: 1, media: { tmdbId: 100 }, requestedBy: { plexUsername: mine === 1 ? "old" : "new" } })],
+      };
+    });
+
+    const pending = fetchSeerrMetadata("u1", "MOVIE");
+    await vi.waitFor(() => expect(call).toBe(2));
+    release();
+    expect((await pending)["TMDB:100"].requestedBy).toEqual(["old", "new"]);
+  });
+});
+
+describe("fetchSeerrMetadataByType", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSeerrClient.getRequests.mockReset();
+  });
+
+  it("reads both types in one unfiltered walk, routing each request by its own type", async () => {
+    mockPrisma.seerrInstance.findMany.mockResolvedValue(ONE_INSTANCE);
+    mockSeerrClient.getRequests.mockResolvedValue({
+      results: [
+        request({ id: 1, type: "movie", media: { tmdbId: 550 }, requestedBy: { plexUsername: "a" } }),
+        request({ id: 2, type: "tv", media: { tmdbId: 550, tvdbId: 77 }, requestedBy: { plexUsername: "b" } }),
+      ],
+    });
+
+    const result = await fetchSeerrMetadataByType("u1", ["MOVIE", "SERIES", "MOVIE"]);
+
+    expect(mockSeerrClient.getRequests).toHaveBeenCalledTimes(1);
+    expect(mockSeerrClient.getRequests).toHaveBeenCalledWith({ take: P, skip: 0 }, {});
+    expect(result.MOVIE!["TMDB:550"].requestedBy).toEqual(["a"]);
+    expect(result.SERIES!["TMDB:550"].requestedBy).toEqual(["b"]);
+    expect(result.SERIES!["TVDB:77"]).toBe(result.SERIES!["TMDB:550"]);
+  });
+
+  it("asks for nothing when no type is wanted", async () => {
+    expect(await fetchSeerrMetadataByType("u1", [])).toEqual({});
+    expect(mockPrisma.seerrInstance.findMany).not.toHaveBeenCalled();
+  });
+});
+
+describe("fetchSeerrMetadataForPreview", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockSeerrClient.getRequests.mockReset();
+    invalidateSeerrMetadataCache();
+    mockPrisma.seerrInstance.findMany.mockResolvedValue(ONE_INSTANCE);
+    mockSeerrClient.getRequests.mockResolvedValue({ results: [request({ id: 1, media: { tmdbId: 1 } })] });
+  });
+
+  it("shares a walk per type until invalidated", async () => {
+    await Promise.all([fetchSeerrMetadataForPreview("u1", "MOVIE"), fetchSeerrMetadataForPreview("u1", "MOVIE")]);
+    const fractions: number[] = [];
+    await fetchSeerrMetadataForPreview("u1", "MOVIE", (f) => fractions.push(f));
+    expect(fractions).toEqual([1]);
+    expect(mockSeerrClient.getRequests).toHaveBeenCalledTimes(1);
+
+    await fetchSeerrMetadataForPreview("u1", "SERIES");
+    expect(mockSeerrClient.getRequests).toHaveBeenCalledTimes(2);
+
+    invalidateSeerrMetadataCache();
+    await fetchSeerrMetadataForPreview("u1", "MOVIE");
+    expect(mockSeerrClient.getRequests).toHaveBeenCalledTimes(3);
   });
 });

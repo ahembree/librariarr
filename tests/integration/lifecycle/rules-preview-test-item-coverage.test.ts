@@ -31,20 +31,24 @@ vi.mock("@/lib/logger", () => ({
   dbLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
+// The routes read through the editor's preview caches (`loadPreviewMetadata`,
+// `fetchArrRecordForPreview`); those are mocked here, and tested on their own.
 const mockFetchArr = vi.hoisted(() => vi.fn());
+const mockFetchArrRecord = vi.hoisted(() => vi.fn());
 const mockFetchSeerr = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/lifecycle/fetch-arr-metadata", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/lifecycle/fetch-arr-metadata")>();
   return {
     ...actual,
-    fetchArrMetadata: mockFetchArr,
+    fetchArrMetadataForPreview: mockFetchArr,
+    fetchArrRecordForPreview: mockFetchArrRecord,
     hasEnabledArrInstances: vi.fn().mockResolvedValue(true),
     resolveArrInstanceScope: vi.fn().mockResolvedValue(null),
   };
 });
 vi.mock("@/lib/lifecycle/fetch-seerr-metadata", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/lifecycle/fetch-seerr-metadata")>();
-  return { ...actual, fetchSeerrMetadata: mockFetchSeerr, hasEnabledSeerrInstances: vi.fn().mockResolvedValue(true) };
+  return { ...actual, fetchSeerrMetadataForPreview: mockFetchSeerr, hasEnabledSeerrInstances: vi.fn().mockResolvedValue(true) };
 });
 
 import { POST as preview } from "@/app/api/lifecycle/rules/preview/route";
@@ -60,6 +64,7 @@ beforeEach(async () => {
   clearMockSession();
   vi.clearAllMocks();
   mockFetchArr.mockResolvedValue({});
+  mockFetchArrRecord.mockResolvedValue({});
   mockFetchSeerr.mockResolvedValue({});
 });
 
@@ -124,7 +129,7 @@ describe("POST /api/lifecycle/rules/test-item", () => {
     const lib = await createTestLibrary(server.id, { type: "MOVIE" });
     const movie = await createTestMediaItem(lib.id, { title: "Heat" });
     await createTestExternalId(movie.id, "TMDB", "949");
-    mockFetchArr.mockResolvedValue({ "949": { arrId: 1, monitored: false, tags: [] } });
+    mockFetchArrRecord.mockResolvedValue({ "949": { arrId: 1, monitored: false, tags: [] } });
     setMockSession({ isLoggedIn: true, userId: user.id });
 
     const body = await expectJson<{ matches: boolean }>(
@@ -133,7 +138,9 @@ describe("POST /api/lifecycle/rules/test-item", () => {
     );
 
     expect(body.matches).toBe(true);
-    expect(mockFetchArr).toHaveBeenCalledWith(user.id, "MOVIE", undefined, "r1");
+    // Only the item's own record is read, not the whole Radarr library.
+    expect(mockFetchArrRecord).toHaveBeenCalledWith(user.id, "MOVIE", "949", "r1", { customFormatScores: false });
+    expect(mockFetchArr).not.toHaveBeenCalled();
   });
 
   it("reads Seerr data for a series, and never for music", async () => {
@@ -253,7 +260,7 @@ describe("POST /api/lifecycle/rules/[id]/diff", () => {
       200,
     );
 
-    expect(mockFetchArr).toHaveBeenCalledWith(user.id, "MOVIE", undefined, "radarr-4k");
+    expect(mockFetchArr).toHaveBeenCalledWith(user.id, "MOVIE", undefined, "radarr-4k", { customFormatScores: false });
     expect(body.added.map((a) => a.id)).toEqual([unmonitored.id]);
     expect(body.removed.map((r) => r.id)).toEqual([monitored.id]);
   });

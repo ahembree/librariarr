@@ -415,7 +415,8 @@ describe("Tracearr integration endpoints", () => {
         }
       );
       const body = await expectJson<{ error: string; detail: string }>(response, 400);
-      expect(body.error).toBe("Failed to connect");
+      // Named like every other type's (this one alone said just "Failed to connect").
+      expect(body.error).toBe("Failed to connect to Tracearr");
       expect(body.detail).toBe("Timeout");
 
       const stored = await getTestPrisma().tracearrInstance.findUnique({

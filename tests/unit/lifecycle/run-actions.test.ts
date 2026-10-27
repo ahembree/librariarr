@@ -180,6 +180,7 @@ describe("executeActionsForItems", () => {
       expect(m.executeAction).toHaveBeenCalledWith(
         expect.objectContaining({ targetTitle: "Breaking Bad S03E10" }),
         undefined,
+        expect.anything(),
       );
       expect(m.prisma.lifecycleAction.create).toHaveBeenCalledWith({
         data: expect.objectContaining({ mediaItemSeasonNumber: 3, mediaItemEpisodeNumber: 10 }),

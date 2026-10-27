@@ -1,16 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { clampSkip } from "@/lib/api/pagination";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { escapeLike } from "@/lib/filters/escape-like";
 import type { Prisma } from "@/generated/prisma/client";
 
-export async function GET(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async (session, request: NextRequest) => {
   const searchParams = request.nextUrl.searchParams;
   const level = searchParams.get("level");
   const source = searchParams.get("source");
@@ -45,11 +40,35 @@ export async function GET(request: NextRequest) {
     where.message = { contains: escapeLike(search), mode: "insensitive" };
   }
 
+  const skip = clampSkip((page - 1) * limit);
+
+  // `count=false` skips the total, which counts every matching row of a table
+  // that only grows — for a reader that already has it, such as the page's
+  // 5-second auto-refresh. The page itself is read one row long instead, so
+  // `hasMore` still says whether another page follows; `total` and `pages`
+  // come back null.
+  if (searchParams.get("count") === "false") {
+    const rows = await prisma.logEntry.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      skip,
+      take: limit + 1,
+    });
+    const hasMore = rows.length > limit;
+    return NextResponse.json({
+      logs: hasMore ? rows.slice(0, limit) : rows,
+      total: null,
+      page,
+      pages: null,
+      hasMore,
+    });
+  }
+
   const [logs, total] = await Promise.all([
     prisma.logEntry.findMany({
       where,
       orderBy: { createdAt: "desc" },
-      skip: clampSkip((page - 1) * limit),
+      skip,
       take: limit,
     }),
     prisma.logEntry.count({ where }),
@@ -60,5 +79,6 @@ export async function GET(request: NextRequest) {
     total,
     page,
     pages: Math.ceil(total / limit),
+    hasMore: skip + logs.length < total,
   });
-}
+});

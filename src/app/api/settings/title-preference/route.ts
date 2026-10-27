@@ -1,17 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { recomputeCanonical } from "@/lib/dedup/recompute-canonical";
 import { invalidateMediaCaches } from "@/lib/cache/invalidate";
 import { eventBus } from "@/lib/events/event-bus";
 import { validateRequest, titlePreferenceSchema } from "@/lib/validation";
 
-export async function GET() {
-  const session = await getSession();
-  if (!session.isLoggedIn || !session.userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async (session) => {
   let settings = await prisma.appSettings.findUnique({
     where: { userId: session.userId },
   });
@@ -26,14 +21,9 @@ export async function GET() {
     preferredTitleServerId: settings.preferredTitleServerId,
     preferredArtworkServerId: settings.preferredArtworkServerId,
   });
-}
+});
 
-export async function PUT(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn || !session.userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const PUT = withSession(async (session, request: NextRequest) => {
   const { data, error } = await validateRequest(request, titlePreferenceSchema);
   if (error) return error;
   const { serverId, field } = data;
@@ -86,4 +76,4 @@ export async function PUT(request: NextRequest) {
     preferredTitleServerId: settings.preferredTitleServerId,
     preferredArtworkServerId: settings.preferredArtworkServerId,
   });
-}
+});

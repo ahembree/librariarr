@@ -87,7 +87,10 @@ describe("POST /api/lifecycle/rules/run", () => {
     const body = await expectJson<{ ruleMatches: unknown[]; skipped: unknown[] }>(response, 200);
 
     expect(mockRunDetection).toHaveBeenCalledWith(user.id, "rs-1", false, expect.any(Array));
-    expect(body.ruleMatches).toEqual(mockResult);
+    // Each rule set and its count, never the matched rows: nothing reads them
+    // (the callers re-read the stored matches), and a library-wide run made
+    // them a 40 MB response.
+    expect(body.ruleMatches).toEqual([{ ruleSet: { id: "rs-1", name: "Unwatched" }, count: 1 }]);
     expect(body.skipped).toEqual([]);
     // Collections are synced from this run's results.
     expect(mockSyncCollectionsAfterDetection).toHaveBeenCalledWith(user.id, "rs-1", mockResult);

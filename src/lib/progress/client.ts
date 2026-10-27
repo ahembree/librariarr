@@ -31,14 +31,24 @@ export async function consumeProgressStream<T>(
   let buffer = "";
   let result: T | undefined;
   let hasResult = false;
+  // A line that is not JSON — a result line the server could not finish
+  // serializing — is remembered rather than thrown at once: the server sends
+  // the reason as an error event on the next line.
+  let unreadable: unknown = null;
 
   const handleLine = (line: string) => {
     const trimmed = line.trim();
     if (!trimmed) return;
-    const event = JSON.parse(trimmed) as
+    let event:
       | ProgressUpdate
       | { type: "result"; result: T }
       | { type: "error"; message: string };
+    try {
+      event = JSON.parse(trimmed);
+    } catch (error) {
+      unreadable ??= error;
+      return;
+    }
     if (event.type === "plan" || event.type === "phase") {
       onProgress(event);
     } else if (event.type === "result") {
@@ -69,6 +79,6 @@ export async function consumeProgressStream<T>(
     reader.cancel().catch(() => {});
   }
 
-  if (!hasResult) throw new Error("Stream ended without a result");
+  if (!hasResult) throw unreadable ?? new Error("Stream ended without a result");
   return result as T;
 }

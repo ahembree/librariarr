@@ -211,8 +211,9 @@ export async function getRawSession(): Promise<IronSession<SessionData>> {
  * honoured. A logged-in session whose `userId` no longer exists, or whose
  * `sessionVersion` no longer matches the row (a credential change, an SSO
  * link/unlink — everything that increments it "to invalidate other
- * sessions"), comes back with `isLoggedIn` false and no `userId`, so every
- * `if (!session.isLoggedIn) return 401` guard downstream refuses it.
+ * sessions"), comes back with `isLoggedIn` false and no `userId`, so
+ * `withSession` (`src/lib/auth/with-session.ts`), and every route that still
+ * checks `isLoggedIn` inline, refuses it with a 401.
  *
  * This lives in `getSession` itself, rather than in a second helper the
  * routes would have to remember to call, because the check was previously

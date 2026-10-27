@@ -423,4 +423,48 @@ describe("GET /api/media/search", () => {
     );
     expect(body.items.map((i) => [i.title, i.itemCount])).toEqual([["Night Show", 3]]);
   });
+
+  describe("several types in one request (types=)", () => {
+    async function library() {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const movies = await createTestLibrary(server.id, { type: "MOVIE" });
+      const shows = await createTestLibrary(server.id, { type: "SERIES" });
+      const music = await createTestLibrary(server.id, { type: "MUSIC" });
+      await createTestMediaItem(movies.id, { type: "MOVIE", title: "Night Train" });
+      await createTestMediaItem(shows.id, { type: "SERIES", title: "Pilot", parentTitle: "Night Shift", seasonNumber: 1, episodeNumber: 1 });
+      await createTestMediaItem(shows.id, { type: "SERIES", title: "Two", parentTitle: "Night Shift", seasonNumber: 1, episodeNumber: 2 });
+      await createTestMediaItem(music.id, { type: "MUSIC", title: "Song", parentTitle: "Nightwish", albumTitle: "Oceanborn" });
+      setMockSession({ userId: user.id, isLoggedIn: true });
+    }
+
+    const search = (searchParams: Record<string, string>) =>
+      callRoute(GET, { url: "/api/media/search", searchParams });
+
+    it("answers each type exactly as its own request does, as the command palette asks for them", async () => {
+      await library();
+      const combined = await expectJson<{ results: Record<string, unknown[]> }>(
+        await search({ q: "night", types: "MOVIE,SERIES,MUSIC", seriesScope: "true", musicScope: "true" }),
+        200,
+      );
+      expect(Object.keys(combined.results)).toEqual(["MOVIE", "SERIES", "MUSIC"]);
+
+      const one = async (params: Record<string, string>) =>
+        (await expectJson<{ items: unknown[] }>(await search({ q: "night", ...params }), 200)).items;
+      expect(combined.results.MOVIE).toEqual(await one({ type: "MOVIE" }));
+      expect(combined.results.SERIES).toEqual(await one({ type: "SERIES", seriesScope: "true" }));
+      expect(combined.results.MUSIC).toEqual(await one({ type: "MUSIC", musicScope: "true" }));
+      expect(combined.results.SERIES).toHaveLength(1);
+      expect(combined.results.MUSIC).toHaveLength(1);
+    });
+
+    it("answers empty lists for an empty query, and 400 for an unknown or missing type", async () => {
+      await library();
+      expect(await expectJson(await search({ q: " ", types: "MOVIE,MUSIC" }), 200)).toEqual({
+        results: { MOVIE: [], MUSIC: [] },
+      });
+      await expectJson(await search({ q: "night", types: "MOVIE,BOOK" }), 400);
+      await expectJson(await search({ q: "night", types: "" }), 400);
+    });
+  });
 });

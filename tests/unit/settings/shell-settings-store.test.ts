@@ -153,6 +153,35 @@ describe("createShellSettingsStore", () => {
       await expect(third).resolves.toBe("saved");
     });
 
+    it("asks for the newer settings again when the refresh after a 409 failed", async () => {
+      const store = createShellSettingsStore(initial);
+      const first = store.saveDashboardLayout(layoutWith("genre"));
+      await settle();
+      answer(0, 409, { code: "stale_revision", revision: 7 });
+      await expect(first).resolves.toBe("conflict");
+      await settle();
+      answer(1, 500);
+      await settle();
+
+      // Still refused, but it asks again rather than refusing every save forever.
+      const second = store.saveDashboardLayout(layoutWith("year"));
+      await expect(second).resolves.toBe("conflict");
+      await settle();
+      expect(calls.map((c) => `${c.method} ${c.url}`)).toEqual([
+        "PUT /api/settings/dashboard-layout",
+        `GET ${SHELL_SETTINGS_URL}`,
+        `GET ${SHELL_SETTINGS_URL}`,
+      ]);
+      answer(2, 200, { ...initial, dashboardLayoutRevision: 7 });
+      await settle();
+
+      const third = store.saveDashboardLayout(layoutWith("year"));
+      await settle();
+      expect(calls[3].body).toEqual({ layout: layoutWith("year"), revision: 7 });
+      answer(3, 200, { revision: 8 });
+      await expect(third).resolves.toBe("saved");
+    });
+
     it("reports a refused or unreachable save as failed and keeps the edit on screen", async () => {
       const store = createShellSettingsStore(initial);
       const refused = store.saveDashboardLayout(layoutWith("genre"));

@@ -8,8 +8,9 @@ import { storeDashboardLayout } from "./seed";
  *
  * Covers: the dialog only offering combinations the routes accept (a timeline
  * "Color By" the route can express, a heatmap pair the cross-tab can cross),
- * and a card whose data fails to load showing an error rather than "No data"
- * or the previous config's data under its new title.
+ * every card's data arriving in one batch request, and a card whose data
+ * fails to load showing an error rather than "No data" or the previous
+ * config's data under its new title.
  */
 
 type Layout = { main: unknown[]; movies: unknown[]; series: unknown[]; music: unknown[] };
@@ -32,6 +33,23 @@ async function stubLayout(page: Page, main: unknown[]) {
       route.request().method() === "GET"
         ? route.fulfill({ json: { layout } })
         : route.fulfill({ json: { layout: route.request().postDataJSON()?.layout ?? layout } }),
+  );
+}
+
+type BatchCard = { kind: "timeline" | "crossTab" | "custom"; [key: string]: unknown };
+
+/**
+ * Every custom card's data comes from one `POST /api/media/stats/custom-batch`
+ * (`{ cards }` → `{ cards: [{ status, body }] }`, in order); `answer` gives
+ * each card's entry, as its own route would have answered it.
+ */
+async function stubCardData(page: Page, answer: (card: BatchCard) => { status: number; body: unknown }) {
+  await page.route(
+    (url) => url.pathname === "/api/media/stats/custom-batch",
+    (route: Route) => {
+      const { cards } = route.request().postDataJSON() as { cards: BatchCard[] };
+      return route.fulfill({ json: { cards: cards.map(answer) } });
+    },
   );
 }
 
@@ -76,6 +94,32 @@ test.describe("dashboard custom cards", () => {
     await expect(page.getByRole("option", { name: "Audio Language", exact: true })).toHaveCount(0);
   });
 
+  test("every custom card's data comes in one request", async ({ page }) => {
+    await stubLayout(page, [
+      { id: "custom-e2e-heatmap", size: 4, config: { chartType: "heatmap", dimension: "resolution", dimension2: "videoCodec" } },
+      { id: "custom-e2e-timeline", size: 4, config: { chartType: "timeline", dimension: "addedAt", timelineBin: "year" } },
+      { id: "custom-e2e-pie", size: 4, config: { chartType: "pie", dimension: "genre" } },
+    ]);
+    const batches: BatchCard["kind"][][] = [];
+    let ownRoutes = 0;
+    page.on("request", (req) => {
+      const path = new URL(req.url()).pathname;
+      if (path === "/api/media/stats/custom-batch") {
+        batches.push((req.postDataJSON() as { cards: BatchCard[] }).cards.map((c) => c.kind));
+      } else if (["/api/media/stats/timeline", "/api/media/stats/cross-tab", "/api/media/stats/custom"].includes(path)) {
+        ownRoutes++;
+      }
+    });
+    await page.goto("/");
+
+    for (const title of ["Resolution vs Video Codec", "Added Date Timeline", "Genre Breakdown"]) {
+      await expect(page.getByText(title)).toBeVisible();
+    }
+    await expect.poll(() => batches.length).toBe(1);
+    expect([...batches[0]].sort()).toEqual(["crossTab", "custom", "timeline"]);
+    expect(ownRoutes).toBe(0);
+  });
+
   test("a card whose data fails to load says so", async ({ page }) => {
     await stubLayout(page, [
       {
@@ -84,9 +128,9 @@ test.describe("dashboard custom cards", () => {
         config: { chartType: "heatmap", dimension: "resolution", dimension2: "videoCodec" },
       },
     ]);
-    await page.route(
-      (url) => url.pathname === "/api/media/stats/cross-tab",
-      (route) => route.fulfill({ status: 500, json: { error: "boom" } }),
+    // The batch answers; the card's own entry is the cross-tab's failure.
+    await stubCardData(page, (card) =>
+      card.kind === "crossTab" ? { status: 500, body: { error: "boom" } } : { status: 200, body: {} },
     );
     await page.goto("/");
 
@@ -104,18 +148,14 @@ test.describe("dashboard custom cards", () => {
       },
     ]);
     let calls = 0;
-    await page.route(
-      (url) => url.pathname === "/api/media/stats/cross-tab",
-      (route) => {
-        calls++;
-        // Resolution comes back as its display bin, as `computeCrossTab` maps it.
-        return calls === 1
-          ? route.fulfill({
-              json: { rows: [{ dim1: "1080P", dim2: "h264", type: "MOVIE", _count: 42 }] },
-            })
-          : route.fulfill({ status: 500, json: { error: "boom" } });
-      },
-    );
+    await stubCardData(page, (card) => {
+      if (card.kind !== "crossTab") return { status: 200, body: {} };
+      calls++;
+      // Resolution comes back as its display bin, as `computeCrossTab` maps it.
+      return calls === 1
+        ? { status: 200, body: { rows: [{ dim1: "1080P", dim2: "h264", type: "MOVIE", _count: 42 }] } }
+        : { status: 500, body: { error: "boom" } };
+    });
     await page.goto("/");
     const card = page.locator('[data-slot="card"]', { hasText: "custom chart" });
     await expect(card.getByText("Resolution vs Video Codec")).toBeVisible();

@@ -1,15 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { validateRequest, columnPreferencesSchema } from "@/lib/validation";
 import { announceDisplaySettingsChanged, staleRevisionBody } from "@/lib/settings/display-settings-events";
 
-export async function GET() {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async (session) => {
   const settings = await prisma.appSettings.findUnique({
     where: { userId: session.userId },
     select: { columnPreferences: true, columnPreferencesRevision: true },
@@ -19,7 +14,7 @@ export async function GET() {
     preferences: settings?.columnPreferences ?? null,
     revision: settings?.columnPreferencesRevision ?? 0,
   });
-}
+});
 
 // A save without a revision retries this many times when another save lands
 // between its read and its write; one with a revision answers 409 instead.
@@ -30,17 +25,12 @@ const UNCONDITIONAL_ATTEMPTS = 3;
  * carrying `revision` is saved only while the stored revision still equals it
  * (409 otherwise), so a stale tab or device cannot overwrite a newer list.
  */
-export async function PUT(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const PUT = withSession(async (session, request: NextRequest) => {
   const { data, error } = await validateRequest(request, columnPreferencesSchema);
   if (error) return error;
 
   const { type, columns, revision } = data;
-  const userId = session.userId!;
+  const userId = session.userId;
 
   for (let attempt = 0; attempt < UNCONDITIONAL_ATTEMPTS; attempt++) {
     const settings = await prisma.appSettings.findUnique({
@@ -81,7 +71,7 @@ export async function PUT(request: NextRequest) {
     staleRevisionBody("column selection", current?.columnPreferencesRevision ?? 0),
     { status: 409 },
   );
-}
+});
 
 function saved(userId: string, revision: number) {
   announceDisplaySettingsChanged(userId);

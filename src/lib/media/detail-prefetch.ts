@@ -150,6 +150,35 @@ export function seerrInfoUrl(id: string): string {
 }
 
 /**
+ * The list a grouped detail page shows under its record: a show's seasons, a
+ * season's episodes, an album's tracks, an artist's albums.
+ */
+export type DetailChildList = "seasons" | "episodes" | "tracks" | "albums";
+
+/**
+ * A detail page's child list, named by the page's own id (`?itemId=`). The
+ * routes read the series, season, album or artist from that record
+ * themselves, so the list is asked for beside the record instead of after it
+ * arrives — the pages built the URL from the record's fields and so waited a
+ * whole round trip. The episode and track lists keep the order and the
+ * `limit=0` the pages always sent (a parent bounds them; there is nothing to
+ * page).
+ */
+export function detailChildrenUrl(kind: DetailChildList, id: string): string {
+  const itemId = encodeURIComponent(id);
+  switch (kind) {
+    case "seasons":
+      return `/api/media/series/seasons?itemId=${itemId}`;
+    case "episodes":
+      return `/api/media/series?itemId=${itemId}&sortBy=episodeNumber&sortOrder=asc&limit=0`;
+    case "tracks":
+      return `/api/media/music?itemId=${itemId}&sortBy=episodeNumber&sortOrder=asc&limit=0`;
+    case "albums":
+      return `/api/media/music/albums?itemId=${itemId}`;
+  }
+}
+
+/**
  * Forget what a change to the media can make stale: item records (titles,
  * streams, play counts) and play history pages. The Arr and Seerr matches are
  * kept — a library sync or a new play changes neither, and they are the costly
@@ -168,15 +197,25 @@ export function prefetchMediaRecord(id: string): void {
 /**
  * Everything a detail page reads that needs only the id, started together.
  * `plays` is the per-item play history (movie and track pages; an episode's is
- * scoped by series identity, which only its record carries). Seerr knows no
- * music.
+ * scoped by series identity, which only its record carries). `integrations`
+ * (default true) is the Arr/Seerr cards, which a grouped artist view does not
+ * show. Seerr knows no music. `children` is the page's child list
+ * (`detailChildrenUrl`), which the show, season, artist and album pages list.
  */
 export function prefetchMediaDetail(
   id: string,
-  options: { mediaType: "MOVIE" | "SERIES" | "MUSIC"; plays: boolean },
+  options: {
+    mediaType: "MOVIE" | "SERIES" | "MUSIC";
+    plays: boolean;
+    integrations?: boolean;
+    children?: DetailChildList;
+  },
 ): void {
   detailPrefetch.prefetch(mediaRecordUrl(id));
-  detailPrefetch.prefetch(arrInfoUrl(id));
-  if (options.mediaType !== "MUSIC") detailPrefetch.prefetch(seerrInfoUrl(id));
+  if (options.children) detailPrefetch.prefetch(detailChildrenUrl(options.children, id));
+  if (options.integrations !== false) {
+    detailPrefetch.prefetch(arrInfoUrl(id));
+    if (options.mediaType !== "MUSIC") detailPrefetch.prefetch(seerrInfoUrl(id));
+  }
   if (options.plays) detailPrefetch.prefetch(mediaPlaysUrl(id, 1));
 }

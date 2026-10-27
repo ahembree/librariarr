@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { enqueueJob, queuedSyncJobIds } from "@/lib/jobs/client";
 import { eventBus } from "@/lib/events/event-bus";
@@ -11,12 +11,7 @@ import {
 } from "@/lib/jobs/constants";
 import { validateRequest, syncByTypeSchema } from "@/lib/validation";
 
-export async function POST(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const POST = withSession(async (session, request: NextRequest) => {
   const { data, error } = await validateRequest(request, syncByTypeSchema);
   if (error) return error;
 
@@ -139,11 +134,11 @@ export async function POST(request: NextRequest) {
     // so running it once per library would repeat the same work N times), which
     // leaves them writing `MediaItem.playCount`/`lastPlayedAt` from
     // *account-scoped* item metadata only — the admin token's own views on Plex,
-    // and nothing at all on Jellyfin/Emby (`getWatchCounts()` returns an empty
-    // map by design). Without the follow-up refresh below, a library synced from
-    // this route reports the owner's last play instead of the household's most
-    // recent one everywhere those columns are read: the hover card, the Last
-    // Played column, and the `Series Last Played` rule/query criterion.
+    // and the admin user's `UserData` on Jellyfin/Emby. Without the follow-up
+    // refresh below, a library synced from this route reports the owner's last
+    // play instead of the household's most recent one everywhere those columns
+    // are read: the hover card, the Last Played column, and the `Series Last
+    // Played` rule/query criterion.
     //
     // MAIN_QUEUE is serial and ordered by priority, then enqueue time, so this
     // (default priority) runs *after* every library job for the server has
@@ -157,7 +152,7 @@ export async function POST(request: NextRequest) {
       { jobKey: `watch-history:${server.id}`, queueName: MAIN_QUEUE, maxAttempts: 3 },
     );
 
-    eventBus.emit({ type: "sync:started", userId: session.userId!, meta: { serverId: server.id } });
+    eventBus.emit({ type: "sync:started", userId: session.userId, meta: { serverId: server.id } });
     syncedCount++;
   }
 
@@ -166,4 +161,4 @@ export async function POST(request: NextRequest) {
     syncedCount,
     skippedCount,
   });
-}
+});

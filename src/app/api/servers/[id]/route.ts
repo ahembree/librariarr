@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { createMediaServerClient } from "@/lib/media-server/factory";
 import { apiLogger } from "@/lib/logger";
@@ -14,18 +14,13 @@ import {
 } from "@/lib/media/watch-evidence";
 import { hasRecentLogin } from "@/lib/auth/recent-login";
 import { reauthRequired } from "@/lib/auth/reauth";
+import { stripTrailingSlashes } from "@/lib/url-normalize";
 
-const withoutTrailingSlash = (value: string) => value.replace(/\/+$/, "");
-
-export async function PUT(
+export const PUT = withSession(async (
+  session,
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+) => {
   const { id } = await params;
 
   const server = await prisma.mediaServer.findFirst({
@@ -57,7 +52,7 @@ export async function PUT(
   if (tracearrMappingChanged && tracearrServerId) {
     const taken = await prisma.mediaServer.findFirst({
       where: {
-        userId: session.userId!,
+        userId: session.userId,
         tracearrServerId,
         id: { not: server.id },
       },
@@ -85,12 +80,12 @@ export async function PUT(
   // at the URL, and the default one onboarding picks is the remote
   // plex.direct address. Sending a replacement token, or re-saving the same
   // settings (the edit form always sends the URL), needs nothing.
-  const urlChanged = url !== undefined && withoutTrailingSlash(url) !== withoutTrailingSlash(server.url);
+  const urlChanged = url !== undefined && stripTrailingSlashes(url) !== stripTrailingSlashes(server.url);
   const turnsTlsChecksOff = tlsSkipVerify === true && !server.tlsSkipVerify;
   const keepsStoredToken = accessToken === undefined || accessToken === "";
   if ((urlChanged || turnsTlsChecksOff) && keepsStoredToken && !hasRecentLogin(session)) {
     return reauthRequired(
-      session.userId!,
+      session.userId,
       urlChanged ? "Changing a media server's URL" : "Turning off certificate checks for a media server",
     );
   }
@@ -234,26 +229,22 @@ export async function PUT(
   // toggled server must be re-canonicalized to a still-enabled copy (otherwise
   // they vanish from multi-server listings). Also covers the delete-data path.
   if (enabled !== undefined) {
-    await recomputeCanonical(session.userId!);
+    await recomputeCanonical(session.userId);
     invalidateMediaCaches();
   }
 
   // Reconcile the realtime WebSocket: an enable/disable, url/token, or TLS
   // change all affect whether/how we connect to this server.
-  eventBus.emit({ type: "server:changed", userId: session.userId!, meta: { serverId: server.id } });
+  eventBus.emit({ type: "server:changed", userId: session.userId, meta: { serverId: server.id } });
 
   return NextResponse.json({ server: sanitize(updated) });
-}
+});
 
-export async function DELETE(
+export const DELETE = withSession(async (
+  session,
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+) => {
   const { id } = await params;
 
   const server = await prisma.mediaServer.findFirst({
@@ -266,7 +257,7 @@ export async function DELETE(
 
   const { searchParams } = new URL(request.url);
   const deleteData = searchParams.get("deleteData") === "true";
-  const userId = session.userId!;
+  const userId = session.userId;
 
   // Query libraries before server deletion (needed for lifecycle cleanup in both paths;
   // after deletion the SetNull cascade clears mediaServerId so we can't identify them)
@@ -348,4 +339,4 @@ export async function DELETE(
   eventBus.emit({ type: "server:changed", userId, meta: { serverId: server.id } });
 
   return NextResponse.json({ success: true });
-}
+});

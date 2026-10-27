@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { createMediaServerClient } from "@/lib/media-server/factory";
 import { apiLogger } from "@/lib/logger";
+import type { Prisma } from "@/generated/prisma/client";
 
 interface ServerHistory {
   serverId: string;
@@ -15,24 +16,31 @@ interface ServerHistory {
   }[];
 }
 
-export async function GET(
-  _request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const { id } = await params;
-
-  const item = await prisma.mediaItem.findFirst({
-    where: { id, library: { mediaServer: { userId: session.userId } } },
-    include: {
-      library: {
-        include: { mediaServer: true },
+const COPY_SELECT = {
+  ratingKey: true,
+  duration: true,
+  library: {
+    select: {
+      mediaServer: {
+        select: { id: true, name: true, type: true, url: true, accessToken: true, tlsSkipVerify: true },
       },
     },
+  },
+} satisfies Prisma.MediaItemSelect;
+
+export const GET = withSession(async (
+  session,
+  _request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) => {
+  const { id } = await params;
+
+  // Only what the live lookup needs: each copy's rating key and duration, and
+  // its server's connection. Both reads loaded whole item rows (summaries,
+  // cast lists) and whole server rows to use six of their columns.
+  const item = await prisma.mediaItem.findFirst({
+    where: { id, library: { mediaServer: { userId: session.userId } } },
+    select: { dedupKey: true, ...COPY_SELECT },
   });
 
   if (!item) {
@@ -50,9 +58,7 @@ export async function GET(
           dedupKey: item.dedupKey,
           library: { mediaServer: { userId: session.userId, enabled: true } },
         },
-        include: {
-          library: { include: { mediaServer: true } },
-        },
+        select: COPY_SELECT,
       })
     : [item];
 
@@ -146,4 +152,4 @@ export async function GET(
     .sort((a, b) => b.playCount - a.playCount);
 
   return NextResponse.json({ history, serverHistories });
-}
+});

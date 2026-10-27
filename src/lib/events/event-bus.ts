@@ -3,6 +3,11 @@ import { logger } from "@/lib/logger";
 
 export type AppEventType =
   | "sync:started"
+  /**
+   * A sync finished and changed the dataset (`meta`: `SyncCompletedMeta` —
+   * `serverId`, and `libraryTypes` when the run knows which library types it
+   * touched; absent means "refetch as before").
+   */
   | "sync:completed"
   /**
    * A running sync committed a batch (`meta.serverId`).

@@ -1,8 +1,10 @@
 import axios from "axios";
 import { prisma } from "@/lib/db";
-import { RadarrClient } from "@/lib/arr/radarr-client";
-import { SonarrClient } from "@/lib/arr/sonarr-client";
-import { LidarrClient, type LidarrTrack } from "@/lib/arr/lidarr-client";
+import { RadarrClient, type RadarrMovie } from "@/lib/arr/radarr-client";
+import { SonarrClient, type SonarrSeries } from "@/lib/arr/sonarr-client";
+import { LidarrClient, type LidarrArtist, type LidarrTrack } from "@/lib/arr/lidarr-client";
+import type { ArrClientBase, ArrTag } from "@/lib/arr/arr-client-base";
+import { familyOfArrInstance, findArrInstance, type ArrFamily } from "@/lib/arr/instances";
 import { logger } from "@/lib/logger";
 import { sanitizeErrorDetail } from "@/lib/api/sanitize";
 import { actionHonorsMemberIds, deletesArrRecord, formatActionLabel, supportsSearchAfter } from "@/lib/lifecycle/action-types";
@@ -185,112 +187,221 @@ export function validateArrItem(
   );
 }
 
-// --- Arr resolution helpers ---
+// --- Arr adapters ---
+//
+// What differs between Radarr, Sonarr and Lidarr for the steps every family
+// shares — resolving the item's record (with title validation), tags, the
+// quality-profile change, a search and the rule-set tag cleanup — so those
+// steps are written once. The member-scoped file deletes stay per family:
+// episodes and tracks are resolved in genuinely different ways.
 
-async function resolveRadarrMovie(action: ActionRecord) {
-  if (!action.arrInstanceId) throw new Error("No Arr instance configured");
-  const instance = await prisma.radarrInstance.findUnique({
-    where: { id: action.arrInstanceId },
-  });
-  if (!instance) throw new Error("Radarr instance not found");
-  if (!instance.enabled) throw new Error("Radarr instance is disabled");
-
-  const client = new RadarrClient(instance.url, instance.apiKey);
-  const tmdbId = action.mediaItem.externalIds.find((e) => e.source === "TMDB");
-  if (!tmdbId) throw new Error("No TMDB ID found for item");
-
-  const movie = await client.getMovieByTmdbId(parseInt(tmdbId.externalId));
-  if (!movie) throw new Error("Movie not found in Radarr");
-
-  if (!action.skipTitleValidation) {
-    validateArrItem(action.mediaItem.parentTitle ?? action.mediaItem.title, movie.title, "Radarr movie", tmdbId.externalId, action.mediaItem.year, movie.year);
-  }
-
-  return { client, movie };
+interface ArrRecord {
+  id: number;
+  tags: number[];
+  qualityProfileId: number;
+  monitored: boolean;
 }
 
-async function resolveSonarrSeries(action: ActionRecord) {
-  if (!action.arrInstanceId) throw new Error("No Arr instance configured");
-  const instance = await prisma.sonarrInstance.findUnique({
-    where: { id: action.arrInstanceId },
-  });
-  if (!instance) throw new Error("Sonarr instance not found");
-  if (!instance.enabled) throw new Error("Sonarr instance is disabled");
-
-  const client = new SonarrClient(instance.url, instance.apiKey);
-  const tvdbId = action.mediaItem.externalIds.find((e) => e.source === "TVDB");
-  if (!tvdbId) throw new Error("No TVDB ID found for item");
-
-  const series = await client.getSeriesByTvdbId(parseInt(tvdbId.externalId));
-  if (!series) throw new Error("Series not found in Sonarr");
-
-  if (!action.skipTitleValidation) {
-    // `action.mediaItem.year` is the EPISODE air year (episodes are stored as
-    // individual MediaItem rows), but Sonarr returns the SERIES premiere year —
-    // so use the one-directional series year guard, not the symmetric one.
-    validateArrItem(action.mediaItem.parentTitle ?? action.mediaItem.title, series.title, "Sonarr series", tvdbId.externalId, action.mediaItem.year, series.year, "episodeOfSeries");
-  }
-
-  return { client, series };
+interface ArrItemAdapter<C extends ArrClientBase, R extends ArrRecord> {
+  label: "Radarr" | "Sonarr" | "Lidarr";
+  /** The external id the record is looked up by. */
+  idSource: "TMDB" | "TVDB" | "MUSICBRAINZ";
+  missingIdError: string;
+  notFoundError: string;
+  createClient(url: string, apiKey: string): C;
+  lookup(client: C, externalId: string): Promise<R | null>;
+  /** Throws when the record is not the item's work (see `validateArrItem`). */
+  validate(action: ActionRecord, record: R, externalId: string): void;
+  name(record: R): string;
+  /** PUT `patch` over `record` — already read, so not read again first. */
+  update(client: C, record: R, patch: Partial<R>): Promise<R>;
+  list(client: C): Promise<R[]>;
+  removeTags(client: C, ids: number[], tagIds: number[]): Promise<void>;
+  /** The search a Search or Change Quality Profile action triggers. */
+  search(client: C, record: R): Promise<void>;
 }
 
-async function resolveLidarrArtist(action: ActionRecord) {
-  if (!action.arrInstanceId) throw new Error("No Arr instance configured");
-  const instance = await prisma.lidarrInstance.findUnique({
-    where: { id: action.arrInstanceId },
-  });
-  if (!instance) throw new Error("Lidarr instance not found");
-  if (!instance.enabled) throw new Error("Lidarr instance is disabled");
+const expectedTitle = (action: ActionRecord) => action.mediaItem.parentTitle ?? action.mediaItem.title;
 
-  const client = new LidarrClient(instance.url, instance.apiKey);
-  const mbId = action.mediaItem.externalIds.find((e) => e.source === "MUSICBRAINZ");
-  if (!mbId) throw new Error("No MusicBrainz ID found for item");
+const RADARR: ArrItemAdapter<RadarrClient, RadarrMovie> = {
+  label: "Radarr",
+  idSource: "TMDB",
+  missingIdError: "No TMDB ID found for item",
+  notFoundError: "Movie not found in Radarr",
+  createClient: (url, apiKey) => new RadarrClient(url, apiKey),
+  lookup: (client, id) => client.getMovieByTmdbId(parseInt(id)),
+  validate: (action, movie, id) =>
+    validateArrItem(expectedTitle(action), movie.title, "Radarr movie", id, action.mediaItem.year, movie.year),
+  name: (movie) => movie.title,
+  update: (client, movie, patch) => client.updateMovie(movie.id, patch, movie),
+  list: (client) => client.getMovies(),
+  removeTags: (client, ids, tagIds) => client.removeTagsFromMovies(ids, tagIds),
+  search: (client, movie) => client.triggerMovieSearch(movie.id),
+};
 
-  const artist = await client.getArtistByMusicBrainzId(mbId.externalId);
-  if (!artist) throw new Error("Artist not found in Lidarr");
+const SONARR: ArrItemAdapter<SonarrClient, SonarrSeries> = {
+  label: "Sonarr",
+  idSource: "TVDB",
+  missingIdError: "No TVDB ID found for item",
+  notFoundError: "Series not found in Sonarr",
+  createClient: (url, apiKey) => new SonarrClient(url, apiKey),
+  lookup: (client, id) => client.getSeriesByTvdbId(parseInt(id)),
+  // `action.mediaItem.year` is the EPISODE air year (episodes are stored as
+  // individual MediaItem rows), but Sonarr returns the SERIES premiere year —
+  // so use the one-directional series year guard, not the symmetric one.
+  validate: (action, series, id) =>
+    validateArrItem(expectedTitle(action), series.title, "Sonarr series", id, action.mediaItem.year, series.year, "episodeOfSeries"),
+  name: (series) => series.title,
+  update: (client, series, patch) => client.updateSeries(series.id, patch, series),
+  list: (client) => client.getSeries(),
+  removeTags: (client, ids, tagIds) => client.removeTagsFromSeries(ids, tagIds),
+  search: (client, series) => client.triggerSeriesSearch(series.id),
+};
 
-  if (!action.skipTitleValidation) {
-    validateArrItem(action.mediaItem.parentTitle ?? action.mediaItem.title, artist.artistName, "Lidarr artist", mbId.externalId);
+const LIDARR: ArrItemAdapter<LidarrClient, LidarrArtist> = {
+  label: "Lidarr",
+  idSource: "MUSICBRAINZ",
+  missingIdError: "No MusicBrainz ID found for item",
+  notFoundError: "Artist not found in Lidarr",
+  createClient: (url, apiKey) => new LidarrClient(url, apiKey),
+  lookup: (client, id) => client.getArtistByMusicBrainzId(id),
+  validate: (action, artist, id) => validateArrItem(expectedTitle(action), artist.artistName, "Lidarr artist", id),
+  name: (artist) => artist.artistName,
+  update: (client, artist, patch) => client.updateArtist(artist.id, patch, artist),
+  list: (client) => client.getArtists(),
+  removeTags: (client, ids, tagIds) => client.removeTagsFromArtists(ids, tagIds),
+  search: (client, artist) => client.triggerArtistSearch(artist.id),
+};
+
+// The adapters are used by family through this map, which erases the record
+// type; each one is only ever handed records its own `lookup` returned.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type AnyArrAdapter = ArrItemAdapter<any, any>;
+const ADAPTERS: Record<ArrFamily, AnyArrAdapter> = { RADARR, SONARR, LIDARR };
+
+/** The family an action type acts on, from its suffix; null for DO_NOTHING. */
+function familyOfActionType(actionType: string): ArrFamily | null {
+  if (actionType.endsWith("_RADARR")) return "RADARR";
+  if (actionType.endsWith("_SONARR")) return "SONARR";
+  if (actionType.endsWith("_LIDARR")) return "LIDARR";
+  return null;
+}
+
+// --- Execution context ---
+
+/**
+ * What one execution run looks up once rather than per action: which Arr
+ * family an instance id belongs to (immutable — ids are per table) and each
+ * instance's tag list (one GET, where every action used to read it again).
+ * The instance row itself is still read per action, so an instance disabled
+ * or deleted mid-run stops being acted on at once.
+ *
+ * Pass one to `executeAction` for every action of a run; without one each
+ * call reads for itself, as before.
+ */
+export class ArrExecutionContext {
+  private readonly families = new Map<string, Promise<ArrFamily | null>>();
+  private readonly tagLists = new Map<string, Promise<ArrTag[]>>();
+
+  familyOf(instanceId: string): Promise<ArrFamily | null> {
+    let pending = this.families.get(instanceId);
+    if (!pending) {
+      pending = familyOfArrInstance(instanceId).then((found) => found?.family ?? null);
+      this.families.set(instanceId, pending);
+    }
+    return pending;
   }
 
-  return { client, artist };
+  /** The instance's tags. A failed read is not kept: the next action asks again. */
+  tags(instanceId: string, client: ArrClientBase): Promise<ArrTag[]> {
+    let pending = this.tagLists.get(instanceId);
+    if (!pending) {
+      pending = client.getTags();
+      this.tagLists.set(instanceId, pending);
+      pending.catch(() => {
+        if (this.tagLists.get(instanceId) === pending) this.tagLists.delete(instanceId);
+      });
+    }
+    return pending;
+  }
+
+  /** A tag this run created, so the next action finds it instead of creating it again. */
+  async rememberTag(instanceId: string, tag: ArrTag): Promise<void> {
+    const pending = this.tagLists.get(instanceId);
+    if (pending) (await pending).push(tag);
+  }
+}
+
+/**
+ * The record one action resolves to, read once and kept for the action's
+ * later steps (tags first, then the main action). A step's PUT replaces it,
+ * so a later PUT sends the tags the earlier one wrote rather than the record
+ * as first read.
+ */
+class ActionArrSession {
+  private resolved: { family: ArrFamily; client: ArrClientBase; record: ArrRecord } | null = null;
+
+  constructor(
+    private readonly action: ActionRecord,
+    readonly ctx: ArrExecutionContext,
+  ) {}
+
+  async resolve<C extends ArrClientBase, R extends ArrRecord>(
+    family: ArrFamily,
+  ): Promise<{ client: C; record: R; adapter: ArrItemAdapter<C, R> }> {
+    const adapter = ADAPTERS[family] as ArrItemAdapter<C, R>;
+    if (this.resolved?.family === family) {
+      return { client: this.resolved.client as C, record: this.resolved.record as R, adapter };
+    }
+    const { action } = this;
+    if (!action.arrInstanceId) throw new Error("No Arr instance configured");
+    const instance = await findArrInstance(family, { id: action.arrInstanceId });
+    if (!instance) throw new Error(`${adapter.label} instance not found`);
+    if (!instance.enabled) throw new Error(`${adapter.label} instance is disabled`);
+
+    const client = adapter.createClient(instance.url, instance.apiKey);
+    const externalId = action.mediaItem.externalIds.find((e) => e.source === adapter.idSource);
+    if (!externalId) throw new Error(adapter.missingIdError);
+
+    const record = await adapter.lookup(client, externalId.externalId);
+    if (!record) throw new Error(adapter.notFoundError);
+
+    if (!action.skipTitleValidation) adapter.validate(action, record, externalId.externalId);
+
+    this.resolved = { family, client, record };
+    return { client, record, adapter };
+  }
+
+  /** PUT `patch` over the resolved record and keep what the app now holds. */
+  async update<R extends ArrRecord>(family: ArrFamily, patch: Partial<R>): Promise<R> {
+    const { client, record, adapter } = await this.resolve<ArrClientBase, R>(family);
+    const answer = await adapter.update(client, record, patch);
+    // The app answers a PUT with the whole record; anything less (a proxy, an
+    // older version) still leaves the record as sent.
+    const next = answer && typeof answer.id === "number" ? answer : ({ ...record, ...patch } as R);
+    this.resolved = { family, client, record: next };
+    return next;
+  }
 }
 
 // --- Tag operations ---
 
-async function executeTagOperations(action: ActionRecord): Promise<void> {
+async function executeTagOperations(session: ActionArrSession, action: ActionRecord): Promise<void> {
   if (!action.arrInstanceId) throw new Error("No Arr instance configured for tag operations");
 
-  const actionType = action.actionType;
-  const isRadarr = actionType.endsWith("_RADARR") || actionType === "DO_NOTHING";
-  const isSonarr = actionType.endsWith("_SONARR");
-  const isLidarr = actionType.endsWith("_LIDARR");
-
-  // Determine Arr type from instance if actionType is DO_NOTHING
-  if (actionType === "DO_NOTHING") {
-    const [radarr, sonarr, lidarr] = await Promise.all([
-      prisma.radarrInstance.findUnique({ where: { id: action.arrInstanceId! } }),
-      prisma.sonarrInstance.findUnique({ where: { id: action.arrInstanceId! } }),
-      prisma.lidarrInstance.findUnique({ where: { id: action.arrInstanceId! } }),
-    ]);
-    if (radarr) return executeRadarrTagOps(action);
-    if (sonarr) return executeSonarrTagOps(action);
-    if (lidarr) return executeLidarrTagOps(action);
-    throw new Error("Arr instance not found");
+  // A "Do Nothing" action names no family: the instance it points at decides.
+  let family = familyOfActionType(action.actionType);
+  if (action.actionType === "DO_NOTHING") {
+    family = await session.ctx.familyOf(action.arrInstanceId);
+    if (!family) throw new Error("Arr instance not found");
   }
+  if (!family) throw new Error(`Unsupported actionType for tag operations: ${action.actionType}`);
 
-  if (isRadarr) return executeRadarrTagOps(action);
-  if (isSonarr) return executeSonarrTagOps(action);
-  if (isLidarr) return executeLidarrTagOps(action);
-  throw new Error(`Unsupported actionType for tag operations: ${actionType}`);
-}
-
-async function executeRadarrTagOps(action: ActionRecord): Promise<void> {
-  const { client, movie } = await resolveRadarrMovie(action);
-  const tags = await client.getTags();
+  const { client, record } = await session.resolve(family);
+  const tags = await session.ctx.tags(action.arrInstanceId, client);
   const tagMap = new Map(tags.map((t) => [t.label.toLowerCase(), t.id]));
 
-  const currentTags = new Set(movie.tags);
+  const currentTags = new Set(record.tags);
 
   // Add tags (find-or-create)
   for (const label of action.addArrTags) {
@@ -298,6 +409,8 @@ async function executeRadarrTagOps(action: ActionRecord): Promise<void> {
     if (tagId === undefined) {
       const created = await client.createTag(label);
       tagId = created.id;
+      tagMap.set(label.toLowerCase(), created.id);
+      await session.ctx.rememberTag(action.arrInstanceId, created);
     }
     currentTags.add(tagId);
   }
@@ -312,66 +425,8 @@ async function executeRadarrTagOps(action: ActionRecord): Promise<void> {
 
   // Update only if tags changed
   const newTags = [...currentTags];
-  if (newTags.length !== movie.tags.length || !newTags.every((t) => movie.tags.includes(t))) {
-    await client.updateMovie(movie.id, { tags: newTags });
-  }
-}
-
-async function executeSonarrTagOps(action: ActionRecord): Promise<void> {
-  const { client, series } = await resolveSonarrSeries(action);
-  const tags = await client.getTags();
-  const tagMap = new Map(tags.map((t) => [t.label.toLowerCase(), t.id]));
-
-  const currentTags = new Set(series.tags);
-
-  for (const label of action.addArrTags) {
-    let tagId = tagMap.get(label.toLowerCase());
-    if (tagId === undefined) {
-      const created = await client.createTag(label);
-      tagId = created.id;
-    }
-    currentTags.add(tagId);
-  }
-
-  for (const label of action.removeArrTags) {
-    const tagId = tagMap.get(label.toLowerCase());
-    if (tagId !== undefined) {
-      currentTags.delete(tagId);
-    }
-  }
-
-  const newTags = [...currentTags];
-  if (newTags.length !== series.tags.length || !newTags.every((t) => series.tags.includes(t))) {
-    await client.updateSeries(series.id, { tags: newTags });
-  }
-}
-
-async function executeLidarrTagOps(action: ActionRecord): Promise<void> {
-  const { client, artist } = await resolveLidarrArtist(action);
-  const tags = await client.getTags();
-  const tagMap = new Map(tags.map((t) => [t.label.toLowerCase(), t.id]));
-
-  const currentTags = new Set(artist.tags);
-
-  for (const label of action.addArrTags) {
-    let tagId = tagMap.get(label.toLowerCase());
-    if (tagId === undefined) {
-      const created = await client.createTag(label);
-      tagId = created.id;
-    }
-    currentTags.add(tagId);
-  }
-
-  for (const label of action.removeArrTags) {
-    const tagId = tagMap.get(label.toLowerCase());
-    if (tagId !== undefined) {
-      currentTags.delete(tagId);
-    }
-  }
-
-  const newTags = [...currentTags];
-  if (newTags.length !== artist.tags.length || !newTags.every((t) => artist.tags.includes(t))) {
-    await client.updateArtist(artist.id, { tags: newTags });
+  if (newTags.length !== record.tags.length || !newTags.every((t) => record.tags.includes(t))) {
+    await session.update(family, { tags: newTags });
   }
 }
 
@@ -385,71 +440,25 @@ export async function cleanupArrTags(
   if (tagLabels.length === 0) return;
 
   // Determine which Arr type this instance belongs to
-  const [radarr, sonarr, lidarr] = await Promise.all([
-    prisma.radarrInstance.findUnique({ where: { id: arrInstanceId } }),
-    prisma.sonarrInstance.findUnique({ where: { id: arrInstanceId } }),
-    prisma.lidarrInstance.findUnique({ where: { id: arrInstanceId } }),
-  ]);
+  const found = await familyOfArrInstance(arrInstanceId);
+  if (!found) throw new Error("Arr instance not found");
 
-  if (radarr) {
-    const client = new RadarrClient(radarr.url, radarr.apiKey);
-    const tags = await client.getTags();
-    const targetTags = tags.filter((t) =>
-      tagLabels.some((label) => label.toLowerCase() === t.label.toLowerCase())
-    );
-    if (targetTags.length === 0) return;
+  const adapter = ADAPTERS[found.family];
+  const client: ArrClientBase = adapter.createClient(found.instance.url, found.instance.apiKey);
+  const tags = await client.getTags();
+  const targetTags = tags.filter((t) =>
+    tagLabels.some((label) => label.toLowerCase() === t.label.toLowerCase())
+  );
+  if (targetTags.length === 0) return;
 
-    const targetIds = new Set(targetTags.map((t) => t.id));
-    const movies = await client.getMovies();
-    for (const movie of movies) {
-      const filtered = movie.tags.filter((id) => !targetIds.has(id));
-      if (filtered.length !== movie.tags.length) {
-        await client.updateMovie(movie.id, { tags: filtered });
-      }
-    }
-    for (const tag of targetTags) {
-      await client.deleteTag(tag.id);
-    }
-  } else if (sonarr) {
-    const client = new SonarrClient(sonarr.url, sonarr.apiKey);
-    const tags = await client.getTags();
-    const targetTags = tags.filter((t) =>
-      tagLabels.some((label) => label.toLowerCase() === t.label.toLowerCase())
-    );
-    if (targetTags.length === 0) return;
-
-    const targetIds = new Set(targetTags.map((t) => t.id));
-    const allSeries = await client.getSeries();
-    for (const s of allSeries) {
-      const filtered = s.tags.filter((id) => !targetIds.has(id));
-      if (filtered.length !== s.tags.length) {
-        await client.updateSeries(s.id, { tags: filtered });
-      }
-    }
-    for (const tag of targetTags) {
-      await client.deleteTag(tag.id);
-    }
-  } else if (lidarr) {
-    const client = new LidarrClient(lidarr.url, lidarr.apiKey);
-    const tags = await client.getTags();
-    const targetTags = tags.filter((t) =>
-      tagLabels.some((label) => label.toLowerCase() === t.label.toLowerCase())
-    );
-    if (targetTags.length === 0) return;
-
-    const targetIds = new Set(targetTags.map((t) => t.id));
-    const artists = await client.getArtists();
-    for (const a of artists) {
-      const filtered = a.tags.filter((id) => !targetIds.has(id));
-      if (filtered.length !== a.tags.length) {
-        await client.updateArtist(a.id, { tags: filtered });
-      }
-    }
-    for (const tag of targetTags) {
-      await client.deleteTag(tag.id);
-    }
-  } else {
-    throw new Error("Arr instance not found");
+  // One bulk-editor request for every record carrying a tag, where each
+  // record used to cost a GET and a PUT of its own.
+  const targetIds = new Set(targetTags.map((t) => t.id));
+  const records: ArrRecord[] = await adapter.list(client);
+  const tagged = records.filter((r) => r.tags.some((id) => targetIds.has(id))).map((r) => r.id);
+  await adapter.removeTags(client, tagged, [...targetIds]);
+  for (const tag of targetTags) {
+    await client.deleteTag(tag.id);
   }
 
   logger.info("Lifecycle", `Cleaned up tags [${tagLabels.join(", ")}] from ${type} items`);
@@ -457,29 +466,27 @@ export async function cleanupArrTags(
 
 // --- Individual action executors ---
 
-async function executeDeleteRadarr(action: ActionRecord) {
-  const { client, movie } = await resolveRadarrMovie(action);
+const movieOf = (session: ActionArrSession) => session.resolve<RadarrClient, RadarrMovie>("RADARR");
+const seriesOf = (session: ActionArrSession) => session.resolve<SonarrClient, SonarrSeries>("SONARR");
+const artistOf = (session: ActionArrSession) => session.resolve<LidarrClient, LidarrArtist>("LIDARR");
+
+async function executeDeleteRadarr(session: ActionArrSession, action: ActionRecord) {
+  const { client, record: movie } = await movieOf(session);
   await client.deleteMovie(movie.id, true, action.addImportExclusion);
 }
 
-async function executeDeleteSonarr(action: ActionRecord) {
-  const { client, series } = await resolveSonarrSeries(action);
+async function executeDeleteSonarr(session: ActionArrSession, action: ActionRecord) {
+  const { client, record: series } = await seriesOf(session);
   await client.deleteSeries(series.id, true, action.addImportExclusion);
 }
 
-async function executeUnmonitorRadarr(action: ActionRecord) {
-  const { client, movie } = await resolveRadarrMovie(action);
-  await client.updateMovie(movie.id, { monitored: false });
+async function executeUnmonitor(session: ActionArrSession, family: ArrFamily) {
+  await session.update(family, { monitored: false });
 }
 
-async function executeUnmonitorSonarr(action: ActionRecord) {
-  const { client, series } = await resolveSonarrSeries(action);
-  await client.updateSeries(series.id, { monitored: false });
-}
-
-async function executeUnmonitorDeleteFilesRadarr(action: ActionRecord) {
-  const { client, movie } = await resolveRadarrMovie(action);
-  await client.updateMovie(movie.id, { monitored: false });
+async function executeUnmonitorDeleteFilesRadarr(session: ActionArrSession, action: ActionRecord) {
+  await session.update<RadarrMovie>("RADARR", { monitored: false });
+  const { client, record: movie } = await movieOf(session);
   if (movie.hasFile && movie.movieFileId) {
     await client.deleteMovieFile(movie.movieFileId);
   }
@@ -488,9 +495,9 @@ async function executeUnmonitorDeleteFilesRadarr(action: ActionRecord) {
   }
 }
 
-async function executeUnmonitorDeleteFilesSonarr(action: ActionRecord): Promise<ActionOutcome> {
-  const { client, series } = await resolveSonarrSeries(action);
-  await client.updateSeries(series.id, { monitored: false });
+async function executeUnmonitorDeleteFilesSonarr(session: ActionArrSession, action: ActionRecord): Promise<ActionOutcome> {
+  await session.update<SonarrSeries>("SONARR", { monitored: false });
+  const { client, record: series } = await seriesOf(session);
   const deleted = await deleteEpisodeFilesForAction(client, series.id, action);
   if (action.searchAfterAction) {
     // A series search skips unmonitored seasons and episodes, and this action
@@ -500,8 +507,8 @@ async function executeUnmonitorDeleteFilesSonarr(action: ActionRecord): Promise<
   return { deletedMemberIds: deleted.deletedMemberIds };
 }
 
-async function executeDeleteLidarr(action: ActionRecord) {
-  const { client, artist } = await resolveLidarrArtist(action);
+async function executeDeleteLidarr(session: ActionArrSession, action: ActionRecord) {
+  const { client, record: artist } = await artistOf(session);
   await refuseSplitArtistDelete(client, artist, action);
   await client.deleteArtist(artist.id, true, action.addImportExclusion);
 }
@@ -559,14 +566,9 @@ async function refuseSplitArtistDelete(
   }
 }
 
-async function executeUnmonitorLidarr(action: ActionRecord) {
-  const { client, artist } = await resolveLidarrArtist(action);
-  await client.updateArtist(artist.id, { monitored: false });
-}
-
-async function executeUnmonitorDeleteFilesLidarr(action: ActionRecord): Promise<ActionOutcome> {
-  const { client, artist } = await resolveLidarrArtist(action);
-  await client.updateArtist(artist.id, { monitored: false });
+async function executeUnmonitorDeleteFilesLidarr(session: ActionArrSession, action: ActionRecord): Promise<ActionOutcome> {
+  await session.update<LidarrArtist>("LIDARR", { monitored: false });
+  const { client, record: artist } = await artistOf(session);
   const deleted = await deleteTrackFilesForAction(client, artist, action);
   if (action.searchAfterAction) {
     await client.triggerArtistSearch(artist.id);
@@ -910,11 +912,11 @@ async function deleteTrackFilesForAction(
 
 // --- Monitor & Delete Files executors ---
 
-async function executeMonitorDeleteFilesRadarr(action: ActionRecord) {
-  const { client, movie } = await resolveRadarrMovie(action);
-  if (!movie.monitored) {
-    await client.updateMovie(movie.id, { monitored: true });
+async function executeMonitorDeleteFilesRadarr(session: ActionArrSession, action: ActionRecord) {
+  if (!(await movieOf(session)).record.monitored) {
+    await session.update<RadarrMovie>("RADARR", { monitored: true });
   }
+  const { client, record: movie } = await movieOf(session);
   if (movie.hasFile && movie.movieFileId) {
     await client.deleteMovieFile(movie.movieFileId);
   }
@@ -923,11 +925,11 @@ async function executeMonitorDeleteFilesRadarr(action: ActionRecord) {
   }
 }
 
-async function executeMonitorDeleteFilesSonarr(action: ActionRecord): Promise<ActionOutcome> {
-  const { client, series } = await resolveSonarrSeries(action);
-  if (!series.monitored) {
-    await client.updateSeries(series.id, { monitored: true });
+async function executeMonitorDeleteFilesSonarr(session: ActionArrSession, action: ActionRecord): Promise<ActionOutcome> {
+  if (!(await seriesOf(session)).record.monitored) {
+    await session.update<SonarrSeries>("SONARR", { monitored: true });
   }
+  const { client, record: series } = await seriesOf(session);
   const deleted = await deleteEpisodeFilesForAction(client, series.id, action);
   // Monitoring the series alone leaves the episodes as they were — and Sonarr's
   // "Unmonitor Deleted Episodes" setting unmonitors the ones just deleted — so
@@ -939,11 +941,11 @@ async function executeMonitorDeleteFilesSonarr(action: ActionRecord): Promise<Ac
   return { deletedMemberIds: deleted.deletedMemberIds };
 }
 
-async function executeMonitorDeleteFilesLidarr(action: ActionRecord): Promise<ActionOutcome> {
-  const { client, artist } = await resolveLidarrArtist(action);
-  if (!artist.monitored) {
-    await client.updateArtist(artist.id, { monitored: true });
+async function executeMonitorDeleteFilesLidarr(session: ActionArrSession, action: ActionRecord): Promise<ActionOutcome> {
+  if (!(await artistOf(session)).record.monitored) {
+    await session.update<LidarrArtist>("LIDARR", { monitored: true });
   }
+  const { client, record: artist } = await artistOf(session);
   const deleted = await deleteTrackFilesForAction(client, artist, action);
   if (action.searchAfterAction) {
     await client.triggerArtistSearch(artist.id);
@@ -953,8 +955,8 @@ async function executeMonitorDeleteFilesLidarr(action: ActionRecord): Promise<Ac
 
 // --- Delete Files Only executors (no monitor change) ---
 
-async function executeDeleteFilesRadarr(action: ActionRecord) {
-  const { client, movie } = await resolveRadarrMovie(action);
+async function executeDeleteFilesRadarr(session: ActionArrSession, action: ActionRecord) {
+  const { client, record: movie } = await movieOf(session);
   if (movie.hasFile && movie.movieFileId) {
     await client.deleteMovieFile(movie.movieFileId);
   }
@@ -963,8 +965,8 @@ async function executeDeleteFilesRadarr(action: ActionRecord) {
   }
 }
 
-async function executeDeleteFilesSonarr(action: ActionRecord): Promise<ActionOutcome> {
-  const { client, series } = await resolveSonarrSeries(action);
+async function executeDeleteFilesSonarr(session: ActionArrSession, action: ActionRecord): Promise<ActionOutcome> {
+  const { client, record: series } = await seriesOf(session);
   const deleted = await deleteEpisodeFilesForAction(client, series.id, action);
   if (action.searchAfterAction) {
     // By id: a series search skips unmonitored seasons and episodes, and
@@ -974,8 +976,8 @@ async function executeDeleteFilesSonarr(action: ActionRecord): Promise<ActionOut
   return { deletedMemberIds: deleted.deletedMemberIds };
 }
 
-async function executeDeleteFilesLidarr(action: ActionRecord): Promise<ActionOutcome> {
-  const { client, artist } = await resolveLidarrArtist(action);
+async function executeDeleteFilesLidarr(session: ActionArrSession, action: ActionRecord): Promise<ActionOutcome> {
+  const { client, record: artist } = await artistOf(session);
   const deleted = await deleteTrackFilesForAction(client, artist, action);
   if (action.searchAfterAction) {
     await client.triggerArtistSearch(artist.id);
@@ -983,77 +985,31 @@ async function executeDeleteFilesLidarr(action: ActionRecord): Promise<ActionOut
   return { deletedMemberIds: deleted.deletedMemberIds };
 }
 
-// --- Change Quality Profile executors ---
+// --- Change Quality Profile / Search executors (every family alike) ---
 
-async function executeChangeQualityProfileRadarr(action: ActionRecord) {
+async function executeChangeQualityProfile(session: ActionArrSession, action: ActionRecord, family: ArrFamily) {
   if (action.targetQualityProfileId == null) {
     throw new Error("No target quality profile configured");
   }
-  const { client, movie } = await resolveRadarrMovie(action);
-  if (movie.qualityProfileId === action.targetQualityProfileId) {
+  const { record, adapter } = await session.resolve(family);
+  if (record.qualityProfileId === action.targetQualityProfileId) {
     logger.info(
       "Lifecycle",
-      `Skipping CHANGE_QUALITY_PROFILE_RADARR for "${movie.title}" — already on profile ${action.targetQualityProfileId}`,
+      `Skipping ${action.actionType} for "${adapter.name(record)}" — already on profile ${action.targetQualityProfileId}`,
     );
     return;
   }
-  await client.updateMovie(movie.id, { qualityProfileId: action.targetQualityProfileId });
+  const updated = await session.update(family, { qualityProfileId: action.targetQualityProfileId });
   if (action.searchAfterAction) {
-    await client.triggerMovieSearch(movie.id);
+    const { client } = await session.resolve(family);
+    await adapter.search(client, updated);
   }
 }
 
-async function executeChangeQualityProfileSonarr(action: ActionRecord) {
-  if (action.targetQualityProfileId == null) {
-    throw new Error("No target quality profile configured");
-  }
-  const { client, series } = await resolveSonarrSeries(action);
-  if (series.qualityProfileId === action.targetQualityProfileId) {
-    logger.info(
-      "Lifecycle",
-      `Skipping CHANGE_QUALITY_PROFILE_SONARR for "${series.title}" — already on profile ${action.targetQualityProfileId}`,
-    );
-    return;
-  }
-  await client.updateSeries(series.id, { qualityProfileId: action.targetQualityProfileId });
-  if (action.searchAfterAction) {
-    await client.triggerSeriesSearch(series.id);
-  }
-}
-
-async function executeChangeQualityProfileLidarr(action: ActionRecord) {
-  if (action.targetQualityProfileId == null) {
-    throw new Error("No target quality profile configured");
-  }
-  const { client, artist } = await resolveLidarrArtist(action);
-  if (artist.qualityProfileId === action.targetQualityProfileId) {
-    logger.info(
-      "Lifecycle",
-      `Skipping CHANGE_QUALITY_PROFILE_LIDARR for "${artist.artistName}" — already on profile ${action.targetQualityProfileId}`,
-    );
-    return;
-  }
-  await client.updateArtist(artist.id, { qualityProfileId: action.targetQualityProfileId });
-  if (action.searchAfterAction) {
-    await client.triggerArtistSearch(artist.id);
-  }
-}
-
-// --- Search executors (trigger a fresh search for a new copy, no other change) ---
-
-async function executeSearchRadarr(action: ActionRecord) {
-  const { client, movie } = await resolveRadarrMovie(action);
-  await client.triggerMovieSearch(movie.id);
-}
-
-async function executeSearchSonarr(action: ActionRecord) {
-  const { client, series } = await resolveSonarrSeries(action);
-  await client.triggerSeriesSearch(series.id);
-}
-
-async function executeSearchLidarr(action: ActionRecord) {
-  const { client, artist } = await resolveLidarrArtist(action);
-  await client.triggerArtistSearch(artist.id);
+/** Trigger a fresh search for a new copy, no other change. */
+async function executeSearch(session: ActionArrSession, family: ArrFamily) {
+  const { client, record, adapter } = await session.resolve(family);
+  await adapter.search(client, record);
 }
 
 // --- Main dispatch ---
@@ -1066,14 +1022,21 @@ export async function executeAction(
    * nature of an action (e.g. "Updating tags" then "Change Quality Profile").
    */
   onStep?: (label: string) => void,
+  /**
+   * Shared by every action of one run (`ArrExecutionContext`), so the run
+   * reads each instance's family and tags once. Omitted, the call reads for
+   * itself.
+   */
+  ctx: ArrExecutionContext = new ArrExecutionContext(),
 ): Promise<ActionOutcome> {
   let outcome: ActionOutcome = {};
+  const session = new ActionArrSession(action, ctx);
   logger.info("Lifecycle", `Starting ${action.actionType} for "${action.targetTitle}" (item: ${action.mediaItem.id}, arr: ${action.arrInstanceId ?? "none"}${action.matchedMediaItemIds.length > 0 ? `, ${action.matchedMediaItemIds.length} matched episodes` : ""})`);
 
   // Execute tag operations before the main action
   if (action.addArrTags.length > 0 || action.removeArrTags.length > 0) {
     onStep?.("Updating tags");
-    await executeTagOperations(action);
+    await executeTagOperations(session, action);
     const tagOps: string[] = [];
     if (action.addArrTags.length > 0) tagOps.push(`+tags: ${action.addArrTags.join(", ")}`);
     if (action.removeArrTags.length > 0) tagOps.push(`-tags: ${action.removeArrTags.join(", ")}`);
@@ -1093,67 +1056,67 @@ export async function executeAction(
       // No-op: record exists for monitoring/reporting purposes
       break;
     case "DELETE_RADARR":
-      await executeDeleteRadarr(action);
+      await executeDeleteRadarr(session, action);
       break;
     case "DELETE_SONARR":
-      await executeDeleteSonarr(action);
+      await executeDeleteSonarr(session, action);
       break;
     case "UNMONITOR_RADARR":
-      await executeUnmonitorRadarr(action);
+      await executeUnmonitor(session, "RADARR");
       break;
     case "UNMONITOR_SONARR":
-      await executeUnmonitorSonarr(action);
+      await executeUnmonitor(session, "SONARR");
       break;
     case "UNMONITOR_DELETE_FILES_RADARR":
-      await executeUnmonitorDeleteFilesRadarr(action);
+      await executeUnmonitorDeleteFilesRadarr(session, action);
       break;
     case "UNMONITOR_DELETE_FILES_SONARR":
-      outcome = await executeUnmonitorDeleteFilesSonarr(action);
+      outcome = await executeUnmonitorDeleteFilesSonarr(session, action);
       break;
     case "DELETE_LIDARR":
-      await executeDeleteLidarr(action);
+      await executeDeleteLidarr(session, action);
       break;
     case "UNMONITOR_LIDARR":
-      await executeUnmonitorLidarr(action);
+      await executeUnmonitor(session, "LIDARR");
       break;
     case "UNMONITOR_DELETE_FILES_LIDARR":
-      outcome = await executeUnmonitorDeleteFilesLidarr(action);
+      outcome = await executeUnmonitorDeleteFilesLidarr(session, action);
       break;
     case "MONITOR_DELETE_FILES_RADARR":
-      await executeMonitorDeleteFilesRadarr(action);
+      await executeMonitorDeleteFilesRadarr(session, action);
       break;
     case "MONITOR_DELETE_FILES_SONARR":
-      outcome = await executeMonitorDeleteFilesSonarr(action);
+      outcome = await executeMonitorDeleteFilesSonarr(session, action);
       break;
     case "MONITOR_DELETE_FILES_LIDARR":
-      outcome = await executeMonitorDeleteFilesLidarr(action);
+      outcome = await executeMonitorDeleteFilesLidarr(session, action);
       break;
     case "DELETE_FILES_RADARR":
-      await executeDeleteFilesRadarr(action);
+      await executeDeleteFilesRadarr(session, action);
       break;
     case "DELETE_FILES_SONARR":
-      outcome = await executeDeleteFilesSonarr(action);
+      outcome = await executeDeleteFilesSonarr(session, action);
       break;
     case "DELETE_FILES_LIDARR":
-      outcome = await executeDeleteFilesLidarr(action);
+      outcome = await executeDeleteFilesLidarr(session, action);
       break;
     case "CHANGE_QUALITY_PROFILE_RADARR":
-      await executeChangeQualityProfileRadarr(action);
+      await executeChangeQualityProfile(session, action, "RADARR");
       break;
     case "CHANGE_QUALITY_PROFILE_SONARR":
-      await executeChangeQualityProfileSonarr(action);
+      await executeChangeQualityProfile(session, action, "SONARR");
       break;
     case "CHANGE_QUALITY_PROFILE_LIDARR":
-      await executeChangeQualityProfileLidarr(action);
+      await executeChangeQualityProfile(session, action, "LIDARR");
       break;
     case "SEARCH_RADARR":
-      await executeSearchRadarr(action);
+      await executeSearch(session, "RADARR");
       break;
     case "SEARCH_SONARR":
-      await executeSearchSonarr(action);
+      await executeSearch(session, "SONARR");
       break;
     case "SEARCH_LIDARR":
-      await executeSearchLidarr(action);
+      await executeSearch(session, "LIDARR");
       break;
     default:
       throw new Error(`Unknown action type: ${action.actionType}`);

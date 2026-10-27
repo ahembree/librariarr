@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
 import { appCache } from "@/lib/cache/memory-cache";
@@ -41,12 +41,7 @@ const RECENTLY_ADDED_TTL_MS = 10 * 60_000;
  * in memory before slicing — proportionate for a full library page, absurd for
  * 24 tiles.
  */
-export async function GET(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async (session, request: NextRequest) => {
   const { searchParams } = request.nextUrl;
   const serverId = searchParams.get("serverId");
   // Validated, never cast. This value reaches raw SQL, and a bare `as` is a
@@ -59,9 +54,9 @@ export async function GET(request: NextRequest) {
     : null;
 
   const [sf, settings] = await Promise.all([
-    resolveServerFilter(session.userId!, serverId, type ?? undefined),
+    resolveServerFilter(session.userId, serverId, type ?? undefined),
     prisma.appSettings.findUnique({
-      where: { userId: session.userId! },
+      where: { userId: session.userId },
       select: { dedupStats: true },
     }),
   ]);
@@ -216,4 +211,4 @@ export async function GET(request: NextRequest) {
     // repeat the whole aggregate scan just to render "24 of N".
     total: rows[0]?.groupTotal ?? 0,
   });
-}
+});

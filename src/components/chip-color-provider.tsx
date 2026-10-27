@@ -100,8 +100,16 @@ export function ChipColorProvider({ children }: { children: React.ReactNode }) {
     [colors]
   );
 
+  // One object per colour change: the provider sits above the whole shell and
+  // re-renders whenever the shell settings do, and a fresh object each time
+  // re-rendered every chip on the page with it.
+  const value = useMemo(
+    () => ({ colors, getHex, getBadgeStyle, getSolidStyle, updateColors }),
+    [colors, getHex, getBadgeStyle, getSolidStyle, updateColors],
+  );
+
   return (
-    <ChipColorContext.Provider value={{ colors, getHex, getBadgeStyle, getSolidStyle, updateColors }}>
+    <ChipColorContext.Provider value={value}>
       {children}
     </ChipColorContext.Provider>
   );

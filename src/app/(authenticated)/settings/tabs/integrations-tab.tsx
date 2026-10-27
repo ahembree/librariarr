@@ -1,380 +1,179 @@
 "use client";
 
-import { useState } from "react";
-import { Button } from "@/components/ui/button";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { ColorChip } from "@/components/color-chip";
-import { Input } from "@/components/ui/input";
-import { SecretInput } from "@/components/ui/secret-input";
-import { Label } from "@/components/ui/label";
-import { Separator } from "@/components/ui/separator";
-import { Switch } from "@/components/ui/switch";
-import {
-  Loader2,
-  Plus,
-  CheckCircle,
-  Trash2,
-  Save,
-  Pencil,
-  Boxes,
-  Inbox,
-  History,
-  AlertCircle,
-  Link2,
-  ExternalLink,
-} from "lucide-react";
-import { cn } from "@/lib/utils";
-import type { ArrInstance, SeerrInstance, TracearrInstance, TestResult } from "../types";
+import { memo } from "react";
+import { Boxes, Inbox, History } from "lucide-react";
+import type { IntegrationInstance, IntegrationType } from "../integration-instances";
+import { useIntegrationInstances } from "../use-integration-instances";
+import { IntegrationInstanceSection, type IntegrationSectionConfig } from "./integration-instance-section";
 
-// ─── Type styling: matches the colored dots used on the media-detail Arr cards ───
+// ─── Per-type configuration ───
 
-interface IntegrationTypeStyle {
-  text: string;
-  dot: string;
-  tile: string;
-  border: string;
-}
+const ARR_EXTERNAL_URL_HINT = 'Used for "Open in" links. Falls back to URL above if empty.';
 
-const INTEGRATION_TYPE_STYLES: Record<string, IntegrationTypeStyle> = {
-  sonarr: {
+const SONARR: IntegrationSectionConfig = {
+  type: "sonarr",
+  label: "Sonarr",
+  hasExternalUrl: true,
+  testBeforeAdd: true,
+  toggleNoun: "integration",
+  icon: Boxes,
+  style: {
     text: "text-sky-400",
     dot: "bg-sky-400 shadow-[0_0_6px] shadow-sky-400/60",
     tile: "bg-sky-500/10",
     border: "border-sky-500/30",
   },
-  radarr: {
+  // deepcode ignore HardcodedNonCryptoSecret: Placeholder string
+  placeholder: { name: "My Sonarr", url: "http://localhost:8989", apiKey: "API key from Sonarr settings" },
+  addDescription: "Connection will be tested before saving.",
+  emptyDescription: "Connect your Sonarr server to enable lifecycle matching and tag sync.",
+  externalUrlHint: ARR_EXTERNAL_URL_HINT,
+  gridClassName: "sm:grid-cols-2",
+};
+
+const RADARR: IntegrationSectionConfig = {
+  ...SONARR,
+  type: "radarr",
+  label: "Radarr",
+  style: {
     text: "text-amber-400",
     dot: "bg-amber-400 shadow-[0_0_6px] shadow-amber-400/60",
     tile: "bg-amber-500/10",
     border: "border-amber-500/30",
   },
-  lidarr: {
+  // deepcode ignore HardcodedNonCryptoSecret: Placeholder string
+  placeholder: { name: "My Radarr", url: "http://localhost:7878", apiKey: "API key from Radarr settings" },
+  emptyDescription: "Connect your Radarr server to enable lifecycle matching and tag sync.",
+};
+
+const LIDARR: IntegrationSectionConfig = {
+  ...SONARR,
+  type: "lidarr",
+  label: "Lidarr",
+  style: {
     text: "text-emerald-400",
     dot: "bg-emerald-400 shadow-[0_0_6px] shadow-emerald-400/60",
     tile: "bg-emerald-500/10",
     border: "border-emerald-500/30",
   },
-  seerr: {
+  // deepcode ignore HardcodedNonCryptoSecret: Placeholder string
+  placeholder: { name: "My Lidarr", url: "http://localhost:8686", apiKey: "API key from Lidarr settings" },
+  emptyDescription: "Connect your Lidarr server to enable lifecycle matching and tag sync.",
+};
+
+const SEERR: IntegrationSectionConfig = {
+  type: "seerr",
+  label: "Seerr",
+  hasExternalUrl: true,
+  testBeforeAdd: true,
+  toggleNoun: "Seerr",
+  icon: Inbox,
+  style: {
     text: "text-violet-400",
     dot: "bg-violet-400 shadow-[0_0_6px] shadow-violet-400/60",
     tile: "bg-violet-500/10",
     border: "border-violet-500/30",
   },
-  tracearr: {
-    text: "text-cyan-400",
-    dot: "bg-cyan-400 shadow-[0_0_6px] shadow-cyan-400/60",
-    tile: "bg-cyan-500/10",
-    border: "border-cyan-500/30",
-  },
+  // deepcode ignore HardcodedNonCryptoSecret: Placeholder string
+  placeholder: { name: "My Seerr", url: "http://localhost:5055", apiKey: "API key from Seerr settings" },
+  addDescription: "Manage request integration instances.",
+  emptyDescription: "Connect Overseerr or Jellyseerr to surface request data alongside your library.",
+  externalUrlHint: 'Used for "Open in Seerr" links. Falls back to URL above if empty.',
+  gridClassName: "sm:grid-cols-4",
 };
-
-// ─── Shared sub-components ───
-
-/** Confirmation before disconnecting an integration instance. */
-function ConfirmRemoveInstanceDialog({
-  instance,
-  productName,
-  consequence,
-  onOpenChange,
-  onConfirm,
-}: {
-  instance: { id: string; name: string } | null;
-  productName: string;
-  /** Replaces the default lifecycle-matching consequence copy, which only fits
-   *  the Arr/Seerr integrations. */
-  consequence?: React.ReactNode;
-  onOpenChange: (open: boolean) => void;
-  onConfirm: () => void;
-}) {
-  return (
-    <AlertDialog open={!!instance} onOpenChange={onOpenChange}>
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Remove {instance?.name}?</AlertDialogTitle>
-          <AlertDialogDescription>
-            {consequence ?? (
-              <>
-                This removes the {productName} connection from Librariarr — lifecycle rules will no
-                longer match or act on items through it. Nothing is changed in {productName} itself.
-              </>
-            )}
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <AlertDialogFooter>
-          <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction variant="destructive" onClick={onConfirm}>
-            <Trash2 className="mr-2 h-4 w-4" />
-            Remove
-          </AlertDialogAction>
-        </AlertDialogFooter>
-      </AlertDialogContent>
-    </AlertDialog>
-  );
-}
-
-/**
- * Whether an edit changes how the instance is reached: a new API key, or a URL
- * other than the stored one. Only such an edit has to pass a connection test
- * before it can be saved — a rename or a new external URL must stay possible
- * while the instance is down.
- */
-function changesConnection(form: { url: string; apiKey: string }, stored: { url: string }): boolean {
-  const norm = (u: string) => u.trim().replace(/\/+$/, "");
-  return form.apiKey !== "" || norm(form.url) !== norm(stored.url);
-}
-
-function TestResultBadge({ result }: { result: TestResult }) {
-  const Icon = result.ok ? CheckCircle : AlertCircle;
-  return (
-    <span
-      role="status"
-      aria-live="polite"
-      className={cn(
-        "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium",
-        result.ok
-          ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400"
-          : "border-destructive/30 bg-destructive/10 text-destructive",
-      )}
-    >
-      <Icon className="h-3 w-3 shrink-0" />
-      {result.ok
-        ? `Connected${result.appName ? ` to ${result.appName}` : ""}${result.version ? ` v${result.version}` : ""}${
-            result.serverCount !== undefined
-              ? ` · ${result.serverCount} ${result.serverCount === 1 ? "server" : "servers"}`
-              : ""
-          }`
-        : `Failed: ${result.error}`}
-    </span>
-  );
-}
-
-function SectionHeader({
-  title,
-  icon: IconComp,
-  style,
-  count,
-  disabledCount,
-  showAddButton,
-  onShowForm,
-}: {
-  title: string;
-  icon: React.ComponentType<{ className?: string }>;
-  style: IntegrationTypeStyle;
-  count: number;
-  disabledCount: number;
-  showAddButton: boolean;
-  onShowForm: () => void;
-}) {
-  return (
-    <div className="mb-4 flex items-center justify-between gap-3">
-      <div className="flex min-w-0 items-center gap-3">
-        <div className={cn("flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border", style.tile, style.border)}>
-          <IconComp className={cn("h-4 w-4", style.text)} />
-        </div>
-        <div className="min-w-0">
-          <h3 className="truncate text-lg font-semibold leading-tight">{title}</h3>
-          {count > 0 && (
-            <p className="text-xs text-muted-foreground">
-              {count} {count === 1 ? "instance" : "instances"}
-              {disabledCount > 0 && ` · ${disabledCount} disabled`}
-            </p>
-          )}
-        </div>
-      </div>
-      {showAddButton && (
-        <Button variant="outline" size="sm" onClick={onShowForm} className="shrink-0">
-          <Plus className="mr-2 h-4 w-4" />
-          Add Instance
-        </Button>
-      )}
-    </div>
-  );
-}
-
-function EmptyState({
-  title,
-  icon: IconComp,
-  style,
-  description,
-  onAdd,
-}: {
-  title: string;
-  icon: React.ComponentType<{ className?: string }>;
-  style: IntegrationTypeStyle;
-  description: string;
-  onAdd: () => void;
-}) {
-  return (
-    <Card className="border-dashed">
-      <CardContent className="flex flex-col items-center justify-center gap-4 py-10 text-center">
-        <div className={cn("flex h-12 w-12 items-center justify-center rounded-xl border", style.tile, style.border)}>
-          <IconComp className={cn("h-6 w-6", style.text)} />
-        </div>
-        <div className="space-y-1">
-          <p className="font-medium">No {title} instances yet</p>
-          <p className="text-xs text-muted-foreground">{description}</p>
-        </div>
-        <Button variant="outline" size="sm" onClick={onAdd}>
-          <Plus className="mr-2 h-4 w-4" />
-          Add {title} Instance
-        </Button>
-      </CardContent>
-    </Card>
-  );
-}
-
-// ─── Props ───
-
-interface ArrForm {
-  name: string;
-  url: string;
-  apiKey: string;
-  externalUrl: string;
-}
-
-interface SeerrForm {
-  name: string;
-  url: string;
-  apiKey: string;
-  externalUrl: string;
-}
-
-interface ArrEditing {
-  id: string | null;
-  form: ArrForm;
-  saving: boolean;
-  error: string;
-  testing: boolean;
-  testResult: TestResult | null;
-}
-
-interface SeerrEditing {
-  id: string | null;
-  form: SeerrForm;
-  saving: boolean;
-  error: string;
-  testing: boolean;
-  testResult: TestResult | null;
-}
-
-interface TracearrForm {
-  name: string;
-  url: string;
-  apiKey: string;
-}
-
-interface TracearrEditing {
-  id: string | null;
-  form: TracearrForm;
-  saving: boolean;
-  error: string;
-  testing: boolean;
-  testResult: TestResult | null;
-}
-
-interface ArrSectionProps {
-  instances: ArrInstance[];
-  showForm: boolean;
-  form: ArrForm;
-  saving: boolean;
-  error: string;
-  testing: boolean;
-  testResult: TestResult | null;
-  editing: ArrEditing;
-  onShowForm: (show: boolean) => void;
-  onFormChange: (form: ArrForm) => void;
-  onAdd: () => void;
-  onDelete: (id: string) => void;
-  onTest: () => void;
-  onStartEdit: (instance: ArrInstance) => void;
-  onSaveEdit: () => void;
-  onCancelEdit: () => void;
-  onEditFormChange: (form: ArrForm) => void;
-  onEditTest: () => void;
-  onToggleEnabled: (id: string, enabled: boolean) => void;
-}
-
-interface SeerrSectionProps {
-  instances: SeerrInstance[];
-  showForm: boolean;
-  form: SeerrForm;
-  saving: boolean;
-  error: string;
-  testing: boolean;
-  testResult: TestResult | null;
-  editing: SeerrEditing;
-  onShowForm: (show: boolean) => void;
-  onFormChange: (form: SeerrForm) => void;
-  onAdd: () => void;
-  onDelete: (id: string) => void;
-  onTest: () => void;
-  onStartEdit: (instance: SeerrInstance) => void;
-  onSaveEdit: () => void;
-  onCancelEdit: () => void;
-  onEditFormChange: (form: SeerrForm) => void;
-  onEditTest: () => void;
-  onToggleEnabled: (id: string, enabled: boolean) => void;
-}
 
 /**
  * Tracearr has no unsaved-instance test endpoint (only
  * `POST /api/integrations/tracearr/[id]/test-connection`), so the add form has
  * no Test button — `POST /api/integrations/tracearr` verifies the connection
- * itself and returns the failure detail, which the form shows inline. Hence no
- * `testing`/`testResult`/`onTest` here; the test props live on `editing`.
+ * itself and returns the failure detail, which the form shows inline.
  */
-interface TracearrSectionProps {
-  instances: TracearrInstance[];
-  showForm: boolean;
-  form: TracearrForm;
-  saving: boolean;
-  error: string;
-  editing: TracearrEditing;
-  onShowForm: (show: boolean) => void;
-  onFormChange: (form: TracearrForm) => void;
-  onAdd: () => void;
-  onDelete: (id: string) => void;
-  onStartEdit: (instance: TracearrInstance) => void;
-  onSaveEdit: () => void;
-  onCancelEdit: () => void;
-  onEditFormChange: (form: TracearrForm) => void;
-  onEditTest: () => void;
-  onToggleEnabled: (id: string, enabled: boolean) => void;
-}
+const TRACEARR: IntegrationSectionConfig = {
+  type: "tracearr",
+  label: "Tracearr",
+  hasExternalUrl: false,
+  testBeforeAdd: false,
+  toggleNoun: "Tracearr",
+  icon: History,
+  style: {
+    text: "text-cyan-400",
+    dot: "bg-cyan-400 shadow-[0_0_6px] shadow-cyan-400/60",
+    tile: "bg-cyan-500/10",
+    border: "border-cyan-500/30",
+  },
+  // deepcode ignore HardcodedNonCryptoSecret: Placeholder string
+  placeholder: { name: "My Tracearr", url: "http://localhost:3000", apiKey: "API key from Tracearr settings" },
+  addDescription: "Connection will be tested before saving.",
+  emptyDescription: "Connect Tracearr to replace a server's coarse watch history with per-play events.",
+  gridClassName: "sm:grid-cols-4",
+  intro: (
+    <>
+      Tracearr records every play as its own event, so a linked media server&apos;s watch history carries
+      per-play detail — completion percentage, device, player, transcode decision — that Plex, Jellyfin and
+      Emby&apos;s own history does not report. Link a server under{" "}
+      <span className="text-foreground">Media Servers → Watch history source</span>.
+    </>
+  ),
+  // The consequence copy deliberately does NOT promise a fallback to native
+  // history. With no enabled instance left, `syncWatchHistory` SKIPS a server
+  // that is still linked to a Tracearr server rather than running the native
+  // path — the native path full-replaces the server's rows, so falling back
+  // would destroy the per-play history that was imported (and re-enabling
+  // would then re-import it alongside the native rows, permanently doubling
+  // `playCount`). The linked server therefore just stops updating until the
+  // admin clears the link, which is the one thing this dialog has to say.
+  //
+  // No affected-server count: the link lives on `MediaServer.tracearrServerId`,
+  // which this tab does not read. Naming the control the admin has to visit is
+  // the actionable half anyway, and it reads correctly whatever the count.
+  removeConsequence: (
+    <>
+      This removes the Tracearr connection from Librariarr. Any media server still linked to it stops updating
+      its watch history — the sync skips a linked server instead of falling back, so the per-play history
+      already imported is never overwritten by the server&apos;s own coarser history. To return a server to its
+      native history, set its <span className="text-foreground">Watch history source</span> to &ldquo;Native
+      (server history)&rdquo; under Media Servers. Nothing is changed in Tracearr itself.
+    </>
+  ),
+};
+
+// ─── Props ───
 
 interface IntegrationsTabProps {
-  sonarr: ArrSectionProps;
-  radarr: ArrSectionProps;
-  lidarr: ArrSectionProps;
-  seerr: SeerrSectionProps;
-  tracearr: TracearrSectionProps;
+  /** Each type's instances, as the page last read them. */
+  instances: Record<IntegrationType, IntegrationInstance[]>;
+  /** Re-read one type's instance list. */
+  onRefresh: (type: IntegrationType) => Promise<unknown>;
+  /** A Tracearr instance was edited: its URL may now name another Tracearr. */
+  onTracearrUpdated: (id: string) => unknown;
 }
 
 // ─── Component ───
 
-export function IntegrationsTab({
-  sonarr,
-  radarr,
-  lidarr,
-  seerr,
-  tracearr,
+/**
+ * The instance lists come from the page (it loads them with the other tabs'
+ * data, and the Media Servers tab reads Tracearr's); everything the forms hold
+ * lives here, so typing in one re-renders this tab rather than the page — and,
+ * memoised over props the page keeps stable, the page's own re-renders skip it.
+ */
+export const IntegrationsTab = memo(function IntegrationsTab({
+  instances,
+  onRefresh,
+  onTracearrUpdated,
 }: IntegrationsTabProps) {
+  const sonarr = useIntegrationInstances(SONARR, { instances: instances.sonarr, refresh: () => onRefresh("sonarr") });
+  const radarr = useIntegrationInstances(RADARR, { instances: instances.radarr, refresh: () => onRefresh("radarr") });
+  const lidarr = useIntegrationInstances(LIDARR, { instances: instances.lidarr, refresh: () => onRefresh("lidarr") });
+  const seerr = useIntegrationInstances(SEERR, { instances: instances.seerr, refresh: () => onRefresh("seerr") });
+  const tracearr = useIntegrationInstances(TRACEARR, {
+    instances: instances.tracearr,
+    refresh: () => onRefresh("tracearr"),
+    // The cached server list behind the watch-history dropdown is stale once
+    // the instance's URL changes: it would keep offering servers that
+    // instance no longer monitors.
+    onUpdated: onTracearrUpdated,
+  });
+
   return (
     <div className="space-y-6">
       <div className="space-y-1">
@@ -385,977 +184,11 @@ export function IntegrationsTab({
         </p>
       </div>
 
-      {/* Sonarr */}
-      <ArrSection
-        title="Sonarr"
-        idPrefix="sonarr"
-        // deepcode ignore HardcodedNonCryptoSecret: Placeholder string
-        placeholder={{ name: "My Sonarr", url: "http://localhost:8989", apiKey: "API key from Sonarr settings" }}
-        {...sonarr}
-      />
-
-      {/* Radarr */}
-      <ArrSection
-        title="Radarr"
-        idPrefix="radarr"
-        // deepcode ignore HardcodedNonCryptoSecret: Placeholder string
-        placeholder={{ name: "My Radarr", url: "http://localhost:7878", apiKey: "API key from Radarr settings" }}
-        {...radarr}
-      />
-
-      {/* Lidarr */}
-      <ArrSection
-        title="Lidarr"
-        idPrefix="lidarr"
-        // deepcode ignore HardcodedNonCryptoSecret: Placeholder string
-        placeholder={{ name: "My Lidarr", url: "http://localhost:8686", apiKey: "API key from Lidarr settings" }}
-        {...lidarr}
-      />
-
-      {/* Seerr */}
-      <SeerrSection {...seerr} />
-
-      {/* Tracearr */}
-      <TracearrSection {...tracearr} />
+      <IntegrationInstanceSection config={SONARR} state={sonarr} />
+      <IntegrationInstanceSection config={RADARR} state={radarr} />
+      <IntegrationInstanceSection config={LIDARR} state={lidarr} />
+      <IntegrationInstanceSection config={SEERR} state={seerr} />
+      <IntegrationInstanceSection config={TRACEARR} state={tracearr} />
     </div>
   );
-}
-
-// ─── Shared Arr Section ───
-
-interface ArrSectionRendererProps extends ArrSectionProps {
-  title: string;
-  idPrefix: string;
-  placeholder: { name: string; url: string; apiKey: string };
-}
-
-function ArrSection({
-  title,
-  idPrefix,
-  placeholder,
-  instances,
-  showForm,
-  form,
-  saving,
-  error,
-  testing,
-  testResult,
-  editing,
-  onShowForm,
-  onFormChange,
-  onAdd,
-  onDelete,
-  onTest,
-  onStartEdit,
-  onSaveEdit,
-  onCancelEdit,
-  onEditFormChange,
-  onEditTest,
-  onToggleEnabled,
-}: ArrSectionRendererProps) {
-  const style = INTEGRATION_TYPE_STYLES[idPrefix] ?? INTEGRATION_TYPE_STYLES.sonarr;
-  const disabledCount = instances.filter((i) => !i.enabled).length;
-  const hasInstances = instances.length > 0;
-  const [confirmDelete, setConfirmDelete] = useState<{ id: string; name: string } | null>(null);
-
-  return (
-    <section>
-      <SectionHeader
-        title={title}
-        icon={Boxes}
-        style={style}
-        count={instances.length}
-        disabledCount={disabledCount}
-        showAddButton={hasInstances && !showForm}
-        onShowForm={() => onShowForm(!showForm)}
-      />
-
-      {showForm && (
-        <Card className={cn("mb-4 border-l-2", style.border)}>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Plus className={cn("h-4 w-4", style.text)} />
-              Add {title} Instance
-            </CardTitle>
-            <CardDescription>
-              Connection will be tested before saving.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="grid gap-4 sm:grid-cols-2 *:space-y-1.5">
-              <div>
-                <Label htmlFor={`${idPrefix}-name`}>Name</Label>
-                <Input
-                  id={`${idPrefix}-name`}
-                  placeholder={placeholder.name}
-                  value={form.name}
-                  onChange={(e) =>
-                    onFormChange({ ...form, name: e.target.value })
-                  }
-                />
-              </div>
-              <div>
-                <Label htmlFor={`${idPrefix}-url`}>URL</Label>
-                <Input
-                  id={`${idPrefix}-url`}
-                  placeholder={placeholder.url}
-                  value={form.url}
-                  onChange={(e) =>
-                    onFormChange({ ...form, url: e.target.value })
-                  }
-                />
-              </div>
-              <div>
-                <Label htmlFor={`${idPrefix}-external-url`}>External URL</Label>
-                <Input
-                  id={`${idPrefix}-external-url`}
-                  placeholder="Browser-accessible URL (optional)"
-                  value={form.externalUrl}
-                  onChange={(e) =>
-                    onFormChange({ ...form, externalUrl: e.target.value })
-                  }
-                />
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Used for &quot;Open in&quot; links. Falls back to URL above if empty.
-                </p>
-              </div>
-              <div>
-                <Label htmlFor={`${idPrefix}-key`}>API Key</Label>
-                <SecretInput
-                  id={`${idPrefix}-key`}
-                  placeholder={placeholder.apiKey}
-                  value={form.apiKey}
-                  onChange={(e) =>
-                    onFormChange({ ...form, apiKey: e.target.value })
-                  }
-                />
-              </div>
-            </div>
-            {error && (
-              <p className="mt-2 text-sm text-destructive">{error}</p>
-            )}
-            <div className="mt-4 flex items-center gap-2">
-              <Button
-                onClick={onAdd}
-                disabled={
-                  saving ||
-                  !form.name ||
-                  !form.url ||
-                  !form.apiKey ||
-                  !testResult?.ok
-                }
-              >
-                {saving ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : (
-                  <Save className="mr-2 h-4 w-4" />
-                )}
-                Save
-              </Button>
-              <Button
-                variant="outline"
-                onClick={onTest}
-                disabled={testing || !form.url || !form.apiKey}
-              >
-                {testing ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : (
-                  <CheckCircle className="mr-2 h-4 w-4" />
-                )}
-                Test
-              </Button>
-              <Button
-                variant="ghost"
-                onClick={() => onShowForm(false)}
-              >
-                Cancel
-              </Button>
-              {testResult && <TestResultBadge result={testResult} />}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {instances.length === 0 && !showForm ? (
-        <EmptyState
-          title={title}
-          icon={Boxes}
-          style={style}
-          description={`Connect your ${title} server to enable lifecycle matching and tag sync.`}
-          onAdd={() => onShowForm(true)}
-        />
-      ) : (
-        <div className="space-y-2">
-          {instances.map((instance) => (
-            <Card key={instance.id} className="overflow-hidden transition-colors hover:bg-muted/20">
-              <CardContent className="py-4">
-                {editing.id === instance.id ? (
-                  <div className="space-y-3">
-                    <div className="grid gap-4 sm:grid-cols-2 *:space-y-1.5">
-                      <div>
-                        <Label>Name</Label>
-                        <Input
-                          value={editing.form.name}
-                          onChange={(e) => onEditFormChange({ ...editing.form, name: e.target.value })}
-                        />
-                      </div>
-                      <div>
-                        <Label>URL</Label>
-                        <Input
-                          value={editing.form.url}
-                          onChange={(e) => onEditFormChange({ ...editing.form, url: e.target.value })}
-                        />
-                      </div>
-                      <div>
-                        <Label>External URL</Label>
-                        <Input
-                          placeholder="Browser-accessible URL (optional)"
-                          value={editing.form.externalUrl}
-                          onChange={(e) => onEditFormChange({ ...editing.form, externalUrl: e.target.value })}
-                        />
-                        <p className="mt-1 text-xs text-muted-foreground">
-                          Used for &quot;Open in&quot; links. Falls back to URL above if empty.
-                        </p>
-                      </div>
-                      <div>
-                        <Label>API Key</Label>
-                        <SecretInput
-                          placeholder="Leave blank to keep current"
-                          value={editing.form.apiKey}
-                          onChange={(e) => onEditFormChange({ ...editing.form, apiKey: e.target.value })}
-                        />
-                      </div>
-                    </div>
-                    {editing.error && (
-                      <p className="text-sm text-destructive">{editing.error}</p>
-                    )}
-                    <div className="flex items-center gap-2">
-                      <Button
-                        size="sm"
-                        onClick={onSaveEdit}
-                        disabled={
-                          editing.saving ||
-                          !editing.form.name ||
-                          !editing.form.url ||
-                          (changesConnection(editing.form, instance) && !editing.testResult?.ok)
-                        }
-                      >
-                        {editing.saving ? (
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        ) : (
-                          <Save className="mr-2 h-4 w-4" />
-                        )}
-                        Save
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={onEditTest}
-                        disabled={editing.testing || !editing.form.url}
-                      >
-                        {editing.testing ? (
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        ) : (
-                          <CheckCircle className="mr-2 h-4 w-4" />
-                        )}
-                        Test
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={onCancelEdit}
-                      >
-                        Cancel
-                      </Button>
-                      {editing.testResult && <TestResultBadge result={editing.testResult} />}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="flex min-w-0 flex-1 items-center gap-3">
-                      <span
-                        className={cn(
-                          "h-2 w-2 shrink-0 rounded-full",
-                          style.dot,
-                          !instance.enabled && "opacity-30 shadow-none",
-                        )}
-                        aria-hidden
-                      />
-                      <div className={cn("min-w-0 flex-1 space-y-0.5", !instance.enabled && "opacity-60")}>
-                        <div className="flex items-center gap-2">
-                          <p className="truncate font-medium">{instance.name}</p>
-                          {!instance.enabled && (
-                            <ColorChip className="border-amber-500/30 bg-amber-500/15 text-[10px] font-medium text-amber-400">
-                              Disabled
-                            </ColorChip>
-                          )}
-                        </div>
-                        <p className="flex items-center gap-1.5 truncate text-sm text-muted-foreground">
-                          <Link2 className="h-3 w-3 shrink-0" />
-                          <span className="truncate font-mono text-xs">{instance.url}</span>
-                        </p>
-                        {instance.externalUrl && (
-                          <p className="flex items-center gap-1.5 truncate text-xs text-muted-foreground/70">
-                            <ExternalLink className="h-3 w-3 shrink-0" />
-                            <span className="truncate font-mono">{instance.externalUrl}</span>
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                    <div className="flex shrink-0 items-center gap-1">
-                      <Switch
-                        checked={instance.enabled}
-                        onCheckedChange={(checked) => onToggleEnabled(instance.id, checked)}
-                      />
-                      <Separator orientation="vertical" className="mx-1 h-6" />
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        onClick={() => onStartEdit(instance)}
-                        title="Edit instance"
-                      >
-                        <Pencil className="h-3.5 w-3.5" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-                        onClick={() => setConfirmDelete({ id: instance.id, name: instance.name })}
-                        aria-label={`Remove ${instance.name}`}
-                        title="Remove instance"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      )}
-
-      <ConfirmRemoveInstanceDialog
-        instance={confirmDelete}
-        productName={title}
-        onOpenChange={(open) => { if (!open) setConfirmDelete(null); }}
-        onConfirm={() => {
-          if (confirmDelete) onDelete(confirmDelete.id);
-          setConfirmDelete(null);
-        }}
-      />
-    </section>
-  );
-}
-
-// ─── Seerr Section ───
-
-function SeerrSection({
-  instances,
-  showForm,
-  form,
-  saving,
-  error,
-  testing,
-  testResult,
-  editing,
-  onShowForm,
-  onFormChange,
-  onAdd,
-  onDelete,
-  onTest,
-  onStartEdit,
-  onSaveEdit,
-  onCancelEdit,
-  onEditFormChange,
-  onEditTest,
-  onToggleEnabled,
-}: SeerrSectionProps) {
-  const style = INTEGRATION_TYPE_STYLES.seerr;
-  const disabledCount = instances.filter((i) => !i.enabled).length;
-  const hasInstances = instances.length > 0;
-  const [confirmDelete, setConfirmDelete] = useState<{ id: string; name: string } | null>(null);
-
-  return (
-    <section>
-      <SectionHeader
-        title="Seerr"
-        icon={Inbox}
-        style={style}
-        count={instances.length}
-        disabledCount={disabledCount}
-        showAddButton={hasInstances && !showForm}
-        onShowForm={() => onShowForm(!showForm)}
-      />
-
-      {showForm && (
-        <Card className={cn("mb-4 border-l-2", style.border)}>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Plus className={cn("h-4 w-4", style.text)} />
-              Add Seerr Instance
-            </CardTitle>
-            <CardDescription>
-              Manage request integration instances.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="grid gap-4 sm:grid-cols-4">
-              <div>
-                <Label htmlFor="seerr-name">Name</Label>
-                <Input
-                  id="seerr-name"
-                  placeholder="My Seerr"
-                  value={form.name}
-                  onChange={(e) =>
-                    onFormChange({ ...form, name: e.target.value })
-                  }
-                />
-              </div>
-              <div>
-                <Label htmlFor="seerr-url">URL</Label>
-                <Input
-                  id="seerr-url"
-                  placeholder="http://localhost:5055"
-                  value={form.url}
-                  onChange={(e) =>
-                    onFormChange({ ...form, url: e.target.value })
-                  }
-                />
-              </div>
-              <div>
-                <Label htmlFor="seerr-external-url">External URL</Label>
-                <Input
-                  id="seerr-external-url"
-                  placeholder="Browser-accessible URL (optional)"
-                  value={form.externalUrl}
-                  onChange={(e) =>
-                    onFormChange({ ...form, externalUrl: e.target.value })
-                  }
-                />
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Used for &quot;Open in Seerr&quot; links. Falls back to URL above if empty.
-                </p>
-              </div>
-              <div>
-                <Label htmlFor="seerr-key">API Key</Label>
-                <SecretInput
-                  id="seerr-key"
-                  placeholder="API key from Seerr settings"
-                  value={form.apiKey}
-                  onChange={(e) =>
-                    onFormChange({ ...form, apiKey: e.target.value })
-                  }
-                />
-              </div>
-            </div>
-            {error && (
-              <p className="mt-2 text-sm text-destructive">{error}</p>
-            )}
-            <div className="mt-4 flex items-center gap-2">
-              <Button
-                onClick={onAdd}
-                disabled={
-                  saving ||
-                  !form.name ||
-                  !form.url ||
-                  !form.apiKey ||
-                  !testResult?.ok
-                }
-              >
-                {saving ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : (
-                  <Save className="mr-2 h-4 w-4" />
-                )}
-                Save
-              </Button>
-              <Button
-                variant="outline"
-                onClick={onTest}
-                disabled={testing || !form.url || !form.apiKey}
-              >
-                {testing ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : (
-                  <CheckCircle className="mr-2 h-4 w-4" />
-                )}
-                Test
-              </Button>
-              <Button
-                variant="ghost"
-                onClick={() => onShowForm(false)}
-              >
-                Cancel
-              </Button>
-              {testResult && <TestResultBadge result={testResult} />}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {instances.length === 0 && !showForm ? (
-        <EmptyState
-          title="Seerr"
-          icon={Inbox}
-          style={style}
-          description="Connect Overseerr or Jellyseerr to surface request data alongside your library."
-          onAdd={() => onShowForm(true)}
-        />
-      ) : (
-        <div className="space-y-2">
-          {instances.map((instance) => (
-            <Card key={instance.id} className="overflow-hidden transition-colors hover:bg-muted/20">
-              <CardContent className="py-4">
-                {editing.id === instance.id ? (
-                  <div className="space-y-3">
-                    <div className="grid gap-4 sm:grid-cols-4">
-                      <div>
-                        <Label>Name</Label>
-                        <Input
-                          value={editing.form.name}
-                          onChange={(e) => onEditFormChange({ ...editing.form, name: e.target.value })}
-                        />
-                      </div>
-                      <div>
-                        <Label>URL</Label>
-                        <Input
-                          value={editing.form.url}
-                          onChange={(e) => onEditFormChange({ ...editing.form, url: e.target.value })}
-                        />
-                      </div>
-                      <div>
-                        <Label>External URL</Label>
-                        <Input
-                          placeholder="Browser-accessible URL (optional)"
-                          value={editing.form.externalUrl}
-                          onChange={(e) => onEditFormChange({ ...editing.form, externalUrl: e.target.value })}
-                        />
-                        <p className="mt-1 text-xs text-muted-foreground">
-                          Used for &quot;Open in Seerr&quot; links. Falls back to URL above if empty.
-                        </p>
-                      </div>
-                      <div>
-                        <Label>API Key</Label>
-                        <SecretInput
-                          placeholder="Leave blank to keep current"
-                          value={editing.form.apiKey}
-                          onChange={(e) => onEditFormChange({ ...editing.form, apiKey: e.target.value })}
-                        />
-                      </div>
-                    </div>
-                    {editing.error && (
-                      <p className="text-sm text-destructive">{editing.error}</p>
-                    )}
-                    <div className="flex items-center gap-2">
-                      <Button
-                        size="sm"
-                        onClick={onSaveEdit}
-                        disabled={
-                          editing.saving ||
-                          !editing.form.name ||
-                          !editing.form.url ||
-                          (changesConnection(editing.form, instance) && !editing.testResult?.ok)
-                        }
-                      >
-                        {editing.saving ? (
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        ) : (
-                          <Save className="mr-2 h-4 w-4" />
-                        )}
-                        Save
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={onEditTest}
-                        disabled={editing.testing || !editing.form.url}
-                      >
-                        {editing.testing ? (
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        ) : (
-                          <CheckCircle className="mr-2 h-4 w-4" />
-                        )}
-                        Test
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={onCancelEdit}
-                      >
-                        Cancel
-                      </Button>
-                      {editing.testResult && <TestResultBadge result={editing.testResult} />}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="flex min-w-0 flex-1 items-center gap-3">
-                      <span
-                        className={cn(
-                          "h-2 w-2 shrink-0 rounded-full",
-                          style.dot,
-                          !instance.enabled && "opacity-30 shadow-none",
-                        )}
-                        aria-hidden
-                      />
-                      <div className={cn("min-w-0 flex-1 space-y-0.5", !instance.enabled && "opacity-60")}>
-                        <div className="flex items-center gap-2">
-                          <p className="truncate font-medium">{instance.name}</p>
-                          {!instance.enabled && (
-                            <ColorChip className="border-amber-500/30 bg-amber-500/15 text-[10px] font-medium text-amber-400">
-                              Disabled
-                            </ColorChip>
-                          )}
-                        </div>
-                        <p className="flex items-center gap-1.5 truncate text-sm text-muted-foreground">
-                          <Link2 className="h-3 w-3 shrink-0" />
-                          <span className="truncate font-mono text-xs">{instance.url}</span>
-                        </p>
-                        {instance.externalUrl && (
-                          <p className="flex items-center gap-1.5 truncate text-xs text-muted-foreground/70">
-                            <ExternalLink className="h-3 w-3 shrink-0" />
-                            <span className="truncate font-mono">{instance.externalUrl}</span>
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                    <div className="flex shrink-0 items-center gap-1">
-                      <Switch
-                        checked={instance.enabled}
-                        onCheckedChange={(checked) => onToggleEnabled(instance.id, checked)}
-                      />
-                      <Separator orientation="vertical" className="mx-1 h-6" />
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        onClick={() => onStartEdit(instance)}
-                        title="Edit instance"
-                      >
-                        <Pencil className="h-3.5 w-3.5" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-                        onClick={() => setConfirmDelete({ id: instance.id, name: instance.name })}
-                        aria-label={`Remove ${instance.name}`}
-                        title="Remove instance"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      )}
-
-      <ConfirmRemoveInstanceDialog
-        instance={confirmDelete}
-        productName="Seerr"
-        onOpenChange={(open) => { if (!open) setConfirmDelete(null); }}
-        onConfirm={() => {
-          if (confirmDelete) onDelete(confirmDelete.id);
-          setConfirmDelete(null);
-        }}
-      />
-    </section>
-  );
-}
-
-// ─── Tracearr Section ───
-
-function TracearrSection({
-  instances,
-  showForm,
-  form,
-  saving,
-  error,
-  editing,
-  onShowForm,
-  onFormChange,
-  onAdd,
-  onDelete,
-  onStartEdit,
-  onSaveEdit,
-  onCancelEdit,
-  onEditFormChange,
-  onEditTest,
-  onToggleEnabled,
-}: TracearrSectionProps) {
-  const style = INTEGRATION_TYPE_STYLES.tracearr;
-  const disabledCount = instances.filter((i) => !i.enabled).length;
-  const hasInstances = instances.length > 0;
-  const [confirmDelete, setConfirmDelete] = useState<{ id: string; name: string } | null>(null);
-
-  return (
-    <section>
-      <SectionHeader
-        title="Tracearr"
-        icon={History}
-        style={style}
-        count={instances.length}
-        disabledCount={disabledCount}
-        showAddButton={hasInstances && !showForm}
-        onShowForm={() => onShowForm(!showForm)}
-      />
-
-      <p className="-mt-2 mb-4 text-xs text-muted-foreground">
-        Tracearr records every play as its own event, so a linked media server&apos;s watch history
-        carries per-play detail — completion percentage, device, player, transcode decision — that
-        Plex, Jellyfin and Emby&apos;s own history does not report. Link a server under{" "}
-        <span className="text-foreground">Media Servers → Watch history source</span>.
-      </p>
-
-      {showForm && (
-        <Card className={cn("mb-4 border-l-2", style.border)}>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Plus className={cn("h-4 w-4", style.text)} />
-              Add Tracearr Instance
-            </CardTitle>
-            <CardDescription>
-              Connection will be tested before saving.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="grid gap-4 sm:grid-cols-4">
-              <div>
-                <Label htmlFor="tracearr-name">Name</Label>
-                <Input
-                  id="tracearr-name"
-                  placeholder="My Tracearr"
-                  value={form.name}
-                  onChange={(e) =>
-                    onFormChange({ ...form, name: e.target.value })
-                  }
-                />
-              </div>
-              <div>
-                <Label htmlFor="tracearr-url">URL</Label>
-                <Input
-                  id="tracearr-url"
-                  placeholder="http://localhost:3000"
-                  value={form.url}
-                  onChange={(e) =>
-                    onFormChange({ ...form, url: e.target.value })
-                  }
-                />
-              </div>
-              <div>
-                <Label htmlFor="tracearr-key">API Key</Label>
-                <SecretInput
-                  id="tracearr-key"
-                  placeholder="API key from Tracearr settings"
-                  value={form.apiKey}
-                  onChange={(e) =>
-                    onFormChange({ ...form, apiKey: e.target.value })
-                  }
-                />
-              </div>
-            </div>
-            {error && (
-              <p className="mt-2 text-sm text-destructive">{error}</p>
-            )}
-            <div className="mt-4 flex items-center gap-2">
-              <Button
-                onClick={onAdd}
-                disabled={saving || !form.name || !form.url || !form.apiKey}
-              >
-                {saving ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : (
-                  <Save className="mr-2 h-4 w-4" />
-                )}
-                Save
-              </Button>
-              <Button
-                variant="ghost"
-                onClick={() => onShowForm(false)}
-              >
-                Cancel
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
-      {instances.length === 0 && !showForm ? (
-        <EmptyState
-          title="Tracearr"
-          icon={History}
-          style={style}
-          description="Connect Tracearr to replace a server's coarse watch history with per-play events."
-          onAdd={() => onShowForm(true)}
-        />
-      ) : (
-        <div className="space-y-2">
-          {instances.map((instance) => (
-            <Card key={instance.id} className="overflow-hidden transition-colors hover:bg-muted/20">
-              <CardContent className="py-4">
-                {editing.id === instance.id ? (
-                  <div className="space-y-3">
-                    <div className="grid gap-4 sm:grid-cols-4">
-                      <div>
-                        <Label>Name</Label>
-                        <Input
-                          value={editing.form.name}
-                          onChange={(e) => onEditFormChange({ ...editing.form, name: e.target.value })}
-                        />
-                      </div>
-                      <div>
-                        <Label>URL</Label>
-                        <Input
-                          value={editing.form.url}
-                          onChange={(e) => onEditFormChange({ ...editing.form, url: e.target.value })}
-                        />
-                      </div>
-                      <div>
-                        <Label>API Key</Label>
-                        {/* Pre-filled with the masked key the GET returned. Sent back
-                            untouched, which the update schema reads as "keep the stored
-                            key" — so an edit of just the name never rotates the secret. */}
-                        <SecretInput
-                          placeholder="Leave unchanged to keep current"
-                          value={editing.form.apiKey}
-                          onChange={(e) => onEditFormChange({ ...editing.form, apiKey: e.target.value })}
-                        />
-                      </div>
-                    </div>
-                    {editing.error && (
-                      <p className="text-sm text-destructive">{editing.error}</p>
-                    )}
-                    <div className="flex items-center gap-2">
-                      <Button
-                        size="sm"
-                        onClick={onSaveEdit}
-                        disabled={editing.saving || !editing.form.name || !editing.form.url || !editing.testResult?.ok}
-                      >
-                        {editing.saving ? (
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        ) : (
-                          <Save className="mr-2 h-4 w-4" />
-                        )}
-                        Save
-                      </Button>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={onEditTest}
-                        disabled={editing.testing || !editing.form.url}
-                      >
-                        {editing.testing ? (
-                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                        ) : (
-                          <CheckCircle className="mr-2 h-4 w-4" />
-                        )}
-                        Test
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={onCancelEdit}
-                      >
-                        Cancel
-                      </Button>
-                      {editing.testResult && <TestResultBadge result={editing.testResult} />}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="flex min-w-0 flex-1 items-center gap-3">
-                      <span
-                        className={cn(
-                          "h-2 w-2 shrink-0 rounded-full",
-                          style.dot,
-                          !instance.enabled && "opacity-30 shadow-none",
-                        )}
-                        aria-hidden
-                      />
-                      <div className={cn("min-w-0 flex-1 space-y-0.5", !instance.enabled && "opacity-60")}>
-                        <div className="flex items-center gap-2">
-                          <p className="truncate font-medium">{instance.name}</p>
-                          {!instance.enabled && (
-                            <ColorChip className="border-amber-500/30 bg-amber-500/15 text-[10px] font-medium text-amber-400">
-                              Disabled
-                            </ColorChip>
-                          )}
-                        </div>
-                        <p className="flex items-center gap-1.5 truncate text-sm text-muted-foreground">
-                          <Link2 className="h-3 w-3 shrink-0" />
-                          <span className="truncate font-mono text-xs">{instance.url}</span>
-                        </p>
-                      </div>
-                    </div>
-                    <div className="flex shrink-0 items-center gap-1">
-                      <Switch
-                        checked={instance.enabled}
-                        onCheckedChange={(checked) => onToggleEnabled(instance.id, checked)}
-                      />
-                      <Separator orientation="vertical" className="mx-1 h-6" />
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        onClick={() => onStartEdit(instance)}
-                        title="Edit instance"
-                      >
-                        <Pencil className="h-3.5 w-3.5" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        className="text-destructive hover:bg-destructive/10 hover:text-destructive"
-                        onClick={() => setConfirmDelete({ id: instance.id, name: instance.name })}
-                        aria-label={`Remove ${instance.name}`}
-                        title="Remove instance"
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          ))}
-        </div>
-      )}
-
-      {/* The consequence copy deliberately does NOT promise a fallback to
-          native history. With no enabled instance left, `syncWatchHistory`
-          SKIPS a server that is still linked to a Tracearr server rather than
-          running the native path — the native path full-replaces the server's
-          rows, so falling back would destroy the per-play history that was
-          imported (and re-enabling would then re-import it alongside the native
-          rows, permanently doubling `playCount`). The linked server therefore
-          just stops updating until the admin clears the link, which is the one
-          thing this dialog has to say and previously said backwards.
-
-          No affected-server count: this tab is pure render over its section
-          props, and the link lives on `MediaServer.tracearrServerId`, which is
-          not among them. Naming the control the admin has to visit is the
-          actionable half anyway, and it reads correctly whatever the count. */}
-      <ConfirmRemoveInstanceDialog
-        instance={confirmDelete}
-        productName="Tracearr"
-        consequence={
-          <>
-            This removes the Tracearr connection from Librariarr. Any media server still linked to
-            it stops updating its watch history — the sync skips a linked server instead of falling
-            back, so the per-play history already imported is never overwritten by the
-            server&apos;s own coarser history. To return a server to its native history, set its{" "}
-            <span className="text-foreground">Watch history source</span> to &ldquo;Native (server
-            history)&rdquo; under Media Servers. Nothing is changed in Tracearr itself.
-          </>
-        }
-        onOpenChange={(open) => { if (!open) setConfirmDelete(null); }}
-        onConfirm={() => {
-          if (confirmDelete) onDelete(confirmDelete.id);
-          setConfirmDelete(null);
-        }}
-      />
-    </section>
-  );
-}
+});

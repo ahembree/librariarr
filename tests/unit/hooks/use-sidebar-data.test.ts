@@ -8,7 +8,10 @@ const mocks = vi.hoisted(() => ({
   toastError: vi.fn(),
   toastSuccess: vi.fn(),
 }));
-vi.mock("@/hooks/use-realtime", () => ({
+// The real module for everything but the subscription: no stream ever opens,
+// so pushes never arrive (`isRealtimeLive()` false) and the fallback poll runs.
+vi.mock("@/hooks/use-realtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/hooks/use-realtime")>()),
   useRealtime: (type: string, cb: () => void) => {
     mocks.handlers.set(type, cb);
     return { connected: true, authExpired: false };
@@ -17,9 +20,12 @@ vi.mock("@/hooks/use-realtime", () => ({
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: mocks.push }) }));
 vi.mock("sonner", () => ({ toast: { error: mocks.toastError, success: mocks.toastSuccess } }));
 
-import { useSidebarData } from "@/hooks/use-sidebar-data";
 import { getPageMeta } from "@/lib/nav/page-meta";
-import { shellSettingsWrapper } from "../../setup/shell-settings-wrapper";
+
+// Loaded fresh per test: the library types are held for the tab, in a module.
+// The wrapper too, so its provider is the one the hook reads.
+let useSidebarData: typeof import("@/hooks/use-sidebar-data").useSidebarData;
+let shellSettingsWrapper: typeof import("../../setup/shell-settings-wrapper").shellSettingsWrapper;
 
 type Responses = Record<string, unknown>;
 const fetchMock = vi.fn();
@@ -30,7 +36,10 @@ function json(body: unknown, ok = true) {
   return Promise.resolve({ ok, json: async () => body });
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  vi.resetModules();
+  ({ useSidebarData } = await import("@/hooks/use-sidebar-data"));
+  ({ shellSettingsWrapper } = await import("../../setup/shell-settings-wrapper"));
   mocks.handlers.clear();
   mocks.push.mockReset();
   mocks.toastError.mockReset();
@@ -161,6 +170,28 @@ describe("useSidebarData", () => {
     expect(streams()).toBe(3);
     await act(async () => mocks.handlers.get("server-status")!());
     expect(streams()).toBe(0);
+  });
+
+  it("takes the badge from a published live count, asking no media server on session-changed meanwhile", async () => {
+    // The same module copy the hook loaded (modules are reset per test).
+    const { publishLiveSessionCount } = await import("@/hooks/use-live-session-count");
+    sessionsQueue = [{ sessions: [] }, { sessions: [{ sessionId: "z" }] }];
+    const { result } = renderHook(() => useSidebarData());
+    const streams = () => result.current.navigation.find((g) => g.label === "Tools")!.items[0].badge;
+    const sessionReads = () => fetchMock.mock.calls.filter(([url]) => url === "/api/tools/sessions").length;
+    await waitFor(() => expect(sessionReads()).toBe(1));
+
+    act(() => publishLiveSessionCount(4));
+    expect(streams()).toBe(4);
+    await act(async () => mocks.handlers.get("session-changed")!());
+    expect(sessionReads()).toBe(1);
+
+    // The publisher left: the last count stays, and the next event reads again.
+    act(() => publishLiveSessionCount(null));
+    expect(streams()).toBe(4);
+    await act(async () => mocks.handlers.get("session-changed")!());
+    expect(sessionReads()).toBe(2);
+    expect(streams()).toBe(1);
   });
 
   it("toasts a server going down and coming back, once each, and broadcasts health", async () => {

@@ -81,33 +81,103 @@ export async function getServerPresenceByDedupKey(
 export async function getServerPresenceByGroup(
   type: "SERIES" | "MUSIC",
   serverIds: string[],
+  options?: GroupPresenceScope,
 ): Promise<Map<string, ServerPresence[]>> {
+  if (serverIds.length === 0 || options?.groupKeys?.length === 0) return new Map();
+  return foldPresence(await readGroupPresence(type, serverIds, options?.groupKeys ?? null));
+}
+
+/** Which groups `getServerPresenceByGroup` answers for. */
+export interface GroupPresenceScope {
+  /**
+   * Only these groups, keyed as the map is (a `seriesKey` for SERIES, the
+   * normalized artist title for MUSIC). A listing that returns a page, or that
+   * a filter narrows to a few shows, needs presence for those alone: across a
+   * whole library the scan was the slowest part of the multi-server Series
+   * listing (~150–270 ms on 100k episodes against ~2–6 ms for 50 shows).
+   * Omitted: every group.
+   */
+  groupKeys?: readonly string[];
+}
+
+/**
+ * The presence of ONE show or artist, for the group-summary route. MUSIC
+ * matches the artist title as the listings group it (`LOWER(TRIM(…))` in SQL),
+ * so a caller holding one of its stored spellings needs no normalization of
+ * its own.
+ */
+export async function getServerPresenceForGroup(
+  type: "SERIES" | "MUSIC",
+  serverIds: string[],
+  group: { seriesKey: string } | { parentTitle: string },
+): Promise<ServerPresence[]> {
+  if (serverIds.length === 0) return [];
+  const rows =
+    "seriesKey" in group
+      ? await readGroupPresence(type, serverIds, [group.seriesKey])
+      : await readGroupPresence(type, serverIds, null, group.parentTitle);
+  return [...foldPresence(rows).values()][0] ?? [];
+}
+
+interface PresenceRow {
+  group_key: string;
+  serverId: string;
+  serverName: string;
+  serverType: string;
+  mediaItemId: string;
+}
+
+/**
+ * One row per group and server: the server's OLDEST item of the group (ties
+ * by id), as a server holding two copies has always been listed.
+ *
+ * A GROUP BY taking `MIN(ARRAY[createdAt as fixed-width text, id])[2]`
+ * rather than a `DISTINCT ON` ordered by `createdAt, id`: the DISTINCT ON
+ * sorted every episode of the library (an external merge sort under the
+ * default `work_mem`), where the aggregate hashes one entry per group and
+ * server. Same rows; measured on 100k episodes over 2 servers, 266 ms → 153
+ * ms for the whole library, 112 → 80 ms for 40k tracks. The timestamp is
+ * written as digits of fixed width (`YYYYMMDDHH24MISSUS`, no locale part), so
+ * the text comparison orders it as the timestamp comparison did.
+ */
+function readGroupPresence(
+  type: "SERIES" | "MUSIC",
+  serverIds: string[],
+  groupKeys: readonly string[] | null,
+  title?: string,
+): Promise<PresenceRow[]> {
   const groupKeyExpr =
     type === "SERIES" ? `mi."seriesKey"` : `LOWER(TRIM(mi."parentTitle"))`;
   const notNullCol = type === "SERIES" ? `mi."seriesKey"` : `mi."parentTitle"`;
-  const items = await prisma.$queryRawUnsafe<
-    {
-      group_key: string;
-      serverId: string;
-      serverName: string;
-      serverType: string;
-      mediaItemId: string;
-    }[]
-  >(
-    `SELECT DISTINCT ON (${groupKeyExpr}, ms.id)
-       ${groupKeyExpr} as group_key,
+  const params: unknown[] = [type, serverIds];
+  let scope = "";
+  if (groupKeys) {
+    params.push(groupKeys);
+    scope = `AND ${groupKeyExpr} = ANY($${params.length}::text[])`;
+  } else if (title !== undefined) {
+    params.push(title);
+    scope = `AND ${groupKeyExpr} = LOWER(TRIM($${params.length}))`;
+  }
+  return prisma.$queryRawUnsafe<PresenceRow[]>(
+    `SELECT p.group_key,
        ms.id as "serverId", ms.name as "serverName", ms.type::text as "serverType",
-       mi.id as "mediaItemId"
-     FROM "MediaItem" mi
-     JOIN "Library" l ON mi."libraryId" = l.id
-     JOIN "MediaServer" ms ON l."mediaServerId" = ms.id
-     WHERE mi.type = $1::"LibraryType" AND ${notNullCol} IS NOT NULL
-       AND l."mediaServerId" = ANY($2::text[])
-     ORDER BY ${groupKeyExpr}, ms.id, mi."createdAt" ASC, mi.id`,
-    type,
-    serverIds,
+       p.media_item_id as "mediaItemId"
+     FROM (
+       SELECT ${groupKeyExpr} as group_key, l."mediaServerId" as server_id,
+         (MIN(ARRAY[to_char(mi."createdAt", 'YYYYMMDDHH24MISSUS'), mi.id]))[2] as media_item_id
+       FROM "MediaItem" mi
+       JOIN "Library" l ON mi."libraryId" = l.id
+       WHERE mi.type = $1::"LibraryType" AND ${notNullCol} IS NOT NULL
+         AND l."mediaServerId" = ANY($2::text[])
+         ${scope}
+       GROUP BY 1, 2
+     ) p
+     JOIN "MediaServer" ms ON ms.id = p.server_id`,
+    ...params,
   );
+}
 
+function foldPresence(items: PresenceRow[]): Map<string, ServerPresence[]> {
   const map = new Map<string, ServerPresence[]>();
 
   for (const row of items) {

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession, type LoggedInSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { executeAction, extractActionError, describeActionError } from "@/lib/lifecycle/actions";
@@ -26,15 +26,11 @@ import { memberIdsFromItemData } from "@/lib/lifecycle/group-aggregate";
 import type { LifecycleRuleGroup } from "@/lib/rules/types";
 import type { Prisma } from "@/generated/prisma/client";
 
-export async function DELETE(
+export const DELETE = withSession(async (
+  session,
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+) => {
   const { id } = await params;
 
   const action = await prisma.lifecycleAction.findUnique({
@@ -54,18 +50,14 @@ export async function DELETE(
 
   await prisma.lifecycleAction.delete({ where: { id } });
   return NextResponse.json({ action: null });
-}
+});
 
 // Force-retry a failed action
-export async function POST(
+export const POST = withSession(async (
+  session,
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+) => {
   const { id } = await params;
   const skipTitleValidation = request.nextUrl.searchParams.get("skipTitleValidation") === "true";
 
@@ -110,7 +102,7 @@ export async function POST(
   }
   // Kept apart from an ad-hoc query action, which can act on another copy or
   // track of the same Arr record (see `execute-in-flight.ts`).
-  if (!tryBeginRuleSetExecution(session.userId!)) {
+  if (!tryBeginRuleSetExecution(session.userId)) {
     endExecute(ruleSetId, lockedItems);
     return NextResponse.json(
       { error: "A query action is running — wait for it to finish" },
@@ -120,10 +112,10 @@ export async function POST(
   try {
     return await retryAction(session, { ...action, ruleSetId }, skipTitleValidation);
   } finally {
-    endRuleSetExecution(session.userId!);
+    endRuleSetExecution(session.userId);
     endExecute(ruleSetId, lockedItems);
   }
-}
+});
 
 type FailedAction = Prisma.LifecycleActionGetPayload<{
   include: { mediaItem: { include: { externalIds: true } } };
@@ -131,7 +123,7 @@ type FailedAction = Prisma.LifecycleActionGetPayload<{
 
 /** The retry proper. Runs under the execute lock on its item (see `POST`). */
 async function retryAction(
-  session: Awaited<ReturnType<typeof getSession>>,
+  session: LoggedInSession,
   action: FailedAction,
   skipTitleValidation: boolean,
 ): Promise<NextResponse> {
@@ -207,7 +199,7 @@ async function retryAction(
   // exception creation deletes PENDING actions, but FAILED rows survive and
   // could otherwise be force-retried against an excluded item.
   // An exception on another server's copy of the item (same dedupKey) counts.
-  const excepted = await findExceptedItemIds(session.userId!, [action.mediaItemId, ...members]);
+  const excepted = await findExceptedItemIds(session.userId, [action.mediaItemId, ...members]);
   if (excepted.has(action.mediaItemId)) {
     return NextResponse.json(
       { error: "This item has a lifecycle exception and cannot be actioned" },
@@ -230,7 +222,7 @@ async function retryAction(
   // series/artist — refuse the retry if ANY sibling is excepted (mirrors the
   // scheduled executor and the manual execute route).
   if (isWholeRecordDestructiveAction(action.actionType) && hasProtectionGroup(action.mediaItem)) {
-    const protectedGroups = await findExceptionProtectedGroups(session.userId!, [
+    const protectedGroups = await findExceptionProtectedGroups(session.userId, [
       action.mediaItem,
     ]);
     if (isGroupProtected(protectedGroups, action.mediaItem)) {

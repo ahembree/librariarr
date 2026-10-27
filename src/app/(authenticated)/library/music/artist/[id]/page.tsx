@@ -1,7 +1,5 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
-import { useRealtime } from "@/hooks/use-realtime";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useChipColors } from "@/components/chip-color-provider";
@@ -9,16 +7,15 @@ import { QualityChip } from "@/components/quality-chips";
 import { QualityBar } from "@/components/media-card";
 import { qualityChips, qualitySegments } from "@/lib/media/quality-chips";
 import { MediaDetailHero } from "@/components/media-detail-hero";
+import { DetailPageStates, genreChips } from "@/components/media-detail-parts";
 import { FadeImage } from "@/components/ui/fade-image";
 import { ColorChip } from "@/components/color-chip";
-import { MediaHoverPopover } from "@/components/media-hover-popover";
+import { MediaHoverPopover, hoverDataFromAlbum } from "@/components/media-hover-popover";
 import { HoverCard, HoverCardTrigger, HoverCardContent } from "@/components/ui/hover-card";
 import { Separator } from "@/components/ui/separator";
-import { Skeleton } from "@/components/ui/skeleton";
 import { formatFileSize } from "@/lib/format";
-import type { MediaItemWithRelations } from "@/lib/types";
-import { detailPrefetch, mediaRecordUrl } from "@/lib/media/detail-prefetch";
-import { type PlayServer, buildPlayLinks } from "@/lib/play-url";
+import { useMediaDetailRecord } from "@/hooks/use-media-detail-record";
+import { useDetailChildren } from "@/hooks/use-detail-children";
 
 interface AlbumData {
   albumTitle: string;
@@ -41,67 +38,36 @@ interface AlbumData {
   year?: number | null;
 }
 
+const PLAY_LINKS: Parameters<typeof useMediaDetailRecord>[1]["playLinks"] = [
+  ["Artist", "grandparentRatingKey"],
+  ["Album", "parentRatingKey"],
+  ["Track", "ratingKey"],
+];
+
+const pickAlbums = (body: Record<string, unknown>) => body.albums as AlbumData[] | undefined;
+
 export default function ArtistDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { getHex } = useChipColors();
-  const [item, setItem] = useState<MediaItemWithRelations | null>(null);
-  const [playServers, setPlayServers] = useState<PlayServer[]>([]);
-  const [albums, setAlbums] = useState<AlbumData[]>([]);
-  const [loading, setLoading] = useState(true);
+  // The albums are asked for by this page's id, beside the record — they used
+  // to wait for it, to read its artist — and both are re-read together on
+  // every `sync:completed` (new/removed items) without a manual refresh. No
+  // integration cards here, so no Lidarr lookup is started.
+  const { item, playServers, loading, syncTick } = useMediaDetailRecord(id, {
+    mediaType: "MUSIC",
+    plays: false,
+    integrations: false,
+    playLinks: PLAY_LINKS,
+    refetchOnTick: true,
+    children: "albums",
+  });
+  const albumList = useDetailChildren(id, "albums", syncTick, pickAlbums);
 
-  // Token guards against a stale slow response landing after the id changes
-  // and overwriting the current artist's data.
-  const reqToken = useRef(0);
+  // The page renders with its albums, as it did when it waited for both in turn.
+  const pending = loading || (item !== null && !albumList.loaded);
+  if (pending || !item) return <DetailPageStates loading={pending} notFoundLabel="Artist not found" />;
 
-  const [syncTick, setSyncTick] = useState(0);
-  // Auto-update on real-time sync (new/removed items) without a manual refresh.
-  useRealtime("sync:completed", () => setSyncTick((t) => t + 1));
-
-  useEffect(() => {
-    const token = ++reqToken.current;
-    async function fetchData() {
-      try {
-        const { body: itemData } = await detailPrefetch.fetch<{ item?: MediaItemWithRelations; playServers?: PlayServer[] }>(mediaRecordUrl(id));
-        if (token !== reqToken.current) return;
-        if (!itemData?.item) return;
-        setItem(itemData.item);
-        setPlayServers(buildPlayLinks(itemData.playServers || [], [
-          ["Artist", "grandparentRatingKey"],
-          ["Album", "parentRatingKey"],
-          ["Track", "ratingKey"],
-        ]));
-
-        const artistName = itemData.item.parentTitle || itemData.item.title;
-        const albumsRes = await fetch(`/api/media/music/albums?parentTitle=${encodeURIComponent(artistName)}`);
-        const albumsData = await albumsRes.json();
-        if (token !== reqToken.current) return;
-        setAlbums(albumsData.albums || []);
-      } catch {
-        // Failed to load
-      } finally {
-        if (token === reqToken.current) setLoading(false);
-      }
-    }
-    fetchData();
-  }, [id, syncTick]);
-
-  if (loading) {
-    return (
-      <div className="p-4 sm:p-6 lg:p-8 space-y-4">
-        <Skeleton className="h-8 w-48" />
-        <Skeleton className="h-[400px] w-full rounded-lg" />
-      </div>
-    );
-  }
-
-  if (!item) {
-    return (
-      <div className="flex items-center justify-center min-h-[50vh]">
-        <p className="text-muted-foreground">Artist not found</p>
-      </div>
-    );
-  }
-
+  const albums = albumList.items;
   const artistName = item.parentTitle || item.title;
   const totalTracks = albums.reduce((sum, a) => sum + a.trackCount, 0);
   const totalSize = albums.reduce((sum, a) => sum + (a.totalSize ? Number(a.totalSize) : 0), 0);
@@ -135,15 +101,7 @@ export default function ArtistDetailPage() {
           )}
         </>
       }
-      genres={
-        item.genres && item.genres.length > 0
-          ? item.genres.map((genre) => (
-              <ColorChip key={genre} className="bg-white/10 text-white/80 border-white/20">
-                {genre}
-              </ColorChip>
-            ))
-          : undefined
-      }
+      genres={genreChips(item.genres)}
       backHref="/library/music"
       backLabel="Music"
       useParentArt
@@ -201,25 +159,7 @@ export default function ArtistDetailPage() {
                   <MediaHoverPopover
                     imageUrl={`/api/media/${a.mediaItemId}/image?type=season`}
                     imageAspect="square"
-                    data={{
-                      title: a.albumTitle,
-                      year: a.year,
-                      summary: a.summary,
-                      contentRating: a.contentRating,
-                      rating: a.rating,
-                      ratingImage: a.ratingImage,
-                      audienceRating: a.audienceRating,
-                      audienceRatingImage: a.audienceRatingImage,
-                      genres: a.genres,
-                      studio: a.studio,
-                      trackCount: a.trackCount,
-                      audioCodecCounts: a.audioCodecCounts,
-                      fileSize: a.totalSize,
-                      playCount: a.totalPlayCount,
-                      lastPlayedAt: a.lastPlayed,
-                      addedAt: a.addedAt,
-                      servers: a.servers,
-                    }}
+                    data={hoverDataFromAlbum(a)}
                   />
                 </HoverCardContent>
               </HoverCard>

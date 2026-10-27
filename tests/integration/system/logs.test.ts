@@ -251,6 +251,50 @@ describe("System logs endpoints", () => {
       expect(body.total).toBe(501);
       expect(body.pages).toBe(2);
     });
+
+    it("says whether another page follows", async () => {
+      const user = await createTestUser();
+      setMockSession({ userId: user.id, isLoggedIn: true });
+      for (let i = 0; i < 3; i++) await createTestLogEntry({ message: `log ${i}` });
+
+      const page = (p: string) =>
+        callRoute(GET, { url: "/api/system/logs", searchParams: { limit: "2", page: p } });
+      expect((await expectJson<{ hasMore: boolean }>(await page("1"))).hasMore).toBe(true);
+      expect((await expectJson<{ hasMore: boolean }>(await page("2"))).hasMore).toBe(false);
+    });
+
+    it("skips the total with count=false and still pages the same rows", async () => {
+      const user = await createTestUser();
+      setMockSession({ userId: user.id, isLoggedIn: true });
+      // Distinct timestamps, so both reads order the rows the same way.
+      const base = Date.now() - 60_000;
+      await getTestPrisma().logEntry.createMany({
+        data: [
+          ...Array.from({ length: 5 }, (_, i) => ({
+            level: "INFO" as const,
+            category: "BACKEND" as const,
+            source: "test",
+            message: `log ${i}`,
+            createdAt: new Date(base + i * 1000),
+          })),
+          { level: "INFO" as const, category: "BACKEND" as const, source: "elsewhere", message: "other" },
+        ],
+      });
+
+      type Body = { logs: { message: string }[]; total: number | null; pages: number | null; page: number; hasMore: boolean };
+      const read = (searchParams: Record<string, string>) =>
+        callRoute(GET, { url: "/api/system/logs", searchParams: { source: "test", limit: "2", ...searchParams } });
+
+      const counted = await expectJson<Body>(await read({ page: "2" }));
+      const uncounted = await expectJson<Body>(await read({ page: "2", count: "false" }));
+      expect(uncounted.logs).toEqual(counted.logs);
+      expect(uncounted).toMatchObject({ total: null, pages: null, page: 2, hasMore: true });
+      expect(counted).toMatchObject({ total: 5, pages: 3, hasMore: true });
+
+      const last = await expectJson<Body>(await read({ page: "3", count: "false" }));
+      expect(last.logs.map((l) => l.message)).toEqual(["log 0"]);
+      expect(last.hasMore).toBe(false);
+    });
   });
 
   // ----- GET /api/system/logs/sources -----
@@ -287,6 +331,26 @@ describe("System logs endpoints", () => {
       // Each source once, alphabetically.
       expect(body.sources).toEqual(["scheduler", "sync-engine"]);
       expect(body.categories).toEqual(["BACKEND", "API", "DB"]);
+    });
+
+    it("lists every source of a large log once, in order", async () => {
+      const user = await createTestUser();
+      setMockSession({ userId: user.id, isLoggedIn: true });
+
+      const sources = Array.from({ length: 12 }, (_, i) => `source-${String(i).padStart(2, "0")}`);
+      await getTestPrisma().logEntry.createMany({
+        data: Array.from({ length: 600 }, (_, i) => ({
+          level: "INFO" as const,
+          category: "BACKEND" as const,
+          source: sources[(i * 7) % sources.length],
+          message: `log ${i}`,
+        })),
+      });
+
+      const body = await expectJson<{ sources: string[] }>(
+        await callRoute(SOURCES_GET, { url: "/api/system/logs/sources" }),
+      );
+      expect(body.sources).toEqual(sources);
     });
   });
 });

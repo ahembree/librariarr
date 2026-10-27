@@ -15,6 +15,7 @@ import {
 } from "./schedule-activity";
 import { logger } from "@/lib/logger";
 import type { MediaSession } from "@/lib/media-server/types";
+import type { MediaServerType } from "@/generated/prisma/client";
 
 let initialized = false;
 let isRunning = false;
@@ -266,10 +267,68 @@ export async function processPrerollSchedules() {
   }
 }
 
+interface EnforcedServer {
+  id: string;
+  type: MediaServerType;
+  url: string;
+  accessToken: string;
+  tlsSkipVerify: boolean;
+}
+
+/**
+ * One tick's view of each server's sessions: fetched once, shared by the
+ * maintenance/transcode loop and every active blackout schedule. Each used to
+ * call `getSessions()` itself, so a server under maintenance with two blackout
+ * windows open was asked three times a tick — and on a session-changed push
+ * the tick runs every couple of seconds.
+ *
+ * A session terminated earlier in the tick is left out of what later loops
+ * see, so a second loop never stops it again (logging a failure, or a second
+ * termination, for a stream that has already gone) and a block_new_only
+ * snapshot taken this tick does not grandfather it.
+ */
+function createTickSessions() {
+  const clients = new Map<string, ReturnType<typeof createMediaServerClient>>();
+  const sessions = new Map<string, Promise<MediaSession[]>>();
+  const terminated = new Set<string>();
+
+  const clientFor = (server: EnforcedServer) => {
+    let client = clients.get(server.id);
+    if (!client) {
+      client = createMediaServerClient(server.type, server.url, server.accessToken, {
+        skipTlsVerify: server.tlsSkipVerify,
+      });
+      clients.set(server.id, client);
+    }
+    return client;
+  };
+
+  return {
+    clientFor,
+    /** The server's sessions this tick, less those already terminated. Rejects if the server could not be asked. */
+    async sessionsFor(server: EnforcedServer): Promise<MediaSession[]> {
+      let pending = sessions.get(server.id);
+      if (!pending) {
+        pending = clientFor(server).getSessions();
+        // Observed here so a rejection no loop reaches is not "unhandled".
+        pending.catch(() => {});
+        sessions.set(server.id, pending);
+      }
+      const all = await pending;
+      return all.filter((session) => !terminated.has(`${server.id}:${session.sessionId}`));
+    },
+    recordTerminated(serverId: string, sessionId: string): void {
+      terminated.add(`${serverId}:${sessionId}`);
+    },
+  };
+}
+
 /** Single enforcement tick — exported for direct testing. */
 export async function runEnforcerTick() {
   if (isRunning) return;
   isRunning = true;
+
+  const tick = createTickSessions();
 
   try {
       const allSettings = await prisma.appSettings.findMany({
@@ -329,10 +388,8 @@ export async function runEnforcerTick() {
 
           await Promise.allSettled(settings.user.mediaServers.map(async (server) => {
             try {
-              const client = createMediaServerClient(server.type, server.url, server.accessToken, {
-                skipTlsVerify: server.tlsSkipVerify,
-              });
-              const sessions = await client.getSessions();
+              const client = tick.clientFor(server);
+              const sessions = await tick.sessionsFor(server);
               polledServerIds.add(server.id);
 
               // The 4K criterion needs the SOURCE resolution, which a Plex
@@ -466,6 +523,7 @@ export async function runEnforcerTick() {
                   };
                   try {
                     await client.terminateSession(session.sessionId, message);
+                    tick.recordTerminated(server.id, session.sessionId);
                     logTermination(termination);
                     pendingTerminations.delete(sessionKey);
                   } catch (error) {
@@ -542,10 +600,8 @@ export async function runEnforcerTick() {
 
             await Promise.allSettled(schedule.user.mediaServers.map(async (server) => {
               try {
-                const client = createMediaServerClient(server.type, server.url, server.accessToken, {
-                  skipTlsVerify: server.tlsSkipVerify,
-                });
-                const sessions = await client.getSessions();
+                const client = tick.clientFor(server);
+                const sessions = await tick.sessionsFor(server);
                 polledBlackoutServers.add(`${schedule.id}:${server.id}`);
 
                 const blackoutExcluded = schedule.excludedUsers ?? [];
@@ -565,6 +621,7 @@ export async function runEnforcerTick() {
                     };
                     try {
                       await client.terminateSession(session.sessionId, blackoutMsg);
+                      tick.recordTerminated(server.id, session.sessionId);
                       logTermination(termination);
                     } catch (error) {
                       logger.error(TERMINATION_SOURCE, terminationFailureMessage(termination, String(error)), {
@@ -618,6 +675,7 @@ export async function runEnforcerTick() {
                       };
                       try {
                         await client.terminateSession(session.sessionId, blackoutMsg);
+                        tick.recordTerminated(server.id, session.sessionId);
                         logTermination(termination);
                         pendingTerminations.delete(sessionKey);
                       } catch (error) {
@@ -657,6 +715,7 @@ export async function runEnforcerTick() {
                         };
                         try {
                           await client.terminateSession(session.sessionId, blackoutMsg);
+                          tick.recordTerminated(server.id, session.sessionId);
                           logTermination(termination);
                         } catch (error) {
                           logger.error(TERMINATION_SOURCE, terminationFailureMessage(termination, String(error)), {

@@ -16,6 +16,12 @@ const nextConfig: NextConfig = {
   output: "standalone",
   // No `X-Powered-By: Next.js` — it only tells a scanner what to try.
   poweredByHeader: false,
+  experimental: {
+    // Every shadcn primitive imports from the `radix-ui` umbrella package, a
+    // barrel re-exporting all ~60 Radix packages; Next's built-in list of
+    // barrels it rewrites to direct imports does not include it.
+    optimizePackageImports: ["radix-ui"],
+  },
   env: {
     NEXT_PUBLIC_APP_VERSION: packageJson.version,
   },

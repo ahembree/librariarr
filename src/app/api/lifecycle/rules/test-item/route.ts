@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import {
   evaluateAllRulesInMemory,
@@ -12,25 +12,21 @@ import {
   hasSeriesAggregateRules,
   hasWatchedByUserRules,
   hasCrossSystemFieldRules,
+  hasCustomFormatScoreRules,
   lookupSeerrMeta,
 } from "@/lib/rules/lifecycle-engine";
 import { fetchCrossSystemData, foldCrossSystemData } from "@/lib/conditions/cross-system-data";
 import type { ArrDataMap, SeerrDataMap } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRuleGroup, LifecycleRule } from "@/lib/rules/types";
-import { fetchArrMetadata } from "@/lib/lifecycle/fetch-arr-metadata";
-import { fetchSeerrMetadata } from "@/lib/lifecycle/fetch-seerr-metadata";
+import { fetchArrRecordForPreview } from "@/lib/lifecycle/fetch-arr-metadata";
+import { fetchSeerrMetadataForPreview } from "@/lib/lifecycle/fetch-seerr-metadata";
 import { checkLifecycleRuleEvaluability } from "@/lib/lifecycle/evaluability";
 import { validateRequest, ruleTestItemSchema } from "@/lib/validation";
 import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
 import { resolveSeriesKey } from "@/lib/media/series-key";
 import { artistMbidOf, splitArtistGroupByMbid } from "@/lib/media/artist-key";
 
-export async function POST(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const POST = withSession(async (session, request: NextRequest) => {
   const { data, error } = await validateRequest(request, ruleTestItemSchema);
   if (error) return error;
 
@@ -91,7 +87,7 @@ export async function POST(request: NextRequest) {
   // (An orphaned library — its server deleted with `onDelete: SetNull` — has no
   // server to scope to, so fall back to the rule set's own targets.)
   const evaluability = await checkLifecycleRuleEvaluability(
-    session.userId!,
+    session.userId,
     type,
     typedRules,
     item.library.mediaServer ? [item.library.mediaServer.id] : serverIds,
@@ -101,16 +97,25 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: evaluability.reason }, { status: 400 });
   }
 
-  // Fetch Arr/Seerr metadata if needed
-  let arrData: ArrDataMap | undefined;
-  if (hasArrRules(typedRules)) {
-    arrData = await fetchArrMetadata(session.userId!, type, undefined, arrInstanceId);
-  }
-
-  let seerrData: SeerrDataMap | undefined;
-  if (hasSeerrRules(typedRules) && type !== "MUSIC") {
-    seerrData = await fetchSeerrMetadata(session.userId!, type);
-  }
+  // The item is evaluated against its own Arr record only — the one under its
+  // Arr-family id, which a group record shares (it spreads the item) — so only
+  // that record is read, not the instance's whole library. Seerr has no
+  // per-item listing that folds requests as the request walk does, so it is
+  // read whole, through the editor's short-lived cache. Both at once.
+  const arrIdSource = type === "MOVIE" ? "TMDB" : type === "MUSIC" ? "MUSICBRAINZ" : "TVDB";
+  const arrLookupId = item.externalIds.find((e) => e.source === arrIdSource)?.externalId;
+  const [arrData, seerrData]: [ArrDataMap | undefined, SeerrDataMap | undefined] = await Promise.all([
+    hasArrRules(typedRules)
+      ? arrLookupId
+        ? fetchArrRecordForPreview(session.userId, type, arrLookupId, arrInstanceId, {
+            customFormatScores: hasCustomFormatScoreRules(typedRules),
+          })
+        : Promise.resolve({})
+      : Promise.resolve(undefined),
+    hasSeerrRules(typedRules) && type !== "MUSIC"
+      ? fetchSeerrMetadataForPreview(session.userId, type)
+      : Promise.resolve(undefined),
+  ]);
 
   // Cross-system fields, enriched as detection enriches them: the item's own,
   // and a group's read across its members (below), leaving out the rule set's
@@ -282,8 +287,6 @@ export async function POST(request: NextRequest) {
       : (group ?? single);
 
   // Evaluate rules against the item
-  const arrIdSource =
-    type === "MOVIE" ? "TMDB" : type === "MUSIC" ? "MUSICBRAINZ" : "TVDB";
   const externalIds = (serialized.externalIds as Array<{
     source: string;
     externalId: string;
@@ -341,4 +344,4 @@ export async function POST(request: NextRequest) {
       thumbUrl: item.thumbUrl,
     },
   });
-}
+});

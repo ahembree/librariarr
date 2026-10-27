@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, memo } from "react";
 import { toast } from "sonner";
 import { useLocalStorage, useLocalStorageJSON } from "@/hooks/use-local-storage";
 import Link from "next/link";
@@ -16,14 +16,8 @@ import { IntegrationUnreachableBanner } from "@/components/integration-unreachab
 import { useIntegrationsHealth } from "@/hooks/use-integrations-health";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { MediaCard } from "@/components/media-card";
-import { useCardSize, estimateContentWidth } from "@/hooks/use-card-size";
+import { useCardSize } from "@/hooks/use-card-size";
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { CardSizeControl } from "@/components/card-size-control";
 import { CardDisplayControl } from "@/components/card-display-control";
@@ -31,28 +25,23 @@ import { MetadataLine } from "@/components/metadata-line";
 import { qualityChips, qualitySegments } from "@/lib/media/quality-chips";
 import { useChipColors } from "@/components/chip-color-provider";
 import { type ChipColorCategory } from "@/lib/theme/chip-colors";
-import { MEDIA_TYPE_BADGE_COLORS, mediaTypeLabel } from "@/lib/theme/media-type-colors";
 import { formatFileSize, formatDuration } from "@/lib/format";
-import { formatActionTypeLabel } from "@/lib/lifecycle/action-types";
 import { cn } from "@/lib/utils";
 import type { MediaItemWithRelations } from "@/lib/types";
 import {
   ChevronDown,
   ChevronRight,
   Columns3,
-  Film,
   Inbox,
   LayoutGrid,
   Loader2,
-  Music,
   RefreshCw,
   ShieldOff,
   TableProperties,
-  Tv,
 } from "lucide-react";
-import { TabNav, type TabNavItem } from "@/components/tab-nav";
+import { TabNav } from "@/components/tab-nav";
 import { ColorChip } from "@/components/color-chip";
-import { MediaHoverPopover } from "@/components/media-hover-popover";
+import { MediaHoverPopover, hoverDataFromListItem } from "@/components/media-hover-popover";
 import { HoverCard, HoverCardTrigger, HoverCardContent } from "@/components/ui/hover-card";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import {
@@ -61,16 +50,17 @@ import {
   DropdownMenuCheckboxItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { useRealtime } from "@/hooks/use-realtime";
+import { PageHeader } from "@/components/page-header";
+import { LoadingButton } from "@/components/loading-button";
+import { ExcludeReasonDialog } from "@/components/exclude-reason-dialog";
+import { RuleSetGroupCard, LIFECYCLE_MEDIA_TYPE_TABS } from "@/components/rule-set-group-card";
+import { VirtualCardGrid, type GridCardContext } from "@/components/virtual-card-grid";
+import { useVirtualPosterGrid, POSTER_ASPECT, SQUARE_ASPECT } from "@/hooks/use-virtual-poster-grid";
+import { LIBRARY_CARD_CONTENT_HEIGHT } from "@/hooks/use-library-grid";
+import { useRuleSetTypeFilter } from "@/hooks/use-rule-set-type-filter";
+import { useLifecycleExceptions } from "@/hooks/use-lifecycle-exceptions";
+import { useRealtimeRefetch } from "@/hooks/use-realtime-refetch";
+import { useSetState } from "@/hooks/use-set-state";
 
 interface MatchedCriterion {
   ruleId: string;
@@ -110,27 +100,40 @@ interface RuleSetMatch {
   count: number;
 }
 
+type MatchRuleSet = RuleSetMatch["ruleSet"];
+
 interface MatchItemsViewProps {
   items: MatchedMediaItem[];
-  ruleSet: RuleSetMatch["ruleSet"];
-  onItemClick: (item: MatchedMediaItem) => void;
+  ruleSet: MatchRuleSet;
+  /** Stable: the views memoise their rows and cards on it. */
+  onItemClick: (item: MatchedMediaItem, ruleSet: MatchRuleSet) => void;
   onExclude: (item: MatchedMediaItem) => void;
-  excludingItems: Set<string>;
-  exceptedItemIds: Set<string>;
+  excludingItems: ReadonlySet<string>;
+  exceptedItemIds: ReadonlySet<string>;
   getHex: (category: ChipColorCategory, value: string) => string;
   show: (section: "badges" | "metadata", key: string) => boolean;
   columnVisibility: Record<string, boolean>;
 }
 
-const GAP = 16;
-const CARD_CONTENT_HEIGHT = 128; // Fixed content area below poster (matches h-32 in MediaCard)
+/** How a match names its item: the show or artist with the member's own title. */
+function matchTitle(item: MatchedMediaItem, separator: string): string {
+  return item.parentTitle ? `${item.parentTitle} ${separator} ${item.title}` : item.title;
+}
 
-interface MatchColumnDef {
-  id: string;
-  label: string;
-  defaultWidth: number;
-  alwaysVisible?: boolean;
-  defaultVisible?: boolean;
+/** The item's artwork — a show's or artist's for a member row. */
+function matchImageUrl(item: MatchedMediaItem, type: string): string {
+  return `/api/media/${item.id}/image${type !== "MOVIE" ? "?type=parent" : ""}`;
+}
+
+/** The hover popover's fields, the same in the table and the card view. */
+function matchHoverContent(item: MatchedMediaItem, type: string, withImage: boolean) {
+  return (
+    <MediaHoverPopover
+      imageUrl={withImage ? matchImageUrl(item, type) : undefined}
+      imageAspect={type === "MUSIC" ? "square" : "poster"}
+      data={hoverDataFromListItem(item, { title: matchTitle(item, "—") })}
+    />
+  );
 }
 
 const ALL_MATCH_COLUMNS: MatchColumnDef[] = [
@@ -139,6 +142,14 @@ const ALL_MATCH_COLUMNS: MatchColumnDef[] = [
   { id: "matchedCriteria", label: "Matched Criteria", defaultWidth: 280, defaultVisible: true },
   { id: "action", label: "", defaultWidth: 100, alwaysVisible: true },
 ];
+
+interface MatchColumnDef {
+  id: string;
+  label: string;
+  defaultWidth: number;
+  alwaysVisible?: boolean;
+  defaultVisible?: boolean;
+}
 
 const MATCH_COLUMN_STORAGE_KEY = "match-table-column-visibility";
 
@@ -189,12 +200,10 @@ function CollapsibleCriteria({ criteria }: { criteria: MatchedCriterion[] }) {
     );
     if (c.actualValue) {
       return (
-        <TooltipProvider key={idx}>
-          <Tooltip>
-            <TooltipTrigger asChild>{badge}</TooltipTrigger>
-            <TooltipContent>Actual: {c.actualValue}</TooltipContent>
-          </Tooltip>
-        </TooltipProvider>
+        <Tooltip key={idx}>
+          <TooltipTrigger asChild>{badge}</TooltipTrigger>
+          <TooltipContent>Actual: {c.actualValue}</TooltipContent>
+        </Tooltip>
       );
     }
     return badge;
@@ -319,7 +328,7 @@ function MatchItemsTableView({
                   transform: `translateY(${virtualRow.start}px)`,
                   minWidth: totalWidth,
                 }}
-                onClick={() => onItemClick(item)}
+                onClick={() => onItemClick(item, ruleSet)}
               >
                 {columnVisibility.title && (
                   <td
@@ -328,14 +337,12 @@ function MatchItemsTableView({
                   >
                     <span className="inline-flex items-center gap-1.5">
                       {exceptedItemIds.has(item.id) && (
-                        <TooltipProvider>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <ShieldOff className="h-3.5 w-3.5 text-orange-400 shrink-0" />
-                            </TooltipTrigger>
-                            <TooltipContent>Excluded from lifecycle actions</TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <ShieldOff className="h-3.5 w-3.5 text-orange-400 shrink-0" />
+                          </TooltipTrigger>
+                          <TooltipContent>Excluded from lifecycle actions</TooltipContent>
+                        </Tooltip>
                       )}
                       {item.parentTitle ? (
                         <>
@@ -386,32 +393,7 @@ function MatchItemsTableView({
                   {tableRow}
                 </HoverCardTrigger>
                 <HoverCardContent side="bottom" align="start" sideOffset={4} className="w-72 p-0 duration-200">
-                  <MediaHoverPopover
-                    imageUrl={`/api/media/${item.id}/image${ruleSet.type !== "MOVIE" ? "?type=parent" : ""}`}
-                    imageAspect={ruleSet.type === "MUSIC" ? "square" : "poster"}
-                    data={{
-                      title: item.parentTitle ? `${item.parentTitle} — ${item.title}` : item.title,
-                      year: item.year,
-                      summary: item.summary,
-                      contentRating: item.contentRating,
-                      rating: item.rating,
-                      audienceRating: item.audienceRating,
-                      ratingImage: item.ratingImage,
-                      audienceRatingImage: item.audienceRatingImage,
-                      duration: item.duration,
-                      resolution: item.resolution,
-                      dynamicRange: item.dynamicRange,
-                      audioProfile: item.audioProfile,
-                      audioCodec: ruleSet.type === "MUSIC" && !item.matchedEpisodes ? item.audioCodec : undefined,
-                      fileSize: item.fileSize,
-                      genres: item.genres,
-                      studio: item.studio,
-                      playCount: item.playCount,
-                      lastPlayedAt: item.lastPlayedAt,
-                      addedAt: item.addedAt,
-                      servers: item.servers,
-                    }}
-                  />
+                  {matchHoverContent(item, ruleSet.type, true)}
                 </HoverCardContent>
               </HoverCard>
             );
@@ -421,6 +403,104 @@ function MatchItemsTableView({
     </div>
   );
 }
+
+const matchKey = (item: MatchedMediaItem) => item.id;
+
+interface MatchCardProps {
+  item: MatchedMediaItem;
+  ruleSet: MatchRuleSet;
+  priority: boolean;
+  excluding: boolean;
+  excepted: boolean;
+  onItemClick: MatchItemsViewProps["onItemClick"];
+  onExclude: MatchItemsViewProps["onExclude"];
+  getHex: MatchItemsViewProps["getHex"];
+  show: MatchItemsViewProps["show"];
+}
+
+/**
+ * One match card, memoised on what it shows: the grid re-renders on every
+ * virtualizer range change, and the card's metadata, quality bar and hover
+ * content are new elements each time.
+ */
+const MatchCard = memo(function MatchCard({
+  item,
+  ruleSet,
+  priority,
+  excluding,
+  excepted,
+  onItemClick,
+  onExclude,
+  getHex,
+  show,
+}: MatchCardProps) {
+  const isMusic = ruleSet.type === "MUSIC";
+  const fallbackIcon = ruleSet.type === "MOVIE" ? "movie" as const : isMusic ? "music" as const : "series" as const;
+  return (
+    <div className="relative group">
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            className="absolute top-2 right-2 z-20 h-7 w-7 rounded-md bg-background/80 backdrop-blur-sm flex items-center justify-center text-muted-foreground hover:text-orange-400 hover:bg-background/90 transition-all opacity-0 group-hover:opacity-100 disabled:opacity-50"
+            onClick={(e) => {
+              e.stopPropagation();
+              onExclude(item);
+            }}
+            disabled={excluding}
+          >
+            {excluding ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <ShieldOff className="h-3.5 w-3.5" />
+            )}
+          </button>
+        </TooltipTrigger>
+        <TooltipContent>Exclude from lifecycle actions</TooltipContent>
+      </Tooltip>
+      {excepted && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <div className="absolute top-2 left-2 z-20 h-6 w-6 rounded-md bg-orange-500/90 backdrop-blur-sm flex items-center justify-center">
+              <ShieldOff className="h-3.5 w-3.5 text-white" />
+            </div>
+          </TooltipTrigger>
+          <TooltipContent>Excluded from lifecycle actions</TooltipContent>
+        </Tooltip>
+      )}
+      <MediaCard
+        imageUrl={matchImageUrl(item, ruleSet.type)}
+        title={matchTitle(item, "-")}
+        fallbackIcon={fallbackIcon}
+        aspectRatio={isMusic ? "square" : "poster"}
+        priority={priority}
+        prefetchMediaId={item.id}
+        onClick={() => onItemClick(item, ruleSet)}
+        hoverContent={matchHoverContent(item, ruleSet.type, false)}
+        metadata={
+          <MetadataLine>
+            {show("metadata", "year") && item.year && <span>{item.year}</span>}
+            {show("metadata", "duration") && formatDuration(item.duration) && <span>{formatDuration(item.duration)}</span>}
+            {show("metadata", "fileSize") && formatFileSize(item.fileSize) && <span>{formatFileSize(item.fileSize)}</span>}
+          </MetadataLine>
+        }
+        qualityBar={qualitySegments(
+          // An artist row is stored against one of its tracks, whose codec
+          // is not the artist's, so it draws no codec segment.
+          isMusic && item.matchedEpisodes ? [] : qualityChips(item, isMusic ? "music" : "video"),
+          getHex,
+          (toggle) => show("badges", toggle),
+        )}
+        badges={
+          item.matchedCriteria && item.matchedCriteria.length > 0 ? (
+            <ColorChip className="border-border text-muted-foreground">
+              {item.matchedCriteria.length} {item.matchedCriteria.length === 1 ? "match" : "matches"}
+            </ColorChip>
+          ) : undefined
+        }
+      />
+    </div>
+  );
+});
 
 function MatchItemsCardView({
   items,
@@ -432,175 +512,41 @@ function MatchItemsCardView({
   getHex,
   show,
 }: MatchItemsViewProps) {
-  const scrollContainerRef = useRef<HTMLDivElement>(null);
-  const { columns: actualColumns } = useCardSize();
-
-  const rowCount = useMemo(
-    () => (items.length > 0 ? Math.ceil(items.length / actualColumns) : 0),
-    [items.length, actualColumns],
-  );
-
-  const estimateSize = useCallback(() => {
-    const container = scrollContainerRef.current;
-    const containerWidth = container?.offsetWidth || estimateContentWidth(window.innerWidth);
-    const columnWidth = (containerWidth - GAP * (actualColumns - 1)) / actualColumns;
-    const posterHeight = columnWidth * (ruleSet.type === "MUSIC" ? 1 : 1.5);
-    return Math.round(posterHeight + CARD_CONTENT_HEIGHT + GAP);
-  }, [actualColumns, ruleSet.type]);
-
-  const virtualizer = useVirtualizer({
-    count: rowCount,
-    getScrollElement: () => scrollContainerRef.current,
-    estimateSize,
+  const { columns } = useCardSize();
+  const grid = useVirtualPosterGrid({
+    count: items.length,
+    columns,
+    aspect: ruleSet.type === "MUSIC" ? SQUARE_ASPECT : POSTER_ASPECT,
+    contentHeight: LIBRARY_CARD_CONTENT_HEIGHT,
+    scrollElement: "own",
     overscan: 5,
   });
 
-  useEffect(() => {
-    virtualizer.measure();
-  }, [actualColumns, virtualizer]);
-
-  const virtualRows = virtualizer.getVirtualItems();
-
-  const fallbackIcon = ruleSet.type === "MOVIE" ? "movie" as const
-    : ruleSet.type === "MUSIC" ? "music" as const
-    : "series" as const;
-  const aspectRatio = ruleSet.type === "MUSIC" ? "square" as const : "poster" as const;
+  const renderCard = useCallback(
+    (item: MatchedMediaItem, { priority }: GridCardContext) => (
+      <MatchCard
+        item={item}
+        ruleSet={ruleSet}
+        priority={priority}
+        excluding={excludingItems.has(item.id)}
+        excepted={exceptedItemIds.has(item.id)}
+        onItemClick={onItemClick}
+        onExclude={onExclude}
+        getHex={getHex}
+        show={show}
+      />
+    ),
+    [ruleSet, excludingItems, exceptedItemIds, onItemClick, onExclude, getHex, show],
+  );
 
   return (
-    <div ref={scrollContainerRef} className="md:max-h-[60dvh] overflow-y-auto">
-      <div
-        style={{
-          height: virtualizer.getTotalSize(),
-          width: "100%",
-          position: "relative",
-        }}
-      >
-        {virtualRows.map((virtualRow) => {
-          const rowStart = virtualRow.index * actualColumns;
-          const rowItems = items.slice(rowStart, rowStart + actualColumns);
-          return (
-            <div
-              key={virtualRow.key}
-              data-index={virtualRow.index}
-              ref={virtualizer.measureElement}
-              style={{
-                position: "absolute",
-                top: 0,
-                left: 0,
-                width: "100%",
-                paddingBottom: GAP,
-                transform: `translateY(${virtualRow.start}px)`,
-              }}
-            >
-              <div
-                style={{
-                  display: "grid",
-                  gap: `${GAP}px`,
-                  gridTemplateColumns: `repeat(${actualColumns}, minmax(0, 1fr))`,
-                }}
-              >
-                {rowItems.map((item) => {
-                  return (
-                    <div key={item.id} className="relative group">
-                      <TooltipProvider>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <button
-                              className="absolute top-2 right-2 z-20 h-7 w-7 rounded-md bg-background/80 backdrop-blur-sm flex items-center justify-center text-muted-foreground hover:text-orange-400 hover:bg-background/90 transition-all opacity-0 group-hover:opacity-100 disabled:opacity-50"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onExclude(item);
-                              }}
-                              disabled={excludingItems.has(item.id)}
-                            >
-                              {excludingItems.has(item.id) ? (
-                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                              ) : (
-                                <ShieldOff className="h-3.5 w-3.5" />
-                              )}
-                            </button>
-                          </TooltipTrigger>
-                          <TooltipContent>Exclude from lifecycle actions</TooltipContent>
-                        </Tooltip>
-                      </TooltipProvider>
-                      {exceptedItemIds.has(item.id) && (
-                        <TooltipProvider>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <div className="absolute top-2 left-2 z-20 h-6 w-6 rounded-md bg-orange-500/90 backdrop-blur-sm flex items-center justify-center">
-                                <ShieldOff className="h-3.5 w-3.5 text-white" />
-                              </div>
-                            </TooltipTrigger>
-                            <TooltipContent>Excluded from lifecycle actions</TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
-                      )}
-                      <MediaCard
-                        imageUrl={`/api/media/${item.id}/image${ruleSet.type !== "MOVIE" ? "?type=parent" : ""}`}
-                        title={item.parentTitle
-                          ? `${item.parentTitle} - ${item.title}`
-                          : item.title}
-                        fallbackIcon={fallbackIcon}
-                        aspectRatio={aspectRatio}
-                        onClick={() => onItemClick(item)}
-                        hoverContent={
-                          <MediaHoverPopover
-                            imageAspect={ruleSet.type === "MUSIC" ? "square" : "poster"}
-                            data={{
-                              title: item.parentTitle ? `${item.parentTitle} — ${item.title}` : item.title,
-                              year: item.year,
-                              summary: item.summary,
-                              contentRating: item.contentRating,
-                              rating: item.rating,
-                              audienceRating: item.audienceRating,
-                              ratingImage: item.ratingImage,
-                              audienceRatingImage: item.audienceRatingImage,
-                              duration: item.duration,
-                              resolution: item.resolution,
-                              dynamicRange: item.dynamicRange,
-                              audioProfile: item.audioProfile,
-                              audioCodec: ruleSet.type === "MUSIC" && !item.matchedEpisodes ? item.audioCodec : undefined,
-                              fileSize: item.fileSize,
-                              genres: item.genres,
-                              studio: item.studio,
-                              playCount: item.playCount,
-                              lastPlayedAt: item.lastPlayedAt,
-                              addedAt: item.addedAt,
-                              servers: item.servers,
-                            }}
-                          />
-                        }
-                        metadata={
-                          <MetadataLine>
-                            {show("metadata", "year") && item.year && <span>{item.year}</span>}
-                            {show("metadata", "duration") && formatDuration(item.duration) && <span>{formatDuration(item.duration)}</span>}
-                            {show("metadata", "fileSize") && formatFileSize(item.fileSize) && <span>{formatFileSize(item.fileSize)}</span>}
-                          </MetadataLine>
-                        }
-                        qualityBar={qualitySegments(
-                          // An artist row is stored against one of its tracks, whose codec
-                          // is not the artist's, so it draws no codec segment.
-                          ruleSet.type === "MUSIC" && item.matchedEpisodes ? [] : qualityChips(item, ruleSet.type === "MUSIC" ? "music" : "video"),
-                          getHex,
-                          (toggle) => show("badges", toggle),
-                        )}
-                        badges={
-                          item.matchedCriteria && item.matchedCriteria.length > 0 ? (
-                            <ColorChip className="border-border text-muted-foreground">
-                              {item.matchedCriteria.length} {item.matchedCriteria.length === 1 ? "match" : "matches"}
-                            </ColorChip>
-                          ) : undefined
-                        }
-                      />
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
+    <VirtualCardGrid
+      grid={grid}
+      items={items}
+      getKey={matchKey}
+      renderItem={renderCard}
+      className="md:max-h-[60dvh] overflow-y-auto"
+    />
   );
 }
 
@@ -614,26 +560,22 @@ function MatchItemsView({
   return <MatchItemsTableView {...props} />;
 }
 
-type MediaTypeTab = "all" | "movies" | "series" | "music";
+const ruleSetOfMatch = (m: RuleSetMatch) => m.ruleSet;
 
-const MEDIA_TYPE_TABS: TabNavItem<MediaTypeTab>[] = [
-  { value: "all", label: "All" },
-  { value: "movies", label: "Movies", icon: Film },
-  { value: "series", label: "Series", icon: Tv },
-  { value: "music", label: "Music", icon: Music },
-];
+/** Detection's announcement of the run this page asked for (`/api/lifecycle/rules/run`). */
+const isOwnRun = (ruleSetId: string | null) => (data: Record<string, unknown>) =>
+  data.manual === true && "ruleSetId" in data && (data.ruleSetId ?? null) === ruleSetId;
 
-const TAB_TO_TYPE: Record<MediaTypeTab, string | null> = {
-  all: null,
-  movies: "MOVIE",
-  series: "SERIES",
-  music: "MUSIC",
-};
+// Executing an action cascade-deletes the RuleMatch rows this page renders,
+// and a sync or purge can remove the underlying media — so detection alone
+// was never enough to keep the list honest.
+const MATCH_EVENTS = ["lifecycle:detection-completed", "lifecycle:action-executed", "sync:completed"] as const;
 
 export default function RuleMatchesPage() {
-  const [mediaTypeTab, setMediaTypeTab] = useState<MediaTypeTab>("all");
   const detailPanel = useMediaDetailPanel();
   const [ruleMatches, setRuleMatches] = useState<RuleSetMatch[]>([]);
+  const { tab: mediaTypeTab, setTab: setMediaTypeTab, filtered: filteredRuleMatches } =
+    useRuleSetTypeFilter(ruleMatches, ruleSetOfMatch);
   const { health: integrationsHealth } = useIntegrationsHealth();
   const arrInstanceIds = useMemo<readonly string[]>(
     () => Array.from(new Set(
@@ -644,9 +586,9 @@ export default function RuleMatchesPage() {
     [ruleMatches],
   );
   const [loading, setLoading] = useState(true);
-  const [expandedRules, setExpandedRules] = useState<Set<string>>(new Set());
+  const [expandedRules, { toggle: toggleExpand }] = useSetState<string>();
   const [viewMode, handleViewModeChange] = useLocalStorage<"cards" | "table">("matches-view-mode", "table");
-  const [runningRules, setRunningRules] = useState<Set<string>>(new Set());
+  const [runningRules, { add: markRunning, remove: unmarkRunning }] = useSetState<string>();
   const [reEvalRunning, setReEvalRunning] = useState(false);
   const { size, setSize } = useCardSize();
   const { getHex } = useChipColors();
@@ -659,12 +601,6 @@ export default function RuleMatchesPage() {
     () => mergeColumnVisibility(storedColumnVisibility),
     [storedColumnVisibility],
   );
-
-  const filteredRuleMatches = useMemo(() => {
-    const typeFilter = TAB_TO_TYPE[mediaTypeTab];
-    if (!typeFilter) return ruleMatches;
-    return ruleMatches.filter((m) => m.ruleSet.type === typeFilter);
-  }, [ruleMatches, mediaTypeTab]);
 
   const toggleColumn = useCallback((colId: string, checked: boolean) => {
     setColumnVisibility({ ...columnVisibility, [colId]: checked });
@@ -689,70 +625,28 @@ export default function RuleMatchesPage() {
     }
   }, []);
 
-  useRealtime("lifecycle:detection-completed", fetchMatches);
-  // Executing an action cascade-deletes the RuleMatch rows this page renders,
-  // and a sync or purge can remove the underlying media — so detection alone
-  // was never enough to keep the list honest.
-  useRealtime("lifecycle:action-executed", fetchMatches);
-  useRealtime("sync:completed", fetchMatches);
+  const matchesRefetch = useRealtimeRefetch(MATCH_EVENTS, fetchMatches);
 
   useEffect(() => {
     void (async () => { await fetchMatches(); })();
   }, [fetchMatches]);
 
-  // Track which items have lifecycle exceptions
-  const [exceptedItemIds, setExceptedItemIds] = useState<Set<string>>(new Set());
-
-  const fetchExceptions = useCallback(async () => {
-    try {
-      const response = await fetch("/api/lifecycle/exceptions");
-      if (response.ok) {
-        const data = await response.json();
-        setExceptedItemIds(new Set((data.exceptions || []).map((e: { mediaItem: { id: string } }) => e.mediaItem.id)));
-      }
-    } catch {
-      // ignore
-    }
-  }, []);
-
-  useEffect(() => {
-    void (async () => { await fetchExceptions(); })();
-  }, [fetchExceptions]);
-
-  const [excludingItems, setExcludingItems] = useState<Set<string>>(new Set());
+  // Which items have lifecycle exceptions, and filing new ones.
+  const { exceptedIds: exceptedItemIds, excludingIds: excludingItems, exclude } = useLifecycleExceptions();
   const [excludePromptItem, setExcludePromptItem] = useState<MatchedMediaItem | null>(null);
-  const [excludeReason, setExcludeReason] = useState("");
 
   const confirmExclude = useCallback(async (item: MatchedMediaItem, reason: string) => {
-    setExcludingItems((prev) => new Set(prev).add(item.id));
-    try {
-      const response = await fetch("/api/lifecycle/exceptions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mediaItemId: item.id, reason: reason || undefined }),
-      });
-      if (response.ok) {
-        setExceptedItemIds((prev) => new Set(prev).add(item.id));
-        setRuleMatches((prev) =>
-          prev.map((match) => {
-            const filtered = match.items.filter((i) => i.id !== item.id);
-            return { ...match, items: filtered, count: filtered.length };
-          })
-        );
-      }
-    } catch (error) {
-      console.error("Failed to exclude item:", error);
-    } finally {
-      setExcludingItems((prev) => {
-        const next = new Set(prev);
-        next.delete(item.id);
-        return next;
-      });
-    }
-  }, []);
+    if (!(await exclude(item.id, { reason }))) return;
+    setRuleMatches((prev) =>
+      prev.map((match) => {
+        const filtered = match.items.filter((i) => i.id !== item.id);
+        return { ...match, items: filtered, count: filtered.length };
+      })
+    );
+  }, [exclude]);
 
   const { open: openPanel } = detailPanel;
-  const openDetailPanel = useCallback((item: MatchedMediaItem, ruleSet: RuleSetMatch["ruleSet"]) => {
+  const openDetailPanel = useCallback((item: MatchedMediaItem, ruleSet: MatchRuleSet) => {
     // The Logic Preview reads grouped rules; a rule set still stored in the
     // flat legacy shape shows its matched criteria alone.
     const rules = (Array.isArray(ruleSet.rules) ? ruleSet.rules : []) as LifecycleRuleGroup[];
@@ -772,7 +666,6 @@ export default function RuleMatchesPage() {
   }, [openPanel]);
 
   const excludeItem = useCallback((item: MatchedMediaItem) => {
-    setExcludeReason("");
     setExcludePromptItem(item);
   }, []);
 
@@ -797,82 +690,57 @@ export default function RuleMatchesPage() {
     [],
   );
 
-  const runRule = useCallback(async (ruleSetId: string, fullReEval = false) => {
-    setRunningRules((prev) => new Set(prev).add(ruleSetId));
+  // A run re-reads the stored matches rather than splicing in the run's
+  // result: detection's result rows are not this page's shape — they lack the
+  // collection name, the quality-profile target and every match's
+  // `detectedAt` — so the row lost its "Collection:" label, its action label's
+  // profile and every Match Date until a reload. The stored matches also keep
+  // a skipped rule set's matches, which detection deliberately preserves
+  // (blanking the row read as every match lost). The run route announces
+  // itself with `lifecycle:detection-completed`, whose re-read is the one kept
+  // when it arrives (`useRealtimeRefetch`).
+  const runDetection = useCallback(async (ruleSetId: string | null, errorTitle: string) => {
+    const ticket = matchesRefetch.begin();
     try {
       const response = await fetch("/api/lifecycle/rules/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ruleSetId, fullReEval, processActions: true }),
+        body: JSON.stringify(ruleSetId ? { ruleSetId, fullReEval: true, processActions: true } : { fullReEval: true, processActions: true }),
       });
       const data = await response.json();
       if (!response.ok) {
-        toast.error("Couldn't run the rule", {
+        toast.error(errorTitle, {
           description: (data?.error as string) ?? "The detection run failed.",
         });
         return;
       }
       reportSkipped(data.skipped);
-      // Re-read the stored matches rather than splicing in the run's result:
-      // detection's result rows are not this page's shape — they lack the
-      // collection name, the quality-profile target and every match's
-      // `detectedAt` — so the row lost its "Collection:" label, its action
-      // label's profile and every Match Date until a reload. The stored
-      // matches also keep a skipped rule set's matches, which detection
-      // deliberately preserves (blanking the row read as every match lost).
-      await fetchMatches();
+      await ticket.settle({ isOwn: isOwnRun(ruleSetId) });
     } catch (error) {
-      console.error("Failed to run rule:", error);
-      toast.error("Couldn't run the rule");
+      console.error("Failed to run detection:", error);
+      toast.error(errorTitle);
     } finally {
-      setRunningRules((prev) => {
-        const next = new Set(prev);
-        next.delete(ruleSetId);
-        return next;
-      });
+      ticket.cancel();
     }
-  }, [reportSkipped, fetchMatches]);
+  }, [matchesRefetch, reportSkipped]);
+
+  const runRule = useCallback(async (ruleSetId: string) => {
+    markRunning(ruleSetId);
+    try {
+      await runDetection(ruleSetId, "Couldn't run the rule");
+    } finally {
+      unmarkRunning(ruleSetId);
+    }
+  }, [runDetection, markRunning, unmarkRunning]);
 
   const reEvalAllRules = useCallback(async () => {
     setReEvalRunning(true);
     try {
-      const response = await fetch("/api/lifecycle/rules/run", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fullReEval: true, processActions: true }),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        toast.error("Couldn't re-evaluate rules", {
-          description: (data?.error as string) ?? "The detection run failed.",
-        });
-        return;
-      }
-      reportSkipped(data.skipped);
-      // Same as `runRule`: the stored matches, not the run's result rows.
-      await fetchMatches();
-    } catch (error) {
-      console.error("Failed to re-evaluate all rules:", error);
-      toast.error("Couldn't re-evaluate rules");
+      await runDetection(null, "Couldn't re-evaluate rules");
     } finally {
       setReEvalRunning(false);
     }
-  }, [reportSkipped, fetchMatches]);
-
-  const toggleExpand = (ruleSetId: string) => {
-    setExpandedRules((prev) => {
-      const next = new Set(prev);
-      if (next.has(ruleSetId)) {
-        next.delete(ruleSetId);
-      } else {
-        next.add(ruleSetId);
-      }
-      return next;
-    });
-  };
-
-  const formatActionType = (type: string | null, targetQualityProfileId?: number | null) =>
-    type ? formatActionTypeLabel(type, targetQualityProfileId) : "None";
+  }, [runDetection]);
 
   if (loading) {
     return (
@@ -883,17 +751,17 @@ export default function RuleMatchesPage() {
   }
 
   return (
-    <>
+    <TooltipProvider>
       <div className="overflow-y-auto h-full">
         <div className="p-4 sm:p-6 lg:p-8">
       {/* Wraps rather than squeezing: beside a long title the toolbar would
           otherwise fold into a column of single buttons on a tablet. */}
-      <div className="mb-6 flex flex-col sm:flex-row sm:flex-wrap sm:items-center sm:justify-between gap-3">
-        <div>
-          <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Rule Matches</h1>
-          <p className="text-muted-foreground mt-1">Media items that match your lifecycle rules, grouped by rule set.</p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+      <PageHeader
+        className="mb-6 sm:items-center"
+        title="Rule Matches"
+        description="Media items that match your lifecycle rules, grouped by rule set."
+        actions={
+          <>
           <div className="flex items-center gap-1 rounded-lg border p-1 h-9">
             <button
               onClick={() => handleViewModeChange("cards")}
@@ -954,25 +822,24 @@ export default function RuleMatchesPage() {
               </DropdownMenuContent>
             </DropdownMenu>
           )}
-          <TooltipProvider>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="outline"
-                  onClick={reEvalAllRules}
-                  disabled={reEvalRunning || loading}
-                >
-                  {reEvalRunning ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RefreshCw className="mr-2 h-4 w-4" />}
-                  {reEvalRunning ? "Re-evaluating..." : "Re-evaluate All"}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom" className="max-w-xs">
-                Clear all existing matches and re-evaluate from scratch. Items that no longer match will be removed.
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-        </div>
-      </div>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <LoadingButton
+                variant="outline"
+                onClick={reEvalAllRules}
+                loading={reEvalRunning}
+                icon={RefreshCw}
+              >
+                {reEvalRunning ? "Re-evaluating..." : "Re-evaluate All"}
+              </LoadingButton>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="max-w-xs">
+              Clear all existing matches and re-evaluate from scratch. Items that no longer match will be removed.
+            </TooltipContent>
+          </Tooltip>
+          </>
+        }
+      />
 
       <IntegrationUnreachableBanner
         health={integrationsHealth}
@@ -982,7 +849,7 @@ export default function RuleMatchesPage() {
         subjectLabel="Some matched rule sets"
       />
 
-      <TabNav tabs={MEDIA_TYPE_TABS} activeTab={mediaTypeTab} onTabChange={setMediaTypeTab} className="mb-6 mt-6" />
+      <TabNav tabs={LIFECYCLE_MEDIA_TYPE_TABS} activeTab={mediaTypeTab} onTabChange={setMediaTypeTab} className="mb-6 mt-6" />
 
       {filteredRuleMatches.length === 0 && (
         <EmptyState
@@ -1000,121 +867,61 @@ export default function RuleMatchesPage() {
       <div className="space-y-4">
         {filteredRuleMatches.map((match) => {
           const isExpanded = expandedRules.has(match.ruleSet.id);
+          const running = runningRules.has(match.ruleSet.id);
 
           return (
-            <Card key={match.ruleSet.id}>
-              <CardHeader
-                className="cursor-pointer"
-                onClick={() => toggleExpand(match.ruleSet.id)}
-              >
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="flex min-w-0 items-center gap-3">
-                    {isExpanded ? (
-                      <ChevronDown className="h-5 w-5 shrink-0 text-muted-foreground" />
-                    ) : (
-                      <ChevronRight className="h-5 w-5 shrink-0 text-muted-foreground" />
-                    )}
-                    <div className="min-w-0">
-                      <CardTitle className="text-lg">
-                        {match.ruleSet.name}
-                      </CardTitle>
-                      <div className="flex flex-wrap items-center gap-2 mt-1">
-                        <ColorChip className={MEDIA_TYPE_BADGE_COLORS[match.ruleSet.type] ?? "border-border text-muted-foreground"}>
-                          {mediaTypeLabel(match.ruleSet.type)}
-                        </ColorChip>
-                        <ColorChip className="bg-muted/40 text-muted-foreground">
-                          {match.count} match{match.count !== 1 && "es"}
-                        </ColorChip>
-                        {match.ruleSet.actionEnabled && (
-                          <span className="text-xs text-muted-foreground">
-                            Action: {formatActionType(match.ruleSet.actionType, match.ruleSet.targetQualityProfileId)}
-                          </span>
-                        )}
-                        {(match.ruleSet.addArrTags?.length > 0 || match.ruleSet.removeArrTags?.length > 0) && (
-                          <div className="flex flex-wrap gap-1">
-                            {match.ruleSet.addArrTags?.map((tag) => (
-                              <ColorChip
-                                key={`add-${tag}`}
-                                className="bg-green/20 text-green border-green/30"
-                              >
-                                +{tag}
-                              </ColorChip>
-                            ))}
-                            {match.ruleSet.removeArrTags?.map((tag) => (
-                              <ColorChip
-                                key={`rm-${tag}`}
-                                className="bg-red/20 text-red border-red/30"
-                              >
-                                -{tag}
-                              </ColorChip>
-                            ))}
-                          </div>
-                        )}
-                        {match.ruleSet.collectionName && (
-                          <span className="text-xs text-sky">
-                            Collection: {match.ruleSet.collectionName}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div
-                    className="flex shrink-0 items-center gap-2 pl-8 sm:pl-0"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <TooltipProvider>
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => runRule(match.ruleSet.id, true)}
-                            disabled={runningRules.has(match.ruleSet.id) || reEvalRunning}
-                          >
-                            {runningRules.has(match.ruleSet.id) ? (
-                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                            ) : (
-                              <RefreshCw className="mr-2 h-4 w-4" />
-                            )}
-                            {runningRules.has(match.ruleSet.id) ? "Re-evaluating..." : "Re-evaluate"}
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent className="max-w-xs">
-                          Clear matches and re-evaluate from scratch. Items that no longer match will be removed.
-                        </TooltipContent>
-                      </Tooltip>
-                    </TooltipProvider>
-                  </div>
-                </div>
-              </CardHeader>
-
-              {isExpanded && match.items.length > 0 && (
-                <CardContent>
-                  <MatchItemsView
-                    viewMode={viewMode}
-                    items={match.items}
-                    ruleSet={match.ruleSet}
-                    onItemClick={(item) => openDetailPanel(item, match.ruleSet)}
-                    onExclude={excludeItem}
-                    excludingItems={excludingItems}
-                    exceptedItemIds={exceptedItemIds}
-                    getHex={getHex}
-                    show={show}
-                    columnVisibility={columnVisibility}
-                  />
-                </CardContent>
+            <RuleSetGroupCard
+              key={match.ruleSet.id}
+              ruleSet={match.ruleSet}
+              countLabel={`${match.count} match${match.count !== 1 ? "es" : ""}`}
+              expanded={isExpanded}
+              onToggle={() => toggleExpand(match.ruleSet.id)}
+              showAction={match.ruleSet.actionEnabled}
+              meta={match.ruleSet.collectionName && (
+                <span className="text-xs text-sky">
+                  Collection: {match.ruleSet.collectionName}
+                </span>
               )}
-
-              {isExpanded && match.items.length === 0 && (
-                <CardContent>
-                  <p className="flex items-center justify-center gap-2 py-4 text-sm text-muted-foreground">
-                    <Inbox className="h-4 w-4" />
-                    No matches yet. Click &ldquo;Re-evaluate&rdquo; to search.
-                  </p>
-                </CardContent>
+              actions={
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <LoadingButton
+                      size="sm"
+                      variant="outline"
+                      onClick={() => runRule(match.ruleSet.id)}
+                      loading={running}
+                      disabled={reEvalRunning}
+                      icon={RefreshCw}
+                    >
+                      {running ? "Re-evaluating..." : "Re-evaluate"}
+                    </LoadingButton>
+                  </TooltipTrigger>
+                  <TooltipContent className="max-w-xs">
+                    Clear matches and re-evaluate from scratch. Items that no longer match will be removed.
+                  </TooltipContent>
+                </Tooltip>
+              }
+            >
+              {match.items.length > 0 ? (
+                <MatchItemsView
+                  viewMode={viewMode}
+                  items={match.items}
+                  ruleSet={match.ruleSet}
+                  onItemClick={openDetailPanel}
+                  onExclude={excludeItem}
+                  excludingItems={excludingItems}
+                  exceptedItemIds={exceptedItemIds}
+                  getHex={getHex}
+                  show={show}
+                  columnVisibility={columnVisibility}
+                />
+              ) : (
+                <p className="flex items-center justify-center gap-2 py-4 text-sm text-muted-foreground">
+                  <Inbox className="h-4 w-4" />
+                  No matches yet. Click &ldquo;Re-evaluate&rdquo; to search.
+                </p>
               )}
-            </Card>
+            </RuleSetGroupCard>
           );
         })}
       </div>
@@ -1125,43 +932,15 @@ export default function RuleMatchesPage() {
 
       {detailPanel.panelProps && <MediaDetailSidePanel {...detailPanel.panelProps} />}
 
-      {/* Exclude reason prompt */}
-      <Dialog open={!!excludePromptItem} onOpenChange={(open) => { if (!open) setExcludePromptItem(null); }}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Exclude from lifecycle actions</DialogTitle>
-            <DialogDescription>
-              &quot;{excludePromptItem?.parentTitle
-                ? `${excludePromptItem.parentTitle} — ${excludePromptItem.title}`
-                : excludePromptItem?.title}&quot; will be excluded from all lifecycle rules. Optionally provide a reason.
-            </DialogDescription>
-          </DialogHeader>
-          <Input
-            placeholder="Reason (optional)"
-            value={excludeReason}
-            onChange={(e) => setExcludeReason(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && excludePromptItem) {
-                setExcludePromptItem(null);
-                confirmExclude(excludePromptItem, excludeReason);
-              }
-            }}
-          />
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setExcludePromptItem(null)}>
-              Cancel
-            </Button>
-            <Button onClick={() => {
-              if (excludePromptItem) {
-                setExcludePromptItem(null);
-                confirmExclude(excludePromptItem, excludeReason);
-              }
-            }}>
-              Exclude
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </>
+      <ExcludeReasonDialog
+        itemLabel={excludePromptItem ? matchTitle(excludePromptItem, "—") : null}
+        onCancel={() => setExcludePromptItem(null)}
+        onConfirm={(reason) => {
+          const item = excludePromptItem;
+          setExcludePromptItem(null);
+          if (item) void confirmExclude(item, reason);
+        }}
+      />
+    </TooltipProvider>
   );
 }

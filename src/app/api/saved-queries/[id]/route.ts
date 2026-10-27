@@ -1,22 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { validateRequest, savedQueryUpdateSchema } from "@/lib/validation";
 import { findFieldsInvalidForTypes, type LibraryType } from "@/lib/conditions";
 
 type RouteParams = { params: Promise<{ id: string }> };
 
-export async function PUT(request: NextRequest, { params }: RouteParams) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const PUT = withSession(async (session, request: NextRequest, { params }: RouteParams) => {
   const { id } = await params;
 
   // Verify ownership
   const existing = await prisma.savedQuery.findFirst({
-    where: { id, userId: session.userId! },
+    where: { id, userId: session.userId },
   });
   if (!existing) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -55,19 +50,14 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
   });
 
   return NextResponse.json({ query: updated });
-}
+});
 
-export async function DELETE(_request: NextRequest, { params }: RouteParams) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const DELETE = withSession(async (session, _request: NextRequest, { params }: RouteParams) => {
   const { id } = await params;
 
   // Verify ownership
   const existing = await prisma.savedQuery.findFirst({
-    where: { id, userId: session.userId! },
+    where: { id, userId: session.userId },
   });
   if (!existing) {
     return NextResponse.json({ error: "Not found" }, { status: 404 });
@@ -76,4 +66,4 @@ export async function DELETE(_request: NextRequest, { params }: RouteParams) {
   await prisma.savedQuery.delete({ where: { id } });
 
   return NextResponse.json({ success: true });
-}
+});

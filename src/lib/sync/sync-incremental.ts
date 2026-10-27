@@ -12,6 +12,8 @@ import { invalidateMediaCaches } from "@/lib/cache/invalidate";
 import { invalidateCachedUrls } from "@/lib/image-cache/image-cache";
 import { eventBus } from "@/lib/events/event-bus";
 import { mbidFromGuids, withArtistMbid } from "@/lib/media/musicbrainz";
+import { mapWithConcurrency, settleWithConcurrency } from "@/lib/concurrency";
+import { syncCompletedMeta, type SyncLibraryType } from "@/lib/sync/sync-completed-meta";
 
 /**
  * Incremental sync: apply just the items a real-time `library-changed` event
@@ -67,7 +69,7 @@ interface IncrementalSyncResult {
 
 // Above this many changed items, listing the library is cheaper than fetching
 // each item on its own — the caller runs a full sync instead.
-const MAX_INCREMENTAL_ITEMS = 100;
+export const MAX_INCREMENTAL_ITEMS = 100;
 
 interface ServerRow {
   id: string;
@@ -93,6 +95,26 @@ interface ItemRow {
   parentThumbUrl: string | null;
   seasonThumbUrl: string | null;
   isWatchlisted: boolean;
+  dedupKey: string | null;
+}
+
+const ITEM_ROW_COLUMNS =
+  `mi."id", mi."ratingKey", mi."libraryId", mi."thumbUrl", mi."parentThumbUrl", mi."seasonThumbUrl", mi."isWatchlisted", mi."dedupKey"`;
+
+/**
+ * How many metadata requests the incremental sync keeps in flight. Up to 100
+ * changed items, their shows and artists, and the library lookups a
+ * Jellyfin/Emby add needs used to go out one at a time — a change set that
+ * should take a second took a minute behind a slow server. Small enough that
+ * a burst of realtime changes cannot crowd out the server's own clients.
+ */
+const FETCH_CONCURRENCY = 8;
+
+/** A transient fetch failure, carrying what failed so the fall-back can say. */
+class TransientFetchError extends Error {
+  constructor(readonly subject: string, readonly cause: unknown) {
+    super(`${subject}: ${String(cause)}`);
+  }
 }
 
 /**
@@ -153,7 +175,7 @@ export async function syncMediaServerItems(
   const allIds = [...new Set([...changedIds, ...removedIds])];
   const existingRows = allIds.length > 0
     ? await prisma.$queryRawUnsafe<ItemRow[]>(
-        `SELECT mi."id", mi."ratingKey", mi."libraryId", mi."thumbUrl", mi."parentThumbUrl", mi."seasonThumbUrl", mi."isWatchlisted"
+        `SELECT ${ITEM_ROW_COLUMNS}
            FROM "MediaItem" mi JOIN "Library" l ON mi."libraryId"=l."id"
           WHERE l."mediaServerId"=$1 AND mi."ratingKey" = ANY($2)`,
         serverId, allIds,
@@ -195,37 +217,68 @@ export async function syncMediaServerItems(
     skipTlsVerify: server.tlsSkipVerify,
   });
 
-  // Fetch each changed item; classify present (upsert) vs gone (delete).
+  // Fetch each changed item; classify present (upsert) vs gone (delete). A
+  // bounded pool, in input order; the first transient failure stops it.
   const fetched: MediaMetadataItem[] = [];
   const toDelete = new Set(removedIds);
   let skippedNonMedia = 0;
-  for (const id of changedIds) {
-    try {
-      const item = await client.getItemMetadata(id);
-      if (!item || !item.ratingKey) {
-        toDelete.add(id);
-      } else if (!isMediaItem(item)) {
-        // A container, not media (a Jellyfin box set, or a Plex collection
-        // whose timeline entry carried no `type` — `normalize-plex` drops the
-        // typed ones before they get here, and the self-write registry drops
-        // the echo of librariarr's own collection writes). Kept as defence in
-        // depth: without it a container would round-trip in as a phantom item.
-        // Route the id to the delete set so a phantom row synced before this
-        // guard existed is cleaned up rather than waiting for a full sync
-        // (nothing legitimate shares a container's ratingKey).
-        toDelete.add(id);
-        skippedNonMedia++;
-      } else {
-        fetched.push(item);
-      }
-    } catch (error) {
-      if (isNotFound(error)) {
-        toDelete.add(id);
-      } else {
+  let outcomes: Array<{ id: string; item: MediaMetadataItem | null }>;
+  try {
+    outcomes = await mapWithConcurrency(changedIds, FETCH_CONCURRENCY, async (id) => {
+      try {
+        return { id, item: await client.getItemMetadata(id) };
+      } catch (error) {
+        if (isNotFound(error)) return { id, item: null };
         // Never turn a transient error into a deletion — reconcile via full sync.
-        return fellBack(`fetch failed for ${id}: ${String(error)}`);
+        throw new TransientFetchError(`fetch failed for ${id}`, error);
       }
+    });
+  } catch (error) {
+    if (error instanceof TransientFetchError) return fellBack(error.message);
+    throw error;
+  }
+  for (const { id, item } of outcomes) {
+    if (!item || !item.ratingKey) {
+      toDelete.add(id);
+    } else if (!isMediaItem(item)) {
+      // A container, not media (a Jellyfin box set, or a Plex collection
+      // whose timeline entry carried no `type` — `normalize-plex` drops the
+      // typed ones before they get here, and the self-write registry drops
+      // the echo of librariarr's own collection writes). Kept as defence in
+      // depth: without it a container would round-trip in as a phantom item.
+      // Route the id to the delete set so a phantom row synced before this
+      // guard existed is cleaned up rather than waiting for a full sync
+      // (nothing legitimate shares a container's ratingKey).
+      toDelete.add(id);
+      skippedNonMedia++;
+    } else {
+      fetched.push(item);
     }
+  }
+
+  // The library of each new item a server places by lookup alone (Jellyfin/
+  // Emby name no section, see below), asked for up front and in parallel. A
+  // failed lookup leaves the item unresolved, as before.
+  const lookedUpLibrary = new Map<string, string | null>();
+  if (client.resolveLibraryKey) {
+    const resolveLibraryKey = client.resolveLibraryKey.bind(client);
+    const needLookup = fetched
+      .filter((item) => item.librarySectionID == null && !soleExisting(item.ratingKey))
+      .map((item) => item.ratingKey);
+    const lookups = await settleWithConcurrency(needLookup, FETCH_CONCURRENCY, (ratingKey) =>
+      resolveLibraryKey(ratingKey),
+    );
+    lookups.forEach((lookup, i) => {
+      if (lookup.status === "fulfilled") {
+        lookedUpLibrary.set(needLookup[i], lookup.value);
+      } else {
+        logger.debug(
+          "SyncIncremental",
+          `Could not resolve the library holding ${needLookup[i]}; leaving it unresolved`,
+          { error: String(lookup.reason) },
+        );
+      }
+    });
   }
 
   // Group upsert items by their DB library. Mapping evidence, in order:
@@ -272,24 +325,15 @@ export async function syncMediaServerItems(
       // Jellyfin/Emby item was unresolved — and unresolved escalates on those
       // servers — so every single add cost a whole-server sync.
       libraryId = soleExisting(item.ratingKey)?.libraryId;
-      if (!libraryId && client.resolveLibraryKey) {
-        try {
-          const key = await client.resolveLibraryKey(item.ratingKey);
-          if (key) {
-            const lib = libByKey.get(key);
-            if (lib) libraryId = lib.id;
-            else if (canBelongToSyncedLibrary(item)) newLibrarySeen = true;
-          }
-        } catch (error) {
-          // Left unresolved. On Jellyfin/Emby that still falls back to a full
-          // sync below — exactly the behaviour before this lookup existed — so
-          // a transient failure here costs what every add used to cost.
-          logger.debug(
-            "SyncIncremental",
-            `Could not resolve the library holding ${item.ratingKey}; leaving it unresolved`,
-            { error: String(error) },
-          );
-        }
+      // A failed lookup (absent from the map) is left unresolved. On
+      // Jellyfin/Emby that still falls back to a full sync below — exactly the
+      // behaviour before this lookup existed — so a transient failure here
+      // costs what every add used to cost.
+      const key = libraryId ? undefined : lookedUpLibrary.get(item.ratingKey);
+      if (key) {
+        const lib = libByKey.get(key);
+        if (lib) libraryId = lib.id;
+        else if (canBelongToSyncedLibrary(item)) newLibrarySeen = true;
       }
     }
     if (!libraryId || !libById.has(libraryId)) {
@@ -355,24 +399,30 @@ export async function syncMediaServerItems(
         .filter((x): x is string => !!x),
     ),
   ];
-  for (const seriesId of seriesIds) {
-    try {
-      const show = await client.getItemMetadata(seriesId);
+  try {
+    await mapWithConcurrency(seriesIds, FETCH_CONCURRENCY, async (seriesId) => {
+      let show: MediaMetadataItem;
+      try {
+        show = await client.getItemMetadata(seriesId);
+      } catch (error) {
+        throw new TransientFetchError(`show metadata fetch failed for ${seriesId}`, error);
+      }
       if (show?.Guid) showGuidsMap.set(seriesId, show.Guid);
       if (show?.Genre) showGenreMap.set(seriesId, show.Genre.map((g) => g.tag));
       if (show?.summary) showSummaryMap.set(seriesId, show.summary);
-    } catch (error) {
-      // NOT best-effort. `processBatch` reads an absent entry in `showGuidsMap`
-      // as "this show has no series-level ids" and deliberately **clears** the
-      // episode's external ids rather than falling back to its episode-level
-      // guid (which would resolve the wrong Sonarr series). A transient fetch
-      // failure is indistinguishable from that, so continuing would wipe the
-      // TVDB id the series' whole Arr/Seerr correlation hangs on — making
-      // `foundInArr` vacuously false for every Arr criterion until the next full
-      // sync. Same rule as the item fetch above: never let a transient error
-      // stand in for absent data; reconcile via full sync.
-      return fellBack(`show metadata fetch failed for ${seriesId}: ${String(error)}`);
-    }
+    });
+  } catch (error) {
+    // NOT best-effort. `processBatch` reads an absent entry in `showGuidsMap`
+    // as "this show has no series-level ids" and deliberately **clears** the
+    // episode's external ids rather than falling back to its episode-level
+    // guid (which would resolve the wrong Sonarr series). A transient fetch
+    // failure is indistinguishable from that, so continuing would wipe the
+    // TVDB id the series' whole Arr/Seerr correlation hangs on — making
+    // `foundInArr` vacuously false for every Arr criterion until the next full
+    // sync. Same rule as the item fetch above: never let a transient error
+    // stand in for absent data; reconcile via full sync.
+    if (error instanceof TransientFetchError) return fellBack(error.message);
+    throw error;
   }
 
   // Tracks on a server whose listings do not carry the artist's MusicBrainz id
@@ -390,19 +440,35 @@ export async function syncMediaServerItems(
       ),
     ];
     const artistMbids = new Map<string, string | null>();
-    for (const artistKey of artistKeys) {
-      try {
-        const artist = await client.getItemMetadata(artistKey);
-        artistMbids.set(artistKey, mbidFromGuids(artist?.Guid));
-      } catch (error) {
-        return fellBack(`artist metadata fetch failed for ${artistKey}: ${String(error)}`);
-      }
+    try {
+      await mapWithConcurrency(artistKeys, FETCH_CONCURRENCY, async (artistKey) => {
+        try {
+          const artist = await client.getItemMetadata(artistKey);
+          artistMbids.set(artistKey, mbidFromGuids(artist?.Guid));
+        } catch (error) {
+          throw new TransientFetchError(`artist metadata fetch failed for ${artistKey}`, error);
+        }
+      });
+    } catch (error) {
+      if (error instanceof TransientFetchError) return fellBack(error.message);
+      throw error;
     }
     for (const [libraryId, items] of groups) {
       if (libById.get(libraryId)!.type !== "MUSIC") continue;
       for (const item of items) withArtistMbid(item, artistMbids.get(item.grandparentRatingKey ?? "") ?? null);
     }
   }
+
+  // The dedup groups this run can have changed: every key the touched rows
+  // held before the write (a re-identified item leaves its old group, a
+  // deleted one's group needs a new canonical copy) and every key they hold
+  // after it. Only those groups are recomputed.
+  const touchedDedupKeys = new Set<string>();
+  for (const row of existingRows) {
+    if (row.dedupKey) touchedDedupKeys.add(row.dedupKey);
+  }
+  // Library types whose rows this run wrote or removed, for `sync:completed`.
+  const touchedTypes = new Set<SyncLibraryType>();
 
   // Upsert each library group via the shared batch processor.
   let upserted = 0;
@@ -440,13 +506,15 @@ export async function syncMediaServerItems(
     // *defined* map as authoritative.
     const isSeries = lib.type === "SERIES";
 
-    await processBatch(
+    const { dedupKeys } = await processBatch(
       items, libraryId, lib.type, watchCounts, existingThumbUrls,
       isSeries ? showGenreMap : undefined,
       isSeries ? showGuidsMap : undefined,
       undefined,
       isSeries ? showSummaryMap : undefined,
     );
+    for (const key of dedupKeys) touchedDedupKeys.add(key);
+    touchedTypes.add(lib.type);
     upserted += items.length;
   }
 
@@ -466,13 +534,23 @@ export async function syncMediaServerItems(
     // `LifecycleException` / `WatchHistory` is correct here — those records
     // describe an item that is genuinely gone.
     const rows = await prisma.$queryRawUnsafe<ItemRow[]>(
-      `SELECT mi."id", mi."ratingKey", mi."libraryId", mi."thumbUrl", mi."parentThumbUrl", mi."seasonThumbUrl", mi."isWatchlisted"
+      `SELECT ${ITEM_ROW_COLUMNS}
          FROM "MediaItem" mi JOIN "Library" l ON mi."libraryId"=l."id"
         WHERE l."mediaServerId"=$1 AND mi."ratingKey" = ANY($2)`,
       serverId, [...toDelete],
     );
     if (rows.length > 0) {
-      for (const r of rows) await invalidateCachedUrls(r.libraryId, [r.thumbUrl, r.parentThumbUrl, r.seasonThumbUrl]);
+      // One invalidation per library: removed episodes share artwork.
+      const urlsByLibrary = new Map<string, (string | null)[]>();
+      for (const r of rows) {
+        const urls = urlsByLibrary.get(r.libraryId) ?? [];
+        urls.push(r.thumbUrl, r.parentThumbUrl, r.seasonThumbUrl);
+        urlsByLibrary.set(r.libraryId, urls);
+        if (r.dedupKey) touchedDedupKeys.add(r.dedupKey);
+        const type = libById.get(r.libraryId)?.type;
+        if (type) touchedTypes.add(type);
+      }
+      for (const [libraryId, urls] of urlsByLibrary) await invalidateCachedUrls(libraryId, urls);
       const ids = rows.map((r) => r.id);
       const exceptions = await prisma.lifecycleException.count({ where: { mediaItemId: { in: ids } } });
       if (exceptions > 0) {
@@ -524,11 +602,15 @@ export async function syncMediaServerItems(
   // multi-server install — and the UI unrefreshed until the enqueued full sync
   // eventually runs on the serial MAIN_QUEUE.
   if (upserted > 0 || deleted > 0) {
-    await recomputeCanonical(server.userId).catch((e) =>
+    await recomputeCanonical(server.userId, { dedupKeys: [...touchedDedupKeys] }).catch((e) =>
       logger.error("SyncIncremental", "recomputeCanonical failed", { error: String(e) }),
     );
     invalidateMediaCaches();
-    eventBus.emit({ type: "sync:completed", userId: server.userId, meta: { serverId, incremental: true } });
+    eventBus.emit({
+      type: "sync:completed",
+      userId: server.userId,
+      meta: syncCompletedMeta(serverId, touchedTypes, { incremental: true }),
+    });
   }
 
   const needsFullSync = newLibrarySeen || (server.type !== "PLEX" && unresolvedIds.length > 0);

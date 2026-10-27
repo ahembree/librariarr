@@ -1,30 +1,35 @@
 "use client";
 
-import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { useVirtualizer } from "@tanstack/react-virtual";
 import { useChipColors } from "@/components/chip-color-provider";
 import { QualityChips } from "@/components/quality-chips";
 import { qualityChips, qualitySegments } from "@/lib/media/quality-chips";
-import { MediaCard, CARD_CONTENT_HEIGHT, PRIORITY_ROWS } from "@/components/media-card";
-import { MediaHoverPopover } from "@/components/media-hover-popover";
+import { MediaCard } from "@/components/media-card";
+import { MediaHoverPopover, hoverDataFromSeason } from "@/components/media-hover-popover";
+import { seasonHoverTitle } from "@/lib/media/hover-data";
 import { MediaFilters } from "@/components/media-filters";
-import { sameFilters } from "@/lib/filters/same-filters";
 import { DataTable } from "@/components/data-table";
 import type { DataTableColumn } from "@/components/data-table";
 import { LibraryToolbar } from "@/components/library-toolbar";
 import { Tv, List, HardDrive, Play } from "lucide-react";
-import { useCardSize, estimateContentWidth } from "@/hooks/use-card-size";
+import { useCardSize } from "@/hooks/use-card-size";
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { useServers } from "@/hooks/use-servers";
-import { useRealtime } from "@/hooks/use-realtime";
 import { useListFetch } from "@/hooks/use-list-fetch";
-import { useDeferredOverscan } from "@/hooks/use-deferred-overscan";
+import { useLibraryListState } from "@/hooks/use-library-list-state";
+import { useFilterPanelReset } from "@/hooks/use-filter-panel-reset";
+import { useLatestRequest } from "@/hooks/use-latest-request";
+import { useLibrarySyncRefetch } from "@/hooks/use-library-sync-refetch";
+import { useVirtualPosterGrid, POSTER_ASPECT } from "@/hooks/use-virtual-poster-grid";
+import { LIBRARY_CARD_CONTENT_HEIGHT } from "@/hooks/use-library-grid";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
-import { formatFileSize } from "@/lib/format";
-import { EmptyState } from "@/components/empty-state";
+import { formatDate, formatFileSize } from "@/lib/format";
+import { LibraryEmptyState } from "@/components/library-empty-state";
+import { PageHeader } from "@/components/page-header";
 import { MediaGridSkeleton } from "@/components/skeletons";
 import { LibraryTabs, SERIES_TABS } from "@/components/library-tabs";
+import { VirtualCardGrid, type GridCardContext } from "@/components/virtual-card-grid";
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
 import { loadCachedList } from "@/lib/media/list-cache";
 
@@ -52,10 +57,6 @@ interface SeasonEntry {
 }
 
 
-const GAP = 16;
-const CARD_BORDER = 2;
-const QUALITY_BAR_HEIGHT = 12;
-
 const SORT_OPTIONS = [
   { value: "parentTitle", label: "Series Name" },
   { value: "seasonNumber", label: "Season Number" },
@@ -65,81 +66,88 @@ const SORT_OPTIONS = [
   { value: "addedAt", label: "Date Added" },
 ];
 
-function seasonTableColumns(): DataTableColumn<SeasonEntry>[] {
-  return [
-    {
-      id: "parentTitle",
-      header: "Series",
-      defaultWidth: 250,
-      accessor: (s) => s.parentTitle,
-      sortValue: (s) => s.parentTitle,
-      sortable: true,
-    },
-    {
-      id: "seasonNumber",
-      header: "Season",
-      defaultWidth: 110,
-      accessor: (s) => s.seasonNumber === 0 ? "Specials" : `Season ${s.seasonNumber}`,
-      sortValue: (s) => s.seasonNumber,
-      sortable: true,
-    },
-    {
-      id: "episodeCount",
-      header: "Episodes",
-      defaultWidth: 90,
-      accessor: (s) => s.episodeCount,
-      sortValue: (s) => s.episodeCount,
-      sortable: true,
-      className: "text-right",
-      headerClassName: "text-right",
-    },
-    {
-      id: "totalSize",
-      header: "Size",
-      defaultWidth: 100,
-      accessor: (s) => formatFileSize(s.totalSize),
-      sortValue: (s) => Number(s.totalSize),
-      sortable: true,
-      className: "text-right",
-      headerClassName: "text-right",
-    },
-    {
-      id: "quality",
-      header: "Quality",
-      defaultWidth: 200,
-      accessor: (s) => <QualityChips chips={qualityChips({ qualityCounts: s.qualityCounts }, "video")} />,
-    },
-    {
-      id: "totalPlayCount",
-      header: "Plays",
-      defaultWidth: 80,
-      accessor: (s) => s.totalPlayCount || "—",
-      sortValue: (s) => s.totalPlayCount,
-      sortable: true,
-      className: "text-right",
-      headerClassName: "text-right",
-    },
-    {
-      id: "lastPlayed",
-      header: "Last Watched",
-      defaultWidth: 120,
-      accessor: (s) =>
-        s.lastPlayed ? new Date(s.lastPlayed).toLocaleDateString() : "—",
-      sortValue: (s) =>
-        s.lastPlayed ? new Date(s.lastPlayed).getTime() : 0,
-      sortable: true,
-    },
-    {
-      id: "addedAt",
-      header: "Added",
-      defaultWidth: 100,
-      accessor: (s) =>
-        s.addedAt ? new Date(s.addedAt).toLocaleDateString() : "—",
-      sortValue: (s) =>
-        s.addedAt ? new Date(s.addedAt).getTime() : 0,
-      sortable: true,
-    },
-  ];
+// Module-level: built inline, the columns were new on every render and the
+// table re-sorted the whole list each time.
+const SEASON_TABLE_COLUMNS: DataTableColumn<SeasonEntry>[] = [
+  {
+    id: "parentTitle",
+    header: "Series",
+    defaultWidth: 250,
+    accessor: (s) => s.parentTitle,
+    sortValue: (s) => s.parentTitle,
+    sortable: true,
+  },
+  {
+    id: "seasonNumber",
+    header: "Season",
+    defaultWidth: 110,
+    accessor: (s) => s.seasonNumber === 0 ? "Specials" : `Season ${s.seasonNumber}`,
+    sortValue: (s) => s.seasonNumber,
+    sortable: true,
+  },
+  {
+    id: "episodeCount",
+    header: "Episodes",
+    defaultWidth: 90,
+    accessor: (s) => s.episodeCount,
+    sortValue: (s) => s.episodeCount,
+    sortable: true,
+    className: "text-right",
+    headerClassName: "text-right",
+  },
+  {
+    id: "totalSize",
+    header: "Size",
+    defaultWidth: 100,
+    accessor: (s) => formatFileSize(s.totalSize),
+    sortValue: (s) => Number(s.totalSize),
+    sortable: true,
+    className: "text-right",
+    headerClassName: "text-right",
+  },
+  {
+    id: "quality",
+    header: "Quality",
+    defaultWidth: 200,
+    accessor: (s) => <QualityChips chips={qualityChips({ qualityCounts: s.qualityCounts }, "video")} />,
+  },
+  {
+    id: "totalPlayCount",
+    header: "Plays",
+    defaultWidth: 80,
+    accessor: (s) => s.totalPlayCount || "—",
+    sortValue: (s) => s.totalPlayCount,
+    sortable: true,
+    className: "text-right",
+    headerClassName: "text-right",
+  },
+  {
+    id: "lastPlayed",
+    header: "Last Watched",
+    defaultWidth: 120,
+    accessor: (s) => formatDate(s.lastPlayed, "—"),
+    sortValue: (s) => s.lastPlayed ? new Date(s.lastPlayed).getTime() : 0,
+    sortable: true,
+  },
+  {
+    id: "addedAt",
+    header: "Added",
+    defaultWidth: 100,
+    accessor: (s) => formatDate(s.addedAt, "—"),
+    sortValue: (s) => s.addedAt ? new Date(s.addedAt).getTime() : 0,
+    sortable: true,
+  },
+];
+
+const SEASONS_FROM = `?from=${encodeURIComponent("/library/series/seasons")}`;
+
+const seasonKeyOf = (s: SeasonEntry) => `${s.seriesKey ?? s.parentTitle}::${s.seasonNumber}`;
+
+// The same popover, with the season's poster as its hero, in both views.
+function seasonHover(season: SeasonEntry) {
+  return (
+    <MediaHoverPopover imageUrl={`/api/media/${season.mediaItemId}/image?type=season`} data={hoverDataFromSeason(season)} />
+  );
 }
 
 export default function AllSeasonsPage() {
@@ -149,104 +157,30 @@ export default function AllSeasonsPage() {
   const { servers } = useServers();
   const [seasons, setSeasons] = useState<SeasonEntry[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filters, setFilters] = useState<Record<string, string>>({});
-  const [sortBy, setSortBy] = useState("parentTitle");
-  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
-  const [viewMode, setViewMode] = useState<"cards" | "table">("cards");
+  const { viewMode, setViewMode, sortBy, sortOrder, toggleSort, toggleOrder, filters, onFilterChange, clearFilters, hasFilters } =
+    useLibraryListState("seasons", "parentTitle");
+  const filterPanel = useFilterPanelReset(undefined, clearFilters);
+  const { size, setSize, columns } = useCardSize();
+  // Guards against a stale slow response landing after a quick filter/sort
+  // flip and overwriting state with the wrong items.
+  const latest = useLatestRequest();
 
-  const { size, setSize, columns: actualColumns } = useCardSize();
-
-  const gridContainerRef = useRef<HTMLDivElement>(null);
+  const grid = useVirtualPosterGrid({
+    count: seasons.length,
+    columns,
+    aspect: POSTER_ASPECT,
+    contentHeight: LIBRARY_CARD_CONTENT_HEIGHT,
+    scrollElement: "main",
+    layoutKey: `${viewMode}:${loading}`,
+  });
 
   const { markChildNavigation } = useScrollRestoration("/library/series/seasons", !loading && seasons.length > 0, undefined, undefined, {
-    getFirstVisibleIndex: () => {
-      if (!gridContainerRef.current) return -1;
-      const main = document.querySelector<HTMLElement>("main");
-      if (!main) return -1;
-      const containerWidth = gridContainerRef.current.offsetWidth;
-      const columnWidth = (containerWidth - GAP * (actualColumns - 1)) / actualColumns;
-      const rowHeight = Math.round(columnWidth * 1.5 + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
-      if (rowHeight <= 0) return -1;
-      const gridTop = gridContainerRef.current.getBoundingClientRect().top - main.getBoundingClientRect().top + main.scrollTop;
-      const centerInGrid = main.scrollTop + main.clientHeight / 2 - gridTop;
-      return Math.max(0, Math.floor(centerInGrid / rowHeight)) * actualColumns;
-    },
-    scrollToIndex: (index) => {
-      if (!gridContainerRef.current) return false;
-      const main = document.querySelector<HTMLElement>("main");
-      if (!main) return false;
-      const row = Math.floor(index / actualColumns);
-      const containerWidth = gridContainerRef.current.offsetWidth;
-      const columnWidth = (containerWidth - GAP * (actualColumns - 1)) / actualColumns;
-      const rowHeight = Math.round(columnWidth * 1.5 + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
-      const gridTop = gridContainerRef.current.getBoundingClientRect().top - main.getBoundingClientRect().top + main.scrollTop;
-      main.scrollTo({ top: Math.max(0, gridTop + row * rowHeight + rowHeight / 2 - main.clientHeight / 2), behavior: "instant" });
-      return true;
-    },
+    getFirstVisibleIndex: grid.getFirstVisibleIndex,
+    scrollToIndex: grid.scrollToIndex,
   });
-
-  const scrollElementRef = useRef<HTMLElement | null>(null);
-  const [, setScrollElement] = useState<HTMLElement | null>(null);
-  const [scrollMargin, setScrollMargin] = useState(0);
-  // Token guards against a stale slow response landing after a quick
-  // filter/sort flip and overwriting state with the wrong items.
-  const reqToken = useRef(0);
-
-  // Find the <main> scroll container on mount
-  useEffect(() => {
-    const main = document.querySelector<HTMLElement>("main");
-    scrollElementRef.current = main;
-    setScrollElement(main);
-  }, []);
-
-  // Re-measure scrollMargin once the grid mounts (it's hidden behind the
-  // skeleton while loading, so the ref is null on the initial pass).
-  useLayoutEffect(() => {
-    if (gridContainerRef.current) {
-      setScrollMargin(gridContainerRef.current.offsetTop);
-    }
-  }, [loading, seasons.length]);
-
-  // Compute row count for virtualizer
-  const rowCount = useMemo(
-    () => (seasons.length > 0 ? Math.ceil(seasons.length / actualColumns) : 0),
-    [seasons.length, actualColumns],
-  );
-
-  const estimateSize = useCallback(() => {
-    const container = gridContainerRef.current;
-    const containerWidth = container?.offsetWidth || estimateContentWidth(window.innerWidth);
-    const columnWidth = (containerWidth - GAP * (actualColumns - 1)) / actualColumns;
-    const posterHeight = columnWidth * 1.5;
-    return Math.round(posterHeight + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
-  }, [actualColumns]);
-
-  const overscan = useDeferredOverscan(!loading && rowCount > 0);
-  const virtualizer = useVirtualizer({
-    count: rowCount,
-    getScrollElement: () => scrollElementRef.current,
-    estimateSize,
-    overscan,
-    scrollMargin,
-  });
-
-  // Re-measure when columns change
-  useEffect(() => {
-    virtualizer.measure();
-  }, [actualColumns, virtualizer]);
-
-  useEffect(() => {
-    const stored = localStorage.getItem("seasons-view-mode") as "cards" | "table" | null;
-    if (stored) setViewMode(stored);
-  }, []);
-
-  const handleViewModeChange = (mode: "cards" | "table") => {
-    setViewMode(mode);
-    localStorage.setItem("seasons-view-mode", mode);
-  };
 
   const fetchSeasons = useCallback(async () => {
-    const token = ++reqToken.current;
+    const token = latest.begin();
     setLoading(true);
     // Set once this request's list is on screen, from the cache or the server.
     let applied = false;
@@ -259,8 +193,8 @@ export default function AllSeasonsPage() {
       }
       // Through the tab's list cache: a list loaded in the last minute is
       // shown at once, an older one shown and then refreshed behind it.
-      await loadCachedList<{ seasons?: typeof seasons }>("/api/media/series/all-seasons", params, (data) => {
-        if (token !== reqToken.current) return;
+      await loadCachedList<{ seasons?: SeasonEntry[] }>("/api/media/series/all-seasons", params, (data) => {
+        if (!latest.isCurrent(token)) return;
         applied = true;
         setSeasons(data.seasons || []);
         setLoading(false);
@@ -270,45 +204,71 @@ export default function AllSeasonsPage() {
       // A failed load with nothing shown for it empties the list, as it did
       // before the cache: the previous list under the new filters would read
       // as their result.
-      if (!applied && token === reqToken.current) setSeasons([]);
+      if (!applied && latest.isCurrent(token)) setSeasons([]);
     } finally {
-      if (token === reqToken.current) setLoading(false);
+      if (latest.isCurrent(token)) setLoading(false);
     }
-  }, [filters, sortBy, sortOrder]);
+  }, [filters, sortBy, sortOrder, latest]);
 
   useListFetch(fetchSeasons);
 
   // Auto-update when real-time sync adds/removes items — no manual refresh.
-  useRealtime("sync:completed", fetchSeasons);
+  useLibrarySyncRefetch({ types: "SERIES" }, fetchSeasons);
 
-  const toggleSort = (field: string) => {
-    if (sortBy === field) {
-      setSortOrder((o) => (o === "asc" ? "desc" : "asc"));
-    } else {
-      setSortBy(field);
-      setSortOrder("asc");
-    }
-  };
+  const navigateToSeason = useCallback(
+    (season: SeasonEntry) => {
+      markChildNavigation();
+      router.push(`/library/series/season/${season.mediaItemId}${SEASONS_FROM}`);
+    },
+    [markChildNavigation, router],
+  );
 
-  const SEASONS_FROM = `?from=${encodeURIComponent("/library/series/seasons")}`;
-  const navigateToSeason = (season: SeasonEntry) => {
-    markChildNavigation();
-    router.push(`/library/series/season/${season.mediaItemId}${SEASONS_FROM}`);
-  };
+  const serverChips = showServers && servers.length > 1;
+  const renderCard = useCallback(
+    (season: SeasonEntry, { priority }: GridCardContext) => (
+      <MediaCard
+        priority={priority}
+        imageUrl={`/api/media/${season.mediaItemId}/image?type=season`}
+        title={seasonHoverTitle(season.parentTitle, season.seasonNumber)}
+        fallbackIcon="series"
+        href={`/library/series/season/${season.mediaItemId}${SEASONS_FROM}`}
+        prefetchMediaId={season.mediaItemId}
+        onClick={markChildNavigation}
+        metadata={
+          <MetadataLine stacked>
+            {show("metadata", "episodeCount") && <MetadataItem icon={<List />}>{season.episodeCount} {season.episodeCount === 1 ? "ep" : "eps"}</MetadataItem>}
+            {show("metadata", "fileSize") && <MetadataItem icon={<HardDrive />}>{formatFileSize(season.totalSize)}</MetadataItem>}
+            {show("metadata", "playCount") && season.totalPlayCount > 0 && (
+              <MetadataItem icon={<Play />}>{season.totalPlayCount} {season.totalPlayCount === 1 ? "play" : "plays"}</MetadataItem>
+            )}
+          </MetadataLine>
+        }
+        qualityBar={qualitySegments(
+          qualityChips({ qualityCounts: season.qualityCounts }, "video"),
+          getHex,
+          (toggle) => show("badges", toggle),
+        )}
+        servers={serverChips ? season.servers : undefined}
+        hoverContent={seasonHover(season)}
+      />
+    ),
+    [show, getHex, serverChips, markChildNavigation],
+  );
 
   return (
     <div className="p-4 sm:p-6 lg:p-8">
-      <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight mb-4">Series</h1>
+      <PageHeader className="mb-4" title="Series" />
 
       <LibraryTabs tabs={SERIES_TABS} active="/library/series/seasons" />
 
       <MediaFilters
-        onFilterChange={(f) => setFilters((prev) => (sameFilters(prev, f) ? prev : f))}
+        resetKey={filterPanel.resetKey}
+        onFilterChange={onFilterChange}
         mediaType="SERIES"
         prefix={
           <LibraryToolbar
             viewMode={viewMode}
-            onViewModeChange={handleViewModeChange}
+            onViewModeChange={setViewMode}
             cardSize={size}
             onCardSizeChange={setSize}
             cardDisplayPrefs={prefs}
@@ -317,8 +277,8 @@ export default function AllSeasonsPage() {
             sortOptions={SORT_OPTIONS}
             sortBy={sortBy}
             sortOrder={sortOrder}
-            onSortChange={(v) => toggleSort(v)}
-            onSortOrderToggle={() => setSortOrder((o) => (o === "asc" ? "desc" : "asc"))}
+            onSortChange={toggleSort}
+            onSortOrderToggle={toggleOrder}
           />
         }
       />
@@ -326,7 +286,7 @@ export default function AllSeasonsPage() {
       {loading ? (
         <MediaGridSkeleton />
       ) : seasons.length === 0 ? (
-        <EmptyState icon={Tv} title="No seasons found." />
+        <LibraryEmptyState icon={Tv} noun="seasons" hasFilters={hasFilters} onClear={filterPanel.clear} />
       ) : (
         <>
           <p className="mb-3 text-sm text-muted-foreground">
@@ -335,117 +295,16 @@ export default function AllSeasonsPage() {
 
           {viewMode === "table" ? (
             <DataTable<SeasonEntry>
-              columns={seasonTableColumns()}
+              columns={SEASON_TABLE_COLUMNS}
               data={seasons}
-              keyExtractor={(s) => `${s.seriesKey ?? s.parentTitle}::${s.seasonNumber}`}
+              keyExtractor={seasonKeyOf}
               defaultSortId="parentTitle"
               resizeStorageKey="dt-widths-seasons"
               onRowClick={navigateToSeason}
-              renderHoverContent={(season) => (
-                <MediaHoverPopover
-                  imageUrl={`/api/media/${season.mediaItemId}/image?type=season`}
-                  data={{
-                    title: `${season.parentTitle} — ${season.seasonNumber === 0 ? "Specials" : `Season ${season.seasonNumber}`}`,
-                    year: season.year,
-                    summary: season.summary,
-                    contentRating: season.contentRating,
-                    rating: season.rating,
-                    ratingImage: season.ratingImage,
-                    audienceRating: season.audienceRating,
-                    audienceRatingImage: season.audienceRatingImage,
-                    genres: season.genres,
-                    studio: season.studio,
-                    episodeCount: season.episodeCount,
-                    qualityCounts: season.qualityCounts,
-                    fileSize: season.totalSize,
-                    playCount: season.totalPlayCount,
-                    lastPlayedAt: season.lastPlayed,
-                    addedAt: season.addedAt,
-                    servers: season.servers,
-                  }}
-                />
-              )}
+              renderHoverContent={seasonHover}
             />
           ) : (
-            <div ref={gridContainerRef}>
-              <div style={{ height: virtualizer.getTotalSize(), width: "100%", position: "relative" }}>
-                {virtualizer.getVirtualItems().map((virtualRow) => {
-                  const rowStart = virtualRow.index * actualColumns;
-                  const rowItems = seasons.slice(rowStart, rowStart + actualColumns);
-                  return (
-                    <div
-                      key={virtualRow.key}
-                      data-index={virtualRow.index}
-                      ref={virtualizer.measureElement}
-                      style={{
-                        position: "absolute",
-                        top: 0,
-                        left: 0,
-                        width: "100%",
-                        paddingBottom: GAP,
-                        transform: `translateY(${virtualRow.start - virtualizer.options.scrollMargin}px)`,
-                      }}
-                    >
-                      <div style={{ display: "grid", gap: `${GAP}px`, gridTemplateColumns: `repeat(${actualColumns}, minmax(0, 1fr))` }}>
-                        {rowItems.map((season) => (
-                          <MediaCard
-                            key={`${season.seriesKey ?? season.parentTitle}::${season.seasonNumber}`}
-                            priority={virtualRow.index < PRIORITY_ROWS}
-                            imageUrl={`/api/media/${season.mediaItemId}/image?type=season`}
-                            title={`${season.parentTitle} — ${season.seasonNumber === 0 ? "Specials" : `Season ${season.seasonNumber}`}`}
-                            fallbackIcon="series"
-                            href={`/library/series/season/${season.mediaItemId}${SEASONS_FROM}`}
-                            prefetchMediaId={season.mediaItemId}
-                            onClick={markChildNavigation}
-                            metadata={
-                              <MetadataLine stacked>
-                                {show("metadata", "episodeCount") && <MetadataItem icon={<List />}>{season.episodeCount} {season.episodeCount === 1 ? "ep" : "eps"}</MetadataItem>}
-                                {show("metadata", "fileSize") && <MetadataItem icon={<HardDrive />}>{formatFileSize(season.totalSize)}</MetadataItem>}
-                                {show("metadata", "playCount") && season.totalPlayCount > 0 && (
-                                  <MetadataItem icon={<Play />}>{season.totalPlayCount} {season.totalPlayCount === 1 ? "play" : "plays"}</MetadataItem>
-                                )}
-                              </MetadataLine>
-                            }
-                            qualityBar={qualitySegments(
-                              qualityChips({ qualityCounts: season.qualityCounts }, "video"),
-                              getHex,
-                              (toggle) => show("badges", toggle),
-                            )}
-                            servers={showServers && servers.length > 1 ? season.servers : undefined}
-                            hoverContent={
-                              <MediaHoverPopover
-                                imageUrl={`/api/media/${season.mediaItemId}/image?type=season`}
-                                data={{
-                                  // Keep the field set identical to the table
-                                  // view's popover (style-guide convention).
-                                  title: `${season.parentTitle} — ${season.seasonNumber === 0 ? "Specials" : `Season ${season.seasonNumber}`}`,
-                                  year: season.year,
-                                  summary: season.summary,
-                                  contentRating: season.contentRating,
-                                  rating: season.rating,
-                                  ratingImage: season.ratingImage,
-                                  audienceRating: season.audienceRating,
-                                  audienceRatingImage: season.audienceRatingImage,
-                                  genres: season.genres,
-                                  studio: season.studio,
-                                  episodeCount: season.episodeCount,
-                                  qualityCounts: season.qualityCounts,
-                                  fileSize: season.totalSize,
-                                  playCount: season.totalPlayCount,
-                                  lastPlayedAt: season.lastPlayed,
-                                  addedAt: season.addedAt,
-                                  servers: season.servers,
-                                }}
-                              />
-                            }
-                          />
-                        ))}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
+            <VirtualCardGrid grid={grid} items={seasons} getKey={seasonKeyOf} renderItem={renderCard} />
           )}
         </>
       )}

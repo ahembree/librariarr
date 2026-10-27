@@ -1,42 +1,38 @@
 "use client";
 
-import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, useTransition } from "react";
-import { useVirtualizer } from "@tanstack/react-virtual";
+import { useState, useCallback, useMemo, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { useChipColors } from "@/components/chip-color-provider";
 import { QualityChips } from "@/components/quality-chips";
 import { qualityChips, qualitySegments } from "@/lib/media/quality-chips";
 import { MediaFilters } from "@/components/media-filters";
-import { MediaCard, CARD_CONTENT_HEIGHT, PRIORITY_ROWS } from "@/components/media-card";
-import { MediaHoverPopover } from "@/components/media-hover-popover";
-import { Button } from "@/components/ui/button";
+import { MediaCard } from "@/components/media-card";
+import { MediaHoverPopover, hoverDataFromArtistGroup } from "@/components/media-hover-popover";
 import { LibraryToolbar } from "@/components/library-toolbar";
 import { Music, Disc3, ListMusic, HardDrive } from "lucide-react";
 import { DataTable } from "@/components/data-table";
 import type { DataTableColumn } from "@/components/data-table";
-import { useCardSize, estimateContentWidth } from "@/hooks/use-card-size";
+import { useCardSize } from "@/hooks/use-card-size";
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { useServers } from "@/hooks/use-servers";
 import { AlphabetFilter } from "@/components/alphabet-filter";
-import { useVirtualGridAlphabet } from "@/hooks/use-virtual-grid-alphabet";
-import { useTableAlphabet } from "@/hooks/use-table-alphabet";
-import { formatFileSize } from "@/lib/format";
-import { EmptyState } from "@/components/empty-state";
+import { formatDate, formatFileSize } from "@/lib/format";
+import { LibraryEmptyState } from "@/components/library-empty-state";
+import { PageHeader } from "@/components/page-header";
 import { SyncLibraryButton } from "@/components/sync-library-button";
 import { MediaGridSkeleton } from "@/components/skeletons";
 import { LibraryTabs, MUSIC_TABS } from "@/components/library-tabs";
+import { VirtualCardGrid, type GridCardContext } from "@/components/virtual-card-grid";
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
-import { useFilterPersistence } from "@/hooks/use-filter-persistence";
-import { sameFilters } from "@/lib/filters/same-filters";
-import { useRealtime } from "@/hooks/use-realtime";
+import { useLibraryListState } from "@/hooks/use-library-list-state";
+import { useFilterPanelReset } from "@/hooks/use-filter-panel-reset";
+import { useLatestRequest } from "@/hooks/use-latest-request";
 import { useListFetch } from "@/hooks/use-list-fetch";
-import { useDeferredOverscan } from "@/hooks/use-deferred-overscan";
+import { useLibrarySyncRefetch } from "@/hooks/use-library-sync-refetch";
+import { useVirtualPosterGrid, SQUARE_ASPECT } from "@/hooks/use-virtual-poster-grid";
+import { LIBRARY_CARD_CONTENT_HEIGHT, useLibraryAlphabet } from "@/hooks/use-library-grid";
 import { loadCachedList } from "@/lib/media/list-cache";
-
-const GAP = 16;
-const CARD_BORDER = 2; // 1px top + 1px bottom border on Card
-const QUALITY_BAR_HEIGHT = 12; // h-1 quality bar (4px) + py-1 padding (8px)
 
 interface GroupedArtist {
   parentTitle: string;
@@ -68,152 +64,125 @@ const SORT_OPTIONS = [
   { value: "addedAt", label: "Date Added" },
 ];
 
-function artistTableColumns(): DataTableColumn<GroupedArtist>[] {
-  return [
-    {
-      id: "parentTitle",
-      header: "Artist",
-      defaultWidth: 250,
-      accessor: (a) => <span className="font-medium">{a.parentTitle}</span>,
-      sortValue: (a) => a.parentTitle,
-      className: "max-w-[300px] truncate",
-    },
-    {
-      id: "albumCount",
-      header: "Albums",
-      defaultWidth: 90,
-      accessor: (a) => a.albumCount,
-      sortValue: (a) => a.albumCount,
-      className: "text-muted-foreground",
-    },
-    {
-      id: "trackCount",
-      header: "Tracks",
-      defaultWidth: 90,
-      accessor: (a) => a.trackCount,
-      sortValue: (a) => a.trackCount,
-      className: "text-muted-foreground",
-    },
-    {
-      id: "totalSize",
-      header: "Size",
-      defaultWidth: 100,
-      accessor: (a) => formatFileSize(a.totalSize),
-      sortValue: (a) => Number(a.totalSize),
-      className: "text-muted-foreground",
-    },
-    {
-      id: "codecs",
-      header: "Codecs",
-      defaultWidth: 200,
-      accessor: (a) => (
-        <QualityChips chips={qualityChips({ audioCodecCounts: a.audioCodecCounts }, "music")} />
-      ),
-    },
-    {
-      id: "lastPlayed",
-      header: "Last Played",
-      defaultWidth: 120,
-      accessor: (a) => a.lastPlayed ? new Date(a.lastPlayed).toLocaleDateString() : "Never",
-      sortValue: (a) => a.lastPlayed ? new Date(a.lastPlayed).getTime() : 0,
-      className: "text-muted-foreground",
-    },
-    {
-      id: "addedAt",
-      header: "Added",
-      defaultWidth: 100,
-      accessor: (a) => a.addedAt ? new Date(a.addedAt).toLocaleDateString() : "-",
-      sortValue: (a) => a.addedAt ? new Date(a.addedAt).getTime() : 0,
-      className: "text-muted-foreground",
-    },
-  ];
+// Module-level: built inline, the columns were new on every render and the
+// table re-sorted the whole list on each alphabet scroll.
+const ARTIST_TABLE_COLUMNS: DataTableColumn<GroupedArtist>[] = [
+  {
+    id: "parentTitle",
+    header: "Artist",
+    defaultWidth: 250,
+    accessor: (a) => <span className="font-medium">{a.parentTitle}</span>,
+    sortValue: (a) => a.parentTitle,
+    className: "max-w-[300px] truncate",
+  },
+  {
+    id: "albumCount",
+    header: "Albums",
+    defaultWidth: 90,
+    accessor: (a) => a.albumCount,
+    sortValue: (a) => a.albumCount,
+    className: "text-muted-foreground",
+  },
+  {
+    id: "trackCount",
+    header: "Tracks",
+    defaultWidth: 90,
+    accessor: (a) => a.trackCount,
+    sortValue: (a) => a.trackCount,
+    className: "text-muted-foreground",
+  },
+  {
+    id: "totalSize",
+    header: "Size",
+    defaultWidth: 100,
+    accessor: (a) => formatFileSize(a.totalSize),
+    sortValue: (a) => Number(a.totalSize),
+    className: "text-muted-foreground",
+  },
+  {
+    id: "codecs",
+    header: "Codecs",
+    defaultWidth: 200,
+    accessor: (a) => (
+      <QualityChips chips={qualityChips({ audioCodecCounts: a.audioCodecCounts }, "music")} />
+    ),
+  },
+  {
+    id: "lastPlayed",
+    header: "Last Played",
+    defaultWidth: 120,
+    accessor: (a) => formatDate(a.lastPlayed, "Never"),
+    sortValue: (a) => a.lastPlayed ? new Date(a.lastPlayed).getTime() : 0,
+    className: "text-muted-foreground",
+  },
+  {
+    id: "addedAt",
+    header: "Added",
+    defaultWidth: 100,
+    accessor: (a) => formatDate(a.addedAt),
+    sortValue: (a) => a.addedAt ? new Date(a.addedAt).getTime() : 0,
+    className: "text-muted-foreground",
+  },
+];
+
+const artistKey = (a: GroupedArtist) => a.parentTitle;
+
+// The table's popover carries the artist's art as its hero; the card's passes
+// the same fields (the card already shows the art).
+function artistTableHover(a: GroupedArtist) {
+  return (
+    <MediaHoverPopover
+      imageUrl={`/api/media/${a.mediaItemId}/image?type=parent`}
+      imageAspect="square"
+      data={hoverDataFromArtistGroup(a)}
+    />
+  );
 }
 
 export default function MusicPage() {
   const router = useRouter();
   const [artistList, setArtistList] = useState<GroupedArtist[]>([]);
   const [loading, setLoading] = useState(true);
-  const { savedFilters, persistFilters } = useFilterPersistence("filters-/library/music");
-  // Start from the restored filters, so the first fetch is already filtered.
-  const [filters, setFilters] = useState<Record<string, string>>(savedFilters);
-  const [viewMode, setViewMode] = useState<"cards" | "table">("cards");
+  const {
+    viewMode,
+    setViewMode,
+    sortBy,
+    sortOrder,
+    toggleSort,
+    toggleOrder,
+    filters,
+    externalFilters,
+    onFilterChange,
+    clearFilters,
+    hasFilters,
+  } = useLibraryListState("music", "parentTitle", { filtersKey: "filters-/library/music" });
+  const filterPanel = useFilterPanelReset(externalFilters, clearFilters);
   const [, startTransition] = useTransition();
   const { show, showServers, setVisible, prefs } = useCardDisplay("MUSIC");
   const { getHex } = useChipColors();
 
-  const { size, setSize, columns: actualColumns } = useCardSize();
+  const { size, setSize, columns } = useCardSize();
   const { servers, selectedServerId, setSelectedServerId } = useServers();
+  // Guards against a stale slow response landing after a quick
+  // sort/filter/server flip and showing the wrong items for the selection.
+  const latest = useLatestRequest();
 
-  const gridContainerRef = useRef<HTMLDivElement>(null);
-
-  const { markChildNavigation } = useScrollRestoration("/library/music", !loading && artistList.length > 0, undefined, undefined, {
-    getFirstVisibleIndex: () => {
-      if (!gridContainerRef.current) return -1;
-      const main = document.querySelector<HTMLElement>("main");
-      if (!main) return -1;
-      const containerWidth = gridContainerRef.current.offsetWidth;
-      const columnWidth = (containerWidth - GAP * (actualColumns - 1)) / actualColumns;
-      const rowHeight = Math.round(columnWidth * 1.0 + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
-      if (rowHeight <= 0) return -1;
-      const gridTop = gridContainerRef.current.getBoundingClientRect().top - main.getBoundingClientRect().top + main.scrollTop;
-      const centerInGrid = main.scrollTop + main.clientHeight / 2 - gridTop;
-      return Math.max(0, Math.floor(centerInGrid / rowHeight)) * actualColumns;
-    },
-    scrollToIndex: (index) => {
-      if (!gridContainerRef.current) return false;
-      const main = document.querySelector<HTMLElement>("main");
-      if (!main) return false;
-      const row = Math.floor(index / actualColumns);
-      const containerWidth = gridContainerRef.current.offsetWidth;
-      const columnWidth = (containerWidth - GAP * (actualColumns - 1)) / actualColumns;
-      const rowHeight = Math.round(columnWidth * 1.0 + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
-      const gridTop = gridContainerRef.current.getBoundingClientRect().top - main.getBoundingClientRect().top + main.scrollTop;
-      main.scrollTo({ top: Math.max(0, gridTop + row * rowHeight + rowHeight / 2 - main.clientHeight / 2), behavior: "instant" });
-      return true;
-    },
+  const grid = useVirtualPosterGrid({
+    count: artistList.length,
+    columns,
+    aspect: SQUARE_ASPECT,
+    contentHeight: LIBRARY_CARD_CONTENT_HEIGHT,
+    scrollElement: "main",
+    layoutKey: `${viewMode}:${loading}`,
   });
 
-  const scrollElementRef = useRef<HTMLElement | null>(null);
-  const [scrollElement, setScrollElement] = useState<HTMLElement | null>(null);
-  const [scrollMargin, setScrollMargin] = useState(0);
-
-  useEffect(() => {
-    const main = document.querySelector<HTMLElement>("main");
-    scrollElementRef.current = main;
-    setScrollElement(main);
-  }, []);
-
-  // Re-measure once the grid mounts behind the loading skeleton (the ref is
-  // null on the first pass), so the virtualized rows aren't mis-positioned.
-  useLayoutEffect(() => {
-    if (gridContainerRef.current) {
-      setScrollMargin(gridContainerRef.current.offsetTop);
-    }
-  }, [loading, artistList.length]);
-
-  useEffect(() => {
-    try {
-      const stored = localStorage.getItem("music-view-mode") as "cards" | "table" | null;
-      if (stored) setViewMode(stored);
-    } catch {
-      // localStorage unavailable (private mode) — keep the default view.
-    }
-  }, []);
-
-  const handleViewModeChange = (mode: "cards" | "table") => {
-    setViewMode(mode);
-    localStorage.setItem("music-view-mode", mode);
-  };
-
-  const [sortBy, setSortBy] = useState("parentTitle");
-  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
-
-  // Token guards against a stale slow response landing after a quick
-  // sort/filter/server flip and showing the wrong items for the selection.
-  const reqToken = useRef(0);
+  const { markChildNavigation } = useScrollRestoration("/library/music", !loading && artistList.length > 0, undefined, undefined, {
+    getFirstVisibleIndex: grid.getFirstVisibleIndex,
+    scrollToIndex: grid.scrollToIndex,
+  });
 
   const fetchArtists = useCallback(async () => {
-    const token = ++reqToken.current;
+    const token = latest.begin();
     setLoading(true);
     // Set once this request's list is on screen, from the cache or the server.
     let applied = false;
@@ -230,8 +199,8 @@ export default function MusicPage() {
       }
       // Through the tab's list cache: a list loaded in the last minute is
       // shown at once, an older one shown and then refreshed behind it.
-      await loadCachedList<{ artists?: typeof artistList }>("/api/media/music/grouped", params, (data) => {
-        if (token !== reqToken.current) return;
+      await loadCachedList<{ artists?: GroupedArtist[] }>("/api/media/music/grouped", params, (data) => {
+        if (!latest.isCurrent(token)) return;
         applied = true;
         startTransition(() => {
           setArtistList(data.artists || []);
@@ -243,110 +212,96 @@ export default function MusicPage() {
       // A failed load with nothing shown for it empties the list, as it did
       // before the cache: the previous list under the new filters would read
       // as their result.
-      if (!applied && token === reqToken.current) setArtistList([]);
-      if (token === reqToken.current) setLoading(false);
+      if (!applied && latest.isCurrent(token)) setArtistList([]);
+      if (latest.isCurrent(token)) setLoading(false);
     }
-  }, [sortBy, sortOrder, selectedServerId, filters]);
+  }, [sortBy, sortOrder, selectedServerId, filters, latest]);
 
-  useRealtime("sync:completed", fetchArtists);
+  useLibrarySyncRefetch({ types: "MUSIC", serverId: selectedServerId }, fetchArtists);
 
   useListFetch(fetchArtists);
 
-  const rowCount = useMemo(
-    () => (artistList.length > 0 ? Math.ceil(artistList.length / actualColumns) : 0),
-    [artistList.length, actualColumns]
+  const alphabetItems = useMemo(() => artistList.map((a) => ({ title: a.parentTitle })), [artistList]);
+  const alphabet = useLibraryAlphabet(alphabetItems, grid, viewMode);
+
+  // Summed once per list, not on every render (each alphabet scroll re-renders).
+  const totals = useMemo(() => {
+    let albums = 0;
+    let tracks = 0;
+    for (const a of artistList) {
+      albums += a.albumCount;
+      tracks += a.trackCount;
+    }
+    return { albums, tracks };
+  }, [artistList]);
+
+  const openArtist = useCallback(
+    (a: GroupedArtist) => {
+      markChildNavigation();
+      router.push(`/library/music/artist/${a.mediaItemId}`);
+    },
+    [markChildNavigation, router],
   );
 
-  const estimateSize = useCallback(() => {
-    const container = gridContainerRef.current;
-    const containerWidth = container?.offsetWidth || estimateContentWidth(window.innerWidth);
-    const columnWidth = (containerWidth - GAP * (actualColumns - 1)) / actualColumns;
-    const posterHeight = columnWidth * 1.0;
-    return Math.round(posterHeight + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
-  }, [actualColumns]);
-
-  const overscan = useDeferredOverscan(!loading && rowCount > 0);
-  const virtualizer = useVirtualizer({
-    count: rowCount,
-    getScrollElement: () => scrollElementRef.current,
-    estimateSize,
-    overscan,
-    scrollMargin,
-  });
-  useEffect(() => {
-    virtualizer.measure();
-  }, [actualColumns, virtualizer]);
-
-  const alphabetItems = useMemo(
-    () => artistList.map((a) => ({ title: a.parentTitle })),
-    [artistList]
+  const serverChips = showServers && servers.length > 1;
+  const renderCard = useCallback(
+    (a: GroupedArtist, { priority }: GridCardContext) => (
+      <MediaCard
+        priority={priority}
+        imageUrl={`/api/media/${a.mediaItemId}/image?type=parent`}
+        title={a.parentTitle}
+        aspectRatio="square"
+        fallbackIcon="music"
+        href={`/library/music/artist/${a.mediaItemId}`}
+        prefetchMediaId={a.mediaItemId}
+        onClick={markChildNavigation}
+        metadata={
+          <MetadataLine stacked>
+            {show("metadata", "albumCount") && <MetadataItem icon={<Disc3 />}>{a.albumCount} {a.albumCount === 1 ? "album" : "albums"}</MetadataItem>}
+            {show("metadata", "trackCount") && <MetadataItem icon={<ListMusic />}>{a.trackCount} tracks</MetadataItem>}
+            {show("metadata", "fileSize") && <MetadataItem icon={<HardDrive />}>{formatFileSize(a.totalSize)}</MetadataItem>}
+          </MetadataLine>
+        }
+        qualityBar={qualitySegments(
+          qualityChips({ audioCodecCounts: a.audioCodecCounts }, "music"),
+          getHex,
+          (toggle) => show("badges", toggle),
+        )}
+        servers={serverChips ? a.servers : undefined}
+        hoverContent={<MediaHoverPopover imageAspect="square" data={hoverDataFromArtistGroup(a)} />}
+      />
+    ),
+    [show, getHex, serverChips, markChildNavigation],
   );
-  const gridAlphabet = useVirtualGridAlphabet({
-    items: alphabetItems,
-    columns: actualColumns,
-    virtualizer,
-    scrollElement,
-    enabled: viewMode === "cards",
-  });
-
-  const tableScrollToIndexRef = useRef<((index: number) => void) | null>(null);
-
-  const tableAlphabet = useTableAlphabet({
-    items: alphabetItems,
-    enabled: viewMode === "table",
-    scrollToIndexRef: tableScrollToIndexRef,
-    scrollElement,
-  });
-
-  const activeLetter = viewMode === "cards" ? gridAlphabet.activeLetter : tableAlphabet.activeLetter;
-  const availableLetters = viewMode === "cards" ? gridAlphabet.availableLetters : tableAlphabet.availableLetters;
-
-  const handleLetterClick = useCallback((letter: string) => {
-    if (viewMode === "cards") {
-      gridAlphabet.scrollToLetter(letter);
-    } else {
-      tableAlphabet.scrollToLetter(letter);
-    }
-  }, [viewMode, gridAlphabet, tableAlphabet]);
-
-  const toggleSort = (field: string) => {
-    if (sortBy === field) {
-      setSortOrder((o) => (o === "asc" ? "desc" : "asc"));
-    } else {
-      setSortBy(field);
-      setSortOrder("asc");
-    }
-  };
 
   return (
     <div className="p-4 sm:p-6 lg:p-8">
-      <div className="mb-6 flex items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-3">
-            <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Music</h1>
-            {!loading && artistList.length > 0 && (
-              <span className="font-mono text-xs text-faint">
-                {artistList.length.toLocaleString()} artists · {artistList.reduce((sum, a) => sum + a.albumCount, 0).toLocaleString()} albums · {artistList.reduce((sum, a) => sum + a.trackCount, 0).toLocaleString()} songs
-              </span>
-            )}
-          </div>
-          <p className="text-muted-foreground mt-1">
-            Browse your music library — grouped by artist, with deep links to albums and individual tracks.
-          </p>
-        </div>
-        <SyncLibraryButton libraryType="MUSIC" onSyncComplete={fetchArtists} />
-      </div>
+      <PageHeader
+        className="mb-6"
+        title="Music"
+        meta={
+          !loading && artistList.length > 0 && (
+            <span className="font-mono text-xs text-faint">
+              {artistList.length.toLocaleString()} artists · {totals.albums.toLocaleString()} albums · {totals.tracks.toLocaleString()} songs
+            </span>
+          )
+        }
+        description="Browse your music library — grouped by artist, with deep links to albums and individual tracks."
+        actions={<SyncLibraryButton libraryType="MUSIC" onSyncComplete={fetchArtists} />}
+        actionsInline
+      />
 
       <LibraryTabs tabs={MUSIC_TABS} active="/library/music" />
 
       <MediaFilters
-        onFilterChange={(f) => { setFilters((prev) => (sameFilters(prev, f) ? prev : f)); persistFilters(f); }}
-        externalFilters={Object.keys(savedFilters).length > 0 ? savedFilters : undefined}
+        resetKey={filterPanel.resetKey}
+        onFilterChange={onFilterChange}
+        externalFilters={filterPanel.externalFilters}
         mediaType="MUSIC"
         prefix={
           <LibraryToolbar
             viewMode={viewMode}
-            onViewModeChange={handleViewModeChange}
+            onViewModeChange={setViewMode}
             cardSize={size}
             onCardSizeChange={setSize}
             cardDisplayPrefs={prefs}
@@ -358,8 +313,8 @@ export default function MusicPage() {
             sortOptions={SORT_OPTIONS}
             sortBy={sortBy}
             sortOrder={sortOrder}
-            onSortChange={(v) => toggleSort(v)}
-            onSortOrderToggle={() => setSortOrder((o) => (o === "asc" ? "desc" : "asc"))}
+            onSortChange={toggleSort}
+            onSortOrderToggle={toggleOrder}
           />
         }
       />
@@ -367,142 +322,23 @@ export default function MusicPage() {
       {loading ? (
         <MediaGridSkeleton />
       ) : artistList.length === 0 ? (
-        <EmptyState
-          icon={Music}
-          title="No artists found."
-          description={Object.keys(filters).length > 0 ? "Try adjusting your filters." : "Sync a media server to get started."}
-          action={Object.keys(filters).length > 0 ? <Button variant="outline" size="sm" onClick={() => { setFilters({}); persistFilters({}); }}>Clear Filters</Button> : undefined}
+        <LibraryEmptyState icon={Music} noun="artists" hasFilters={hasFilters} onClear={filterPanel.clear} />
+      ) : viewMode === "table" ? (
+        <DataTable<GroupedArtist>
+          columns={ARTIST_TABLE_COLUMNS}
+          data={artistList}
+          keyExtractor={artistKey}
+          defaultSortId="parentTitle"
+          resizeStorageKey="dt-widths-music"
+          onRowClick={openArtist}
+          scrollToIndexRef={alphabet.tableScrollToIndexRef}
+          renderHoverContent={artistTableHover}
         />
       ) : (
-        <>
-          {viewMode === "table" ? (
-            <DataTable<GroupedArtist>
-              columns={artistTableColumns()}
-              data={artistList}
-              keyExtractor={(a) => a.parentTitle}
-              defaultSortId="parentTitle"
-              resizeStorageKey="dt-widths-music"
-              onRowClick={(a) => { markChildNavigation(); router.push(`/library/music/artist/${a.mediaItemId}`); }}
-              scrollToIndexRef={tableScrollToIndexRef}
-              renderHoverContent={(a) => (
-                <MediaHoverPopover
-                  imageUrl={`/api/media/${a.mediaItemId}/image?type=parent`}
-                  imageAspect="square"
-                  data={{
-                    title: a.parentTitle,
-                    year: a.year,
-                    summary: a.summary,
-                    contentRating: a.contentRating,
-                    rating: a.rating,
-                    ratingImage: a.ratingImage,
-                    audienceRating: a.audienceRating,
-                    audienceRatingImage: a.audienceRatingImage,
-                    genres: a.genres,
-                    studio: a.studio,
-                    albumCount: a.albumCount,
-                    trackCount: a.trackCount,
-                    audioCodecCounts: a.audioCodecCounts,
-                    fileSize: a.totalSize,
-                    lastPlayedAt: a.lastPlayed,
-                    addedAt: a.addedAt,
-                    servers: a.servers,
-                  }}
-                />
-              )}
-            />
-          ) : (
-            <div ref={gridContainerRef}>
-              <div
-                style={{
-                  height: virtualizer.getTotalSize(),
-                  width: "100%",
-                  position: "relative",
-                }}
-              >
-                {virtualizer.getVirtualItems().map((virtualRow) => {
-                  const rowStart = virtualRow.index * actualColumns;
-                  const rowItems = artistList.slice(rowStart, rowStart + actualColumns);
-                  return (
-                    <div
-                      key={virtualRow.key}
-                      data-index={virtualRow.index}
-                      ref={virtualizer.measureElement}
-                      style={{
-                        position: "absolute",
-                        top: 0,
-                        left: 0,
-                        width: "100%",
-                        paddingBottom: GAP,
-                        transform: `translateY(${virtualRow.start - virtualizer.options.scrollMargin}px)`,
-                      }}
-                    >
-                      <div
-                        style={{
-                          display: "grid",
-                          gap: `${GAP}px`,
-                          gridTemplateColumns: `repeat(${actualColumns}, minmax(0, 1fr))`,
-                        }}
-                      >
-                        {rowItems.map((a) => (
-                          <MediaCard
-                            key={a.parentTitle}
-                            priority={virtualRow.index < PRIORITY_ROWS}
-                            imageUrl={`/api/media/${a.mediaItemId}/image?type=parent`}
-                            title={a.parentTitle}
-                            aspectRatio="square"
-                            fallbackIcon="music"
-                            href={`/library/music/artist/${a.mediaItemId}`}
-                            prefetchMediaId={a.mediaItemId}
-                            onClick={() => { markChildNavigation(); }}
-                            metadata={
-                              <MetadataLine stacked>
-                                {show("metadata", "albumCount") && <MetadataItem icon={<Disc3 />}>{a.albumCount} {a.albumCount === 1 ? "album" : "albums"}</MetadataItem>}
-                                {show("metadata", "trackCount") && <MetadataItem icon={<ListMusic />}>{a.trackCount} tracks</MetadataItem>}
-                                {show("metadata", "fileSize") && <MetadataItem icon={<HardDrive />}>{formatFileSize(a.totalSize)}</MetadataItem>}
-                              </MetadataLine>
-                            }
-                            qualityBar={qualitySegments(
-                              qualityChips({ audioCodecCounts: a.audioCodecCounts }, "music"),
-                              getHex,
-                              (toggle) => show("badges", toggle),
-                            )}
-                            servers={showServers && servers.length > 1 ? a.servers : undefined}
-                            hoverContent={
-                              <MediaHoverPopover
-                                data={{
-                                  title: a.parentTitle,
-                                  year: a.year,
-                                  summary: a.summary,
-                                  contentRating: a.contentRating,
-                                  rating: a.rating,
-                                  ratingImage: a.ratingImage,
-                                  audienceRating: a.audienceRating,
-                                  audienceRatingImage: a.audienceRatingImage,
-                                  genres: a.genres,
-                                  studio: a.studio,
-                                  albumCount: a.albumCount,
-                                  trackCount: a.trackCount,
-                                  audioCodecCounts: a.audioCodecCounts,
-                                  fileSize: a.totalSize,
-                                  lastPlayedAt: a.lastPlayed,
-                                  addedAt: a.addedAt,
-                                  servers: a.servers,
-                                }}
-                              />
-                            }
-                          />
-                        ))}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-        </>
+        <VirtualCardGrid grid={grid} items={artistList} getKey={artistKey} renderItem={renderCard} />
       )}
 
-      <AlphabetFilter activeLetter={activeLetter} onLetterClick={handleLetterClick} availableLetters={availableLetters} />
+      <AlphabetFilter activeLetter={alphabet.activeLetter} onLetterClick={alphabet.onLetterClick} availableLetters={alphabet.availableLetters} />
     </div>
   );
 }

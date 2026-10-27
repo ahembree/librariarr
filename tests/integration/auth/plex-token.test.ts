@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { clearMockSession, getMockSession } from "../../setup/mock-session";
-import { callRoute, expectJson, createTestUser } from "../../setup/test-helpers";
+import { callRoute, expectJson, createTestUser, createTestServer } from "../../setup/test-helpers";
 
 // file deepcode ignore HardcodedNonCryptoSecret/test: Test file with hardcoded values to run validation tests
 
@@ -83,6 +83,8 @@ describe("POST /api/auth/plex/token", () => {
 
     expect(body.authenticated).toBe(true);
     expect(body.user.username).toBe("newplexuser");
+    // A brand-new admin has no server: the login page goes to onboarding.
+    expect((body as { hasServers?: boolean }).hasServers).toBe(false);
     expect(mockGetPlexUser).toHaveBeenCalledWith("plex-auth-token");
 
     // Verify user was created in the database
@@ -139,6 +141,8 @@ describe("POST /api/auth/plex/token", () => {
     expect(body.authenticated).toBe(true);
     expect(body.user.username).toBe("updatedname");
     expect(body.user.id).toBe(existingUser.id);
+    // No server added yet.
+    expect((body as { hasServers?: boolean }).hasServers).toBe(false);
 
     // Verify user was updated
     const prisma = getTestPrisma();
@@ -161,6 +165,25 @@ describe("POST /api/auth/plex/token", () => {
     });
     expect("plexToken" in session).toBe(false);
     expect(mockSucceeded).toHaveBeenCalledTimes(1);
+  });
+
+  it("says an existing user has a media server, so the login page goes home", async () => {
+    const existingUser = await createTestUser({ plexId: "88002", plexToken: "old-token" });
+    await createTestServer(existingUser.id);
+    mockGetPlexUser.mockResolvedValue({
+      id: 88002,
+      uuid: "user-uuid-servers",
+      email: "x@example.com",
+      username: "withservers",
+      authToken: "tok",
+      thumb: "",
+    });
+
+    const body = await expectJson<{ hasServers: boolean }>(
+      await callRoute(POST, { url: "/api/auth/plex/token", method: "POST", body: { authToken: "tok" } }),
+      200,
+    );
+    expect(body.hasServers).toBe(true);
   });
 
   it("should return 403 when Plex account is not linked to admin", async () => {

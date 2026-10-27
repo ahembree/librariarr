@@ -13,6 +13,7 @@ import {
 } from "@/lib/seerr/library-match";
 import { appCache } from "@/lib/cache/memory-cache";
 import { INTEGRATIONS_HEALTH_CACHE_KEY } from "@/lib/cache/invalidate";
+import { invalidateSeerrMetadataCache } from "@/lib/lifecycle/fetch-seerr-metadata";
 import { COMPLETED_PLAY_FILTER } from "@/lib/media/watch-completion";
 import { logger } from "@/lib/logger";
 
@@ -87,13 +88,14 @@ export async function getSeerrRequestStats(
 /**
  * Drop every cached Seerr-derived answer. Called by the Seerr instance
  * create/update/delete routes, so removing or disabling an instance doesn't
- * leave the dashboard card, the drill-down and the integration health banner
- * reporting it for another minute.
+ * leave the dashboard card, the drill-down, the integration health banner and
+ * the rule editor's previews reporting it for another minute.
  */
 export function invalidateSeerrCaches(): void {
   appCache.invalidate(STATS_CACHE_KEY);
   appCache.invalidatePrefix(USER_REQUESTS_CACHE_PREFIX);
   appCache.invalidate(INTEGRATIONS_HEALTH_CACHE_KEY);
+  invalidateSeerrMetadataCache();
 }
 
 async function computeSeerrRequestStats(

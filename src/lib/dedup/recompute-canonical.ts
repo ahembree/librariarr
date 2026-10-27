@@ -20,80 +20,87 @@ import { seriesKeySqlExpression } from "@/lib/media/series-key";
  * query that combines `dedupCanonical = true` with the enabled-server scope
  * (the multi-server listings, the Seerr request stats) lost the title entirely.
  * Groups that exist only on disabled servers still get a canonical copy.
+ *
+ * Only rows whose flag actually changes are written. The previous form set the
+ * flag on EVERY row the user owns on every call — after every full and
+ * incremental sync — which rewrote (and re-indexed) a whole library's worth of
+ * tuples to change, usually, nothing.
+ *
+ * `options.dedupKeys` limits the recompute to those groups. A caller that knows
+ * exactly which rows it wrote (the incremental sync) passes the keys of every
+ * row it upserted or deleted, before AND after the write, because a row whose
+ * key changed leaves one group and joins another, and a deleted row's group
+ * must elect a new canonical copy. Omitted, every group is recomputed.
  */
-export async function recomputeCanonical(userId: string): Promise<void> {
+export async function recomputeCanonical(
+  userId: string,
+  options: { dedupKeys?: string[] } = {},
+): Promise<void> {
+  const scoped = options.dedupKeys !== undefined;
+  const dedupKeys = [...new Set(options.dedupKeys ?? [])];
+  if (scoped && dedupKeys.length === 0) return;
+
   const settings = await prisma.appSettings.findUnique({
     where: { userId },
     select: { preferredTitleServerId: true },
   });
   const preferredServerId = settings?.preferredTitleServerId ?? null;
 
-  // Single atomic UPDATE: set dedupCanonical based on whether each item is the
-  // canonical pick for its dedupKey group. Wrapped in deadlock retry because
-  // concurrent syncs for the same user can deadlock with processBatch upserts.
+  // Winners are ranked once per group: a copy on an enabled server first, then
+  // the preferred title server, then the oldest, then the id — the last only so
+  // that two copies created in the same statement (same `createdAt`) cannot
+  // swap places between runs and turn every recompute into a rewrite. With no
+  // preference the second term is NULL = x, which ranks every copy equally.
+  //
+  // Wrapped in deadlock retry because concurrent syncs for the same user can
+  // deadlock with processBatch upserts.
   await withDeadlockRetry("recomputeCanonical", async () => {
-    if (preferredServerId) {
-      await prisma.$executeRaw`
-        UPDATE "MediaItem" mi_outer SET "dedupCanonical" = (
-          mi_outer.id IN (
-            SELECT DISTINCT ON (mi."dedupKey") mi.id
-            FROM "MediaItem" mi
-            JOIN "Library" l ON mi."libraryId" = l.id
-            JOIN "MediaServer" ms ON l."mediaServerId" = ms.id
-            WHERE ms."userId" = ${userId} AND mi."dedupKey" IS NOT NULL
-            ORDER BY mi."dedupKey",
-              CASE WHEN ms."enabled" THEN 0 ELSE 1 END,
-              CASE WHEN l."mediaServerId" = ${preferredServerId} THEN 0 ELSE 1 END,
-              mi."createdAt" ASC
-          )
-        )
-        WHERE mi_outer."libraryId" IN (
-          SELECT l.id FROM "Library" l
-          JOIN "MediaServer" ms ON l."mediaServerId" = ms.id
-          WHERE ms."userId" = ${userId}
-        )
-        AND mi_outer."dedupKey" IS NOT NULL
-      `;
-    } else {
-      // No preference — oldest item per group wins
-      await prisma.$executeRaw`
-        UPDATE "MediaItem" mi_outer SET "dedupCanonical" = (
-          mi_outer.id IN (
-            SELECT DISTINCT ON (mi."dedupKey") mi.id
-            FROM "MediaItem" mi
-            JOIN "Library" l ON mi."libraryId" = l.id
-            JOIN "MediaServer" ms ON l."mediaServerId" = ms.id
-            WHERE ms."userId" = ${userId} AND mi."dedupKey" IS NOT NULL
-            ORDER BY mi."dedupKey",
-              CASE WHEN ms."enabled" THEN 0 ELSE 1 END,
-              mi."createdAt" ASC
-          )
-        )
-        WHERE mi_outer."libraryId" IN (
-          SELECT l.id FROM "Library" l
-          JOIN "MediaServer" ms ON l."mediaServerId" = ms.id
-          WHERE ms."userId" = ${userId}
-        )
-        AND mi_outer."dedupKey" IS NOT NULL
-      `;
-    }
+    await prisma.$executeRawUnsafe(
+      `UPDATE "MediaItem" mi SET "dedupCanonical" = r."winner"
+         FROM (
+           SELECT x."id", x."dedupCanonical",
+                  ROW_NUMBER() OVER (
+                    PARTITION BY x."dedupKey"
+                    ORDER BY CASE WHEN ms."enabled" THEN 0 ELSE 1 END,
+                             CASE WHEN l."mediaServerId" = $2::text THEN 0 ELSE 1 END,
+                             x."createdAt" ASC,
+                             x."id" ASC
+                  ) = 1 AS "winner"
+             FROM "MediaItem" x
+             JOIN "Library" l ON x."libraryId" = l."id"
+             JOIN "MediaServer" ms ON l."mediaServerId" = ms."id"
+            WHERE ms."userId" = $1 AND x."dedupKey" IS NOT NULL
+              ${scoped ? `AND x."dedupKey" = ANY($3::text[])` : ""}
+         ) r
+        WHERE mi."id" = r."id" AND r."dedupCanonical" IS DISTINCT FROM r."winner"`,
+      ...(scoped ? [userId, preferredServerId, dedupKeys] : [userId, preferredServerId]),
+    );
   });
 
   // Ensure items without dedupKey stay canonical (default).
   // These are items that haven't been synced yet or have no computable key.
-  // This targets a disjoint set (dedupKey IS NULL) so no deadlock risk.
-  await prisma.$executeRaw`
-    UPDATE "MediaItem" SET "dedupCanonical" = true
-    WHERE "libraryId" IN (
-      SELECT l.id FROM "Library" l
-      JOIN "MediaServer" ms ON l."mediaServerId" = ms.id
-      WHERE ms."userId" = ${userId}
-    )
-    AND "dedupKey" IS NULL
-    AND "dedupCanonical" = false
-  `;
+  // This targets a disjoint set (dedupKey IS NULL) so no deadlock risk. A
+  // scoped call only ever names keys, and every row a sync writes has one, so
+  // there is nothing for it to fix there.
+  if (!scoped) {
+    await prisma.$executeRaw`
+      UPDATE "MediaItem" SET "dedupCanonical" = true
+      WHERE "libraryId" IN (
+        SELECT l.id FROM "Library" l
+        JOIN "MediaServer" ms ON l."mediaServerId" = ms.id
+        WHERE ms."userId" = ${userId}
+      )
+      AND "dedupKey" IS NULL
+      AND "dedupCanonical" = false
+    `;
+  }
 
-  logger.info("Sync", "Dedup canonical flags recomputed");
+  logger.info(
+    "Sync",
+    scoped
+      ? `Dedup canonical flags recomputed for ${dedupKeys.length} group(s)`
+      : "Dedup canonical flags recomputed",
+  );
 }
 
 /**

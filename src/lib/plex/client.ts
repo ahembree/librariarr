@@ -1,14 +1,11 @@
 import axios, { type AxiosInstance } from "axios";
 import https from "https";
-import { configureRetry, NO_BREAKER_MARK, NO_RETRY } from "@/lib/http-retry";
+import { NO_BREAKER_MARK, NO_RETRY } from "@/lib/http-retry";
+import { BYPASS_BREAKER } from "@/lib/media-server/health-cache";
 import {
-  BYPASS_BREAKER,
-  isUnreachable,
-  markUnreachable,
-  clearUnreachable,
-  getLastFailureMessage,
-  ServerUnreachableError,
-} from "@/lib/media-server/health-cache";
+  instrumentMediaServerClient,
+  normalizeMediaServerUrl,
+} from "@/lib/media-server/http-instrumentation";
 import type {
   PlexLibrarySection,
   PlexMetadataItem,
@@ -17,7 +14,7 @@ import type {
   PlexSession,
 } from "./types";
 import type { MediaServerClient, LibraryItemType } from "@/lib/media-server/client";
-import type { DetailedWatchHistoryEntry } from "@/lib/media-server/types";
+import type { CollectionVisibility, DetailedWatchHistoryEntry } from "@/lib/media-server/types";
 import { MediaItemNotFoundError } from "@/lib/media-server/client";
 import { isMediaItem } from "@/lib/media-server/item-types";
 import { normalizeResolutionFromDimensions } from "@/lib/resolution";
@@ -68,10 +65,10 @@ export class PlexClient implements MediaServerClient {
   private token: string;
 
   constructor(baseURL: string, token: string, options?: PlexClientOptions) {
-    this.baseURL = baseURL;
+    this.baseURL = normalizeMediaServerUrl(baseURL);
     this.token = token;
     const axiosConfig: Record<string, unknown> = {
-      baseURL,
+      baseURL: this.baseURL,
       headers: {
         "X-Plex-Token": token,
         Accept: "application/json",
@@ -88,42 +85,11 @@ export class PlexClient implements MediaServerClient {
 
     this.client = axios.create(axiosConfig);
 
-    const baseURLForHealth = this.baseURL;
-    this.client.interceptors.request.use((config) => {
-      if (!config.__bypassBreaker && isUnreachable(baseURLForHealth)) {
-        return Promise.reject(
-          new ServerUnreachableError(baseURLForHealth, getLastFailureMessage(baseURLForHealth)),
-        ) as never;
-      }
-      (config as unknown as Record<string, unknown>).__startTime = Date.now();
-      if (!config.url?.includes("/library/metadata/")) {
-        logger.debug("Plex", `${config.method?.toUpperCase()} ${config.url}`);
-      }
-      return config;
-    });
-
-    this.client.interceptors.response.use(
-      (response) => {
-        clearUnreachable(baseURLForHealth);
-        const start = (response.config as unknown as Record<string, unknown>).__startTime as number;
-        const duration = start ? Date.now() - start : 0;
-        if (!response.config.url?.includes("/library/metadata/")) {
-          logger.debug("Plex", `${response.status} ${response.config.url} (${duration}ms)`);
-        }
-        return response;
-      },
-      (error) => {
-        if (axios.isAxiosError(error)) {
-          logger.debug("Plex", `ERROR ${error.response?.status ?? "NETWORK"} ${error.config?.url}`, {
-            message: error.message,
-          });
-        }
-        return Promise.reject(error);
-      }
-    );
-
-    configureRetry(this.client, "Plex", logger, {
-      onTerminalNetworkError: (error) => markUnreachable(baseURLForHealth, error),
+    instrumentMediaServerClient(this.client, {
+      baseURL: this.baseURL,
+      logPrefix: () => "Plex",
+      // A sync fetches every item's metadata; logging each would drown the log.
+      quiet: (url) => url?.includes("/library/metadata/") ?? false,
     });
   }
 
@@ -396,8 +362,7 @@ export class PlexClient implements MediaServerClient {
 
   /**
    * Walk `/status/sessions/history/all` newest-first, handing each page to
-   * `onPage`. Shared by `getWatchCounts` and `getDetailedWatchHistory` so the
-   * two cannot disagree about where the history ends.
+   * `onPage` (`getDetailedWatchHistory`'s pager).
    *
    * A short page ends the walk only when the container reports no `totalSize`
    * or that total has been reached. The previous loops stopped on ANY page
@@ -451,49 +416,6 @@ export class PlexClient implements MediaServerClient {
       // Yield between pages so V8 can collect the previous page's parsed JSON
       await new Promise<void>((resolve) => { setImmediate(resolve); });
     }
-  }
-
-  /**
-   * Fetches server-wide watch history and returns per-ratingKey play counts.
-   * Unlike viewCount (which is per-authenticated-user), this counts watches
-   * from ALL users on the server — important for lifecycle decisions.
-   */
-  async getWatchCounts(): Promise<Map<string, { count: number; lastWatchedAt: number }>> {
-    const counts = new Map<string, { count: number; lastWatchedAt: number }>();
-
-    try {
-      await this.forEachHistoryPage((metadata) => {
-        for (const entry of metadata) {
-          const key = String(entry.ratingKey ?? "");
-          if (!key) continue;
-
-          // Only count full plays (90%+ watched)
-          const viewOffset = entry.viewOffset as number | undefined;
-          if (viewOffset != null && viewOffset > 0) {
-            const duration = entry.duration as number | undefined;
-            if (duration && duration > 0 && viewOffset / duration < 0.9) {
-              continue;
-            }
-          }
-
-          const viewedAt = (entry.viewedAt as number) ?? 0;
-          const existing = counts.get(key);
-          if (existing) {
-            existing.count++;
-            if (viewedAt > existing.lastWatchedAt) {
-              existing.lastWatchedAt = viewedAt;
-            }
-          } else {
-            counts.set(key, { count: 1, lastWatchedAt: viewedAt });
-          }
-        }
-      });
-    } catch {
-      // Non-fatal: if history fetch fails, viewCount from metadata is used as-is
-      logger.debug("Plex", "Failed to fetch watch history counts, using metadata viewCount only");
-    }
-
-    return counts;
   }
 
   async getDevices(signal?: AbortSignal): Promise<Map<number, { name: string; platform: string }>> {
@@ -735,7 +657,7 @@ export class PlexClient implements MediaServerClient {
   async getCollectionVisibility(
     sectionKey: string,
     collectionRatingKey: string
-  ): Promise<{ identifier: string | null; home: boolean; shared: boolean; recommended: boolean }> {
+  ): Promise<CollectionVisibility> {
     const response = await this.client.get(
       `/hubs/sections/${sectionKey}/manage`,
       { params: { metadataItemId: collectionRatingKey } }
@@ -760,17 +682,20 @@ export class PlexClient implements MediaServerClient {
   }
 
   /**
-   * Update a collection's visibility on home screens and library recommended.
-   * Reads current state from Plex first, then applies the desired state.
+   * Update a collection's visibility on home screens and library recommended,
+   * from its current state: `known` when the caller has just read it (the
+   * collection sync reads it to see whether anything changed, and a second
+   * read here cost one more request per change), else read from Plex first.
    */
   async updateCollectionVisibility(
     sectionKey: string,
     collectionRatingKey: string,
     home: boolean,
     shared: boolean,
-    recommended: boolean
+    recommended: boolean,
+    known?: CollectionVisibility
   ): Promise<void> {
-    const current = await this.getCollectionVisibility(sectionKey, collectionRatingKey);
+    const current = known ?? (await this.getCollectionVisibility(sectionKey, collectionRatingKey));
     const wantAny = home || shared || recommended;
 
     const params = {

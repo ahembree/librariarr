@@ -5,7 +5,12 @@ vi.mock("@/lib/logger", () => ({
   logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-import { walkSeerrRequests, SEERR_MAX_REQUEST_PAGES } from "@/lib/seerr/request-walk";
+import {
+  walkSeerrRequests,
+  SEERR_MAX_REQUEST_PAGES,
+  SEERR_REQUEST_PAGE_SIZE as P,
+  SEERR_REQUEST_PAGE_OVERLAP as O,
+} from "@/lib/seerr/request-walk";
 import { IntegrationError } from "@/lib/integration-error";
 import type { SeerrClient, SeerrRequest } from "@/lib/seerr/seerr-client";
 
@@ -30,26 +35,28 @@ const newestFirst = (n: number) => Array.from({ length: n }, (_, i) => req(n - i
 
 describe("walkSeerrRequests", () => {
   it("visits every request exactly once across overlapping pages", async () => {
-    const { client, getRequests } = listClient(newestFirst(250));
+    const total = 2.5 * P;
+    const { client, getRequests } = listClient(newestFirst(total));
     const seen: number[] = [];
     await walkSeerrRequests(client, { instanceName: "S" }, (r) => seen.push(r.id));
-    expect(seen).toHaveLength(250);
-    expect(new Set(seen).size).toBe(250);
-    expect(getRequests.mock.calls.map((c) => c[0].skip)).toEqual([0, 90, 180]);
+    expect(seen).toHaveLength(total);
+    expect(new Set(seen).size).toBe(total);
+    expect(getRequests.mock.calls.map((c) => c[0].skip)).toEqual([0, P - O, 2 * (P - O)]);
   });
 
   it("reports progress against the server's count, ending at 1", async () => {
-    const { client } = listClient(newestFirst(250));
+    const total = 2.5 * P;
+    const { client } = listClient(newestFirst(total));
     const fractions: number[] = [];
     await walkSeerrRequests(client, { instanceName: "S", onProgress: (f) => fractions.push(f) }, () => {});
-    // Rows covered after each advance: 100 of 250, then 190, then the end.
-    expect(fractions).toEqual([100 / 250, 190 / 250, 1]);
+    // Rows covered after each advance: one page, then a page less the overlap more, then the end.
+    expect(fractions).toEqual([P / total, (2 * P - O) / total, 1]);
   });
 
   it("fails fast on the first page only when asked to", async () => {
     // An interactive caller learns about a dead instance after one timeout;
     // pages after the first keep their retries — the instance just answered.
-    const { client, getRequests } = listClient(newestFirst(150));
+    const { client, getRequests } = listClient(newestFirst(1.5 * P));
     await walkSeerrRequests(client, { instanceName: "S", failFast: true }, () => {});
     expect(getRequests.mock.calls.map((c) => c[1])).toEqual([{ retry: false }, {}]);
 
@@ -60,7 +67,7 @@ describe("walkSeerrRequests", () => {
 
   it("stops paging once the caller's signal is aborted", async () => {
     const controller = new AbortController();
-    const { client, getRequests } = listClient(newestFirst(250), (_list, call) => {
+    const { client, getRequests } = listClient(newestFirst(2.5 * P), (_list, call) => {
       if (call === 0) controller.abort();
     });
     await expect(
@@ -84,46 +91,46 @@ describe("walkSeerrRequests", () => {
   });
 
   it("stops on a full last page when the count says nothing follows", async () => {
-    const { client, getRequests } = listClient(newestFirst(100));
+    const { client, getRequests } = listClient(newestFirst(P));
     const seen: number[] = [];
     await walkSeerrRequests(client, { instanceName: "S" }, (r) => seen.push(r.id));
-    expect(seen).toHaveLength(100);
+    expect(seen).toHaveLength(P);
     expect(getRequests).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to 'a short page is the last' when the response carries no count", async () => {
-    const list = newestFirst(150);
+    const list = newestFirst(1.5 * P);
     const getRequests = vi.fn(async ({ skip, take }: Params) => ({ results: list.slice(skip, skip + take) }));
     const seen = new Set<number>();
     await walkSeerrRequests({ getRequests } as unknown as SeerrClient, { instanceName: "S" }, (r) => seen.add(r.id));
-    expect(seen.size).toBe(150);
-    expect(getRequests.mock.calls.map((c) => c[0].skip)).toEqual([0, 90]);
+    expect(seen.size).toBe(1.5 * P);
+    expect(getRequests.mock.calls.map((c) => c[0].skip)).toEqual([0, P - O]);
   });
 
   it("does not double-count a row pushed down by a request created mid-walk", async () => {
-    const { client } = listClient(newestFirst(150), (list, call) => {
-      if (call === 1) list.unshift(req(9999)); // new request lands at offset 0
+    const { client } = listClient(newestFirst(1.5 * P), (list, call) => {
+      if (call === 1) list.unshift(req(9_999_999)); // new request lands at offset 0
     });
     const seen: number[] = [];
     await walkSeerrRequests(client, { instanceName: "S" }, (r) => seen.push(r.id));
     expect(new Set(seen).size).toBe(seen.length);
-    expect(seen).toHaveLength(150); // the new one sits before the offset — next run picks it up
+    expect(seen).toHaveLength(1.5 * P); // the new one sits before the offset — next run picks it up
   });
 
   it("still reads every row when a few already-read requests are deleted mid-walk", async () => {
-    const { client } = listClient(newestFirst(250), (list, call) => {
+    const { client } = listClient(newestFirst(2.5 * P), (list, call) => {
       if (call === 1) list.splice(0, 3); // three rows from page 1 cancelled
     });
     const seen = new Set<number>();
     await walkSeerrRequests(client, { instanceName: "S" }, (r) => seen.add(r.id));
     // The deleted three were read on page 1; every other row once the list shifted.
-    expect([...seen].sort((a, b) => a - b)).toEqual(Array.from({ length: 250 }, (_, i) => i + 1));
+    expect([...seen].sort((a, b) => a - b)).toEqual(Array.from({ length: 2.5 * P }, (_, i) => i + 1));
   });
 
   it("throws when more rows vanish than the overlap can absorb", async () => {
     // A skipped row would read as "never requested" — fail closed instead.
-    const { client } = listClient(newestFirst(250), (list, call) => {
-      if (call === 1) list.splice(0, 15);
+    const { client } = listClient(newestFirst(2.5 * P), (list, call) => {
+      if (call === 1) list.splice(0, O + 5);
     });
     await expect(walkSeerrRequests(client, { instanceName: "S" }, () => {})).rejects.toThrow(/changed while it was being read/);
   });
@@ -139,8 +146,8 @@ describe("walkSeerrRequests", () => {
   it("throws at the page cap instead of returning a truncated walk", async () => {
     const client = {
       // An endless newest-first list: every page is full and advances.
-      getRequests: vi.fn(async ({ skip }: Params) => ({
-        results: Array.from({ length: 100 }, (_, i) => req(10_000_000 - skip - i)),
+      getRequests: vi.fn(async ({ skip, take }: Params) => ({
+        results: Array.from({ length: take }, (_, i) => req(10_000_000 - skip - i)),
       })),
     } as unknown as SeerrClient;
     await expect(walkSeerrRequests(client, { instanceName: "S" }, () => {})).rejects.toThrow(
@@ -174,14 +181,14 @@ describe("walkSeerrRequests", () => {
     );
     expect(seen).toEqual([3, 1]);
     expect(getRequests).toHaveBeenCalledTimes(2);
-    expect(getRequests.mock.calls[0][0]).toEqual({ take: 100, skip: 0, mediaType: "tv" });
-    expect(getRequests.mock.calls[1][0]).toEqual({ take: 100, skip: 0 });
+    expect(getRequests.mock.calls[0][0]).toEqual({ take: P, skip: 0, mediaType: "tv" });
+    expect(getRequests.mock.calls[1][0]).toEqual({ take: P, skip: 0 });
   });
 
   it("sends mediaType to servers that accept it", async () => {
     const { client, getRequests } = listClient([req(1, "movie")]);
     await walkSeerrRequests(client, { instanceName: "S", mediaType: "movie" }, () => {});
-    expect(getRequests).toHaveBeenCalledWith({ take: 100, skip: 0, mediaType: "movie" }, {});
+    expect(getRequests).toHaveBeenCalledWith({ take: P, skip: 0, mediaType: "movie" }, {});
   });
 
   it("propagates other errors", async () => {

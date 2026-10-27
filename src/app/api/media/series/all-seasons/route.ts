@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { withListResponseCache } from "@/lib/api/cached-list-response";
 import { jsonResponse } from "@/lib/api/json-response";
 import { prisma } from "@/lib/db";
@@ -67,19 +67,14 @@ const SEASON_LEVEL_FILTER_KEYS = [
 /** First non-null value in episode order — show-level metadata is the same on every episode. */
 const first = (col: string) => firstNonNullSql(col, `"episodeNumber", id`);
 
-async function listGet(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+const listGet = withSession(async (session, request: NextRequest) => {
   const { searchParams } = new URL(request.url);
   const search = searchParams.get("search");
   const sortBy = searchParams.get("sortBy") || "parentTitle";
   const sortOrder = searchParams.get("sortOrder") || "asc";
   const serverId = searchParams.get("serverId");
 
-  const sf = await resolveServerFilter(session.userId!, serverId, "SERIES");
+  const sf = await resolveServerFilter(session.userId, serverId, "SERIES");
   if (!sf) {
     return NextResponse.json({ seasons: [] });
   }
@@ -131,7 +126,10 @@ async function listGet(request: NextRequest) {
     resolutionOtherIncludesNull: true,
   });
   if (Object.keys(narrowing).length > 0) {
-    const qualifying = await prisma.mediaItem.findMany({
+    // `groupBy`, not `findMany({ distinct })`: Prisma applies `distinct` in
+    // Node, reading one row per matching episode to keep one per season.
+    const qualifying = await prisma.mediaItem.groupBy({
+      by: ["seriesKey", "seasonNumber"],
       where: {
         AND: [
           narrowing,
@@ -144,8 +142,6 @@ async function listGet(request: NextRequest) {
           },
         ],
       },
-      select: { seriesKey: true, seasonNumber: true },
-      distinct: ["seriesKey", "seasonNumber"],
     });
     params.push(qualifying.map((r) => r.seriesKey));
     const keysParam = params.length;
@@ -306,7 +302,7 @@ async function listGet(request: NextRequest) {
     });
 
   return jsonResponse(request, { seasons: seasonsList });
-}
+});
 
 /**
  * Answered from the list response cache when the same listing was asked for

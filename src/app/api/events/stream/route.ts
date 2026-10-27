@@ -1,5 +1,5 @@
-import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { eventBus } from "@/lib/events/event-bus";
 import type { AppEvent } from "@/lib/events/event-bus";
 
@@ -22,13 +22,8 @@ export async function HEAD() {
   return new Response(null, { status: session.isLoggedIn ? 200 : 401 });
 }
 
-export async function GET() {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  const userId = session.userId!;
+export const GET = withSession(async (session) => {
+  const userId = session.userId;
   let closed = false;
   // Idempotent teardown — assigned in start(); called directly from cancel()
   // and the lifetime timer so the eventBus subscription + timers are released
@@ -106,4 +101,4 @@ export async function GET() {
       "X-Accel-Buffering": "no",
     },
   });
-}
+});

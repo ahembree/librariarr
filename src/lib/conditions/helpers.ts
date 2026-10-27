@@ -1,8 +1,8 @@
 import { CONDITION_FIELDS } from "./fields";
 import { isNonNullableNonTextField } from "./field-metadata";
 import { CONDITION_OPERATORS } from "./operators";
-import { STREAM_QUERY_FIELDS } from "./stream-query";
-import type { ConditionGroup, ConditionFieldType } from "./types";
+import { STREAM_QUERY_FIELDS, isStreamQueryGroup } from "./stream-query";
+import type { Condition, ConditionGroup, ConditionFieldType } from "./types";
 
 // ─── Field-set predicates ────────────────────────────────────────────────
 
@@ -284,20 +284,64 @@ export const EXTERNAL_ID_FIELD = "hasExternalId";
 
 // ─── Tree walkers ────────────────────────────────────────────────────────
 
+/**
+ * Whether any ENABLED rule in the tree satisfies `visitRule`, or any enabled
+ * group satisfies `visitGroup`. A disabled group is skipped whole, sub-groups
+ * included — the one walk every `has*Rules` gate shares, so a gate cannot
+ * read a disabled rule differently from the engines (both phases skip them).
+ */
+export function anyEnabled(
+  groups: ConditionGroup[],
+  visitRule: (rule: Condition) => boolean,
+  visitGroup?: (group: ConditionGroup) => boolean,
+): boolean {
+  for (const group of groups) {
+    if (group.enabled === false) continue;
+    if (visitGroup?.(group)) return true;
+    if (group.rules.some((r) => r.enabled !== false && visitRule(r))) return true;
+    if (group.groups?.length && anyEnabled(group.groups, visitRule, visitGroup)) return true;
+  }
+  return false;
+}
+
 function anyRuleMatches(
   groups: ConditionGroup[],
   predicate: (field: string) => boolean,
 ): boolean {
-  for (const group of groups) {
-    if (group.enabled === false) continue;
-    if (group.rules.some((r) => r.enabled !== false && predicate(r.field))) {
-      return true;
-    }
-    if (group.groups?.length && anyRuleMatches(group.groups, predicate)) {
-      return true;
-    }
-  }
-  return false;
+  return anyEnabled(groups, (r) => predicate(r.field));
+}
+
+/** At least one enabled rule anywhere — a rule set without one would match everything. */
+export function hasActiveRules(groups: ConditionGroup[]): boolean {
+  return anyEnabled(groups, () => true);
+}
+
+/** Wildcard operators on a library field (external fields evaluate their own). */
+export function hasWildcardRules(groups: ConditionGroup[]): boolean {
+  return anyEnabled(
+    groups,
+    (r) => !isExternalField(r.field) && (r.operator === "matchesWildcard" || r.operator === "notMatchesWildcard"),
+  );
+}
+
+/** Rules that read the streams relation: a stream query group or a stream field. */
+export function hasStreamRules(groups: ConditionGroup[]): boolean {
+  return anyEnabled(groups, (r) => isStreamField(r.field), (g) => isStreamQueryGroup(g));
+}
+
+export function hasExternalIdFieldRules(groups: ConditionGroup[]): boolean {
+  return anyRuleMatches(groups, (f) => f === EXTERNAL_ID_FIELD);
+}
+
+/**
+ * Custom Format Score: the one Arr field Radarr computes only on `/moviefile`
+ * (a request per 100 movies), so Arr data is fetched with scores only when a
+ * rule, query or column reads it.
+ */
+export const CUSTOM_FORMAT_SCORE_FIELD = "arrCustomFormatScore";
+
+export function hasCustomFormatScoreRules(groups: ConditionGroup[]): boolean {
+  return anyRuleMatches(groups, (f) => f === CUSTOM_FORMAT_SCORE_FIELD);
 }
 
 export function hasArrRules(groups: ConditionGroup[]): boolean {

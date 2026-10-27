@@ -691,11 +691,12 @@ describe("syncMediaServerItems", () => {
     expect(result.status).toBe("fell-back");
     expect(result.upserted).toBe(1);
     expect(sideEffects.invalidate).toHaveBeenCalledTimes(1);
-    expect(sideEffects.recompute).toHaveBeenCalledWith(server.userId);
+    // Only the dedup group of the item it wrote is recomputed.
+    expect(sideEffects.recompute).toHaveBeenCalledWith(server.userId, { dedupKeys: ["movie:tmdb:999"] });
     expect(sideEffects.emit).toHaveBeenCalledWith({
       type: "sync:completed",
       userId: server.userId,
-      meta: { serverId: server.id, incremental: true },
+      meta: { serverId: server.id, incremental: true, libraryTypes: ["MOVIE"] },
     });
   });
 
@@ -734,5 +735,130 @@ describe("syncMediaServerItems", () => {
       where: { ratingKey: "dup-1", libraryId: libA.id },
     });
     expect(rowA?.isWatchlisted).toBe(true);
+  });
+
+  describe("bounded concurrency", () => {
+    /** Tracks how many metadata calls are in flight at once. */
+    function trackInFlight(answer: (id: string) => unknown) {
+      const state = { inFlight: 0, peak: 0 };
+      mockGetItemMetadata.mockImplementation(async (id: string) => {
+        state.inFlight++;
+        state.peak = Math.max(state.peak, state.inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        state.inFlight--;
+        return answer(id);
+      });
+      return state;
+    }
+
+    it("fetches the changed items in parallel, never more than eight at once", async () => {
+      const { server } = await seed();
+      const ids = Array.from({ length: 30 }, (_, i) => `p${i}`);
+      const state = trackInFlight((id) => movieMeta(id, { Guid: [{ id: `tmdb://${id}` }] }));
+
+      const result = await syncMediaServerItems(server.id, ids, []);
+
+      expect(result).toMatchObject({ status: "done", upserted: 30 });
+      expect(state.peak).toBeGreaterThan(1);
+      expect(state.peak).toBeLessThanOrEqual(8);
+      expect(await getTestPrisma().mediaItem.count()).toBe(30);
+    });
+
+    it("still falls back, writing nothing, when one of many fetches fails transiently", async () => {
+      const { server } = await seed();
+      const ids = Array.from({ length: 20 }, (_, i) => `t${i}`);
+      trackInFlight((id) => {
+        if (id === "t7") throw { response: { status: 503 } };
+        return movieMeta(id);
+      });
+
+      const result = await syncMediaServerItems(server.id, ids, []);
+
+      expect(result.status).toBe("fell-back");
+      expect(result.reason).toMatch(/^fetch failed for t7: /);
+      expect(await getTestPrisma().mediaItem.count()).toBe(0);
+      expect(sideEffects.emit).not.toHaveBeenCalled();
+    });
+
+    it("fetches the shows of many episodes in parallel and falls back if one fails", async () => {
+      const { server } = await seed();
+      await createTestLibrary(server.id, { key: "2", type: "SERIES" });
+      const episodes = Array.from({ length: 12 }, (_, i) => `ep${i}`);
+      const answer = (id: string) => {
+        if (id.startsWith("show")) {
+          if (id === "show5") throw new Error("socket hang up");
+          return { ratingKey: id, type: "show", title: id, Guid: [{ id: `tvdb://${id}` }] };
+        }
+        return {
+          ratingKey: id, key: `/library/metadata/${id}`, type: "episode", title: id,
+          grandparentRatingKey: `show${id.slice(2)}`, grandparentTitle: "Show", parentIndex: 1, index: 1,
+          librarySectionID: 2,
+        };
+      };
+      const state = trackInFlight(answer);
+
+      const result = await syncMediaServerItems(server.id, episodes, []);
+
+      expect(result.status).toBe("fell-back");
+      expect(result.reason).toMatch(/^show metadata fetch failed for show5: /);
+      expect(state.peak).toBeLessThanOrEqual(8);
+      // The show fetch runs before any write.
+      expect(await getTestPrisma().mediaItem.count()).toBe(0);
+    });
+
+    it("looks up the libraries of new Jellyfin items in parallel", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id, { name: "JF", type: "JELLYFIN" });
+      const library = await createTestLibrary(server.id, { key: "lib-1", type: "MOVIE" });
+      const ids = Array.from({ length: 10 }, (_, i) => `jf${i}`);
+      mockGetItemMetadata.mockImplementation(async (id: string) => {
+        const item = movieMeta(id, { Guid: [{ id: `tmdb://${id}` }] });
+        delete (item as { librarySectionID?: number }).librarySectionID;
+        return item;
+      });
+      let inFlight = 0;
+      let peak = 0;
+      mockResolveLibraryKey.mockImplementation(async (id: string) => {
+        inFlight++;
+        peak = Math.max(peak, inFlight);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        inFlight--;
+        // One lookup fails: that item is left unresolved, as before.
+        if (id === "jf3") throw new Error("timeout");
+        return "lib-1";
+      });
+
+      const result = await syncMediaServerItems(server.id, ids, []);
+
+      expect(peak).toBeGreaterThan(1);
+      expect(result.upserted).toBe(9);
+      expect(result.unresolved).toBe(1);
+      // An unresolved item on Jellyfin still escalates, exactly as before.
+      expect(result.status).toBe("fell-back");
+      expect(await getTestPrisma().mediaItem.count({ where: { libraryId: library.id } })).toBe(9);
+    });
+  });
+
+  describe("scoped canonical recompute", () => {
+    it("recomputes the groups of upserted items before and after, and of deleted ones", async () => {
+      const { server, library } = await seed();
+      const prisma = getTestPrisma();
+      const moved = await createTestMediaItem(library.id, { ratingKey: "re-id" });
+      await prisma.mediaItem.update({ where: { id: moved.id }, data: { dedupKey: "movie:tmdb:old" } });
+      const gone = await createTestMediaItem(library.id, { ratingKey: "gone" });
+      await prisma.mediaItem.update({ where: { id: gone.id }, data: { dedupKey: "movie:tmdb:gone" } });
+      // A Fix Match re-identified the item: its key moves from "old" to "new".
+      mockGetItemMetadata.mockResolvedValue(movieMeta("re-id", { Guid: [{ id: "tmdb://new" }] }));
+
+      await syncMediaServerItems(server.id, ["re-id"], ["gone"]);
+
+      const [, scope] = sideEffects.recompute.mock.calls[0] as unknown as [string, { dedupKeys: string[] }];
+      expect([...scope.dedupKeys].sort()).toEqual(["movie:tmdb:gone", "movie:tmdb:new", "movie:tmdb:old"]);
+      expect(sideEffects.emit).toHaveBeenCalledWith({
+        type: "sync:completed",
+        userId: server.userId,
+        meta: { serverId: server.id, incremental: true, libraryTypes: ["MOVIE"] },
+      });
+    });
   });
 });

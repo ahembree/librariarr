@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { authMethodLabel } from "@/lib/auth/auth-method";
 
@@ -8,12 +8,7 @@ import { authMethodLabel } from "@/lib/auth/auth-method";
  * user chip): display name and a best-effort primary auth method label.
  * Exposes no secrets — username and method are safe to render.
  */
-export async function GET() {
-  const session = await getSession();
-  if (!session.isLoggedIn || !session.userId) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async (session) => {
   const user = await prisma.user.findUnique({
     where: { id: session.userId },
     select: {
@@ -33,4 +28,4 @@ export async function GET() {
     email: user.email,
     authMethod: authMethodLabel(user),
   });
-}
+});

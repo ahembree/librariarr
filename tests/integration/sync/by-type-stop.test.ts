@@ -57,7 +57,6 @@ vi.mock("@/lib/media-server/factory", () => ({
       { key: "2", title: "Movies B", type: "movie" },
       { key: "3", title: "Movies C", type: "movie" },
     ]),
-    getWatchCounts: vi.fn(async () => new Map()),
     getLibraryItemsPage: vi.fn(async (section: string, _type: string, offset: number) => {
       if (offset === 0 && state.onSection) await state.onSection(section);
       const items = offset === 0

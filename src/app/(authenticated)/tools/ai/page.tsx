@@ -115,7 +115,14 @@ export default function AiAnalysisPage() {
               const line = buffer.slice(0, idx);
               buffer = buffer.slice(idx + 1);
               if (!line.trim()) continue;
-              const ev = JSON.parse(line);
+              let ev;
+              try {
+                ev = JSON.parse(line);
+              } catch {
+                // A result line the server could not finish; its reason
+                // follows as an error event.
+                continue;
+              }
               if (ev.type === "status") setStatus(ev.label);
               else if (ev.type === "tool") setSteps((prev) => [...prev, ev.label]);
               else if (ev.type === "result") final = ev.result as AiChatResponse;

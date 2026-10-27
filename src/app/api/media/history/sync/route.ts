@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { validateRequest, watchHistorySyncSchema } from "@/lib/validation";
 import { syncWatchHistory } from "@/lib/sync/sync-watch-history";
@@ -27,12 +27,7 @@ export const maxDuration = 1800;
 // to the previous consistent state rather than leaving a half-wiped table.
 const MAX_SYNC_LIFETIME_MS = 30 * 60 * 1000;
 
-export async function POST(request: Request) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const POST = withSession(async (session, request: Request) => {
   const { data, error } = await validateRequest(request, watchHistorySyncSchema);
   if (error) return error;
 
@@ -146,6 +141,7 @@ export async function POST(request: Request) {
       // lifetime cap, and the user needs to know one more run will finish it.
       return { success: true, counts, cancelled: signal.aborted };
     },
-    { signal: request.signal, maxLifetimeMs: MAX_SYNC_LIFETIME_MS },
+    // `request`: its signal, and gzip when the client accepts it.
+    { request, maxLifetimeMs: MAX_SYNC_LIFETIME_MS },
   );
-}
+});

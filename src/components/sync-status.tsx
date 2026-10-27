@@ -2,6 +2,9 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useRealtime } from "@/hooks/use-realtime";
+import { useFallbackPoll } from "@/hooks/use-fallback-poll";
+import { fetchSyncStatus } from "@/lib/sync/sync-status-client";
+import { formatRelativeDate } from "@/lib/format";
 import {
   Card,
   CardContent,
@@ -32,44 +35,32 @@ interface SyncJob {
   mediaServer: { name: string; type: string };
 }
 
-interface SyncStatusProps {
-  onSyncComplete?: () => void;
-}
-
-export function SyncStatus({ onSyncComplete }: SyncStatusProps) {
+/**
+ * The Library Sync card: running syncs with their progress, then the recent
+ * results for 30 s. It refreshes nothing else — it used to refresh the
+ * dashboard's stats on its own 10 s throttle beside the sync indicator's, and
+ * again at the end of a sync beside the page's own `sync:completed` refetch.
+ */
+export function SyncStatus() {
   const [jobs, setJobs] = useState<SyncJob[]>([]);
   const [hasActiveSync, setHasActiveSync] = useState(false);
   const [initialCheckDone, setInitialCheckDone] = useState(false);
   const [visible, setVisible] = useState(true);
   const hideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const wasActiveRef = useRef(false);
-  const lastStatsRefreshRef = useRef(0);
 
   const fetchStatus = useCallback(async () => {
     try {
-      const res = await fetch("/api/sync/status");
-      const data = await res.json();
-      const newJobs: SyncJob[] = data.jobs || [];
+      // Shared with the sync indicator and any other reader of the same event.
+      const data = await fetchSyncStatus();
+      // A failed check keeps what is on screen (background polling).
+      if (!data) return;
+      const newJobs = (data.jobs ?? []) as unknown as SyncJob[];
       setJobs(newJobs);
 
       const isActive = newJobs.some(
         (j) => j.status === "RUNNING" || j.status === "PENDING"
       );
 
-      if (onSyncComplete) {
-        // Detect transition from active to idle
-        if (wasActiveRef.current && !isActive) {
-          onSyncComplete();
-          lastStatsRefreshRef.current = Date.now();
-        }
-        // Live-refresh stats every 10s during active sync
-        else if (isActive && Date.now() - lastStatsRefreshRef.current >= 10000) {
-          onSyncComplete();
-          lastStatsRefreshRef.current = Date.now();
-        }
-      }
-
-      wasActiveRef.current = isActive;
       setHasActiveSync(isActive);
 
       if (!isActive && newJobs.length > 0) {
@@ -93,7 +84,7 @@ export function SyncStatus({ onSyncComplete }: SyncStatusProps) {
     } finally {
       setInitialCheckDone(true);
     }
-  }, [onSyncComplete]);
+  }, []);
 
   // Initial fetch on mount
   useEffect(() => {
@@ -113,14 +104,10 @@ export function SyncStatus({ onSyncComplete }: SyncStatusProps) {
   useRealtime("sync:completed", fetchStatus);
   useRealtime("sync:failed", fetchStatus);
 
-  // Fallback poll. The idle tick is still essential: on an SSE-down environment
-  // a NEW sync would otherwise never be detected and the card could stay hidden
-  // until a full page reload.
-  useEffect(() => {
-    if (!initialCheckDone) return;
-    const interval = setInterval(fetchStatus, hasActiveSync ? 15000 : 60000);
-    return () => clearInterval(interval);
-  }, [fetchStatus, hasActiveSync, initialCheckDone]);
+  // Fallback poll, only while pushes are not arriving. The idle tick is still
+  // essential then: on an SSE-down environment a NEW sync would otherwise never
+  // be detected and the card could stay hidden until a full page reload.
+  useFallbackPoll(fetchStatus, hasActiveSync ? 15000 : 60000, initialCheckDone);
 
   if (!initialCheckDone) return null;
   if (jobs.length === 0) return null;
@@ -229,7 +216,7 @@ function RecentSyncJob({ job }: { job: SyncJob }) {
   const completedAt = job.completedAt
     ? new Date(job.completedAt)
     : null;
-  const ago = completedAt ? formatTimeAgo(completedAt) : "";
+  const ago = completedAt ? formatRelativeDate(completedAt, { largestUnit: "day" }) : "";
 
   return (
     <div className="flex items-center justify-between rounded-lg bg-muted/30 px-3 py-2 text-sm">
@@ -257,14 +244,4 @@ function RecentSyncJob({ job }: { job: SyncJob }) {
       </div>
     </div>
   );
-}
-
-function formatTimeAgo(date: Date): string {
-  const seconds = Math.round((Date.now() - date.getTime()) / 1000);
-  if (seconds < 60) return "just now";
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.floor(hours / 24)}d ago`;
 }

@@ -11,9 +11,12 @@ import {
 import { ColorChip } from "@/components/color-chip";
 import { ServerTypeChip } from "@/components/server-type-chip";
 import { Checkbox } from "@/components/ui/checkbox";
+import { ConfirmDialog } from "@/components/confirm-dialog";
+import { ConnectionTestResult } from "@/components/connection-test-result";
+import { InlineError } from "@/components/inline-error";
+import { LoadingButton } from "@/components/loading-button";
 import { Input } from "@/components/ui/input";
 import { SecretInput } from "@/components/ui/secret-input";
-import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import {
   DropdownMenu,
@@ -63,6 +66,8 @@ import {
   History,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { formatDateTime, formatSyncEta } from "@/lib/format";
+import { MediaServerConnectionFields } from "../media-server-connection-fields";
 import type {
   MediaServer,
   PlexServer,
@@ -76,19 +81,6 @@ import type {
 } from "../types";
 
 // ─── Local helpers ───
-
-function formatSyncEta(startedAt: string, processed: number, total: number): string | null {
-  if (processed <= 0 || total <= 0) return null;
-  const elapsed = (Date.now() - new Date(startedAt).getTime()) / 1000;
-  if (elapsed < 5) return null;
-  const rate = processed / elapsed;
-  const remaining = Math.ceil((total - processed) / rate);
-  if (remaining < 60) return `~${remaining}s left`;
-  const mins = Math.ceil(remaining / 60);
-  if (mins < 60) return `~${mins}m left`;
-  const hrs = Math.floor(mins / 60);
-  return `~${hrs}h ${mins % 60}m left`;
-}
 
 function SyncProgressBar({ job }: { job: MediaServer["syncJobs"][0] }) {
   const isPending = job.status === "PENDING";
@@ -145,11 +137,6 @@ function SyncProgressBar({ job }: { job: MediaServer["syncJobs"][0] }) {
       )}
     </div>
   );
-}
-
-function formatDate(date: string | null) {
-  if (!date) return "Never";
-  return new Date(date).toLocaleString();
 }
 
 function getSyncStatusBadge(status: string) {
@@ -281,7 +268,7 @@ function watchSourceLabel(option: WatchSourceOption): string {
 /**
  * Date only, no clock. This is the "how far back has the import reached"
  * boundary, where the second a play happened to start is noise — unlike the
- * sync timestamps `formatDate` above renders, which a user may need to
+ * sync timestamps `formatDateTime` renders, which a user may need to
  * correlate to the minute. Locale-driven ("6 Mar 2024" / "Mar 6, 2024"),
  * matching how the system tab formats release dates.
  */
@@ -725,7 +712,8 @@ interface ServersTabProps {
   onAddJellyfinEmbyServer: () => void;
   onConfirmAddServerLibraries: () => void;
   onToggleServerEnabled: (serverId: string, enabled: boolean) => void;
-  onConfirmWatchHistorySource: () => void;
+  /** Resolves false when the change was refused, which keeps the dialog open. */
+  onConfirmWatchHistorySource: () => Promise<boolean>;
 }
 
 // ─── Component ───
@@ -853,19 +841,9 @@ export function ServersTab({
           </div>
           <div className="flex items-center gap-2 shrink-0">
             {servers.length > 1 && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={onSyncAllServers}
-                disabled={hasActiveSync}
-              >
-                {hasActiveSync ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : (
-                  <RefreshCw className="mr-2 h-4 w-4" />
-                )}
+              <LoadingButton variant="outline" size="sm" icon={RefreshCw} loading={hasActiveSync} onClick={onSyncAllServers}>
                 Sync All
-              </Button>
+              </LoadingButton>
             )}
             {addServerMenu}
           </div>
@@ -1067,18 +1045,15 @@ export function ServersTab({
                           </div>
                         </label>
                         <div className="flex items-center gap-2 pt-1">
-                          <Button
+                          <LoadingButton
                             size="sm"
+                            icon={Save}
+                            loading={editServerSaving}
                             onClick={() => onSaveServer(server.id)}
-                            disabled={editServerSaving || !editServerUrl || (!!editServerExternalUrl && !/^https?:\/\//i.test(editServerExternalUrl))}
+                            disabled={!editServerUrl || (!!editServerExternalUrl && !/^https?:\/\//i.test(editServerExternalUrl))}
                           >
-                            {editServerSaving ? (
-                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                            ) : (
-                              <Save className="mr-2 h-4 w-4" />
-                            )}
                             Save
-                          </Button>
+                          </LoadingButton>
                           <Button
                             variant="ghost"
                             size="sm"
@@ -1107,23 +1082,7 @@ export function ServersTab({
                       </div>
                     )}
                     {testResult?.serverId === server.id && (
-                      <div className={`mb-4 flex items-center gap-2 rounded-lg p-3 text-sm ${
-                        testResult.ok
-                          ? "bg-green-500/10 text-green-500"
-                          : "bg-destructive/10 text-destructive"
-                      }`}>
-                        {testResult.ok ? (
-                          <>
-                            <CheckCircle className="h-4 w-4 shrink-0" />
-                            Connection successful
-                          </>
-                        ) : (
-                          <>
-                            <XCircle className="h-4 w-4 shrink-0" />
-                            Connection failed{testResult.error ? ` — ${testResult.error}` : ""}
-                          </>
-                        )}
-                      </div>
+                      <ConnectionTestResult result={testResult} className="mb-4 rounded-lg" />
                     )}
                     <WatchHistorySourceSelect
                       server={server}
@@ -1214,7 +1173,7 @@ export function ServersTab({
                           {getSyncStatusBadge(latestSync.status)}
                         </div>
                         <div className="mt-1 flex items-center justify-between text-muted-foreground">
-                          <span>{formatDate(latestSync.startedAt)}</span>
+                          <span>{formatDateTime(latestSync.startedAt, "Never")}</span>
                           {latestSync.itemsProcessed > 0 && (
                             <span>
                               {latestSync.itemsProcessed} items
@@ -1339,109 +1298,48 @@ export function ServersTab({
                   No compatible libraries found on this server.
                 </p>
               )}
-              {addServerError && (
-                <div className="flex items-center gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-                  <AlertCircle className="h-4 w-4 shrink-0" />
-                  {addServerError}
-                </div>
-              )}
+              {addServerError && <InlineError>{addServerError}</InlineError>}
             </div>
           ) : (
             <div className="space-y-3 py-2">
-              <div className="space-y-1">
-                <Label htmlFor="add-server-url">URL</Label>
-                <Input
-                  id="add-server-url"
-                  placeholder="http://your-server:8096"
-                  value={addServerForm.url}
-                  onChange={(e) => { setAddServerForm((f) => ({ ...f, url: e.target.value })); setAddServerTestResult(null); }}
-                />
-                <p className="text-xs text-muted-foreground">Must include http:// or https://</p>
-              </div>
-              <div className="space-y-1">
-                <Label htmlFor="add-server-apikey">API Key</Label>
-                <SecretInput
-                  id="add-server-apikey"
-                  placeholder="API key from dashboard"
-                  value={addServerForm.apiKey}
-                  onChange={(e) => { setAddServerForm((f) => ({ ...f, apiKey: e.target.value })); setAddServerTestResult(null); }}
-                />
-              </div>
-              <div className="flex items-center gap-2">
-                <Switch
-                  id="add-server-tls"
-                  checked={addServerForm.tlsSkipVerify}
-                  onCheckedChange={(checked) => { setAddServerForm((f) => ({ ...f, tlsSkipVerify: checked })); setAddServerTestResult(null); }}
-                />
-                <Label htmlFor="add-server-tls" className="text-sm">Skip TLS verification</Label>
-              </div>
-              {addServerTestResult && (
-                <div className={`flex items-center gap-2 rounded-md p-3 text-sm ${
-                  addServerTestResult.ok
-                    ? "bg-green-500/10 text-green-500"
-                    : "bg-destructive/10 text-destructive"
-                }`}>
-                  {addServerTestResult.ok ? (
-                    <>
-                      <CheckCircle className="h-4 w-4 shrink-0" />
-                      Connection successful
-                    </>
-                  ) : (
-                    <>
-                      <XCircle className="h-4 w-4 shrink-0" />
-                      Connection failed{addServerTestResult.error ? ` — ${addServerTestResult.error}` : ""}
-                    </>
-                  )}
-                </div>
-              )}
-              {addServerError && (
-                <div className="flex items-center gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
-                  <AlertCircle className="h-4 w-4 shrink-0" />
-                  {addServerError}
-                </div>
-              )}
+              <MediaServerConnectionFields
+                idPrefix="add-server"
+                value={addServerForm}
+                onChange={(next) => {
+                  setAddServerForm(next);
+                  setAddServerTestResult(null);
+                }}
+              />
+              {addServerTestResult && <ConnectionTestResult result={addServerTestResult} />}
+              {addServerError && <InlineError>{addServerError}</InlineError>}
             </div>
           )}
 
           <AlertDialogFooter>
             <AlertDialogCancel disabled={addServerSaving}>Cancel</AlertDialogCancel>
             {addServerDialog?.step === "libraries" ? (
-              <Button
-                onClick={onConfirmAddServerLibraries}
-                disabled={addServerSaving}
-              >
-                {addServerSaving ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                ) : (
-                  <CheckCircle className="mr-2 h-4 w-4" />
-                )}
+              <LoadingButton icon={CheckCircle} loading={addServerSaving} onClick={onConfirmAddServerLibraries}>
                 Confirm & Sync
-              </Button>
+              </LoadingButton>
             ) : (
               <>
-                <Button
+                <LoadingButton
                   variant="outline"
+                  icon={Plug}
+                  loading={addServerTesting}
                   onClick={onTestAddServerConnection}
-                  disabled={addServerTesting || addServerSaving || !addServerForm.url || !addServerForm.apiKey}
+                  disabled={addServerSaving || !addServerForm.url || !addServerForm.apiKey}
                 >
-                  {addServerTesting ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  ) : (
-                    <Plug className="mr-2 h-4 w-4" />
-                  )}
                   Test
-                </Button>
-                <Button
+                </LoadingButton>
+                <LoadingButton
+                  icon={Plus}
+                  loading={addServerSaving}
                   onClick={onAddJellyfinEmbyServer}
-                  disabled={addServerSaving || !addServerForm.url || !addServerForm.apiKey || !addServerTestResult?.ok}
+                  disabled={!addServerForm.url || !addServerForm.apiKey || !addServerTestResult?.ok}
                 >
-                  {addServerSaving ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  ) : (
-                    <Plus className="mr-2 h-4 w-4" />
-                  )}
                   Add Server
-                </Button>
+                </LoadingButton>
               </>
             )}
           </AlertDialogFooter>
@@ -1519,39 +1417,24 @@ export function ServersTab({
       </AlertDialog>
 
       {/* Watch history source change confirmation */}
-      <AlertDialog
+      <ConfirmDialog
         open={!!watchHistorySourceDialog?.open}
         onOpenChange={(open) => { if (!open) setWatchHistorySourceDialog(null); }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              Change watch history source for {watchHistorySourceDialog?.serverName}?
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              History will come from{" "}
-              <span className="text-foreground">{watchHistorySourceDialog?.sourceLabel}</span>.
-              Switching sources clears this server&apos;s stored watch history — the next sync
-              repopulates it from the new source. Play counts and last-played dates will look empty
-              until then, which affects any lifecycle rule that reads them.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={!!savingWatchHistorySource}>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={onConfirmWatchHistorySource}
-              disabled={!!savingWatchHistorySource}
-            >
-              {savingWatchHistorySource ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <History className="mr-2 h-4 w-4" />
-              )}
-              Change Source
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+        title={`Change watch history source for ${watchHistorySourceDialog?.serverName ?? ""}?`}
+        description={
+          <>
+            History will come from{" "}
+            <span className="text-foreground">{watchHistorySourceDialog?.sourceLabel}</span>.
+            Switching sources clears this server&apos;s stored watch history — the next sync
+            repopulates it from the new source. Play counts and last-played dates will look empty
+            until then, which affects any lifecycle rule that reads them.
+          </>
+        }
+        confirmLabel="Change Source"
+        confirmIcon={History}
+        pending={!!savingWatchHistorySource}
+        onConfirm={onConfirmWatchHistorySource}
+      />
     </>
   );
 }

@@ -1,4 +1,5 @@
 import { resolveSeriesKey } from "@/lib/media/series-key";
+import { compareIds } from "@/lib/conditions/compare-ids";
 
 /**
  * Shared series-aggregate computation. Both the rule engine and the query
@@ -82,7 +83,7 @@ export function aggregateEpisodesIntoSeries<E extends AggregableEpisode>(
   const aggregated: Array<SeriesAggregate<E>> = [];
 
   for (const [, eps] of seriesMap) {
-    eps.sort((a, b) => a.id.localeCompare(b.id));
+    eps.sort((a, b) => compareIds(a.id, b.id));
     const representative = eps[0];
 
     const totalPlays = eps.reduce((sum, ep) => sum + ep.playCount, 0);

@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ColorChip } from "@/components/color-chip";
+import { formatChannels } from "@/lib/format";
 import { Separator } from "@/components/ui/separator";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Slider } from "@/components/ui/slider";
@@ -60,6 +61,12 @@ interface MediaFiltersProps {
    * comes from every library, so without the opt-in every page offered them.
    */
   streamCountFilters?: boolean;
+  /**
+   * Change it to empty the panel: the page's own "Clear Filters" (outside the
+   * panel, in its empty state) after it has cleared its copy. See
+   * `useFilterPanelReset`.
+   */
+  resetKey?: number;
 }
 
 // Content rating sort order (most restrictive first)
@@ -80,18 +87,6 @@ function sortContentRatings(ratings: string[]): string[] {
     if (bi !== -1) return 1;
     return a.localeCompare(b);
   });
-}
-
-const CHANNEL_LABELS: Record<number, string> = {
-  1: "Mono",
-  2: "Stereo",
-  3: "2.1",
-  6: "5.1",
-  8: "7.1",
-};
-
-function formatChannels(ch: number): string {
-  return CHANNEL_LABELS[ch] ?? `${ch}ch`;
 }
 
 const MB = 1024 * 1024;
@@ -1041,7 +1036,7 @@ function InlineSliderPopover({
   );
 }
 
-export function MediaFilters({ onFilterChange, externalFilters, mediaType, prefix, seriesAggregateFilters = false, streamCountFilters = false }: MediaFiltersProps) {
+export function MediaFilters({ onFilterChange, externalFilters, mediaType, prefix, seriesAggregateFilters = false, streamCountFilters = false, resetKey }: MediaFiltersProps) {
   const [filters, setFilters] = useState<MediaFilterValues>({});
   const [searchInput, setSearchInput] = useState("");
   const [distinctData, setDistinctData] = useState<DistinctData>({});
@@ -1099,6 +1094,18 @@ export function MediaFilters({ onFilterChange, externalFilters, mediaType, prefi
 
   // Range slider states (file size, duration)
   const [durationRange, setDurationRange] = useState<[number, number] | null>(null);
+
+  // A page's "Clear Filters" empties the panel in place. Pages used to remount
+  // it with a new `key`, which also threw away the filter options it had
+  // fetched (a scan of every item, fetched again on the next open). The page
+  // has already cleared its own copy, so nothing is broadcast.
+  const [prevResetKey, setPrevResetKey] = useState(resetKey);
+  if (prevResetKey !== resetKey) {
+    setPrevResetKey(resetKey);
+    setFilters({});
+    setSearchInput("");
+    setDurationRange(null);
+  }
 
   // Sync external filter changes (e.g. from quality chart click, restored filters).
   // The merged filters are also broadcast via onFilterChange in a follow-up effect (see below)
@@ -1187,12 +1194,15 @@ export function MediaFilters({ onFilterChange, externalFilters, mediaType, prefi
   }, [searchInput, updateFilter]);
 
   // Auto-search with debounce as user types (skip mount to avoid triggering a
-  // redundant re-fetch — searchInput starts empty so there's nothing to apply)
+  // redundant re-fetch — searchInput starts empty so there's nothing to apply).
+  // A box that already holds the applied search (restored filters, a reset)
+  // has nothing to apply either.
   useEffect(() => {
     if (!searchMounted.current) {
       searchMounted.current = true;
       return;
     }
+    if ((searchInput || undefined) === filters.search) return;
     const timeout = setTimeout(() => {
       updateFilter("search", searchInput || undefined);
     }, 300);

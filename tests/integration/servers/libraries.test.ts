@@ -280,5 +280,33 @@ describe("Server Libraries endpoints", () => {
       expect(body.libraries).toEqual([]);
       expect(await getTestPrisma().library.count()).toBe(0);
     });
+
+    it("asks the server for its library list once however many new libraries are enabled", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      mockGetLibraries.mockResolvedValue([
+        { key: "4", title: "Films", type: "movie" },
+        { key: "5", title: "Shows", type: "show" },
+        { key: "6", title: "Music", type: "artist" },
+      ]);
+      setMockSession({ userId: user.id, isLoggedIn: true });
+
+      const response = await callRouteWithParams(
+        PUT,
+        { id: server.id },
+        {
+          url: `/api/servers/${server.id}/libraries`,
+          method: "PUT",
+          body: { libraries: [{ key: "4", enabled: true }, { key: "5", enabled: false }, { key: "6", enabled: true }] },
+        }
+      );
+      const body = await expectJson<{ libraries: { key: string; type: string; enabled: boolean }[] }>(response, 200);
+      expect(body.libraries.map((l) => [l.key, l.type, l.enabled]).sort()).toEqual([
+        ["4", "MOVIE", true],
+        ["5", "SERIES", false],
+        ["6", "MUSIC", true],
+      ]);
+      expect(mockGetLibraries).toHaveBeenCalledTimes(1);
+    });
   });
 });

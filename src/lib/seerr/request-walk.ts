@@ -1,9 +1,13 @@
 import { IntegrationError } from "@/lib/integration-error";
 import type { SeerrClient, SeerrRequest } from "@/lib/seerr/seerr-client";
 
-const SEERR_REQUEST_PAGE_SIZE = 100;
+// Every page is one round trip in which Seerr also asks each Arr app it knows
+// about the page's media, so fewer, larger pages read the same list sooner.
+// The overlap/consistency checks below hold for any page size, and a server
+// or proxy that caps `take` lower is followed page by page as it answers.
+export const SEERR_REQUEST_PAGE_SIZE = 500;
 // Hard ceiling so a huge or looping instance can't hang the caller.
-// 1000 pages × ~90 new requests per page ≈ 90k requests.
+// 1000 pages × ~490 new requests per page ≈ 490k requests.
 export const SEERR_MAX_REQUEST_PAGES = 1000;
 // Consecutive pages overlap by this many rows. `GET /api/v1/request` is an
 // offset listing ordered newest-first, so a request created or deleted between
@@ -11,7 +15,8 @@ export const SEERR_MAX_REQUEST_PAGES = 1000;
 // harmless by the id dedupe), a deletion moves an unread row under an offset
 // already passed. The overlap absorbs up to this many deletions per page; past
 // that the walk cannot prove it read everything and throws.
-const PAGE_OVERLAP = 10;
+export const SEERR_REQUEST_PAGE_OVERLAP = 10;
+const PAGE_OVERLAP = SEERR_REQUEST_PAGE_OVERLAP;
 
 interface WalkSeerrRequestsOptions {
   /** Instance name, for error messages. */

@@ -1,25 +1,51 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
+import { appCache } from "@/lib/cache/memory-cache";
 import { createMediaServerClient } from "@/lib/media-server/factory";
 import { isUnreachable } from "@/lib/media-server/health-cache";
 
-export async function GET(
+interface SeriesSummary {
+  summary: string | null;
+  genres: unknown;
+  studio: string | null;
+  contentRating: string | null;
+  year: number | null;
+}
+
+/**
+ * A show's metadata is the same for every episode page of it, so it is kept
+ * per server and show key. Under the `group-summary:` prefix on purpose: it is
+ * a show-level summary, and `invalidateMediaCaches()` drops that prefix after
+ * every sync, which is when the show's metadata can have changed.
+ */
+const SHOW_SUMMARY_TTL_MS = 5 * 60_000;
+const showSummaryKey = (serverId: string, showRatingKey: string) =>
+  `group-summary:series-summary:${serverId}:${showRatingKey}`;
+
+export const GET = withSession(async (
+  session,
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
-) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+) => {
   const { id } = await params;
 
   const item = await prisma.mediaItem.findUnique({
     where: { id },
-    include: {
+    select: {
+      ratingKey: true,
+      grandparentRatingKey: true,
+      summary: true,
+      genres: true,
+      studio: true,
+      contentRating: true,
+      year: true,
       library: {
-        include: { mediaServer: true },
+        select: {
+          mediaServer: {
+            select: { id: true, userId: true, type: true, url: true, accessToken: true, tlsSkipVerify: true },
+          },
+        },
       },
     },
   });
@@ -37,17 +63,18 @@ export async function GET(
   }
 
   const server = item.library.mediaServer;
+  const episodeFallback: SeriesSummary = {
+    summary: item.summary,
+    genres: item.genres ?? [],
+    studio: item.studio,
+    contentRating: item.contentRating,
+    year: item.year,
+  };
 
   // Skip the live fetch when the breaker is open — the page renders fine with
   // episode-level fallback data.
   if (isUnreachable(server.url)) {
-    return NextResponse.json({
-      summary: item.summary,
-      genres: item.genres ?? [],
-      studio: item.studio,
-      contentRating: item.contentRating,
-      year: item.year,
-    });
+    return NextResponse.json(episodeFallback);
   }
 
   try {
@@ -55,39 +82,35 @@ export async function GET(
       skipTlsVerify: server.tlsSkipVerify,
     });
 
-    // Fetch the episode metadata to get grandparentRatingKey (the show's key)
-    const episodeMetadata = await client.getItemMetadata(item.ratingKey);
-    const showRatingKey = episodeMetadata.grandparentRatingKey;
+    // The show's key is stored on every episode the sync wrote; the episode's
+    // own metadata was fetched only to read it back. That lookup stays for a
+    // row stored without one.
+    const showRatingKey =
+      item.grandparentRatingKey ?? (await client.getItemMetadata(item.ratingKey)).grandparentRatingKey;
 
     if (!showRatingKey) {
       // Fall back to episode-level data if no grandparent
-      return NextResponse.json({
-        summary: item.summary,
-        genres: item.genres ?? [],
-        studio: item.studio,
-        contentRating: item.contentRating,
-        year: item.year,
-      });
+      return NextResponse.json(episodeFallback);
     }
 
-    // Fetch the show-level metadata
-    const showMetadata = await client.getItemMetadata(showRatingKey);
-
-    return NextResponse.json({
-      summary: showMetadata.summary ?? null,
-      genres: showMetadata.Genre?.map((g) => g.tag) ?? [],
-      studio: showMetadata.studio ?? null,
-      contentRating: showMetadata.contentRating ?? null,
-      year: showMetadata.year ?? null,
-    });
+    const summary = await appCache.getOrSet<SeriesSummary>(
+      showSummaryKey(server.id, showRatingKey),
+      async () => {
+        const showMetadata = await client.getItemMetadata(showRatingKey);
+        return {
+          summary: showMetadata.summary ?? null,
+          genres: showMetadata.Genre?.map((g) => g.tag) ?? [],
+          studio: showMetadata.studio ?? null,
+          contentRating: showMetadata.contentRating ?? null,
+          year: showMetadata.year ?? null,
+        };
+      },
+      SHOW_SUMMARY_TTL_MS,
+    );
+    return NextResponse.json(summary);
   } catch {
-    // Fall back to episode-level data on error
-    return NextResponse.json({
-      summary: item.summary,
-      genres: item.genres ?? [],
-      studio: item.studio,
-      contentRating: item.contentRating,
-      year: item.year,
-    });
+    // Fall back to episode-level data on error (never cached: a failed
+    // lookup throws out of `getOrSet` before anything is stored).
+    return NextResponse.json(episodeFallback);
   }
-}
+});

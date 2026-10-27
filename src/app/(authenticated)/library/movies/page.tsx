@@ -1,35 +1,35 @@
 "use client";
 
-import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo, useTransition, memo } from "react";
+import { useState, useCallback, useMemo, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { useVirtualizer } from "@tanstack/react-virtual";
 import { qualityChips, qualitySegments } from "@/lib/media/quality-chips";
 import { useChipColors } from "@/components/chip-color-provider";
 import { MediaTable } from "@/components/media-table";
 import { MediaFilters } from "@/components/media-filters";
-import { MediaCard, CARD_CONTENT_HEIGHT, PRIORITY_ROWS } from "@/components/media-card";
-import { MediaHoverPopover } from "@/components/media-hover-popover";
-import { Button } from "@/components/ui/button";
+import { MediaCard } from "@/components/media-card";
+import { MediaHoverPopover, hoverDataFromListItem, hoverSummaryUrl } from "@/components/media-hover-popover";
 import { Film, Calendar, Clock, HardDrive } from "lucide-react";
 import { MediaGridSkeleton } from "@/components/skeletons";
-import { useCardSize, estimateContentWidth } from "@/hooks/use-card-size";
+import { useCardSize } from "@/hooks/use-card-size";
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { useServers } from "@/hooks/use-servers";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { LibraryToolbar } from "@/components/library-toolbar";
 import { AlphabetFilter } from "@/components/alphabet-filter";
-import { useVirtualGridAlphabet } from "@/hooks/use-virtual-grid-alphabet";
-import { useTableAlphabet } from "@/hooks/use-table-alphabet";
 import type { MediaListItem } from "@/lib/types";
 import { formatFileSize, formatDuration } from "@/lib/format";
-import { EmptyState } from "@/components/empty-state";
+import { LibraryEmptyState } from "@/components/library-empty-state";
+import { PageHeader } from "@/components/page-header";
 import { SyncLibraryButton } from "@/components/sync-library-button";
+import { VirtualCardGrid, type GridCardContext } from "@/components/virtual-card-grid";
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
-import { useFilterPersistence } from "@/hooks/use-filter-persistence";
-import { sameFilters } from "@/lib/filters/same-filters";
-import { useRealtime } from "@/hooks/use-realtime";
+import { useLibraryListState } from "@/hooks/use-library-list-state";
+import { useFilterPanelReset } from "@/hooks/use-filter-panel-reset";
+import { useLatestRequest } from "@/hooks/use-latest-request";
 import { useListFetch } from "@/hooks/use-list-fetch";
-import { useDeferredOverscan } from "@/hooks/use-deferred-overscan";
+import { useLibrarySyncRefetch } from "@/hooks/use-library-sync-refetch";
+import { useVirtualPosterGrid, POSTER_ASPECT } from "@/hooks/use-virtual-poster-grid";
+import { LIBRARY_CARD_CONTENT_HEIGHT, useLibraryAlphabet } from "@/hooks/use-library-grid";
 import { fetchListProgressively } from "@/lib/media/progressive-load";
 
 const SORT_OPTIONS = [
@@ -42,224 +42,70 @@ const SORT_OPTIONS = [
   { value: "rating", label: "Rating" },
 ];
 
-const GAP = 16; // 1rem grid gap
-const CARD_BORDER = 2; // 1px top + 1px bottom border on Card
-const QUALITY_BAR_HEIGHT = 12; // h-1 quality bar between poster and content
+const movieKey = (movie: MediaListItem) => movie.id;
 
-interface MovieGridCardProps {
-  movie: MediaListItem;
-  priority: boolean;
-  show: ReturnType<typeof useCardDisplay>["show"];
-  getHex: ReturnType<typeof useChipColors>["getHex"];
-  serverChips: boolean;
-  onNavigate: () => void;
-}
-
-/**
- * One movie in the grid, memoised on its row and the page's stable callbacks.
- * The page re-renders on every virtualizer range change and again when the
- * rest of the library lands; `MediaCard`'s own memo never held through that,
- * since its metadata, quality bar and hover content are new elements each
- * render, so every mounted card re-rendered each time.
- */
-const MovieGridCard = memo(function MovieGridCard({ movie, priority, show, getHex, serverChips, onNavigate }: MovieGridCardProps) {
+// The table's popover: the poster as its hero, since a row shows none. The
+// card's passes the same fields (the card already shows the poster).
+function movieTableHover(movie: MediaListItem) {
   return (
-    <MediaCard
-      priority={priority}
+    <MediaHoverPopover
+      summaryUrl={hoverSummaryUrl(movie.id)}
       imageUrl={`/api/media/${movie.id}/image`}
-      title={movie.title}
-      fallbackIcon="movie"
-      href={`/library/movies/${movie.id}`}
-      prefetchMediaId={movie.id}
-      onClick={onNavigate}
-      metadata={
-        <MetadataLine stacked>
-          {show("metadata", "year") && movie.year && <MetadataItem icon={<Calendar />}>{movie.year}</MetadataItem>}
-          {show("metadata", "duration") && formatDuration(movie.duration) && <MetadataItem icon={<Clock />}>{formatDuration(movie.duration)}</MetadataItem>}
-          {show("metadata", "fileSize") && formatFileSize(movie.fileSize) && <MetadataItem icon={<HardDrive />}>{formatFileSize(movie.fileSize)}</MetadataItem>}
-        </MetadataLine>
-      }
-      qualityBar={qualitySegments(qualityChips(movie, "video"), getHex, (toggle) => show("badges", toggle))}
-      servers={serverChips ? movie.servers : undefined}
-      hoverContent={
-        <MediaHoverPopover
-          summaryUrl={`/api/media/${movie.id}`}
-          data={{
-            title: movie.title,
-            year: movie.year,
-            contentRating: movie.contentRating,
-            rating: movie.rating,
-            audienceRating: movie.audienceRating,
-            ratingImage: movie.ratingImage,
-            audienceRatingImage: movie.audienceRatingImage,
-            duration: movie.duration,
-            resolution: movie.resolution,
-            dynamicRange: movie.dynamicRange,
-            audioProfile: movie.audioProfile,
-            fileSize: movie.fileSize,
-            genres: movie.genres,
-            studio: movie.studio,
-            playCount: movie.playCount,
-            lastPlayedAt: movie.lastPlayedAt,
-            addedAt: movie.addedAt,
-            servers: movie.servers,
-          }}
-        />
-      }
+      data={hoverDataFromListItem(movie)}
     />
   );
-});
+}
 
 export default function MoviesPage() {
   const router = useRouter();
   const [items, setItems] = useState<MediaListItem[]>([]);
-  const { savedFilters, persistFilters } = useFilterPersistence("filters-/library/movies");
-  // Start from the restored filters, so the first fetch is already filtered.
-  const [filters, setFilters] = useState<Record<string, string>>(savedFilters);
-  const [sortBy, setSortBy] = useState("title");
-  const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
+  const {
+    viewMode,
+    setViewMode,
+    sortBy,
+    sortOrder,
+    toggleSort,
+    toggleOrder,
+    filters,
+    externalFilters,
+    onFilterChange,
+    clearFilters,
+    hasFilters,
+  } = useLibraryListState("movies", "title", { filtersKey: "filters-/library/movies" });
+  const filterPanel = useFilterPanelReset(externalFilters, clearFilters);
   const [loading, setLoading] = useState(true);
   // The first screenful arrives before the rest of the library; consumers that
   // need the complete list (item count, scroll restoration) wait for this.
   const [loadingRest, setLoadingRest] = useState(true);
-  const [viewMode, setViewMode] = useState<"cards" | "table">("cards");
-  const { size, setSize, columns: actualColumns } = useCardSize();
+  const { size, setSize, columns } = useCardSize();
   const [, startTransition] = useTransition();
   const { servers, selectedServerId, setSelectedServerId } = useServers();
   const { getHex } = useChipColors();
   const { show, showServers, setVisible, prefs } = useCardDisplay("MOVIE");
+  // Guards against a stale slow response landing after a quick filter/server
+  // flip and overwriting state with the wrong items.
+  const latest = useLatestRequest();
 
-  const gridContainerRef = useRef<HTMLDivElement>(null);
+  const grid = useVirtualPosterGrid({
+    count: items.length,
+    columns,
+    aspect: POSTER_ASPECT,
+    contentHeight: LIBRARY_CARD_CONTENT_HEIGHT,
+    scrollElement: "main",
+    // The grid remounts behind the skeleton and on a view switch.
+    layoutKey: `${viewMode}:${loading}`,
+  });
 
   const { markChildNavigation } = useScrollRestoration("/library/movies", !loadingRest && items.length > 0, undefined, undefined, {
-    getFirstVisibleIndex: () => {
-      if (!gridContainerRef.current) return -1;
-      const main = document.querySelector<HTMLElement>("main");
-      if (!main) return -1;
-      // Compute row height from the same formula as estimateSize
-      const containerWidth = gridContainerRef.current.offsetWidth;
-      const columnWidth = (containerWidth - GAP * (actualColumns - 1)) / actualColumns;
-      const rowHeight = Math.round(columnWidth * 1.5 + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
-      if (rowHeight <= 0) return -1;
-      // Use getBoundingClientRect for reliable grid offset (offsetTop depends on offsetParent chain)
-      const gridTop = gridContainerRef.current.getBoundingClientRect().top - main.getBoundingClientRect().top + main.scrollTop;
-      // Find the row at the center of the viewport
-      const centerInGrid = main.scrollTop + main.clientHeight / 2 - gridTop;
-      return Math.max(0, Math.floor(centerInGrid / rowHeight)) * actualColumns;
-    },
-    scrollToIndex: (index) => {
-      if (!gridContainerRef.current) return false;
-      const main = document.querySelector<HTMLElement>("main");
-      if (!main) return false;
-      const row = Math.floor(index / actualColumns);
-      const containerWidth = gridContainerRef.current.offsetWidth;
-      const columnWidth = (containerWidth - GAP * (actualColumns - 1)) / actualColumns;
-      const rowHeight = Math.round(columnWidth * 1.5 + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
-      // Use getBoundingClientRect for reliable grid offset
-      const gridTop = gridContainerRef.current.getBoundingClientRect().top - main.getBoundingClientRect().top + main.scrollTop;
-      main.scrollTo({ top: Math.max(0, gridTop + row * rowHeight + rowHeight / 2 - main.clientHeight / 2), behavior: "instant" });
-      return true;
-    },
+    getFirstVisibleIndex: grid.getFirstVisibleIndex,
+    scrollToIndex: grid.scrollToIndex,
   });
 
-  const scrollElementRef = useRef<HTMLElement | null>(null);
-  const [scrollElement, setScrollElement] = useState<HTMLElement | null>(null);
-  const [scrollMargin, setScrollMargin] = useState(0);
-  // Token guards against a stale slow response landing after a quick
-  // filter/server flip and overwriting state with the wrong items.
-  const reqToken = useRef(0);
-
-  // Find the <main> scroll container on mount
-  useEffect(() => {
-    const main = document.querySelector<HTMLElement>("main");
-    scrollElementRef.current = main;
-    setScrollElement(main);
-  }, []);
-
-  // Re-measure scrollMargin once the grid mounts (it's hidden behind the
-  // skeleton while loading, so the ref is null on the initial pass).
-  useLayoutEffect(() => {
-    if (gridContainerRef.current) {
-      setScrollMargin(gridContainerRef.current.offsetTop);
-    }
-  }, [loading, items.length]);
-
-  // Compute row count for virtualizer
-  const rowCount = useMemo(
-    () => (items.length > 0 ? Math.ceil(items.length / actualColumns) : 0),
-    [items.length, actualColumns],
-  );
-
-  const estimateSize = useCallback(() => {
-    const container = gridContainerRef.current;
-    const containerWidth = container?.offsetWidth || estimateContentWidth(window.innerWidth);
-    const columnWidth = (containerWidth - GAP * (actualColumns - 1)) / actualColumns;
-    const posterHeight = columnWidth * 1.5;
-    return Math.round(posterHeight + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
-  }, [actualColumns]);
-
-  const overscan = useDeferredOverscan(!loading && items.length > 0);
-  const virtualizer = useVirtualizer({
-    count: rowCount,
-    getScrollElement: () => scrollElementRef.current,
-    estimateSize,
-    overscan,
-    scrollMargin,
-  });
-  // Re-measure when columns change
-  useEffect(() => {
-    virtualizer.measure();
-  }, [actualColumns, virtualizer]);
-
-  const alphabetItems = useMemo(
-    () => items.map((m) => ({ title: m.titleSort || m.title })),
-    [items],
-  );
-
-  const gridAlphabet = useVirtualGridAlphabet({
-    items: alphabetItems,
-    columns: actualColumns,
-    virtualizer,
-    scrollElement,
-    enabled: viewMode === "cards",
-  });
-
-  const tableScrollToIndexRef = useRef<((index: number) => void) | null>(null);
-
-  const tableAlphabet = useTableAlphabet({
-    items: alphabetItems,
-    enabled: viewMode === "table",
-    scrollToIndexRef: tableScrollToIndexRef,
-    scrollElement,
-  });
-
-  const activeLetter = viewMode === "cards" ? gridAlphabet.activeLetter : tableAlphabet.activeLetter;
-  const availableLetters = viewMode === "cards" ? gridAlphabet.availableLetters : tableAlphabet.availableLetters;
-
-  useEffect(() => {
-    const stored = localStorage.getItem("movies-view-mode") as "cards" | "table" | null;
-    if (stored) setViewMode(stored);
-  }, []);
-
-  const handleViewModeChange = (mode: "cards" | "table") => {
-    setViewMode(mode);
-    localStorage.setItem("movies-view-mode", mode);
-  };
-
-  const handleSort = useCallback(
-    (field: string) => {
-      if (field === sortBy) {
-        setSortOrder((o) => (o === "asc" ? "desc" : "asc"));
-      } else {
-        setSortBy(field);
-        setSortOrder("asc");
-      }
-    },
-    [sortBy],
-  );
+  const alphabetItems = useMemo(() => items.map((m) => ({ title: m.titleSort || m.title })), [items]);
+  const alphabet = useLibraryAlphabet(alphabetItems, grid, viewMode);
 
   const fetchMovies = useCallback(async () => {
-    const token = ++reqToken.current;
+    const token = latest.begin();
     setLoading(true);
     setLoadingRest(true);
     try {
@@ -279,7 +125,7 @@ export default function MoviesPage() {
         "/api/media/movies",
         params,
         (loaded, done) => {
-          if (token !== reqToken.current) return;
+          if (!latest.isCurrent(token)) return;
           const apply = () => {
             setItems(loaded);
             setLoading(false);
@@ -295,55 +141,80 @@ export default function MoviesPage() {
       );
     } catch (error) {
       console.error("Failed to fetch movies:", error);
-      if (token === reqToken.current) {
+      if (latest.isCurrent(token)) {
         setLoading(false);
         setLoadingRest(false);
       }
     }
-  }, [filters, sortBy, sortOrder, selectedServerId]);
+  }, [filters, sortBy, sortOrder, selectedServerId, latest]);
 
-  useRealtime("sync:completed", fetchMovies);
+  useLibrarySyncRefetch({ types: "MOVIE", serverId: selectedServerId }, fetchMovies);
 
   // No debounce on changes: this page has always refetched at once.
   useListFetch(fetchMovies, 0);
 
-  const handleLetterClick = useCallback((letter: string) => {
-    if (viewMode === "cards") {
-      gridAlphabet.scrollToLetter(letter);
-    } else {
-      tableAlphabet.scrollToLetter(letter);
-    }
-  }, [viewMode, gridAlphabet, tableAlphabet]);
+  const openMovie = useCallback(
+    (item: MediaListItem) => {
+      markChildNavigation();
+      router.push(`/library/movies/${item.id}`);
+    },
+    [markChildNavigation, router],
+  );
 
-  const virtualRows = virtualizer.getVirtualItems();
+  // Stable while the display preferences hold, so a virtualizer range change
+  // or the rest of the library landing re-renders no mounted card.
+  const serverChips = showServers && servers.length > 1;
+  const renderCard = useCallback(
+    (movie: MediaListItem, { priority }: GridCardContext) => (
+      <MediaCard
+        priority={priority}
+        imageUrl={`/api/media/${movie.id}/image`}
+        title={movie.title}
+        fallbackIcon="movie"
+        href={`/library/movies/${movie.id}`}
+        prefetchMediaId={movie.id}
+        onClick={markChildNavigation}
+        metadata={
+          <MetadataLine stacked>
+            {show("metadata", "year") && movie.year && <MetadataItem icon={<Calendar />}>{movie.year}</MetadataItem>}
+            {show("metadata", "duration") && formatDuration(movie.duration) && <MetadataItem icon={<Clock />}>{formatDuration(movie.duration)}</MetadataItem>}
+            {show("metadata", "fileSize") && formatFileSize(movie.fileSize) && <MetadataItem icon={<HardDrive />}>{formatFileSize(movie.fileSize)}</MetadataItem>}
+          </MetadataLine>
+        }
+        qualityBar={qualitySegments(qualityChips(movie, "video"), getHex, (toggle) => show("badges", toggle))}
+        servers={serverChips ? movie.servers : undefined}
+        hoverContent={<MediaHoverPopover summaryUrl={hoverSummaryUrl(movie.id)} data={hoverDataFromListItem(movie)} />}
+      />
+    ),
+    [show, getHex, serverChips, markChildNavigation],
+  );
 
   return (
     <div className="p-4 sm:p-6 lg:p-8">
-      <div className="mb-6 flex items-start justify-between gap-3">
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-3">
-            <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Movies</h1>
-            {!loadingRest && items.length > 0 && (
-              <span className="font-mono text-xs text-faint">
-                {items.length.toLocaleString()} {items.length === 1 ? "movie" : "movies"}
-              </span>
-            )}
-          </div>
-          <p className="text-muted-foreground mt-1">
-            Browse your movie library — filter by quality, year, genre, and more.
-          </p>
-        </div>
-        <SyncLibraryButton libraryType="MOVIE" onSyncComplete={fetchMovies} />
-      </div>
+      <PageHeader
+        className="mb-6"
+        title="Movies"
+        meta={
+          !loadingRest && items.length > 0 && (
+            <span className="font-mono text-xs text-faint">
+              {items.length.toLocaleString()} {items.length === 1 ? "movie" : "movies"}
+            </span>
+          )
+        }
+        description="Browse your movie library — filter by quality, year, genre, and more."
+        actions={<SyncLibraryButton libraryType="MOVIE" onSyncComplete={fetchMovies} />}
+        actionsInline
+      />
 
       <MediaFilters
-        onFilterChange={(f) => { setFilters((prev) => (sameFilters(prev, f) ? prev : f)); persistFilters(f); }}
-        externalFilters={Object.keys(savedFilters).length > 0 ? savedFilters : undefined}
+        resetKey={filterPanel.resetKey}
+        onFilterChange={onFilterChange}
+        externalFilters={filterPanel.externalFilters}
         streamCountFilters
         prefix={
           <LibraryToolbar
             viewMode={viewMode}
-            onViewModeChange={handleViewModeChange}
+            onViewModeChange={setViewMode}
             cardSize={size}
             onCardSizeChange={setSize}
             cardDisplayPrefs={prefs}
@@ -355,8 +226,8 @@ export default function MoviesPage() {
             sortOptions={SORT_OPTIONS}
             sortBy={sortBy}
             sortOrder={sortOrder}
-            onSortChange={(v) => { if (v === sortBy) { setSortOrder((o) => o === "asc" ? "desc" : "asc"); } else { setSortBy(v); setSortOrder("asc"); } }}
-            onSortOrderToggle={() => setSortOrder((o) => (o === "asc" ? "desc" : "asc"))}
+            onSortChange={toggleSort}
+            onSortOrderToggle={toggleOrder}
           />
         }
       />
@@ -364,111 +235,28 @@ export default function MoviesPage() {
       {loading ? (
         <MediaGridSkeleton />
       ) : items.length === 0 ? (
-        <EmptyState
-          icon={Film}
-          title="No movies found."
-          description={Object.keys(filters).length > 0 ? "Try adjusting your filters." : "Sync a media server to get started."}
-          action={Object.keys(filters).length > 0 ? <Button variant="outline" size="sm" onClick={() => { setFilters({}); persistFilters({}); }}>Clear Filters</Button> : undefined}
+        <LibraryEmptyState icon={Film} noun="movies" hasFilters={hasFilters} onClear={filterPanel.clear} />
+      ) : viewMode === "table" ? (
+        <MediaTable
+          items={items}
+          onItemClick={openMovie}
+          sortBy={sortBy}
+          sortOrder={sortOrder}
+          onSort={toggleSort}
+          mediaType="MOVIE"
+          scrollToIndexRef={alphabet.tableScrollToIndexRef}
+          hideServers={servers.length <= 1}
+          renderHoverContent={movieTableHover}
         />
       ) : (
-        <>
-          {viewMode === "table" ? (
-            <MediaTable
-              items={items}
-              onItemClick={(item) => { markChildNavigation(); router.push(`/library/movies/${item.id}`); }}
-              sortBy={sortBy}
-              sortOrder={sortOrder}
-              onSort={handleSort}
-              mediaType="MOVIE"
-              scrollToIndexRef={tableScrollToIndexRef}
-              hideServers={servers.length <= 1}
-              renderHoverContent={(movie) => (
-                <MediaHoverPopover
-                  summaryUrl={`/api/media/${movie.id}`}
-                  imageUrl={`/api/media/${movie.id}/image`}
-                  data={{
-                    title: movie.title,
-                    year: movie.year,
-                    contentRating: movie.contentRating,
-                    rating: movie.rating,
-                    audienceRating: movie.audienceRating,
-                    ratingImage: movie.ratingImage,
-                    audienceRatingImage: movie.audienceRatingImage,
-                    duration: movie.duration,
-                    resolution: movie.resolution,
-                    dynamicRange: movie.dynamicRange,
-                    audioProfile: movie.audioProfile,
-                    fileSize: movie.fileSize,
-                    genres: movie.genres,
-                    studio: movie.studio,
-                    playCount: movie.playCount,
-                    lastPlayedAt: movie.lastPlayedAt,
-                    addedAt: movie.addedAt,
-                    servers: movie.servers,
-                  }}
-                />
-              )}
-            />
-          ) : (
-            <div ref={gridContainerRef}>
-              <div
-                style={{
-                  height: virtualizer.getTotalSize(),
-                  width: "100%",
-                  position: "relative",
-                }}
-              >
-                {virtualRows.map((virtualRow) => {
-                  const rowStart = virtualRow.index * actualColumns;
-                  const rowItems = items.slice(rowStart, rowStart + actualColumns);
-                  return (
-                    <div
-                      key={virtualRow.key}
-                      data-index={virtualRow.index}
-                      ref={virtualizer.measureElement}
-                      style={{
-                        position: "absolute",
-                        top: 0,
-                        left: 0,
-                        width: "100%",
-                        paddingBottom: GAP,
-                        transform: `translateY(${virtualRow.start - virtualizer.options.scrollMargin}px)`,
-                      }}
-                    >
-                      <div
-                        style={{
-                          display: "grid",
-                          gap: `${GAP}px`,
-                          gridTemplateColumns: `repeat(${actualColumns}, minmax(0, 1fr))`,
-                        }}
-                      >
-                        {rowItems.map((movie) => (
-                          <MovieGridCard
-                            key={movie.id}
-                            movie={movie}
-                            priority={virtualRow.index < PRIORITY_ROWS}
-                            show={show}
-                            getHex={getHex}
-                            serverChips={showServers && servers.length > 1}
-                            onNavigate={markChildNavigation}
-                          />
-                        ))}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-        </>
+        <VirtualCardGrid grid={grid} items={items} getKey={movieKey} renderItem={renderCard} />
       )}
 
       <AlphabetFilter
-        activeLetter={activeLetter}
-        onLetterClick={handleLetterClick}
-        availableLetters={availableLetters}
+        activeLetter={alphabet.activeLetter}
+        onLetterClick={alphabet.onLetterClick}
+        availableLetters={alphabet.availableLetters}
       />
-
     </div>
   );
 }

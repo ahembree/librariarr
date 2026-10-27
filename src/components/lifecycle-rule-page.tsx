@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useLayoutEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { getServerTypeLabel } from "@/lib/server-styles";
 import { ServerTypeChip } from "@/components/server-type-chip";
@@ -19,16 +19,14 @@ import {
 import { RuleBuilder, ruleBuilderConfig, countAllRules, validateAllRules } from "@/components/rule-builder";
 import { BuilderWithPseudocode } from "@/components/builder/builder-with-pseudocode";
 import { IntegrationUnreachableBanner } from "@/components/integration-unreachable-banner";
-import { useIntegrationsHealth, deriveIntegrationsStatus, arrTypeForMediaType } from "@/hooks/use-integrations-health";
+import { deriveIntegrationsStatus, arrTypeForMediaType } from "@/hooks/use-integrations-health";
 import { hasArrRules, hasSeerrRules, hasPlayActivityRules } from "@/lib/conditions";
-import { useRealtime } from "@/hooks/use-realtime";
-import { MediaTable } from "@/components/media-table";
-import { MediaDetailSidePanel, type MatchedCriterion } from "@/components/media-detail-side-panel";
+import { MediaDetailSidePanel } from "@/components/media-detail-side-panel";
 import { useMediaDetailPanel } from "@/hooks/use-media-detail-panel";
 import { groupOfRow } from "@/lib/media/detail-panel-item";
 import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
+import { legacyRulesToEditorGroups } from "@/lib/rules/legacy";
 import { deletesArrRecord } from "@/lib/lifecycle/action-types";
-import type { MediaItemWithRelations } from "@/lib/types";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -53,7 +51,7 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
-import { AlertTriangle, Calendar, Check, ChevronsUpDown, ClipboardPaste, Clock, Copy, ExternalLink, Eye, FileText, FlaskConical, HardDrive, LayoutGrid, Loader2, Save, Search, ShieldOff, SlidersHorizontal, TableProperties, Trash2, Upload, X } from "lucide-react";
+import { AlertTriangle, Check, ChevronsUpDown, ClipboardPaste, ExternalLink, Eye, FileText, FlaskConical, Loader2, Save, SlidersHorizontal, Trash2, Upload, X } from "lucide-react";
 import {
   Tooltip,
   TooltipContent,
@@ -70,7 +68,6 @@ import {
 } from "@/components/ui/dialog";
 import {
   AlertDialog,
-  AlertDialogAction,
   AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
@@ -78,28 +75,33 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { PseudocodePanel } from "@/components/builder/pseudocode-panel";
-import { MediaCard } from "@/components/media-card";
-import { MediaHoverPopover } from "@/components/media-hover-popover";
-import { useCardSize, estimateContentWidth } from "@/hooks/use-card-size";
-import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
-import { CardSizeControl } from "@/components/card-size-control";
-import { CardDisplayControl } from "@/components/card-display-control";
-import { MetadataLine, MetadataItem } from "@/components/metadata-line";
-import { qualityChips, qualitySegments } from "@/lib/media/quality-chips";
-import { useChipColors } from "@/components/chip-color-provider";
-import type { ChipColorCategory } from "@/lib/theme/chip-colors";
-import { formatFileSize, formatDuration } from "@/lib/format";
-import { formatMediaItemTitle } from "@/lib/media/display-title";
-import { useVirtualizer } from "@tanstack/react-virtual";
-import { cn, generateId } from "@/lib/utils";
+import { ConfirmDialog } from "@/components/confirm-dialog";
+import { LoadingButton } from "@/components/loading-button";
+import { generateId } from "@/lib/utils";
 import { QueryProgress, useStreamProgress } from "@/components/query-progress";
 import { consumeProgressStream } from "@/lib/progress/client";
+import type { PreviewDiffCounts, PreviewDiffStatus, PreviewItem } from "@/components/rule-preview-section";
+import { lazyComponent } from "@/components/lazy-component";
+import { Skeleton } from "@/components/ui/skeleton";
 
-interface PreviewItem extends MediaItemWithRelations {
-  matchedCriteria?: MatchedCriterion[];
-  actualValues?: Record<string, string>;
+// Loaded on demand: the results table and card grid (MediaTable, the card and
+// hover components) render only once a preview has answered.
+const RulePreviewSection = lazyComponent(
+  () => import("@/components/rule-preview-section").then((m) => m.RulePreviewSection),
+  RulePreviewSkeleton,
+);
+
+function RulePreviewSkeleton() {
+  return <Skeleton className="mt-8 h-64 w-full rounded-lg" />;
 }
+import { ExportRuleSetDialog, ImportRuleSetDialog, TestMediaDialog } from "@/components/lifecycle-rule-dialogs";
+import { stripTrailingSlashes } from "@/lib/url-normalize";
+import type {
+  CollectionDefinition,
+  RuleEditorData,
+  RuleEditorServer,
+  SavedRuleSet,
+} from "@/hooks/use-rule-editor-data";
 
 interface DiffItem {
   id: string;
@@ -143,41 +145,6 @@ interface RuleSetSnapshot {
   serverIds: string;
 }
 
-interface CollectionDefinition {
-  id: string;
-  name: string;
-  sortName: string | null;
-  homeScreen: boolean;
-  recommended: boolean;
-  sort: string;
-  _count?: { ruleSets: number };
-}
-
-interface SavedRuleSet {
-  id: string;
-  name: string;
-  type: string;
-  rules: LifecycleRule[] | LifecycleRuleGroup[];
-  enabled: boolean;
-  seriesScope?: boolean;
-  actionEnabled: boolean;
-  actionType: string | null;
-  actionDelayDays: number;
-  arrInstanceId: string | null;
-  targetQualityProfileId?: number | null;
-  addImportExclusion: boolean;
-  searchAfterAction?: boolean;
-  addArrTags: string[];
-  removeArrTags: string[];
-  collectionId: string | null;
-  collection?: CollectionDefinition | null;
-  discordNotifyOnAction: boolean;
-  discordNotifyOnMatch?: boolean;
-  stickyMatches?: boolean;
-  serverIds: string[];
-  createdAt: string;
-}
-
 // Sentinel for the "Create new collection…" dropdown option.
 const NEW_COLLECTION = "__new__";
 
@@ -189,25 +156,11 @@ function isQualityProfileChangeAction(actionType: string): boolean {
   return actionType.startsWith("CHANGE_QUALITY_PROFILE_");
 }
 
+// The engine's legacy conversion, keeping disabled rules (`legacy.ts`): the
+// editor shows a legacy rule set as it is evaluated, and saving it neither
+// loses a disabled rule nor changes what matches.
 function legacyToGroups(rules: LifecycleRule[] | LifecycleRuleGroup[]): LifecycleRuleGroup[] {
-  if (rules.length === 0) return [];
-  if ("rules" in rules[0]) {
-    return (rules as LifecycleRuleGroup[]).map((g) => ({
-      ...g,
-      groups: g.groups ?? [],
-    }));
-  }
-  const flat = rules as LifecycleRule[];
-  const groups: LifecycleRuleGroup[] = [
-    { id: generateId(), condition: "AND", rules: [], groups: [] },
-  ];
-  for (let i = 0; i < flat.length; i++) {
-    groups[groups.length - 1].rules.push(flat[i]);
-    if (i < flat.length - 1 && flat[i].condition === "AND") {
-      groups.push({ id: generateId(), condition: "AND", rules: [], groups: [] });
-    }
-  }
-  return groups;
+  return legacyRulesToEditorGroups(rules, generateId);
 }
 
 function countRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): number {
@@ -216,12 +169,6 @@ function countRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): number {
     return countAllRules(rules as LifecycleRuleGroup[]);
   }
   return rules.length;
-}
-
-interface ArrInstance {
-  id: string;
-  name: string;
-  url: string;
 }
 
 interface RuleSetExport {
@@ -250,34 +197,6 @@ interface RuleSetExport {
   serverIds?: string[];
 }
 
-interface MediaServer {
-  id: string;
-  name: string;
-  type: string;
-  /** Disabled servers are outside every guard's scope — `checkWatchHistoryCompleteness`
-   *  counts `enabled: true` only, and `runDetection` intersects the rule set's
-   *  targets with the enabled set before evaluating. */
-  enabled: boolean;
-  /**
-   * Mirrors `checkWatchHistoryCompleteness`: why this server's play history
-   * cannot answer play-activity criteria, or `null` when it can. Held
-   * client-side only so the editor can WARN about a refusal before the user
-   * triggers one — the server-side guard stays the authority on whether the
-   * rule set is actually safe to evaluate.
-   *
-   * The two faults are kept apart because their REMEDIES are opposites, and
-   * collapsing them to one boolean gave every refusal the wrong advice half the
-   * time. `"importing"` (`tracearrBackfillComplete` false) is resolved by
-   * waiting — the newest-first archive walk is still running. `"unsynced"`
-   * (`watchHistorySyncedAt` null) is not resolved by waiting at all: the marker
-   * was never set, or was withdrawn by a source change, a purge, a restore, or
-   * a sync that could not load Tracearr's account map — and on a server whose
-   * Tracearr import has long since finished, "watch the import progress" points
-   * the user at a bar that already reads done.
-   */
-  playHistoryFault: "unsynced" | "importing" | null;
-}
-
 interface ScopeConfig {
   id: string;
   label: string;
@@ -304,12 +223,19 @@ interface LifecycleRulePageProps {
   scopeConfig?: ScopeConfig;
   /** When true, skips outer padding and page title (used when embedded in the unified rules page) */
   embedded?: boolean;
+  /** What every tab reads, loaded once by the rules page (`useRuleEditorData`). */
+  data: RuleEditorData;
 }
 
-const CARD_GAP = 16;
-const CARD_CONTENT_HEIGHT = 138;
-const CARD_QUALITY_BAR_HEIGHT = 12;
-const CARD_BORDER = 2;
+/** The Arr metadata keys an instance's metadata fills, all empty. */
+const NO_ARR_VALUES: Record<string, string[]> = {
+  arrTag: [],
+  arrQualityProfile: [],
+  arrOriginalLanguage: [],
+  arrStatus: [],
+  arrSeriesType: [],
+  arrQualityName: [],
+};
 
 function DiffSection({
   label,
@@ -360,210 +286,6 @@ function DiffSection({
   );
 }
 
-function PreviewCardGrid({
-  items,
-  mediaType,
-  onItemClick,
-  diffMap,
-  exceptedItemIds,
-  show,
-  getHex,
-  showServers,
-}: {
-  items: PreviewItem[];
-  mediaType: "MOVIE" | "SERIES" | "MUSIC";
-  onItemClick: (item: PreviewItem) => void;
-  diffMap: Map<string, "added" | "removed" | "retained">;
-  exceptedItemIds: Set<string>;
-  show: (section: "badges" | "metadata", key: string) => boolean;
-  getHex: (category: ChipColorCategory, value: string) => string;
-  showServers: boolean;
-}) {
-  const cardContainerRef = useRef<HTMLDivElement>(null);
-  const scrollElementRef = useRef<HTMLElement | null>(null);
-  const { columns: actualColumns } = useCardSize();
-  const [scrollMargin, setScrollMargin] = useState(0);
-
-  const rowCount = useMemo(
-    () => (items.length > 0 ? Math.ceil(items.length / actualColumns) : 0),
-    [items.length, actualColumns],
-  );
-
-  // Find scrollable ancestor on mount
-  useLayoutEffect(() => {
-    let el = cardContainerRef.current?.parentElement ?? null;
-    while (el) {
-      const style = getComputedStyle(el);
-      if (style.overflowY === "auto" || style.overflowY === "scroll") {
-        scrollElementRef.current = el;
-        break;
-      }
-      el = el.parentElement;
-    }
-    if (!scrollElementRef.current) {
-      scrollElementRef.current = document.querySelector<HTMLElement>("main");
-    }
-  }, []);
-
-  useLayoutEffect(() => {
-    if (cardContainerRef.current) {
-      const scrollEl = scrollElementRef.current;
-      const containerEl = cardContainerRef.current;
-      if (scrollEl && containerEl) {
-        setScrollMargin(Math.round(
-          containerEl.getBoundingClientRect().top - scrollEl.getBoundingClientRect().top + scrollEl.scrollTop,
-        ));
-      }
-    }
-  }, [items.length]);
-
-  const estimateSize = useCallback(() => {
-    const container = cardContainerRef.current;
-    const containerWidth = container?.offsetWidth || estimateContentWidth(window.innerWidth);
-    const columnWidth = (containerWidth - CARD_GAP * (actualColumns - 1)) / actualColumns;
-    const posterHeight = columnWidth * (mediaType === "MUSIC" ? 1 : 1.5);
-    return Math.round(posterHeight + CARD_QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + CARD_GAP);
-  }, [actualColumns, mediaType]);
-
-  const virtualizer = useVirtualizer({
-    count: rowCount,
-    getScrollElement: () => scrollElementRef.current,
-    estimateSize,
-    overscan: 5,
-    scrollMargin,
-  });
-
-  useEffect(() => {
-    virtualizer.measure();
-  }, [actualColumns, virtualizer]);
-
-  const virtualRows = virtualizer.getVirtualItems();
-
-  const fallbackIcon = mediaType === "MOVIE" ? "movie" as const
-    : mediaType === "MUSIC" ? "music" as const
-    : "series" as const;
-  const aspectRatio = mediaType === "MUSIC" ? "square" as const : "poster" as const;
-
-  return (
-    <div ref={cardContainerRef}>
-      <div
-        style={{
-          height: virtualizer.getTotalSize(),
-          width: "100%",
-          position: "relative",
-        }}
-      >
-        {virtualRows.map((virtualRow) => {
-          const rowStart = virtualRow.index * actualColumns;
-          const rowItems = items.slice(rowStart, rowStart + actualColumns);
-          return (
-            <div
-              key={virtualRow.key}
-              data-index={virtualRow.index}
-              ref={virtualizer.measureElement}
-              style={{
-                position: "absolute",
-                top: 0,
-                left: 0,
-                width: "100%",
-                paddingBottom: CARD_GAP,
-                transform: `translateY(${virtualRow.start - (virtualizer.options.scrollMargin ?? 0)}px)`,
-              }}
-            >
-              <div
-                style={{
-                  display: "grid",
-                  gap: `${CARD_GAP}px`,
-                  gridTemplateColumns: `repeat(${actualColumns}, minmax(0, 1fr))`,
-                }}
-              >
-                {rowItems.map((item) => {
-                  const diffStatus = diffMap.get(item.id);
-                  const isDiffActive = diffMap.size > 0;
-                  return (
-                    <div
-                      key={item.id}
-                      className={cn(
-                        "relative rounded-lg",
-                        isDiffActive && diffStatus === "added" && "ring-1 ring-emerald-500/70",
-                        isDiffActive && diffStatus === "removed" && "ring-1 ring-amber/70 opacity-60",
-                      )}
-                    >
-                      {exceptedItemIds.has(item.id) && (
-                        <TooltipProvider>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <div className="absolute top-2 left-2 z-20 h-6 w-6 rounded-md bg-orange-500/90 backdrop-blur-sm flex items-center justify-center">
-                                <ShieldOff className="h-3.5 w-3.5 text-white" />
-                              </div>
-                            </TooltipTrigger>
-                            <TooltipContent>Excluded from lifecycle actions</TooltipContent>
-                          </Tooltip>
-                        </TooltipProvider>
-                      )}
-                      <MediaCard
-                        imageUrl={`/api/media/${item.id}/image${mediaType !== "MOVIE" ? "?type=parent" : ""}`}
-                        title={item.parentTitle
-                          ? `${item.parentTitle} - ${item.title}`
-                          : item.title}
-                        fallbackIcon={fallbackIcon}
-                        aspectRatio={aspectRatio}
-                        onClick={() => onItemClick(item)}
-                        hoverContent={
-                          <MediaHoverPopover
-                            imageAspect={aspectRatio}
-                            data={{
-                              title: item.parentTitle ? `${item.parentTitle} — ${item.title}` : item.title,
-                              year: item.year,
-                              summary: item.summary,
-                              contentRating: item.contentRating,
-                              rating: item.rating,
-                              audienceRating: item.audienceRating,
-                              ratingImage: item.ratingImage,
-                              audienceRatingImage: item.audienceRatingImage,
-                              duration: item.duration,
-                              resolution: item.resolution,
-                              dynamicRange: item.dynamicRange,
-                              audioProfile: item.audioProfile,
-                              audioCodec: mediaType === "MUSIC" && !item.matchedEpisodes ? item.audioCodec : undefined,
-                              fileSize: item.fileSize,
-                              genres: item.genres,
-                              studio: item.studio,
-                              playCount: item.playCount,
-                              lastPlayedAt: item.lastPlayedAt,
-                              addedAt: item.addedAt,
-                              servers: item.servers,
-                            }}
-                          />
-                        }
-                        metadata={
-                          <MetadataLine stacked>
-                            {show("metadata", "year") && item.year && <MetadataItem icon={<Calendar />}>{item.year}</MetadataItem>}
-                            {show("metadata", "duration") && formatDuration(item.duration) && <MetadataItem icon={<Clock />}>{formatDuration(item.duration)}</MetadataItem>}
-                            {show("metadata", "fileSize") && formatFileSize(item.fileSize) && <MetadataItem icon={<HardDrive />}>{formatFileSize(item.fileSize)}</MetadataItem>}
-                          </MetadataLine>
-                        }
-                        qualityBar={qualitySegments(
-                          // An artist row is stored against one of its tracks, whose codec
-                          // is not the artist's, so it draws no codec segment.
-                          mediaType === "MUSIC" && item.matchedEpisodes ? [] : qualityChips(item, mediaType === "MUSIC" ? "music" : "video"),
-                          getHex,
-                          (toggle) => show("badges", toggle),
-                        )}
-                        servers={showServers ? item.servers : undefined}
-                      />
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
 /** Tinted chip for rule-set capability flags in the saved list. */
 function FeatureChip({
   tone,
@@ -596,6 +318,7 @@ export function LifecycleRulePage({
   importErrorMessage,
   scopeConfig,
   embedded,
+  data: editorData,
 }: LifecycleRulePageProps) {
   const detailPanel = useMediaDetailPanel();
   const [name, setName] = useState("");
@@ -603,9 +326,7 @@ export function LifecycleRulePage({
   const [nameTouched, setNameTouched] = useState(false);
   const [showExportDialog, setShowExportDialog] = useState(false);
   const [showImportDialog, setShowImportDialog] = useState(false);
-  const [importJson, setImportJson] = useState("");
   const [exportJson, setExportJson] = useState("");
-  const [copied, setCopied] = useState(false);
   const [groups, setGroups] = useState<LifecycleRuleGroup[]>([]);
   const [preview, setPreview] = useState<PreviewItem[]>([]);
   // The open row as the latest preview has it: a re-run refreshes its matched
@@ -623,56 +344,20 @@ export function LifecycleRulePage({
       group: groupOfRow(item),
     });
   }, [openPanel, mediaType]);
-  const [savedRuleSets, setSavedRuleSets] = useState<SavedRuleSet[]>([]);
+  const { refreshRuleSets, integrationsHealth, exceptedItemIds, servers } = editorData;
+  // The rules page holds every type's rule sets; this tab lists its own.
+  const savedRuleSets = useMemo(
+    () => (editorData.ruleSets ?? []).filter((r) => r.type === mediaType),
+    [editorData.ruleSets, mediaType],
+  );
   const [activeRuleSetId, setActiveRuleSetId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [previewing, setPreviewing] = useState(false);
   const { state: previewProgress, handleUpdate: onPreviewProgress, reset: resetPreviewProgress } = useStreamProgress();
   const [saveError, setSaveError] = useState<string | null>(null);
   const [justSaved, setJustSaved] = useState(false);
-  const [previewSortBy, setPreviewSortBy] = useState<string | undefined>("title");
-  const [previewSortOrder, setPreviewSortOrder] = useState<"asc" | "desc">("asc");
-
-  // Preview view mode (cards/table)
-  const [previewViewMode, setPreviewViewMode] = useState<"cards" | "table">(() => {
-    if (typeof window === "undefined") return "table";
-    return (localStorage.getItem("lifecycle-preview-view-mode") as "cards" | "table") ?? "table";
-  });
-  const handlePreviewViewModeChange = useCallback((mode: "cards" | "table") => {
-    const scroller = findScrollContainer();
-    const scrollTop = scroller?.scrollTop ?? 0;
-    setPreviewViewMode(mode);
-    localStorage.setItem("lifecycle-preview-view-mode", mode);
-    requestAnimationFrame(() => {
-      scroller?.scrollTo({ top: scrollTop, behavior: "instant" });
-    });
-  }, []);
-  const { size: cardSize, setSize: setCardSize } = useCardSize();
-  const { show: showCardField, showServers, setVisible: setCardFieldVisible, prefs: cardPrefs } = useCardDisplay(
-    mediaType === "MUSIC" ? "MUSIC" : mediaType === "SERIES" ? "SERIES" : "MOVIE",
-  );
-  const { getHex } = useChipColors();
-
-  // Exception tracking for preview indicator
-  const [exceptedItemIds, setExceptedItemIds] = useState<Set<string>>(new Set());
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const response = await fetch("/api/lifecycle/exceptions");
-        if (!response.ok || cancelled) return;
-        const data = await response.json();
-        if (cancelled) return;
-        setExceptedItemIds(new Set((data.exceptions || []).map((e: { mediaItem: { id: string } }) => e.mediaItem.id)));
-      } catch {
-        // ignore
-      }
-    })();
-    return () => { cancelled = true; };
-  }, []);
-  const [distinctValues, setDistinctValues] = useState<
-    Record<string, string[]>
-  >({});
+  // The selected instance's tags, profiles and other enumerable Arr values.
+  const [arrDistinctValues, setArrDistinctValues] = useState<Record<string, string[]>>(NO_ARR_VALUES);
 
   // Delete confirmation
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
@@ -705,14 +390,21 @@ export function LifecycleRulePage({
   const [removeArrTags, setRemoveArrTags] = useState<string[]>([]);
   const [manageTagsEnabled, setManageTagsEnabled] = useState(false);
   const [tagMode, setTagMode] = useState<"add" | "remove">("add");
-  const [arrInstances, setArrInstances] = useState<ArrInstance[]>([]);
-  const [seerrConnected, setSeerrConnected] = useState(false);
-
-  const { health: integrationsHealth } = useIntegrationsHealth();
-  const relevantArrTypes = useMemo(
-    () => [arrTypeForMediaType(mediaType)] as const,
-    [mediaType],
+  const arrType = arrTypeForMediaType(mediaType);
+  const arrInstances = editorData.integrations?.[arrType] ?? [];
+  // Seerr data is never read for music (its fields are invalid there).
+  const seerrConnected = mediaType !== "MUSIC" && (editorData.integrations?.seerrConnected ?? false);
+  const seerrUsers = mediaType === "MUSIC" ? null : (editorData.integrations?.seerrUsers ?? null);
+  const distinctValues = useMemo<Record<string, string[]>>(
+    () => ({
+      ...editorData.distinctValues,
+      ...(seerrUsers ? { seerrRequestedBy: seerrUsers } : {}),
+      ...arrDistinctValues,
+    }),
+    [editorData.distinctValues, seerrUsers, arrDistinctValues],
   );
+
+  const relevantArrTypes = useMemo(() => [arrType] as const, [arrType]);
   // Only the rule set's selected Arr instance matters for reachability.
   // If none is selected, pass an empty array so the banner stays silent
   // (nothing to be unreachable about until the user picks an instance).
@@ -777,7 +469,6 @@ export function LifecycleRulePage({
 
   // Server selection
   const [serverIds, setServerIds] = useState<string[]>([]);
-  const [servers, setServers] = useState<MediaServer[]>([]);
   const [serverPopoverOpen, setServerPopoverOpen] = useState(false);
 
   // Scoped to the rule set's own targets, exactly as the guard scopes its count
@@ -787,7 +478,7 @@ export function LifecycleRulePage({
     () =>
       serverIds
         .map((id) => servers.find((s) => s.id === id))
-        .filter((s): s is MediaServer => !!s && s.enabled && s.playHistoryFault !== null),
+        .filter((s): s is RuleEditorServer => !!s && s.enabled && s.playHistoryFault !== null),
     [serverIds, servers],
   );
 
@@ -887,8 +578,8 @@ export function LifecycleRulePage({
   const [diffExpanded, setDiffExpanded] = useState<Record<string, boolean>>({});
 
   // Preview diff highlighting
-  const [previewDiffMap, setPreviewDiffMap] = useState<Map<string, "added" | "removed" | "retained">>(new Map());
-  const [previewDiffCounts, setPreviewDiffCounts] = useState<{ added: number; removed: number; retained: number } | null>(null);
+  const [previewDiffMap, setPreviewDiffMap] = useState<Map<string, PreviewDiffStatus>>(() => new Map());
+  const [previewDiffCounts, setPreviewDiffCounts] = useState<PreviewDiffCounts | null>(null);
 
   // Ref to the scroll container to preserve scroll position across re-renders
 
@@ -908,137 +599,7 @@ export function LifecycleRulePage({
     isExistingCollectionSelected && prevCollectionId === selectedCollectionId;
   const otherCollectionUsage = selectedCollectionUsage - (currentRuleUsesSelected ? 1 : 0);
 
-  // Test Media
   const [showTestMediaDialog, setShowTestMediaDialog] = useState(false);
-  const [testMediaSearch, setTestMediaSearch] = useState("");
-  const [testMediaResults, setTestMediaResults] = useState<Array<{ id: string; title: string; parentTitle?: string | null; seasonNumber?: number | null; episodeNumber?: number | null; year?: number | null; thumbUrl?: string | null; type: string }>>([]);
-  const [testMediaSearching, setTestMediaSearching] = useState(false);
-  const [testMediaSelected, setTestMediaSelected] = useState<{ id: string; title: string; parentTitle?: string | null; seasonNumber?: number | null; episodeNumber?: number | null; year?: number | null } | null>(null);
-  const [testMediaEvaluating, setTestMediaEvaluating] = useState(false);
-  const [testMediaResult, setTestMediaResult] = useState<{ matches: boolean; matchedCriteria: MatchedCriterion[]; actualValues: Record<string, string> } | null>(null);
-  const testMediaTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // What Test Media evaluates: a show in series scope, otherwise one episode —
-  // its show and SxxExx, never its own title — or a movie or track.
-  const testMediaTitle = (item: {
-    title: string;
-    parentTitle?: string | null;
-    seasonNumber?: number | null;
-    episodeNumber?: number | null;
-  }) =>
-    scopeConfig && seriesScope
-      ? (item.parentTitle ?? item.title)
-      : formatMediaItemTitle({ ...item, type: mediaType });
-
-  const fetchDistinctValues = async () => {
-    try {
-      const response = await fetch("/api/media/distinct-values");
-      const data = await response.json();
-      // Merge rather than replace: Seerr requester names (seerrRequestedBy) and
-      // Arr metadata (arrTag, arrQualityProfile) are fetched separately and
-      // merged into distinctValues. A bare setDistinctValues(data) would clobber
-      // them when this fetch resolves after those, dropping the enumerated
-      // "Requested By" dropdown back to a raw text input.
-      setDistinctValues((prev) => ({ ...prev, ...data }));
-    } catch (error) {
-      console.error("Failed to fetch distinct values:", error);
-    }
-  };
-
-  const fetchRuleSets = async () => {
-    try {
-      const response = await fetch("/api/lifecycle/rules");
-      const data = await response.json();
-      setSavedRuleSets(
-        data.ruleSets.filter((r: SavedRuleSet) => r.type === mediaType)
-      );
-    } catch (error) {
-      console.error("Failed to fetch rule sets:", error);
-    }
-  };
-
-  const fetchArrInstances = async () => {
-    try {
-      const response = await fetch(`/api/integrations/${arrApiPath}`);
-      const data = await response.json();
-      setArrInstances(data.instances || []);
-    } catch (error) {
-      console.error(`Failed to fetch ${arrServiceName} instances:`, error);
-    }
-  };
-
-  const fetchSeerrInstances = async () => {
-    if (mediaType === "MUSIC") return;
-    try {
-      const response = await fetch("/api/integrations/seerr");
-      const data = await response.json();
-      // Lifecycle evaluation reads every ENABLED instance (fetchSeerrMetadata),
-      // so the editor must too: a disabled instance is not "connected", and
-      // the Requested By choices are the union across enabled instances.
-      const instances = ((data.instances || []) as Array<{ id: string; enabled?: boolean }>)
-        .filter((i) => i.enabled !== false);
-      setSeerrConnected(instances.length > 0);
-      if (instances.length > 0) {
-        const lists = await Promise.all(
-          instances.map(async (inst) => {
-            try {
-              const metaRes = await fetch(`/api/integrations/seerr/${inst.id}/metadata`);
-              if (!metaRes.ok) return [] as string[];
-              const metaData = await metaRes.json();
-              return (metaData.users ?? []) as string[];
-            } catch {
-              return [] as string[];
-            }
-          }),
-        );
-        setDistinctValues((prev) => ({
-          ...prev,
-          seerrRequestedBy: [...new Set(lists.flat())].sort((a, b) => a.localeCompare(b)),
-        }));
-      }
-    } catch {
-      // Seerr not configured — leave as false
-    }
-  };
-
-  const fetchServers = async () => {
-    try {
-      const response = await fetch("/api/servers");
-      const data = await response.json();
-      setServers((data.servers || []).map((s: {
-        id: string;
-        name: string;
-        type: string;
-        enabled?: boolean;
-        watchHistorySyncedAt?: string | null;
-        tracearrServerId?: string | null;
-        tracearrBackfillComplete?: boolean;
-      }) => ({
-        id: s.id,
-        name: s.name,
-        type: s.type,
-        enabled: s.enabled !== false,
-        // A field absent from the payload reads as ESTABLISHED. This flag only
-        // decides whether to show a warning, and a false alarm about play
-        // history is worse than no banner: the server-side guard still refuses
-        // and now reports its reason, so the failure mode of guessing wrong
-        // here is a missing hint, not a missed refusal.
-        //
-        // `unsynced` is tested first, matching the server-side guard: a server
-        // can be both, and the marker being absent is the fault that waiting
-        // will not fix.
-        playHistoryFault:
-          s.watchHistorySyncedAt === undefined
-            ? null
-            : s.watchHistorySyncedAt === null
-              ? "unsynced"
-              : s.tracearrServerId != null && s.tracearrBackfillComplete === false
-                ? "importing"
-                : null,
-      })));
-    } catch (error) {
-      console.error("Failed to fetch servers:", error);
-    }
-  };
 
   // The user's reusable collections for this library type — populates the
   // collection dropdown. Returns the list so callers can use it before the
@@ -1056,27 +617,10 @@ export function LifecycleRulePage({
     }
   };
 
+  // The only list this tab reads for itself; the rest come with `data`.
   useEffect(() => {
-    void (async () => {
-      await Promise.all([
-        fetchRuleSets(),
-        fetchArrInstances(),
-        fetchSeerrInstances(),
-        fetchDistinctValues(),
-        fetchServers(),
-        fetchCollections(),
-      ]);
-    })();
+    void (async () => { await fetchCollections(); })();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // A Tracearr backfill finishing is what CLEARS the play-history warning below,
-  // and it happens minutes-to-hours after this page mounted. Without a refresh
-  // the banner would keep claiming a rule set is paused long after the import
-  // finished, until the user reloaded — a stale warning about a stale-data
-  // problem. Both events carry only `meta.serverId`, so refetch the servers and
-  // let the list stay the one place the state is read from.
-  useRealtime("tracearr:import-progress", () => { void fetchServers(); });
-  useRealtime("watch-history:updated", () => { void fetchServers(); });
 
   // Fetch arr-specific metadata (tags, quality profiles, languages) when an instance is selected.
   // The "reset when arrInstanceId is cleared" half of this lives in handleArrInstanceChange below
@@ -1102,8 +646,7 @@ export function LifecycleRulePage({
         if (cancelled) return;
         const profiles: Array<{ id: number; name: string }> = data.qualityProfiles ?? [];
         setArrQualityProfiles(profiles);
-        setDistinctValues((prev) => ({
-          ...prev,
+        setArrDistinctValues({
           arrTag: data.tags?.map((t: { label: string }) => t.label) ?? [],
           arrQualityProfile: profiles.map((p) => p.name),
           arrOriginalLanguage: data.languages ?? [],
@@ -1114,7 +657,7 @@ export function LifecycleRulePage({
           arrStatus: data.statuses ?? [],
           arrSeriesType: data.seriesTypes ?? [],
           arrQualityName: data.qualityNames ?? [],
-        }));
+        });
         setArrProfilesStatus("ready");
       } catch {
         if (!cancelled) setArrProfilesStatus("error");
@@ -1133,15 +676,7 @@ export function LifecycleRulePage({
     setArrQualityProfiles([]);
     setArrProfilesStatus(newId ? "loading" : "idle");
     if (!newId) {
-      setDistinctValues((prev) => ({
-        ...prev,
-        arrTag: [],
-        arrQualityProfile: [],
-        arrOriginalLanguage: [],
-        arrStatus: [],
-        arrSeriesType: [],
-        arrQualityName: [],
-      }));
+      setArrDistinctValues(NO_ARR_VALUES);
       setManageTagsEnabled(false);
       setAddArrTags([]);
       setRemoveArrTags([]);
@@ -1245,7 +780,7 @@ export function LifecycleRulePage({
             : s,
         );
       }
-      await fetchRuleSets();
+      await refreshRuleSets();
       await fetchCollections();
     } catch (error) {
       toast.error("Couldn't delete collection", { description: String(error) });
@@ -1361,7 +896,7 @@ export function LifecycleRulePage({
         savedRuleSetId = data.ruleSet.id;
         setActiveRuleSetId(savedRuleSetId);
       }
-      await fetchRuleSets();
+      await refreshRuleSets();
       await fetchCollections();
 
       // Reconcile Plex collections from current matches. If the rule moved off a
@@ -1490,11 +1025,11 @@ export function LifecycleRulePage({
       const diffResponse = diffPromise ? await diffPromise : null;
 
       // Process diff data if available
-      let nextDiffMap: Map<string, "added" | "removed" | "retained"> | null = null;
-      let nextDiffCounts: DiffData["counts"] | null = null;
+      let nextDiffMap: Map<string, PreviewDiffStatus> | null = null;
+      let nextDiffCounts: PreviewDiffCounts | null = null;
       if (diffResponse?.ok) {
         const diff = await diffResponse.json() as DiffData & { removedItems?: PreviewItem[] };
-        const statusMap = new Map<string, "added" | "removed" | "retained">();
+        const statusMap = new Map<string, PreviewDiffStatus>();
         // Another server's copy folded into a match shares its status — the
         // preview lists every copy as a row, detection stores the title once.
         for (const item of diff.added) {
@@ -1558,111 +1093,6 @@ export function LifecycleRulePage({
     }
   };
 
-  const handlePreviewSort = (field: string) => {
-    if (previewSortBy === field) {
-      setPreviewSortOrder((prev) => (prev === "asc" ? "desc" : "asc"));
-    } else {
-      setPreviewSortBy(field);
-      setPreviewSortOrder("asc");
-    }
-  };
-
-  // Fields stored as numeric values but serialized as strings (e.g. BigInt fileSize)
-  // must be compared numerically — a lexicographic compare ranks "9000" above "10000".
-  const NUMERIC_PREVIEW_FIELDS = new Set(["fileSize"]);
-
-  const sortedPreview = [...preview].sort((a, b) => {
-    if (!previewSortBy) return 0;
-    const aVal = a[previewSortBy as keyof PreviewItem];
-    const bVal = b[previewSortBy as keyof PreviewItem];
-    if (aVal == null && bVal == null) return 0;
-    if (aVal == null) return 1;
-    if (bVal == null) return -1;
-    let cmp: number;
-    if (NUMERIC_PREVIEW_FIELDS.has(previewSortBy)) {
-      const aNum = Number(aVal);
-      const bNum = Number(bVal);
-      cmp = aNum < bNum ? -1 : aNum > bNum ? 1 : 0;
-    } else {
-      cmp = aVal < bVal ? -1 : aVal > bVal ? 1 : 0;
-    }
-    return previewSortOrder === "asc" ? cmp : -cmp;
-  });
-
-  // Test Media handlers
-  const handleTestMediaSearch = useCallback(
-    async (query: string) => {
-      if (!query.trim()) {
-        setTestMediaResults([]);
-        return;
-      }
-      setTestMediaSearching(true);
-      try {
-        const params = new URLSearchParams({ q: query, type: mediaType });
-        if (scopeConfig && seriesScope) params.set("seriesScope", "true");
-        const response = await fetch(`/api/media/search?${params}`);
-        if (response.ok) {
-          const data = await response.json();
-          setTestMediaResults(data.items ?? []);
-        }
-      } catch {
-        // ignore
-      } finally {
-        setTestMediaSearching(false);
-      }
-    },
-    [mediaType, scopeConfig, seriesScope],
-  );
-
-  const handleTestMediaSearchInput = useCallback(
-    (value: string) => {
-      setTestMediaSearch(value);
-      setTestMediaSelected(null);
-      setTestMediaResult(null);
-      if (testMediaTimerRef.current) clearTimeout(testMediaTimerRef.current);
-      testMediaTimerRef.current = setTimeout(() => handleTestMediaSearch(value), 300);
-    },
-    [handleTestMediaSearch],
-  );
-
-  const handleTestMediaEvaluate = useCallback(
-    async (itemId: string) => {
-      setTestMediaEvaluating(true);
-      setTestMediaResult(null);
-      try {
-        const response = await fetch("/api/lifecycle/rules/test-item", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            rules: groups,
-            type: mediaType,
-            seriesScope: scopeConfig ? seriesScope : undefined,
-            mediaItemId: itemId,
-            serverIds,
-            arrInstanceId: arrInstanceId || null,
-            ...(activeRuleSetId ? { ruleSetId: activeRuleSetId } : {}),
-          }),
-        });
-        if (response.ok) {
-          const data = await response.json();
-          setTestMediaResult({
-            matches: data.matches,
-            matchedCriteria: data.matchedCriteria ?? [],
-            actualValues: data.actualValues ?? {},
-          });
-        } else {
-          const data = await response.json().catch(() => null);
-          toast.error(data?.error ?? "Failed to evaluate item");
-        }
-      } catch {
-        toast.error("Failed to evaluate item");
-      } finally {
-        setTestMediaEvaluating(false);
-      }
-    },
-    [groups, mediaType, scopeConfig, seriesScope, serverIds, arrInstanceId, activeRuleSetId],
-  );
-
   const takeSnapshot = (): RuleSetSnapshot => ({
     name,
     groups: JSON.stringify(groups),
@@ -1693,7 +1123,10 @@ export function LifecycleRulePage({
   const loadRuleSet = async (ruleSet: SavedRuleSet) => {
     const token = ++loadTokenRef.current;
     setName(ruleSet.name);
-    setGroups(legacyToGroups(ruleSet.rules));
+    // Converted once: a legacy rule set's buckets get fresh ids on every
+    // conversion, so a second one for the snapshot read as an unsaved edit.
+    const loadedGroups = legacyToGroups(ruleSet.rules);
+    setGroups(loadedGroups);
     setActiveRuleSetId(ruleSet.id);
     setEnabled(ruleSet.enabled ?? true);
     if (scopeConfig) {
@@ -1747,7 +1180,7 @@ export function LifecycleRulePage({
     // Capture snapshot from rule set data (state not yet updated)
     setSnapshot({
       name: ruleSet.name,
-      groups: JSON.stringify(legacyToGroups(ruleSet.rules)),
+      groups: JSON.stringify(loadedGroups),
       enabled: ruleSet.enabled ?? true,
       seriesScope: ruleSet.seriesScope ?? true,
       actionEnabled: ruleSet.actionEnabled,
@@ -1784,12 +1217,11 @@ export function LifecycleRulePage({
   // this a true one-shot.
   useEffect(() => {
     if (hydratedFromUrlRef.current || !ruleSetIdFromUrl) return;
-    if (savedRuleSets.length === 0) return;
-    const match = savedRuleSets.find((rs) => rs.id === ruleSetIdFromUrl);
-    if (match) {
-      hydratedFromUrlRef.current = true;
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      void loadRuleSet(match);
+    // Every type's rule sets, as the rules page read them.
+    const allRuleSets = editorData.ruleSets;
+    if (!allRuleSets) return;
+    hydratedFromUrlRef.current = true;
+    const clearParam = () => {
       if (typeof window !== "undefined") {
         window.history.replaceState(
           null,
@@ -1797,58 +1229,34 @@ export function LifecycleRulePage({
           window.location.pathname + window.location.hash,
         );
       }
+    };
+    const found = allRuleSets.find((rs) => rs.id === ruleSetIdFromUrl);
+    if (!found) {
+      toast.error("Rule set not found", {
+        description: "It may have been deleted.",
+      });
+      clearParam();
       return;
     }
-    // No match in this tab. The rule set might belong to a different library
-    // type — re-fetch unfiltered and either redirect to the right tab or
-    // surface a not-found message.
-    hydratedFromUrlRef.current = true;
-    void (async () => {
-      try {
-        const res = await fetch("/api/lifecycle/rules");
-        if (!res.ok) throw new Error("fetch failed");
-        const data = (await res.json()) as { ruleSets: SavedRuleSet[] };
-        const found = data.ruleSets.find((rs) => rs.id === ruleSetIdFromUrl);
-        if (!found) {
-          toast.error("Rule set not found", {
-            description: "It may have been deleted.",
-          });
-          if (typeof window !== "undefined") {
-            window.history.replaceState(
-              null,
-              "",
-              window.location.pathname + window.location.hash,
-            );
-          }
-          return;
-        }
-        const targetHash =
-          found.type === "MOVIE" ? "movies" : found.type === "SERIES" ? "series" : "music";
-        toast.info("Switching to the rule set's tab", {
-          description: `This rule set is in the ${targetHash} tab.`,
-        });
-        if (typeof window !== "undefined") {
-          window.location.replace(
-            `${window.location.pathname}?ruleSet=${encodeURIComponent(found.id)}#${targetHash}`,
-          );
-        }
-      } catch {
-        // Network failure — surface it so the user isn't stranded on the
-        // wrong tab with no explanation. Clear the param so refresh doesn't
-        // loop on the same failure.
-        toast.error("Couldn't locate the rule set", {
-          description: "Check your network and refresh.",
-        });
-        if (typeof window !== "undefined") {
-          window.history.replaceState(
-            null,
-            "",
-            window.location.pathname + window.location.hash,
-          );
-        }
-      }
-    })();
-  }, [ruleSetIdFromUrl, savedRuleSets]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (found.type === mediaType) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      void loadRuleSet(found);
+      clearParam();
+      return;
+    }
+    // The rule set belongs to another library type: move to its tab, which
+    // loads it from the same param.
+    const targetHash =
+      found.type === "MOVIE" ? "movies" : found.type === "SERIES" ? "series" : "music";
+    toast.info("Switching to the rule set's tab", {
+      description: `This rule set is in the ${targetHash} tab.`,
+    });
+    if (typeof window !== "undefined") {
+      window.location.replace(
+        `${window.location.pathname}?ruleSet=${encodeURIComponent(found.id)}#${targetHash}`,
+      );
+    }
+  }, [ruleSetIdFromUrl, editorData.ruleSets]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggleRuleSetEnabled = async (id: string, currentEnabled: boolean) => {
     try {
@@ -1860,7 +1268,7 @@ export function LifecycleRulePage({
       if (activeRuleSetId === id) {
         setEnabled(!currentEnabled);
       }
-      await fetchRuleSets();
+      await refreshRuleSets();
     } catch (error) {
       console.error("Failed to toggle rule set:", error);
     }
@@ -1875,7 +1283,7 @@ export function LifecycleRulePage({
       if (activeRuleSetId === id) {
         newRuleSet();
       }
-      await fetchRuleSets();
+      await refreshRuleSets();
     } catch (error) {
       console.error("Failed to delete rule set:", error);
     }
@@ -1953,17 +1361,10 @@ export function LifecycleRulePage({
       data.seriesScope = seriesScope;
     }
     setExportJson(JSON.stringify(data, null, 2));
-    setCopied(false);
     setShowExportDialog(true);
   };
 
-  const handleCopyExport = async () => {
-    await navigator.clipboard.writeText(exportJson);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  const handleImportJson = () => {
+  const handleImportJson = (importJson: string) => {
     try {
       const data = JSON.parse(importJson) as RuleSetExport;
       if (!data.rules || !Array.isArray(data.rules)) {
@@ -2016,12 +1417,37 @@ export function LifecycleRulePage({
       setPreview([]);
       setSaveError(null);
       setShowImportDialog(false);
-      setImportJson("");
     } catch {
       setSaveError("Failed to parse rule set JSON");
       setShowImportDialog(false);
     }
   };
+
+  // The builder and its logic preview, as one element kept while what they
+  // read is unchanged: React skips re-rendering an element it has already
+  // rendered, so typing a name, a collection or a delay no longer re-renders
+  // every rule row and the pseudocode.
+  const arrUnreachable = integrationsStatus.arrUnreachable;
+  const seerrUnreachable = integrationsStatus.seerrUnreachable;
+  const arrAvailableForLibrary = arrInstances.length > 0;
+  const ruleBuilder = useMemo(
+    () => (
+      <BuilderWithPseudocode groups={groups} config={ruleBuilderConfig}>
+        <RuleBuilder
+          groups={groups}
+          onChange={setGroups}
+          distinctValues={distinctValues}
+          arrConnected={!!arrInstanceId}
+          arrUnreachable={arrUnreachable}
+          arrAvailableForLibrary={arrAvailableForLibrary}
+          seerrConnected={mediaType === "MUSIC" ? undefined : seerrConnected}
+          seerrUnreachable={seerrUnreachable}
+          libraryType={mediaType}
+        />
+      </BuilderWithPseudocode>
+    ),
+    [groups, distinctValues, arrInstanceId, arrUnreachable, arrAvailableForLibrary, mediaType, seerrConnected, seerrUnreachable],
+  );
 
   return (
     <>
@@ -2326,19 +1752,7 @@ export function LifecycleRulePage({
             subjectLabel="This rule set"
           />
 
-          <BuilderWithPseudocode groups={groups} config={ruleBuilderConfig}>
-            <RuleBuilder
-              groups={groups}
-              onChange={setGroups}
-              distinctValues={distinctValues}
-              arrConnected={!!arrInstanceId}
-              arrUnreachable={integrationsStatus.arrUnreachable}
-              arrAvailableForLibrary={arrInstances.length > 0}
-              seerrConnected={mediaType === "MUSIC" ? undefined : seerrConnected}
-              seerrUnreachable={integrationsStatus.seerrUnreachable}
-              libraryType={mediaType}
-            />
-          </BuilderWithPseudocode>
+          {ruleBuilder}
 
           {/* Action Configuration */}
           <div className="rounded-lg border p-4 space-y-4">
@@ -2938,26 +2352,17 @@ export function LifecycleRulePage({
           )}
 
           <div className="flex flex-wrap gap-2 pt-2">
-            <Button
+            <LoadingButton
               onClick={handlePreview}
-              disabled={groups.length === 0 || !validateAllRules(groups) || previewing || serverIds.length === 0 || (ruleUsesArr && !arrInstanceId) || (ruleUsesSeerr && !seerrConnected)}
+              loading={previewing}
+              icon={Eye}
+              disabled={groups.length === 0 || !validateAllRules(groups) || serverIds.length === 0 || (ruleUsesArr && !arrInstanceId) || (ruleUsesSeerr && !seerrConnected)}
               variant="secondary"
             >
-              {previewing ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <Eye className="mr-2 h-4 w-4" />
-              )}
               Preview
-            </Button>
+            </LoadingButton>
             <Button
-              onClick={() => {
-                setTestMediaSearch("");
-                setTestMediaResults([]);
-                setTestMediaSelected(null);
-                setTestMediaResult(null);
-                setShowTestMediaDialog(true);
-              }}
+              onClick={() => setShowTestMediaDialog(true)}
               disabled={groups.length === 0 || !validateAllRules(groups) || serverIds.length === 0 || (ruleUsesArr && !arrInstanceId) || (ruleUsesSeerr && !seerrConnected)}
               variant="secondary"
             >
@@ -2989,7 +2394,7 @@ export function LifecycleRulePage({
             </Button>
             <div className="ml-auto flex gap-2">
               <Button
-                onClick={() => { setImportJson(""); setSaveError(null); setShowImportDialog(true); }}
+                onClick={() => { setSaveError(null); setShowImportDialog(true); }}
                 variant="outline"
                 size="sm"
               >
@@ -3022,429 +2427,84 @@ export function LifecycleRulePage({
 
       {/* Preview Results */}
       {preview.length > 0 && (
-        <div className="mt-8">
-          <div className="flex items-center gap-3 mb-4 flex-wrap">
-            <h2 className="text-xl font-bold font-display">
-              Preview Results ({previewDiffCounts ? previewDiffCounts.added + previewDiffCounts.retained : preview.length} matches)
-            </h2>
-            {previewDiffCounts && (previewDiffCounts.added > 0 || previewDiffCounts.removed > 0) && (
-              <div className="flex items-center gap-2 text-sm">
-                <span className="text-muted-foreground">—</span>
-                {previewDiffCounts.added > 0 && (
-                  <ColorChip className="border-green/30 bg-green-dim text-green">
-                    +{previewDiffCounts.added} new
-                  </ColorChip>
-                )}
-                {previewDiffCounts.retained > 0 && (
-                  <ColorChip className="border-border bg-muted/40 text-muted-foreground">
-                    {previewDiffCounts.retained} retained
-                  </ColorChip>
-                )}
-                {previewDiffCounts.removed > 0 && (
-                  <ColorChip className="border-amber/30 bg-amber-dim text-amber">
-                    -{previewDiffCounts.removed} removed
-                  </ColorChip>
-                )}
-              </div>
-            )}
-            <div className="ml-auto flex items-center gap-3">
-              <div className="flex items-center gap-1 rounded-lg border p-1 h-9">
-                <button
-                  onClick={() => handlePreviewViewModeChange("cards")}
-                  className={cn(
-                    "rounded-md p-1.5 transition-colors",
-                    previewViewMode === "cards"
-                      ? "bg-primary text-primary-foreground"
-                      : "text-muted-foreground hover:text-foreground hover:bg-muted",
-                  )}
-                  title="Card view"
-                  aria-label="Card view"
-                >
-                  <LayoutGrid className="h-4 w-4" />
-                </button>
-                <button
-                  onClick={() => handlePreviewViewModeChange("table")}
-                  className={cn(
-                    "rounded-md p-1.5 transition-colors",
-                    previewViewMode === "table"
-                      ? "bg-primary text-primary-foreground"
-                      : "text-muted-foreground hover:text-foreground hover:bg-muted",
-                  )}
-                  title="Table view"
-                  aria-label="Table view"
-                >
-                  <TableProperties className="h-4 w-4" />
-                </button>
-              </div>
-              {previewViewMode === "cards" && (
-                <>
-                  <CardSizeControl size={cardSize} onChange={setCardSize} />
-                  <CardDisplayControl
-                    prefs={cardPrefs}
-                    config={TOGGLE_CONFIGS.MOVIE}
-                    onToggle={(section, key, visible) => setCardFieldVisible(section, key, visible)}
-                  />
-                </>
-              )}
-            </div>
-          </div>
-          {previewViewMode === "table" ? (
-            <MediaTable
-              items={sortedPreview}
-              onItemClick={openDetailPanel}
-              sortBy={previewSortBy}
-              sortOrder={previewSortOrder}
-              onSort={handlePreviewSort}
-              mediaType={mediaType}
-              exceptedItemIds={exceptedItemIds}
-              renderHoverContent={(item) => (
-                <MediaHoverPopover
-                  imageUrl={`/api/media/${item.id}/image${mediaType !== "MOVIE" ? "?type=parent" : ""}`}
-                  imageAspect={mediaType === "MUSIC" ? "square" : "poster"}
-                  data={{
-                    title: item.parentTitle ? `${item.parentTitle} — ${item.title}` : item.title,
-                    year: item.year,
-                    summary: item.summary,
-                    contentRating: item.contentRating,
-                    rating: item.rating,
-                    audienceRating: item.audienceRating,
-                    ratingImage: item.ratingImage,
-                    audienceRatingImage: item.audienceRatingImage,
-                    duration: item.duration,
-                    resolution: item.resolution,
-                    dynamicRange: item.dynamicRange,
-                    audioProfile: item.audioProfile,
-                    audioCodec: mediaType === "MUSIC" && !item.matchedEpisodes ? item.audioCodec : undefined,
-                    fileSize: item.fileSize,
-                    genres: item.genres,
-                    studio: item.studio,
-                    playCount: item.playCount,
-                    lastPlayedAt: item.lastPlayedAt,
-                    addedAt: item.addedAt,
-                    servers: item.servers,
-                  }}
-                />
-              )}
-              rowClassName={previewDiffMap.size > 0 ? (item) => {
-                const status = previewDiffMap.get(item.id);
-                if (status === "added") return "border-l-2 border-l-emerald-500/70 bg-emerald-500/5";
-                if (status === "removed") return "border-l-2 border-l-amber/70 bg-amber/5 opacity-60";
-                return undefined;
-              } : undefined}
-            />
-          ) : (
-            <PreviewCardGrid
-              items={sortedPreview}
-              mediaType={mediaType}
-              onItemClick={openDetailPanel}
-              diffMap={previewDiffMap}
-              exceptedItemIds={exceptedItemIds}
-              show={showCardField}
-              getHex={getHex}
-              showServers={showServers}
-            />
-          )}
-        </div>
+        <RulePreviewSection
+          items={preview}
+          mediaType={mediaType}
+          diffMap={previewDiffMap}
+          diffCounts={previewDiffCounts}
+          exceptedItemIds={exceptedItemIds}
+          onItemClick={openDetailPanel}
+        />
       )}
 
-      {/* Export Dialog */}
-      <Dialog open={showExportDialog} onOpenChange={setShowExportDialog}>
-        <DialogContent className="sm:max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>Export Rule Set</DialogTitle>
-            <DialogDescription>
-              Copy the JSON below to share or back up this rule set.
-            </DialogDescription>
-          </DialogHeader>
-          <textarea
-            readOnly
-            value={exportJson}
-            className="h-64 w-full rounded-md border bg-muted p-3 font-mono text-xs focus:outline-none"
-            onFocus={(e) => e.target.select()}
-          />
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowExportDialog(false)}>
-              Close
-            </Button>
-            <Button onClick={handleCopyExport}>
-              {copied ? (
-                <Check className="mr-2 h-4 w-4" />
-              ) : (
-                <Copy className="mr-2 h-4 w-4" />
-              )}
-              {copied ? "Copied" : "Copy to Clipboard"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ExportRuleSetDialog open={showExportDialog} onOpenChange={setShowExportDialog} json={exportJson} />
 
-      {/* Import Dialog */}
-      <Dialog open={showImportDialog} onOpenChange={setShowImportDialog}>
-        <DialogContent className="sm:max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>Import Rule Set</DialogTitle>
-            <DialogDescription>
-              Paste a previously exported rule set JSON below.
-            </DialogDescription>
-          </DialogHeader>
-          <textarea
-            value={importJson}
-            onChange={(e) => setImportJson(e.target.value)}
-            placeholder="Paste rule set JSON here..."
-            className="h-64 w-full rounded-md border bg-muted p-3 font-mono text-xs focus:outline-none placeholder:text-muted-foreground"
-          />
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowImportDialog(false)}>
-              Cancel
-            </Button>
-            <Button onClick={handleImportJson} disabled={!importJson.trim()}>
-              <ClipboardPaste className="mr-2 h-4 w-4" />
-              Import
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <ImportRuleSetDialog open={showImportDialog} onOpenChange={setShowImportDialog} onImport={handleImportJson} />
 
-      {/* Test Media Dialog */}
-      <Dialog open={showTestMediaDialog} onOpenChange={setShowTestMediaDialog}>
-        <DialogContent className="sm:max-w-2xl max-h-[80dvh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>Test Media</DialogTitle>
-            <DialogDescription>
-              Search for a media item and evaluate it against the current rules.
-            </DialogDescription>
-          </DialogHeader>
-
-          {/* Search input */}
-          {!testMediaSelected && (
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Search by title..."
-                value={testMediaSearch}
-                onChange={(e) => handleTestMediaSearchInput(e.target.value)}
-                className="pl-9"
-                autoFocus
-              />
-            </div>
-          )}
-
-          {/* Search results */}
-          {!testMediaSelected && testMediaResults.length > 0 && (
-            <div className="max-h-60 overflow-y-auto rounded-md border">
-              {testMediaResults.map((item) => {
-                const displayTitle = testMediaTitle(item);
-                return (
-                  <button
-                    key={item.id}
-                    className="flex w-full items-center gap-3 px-3 py-2 text-left hover:bg-accent transition-colors border-b last:border-b-0"
-                    onClick={() => {
-                      setTestMediaSelected(item);
-                      setTestMediaResults([]);
-                    }}
-                  >
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium truncate">{displayTitle}</p>
-                      {item.year && (
-                        <p className="text-xs text-muted-foreground">{item.year}</p>
-                      )}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-
-          {/* No results */}
-          {!testMediaSelected && testMediaSearch.trim() && !testMediaSearching && testMediaResults.length === 0 && (
-            <p className="text-sm text-muted-foreground text-center py-4">No items found</p>
-          )}
-
-          {/* Searching indicator */}
-          {testMediaSearching && (
-            <div className="flex items-center justify-center py-4">
-              <Loader2 className="h-4 w-4 animate-spin mr-2" />
-              <span className="text-sm text-muted-foreground">Searching...</span>
-            </div>
-          )}
-
-          {/* Selected item */}
-          {testMediaSelected && (
-            <div className="space-y-4">
-              <div className="flex items-center justify-between rounded-md border p-3">
-                <div>
-                  <p className="text-sm font-medium">
-                    {testMediaTitle(testMediaSelected)}
-                  </p>
-                  {testMediaSelected.year && (
-                    <p className="text-xs text-muted-foreground">{testMediaSelected.year}</p>
-                  )}
-                </div>
-                <div className="flex items-center gap-2">
-                  <Button
-                    size="sm"
-                    onClick={() => handleTestMediaEvaluate(testMediaSelected.id)}
-                    disabled={testMediaEvaluating}
-                  >
-                    {testMediaEvaluating ? (
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    ) : (
-                      <FlaskConical className="mr-2 h-4 w-4" />
-                    )}
-                    Evaluate
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => {
-                      setTestMediaSelected(null);
-                      setTestMediaResult(null);
-                      setTestMediaSearch("");
-                    }}
-                  >
-                    Change
-                  </Button>
-                </div>
-              </div>
-
-              {/* Evaluation results */}
-              {testMediaResult && (
-                <div className="space-y-4">
-                  {/* Match indicator */}
-                  <div className="flex items-center gap-2">
-                    <ColorChip
-                      className={testMediaResult.matches
-                        ? "border-green/30 bg-green-dim text-green"
-                        : "border-border bg-muted/40 text-muted-foreground"}
-                    >
-                      {testMediaResult.matches ? "Matches Rules" : "Does Not Match"}
-                    </ColorChip>
-                  </div>
-
-                  {/* Matched criteria badges */}
-                  {testMediaResult.matchedCriteria.length > 0 && (
-                    <div className="space-y-2">
-                      <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Matched Criteria</h4>
-                      <div className="flex flex-wrap gap-1.5">
-                        {testMediaResult.matchedCriteria.map((criterion, i) => {
-                          const badge = (
-                            <ColorChip key={i} className={criterion.negate ? "border-red/30 text-red" : undefined}>
-                              {criterion.groupName && (
-                                <span className="text-sky mr-1">[{criterion.groupName}]</span>
-                              )}
-                              {criterion.negate && <span className="text-red mr-1">NOT</span>}
-                              {criterion.field} {criterion.operator} {criterion.value}
-                            </ColorChip>
-                          );
-                          if (criterion.actualValue) {
-                            return (
-                              <TooltipProvider key={i}>
-                                <Tooltip>
-                                  {/* ColorChip takes no ref, so the trigger is a wrapper. */}
-                                  <TooltipTrigger asChild><span className="inline-flex">{badge}</span></TooltipTrigger>
-                                  <TooltipContent>Actual: {criterion.actualValue}</TooltipContent>
-                                </Tooltip>
-                              </TooltipProvider>
-                            );
-                          }
-                          return badge;
-                        })}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Logic preview */}
-                  <div className="space-y-2">
-                    <h4 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">Logic Preview</h4>
-                    <PseudocodePanel
-                      groups={groups}
-                      config={ruleBuilderConfig}
-                      highlightedRuleIds={new Set(testMediaResult.matchedCriteria.map((c) => c.ruleId))}
-                      actualValues={new Map(Object.entries(testMediaResult.actualValues))}
-                    />
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowTestMediaDialog(false)}>
-              Close
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <TestMediaDialog
+        open={showTestMediaDialog}
+        onOpenChange={setShowTestMediaDialog}
+        groups={groups}
+        mediaType={mediaType}
+        seriesScope={scopeConfig ? seriesScope : undefined}
+        serverIds={serverIds}
+        arrInstanceId={arrInstanceId}
+        ruleSetId={activeRuleSetId}
+      />
 
       {/* Delete Confirmation Dialog */}
-      <AlertDialog open={!!deleteConfirmId} onOpenChange={(open) => { if (!open) setDeleteConfirmId(null); }}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete Rule Set?</AlertDialogTitle>
-            <AlertDialogDescription asChild>
-              <div className="space-y-2">
-                <p>
-                  This will permanently delete the rule set &ldquo;{deleteConfirmName}&rdquo;.
-                  {deleteConfirmHasCollection && (
-                    <> Its items will be removed from the linked Plex collection (the
-                    collection itself is kept for any other rules using it).</>
-                  )}
-                </p>
-                {deleteConfirmAddTags.length > 0 && (
-                  <div className="rounded-md border border-amber/30 bg-amber/10 p-3 text-sm">
-                    <p className="mb-2 text-amber">
-                      This rule set adds tags [{deleteConfirmAddTags.join(", ")}] to items.
-                    </p>
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <Checkbox
-                        checked={deleteConfirmCleanupTags}
-                        onCheckedChange={(v) => setDeleteConfirmCleanupTags(v === true)}
-                      />
-                      <span>Remove these tags from all items and delete the tag definitions</span>
-                    </label>
-                  </div>
-                )}
-              </div>
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={() => {
-                if (deleteConfirmId) deleteRuleSet(deleteConfirmId, deleteConfirmCleanupTags);
-                setDeleteConfirmId(null);
-              }}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            >
-              Delete
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ConfirmDialog
+        open={!!deleteConfirmId}
+        onOpenChange={(open) => { if (!open) setDeleteConfirmId(null); }}
+        title="Delete Rule Set?"
+        description={
+          <>
+            This will permanently delete the rule set &ldquo;{deleteConfirmName}&rdquo;.
+            {deleteConfirmHasCollection && (
+              <> Its items will be removed from the linked Plex collection (the
+              collection itself is kept for any other rules using it).</>
+            )}
+          </>
+        }
+        confirmLabel="Delete"
+        destructive
+        onConfirm={() => {
+          if (deleteConfirmId) void deleteRuleSet(deleteConfirmId, deleteConfirmCleanupTags);
+        }}
+      >
+        {deleteConfirmAddTags.length > 0 && (
+          <div className="rounded-md border border-amber/30 bg-amber/10 p-3 text-sm">
+            <p className="mb-2 text-amber">
+              This rule set adds tags [{deleteConfirmAddTags.join(", ")}] to items.
+            </p>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <Checkbox
+                checked={deleteConfirmCleanupTags}
+                onCheckedChange={(v) => setDeleteConfirmCleanupTags(v === true)}
+              />
+              <span>Remove these tags from all items and delete the tag definitions</span>
+            </label>
+          </div>
+        )}
+      </ConfirmDialog>
 
       {/* Delete collection confirmation */}
-      <AlertDialog open={showDeleteCollectionDialog} onOpenChange={(open) => { if (!deletingCollection) setShowDeleteCollectionDialog(open); }}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete Collection?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This permanently deletes the collection definition &ldquo;{collectionName}&rdquo; and removes it from Plex.
-              {currentRuleUsesSelected && <> It will also be removed from this rule.</>} This can&rsquo;t be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={deletingCollection}>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              onClick={(e) => { e.preventDefault(); void handleDeleteCollection(); }}
-              disabled={deletingCollection}
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
-            >
-              {deletingCollection ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Trash2 className="mr-2 h-4 w-4" />}
-              Delete Collection
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ConfirmDialog
+        open={showDeleteCollectionDialog}
+        onOpenChange={setShowDeleteCollectionDialog}
+        title="Delete Collection?"
+        description={
+          <>
+            This permanently deletes the collection definition &ldquo;{collectionName}&rdquo; and removes it from Plex.
+            {currentRuleUsesSelected && <> It will also be removed from this rule.</>} This can&rsquo;t be undone.
+          </>
+        }
+        confirmLabel="Delete Collection"
+        confirmIcon={Trash2}
+        destructive
+        pending={deletingCollection}
+        onConfirm={handleDeleteCollection}
+      />
 
       {/* Pre-save: prompt for save behavior */}
       <AlertDialog open={showSaveOptions} onOpenChange={(open) => { if (!savingWithOption && !loadingDiff) setShowSaveOptions(open); }}>
@@ -3635,118 +2695,102 @@ export function LifecycleRulePage({
       </AlertDialog>
 
       {/* Reschedule pending actions prompt */}
-      <AlertDialog open={showRescheduleDialog} onOpenChange={setShowRescheduleDialog}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Update Pending Actions</AlertDialogTitle>
-            <AlertDialogDescription>
-              Action delay changed from {rescheduleOldDelay} to {rescheduleNewDelay} day{rescheduleNewDelay !== 1 ? "s" : ""}.
-              Would you like to reschedule existing pending actions to {rescheduleNewDelay} day{rescheduleNewDelay !== 1 ? "s" : ""} from today?
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>No, keep current schedule</AlertDialogCancel>
-            <AlertDialogAction
-              disabled={rescheduling}
-              onClick={async (e) => {
-                // Keep the dialog open while the POST is in flight so the guard stays visible.
-                e.preventDefault();
-                if (!activeRuleSetId || rescheduling) return;
-                setRescheduling(true);
-                try {
-                  const res = await fetch(`/api/lifecycle/rules/${activeRuleSetId}/reschedule-actions`, {
-                    method: "POST",
-                  });
-                  if (res.ok) {
-                    const data = await res.json();
-                    if (data.updated > 0) {
-                      toast.success(`Rescheduled ${data.updated} pending action${data.updated !== 1 ? "s" : ""}`);
-                    } else {
-                      toast.success("No pending actions to reschedule");
-                    }
-                  } else {
-                    toast.error("Failed to reschedule actions");
-                  }
-                } catch {
-                  toast.error("Failed to reschedule actions");
-                } finally {
-                  setRescheduling(false);
-                  setShowRescheduleDialog(false);
-                }
-              }}
-            >
-              {rescheduling ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : null}
-              Yes, reschedule
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ConfirmDialog
+        open={showRescheduleDialog}
+        onOpenChange={setShowRescheduleDialog}
+        title="Update Pending Actions"
+        description={
+          <>
+            Action delay changed from {rescheduleOldDelay} to {rescheduleNewDelay} day{rescheduleNewDelay !== 1 ? "s" : ""}.
+            Would you like to reschedule existing pending actions to {rescheduleNewDelay} day{rescheduleNewDelay !== 1 ? "s" : ""} from today?
+          </>
+        }
+        cancelLabel="No, keep current schedule"
+        confirmLabel="Yes, reschedule"
+        pending={rescheduling}
+        onConfirm={async () => {
+          // The dialog stays open, spinning, while the POST is in flight.
+          if (!activeRuleSetId || rescheduling) return;
+          setRescheduling(true);
+          try {
+            const res = await fetch(`/api/lifecycle/rules/${activeRuleSetId}/reschedule-actions`, {
+              method: "POST",
+            });
+            if (res.ok) {
+              const data = await res.json();
+              if (data.updated > 0) {
+                toast.success(`Rescheduled ${data.updated} pending action${data.updated !== 1 ? "s" : ""}`);
+              } else {
+                toast.success("No pending actions to reschedule");
+              }
+            } else {
+              toast.error("Failed to reschedule actions");
+            }
+          } catch {
+            toast.error("Failed to reschedule actions");
+          } finally {
+            setRescheduling(false);
+            setShowRescheduleDialog(false);
+          }
+        }}
+      />
 
-      <AlertDialog open={showRecycleBinModal} onOpenChange={setShowRecycleBinModal}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle className="flex items-center gap-2">
-              <AlertTriangle className="h-5 w-5 text-amber" />
-              Recycle Bin Disabled
-            </AlertDialogTitle>
-            <AlertDialogDescription asChild>
-              <div className="space-y-2">
-                <p>
-                  The selected {arrServiceName} instance has no recycle bin configured.
-                  Files removed by this lifecycle rule will be permanently deleted with no
-                  way to recover them.
-                </p>
-                {recycleBinStatus?.arrUrl && (
-                  <p>
-                    You can configure a recycle bin path in{" "}
-                    <a
-                      href={`${recycleBinStatus.arrUrl.replace(/\/+$/, "")}/settings/mediamanagement`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="underline inline-flex items-center gap-1"
-                    >
-                      {arrServiceName} settings <ExternalLink className="h-3 w-3" />
-                    </a>
-                    .
-                  </p>
-                )}
-              </div>
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <label className="flex items-center gap-2 cursor-pointer py-2">
-            <Checkbox
-              checked={recycleBinAcknowledged}
-              onCheckedChange={(c) => setRecycleBinAcknowledged(c === true)}
-            />
-            <span className="text-sm">
-              I understand that deletes will be permanent and unrecoverable.
-            </span>
-          </label>
-          <AlertDialogFooter>
-            <AlertDialogCancel
-              onClick={() => {
-                pendingSaveOptionsRef.current = undefined;
-                setRecycleBinAcknowledged(false);
-              }}
+      <ConfirmDialog
+        open={showRecycleBinModal}
+        onOpenChange={(open) => {
+          if (!open) {
+            pendingSaveOptionsRef.current = undefined;
+            setRecycleBinAcknowledged(false);
+          }
+          setShowRecycleBinModal(open);
+        }}
+        title={
+          <span className="flex items-center gap-2">
+            <AlertTriangle className="h-5 w-5 text-amber" />
+            Recycle Bin Disabled
+          </span>
+        }
+        description={
+          <>
+            The selected {arrServiceName} instance has no recycle bin configured.
+            Files removed by this lifecycle rule will be permanently deleted with no
+            way to recover them.
+          </>
+        }
+        confirmLabel="Save anyway"
+        confirmDisabled={!recycleBinAcknowledged}
+        onConfirm={() => {
+          if (arrInstanceId) recycleBinAcknowledgedRef.current.add(arrInstanceId);
+          const opts = pendingSaveOptionsRef.current;
+          pendingSaveOptionsRef.current = undefined;
+          setRecycleBinAcknowledged(false);
+          void executeSave(opts);
+        }}
+      >
+        {recycleBinStatus?.arrUrl && (
+          <p className="text-sm text-muted-foreground">
+            You can configure a recycle bin path in{" "}
+            <a
+              href={`${stripTrailingSlashes(recycleBinStatus.arrUrl)}/settings/mediamanagement`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline inline-flex items-center gap-1"
             >
-              Cancel
-            </AlertDialogCancel>
-            <AlertDialogAction
-              disabled={!recycleBinAcknowledged}
-              onClick={() => {
-                if (arrInstanceId) recycleBinAcknowledgedRef.current.add(arrInstanceId);
-                const opts = pendingSaveOptionsRef.current;
-                pendingSaveOptionsRef.current = undefined;
-                setRecycleBinAcknowledged(false);
-                setShowRecycleBinModal(false);
-                executeSave(opts);
-              }}
-            >
-              Save anyway
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+              {arrServiceName} settings <ExternalLink className="h-3 w-3" />
+            </a>
+            .
+          </p>
+        )}
+        <label className="flex items-center gap-2 cursor-pointer py-2">
+          <Checkbox
+            checked={recycleBinAcknowledged}
+            onCheckedChange={(c) => setRecycleBinAcknowledged(c === true)}
+          />
+          <span className="text-sm">
+            I understand that deletes will be permanent and unrecoverable.
+          </span>
+        </label>
+      </ConfirmDialog>
         </div>
     </div>
 

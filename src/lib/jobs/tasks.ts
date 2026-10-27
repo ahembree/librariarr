@@ -1,6 +1,7 @@
 import type { Task, TaskList } from "graphile-worker";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
+import { eventBus } from "@/lib/events/event-bus";
 import { syncMediaServer } from "@/lib/sync/sync-server";
 import { syncWatchHistory } from "@/lib/sync/sync-watch-history";
 import { syncMediaServerItems } from "@/lib/sync/sync-incremental";
@@ -81,6 +82,42 @@ export async function cleanupOldActions(): Promise<void> {
   }
 }
 
+/** Sync jobs always kept per server, however old: the recent history every status surface reads. */
+export const SYNC_JOB_KEEP_PER_SERVER = 50;
+/** Sync jobs younger than this are kept whatever their number. */
+export const SYNC_JOB_RETENTION_DAYS = 30;
+
+/**
+ * Drop finished sync jobs that are both old and beyond each server's newest
+ * `SYNC_JOB_KEEP_PER_SERVER`. Nothing pruned them, so every reader of the
+ * table — `/api/sync/status` sorts the recent finished jobs, the server list
+ * reads each server's newest — worked over a history that only ever grew
+ * (a sync per server per scheduled run, plus one per library change that
+ * fell back, plus every manual one). A PENDING or RUNNING row is never
+ * touched: it is a sync someone is waiting on.
+ */
+export async function pruneSyncJobs(now: Date = new Date()): Promise<number> {
+  const cutoff = new Date(now.getTime() - SYNC_JOB_RETENTION_DAYS * 24 * 60 * 60 * 1000);
+  const removed = await prisma.$executeRawUnsafe(
+    `DELETE FROM "SyncJob" s
+      USING (
+        SELECT "id", "startedAt", "status",
+               ROW_NUMBER() OVER (PARTITION BY "mediaServerId" ORDER BY "startedAt" DESC, "id" DESC) AS "rank"
+          FROM "SyncJob"
+      ) ranked
+      WHERE s."id" = ranked."id"
+        AND ranked."rank" > $1
+        AND ranked."startedAt" < $2
+        AND ranked."status"::text NOT IN ('PENDING', 'RUNNING')`,
+    SYNC_JOB_KEEP_PER_SERVER,
+    cutoff,
+  );
+  if (removed > 0) {
+    logger.info("Jobs", `Sync job cleanup: removed ${removed} finished job(s) older than ${SYNC_JOB_RETENTION_DAYS} days`);
+  }
+  return removed;
+}
+
 /** Create a database backup and prune old ones to the configured retention count. */
 export async function runScheduledBackup(): Promise<void> {
   const settings = await prisma.appSettings.findFirst({
@@ -123,10 +160,16 @@ const syncServer: Task = async (payload) => {
     // with nothing left to claim it, and a PENDING row makes every Sync button
     // answer as though a sync were queued.
     if (syncJobId) {
-      await prisma.syncJob.updateMany({
+      const closed = await prisma.syncJob.updateMany({
         where: { id: syncJobId, status: "PENDING" },
         data: { status: "FAILED", completedAt: new Date(), error: "Another sync of this server was already running" },
       });
+      // The pages showing the queued row poll only while pushes are not
+      // arriving, so its end has to be announced like any other sync's.
+      if (closed.count > 0) {
+        const server = await prisma.mediaServer.findUnique({ where: { id: serverId }, select: { userId: true } });
+        if (server) eventBus.emit({ type: "sync:failed", userId: server.userId, meta: { serverId } });
+      }
     }
     return;
   }
@@ -254,7 +297,10 @@ const tracearrBackfill: Task = async (payload) => {
   // anyway, so there is nothing to lose by simply logging it.
   if (!result.backfillPending) {
     try {
-      await recoverHistoryForNewItems(serverId);
+      // The slice that just finished the walk built a join index; reuse it
+      // rather than load every item on the server a second time.
+      if (result.joinIndex) await recoverHistoryForNewItems(serverId, { joinIndex: result.joinIndex });
+      else await recoverHistoryForNewItems(serverId);
     } catch (error) {
       logger.warn(
         "Jobs",
@@ -371,6 +417,13 @@ const archiveLogsTask: Task = async () => {
 
 const cleanupActionsTask: Task = async () => {
   await cleanupOldActions();
+  // Housekeeping of its own: a failure here must not fail (and retry) the
+  // action cleanup above, which already ran.
+  try {
+    await pruneSyncJobs();
+  } catch (error) {
+    logger.warn("Jobs", "Sync job cleanup failed", { error: String(error) });
+  }
 };
 
 const pruneImageCacheTask: Task = async () => {

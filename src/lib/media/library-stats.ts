@@ -216,22 +216,28 @@ export async function computeLibraryStats(serverIds: string[], dedupEnabled: boo
     .map((s) => s.parentTitle)
     .filter((t): t is string => t != null);
 
+  // The most-played episode/track of each, by `DISTINCT ON` in SQL. Prisma's
+  // `distinct` is applied in Node: it read every episode of the ten shows
+  // (every track of the ten artists) to keep one each. `id` breaks a tie in
+  // play count, which the unordered pick left to the heap order.
   const [seriesReps, musicDetails] = await Promise.all([
     topSeriesKeys.length > 0
-      ? prisma.mediaItem.findMany({
-          where: { ...serverFilter, type: "SERIES", seriesKey: { in: topSeriesKeys } },
-          select: { id: true, seriesKey: true, parentTitle: true, parentThumbUrl: true, playCount: true },
-          orderBy: { playCount: "desc" },
-          distinct: ["seriesKey"],
-        })
+      ? prisma.$queryRaw<{ id: string; seriesKey: string | null; parentTitle: string | null; parentThumbUrl: string | null }[]>`
+          SELECT DISTINCT ON (mi."seriesKey") mi.id, mi."seriesKey", mi."parentTitle", mi."parentThumbUrl"
+          FROM "MediaItem" mi
+          JOIN "Library" l ON mi."libraryId" = l.id
+          WHERE ${inServers} AND mi.type = 'SERIES'::"LibraryType"
+            AND mi."seriesKey" = ANY(${topSeriesKeys}::text[])
+          ORDER BY mi."seriesKey", mi."playCount" DESC, mi.id`
       : [],
     topMusicArtists.length > 0
-      ? prisma.mediaItem.findMany({
-          where: { ...serverFilter, type: "MUSIC", parentTitle: { in: topMusicArtists } },
-          select: { id: true, parentTitle: true, parentThumbUrl: true, playCount: true },
-          orderBy: { playCount: "desc" },
-          distinct: ["parentTitle"],
-        })
+      ? prisma.$queryRaw<{ id: string; parentTitle: string; parentThumbUrl: string | null }[]>`
+          SELECT DISTINCT ON (mi."parentTitle") mi.id, mi."parentTitle", mi."parentThumbUrl"
+          FROM "MediaItem" mi
+          JOIN "Library" l ON mi."libraryId" = l.id
+          WHERE ${inServers} AND mi.type = 'MUSIC'::"LibraryType"
+            AND mi."parentTitle" = ANY(${topMusicArtists}::text[])
+          ORDER BY mi."parentTitle", mi."playCount" DESC, mi.id`
       : [],
   ]);
 

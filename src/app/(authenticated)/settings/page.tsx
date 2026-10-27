@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo, useRef, useSyncExternalStore } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { toast } from "sonner";
 import { usePlexOAuth } from "@/hooks/use-plex-oauth";
 import { fetchWithReauth } from "@/lib/auth/reauth-client";
@@ -10,6 +10,12 @@ import { SETTINGS_BUNDLE_PATHS } from "@/lib/settings/settings-bundle-paths";
 import { responseErrorMessage } from "@/lib/api/error-message";
 import { PlexLoginPrompt } from "@/components/plex-login-prompt";
 import { useRealtime } from "@/hooks/use-realtime";
+import { useFallbackPoll } from "@/hooks/use-fallback-poll";
+import { useCronScheduleSetting } from "@/hooks/use-cron-schedule-setting";
+import { useSetState } from "@/hooks/use-set-state";
+import { fetchSyncStatus } from "@/lib/sync/sync-status-client";
+import { mergeSyncProgress } from "./sync-progress";
+import { createPreloadedReads, type PreloadedReads } from "./preloaded-reads";
 import {
   DEFAULT_CHIP_COLORS,
   mergeChipColors,
@@ -28,29 +34,23 @@ import {
   Sparkles,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { MASKED_VALUE } from "@/lib/api/sanitize";
 import { SettingsPanelSkeleton, SettingsSkeleton } from "@/components/skeletons";
 import { isSyncRequestSettled, type PendingSyncRequest } from "@/lib/sync/sync-request";
-import { readUrlHash, replaceUrlHash, subscribeToUrlHash } from "@/lib/url-hash";
+import { readUrlHash } from "@/lib/url-hash";
+import { tabFromHash, useHashTab } from "@/hooks/use-hash-tab";
+import { useHydrated } from "@/hooks/use-hydrated";
 
 // ─── Tab components ───
-import { GeneralTab } from "./tabs/general-tab";
-import { SchedulingTab } from "./tabs/scheduling-tab";
-import { ServersTab } from "./tabs/servers-tab";
+// Each tab's code loads on demand (`lazySettingsTab`), with its data: the
+// page's own script carries none of them. Types only, from the tab modules.
+import { lazySettingsTab } from "./lazy-tab";
 import type { AddServerDialogState, AddServerFormState, PurgeDialogState, SyncPromptState, RemoveServerDialogState, ServerTestResult, WatchHistorySourceDialogState } from "./tabs/servers-tab";
-import { IntegrationsTab } from "./tabs/integrations-tab";
-import { NotificationsTab } from "./tabs/notifications-tab";
-import { AuthenticationTab } from "./tabs/authentication-tab";
 import type { CredentialsForm, PromptForm } from "./tabs/authentication-tab";
-import { SystemTab } from "./tabs/system-tab";
-import { AiTab } from "./tabs/ai-tab";
 import type { AiProvider } from "./tabs/ai-tab";
 
 // ─── Shared types ───
 import type {
   MediaServer,
-  ArrInstance,
-  SeerrInstance,
   TracearrInstance,
   TracearrImportStatus,
   TracearrServerListState,
@@ -66,7 +66,17 @@ import type {
   ReleaseNote,
 } from "./types";
 import { PRESET_VALUES } from "./types";
+import { INTEGRATION_TYPES, type IntegrationInstance, type IntegrationType } from "./integration-instances";
 import { newPasswordProblem } from "@/lib/auth/password-rules";
+
+type IntegrationInstanceLists = Record<IntegrationType, IntegrationInstance[]>;
+const NO_INTEGRATION_INSTANCES: IntegrationInstanceLists = {
+  sonarr: [],
+  radarr: [],
+  lidarr: [],
+  seerr: [],
+  tracearr: [],
+};
 
 /** Stable empty reference — see `visibleTracearrImportStatus`. */
 const NO_TRACEARR_IMPORT_STATUS: TracearrImportStatus[] = [];
@@ -86,7 +96,27 @@ const SETTINGS_TABS: { value: SettingsTab; label: string; icon: typeof SettingsI
   { value: "system", label: "System", icon: Monitor },
 ];
 
-const VALID_SETTINGS_TABS = new Set<string>(SETTINGS_TABS.map((t) => t.value));
+const VALID_SETTINGS_TABS: readonly SettingsTab[] = SETTINGS_TABS.map((t) => t.value);
+
+const TAB_CODE = {
+  general: lazySettingsTab(() => import("./tabs/general-tab").then((m) => m.GeneralTab)),
+  scheduling: lazySettingsTab(() => import("./tabs/scheduling-tab").then((m) => m.SchedulingTab)),
+  servers: lazySettingsTab(() => import("./tabs/servers-tab").then((m) => m.ServersTab)),
+  integrations: lazySettingsTab(() => import("./tabs/integrations-tab").then((m) => m.IntegrationsTab)),
+  notifications: lazySettingsTab(() => import("./tabs/notifications-tab").then((m) => m.NotificationsTab)),
+  authentication: lazySettingsTab(() => import("./tabs/authentication-tab").then((m) => m.AuthenticationTab)),
+  ai: lazySettingsTab(() => import("./tabs/ai-tab").then((m) => m.AiTab)),
+  system: lazySettingsTab(() => import("./tabs/system-tab").then((m) => m.SystemTab)),
+} satisfies Record<SettingsTab, { load: () => Promise<unknown> }>;
+
+const GeneralTab = TAB_CODE.general.View;
+const SchedulingTab = TAB_CODE.scheduling.View;
+const ServersTab = TAB_CODE.servers.View;
+const IntegrationsTab = TAB_CODE.integrations.View;
+const NotificationsTab = TAB_CODE.notifications.View;
+const AuthenticationTab = TAB_CODE.authentication.View;
+const AiTab = TAB_CODE.ai.View;
+const SystemTab = TAB_CODE.system.View;
 
 /**
  * How often the Tracearr import status is re-read while a backfill is still
@@ -105,17 +135,6 @@ const REALTIME_STATUS_POLL_MS = 60_000;
 const integrationSaveError = responseErrorMessage;
 
 
-/** `useSyncExternalStore` subscriber for a value that never changes. */
-const subscribeNothing = () => () => {};
-
-/** The tab a URL hash names, or null for no hash or one that names none. */
-function tabFromHash(hash: string): SettingsTab | null {
-  const tab = hash.slice(1);
-  return VALID_SETTINGS_TABS.has(tab) ? (tab as SettingsTab) : null;
-}
-
-/** Server snapshot for the URL hash: the server never sees it. */
-const noUrlHash = () => "";
 
 // ─── Tab navigation helpers ───
 
@@ -179,20 +198,40 @@ function bundleOf(ref: { current: RequestBundle | null }): RequestBundle {
   return (ref.current ??= createRequestBundle("/api/settings/bundle", SETTINGS_BUNDLE_PATHS));
 }
 
+/**
+ * The opening reads of the Authentication tab's SSO and API key sections,
+ * which fetch their own data when they mount: started with the tab's other
+ * loaders (so the tab waits for them, and the bundle answers them), then
+ * handed to the sections (`preloaded-reads.ts`).
+ */
+const AUTH_SECTION_PATHS = ["/api/settings/sso", "/api/settings/sso/me", "/api/settings/api-keys"] as const;
+
 export default function SettingsPage() {
   const bundleRef = useRef<RequestBundle | null>(null);
+  const authSectionReadsRef = useRef<PreloadedReads | null>(null);
+  const authSectionReads = useCallback(
+    () => (authSectionReadsRef.current ??= createPreloadedReads((path) => bundleOf(bundleRef).get(path))),
+    [],
+  );
+  const preloadAuthSections = useCallback(
+    () => Promise.all(AUTH_SECTION_PATHS.map((path) => authSectionReads().preload(path))),
+    [authSectionReads],
+  );
+  const readAuthSectionData = useCallback((path: string) => authSectionReads().get(path), [authSectionReads]);
   // The open tab IS the URL hash — see `src/lib/url-hash.ts` for why it is
   // read through a store rather than once on mount.
-  const urlHash = useSyncExternalStore(subscribeToUrlHash, readUrlHash, noUrlHash);
-  const activeTab: SettingsTab = tabFromHash(urlHash) ?? "general";
-  const setActiveTab = useCallback((tab: SettingsTab) => replaceUrlHash(`#${tab}`), []);
+  const [activeTab, setActiveTab] = useHashTab(VALID_SETTINGS_TABS, "general");
   // False only while server-rendering and hydrating. The open tab comes from
   // the URL hash, which the server cannot see, so until then the page renders
   // the skeleton the server did; a client-side navigation skips straight past.
-  const hydrated = useSyncExternalStore(subscribeNothing, () => true, () => false);
+  const hydrated = useHydrated();
   const [servers, setServers] = useState<MediaServer[]>([]);
+  // Whether the Integrations tab has been open (see its TabsContent). Set
+  // during render, the way React derives state from a changed value.
+  const [integrationsOpened, setIntegrationsOpened] = useState(false);
+  if (activeTab === "integrations" && !integrationsOpened) setIntegrationsOpened(true);
   // Tabs whose data has loaded — each tab renders once its own requests are in.
-  const [loadedTabs, setLoadedTabs] = useState<ReadonlySet<SettingsTab>>(() => new Set());
+  const [loadedTabs, { add: markTabLoaded }] = useSetState<SettingsTab>();
   // The manual sync this page last requested, until its own run ends — see
   // `isSyncRequestSettled` for how that run is told apart from the previous one.
   const [syncRequest, setSyncRequest] = useState<PendingSyncRequest | null>(null);
@@ -292,48 +331,15 @@ export default function SettingsPage() {
   const [scheduledJobTime, setScheduledJobTime] = useState("00:00");
   const [savingJobTime, setSavingJobTime] = useState(false);
 
-  // Sync schedule
-  const [syncSchedule, setSyncSchedule] = useState("DAILY");
+  // When each schedule last ran (the schedules themselves: useCronScheduleSetting below)
   const [lastScheduledSync, setLastScheduledSync] = useState<string | null>(null);
-  const [savingSchedule, setSavingSchedule] = useState(false);
-  const [isCustomSchedule, setIsCustomSchedule] = useState(false);
-  const [customCron, setCustomCron] = useState("");
-  const [cronError, setCronError] = useState("");
+  const [lastLcDetect, setLastLcDetect] = useState<string | null>(null);
+  const [lastLcExec, setLastLcExec] = useState<string | null>(null);
+  const [runningJob, setRunningJob] = useState<"sync" | "detection" | "execution" | null>(null);
 
-  // Sonarr instances
-  const [sonarrInstances, setSonarrInstances] = useState<ArrInstance[]>([]);
-  const [showSonarrForm, setShowSonarrForm] = useState(false);
-  const [sonarrForm, setSonarrForm] = useState({ name: "", url: "", apiKey: "", externalUrl: "" });
-  const [sonarrSaving, setSonarrSaving] = useState(false);
-  const [sonarrError, setSonarrError] = useState("");
-
-  // Radarr instances
-  const [radarrInstances, setRadarrInstances] = useState<ArrInstance[]>([]);
-  const [showRadarrForm, setShowRadarrForm] = useState(false);
-  const [radarrForm, setRadarrForm] = useState({ name: "", url: "", apiKey: "", externalUrl: "" });
-  const [radarrSaving, setRadarrSaving] = useState(false);
-  const [radarrError, setRadarrError] = useState("");
-
-  // Lidarr instances
-  const [lidarrInstances, setLidarrInstances] = useState<ArrInstance[]>([]);
-  const [showLidarrForm, setShowLidarrForm] = useState(false);
-  const [lidarrForm, setLidarrForm] = useState({ name: "", url: "", apiKey: "", externalUrl: "" });
-  const [lidarrSaving, setLidarrSaving] = useState(false);
-  const [lidarrError, setLidarrError] = useState("");
-
-  // Seerr instances
-  const [seerrInstances, setSeerrInstances] = useState<SeerrInstance[]>([]);
-  const [showSeerrForm, setShowSeerrForm] = useState(false);
-  const [seerrForm, setSeerrForm] = useState({ name: "", url: "", apiKey: "", externalUrl: "" });
-  const [seerrSaving, setSeerrSaving] = useState(false);
-  const [seerrError, setSeerrError] = useState("");
-
-  // Tracearr instances
-  const [tracearrInstances, setTracearrInstances] = useState<TracearrInstance[]>([]);
-  const [showTracearrForm, setShowTracearrForm] = useState(false);
-  const [tracearrForm, setTracearrForm] = useState({ name: "", url: "", apiKey: "" });
-  const [tracearrSaving, setTracearrSaving] = useState(false);
-  const [tracearrError, setTracearrError] = useState("");
+  // Each integration type's instances (the forms live in the Integrations tab)
+  const [integrationInstances, setIntegrationInstances] = useState<IntegrationInstanceLists>(NO_INTEGRATION_INSTANCES);
+  const tracearrInstances: TracearrInstance[] = integrationInstances.tracearr;
 
   // System info
   const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null);
@@ -373,22 +379,6 @@ export default function SettingsPage() {
   const [chipColors, setChipColors] = useState<ChipColorMap>(DEFAULT_CHIP_COLORS);
   const { updateColors: updateChipColorContext } = useChipColors();
 
-  // Lifecycle detection schedule
-  const [lcDetectSchedule, setLcDetectSchedule] = useState("EVERY_6H");
-  const [lastLcDetect, setLastLcDetect] = useState<string | null>(null);
-  const [savingLcDetect, setSavingLcDetect] = useState(false);
-  const [isCustomLcDetect, setIsCustomLcDetect] = useState(false);
-  const [customLcDetectCron, setCustomLcDetectCron] = useState("");
-  const [lcDetectCronError, setLcDetectCronError] = useState("");
-
-  // Lifecycle execution schedule
-  const [lcExecSchedule, setLcExecSchedule] = useState("EVERY_6H");
-  const [lastLcExec, setLastLcExec] = useState<string | null>(null);
-  const [savingLcExec, setSavingLcExec] = useState(false);
-  const [isCustomLcExec, setIsCustomLcExec] = useState(false);
-  const [customLcExecCron, setCustomLcExecCron] = useState("");
-  const [lcExecCronError, setLcExecCronError] = useState("");
-  const [runningJob, setRunningJob] = useState<"sync" | "detection" | "execution" | null>(null);
 
   // Log retention
   const [logRetentionDays, setLogRetentionDays] = useState(7);
@@ -416,16 +406,6 @@ export default function SettingsPage() {
   const [savingRealtime, setSavingRealtime] = useState(false);
   const [realtimeServers, setRealtimeServers] = useState<RealtimeServerStatus[]>([]);
 
-  // Connection test state (add form)
-  const [sonarrTesting, setSonarrTesting] = useState(false);
-  const [sonarrTestResult, setSonarrTestResult] = useState<TestResult | null>(null);
-  const [radarrTesting, setRadarrTesting] = useState(false);
-  const [radarrTestResult, setRadarrTestResult] = useState<TestResult | null>(null);
-  const [lidarrTesting, setLidarrTesting] = useState(false);
-  const [lidarrTestResult, setLidarrTestResult] = useState<TestResult | null>(null);
-  const [seerrTesting, setSeerrTesting] = useState(false);
-  const [seerrTestResult, setSeerrTestResult] = useState<TestResult | null>(null);
-
   // Schedule info (next run times)
   const [scheduleInfo, setScheduleInfo] = useState<ScheduleInfo | null>(null);
 
@@ -448,62 +428,17 @@ export default function SettingsPage() {
   const [aiTesting, setAiTesting] = useState(false);
   const [aiTestResult, setAiTestResult] = useState<TestResult | null>(null);
 
-  // Sonarr edit state
-  const [editingSonarrId, setEditingSonarrId] = useState<string | null>(null);
-  const [editSonarrForm, setEditSonarrForm] = useState({ name: "", url: "", apiKey: "", externalUrl: "" });
-  const [editSonarrSaving, setEditSonarrSaving] = useState(false);
-  const [editSonarrError, setEditSonarrError] = useState("");
-  const [editSonarrTesting, setEditSonarrTesting] = useState(false);
-  const [editSonarrTestResult, setEditSonarrTestResult] = useState<TestResult | null>(null);
-
-  // Radarr edit state
-  const [editingRadarrId, setEditingRadarrId] = useState<string | null>(null);
-  const [editRadarrForm, setEditRadarrForm] = useState({ name: "", url: "", apiKey: "", externalUrl: "" });
-  const [editRadarrSaving, setEditRadarrSaving] = useState(false);
-  const [editRadarrError, setEditRadarrError] = useState("");
-  const [editRadarrTesting, setEditRadarrTesting] = useState(false);
-  const [editRadarrTestResult, setEditRadarrTestResult] = useState<TestResult | null>(null);
-
-  // Lidarr edit state
-  const [editingLidarrId, setEditingLidarrId] = useState<string | null>(null);
-  const [editLidarrForm, setEditLidarrForm] = useState({ name: "", url: "", apiKey: "", externalUrl: "" });
-  const [editLidarrSaving, setEditLidarrSaving] = useState(false);
-  const [editLidarrError, setEditLidarrError] = useState("");
-  const [editLidarrTesting, setEditLidarrTesting] = useState(false);
-  const [editLidarrTestResult, setEditLidarrTestResult] = useState<TestResult | null>(null);
-
-  // Seerr edit state
-  const [editingSeerrId, setEditingSeerrId] = useState<string | null>(null);
-  const [editSeerrForm, setEditSeerrForm] = useState({ name: "", url: "", apiKey: "", externalUrl: "" });
-  const [editSeerrSaving, setEditSeerrSaving] = useState(false);
-  const [editSeerrError, setEditSeerrError] = useState("");
-  const [editSeerrTesting, setEditSeerrTesting] = useState(false);
-  const [editSeerrTestResult, setEditSeerrTestResult] = useState<TestResult | null>(null);
-
-  // Tracearr edit state
-  const [editingTracearrId, setEditingTracearrId] = useState<string | null>(null);
-  const [editTracearrForm, setEditTracearrForm] = useState({ name: "", url: "", apiKey: "" });
-  const [editTracearrSaving, setEditTracearrSaving] = useState(false);
-  const [editTracearrError, setEditTracearrError] = useState("");
-  const [editTracearrTesting, setEditTracearrTesting] = useState(false);
-  const [editTracearrTestResult, setEditTracearrTestResult] = useState<TestResult | null>(null);
-
-  // A URL naming no tab (/settings alone, or an unknown hash) is pointed at
-  // the General tab it shows. Read live, not from this render's `activeTab`:
-  // on a client-side navigation this runs before the store has re-read the
-  // hash the router just wrote, and normalising from the render's value
-  // overwrote #authentication with #general.
-  useEffect(() => {
-    if (!tabFromHash(readUrlHash())) replaceUrlHash("#general");
-  }, [urlHash]);
-
   // ─── Fetchers ───
 
+  // Bumped each time a server list is applied: a progress read that was asked
+  // for before it may be older than that list (see `fetchSyncProgress`).
+  const serversRead = useRef(0);
   const fetchServers = useCallback(async (): Promise<MediaServer[]> => {
     try {
       const response = await bundleOf(bundleRef).get("/api/servers");
       const data = await response.json();
       const fresh: MediaServer[] = data.servers || [];
+      serversRead.current += 1;
       setServers(fresh);
       // Drop a request whose run has ended. Deriving that during render is not
       // enough on its own: a request left stored after its run finished would
@@ -517,26 +452,68 @@ export default function SettingsPage() {
     }
   }, []);
 
+  const fetchScheduleInfo = useCallback(async () => {
+    try {
+      const response = await bundleOf(bundleRef).get("/api/settings/schedule-info");
+      const data = await response.json();
+      setScheduleInfo(data);
+      if (data.scheduledJobTime) {
+        setScheduledJobTime(data.scheduledJobTime);
+      }
+      // Keep the cards' "Last run" values in sync. These states are otherwise
+      // only populated by fetchSettings/fetchLifecycleSchedule, so without
+      // this a "Run Now" (which refreshes schedule-info) wouldn't update them.
+      if (data.sync) setLastScheduledSync(data.sync.lastRun ?? null);
+      if (data.detection) setLastLcDetect(data.detection.lastRun ?? null);
+      if (data.execution) setLastLcExec(data.execution.lastRun ?? null);
+    } catch (error) {
+      console.error("Failed to fetch schedule info:", error);
+    }
+  }, []);
+
+
+  // The three schedules: a preset picker or a custom cron expression each,
+  // saved to its route, after which the next-run times are re-read.
+  const syncSchedule = useCronScheduleSetting({
+    endpoint: "/api/settings/sync-schedule",
+    bodyKey: "syncSchedule",
+    successMsg: "Sync schedule saved",
+    refresh: fetchScheduleInfo,
+    presets: PRESET_VALUES,
+    initial: "DAILY",
+  });
+  const detectionSchedule = useCronScheduleSetting({
+    endpoint: "/api/settings/lifecycle-schedule",
+    bodyKey: "lifecycleDetectionSchedule",
+    successMsg: "Detection schedule saved",
+    refresh: fetchScheduleInfo,
+    presets: PRESET_VALUES,
+    initial: "EVERY_6H",
+  });
+  const executionSchedule = useCronScheduleSetting({
+    endpoint: "/api/settings/lifecycle-schedule",
+    bodyKey: "lifecycleExecutionSchedule",
+    successMsg: "Execution schedule saved",
+    refresh: fetchScheduleInfo,
+    presets: PRESET_VALUES,
+    initial: "EVERY_6H",
+  });
+  const { load: loadSyncSchedule } = syncSchedule;
+  const { load: loadDetectionSchedule } = detectionSchedule;
+  const { load: loadExecutionSchedule } = executionSchedule;
+
   const fetchSettings = useCallback(async () => {
     try {
       const response = await bundleOf(bundleRef).get("/api/settings/sync-schedule");
       const data = await response.json();
       if (data.settings) {
-        const schedule = data.settings.syncSchedule;
-        if (PRESET_VALUES.includes(schedule)) {
-          setSyncSchedule(schedule);
-          setIsCustomSchedule(false);
-        } else {
-          setSyncSchedule("CUSTOM");
-          setIsCustomSchedule(true);
-          setCustomCron(schedule);
-        }
+        loadSyncSchedule(data.settings.syncSchedule);
         setLastScheduledSync(data.settings.lastScheduledSync);
       }
     } catch (error) {
       console.error("Failed to fetch settings:", error);
     }
-  }, []);
+  }, [loadSyncSchedule]);
 
   const fetchDedupSetting = useCallback(async () => {
     try {
@@ -574,55 +551,25 @@ export default function SettingsPage() {
     }
   }, []);
 
-  const fetchSonarrInstances = useCallback(async () => {
+  const fetchIntegrationInstances = useCallback(async (type: IntegrationType) => {
     try {
-      const response = await bundleOf(bundleRef).get("/api/integrations/sonarr");
+      const response = await bundleOf(bundleRef).get(`/api/integrations/${type}`);
       const data = await response.json();
-      setSonarrInstances(data.instances || []);
+      const instances: IntegrationInstance[] = data.instances || [];
+      setIntegrationInstances((current) => ({ ...current, [type]: instances }));
     } catch (error) {
-      console.error("Failed to fetch Sonarr instances:", error);
+      console.error(`Failed to fetch ${type} instances:`, error);
     }
   }, []);
-
-  const fetchRadarrInstances = useCallback(async () => {
-    try {
-      const response = await bundleOf(bundleRef).get("/api/integrations/radarr");
-      const data = await response.json();
-      setRadarrInstances(data.instances || []);
-    } catch (error) {
-      console.error("Failed to fetch Radarr instances:", error);
-    }
-  }, []);
-
-  const fetchLidarrInstances = useCallback(async () => {
-    try {
-      const response = await bundleOf(bundleRef).get("/api/integrations/lidarr");
-      const data = await response.json();
-      setLidarrInstances(data.instances || []);
-    } catch (error) {
-      console.error("Failed to fetch Lidarr instances:", error);
-    }
-  }, []);
-
-  const fetchSeerrInstances = useCallback(async () => {
-    try {
-      const response = await bundleOf(bundleRef).get("/api/integrations/seerr");
-      const data = await response.json();
-      setSeerrInstances(data.instances || []);
-    } catch (error) {
-      console.error("Failed to fetch Seerr instances:", error);
-    }
-  }, []);
-
-  const fetchTracearrInstances = useCallback(async () => {
-    try {
-      const response = await bundleOf(bundleRef).get("/api/integrations/tracearr");
-      const data = await response.json();
-      setTracearrInstances(data.instances || []);
-    } catch (error) {
-      console.error("Failed to fetch Tracearr instances:", error);
-    }
-  }, []);
+  // One fetcher per type, kept stable: `startOnce` runs each once by identity.
+  const integrationFetchers = useMemo(
+    () =>
+      Object.fromEntries(INTEGRATION_TYPES.map((type) => [type, () => fetchIntegrationInstances(type)])) as Record<
+        IntegrationType,
+        () => Promise<void>
+      >,
+    [fetchIntegrationInstances],
+  );
 
   /**
    * The media servers one Tracearr instance monitors, for the per-server
@@ -857,53 +804,25 @@ export default function SettingsPage() {
   const fetchLifecycleSchedule = useCallback(async () => {
     try {
       const response = await bundleOf(bundleRef).get("/api/settings/lifecycle-schedule");
-      const data = await response.json();
-      if (data.settings) {
-        const detect = data.settings.lifecycleDetectionSchedule;
-        if (PRESET_VALUES.includes(detect)) {
-          setLcDetectSchedule(detect);
-          setIsCustomLcDetect(false);
-        } else {
-          setLcDetectSchedule("CUSTOM");
-          setIsCustomLcDetect(true);
-          setCustomLcDetectCron(detect);
-        }
-        setLastLcDetect(data.settings.lastScheduledLifecycleDetection);
-
-        const exec = data.settings.lifecycleExecutionSchedule;
-        if (PRESET_VALUES.includes(exec)) {
-          setLcExecSchedule(exec);
-          setIsCustomLcExec(false);
-        } else {
-          setLcExecSchedule("CUSTOM");
-          setIsCustomLcExec(true);
-          setCustomLcExecCron(exec);
-        }
-        setLastLcExec(data.settings.lastScheduledLifecycleExecution);
+      // The route answers the fields at the top level, not under `settings` as
+      // the sync schedule's does: read under `settings`, a stored schedule was
+      // never shown, and both pickers read "Every 6 hours" whatever was saved.
+      const data = (await response.json()) as {
+        lifecycleDetectionSchedule?: string;
+        lastScheduledLifecycleDetection?: string | null;
+        lifecycleExecutionSchedule?: string;
+        lastScheduledLifecycleExecution?: string | null;
+      };
+      if (response.ok && data.lifecycleDetectionSchedule && data.lifecycleExecutionSchedule) {
+        loadDetectionSchedule(data.lifecycleDetectionSchedule);
+        setLastLcDetect(data.lastScheduledLifecycleDetection ?? null);
+        loadExecutionSchedule(data.lifecycleExecutionSchedule);
+        setLastLcExec(data.lastScheduledLifecycleExecution ?? null);
       }
     } catch (error) {
       console.error("Failed to fetch lifecycle schedule:", error);
     }
-  }, []);
-
-  const fetchScheduleInfo = useCallback(async () => {
-    try {
-      const response = await bundleOf(bundleRef).get("/api/settings/schedule-info");
-      const data = await response.json();
-      setScheduleInfo(data);
-      if (data.scheduledJobTime) {
-        setScheduledJobTime(data.scheduledJobTime);
-      }
-      // Keep the cards' "Last run" values in sync. These states are otherwise
-      // only populated by fetchSyncSchedule/fetchLifecycleSchedule, so without
-      // this a "Run Now" (which refreshes schedule-info) wouldn't update them.
-      if (data.sync) setLastScheduledSync(data.sync.lastRun ?? null);
-      if (data.detection) setLastLcDetect(data.detection.lastRun ?? null);
-      if (data.execution) setLastLcExec(data.execution.lastRun ?? null);
-    } catch (error) {
-      console.error("Failed to fetch schedule info:", error);
-    }
-  }, []);
+  }, [loadDetectionSchedule, loadExecutionSchedule]);
 
   const fetchDiscordSettings = useCallback(async () => {
     try {
@@ -964,9 +883,11 @@ export default function SettingsPage() {
   // tabs load behind them, so switching tabs afterwards is still instant —
   // except System, whose figures (release notes from GitHub, a scan of the
   // image cache, whole-table counts) are requested only once it is opened.
+  // A tab's own code is one of its loaders (`TAB_CODE`), first in its list.
   const tabLoaders = useMemo<Record<SettingsTab, Array<() => Promise<unknown>>>>(
     () => ({
       general: [
+        TAB_CODE.general.load,
         fetchAccentColor,
         fetchChipColors,
         fetchDedupSetting,
@@ -979,21 +900,15 @@ export default function SettingsPage() {
         fetchServers,
         fetchTitlePreference,
       ],
-      scheduling: [fetchSettings, fetchLifecycleSchedule, fetchScheduleInfo],
-      servers: [fetchServers, fetchTracearrInstances, fetchAuthInfo],
-      integrations: [
-        fetchSonarrInstances,
-        fetchRadarrInstances,
-        fetchLidarrInstances,
-        fetchSeerrInstances,
-        fetchTracearrInstances,
-      ],
-      notifications: [fetchDiscordSettings],
-      authentication: [fetchAuthInfo],
-      ai: [fetchAiSettings],
-      system: [fetchSystemInfo, fetchImageCacheStats],
+      scheduling: [TAB_CODE.scheduling.load, fetchSettings, fetchLifecycleSchedule, fetchScheduleInfo],
+      servers: [TAB_CODE.servers.load, fetchServers, integrationFetchers.tracearr, fetchAuthInfo],
+      integrations: [TAB_CODE.integrations.load, ...INTEGRATION_TYPES.map((type) => integrationFetchers[type])],
+      notifications: [TAB_CODE.notifications.load, fetchDiscordSettings],
+      authentication: [TAB_CODE.authentication.load, fetchAuthInfo, preloadAuthSections],
+      ai: [TAB_CODE.ai.load, fetchAiSettings],
+      system: [TAB_CODE.system.load, fetchSystemInfo, fetchImageCacheStats],
     }),
-    [fetchServers, fetchSettings, fetchSonarrInstances, fetchRadarrInstances, fetchLidarrInstances, fetchSeerrInstances, fetchTracearrInstances, fetchSystemInfo, fetchAccentColor, fetchChipColors, fetchLogRetention, fetchActionRetention, fetchDeleteCeiling, fetchBackupSettings, fetchLifecycleSchedule, fetchScheduleInfo, fetchDiscordSettings, fetchAiSettings, fetchDedupSetting, fetchRealtimeSetting, fetchRealtimeStatus, fetchImageCacheStats, fetchAuthInfo, fetchTitlePreference],
+    [fetchServers, fetchSettings, integrationFetchers, fetchSystemInfo, fetchAccentColor, fetchChipColors, fetchLogRetention, fetchActionRetention, fetchDeleteCeiling, fetchBackupSettings, fetchLifecycleSchedule, fetchScheduleInfo, fetchDiscordSettings, fetchAiSettings, fetchDedupSetting, fetchRealtimeSetting, fetchRealtimeStatus, fetchImageCacheStats, fetchAuthInfo, fetchTitlePreference, preloadAuthSections],
   );
 
   // A fetcher two tabs share, or a tab opened twice, runs once.
@@ -1010,9 +925,9 @@ export default function SettingsPage() {
   const loadTab = useCallback(
     async (tab: SettingsTab) => {
       await Promise.allSettled(tabLoaders[tab].map(startOnce));
-      setLoadedTabs((prev) => (prev.has(tab) ? prev : new Set(prev).add(tab)));
+      markTabLoaded(tab);
     },
-    [tabLoaders, startOnce],
+    [tabLoaders, startOnce, markTabLoaded],
   );
 
   // Declared before the effect below so that, with the page opened at #system,
@@ -1027,7 +942,7 @@ export default function SettingsPage() {
   }, [activeTab, loadTab, startOnce, fetchChangelog]);
 
   useEffect(() => {
-    const openTab = tabFromHash(readUrlHash()) ?? "general";
+    const openTab = tabFromHash(readUrlHash(), VALID_SETTINGS_TABS) ?? "general";
     const eager = [openTab, ...SETTINGS_TABS.map((t) => t.value).filter((tab) => tab !== openTab)].filter(
       (tab) => tab !== "system",
     );
@@ -1086,10 +1001,26 @@ export default function SettingsPage() {
   const hasActiveSync = servers.some(
     (s) => s.syncJobs[0]?.status === "RUNNING" || s.syncJobs[0]?.status === "PENDING"
   );
-  // Pushed. `/api/servers` COUNTs MediaItem per library on every call, so the
-  // old 2s tick ran that aggregate ~30 times a minute for the whole of a sync.
+  // A running sync's progress, from the sync status rather than the server
+  // list: `/api/servers` COUNTs MediaItem per library on every call, and a sync
+  // announces progress every two seconds per server. Only the newest read is
+  // applied, and only when no server list landed after it was asked for — that
+  // list may already say the sync finished, which an older RUNNING row must
+  // never undo.
+  const progressRead = useRef(0);
+  const fetchSyncProgress = useCallback(async () => {
+    const seq = ++progressRead.current;
+    const listsBefore = serversRead.current;
+    const data = await fetchSyncStatus();
+    if (!data?.jobs || seq !== progressRead.current || listsBefore !== serversRead.current) return;
+    const jobs = data.jobs;
+    setServers((current) => mergeSyncProgress(current, jobs));
+  }, []);
+
+  // Pushed. A sync starting, ending or a server changing re-reads the list;
+  // progress in between only moves the running row (above).
   useRealtime("sync:started", fetchServers);
-  useRealtime("sync:progress", fetchServers);
+  useRealtime("sync:progress", fetchSyncProgress);
   useRealtime("sync:completed", fetchServers);
   useRealtime("sync:failed", fetchServers);
   useRealtime("server:changed", fetchServers);
@@ -1114,16 +1045,15 @@ export default function SettingsPage() {
     [servers, syncRequest],
   );
 
-  // Fallback only, for a dropped stream. Armed by a pending request as well as
-  // by a job row: between pressing Sync and the first refetch that sees the
-  // new row, `hasActiveSync` is still false, so with the stream down nothing
-  // refetched at all and the button spun to its 5-minute timeout.
+  // Fallback only, for a dropped stream: it runs while pushes are not arriving
+  // (`useFallbackPoll`), since with the stream up `sync:started`/`completed`/
+  // `failed` re-read the list and a reconnect's resync covers a gap. Armed by
+  // a pending request as well as by a job row: between pressing Sync and the
+  // first refetch that sees the new row, `hasActiveSync` is still false, so
+  // with the stream down nothing refetched at all and the button spun to its
+  // 5-minute timeout.
   const pollServers = hasActiveSync || activeSyncingServer !== null;
-  useEffect(() => {
-    if (!pollServers) return;
-    const interval = setInterval(fetchServers, 15000);
-    return () => clearInterval(interval);
-  }, [pollServers, fetchServers]);
+  useFallbackPoll(() => { void fetchServers(); }, 15000, pollServers);
 
   // The import readout is PUSHED, not polled. The importer emits
   // `tracearr:import-progress` after each page commits (throttled there, since
@@ -1153,15 +1083,10 @@ export default function SettingsPage() {
   const tracearrBackfillRunning = visibleTracearrImportStatus.some(
     (s) => !s.backfillComplete || s.activeImport !== null,
   );
+  // Gated on the stream (`useFallbackPoll`): while pushes arrive, the
+  // importer's own events already refetch.
   const pollTracearrImport = hasTracearrInstance && tracearrBackfillRunning;
-  useEffect(() => {
-    if (!pollTracearrImport) return;
-    const interval = setInterval(
-      () => { void fetchTracearrImportStatus(); },
-      TRACEARR_IMPORT_POLL_MS,
-    );
-    return () => clearInterval(interval);
-  }, [pollTracearrImport, fetchTracearrImportStatus]);
+  useFallbackPoll(() => { void fetchTracearrImportStatus(); }, TRACEARR_IMPORT_POLL_MS, pollTracearrImport);
 
   // ─── Server handlers ───
 
@@ -1456,8 +1381,9 @@ export default function SettingsPage() {
    * what the dialog warned about, so the servers refetch afterwards keeps the
    * dropdown honest about what is actually stored.
    */
-  const confirmWatchHistorySource = async () => {
-    if (!watchHistorySourceDialog) return;
+  // Resolves false when the change was refused, which keeps the dialog open.
+  const confirmWatchHistorySource = async (): Promise<boolean> => {
+    if (!watchHistorySourceDialog) return false;
     const { serverId, tracearrServerId, sourceLabel } = watchHistorySourceDialog;
     setSavingWatchHistorySource(serverId);
     try {
@@ -1471,78 +1397,24 @@ export default function SettingsPage() {
         toast.error("Failed to change watch history source", {
           description: data?.detail ?? data?.error,
         });
-        return;
+        return false;
       }
-      setWatchHistorySourceDialog(null);
+      // The dialog stays open (spinning) until the refetch below is in, and
+      // ConfirmDialog closes it on `true`: closed here, another server's
+      // source change could open it again in the meantime, greyed out by
+      // this run, and have it closed under the user when this run answered.
       // The PUT clears the stored history AND resets the backfill flag, so the
       // status line under the dropdown is stale the instant it returns —
       // refetch rather than leave a "fully imported" tick over an empty table.
       await Promise.all([fetchServers(), fetchTracearrImportStatus()]);
       toast.success("Watch history source changed", { description: `Now using ${sourceLabel}.` });
+      return true;
     } catch (error) {
       console.error("Failed to change watch history source:", error);
       toast.error("Failed to change watch history source");
+      return false;
     } finally {
       setSavingWatchHistorySource(null);
-    }
-  };
-
-  const toggleArrEnabled = async (type: string, id: string, enabled: boolean) => {
-    try {
-      const res = await fetch(`/api/integrations/${type}/${id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled }),
-      });
-      if (res.ok) {
-        if (type === "sonarr") await fetchSonarrInstances();
-        else if (type === "radarr") await fetchRadarrInstances();
-        else if (type === "lidarr") await fetchLidarrInstances();
-        toast.success(enabled ? "Integration enabled" : "Integration disabled");
-      } else {
-        toast.error("Failed to update integration");
-      }
-    } catch (error) {
-      console.error("Failed to toggle integration enabled:", error);
-      toast.error("Failed to update integration");
-    }
-  };
-
-  const toggleSeerrEnabled = async (id: string, enabled: boolean) => {
-    try {
-      const res = await fetch(`/api/integrations/seerr/${id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled }),
-      });
-      if (res.ok) {
-        await fetchSeerrInstances();
-        toast.success(enabled ? "Seerr enabled" : "Seerr disabled");
-      } else {
-        toast.error("Failed to update Seerr");
-      }
-    } catch (error) {
-      console.error("Failed to toggle Seerr enabled:", error);
-      toast.error("Failed to update Seerr");
-    }
-  };
-
-  const toggleTracearrEnabled = async (id: string, enabled: boolean) => {
-    try {
-      const res = await fetch(`/api/integrations/tracearr/${id}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled }),
-      });
-      if (res.ok) {
-        await fetchTracearrInstances();
-        toast.success(enabled ? "Tracearr enabled" : "Tracearr disabled");
-      } else {
-        toast.error("Failed to update Tracearr");
-      }
-    } catch (error) {
-      console.error("Failed to toggle Tracearr enabled:", error);
-      toast.error("Failed to update Tracearr");
     }
   };
 
@@ -1640,118 +1512,6 @@ export default function SettingsPage() {
   };
 
   // ─── Schedule handlers ───
-
-  const saveSyncSchedule = async (value: string) => {
-    setCronError("");
-    setSavingSchedule(true);
-    try {
-      const response = await fetch("/api/settings/sync-schedule", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ syncSchedule: value }),
-      });
-      if (!response.ok) {
-        const data = await response.json();
-        setCronError(data.error || "Failed to save schedule");
-        return;
-      }
-      await fetchScheduleInfo();
-      toast.success("Sync schedule saved");
-    } catch (error) {
-      console.error("Failed to save schedule:", error);
-      setCronError("Failed to save schedule");
-    } finally {
-      setSavingSchedule(false);
-    }
-  };
-
-  const saveLcDetectSchedule = async (value: string) => {
-    setLcDetectCronError("");
-    setSavingLcDetect(true);
-    try {
-      const response = await fetch("/api/settings/lifecycle-schedule", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lifecycleDetectionSchedule: value }),
-      });
-      if (!response.ok) {
-        const data = await response.json();
-        setLcDetectCronError(data.error || "Failed to save schedule");
-      } else {
-        toast.success("Detection schedule saved");
-      }
-      await fetchScheduleInfo();
-    } catch {
-      setLcDetectCronError("Failed to save schedule");
-    } finally {
-      setSavingLcDetect(false);
-    }
-  };
-
-  const saveLcExecSchedule = async (value: string) => {
-    setLcExecCronError("");
-    setSavingLcExec(true);
-    try {
-      const response = await fetch("/api/settings/lifecycle-schedule", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lifecycleExecutionSchedule: value }),
-      });
-      if (!response.ok) {
-        const data = await response.json();
-        setLcExecCronError(data.error || "Failed to save schedule");
-      } else {
-        toast.success("Execution schedule saved");
-      }
-      await fetchScheduleInfo();
-    } catch {
-      setLcExecCronError("Failed to save schedule");
-    } finally {
-      setSavingLcExec(false);
-    }
-  };
-
-  const handleScheduleChange = (value: string) => {
-    if (value === "CUSTOM") {
-      setSyncSchedule("CUSTOM");
-      setIsCustomSchedule(true);
-      setCronError("");
-    } else {
-      setSyncSchedule(value);
-      setIsCustomSchedule(false);
-      setCustomCron("");
-      setCronError("");
-      saveSyncSchedule(value);
-    }
-  };
-
-  const handleLcDetectScheduleChange = (value: string) => {
-    if (value === "CUSTOM") {
-      setLcDetectSchedule("CUSTOM");
-      setIsCustomLcDetect(true);
-      setLcDetectCronError("");
-    } else {
-      setLcDetectSchedule(value);
-      setIsCustomLcDetect(false);
-      setCustomLcDetectCron("");
-      setLcDetectCronError("");
-      saveLcDetectSchedule(value);
-    }
-  };
-
-  const handleLcExecScheduleChange = (value: string) => {
-    if (value === "CUSTOM") {
-      setLcExecSchedule("CUSTOM");
-      setIsCustomLcExec(true);
-      setLcExecCronError("");
-    } else {
-      setLcExecSchedule(value);
-      setIsCustomLcExec(false);
-      setCustomLcExecCron("");
-      setLcExecCronError("");
-      saveLcExecSchedule(value);
-    }
-  };
 
   const handleScheduledJobTimeChange = async (value: string) => {
     if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(value)) {
@@ -2165,509 +1925,6 @@ export default function SettingsPage() {
     }
   };
 
-  // ─── Integration handlers ───
-
-  const addSonarrInstance = async () => {
-    setSonarrSaving(true);
-    setSonarrError("");
-    try {
-      const response = await fetch("/api/integrations/sonarr", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(sonarrForm),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        setSonarrError(integrationSaveError(data, "Failed to add Sonarr instance"));
-        return;
-      }
-      setSonarrForm({ name: "", url: "", apiKey: "", externalUrl: "" });
-      setShowSonarrForm(false);
-      await fetchSonarrInstances();
-      toast.success("Sonarr instance added");
-    } catch (error) {
-      setSonarrError("Failed to add Sonarr instance");
-      console.error(error);
-    } finally {
-      setSonarrSaving(false);
-    }
-  };
-
-  const deleteSonarrInstance = async (id: string) => {
-    try {
-      const res = await fetch(`/api/integrations/sonarr/${id}`, { method: "DELETE" });
-      if (!res.ok) {
-        toast.error("Failed to remove Sonarr instance");
-        return;
-      }
-      toast.success("Sonarr instance removed");
-      await fetchSonarrInstances();
-    } catch {
-      toast.error("Failed to remove Sonarr instance");
-    }
-  };
-
-  const addRadarrInstance = async () => {
-    setRadarrSaving(true);
-    setRadarrError("");
-    try {
-      const response = await fetch("/api/integrations/radarr", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(radarrForm),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        setRadarrError(integrationSaveError(data, "Failed to add Radarr instance"));
-        return;
-      }
-      setRadarrForm({ name: "", url: "", apiKey: "", externalUrl: "" });
-      setShowRadarrForm(false);
-      await fetchRadarrInstances();
-      toast.success("Radarr instance added");
-    } catch (error) {
-      setRadarrError("Failed to add Radarr instance");
-      console.error(error);
-    } finally {
-      setRadarrSaving(false);
-    }
-  };
-
-  const deleteRadarrInstance = async (id: string) => {
-    try {
-      const res = await fetch(`/api/integrations/radarr/${id}`, { method: "DELETE" });
-      if (!res.ok) {
-        toast.error("Failed to remove Radarr instance");
-        return;
-      }
-      toast.success("Radarr instance removed");
-      await fetchRadarrInstances();
-    } catch {
-      toast.error("Failed to remove Radarr instance");
-    }
-  };
-
-  const addLidarrInstance = async () => {
-    setLidarrSaving(true);
-    setLidarrError("");
-    try {
-      const response = await fetch("/api/integrations/lidarr", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(lidarrForm),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        setLidarrError(integrationSaveError(data, "Failed to add Lidarr instance"));
-        return;
-      }
-      setLidarrForm({ name: "", url: "", apiKey: "", externalUrl: "" });
-      setShowLidarrForm(false);
-      await fetchLidarrInstances();
-      toast.success("Lidarr instance added");
-    } catch (error) {
-      setLidarrError("Failed to add Lidarr instance");
-      console.error(error);
-    } finally {
-      setLidarrSaving(false);
-    }
-  };
-
-  const deleteLidarrInstance = async (id: string) => {
-    try {
-      const res = await fetch(`/api/integrations/lidarr/${id}`, { method: "DELETE" });
-      if (!res.ok) {
-        toast.error("Failed to remove Lidarr instance");
-        return;
-      }
-      toast.success("Lidarr instance removed");
-      await fetchLidarrInstances();
-    } catch {
-      toast.error("Failed to remove Lidarr instance");
-    }
-  };
-
-  const addSeerrInstance = async () => {
-    setSeerrSaving(true);
-    setSeerrError("");
-    try {
-      const response = await fetch("/api/integrations/seerr", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(seerrForm),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        setSeerrError(integrationSaveError(data, "Failed to add Seerr instance"));
-        return;
-      }
-      setSeerrForm({ name: "", url: "", apiKey: "", externalUrl: "" });
-      setShowSeerrForm(false);
-      await fetchSeerrInstances();
-      toast.success("Seerr instance added");
-    } catch (error) {
-      setSeerrError("Failed to add Seerr instance");
-      console.error(error);
-    } finally {
-      setSeerrSaving(false);
-    }
-  };
-
-  const deleteSeerrInstance = async (id: string) => {
-    try {
-      const res = await fetch(`/api/integrations/seerr/${id}`, { method: "DELETE" });
-      if (!res.ok) {
-        toast.error("Failed to remove Seerr instance");
-        return;
-      }
-      toast.success("Seerr instance removed");
-      await fetchSeerrInstances();
-    } catch {
-      toast.error("Failed to remove Seerr instance");
-    }
-  };
-
-  const testArrConnection = async (type: "sonarr" | "radarr" | "lidarr" | "seerr", url: string, apiKey: string, setTesting: (v: boolean) => void, setResult: (v: TestResult | null) => void) => {
-    setTesting(true);
-    setResult(null);
-    try {
-      const response = await fetch(`/api/integrations/${type}/test`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url, apiKey }),
-      });
-      const data = await response.json();
-      setResult(data);
-    } catch {
-      setResult({ ok: false, error: "Request failed" });
-    } finally {
-      setTesting(false);
-    }
-  };
-
-  // Per-form sequence for the edit-form connection test. Only the latest test
-  // may write its result: an auto-test still in flight for another instance
-  // (Edit A → Cancel → Edit B) or for credentials since edited used to land
-  // afterwards and overwrite the form's result — disabling Save on a healthy
-  // instance, or enabling it on one whose new credentials were never tested.
-  const editTestSeq = useRef<Record<"sonarr" | "radarr" | "lidarr" | "seerr", number>>({
-    sonarr: 0, radarr: 0, lidarr: 0, seerr: 0,
-  });
-  const invalidateEditTest = (type: "sonarr" | "radarr" | "lidarr" | "seerr", setTesting: (v: boolean) => void) => {
-    editTestSeq.current[type]++;
-    setTesting(false);
-  };
-
-  // Test connection for existing instances (uses server-side stored credentials)
-  const testEditArrConnection = async (type: "sonarr" | "radarr" | "lidarr" | "seerr", id: string, overrides: { url?: string; apiKey?: string }, setTesting: (v: boolean) => void, setResult: (v: TestResult | null) => void) => {
-    const seq = ++editTestSeq.current[type];
-    const current = () => editTestSeq.current[type] === seq;
-    setTesting(true);
-    setResult(null);
-    try {
-      const body: Record<string, string> = {};
-      if (overrides.url) body.url = overrides.url;
-      if (overrides.apiKey) body.apiKey = overrides.apiKey;
-      const response = await fetchWithReauth(`/api/integrations/${type}/${id}/test-connection`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const data = await response.json();
-      if (current()) setResult(data);
-    } catch {
-      if (current()) setResult({ ok: false, error: "Request failed" });
-    } finally {
-      if (current()) setTesting(false);
-    }
-  };
-
-  // Sonarr edit handlers
-  const startEditSonarr = (instance: ArrInstance) => {
-    setEditingSonarrId(instance.id);
-    setEditSonarrForm({ name: instance.name, url: instance.url, apiKey: "", externalUrl: instance.externalUrl ?? "" });
-    setEditSonarrError("");
-    setEditSonarrTestResult(null);
-    testEditArrConnection("sonarr", instance.id, {}, setEditSonarrTesting, setEditSonarrTestResult);
-  };
-
-  const saveEditSonarr = async () => {
-    setEditSonarrSaving(true);
-    setEditSonarrError("");
-    try {
-      const body: Record<string, string> = {};
-      if (editSonarrForm.name) body.name = editSonarrForm.name;
-      if (editSonarrForm.url) body.url = editSonarrForm.url;
-      if (editSonarrForm.apiKey) body.apiKey = editSonarrForm.apiKey;
-      // Only when changed: an External URL stored under an older, looser rule
-      // must not make every rename or re-point of the instance fail validation.
-      const storedSonarrExternalUrl = sonarrInstances.find((i) => i.id === editingSonarrId)?.externalUrl ?? "";
-      if (editSonarrForm.externalUrl !== storedSonarrExternalUrl) body.externalUrl = editSonarrForm.externalUrl;
-
-      const response = await fetchWithReauth(`/api/integrations/sonarr/${editingSonarrId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        setEditSonarrError(integrationSaveError(data, "Failed to update"));
-        return;
-      }
-      setEditingSonarrId(null);
-      await fetchSonarrInstances();
-      toast.success("Sonarr instance updated");
-    } catch {
-      setEditSonarrError("Failed to update Sonarr instance");
-    } finally {
-      setEditSonarrSaving(false);
-    }
-  };
-
-  // Radarr edit handlers
-  const startEditRadarr = (instance: ArrInstance) => {
-    setEditingRadarrId(instance.id);
-    setEditRadarrForm({ name: instance.name, url: instance.url, apiKey: "", externalUrl: instance.externalUrl ?? "" });
-    setEditRadarrError("");
-    setEditRadarrTestResult(null);
-    testEditArrConnection("radarr", instance.id, {}, setEditRadarrTesting, setEditRadarrTestResult);
-  };
-
-  const saveEditRadarr = async () => {
-    setEditRadarrSaving(true);
-    setEditRadarrError("");
-    try {
-      const body: Record<string, string> = {};
-      if (editRadarrForm.name) body.name = editRadarrForm.name;
-      if (editRadarrForm.url) body.url = editRadarrForm.url;
-      if (editRadarrForm.apiKey) body.apiKey = editRadarrForm.apiKey;
-      // Only when changed: an External URL stored under an older, looser rule
-      // must not make every rename or re-point of the instance fail validation.
-      const storedRadarrExternalUrl = radarrInstances.find((i) => i.id === editingRadarrId)?.externalUrl ?? "";
-      if (editRadarrForm.externalUrl !== storedRadarrExternalUrl) body.externalUrl = editRadarrForm.externalUrl;
-
-      const response = await fetchWithReauth(`/api/integrations/radarr/${editingRadarrId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        setEditRadarrError(integrationSaveError(data, "Failed to update"));
-        return;
-      }
-      setEditingRadarrId(null);
-      await fetchRadarrInstances();
-      toast.success("Radarr instance updated");
-    } catch {
-      setEditRadarrError("Failed to update Radarr instance");
-    } finally {
-      setEditRadarrSaving(false);
-    }
-  };
-
-  // Lidarr edit handlers
-  const startEditLidarr = (instance: ArrInstance) => {
-    setEditingLidarrId(instance.id);
-    setEditLidarrForm({ name: instance.name, url: instance.url, apiKey: "", externalUrl: instance.externalUrl ?? "" });
-    setEditLidarrError("");
-    setEditLidarrTestResult(null);
-    testEditArrConnection("lidarr", instance.id, {}, setEditLidarrTesting, setEditLidarrTestResult);
-  };
-
-  const saveEditLidarr = async () => {
-    setEditLidarrSaving(true);
-    setEditLidarrError("");
-    try {
-      const body: Record<string, string> = {};
-      if (editLidarrForm.name) body.name = editLidarrForm.name;
-      if (editLidarrForm.url) body.url = editLidarrForm.url;
-      if (editLidarrForm.apiKey) body.apiKey = editLidarrForm.apiKey;
-      // Only when changed: an External URL stored under an older, looser rule
-      // must not make every rename or re-point of the instance fail validation.
-      const storedLidarrExternalUrl = lidarrInstances.find((i) => i.id === editingLidarrId)?.externalUrl ?? "";
-      if (editLidarrForm.externalUrl !== storedLidarrExternalUrl) body.externalUrl = editLidarrForm.externalUrl;
-
-      const response = await fetchWithReauth(`/api/integrations/lidarr/${editingLidarrId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        setEditLidarrError(integrationSaveError(data, "Failed to update"));
-        return;
-      }
-      setEditingLidarrId(null);
-      await fetchLidarrInstances();
-      toast.success("Lidarr instance updated");
-    } catch {
-      setEditLidarrError("Failed to update Lidarr instance");
-    } finally {
-      setEditLidarrSaving(false);
-    }
-  };
-
-  // Seerr edit handlers
-  const startEditSeerr = (instance: SeerrInstance) => {
-    setEditingSeerrId(instance.id);
-    setEditSeerrForm({ name: instance.name, url: instance.url, apiKey: "", externalUrl: instance.externalUrl ?? "" });
-    setEditSeerrError("");
-    setEditSeerrTestResult(null);
-    testEditArrConnection("seerr", instance.id, {}, setEditSeerrTesting, setEditSeerrTestResult);
-  };
-
-  const saveEditSeerr = async () => {
-    setEditSeerrSaving(true);
-    setEditSeerrError("");
-    try {
-      const body: Record<string, string> = {};
-      if (editSeerrForm.name) body.name = editSeerrForm.name;
-      if (editSeerrForm.url) body.url = editSeerrForm.url;
-      if (editSeerrForm.apiKey) body.apiKey = editSeerrForm.apiKey;
-      // Only when changed: an External URL stored under an older, looser rule
-      // must not make every rename or re-point of the instance fail validation.
-      const storedSeerrExternalUrl = seerrInstances.find((i) => i.id === editingSeerrId)?.externalUrl ?? "";
-      if (editSeerrForm.externalUrl !== storedSeerrExternalUrl) body.externalUrl = editSeerrForm.externalUrl;
-
-      const response = await fetchWithReauth(`/api/integrations/seerr/${editingSeerrId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        setEditSeerrError(integrationSaveError(data, "Failed to update"));
-        return;
-      }
-      setEditingSeerrId(null);
-      await fetchSeerrInstances();
-      toast.success("Seerr instance updated");
-    } catch {
-      setEditSeerrError("Failed to update Seerr instance");
-    } finally {
-      setEditSeerrSaving(false);
-    }
-  };
-
-  // ─── Tracearr handlers ───
-
-  const addTracearrInstance = async () => {
-    setTracearrSaving(true);
-    setTracearrError("");
-    try {
-      const response = await fetch("/api/integrations/tracearr", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(tracearrForm),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        // There is no unsaved-instance test endpoint for Tracearr, so the POST
-        // is the connection test — surface its detail or a bad URL/key gives
-        // the user nothing to act on.
-        setTracearrError(data.detail ? `${data.error} — ${data.detail}` : (data.error || "Failed to add Tracearr instance"));
-        return;
-      }
-      setTracearrForm({ name: "", url: "", apiKey: "" });
-      setShowTracearrForm(false);
-      await fetchTracearrInstances();
-      toast.success("Tracearr instance added");
-    } catch (error) {
-      setTracearrError("Failed to add Tracearr instance");
-      console.error(error);
-    } finally {
-      setTracearrSaving(false);
-    }
-  };
-
-  const deleteTracearrInstance = async (id: string) => {
-    try {
-      const res = await fetch(`/api/integrations/tracearr/${id}`, { method: "DELETE" });
-      if (!res.ok) {
-        toast.error("Failed to remove Tracearr instance");
-        return;
-      }
-      toast.success("Tracearr instance removed");
-      await fetchTracearrInstances();
-    } catch {
-      toast.error("Failed to remove Tracearr instance");
-    }
-  };
-
-  /**
-   * Tests a saved instance. The edited URL is passed as an override so the
-   * button tests what is on screen, but a `MASKED_VALUE` key is dropped rather
-   * than sent: it is the placeholder the GET returned, not a credential. The
-   * route treats the mask as "use the stored key" too — this just keeps the
-   * placeholder from travelling at all.
-   */
-  const testTracearrConnection = async (id: string, overrides: { url?: string; apiKey?: string }) => {
-    setEditTracearrTesting(true);
-    setEditTracearrTestResult(null);
-    try {
-      const body: Record<string, string> = {};
-      if (overrides.url) body.url = overrides.url;
-      if (overrides.apiKey && overrides.apiKey !== MASKED_VALUE) body.apiKey = overrides.apiKey;
-      const response = await fetchWithReauth(`/api/integrations/tracearr/${id}/test-connection`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const data = await response.json();
-      setEditTracearrTestResult(data);
-    } catch {
-      setEditTracearrTestResult({ ok: false, error: "Request failed" });
-    } finally {
-      setEditTracearrTesting(false);
-    }
-  };
-
-  const startEditTracearr = (instance: TracearrInstance) => {
-    setEditingTracearrId(instance.id);
-    // The key is pre-filled with the mask the GET returned and echoed back on
-    // save, which the update schema reads as "keep the stored key".
-    setEditTracearrForm({ name: instance.name, url: instance.url, apiKey: instance.apiKey });
-    setEditTracearrError("");
-    setEditTracearrTestResult(null);
-    testTracearrConnection(instance.id, {});
-  };
-
-  const saveEditTracearr = async () => {
-    if (!editingTracearrId) return;
-    setEditTracearrSaving(true);
-    setEditTracearrError("");
-    try {
-      const body: Record<string, string> = {};
-      if (editTracearrForm.name) body.name = editTracearrForm.name;
-      if (editTracearrForm.url) body.url = editTracearrForm.url;
-      if (editTracearrForm.apiKey) body.apiKey = editTracearrForm.apiKey;
-
-      const response = await fetchWithReauth(`/api/integrations/tracearr/${editingTracearrId}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const data = await response.json();
-      if (!response.ok) {
-        setEditTracearrError(data.detail ? `${data.error} — ${data.detail}` : (data.error || "Failed to update"));
-        return;
-      }
-      const savedId = editingTracearrId;
-      setEditingTracearrId(null);
-      await fetchTracearrInstances();
-      // The URL may now point at a different Tracearr, so the cached server
-      // list for this instance is stale — the mapping dropdown would otherwise
-      // keep offering servers that instance no longer monitors.
-      await fetchTracearrServers(savedId);
-      toast.success("Tracearr instance updated");
-    } catch {
-      setEditTracearrError("Failed to update Tracearr instance");
-    } finally {
-      setEditTracearrSaving(false);
-    }
-  };
-
   // ─── Notification handlers ───
 
   const saveDiscordSettings = async () => {
@@ -2990,30 +2247,6 @@ export default function SettingsPage() {
     }
   };
 
-  // ─── Helpers ───
-
-  const formatDate = (date: string | null) => {
-    if (!date) return "Never";
-    return new Date(date).toLocaleString();
-  };
-
-  const formatNextRun = (nextRun: string | null, lastRun: string | null) => {
-    if (!nextRun) return "Manual only";
-    const d = new Date(nextRun);
-    const diffMs = d.getTime() - Date.now();
-    if (diffMs > 0) return d.toLocaleString();
-    // Never run before — waiting for first scheduler tick
-    if (!lastRun) return "Pending";
-    // Past date — scheduler hasn't picked it up yet
-    const overdueMs = Math.abs(diffMs);
-    if (overdueMs <= 15 * 60 * 1000) return "Due now";
-    const mins = Math.round(overdueMs / 60000);
-    if (mins < 60) return `Overdue (${mins}m ago)`;
-    const hrs = Math.round(mins / 60);
-    if (hrs < 24) return `Overdue (${hrs}h ago)`;
-    return `Overdue (${Math.round(hrs / 24)}d ago)`;
-  };
-
   // ─── Loading gate ───
 
   if (!hydrated) {
@@ -3109,38 +2342,15 @@ export default function SettingsPage() {
               savingJobTime={savingJobTime}
               onScheduledJobTimeChange={handleScheduledJobTimeChange}
               syncSchedule={syncSchedule}
-              isCustomSchedule={isCustomSchedule}
-              customCron={customCron}
-              cronError={cronError}
-              savingSchedule={savingSchedule}
               lastScheduledSync={lastScheduledSync}
-              onSyncScheduleChange={handleScheduleChange}
-              onCustomCronChange={setCustomCron}
-              onSaveSyncSchedule={saveSyncSchedule}
-              lcDetectSchedule={lcDetectSchedule}
-              isCustomLcDetect={isCustomLcDetect}
-              customLcDetectCron={customLcDetectCron}
-              lcDetectCronError={lcDetectCronError}
-              savingLcDetect={savingLcDetect}
+              detectionSchedule={detectionSchedule}
               lastLcDetect={lastLcDetect}
-              onLcDetectScheduleChange={handleLcDetectScheduleChange}
-              onCustomLcDetectCronChange={setCustomLcDetectCron}
-              onSaveLcDetectSchedule={saveLcDetectSchedule}
-              lcExecSchedule={lcExecSchedule}
-              isCustomLcExec={isCustomLcExec}
-              customLcExecCron={customLcExecCron}
-              lcExecCronError={lcExecCronError}
-              savingLcExec={savingLcExec}
+              executionSchedule={executionSchedule}
               lastLcExec={lastLcExec}
-              onLcExecScheduleChange={handleLcExecScheduleChange}
-              onCustomLcExecCronChange={setCustomLcExecCron}
-              onSaveLcExecSchedule={saveLcExecSchedule}
               timezone={scheduleInfo?.timezone ?? null}
               scheduleInfo={scheduleInfo}
               runningJob={runningJob}
               onRunNow={handleRunNow}
-              formatDate={formatDate}
-              formatNextRun={formatNextRun}
             />
           ) : (
             <SettingsPanelSkeleton />
@@ -3220,197 +2430,21 @@ export default function SettingsPage() {
           )}
         </TabsContent>
 
-        <TabsContent value="integrations" id="settings-panel-integrations" aria-labelledby="settings-tab-integrations">
+        {/* Kept mounted (hidden) once opened: the forms hold their own state
+            (useIntegrationInstances), which a switch to another tab would
+            otherwise drop mid-edit. */}
+        <TabsContent
+          value="integrations"
+          id="settings-panel-integrations"
+          aria-labelledby="settings-tab-integrations"
+          forceMount={integrationsOpened || undefined}
+          className="data-[state=inactive]:hidden"
+        >
           {loadedTabs.has("integrations") ? (
             <IntegrationsTab
-              sonarr={{
-                instances: sonarrInstances,
-                showForm: showSonarrForm,
-                form: sonarrForm,
-                saving: sonarrSaving,
-                error: sonarrError,
-                testing: sonarrTesting,
-                testResult: sonarrTestResult,
-                editing: {
-                  id: editingSonarrId,
-                  form: editSonarrForm,
-                  saving: editSonarrSaving,
-                  error: editSonarrError,
-                  testing: editSonarrTesting,
-                  testResult: editSonarrTestResult,
-                },
-                onShowForm: setShowSonarrForm,
-                onFormChange: (form) => {
-                  if (form.url !== sonarrForm.url || form.apiKey !== sonarrForm.apiKey) setSonarrTestResult(null);
-                  setSonarrForm(form);
-                },
-                onAdd: addSonarrInstance,
-                onDelete: deleteSonarrInstance,
-                onTest: () => testArrConnection("sonarr", sonarrForm.url, sonarrForm.apiKey, setSonarrTesting, setSonarrTestResult),
-                onStartEdit: startEditSonarr,
-                onSaveEdit: saveEditSonarr,
-                onCancelEdit: () => {
-                  invalidateEditTest("sonarr", setEditSonarrTesting);
-                  setEditingSonarrId(null);
-                },
-                onEditFormChange: (form) => {
-                  if (form.url !== editSonarrForm.url || form.apiKey !== editSonarrForm.apiKey) {
-                    invalidateEditTest("sonarr", setEditSonarrTesting);
-                    setEditSonarrTestResult(null);
-                  }
-                  setEditSonarrForm(form);
-                },
-                onEditTest: () => testEditArrConnection("sonarr", editingSonarrId!, { url: editSonarrForm.url, apiKey: editSonarrForm.apiKey }, setEditSonarrTesting, setEditSonarrTestResult),
-                onToggleEnabled: (id: string, enabled: boolean) => toggleArrEnabled("sonarr", id, enabled),
-              }}
-              radarr={{
-                instances: radarrInstances,
-                showForm: showRadarrForm,
-                form: radarrForm,
-                saving: radarrSaving,
-                error: radarrError,
-                testing: radarrTesting,
-                testResult: radarrTestResult,
-                editing: {
-                  id: editingRadarrId,
-                  form: editRadarrForm,
-                  saving: editRadarrSaving,
-                  error: editRadarrError,
-                  testing: editRadarrTesting,
-                  testResult: editRadarrTestResult,
-                },
-                onShowForm: setShowRadarrForm,
-                onFormChange: (form) => {
-                  if (form.url !== radarrForm.url || form.apiKey !== radarrForm.apiKey) setRadarrTestResult(null);
-                  setRadarrForm(form);
-                },
-                onAdd: addRadarrInstance,
-                onDelete: deleteRadarrInstance,
-                onTest: () => testArrConnection("radarr", radarrForm.url, radarrForm.apiKey, setRadarrTesting, setRadarrTestResult),
-                onStartEdit: startEditRadarr,
-                onSaveEdit: saveEditRadarr,
-                onCancelEdit: () => {
-                  invalidateEditTest("radarr", setEditRadarrTesting);
-                  setEditingRadarrId(null);
-                },
-                onEditFormChange: (form) => {
-                  if (form.url !== editRadarrForm.url || form.apiKey !== editRadarrForm.apiKey) {
-                    invalidateEditTest("radarr", setEditRadarrTesting);
-                    setEditRadarrTestResult(null);
-                  }
-                  setEditRadarrForm(form);
-                },
-                onEditTest: () => testEditArrConnection("radarr", editingRadarrId!, { url: editRadarrForm.url, apiKey: editRadarrForm.apiKey }, setEditRadarrTesting, setEditRadarrTestResult),
-                onToggleEnabled: (id: string, enabled: boolean) => toggleArrEnabled("radarr", id, enabled),
-              }}
-              lidarr={{
-                instances: lidarrInstances,
-                showForm: showLidarrForm,
-                form: lidarrForm,
-                saving: lidarrSaving,
-                error: lidarrError,
-                testing: lidarrTesting,
-                testResult: lidarrTestResult,
-                editing: {
-                  id: editingLidarrId,
-                  form: editLidarrForm,
-                  saving: editLidarrSaving,
-                  error: editLidarrError,
-                  testing: editLidarrTesting,
-                  testResult: editLidarrTestResult,
-                },
-                onShowForm: setShowLidarrForm,
-                onFormChange: (form) => {
-                  if (form.url !== lidarrForm.url || form.apiKey !== lidarrForm.apiKey) setLidarrTestResult(null);
-                  setLidarrForm(form);
-                },
-                onAdd: addLidarrInstance,
-                onDelete: deleteLidarrInstance,
-                onTest: () => testArrConnection("lidarr", lidarrForm.url, lidarrForm.apiKey, setLidarrTesting, setLidarrTestResult),
-                onStartEdit: startEditLidarr,
-                onSaveEdit: saveEditLidarr,
-                onCancelEdit: () => {
-                  invalidateEditTest("lidarr", setEditLidarrTesting);
-                  setEditingLidarrId(null);
-                },
-                onEditFormChange: (form) => {
-                  if (form.url !== editLidarrForm.url || form.apiKey !== editLidarrForm.apiKey) {
-                    invalidateEditTest("lidarr", setEditLidarrTesting);
-                    setEditLidarrTestResult(null);
-                  }
-                  setEditLidarrForm(form);
-                },
-                onEditTest: () => testEditArrConnection("lidarr", editingLidarrId!, { url: editLidarrForm.url, apiKey: editLidarrForm.apiKey }, setEditLidarrTesting, setEditLidarrTestResult),
-                onToggleEnabled: (id: string, enabled: boolean) => toggleArrEnabled("lidarr", id, enabled),
-              }}
-              seerr={{
-                instances: seerrInstances,
-                showForm: showSeerrForm,
-                form: seerrForm,
-                saving: seerrSaving,
-                error: seerrError,
-                testing: seerrTesting,
-                testResult: seerrTestResult,
-                editing: {
-                  id: editingSeerrId,
-                  form: editSeerrForm,
-                  saving: editSeerrSaving,
-                  error: editSeerrError,
-                  testing: editSeerrTesting,
-                  testResult: editSeerrTestResult,
-                },
-                onShowForm: setShowSeerrForm,
-                onFormChange: (form) => {
-                  if (form.url !== seerrForm.url || form.apiKey !== seerrForm.apiKey) setSeerrTestResult(null);
-                  setSeerrForm(form);
-                },
-                onAdd: addSeerrInstance,
-                onDelete: deleteSeerrInstance,
-                onTest: () => testArrConnection("seerr", seerrForm.url, seerrForm.apiKey, setSeerrTesting, setSeerrTestResult),
-                onStartEdit: startEditSeerr,
-                onSaveEdit: saveEditSeerr,
-                onCancelEdit: () => {
-                  invalidateEditTest("seerr", setEditSeerrTesting);
-                  setEditingSeerrId(null);
-                },
-                onEditFormChange: (form) => {
-                  if (form.url !== editSeerrForm.url || form.apiKey !== editSeerrForm.apiKey) {
-                    invalidateEditTest("seerr", setEditSeerrTesting);
-                    setEditSeerrTestResult(null);
-                  }
-                  setEditSeerrForm(form);
-                },
-                onEditTest: () => testEditArrConnection("seerr", editingSeerrId!, { url: editSeerrForm.url, apiKey: editSeerrForm.apiKey }, setEditSeerrTesting, setEditSeerrTestResult),
-                onToggleEnabled: (id: string, enabled: boolean) => toggleSeerrEnabled(id, enabled),
-              }}
-              tracearr={{
-                instances: tracearrInstances,
-                showForm: showTracearrForm,
-                form: tracearrForm,
-                saving: tracearrSaving,
-                error: tracearrError,
-                editing: {
-                  id: editingTracearrId,
-                  form: editTracearrForm,
-                  saving: editTracearrSaving,
-                  error: editTracearrError,
-                  testing: editTracearrTesting,
-                  testResult: editTracearrTestResult,
-                },
-                onShowForm: setShowTracearrForm,
-                onFormChange: setTracearrForm,
-                onAdd: addTracearrInstance,
-                onDelete: deleteTracearrInstance,
-                onStartEdit: startEditTracearr,
-                onSaveEdit: saveEditTracearr,
-                onCancelEdit: () => setEditingTracearrId(null),
-                onEditFormChange: (form) => {
-                  if (form.url !== editTracearrForm.url || form.apiKey !== editTracearrForm.apiKey) setEditTracearrTestResult(null);
-                  setEditTracearrForm(form);
-                },
-                onEditTest: () => testTracearrConnection(editingTracearrId!, { url: editTracearrForm.url, apiKey: editTracearrForm.apiKey }),
-                onToggleEnabled: (id: string, enabled: boolean) => toggleTracearrEnabled(id, enabled),
-              }}
+              instances={integrationInstances}
+              onRefresh={fetchIntegrationInstances}
+              onTracearrUpdated={fetchTracearrServers}
             />
           ) : (
             <SettingsPanelSkeleton />
@@ -3464,6 +2498,7 @@ export default function SettingsPage() {
               onPlexLink={handlePlexLink}
               onCreateCredentialsAndEnable={handleCreateCredentialsAndEnable}
               onAuthSettingsChanged={refreshAuthInfo}
+              readSectionData={readAuthSectionData}
             />
           ) : (
             <SettingsPanelSkeleton />

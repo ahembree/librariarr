@@ -95,6 +95,29 @@ export class SeerrDataMapBuilder {
     else this.records.set(key, record);
   }
 
+  /**
+   * Fold another builder's requests into this one, as if they had been added
+   * here after this builder's own. Lets instances be walked in parallel into
+   * builders of their own and merged in a fixed order afterwards: every merge
+   * here (counts summed, requesters appended in first-seen order, the latest
+   * date kept) gives the same answer folded per instance as one at a time.
+   */
+  absorb(other: SeerrDataMapBuilder): void {
+    for (const [key, record] of other.records) {
+      const existing = this.records.get(key);
+      if (existing) mergeInto(existing, record);
+      else this.records.set(key, { ...record, requestedBy: [...record.requestedBy] });
+    }
+    for (const [tvdbKey, keys] of other.tvdbAliases) {
+      let aliases = this.tvdbAliases.get(tvdbKey);
+      if (!aliases) {
+        aliases = new Set();
+        this.tvdbAliases.set(tvdbKey, aliases);
+      }
+      for (const k of keys) aliases.add(k);
+    }
+  }
+
   build(): SeerrDataMap {
     const out: SeerrDataMap = Object.fromEntries(this.records);
     for (const [tvdbKey, keys] of this.tvdbAliases) {

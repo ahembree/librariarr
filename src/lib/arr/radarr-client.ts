@@ -1,7 +1,5 @@
-import axios, { AxiosInstance } from "axios";
-import { logger } from "@/lib/logger";
-import { IntegrationError } from "@/lib/integration-error";
-import { configureRetry, NO_RETRY } from "@/lib/http-retry";
+import { ArrClientBase } from "@/lib/arr/arr-client-base";
+import { mapWithConcurrency } from "@/lib/concurrency";
 
 export interface RadarrMovie {
   id: number;
@@ -35,16 +33,6 @@ export interface RadarrMovie {
   status?: string;
 }
 
-interface RadarrTag {
-  id: number;
-  label: string;
-}
-
-interface RadarrQualityProfile {
-  id: number;
-  name: string;
-}
-
 interface RadarrMovieFile {
   id: number;
   movieId: number;
@@ -58,66 +46,14 @@ interface RadarrMovieFile {
 // Movie ids are sent as repeated `movieId=` query params; chunk them so the
 // request line stays well under Radarr's ~8 KB Kestrel limit on large libraries.
 const MOVIE_FILE_QUERY_CHUNK = 100;
+// Chunks in flight at once. 10k movies are 100 chunks, which one at a time
+// were the slowest part of every movie-metadata fetch; more than a few at once
+// only queue inside Radarr, which computes each file's custom formats.
+const MOVIE_FILE_QUERY_CONCURRENCY = 4;
 
-interface RadarrMediaManagementConfig {
-  recycleBin: string | null;
-  recycleBinCleanupDays: number;
-}
-
-export class RadarrClient {
-  private client: AxiosInstance;
-
+export class RadarrClient extends ArrClientBase {
   constructor(baseURL: string, apiKey: string) {
-    this.client = axios.create({
-      baseURL: baseURL.replace(/\/+$/, ""),
-      headers: {
-        "X-Api-Key": apiKey,
-        Accept: "application/json",
-        "Content-Type": "application/json",
-      },
-      timeout: 15000,
-    });
-
-    this.client.interceptors.request.use((config) => {
-      (config as unknown as Record<string, unknown>).__startTime = Date.now();
-      return config;
-    });
-
-    // Must be registered BEFORE the IntegrationError conversion below: axios
-    // runs response interceptors in registration order, and the retry handler
-    // needs the raw AxiosError (`config`/`response`). Registered after it, the
-    // retry only ever saw an IntegrationError and rethrew every failure.
-    configureRetry(this.client, "Radarr", logger);
-
-    this.client.interceptors.response.use(
-      (response) => response,
-      (error) => {
-        if (axios.isAxiosError(error)) {
-          const start = (error.config as unknown as Record<string, unknown>)?.__startTime as number | undefined;
-          const duration = start ? ` (${Date.now() - start}ms)` : "";
-          logger.debug("Radarr", `ERROR ${error.response?.status ?? "NETWORK"} ${error.config?.url}${duration}`, {
-            message: error.message,
-          });
-          return Promise.reject(new IntegrationError("Radarr", error));
-        }
-        return Promise.reject(error);
-      }
-    );
-  }
-
-  async testConnection(): Promise<{ ok: boolean; error?: string; appName?: string; version?: string }> {
-    try {
-      const response = await this.client.get("/api/v3/system/status", { ...NO_RETRY });
-      const { appName, version } = response.data;
-      if (appName && appName !== "Radarr") {
-        return { ok: false, error: `Expected Radarr but connected to ${appName}`, appName, version };
-      }
-      return { ok: true, appName, version };
-    } catch (error: unknown) {
-      const msg =
-        error instanceof Error ? error.message : "Connection failed";
-      return { ok: false, error: msg };
-    }
+    super("Radarr", "v3", baseURL, apiKey);
   }
 
   async getMovies(): Promise<RadarrMovie[]> {
@@ -152,13 +88,22 @@ export class RadarrClient {
     });
   }
 
-  async updateMovie(id: number, movie: Partial<RadarrMovie>): Promise<RadarrMovie> {
-    const current = await this.getMovieById(id);
+  /**
+   * PUTs `movie` over the record. Pass `current` — the record just read —
+   * to skip re-reading it first; without it the record is fetched by id.
+   */
+  async updateMovie(id: number, movie: Partial<RadarrMovie>, current?: RadarrMovie): Promise<RadarrMovie> {
+    const base = current ?? (await this.getMovieById(id));
     const { data } = await this.client.put<RadarrMovie>(
       `/api/v3/movie/${id}`,
-      { ...current, ...movie }
+      { ...base, ...movie }
     );
     return data;
+  }
+
+  /** Removes `tagIds` from every movie in `movieIds` in one bulk-editor request. */
+  async removeTagsFromMovies(movieIds: number[], tagIds: number[]): Promise<void> {
+    await this.removeTagsWithEditor("movie", "movieIds", movieIds, tagIds);
   }
 
   /**
@@ -167,9 +112,10 @@ export class RadarrClient {
    * Radarr only computes `customFormatScore` in the /moviefile endpoint (the
    * /movie list and /movie/{id} endpoints leave the embedded movieFile's score
    * null), so rule/query evaluation must pull the real score from here and merge
-   * it back onto each movie. Ids are chunked to keep the query string small.
+   * it back onto each movie. Ids are chunked to keep the query string small,
+   * and a few chunks are requested at a time.
    *
-   * `onProgress` (optional) reports 0..1 completion after each chunk so callers
+   * `onProgress` (optional) reports 0..1 completion as chunks finish so callers
    * can drive a progress bar through what is usually the slowest part of a
    * movie-metadata fetch on large libraries.
    */
@@ -182,18 +128,30 @@ export class RadarrClient {
       onProgress?.(1);
       return scores;
     }
+    const chunks: number[][] = [];
     for (let i = 0; i < movieIds.length; i += MOVIE_FILE_QUERY_CHUNK) {
-      const chunk = movieIds.slice(i, i + MOVIE_FILE_QUERY_CHUNK);
+      chunks.push(movieIds.slice(i, i + MOVIE_FILE_QUERY_CHUNK));
+    }
+    let done = 0;
+    const pages = await mapWithConcurrency(chunks, MOVIE_FILE_QUERY_CONCURRENCY, async (chunk) => {
       const { data } = await this.client.get<RadarrMovieFile[]>("/api/v3/moviefile", {
         params: { movieId: chunk },
+        // Radarr binds `movieId` as an int[] only from repeated plain keys;
+        // axios' default `movieId[]=1` is ignored and the filter skipped.
         paramsSerializer: { indexes: null },
       });
+      done += chunk.length;
+      onProgress?.(Math.min(1, done / movieIds.length));
+      return data;
+    });
+    // Merged in chunk order, so a movie id answered twice keeps the answer
+    // the one-at-a-time loop would have kept.
+    for (const data of pages) {
       for (const file of data) {
         if (file.customFormatScore != null) {
           scores.set(file.movieId, file.customFormatScore);
         }
       }
-      onProgress?.(Math.min(1, (i + chunk.length) / movieIds.length));
     }
     return scores;
   }
@@ -202,52 +160,10 @@ export class RadarrClient {
     await this.client.delete(`/api/v3/moviefile/${movieFileId}`);
   }
 
-  async getQualityProfiles(): Promise<RadarrQualityProfile[]> {
-    const { data } = await this.client.get<RadarrQualityProfile[]>(
-      "/api/v3/qualityprofile"
-    );
-    return data;
-  }
-
   async triggerMovieSearch(movieId: number): Promise<void> {
     await this.client.post("/api/v3/command", {
       name: "MoviesSearch",
       movieIds: [movieId],
     });
   }
-
-  async getTags(): Promise<RadarrTag[]> {
-    const { data } = await this.client.get<RadarrTag[]>("/api/v3/tag");
-    return data;
-  }
-
-  async createTag(label: string): Promise<RadarrTag> {
-    const { data } = await this.client.post<RadarrTag>("/api/v3/tag", { label });
-    return data;
-  }
-
-  async deleteTag(id: number): Promise<void> {
-    await this.client.delete(`/api/v3/tag/${id}`);
-  }
-
-  async getLanguages(): Promise<{ id: number; name: string }[]> {
-    const { data } = await this.client.get<{ id: number; name: string }[]>(
-      "/api/v3/language"
-    );
-    return data;
-  }
-
-  /**
-   * Only caller is the rule editor's recycle-bin check, which the Save button
-   * waits on — a probe, so it reports the first failure (NO_RETRY) instead of
-   * holding Save through four timeouts.
-   */
-  async getMediaManagementConfig(): Promise<RadarrMediaManagementConfig> {
-    const { data } = await this.client.get<RadarrMediaManagementConfig>(
-      "/api/v3/config/mediamanagement",
-      { ...NO_RETRY },
-    );
-    return data;
-  }
-
 }

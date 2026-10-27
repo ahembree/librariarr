@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { withListResponseCache } from "@/lib/api/cached-list-response";
 import { jsonResponse } from "@/lib/api/json-response";
 import { MAX_GROUPED_LIST_LIMIT, parseListPagination } from "@/lib/api/pagination";
 import { prisma } from "@/lib/db";
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
 import { getServerPresenceByGroup } from "@/lib/dedup/server-presence";
+import type { ServerPresence } from "@/lib/dedup/deduplicate";
 import { applyCommonFilters } from "@/lib/filters/build-where";
 import { loadGenreSpellings } from "@/lib/filters/genre-spellings";
 import { loadResolutionSpellings } from "@/lib/filters/resolution-spellings";
@@ -196,12 +197,7 @@ function applySeriesFilters<T extends SeriesItem>(list: T[], params: URLSearchPa
   return result;
 }
 
-async function listGet(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+const listGet = withSession(async (session, request: NextRequest) => {
   const { searchParams } = new URL(request.url);
   // The shared parser, so `offset` (documented for every paged listing, and
   // what an offset-based client pages with) is honoured here too: these routes
@@ -216,7 +212,7 @@ async function listGet(request: NextRequest) {
   const serverId = searchParams.get("serverId");
   const startsWith = searchParams.get("startsWith");
 
-  const sf = await resolveServerFilter(session.userId!, serverId, "SERIES");
+  const sf = await resolveServerFilter(session.userId, serverId, "SERIES");
   if (!sf) {
     return NextResponse.json({ series: [], pagination: { page, limit, hasMore: false } });
   }
@@ -277,8 +273,15 @@ async function listGet(request: NextRequest) {
   applyCommonFilters(narrowing, episodeParams, genreSpellings, resolutionSpellings, {
     resolutionOtherIncludesNull: true,
   });
+  // The qualifying shows' keys, when a filter narrows the listing: known before
+  // the aggregate runs, so the server presence below can be scoped to them.
+  let qualifyingKeys: string[] | null = null;
   if (Object.keys(narrowing).length > 0) {
-    const qualifying = await prisma.mediaItem.findMany({
+    // `groupBy`, not `findMany({ distinct })`: Prisma applies `distinct` in
+    // Node, so that read one row per matching EPISODE and kept one per show;
+    // `groupBy` is a SQL GROUP BY and returns one row per show.
+    const qualifying = await prisma.mediaItem.groupBy({
+      by: ["seriesKey"],
       where: {
         AND: [
           narrowing,
@@ -291,10 +294,9 @@ async function listGet(request: NextRequest) {
           },
         ],
       },
-      select: { seriesKey: true },
-      distinct: ["seriesKey"],
     });
-    params.push(qualifying.map((r) => r.seriesKey));
+    qualifyingKeys = qualifying.flatMap((r) => (r.seriesKey ? [r.seriesKey] : []));
+    params.push(qualifyingKeys);
     filters.push(`AND mi."seriesKey" = ANY($${params.length}::text[])`);
   }
 
@@ -326,6 +328,10 @@ async function listGet(request: NextRequest) {
   // `ORDER BY group_key`: the list is sorted below with a stable sort, so this
   // is the order of ties — shows with equal episode counts, or two same-titled
   // shows — and a page boundary falls in the same place on every request.
+  const presenceSource = seriesPresenceSource(sf.isSingleServer, qualifyingKeys, {
+    paged: limit > 0,
+    titleFiltered: !!search || !!startsWith,
+  });
   const [groups, representatives, groupServerPresence] = await Promise.all([
     prisma.$queryRawUnsafe<SeriesGroupRow[]>(
       `SELECT
@@ -399,9 +405,15 @@ async function listGet(request: NextRequest) {
       ...params,
       artworkServerId,
     ),
-    // On one server every show is on that server: the presence scan (a
-    // DISTINCT ON over every episode) would only ever say so.
-    sf.isSingleServer ? null : getServerPresenceByGroup("SERIES", sf.serverIds),
+    // On one server every show is on that server: the presence scan would only
+    // ever say so. Otherwise it is read alongside the aggregate when it must
+    // cover the whole library or the filter's shows, and after paging when
+    // only the returned shows need it (`presenceSource`).
+    presenceSource === "library"
+      ? getServerPresenceByGroup("SERIES", sf.serverIds)
+      : presenceSource === "qualifying"
+        ? getServerPresenceByGroup("SERIES", sf.serverIds, { groupKeys: qualifyingKeys! })
+        : null,
   ]);
 
   const repByKey = new Map(representatives.map((r) => [r.group_key, r]));
@@ -435,9 +447,11 @@ async function listGet(request: NextRequest) {
       isWatchlisted: g.isWatchlisted,
       qualityCounts: (g.qualityCounts ?? {}) as Record<string, number>,
       thumbUrl: rep?.thumbUrl ?? null,
-      servers: singleServer
+      // Filled in after paging when `presenceSource` is "page" — the key is
+      // set here so it keeps its place in the row.
+      servers: (singleServer
         ? [{ serverId: singleServer.serverId, serverName: singleServer.name, serverType: singleServer.type, mediaItemId: rep?.mediaItemId ?? "" }]
-        : groupServerPresence?.get(g.group_key) ?? [],
+        : groupServerPresence?.get(g.group_key) ?? []) as ServerPresence[],
       summary: rep?.summary ?? summaryByKey.get(g.group_key) ?? null,
       genres: g.genres as string[] | null,
       studio: g.studio,
@@ -454,14 +468,50 @@ async function listGet(request: NextRequest) {
   seriesList = applySeriesFilters(seriesList, searchParams);
 
   const sorted = sortSeriesList(seriesList, sortBy, sortOrder);
+  // The presence of just the shows being returned.
+  const withPresence = async <T extends { seriesKey: string; servers: ServerPresence[] }>(rows: T[]) => {
+    if (presenceSource !== "page") return rows;
+    const presence = await getServerPresenceByGroup("SERIES", sf.serverIds, presenceScope(rows.map((r) => r.seriesKey)));
+    for (const row of rows) row.servers = presence.get(row.seriesKey) ?? [];
+    return rows;
+  };
   if (limit > 0) {
     const paged = sorted.slice(skip, skip + limit + 1);
     const hasMore = paged.length > limit;
     if (hasMore) paged.pop();
-    return jsonResponse(request, { series: paged, pagination: { page, limit, hasMore } });
+    return jsonResponse(request, { series: await withPresence(paged), pagination: { page, limit, hasMore } });
   }
   // `limit=0` is everything — after an explicit `offset`, as on the flat lists.
-  return jsonResponse(request, { series: sorted.slice(skip), pagination: { page, limit, hasMore: false } });
+  return jsonResponse(request, { series: await withPresence(sorted.slice(skip)), pagination: { page, limit, hasMore: false } });
+});
+
+/**
+ * Above this many shows, presence is read for the whole library instead: past
+ * it the scoped scan costs about what the full one does (measured: 50 shows
+ * ~6 ms, 1,000 shows ~140 ms, the whole 1,500-show library ~150 ms).
+ */
+const PRESENCE_SCOPE_MAX_KEYS = 500;
+
+function presenceScope(keys: string[]): { groupKeys: string[] } | undefined {
+  return keys.length <= PRESENCE_SCOPE_MAX_KEYS ? { groupKeys: keys } : undefined;
+}
+
+/**
+ * Where a multi-server listing's presence comes from: none on one server;
+ * alongside the aggregate for the filter's shows when a filter named few of
+ * them; after paging for the returned shows when a page, a search or a
+ * letter makes the answer a part of the library; else for every show.
+ */
+function seriesPresenceSource(
+  isSingleServer: boolean,
+  qualifyingKeys: string[] | null,
+  { paged, titleFiltered }: { paged: boolean; titleFiltered: boolean },
+): "none" | "library" | "qualifying" | "page" {
+  if (isSingleServer) return "none";
+  if (paged) return "page";
+  if (qualifyingKeys && qualifyingKeys.length <= PRESENCE_SCOPE_MAX_KEYS) return "qualifying";
+  if (titleFiltered) return "page";
+  return "library";
 }
 
 /**

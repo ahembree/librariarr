@@ -925,8 +925,25 @@ describe("syncTracearrHistory", () => {
       await syncTracearrHistory("server-1");
 
       expect(mockReconcile).toHaveBeenCalledTimes(1);
-      expect(mockReconcile).toHaveBeenCalledWith("server-1");
+      // Only the items this run wrote a play for: the rest of the server's
+      // rows are as the last reconcile left them.
+      expect(mockReconcile).toHaveBeenCalledWith("server-1", { mediaItemIds: ["item-1"] });
       expect(mockInvalidate).toHaveBeenCalledTimes(1);
+    });
+
+    it("reconciles every item the run wrote to, across pages, once each", async () => {
+      mockGetHistoryPage
+        .mockResolvedValueOnce({ records: [historyRecord({ id: "c1" }), historyRecord({ id: "c2" })], nextCursor: "n2" })
+        .mockResolvedValueOnce({ records: [historyRecord({ id: "c3" })], nextCursor: null });
+      mockResolve.mockImplementation((_index: unknown, record: { id: string }) => ({
+        mediaItemId: record.id === "c3" ? "item-2" : "item-1",
+      }));
+
+      await syncTracearrHistory("server-1");
+
+      expect(mockReconcile).toHaveBeenCalledTimes(1);
+      const [, scope] = mockReconcile.mock.calls[0] as [string, { mediaItemIds: string[] }];
+      expect([...scope.mediaItemIds].sort()).toEqual(["item-1", "item-2"]);
     });
 
     it("does not reconcile when nothing was imported", async () => {
@@ -1026,9 +1043,12 @@ describe("syncTracearrHistory", () => {
       }
     });
 
-    it("reports before the first fetch, while the join index is built", async () => {
+    it("reports before the first page lands, while the join index is built", async () => {
       const { updates, report } = progressRecorder();
       let updatesWhenIndexBuilt: WatchHistoryProgress[] = [];
+      // The index is built on the first page that holds one of this server's
+      // records, and before that page is reported.
+      mockGetHistoryPage.mockResolvedValueOnce({ records: [historyRecord()], nextCursor: null });
       mockBuildIndex.mockImplementationOnce(async () => {
         updatesWhenIndexBuilt = [...updates];
         return {
@@ -1243,10 +1263,16 @@ describe("syncTracearrHistory", () => {
       // derived from the rows already written, so the next run resumes from
       // exactly here. Rejecting instead would surface a deliberate cancel to
       // the job runner as a failed sync and (on the route) as an error event.
+      // The cancel landed while page 2 was in flight (requested while page 1
+      // was written): it is dropped, and page 1's row is kept.
       await expect(
         syncTracearrHistory("server-1", { signal: controller.signal }),
-      ).resolves.toMatchObject({ count: 2, backfillPending: true });
+      ).resolves.toMatchObject({ count: 1, backfillPending: true });
       expect(mockGetHistoryPage).toHaveBeenCalledTimes(2);
+      expect(insertCalls()).toHaveLength(1);
+      // The dropped request was told to stop, too.
+      const [, dropped] = mockGetHistoryPage.mock.calls[1] as [string, { signal: AbortSignal }];
+      expect(dropped.signal.aborted).toBe(true);
     });
 
     it("still reconciles play state and invalidates caches for what it imported", async () => {
@@ -1261,7 +1287,7 @@ describe("syncTracearrHistory", () => {
       // on a cancelled run would leave those columns reporting the connected
       // account's own views until some later run happened to finish.
       expect(mockReconcile).toHaveBeenCalledTimes(1);
-      expect(mockReconcile).toHaveBeenCalledWith("server-1");
+      expect(mockReconcile).toHaveBeenCalledWith("server-1", { mediaItemIds: ["item-1"] });
       expect(mockInvalidate).toHaveBeenCalledTimes(1);
     });
 
@@ -1835,6 +1861,8 @@ describe("syncTracearrHistory", () => {
         count: 1,
         backfillPending: true,
         backfillOutcome: "stopped",
+        // Built for the page it walked, and handed back for the recovery pass.
+        joinIndex: expect.objectContaining({ serverId: "server-1" }),
       });
     });
 
@@ -1857,7 +1885,7 @@ describe("syncTracearrHistory", () => {
       await expect(
         syncTracearrHistory("server-1", { passes: "backfill", deadlineMs }),
       ).resolves.toMatchObject({ count: 1, backfillPending: true });
-      expect(mockReconcile).toHaveBeenCalledWith("server-1");
+      expect(mockReconcile).toHaveBeenCalledWith("server-1", { mediaItemIds: ["item-1"] });
       expect(mockInvalidate).toHaveBeenCalledTimes(1);
     });
 
@@ -1881,7 +1909,7 @@ describe("syncTracearrHistory", () => {
       expect(insertCalls()).toHaveLength(1);
       // The same clean stop as a spent deadline: resumable, never "complete",
       // and not "errored" (which would make the job back off and burn retries).
-      expect(result).toEqual({ count: 1, backfillPending: true, backfillOutcome: "stopped" });
+      expect(result).toMatchObject({ count: 1, backfillPending: true, backfillOutcome: "stopped" });
       expect(mockPrisma.mediaServer.updateMany).not.toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({ tracearrBackfillComplete: true }),
@@ -2373,7 +2401,12 @@ describe("syncTracearrHistory", () => {
       const result = await syncTracearrHistory("server-1", { passes: "backfill" });
 
       expect(insertCalls()).toHaveLength(0);
-      expect(mockGetHistoryPage).toHaveBeenCalledTimes(1);
+      // Page 2 was requested while page 1 was being written; the refused write
+      // drops it, unread, and aborts the request.
+      expect(mockGetHistoryPage).toHaveBeenCalledTimes(2);
+      const [, dropped] = mockGetHistoryPage.mock.calls[1] as [string, { cursor: string; signal: AbortSignal }];
+      expect(dropped.cursor).toBe("cursor-2");
+      expect(dropped.signal.aborted).toBe(true);
       expect(result).toMatchObject({ count: 0, backfillOutcome: "stopped" });
       const check = mockPrisma.$queryRawUnsafe.mock.calls.find((args) =>
         (args[0] as string).includes("FOR SHARE"),
@@ -2781,8 +2814,11 @@ describe("syncTracearrHistory", () => {
         backfillComplete: false,
       });
       let seenDuring: ReturnType<typeof getTracearrImportActivity> = null;
+      // Page 3 is requested while page 2 is written — by then page 1 has
+      // committed, and the live readout shows exactly that page.
       mockGetHistoryPage
         .mockResolvedValueOnce({ records: [historyRecord({ id: "chain-1" })], nextCursor: "cursor-2" })
+        .mockResolvedValueOnce({ records: [historyRecord({ id: "chain-2" })], nextCursor: "cursor-3" })
         .mockImplementationOnce(async () => {
           seenDuring = getTracearrImportActivity("server-1");
           return { records: [], nextCursor: null };
@@ -2919,12 +2955,17 @@ describe("syncTracearrHistory", () => {
       const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => clock);
       let page = 0;
       mockGetHistoryPage.mockImplementation(async () => {
-        clock += 5_000; // past IMPORT_PROGRESS_THROTTLE_MS
         page++;
         return {
           records: [historyRecord({ id: `chain-${page}` })],
           nextCursor: page < 3 ? `cursor-${page}` : null,
         };
+      });
+      // Time passes as each page is WRITTEN (the next page is fetched during
+      // the write, so the write is what spaces the commits apart).
+      mockPrisma.$executeRawUnsafe.mockImplementation(async (sql: string) => {
+        if (sql.includes('INSERT INTO "WatchHistory"')) clock += 5_000; // past IMPORT_PROGRESS_THROTTLE_MS
+        return 1;
       });
 
       try {
@@ -3101,4 +3142,197 @@ describe("syncTracearrHistory", () => {
     });
   });
 
+  describe("work decided before anything expensive", () => {
+    it("builds no join index for a backfill slice with the archive already walked", async () => {
+      storedRows({
+        min: new Date("2021-01-01T00:00:00.000Z"),
+        max: new Date("2025-07-10T12:00:00.000Z"),
+        backfillComplete: true,
+      });
+
+      const result = await syncTracearrHistory("server-1", { passes: "backfill" });
+
+      // Nothing to walk: queued after every forward sync, this slice used to
+      // load every item on the server for nothing.
+      expect(mockGetHistoryPage).not.toHaveBeenCalled();
+      expect(mockBuildIndex).not.toHaveBeenCalled();
+      expect(result).toEqual({ count: 0, backfillPending: false, backfillOutcome: undefined });
+      // The account map is still asked for: the healthy run's release of the
+      // evidence marker is conditioned on it.
+      expect(mockGetServerAccountNames).toHaveBeenCalledTimes(1);
+      expect(mockPrisma.mediaServer.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({ data: { watchHistorySyncedAt: expect.any(Date) } }),
+      );
+    });
+
+    it("asks Tracearr for nothing on a forward run with no stored plays to catch up from", async () => {
+      neverBackfilled();
+
+      await syncTracearrHistory("server-1", { passes: "forward" });
+
+      expect(mockGetHistoryPage).not.toHaveBeenCalled();
+      expect(mockBuildIndex).not.toHaveBeenCalled();
+      // No pass could write, so no map is needed and nothing warns about one.
+      expect(mockGetServerAccountNames).not.toHaveBeenCalled();
+      expect(vi.mocked(logger.warn)).not.toHaveBeenCalledWith(
+        "WatchHistory",
+        expect.stringContaining("account-name map is unavailable"),
+      );
+    });
+
+    it("builds no join index when every page it walks is empty", async () => {
+      neverBackfilled();
+      mockGetHistoryPage.mockResolvedValueOnce({ records: [], nextCursor: null });
+
+      await syncTracearrHistory("server-1", { passes: "backfill" });
+
+      expect(mockGetHistoryPage).toHaveBeenCalledTimes(1);
+      expect(mockBuildIndex).not.toHaveBeenCalled();
+    });
+
+    it("builds the join index once, on the first page with this server's records", async () => {
+      neverBackfilled();
+      mockGetHistoryPage
+        .mockResolvedValueOnce({
+          records: [historyRecord({ id: "foreign", server_id: "99999999-9999-9999-9999-999999999999" })],
+          nextCursor: "c2",
+        })
+        .mockResolvedValueOnce({ records: [historyRecord({ id: "a" })], nextCursor: "c3" })
+        .mockResolvedValueOnce({ records: [historyRecord({ id: "b" })], nextCursor: null });
+
+      const result = await syncTracearrHistory("server-1", { passes: "backfill" });
+
+      expect(mockBuildIndex).toHaveBeenCalledTimes(1);
+      expect(mockBuildIndex).toHaveBeenCalledWith("server-1");
+      expect(result.joinIndex).toEqual(expect.objectContaining({ serverId: "server-1" }));
+      expect(result.count).toBe(2);
+    });
+  });
+
+  describe("the next page is requested while the current one is written", () => {
+    it("asks for page 2 before page 1's rows are written, and still commits in order", async () => {
+      neverBackfilled();
+      const order: string[] = [];
+      mockGetHistoryPage.mockImplementation(async (_server: string, opts: { cursor?: string }) => {
+        order.push(`fetch ${opts.cursor ?? "first"}`);
+        return opts.cursor === "c2"
+          ? { records: [historyRecord({ id: "b" })], nextCursor: null }
+          : { records: [historyRecord({ id: "a" })], nextCursor: "c2" };
+      });
+      mockPrisma.$executeRawUnsafe.mockImplementation(async (sql: string, ...params: unknown[]) => {
+        if (sql.includes('INSERT INTO "WatchHistory"')) {
+          const columns = sql
+            .slice(sql.indexOf("(") + 1, sql.indexOf(")"))
+            .split(",")
+            .map((name) => name.trim().replace(/"/g, ""));
+          order.push(`write ${params[columns.indexOf("sourceEventId")]}`);
+        }
+        return 1;
+      });
+
+      const result = await syncTracearrHistory("server-1", { passes: "backfill" });
+
+      expect(order).toEqual(["fetch first", "fetch c2", "write a", "write b"]);
+      // "Exhausted" still only on a null cursor: the walk finished the archive.
+      expect(result).toMatchObject({ count: 2, backfillOutcome: "exhausted", backfillPending: false });
+      expect(mockGetHistoryPage).toHaveBeenCalledTimes(2);
+    });
+
+    it("requests no next page once the slice is spent, a sync is waiting, or a cursor repeats", async () => {
+      storedRows({ min: new Date("2021-01-01T00:00:00Z"), max: new Date("2025-07-10T12:00:00Z"), backfillComplete: false });
+      mockGetHistoryPage.mockResolvedValue({ records: [historyRecord({ id: "a" })], nextCursor: "same" });
+
+      // A repeated cursor: page 1 → "same", page 2 → "same" again, which stops
+      // the walk; page 3 is never requested.
+      const repeated = await syncTracearrHistory("server-1", { passes: "backfill" });
+      expect(repeated.backfillOutcome).toBe("stopped");
+      expect(mockGetHistoryPage).toHaveBeenCalledTimes(2);
+
+      mockGetHistoryPage.mockClear();
+      await syncTracearrHistory("server-1", { passes: "backfill", deadlineMs: Date.now() - 1 });
+      expect(mockGetHistoryPage).toHaveBeenCalledTimes(1);
+
+      mockGetHistoryPage.mockClear();
+      await syncTracearrHistory("server-1", { passes: "backfill", yieldTo: () => true });
+      expect(mockGetHistoryPage).toHaveBeenCalledTimes(1);
+    });
+
+    it("drops a requested page whose current page failed to write, and reports the run as errored", async () => {
+      neverBackfilled();
+      mockGetHistoryPage
+        .mockResolvedValueOnce({ records: [historyRecord({ id: "a" })], nextCursor: "c2" })
+        .mockResolvedValueOnce({ records: [historyRecord({ id: "b" })], nextCursor: null });
+      mockPrisma.$executeRawUnsafe.mockImplementation(async (sql: string) => {
+        if (sql.includes('INSERT INTO "WatchHistory"')) throw new Error("deadlock detected");
+        return 1;
+      });
+
+      const result = await syncTracearrHistory("server-1", { passes: "backfill" });
+
+      expect(result).toMatchObject({ count: 0, backfillOutcome: "errored", backfillPending: true });
+      const [, dropped] = mockGetHistoryPage.mock.calls[1] as [string, { signal: AbortSignal }];
+      expect(dropped.signal.aborted).toBe(true);
+      // Nothing it failed to write moved the resume cursor.
+      expect(mockPrisma.mediaServer.updateMany).not.toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ tracearrBackfillCursorAt: expect.anything() }) }),
+      );
+    });
+
+    it("an abort of the run's signal reaches the page in flight", async () => {
+      neverBackfilled();
+      const controller = new AbortController();
+      let inFlight: AbortSignal | undefined;
+      mockGetHistoryPage
+        .mockResolvedValueOnce({ records: [historyRecord({ id: "a" })], nextCursor: "c2" })
+        .mockImplementationOnce(async (_server: string, opts: { signal: AbortSignal }) => {
+          inFlight = opts.signal;
+          return { records: [], nextCursor: null };
+        });
+      mockPrisma.$executeRawUnsafe.mockImplementation(async (sql: string) => {
+        if (sql.includes('INSERT INTO "WatchHistory"')) controller.abort();
+        return 1;
+      });
+
+      await syncTracearrHistory("server-1", { passes: "backfill", signal: controller.signal });
+
+      expect(inFlight?.aborted).toBe(true);
+    });
+  });
+
+  describe("resolving the instance on a multi-instance install", () => {
+    it("asks every instance at once and keeps the oldest one that monitors the server", async () => {
+      mockPrisma.tracearrInstance.findMany.mockResolvedValueOnce([
+        { id: "a", name: "A", url: "http://a:8080", apiKey: "k1" },
+        { id: "b", name: "B", url: "http://b:8080", apiKey: "k2" },
+        { id: "c", name: "C", url: "http://c:8080", apiKey: "k3" },
+      ]);
+      const started: string[] = [];
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      mockListServers.mockImplementation(async (url: string) => {
+        started.push(url);
+        if (url === "http://a:8080") {
+          await gate;
+          throw new Error("ETIMEDOUT");
+        }
+        return [{ id: TRACEARR_SERVER_ID, name: "Plex", type: "plex", online: true, activeStreams: 0 }];
+      });
+      setTimeout(release, 5);
+      storedRows({ min: new Date("2025-07-10T11:00:00Z"), max: new Date("2025-07-10T12:00:00Z"), backfillComplete: true });
+
+      await syncTracearrHistory("server-1", { passes: "forward" });
+
+      // B and C were asked while A was still hanging, and B (older than C) won.
+      expect(started).toEqual(["http://a:8080", "http://b:8080", "http://c:8080"]);
+      expect(vi.mocked(logger.warn)).toHaveBeenCalledWith(
+        "WatchHistory",
+        expect.stringContaining('Tracearr instance "A"'),
+        expect.anything(),
+      );
+      expect(vi.mocked(logger.info)).toHaveBeenCalledWith(
+        "WatchHistory",
+        expect.stringContaining('from "B"'),
+      );
+    });
+  });
 });

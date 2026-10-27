@@ -18,6 +18,18 @@ function respond(body: unknown) {
   return { ok: true, status: 200, json: async () => body };
 }
 
+/** The record requests only — the panel also starts its sections' requests. */
+const recordCalls = () => fetchMock.mock.calls.filter(([url]) => /^\/api\/media\/[^/?]+$/.test(url));
+
+/** Queue answers for the record requests alone, in order; every other request is a 200 `{}`. */
+function recordAnswers(...answers: unknown[]) {
+  fetchMock.mockImplementation((url: string) => {
+    if (!/^\/api\/media\/[^/?]+$/.test(url)) return Promise.resolve(respond({}));
+    const next = answers.shift();
+    return next instanceof Promise ? next : Promise.resolve(next);
+  });
+}
+
 beforeEach(() => {
   localStorage.clear();
   fetchMock.mockReset();
@@ -59,11 +71,52 @@ describe("useMediaDetailPanel", () => {
     prefetchMediaRecord("a");
     const { result } = renderHook(() => useMediaDetailPanel());
     await act(() => result.current.open({ id: "a", mediaType: "MOVIE" }));
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(recordCalls()).toHaveLength(1);
     expect(result.current.panelProps?.item.title).toBe("Title a");
     // Taken once: opening it again reads the current record.
     await act(() => result.current.open({ id: "a", mediaType: "MOVIE" }));
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(recordCalls()).toHaveLength(2);
+  });
+
+  it("starts the panel's id-keyed requests with the record, for the sections that show them", async () => {
+    fetchMock.mockResolvedValue(respond({ item: record("a") }));
+    const { result } = renderHook(() => useMediaDetailPanel());
+    const urls = () => fetchMock.mock.calls.map(([url]) => url);
+
+    act(() => void result.current.open({ id: "m", mediaType: "MOVIE" }));
+    expect(urls()).toEqual(["/api/media/m", "/api/media/m/arr-info", "/api/media/m/seerr-info", "/api/media/m/plays?page=1&limit=5"]);
+    // The content's own reads take them instead of asking again.
+    expect(detailPrefetch.take("/api/media/m/arr-info")).not.toBeNull();
+    expect(detailPrefetch.take("/api/media/m/plays?page=1&limit=5")).not.toBeNull();
+
+    // An episode's plays are scoped by series identity, which only its record carries.
+    fetchMock.mockClear();
+    act(() => void result.current.open({ id: "e", mediaType: "SERIES" }));
+    expect(urls()).toEqual(["/api/media/e", "/api/media/e/arr-info", "/api/media/e/seerr-info"]);
+
+    // A track: no Seerr.
+    fetchMock.mockClear();
+    act(() => void result.current.open({ id: "t", mediaType: "MUSIC" }));
+    expect(urls()).toEqual(["/api/media/t", "/api/media/t/arr-info", "/api/media/t/plays?page=1&limit=5"]);
+
+    // An artist group: no per-item plays and no Arr/Seerr cards.
+    fetchMock.mockClear();
+    const group = { title: "Artist", memberCount: 12 };
+    act(() => void result.current.open({ id: "g", mediaType: "MUSIC", group }));
+    expect(urls()).toEqual(["/api/media/g"]);
+
+    // A show group keeps its integrations.
+    fetchMock.mockClear();
+    await act(() => result.current.open({ id: "s", mediaType: "SERIES", group }));
+    expect(urls()).toEqual(["/api/media/s", "/api/media/s/arr-info", "/api/media/s/seerr-info"]);
+  });
+
+  it("hands the panel the record exactly as loaded, beside the item with the group laid over it", async () => {
+    fetchMock.mockResolvedValue(respond({ item: record("s", { title: "Pilot", parentTitle: "Show", type: "SERIES" }) }));
+    const { result } = renderHook(() => useMediaDetailPanel());
+    await act(() => result.current.open({ id: "s", mediaType: "SERIES", group: { title: "Show", memberCount: 10 } }));
+    expect(result.current.panelProps?.record?.title).toBe("Pilot");
+    expect(result.current.panelProps?.item.title).not.toBe(result.current.panelProps?.record?.title);
   });
 
   it("opens with the fetched record", async () => {
@@ -161,8 +214,7 @@ describe("useMediaDetailPanel", () => {
   });
 
   it("keeps the previous panel when the record cannot be read", async () => {
-    fetchMock.mockResolvedValueOnce(respond({ item: record("a") }));
-    fetchMock.mockResolvedValueOnce({ ok: false, status: 500, json: async () => ({}) });
+    recordAnswers(respond({ item: record("a") }), { ok: false, status: 500, json: async () => ({}) });
     const { result } = renderHook(() => useMediaDetailPanel());
     await act(() => result.current.open({ id: "a", mediaType: "MOVIE" }));
     await act(() => result.current.open({ id: "b", mediaType: "MOVIE", label: "B" }));
@@ -192,8 +244,7 @@ describe("useMediaDetailPanel", () => {
   });
 
   it("closes the previous item's panel when the clicked one is gone", async () => {
-    fetchMock.mockResolvedValueOnce(respond({ item: record("a") }));
-    fetchMock.mockResolvedValueOnce({ ok: false, status: 404, json: async () => ({}) });
+    recordAnswers(respond({ item: record("a") }), { ok: false, status: 404, json: async () => ({}) });
     const { result } = renderHook(() => useMediaDetailPanel());
     await act(() => result.current.open({ id: "a", mediaType: "MOVIE" }));
     expect(result.current.selectedId).toBe("a");
@@ -222,8 +273,7 @@ describe("useMediaDetailPanel", () => {
 
   it("stays quiet about a click a later one replaced", async () => {
     let resolveFirst!: (v: unknown) => void;
-    fetchMock.mockReturnValueOnce(new Promise((r) => { resolveFirst = r; }));
-    fetchMock.mockResolvedValueOnce(respond({ item: record("b") }));
+    recordAnswers(new Promise((r) => { resolveFirst = r; }), respond({ item: record("b") }));
     const { result } = renderHook(() => useMediaDetailPanel());
     let first!: Promise<void>;
     act(() => { first = result.current.open({ id: "a", mediaType: "MOVIE" }); });

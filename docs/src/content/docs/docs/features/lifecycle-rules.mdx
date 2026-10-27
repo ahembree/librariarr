@@ -405,6 +405,9 @@ Before executing any actions, use the **Preview** feature to see which media ite
 - On an existing rule set, marks each item as **new**, **retained** or **removed** compared with its current matches
 - Runs when you click **Preview** (and **Test Media** checks one item of your choice against the rules)
 - Shows a live progress bar through each phase (fetching *arr/Seerr metadata, evaluating rules, computing matched criteria) so large libraries don't just spin
+- Reuses the *arr and Seerr data it fetched for 45 seconds, so **Preview**, **Test Media** and the **Match Changes Preview** of **Save and re-detect**, pressed one after another, share one read of your *arr and Seerr libraries instead of each reading them again. A change made in Sonarr, Radarr, Lidarr or Seerr (a tag added there, say) can therefore take up to 45 seconds to show in a preview. Adding, editing or removing an *arr or Seerr instance in Librariarr discards the kept data at once, and running actions discards the *arr data. Detection and the actions themselves never use it: they always read fresh data.
+- **Test Media** asks each *arr instance for the one item being tested rather than its whole library, unless a preview has just fetched the library anyway
+- Radarr's **Custom Format Score** is fetched only for a rule set that uses it, since it is the slowest part of reading Radarr (one request per 100 movies)
 
 Preview is **refused** whenever the rules can't be evaluated faithfully, and the reason is shown as an error notification rather than an empty or stale result list. The same guard that pauses detection applies here, so a preview never shows matches that detection would refuse to produce:
 

@@ -1,7 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, useMemo, type ReactNode } from "react";
-import { useVirtualizer } from "@tanstack/react-virtual";
+import { useState, useEffect, useCallback, useRef, useMemo, memo, type ReactNode } from "react";
 import { useMediaDetailPanel } from "@/hooks/use-media-detail-panel";
 import { groupOfRow, toDetailPanelMediaType } from "@/lib/media/detail-panel-item";
 import { MediaDetailSidePanel } from "@/components/media-detail-side-panel";
@@ -44,7 +43,6 @@ import {
   Trash2,
   ChevronDown,
   Search,
-  Loader2,
   Copy,
   LayoutGrid,
   TableProperties,
@@ -67,11 +65,19 @@ import { useIntegrationsHealth, deriveIntegrationsStatus, arrTypeForMediaType, t
 import { hasArrRules, hasSeerrRules, type QueryGroup, type QueryDefinition } from "@/lib/query/types";
 import type { MediaItemWithRelations } from "@/lib/types";
 import { DataTable, type DataTableColumn } from "@/components/data-table";
-import { MediaCard, CARD_CONTENT_HEIGHT, PRIORITY_ROWS } from "@/components/media-card";
-import { MediaHoverPopover } from "@/components/media-hover-popover";
+import { MediaCard } from "@/components/media-card";
+import { MediaHoverPopover, hoverDataFromListItem } from "@/components/media-hover-popover";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { CardSizeControl } from "@/components/card-size-control";
-import { useCardSize, estimateContentWidth } from "@/hooks/use-card-size";
+import { useCardSize } from "@/hooks/use-card-size";
+import { useLocalStorage } from "@/hooks/use-local-storage";
+import { useStoredSet } from "@/hooks/use-stored-set";
+import { useLibraryTypes } from "@/hooks/use-library-types";
+import { useVirtualPosterGrid, POSTER_ASPECT } from "@/hooks/use-virtual-poster-grid";
+import { LIBRARY_CARD_CONTENT_HEIGHT } from "@/hooks/use-library-grid";
+import { VirtualCardGrid, type GridCardContext } from "@/components/virtual-card-grid";
+import { PageHeader } from "@/components/page-header";
+import { LoadingButton } from "@/components/loading-button";
 import {
   audioProfileChipLabel,
   dynamicRangeChipLabel,
@@ -151,6 +157,30 @@ interface QueryResultItem {
     mediaServer: { id: string; name: string; type: string };
   } | null;
   servers?: Array<{ serverId: string; serverName: string; serverType: string }>;
+}
+
+interface IntegrationInstanceRow {
+  id: string;
+  name: string;
+  enabled?: boolean;
+}
+
+/** `GET /api/integrations/instances`: each type's instances, as its own route lists them. */
+interface IntegrationInstances {
+  radarr?: IntegrationInstanceRow[];
+  sonarr?: IntegrationInstanceRow[];
+  lidarr?: IntegrationInstanceRow[];
+  seerr?: IntegrationInstanceRow[];
+  /** With `?withMetadata=1`: every requester name across the enabled Seerr instances. */
+  seerrUsers?: string[];
+}
+
+function listedInstances(rows: IntegrationInstanceRow[] | undefined) {
+  return (rows ?? []).map((i) => ({ id: i.id, name: i.name, enabled: i.enabled !== false }));
+}
+
+function enabledSeerr(data: IntegrationInstances) {
+  return (data.seerr ?? []).filter((i) => i.enabled !== false);
 }
 
 const FALLBACK_ICONS: Record<string, "movie" | "series" | "music"> = {
@@ -274,6 +304,11 @@ const COLUMN_GROUPS: Record<string, string> = {
   playback: "Playback",
 };
 
+/**
+ * The visible columns, stored as a list; none stored (or an empty list) means
+ * the defaults. Read through `useStoredSet`: the page wrote it with a bare
+ * `localStorage.setItem`, which throws in a private window.
+ */
 const VISIBLE_KEY = "query-visible-columns";
 
 /** Columns pinned to the table's left edge until the user changes them. */
@@ -282,21 +317,99 @@ const QUERY_TABLE_PINNING = {
   defaultPinned: ["type", "title", "year"],
 };
 
-function loadVisibleColumns(): Set<string> {
-  try {
-    const stored = localStorage.getItem(VISIBLE_KEY);
-    if (stored) return new Set(JSON.parse(stored));
-  } catch { /* use defaults */ }
-  return new Set<string>();
+/** The artwork a result shows: a show's or an episode's series poster, else its own. */
+function resultImageUrl(item: QueryResultItem): string {
+  return `/api/media/${item.id}/image${item.type === "SERIES" || item.parentTitle ? "?type=parent" : ""}`;
 }
 
-function saveVisibleColumns(cols: Set<string>) {
-  localStorage.setItem(VISIBLE_KEY, JSON.stringify([...cols]));
+/**
+ * A result's popover: a grouped row (a show, an artist) passes its counts —
+ * tracks for an artist, never "episodes" — and an individual one its file.
+ */
+function resultHoverData(item: QueryResultItem) {
+  return hoverDataFromListItem(item, { title: resultTitle(item) });
 }
 
-const GAP = 16;
-const CARD_BORDER = 2; // 1px top + 1px bottom border on Card
-const QUALITY_BAR_HEIGHT = 12; // h-1 quality bar (4px) + py-1 padding (8px)
+function queryResultTableHover(item: QueryResultItem) {
+  return <MediaHoverPopover imageUrl={resultImageUrl(item)} data={resultHoverData(item)} />;
+}
+
+const resultKey = (item: QueryResultItem) => item.id;
+
+interface QueryResultCardProps {
+  item: QueryResultItem;
+  selected: boolean;
+  priority: boolean;
+  showServers: boolean;
+  getHex: ReturnType<typeof useChipColors>["getHex"];
+  onToggle: (id: string) => void;
+  onOpen: (item: QueryResultItem) => void;
+}
+
+/**
+ * One result in the card grid, with its selection checkbox. Memoised on the
+ * row and its selected state: the grid's `renderItem` changes with every
+ * selection, and only the card whose checkbox moved re-renders for it.
+ */
+const QueryResultCard = memo(function QueryResultCard({
+  item,
+  selected,
+  priority,
+  showServers,
+  getHex,
+  onToggle,
+  onOpen,
+}: QueryResultCardProps) {
+  return (
+    <div
+      className={cn(
+        "relative rounded-lg",
+        selected && "ring-2 ring-primary ring-offset-2 ring-offset-background",
+      )}
+    >
+      <div
+        className="absolute left-2 top-2 z-10 flex rounded bg-background/80 p-0.5 backdrop-blur"
+        onClick={(e) => { e.stopPropagation(); onToggle(item.id); }}
+      >
+        <Checkbox
+          checked={selected}
+          onClick={(e) => e.stopPropagation()}
+          onCheckedChange={() => onToggle(item.id)}
+          aria-label={`Select ${resultTitle(item)}`}
+        />
+      </div>
+      <MediaCard
+        priority={priority}
+        imageUrl={resultImageUrl(item)}
+        title={resultTitle(item)}
+        fallbackIcon={FALLBACK_ICONS[item.type] ?? "movie"}
+        onClick={() => onOpen(item)}
+        servers={showServers ? item.servers : undefined}
+        metadata={
+          <MetadataLine stacked>
+            {item.type !== "SERIES" && item.year && <MetadataItem icon={<Calendar />}>{item.year}</MetadataItem>}
+            {item.matchedEpisodes != null && (
+              <MetadataItem icon={<Layers />}>
+                {item.seasonCount}S / {item.matchedEpisodes}E
+              </MetadataItem>
+            )}
+            {item.matchedEpisodes == null && formatDuration(item.duration) && (
+              <MetadataItem icon={<Clock />}>{formatDuration(item.duration)}</MetadataItem>
+            )}
+            {formatFileSize(item.fileSize) && <MetadataItem icon={<HardDrive />}>{formatFileSize(item.fileSize)}</MetadataItem>}
+          </MetadataLine>
+        }
+        badges={
+          <ColorChip className={MEDIA_TYPE_BADGE_COLORS[item.type] ?? ""}>
+            {mediaTypeLabel(item.type)}
+          </ColorChip>
+        }
+        qualityBar={qualitySegments(qualityChips(item, item.type === "MUSIC" ? "music" : "video"), getHex)}
+        hoverContent={<MediaHoverPopover data={resultHoverData(item)} />}
+      />
+    </div>
+  );
+});
 
 // ── Component ───────────────────────────────────────────────────
 
@@ -336,8 +449,14 @@ export default function QueryPage() {
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("asc");
   const [includeEpisodes, setIncludeEpisodes] = useState(false);
   const [arrServerIds, setArrServerIds] = useState<{ radarr?: string; sonarr?: string; lidarr?: string }>({});
-  // Media types with an enabled library; null until loaded (then every type counts).
-  const [libraryTypes, setLibraryTypes] = useState<Set<string> | null>(null);
+  // Media types with an enabled library, from the tab's store (the shell's
+  // copy first, kept current by events) rather than a request of this page's
+  // own; null until known (then every type counts).
+  const libraryTypesData = useLibraryTypes();
+  const libraryTypes = useMemo(
+    () => (libraryTypesData ? new Set<string>(libraryTypesData.types) : null),
+    [libraryTypesData],
+  );
 
   // Arr instances
   const [arrInstances, setArrInstances] = useState<{
@@ -383,20 +502,14 @@ export default function QueryPage() {
   const [hasRun, setHasRun] = useState(false);
   const { state: queryProgress, handleUpdate: onQueryProgress, reset: resetQueryProgress } = useStreamProgress();
 
-  // View state
-  const [viewMode, setViewMode] = useState<"table" | "cards">("table");
+  // View state, read from this browser's storage without an effect (the cards
+  // painted first, then switched) and without throwing in a private window.
+  const [storedViewMode, setViewMode] = useLocalStorage<"table" | "cards">("query-view-mode", "table");
+  const viewMode: "table" | "cards" = storedViewMode === "cards" ? "cards" : "table";
   const { size, setSize, columns: cardColumns } = useCardSize();
 
   // Column visibility
-  const [visibleCols, setVisibleCols] = useState<Set<string>>(() => new Set<string>());
-
-  // Load preferences on mount
-  useEffect(() => {
-    const stored = localStorage.getItem("query-view-mode") as "table" | "cards" | null;
-    if (stored) setViewMode(stored);
-    const cols = loadVisibleColumns();
-    if (cols.size > 0) setVisibleCols(cols);
-  }, []);
+  const [visibleCols, visibleColActions] = useStoredSet(VISIBLE_KEY);
 
   // Saved queries
   const [savedQueries, setSavedQueries] = useState<SavedQuery[]>([]);
@@ -438,61 +551,49 @@ export default function QueryPage() {
       })
       .catch(() => {});
 
-    // The media types the user has libraries for, so the Arr warning names
-    // only types a query could return (the engine warns the same way).
-    fetch("/api/media/library-types")
+    // Every integration's instances in one request (it was one per type), and
+    // the Seerr requester names beside them (`withMetadata`, which replaced
+    // the per-instance metadata chain that waited for the Seerr list). Two
+    // requests, side by side, so a slow or unreachable Seerr instance never
+    // holds back the Arr pickers or the connection warnings.
+    fetch("/api/integrations/instances")
       .then((r) => (r.ok ? r.json() : null))
-      .then((data) => setLibraryTypes(new Set((data?.types ?? []) as string[])))
-      .catch(() => {});
-
-    // Fetch Arr instances (all 3 types in parallel)
-    Promise.all([
-      fetch("/api/integrations/radarr").then((r) => r.ok ? r.json() : null).catch(() => null),
-      fetch("/api/integrations/sonarr").then((r) => r.ok ? r.json() : null).catch(() => null),
-      fetch("/api/integrations/lidarr").then((r) => r.ok ? r.json() : null).catch(() => null),
-    ]).then(([radarrData, sonarrData, lidarrData]) => {
-      // A disabled instance answers no criteria (the engine leaves its media
-      // type out), so it is listed but marked and never counted as selected.
-      const toInstances = (data: { instances?: Array<{ id: string; name: string; enabled?: boolean }> } | null) =>
-        (data?.instances ?? []).map((i) => ({ id: i.id, name: i.name, enabled: i.enabled !== false }));
-      setArrInstances({
-        radarr: toInstances(radarrData),
-        sonarr: toInstances(sonarrData),
-        lidarr: toInstances(lidarrData),
-      });
-    });
-
-    // Fetch Seerr instances to determine connection status
-    fetch("/api/integrations/seerr")
-      .then((r) => r.ok ? r.json() : null)
-      .then((data) => {
+      .then((data: IntegrationInstances | null) => {
+        if (!data) return;
+        // A disabled instance answers no criteria (the engine leaves its media
+        // type out), so it is listed but marked and never counted as selected.
+        setArrInstances({
+          radarr: listedInstances(data.radarr),
+          sonarr: listedInstances(data.sonarr),
+          lidarr: listedInstances(data.lidarr),
+        });
         // Only enabled instances answer Seerr criteria (the engine merges every
         // enabled one); treating a disabled one as connected hid the
         // "can't be evaluated" warning.
-        const instances = ((data?.instances ?? []) as Array<{ id: string; enabled?: boolean }>)
-          .filter((i) => i.enabled !== false);
-        setSeerrConnected(instances.length > 0);
-        setSeerrInstanceIds(instances.map((i) => i.id));
-        if (instances.length > 0) {
-          Promise.all(
-            instances.map((inst) =>
-              fetch(`/api/integrations/seerr/${inst.id}/metadata`)
-                .then((r) => (r.ok ? r.json() : null))
-                .then((metaData) => (metaData?.users ?? []) as string[])
-                .catch(() => [] as string[]),
-            ),
-          ).then((lists) => {
-            const users = [...new Set(lists.flat())].sort((a, b) => a.localeCompare(b));
-            setDistinctValues((prev) => ({ ...prev, seerrRequestedBy: users }));
-          });
-        }
+        const seerr = enabledSeerr(data);
+        setSeerrConnected(seerr.length > 0);
+        setSeerrInstanceIds(seerr.map((i) => i.id));
+      })
+      .catch(() => {});
+
+    fetch("/api/integrations/instances?withMetadata=1")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: IntegrationInstances | null) => {
+        // Set only when an enabled instance exists, as before: with none the
+        // field stays a free-text input rather than an empty dropdown.
+        if (!data || enabledSeerr(data).length === 0) return;
+        const users = Array.isArray(data.seerrUsers) ? data.seerrUsers : [];
+        setDistinctValues((prev) => ({ ...prev, seerrRequestedBy: users }));
       })
       .catch(() => {});
   }, []);
 
   // Fetch Arr metadata when selected Arr servers change (for dropdown distinct
-  // values AND the action bar's per-family quality profiles + tags).
+  // values AND the action bar's per-family quality profiles + tags). An answer
+  // for a selection already changed again is dropped: it would show the
+  // previous instance's profiles and tags under the new one.
   useEffect(() => {
+    let cancelled = false;
     const fetchArrMetadata = async () => {
       const meta: Record<ArrFamily, ArrFamilyMeta> = {
         radarr: { qualityProfiles: [], tags: [] },
@@ -528,6 +629,7 @@ export default function QueryPage() {
       if (arrServerIds.sonarr) promises.push(fetchFamily("sonarr", arrServerIds.sonarr));
       if (arrServerIds.lidarr) promises.push(fetchFamily("lidarr", arrServerIds.lidarr));
       await Promise.all(promises);
+      if (cancelled) return;
 
       setArrMeta(meta);
 
@@ -550,23 +652,30 @@ export default function QueryPage() {
     };
 
     if (arrServerIds.radarr || arrServerIds.sonarr || arrServerIds.lidarr) {
-      fetchArrMetadata();
+      void fetchArrMetadata();
     } else {
-      setArrMeta({
-        radarr: { qualityProfiles: [], tags: [] },
-        sonarr: { qualityProfiles: [], tags: [] },
-        lidarr: { qualityProfiles: [], tags: [] },
+      // Deferred out of the effect body, like the fetch's own updates.
+      queueMicrotask(() => {
+        if (cancelled) return;
+        setArrMeta({
+          radarr: { qualityProfiles: [], tags: [] },
+          sonarr: { qualityProfiles: [], tags: [] },
+          lidarr: { qualityProfiles: [], tags: [] },
+        });
+        setDistinctValues((prev) => ({
+          ...prev,
+          arrTag: [],
+          arrQualityProfile: [],
+          arrOriginalLanguage: [],
+          arrStatus: [],
+          arrSeriesType: [],
+          arrQualityName: [],
+        }));
       });
-      setDistinctValues((prev) => ({
-        ...prev,
-        arrTag: [],
-        arrQualityProfile: [],
-        arrOriginalLanguage: [],
-        arrStatus: [],
-        arrSeriesType: [],
-        arrQualityName: [],
-      }));
     }
+    return () => {
+      cancelled = true;
+    };
   }, [arrServerIds]);
 
   // ── All column definitions (with chip styles) ──
@@ -801,22 +910,16 @@ export default function QueryPage() {
   }, [allColumns, visibleCols]);
 
   const toggleColumn = useCallback((colId: string) => {
-    setVisibleCols((prev) => {
-      const next = new Set(prev.size === 0
-        ? allColumns.filter((c) => c.defaultVisible).map((c) => c.id)
-        : prev,
-      );
-      if (next.has(colId)) {
-        // Don't allow hiding title
-        if (colId === "title") return next;
-        next.delete(colId);
-      } else {
-        next.add(colId);
-      }
-      saveVisibleColumns(next);
-      return next;
-    });
-  }, [allColumns]);
+    // Don't allow hiding title
+    if (colId === "title" && (visibleCols.size === 0 || visibleCols.has("title"))) return;
+    const next = new Set(visibleCols.size === 0
+      ? allColumns.filter((c) => c.defaultVisible).map((c) => c.id)
+      : visibleCols,
+    );
+    if (next.has(colId)) next.delete(colId);
+    else next.add(colId);
+    visibleColActions.replace(next);
+  }, [allColumns, visibleCols, visibleColActions]);
 
   const effectiveVisible = useMemo(() => {
     if (visibleCols.size === 0) {
@@ -969,9 +1072,14 @@ export default function QueryPage() {
           const d = JSON.parse(raw) as Partial<QueryDraft>;
           const def = d?.definition;
           if (def && Array.isArray(def.groups) && def.groups.length > 0) {
-            applyQueryDefinition(def);
-            if (d.activeQueryId) setActiveQueryId(d.activeQueryId);
-            setDraftRestored(true);
+            // Read now, applied just after the effect: the restore's state
+            // updates must not run inside the effect body. The persistence
+            // below then mirrors the restored builder back into the draft.
+            queueMicrotask(() => {
+              applyQueryDefinition(def);
+              if (d.activeQueryId) setActiveQueryId(d.activeQueryId);
+              setDraftRestored(true);
+            });
           }
         }
       } catch {
@@ -1362,82 +1470,49 @@ export default function QueryPage() {
     });
   }, [openPanel]);
 
-  const handleViewModeChange = (mode: "table" | "cards") => {
-    setViewMode(mode);
-    localStorage.setItem("query-view-mode", mode);
-  };
-
   const activeQuery = savedQueries.find((q) => q.id === activeQueryId);
 
-  // ── Card grid virtualizer ──
-
-  const [gridNode, setGridNode] = useState<HTMLDivElement | null>(null);
-  const gridContainerRef = useCallback((node: HTMLDivElement | null) => {
-    setGridNode(node);
+  const handleTableSort = useCallback((id: string, order: "asc" | "desc") => {
+    setSortBy(id);
+    setSortOrder(order);
   }, []);
-  const scrollElementRef = useRef<HTMLElement | null>(null);
-  const [scrollMargin, setScrollMargin] = useState(0);
 
-  useEffect(() => {
-    if (!gridNode) {
-      scrollElementRef.current = null;
-      setScrollMargin(0);
-      return;
-    }
-    // Walk up the DOM to find the nearest scrollable ancestor
-    let el: HTMLElement | null = gridNode.parentElement;
-    while (el) {
-      const style = getComputedStyle(el);
-      if (style.overflowY === "auto" || style.overflowY === "scroll") {
-        scrollElementRef.current = el;
-        break;
-      }
-      el = el.parentElement;
-    }
-    if (!el) {
-      scrollElementRef.current = document.querySelector<HTMLElement>("main");
-    }
-    setScrollMargin(gridNode.offsetTop);
-  }, [gridNode]);
+  // ── Card grid ──
 
-  const rowCount = useMemo(
-    () => (results.length > 0 ? Math.ceil(results.length / cardColumns) : 0),
-    [results.length, cardColumns],
-  );
-
-  const estimateSize = useCallback(() => {
-    const containerWidth = gridNode?.offsetWidth || estimateContentWidth(window.innerWidth);
-    const columnWidth = (containerWidth - GAP * (cardColumns - 1)) / cardColumns;
-    const posterHeight = columnWidth * 1.5;
-    return Math.round(posterHeight + QUALITY_BAR_HEIGHT + CARD_CONTENT_HEIGHT + CARD_BORDER + GAP);
-  }, [cardColumns, gridNode]);
-
-  const gridVirtualizer = useVirtualizer({
-    count: rowCount,
-    getScrollElement: () => scrollElementRef.current,
-    estimateSize,
-    overscan: 3,
-    scrollMargin,
+  // The results sit in the shell's <main>, whose scroll the grid follows.
+  // What is above it moves while it shows — the action's progress bar, the
+  // action bar's hint once something is selected — so it is re-measured then.
+  const grid = useVirtualPosterGrid({
+    count: sortedResults.length,
+    columns: cardColumns,
+    aspect: POSTER_ASPECT,
+    contentHeight: LIBRARY_CARD_CONTENT_HEIGHT,
+    scrollElement: "main",
+    layoutKey: `${viewMode}:${loading}:${executingAction}:${selectedIds.size > 0}`,
   });
 
-  useEffect(() => {
-    gridVirtualizer.measure();
-  }, [cardColumns, gridVirtualizer]);
-
-  const virtualRows = gridVirtualizer.getVirtualItems();
+  const showServerChips = servers.length > 1;
+  // Changes with the selection, which only the cards whose checkbox moved
+  // re-render for (`QueryResultCard` is memoised on its own selected state).
+  const renderResultCard = useCallback(
+    (item: QueryResultItem, { priority }: GridCardContext) => (
+      <QueryResultCard
+        item={item}
+        selected={selectedIds.has(item.id)}
+        priority={priority}
+        showServers={showServerChips}
+        getHex={getHex}
+        onToggle={toggleSelect}
+        onOpen={navigateToItem}
+      />
+    ),
+    [selectedIds, showServerChips, getHex, toggleSelect, navigateToItem],
+  );
 
   return (
     <>
       <div className="space-y-6 p-4 sm:p-6 lg:p-8">
-      {/* Header */}
-      <div className="flex items-start justify-between">
-        <div>
-          <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">Query Builder</h1>
-          <p className="text-muted-foreground mt-1">
-            Build ad-hoc queries across your media library.
-          </p>
-        </div>
-      </div>
+      <PageHeader title="Query Builder" description="Build ad-hoc queries across your media library." />
 
       {/* Saved queries toolbar */}
       <div className="flex flex-wrap items-center gap-2">
@@ -1761,7 +1836,7 @@ export default function QueryPage() {
         {/* View toggle */}
         <div className="flex items-center gap-1 rounded-lg border p-1 h-9">
           <button
-            onClick={() => handleViewModeChange("table")}
+            onClick={() => setViewMode("table")}
             className={cn(
               "rounded-md p-1.5 transition-colors",
               viewMode === "table" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground hover:bg-muted",
@@ -1772,7 +1847,7 @@ export default function QueryPage() {
             <TableProperties className="h-4 w-4" />
           </button>
           <button
-            onClick={() => handleViewModeChange("cards")}
+            onClick={() => setViewMode("cards")}
             className={cn(
               "rounded-md p-1.5 transition-colors",
               viewMode === "cards" ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground hover:bg-muted",
@@ -1831,14 +1906,9 @@ export default function QueryPage() {
           </DropdownMenu>
         )}
 
-        <Button onClick={runQuery} disabled={loading || !isValid}>
-          {loading ? (
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-          ) : (
-            <Play className="mr-2 h-4 w-4" />
-          )}
+        <LoadingButton onClick={runQuery} loading={loading} disabled={!isValid} icon={Play}>
           Run Query
-        </Button>
+        </LoadingButton>
       </div>
 
       {/* Results */}
@@ -1903,158 +1973,16 @@ export default function QueryPage() {
                 columns={tableColumns}
                 data={sortedResults}
                 onRowClick={navigateToItem}
-                keyExtractor={(item) => item.id}
+                keyExtractor={resultKey}
                 defaultSortId={sortBy}
                 defaultSortOrder={sortOrder}
-                onSortChange={(id, order) => { setSortBy(id); setSortOrder(order); }}
+                onSortChange={handleTableSort}
                 resizeStorageKey="query-results-col-widths"
                 pinning={QUERY_TABLE_PINNING}
-                renderHoverContent={(item) => (
-                  <MediaHoverPopover
-                    imageUrl={`/api/media/${item.id}/image${item.type === "SERIES" || item.parentTitle ? "?type=parent" : ""}`}
-                    data={{
-                      title: resultTitle(item),
-                      year: item.year,
-                      summary: item.summary,
-                      contentRating: item.contentRating,
-                      rating: item.rating,
-                      audienceRating: item.audienceRating,
-                      ratingImage: item.ratingImage,
-                      audienceRatingImage: item.audienceRatingImage,
-                      duration: item.matchedEpisodes != null ? undefined : item.duration,
-                      resolution: item.matchedEpisodes != null ? undefined : item.resolution,
-                      dynamicRange: item.matchedEpisodes != null ? undefined : item.dynamicRange,
-                      audioProfile: item.matchedEpisodes != null ? undefined : item.audioProfile,
-                      audioCodec: item.type === "MUSIC" && item.matchedEpisodes == null ? item.audioCodec : undefined,
-                      seasonCount: item.matchedEpisodes != null ? item.seasonCount : undefined,
-                      episodeCount: item.matchedEpisodes != null ? item.matchedEpisodes : undefined,
-                      fileSize: item.fileSize,
-                      genres: item.genres,
-                      studio: item.studio,
-                      playCount: item.playCount,
-                      lastPlayedAt: item.lastPlayedAt,
-                      addedAt: item.addedAt,
-                      servers: item.servers,
-                    }}
-                  />
-                )}
+                renderHoverContent={queryResultTableHover}
               />
             ) : (
-              <div ref={gridContainerRef}>
-                <div
-                  style={{
-                    height: gridVirtualizer.getTotalSize(),
-                    width: "100%",
-                    position: "relative",
-                  }}
-                >
-                  {virtualRows.map((virtualRow) => {
-                    const rowStart = virtualRow.index * cardColumns;
-                    const rowItems = sortedResults.slice(rowStart, rowStart + cardColumns);
-                    return (
-                      <div
-                        key={virtualRow.key}
-                        data-index={virtualRow.index}
-                        ref={gridVirtualizer.measureElement}
-                        style={{
-                          position: "absolute",
-                          top: 0,
-                          left: 0,
-                          width: "100%",
-                          paddingBottom: GAP,
-                          transform: `translateY(${virtualRow.start - gridVirtualizer.options.scrollMargin}px)`,
-                        }}
-                      >
-                        <div
-                          style={{
-                            display: "grid",
-                            gap: `${GAP}px`,
-                            gridTemplateColumns: `repeat(${cardColumns}, minmax(0, 1fr))`,
-                          }}
-                        >
-                          {rowItems.map((item) => (
-                            <div
-                              key={item.id}
-                              className={cn(
-                                "relative rounded-lg",
-                                selectedIds.has(item.id) && "ring-2 ring-primary ring-offset-2 ring-offset-background",
-                              )}
-                            >
-                              <div
-                                className="absolute left-2 top-2 z-10 flex rounded bg-background/80 p-0.5 backdrop-blur"
-                                onClick={(e) => { e.stopPropagation(); toggleSelect(item.id); }}
-                              >
-                                <Checkbox
-                                  checked={selectedIds.has(item.id)}
-                                  onClick={(e) => e.stopPropagation()}
-                                  onCheckedChange={() => toggleSelect(item.id)}
-                                  aria-label={`Select ${resultTitle(item)}`}
-                                />
-                              </div>
-                            <MediaCard
-                              priority={virtualRow.index < PRIORITY_ROWS}
-                              imageUrl={`/api/media/${item.id}/image${item.type === "SERIES" || item.parentTitle ? "?type=parent" : ""}`}
-                              title={resultTitle(item)}
-                              fallbackIcon={FALLBACK_ICONS[item.type] ?? "movie"}
-                              onClick={() => navigateToItem(item)}
-                              servers={servers.length > 1 ? item.servers : undefined}
-                              metadata={
-                                <MetadataLine stacked>
-                                  {item.type !== "SERIES" && item.year && <MetadataItem icon={<Calendar />}>{item.year}</MetadataItem>}
-                                  {item.matchedEpisodes != null && (
-                                    <MetadataItem icon={<Layers />}>
-                                      {item.seasonCount}S / {item.matchedEpisodes}E
-                                    </MetadataItem>
-                                  )}
-                                  {item.matchedEpisodes == null && formatDuration(item.duration) && (
-                                    <MetadataItem icon={<Clock />}>{formatDuration(item.duration)}</MetadataItem>
-                                  )}
-                                  {formatFileSize(item.fileSize) && <MetadataItem icon={<HardDrive />}>{formatFileSize(item.fileSize)}</MetadataItem>}
-                                </MetadataLine>
-                              }
-                              badges={
-                                <ColorChip className={MEDIA_TYPE_BADGE_COLORS[item.type] ?? ""}>
-                                  {mediaTypeLabel(item.type)}
-                                </ColorChip>
-                              }
-                              qualityBar={qualitySegments(qualityChips(item, item.type === "MUSIC" ? "music" : "video"), getHex)}
-                              hoverContent={
-                                <MediaHoverPopover
-                                  data={{
-                                    title: resultTitle(item),
-                                    year: item.year,
-                                    summary: item.summary,
-                                    contentRating: item.contentRating,
-                                    rating: item.rating,
-                                    audienceRating: item.audienceRating,
-                                    ratingImage: item.ratingImage,
-                                    audienceRatingImage: item.audienceRatingImage,
-                                    duration: item.matchedEpisodes != null ? undefined : item.duration,
-                                    resolution: item.matchedEpisodes != null ? undefined : item.resolution,
-                                    dynamicRange: item.matchedEpisodes != null ? undefined : item.dynamicRange,
-                                    audioProfile: item.matchedEpisodes != null ? undefined : item.audioProfile,
-                                    audioCodec: item.type === "MUSIC" && item.matchedEpisodes == null ? item.audioCodec : undefined,
-                                    seasonCount: item.matchedEpisodes != null ? item.seasonCount : undefined,
-                                    episodeCount: item.matchedEpisodes != null ? item.matchedEpisodes : undefined,
-                                    fileSize: item.fileSize,
-                                    genres: item.genres,
-                                    studio: item.studio,
-                                    playCount: item.playCount,
-                                    lastPlayedAt: item.lastPlayedAt,
-                                    addedAt: item.addedAt,
-                                    servers: item.servers,
-                                  }}
-                                />
-                              }
-                            />
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
+              <VirtualCardGrid grid={grid} items={sortedResults} getKey={resultKey} renderItem={renderResultCard} />
             )
           ) : !loading ? (
             <EmptyState

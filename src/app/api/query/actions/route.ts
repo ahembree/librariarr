@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { logger } from "@/lib/logger";
 import { executeQuery } from "@/lib/query/query-engine";
@@ -13,6 +13,7 @@ import {
   isWholeRecordDestructiveAction,
 } from "@/lib/lifecycle/exception-guard";
 import { arrFamilyLabel } from "@/lib/lifecycle/fetch-arr-metadata";
+import { ARR_FAMILY_FOR_TYPE, ARR_TYPE_FOR_FAMILY, familyOfArrInstance, findArrInstance } from "@/lib/arr/instances";
 import { hasEnabledSeerrInstances } from "@/lib/lifecycle/fetch-seerr-metadata";
 import { hasArrRules, hasSeerrRules, hasPlayActivityRules } from "@/lib/conditions/helpers";
 import { checkWatchHistoryCompleteness } from "@/lib/lifecycle/evaluability";
@@ -48,41 +49,23 @@ function familyFromActionType(actionType: string): MediaType | null {
 }
 
 /** The user's Arr instance of the family serving `type`, or null. */
-async function findArrInstance(
+function findUserArrInstance(
   arrInstanceId: string,
   userId: string,
   type: MediaType,
 ): Promise<{ id: string; name: string; enabled: boolean } | null> {
-  const where = { id: arrInstanceId, userId };
-  const select = { id: true, name: true, enabled: true } as const;
-  if (type === "MOVIE") return prisma.radarrInstance.findFirst({ where, select });
-  if (type === "SERIES") return prisma.sonarrInstance.findFirst({ where, select });
-  return prisma.lidarrInstance.findFirst({ where, select });
-}
-
-/** Confirm an Arr instance belongs to the user and matches the expected media type. */
-async function arrInstanceMatchesType(
-  arrInstanceId: string,
-  userId: string,
-  type: MediaType,
-): Promise<boolean> {
-  return (await findArrInstance(arrInstanceId, userId, type)) !== null;
+  return findArrInstance(ARR_FAMILY_FOR_TYPE[type], { id: arrInstanceId, userId }, { id: true, name: true, enabled: true });
 }
 
 /** Find which Arr family an instance belongs to (for DO_NOTHING tag-only ops). */
 async function typeForArrInstance(arrInstanceId: string, userId: string): Promise<MediaType | null> {
-  if (await arrInstanceMatchesType(arrInstanceId, userId, "MOVIE")) return "MOVIE";
-  if (await arrInstanceMatchesType(arrInstanceId, userId, "SERIES")) return "SERIES";
-  if (await arrInstanceMatchesType(arrInstanceId, userId, "MUSIC")) return "MUSIC";
-  return null;
+  // The three tables are probed together; ids are per table, so one answers.
+  const found = await familyOfArrInstance(arrInstanceId, userId);
+  return found ? ARR_TYPE_FOR_FAMILY[found.family] : null;
 }
 
-export async function POST(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-  const userId = session.userId!;
+export const POST = withSession(async (session, request: NextRequest) => {
+  const userId = session.userId;
 
   const { data, error } = await validateRequest(request, queryActionSchema);
   if (error) return error;
@@ -129,7 +112,7 @@ export async function POST(request: NextRequest) {
   // instance belongs to the user and the correct family.
   let targetType = familyFromActionType(actionType);
   if (targetType) {
-    if (arrInstanceId && !(await arrInstanceMatchesType(arrInstanceId, userId, targetType))) {
+    if (arrInstanceId && !(await findUserArrInstance(arrInstanceId, userId, targetType))) {
       return NextResponse.json({ error: "Arr instance not found for this action type" }, { status: 404 });
     }
   } else if (arrInstanceId) {
@@ -159,7 +142,7 @@ export async function POST(request: NextRequest) {
     const familyKey = resolvedType === "MOVIE" ? "radarr" : resolvedType === "SERIES" ? "sonarr" : "lidarr";
     const selectedArrId = query.arrServerIds?.[familyKey];
     const selectedArr = selectedArrId
-      ? await findArrInstance(selectedArrId, userId, resolvedType)
+      ? await findUserArrInstance(selectedArrId, userId, resolvedType)
       : null;
     if (!selectedArr) {
       return NextResponse.json(
@@ -287,7 +270,7 @@ export async function POST(request: NextRequest) {
           endQueryExecution(userId);
         }
       },
-      { signal: request.signal },
+      { request },
     );
   } catch (err) {
     // Only reachable if the stream itself failed to start — the run's own
@@ -646,11 +629,11 @@ export async function POST(request: NextRequest) {
     if (executed > 0 || failed > 0) {
       eventBus.emit({
         type: "lifecycle:action-executed",
-        userId: session.userId!,
+        userId: session.userId,
         meta: { executed, failed, source: "query" },
       });
     }
 
     return { executed, failed, skipped, errors };
   }
-}
+});

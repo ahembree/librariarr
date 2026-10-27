@@ -26,9 +26,9 @@ vi.mock("@/lib/logger", () => ({
   dbLogger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
-const mockRemoveItemFromCollections = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+const mockRemoveItemsFromCollections = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 vi.mock("@/lib/lifecycle/collections", () => ({
-  removeItemFromCollections: mockRemoveItemFromCollections,
+  removeItemsFromCollections: mockRemoveItemsFromCollections,
 }));
 
 // Route imports — MUST come AFTER vi.mock() calls
@@ -164,6 +164,62 @@ describe("Lifecycle Exceptions API", () => {
       const keyById = new Map(body.exceptions.map((e) => [e.mediaItem.id, e.mediaItem.seriesKey]));
       expect(keyById.get(uk.id)).toBe("tvdb:78107");
       expect(keyById.get(us.id)).toBe("tvdb:73244");
+    });
+
+    it("names each row's server from its library", async () => {
+      const user = await createTestUser();
+      const s1 = await createTestServer(user.id, { name: "Plex A" });
+      const s2 = await createTestServer(user.id, { name: "Plex B" });
+      const l1 = await createTestLibrary(s1.id, { type: "MOVIE" });
+      const l2 = await createTestLibrary(s2.id, { type: "MOVIE" });
+      const a = await createTestMediaItem(l1.id, { type: "MOVIE", title: "A" });
+      const b = await createTestMediaItem(l2.id, { type: "MOVIE", title: "B" });
+      await prisma.lifecycleException.createMany({
+        data: [{ userId: user.id, mediaItemId: a.id }, { userId: user.id, mediaItemId: b.id }],
+      });
+
+      setMockSession({ userId: user.id, isLoggedIn: true });
+      const body = await expectJson<{
+        exceptions: Array<{ mediaItem: Record<string, unknown> & { id: string; library: { mediaServer: unknown } } }>;
+      }>(await callRoute(GET), 200);
+
+      const serverById = new Map(body.exceptions.map((e) => [e.mediaItem.id, e.mediaItem.library.mediaServer]));
+      expect(serverById.get(a.id)).toEqual({ id: s1.id, name: s1.name, type: s1.type });
+      expect(serverById.get(b.id)).toEqual({ id: s2.id, name: s2.name, type: s2.type });
+      // The lookup key is not part of the response.
+      for (const e of body.exceptions) expect(e.mediaItem).not.toHaveProperty("libraryId");
+    });
+
+    it("answers ?idsOnly=1 with just the excepted item ids, for the requested type", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id);
+      const movieLib = await createTestLibrary(server.id, { type: "MOVIE" });
+      const seriesLib = await createTestLibrary(server.id, { type: "SERIES", key: "2" });
+      const movie = await createTestMediaItem(movieLib.id, { type: "MOVIE" });
+      const episode = await createTestMediaItem(seriesLib.id, { type: "SERIES", title: "Pilot", parentTitle: "Lost" });
+      await prisma.lifecycleException.createMany({
+        data: [{ userId: user.id, mediaItemId: movie.id }, { userId: user.id, mediaItemId: episode.id }],
+      });
+      setMockSession({ userId: user.id, isLoggedIn: true });
+      const all = await expectJson<{ mediaItemIds: string[] }>(
+        await callRoute(GET, { url: "/api/lifecycle/exceptions?idsOnly=1" }),
+        200,
+      );
+      expect(Object.keys(all)).toEqual(["mediaItemIds"]);
+      expect(new Set(all.mediaItemIds)).toEqual(new Set([movie.id, episode.id]));
+
+      const movies = await expectJson<{ mediaItemIds: string[] }>(
+        await callRoute(GET, { url: "/api/lifecycle/exceptions?idsOnly=true&type=MOVIE" }),
+        200,
+      );
+      expect(movies.mediaItemIds).toEqual([movie.id]);
+
+      // Any other value is the full listing.
+      const full = await expectJson<{ exceptions: unknown[] }>(
+        await callRoute(GET, { url: "/api/lifecycle/exceptions?idsOnly=0" }),
+        200,
+      );
+      expect(full.exceptions).toHaveLength(2);
     });
 
     it("rejects an unknown type with 400 instead of failing the query", async () => {
@@ -417,7 +473,14 @@ describe("Lifecycle Exceptions API", () => {
       setMockSession({ userId: user.id, isLoggedIn: true });
       await expectJson(await callRoute(POST, { method: "POST", body: { mediaItemId: mediaItem.id } }), 201);
 
-      const calls = mockRemoveItemFromCollections.mock.calls.map((c) => [c[3], c[5]]);
+      // One batch for the whole exclusion.
+      expect(mockRemoveItemsFromCollections).toHaveBeenCalledTimes(1);
+      const [owner, removals] = mockRemoveItemsFromCollections.mock.calls[0] as [
+        string,
+        Array<{ type: string; collectionName: string; itemRatingKey: string; libraryId?: string }>,
+      ];
+      expect(owner).toBe(user.id);
+      const calls = removals.map((r) => [r.itemRatingKey, r.libraryId]);
       expect(calls).toEqual(
         expect.arrayContaining([
           [kept.ratingKey, library2.id],
@@ -425,7 +488,7 @@ describe("Lifecycle Exceptions API", () => {
         ]),
       );
       expect(calls).toHaveLength(2);
-      expect(mockRemoveItemFromCollections.mock.calls[0].slice(0, 3)).toEqual([user.id, "MOVIE", "Leaving Soon"]);
+      for (const r of removals) expect(r).toMatchObject({ type: "MOVIE", collectionName: "Leaving Soon" });
     });
 
     it("a series-scope exception disarms another server's copy of the show", async () => {
@@ -564,6 +627,25 @@ describe("Lifecycle Exceptions API", () => {
       const response = await callRoute(BULK_DELETE, { method: "DELETE", body: { ids } });
       const body = await expectJson<{ deleted: number }>(response, 200);
       expect(body.deleted).toBe(2);
+      expect(await prisma.lifecycleException.count({ where: { id: { in: realIds } } })).toBe(0);
+    });
+
+    // Past Postgres' 32,767 bind parameters in one IN list.
+    it("removes and re-words a row of 40,000 ids", async () => {
+      const { ids, realIds } = await rowOfExceptions();
+      const many = [...ids, ...Array.from({ length: 40_000 - ids.length }, (_, i) => `beyond-${i}`)];
+
+      const patched = await expectJson<{ updated: number }>(
+        await callRoute(BULK_PATCH, { method: "PATCH", body: { ids: many, reason: "renamed" } }),
+        200,
+      );
+      expect(patched.updated).toBe(2);
+
+      const deleted = await expectJson<{ deleted: number }>(
+        await callRoute(BULK_DELETE, { method: "DELETE", body: { ids: many } }),
+        200,
+      );
+      expect(deleted.deleted).toBe(2);
       expect(await prisma.lifecycleException.count({ where: { id: { in: realIds } } })).toBe(0);
     });
   });

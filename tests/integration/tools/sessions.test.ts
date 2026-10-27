@@ -37,6 +37,9 @@ import { logger } from "@/lib/logger";
 import { _resetFirstSeen } from "@/lib/media-server/session-first-seen";
 import { GET } from "@/app/api/tools/sessions/route";
 import { POST } from "@/app/api/tools/sessions/terminate/route";
+import { _resetSessionsSnapshot } from "@/app/api/tools/sessions/snapshot";
+import { realtimeBus } from "@/lib/media-server/realtime/bus";
+import { eventBus } from "@/lib/events/event-bus";
 
 /** Just the termination lines — other logger.info calls must not shift them. */
 function terminationLogLines(): string[] {
@@ -56,6 +59,8 @@ describe("Tools sessions endpoints", () => {
     clearMockSession();
     vi.clearAllMocks();
     _resetFirstSeen();
+    // The shared poll would otherwise answer this test with the last one's.
+    _resetSessionsSnapshot();
     mockGetSessions.mockResolvedValue([
       {
         sessionId: "s1",
@@ -145,6 +150,8 @@ describe("Tools sessions endpoints", () => {
         vi.setSystemTime(t0);
         await callRoute(GET, { url: "/api/tools/sessions" });
         vi.setSystemTime(t0 + 60_000);
+        // A fresh poll of the server, not the shared one from a moment ago.
+        _resetSessionsSnapshot();
         const second = await expectJson<{ sessions: { startedAt: number }[] }>(
           await callRoute(GET, { url: "/api/tools/sessions" }),
           200,
@@ -154,6 +161,68 @@ describe("Tools sessions endpoints", () => {
         expect(second.sessions[0].startedAt).toBe(t0);
       } finally {
         vi.useRealTimers();
+      }
+    });
+
+    it("shares one poll of the servers between reads a moment apart", async () => {
+      const user = await createTestUser();
+      await createTestServer(user.id, { name: "Test Plex" });
+      setMockSession({ userId: user.id, isLoggedIn: true });
+
+      const [a, b] = await Promise.all([
+        callRoute(GET, { url: "/api/tools/sessions" }),
+        callRoute(GET, { url: "/api/tools/sessions" }),
+      ]);
+      await callRoute(GET, { url: "/api/tools/sessions" });
+      expect(mockGetSessions).toHaveBeenCalledTimes(1);
+      expect(await b.json()).toEqual(await a.json());
+    });
+
+    it("polls again after a pushed session change, a server change or a termination", async () => {
+      const user = await createTestUser();
+      const server = await createTestServer(user.id, { name: "Test Plex" });
+      setMockSession({ userId: user.id, isLoggedIn: true });
+      const read = () => callRoute(GET, { url: "/api/tools/sessions" });
+
+      await read();
+      expect(mockGetSessions).toHaveBeenCalledTimes(1);
+
+      realtimeBus.emit({ kind: "session-changed", serverId: server.id, serverType: "PLEX", at: Date.now() });
+      await read();
+      expect(mockGetSessions).toHaveBeenCalledTimes(2);
+
+      realtimeBus.emit({ kind: "server-status", serverId: server.id, serverType: "PLEX", at: Date.now(), connected: false } as never);
+      await read();
+      expect(mockGetSessions).toHaveBeenCalledTimes(3);
+
+      eventBus.emit({ type: "server:changed", userId: user.id });
+      await read();
+      expect(mockGetSessions).toHaveBeenCalledTimes(4);
+
+      mockGetSessions.mockResolvedValueOnce([]);
+      await callRoute(POST, {
+        url: "/api/tools/sessions/terminate",
+        method: "POST",
+        body: { serverId: server.id, sessionIds: ["s1"], message: "Bye" },
+      });
+      // The refresh the Stream Manager makes right after shows the session gone.
+      const after = await expectJson<{ sessions: unknown[] }>(await read(), 200);
+      expect(after.sessions).toEqual([]);
+      expect(mockGetSessions).toHaveBeenCalledTimes(5);
+    });
+
+    it("does not keep a poll whose server list could not be read", async () => {
+      const user = await createTestUser();
+      await createTestServer(user.id, { name: "Test Plex" });
+      setMockSession({ userId: user.id, isLoggedIn: true });
+      const prisma = (await import("../../setup/test-db")).getTestPrisma();
+      const findMany = vi.spyOn(prisma.mediaServer, "findMany").mockRejectedValueOnce(new Error("db down"));
+      try {
+        await expect(callRoute(GET, { url: "/api/tools/sessions" })).rejects.toThrow("db down");
+        const body = await expectJson<{ sessions: unknown[] }>(await callRoute(GET, { url: "/api/tools/sessions" }), 200);
+        expect(body.sessions).toHaveLength(1);
+      } finally {
+        findMany.mockRestore();
       }
     });
 

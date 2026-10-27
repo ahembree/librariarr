@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { withListResponseCache } from "@/lib/api/cached-list-response";
 import { jsonResponse, mapInSlices } from "@/lib/api/json-response";
 import { prisma } from "@/lib/db";
@@ -10,6 +10,7 @@ import { loadGenreSpellings } from "@/lib/filters/genre-spellings";
 import { loadResolutionSpellings } from "@/lib/filters/resolution-spellings";
 import { resolveServerFilter } from "@/lib/dedup/server-filter";
 import { parseListPagination } from "@/lib/api/pagination";
+import { loadDetailScope } from "@/lib/api/detail-scope";
 import { getServerPresenceByDedupKey } from "@/lib/dedup/server-presence";
 
 // Valid MediaItem scalar sort columns; anything else falls back to title.
@@ -46,23 +47,36 @@ const SORT_COLUMNS = new Set([
   "originallyAvailableAt",
 ]);
 
-async function listGet(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+const listGet = withSession(async (session, request: NextRequest) => {
   const { searchParams } = new URL(request.url);
   const { page, limit, skip } = parseListPagination(searchParams);
-  const parentTitle = searchParams.get("parentTitle");
-  const albumTitle = searchParams.get("albumTitle");
+  let parentTitle = searchParams.get("parentTitle");
+  let albumTitle = searchParams.get("albumTitle");
   const search = searchParams.get("search");
   const rawSortBy = searchParams.get("sortBy") ?? "title";
   const sortBy = SORT_COLUMNS.has(rawSortBy) ? rawSortBy : "title";
   const sortOrder = searchParams.get("sortOrder") === "desc" ? "desc" : "asc";
   const serverId = searchParams.get("serverId");
 
-  const sf = await resolveServerFilter(session.userId!, serverId, "MUSIC");
+  // `itemId` names an album page's record: the list is that album of its
+  // artist, read here (`loadDetailScope`) so the page need not wait for the
+  // record. It replaces `parentTitle` and `albumTitle`.
+  const itemId = searchParams.get("itemId");
+  if (itemId) {
+    const scope = await loadDetailScope(session.userId, itemId, "MUSIC");
+    if (!scope) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+    // A track with no artist or no album belongs to no album list (the page
+    // listed nothing for one).
+    if (!scope.parentTitle || !scope.albumTitle) {
+      return NextResponse.json({ items: [], pagination: { page, limit, hasMore: false } });
+    }
+    parentTitle = scope.parentTitle;
+    albumTitle = scope.albumTitle;
+  }
+
+  const sf = await resolveServerFilter(session.userId, serverId, "MUSIC");
   if (!sf) {
     return NextResponse.json({ items: [], pagination: { page, limit, hasMore: false } });
   }
@@ -180,7 +194,7 @@ async function listGet(request: NextRequest) {
     items: serializedItems,
     pagination: { page, limit, hasMore },
   });
-}
+});
 
 /**
  * Answered from the list response cache when the same listing was asked for

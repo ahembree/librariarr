@@ -27,6 +27,7 @@ vi.mock("@/lib/logger", () => ({
 import {
   getServerPresenceByDedupKey,
   getServerPresenceByGroup,
+  getServerPresenceForGroup,
 } from "@/lib/dedup/server-presence";
 
 const testPrisma = getTestPrisma();
@@ -403,6 +404,65 @@ describe("getServerPresenceByGroup", () => {
     expect(result.has("tvdb:78107")).toBe(true);
     expect(result.has("tvdb:73244")).toBe(true);
     expect(result.has("title:the office")).toBe(false);
+  });
+
+  it("links each server's oldest copy of the group, ties by id", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id, { name: "Plex" });
+    const lib = await createTestLibrary(server.id, { type: "SERIES" });
+    const ep = (title: string) =>
+      createTestMediaItem(lib.id, { title, type: "SERIES", parentTitle: "Show", seriesKey: "tvdb:1" });
+    const newer = await ep("Newer");
+    const older = await ep("Older");
+    const tieA = await ep("Tie A");
+    const tieB = await ep("Tie B");
+    const at = (iso: string) => new Date(iso);
+    await testPrisma.mediaItem.update({ where: { id: newer.id }, data: { createdAt: at("2024-05-01T00:00:00.000Z") } });
+    await testPrisma.mediaItem.update({ where: { id: older.id }, data: { createdAt: at("2024-01-01T00:00:00.123Z") } });
+    // Two copies a millisecond older still: the lower id wins the tie.
+    await testPrisma.mediaItem.update({ where: { id: tieA.id }, data: { createdAt: at("2024-01-01T00:00:00.122Z") } });
+    await testPrisma.mediaItem.update({ where: { id: tieB.id }, data: { createdAt: at("2024-01-01T00:00:00.122Z") } });
+
+    const result = await getServerPresenceByGroup("SERIES", [server.id]);
+    expect(result.get("tvdb:1")!.map((s) => s.mediaItemId)).toEqual([[tieA.id, tieB.id].sort()[0]]);
+  });
+
+  it("answers for only the groups it is given", async () => {
+    const user = await createTestUser();
+    const server1 = await createTestServer(user.id, { name: "Alpha" });
+    const server2 = await createTestServer(user.id, { name: "Beta" });
+    const lib1 = await createTestLibrary(server1.id, { type: "SERIES" });
+    const lib2 = await createTestLibrary(server2.id, { type: "SERIES" });
+    for (const lib of [lib1, lib2]) {
+      for (const key of ["tvdb:1", "tvdb:2", "tvdb:3"]) {
+        await createTestMediaItem(lib.id, { type: "SERIES", parentTitle: key, seriesKey: key });
+      }
+    }
+
+    const whole = await getServerPresenceByGroup("SERIES", [server1.id, server2.id]);
+    const scoped = await getServerPresenceByGroup("SERIES", [server1.id, server2.id], { groupKeys: ["tvdb:1", "tvdb:3"] });
+    expect([...scoped.keys()].sort()).toEqual(["tvdb:1", "tvdb:3"]);
+    expect(scoped.get("tvdb:1")).toEqual(whole.get("tvdb:1"));
+    expect(scoped.get("tvdb:3")).toEqual(whole.get("tvdb:3"));
+    expect((await getServerPresenceByGroup("SERIES", [server1.id], { groupKeys: [] })).size).toBe(0);
+  });
+
+  it("reads one artist's presence by any spelling of its name", async () => {
+    const user = await createTestUser();
+    const server1 = await createTestServer(user.id, { name: "Alpha" });
+    const server2 = await createTestServer(user.id, { name: "Beta" });
+    const lib1 = await createTestLibrary(server1.id, { type: "MUSIC" });
+    const lib2 = await createTestLibrary(server2.id, { type: "MUSIC" });
+    await createTestMediaItem(lib1.id, { type: "MUSIC", parentTitle: "Air" });
+    await createTestMediaItem(lib2.id, { type: "MUSIC", parentTitle: " air " });
+    await createTestMediaItem(lib2.id, { type: "MUSIC", parentTitle: "Other" });
+
+    const presence = await getServerPresenceForGroup("MUSIC", [server1.id, server2.id], { parentTitle: "AIR" });
+    expect(presence.map((s) => s.serverName)).toEqual(["Alpha", "Beta"]);
+    expect(await getServerPresenceForGroup("MUSIC", [server1.id, server2.id], { parentTitle: "Nobody" })).toEqual([]);
+    expect(
+      (await getServerPresenceForGroup("SERIES", [server1.id], { seriesKey: "tvdb:none" })),
+    ).toEqual([]);
   });
 
   it("merges the same show across servers via a shared seriesKey", async () => {

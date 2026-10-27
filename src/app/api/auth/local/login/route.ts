@@ -6,6 +6,7 @@ import { apiLogger } from "@/lib/logger";
 import { validateRequest, authLoginSchema } from "@/lib/validation";
 import { peekAuthRateLimit, reserveAuthAttempt } from "@/lib/rate-limit/rate-limiter";
 import { loadPasswordSignInState, passwordSignInEnabled } from "@/lib/auth/password-sign-in";
+import { userHasServers } from "@/lib/api/has-servers";
 
 /**
  * A real cost-12 bcrypt hash of a throwaway string. Compared against on the
@@ -94,6 +95,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       authenticated: true,
       user: { id: user.id, username: user.username },
+      // Where the login page goes next (see `userHasServers`).
+      hasServers: await userHasServers(user.id),
     });
   } catch (error) {
     apiLogger.error("Auth", "Local login failed", { error: String(error) });

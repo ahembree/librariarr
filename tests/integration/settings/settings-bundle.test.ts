@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import { cleanDatabase, disconnectTestDb, getTestPrisma } from "../../setup/test-db";
 import { setMockSession, clearMockSession } from "../../setup/mock-session";
-import { callRoute, expectJson, createTestUser, createTestServer } from "../../setup/test-helpers";
+import { callRoute, expectJson, createTestUser, createTestServer, createTestApiKey } from "../../setup/test-helpers";
 
 const failing = vi.hoisted(() => ({ titlePreference: false }));
 
@@ -37,6 +37,9 @@ import { GET as getSonarr } from "@/app/api/integrations/sonarr/route";
 import { GET as getDiscord } from "@/app/api/settings/discord/route";
 import { GET as getAuth } from "@/app/api/settings/auth/route";
 import { GET as getDeleteCeiling } from "@/app/api/settings/delete-ceiling/route";
+import { GET as getSso } from "@/app/api/settings/sso/route";
+import { GET as getSsoMe } from "@/app/api/settings/sso/me/route";
+import { GET as getApiKeys } from "@/app/api/settings/api-keys/route";
 
 const prisma = getTestPrisma();
 const ALL = SETTINGS_BUNDLE_PATHS.join(",");
@@ -84,6 +87,7 @@ describe("GET /api/settings/bundle", () => {
     setMockSession({ isLoggedIn: true, userId: user.id });
     await createTestServer(user.id, { name: "Home" });
     await prisma.appSettings.create({ data: { userId: user.id, accentColor: "violet", maxAutoDeleteItems: 25 } });
+    await createTestApiKey(user.id, { name: "Script" });
 
     const { parts } = await expectJson<Parts>(await bundle(ALL));
     const direct: [string, () => Promise<Response>][] = [
@@ -94,12 +98,19 @@ describe("GET /api/settings/bundle", () => {
       ["/api/settings/discord", () => getDiscord()],
       ["/api/settings/auth", () => getAuth()],
       ["/api/settings/delete-ceiling", () => getDeleteCeiling()],
+      ["/api/settings/sso", () => getSso()],
+      ["/api/settings/sso/me", () => getSsoMe()],
+      ["/api/settings/api-keys", () => getApiKeys()],
     ];
     for (const [path, call] of direct) {
       const res = await call();
       expect(parts[path], path).toEqual({ status: res.status, body: await res.json() });
     }
     expect(parts["/api/settings/accent-color"].body).toMatchObject({ accentColor: "violet" });
+    // The key list is the route's own: names and prefixes, never the hash.
+    const { apiKeys } = parts["/api/settings/api-keys"].body as { apiKeys: Record<string, unknown>[] };
+    expect(apiKeys.map((key) => key.name)).toEqual(["Script"]);
+    expect(apiKeys[0]).not.toHaveProperty("keyHash");
   });
 
   it("answers only the paths asked for", async () => {

@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { SEERR_REQUEST_PAGE_SIZE as P } from "@/lib/seerr/request-walk";
 
 const mockPrisma = vi.hoisted(() => ({
   seerrInstance: { findMany: vi.fn() },
@@ -75,7 +76,7 @@ describe("fetchSeerrDataForQuery", () => {
       },
     });
     // Someone is waiting on the query page: the first page fails fast.
-    expect(mockGetRequests).toHaveBeenCalledWith("http://o", { take: 100, skip: 0, mediaType: "movie" }, { retry: false });
+    expect(mockGetRequests).toHaveBeenCalledWith("http://o", { take: P, skip: 0, mediaType: "movie" }, { retry: false });
   });
 
   it("merges every enabled instance, like lifecycle rules", async () => {
@@ -109,7 +110,7 @@ describe("fetchSeerrDataForQuery", () => {
     const result = await fetchSeerrDataForQuery("u1", ["MOVIE", "SERIES"]);
 
     expect(mockGetRequests).toHaveBeenCalledTimes(1);
-    expect(mockGetRequests).toHaveBeenCalledWith("http://o", { take: 100, skip: 0 }, { retry: false });
+    expect(mockGetRequests).toHaveBeenCalledWith("http://o", { take: P, skip: 0 }, { retry: false });
     expect(result.MOVIE["TMDB:550"].requestedBy).toEqual(["a"]);
     expect(result.SERIES["TMDB:550"].requestedBy).toEqual(["b"]);
     expect(result.SERIES["TVDB:77"]).toBe(result.SERIES["TMDB:550"]);

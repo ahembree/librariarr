@@ -12,6 +12,7 @@ const { mockPrisma, mockClient, mockEmit, cancelWatch } = vi.hoisted(() => ({
   },
   mockPrisma: {
     $queryRawUnsafe: vi.fn(),
+    $executeRawUnsafe: vi.fn().mockResolvedValue(0),
     lifecycleException: { count: vi.fn() },
   },
   mockClient: {
@@ -24,7 +25,6 @@ const { mockPrisma, mockClient, mockEmit, cancelWatch } = vi.hoisted(() => ({
     getLibraryTracks: vi.fn(),
     getLibraryItemsPage: vi.fn(),
     getItemMetadata: vi.fn(),
-    getWatchCounts: vi.fn(),
     getWatchHistory: vi.fn(),
     getDetailedWatchHistory: vi.fn(),
     getSessions: vi.fn(),
@@ -85,6 +85,7 @@ vi.mock("@/lib/sync/sync-watch-history", () => ({
 vi.mock("@/lib/sync/watch-reconcile", () => ({
   reconcileWatchStateFromHistory: vi.fn().mockResolvedValue(0),
   loadWatchCountsFromHistory: vi.fn().mockResolvedValue(new Map()),
+  loadLibraryWatchCountsFromHistory: vi.fn(async () => new Map()),
 }));
 
 vi.mock("@/lib/http-retry", () => ({
@@ -281,7 +282,6 @@ describe("syncMediaServer", () => {
 
     mockClient.testConnection.mockResolvedValue({ ok: true, serverName: "Test Plex" });
     mockClient.getLibraries.mockResolvedValue([]);
-    mockClient.getWatchCounts.mockResolvedValue(new Map());
   });
 
   it("syncs watch history (which reconciles play state) by default", async () => {
@@ -290,8 +290,9 @@ describe("syncMediaServer", () => {
 
     await syncMediaServer("server-1");
 
-    expect(syncWatchHistory).toHaveBeenCalledWith("server-1", undefined, expect.any(AbortSignal));
-    // syncWatchHistory reconciles internally, so the sync must not do it twice.
+    // `reconcileAll`: after a full item sync the whole server is reconciled,
+    // inside syncWatchHistory — so the sync must not do it twice itself.
+    expect(syncWatchHistory).toHaveBeenCalledWith("server-1", undefined, expect.any(AbortSignal), { reconcileAll: true });
     expect(reconcileWatchStateFromHistory).not.toHaveBeenCalled();
   });
 
@@ -519,7 +520,6 @@ describe("syncMediaServer stale-item purge guard", () => {
     mockClient.getLibraries.mockResolvedValue([
       { key: "1", title: "Movies", type: "movie", agent: "", scanner: "" },
     ]);
-    mockClient.getWatchCounts.mockResolvedValue(new Map());
     mockPrisma.lifecycleException.count.mockResolvedValue(0);
   }
 
@@ -865,7 +865,7 @@ describe("MediaItem upsert: non-regressive play state", () => {
   //
   // Both of `buildItemData`'s inputs can legitimately read zero for an item
   // somebody else watched: Plex metadata carries only the admin token's own
-  // `viewCount`, `JellyfinBase.getWatchCounts()` returns an empty map by design,
+  // `viewCount`, Jellyfin/Emby `UserData` only the admin user's plays,
   // and `loadWatchCountsFromHistory` returns nothing while `WatchHistory` is
   // empty. `WatchHistory` IS empty, deliberately, from the moment a server's
   // watch-history source is switched until the newest-first Tracearr re-import
@@ -951,7 +951,6 @@ describe("syncMediaServer per-item enrichment resilience", () => {
     mockClient.getLibraries.mockResolvedValue([
       { key: "1", title: "Movies", type: "movie", agent: "", scanner: "" },
     ]);
-    mockClient.getWatchCounts.mockResolvedValue(new Map());
     mockPrisma.lifecycleException.count.mockResolvedValue(0);
   }
 
@@ -1141,7 +1140,6 @@ describe("syncMediaServer library and watchlist reconciliation", () => {
       return [];
     });
     mockClient.getLibraries.mockResolvedValue([MOVIES]);
-    mockClient.getWatchCounts.mockResolvedValue(new Map());
     mockClient.getLibraryItemsPage.mockResolvedValue({ items: [], total: 0 });
     mockPrisma.lifecycleException.count.mockResolvedValue(0);
   }
@@ -1372,7 +1370,6 @@ describe("syncMediaServer job lifecycle events", () => {
     mockSyncDb();
     mockClient.testConnection.mockResolvedValue({ ok: true, serverName: "Test Plex" });
     mockClient.getLibraries.mockResolvedValue([]);
-    mockClient.getWatchCounts.mockResolvedValue(new Map());
     mockClient.getLibraryItemsPage.mockResolvedValue({
       items: [{ ratingKey: "rk1", title: "Movie A", type: "movie" }],
       total: 1,
@@ -1426,15 +1423,16 @@ describe("syncMediaServer job lifecycle events", () => {
     expect(emitsOfType("sync:completed").length).toBe(0);
   });
 
-  it("honours a Stop before the play-count scan and announces sync:failed when nothing changed", async () => {
+  it("honours a Stop before the libraries and announces sync:failed when nothing changed", async () => {
+    const { loadLibraryWatchCountsFromHistory } = await import("@/lib/sync/watch-reconcile");
     mockSyncDb({ cancel: () => true });
     mockClient.getLibraries.mockResolvedValue([MOVIES]);
 
     await syncMediaServer("server-1");
 
-    // The scan pages a large server's whole history; a Stop pressed before it
-    // must not wait it out.
-    expect(mockClient.getWatchCounts).not.toHaveBeenCalled();
+    // A Stop pressed before the library loop must not start it.
+    expect(mockClient.getWatchlistGuids).not.toHaveBeenCalled();
+    expect(loadLibraryWatchCountsFromHistory).not.toHaveBeenCalled();
     expect(findDbCalls('UPDATE "SyncJob"', "CANCELLED").length).toBe(1);
     // Nothing was written, so no listing should re-pull its whole list.
     expect(emitsOfType("sync:failed").length).toBe(1);
@@ -1575,7 +1573,6 @@ describe("syncMediaServer claims the row created at request time", () => {
     vi.clearAllMocks();
     mockClient.testConnection.mockResolvedValue({ ok: true, serverName: "Test Plex" });
     mockClient.getLibraries.mockResolvedValue([]);
-    mockClient.getWatchCounts.mockResolvedValue(new Map());
   });
 
   it("reports into the requested row while it is still PENDING", async () => {

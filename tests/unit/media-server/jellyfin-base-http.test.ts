@@ -320,14 +320,6 @@ describe("bulk item listings", () => {
   });
 });
 
-describe("getWatchCounts", () => {
-  it("returns an empty map by design", async () => {
-    const url = await serve(() => undefined);
-    expect((await new JellyfinClient(url, "t").getWatchCounts()).size).toBe(0);
-    expect(requests).toHaveLength(0);
-  });
-});
-
 describe("getWatchHistory (Jellyfin)", () => {
   it("emits one entry per play, dated first play newest, undated last; skips users it cannot read", async () => {
     const url = await serve((_req, u) => {
@@ -436,6 +428,60 @@ describe("getDetailedWatchHistory", () => {
   it("treats an empty /Users body as no users", async () => {
     const url = await serve(() => ({ body: null }));
     expect(await new JellyfinClient(url, "t").getDetailedWatchHistory()).toEqual([]);
+  });
+
+  it("asks only for what it reads: no images, no total count", async () => {
+    const url = await serve((_req, u) => {
+      if (u.pathname === "/Users") return { body: [{ Id: "u1", Name: "Ann" }] };
+      return { body: { Items: [] } };
+    });
+    await new JellyfinClient(url, "t").getDetailedWatchHistory();
+    const query = requests.find((r) => r.path === "/Users/u1/Items")!.query;
+    expect(query.get("EnableImages")).toBe("false");
+    expect(query.get("EnableTotalRecordCount")).toBe("false");
+    expect(query.get("EnableUserData")).toBe("true");
+    expect(query.get("IncludeItemTypes")).toBe("Movie,Episode,Audio");
+  });
+
+  it("walks a few users at once and returns their plays in the server's user order", async () => {
+    const users = Array.from({ length: 6 }, (_, i) => ({ Id: `u${i}`, Name: `User ${i}` }));
+    let inFlight = 0;
+    let peak = 0;
+    const url = await serve((_req, u) => {
+      if (u.pathname === "/Users") return { body: users };
+      return { body: { Items: [{ Id: `item-${u.pathname.split("/")[2]}`, UserData: { PlayCount: 1 } }] } };
+    });
+    // Count overlap at the server: the handler answers synchronously, so
+    // measure the requests the client has outstanding instead.
+    const client = new JellyfinClient(url, "t");
+    const inner = (client as unknown as { client: { interceptors: { request: { use: (f: (c: unknown) => unknown) => void }; response: { use: (f: (r: unknown) => unknown) => void } } } }).client;
+    inner.interceptors.request.use((config) => {
+      inFlight++;
+      peak = Math.max(peak, inFlight);
+      return config;
+    });
+    inner.interceptors.response.use(async (response) => {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      inFlight--;
+      return response;
+    });
+
+    const entries = await client.getDetailedWatchHistory();
+
+    expect(entries.map((e) => e.username)).toEqual(users.map((u) => u.Name));
+    expect(peak).toBeGreaterThan(1);
+    // /Users itself plus at most three user walks at a time.
+    expect(peak).toBeLessThanOrEqual(3);
+  });
+
+  it("propagates a transient failure of one user even while others are being walked", async () => {
+    const url = await serve((_req, u) => {
+      if (u.pathname === "/Users") return { body: [{ Id: "a", Name: "A" }, { Id: "b", Name: "B" }, { Id: "c", Name: "C" }] };
+      if (u.pathname === "/Users/b/Items") return { status: 500, body: { message: "boom" } };
+      return { body: { Items: [{ Id: "x", UserData: { PlayCount: 1 } }] } };
+    });
+    // A partial history would be committed with a destructive full replace.
+    await expect(new JellyfinClient(url, "t").getDetailedWatchHistory()).rejects.toThrow(/500/);
   });
 });
 

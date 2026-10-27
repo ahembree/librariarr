@@ -1,15 +1,9 @@
 import axios, { type AxiosInstance } from "axios";
 import https from "https";
-import { configureRetry, NO_BREAKER_MARK, NO_RETRY } from "@/lib/http-retry";
+import { NO_BREAKER_MARK, NO_RETRY } from "@/lib/http-retry";
 import { ARTIST_MBID_SCHEME, firstMbid } from "@/lib/media/musicbrainz";
-import {
-  BYPASS_BREAKER,
-  isUnreachable,
-  markUnreachable,
-  clearUnreachable,
-  getLastFailureMessage,
-  ServerUnreachableError,
-} from "./health-cache";
+import { BYPASS_BREAKER } from "./health-cache";
+import { instrumentMediaServerClient, normalizeMediaServerUrl } from "./http-instrumentation";
 import type { MediaServerClient, MediaServerClientOptions, LibraryItemType } from "./client";
 import type {
   MediaSession,
@@ -32,7 +26,15 @@ import type {
 } from "@/lib/jellyfin/types";
 import { logger } from "@/lib/logger";
 import { isPrivateAddress } from "@/lib/media-server/local-address";
+import { mapWithConcurrency } from "@/lib/concurrency";
 import { normalizeResolutionFromDimensions } from "@/lib/resolution";
+
+/**
+ * How many users' play histories `getDetailedWatchHistory` walks at once.
+ * Each walk pages the server's whole played set for that user, so a small
+ * number keeps a household's scan from crowding the server's own clients.
+ */
+const USER_HISTORY_CONCURRENCY = 3;
 
 // Fields to request from Jellyfin/Emby /Items endpoint (must be valid ItemFields enum values)
 export const ITEM_FIELDS = [
@@ -150,7 +152,7 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
     token: string,
     options?: MediaServerClientOptions
   ) {
-    this.baseURL = baseURL.replace(/\/+$/, "");
+    this.baseURL = normalizeMediaServerUrl(baseURL);
     this.token = token;
 
     const axiosConfig: Record<string, unknown> = {
@@ -168,55 +170,14 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
 
     this.client = axios.create(axiosConfig);
 
-    const baseURLForHealth = this.baseURL;
-    // Auth headers added via interceptor — safe because requests only fire
-    // after the subclass constructor has completed.
-    this.client.interceptors.request.use((config) => {
-      if (!config.__bypassBreaker && isUnreachable(baseURLForHealth)) {
-        return Promise.reject(
-          new ServerUnreachableError(baseURLForHealth, getLastFailureMessage(baseURLForHealth)),
-        ) as never;
-      }
-      Object.assign(config.headers, this.getAuthHeaders());
-      (config as unknown as Record<string, unknown>).__startTime = Date.now();
-      logger.debug(
-        this.logPrefix,
-        `${config.method?.toUpperCase()} ${config.url}`
-      );
-      return config;
-    });
-
-    this.client.interceptors.response.use(
-      (response) => {
-        clearUnreachable(baseURLForHealth);
-        const start = (
-          response.config as unknown as Record<string, unknown>
-        ).__startTime as number;
-        const duration = start ? Date.now() - start : 0;
-        logger.debug(
-          this.logPrefix,
-          `${response.status} ${response.config.url} (${duration}ms)`
-        );
-        return response;
+    instrumentMediaServerClient(this.client, {
+      baseURL: this.baseURL,
+      logPrefix: () => this.logPrefix,
+      // Auth headers added via interceptor — safe because requests only fire
+      // after the subclass constructor has completed.
+      beforeRequest: (config) => {
+        Object.assign(config.headers, this.getAuthHeaders());
       },
-      (error) => {
-        if (axios.isAxiosError(error)) {
-          const body = error.response?.data;
-          const detail = typeof body === "string"
-            ? body
-            : body?.message ?? body?.title ?? body?.Message ?? body?.Title;
-          logger.debug(
-            this.logPrefix,
-            `ERROR ${error.response?.status ?? "NETWORK"} ${error.config?.url}`,
-            { message: error.message, ...(detail ? { detail } : {}) }
-          );
-        }
-        return Promise.reject(error);
-      }
-    );
-
-    configureRetry(this.client, () => this.logPrefix, logger, {
-      onTerminalNetworkError: (error) => markUnreachable(baseURLForHealth, error),
     });
   }
 
@@ -411,14 +372,6 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
     return this.normalizeItem(response.data);
   }
 
-  async getWatchCounts(): Promise<
-    Map<string, { count: number; lastWatchedAt: number }>
-  > {
-    // Jellyfin items include UserData.PlayCount during normal item queries,
-    // so the sync engine gets accurate counts directly from item normalization.
-    return new Map();
-  }
-
   async getWatchHistory(
     ratingKey: string
   ): Promise<WatchHistoryEntry[]> {
@@ -492,7 +445,12 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
       const users = usersRes.data || [];
 
       const pageSize = 1000;
-      for (const user of users) {
+      // A few users at a time rather than one after another: each user is a
+      // separate walk of the server's played items, and a household of ten
+      // waited for ten in turn. Fails fast like the sequential loop did — the
+      // first transient error stops new users starting and propagates.
+      const perUser = await mapWithConcurrency(users, USER_HISTORY_CONCURRENCY, async (user) => {
+        const userEntries: typeof entries = [];
         try {
           let startIndex = 0;
           // Page through this user's played items — a single Limit:10000 would
@@ -513,6 +471,12 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
                 // also walked every played Series, Season and BoxSet, which can
                 // never map to a MediaItem and were dropped on arrival.
                 IncludeItemTypes: "Movie,Episode,Audio",
+                // Only `Id` and `UserData` are read below. No image tags or
+                // blurhashes, and no total count — the paging ends on a short
+                // page, so the count query the server runs per page is waste.
+                EnableUserData: true,
+                EnableImages: false,
+                EnableTotalRecordCount: false,
                 StartIndex: startIndex,
                 Limit: pageSize,
               },
@@ -525,7 +489,7 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
               if (playCount <= 0) continue;
 
               for (let i = 0; i < playCount; i++) {
-                entries.push({
+                userEntries.push({
                   ratingKey: item.Id,
                   username: user.Name,
                   watchedAt:
@@ -555,10 +519,17 @@ export abstract class JellyfinCompatClient implements MediaServerClient {
               this.logPrefix,
               `Skipping watch history for user "${user.Name}" (HTTP ${status})`,
             );
-            continue;
+            return [];
           }
           throw error;
         }
+        return userEntries;
+      });
+      // In the server's user order, whatever order the walks finished in.
+      // A loop, not a spread: one user can hold more plays than a call's
+      // argument list allows.
+      for (const userEntries of perUser) {
+        for (const entry of userEntries) entries.push(entry);
       }
     } catch (error) {
       // Re-throw a hard failure (e.g. /Users unreachable) so the caller can

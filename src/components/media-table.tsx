@@ -36,7 +36,7 @@ import { ServerChips } from "@/components/server-chips";
 import { useColumnResize } from "@/hooks/use-column-resize";
 import { useShellSettings, useShellSnapshot } from "@/components/shell-settings-provider";
 import { toast } from "sonner";
-import { formatFileSize, formatDuration, formatDate, formatDateOnly } from "@/lib/format";
+import { formatFileSize, formatDuration, formatDate, formatDateOnly, formatChannels } from "@/lib/format";
 import { formatEpisodeCode } from "@/lib/media/display-title";
 import { intentHandlers } from "@/lib/intent-prefetch";
 import { prefetchMediaRecord } from "@/lib/media/detail-prefetch";
@@ -86,19 +86,6 @@ interface ColumnDef {
 /** One quality chip in a cell, or "-" when the item has no such value. */
 function chipCell(chip: QualityChipSpec | null) {
   return chip ? <QualityChip chip={chip} /> : <span className="text-muted-foreground">-</span>;
-}
-
-const CHANNEL_LABELS: Record<number, string> = {
-  1: "Mono",
-  2: "Stereo",
-  3: "2.1",
-  6: "5.1",
-  8: "7.1",
-};
-
-function formatChannels(ch: number | null): string {
-  if (ch == null) return "-";
-  return CHANNEL_LABELS[ch] ?? `${ch}ch`;
 }
 
 function formatEpisodeLabel(item: MediaListItem, isMusic: boolean): string | null {
@@ -236,7 +223,7 @@ function buildColumns(): ColumnDef[] {
     defaultVisible: false,
     defaultWidth: 90,
     render: (item) => (
-      <span className="text-muted-foreground">{formatChannels(item.audioChannels)}</span>
+      <span className="text-muted-foreground">{item.audioChannels == null ? "-" : formatChannels(item.audioChannels)}</span>
     ),
   },
   {

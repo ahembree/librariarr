@@ -219,6 +219,84 @@ describe("SERIES libraries", () => {
     expect((await latestJob(server.id)).status).toBe("COMPLETED");
   });
 
+  it("refreshes every show's summary on its own episodes in one pass, and only in this library", async () => {
+    const { server } = await newServer();
+    fake.bulkListingIncomplete = true;
+    setLibraries({ key: "2", title: "TV", type: "show" });
+    fake.shows = [
+      { ratingKey: "s1", summary: "One." },
+      { ratingKey: "s2", summary: "Two." },
+      { ratingKey: "s3", summary: "Three." },
+    ];
+    fake.catalog["2"] = [episode("e1", "s1", 1, 1), episode("e2", "s1", 1, 2), episode("e3", "s2", 1, 1), episode("e4", "s3", 1, 1)];
+    await syncMediaServer(server.id, undefined, { skipWatchHistory: true });
+    // Another library on the server holding an episode under the same show key.
+    const other = await createTestLibrary(server.id, { key: "9", type: "SERIES" });
+    const x1 = await createTestMediaItem(other.id, { ratingKey: "x1", type: "SERIES", title: "X" });
+    await prisma.mediaItem.update({ where: { id: x1.id }, data: { grandparentRatingKey: "s1", parentSummary: "Elsewhere." } });
+
+    // Episodes unchanged (not enriched, not upserted); two summaries changed.
+    fake.shows = [
+      { ratingKey: "s1", summary: "One, rewritten." },
+      { ratingKey: "s2", summary: "Two, rewritten." },
+      { ratingKey: "s3", summary: "Three." },
+    ];
+    // Scoped to the TV library, so the vanished-library purge leaves "9" alone.
+    await syncMediaServer(server.id, "2", { skipWatchHistory: true });
+
+    const summaries = Object.fromEntries(
+      (await prisma.mediaItem.findMany()).map((r) => [r.ratingKey, r.parentSummary]),
+    );
+    expect(summaries).toEqual({
+      e1: "One, rewritten.",
+      e2: "One, rewritten.",
+      e3: "Two, rewritten.",
+      e4: "Three.",
+      x1: "Elsewhere.",
+    });
+  });
+
+  it("names the library types it touched on sync:completed", async () => {
+    const { server, user } = await newServer();
+    setLibraries({ key: "2", title: "TV", type: "show" }, { key: "1", title: "Movies", type: "movie" });
+    fake.catalog["2"] = [episode("e1", "s1", 1, 1)];
+    fake.catalog["1"] = [movie("m1")];
+
+    await syncMediaServer(server.id, undefined, { skipWatchHistory: true });
+
+    expect(eventBus.emit).toHaveBeenLastCalledWith({
+      type: "sync:completed",
+      userId: user.id,
+      meta: { serverId: server.id, libraryTypes: ["MOVIE", "SERIES"] },
+    });
+
+    // A library-scoped run names only its own library's type.
+    vi.mocked(eventBus.emit).mockClear();
+    await syncMediaServer(server.id, "1", { skipWatchHistory: true });
+    expect(eventBus.emit).toHaveBeenLastCalledWith(
+      expect.objectContaining({ type: "sync:completed", meta: { serverId: server.id, libraryTypes: ["MOVIE"] } }),
+    );
+
+    // Unless it runs the watch-history pass, which writes plays for every
+    // library on the server.
+    vi.mocked(eventBus.emit).mockClear();
+    await syncMediaServer(server.id, "1");
+    expect(eventBus.emit).toHaveBeenLastCalledWith(
+      expect.objectContaining({ type: "sync:completed", meta: { serverId: server.id, libraryTypes: ["MOVIE", "SERIES"] } }),
+    );
+  });
+
+  it("omits the library types when the run touched no library", async () => {
+    const { server } = await newServer();
+    setLibraries();
+
+    await syncMediaServer(server.id, undefined, { skipWatchHistory: true });
+
+    expect(eventBus.emit).toHaveBeenLastCalledWith(
+      expect.objectContaining({ type: "sync:completed", meta: { serverId: server.id } }),
+    );
+  });
+
   it("clears a stored series id once the show loses its ids, and refreshes the summary on episodes enrichment skipped", async () => {
     const { server } = await newServer();
     fake.bulkListingIncomplete = true;
@@ -363,7 +441,7 @@ describe("movie metadata", () => {
 });
 
 describe("play state stays monotonic", () => {
-  it("never lowers playCount/lastPlayedAt when the server and history read zero, and raises it from play counts", async () => {
+  it("never lowers playCount/lastPlayedAt when the server and history read zero, and raises it from the stored plays", async () => {
     const { server } = await newServer();
     setLibraries({ key: "1", title: "Movies", type: "movie" });
     fake.catalog["1"] = [movie("m1"), movie("m2")];
@@ -371,8 +449,19 @@ describe("play state stays monotonic", () => {
 
     const lastPlayed = new Date("2025-05-05T00:00:00Z");
     await prisma.mediaItem.updateMany({ where: { ratingKey: "m1" }, data: { playCount: 5, lastPlayedAt: lastPlayed } });
-    fake.watchCounts = new Map([["m2", { count: 3, lastWatchedAt: 1_750_000_000 }]]);
-    await syncMediaServer(server.id, undefined, { skipWatchHistory: true });
+    const m2Row = await prisma.mediaItem.findFirstOrThrow({ where: { ratingKey: "m2" } });
+    await prisma.watchHistory.createMany({
+      data: [1_749_000_000, 1_749_500_000, 1_750_000_000].map((s) => ({
+        mediaItemId: m2Row.id,
+        mediaServerId: server.id,
+        serverUsername: "alice",
+        watchedAt: new Date(s * 1000),
+      })),
+    });
+    // The watch-history pass is mocked out here, so nothing reconciles after
+    // the upsert: the 3 plays can only arrive through the counts the upsert
+    // itself reads from the stored history.
+    await syncMediaServer(server.id);
 
     const m1 = await prisma.mediaItem.findFirstOrThrow({ where: { ratingKey: "m1" } });
     expect(m1.playCount).toBe(5);
@@ -380,6 +469,31 @@ describe("play state stays monotonic", () => {
     const m2 = await prisma.mediaItem.findFirstOrThrow({ where: { ratingKey: "m2" } });
     expect(m2.playCount).toBe(3);
     expect(m2.lastPlayedAt?.getTime()).toBe(1_750_000_000_000);
+  });
+
+  it("reads play counts per library, never from a live scan of the server's history", async () => {
+    const { server } = await newServer();
+    setLibraries({ key: "1", title: "Movies", type: "movie" }, { key: "2", title: "More Movies", type: "movie" });
+    // The same rating key in two libraries: plays of one must not count for the other.
+    fake.catalog["1"] = [movie("same")];
+    fake.catalog["2"] = [movie("same", { librarySectionID: 2 })];
+    await syncMediaServer(server.id, undefined, { skipWatchHistory: true });
+    const first = await prisma.mediaItem.findFirstOrThrow({ where: { ratingKey: "same", library: { key: "1" } } });
+    await prisma.watchHistory.createMany({
+      data: [1, 2].map((n) => ({
+        mediaItemId: first.id,
+        mediaServerId: server.id,
+        serverUsername: "alice",
+        watchedAt: new Date(Date.UTC(2025, 0, n)),
+      })),
+    });
+    fake.watchCounts = new Map([["same", { count: 99, lastWatchedAt: 1_800_000_000 }]]);
+
+    await syncMediaServer(server.id);
+
+    const rows = await prisma.mediaItem.findMany({ where: { ratingKey: "same" }, include: { library: true } });
+    const byLibrary = new Map(rows.map((r) => [r.library.key, r.playCount]));
+    expect(byLibrary).toEqual(new Map([["1", 2], ["2", 0]]));
   });
 });
 
@@ -412,7 +526,8 @@ describe("traversal and cancellation", () => {
     const lib = await createTestLibrary(server.id, { key: "1", type: "MOVIE" });
     const kept = await createTestMediaItem(lib.id, { ratingKey: "kept", title: "Kept" });
     fake.catalog["1"] = [movie("m1")];
-    fake.onWatchCounts = async () => {
+    // The first page is fetched before the library row is upserted.
+    fake.onPage = async () => {
       await prisma.library.update({ where: { id: lib.id }, data: { enabled: false } });
     };
 
@@ -564,7 +679,7 @@ describe("failure handling", () => {
 
     await syncMediaServer(server.id);
 
-    expect(syncWatchHistory).toHaveBeenCalledWith(server.id, undefined, expect.any(AbortSignal));
+    expect(syncWatchHistory).toHaveBeenCalledWith(server.id, undefined, expect.any(AbortSignal), { reconcileAll: true });
     expect((await latestJob(server.id)).status).toBe("COMPLETED");
     expect(await prisma.mediaItem.count()).toBe(1);
   });
@@ -584,17 +699,18 @@ describe("failure handling", () => {
 
 describe("status line and memory housekeeping", () => {
   it.each([
-    [125_000, "Play counts: 2m 5s"],
-    [120_000, "Play counts: 2m"],
-  ])("formats a %ims play-count scan in the status line", async (elapsed, expected) => {
+    [125_000, "Movies: 2m 5s"],
+    [120_000, "Movies: 2m"],
+  ])("formats a %ims library step in the status line", async (elapsed, expected) => {
     const { server } = await newServer();
     setLibraries({ key: "1", title: "Movies", type: "movie" });
-    fake.catalog["1"] = [movie("m1")];
-    fake.onWatchCounts = () => {
+    fake.catalog["1"] = Array.from({ length: 501 }, (_, i) => movie(`m${i}`));
+    // The second page is fetched while the library's step is being timed.
+    fake.onPage = (offset) => {
+      if (offset !== 500) return;
       const now = Date.now();
       vi.spyOn(Date, "now").mockReturnValue(now + elapsed);
     };
-    fake.onPage = () => { vi.restoreAllMocks(); };
     let status: string | null = null;
     vi.mocked(syncWatchHistory).mockImplementationOnce(async () => {
       status = (await latestJob(server.id)).currentLibrary;
@@ -604,7 +720,7 @@ describe("status line and memory housekeeping", () => {
     await syncMediaServer(server.id);
 
     // The watch-history phase's status line lists every finished step first.
-    expect(status).toMatch(new RegExp(`^${expected} · Movies: [0-9.]+s · Syncing detailed watch history\\.\\.\\.$`));
+    expect(status).toBe(`${expected} · Syncing detailed watch history...`);
   });
 
   it("forces a collection when the runtime exposes gc", async () => {
@@ -622,7 +738,7 @@ describe("status line and memory housekeeping", () => {
 
 describe("processBatch", () => {
   it("does nothing for an empty batch", async () => {
-    await expect(processBatch([], "no-library", "MOVIE", new Map(), new Map())).resolves.toBeUndefined();
+    await expect(processBatch([], "no-library", "MOVIE", new Map(), new Map())).resolves.toEqual({ dedupKeys: [] });
     expect(await prisma.mediaItem.count()).toBe(0);
   });
 });

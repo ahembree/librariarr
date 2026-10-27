@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { validateRequest, queryColumnValuesSchema } from "@/lib/validation";
 import { computeQueryColumnValues } from "@/lib/query/column-values";
 import { jsonResponse } from "@/lib/api/json-response";
@@ -15,17 +15,12 @@ export const maxDuration = 300;
  * Read-only; scoped to the caller's enabled servers (and the query's server
  * selection), so an id from anywhere else simply returns nothing.
  */
-export async function POST(request: Request) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const POST = withSession(async (session, request: Request) => {
   const { data, error } = await validateRequest(request, queryColumnValuesSchema);
   if (error) return error;
 
   try {
-    const result = await computeQueryColumnValues(session.userId!, data);
+    const result = await computeQueryColumnValues(session.userId, data);
     return jsonResponse(request, result);
   } catch (err) {
     apiLogger.error("Query", "Failed to compute query column values", { error: String(err) });
@@ -34,4 +29,4 @@ export async function POST(request: Request) {
       { status: 500 },
     );
   }
-}
+});

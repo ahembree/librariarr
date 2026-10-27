@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSession } from "@/lib/auth/session";
+import { withSession } from "@/lib/auth/with-session";
 import { getDimensionMeta, supportsTimelineBreakdown } from "@/lib/dashboard/custom-dimensions";
 import { resolveStatsScope } from "@/lib/media/stats-scope";
 import {
@@ -13,12 +13,7 @@ import {
 // Re-exported for consumers that imported the type from the route (e.g. charts).
 export type { TimelinePoint } from "@/lib/media/timeline";
 
-export async function GET(request: NextRequest) {
-  const session = await getSession();
-  if (!session.isLoggedIn) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
+export const GET = withSession(async (session, request: NextRequest) => {
   const { searchParams } = request.nextUrl;
   const dateField = searchParams.get("dateField");
   const bin = searchParams.get("bin") ?? "month";
@@ -55,7 +50,7 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const scope = await resolveStatsScope(session.userId!, serverId);
+  const scope = await resolveStatsScope(session.userId, serverId);
   if (scope === "server-not-found") {
     return NextResponse.json({ error: "Server not found" }, { status: 404 });
   }
@@ -77,4 +72,4 @@ export async function GET(request: NextRequest) {
   });
 
   return NextResponse.json(result);
-}
+});

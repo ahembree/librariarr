@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/db";
+import { findInChunks } from "@/lib/conditions/in-chunks";
 import type { ArrDataMap } from "@/lib/rules/lifecycle-engine";
 import { actionHonorsMemberIds } from "@/lib/lifecycle/action-types";
 
@@ -34,10 +35,12 @@ export async function arrExternalIdsOf(
     if (typeof found === "string") ids.set(item.id as string, found);
   }
   if (missing.length > 0 && opts.loadMissing !== false) {
-    const rows = await prisma.mediaItemExternalId.findMany({
-      where: { mediaItemId: { in: missing }, source },
-      select: { mediaItemId: true, externalId: true },
-    });
+    const rows = await findInChunks(missing, (ids) =>
+      prisma.mediaItemExternalId.findMany({
+        where: { mediaItemId: { in: ids }, source },
+        select: { mediaItemId: true, externalId: true },
+      }),
+    );
     for (const r of rows) ids.set(r.mediaItemId, r.externalId);
   }
   return ids;

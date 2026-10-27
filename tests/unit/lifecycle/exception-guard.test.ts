@@ -2,11 +2,13 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 
 const mockPrisma = vi.hoisted(() => ({
   lifecycleException: { findMany: vi.fn() },
+  $queryRawUnsafe: vi.fn(),
 }));
 
 vi.mock("@/lib/db", () => ({ prisma: mockPrisma }));
 
 import {
+  findExceptedItemIds,
   findExceptionProtectedGroups,
   hasProtectionGroup,
   protectionKeys,
@@ -76,6 +78,84 @@ describe("protectionKey", () => {
 
   it("is null for a movie — its own exception row is checked directly", () => {
     expect(protectionKey({ parentTitle: null, type: "MOVIE" })).toBeNull();
+  });
+});
+
+describe("findExceptedItemIds — a library's worth of candidates", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  // A track-scope music rule set matching 38k tracks sent them as one IN list
+  // beside the owner filter, past Postgres' 32,767 bind parameters (P2029),
+  // and Re-evaluate All answered 500.
+  it("sends the candidates as one array parameter, however many there are", async () => {
+    const candidates = Array.from({ length: 40_000 }, (_, i) => `t${i}`);
+    mockPrisma.lifecycleException.findMany.mockResolvedValue([
+      { mediaItemId: "t5", mediaItem: { dedupKey: "track:a" } },
+      { mediaItemId: "elsewhere", mediaItem: { dedupKey: "track:b" } },
+    ]);
+    mockPrisma.$queryRawUnsafe.mockResolvedValue([
+      { id: "t7", dedupKey: "track:b" },
+      { id: "t9", dedupKey: "track:other" },
+    ]);
+
+    const excepted = await findExceptedItemIds("u1", candidates);
+
+    expect(mockPrisma.$queryRawUnsafe).toHaveBeenCalledTimes(1);
+    const [sql, ids, userId] = mockPrisma.$queryRawUnsafe.mock.calls[0];
+    expect(sql).toContain(`mi."id" = ANY($1::text[])`);
+    expect(sql).toContain(`ms."userId" = $2`);
+    expect(ids).toHaveLength(40_000);
+    expect(userId).toBe("u1");
+    // Its own exception, and a copy of another excepted item.
+    expect(excepted).toEqual(new Set(["t5", "t7"]));
+  });
+
+  it("does not look the candidates up when no exception carries a dedupKey", async () => {
+    mockPrisma.lifecycleException.findMany.mockResolvedValue([{ mediaItemId: "a", mediaItem: { dedupKey: null } }]);
+    expect(await findExceptedItemIds("u1", ["a", "b"])).toEqual(new Set(["a"]));
+    expect(mockPrisma.$queryRawUnsafe).not.toHaveBeenCalled();
+  });
+
+  it("asks nothing for no candidates", async () => {
+    expect(await findExceptedItemIds("u1", [])).toEqual(new Set());
+    expect(mockPrisma.lifecycleException.findMany).not.toHaveBeenCalled();
+  });
+});
+
+describe("findExceptionProtectedGroups — slices", () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+  });
+
+  it("splits a library's worth of titles and ids into statements under the parameter limit, and unions the keys", async () => {
+    const targets: ProtectionTarget[] = Array.from({ length: 20_000 }, (_, i) => ({
+      parentTitle: `Artist ${i}`,
+      type: "MUSIC",
+      externalIds: [{ source: "MUSICBRAINZ", externalId: `mbid-${i}` }],
+    }));
+    mockPrisma.lifecycleException.findMany
+      .mockResolvedValueOnce([{ mediaItem: { parentTitle: "Artist 3", seriesKey: null, type: "MUSIC", externalIds: [] } }])
+      .mockResolvedValue([]);
+
+    const keys = await findExceptionProtectedGroups("u1", targets);
+
+    const calls = mockPrisma.lifecycleException.findMany.mock.calls;
+    expect(calls.length).toBeGreaterThan(1);
+    let titles = 0;
+    for (const [args] of calls) {
+      const or = args.where.mediaItem.OR as Array<Record<string, { in?: string[] } & Record<string, unknown>>>;
+      const parentList = (or.find((c) => "parentTitle" in c)?.parentTitle as { in: string[] }).in;
+      const mbidList = (
+        (or.find((c) => "externalIds" in c)?.externalIds as { some: { externalId: { in: string[] } } }).some.externalId
+      ).in;
+      // Well under 32,767 bind parameters per statement.
+      expect(parentList.length + mbidList.length).toBeLessThanOrEqual(15_000);
+      titles += parentList.length;
+    }
+    expect(titles).toBe(20_000);
+    expect(isGroupProtected(keys, { parentTitle: "artist 3", type: "MUSIC" })).toBe(true);
   });
 });
 
