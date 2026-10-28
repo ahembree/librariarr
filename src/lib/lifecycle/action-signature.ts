@@ -50,3 +50,20 @@ export function actionConfigSignature(c: ActionConfig): string {
     removeArrTags: normTags(c.removeArrTags),
   });
 }
+
+/**
+ * The columns a stored action is read with to compare its signature and the
+ * episodes it covered.
+ */
+export const ACTION_SIGNATURE_SELECT = {
+  mediaItemId: true,
+  status: true,
+  actionType: true,
+  arrInstanceId: true,
+  targetQualityProfileId: true,
+  addImportExclusion: true,
+  searchAfterAction: true,
+  addArrTags: true,
+  removeArrTags: true,
+  matchedMediaItemIds: true,
+} as const;

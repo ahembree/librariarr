@@ -286,6 +286,28 @@ describe("SERIES libraries", () => {
     );
   });
 
+  it("names every type when a library-scoped run's reconcile repairs another library", async () => {
+    const { server } = await newServer();
+    setLibraries({ key: "2", title: "TV", type: "show" }, { key: "1", title: "Movies", type: "movie" });
+    fake.catalog["2"] = [episode("e1", "s1", 1, 1)];
+    fake.catalog["1"] = [movie("m1")];
+    await syncMediaServer(server.id, undefined, { skipWatchHistory: true });
+
+    // A stored play the episode's columns do not reflect yet (a reconcile an
+    // earlier run did not finish): the Movies-only run repairs it.
+    const ep = await prisma.mediaItem.findFirstOrThrow({ where: { ratingKey: "e1" } });
+    await prisma.watchHistory.create({
+      data: { mediaItemId: ep.id, mediaServerId: server.id, serverUsername: "alice", watchedAt: new Date() },
+    });
+    vi.mocked(eventBus.emit).mockClear();
+    await syncMediaServer(server.id, "1", { skipWatchHistory: true });
+
+    expect((await prisma.mediaItem.findUniqueOrThrow({ where: { id: ep.id } })).playCount).toBe(1);
+    expect(eventBus.emit).toHaveBeenLastCalledWith(
+      expect.objectContaining({ type: "sync:completed", meta: { serverId: server.id, libraryTypes: ["MOVIE", "SERIES"] } }),
+    );
+  });
+
   it("omits the library types when the run touched no library", async () => {
     const { server } = await newServer();
     setLibraries();

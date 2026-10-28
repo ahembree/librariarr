@@ -85,7 +85,8 @@ describe("createListCache", () => {
 describe("listCacheKeyFor", () => {
   it("does not split an entry on parameter order", () => {
     expect(listCacheKeyFor("/x", new URLSearchParams("b=2&a=1"))).toBe(listCacheKeyFor("/x", new URLSearchParams("a=1&b=2")));
-    expect(listCacheKeyFor("/x", new URLSearchParams("a=2&a=1"))).toBe("/x?a=1&a=2");
+    // Repeats keep their order: the handler reads the first.
+    expect(listCacheKeyFor("/x", new URLSearchParams("a=2&a=1"))).toBe("/x?a=2&a=1");
     expect(listCacheKeyFor("/x", new URLSearchParams("a=1"))).not.toBe(listCacheKeyFor("/y", new URLSearchParams("a=1")));
   });
 });

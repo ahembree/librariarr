@@ -4,7 +4,7 @@ import { jsonResponse } from "@/lib/api/json-response";
 import { prisma } from "@/lib/db";
 import { isDestructiveActionType, ruleSetActsOnEpisodes } from "@/lib/lifecycle/action-types";
 import { actionConfigSignature } from "@/lib/lifecycle/action-signature";
-import { uncoveredMembers } from "@/lib/lifecycle/episode-coverage";
+import { coverageOf, uncoveredEpisodes, type EpisodeCoverage } from "@/lib/lifecycle/episode-coverage";
 import { loadStoredMatchMembers } from "@/lib/lifecycle/match-snapshot";
 import {
   actionTargetTitle,
@@ -299,7 +299,7 @@ async function handlePendingGrouped(request: NextRequest, userId: string) {
   // a different signature no longer suppresses it.
   const pendingPairs = new Set(pendingActions.map((a) => `${a.ruleSetId}:${a.mediaItemId}`));
   const completedSigsByPair = new Map<string, Set<string>>();
-  const settledByPair = new Map<string, typeof settledActions>();
+  const settledByRuleSet = new Map<string, typeof settledActions>();
   for (const a of settledActions) {
     const pair = `${a.ruleSetId}:${a.mediaItemId}`;
     let sigs = completedSigsByPair.get(pair);
@@ -308,22 +308,32 @@ async function handlePendingGrouped(request: NextRequest, userId: string) {
       completedSigsByPair.set(pair, sigs);
     }
     sigs.add(actionConfigSignature(a));
-    settledByPair.set(pair, [...(settledByPair.get(pair) ?? []), a]);
+    if (a.ruleSetId) settledByRuleSet.set(a.ruleSetId, [...(settledByRuleSet.get(a.ruleSetId) ?? []), a]);
   }
 
-  // An episode-scoped action (see `uncoveredMembers`) suppresses a match only
-  // when it acted on every episode the match holds now, which needs the
-  // matches' member lists — read only for those rule sets, and only when a
-  // settled action could suppress one of their matches.
-  const episodeScopedRuleSets = [...ruleSetById.values()]
-    .filter((r) => r.actionType && ruleSetActsOnEpisodes(r.actionType, r))
-    .map((r) => r.id)
-    .filter((id) => matchKeys.some((m) => m.ruleSetId === id && settledByPair.has(`${id}:${m.mediaItemId}`)));
+  // A Series rule set's action is suppressed per episode, from every settled
+  // action of the rule set with the same configuration (`episode-coverage.ts`),
+  // exactly as the scheduler decides it — which needs the matches' member
+  // lists, read only for the rule sets with such an action.
+  const coverageByRuleSet = new Map<string, EpisodeCoverage>();
+  for (const [ruleSetId, settled] of settledByRuleSet) {
+    const ruleSet = ruleSetById.get(ruleSetId);
+    if (!ruleSet || ruleSet.type !== "SERIES" || !ruleSet.actionType || isDestructiveActionType(ruleSet.actionType)) continue;
+    const signature = actionConfigSignature(ruleSet);
+    const same = settled.filter((a) => actionConfigSignature(a) === signature);
+    if (same.length > 0) coverageByRuleSet.set(ruleSetId, coverageOf(same));
+  }
   const currentMembersByPair = new Map<string, string[]>();
-  for (const m of await loadStoredMatchMembers(episodeScopedRuleSets)) {
+  for (const m of await loadStoredMatchMembers([...coverageByRuleSet.keys()])) {
     const ids = Array.isArray(m.memberIds) ? m.memberIds.filter((x): x is string => typeof x === "string") : [];
     currentMembersByPair.set(`${m.ruleSetId}:${m.mediaItemId}`, ids);
   }
+  /** The episodes an estimated row's action would act on, or null when nothing narrows it. */
+  const uncoveredFor = (ruleSetId: string, mediaItemId: string): string[] | null => {
+    const coverage = coverageByRuleSet.get(ruleSetId);
+    if (!coverage) return null;
+    return uncoveredEpisodes(mediaItemId, currentMembersByPair.get(`${ruleSetId}:${mediaItemId}`) ?? [], coverage);
+  };
 
   const upcomingIds = matchKeys
     .filter((m) => {
@@ -335,15 +345,12 @@ async function handlePendingGrouped(request: NextRequest, userId: string) {
       // between is simply not there: nothing to estimate for it.
       const ruleSet = ruleSetById.get(m.ruleSetId);
       if (!ruleSet) return false;
-      if (ruleSet.actionType && !isDestructiveActionType(ruleSet.actionType)) {
-        const signature = actionConfigSignature(ruleSet);
-        if (completedSigsByPair.get(pair)?.has(signature)) {
-          if (!ruleSetActsOnEpisodes(ruleSet.actionType, ruleSet)) return false;
-          const settled = (settledByPair.get(pair) ?? []).filter((a) => actionConfigSignature(a) === signature);
-          return uncoveredMembers(currentMembersByPair.get(pair) ?? [], settled).length > 0;
-        }
+      if (!ruleSet.actionType || isDestructiveActionType(ruleSet.actionType)) return true;
+      if (ruleSet.type === "SERIES") {
+        const left = uncoveredFor(m.ruleSetId, m.mediaItemId);
+        return left === null || left.length > 0;
       }
-      return true;
+      return !completedSigsByPair.get(pair)?.has(actionConfigSignature(ruleSet));
     })
     .map((m) => m.id);
 
@@ -436,7 +443,14 @@ async function handlePendingGrouped(request: NextRequest, userId: string) {
       title: snapshot?.title,
       parentTitle: snapshot?.parentTitle,
     });
-    const memberIds = memberIdsFromItemData(m.itemData);
+    // An episode-scoped action is scheduled for, and executes on, only the
+    // episodes no settled action of the same configuration has covered: list
+    // those, not every member.
+    const allMembers = memberIdsFromItemData(m.itemData);
+    const memberIds =
+      m.ruleSet.actionType && ruleSetActsOnEpisodes(m.ruleSet.actionType, m.ruleSet)
+        ? (uncoveredFor(m.ruleSetId, m.mediaItemId) ?? allMembers)
+        : allMembers;
     const mi = buildActionMediaItem({
       actionType: m.ruleSet.actionType!,
       status: "PENDING",

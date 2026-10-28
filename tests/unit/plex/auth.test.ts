@@ -1,8 +1,9 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
 const mockPrisma = {
+  $executeRaw: vi.fn(),
   systemConfig: {
-    upsert: vi.fn(),
+    findUniqueOrThrow: vi.fn(),
   },
 };
 
@@ -39,7 +40,9 @@ beforeEach(async () => {
   vi.clearAllMocks();
   // clearAllMocks keeps queued `mock*Once` answers, which would otherwise leak
   // into the next test if one went unconsumed.
-  mockPrisma.systemConfig.upsert.mockReset();
+  mockPrisma.systemConfig.findUniqueOrThrow.mockReset();
+  mockPrisma.$executeRaw.mockReset();
+  mockPrisma.$executeRaw.mockResolvedValue(1);
   mockAxiosGet.mockReset();
   mockAxiosPost.mockReset();
   // Reset module to clear cachedClientId
@@ -68,26 +71,25 @@ beforeEach(async () => {
 
 describe("Plex Auth", () => {
   describe("getPlexClientId", () => {
-    it("upserts and returns client ID from database", async () => {
-      mockPrisma.systemConfig.upsert.mockResolvedValueOnce({
+    it("creates the row if missing and returns the stored client ID", async () => {
+      mockPrisma.systemConfig.findUniqueOrThrow.mockResolvedValueOnce({
         id: "singleton",
         plexClientId: "test-uuid-123",
       });
       const result = await getPlexClientId();
       expect(result).toBe("test-uuid-123");
-      expect(mockPrisma.systemConfig.upsert).toHaveBeenCalledWith({
+      // A fresh random UUID, kept only when no row exists yet.
+      const [sql, uuid] = mockPrisma.$executeRaw.mock.calls[0];
+      expect(sql.join("?")).toContain('ON CONFLICT ("id") DO NOTHING');
+      expect(uuid).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+      expect(mockPrisma.systemConfig.findUniqueOrThrow).toHaveBeenCalledWith({
         where: { id: "singleton" },
-        // A fresh random UUID, kept only when no row exists yet.
-        create: {
-          id: "singleton",
-          plexClientId: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/),
-        },
-        update: {},
+        select: { plexClientId: true },
       });
     });
 
     it("caches the client ID on subsequent calls", async () => {
-      mockPrisma.systemConfig.upsert.mockResolvedValueOnce({
+      mockPrisma.systemConfig.findUniqueOrThrow.mockResolvedValueOnce({
         id: "singleton",
         plexClientId: "cached-uuid",
       });
@@ -95,7 +97,7 @@ describe("Plex Auth", () => {
       const second = await getPlexClientId();
       expect(first).toBe("cached-uuid");
       expect(second).toBe("cached-uuid");
-      expect(mockPrisma.systemConfig.upsert).toHaveBeenCalledTimes(1);
+      expect(mockPrisma.systemConfig.findUniqueOrThrow).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -111,7 +113,7 @@ describe("Plex Auth", () => {
 
   describe("createPlexPin", () => {
     it("posts to plex.tv and returns pin data", async () => {
-      mockPrisma.systemConfig.upsert.mockResolvedValueOnce({
+      mockPrisma.systemConfig.findUniqueOrThrow.mockResolvedValueOnce({
         plexClientId: "client-id",
       });
       const pinData = {
@@ -147,7 +149,7 @@ describe("Plex Auth", () => {
 
   describe("checkPlexPin", () => {
     it("checks pin status without code", async () => {
-      mockPrisma.systemConfig.upsert.mockResolvedValueOnce({
+      mockPrisma.systemConfig.findUniqueOrThrow.mockResolvedValueOnce({
         plexClientId: "client-id",
       });
       // file deepcode ignore HardcodedNonCryptoSecret/test: test file
@@ -165,7 +167,7 @@ describe("Plex Auth", () => {
     });
 
     it("checks pin status with code", async () => {
-      mockPrisma.systemConfig.upsert.mockResolvedValueOnce({
+      mockPrisma.systemConfig.findUniqueOrThrow.mockResolvedValueOnce({
         plexClientId: "client-id",
       });
       mockAxiosGet.mockResolvedValueOnce({ data: { id: 123 } });
@@ -182,7 +184,7 @@ describe("Plex Auth", () => {
 
   describe("getPlexUser", () => {
     it("fetches user with auth token", async () => {
-      mockPrisma.systemConfig.upsert.mockResolvedValueOnce({
+      mockPrisma.systemConfig.findUniqueOrThrow.mockResolvedValueOnce({
         plexClientId: "client-id",
       });
       const userData = { id: 1, username: "testuser", email: "test@example.com" };
@@ -204,7 +206,7 @@ describe("Plex Auth", () => {
 
   describe("getPlexResources", () => {
     it("fetches resources with includeHttps", async () => {
-      mockPrisma.systemConfig.upsert.mockResolvedValueOnce({
+      mockPrisma.systemConfig.findUniqueOrThrow.mockResolvedValueOnce({
         plexClientId: "client-id",
       });
       const resources = [{ name: "Server1", clientIdentifier: "abc" }];
@@ -227,7 +229,7 @@ describe("Plex Auth", () => {
       // `response.data` directly threw and every Plex user got an empty friends
       // list — the excluded-users picker only ever showed the owner and whoever
       // was streaming. The array lives under `users`.
-      mockPrisma.systemConfig.upsert.mockResolvedValueOnce({
+      mockPrisma.systemConfig.findUniqueOrThrow.mockResolvedValueOnce({
         plexClientId: "client-id",
       });
       mockAxiosGet.mockResolvedValueOnce({
@@ -247,7 +249,7 @@ describe("Plex Auth", () => {
 
     it("still accepts a bare-array response", async () => {
       // Belt-and-suspenders: older/other deployments have returned a bare array.
-      mockPrisma.systemConfig.upsert.mockResolvedValueOnce({
+      mockPrisma.systemConfig.findUniqueOrThrow.mockResolvedValueOnce({
         plexClientId: "client-id",
       });
       mockAxiosGet.mockResolvedValueOnce({
@@ -263,7 +265,7 @@ describe("Plex Auth", () => {
       // which is the account's friendly ("Full Name") when one is set — not the
       // login username. So a friend who set a friendly name must surface by that
       // name here, or excluding them would never match their session.
-      mockPrisma.systemConfig.upsert.mockResolvedValueOnce({
+      mockPrisma.systemConfig.findUniqueOrThrow.mockResolvedValueOnce({
         plexClientId: "client-id",
       });
       mockAxiosGet.mockResolvedValueOnce({
@@ -281,7 +283,7 @@ describe("Plex Auth", () => {
     });
 
     it("returns empty array on error", async () => {
-      mockPrisma.systemConfig.upsert.mockResolvedValueOnce({
+      mockPrisma.systemConfig.findUniqueOrThrow.mockResolvedValueOnce({
         plexClientId: "client-id",
       });
       mockAxiosGet.mockRejectedValueOnce(new Error("fail"));
@@ -291,7 +293,7 @@ describe("Plex Auth", () => {
 
     it("returns empty array for an unexpected response shape", async () => {
       // Neither a bare array nor `{ users: [...] }` — must not throw.
-      mockPrisma.systemConfig.upsert.mockResolvedValueOnce({
+      mockPrisma.systemConfig.findUniqueOrThrow.mockResolvedValueOnce({
         plexClientId: "client-id",
       });
       mockAxiosGet.mockResolvedValueOnce({ data: { unexpected: true } });
@@ -300,7 +302,7 @@ describe("Plex Auth", () => {
     });
 
     it("filters out empty usernames", async () => {
-      mockPrisma.systemConfig.upsert.mockResolvedValueOnce({
+      mockPrisma.systemConfig.findUniqueOrThrow.mockResolvedValueOnce({
         plexClientId: "client-id",
       });
       mockAxiosGet.mockResolvedValueOnce({
@@ -315,7 +317,7 @@ describe("Plex Auth", () => {
 
   describe("getPlexAuthUrl", () => {
     it("constructs auth URL with params", async () => {
-      mockPrisma.systemConfig.upsert.mockResolvedValueOnce({
+      mockPrisma.systemConfig.findUniqueOrThrow.mockResolvedValueOnce({
         plexClientId: "my-client-id",
       });
 

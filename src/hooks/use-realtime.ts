@@ -211,11 +211,14 @@ function clearIdleCloseTimer() {
  * subscribers that refetch the same route share the request.
  */
 function fireResync() {
+  // The cache drops run on every reopen, throttled or not: they cost no
+  // request, and skipped they left lists loaded before the drop reading as
+  // fresh once the stream was live again, past any event missed meanwhile.
+  runPreHandlers(new Set([...preHandlers.values()].flatMap((set) => [...set])));
   const now = Date.now();
   if (now - lastResyncAt < MIN_RESYNC_INTERVAL_MS) return;
   lastResyncAt = now;
 
-  runPreHandlers(new Set([...preHandlers.values()].flatMap((set) => [...set])));
   const callbacks = new Set<RealtimeCallback>();
   for (const current of resyncListeners) callbacks.add(current());
   const scope = newRequestScope();

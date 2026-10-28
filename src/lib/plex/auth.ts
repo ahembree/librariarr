@@ -11,10 +11,16 @@ let cachedClientId: string | null = null;
 export async function getPlexClientId(): Promise<string> {
   if (cachedClientId) return cachedClientId;
 
-  const config = await prisma.systemConfig.upsert({
+  // ON CONFLICT rather than an upsert with an empty update, which Prisma runs
+  // as a read then a create: two first sign-ins at once both created the row
+  // and the second failed on the primary key.
+  await prisma.$executeRaw`
+    INSERT INTO "SystemConfig" ("id", "plexClientId", "updatedAt")
+    VALUES ('singleton', ${randomUUID()}, NOW())
+    ON CONFLICT ("id") DO NOTHING`;
+  const config = await prisma.systemConfig.findUniqueOrThrow({
     where: { id: "singleton" },
-    create: { id: "singleton", plexClientId: randomUUID() },
-    update: {},
+    select: { plexClientId: true },
   });
 
   cachedClientId = config.plexClientId;
