@@ -28,6 +28,7 @@ function config(ruleSetId: string, userId: string, actionType: string, overrides
     userId,
     name: "RS",
     type: "MOVIE",
+    seriesScope: true,
     actionEnabled: true,
     actionType,
     actionDelayDays: 0,

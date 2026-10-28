@@ -434,6 +434,28 @@ describe("episode-scoped Sonarr Unmonitor and Search (Query page episode view)",
     expect(mockSonarr.updateSeries).not.toHaveBeenCalled();
   });
 
+  it("acts on the episodes that resolve and warns about the rest", async () => {
+    mockPrisma.mediaItem.findMany.mockResolvedValue([
+      { id: "e2", seasonNumber: 1, episodeNumber: 2, originallyAvailableAt: null },
+      { id: "e9", seasonNumber: 9, episodeNumber: 9, originallyAvailableAt: null },
+    ]);
+    await executeAction(showAction({ actionType: "UNMONITOR_SONARR", episodeScope: true, matchedMediaItemIds: ["e2", "e9", "gone"] }));
+    expect(mockSonarr.setEpisodesMonitored).toHaveBeenCalledWith([502], false);
+    expect(mockLogger.warn).toHaveBeenCalledWith(
+      "Lifecycle",
+      expect.stringMatching(/acting on 1 of 3 episode\(s\) — 1 could not be matched .*, 1 are no longer in the library/),
+    );
+  });
+
+  it("says the episodes are gone when none is in the library any more", async () => {
+    mockPrisma.mediaItem.findMany.mockResolvedValue([]);
+    await expect(
+      executeAction(showAction({ actionType: "SEARCH_SONARR", episodeScope: true, matchedMediaItemIds: ["gone"] })),
+    ).rejects.toThrow("are in the library any more");
+    expect(mockSonarr.triggerEpisodeSearch).not.toHaveBeenCalled();
+    expect(mockSonarr.triggerSeriesSearch).not.toHaveBeenCalled();
+  });
+
   it("throws rather than widening to the series when no selected episode resolves in Sonarr", async () => {
     mockSonarr.getEpisodes.mockResolvedValue([{ id: 501, seasonNumber: 1, episodeNumber: 1, episodeFileId: 10 }]);
     await expect(

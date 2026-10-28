@@ -12,7 +12,7 @@ import { matchIdentityChange } from "@/lib/lifecycle/match-identity";
 import { arrExternalIdsOf, arrIdSourceFor } from "@/lib/lifecycle/cross-server-copies";
 import { heldScheduledFor, loadGroupedActionHold } from "@/lib/lifecycle/grouped-action-hold";
 import { UnreachableInstances } from "@/lib/lifecycle/unreachable-instances";
-import { actionHonorsMemberIds, isDestructiveActionType, ruleSetActsOnEpisodes } from "@/lib/lifecycle/action-types";
+import { actionHonorsMemberIds, actsOnMembers, isDestructiveActionType, ruleSetActsOnEpisodes } from "@/lib/lifecycle/action-types";
 import { checkDeleteCeiling } from "@/lib/lifecycle/delete-ceiling";
 import { notifyDeleteCeilingHeld, notifyDeletionHeld } from "@/lib/lifecycle/deletion-held-notice";
 import { reserveApiDestructive, type ApiDestructiveReservation } from "@/lib/api-keys/destructive-budget";
@@ -31,6 +31,7 @@ import {
   type ProtectionTarget,
 } from "@/lib/lifecycle/exception-guard";
 import { actionConfigSignature } from "@/lib/lifecycle/action-signature";
+import { uncoveredMembers } from "@/lib/lifecycle/episode-coverage";
 import { createRunMetadata } from "@/lib/lifecycle/run-metadata";
 import { invalidateArrMetadataCache } from "@/lib/lifecycle/fetch-arr-metadata";
 import { checkLifecycleRuleEvaluability } from "@/lib/lifecycle/evaluability";
@@ -81,6 +82,7 @@ interface ActionSchedulingRuleSet {
   userId: string;
   name: string;
   type: string;
+  seriesScope: boolean;
   actionEnabled: boolean;
   actionType: string | null;
   actionDelayDays: number;
@@ -209,17 +211,35 @@ export async function scheduleActionsForRuleSet(
         searchAfterAction: true,
         addArrTags: true,
         removeArrTags: true,
+        matchedMediaItemIds: true,
       },
     }),
   );
+  const actsOnEpisodes = ruleSetActsOnEpisodes(ruleSet.actionType, ruleSet);
   const existingItemIds = new Set<string | null>();
+  const settledByItem = new Map<string, Array<{ matchedMediaItemIds: string[] }>>();
   for (const action of existingActions) {
     // A PENDING action always blocks (dedup). A completed/failed action only
     // blocks when its config matches what we'd schedule now — a re-configured
     // action has a different signature and is allowed through.
-    if (action.status === "PENDING" || actionConfigSignature(action) === currentSignature) {
+    if (action.status === "PENDING") {
       existingItemIds.add(action.mediaItemId);
+    } else if (actionConfigSignature(action) === currentSignature) {
+      if (actsOnEpisodes && action.mediaItemId) {
+        settledByItem.set(action.mediaItemId, [...(settledByItem.get(action.mediaItemId) ?? []), action]);
+      } else {
+        existingItemIds.add(action.mediaItemId);
+      }
     }
+  }
+  // An episode-scoped action blocks only the episodes it acted on: the rest of
+  // the show's matched episodes get an action of their own.
+  const remainingMembers = new Map<string, string[]>();
+  for (const [itemId, settled] of settledByItem) {
+    if (existingItemIds.has(itemId)) continue;
+    const left = uncoveredMembers(episodeIdMap.get(itemId) ?? [], settled);
+    if (left.length === 0) existingItemIds.add(itemId);
+    else remainingMembers.set(itemId, left);
   }
 
   const newItems = matchedItems.filter((item) => !existingItemIds.has(item.id as string));
@@ -250,7 +270,7 @@ export async function scheduleActionsForRuleSet(
         actionType: ruleSet.actionType!,
         addImportExclusion: ruleSet.addImportExclusion,
         searchAfterAction: ruleSet.searchAfterAction,
-        matchedMediaItemIds: episodeIdMap.get(item.id as string) ?? [],
+        matchedMediaItemIds: remainingMembers.get(item.id as string) ?? episodeIdMap.get(item.id as string) ?? [],
         addArrTags: ruleSet.addArrTags,
         removeArrTags: ruleSet.removeArrTags,
         scheduledFor: dueAt(item),
@@ -511,7 +531,7 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
   // A minute early, so a clock difference between the app and the database —
   // `createdAt` is the database's — can only make pass 2 check more, never less.
   const exceptionsCheckedBefore = new Date(Date.now() - 60_000);
-  const pendingActions = await prisma.lifecycleAction.findMany({
+  const loadedActions = await prisma.lifecycleAction.findMany({
     where: {
       status: "PENDING",
       scheduledFor: { lte: new Date() },
@@ -546,6 +566,12 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
       },
     },
   });
+  // Whether each action acts on its episodes rather than its series, decided
+  // once and carried with the action into naming, pass 1 and the executor.
+  const pendingActions = loadedActions.map((a) => ({
+    ...a,
+    episodeScope: !!a.ruleSet && ruleSetActsOnEpisodes(a.actionType, a.ruleSet),
+  }));
 
   // SAFETY: Batch-validate that each pending action's item still exists in
   // the RuleMatch table for its rule set. Cancel stale actions whose items
@@ -745,11 +771,7 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
       // episode-id churn) would wrongly skip a series that still matches. Also
       // skip when the match doesn't track members — absence means "not
       // member-scoped", not "zero members".
-      // Episode-scoped Unmonitor/Search act on the member list too.
-      const actsOnMembers =
-        actionHonorsMemberIds(action.actionType) ||
-        (!!action.ruleSet && ruleSetActsOnEpisodes(action.actionType, action.ruleSet));
-      const currentMembers = actsOnMembers
+      const currentMembers = actsOnMembers(action.actionType, action.episodeScope)
         ? currentMemberIds.get(`${action.ruleSetId}:${action.mediaItemId}`)
         : undefined;
       if (currentMembers) {
@@ -1029,15 +1051,7 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
     // what its log line, notifications and history name (see `executedTitle`).
     const running = { ...action, matchedMediaItemIds: filteredMatchedIds, mediaItem, memberEpisodes: runningEpisodes };
     try {
-      const outcome = await executeAction(
-        {
-          ...running,
-          targetTitle: actionTargetTitle(running),
-          episodeScope: !!action.ruleSet && ruleSetActsOnEpisodes(action.actionType, action.ruleSet),
-        },
-        undefined,
-        arrContext,
-      );
+      const outcome = await executeAction({ ...running, targetTitle: actionTargetTitle(running) }, undefined, arrContext);
 
       // Compute deleted bytes for stats tracking (only for delete actions)
       const deletedBytes = await computeDeletedBytes(action.actionType, mediaItem, filteredMatchedIds, outcome);

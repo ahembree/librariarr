@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   actionCanScopeToEpisodes,
+  actsOnMembers,
   ruleSetActsOnEpisodes,
   supportsSearchAfter,
   QUALITY_PROFILE_ACTION_TYPES,
@@ -117,5 +118,24 @@ describe("ruleSetActsOnEpisodes", () => {
 
   it("never applies to a non-series rule set", () => {
     expect(ruleSetActsOnEpisodes("UNMONITOR_SONARR", { type: "MOVIE", seriesScope: false })).toBe(false);
+  });
+});
+
+describe("actsOnMembers", () => {
+  it("is true for the file deletes whatever the scope", () => {
+    expect(actsOnMembers("DELETE_FILES_SONARR")).toBe(true);
+    expect(actsOnMembers("DELETE_FILES_SONARR", false)).toBe(true);
+  });
+
+  it("is true for Unmonitor and Search only when episode-scoped", () => {
+    expect(actsOnMembers("UNMONITOR_SONARR", true)).toBe(true);
+    expect(actsOnMembers("SEARCH_SONARR", true)).toBe(true);
+    expect(actsOnMembers("UNMONITOR_SONARR", false)).toBe(false);
+    expect(actsOnMembers("SEARCH_SONARR")).toBe(false);
+  });
+
+  it("is false for whole-record actions even when episode-scoped", () => {
+    expect(actsOnMembers("DELETE_SONARR", true)).toBe(false);
+    expect(actsOnMembers("CHANGE_QUALITY_PROFILE_SONARR", true)).toBe(false);
   });
 });

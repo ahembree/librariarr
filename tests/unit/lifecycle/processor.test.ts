@@ -214,6 +214,7 @@ describe("scheduleActionsForRuleSet", () => {
         name: "Test",
         type: "MOVIE",
         actionEnabled: false,
+        seriesScope: true,
         actionType: null,
         actionDelayDays: 0,
         arrInstanceId: null,
@@ -242,6 +243,7 @@ describe("scheduleActionsForRuleSet", () => {
         name: "Test",
         type: "MOVIE",
         actionEnabled: false,
+        seriesScope: true,
         actionType: null,
         actionDelayDays: 0,
         arrInstanceId: null,
@@ -268,6 +270,7 @@ describe("scheduleActionsForRuleSet", () => {
         name: "Test",
         type: "MOVIE",
         actionEnabled: true,
+        seriesScope: true,
         actionType: null,
         actionDelayDays: 0,
         arrInstanceId: null,
@@ -305,6 +308,7 @@ describe("scheduleActionsForRuleSet", () => {
         name: "Test",
         type: "MOVIE",
         actionEnabled: true,
+        seriesScope: true,
         actionType: "DELETE_RADARR",
         actionDelayDays: 7,
         arrInstanceId: "arr1",
@@ -347,6 +351,7 @@ describe("scheduleActionsForRuleSet", () => {
         name: "Test",
         type: "MOVIE",
         actionEnabled: true,
+        seriesScope: true,
         actionType: "DELETE_RADARR",
         actionDelayDays: 7,
         arrInstanceId: "arr1",
@@ -380,6 +385,7 @@ describe("scheduleActionsForRuleSet", () => {
         name: "Test",
         type: "MOVIE",
         actionEnabled: true,
+        seriesScope: true,
         actionType: "DELETE_RADARR",
         actionDelayDays: 7,
         arrInstanceId: "arr1",
@@ -426,6 +432,7 @@ describe("scheduleActionsForRuleSet", () => {
           name: "Test",
           type: "MOVIE",
           actionEnabled: true,
+          seriesScope: true,
           actionType: "DELETE_RADARR",
           actionDelayDays: 7,
           arrInstanceId: "arr1",
@@ -470,6 +477,7 @@ describe("scheduleActionsForRuleSet", () => {
         name: "Test",
         type: "MOVIE",
         actionEnabled: true,
+        seriesScope: true,
         actionType: "DELETE_RADARR",
         actionDelayDays: 0,
         arrInstanceId: "arr1",
@@ -514,6 +522,7 @@ describe("scheduleActionsForRuleSet", () => {
         name: "Test",
         type: "MOVIE",
         actionEnabled: true,
+        seriesScope: true,
         actionType: "UNMONITOR_RADARR",
         actionDelayDays: 0,
         arrInstanceId: "arr1",
@@ -551,6 +560,7 @@ describe("scheduleActionsForRuleSet", () => {
         name: "Test",
         type: "MOVIE",
         actionEnabled: true,
+        seriesScope: true,
         actionType: "DELETE_RADARR",
         actionDelayDays: 0,
         arrInstanceId: "arr1",
@@ -596,6 +606,7 @@ describe("scheduleActionsForRuleSet", () => {
         name: "Test",
         type: "MOVIE",
         actionEnabled: true,
+        seriesScope: true,
         actionType: "DO_NOTHING",
         actionDelayDays: 0,
         arrInstanceId: null,
@@ -641,6 +652,7 @@ describe("scheduleActionsForRuleSet", () => {
         name: "Test",
         type: "MOVIE",
         actionEnabled: true,
+        seriesScope: true,
         actionType: "DO_NOTHING",
         actionDelayDays: 0,
         arrInstanceId: null,
@@ -680,6 +692,7 @@ describe("scheduleActionsForRuleSet", () => {
         name: "Test",
         type: "MOVIE",
         actionEnabled: true,
+        seriesScope: true,
         actionType: "DELETE_RADARR",
         actionDelayDays: 0,
         arrInstanceId: "arr1",
@@ -716,6 +729,7 @@ describe("scheduleActionsForRuleSet", () => {
         name: "Test",
         type: "SERIES",
         actionEnabled: true,
+        seriesScope: true,
         actionType: "DELETE_SONARR",
         actionDelayDays: 0,
         arrInstanceId: "arr1",
@@ -759,6 +773,7 @@ describe("scheduleActionsForRuleSet", () => {
         name: "Test",
         type: "MOVIE",
         actionEnabled: true,
+        seriesScope: true,
         actionType: "DELETE_RADARR",
         actionDelayDays: 7,
         arrInstanceId: "arr1",
@@ -795,6 +810,80 @@ describe("scheduleActionsForRuleSet", () => {
     ]);
   });
 
+  describe("episode-scoped Unmonitor (series scope off)", () => {
+    const ruleSet = (seriesScope: boolean) => ({
+      id: "rs1",
+      userId: "u1",
+      name: "Unmonitor watched",
+      type: "SERIES",
+      actionEnabled: true,
+      seriesScope,
+      actionType: "UNMONITOR_SONARR",
+      actionDelayDays: 0,
+      arrInstanceId: "arr1",
+      targetQualityProfileId: null,
+      addImportExclusion: false,
+      searchAfterAction: false,
+      addArrTags: [],
+      removeArrTags: [],
+    });
+    const completed = (mediaItemId: string, matchedMediaItemIds: string[]) => ({
+      mediaItemId,
+      status: "COMPLETED",
+      actionType: "UNMONITOR_SONARR",
+      arrInstanceId: "arr1",
+      targetQualityProfileId: null,
+      addImportExclusion: false,
+      searchAfterAction: false,
+      addArrTags: [],
+      removeArrTags: [],
+      matchedMediaItemIds,
+    });
+    const shows = [
+      { id: "a1", title: "Show A", parentTitle: null },
+      { id: "b1", title: "Show B", parentTitle: null },
+    ];
+
+    function mockExisting(existing: unknown[]) {
+      mockPrisma.lifecycleAction.findMany
+        .mockResolvedValueOnce([]) // previousPending
+        .mockResolvedValueOnce([]) // allPending (dedup)
+        .mockResolvedValueOnce(existing); // existingActions
+      mockPrisma.lifecycleAction.deleteMany.mockResolvedValue({ count: 0 });
+      mockPrisma.lifecycleAction.createMany.mockResolvedValue({ count: 1 });
+    }
+
+    it("schedules the episodes a completed action did not act on, and nothing for a show it fully covered", async () => {
+      // Show A: a1 was unmonitored, a2 has been watched since. Show B: all covered.
+      mockExisting([completed("a1", ["a1"]), completed("b1", ["b1", "b2"])]);
+
+      await scheduleActionsForRuleSet(
+        ruleSet(false),
+        shows,
+        new Map([["a1", ["a1", "a2"]], ["b1", ["b1", "b2"]]]),
+      );
+
+      const data = mockPrisma.lifecycleAction.createMany.mock.calls[0][0].data;
+      expect(data).toEqual([expect.objectContaining({ mediaItemId: "a1", matchedMediaItemIds: ["a2"] })]);
+    });
+
+    it("treats a completed action with no member list as having covered the whole show", async () => {
+      mockExisting([completed("a1", [])]);
+
+      await scheduleActionsForRuleSet(ruleSet(false), [shows[0]], new Map([["a1", ["a1", "a2"]]]));
+
+      expect(mockPrisma.lifecycleAction.createMany).not.toHaveBeenCalled();
+    });
+
+    it("with series scope on, a completed action still blocks the whole show", async () => {
+      mockExisting([completed("a1", ["a1"])]);
+
+      await scheduleActionsForRuleSet(ruleSet(true), [shows[0]], new Map([["a1", ["a1", "a2"]]]));
+
+      expect(mockPrisma.lifecycleAction.createMany).not.toHaveBeenCalled();
+    });
+  });
+
   it("records a series group's show-level TVDB id and leaves an id-less item's snapshot empty", async () => {
     mockPrisma.lifecycleAction.findMany
       .mockResolvedValueOnce([]) // previousPending
@@ -810,6 +899,7 @@ describe("scheduleActionsForRuleSet", () => {
         name: "Test",
         type: "SERIES",
         actionEnabled: true,
+        seriesScope: true,
         actionType: "DELETE_SONARR",
         actionDelayDays: 7,
         arrInstanceId: "arr1",
@@ -858,6 +948,7 @@ describe("scheduleActionsForRuleSet", () => {
           name: "Test",
           type,
           actionEnabled: true,
+          seriesScope: true,
           actionType: "DELETE_SONARR",
           actionDelayDays,
           arrInstanceId: "arr1",
@@ -2207,6 +2298,49 @@ describe("executeLifecycleActions", () => {
         }),
       }));
       expect(mockBuildSuccessSummaryEmbed).toHaveBeenCalledWith("Shows", "DELETE_FILES_SONARR", ["Battlestar Galactica S01E02"]);
+    });
+
+    it("runs an Unmonitor of a series-scope-off rule set on the episodes that still match, named after the one left", async () => {
+      mockPrisma.ruleMatch.findMany.mockResolvedValue([
+        { ruleSetId: "rs1", mediaItemId: "rep1", itemData: { memberIds: ["ep2"] } },
+      ]);
+      const action = showAction("UNMONITOR_SONARR");
+      mockPrisma.lifecycleAction.findMany.mockResolvedValue([{
+        ...action,
+        matchedMediaItemIds: ["rep1", "ep2"],
+        mediaItem: { ...episode, type: "SERIES", seasonNumber: 1, episodeNumber: 1 },
+        ruleSet: { ...action.ruleSet, seriesScope: false },
+      }]);
+      mockPrisma.mediaItem.findMany.mockImplementation(async (args: { select?: Record<string, boolean> }) =>
+        args.select?.seasonNumber ? [{ id: "ep2", title: "Water", seasonNumber: 1, episodeNumber: 2 }] : [],
+      );
+      mockExecuteAction.mockResolvedValue(undefined);
+
+      await executeLifecycleActions("u1");
+
+      expect(mockExecuteAction).toHaveBeenCalledWith(
+        expect.objectContaining({ episodeScope: true, matchedMediaItemIds: ["ep2"], targetTitle: "Battlestar Galactica S01E02" }),
+        undefined,
+        expect.anything(),
+      );
+    });
+
+    it("runs an Unmonitor of a series-scope rule set on the series", async () => {
+      const action = showAction("UNMONITOR_SONARR");
+      mockPrisma.lifecycleAction.findMany.mockResolvedValue([{
+        ...action,
+        mediaItem: { ...episode, type: "SERIES" },
+        ruleSet: { ...action.ruleSet, seriesScope: true },
+      }]);
+      mockExecuteAction.mockResolvedValue(undefined);
+
+      await executeLifecycleActions("u1");
+
+      expect(mockExecuteAction).toHaveBeenCalledWith(
+        expect.objectContaining({ episodeScope: false, targetTitle: "Battlestar Galactica" }),
+        undefined,
+        expect.anything(),
+      );
     });
 
     it("names the show when it cancels a series action that no longer matches", async () => {

@@ -65,6 +65,15 @@ export function actionCanScopeToEpisodes(actionType: string): boolean {
   return EPISODE_SCOPABLE_ACTION_TYPES.has(actionType);
 }
 
+/**
+ * Whether the action acts on its member list (`matchedMediaItemIds`) rather
+ * than the whole record: the member-scoped file deletes always, Unmonitor and
+ * Search when episode-scoped. Every member-aware consumer asks this.
+ */
+export function actsOnMembers(actionType: string, episodeScope?: boolean | null): boolean {
+  return actionHonorsMemberIds(actionType) || (!!episodeScope && actionCanScopeToEpisodes(actionType));
+}
+
 /** Whether a rule set's action acts on its matched episodes rather than the series. */
 export function ruleSetActsOnEpisodes(
   actionType: string,

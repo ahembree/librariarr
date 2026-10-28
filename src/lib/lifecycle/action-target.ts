@@ -1,5 +1,5 @@
 // Client-safe (no server imports).
-import { actionHonorsMemberIds } from "@/lib/lifecycle/action-types";
+import { actsOnMembers } from "@/lib/lifecycle/action-types";
 import {
   formatEpisodeTitle,
   seriesTitleOf,
@@ -14,6 +14,8 @@ export interface ActionTargetParts {
   actionType: string;
   /** The episodes a member-scoped action acts on. */
   matchedMediaItemIds?: readonly string[] | null;
+  /** An episode-scoped Unmonitor or Search, which acts on those episodes too. */
+  episodeScope?: boolean | null;
   mediaItem: MediaTitleParts & { id: string; title: string; parentTitle: string | null; type: string };
   /**
    * Episodes by id, for naming an action on exactly one episode that is NOT
@@ -25,14 +27,14 @@ export interface ActionTargetParts {
 }
 
 /** What decides which episode, if any, an action acts on alone. */
-export type MemberScope = Pick<ActionTargetParts, "actionType" | "matchedMediaItemIds"> & {
+export type MemberScope = Pick<ActionTargetParts, "actionType" | "matchedMediaItemIds" | "episodeScope"> & {
   mediaItem: { id: string; type: string } | null;
 };
 
-/** The one episode a series file delete acts on, when it acts on exactly one. */
+/** The one episode a series action on its members acts on, when it acts on exactly one. */
 function soleEpisodeId(action: MemberScope): string | null {
   const members = action.matchedMediaItemIds ?? [];
-  if (action.mediaItem?.type !== "SERIES" || !actionHonorsMemberIds(action.actionType) || members.length !== 1) {
+  if (action.mediaItem?.type !== "SERIES" || !actsOnMembers(action.actionType, action.episodeScope) || members.length !== 1) {
     return null;
   }
   return members[0];
@@ -61,8 +63,9 @@ function targetEpisode(action: ActionTargetParts): MemberEpisode | null {
  * A series action is stored against ONE representative episode, but it acts on
  * the show — a whole-series action on the Sonarr series, a file delete on the
  * episodes it matched — so it is named by the show, never by that episode's
- * own title. The exception is an action on exactly one episode (the Query
- * page's file delete on a single episode, or a rule that matched just the one),
+ * own title. The exception is an action on exactly one episode (a file delete,
+ * or an episode-scoped Unmonitor or Search, on a single episode — from the
+ * Query page, or a rule that matched just the one),
  * which is named "<Show> SxxExx". A movie or track keeps its own title.
  */
 export function actionTargetTitle(action: ActionTargetParts): string {

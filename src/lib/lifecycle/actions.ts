@@ -784,15 +784,29 @@ async function deleteMatchedEpisodeFiles(
  * The Sonarr episode ids of an episode-scoped action's members. Throws when
  * none resolve: recording the action as done would report a change that never
  * happened, and falling back to the series would act on episodes nobody picked.
+ * When only some resolve it acts on those and logs the rest, as the file
+ * delete does.
  */
 async function episodeScopeIds(session: ActionArrSession, action: ActionRecord): Promise<number[]> {
   // An action stored before members were recorded is its own episode.
   const ids = action.matchedMediaItemIds.length > 0 ? action.matchedMediaItemIds : [action.mediaItem.id];
   const { client, record: series } = await seriesOf(session);
-  const { memberBySonarrId, found } = await resolveSonarrEpisodes(client, series.id, ids);
+  const { memberBySonarrId, found, unresolved } = await resolveSonarrEpisodes(client, series.id, ids);
+  if (found === 0) {
+    throw new Error(`None of the ${ids.length} episode(s) to act on are in the library any more — nothing was changed`);
+  }
   if (memberBySonarrId.size === 0) {
     throw new Error(
-      `None of the ${found} selected episode(s) could be matched to an episode in Sonarr series ${series.id} — nothing was changed`,
+      `None of the ${found} episode(s) to act on could be matched to an episode in Sonarr series "${series.title}" — nothing was changed`,
+    );
+  }
+  const missing = ids.length - memberBySonarrId.size;
+  if (missing > 0) {
+    logger.warn(
+      "Lifecycle",
+      `${action.actionType} on "${action.targetTitle}": acting on ${memberBySonarrId.size} of ${ids.length} episode(s) — ` +
+        `${unresolved} could not be matched to Sonarr series "${series.title}"` +
+        (ids.length > found ? `, ${ids.length - found} are no longer in the library` : ""),
     );
   }
   return [...memberBySonarrId.keys()];
