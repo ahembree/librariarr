@@ -21,7 +21,7 @@ import {
 import { matchIdentityChange } from "@/lib/lifecycle/match-identity";
 import { arrIdSourceFor } from "@/lib/lifecycle/cross-server-copies";
 import { hasSeerrRules } from "@/lib/rules/lifecycle-engine";
-import { actionHonorsMemberIds } from "@/lib/lifecycle/action-types";
+import { actionHonorsMemberIds, ruleSetActsOnEpisodes } from "@/lib/lifecycle/action-types";
 import { memberIdsFromItemData } from "@/lib/lifecycle/group-aggregate";
 import type { LifecycleRuleGroup } from "@/lib/rules/types";
 import type { Prisma } from "@/generated/prisma/client";
@@ -136,7 +136,7 @@ async function retryAction(
   // enforce this gate; force-retry needs it too.
   const ruleSet = await prisma.ruleSet.findFirst({
     where: { id: action.ruleSetId, userId: session.userId },
-    select: { enabled: true, type: true, rules: true },
+    select: { enabled: true, type: true, rules: true, seriesScope: true },
   });
   if (!ruleSet?.enabled) {
     return NextResponse.json(
@@ -182,7 +182,10 @@ async function retryAction(
   // exception protects — sent as stored, a retry deleted the files of episodes
   // watched or excepted since the failure.
   let members = action.matchedMediaItemIds ?? [];
-  if (members.length > 0 && actionHonorsMemberIds(action.actionType)) {
+  if (
+    members.length > 0 &&
+    (actionHonorsMemberIds(action.actionType) || ruleSetActsOnEpisodes(action.actionType, ruleSet))
+  ) {
     const current = new Set(memberIdsFromItemData(stillMatched.itemData));
     if (current.size > 0) {
       members = members.filter((m) => current.has(m));
@@ -278,6 +281,7 @@ async function retryAction(
       addArrTags: action.addArrTags,
       removeArrTags: action.removeArrTags,
       skipTitleValidation,
+      episodeScope: ruleSetActsOnEpisodes(action.actionType, ruleSet),
       targetTitle,
       mediaItem,
     });

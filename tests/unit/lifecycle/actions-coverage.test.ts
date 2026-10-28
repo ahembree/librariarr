@@ -427,14 +427,18 @@ describe("episode-scoped Sonarr Unmonitor and Search (Query page episode view)",
     expect(mockSonarr.triggerSeriesSearch).not.toHaveBeenCalled();
   });
 
+  it("with no members recorded, acts on the action's own episode", async () => {
+    await executeAction(showAction({ actionType: "UNMONITOR_SONARR", episodeScope: true, matchedMediaItemIds: [] }));
+    expect(mockPrisma.mediaItem.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { id: { in: ["ep-rep"] } } }));
+    expect(mockSonarr.setEpisodesMonitored).toHaveBeenCalledWith([502], false);
+    expect(mockSonarr.updateSeries).not.toHaveBeenCalled();
+  });
+
   it("throws rather than widening to the series when no selected episode resolves in Sonarr", async () => {
     mockSonarr.getEpisodes.mockResolvedValue([{ id: 501, seasonNumber: 1, episodeNumber: 1, episodeFileId: 10 }]);
     await expect(
       executeAction(showAction({ actionType: "UNMONITOR_SONARR", episodeScope: true, matchedMediaItemIds: ["e2"] })),
     ).rejects.toThrow("nothing was changed");
-    await expect(
-      executeAction(showAction({ actionType: "SEARCH_SONARR", episodeScope: true, matchedMediaItemIds: [] })),
-    ).rejects.toThrow("No episodes to act on");
     expect(mockSonarr.updateSeries).not.toHaveBeenCalled();
     expect(mockSonarr.triggerSeriesSearch).not.toHaveBeenCalled();
     expect(mockSonarr.setEpisodesMonitored).not.toHaveBeenCalled();

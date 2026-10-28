@@ -56,13 +56,21 @@ export function actionHonorsMemberIds(actionType: string): boolean {
 
 /**
  * Sonarr actions Sonarr can apply to single episodes as well as to a series.
- * The Query page's episode view runs them on the selected episodes only
- * (`ActionRecord.episodeScope`); a rule set runs them on the series.
+ * The Query page's episode view and a Series rule set with series scope off
+ * run them on the matched episodes only (`ActionRecord.episodeScope`).
  */
 const EPISODE_SCOPABLE_ACTION_TYPES = new Set<string>(["UNMONITOR_SONARR", "SEARCH_SONARR"]);
 
 export function actionCanScopeToEpisodes(actionType: string): boolean {
   return EPISODE_SCOPABLE_ACTION_TYPES.has(actionType);
+}
+
+/** Whether a rule set's action acts on its matched episodes rather than the series. */
+export function ruleSetActsOnEpisodes(
+  actionType: string,
+  ruleSet: { type: string; seriesScope: boolean },
+): boolean {
+  return ruleSet.type === "SERIES" && !ruleSet.seriesScope && actionCanScopeToEpisodes(actionType);
 }
 
 /**

@@ -562,7 +562,7 @@ Rules are evaluated in two steps:
 For **Series** rule sets, the **Match against entire series** toggle (series scope) controls the unit of evaluation:
 
 - **Series scope on** — the rule is evaluated against the whole show, and an action applies to the entire series. Every episode is a member of the match.
-- **Series scope off** — the rule is evaluated against individual episodes, then results are grouped by show. A member-scoped action (such as **Delete Files Only**) acts only on the episodes that matched.
+- **Series scope off** — the rule is evaluated against individual episodes, then results are grouped by show. A member-scoped action (such as **Delete Files Only**) acts only on the episodes that matched. **Unmonitor Only** and **Search for New Copy** also act only on the matched episodes: Sonarr unmonitors or searches those episodes and leaves the rest of the show as it is. **Delete from Sonarr**, **Change Quality Profile** and tags are properties of the series in Sonarr and still apply to the whole show.
 
 Some fields are **series-aggregate** fields — `availableEpisodeCount`, `watchedEpisodeCount`, `watchedEpisodePercentage`, `lastEpisodeAiredAt`, `lastEpisodeAddedAt`, `latestEpisodeViewDate`, and `seriesLastPlayedAt` (**Series Last Played**). These describe the show as a whole and can only be computed across every episode, so a rule that references one is always evaluated at the series level — even with Series Scope off.
 

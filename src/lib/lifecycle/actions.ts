@@ -76,10 +76,10 @@ export interface ActionRecord {
   removeArrTags: string[];
   skipTitleValidation?: boolean;
   /**
-   * Unmonitor and Search act on the episodes in `matchedMediaItemIds` rather
-   * than the whole series (Sonarr only). Set by the Query page's episode view,
-   * where the user picked individual episodes; rule-based actions leave it off
-   * and keep acting on the series.
+   * Unmonitor and Search act on the episodes in `matchedMediaItemIds` (else
+   * the action's own episode) rather than the whole series (Sonarr only). Set
+   * by the Query page's episode view and by a Series rule set with series
+   * scope off (`ruleSetActsOnEpisodes`).
    */
   episodeScope?: boolean;
   /**
@@ -786,11 +786,10 @@ async function deleteMatchedEpisodeFiles(
  * happened, and falling back to the series would act on episodes nobody picked.
  */
 async function episodeScopeIds(session: ActionArrSession, action: ActionRecord): Promise<number[]> {
-  if (action.matchedMediaItemIds.length === 0) {
-    throw new Error("No episodes to act on");
-  }
+  // An action stored before members were recorded is its own episode.
+  const ids = action.matchedMediaItemIds.length > 0 ? action.matchedMediaItemIds : [action.mediaItem.id];
   const { client, record: series } = await seriesOf(session);
-  const { memberBySonarrId, found } = await resolveSonarrEpisodes(client, series.id, action.matchedMediaItemIds);
+  const { memberBySonarrId, found } = await resolveSonarrEpisodes(client, series.id, ids);
   if (memberBySonarrId.size === 0) {
     throw new Error(
       `None of the ${found} selected episode(s) could be matched to an episode in Sonarr series ${series.id} — nothing was changed`,

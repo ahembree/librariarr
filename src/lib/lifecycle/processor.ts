@@ -12,7 +12,7 @@ import { matchIdentityChange } from "@/lib/lifecycle/match-identity";
 import { arrExternalIdsOf, arrIdSourceFor } from "@/lib/lifecycle/cross-server-copies";
 import { heldScheduledFor, loadGroupedActionHold } from "@/lib/lifecycle/grouped-action-hold";
 import { UnreachableInstances } from "@/lib/lifecycle/unreachable-instances";
-import { actionHonorsMemberIds, isDestructiveActionType } from "@/lib/lifecycle/action-types";
+import { actionHonorsMemberIds, isDestructiveActionType, ruleSetActsOnEpisodes } from "@/lib/lifecycle/action-types";
 import { checkDeleteCeiling } from "@/lib/lifecycle/delete-ceiling";
 import { notifyDeleteCeilingHeld, notifyDeletionHeld } from "@/lib/lifecycle/deletion-held-notice";
 import { reserveApiDestructive, type ApiDestructiveReservation } from "@/lib/api-keys/destructive-budget";
@@ -541,6 +541,7 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
           userId: true,
           type: true,
           rules: true,
+          seriesScope: true,
         },
       },
     },
@@ -744,7 +745,11 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
       // episode-id churn) would wrongly skip a series that still matches. Also
       // skip when the match doesn't track members — absence means "not
       // member-scoped", not "zero members".
-      const currentMembers = actionHonorsMemberIds(action.actionType)
+      // Episode-scoped Unmonitor/Search act on the member list too.
+      const actsOnMembers =
+        actionHonorsMemberIds(action.actionType) ||
+        (!!action.ruleSet && ruleSetActsOnEpisodes(action.actionType, action.ruleSet));
+      const currentMembers = actsOnMembers
         ? currentMemberIds.get(`${action.ruleSetId}:${action.mediaItemId}`)
         : undefined;
       if (currentMembers) {
@@ -1024,7 +1029,15 @@ export async function executeLifecycleActions(userId?: string, options: ExecuteL
     // what its log line, notifications and history name (see `executedTitle`).
     const running = { ...action, matchedMediaItemIds: filteredMatchedIds, mediaItem, memberEpisodes: runningEpisodes };
     try {
-      const outcome = await executeAction({ ...running, targetTitle: actionTargetTitle(running) }, undefined, arrContext);
+      const outcome = await executeAction(
+        {
+          ...running,
+          targetTitle: actionTargetTitle(running),
+          episodeScope: !!action.ruleSet && ruleSetActsOnEpisodes(action.actionType, action.ruleSet),
+        },
+        undefined,
+        arrContext,
+      );
 
       // Compute deleted bytes for stats tracking (only for delete actions)
       const deletedBytes = await computeDeletedBytes(action.actionType, mediaItem, filteredMatchedIds, outcome);
