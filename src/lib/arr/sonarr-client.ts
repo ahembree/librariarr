@@ -42,7 +42,7 @@ export interface SonarrSeries {
   }>;
 }
 
-interface SonarrEpisode {
+export interface SonarrEpisode {
   id: number;
   seasonNumber: number;
   episodeNumber: number;

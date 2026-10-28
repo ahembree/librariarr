@@ -20,6 +20,8 @@ interface ActionConfig {
   searchAfterAction: boolean;
   addArrTags: string[];
   removeArrTags: string[];
+  /** Unmonitor/Search act on the item's episodes, not the series (see `ActionRecord.episodeScope`). */
+  episodeScope?: boolean;
 }
 
 /**
@@ -178,6 +180,7 @@ export async function executeActionsForItems(
         matchedMediaItemIds,
         addArrTags: config.addArrTags,
         removeArrTags: config.removeArrTags,
+        episodeScope: config.episodeScope,
         targetTitle: title,
         mediaItem: item,
       }, reportStep, arrContext);

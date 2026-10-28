@@ -404,6 +404,43 @@ describe("whole-record and monitoring executors", () => {
   });
 });
 
+describe("episode-scoped Sonarr Unmonitor and Search (Query page episode view)", () => {
+  beforeEach(() => {
+    mockPrisma.mediaItem.findMany.mockResolvedValue([
+      { id: "e2", seasonNumber: 1, episodeNumber: 2, originallyAvailableAt: null },
+    ]);
+    mockSonarr.getEpisodes.mockResolvedValue([
+      { id: 501, seasonNumber: 1, episodeNumber: 1, episodeFileId: 10 },
+      { id: 502, seasonNumber: 1, episodeNumber: 2, episodeFileId: 11 },
+    ]);
+  });
+
+  it("UNMONITOR_SONARR unmonitors only the selected episodes, not the series", async () => {
+    await executeAction(showAction({ actionType: "UNMONITOR_SONARR", episodeScope: true, matchedMediaItemIds: ["e2"] }));
+    expect(mockSonarr.setEpisodesMonitored).toHaveBeenCalledWith([502], false);
+    expect(mockSonarr.updateSeries).not.toHaveBeenCalled();
+  });
+
+  it("SEARCH_SONARR searches only the selected episodes, not the series", async () => {
+    await executeAction(showAction({ actionType: "SEARCH_SONARR", episodeScope: true, matchedMediaItemIds: ["e2"] }));
+    expect(mockSonarr.triggerEpisodeSearch).toHaveBeenCalledWith([502]);
+    expect(mockSonarr.triggerSeriesSearch).not.toHaveBeenCalled();
+  });
+
+  it("throws rather than widening to the series when no selected episode resolves in Sonarr", async () => {
+    mockSonarr.getEpisodes.mockResolvedValue([{ id: 501, seasonNumber: 1, episodeNumber: 1, episodeFileId: 10 }]);
+    await expect(
+      executeAction(showAction({ actionType: "UNMONITOR_SONARR", episodeScope: true, matchedMediaItemIds: ["e2"] })),
+    ).rejects.toThrow("nothing was changed");
+    await expect(
+      executeAction(showAction({ actionType: "SEARCH_SONARR", episodeScope: true, matchedMediaItemIds: [] })),
+    ).rejects.toThrow("No episodes to act on");
+    expect(mockSonarr.updateSeries).not.toHaveBeenCalled();
+    expect(mockSonarr.triggerSeriesSearch).not.toHaveBeenCalled();
+    expect(mockSonarr.setEpisodesMonitored).not.toHaveBeenCalled();
+  });
+});
+
 describe("Sonarr member-scoped file deletes", () => {
   it.each(["DELETE_FILES_SONARR", "UNMONITOR_DELETE_FILES_SONARR", "MONITOR_DELETE_FILES_SONARR"])(
     "%s with no matched episodes deletes NOTHING rather than the whole series",

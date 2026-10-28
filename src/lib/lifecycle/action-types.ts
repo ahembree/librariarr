@@ -55,6 +55,17 @@ export function actionHonorsMemberIds(actionType: string): boolean {
 }
 
 /**
+ * Sonarr actions Sonarr can apply to single episodes as well as to a series.
+ * The Query page's episode view runs them on the selected episodes only
+ * (`ActionRecord.episodeScope`); a rule set runs them on the series.
+ */
+const EPISODE_SCOPABLE_ACTION_TYPES = new Set<string>(["UNMONITOR_SONARR", "SEARCH_SONARR"]);
+
+export function actionCanScopeToEpisodes(actionType: string): boolean {
+  return EPISODE_SCOPABLE_ACTION_TYPES.has(actionType);
+}
+
+/**
  * Whether the action removes the whole Arr record — the movie, series or
  * artist — from Radarr/Sonarr/Lidarr. Tags on a record about to be deleted
  * would be deleted with it, so tag options are offered for every other action,

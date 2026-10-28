@@ -844,6 +844,57 @@ describe("POST /api/query/actions", () => {
     expect(new Set(mockedExecuteAction.mock.calls[0][0].matchedMediaItemIds)).toEqual(new Set([ep1.id, ep2.id]));
   });
 
+  it.each(["UNMONITOR_SONARR", "SEARCH_SONARR"])(
+    "%s in episode (includeEpisodes) mode acts on the selected episodes only, not the series",
+    async (actionType) => {
+      const user = await createTestUser();
+      setMockSession({ isLoggedIn: true, userId: user.id });
+      const library = await createTestLibrary((await createTestServer(user.id)).id, { type: "SERIES" });
+      const ep1 = await createTestMediaItem(library.id, { type: "SERIES", title: "S1E1", parentTitle: "Show", seasonNumber: 1, episodeNumber: 1 });
+      const ep2 = await createTestMediaItem(library.id, { type: "SERIES", title: "S1E2", parentTitle: "Show", seasonNumber: 1, episodeNumber: 2 });
+      const sonarr = await createTestSonarrInstance(user.id);
+
+      mockedExecuteQuery.mockResolvedValue(queryResult([
+        { id: ep1.id, type: "SERIES", title: "S1E1", parentTitle: "Show" },
+        { id: ep2.id, type: "SERIES", title: "S1E2", parentTitle: "Show" },
+      ]));
+
+      const response = await callRoute(POST, {
+        method: "POST",
+        body: {
+          query: { ...BASE_QUERY, includeEpisodes: true },
+          mediaItemIds: [ep2.id],
+          actionType,
+          arrInstanceId: sonarr.id,
+        },
+      });
+      const { result: body } = await expectStreamResult<{ executed: number }>(response);
+      expect(body.executed).toBe(1);
+      expect(mockedExecuteAction).toHaveBeenCalledTimes(1);
+      const record = mockedExecuteAction.mock.calls[0][0];
+      expect(record.episodeScope).toBe(true);
+      expect(record.matchedMediaItemIds).toEqual([ep2.id]);
+    },
+  );
+
+  it("UNMONITOR_SONARR in the grouped series view still acts on the series", async () => {
+    const user = await createTestUser();
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    const library = await createTestLibrary((await createTestServer(user.id)).id, { type: "SERIES" });
+    const ep1 = await createTestMediaItem(library.id, { type: "SERIES", title: "S1E1", parentTitle: "Show", seasonNumber: 1, episodeNumber: 1 });
+    const sonarr = await createTestSonarrInstance(user.id);
+
+    mockedExecuteQuery.mockResolvedValue(queryResult([{ id: ep1.id, type: "SERIES", title: "Show", parentTitle: "Show" }]));
+
+    const response = await callRoute(POST, {
+      method: "POST",
+      body: { query: BASE_QUERY, mediaItemIds: [ep1.id], actionType: "UNMONITOR_SONARR", arrInstanceId: sonarr.id },
+    });
+    await expectStreamResult(response);
+    expect(mockedExecuteAction).toHaveBeenCalledTimes(1);
+    expect(mockedExecuteAction.mock.calls[0][0].episodeScope).toBe(false);
+  });
+
   it("records a FAILED action and surfaces the error when execution throws", async () => {
     const user = await createTestUser();
     setMockSession({ isLoggedIn: true, userId: user.id });

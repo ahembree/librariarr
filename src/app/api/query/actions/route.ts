@@ -5,7 +5,7 @@ import { logger } from "@/lib/logger";
 import { executeQuery } from "@/lib/query/query-engine";
 import { appCache } from "@/lib/cache/memory-cache";
 import { executeActionsForItems } from "@/lib/lifecycle/run-actions";
-import { MOVIE_ACTION_TYPES, SERIES_ACTION_TYPES, MUSIC_ACTION_TYPES, actionHonorsMemberIds, deletesArrRecord } from "@/lib/lifecycle/action-types";
+import { MOVIE_ACTION_TYPES, SERIES_ACTION_TYPES, MUSIC_ACTION_TYPES, actionCanScopeToEpisodes, actionHonorsMemberIds, deletesArrRecord } from "@/lib/lifecycle/action-types";
 import {
   findExceptedItemIds,
   findExceptionProtectedGroups,
@@ -358,7 +358,11 @@ export const POST = withSession(async (session, request: NextRequest) => {
     // Whole-record series actions (DELETE_SONARR, UNMONITOR_SONARR, …) hit the
     // ENTIRE series and ignore the member list; member-scoped actions
     // (DELETE_FILES_SONARR, …) act only on the named episodes.
-    const isMemberScoped = actionHonorsMemberIds(actionType);
+    // In episode view, Unmonitor and Search act on the selected episodes, not
+    // the series those episodes belong to.
+    const episodeScope =
+      resolvedType === "SERIES" && !!query.includeEpisodes && actionCanScopeToEpisodes(actionType);
+    const isMemberScoped = actionHonorsMemberIds(actionType) || episodeScope;
     const isWholeRecordDestructive = isWholeRecordDestructiveAction(actionType);
 
     // Group a show's episodes by the SAME series identity the query engine
@@ -594,6 +598,7 @@ export const POST = withSession(async (session, request: NextRequest) => {
         searchAfterAction,
         addArrTags,
         removeArrTags,
+        episodeScope,
       },
       actionMembers,
       {

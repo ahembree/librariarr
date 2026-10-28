@@ -1,7 +1,7 @@
 import axios from "axios";
 import { prisma } from "@/lib/db";
 import { RadarrClient, type RadarrMovie } from "@/lib/arr/radarr-client";
-import { SonarrClient, type SonarrSeries } from "@/lib/arr/sonarr-client";
+import { SonarrClient, type SonarrEpisode, type SonarrSeries } from "@/lib/arr/sonarr-client";
 import { LidarrClient, type LidarrArtist, type LidarrTrack } from "@/lib/arr/lidarr-client";
 import type { ArrClientBase, ArrTag } from "@/lib/arr/arr-client-base";
 import { familyOfArrInstance, findArrInstance, type ArrFamily } from "@/lib/arr/instances";
@@ -75,6 +75,13 @@ export interface ActionRecord {
   addArrTags: string[];
   removeArrTags: string[];
   skipTitleValidation?: boolean;
+  /**
+   * Unmonitor and Search act on the episodes in `matchedMediaItemIds` rather
+   * than the whole series (Sonarr only). Set by the Query page's episode view,
+   * where the user picked individual episodes; rule-based actions leave it off
+   * and keep acting on the series.
+   */
+  episodeScope?: boolean;
   /**
    * What the log lines call the item: `actionTargetTitle` of this action — a
    * series action by its show, or "<Show> SxxExx" on one episode, never by the
@@ -645,11 +652,21 @@ function airDatesContradict(ours: Date | null, sonarrAirDate: string | undefined
 const formatSE = (season: number, episode: number) =>
   `S${String(season).padStart(2, "0")}E${String(episode).padStart(2, "0")}`;
 
-async function deleteMatchedEpisodeFiles(
+/** Our episodes resolved to Sonarr's, by season/episode number checked against air date. */
+interface ResolvedSonarrEpisodes {
+  sonarrEpisodes: SonarrEpisode[];
+  /** Sonarr episode id → our member id. */
+  memberBySonarrId: Map<number, string>;
+  /** How many of our episodes were found in the database. */
+  found: number;
+  unresolved: number;
+}
+
+async function resolveSonarrEpisodes(
   client: SonarrClient,
   seriesId: number,
   matchedMediaItemIds: string[],
-): Promise<MemberFileDeletion> {
+): Promise<ResolvedSonarrEpisodes> {
   // Look up matched episodes from DB to get season/episode numbers
   const episodes = await prisma.mediaItem.findMany({
     where: { id: { in: matchedMediaItemIds } },
@@ -700,10 +717,21 @@ async function deleteMatchedEpisodeFiles(
     memberBySonarrId.set(sonarrEp.id, e.id);
   }
 
-  if (episodes.length > 0 && memberBySonarrId.size === 0) {
+  return { sonarrEpisodes, memberBySonarrId, found: episodes.length, unresolved };
+}
+
+async function deleteMatchedEpisodeFiles(
+  client: SonarrClient,
+  seriesId: number,
+  matchedMediaItemIds: string[],
+): Promise<MemberFileDeletion> {
+  const { sonarrEpisodes, memberBySonarrId, found, unresolved } =
+    await resolveSonarrEpisodes(client, seriesId, matchedMediaItemIds);
+
+  if (found > 0 && memberBySonarrId.size === 0) {
     // Recording this as done would report a delete that never happened.
     throw new Error(
-      `None of the ${episodes.length} matched episode(s) could be matched to an episode in Sonarr series ${seriesId} — nothing was deleted`,
+      `None of the ${found} matched episode(s) could be matched to an episode in Sonarr series ${seriesId} — nothing was deleted`,
     );
   }
 
@@ -744,12 +772,45 @@ async function deleteMatchedEpisodeFiles(
   }
 
   if (fileIds.length > 0) {
-    logger.info("Lifecycle", `Deleting ${fileIds.length} matched episode files (${episodes.length} episodes matched${unresolved > 0 ? `, ${unresolved} not found in Sonarr` : ""}) for Sonarr series ${seriesId}`);
+    logger.info("Lifecycle", `Deleting ${fileIds.length} matched episode files (${found} episodes matched${unresolved > 0 ? `, ${unresolved} not found in Sonarr` : ""}) for Sonarr series ${seriesId}`);
     await client.deleteEpisodeFiles(fileIds);
   } else {
-    logger.warn("Lifecycle", `No episode files deleted for Sonarr series ${seriesId} (${episodes.length} episodes matched${unresolved > 0 ? `, ${unresolved} not found in Sonarr` : ""}; none had a file it could delete on its own)`);
+    logger.warn("Lifecycle", `No episode files deleted for Sonarr series ${seriesId} (${found} episodes matched${unresolved > 0 ? `, ${unresolved} not found in Sonarr` : ""}; none had a file it could delete on its own)`);
   }
   return { deletedMemberIds, arrItemIds };
+}
+
+/**
+ * The Sonarr episode ids of an episode-scoped action's members. Throws when
+ * none resolve: recording the action as done would report a change that never
+ * happened, and falling back to the series would act on episodes nobody picked.
+ */
+async function episodeScopeIds(session: ActionArrSession, action: ActionRecord): Promise<number[]> {
+  if (action.matchedMediaItemIds.length === 0) {
+    throw new Error("No episodes to act on");
+  }
+  const { client, record: series } = await seriesOf(session);
+  const { memberBySonarrId, found } = await resolveSonarrEpisodes(client, series.id, action.matchedMediaItemIds);
+  if (memberBySonarrId.size === 0) {
+    throw new Error(
+      `None of the ${found} selected episode(s) could be matched to an episode in Sonarr series ${series.id} — nothing was changed`,
+    );
+  }
+  return [...memberBySonarrId.keys()];
+}
+
+async function executeUnmonitorSonarr(session: ActionArrSession, action: ActionRecord) {
+  if (!action.episodeScope) return executeUnmonitor(session, "SONARR");
+  const ids = await episodeScopeIds(session, action);
+  const { client } = await seriesOf(session);
+  await client.setEpisodesMonitored(ids, false);
+}
+
+async function executeSearchSonarr(session: ActionArrSession, action: ActionRecord) {
+  if (!action.episodeScope) return executeSearch(session, "SONARR");
+  const ids = await episodeScopeIds(session, action);
+  const { client } = await seriesOf(session);
+  await client.triggerEpisodeSearch(ids);
 }
 
 // --- Track-level file deletion helper (Lidarr) ---
@@ -1065,7 +1126,7 @@ export async function executeAction(
       await executeUnmonitor(session, "RADARR");
       break;
     case "UNMONITOR_SONARR":
-      await executeUnmonitor(session, "SONARR");
+      await executeUnmonitorSonarr(session, action);
       break;
     case "UNMONITOR_DELETE_FILES_RADARR":
       await executeUnmonitorDeleteFilesRadarr(session, action);
@@ -1113,7 +1174,7 @@ export async function executeAction(
       await executeSearch(session, "RADARR");
       break;
     case "SEARCH_SONARR":
-      await executeSearch(session, "SONARR");
+      await executeSearchSonarr(session, action);
       break;
     case "SEARCH_LIDARR":
       await executeSearch(session, "LIDARR");
