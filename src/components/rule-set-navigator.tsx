@@ -447,13 +447,16 @@ export function RuleSetRail(props: RuleSetNavigatorProps) {
                           }
                         }}
                         className={`group/row flex cursor-pointer items-center gap-2 rounded-lg py-1.5 pr-1.5 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring ${
-                          active ? "bg-primary/10" : "hover:bg-muted/50"
+                          // Row highlights span the open list's width; in the
+                          // collapsed strip they would be clipped mid-row, so
+                          // the monogram's ring marks the selection there.
+                          !open ? "" : active ? "bg-primary/10" : "hover:bg-muted/50"
                         }`}
                       >
                         <div className="flex w-10 shrink-0 justify-center">
                           <span
                             className={`relative flex h-8 w-8 items-center justify-center rounded-lg text-[11px] font-semibold ring-1 ${avatarColor(ruleSet.name)} ${
-                              active ? "ring-2 ring-primary" : ""
+                              active ? `ring-2 ring-primary! ${open ? "" : "ring-offset-2 ring-offset-card"}` : open ? "" : "transition-transform group-hover/row:scale-105"
                             } ${!ruleSet.enabled ? "opacity-40 grayscale" : ""}`}
                           >
                             {monogram(ruleSet.name)}
