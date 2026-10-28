@@ -1485,9 +1485,10 @@ export function LifecycleRulePage({
         </div>
       )}
 
-      {/* Saved rule sets: a pinned rail beside the editor on wide screens,
-          a pinned switcher bar + bottom sheet everywhere else. */}
-      <div className={savedRuleSets.length > 0 ? "xl:flex xl:items-start xl:gap-6" : undefined}>
+      {/* Saved rule sets: a hover-to-open rail beside the editor on wide
+          screens with a pointer, a pinned switcher bar + bottom sheet
+          everywhere else (touch screens cannot hover). */}
+      <div className={savedRuleSets.length > 0 ? "rail:flex rail:items-start rail:gap-4" : undefined}>
       {savedRuleSets.length > 0 && <RuleSetRail {...navigatorProps} />}
       <div ref={editorTopRef} className="min-w-0 flex-1 scroll-mt-4">
       {savedRuleSets.length > 0 && <RuleSetSwitcherBar {...navigatorProps} />}

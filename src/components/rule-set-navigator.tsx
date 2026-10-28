@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, ChevronDown, ChevronLeft, ChevronRight, FileText, Search, Trash2, X } from "lucide-react";
+import { Check, ChevronDown, ChevronLeft, ChevronRight, FileText, Pin, PinOff, Search, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -13,6 +13,8 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { ColorChip } from "@/components/color-chip";
+import { useLocalStorage } from "@/hooks/use-local-storage";
+import { avatarColor } from "@/lib/avatar";
 import { countAllRules } from "@/components/rule-builder";
 import type { LifecycleRule, LifecycleRuleGroup } from "@/lib/rules/types";
 import type { SavedRuleSet } from "@/hooks/use-rule-editor-data";
@@ -93,8 +95,7 @@ function RuleSetChips({
 }
 
 /**
- * The searchable list both layouts render: the side rail on wide screens and
- * the bottom sheet everywhere else.
+ * The searchable list in the switcher bar's bottom sheet.
  */
 function RuleSetList({
   ruleSets,
@@ -215,15 +216,61 @@ function RuleSetList({
 }
 
 /**
- * Wide screens: the saved rule sets as a rail beside the editor, pinned while
- * the editor scrolls, so switching never means scrolling back to the top.
+ * A rule set's monogram: the first and last words' initials ("Old 720p
+ * movies" → OM), or the first initial and a short trailing number ("Old
+ * movies 12" → O12).
+ */
+function monogram(name: string): string {
+  const words = name.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return "?";
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  const last = words[words.length - 1];
+  // A trailing number is what tells "Old movies 2" from "Old movies 12".
+  if (/^\d{1,2}$/.test(last)) return (words[0][0] + last).toUpperCase();
+  return (words[0][0] + last[0]).toUpperCase();
+}
+
+const RAIL_PINNED_KEY = "lifecycle-rule-rail-pinned";
+/** Hover-intent delays: the rail neither flickers open as the pointer
+ * crosses it on its way to the editor nor snaps shut on a brief overshoot. */
+const OPEN_DELAY_MS = 120;
+const CLOSE_DELAY_MS = 220;
+
+/**
+ * Wide screens with a pointer: the saved rule sets as a slim strip of
+ * monograms beside the editor, pinned while the editor scrolls. Hovering (or
+ * tabbing into) it opens the full list over the editor, so the editor keeps
+ * its width; the pin keeps the list open beside it instead.
  */
 export function RuleSetRail(props: RuleSetNavigatorProps) {
+  const { ruleSets, activeId, scopeLabels, onSelect, onToggleEnabled, onDelete } = props;
+  const [pinnedValue, setPinnedValue] = useLocalStorage<"0" | "1">(RAIL_PINNED_KEY, "0");
+  const pinned = pinnedValue === "1";
+  const [hovered, setHovered] = useState(false);
+  const open = pinned || hovered;
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const [query, setQuery] = useState("");
+  const showSearch = ruleSets.length >= SEARCH_THRESHOLD;
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return ruleSets;
+    return ruleSets.filter((rs) => rs.name.toLowerCase().includes(q));
+  }, [ruleSets, query]);
+
+  const schedule = (next: boolean, delay: number) => {
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = setTimeout(() => setHovered(next), delay);
+  };
+  useEffect(() => () => {
+    if (timer.current) clearTimeout(timer.current);
+  }, []);
+
   // Sized to the box that scrolls the page rather than the viewport: the
   // shell's header and any banner sit above it, so a viewport-tall rail ran
   // past the bottom of the screen.
   const asideRef = useRef<HTMLElement>(null);
-  const [maxHeight, setMaxHeight] = useState<number | null>(null);
+  const [height, setHeight] = useState<number | null>(null);
   useEffect(() => {
     let scroller = asideRef.current?.parentElement ?? null;
     while (scroller) {
@@ -233,27 +280,205 @@ export function RuleSetRail(props: RuleSetNavigatorProps) {
     }
     if (!scroller) return;
     const box = scroller;
-    const update = () => setMaxHeight(box.clientHeight - 32);
+    const update = () => setHeight(box.clientHeight - 32);
     update();
     const observer = new ResizeObserver(update);
     observer.observe(box);
     return () => observer.disconnect();
   }, []);
 
+  // Keep the rule set being edited in view within the strip.
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const box = scrollRef.current;
+    const row = box?.querySelector<HTMLElement>('[aria-current="true"]');
+    if (!box || !row) return;
+    const top = row.offsetTop;
+    if (top < box.scrollTop) box.scrollTop = top;
+    else if (top + row.offsetHeight > box.scrollTop + box.clientHeight) {
+      box.scrollTop = top + row.offsetHeight - box.clientHeight;
+    }
+  }, [activeId]);
+
+  // Content past the monogram column fades with the panel's width, so the
+  // collapsed strip shows monograms alone.
+  const reveal = `transition-opacity duration-150 ${open ? "opacity-100" : "pointer-events-none opacity-0"}`;
+
   return (
     <aside
       ref={asideRef}
-      style={maxHeight !== null ? { maxHeight } : undefined}
-      className="hidden xl:sticky xl:top-4 xl:flex xl:max-h-[calc(100dvh-2rem)] xl:w-72 xl:shrink-0 xl:self-start 2xl:w-80"
       aria-label="Saved rule sets"
+      style={height !== null ? { height } : undefined}
+      className={`relative hidden h-[calc(100dvh-8rem)] shrink-0 transition-[width] duration-200 ease-out rail:sticky rail:top-4 rail:z-30 rail:block rail:self-start ${
+        pinned ? "w-80" : "w-14"
+      }`}
+      onMouseEnter={() => schedule(true, OPEN_DELAY_MS)}
+      onMouseLeave={() => schedule(false, CLOSE_DELAY_MS)}
+      onFocus={() => {
+        if (timer.current) clearTimeout(timer.current);
+        setHovered(true);
+      }}
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setHovered(false);
+      }}
+      onKeyDown={(e) => {
+        if (e.key === "Escape" && !pinned) {
+          setHovered(false);
+          (document.activeElement as HTMLElement | null)?.blur();
+        }
+      }}
     >
-      <div className="flex min-h-0 w-full flex-col rounded-xl border bg-card p-3">
-        <div className="mb-2 flex shrink-0 items-center gap-2 px-1 text-sm font-semibold">
-          <FileText className="h-4 w-4" />
-          Saved Rule Sets
-          <span className="ml-auto font-mono text-xs font-normal text-muted-foreground">{props.ruleSets.length}</span>
+      <div
+        className={`absolute inset-y-0 left-0 z-30 overflow-hidden rounded-xl border bg-card transition-[width,box-shadow] duration-200 ease-out ${
+          open ? "w-80" : "w-14"
+        } ${open && !pinned ? "shadow-2xl shadow-black/60" : ""}`}
+      >
+        {/* Fixed width, so nothing reflows while the panel animates. */}
+        <div className="flex h-full w-80 flex-col p-2">
+          <div className="flex h-10 shrink-0 items-center gap-2">
+            <div className="flex w-10 shrink-0 justify-center">
+              <FileText className="h-4 w-4 text-muted-foreground" />
+            </div>
+            <div className={`flex min-w-0 flex-1 items-center gap-2 ${reveal}`}>
+              <span className="text-sm font-semibold">Rule Sets</span>
+              <span className="font-mono text-xs text-muted-foreground">{ruleSets.length}</span>
+              <Button
+                variant="ghost"
+                size="icon"
+                className={`ml-auto h-8 w-8 ${pinned ? "text-primary" : "text-muted-foreground"}`}
+                aria-label={pinned ? "Unpin rule set list" : "Pin rule set list open"}
+                aria-pressed={pinned}
+                title={pinned ? "Unpin" : "Keep open"}
+                tabIndex={open ? 0 : -1}
+                onClick={() => setPinnedValue(pinned ? "0" : "1")}
+              >
+                {pinned ? <PinOff className="h-4 w-4" /> : <Pin className="h-4 w-4" />}
+              </Button>
+            </div>
+          </div>
+
+          {showSearch && (
+            <div className="mb-1 flex h-10 shrink-0 items-center gap-2">
+              <button
+                type="button"
+                aria-label="Filter rule sets"
+                tabIndex={open ? -1 : 0}
+                onClick={() => searchRef.current?.focus()}
+                className={`flex h-9 w-10 shrink-0 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted/60 ${
+                  query ? "text-primary" : ""
+                }`}
+              >
+                <Search className="h-4 w-4" />
+              </button>
+              <div className={`relative min-w-0 flex-1 ${reveal}`}>
+                <Input
+                  ref={searchRef}
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Filter by name…"
+                  aria-label="Filter rule sets by name"
+                  tabIndex={open ? 0 : -1}
+                  className="h-8 pr-8 text-sm"
+                />
+                {query && (
+                  <button
+                    type="button"
+                    aria-label="Clear filter"
+                    onClick={() => setQuery("")}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:text-foreground"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
+          <div className="mx-0 mb-1 h-px shrink-0 bg-border" />
+
+          <div
+            ref={scrollRef}
+            className={`relative min-h-0 flex-1 overscroll-contain ${open ? "overflow-y-auto" : "overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"}`}
+          >
+            {filtered.length === 0 ? (
+              <p className={`py-6 pl-12 pr-2 text-sm text-muted-foreground ${reveal}`}>No rule sets match “{query}”.</p>
+            ) : (
+              <ul className="grid grid-cols-[minmax(0,1fr)] gap-0.5" role="list">
+                {filtered.map((ruleSet) => {
+                  const active = activeId === ruleSet.id;
+                  return (
+                    <li key={ruleSet.id}>
+                      <div
+                        role="button"
+                        tabIndex={0}
+                        aria-current={active ? "true" : undefined}
+                        aria-label={`Edit rule set ${ruleSet.name}`}
+                        onClick={() => onSelect(ruleSet)}
+                        onKeyDown={(e) => {
+                          if (e.target !== e.currentTarget) return;
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            onSelect(ruleSet);
+                          }
+                        }}
+                        className={`group/row flex cursor-pointer items-center gap-2 rounded-lg py-1.5 pr-1.5 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring ${
+                          active ? "bg-primary/10" : "hover:bg-muted/50"
+                        }`}
+                      >
+                        <div className="flex w-10 shrink-0 justify-center">
+                          <span
+                            className={`relative flex h-8 w-8 items-center justify-center rounded-lg text-[11px] font-semibold ring-1 ${avatarColor(ruleSet.name)} ${
+                              active ? "ring-2 ring-primary" : ""
+                            } ${!ruleSet.enabled ? "opacity-40 grayscale" : ""}`}
+                          >
+                            {monogram(ruleSet.name)}
+                            {ruleSet.enabled && ruleSet.actionEnabled && (
+                              <span
+                                className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-amber ring-2 ring-card"
+                                aria-hidden="true"
+                              />
+                            )}
+                          </span>
+                        </div>
+                        <div className={`flex min-w-0 flex-1 items-center gap-2 ${reveal}`}>
+                          <div className={`min-w-0 flex-1 ${!ruleSet.enabled ? "opacity-60" : ""}`}>
+                            <p className={`truncate text-sm ${active ? "font-semibold text-foreground" : "font-medium"}`} title={ruleSet.name}>
+                              {ruleSet.name}
+                            </p>
+                            <RuleSetChips ruleSet={ruleSet} scopeLabels={scopeLabels} />
+                          </div>
+                          <Switch
+                            checked={ruleSet.enabled}
+                            onCheckedChange={() => onToggleEnabled(ruleSet.id, ruleSet.enabled)}
+                            onClick={(e) => e.stopPropagation()}
+                            onKeyDown={(e) => e.stopPropagation()}
+                            tabIndex={open ? 0 : -1}
+                            aria-label={`${ruleSet.enabled ? "Disable" : "Enable"} rule set ${ruleSet.name}`}
+                            className="shrink-0 scale-90"
+                          />
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            tabIndex={open ? 0 : -1}
+                            className="h-7 w-7 shrink-0 text-muted-foreground opacity-0 transition-opacity hover:text-destructive focus-visible:opacity-100 group-hover/row:opacity-100"
+                            aria-label={`Delete rule set ${ruleSet.name}`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onDelete(ruleSet);
+                            }}
+                            onKeyDown={(e) => e.stopPropagation()}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
         </div>
-        <RuleSetList {...props} />
       </div>
     </aside>
   );
@@ -274,7 +499,7 @@ export function RuleSetSwitcherBar(props: RuleSetNavigatorProps) {
 
   return (
     <>
-      <div className="sticky top-0 z-20 -mx-4 mb-4 border-b border-white/5 bg-background/85 px-4 py-2 backdrop-blur-md sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8 xl:hidden">
+      <div className="sticky top-0 z-20 -mx-4 mb-4 border-b border-white/5 bg-background/85 px-4 py-2 backdrop-blur-md sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8 rail:hidden">
         <div className="flex items-center gap-1.5">
           <Button
             variant="ghost"

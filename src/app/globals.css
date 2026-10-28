@@ -3,6 +3,8 @@
 @import "shadcn/tailwind.css";
 
 @custom-variant dark (&:is(.dark *));
+/* Wide enough for a side rail beside a page, with a pointer that can hover. */
+@custom-variant rail (@media (min-width: 64rem) and (hover: hover));
 
 @theme inline {
   --color-background: var(--background);
