@@ -100,7 +100,7 @@ import type { ProgressUpdate } from "@/lib/progress/types";
 import { buildActionBatches, actionMediaType, countActionUnits, oversizedActionGroup } from "@/lib/query/batch";
 import { MAX_QUERY_ACTION_ITEMS } from "@/lib/query/constants";
 import { readResponseError } from "@/lib/api/error-message";
-import { actionHonorsMemberIds } from "@/lib/lifecycle/action-types";
+import { actionCanScopeToEpisodes, actionHonorsMemberIds } from "@/lib/lifecycle/action-types";
 import { QueryActionBar, type ArrFamily, type ArrFamilyMeta, type QueryActionConfig } from "@/components/query-action-bar";
 import { toast } from "sonner";
 import {
@@ -1165,6 +1165,7 @@ export default function QueryPage() {
       // offer instead.
       if (
         !actionHonorsMemberIds(config.actionType) &&
+        !actionCanScopeToEpisodes(config.actionType) &&
         definition.includeEpisodes &&
         oversizedActionGroup(selectedItems, targetType) === "SERIES"
       ) {

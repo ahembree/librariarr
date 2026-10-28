@@ -20,6 +20,8 @@ interface ActionConfig {
   searchAfterAction: boolean;
   addArrTags: string[];
   removeArrTags: string[];
+  /** Unmonitor/Search act on the item's episodes, not the series (see `ActionRecord.episodeScope`). */
+  episodeScope?: boolean;
 }
 
 /**
@@ -150,12 +152,12 @@ export async function executeActionsForItems(
   const arrContext = new ArrExecutionContext();
   // An item acted on through exactly one OTHER episode is named after it.
   const memberEpisodes = await loadMemberEpisodes(
-    items.map((item) => ({ actionType, matchedMediaItemIds: episodeIdMap.get(item.id), mediaItem: item })),
+    items.map((item) => ({ actionType, matchedMediaItemIds: episodeIdMap.get(item.id), episodeScope: config.episodeScope, mediaItem: item })),
   );
 
   for (const item of items) {
     const matchedMediaItemIds = episodeIdMap.get(item.id) ?? [];
-    const target = { actionType, matchedMediaItemIds, mediaItem: item, memberEpisodes };
+    const target = { actionType, matchedMediaItemIds, episodeScope: config.episodeScope, mediaItem: item, memberEpisodes };
     const title = actionTargetTitle(target);
     // Surface the live sub-step for this item (tags → main action) to the bar.
     const reportStep = onProgress
@@ -178,6 +180,7 @@ export async function executeActionsForItems(
         matchedMediaItemIds,
         addArrTags: config.addArrTags,
         removeArrTags: config.removeArrTags,
+        episodeScope: config.episodeScope,
         targetTitle: title,
         mediaItem: item,
       }, reportStep, arrContext);

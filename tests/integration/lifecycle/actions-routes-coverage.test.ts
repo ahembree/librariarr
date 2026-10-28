@@ -320,3 +320,73 @@ describe("POST /api/lifecycle/actions/execute — extra paths", () => {
     expect(mockSendDiscord).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("episode-scoped Unmonitor (Series rule set, series scope off)", () => {
+  const exec = (body: unknown) => callRoute(execute, { url: "/api/lifecycle/actions/execute", method: "POST", body });
+
+  async function showSetup(seriesScope: boolean) {
+    const user = await createTestUser();
+    const lib = await createTestLibrary((await createTestServer(user.id)).id, { type: "SERIES" });
+    const ep1 = await createTestMediaItem(lib.id, { type: "SERIES", title: "Pilot", parentTitle: "Lost", seasonNumber: 1, episodeNumber: 1 });
+    const ep2 = await createTestMediaItem(lib.id, { type: "SERIES", title: "Two", parentTitle: "Lost", seasonNumber: 1, episodeNumber: 2 });
+    const ruleSet = await createTestRuleSet(user.id, {
+      type: "SERIES", seriesScope, actionEnabled: true, actionType: "UNMONITOR_SONARR", arrInstanceId: "arr-1",
+    });
+    const match = await createTestRuleMatch(ruleSet.id, ep1.id, { title: "Lost", parentTitle: null, memberIds: [ep1.id, ep2.id] });
+    setMockSession({ isLoggedIn: true, userId: user.id });
+    return { user, ep1, ep2, ruleSet, match };
+  }
+
+  it("Execute runs it on the matched episodes; with series scope on, on the series", async () => {
+    const off = await showSetup(false);
+    await expectJson(await exec({ ruleSetId: off.ruleSet.id }), 200);
+    expect(mockExecuteAction.mock.calls[0][0]).toMatchObject({ episodeScope: true });
+    expect([...mockExecuteAction.mock.calls[0][0].matchedMediaItemIds].sort()).toEqual([off.ep1.id, off.ep2.id].sort());
+
+    mockExecuteAction.mockClear();
+    const on = await showSetup(true);
+    await expectJson(await exec({ ruleSetId: on.ruleSet.id }), 200);
+    expect(mockExecuteAction.mock.calls[0][0]).toMatchObject({ episodeScope: false });
+  });
+
+  it("Retry runs it on the episodes the match still holds", async () => {
+    const { user, ep1, ep2, ruleSet, match } = await showSetup(false);
+    await prisma.ruleMatch.update({ where: { id: match.id }, data: { itemData: { title: "Lost", parentTitle: null, memberIds: [ep2.id] } } });
+    const action = await failedAction(user.id, {
+      mediaItemId: ep1.id, ruleSetId: ruleSet.id, actionType: "UNMONITOR_SONARR",
+      matchedMediaItemIds: [ep1.id, ep2.id], mediaItemTitle: "Lost",
+    });
+
+    await expectJson(await retryCall(action.id), 200);
+
+    expect(mockExecuteAction.mock.calls[0][0]).toMatchObject({
+      episodeScope: true,
+      matchedMediaItemIds: [ep2.id],
+      targetTitle: "Lost S01E02",
+    });
+  });
+
+  it("Pending estimates the show again once an episode matches that a completed action did not act on", async () => {
+    const { user, ep1, ep2, ruleSet, match } = await showSetup(false);
+    await prisma.lifecycleAction.create({
+      data: {
+        userId: user.id, mediaItemId: ep1.id, ruleSetId: ruleSet.id, actionType: "UNMONITOR_SONARR",
+        status: "COMPLETED", scheduledFor: new Date(), executedAt: new Date(), arrInstanceId: "arr-1",
+        matchedMediaItemIds: [ep1.id],
+      },
+    });
+    const pendingIds = async () => {
+      const body = await expectJson<{ groups: { items: { id: string }[] }[] }>(
+        await callRoute(GET, { url: "/api/lifecycle/actions" }),
+        200,
+      );
+      return body.groups.flatMap((g) => g.items.map((i) => i.id));
+    };
+
+    expect(await pendingIds()).toEqual([`rm_${match.id}`]);
+
+    await prisma.lifecycleAction.updateMany({ where: { ruleSetId: ruleSet.id }, data: { matchedMediaItemIds: [ep1.id, ep2.id] } });
+    expect(await pendingIds()).toEqual([]);
+  });
+});
+

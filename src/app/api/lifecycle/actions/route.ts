@@ -2,8 +2,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { withSession } from "@/lib/auth/with-session";
 import { jsonResponse } from "@/lib/api/json-response";
 import { prisma } from "@/lib/db";
-import { isDestructiveActionType } from "@/lib/lifecycle/action-types";
+import { isDestructiveActionType, ruleSetActsOnEpisodes } from "@/lib/lifecycle/action-types";
 import { actionConfigSignature } from "@/lib/lifecycle/action-signature";
+import { uncoveredMembers } from "@/lib/lifecycle/episode-coverage";
+import { loadStoredMatchMembers } from "@/lib/lifecycle/match-snapshot";
 import {
   actionTargetTitle,
   actionTitleSnapshot,
@@ -88,7 +90,7 @@ const MEDIA_ITEM_SELECT = {
 } as const;
 
 const RULE_SET_SELECT = {
-  id: true, name: true, type: true, actionType: true, actionDelayDays: true,
+  id: true, name: true, type: true, seriesScope: true, actionType: true, actionDelayDays: true,
   addImportExclusion: true, searchAfterAction: true, addArrTags: true,
   removeArrTags: true, arrInstanceId: true, targetQualityProfileId: true,
 } as const;
@@ -151,6 +153,7 @@ function buildActionMediaItem(
     actionType: string;
     status: string;
     matchedMediaItemIds: string[];
+    episodeScope?: boolean;
     mediaItemTitle: string | null;
     mediaItemParentTitle: string | null;
     mediaItemSeasonNumber?: number | null;
@@ -272,6 +275,7 @@ async function handlePendingGrouped(request: NextRequest, userId: string) {
         searchAfterAction: true,
         addArrTags: true,
         removeArrTags: true,
+        matchedMediaItemIds: true,
       },
     }),
     // 2. The matches of action-enabled rule sets — their keys only. Once the
@@ -295,6 +299,7 @@ async function handlePendingGrouped(request: NextRequest, userId: string) {
   // a different signature no longer suppresses it.
   const pendingPairs = new Set(pendingActions.map((a) => `${a.ruleSetId}:${a.mediaItemId}`));
   const completedSigsByPair = new Map<string, Set<string>>();
+  const settledByPair = new Map<string, typeof settledActions>();
   for (const a of settledActions) {
     const pair = `${a.ruleSetId}:${a.mediaItemId}`;
     let sigs = completedSigsByPair.get(pair);
@@ -303,6 +308,21 @@ async function handlePendingGrouped(request: NextRequest, userId: string) {
       completedSigsByPair.set(pair, sigs);
     }
     sigs.add(actionConfigSignature(a));
+    settledByPair.set(pair, [...(settledByPair.get(pair) ?? []), a]);
+  }
+
+  // An episode-scoped action (see `uncoveredMembers`) suppresses a match only
+  // when it acted on every episode the match holds now, which needs the
+  // matches' member lists — read only for those rule sets, and only when a
+  // settled action could suppress one of their matches.
+  const episodeScopedRuleSets = [...ruleSetById.values()]
+    .filter((r) => r.actionType && ruleSetActsOnEpisodes(r.actionType, r))
+    .map((r) => r.id)
+    .filter((id) => matchKeys.some((m) => m.ruleSetId === id && settledByPair.has(`${id}:${m.mediaItemId}`)));
+  const currentMembersByPair = new Map<string, string[]>();
+  for (const m of await loadStoredMatchMembers(episodeScopedRuleSets)) {
+    const ids = Array.isArray(m.memberIds) ? m.memberIds.filter((x): x is string => typeof x === "string") : [];
+    currentMembersByPair.set(`${m.ruleSetId}:${m.mediaItemId}`, ids);
   }
 
   const upcomingIds = matchKeys
@@ -316,7 +336,12 @@ async function handlePendingGrouped(request: NextRequest, userId: string) {
       const ruleSet = ruleSetById.get(m.ruleSetId);
       if (!ruleSet) return false;
       if (ruleSet.actionType && !isDestructiveActionType(ruleSet.actionType)) {
-        if (completedSigsByPair.get(pair)?.has(actionConfigSignature(ruleSet))) return false;
+        const signature = actionConfigSignature(ruleSet);
+        if (completedSigsByPair.get(pair)?.has(signature)) {
+          if (!ruleSetActsOnEpisodes(ruleSet.actionType, ruleSet)) return false;
+          const settled = (settledByPair.get(pair) ?? []).filter((a) => actionConfigSignature(a) === signature);
+          return uncoveredMembers(currentMembersByPair.get(pair) ?? [], settled).length > 0;
+        }
       }
       return true;
     })
@@ -371,7 +396,12 @@ async function handlePendingGrouped(request: NextRequest, userId: string) {
       groupMap.set(a.ruleSetId!, { ruleSet, items: [], count: 0 });
     }
     const group = groupMap.get(a.ruleSetId!)!;
-    const mi = buildActionMediaItem(a, ruleSet.type, memberDataMap, servers);
+    const mi = buildActionMediaItem(
+      { ...a, episodeScope: ruleSetActsOnEpisodes(a.actionType, ruleSet) },
+      ruleSet.type,
+      memberDataMap,
+      servers,
+    );
     group.items.push({
       id: a.id,
       actionType: a.actionType,
@@ -411,6 +441,7 @@ async function handlePendingGrouped(request: NextRequest, userId: string) {
       actionType: m.ruleSet.actionType!,
       status: "PENDING",
       matchedMediaItemIds: memberIds,
+      episodeScope: ruleSetActsOnEpisodes(m.ruleSet.actionType!, m.ruleSet),
       mediaItemTitle: m.mediaItem.title,
       mediaItemParentTitle: m.mediaItem.parentTitle,
       ruleSetType: m.ruleSet.type,

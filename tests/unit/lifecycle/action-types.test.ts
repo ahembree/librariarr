@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
+  actionCanScopeToEpisodes,
+  actsOnMembers,
+  ruleSetActsOnEpisodes,
   supportsSearchAfter,
   QUALITY_PROFILE_ACTION_TYPES,
   MOVIE_ACTION_TYPES,
@@ -93,5 +96,46 @@ describe("formatActionTypeLabel", () => {
 
   it("falls back to the raw value for unknown action types", () => {
     expect(formatActionTypeLabel("MYSTERY_ACTION")).toBe("MYSTERY_ACTION");
+  });
+});
+
+describe("ruleSetActsOnEpisodes", () => {
+  it.each(["UNMONITOR_SONARR", "SEARCH_SONARR"])("%s acts on episodes when series scope is off", (actionType) => {
+    expect(ruleSetActsOnEpisodes(actionType, { type: "SERIES", seriesScope: false })).toBe(true);
+  });
+
+  it.each(["UNMONITOR_SONARR", "SEARCH_SONARR"])("%s acts on the series when series scope is on", (actionType) => {
+    expect(ruleSetActsOnEpisodes(actionType, { type: "SERIES", seriesScope: true })).toBe(false);
+  });
+
+  it.each(["DELETE_SONARR", "CHANGE_QUALITY_PROFILE_SONARR", "DO_NOTHING", "DELETE_FILES_SONARR"])(
+    "%s is never episode-scoped by this flag",
+    (actionType) => {
+      expect(actionCanScopeToEpisodes(actionType)).toBe(false);
+      expect(ruleSetActsOnEpisodes(actionType, { type: "SERIES", seriesScope: false })).toBe(false);
+    },
+  );
+
+  it("never applies to a non-series rule set", () => {
+    expect(ruleSetActsOnEpisodes("UNMONITOR_SONARR", { type: "MOVIE", seriesScope: false })).toBe(false);
+  });
+});
+
+describe("actsOnMembers", () => {
+  it("is true for the file deletes whatever the scope", () => {
+    expect(actsOnMembers("DELETE_FILES_SONARR")).toBe(true);
+    expect(actsOnMembers("DELETE_FILES_SONARR", false)).toBe(true);
+  });
+
+  it("is true for Unmonitor and Search only when episode-scoped", () => {
+    expect(actsOnMembers("UNMONITOR_SONARR", true)).toBe(true);
+    expect(actsOnMembers("SEARCH_SONARR", true)).toBe(true);
+    expect(actsOnMembers("UNMONITOR_SONARR", false)).toBe(false);
+    expect(actsOnMembers("SEARCH_SONARR")).toBe(false);
+  });
+
+  it("is false for whole-record actions even when episode-scoped", () => {
+    expect(actsOnMembers("DELETE_SONARR", true)).toBe(false);
+    expect(actsOnMembers("CHANGE_QUALITY_PROFILE_SONARR", true)).toBe(false);
   });
 });
