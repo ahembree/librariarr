@@ -137,6 +137,24 @@ describe("/api/settings/whats-new", () => {
     }
   });
 
+  it("creates the settings row when saves race to make it", async () => {
+    // With no row there was nothing to lock, and two creates collided on the
+    // unique userId (a 500).
+    for (let i = 0; i < 5; i++) {
+      await cleanDatabase();
+      const user = await createTestUser();
+      setMockSession({ userId: user.id, isLoggedIn: true });
+      const responses = await Promise.all([
+        callRoute(PUT, { method: "PUT", body: { version: "1.3.0" } }),
+        callRoute(PUT, { method: "PUT", body: { version: "1.2.0" } }),
+        callRoute(PUT, { method: "PUT", body: { version: "1.3.0" } }),
+      ]);
+      for (const res of responses) expect(res.status).toBe(200);
+      const settings = await prisma.appSettings.findUnique({ where: { userId: user.id } });
+      expect(settings?.lastSeenVersion).toBe("1.3.0");
+    }
+  });
+
   it("records the version closed, and stays closed until the next upgrade", async () => {
     const user = await signIn("1.2.0");
     const put = await callRoute(PUT, { method: "PUT", body: { version: "v1.3.0" } });

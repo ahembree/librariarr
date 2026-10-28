@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth/session";
 import { withSharedSession } from "@/lib/auth/shared-session";
-import { prisma } from "@/lib/db";
+import { ensureAppSettingsRow } from "@/lib/settings/app-settings-row";
 import { jsonResponse } from "@/lib/api/json-response";
 import { apiLogger } from "@/lib/logger";
 import {
@@ -95,12 +95,7 @@ export async function GET(request: NextRequest) {
     // Several of these handlers create the settings row when it is missing.
     // Run side by side on a first visit they would race to insert it, so it
     // is created once first.
-    await prisma.appSettings.upsert({
-      where: { userId: session.userId },
-      update: {},
-      create: { userId: session.userId },
-      select: { id: true },
-    });
+    await ensureAppSettingsRow(session.userId);
 
     const answers = await Promise.all(
       paths.map(async (path): Promise<[string, BundledResponse]> => {
