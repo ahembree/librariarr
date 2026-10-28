@@ -2084,6 +2084,11 @@ export async function evaluateSeriesScope(
             return evaluateAllRulesInMemory(rules, epItem, arrMeta, seerrMeta);
           })
           .map((ep) => ep.id);
+        // Passing only as a whole (a summed file size, say) is not a match when
+        // the rule is per episode: with no member an episode-scoped action fell
+        // back to the representative, which never matched, and its settled
+        // empty member list then read as covering the whole show.
+        if (series.memberIds.length === 0) continue;
       }
       matching.push({ ...series, ...cross });
     }

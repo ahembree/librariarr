@@ -97,6 +97,36 @@ describe("evaluateSeriesScope — member restriction for seriesScope=false + agg
     expect(members).toEqual([repId]);
   });
 
+  it("does not match a show whose episodes pass only as a whole when seriesScope is false", async () => {
+    const user = await createTestUser();
+    const server = await createTestServer(user.id);
+    const library = await createTestLibrary(server.id, { type: "SERIES" });
+    for (let e = 1; e <= 3; e++) {
+      await createTestMediaItem(library.id, {
+        type: "SERIES", title: `S1E${e}`, parentTitle: "ShowY",
+        seasonNumber: 1, episodeNumber: e, fileSize: BigInt(1000 * 1024 * 1024),
+      });
+    }
+    // The show sums to 3000 MB; no single 1000 MB episode passes. Matched with
+    // no members, an episode-scoped Unmonitor fell back to an episode that
+    // never matched.
+    const sizeRule: LifecycleRuleGroup[] = [
+      {
+        id: "gs",
+        condition: "AND",
+        rules: [
+          { id: "rs1", field: "availableEpisodeCount", operator: "greaterThan", value: "0", condition: "AND" },
+          { id: "rs2", field: "fileSize", operator: "greaterThan", value: "2000", condition: "AND" },
+        ],
+        groups: [],
+      },
+    ];
+
+    expect(await evaluateSeriesScope(sizeRule, [server.id], undefined, undefined, true)).toHaveLength(0);
+    // Whole-series intent still matches on the summed size.
+    expect(await evaluateSeriesScope(sizeRule, [server.id], undefined, undefined, false)).toHaveLength(1);
+  });
+
   it("keeps every episode as a member when seriesScope is true", async () => {
     const { serverId, allIds } = await seedShow();
 

@@ -130,6 +130,19 @@ export const PUT = withSession(async (
     }
   }
 
+  // Series scope decides what a stored match and its pending action act on
+  // (the whole show, or only the matched episodes), and the executor reads it
+  // when the action runs: kept across a change, a pending episode Unmonitor or
+  // Search would run against the whole series nothing evaluated.
+  let seriesScopeChanged = false;
+  if (seriesScope !== undefined) {
+    const current = await prisma.ruleSet.findFirst({
+      where: { id, userId: session.userId },
+      select: { seriesScope: true },
+    });
+    seriesScopeChanged = current !== null && current.seriesScope !== seriesScope;
+  }
+
   // A referenced collection must exist, belong to the user, and target the same
   // library type as this rule set.
   if (collectionId) {
@@ -174,8 +187,10 @@ export const PUT = withSession(async (
   // clearMatches=false preserves existing matches and pending actions (e.g. when user
   // wants to keep matches intact after a config-only change). Defaults to true for
   // backwards compatibility and safety. A change of the instance the Arr
-  // criteria are read from always clears (see `arrScopeChanged`).
-  const clearMatches = request.nextUrl.searchParams.get("clearMatches") !== "false" || arrScopeChanged;
+  // criteria are read from, or of series scope, always clears (see
+  // `arrScopeChanged`, `seriesScopeChanged`).
+  const clearMatches =
+    request.nextUrl.searchParams.get("clearMatches") !== "false" || arrScopeChanged || seriesScopeChanged;
 
   // Wrap update + cleanup + read in a single transaction so the returned
   // record reflects exactly the values we just wrote and isn't clobbered
