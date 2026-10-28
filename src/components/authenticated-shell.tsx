@@ -32,8 +32,10 @@ function dropClientMediaCaches(): void {
   clearLibraryListCache();
   dropMediaDerivedPrefetches();
 }
+// `sync:failed` too: a sync that wrote some libraries before failing settles
+// the dataset (the server's caches are dropped) and announces only the failure.
 beforeRealtimeEvents(
-  ["sync:completed", "watch-history:updated", "server:changed", "settings:changed"],
+  ["sync:completed", "sync:failed", "watch-history:updated", "server:changed", "settings:changed"],
   dropClientMediaCaches,
 );
 

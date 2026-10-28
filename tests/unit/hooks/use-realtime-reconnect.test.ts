@@ -196,6 +196,19 @@ describe("useRealtime reconnect machinery", () => {
     expect(resyncs).toHaveLength(2);
   });
 
+  it("drops the client caches on every reopen, even one whose resync is throttled", () => {
+    // An event lost in a quick flap would otherwise leave a list loaded
+    // before it reading as fresh once the stream was live again.
+    const drops: number[] = [];
+    mod.beforeRealtimeEvents(["sync:completed"], () => drops.push(1));
+    const first = subscribe() as unknown as FakeEventSource;
+    first.fireOpen(); // first open: nothing missed yet
+    expect(drops).toHaveLength(0);
+    first.fireOpen(); // reopen: resync
+    first.fireOpen(); // flap within the floor: resync throttled
+    expect(drops).toHaveLength(2);
+  });
+
   it("holds the connection open across a navigation instead of rebuilding it", async () => {
     // The whole point of the grace period: a route change releases then
     // re-acquires, and must reuse the same connection.
