@@ -266,25 +266,47 @@ export function RuleSetRail(props: RuleSetNavigatorProps) {
     if (timer.current) clearTimeout(timer.current);
   }, []);
 
-  // Sized to the box that scrolls the page rather than the viewport: the
-  // shell's header and any banner sit above it, so a viewport-tall rail ran
-  // past the bottom of the screen.
+  // The panel is as tall as its list, capped at the space it has on screen:
+  // from where it sits (or its pinned offset, once stuck) to the bottom of
+  // the box that scrolls the page, and never past the editor beside it — so
+  // it neither runs below the visible area nor makes a short page longer.
+  // Re-measured as the page scrolls, since that space grows until it sticks.
   const asideRef = useRef<HTMLElement>(null);
   const [height, setHeight] = useState<number | null>(null);
   useEffect(() => {
-    let scroller = asideRef.current?.parentElement ?? null;
+    const aside = asideRef.current;
+    let scroller = aside?.parentElement ?? null;
     while (scroller) {
       const overflowY = getComputedStyle(scroller).overflowY;
       if (overflowY === "auto" || overflowY === "scroll") break;
       scroller = scroller.parentElement;
     }
-    if (!scroller) return;
+    if (!aside || !scroller) return;
     const box = scroller;
-    const update = () => setHeight(box.clientHeight - 32);
+    const STICKY_TOP = 16;
+    const GAP_BELOW = 16;
+    let frame = 0;
+    const update = () => {
+      frame = 0;
+      const boxRect = box.getBoundingClientRect();
+      const asideRect = aside.getBoundingClientRect();
+      const top = Math.max(asideRect.top, boxRect.top + STICKY_TOP);
+      const bottom = Math.min(boxRect.bottom - GAP_BELOW, asideRect.bottom);
+      setHeight(Math.max(0, Math.round(bottom - top)));
+    };
+    const schedule = () => {
+      if (!frame) frame = requestAnimationFrame(update);
+    };
     update();
-    const observer = new ResizeObserver(update);
+    const observer = new ResizeObserver(schedule);
     observer.observe(box);
-    return () => observer.disconnect();
+    observer.observe(aside);
+    box.addEventListener("scroll", schedule, { passive: true });
+    return () => {
+      observer.disconnect();
+      box.removeEventListener("scroll", schedule);
+      if (frame) cancelAnimationFrame(frame);
+    };
   }, []);
 
   // Keep the rule set being edited in view within the strip.
@@ -308,33 +330,36 @@ export function RuleSetRail(props: RuleSetNavigatorProps) {
     <aside
       ref={asideRef}
       aria-label="Saved rule sets"
-      style={height !== null ? { height } : undefined}
-      className={`relative hidden h-[calc(100dvh-8rem)] shrink-0 transition-[width] duration-200 ease-out rail:sticky rail:top-4 rail:z-30 rail:block rail:self-start ${
+      className={`relative hidden shrink-0 transition-[width] duration-200 ease-out rail:z-30 rail:block rail:self-stretch ${
         pinned ? "w-80" : "w-14"
       }`}
-      onMouseEnter={() => schedule(true, OPEN_DELAY_MS)}
-      onMouseLeave={() => schedule(false, CLOSE_DELAY_MS)}
-      onFocus={() => {
-        if (timer.current) clearTimeout(timer.current);
-        setHovered(true);
-      }}
-      onBlur={(e) => {
-        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setHovered(false);
-      }}
-      onKeyDown={(e) => {
-        if (e.key === "Escape" && !pinned) {
-          setHovered(false);
-          (document.activeElement as HTMLElement | null)?.blur();
-        }
-      }}
     >
       <div
-        className={`absolute inset-y-0 left-0 z-30 overflow-hidden rounded-xl border bg-card transition-[width,box-shadow] duration-200 ease-out ${
+        className="sticky top-4"
+        style={{ height: height ?? 0 }}
+      >
+      <div
+        className={`absolute left-0 top-0 z-30 flex max-h-full flex-col overflow-hidden rounded-xl border bg-card transition-[width,box-shadow] duration-200 ease-out ${
           open ? "w-80" : "w-14"
         } ${open && !pinned ? "shadow-2xl shadow-black/60" : ""}`}
+        onMouseEnter={() => schedule(true, OPEN_DELAY_MS)}
+        onMouseLeave={() => schedule(false, CLOSE_DELAY_MS)}
+        onFocus={() => {
+          if (timer.current) clearTimeout(timer.current);
+          setHovered(true);
+        }}
+        onBlur={(e) => {
+          if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setHovered(false);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Escape" && !pinned) {
+            setHovered(false);
+            (document.activeElement as HTMLElement | null)?.blur();
+          }
+        }}
       >
         {/* Fixed width, so nothing reflows while the panel animates. */}
-        <div className="flex h-full w-80 flex-col p-2">
+        <div className="flex min-h-0 w-80 flex-col p-2">
           <div className="flex h-10 shrink-0 items-center gap-2">
             <div className="flex w-10 shrink-0 justify-center">
               <FileText className="h-4 w-4 text-muted-foreground" />
@@ -398,7 +423,7 @@ export function RuleSetRail(props: RuleSetNavigatorProps) {
 
           <div
             ref={scrollRef}
-            className={`relative min-h-0 flex-1 overscroll-contain ${open ? "overflow-y-auto" : "overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"}`}
+            className={`relative min-h-0 overscroll-contain ${open ? "overflow-y-auto" : "overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"}`}
           >
             {filtered.length === 0 ? (
               <p className={`py-6 pl-12 pr-2 text-sm text-muted-foreground ${reveal}`}>No rule sets match “{query}”.</p>
@@ -479,6 +504,7 @@ export function RuleSetRail(props: RuleSetNavigatorProps) {
             )}
           </div>
         </div>
+      </div>
       </div>
     </aside>
   );
