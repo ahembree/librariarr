@@ -25,8 +25,8 @@ import { hasSeerrRules } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRuleGroup } from "@/lib/rules/types";
 import { matchIdentityChange } from "@/lib/lifecycle/match-identity";
 import { memberIdsFromItemData } from "@/lib/lifecycle/group-aggregate";
-import { actionConfigSignature } from "@/lib/lifecycle/action-signature";
-import { episodesToExecute } from "@/lib/lifecycle/episode-coverage";
+import { ACTION_SIGNATURE_SELECT, actionConfigSignature } from "@/lib/lifecycle/action-signature";
+import { coverageOf, episodesToExecute } from "@/lib/lifecycle/episode-coverage";
 import { getApiKeyPrincipal } from "@/lib/api-keys/principal";
 import {
   destructiveRefusalResponse,
@@ -274,41 +274,25 @@ async function executeRuleSet(
   // lists (`episodesToExecute`), not every episode the match holds now.
   if (ruleSet.actionType && ruleSetActsOnEpisodes(ruleSet.actionType, ruleSet)) {
     const signature = actionConfigSignature(ruleSet);
-    const actions = await prisma.lifecycleAction.findMany({
-      where: {
-        ruleSetId: ruleSet.id,
-        mediaItemId: { in: itemIds },
-        OR: [{ status: "PENDING" }, { status: { in: ["COMPLETED", "FAILED"] }, actionType: ruleSet.actionType }],
-      },
-      select: {
-        mediaItemId: true,
-        status: true,
-        actionType: true,
-        arrInstanceId: true,
-        targetQualityProfileId: true,
-        addImportExclusion: true,
-        searchAfterAction: true,
-        addArrTags: true,
-        removeArrTags: true,
-        matchedMediaItemIds: true,
-      },
-    });
+    const [pending, settled] = await Promise.all([
+      prisma.lifecycleAction.findMany({
+        where: { ruleSetId: ruleSet.id, mediaItemId: { in: itemIds }, status: "PENDING" },
+        select: { mediaItemId: true, matchedMediaItemIds: true },
+      }),
+      // Every settled action of the rule set, wherever it is stored: a show's
+      // representative moves, and what an action under the old one covered
+      // still counts (`episode-coverage.ts`).
+      prisma.lifecycleAction.findMany({
+        where: { ruleSetId: ruleSet.id, status: { in: ["COMPLETED", "FAILED"] }, actionType: ruleSet.actionType },
+        select: ACTION_SIGNATURE_SELECT,
+      }),
+    ]);
     const pendingByItem = new Map<string, string[]>();
-    const settledByItem = new Map<string, Array<{ matchedMediaItemIds: string[] }>>();
-    for (const a of actions) {
-      if (!a.mediaItemId) continue;
-      if (a.status === "PENDING") pendingByItem.set(a.mediaItemId, a.matchedMediaItemIds);
-      else if (actionConfigSignature(a) === signature) {
-        settledByItem.set(a.mediaItemId, [...(settledByItem.get(a.mediaItemId) ?? []), a]);
-      }
-    }
+    for (const a of pending) if (a.mediaItemId) pendingByItem.set(a.mediaItemId, a.matchedMediaItemIds);
+    const coverage = coverageOf(settled.filter((a) => actionConfigSignature(a) === signature));
     const covered: string[] = [];
     for (const id of itemIds) {
-      const members = episodesToExecute(
-        episodeIdMap.get(id) ?? [],
-        pendingByItem.get(id) ?? null,
-        settledByItem.get(id) ?? [],
-      );
+      const members = episodesToExecute(id, episodeIdMap.get(id) ?? [], pendingByItem.get(id) ?? null, coverage);
       if (members.length > 0) episodeIdMap.set(id, members);
       else {
         episodeIdMap.delete(id);
@@ -316,7 +300,8 @@ async function executeRuleSet(
       }
     }
     if (covered.length > 0) {
-      itemIds = itemIds.filter((id) => !covered.includes(id));
+      const skip = new Set(covered);
+      itemIds = itemIds.filter((id) => !skip.has(id));
       logger.info("Lifecycle", `Skipped ${covered.length} item(s) whose episodes this action has already acted on, for rule set "${ruleSet.id}"`);
       if (itemIds.length === 0) {
         return NextResponse.json(

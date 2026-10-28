@@ -1,22 +1,59 @@
 /**
- * The episodes of a match that no settled action of the same configuration has
- * acted on yet.
+ * Which episodes of a series match the rule set's non-destructive action
+ * (Unmonitor, Search, tag or quality changes) has already acted on.
  *
- * An episode-scoped Unmonitor or Search (`ruleSetActsOnEpisodes`) acts on the
- * episodes that matched when it ran, and the show it is stored against keeps
- * matching. Suppressing the show once one such action had completed — as a
- * whole-series action is — meant an episode that started matching later (one
- * watched since, under "unmonitor watched episodes") was never acted on. A
- * settled action with no member list acted on the whole series (before
- * episode scope existed), so it covers every episode.
+ * A show's match is stored against one representative episode, and that
+ * representative moves: with series scope off it is the lowest-id episode that
+ * matches now, so once it stops matching (upgraded, say) the next one stands
+ * in. Keyed on the representative, an action settled under the old one no
+ * longer counted and the new representative's action repeated it on every
+ * episode it had already covered. Coverage is therefore read per episode, from
+ * every settled action of the rule set with the same configuration, wherever
+ * it is stored.
+ *
+ * It is also what decides a whole-series action: one is suppressed only when
+ * the settled actions covered every episode the show matches now. Suppressed
+ * by any settled action on the same representative, a rule set switched to
+ * series scope after an episode-scoped action had run on a few episodes never
+ * scheduled the series action at all. The price is that a whole-series action
+ * runs once more when an episode it never covered starts matching, which
+ * repeats an Unmonitor or Search on a series already in that state.
  */
-export function uncoveredMembers(
+export interface EpisodeCoverage {
+  /** Every episode a settled action acted on. */
+  episodes: Set<string>;
+  /** Items a settled action with no member list was stored against: that
+   * action predates member lists and acted on the whole series. */
+  wholeShow: Set<string>;
+}
+
+export function coverageOf(
+  settled: ReadonlyArray<{ mediaItemId: string | null; matchedMediaItemIds: readonly string[] }>,
+): EpisodeCoverage {
+  const episodes = new Set<string>();
+  const wholeShow = new Set<string>();
+  for (const action of settled) {
+    if (action.matchedMediaItemIds.length === 0) {
+      if (action.mediaItemId) wholeShow.add(action.mediaItemId);
+    } else {
+      for (const id of action.matchedMediaItemIds) episodes.add(id);
+    }
+  }
+  return { episodes, wholeShow };
+}
+
+/**
+ * The episodes of a match (`members`, or the matched item itself when it lists
+ * none) that no settled action covered.
+ */
+export function uncoveredEpisodes(
+  matchItemId: string,
   members: readonly string[],
-  settled: ReadonlyArray<{ matchedMediaItemIds: readonly string[] }>,
+  coverage: EpisodeCoverage,
 ): string[] {
-  if (settled.some((a) => a.matchedMediaItemIds.length === 0)) return [];
-  const covered = new Set(settled.flatMap((a) => a.matchedMediaItemIds));
-  return members.filter((m) => !covered.has(m));
+  const scope = members.length > 0 ? members : [matchItemId];
+  if (coverage.wholeShow.has(matchItemId) || scope.some((id) => coverage.wholeShow.has(id))) return [];
+  return scope.filter((id) => !coverage.episodes.has(id));
 }
 
 /**
@@ -28,14 +65,15 @@ export function uncoveredMembers(
  * episodes the row did not list.
  */
 export function episodesToExecute(
+  matchItemId: string,
   currentMembers: readonly string[],
   pendingMembers: readonly string[] | null,
-  settled: ReadonlyArray<{ matchedMediaItemIds: readonly string[] }>,
+  coverage: EpisodeCoverage,
 ): string[] {
   if (pendingMembers && pendingMembers.length > 0) {
     if (currentMembers.length === 0) return [...pendingMembers];
     const current = new Set(currentMembers);
     return pendingMembers.filter((m) => current.has(m));
   }
-  return uncoveredMembers(currentMembers, settled);
+  return uncoveredEpisodes(matchItemId, currentMembers, coverage);
 }

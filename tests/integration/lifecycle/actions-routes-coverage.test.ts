@@ -409,6 +409,45 @@ describe("episode-scoped Unmonitor (Series rule set, series scope off)", () => {
     expect(mockExecuteAction.mock.calls[0][0].matchedMediaItemIds).toEqual([ep2.id]);
   });
 
+  it("counts what a completed action under the show's previous representative covered", async () => {
+    const { user, ep1, ep2, ruleSet, match } = await showSetup(false);
+    await prisma.lifecycleAction.create({
+      data: {
+        userId: user.id, mediaItemId: ep1.id, ruleSetId: ruleSet.id, actionType: "UNMONITOR_SONARR",
+        status: "COMPLETED", scheduledFor: new Date(), executedAt: new Date(), arrInstanceId: "arr-1",
+        matchedMediaItemIds: [ep1.id, ep2.id],
+      },
+    });
+    // ep1 stopped matching; ep2 is the show's representative now.
+    await prisma.ruleMatch.update({
+      where: { id: match.id },
+      data: { mediaItemId: ep2.id, itemData: { title: "Lost", parentTitle: null, memberIds: [ep2.id] } },
+    });
+
+    const body = await expectJson<{ groups: unknown[] }>(await callRoute(GET, { url: "/api/lifecycle/actions" }), 200);
+    expect(body.groups).toEqual([]);
+    await expectJson(await exec({ ruleSetId: ruleSet.id }), 400);
+    expect(mockExecuteAction).not.toHaveBeenCalled();
+  });
+
+  it("with series scope on, estimates the series while an episode it matches was never covered", async () => {
+    const { user, ep1, ep2, ruleSet, match } = await showSetup(true);
+    const done = await prisma.lifecycleAction.create({
+      data: {
+        userId: user.id, mediaItemId: ep1.id, ruleSetId: ruleSet.id, actionType: "UNMONITOR_SONARR",
+        status: "COMPLETED", scheduledFor: new Date(), executedAt: new Date(), arrInstanceId: "arr-1",
+        matchedMediaItemIds: [ep1.id],
+      },
+    });
+    const ids = async () =>
+      (await expectJson<{ groups: { items: { id: string }[] }[] }>(await callRoute(GET, { url: "/api/lifecycle/actions" }), 200))
+        .groups.flatMap((g) => g.items.map((i) => i.id));
+
+    expect(await ids()).toEqual([`rm_${match.id}`]);
+    await prisma.lifecycleAction.update({ where: { id: done.id }, data: { matchedMediaItemIds: [ep1.id, ep2.id] } });
+    expect(await ids()).toEqual([]);
+  });
+
   it("Execute acts on a scheduled action's own episodes, not every episode the match holds", async () => {
     const { user, ep1, ep2, ruleSet } = await showSetup(false);
     await prisma.lifecycleAction.create({

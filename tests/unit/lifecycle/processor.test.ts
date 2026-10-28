@@ -844,11 +844,12 @@ describe("scheduleActionsForRuleSet", () => {
       { id: "b1", title: "Show B", parentTitle: null },
     ];
 
-    function mockExisting(existing: unknown[]) {
+    function mockExisting(settled: unknown[]) {
       mockPrisma.lifecycleAction.findMany
         .mockResolvedValueOnce([]) // previousPending
         .mockResolvedValueOnce([]) // allPending (dedup)
-        .mockResolvedValueOnce(existing); // existingActions
+        .mockResolvedValueOnce([]) // existingActions (PENDING only for a Series rule set)
+        .mockResolvedValueOnce(settled); // every settled action of the rule set
       mockPrisma.lifecycleAction.deleteMany.mockResolvedValue({ count: 0 });
       mockPrisma.lifecycleAction.createMany.mockResolvedValue({ count: 1 });
     }
@@ -875,8 +876,28 @@ describe("scheduleActionsForRuleSet", () => {
       expect(mockPrisma.lifecycleAction.createMany).not.toHaveBeenCalled();
     });
 
-    it("with series scope on, a completed action still blocks the whole show", async () => {
+    it("counts what an action under the show's previous representative covered", async () => {
+      // Settled under a3, which has since stopped matching; a4 stands in now.
+      mockExisting([completed("a3", ["a3", "a4"])]);
+
+      await scheduleActionsForRuleSet(ruleSet(false), [{ id: "a4", title: "Show A", parentTitle: null }], new Map([["a4", ["a4", "a5"]]]));
+
+      const data = mockPrisma.lifecycleAction.createMany.mock.calls[0][0].data;
+      expect(data).toEqual([expect.objectContaining({ mediaItemId: "a4", matchedMediaItemIds: ["a5"] })]);
+    });
+
+    it("with series scope on, schedules the series while an episode it matches was never covered", async () => {
+      // An episode-scoped action ran on a1 before the rule set switched scope.
       mockExisting([completed("a1", ["a1"])]);
+
+      await scheduleActionsForRuleSet(ruleSet(true), [shows[0]], new Map([["a1", ["a1", "a2"]]]));
+
+      const data = mockPrisma.lifecycleAction.createMany.mock.calls[0][0].data;
+      expect(data).toEqual([expect.objectContaining({ mediaItemId: "a1", matchedMediaItemIds: ["a1", "a2"] })]);
+    });
+
+    it("with series scope on, a completed action that covered every matching episode blocks the show", async () => {
+      mockExisting([completed("a1", ["a1", "a2"])]);
 
       await scheduleActionsForRuleSet(ruleSet(true), [shows[0]], new Map([["a1", ["a1", "a2"]]]));
 
