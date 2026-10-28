@@ -436,7 +436,20 @@ async function handlePendingGrouped(request: NextRequest, userId: string) {
       title: snapshot?.title,
       parentTitle: snapshot?.parentTitle,
     });
-    const memberIds = memberIdsFromItemData(m.itemData);
+    // An episode-scoped action is scheduled for, and executes on, only the
+    // episodes no settled action of the same configuration has covered: list
+    // those, not every member.
+    const allMembers = memberIdsFromItemData(m.itemData);
+    const pair = `${m.ruleSetId}:${m.mediaItemId}`;
+    const memberIds =
+      m.ruleSet.actionType && ruleSetActsOnEpisodes(m.ruleSet.actionType, m.ruleSet)
+        ? uncoveredMembers(
+            allMembers,
+            (settledByPair.get(pair) ?? []).filter(
+              (a) => actionConfigSignature(a) === actionConfigSignature(m.ruleSet),
+            ),
+          )
+        : allMembers;
     const mi = buildActionMediaItem({
       actionType: m.ruleSet.actionType!,
       status: "PENDING",

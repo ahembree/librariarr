@@ -25,6 +25,8 @@ import { hasSeerrRules } from "@/lib/rules/lifecycle-engine";
 import type { LifecycleRuleGroup } from "@/lib/rules/types";
 import { matchIdentityChange } from "@/lib/lifecycle/match-identity";
 import { memberIdsFromItemData } from "@/lib/lifecycle/group-aggregate";
+import { actionConfigSignature } from "@/lib/lifecycle/action-signature";
+import { episodesToExecute } from "@/lib/lifecycle/episode-coverage";
 import { getApiKeyPrincipal } from "@/lib/api-keys/principal";
 import {
   destructiveRefusalResponse,
@@ -266,6 +268,63 @@ async function executeRuleSet(
     for (const [id, members] of storedMemberIds(validMatches)) episodeIdMap.set(id, members);
 
     logger.info("Lifecycle", `Manual execute selected: ${itemIds.length} validated matches (${invalidIds.length} rejected) for rule set "${ruleSet.id}"`);
+  }
+
+  // An episode-scoped Unmonitor/Search acts on the episodes its Pending row
+  // lists (`episodesToExecute`), not every episode the match holds now.
+  if (ruleSet.actionType && ruleSetActsOnEpisodes(ruleSet.actionType, ruleSet)) {
+    const signature = actionConfigSignature(ruleSet);
+    const actions = await prisma.lifecycleAction.findMany({
+      where: {
+        ruleSetId: ruleSet.id,
+        mediaItemId: { in: itemIds },
+        OR: [{ status: "PENDING" }, { status: { in: ["COMPLETED", "FAILED"] }, actionType: ruleSet.actionType }],
+      },
+      select: {
+        mediaItemId: true,
+        status: true,
+        actionType: true,
+        arrInstanceId: true,
+        targetQualityProfileId: true,
+        addImportExclusion: true,
+        searchAfterAction: true,
+        addArrTags: true,
+        removeArrTags: true,
+        matchedMediaItemIds: true,
+      },
+    });
+    const pendingByItem = new Map<string, string[]>();
+    const settledByItem = new Map<string, Array<{ matchedMediaItemIds: string[] }>>();
+    for (const a of actions) {
+      if (!a.mediaItemId) continue;
+      if (a.status === "PENDING") pendingByItem.set(a.mediaItemId, a.matchedMediaItemIds);
+      else if (actionConfigSignature(a) === signature) {
+        settledByItem.set(a.mediaItemId, [...(settledByItem.get(a.mediaItemId) ?? []), a]);
+      }
+    }
+    const covered: string[] = [];
+    for (const id of itemIds) {
+      const members = episodesToExecute(
+        episodeIdMap.get(id) ?? [],
+        pendingByItem.get(id) ?? null,
+        settledByItem.get(id) ?? [],
+      );
+      if (members.length > 0) episodeIdMap.set(id, members);
+      else {
+        episodeIdMap.delete(id);
+        covered.push(id);
+      }
+    }
+    if (covered.length > 0) {
+      itemIds = itemIds.filter((id) => !covered.includes(id));
+      logger.info("Lifecycle", `Skipped ${covered.length} item(s) whose episodes this action has already acted on, for rule set "${ruleSet.id}"`);
+      if (itemIds.length === 0) {
+        return NextResponse.json(
+          { error: "This action has already acted on every matched episode of the selected items" },
+          { status: 400 },
+        );
+      }
+    }
   }
 
   // Filter out items that have a LifecycleException — both representative

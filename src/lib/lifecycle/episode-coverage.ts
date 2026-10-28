@@ -18,3 +18,24 @@ export function uncoveredMembers(
   const covered = new Set(settled.flatMap((a) => a.matchedMediaItemIds));
   return members.filter((m) => !covered.has(m));
 }
+
+/**
+ * The episodes a manual Execute of an episode-scoped action acts on: what the
+ * Pending row shows. A scheduled action shows the members it was scheduled
+ * with, so it acts on those still matching (as the scheduled executor does); an
+ * estimated row shows the members no settled action of the same configuration
+ * has covered. Acting on every current member instead repeated the action on
+ * episodes the row did not list.
+ */
+export function episodesToExecute(
+  currentMembers: readonly string[],
+  pendingMembers: readonly string[] | null,
+  settled: ReadonlyArray<{ matchedMediaItemIds: readonly string[] }>,
+): string[] {
+  if (pendingMembers && pendingMembers.length > 0) {
+    if (currentMembers.length === 0) return [...pendingMembers];
+    const current = new Set(currentMembers);
+    return pendingMembers.filter((m) => current.has(m));
+  }
+  return uncoveredMembers(currentMembers, settled);
+}

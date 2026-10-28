@@ -388,5 +388,50 @@ describe("episode-scoped Unmonitor (Series rule set, series scope off)", () => {
     await prisma.lifecycleAction.updateMany({ where: { ruleSetId: ruleSet.id }, data: { matchedMediaItemIds: [ep1.id, ep2.id] } });
     expect(await pendingIds()).toEqual([]);
   });
+
+  it("Pending lists, and Execute acts on, only the episodes a completed action did not cover", async () => {
+    const { user, ep1, ep2, ruleSet } = await showSetup(false);
+    await prisma.lifecycleAction.create({
+      data: {
+        userId: user.id, mediaItemId: ep1.id, ruleSetId: ruleSet.id, actionType: "UNMONITOR_SONARR",
+        status: "COMPLETED", scheduledFor: new Date(), executedAt: new Date(), arrInstanceId: "arr-1",
+        matchedMediaItemIds: [ep1.id],
+      },
+    });
+
+    const body = await expectJson<{ groups: { items: { mediaItem: { matchedEpisodes?: number } }[] }[] }>(
+      await callRoute(GET, { url: "/api/lifecycle/actions" }),
+      200,
+    );
+    expect(body.groups[0].items[0].mediaItem.matchedEpisodes).toBe(1);
+
+    await expectJson(await exec({ ruleSetId: ruleSet.id, mediaItemIds: [ep1.id] }), 200);
+    expect(mockExecuteAction.mock.calls[0][0].matchedMediaItemIds).toEqual([ep2.id]);
+  });
+
+  it("Execute acts on a scheduled action's own episodes, not every episode the match holds", async () => {
+    const { user, ep1, ep2, ruleSet } = await showSetup(false);
+    await prisma.lifecycleAction.create({
+      data: {
+        userId: user.id, mediaItemId: ep1.id, ruleSetId: ruleSet.id, actionType: "UNMONITOR_SONARR",
+        status: "PENDING", scheduledFor: new Date(), arrInstanceId: "arr-1", matchedMediaItemIds: [ep2.id],
+      },
+    });
+    await expectJson(await exec({ ruleSetId: ruleSet.id }), 200);
+    expect(mockExecuteAction.mock.calls[0][0].matchedMediaItemIds).toEqual([ep2.id]);
+  });
+
+  it("refuses when every episode of the selection was already acted on", async () => {
+    const { user, ep1, ep2, ruleSet } = await showSetup(false);
+    await prisma.lifecycleAction.create({
+      data: {
+        userId: user.id, mediaItemId: ep1.id, ruleSetId: ruleSet.id, actionType: "UNMONITOR_SONARR",
+        status: "COMPLETED", scheduledFor: new Date(), executedAt: new Date(), arrInstanceId: "arr-1",
+        matchedMediaItemIds: [ep1.id, ep2.id],
+      },
+    });
+    await expectJson(await exec({ ruleSetId: ruleSet.id }), 400);
+    expect(mockExecuteAction).not.toHaveBeenCalled();
+  });
 });
 

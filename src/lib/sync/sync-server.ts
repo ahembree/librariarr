@@ -1573,7 +1573,11 @@ export async function syncMediaServer(serverId: string, libraryKey?: string, opt
       // Reconciling from the *stored* history needs no server round-trip and
       // is monotonic, so it can only restore play state, never lower it.
       try {
-        await reconcileWatchStateFromHistory(serverId);
+        // The pass is server-wide: what it repairs can sit in a library of
+        // another type, whose open pages must not skip their refetch.
+        if ((await reconcileWatchStateFromHistory(serverId)) > 0) {
+          await addServerLibraryTypes(serverId, touchedTypes);
+        }
       } catch (reconcileError) {
         // Non-fatal: the next watch-history sync reconciles again.
         logger.warn("Sync", "Failed to reconcile play state from stored watch history", {
