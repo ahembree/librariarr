@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { withSession } from "@/lib/auth/with-session";
 import { prisma } from "@/lib/db";
 import { announceDisplaySettingsChanged } from "@/lib/settings/display-settings-events";
+import { ensureAppSettingsRow } from "@/lib/settings/app-settings-row";
 import { validateRequest, whatsNewSeenSchema } from "@/lib/validation";
 import { fetchReleaseNotes } from "@/lib/version/update-checker";
 import { compareSemver } from "@/lib/version/semver";
@@ -70,15 +71,15 @@ export const PUT = withSession(async (session, request: NextRequest) => {
   const userId = session.userId;
   // Compare and write under the row's lock: read first and written apart, two
   // tabs closing their dialogs together each passed the check, and the older
-  // version could land last and bring the newer dialog back.
+  // version could land last and bring the newer dialog back. The row is made
+  // first: with none there is nothing to lock, and a create racing another
+  // save's create (every display setting save makes the row) failed on the
+  // unique userId.
   const lastSeenVersion = await prisma.$transaction(async (tx) => {
+    await ensureAppSettingsRow(userId, tx);
     const rows = await tx.$queryRaw<{ lastSeenVersion: string | null }[]>`
       SELECT "lastSeenVersion" FROM "AppSettings" WHERE "userId" = ${userId} FOR UPDATE`;
-    if (rows.length === 0) {
-      await tx.appSettings.create({ data: { userId, lastSeenVersion: version }, select: { id: true } });
-      return version;
-    }
-    const stored = rows[0].lastSeenVersion;
+    const stored = rows[0]?.lastSeenVersion ?? null;
     // Never step back: a second tab closing an older dialog must not make the
     // newer one show again.
     if (stored !== null && compareSemver(version, stored) <= 0) return stored;

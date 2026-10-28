@@ -164,6 +164,21 @@ describe("PUT /api/lifecycle/rules/[id]", () => {
     expect(await prisma.ruleMatch.count({ where: { ruleSetId: ruleSet.id } })).toBe(1);
   });
 
+  it("clears even with clearMatches=false when the series scope changes", async () => {
+    // The executor reads the scope when an action runs: kept, a pending
+    // episode-scoped Unmonitor would act on the whole series.
+    const { ruleSet } = await withPending();
+    await expectJson(await put(ruleSet.id, { seriesScope: false }, { clearMatches: "false" }), 200);
+    expect(await prisma.ruleMatch.count({ where: { ruleSetId: ruleSet.id } })).toBe(0);
+    expect(await prisma.lifecycleAction.count({ where: { ruleSetId: ruleSet.id, status: "PENDING" } })).toBe(0);
+  });
+
+  it("keeps the matches with clearMatches=false when the series scope is sent unchanged", async () => {
+    const { ruleSet, action } = await withPending();
+    await expectJson(await put(ruleSet.id, { seriesScope: true }, { clearMatches: "false" }), 200);
+    await expectUntouched(ruleSet.id, action.id);
+  });
+
   it("with clearMatches=false and nothing action-related, leaves PENDING actions untouched", async () => {
     const { ruleSet, action } = await withPending();
     const body = await expectJson<{ ruleSet: { discordNotifyOnMatch: boolean } }>(

@@ -30,8 +30,8 @@ import {
   isWholeRecordDestructiveAction,
   type ProtectionTarget,
 } from "@/lib/lifecycle/exception-guard";
-import { actionConfigSignature } from "@/lib/lifecycle/action-signature";
-import { uncoveredMembers } from "@/lib/lifecycle/episode-coverage";
+import { ACTION_SIGNATURE_SELECT, actionConfigSignature } from "@/lib/lifecycle/action-signature";
+import { coverageOf, uncoveredEpisodes } from "@/lib/lifecycle/episode-coverage";
 import { createRunMetadata } from "@/lib/lifecycle/run-metadata";
 import { invalidateArrMetadataCache } from "@/lib/lifecycle/fetch-arr-metadata";
 import { checkLifecycleRuleEvaluability } from "@/lib/lifecycle/evaluability";
@@ -187,8 +187,12 @@ export async function scheduleActionsForRuleSet(
   // (e.g. Arr removed its record but the file remained on disk due to
   // permissions), so we never suppress them.
   const currentSignature = actionConfigSignature(ruleSet);
+  // A Series rule set's non-destructive action is suppressed per episode, from
+  // every settled action of the rule set (see `episode-coverage.ts`), not by a
+  // settled action on the match's current representative.
+  const perEpisodeCoverage = ruleSet.type === "SERIES" && !isDestructiveActionType(ruleSet.actionType!);
   const existingActionConditions: Prisma.LifecycleActionWhereInput[] = [{ status: "PENDING" }];
-  if (!isDestructiveActionType(ruleSet.actionType!)) {
+  if (!isDestructiveActionType(ruleSet.actionType!) && !perEpisodeCoverage) {
     existingActionConditions.push({
       status: { in: ["COMPLETED", "FAILED"] },
       actionType: ruleSet.actionType!,
@@ -201,45 +205,34 @@ export async function scheduleActionsForRuleSet(
         mediaItemId: { in: ids },
         OR: existingActionConditions,
       },
-      select: {
-        mediaItemId: true,
-        status: true,
-        actionType: true,
-        arrInstanceId: true,
-        targetQualityProfileId: true,
-        addImportExclusion: true,
-        searchAfterAction: true,
-        addArrTags: true,
-        removeArrTags: true,
-        matchedMediaItemIds: true,
-      },
+      select: ACTION_SIGNATURE_SELECT,
     }),
   );
   const actsOnEpisodes = ruleSetActsOnEpisodes(ruleSet.actionType, ruleSet);
   const existingItemIds = new Set<string | null>();
-  const settledByItem = new Map<string, Array<{ matchedMediaItemIds: string[] }>>();
   for (const action of existingActions) {
     // A PENDING action always blocks (dedup). A completed/failed action only
     // blocks when its config matches what we'd schedule now — a re-configured
     // action has a different signature and is allowed through.
-    if (action.status === "PENDING") {
+    if (action.status === "PENDING" || actionConfigSignature(action) === currentSignature) {
       existingItemIds.add(action.mediaItemId);
-    } else if (actionConfigSignature(action) === currentSignature) {
-      if (actsOnEpisodes && action.mediaItemId) {
-        settledByItem.set(action.mediaItemId, [...(settledByItem.get(action.mediaItemId) ?? []), action]);
-      } else {
-        existingItemIds.add(action.mediaItemId);
-      }
     }
   }
-  // An episode-scoped action blocks only the episodes it acted on: the rest of
-  // the show's matched episodes get an action of their own.
+  // An episode-scoped action is scheduled for the episodes nothing covered yet;
+  // a whole-series one runs while any matching episode is uncovered.
   const remainingMembers = new Map<string, string[]>();
-  for (const [itemId, settled] of settledByItem) {
-    if (existingItemIds.has(itemId)) continue;
-    const left = uncoveredMembers(episodeIdMap.get(itemId) ?? [], settled);
-    if (left.length === 0) existingItemIds.add(itemId);
-    else remainingMembers.set(itemId, left);
+  if (perEpisodeCoverage) {
+    const settled = await prisma.lifecycleAction.findMany({
+      where: { ruleSetId: ruleSet.id, status: { in: ["COMPLETED", "FAILED"] }, actionType: ruleSet.actionType! },
+      select: ACTION_SIGNATURE_SELECT,
+    });
+    const coverage = coverageOf(settled.filter((a) => actionConfigSignature(a) === currentSignature));
+    for (const itemId of matchedItemIds) {
+      if (existingItemIds.has(itemId)) continue;
+      const left = uncoveredEpisodes(itemId, episodeIdMap.get(itemId) ?? [], coverage);
+      if (left.length === 0) existingItemIds.add(itemId);
+      else if (actsOnEpisodes) remainingMembers.set(itemId, left);
+    }
   }
 
   const newItems = matchedItems.filter((item) => !existingItemIds.has(item.id as string));

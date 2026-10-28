@@ -2561,10 +2561,13 @@ export function LifecycleRulePage({
                 bgColor="bg-muted/50"
                 note={
                   // The PUT clears every match when the instance the Arr criteria
-                  // are read from changes, so nothing scheduled survives that save.
+                  // are read from or the series scope changes, so nothing
+                  // scheduled survives that save.
                   ruleUsesArr && snapshot && snapshot.arrInstanceId !== arrInstanceId
                     ? "Matches restart against the new *arr instance — pending actions are rescheduled"
-                    : "Scheduled actions will be preserved"
+                    : snapshot && snapshot.seriesScope !== seriesScope
+                      ? "Matches restart under the new series scope — pending actions are rescheduled"
+                      : "Scheduled actions will be preserved"
                 }
                 expanded={diffExpanded.retained ?? false}
                 onToggle={() => setDiffExpanded((prev) => ({ ...prev, retained: !prev.retained }))}
