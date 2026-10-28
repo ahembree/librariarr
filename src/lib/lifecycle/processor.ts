@@ -496,11 +496,13 @@ export function resetApiHoldNotices(): void {
  * happens here.
  */
 async function recordVanishedAction(
-  action: Prisma.LifecycleActionGetPayload<object> & { mediaItem?: unknown; ruleSet?: unknown },
+  action: Prisma.LifecycleActionGetPayload<object> & { mediaItem?: unknown; ruleSet?: unknown; episodeScope?: boolean },
   result: Omit<Prisma.LifecycleActionUncheckedCreateInput, "userId" | "actionType" | "scheduledFor">,
 ): Promise<void> {
+  // The relations and the run's own `episodeScope` are not columns: Prisma
+  // refuses a create carrying them.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const { id, createdAt, updatedAt, mediaItem, ruleSet, ...scalars } = action;
+  const { id, createdAt, updatedAt, mediaItem, ruleSet, episodeScope, ...scalars } = action;
   const data: Prisma.LifecycleActionUncheckedCreateInput = { ...scalars, ...result };
   try {
     await prisma.lifecycleAction.create({ data });
