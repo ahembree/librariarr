@@ -221,12 +221,14 @@ function RuleSetList({
  * movies 12" → O12).
  */
 function monogram(name: string): string {
-  const words = name.trim().split(/\s+/).filter(Boolean);
+  // Split by code point, so a name led by an emoji keeps it whole rather
+  // than showing half of a surrogate pair.
+  const words = name.trim().split(/\s+/).filter(Boolean).map((w) => Array.from(w));
   if (words.length === 0) return "?";
-  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  if (words.length === 1) return words[0].slice(0, 2).join("").toUpperCase();
   const last = words[words.length - 1];
   // A trailing number is what tells "Old movies 2" from "Old movies 12".
-  if (/^\d{1,2}$/.test(last)) return (words[0][0] + last).toUpperCase();
+  if (/^\d{1,2}$/.test(last.join(""))) return (words[0][0] + last.join("")).toUpperCase();
   return (words[0][0] + last[0]).toUpperCase();
 }
 

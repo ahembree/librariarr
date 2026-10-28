@@ -1232,17 +1232,26 @@ export function LifecycleRulePage({
 
   const toggleRuleSetEnabled = async (id: string, currentEnabled: boolean) => {
     try {
-      await fetch(`/api/lifecycle/rules/${id}`, {
+      const res = await fetch(`/api/lifecycle/rules/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enabled: !currentEnabled }),
       });
+      if (!res.ok) {
+        toast.error(`Failed to ${currentEnabled ? "disable" : "enable"} rule set`);
+        return;
+      }
       if (activeRuleSetId === id) {
         setEnabled(!currentEnabled);
+        // The toggle saved this value, so it is not an unsaved edit: moving
+        // only the form left the rule set reading as dirty, and switching
+        // away asked to discard changes that did not exist.
+        setSnapshot((s) => (s ? { ...s, enabled: !currentEnabled } : s));
       }
       await refreshRuleSets();
     } catch (error) {
       console.error("Failed to toggle rule set:", error);
+      toast.error(`Failed to ${currentEnabled ? "disable" : "enable"} rule set`);
     }
   };
 
@@ -1405,8 +1414,12 @@ export function LifecycleRulePage({
     action();
     // A switch made from the pinned bar or rail lands at the top of the
     // editor, where the new rule set's name and servers are.
+    // Measured against the box that scrolls the page, not the window: the
+    // shell's header sits above it, so an editor top hidden under the header
+    // is still below the window's top.
     const el = editorTopRef.current;
-    if (el && el.getBoundingClientRect().top < 0) {
+    const scrollerTop = findScrollContainer()?.getBoundingClientRect().top ?? 0;
+    if (el && el.getBoundingClientRect().top < scrollerTop) {
       el.scrollIntoView({ block: "start", behavior: "instant" });
     }
   };
