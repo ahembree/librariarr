@@ -219,8 +219,8 @@ importers:
         specifier: ^8.6.0
         version: 8.6.0(react@19.3.1)
       graphile-worker:
-        specifier: ^0.17.3
-        version: 0.17.3(supports-color@7.2.0)(typescript@6.0.3)
+        specifier: ^0.18.0
+        version: 0.18.0(supports-color@7.2.0)(typescript@6.0.3)
       iron-session:
         specifier: ^9.0.1
         version: 9.0.1
@@ -842,8 +842,8 @@ packages:
   '@fontsource-variable/sora@5.3.0':
     resolution: {integrity: sha512-h8kHta4Z8SkfUGeI82TUy1n3rbrKpBRGwuk4t4qCwto5oEHxlbOFD2yGP+Df5fbmTXwKGn+o667vYp0E4K8Whw==}
 
-  '@graphile/logger@0.2.0':
-    resolution: {integrity: sha512-jjcWBokl9eb1gVJ85QmoaQ73CQ52xAaOCF29ukRbYNl6lY+ts0ErTaDYOBlejcbUs2OpaiqYLO5uDhyLFzWw4w==}
+  '@graphile/logger@0.3.0':
+    resolution: {integrity: sha512-0+79VNQYCIPQ7sD/rjQCvRV15k9zhWYHFc1QE7Bv0GLchgmxsTNtkKT1RSG8zCy0jPchel7x6o2RQ1dnnzhF0A==}
 
   '@hono/node-server@2.1.1':
     resolution: {integrity: sha512-ELuehkj5VCBdgEw9zs+ivkKwyzzUCSQuE96YmiPvn1ECBoZCczbFXJLeEGMTYjphP6gydh4pHMqEYPVMYUVgQg==}
@@ -3737,9 +3737,9 @@ packages:
     resolution: {integrity: sha512-uMdF9Rt8/NwT1wVXNleYgM5ro2hHDodHiKA3efJhgdU8iP+r/hksnghOHreMva0sF5tV73f4TpiELPUR0g7O9w==}
     engines: {node: '>=16'}
 
-  graphile-worker@0.17.3:
-    resolution: {integrity: sha512-5vX/nDit7vXDw6JauGE7CpE4uYWu8XLTDkcL3msqwVRwrtxBqawL1C55INfXGtoyV1DIkWvvPdeKtXuLRGYyLg==}
-    engines: {node: '>=14.0.0', yarn: ^1.22.22}
+  graphile-worker@0.18.0:
+    resolution: {integrity: sha512-WDpuFp7v6TUoTeA5k9YFHfopaomZkyIy90PvRWMuM5BV0igRnNScw82HI6IehAiaI7wWpS56IWloLZ8ugZ2ceA==}
+    engines: {node: '>=22.18.0'}
     hasBin: true
 
   graphmatch@1.1.1:
@@ -6211,7 +6211,7 @@ snapshots:
 
   '@fontsource-variable/sora@5.3.0': {}
 
-  '@graphile/logger@0.2.0': {}
+  '@graphile/logger@0.3.0': {}
 
   '@hono/node-server@2.1.1(hono@4.13.13)':
     dependencies:
@@ -9313,16 +9313,15 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  graphile-worker@0.17.3(supports-color@7.2.0)(typescript@6.0.3):
+  graphile-worker@0.18.0(supports-color@7.2.0)(typescript@6.0.3):
     dependencies:
-      '@graphile/logger': 0.2.0
+      '@graphile/logger': 0.3.0
       '@types/debug': 4.1.13
       '@types/pg': 8.23.1
       cosmiconfig: 8.3.6(typescript@6.0.3)
       graphile-config: 0.0.1-beta.18(supports-color@7.2.0)
       json5: 2.2.3
       pg: 8.23.1
-      tslib: 2.8.1
       yargs: 17.7.3
     transitivePeerDependencies:
       - pg-native
