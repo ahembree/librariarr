@@ -40,6 +40,9 @@ beforeRealtimeEvents(
 );
 
 
+// How long the event stream must stay down before the shell says so.
+const DISCONNECTED_BANNER_DELAY_MS = 15000;
+
 interface UnreachableServer {
   id: string;
   name: string;
@@ -81,6 +84,22 @@ export function AuthenticatedShell({
   // navigation and the connection is no longer torn down and rebuilt on every
   // route change. Do not remove it.
   const { connected: realtimeConnected, authExpired } = useRealtime("settings:changed", checkMaintenance);
+
+  // The banner waits out a short drop. The stream ends routinely — the route
+  // closes it after an hour, a proxy closes one it thinks idle — and the
+  // browser reconnects within a few seconds, so shown at once the banner
+  // flashed during normal use with nothing actually wrong. It also kept the
+  // banner out of the first paint, before the stream had opened at all.
+  const [realtimeDown, setRealtimeDown] = useState(false);
+  useEffect(() => {
+    if (realtimeConnected) return;
+    const timer = setTimeout(() => setRealtimeDown(true), DISCONNECTED_BANNER_DELAY_MS);
+    // Runs when the stream is back (or the shell unmounts).
+    return () => {
+      clearTimeout(timer);
+      setRealtimeDown(false);
+    };
+  }, [realtimeConnected]);
 
   // Fallback only. SSE dies to proxy buffering and idle timeouts, so this
   // stays as a safety net — at 5 minutes, and only while pushes are not
@@ -173,7 +192,7 @@ export function AuthenticatedShell({
             <AlertTriangle className="h-3.5 w-3.5" />
             <span>Your session expired &mdash; sign in again</span>
           </Link>
-        ) : !realtimeConnected ? (
+        ) : realtimeDown ? (
           <div className="flex shrink-0 items-center justify-center gap-2 border-b border-muted-foreground/20 bg-muted/40 px-4 py-1.5 text-sm text-muted-foreground">
             <WifiOff className="h-3.5 w-3.5" />
             <span>Live updates disconnected &mdash; reconnecting</span>

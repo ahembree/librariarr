@@ -98,7 +98,7 @@ describe("GET /api/events/stream — the SSE body", () => {
     expect(() => eventBus.emit({ type: "sync:completed", userId: "user-1" })).not.toThrow();
   });
 
-  it("sends a heartbeat comment every 30 seconds and ends the stream after an hour", async () => {
+  it("sends a heartbeat comment every 15 seconds and ends the stream after an hour", async () => {
     vi.useFakeTimers();
     setMockSession({ userId: "user-1", isLoggedIn: true });
     const before = eventBus.listenerCount;
@@ -106,19 +106,19 @@ describe("GET /api/events/stream — the SSE body", () => {
     const r = res.body!.getReader();
     await readChunk(r); // connected
 
-    vi.advanceTimersByTime(30_000);
+    vi.advanceTimersByTime(15_000);
     expect(await readChunk(r)).toBe(": heartbeat\n\n");
 
     vi.advanceTimersByTime(3_600_000);
-    // Heartbeats queued before the lifetime cap fired — one every 30s from the
-    // 60s mark through the hour mark itself — then the stream closes.
+    // Heartbeats queued before the lifetime cap fired — one every 15s from the
+    // 30s mark through the hour mark itself — then the stream closes.
     let chunk: string | null;
     let heartbeats = 0;
     while ((chunk = await readChunk(r)) !== null) {
       expect(chunk).toBe(": heartbeat\n\n");
       heartbeats++;
     }
-    expect(heartbeats).toBe(119);
+    expect(heartbeats).toBe(239);
     expect(eventBus.listenerCount).toBe(before);
 
     // Nothing is sent once the stream has been torn down.
