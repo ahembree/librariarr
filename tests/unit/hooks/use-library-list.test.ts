@@ -172,6 +172,22 @@ describe("useLibraryList — progressive", () => {
     expect(during.every((r) => r.count >= FIRST_CHUNK_SIZE + 5)).toBe(true);
   });
 
+  it("refreshes a list shorter than the first screenful with one request", async () => {
+    const { result } = renderList({ query: "sortBy=title" });
+    await waitFor(() => expect(pending).toHaveLength(1));
+    await answer(isFirst, { items: range(0, 3), pagination: { hasMore: false } });
+    await waitFor(() => expect(result.current.loadingRest).toBe(false));
+
+    emitSync();
+    await waitFor(() => expect(pending).toHaveLength(1));
+    // Only the first page: a rest request would come back empty.
+    await Promise.resolve();
+    expect(pending.some((p) => isRest(p.url))).toBe(false);
+    await answer(isFirst, { items: range(0, 4), pagination: { hasMore: false } });
+    await waitFor(() => expect(result.current.items).toHaveLength(4));
+    expect(result.current.loading).toBe(false);
+  });
+
   it("ignores a sync that cannot have changed the list", async () => {
     renderList({ query: "sortBy=title" });
     await loadWhole(1);

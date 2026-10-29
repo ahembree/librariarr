@@ -35,16 +35,25 @@ interface ListResponse<T> {
  * `offset` riding along would silently skip rows out of the first pass.
  *
  * With `quiet`, only the complete list is handed over — for a refresh of a
- * list already on screen.
+ * list already on screen. `shownLength` is that list's length: the rest is
+ * asked for alongside the first screenful only when the list on screen reaches
+ * past it, since for a shorter one the second request would only come back
+ * empty after the server had run the whole listing for it.
  *
- * Rejects if the first pass fails. A failed second pass also rejects, but the
- * first chunk has already been handed over, so the caller keeps a usable list.
+ * Rejects if the first pass fails. A failed second pass also rejects; without
+ * `quiet` the first chunk has already been handed over, so the caller keeps a
+ * usable list, while a quiet refresh has handed over nothing and the caller
+ * keeps the list it already shows.
  */
 export async function fetchListProgressively<T>(
   url: string,
   params: URLSearchParams,
   onChunk: (items: T[], done: boolean) => void,
-  { cache = libraryListCache, quiet = false }: { cache?: ListCache; quiet?: boolean } = {},
+  {
+    cache = libraryListCache,
+    quiet = false,
+    shownLength,
+  }: { cache?: ListCache; quiet?: boolean; shownLength?: number } = {},
 ): Promise<void> {
   // A list this tab loaded recently is shown whole at once (see
   // `list-cache.ts`); one past fresh is then refreshed behind it through the
@@ -64,7 +73,9 @@ export async function fetchListProgressively<T>(
   if (cached) {
     onChunk(cached.value, true);
     if (cached.fresh) return;
-    const { items } = await fetchBothPasses<T>(url, params);
+    const { items } = await fetchBothPasses<T>(url, params, {
+      restAlongside: reachesPastFirstChunk(cached.value.length),
+    });
     cache.set(key, items, generation);
     onChunk(items, true);
     return;
@@ -74,9 +85,18 @@ export async function fetchListProgressively<T>(
   // added or removed items). A first screenful would replace the whole list
   // on screen with its first 100 rows until the rest arrived, so the refresh
   // is handed over once, complete.
-  const { items, firstWasAll } = await fetchBothPasses<T>(url, params, quiet ? undefined : onChunk);
+  const { items, firstWasAll } = await fetchBothPasses<T>(
+    url,
+    params,
+    quiet ? { restAlongside: reachesPastFirstChunk(shownLength) } : { onFirst: onChunk },
+  );
   cache.set(key, items, generation);
   if (quiet || !firstWasAll) onChunk(items, true);
+}
+
+/** A list of `length` rows (unknown: assume so) runs past the first screenful. */
+function reachesPastFirstChunk(length: number | undefined): boolean {
+  return length === undefined || length >= FIRST_CHUNK_SIZE;
 }
 
 /**
@@ -84,15 +104,16 @@ export async function fetchListProgressively<T>(
  * screenful (with `done` when it was the whole list); the result is the whole
  * list either way.
  *
- * Without `onFirst` nobody is waiting on the first screenful alone (a refresh
- * behind a list already on screen), so the rest is asked for at the same time,
- * from the offset a full first page ends at: one round trip instead of two,
- * through the same two URLs — the keys the server's response cache holds.
+ * With `restAlongside` nobody is waiting on the first screenful alone (a
+ * refresh behind a list already on screen, which runs past it), so the rest is
+ * asked for at the same time, from the offset a full first page ends at: one
+ * round trip instead of two, through the same two URLs — the keys the server's
+ * response cache holds.
  */
 async function fetchBothPasses<T>(
   url: string,
   params: URLSearchParams,
-  onFirst?: (items: T[], done: boolean) => void,
+  { onFirst, restAlongside = false }: { onFirst?: (items: T[], done: boolean) => void; restAlongside?: boolean } = {},
 ): Promise<{ items: T[]; firstWasAll: boolean }> {
   const firstParams = new URLSearchParams(params);
   firstParams.delete("offset");
@@ -107,28 +128,46 @@ async function fetchBothPasses<T>(
   };
 
   const firstPage = fetchPage<T>(`${url}?${firstParams}`);
-  const earlyRest = onFirst ? undefined : fetchPage<T>(restUrl(FIRST_CHUNK_SIZE));
+  // The early rest can be the whole library; when it goes unused (the first
+  // page failed, was the whole list, or ended short of a full page) it is
+  // aborted rather than downloaded for nothing.
+  const earlyRestAbort = restAlongside && !onFirst ? new AbortController() : undefined;
+  const earlyRest = earlyRestAbort ? fetchPage<T>(restUrl(FIRST_CHUNK_SIZE), earlyRestAbort.signal) : undefined;
   // Awaited below, or dropped when the first page turns out to be the whole
   // list; a rejection must not surface as unhandled meanwhile.
   earlyRest?.catch(() => {});
 
-  const firstBody = await firstPage;
+  let firstBody: ListResponse<T>;
+  try {
+    firstBody = await firstPage;
+  } catch (error) {
+    earlyRestAbort?.abort();
+    throw error;
+  }
   const firstItems = firstBody.items ?? [];
 
   // Trust hasMore when the endpoint sends it; fall back to a short page.
   const hasMore = firstBody.pagination?.hasMore ?? firstItems.length >= FIRST_CHUNK_SIZE;
   onFirst?.(firstItems, !hasMore);
-  if (!hasMore) return { items: firstItems, firstWasAll: true };
+  if (!hasMore) {
+    earlyRestAbort?.abort();
+    return { items: firstItems, firstWasAll: true };
+  }
 
   // A first page with more after it is always FIRST_CHUNK_SIZE long; one that
   // is not is followed up from its own end rather than leave a gap.
-  const restBody =
-    earlyRest && firstItems.length === FIRST_CHUNK_SIZE ? await earlyRest : await fetchPage<T>(restUrl(firstItems.length));
+  let restBody: ListResponse<T>;
+  if (earlyRest && firstItems.length === FIRST_CHUNK_SIZE) {
+    restBody = await earlyRest;
+  } else {
+    earlyRestAbort?.abort();
+    restBody = await fetchPage<T>(restUrl(firstItems.length));
+  }
   return { items: [...firstItems, ...(restBody.items ?? [])], firstWasAll: false };
 }
 
-async function fetchPage<T>(href: string): Promise<ListResponse<T>> {
-  const response = await fetch(href);
+async function fetchPage<T>(href: string, signal?: AbortSignal): Promise<ListResponse<T>> {
+  const response = await (signal ? fetch(href, { signal }) : fetch(href));
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   return (await response.json()) as ListResponse<T>;
 }

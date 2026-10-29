@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState, useTransition } from "react";
+import { startTransition, useCallback, useRef, useState } from "react";
 import { useLatestRequest } from "@/hooks/use-latest-request";
 import { useListFetch } from "@/hooks/use-list-fetch";
 import { useLibrarySyncRefetch } from "@/hooks/use-library-sync-refetch";
@@ -87,11 +87,14 @@ export function useLibraryList<T, B = unknown>(options: LibraryListOptions<T, B>
   const [items, setItems] = useState<T[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingRest, setLoadingRest] = useState(true);
-  const [, startTransition] = useTransition();
   const latest = useLatestRequest();
-  // The list in `items`: the request it answers (`listCacheKeyFor`), and
-  // whether it is on screen — false while the skeleton stands in for it.
-  const held = useRef<{ key: string | null; visible: boolean }>({ key: null, visible: false });
+  // The list in `items`: the request it answers (`listCacheKeyFor`), its
+  // length, and whether it is on screen — false while the skeleton stands in.
+  const held = useRef<{ key: string | null; length: number; visible: boolean }>({
+    key: null,
+    length: 0,
+    visible: false,
+  });
 
   const refetch = useCallback(async () => {
     const token = latest.begin();
@@ -107,19 +110,25 @@ export function useLibraryList<T, B = unknown>(options: LibraryListOptions<T, B>
     let applied = false;
     const apply = (list: T[], done: boolean) => {
       if (!latest.isCurrent(token)) return;
-      held.current = { key: listKey, visible: true };
+      held.current = { key: listKey, length: list.length, visible: true };
       const update = () => {
         setItems(list);
         setLoading(false);
         if (done) setLoadingRest(false);
       };
+      // React's standalone `startTransition`, not `useTransition`'s: nothing
+      // reads the pending flag, and tracking it re-rendered the whole page
+      // around every transition.
       if (applied || refresh) startTransition(update);
       else update();
       applied = true;
     };
     try {
       if (mode === "progressive") {
-        await fetchListProgressively<T>(url, requestParams, apply, { quiet: refresh });
+        await fetchListProgressively<T>(url, requestParams, apply, {
+          quiet: refresh,
+          shownLength: refresh ? held.current.length : undefined,
+        });
       } else if (select) {
         await loadCachedList<B>(url, requestParams, (body) => apply(select(body) ?? [], true));
       }
@@ -129,6 +138,7 @@ export function useLibraryList<T, B = unknown>(options: LibraryListOptions<T, B>
       if (held.current.key !== listKey) {
         setItems([]);
         held.current.key = null;
+        held.current.length = 0;
       }
       held.current.visible = true;
       setLoading(false);

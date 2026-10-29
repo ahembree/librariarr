@@ -313,4 +313,77 @@ describe("fetchListProgressively", () => {
       fetchListProgressively("/api/media/movies", new URLSearchParams(), () => {}, { quiet: true }),
     ).rejects.toThrow("HTTP 503");
   });
+
+  describe("aborts the early rest when it goes unused", () => {
+    /** First page answered from `first`; every other request waits and records its signal. */
+    function stubWithSignals(first: { status?: number; body?: unknown }) {
+      const signals: Array<AbortSignal | undefined> = [];
+      vi.stubGlobal(
+        "fetch",
+        vi.fn((url: string, init?: RequestInit) => {
+          if (url.includes(`limit=${FIRST_CHUNK_SIZE}`)) {
+            const status = first.status ?? 200;
+            return Promise.resolve({ ok: status < 300, status, json: async () => first.body } as Response);
+          }
+          signals.push(init?.signal ?? undefined);
+          if (url.includes(`offset=${FIRST_CHUNK_SIZE}`)) return new Promise<Response>(() => {});
+          return Promise.resolve({ ok: true, status: 200, json: async () => ({ items: [] }) } as Response);
+        }),
+      );
+      return signals;
+    }
+
+    it("when the first screenful fails", async () => {
+      const signals = stubWithSignals({ status: 500 });
+      await expect(
+        fetchListProgressively("/api/media/movies", new URLSearchParams(), () => {}, { quiet: true }),
+      ).rejects.toThrow("HTTP 500");
+      expect(signals[0]?.aborted).toBe(true);
+    });
+
+    it("when the first screenful is the whole list", async () => {
+      const signals = stubWithSignals({ body: { items: [item(1)], pagination: { hasMore: false } } });
+      await fetchListProgressively("/api/media/movies", new URLSearchParams(), () => {}, { quiet: true });
+      expect(signals[0]?.aborted).toBe(true);
+    });
+
+    it("when a short first page is followed up from its own end", async () => {
+      const signals = stubWithSignals({ body: { items: [item(1)], pagination: { hasMore: true } } });
+      await fetchListProgressively("/api/media/movies", new URLSearchParams(), () => {}, { quiet: true });
+      expect(signals[0]?.aborted).toBe(true);
+    });
+  });
+
+  describe("a quiet refresh of a list shorter than the first screenful", () => {
+    it("sends only the first-page request", async () => {
+      const urls = stubFetch([{ body: { items: [item(1), item(2)], pagination: { hasMore: false } } }]);
+      const chunks: number[] = [];
+      await fetchListProgressively("/api/media/movies", new URLSearchParams(), (items) => chunks.push(items.length), {
+        quiet: true,
+        shownLength: 1,
+      });
+      expect(urls).toHaveLength(1);
+      expect(urls[0]).toContain(`limit=${FIRST_CHUNK_SIZE}`);
+      expect(chunks).toEqual([2]);
+    });
+
+    it("asks for the rest after the first page when the list has grown past it", async () => {
+      const first = Array.from({ length: FIRST_CHUNK_SIZE }, (_, i) => item(i));
+      const urls = stubFetch([
+        { body: { items: first, pagination: { hasMore: true } } },
+        { body: { items: [item(1000)] } },
+      ]);
+      const chunks: Array<{ n: number; done: boolean }> = [];
+      await fetchListProgressively(
+        "/api/media/movies",
+        new URLSearchParams(),
+        (items, done) => chunks.push({ n: items.length, done }),
+        { quiet: true, shownLength: FIRST_CHUNK_SIZE - 1 },
+      );
+      expect(urls).toHaveLength(2);
+      expect(urls[1]).toContain(`offset=${FIRST_CHUNK_SIZE}`);
+      // Still handed over once, complete.
+      expect(chunks).toEqual([{ n: FIRST_CHUNK_SIZE + 1, done: true }]);
+    });
+  });
 });
