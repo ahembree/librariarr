@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { MediaCard } from "@/components/media-card";
 import { useChipColors } from "@/components/chip-color-provider";
@@ -15,12 +15,9 @@ import { MediaHoverPopover, hoverDataFromAlbum } from "@/components/media-hover-
 import { useCardSize } from "@/hooks/use-card-size";
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { useServers } from "@/hooks/use-servers";
-import { useListFetch } from "@/hooks/use-list-fetch";
-import { useShownList } from "@/hooks/use-shown-list";
+import { useLibraryList } from "@/hooks/use-library-list";
 import { useLibraryListState } from "@/hooks/use-library-list-state";
 import { useFilterPanelReset } from "@/hooks/use-filter-panel-reset";
-import { useLatestRequest } from "@/hooks/use-latest-request";
-import { useLibrarySyncRefetch } from "@/hooks/use-library-sync-refetch";
 import { useVirtualPosterGrid, SQUARE_ASPECT } from "@/hooks/use-virtual-poster-grid";
 import { LIBRARY_CARD_CONTENT_HEIGHT } from "@/hooks/use-library-grid";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
@@ -31,7 +28,6 @@ import { MediaGridSkeleton } from "@/components/skeletons";
 import { LibraryTabs, MUSIC_TABS } from "@/components/library-tabs";
 import { VirtualCardGrid, type GridCardContext } from "@/components/virtual-card-grid";
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
-import { listCacheKeyFor, loadCachedList } from "@/lib/media/list-cache";
 
 interface AlbumEntry {
   albumTitle: string;
@@ -122,11 +118,11 @@ function albumHover(album: AlbumEntry) {
   );
 }
 
+const selectAlbums = (body: { albums?: AlbumEntry[] }) => body.albums;
+
 export default function AllAlbumsPage() {
   const router = useRouter();
   const { getHex } = useChipColors();
-  const [albums, setAlbums] = useState<AlbumEntry[]>([]);
-  const [loading, setLoading] = useState(true);
   const { viewMode, setViewMode, sortBy, sortOrder, toggleSort, toggleOrder, filters, onFilterChange, clearFilters, hasFilters } =
     useLibraryListState("albums", "albumTitle");
   const filterPanel = useFilterPanelReset(undefined, clearFilters);
@@ -134,10 +130,23 @@ export default function AllAlbumsPage() {
   const { size, setSize, columns } = useCardSize();
   const { show: showCardBadge, showServers, prefs: cardDisplayPrefs, setVisible: setCardDisplayVisible } = useCardDisplay("MUSIC_ALBUMS");
   const { servers, selectedServerId, setSelectedServerId } = useServers();
-  // Guards against a stale slow response landing after a quick
-  // sort/filter/server flip and showing the wrong items for the selection.
-  const latest = useLatestRequest();
-  const shown = useShownList();
+  const listParams = new URLSearchParams();
+  listParams.set("limit", "0");
+  listParams.set("sortBy", sortBy);
+  listParams.set("sortOrder", sortOrder);
+  if (selectedServerId !== "all") {
+    listParams.set("serverId", selectedServerId);
+  }
+  for (const [key, value] of Object.entries(filters)) {
+    if (value) listParams.set(key, value);
+  }
+  const { items: albums, loading } = useLibraryList({
+    url: "/api/media/music/albums/all",
+    params: listParams,
+    mode: "grouped",
+    select: selectAlbums,
+    syncScope: { types: "MUSIC", serverId: selectedServerId },
+  });
 
   const grid = useVirtualPosterGrid({
     count: albums.length,
@@ -152,51 +161,6 @@ export default function AllAlbumsPage() {
     getFirstVisibleIndex: grid.getFirstVisibleIndex,
     scrollToIndex: grid.scrollToIndex,
   });
-
-  const fetchAlbums = useCallback(async () => {
-    const token = latest.begin();
-    const params = new URLSearchParams();
-    params.set("limit", "0");
-    params.set("sortBy", sortBy);
-    params.set("sortOrder", sortOrder);
-    if (selectedServerId !== "all") {
-      params.set("serverId", selectedServerId);
-    }
-    for (const [key, value] of Object.entries(filters)) {
-      if (value) params.set(key, value);
-    }
-    const listKey = listCacheKeyFor("/api/media/music/albums/all", params);
-    // A refetch of the list already on screen (a sync added or removed items)
-    // swaps the new list in where the old one stands, with no skeleton.
-    const refresh = shown.begin(listKey);
-    if (!refresh) setLoading(true);
-    // Set once this request's list is on screen, from the cache or the server.
-    let applied = false;
-    try {
-      // Through the tab's list cache: a list loaded in the last minute is
-      // shown at once, an older one shown and then refreshed behind it.
-      await loadCachedList<{ albums?: AlbumEntry[] }>("/api/media/music/albums/all", params, (data) => {
-        if (!latest.isCurrent(token)) return;
-        applied = true;
-        shown.markShown(listKey);
-        setAlbums(data.albums || []);
-        setLoading(false);
-      });
-    } catch (error) {
-      console.error("Failed to fetch albums:", error);
-      // A failed load with nothing shown for it empties the list, as it did
-      // before the cache: the previous list under the new filters would read
-      // as their result. A failed refresh leaves the list on screen as it was.
-      if (!applied && !refresh && latest.isCurrent(token)) setAlbums([]);
-    } finally {
-      if (latest.isCurrent(token)) setLoading(false);
-    }
-  }, [filters, sortBy, sortOrder, selectedServerId, latest, shown]);
-
-  useListFetch(fetchAlbums);
-
-  // Auto-update when real-time sync adds/removes items — no manual refresh.
-  useLibrarySyncRefetch({ types: "MUSIC", serverId: selectedServerId }, fetchAlbums);
 
   const openAlbum = useCallback(
     (a: AlbumEntry) => {

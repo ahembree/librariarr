@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useTransition } from "react";
+import { useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { MediaTable } from "@/components/media-table";
 import { MediaFilters } from "@/components/media-filters";
@@ -13,16 +13,11 @@ import type { MediaListItem } from "@/lib/types";
 import { useCardSize } from "@/hooks/use-card-size";
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { useServers } from "@/hooks/use-servers";
-import { useListFetch } from "@/hooks/use-list-fetch";
-import { useShownList } from "@/hooks/use-shown-list";
+import { useLibraryList } from "@/hooks/use-library-list";
 import { useLibraryListState } from "@/hooks/use-library-list-state";
 import { useFilterPanelReset } from "@/hooks/use-filter-panel-reset";
-import { useLatestRequest } from "@/hooks/use-latest-request";
-import { useLibrarySyncRefetch } from "@/hooks/use-library-sync-refetch";
 import { useVirtualPosterGrid, SQUARE_ASPECT } from "@/hooks/use-virtual-poster-grid";
 import { LIBRARY_CARD_CONTENT_HEIGHT } from "@/hooks/use-library-grid";
-import { fetchListProgressively } from "@/lib/media/progressive-load";
-import { listCacheKeyFor } from "@/lib/media/list-cache";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { formatFileSize, formatDuration } from "@/lib/format";
 import { LibraryEmptyState } from "@/components/library-empty-state";
@@ -55,20 +50,21 @@ export default function AllTracksPage() {
   const { getHex } = useChipColors();
   const { show, showServers, setVisible, prefs } = useCardDisplay("MUSIC_TRACKS");
   const { servers } = useServers();
-  const [items, setItems] = useState<MediaListItem[]>([]);
   const { viewMode, setViewMode, sortBy, sortOrder, toggleSort, filters, onFilterChange, clearFilters, hasFilters } =
     useLibraryListState("tracks", "title", { defaultViewMode: "table" });
   const filterPanel = useFilterPanelReset(undefined, clearFilters);
-  const [loading, setLoading] = useState(true);
-  // The first screenful arrives before the rest of the library; consumers that
-  // need the complete list (item count, scroll restoration) wait for this.
-  const [loadingRest, setLoadingRest] = useState(true);
-  const [, startTransition] = useTransition();
   const { size, setSize, columns } = useCardSize();
-  // Guards against a stale slow response landing after a quick sort/filter
-  // flip and showing the wrong items for the selection.
-  const latest = useLatestRequest();
-  const shown = useShownList();
+  const listParams = new URLSearchParams({
+    sortBy,
+    sortOrder,
+    ...filters,
+  });
+  const { items, loading, loadingRest } = useLibraryList<MediaListItem>({
+    url: "/api/media/music",
+    params: listParams,
+    mode: "progressive",
+    syncScope: { types: "MUSIC" },
+  });
 
   const grid = useVirtualPosterGrid({
     count: items.length,
@@ -83,63 +79,6 @@ export default function AllTracksPage() {
     getFirstVisibleIndex: grid.getFirstVisibleIndex,
     scrollToIndex: grid.scrollToIndex,
   });
-
-  const fetchTracks = useCallback(async () => {
-    const token = latest.begin();
-    const params = new URLSearchParams({
-      sortBy,
-      sortOrder,
-      ...filters,
-    });
-    const listKey = listCacheKeyFor("/api/media/music", params);
-    // A refetch of the list already on screen (a sync added or removed items)
-    // swaps the new list in whole where the old one stands: no skeleton, and
-    // no first screenful standing in for the whole library meanwhile.
-    const refresh = shown.begin(listKey);
-    if (!refresh) {
-      setLoading(true);
-      setLoadingRest(true);
-    }
-    try {
-      // Paint the first screenful, then fill in the rest behind it — the whole
-      // library in one response meant nothing rendered until all of it landed.
-      let firstChunk = true;
-      await fetchListProgressively<MediaListItem>(
-        "/api/media/music",
-        params,
-        (loaded, done) => {
-          if (!latest.isCurrent(token)) return;
-          // Only the whole list counts as shown: a refresh started while the rest
-          // is still loading would otherwise skip the loading state, and if it
-          // failed leave the first screenful up with `loadingRest` stuck on.
-          if (done) shown.markShown(listKey);
-          const apply = () => {
-            setItems(loaded);
-            setLoading(false);
-            if (done) setLoadingRest(false);
-          };
-          // First screenful as a normal update (a transition only delayed it);
-          // the rest of the library stays a transition.
-          if (firstChunk && !refresh) apply();
-          else startTransition(apply);
-          firstChunk = false;
-        },
-        { quiet: refresh },
-      );
-    } catch (error) {
-      console.error("Failed to fetch tracks:", error);
-      // A failed refresh leaves the list on screen as it was.
-      if (!refresh && latest.isCurrent(token)) {
-        setLoading(false);
-        setLoadingRest(false);
-      }
-    }
-  }, [sortBy, sortOrder, filters, latest, shown]);
-
-  useListFetch(fetchTracks);
-
-  // Auto-update when real-time sync adds/removes items — no manual refresh.
-  useLibrarySyncRefetch({ types: "MUSIC" }, fetchTracks);
 
   const openTrack = useCallback(
     (item: MediaListItem) => {

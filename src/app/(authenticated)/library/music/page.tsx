@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useMemo, useTransition } from "react";
+import { useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { useChipColors } from "@/components/chip-color-provider";
 import { QualityChips } from "@/components/quality-chips";
@@ -16,6 +16,7 @@ import { useCardSize } from "@/hooks/use-card-size";
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { useServers } from "@/hooks/use-servers";
+import { useLibraryList } from "@/hooks/use-library-list";
 import { AlphabetFilter } from "@/components/alphabet-filter";
 import { formatDate, formatFileSize } from "@/lib/format";
 import { LibraryEmptyState } from "@/components/library-empty-state";
@@ -27,13 +28,8 @@ import { VirtualCardGrid, type GridCardContext } from "@/components/virtual-card
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
 import { useLibraryListState } from "@/hooks/use-library-list-state";
 import { useFilterPanelReset } from "@/hooks/use-filter-panel-reset";
-import { useLatestRequest } from "@/hooks/use-latest-request";
-import { useListFetch } from "@/hooks/use-list-fetch";
-import { useShownList } from "@/hooks/use-shown-list";
-import { useLibrarySyncRefetch } from "@/hooks/use-library-sync-refetch";
 import { useVirtualPosterGrid, SQUARE_ASPECT } from "@/hooks/use-virtual-poster-grid";
 import { LIBRARY_CARD_CONTENT_HEIGHT, useLibraryAlphabet } from "@/hooks/use-library-grid";
-import { listCacheKeyFor, loadCachedList } from "@/lib/media/list-cache";
 
 interface GroupedArtist {
   parentTitle: string;
@@ -140,10 +136,10 @@ function artistTableHover(a: GroupedArtist) {
   );
 }
 
+const selectArtists = (body: { artists?: GroupedArtist[] }) => body.artists;
+
 export default function MusicPage() {
   const router = useRouter();
-  const [artistList, setArtistList] = useState<GroupedArtist[]>([]);
-  const [loading, setLoading] = useState(true);
   const {
     viewMode,
     setViewMode,
@@ -158,16 +154,28 @@ export default function MusicPage() {
     hasFilters,
   } = useLibraryListState("music", "parentTitle", { filtersKey: "filters-/library/music" });
   const filterPanel = useFilterPanelReset(externalFilters, clearFilters);
-  const [, startTransition] = useTransition();
   const { show, showServers, setVisible, prefs } = useCardDisplay("MUSIC");
   const { getHex } = useChipColors();
 
   const { size, setSize, columns } = useCardSize();
   const { servers, selectedServerId, setSelectedServerId } = useServers();
-  // Guards against a stale slow response landing after a quick
-  // sort/filter/server flip and showing the wrong items for the selection.
-  const latest = useLatestRequest();
-  const shown = useShownList();
+  const listParams = new URLSearchParams();
+  listParams.set("sortBy", sortBy);
+  listParams.set("sortOrder", sortOrder);
+  listParams.set("limit", "0");
+  if (selectedServerId !== "all") {
+    listParams.set("serverId", selectedServerId);
+  }
+  for (const [key, value] of Object.entries(filters)) {
+    if (value) listParams.set(key, value);
+  }
+  const { items: artistList, loading, refetch: fetchArtists } = useLibraryList({
+    url: "/api/media/music/grouped",
+    params: listParams,
+    mode: "grouped",
+    select: selectArtists,
+    syncScope: { types: "MUSIC", serverId: selectedServerId },
+  });
 
   const grid = useVirtualPosterGrid({
     count: artistList.length,
@@ -182,51 +190,6 @@ export default function MusicPage() {
     getFirstVisibleIndex: grid.getFirstVisibleIndex,
     scrollToIndex: grid.scrollToIndex,
   });
-
-  const fetchArtists = useCallback(async () => {
-    const token = latest.begin();
-    const params = new URLSearchParams();
-    params.set("sortBy", sortBy);
-    params.set("sortOrder", sortOrder);
-    params.set("limit", "0");
-    if (selectedServerId !== "all") {
-      params.set("serverId", selectedServerId);
-    }
-    for (const [key, value] of Object.entries(filters)) {
-      if (value) params.set(key, value);
-    }
-    const listKey = listCacheKeyFor("/api/media/music/grouped", params);
-    // A refetch of the list already on screen (a sync added or removed items)
-    // swaps the new list in where the old one stands, with no skeleton.
-    const refresh = shown.begin(listKey);
-    if (!refresh) setLoading(true);
-    // Set once this request's list is on screen, from the cache or the server.
-    let applied = false;
-    try {
-      // Through the tab's list cache: a list loaded in the last minute is
-      // shown at once, an older one shown and then refreshed behind it.
-      await loadCachedList<{ artists?: GroupedArtist[] }>("/api/media/music/grouped", params, (data) => {
-        if (!latest.isCurrent(token)) return;
-        applied = true;
-        shown.markShown(listKey);
-        startTransition(() => {
-          setArtistList(data.artists || []);
-          setLoading(false);
-        });
-      });
-    } catch (error) {
-      console.error("Failed to fetch artists:", error);
-      // A failed load with nothing shown for it empties the list, as it did
-      // before the cache: the previous list under the new filters would read
-      // as their result. A failed refresh leaves the list on screen as it was.
-      if (!applied && !refresh && latest.isCurrent(token)) setArtistList([]);
-      if (latest.isCurrent(token)) setLoading(false);
-    }
-  }, [sortBy, sortOrder, selectedServerId, filters, latest, shown]);
-
-  useLibrarySyncRefetch({ types: "MUSIC", serverId: selectedServerId }, fetchArtists);
-
-  useListFetch(fetchArtists);
 
   const alphabetItems = useMemo(() => artistList.map((a) => ({ title: a.parentTitle })), [artistList]);
   const alphabet = useLibraryAlphabet(alphabetItems, grid, viewMode);

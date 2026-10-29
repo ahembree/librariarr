@@ -246,4 +246,71 @@ describe("fetchListProgressively", () => {
     });
     expect(chunks).toEqual([true]);
   });
+
+  it("asks for the rest at the same time as the first screenful on a quiet refresh", async () => {
+    const resolvers: Array<(body: unknown) => void> = [];
+    const urls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        (url: string) =>
+          new Promise<Response>((resolve) => {
+            urls.push(url);
+            resolvers.push((body) => resolve({ ok: true, status: 200, json: async () => body } as Response));
+          }),
+      ),
+    );
+    const pending = fetchListProgressively("/api/media/movies", new URLSearchParams("sortBy=title"), () => {}, {
+      quiet: true,
+    });
+    // Both out before either answers, the rest from where a full first page ends.
+    await vi.waitFor(() => expect(urls).toHaveLength(2));
+    expect(urls[0]).toContain(`limit=${FIRST_CHUNK_SIZE}`);
+    expect(urls[1]).toContain(`offset=${FIRST_CHUNK_SIZE}`);
+    resolvers[0]({ items: Array.from({ length: FIRST_CHUNK_SIZE }, (_, i) => item(i)), pagination: { hasMore: true } });
+    resolvers[1]({ items: [item(1000)] });
+    await pending;
+  });
+
+  it("drops the early rest when the first screenful is the whole list, even if it fails", async () => {
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    try {
+      stubFetch([{ body: { items: [item(1)], pagination: { hasMore: false } } }, { status: 500 }]);
+      const chunks: number[] = [];
+      await fetchListProgressively("/api/media/movies", new URLSearchParams(), (items) => chunks.push(items.length), {
+        quiet: true,
+      });
+      await new Promise((r) => setTimeout(r, 0));
+      expect(chunks).toEqual([1]);
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off("unhandledRejection", unhandled);
+    }
+  });
+
+  it("follows a short first page that still has more up from its own end", async () => {
+    const urls = stubFetch([
+      { body: { items: [item(1), item(2)], pagination: { hasMore: true } } },
+      { body: { items: [item(999)] } },
+      { body: { items: [item(3)] } },
+    ]);
+    const chunks: string[][] = [];
+    await fetchListProgressively<{ id: string }>(
+      "/api/media/movies",
+      new URLSearchParams(),
+      (items) => chunks.push(items.map((i) => i.id)),
+      { quiet: true },
+    );
+    // The early request from FIRST_CHUNK_SIZE would leave a gap; it is not used.
+    expect(urls[2]).toContain("offset=2");
+    expect(chunks).toEqual([["i1", "i2", "i3"]]);
+  });
+
+  it("rejects when the first screenful fails on a quiet refresh", async () => {
+    stubFetch([{ status: 503 }, { body: { items: [] } }]);
+    await expect(
+      fetchListProgressively("/api/media/movies", new URLSearchParams(), () => {}, { quiet: true }),
+    ).rejects.toThrow("HTTP 503");
+  });
 });

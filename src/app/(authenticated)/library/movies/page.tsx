@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useMemo, useTransition } from "react";
+import { useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import { qualityChips, qualitySegments } from "@/lib/media/quality-chips";
 import { useChipColors } from "@/components/chip-color-provider";
@@ -13,6 +13,7 @@ import { MediaGridSkeleton } from "@/components/skeletons";
 import { useCardSize } from "@/hooks/use-card-size";
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { useServers } from "@/hooks/use-servers";
+import { useLibraryList } from "@/hooks/use-library-list";
 import { MetadataLine, MetadataItem } from "@/components/metadata-line";
 import { LibraryToolbar } from "@/components/library-toolbar";
 import { AlphabetFilter } from "@/components/alphabet-filter";
@@ -25,14 +26,8 @@ import { VirtualCardGrid, type GridCardContext } from "@/components/virtual-card
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
 import { useLibraryListState } from "@/hooks/use-library-list-state";
 import { useFilterPanelReset } from "@/hooks/use-filter-panel-reset";
-import { useLatestRequest } from "@/hooks/use-latest-request";
-import { useListFetch } from "@/hooks/use-list-fetch";
-import { useShownList } from "@/hooks/use-shown-list";
-import { useLibrarySyncRefetch } from "@/hooks/use-library-sync-refetch";
 import { useVirtualPosterGrid, POSTER_ASPECT } from "@/hooks/use-virtual-poster-grid";
 import { LIBRARY_CARD_CONTENT_HEIGHT, useLibraryAlphabet } from "@/hooks/use-library-grid";
-import { fetchListProgressively } from "@/lib/media/progressive-load";
-import { listCacheKeyFor } from "@/lib/media/list-cache";
 
 const SORT_OPTIONS = [
   { value: "title", label: "Name" },
@@ -60,7 +55,6 @@ function movieTableHover(movie: MediaListItem) {
 
 export default function MoviesPage() {
   const router = useRouter();
-  const [items, setItems] = useState<MediaListItem[]>([]);
   const {
     viewMode,
     setViewMode,
@@ -75,19 +69,26 @@ export default function MoviesPage() {
     hasFilters,
   } = useLibraryListState("movies", "title", { filtersKey: "filters-/library/movies" });
   const filterPanel = useFilterPanelReset(externalFilters, clearFilters);
-  const [loading, setLoading] = useState(true);
-  // The first screenful arrives before the rest of the library; consumers that
-  // need the complete list (item count, scroll restoration) wait for this.
-  const [loadingRest, setLoadingRest] = useState(true);
   const { size, setSize, columns } = useCardSize();
-  const [, startTransition] = useTransition();
   const { servers, selectedServerId, setSelectedServerId } = useServers();
   const { getHex } = useChipColors();
   const { show, showServers, setVisible, prefs } = useCardDisplay("MOVIE");
-  // Guards against a stale slow response landing after a quick filter/server
-  // flip and overwriting state with the wrong items.
-  const latest = useLatestRequest();
-  const shown = useShownList();
+  const listParams = new URLSearchParams({
+    sortBy,
+    sortOrder,
+    ...filters,
+  });
+  if (selectedServerId !== "all") {
+    listParams.set("serverId", selectedServerId);
+  }
+  const { items, loading, loadingRest, refetch: fetchMovies } = useLibraryList<MediaListItem>({
+    url: "/api/media/movies",
+    params: listParams,
+    mode: "progressive",
+    syncScope: { types: "MOVIE", serverId: selectedServerId },
+    // No debounce on changes: this page has always refetched at once.
+    debounceMs: 0,
+  });
 
   const grid = useVirtualPosterGrid({
     count: items.length,
@@ -106,67 +107,6 @@ export default function MoviesPage() {
 
   const alphabetItems = useMemo(() => items.map((m) => ({ title: m.titleSort || m.title })), [items]);
   const alphabet = useLibraryAlphabet(alphabetItems, grid, viewMode);
-
-  const fetchMovies = useCallback(async () => {
-    const token = latest.begin();
-    const params = new URLSearchParams({
-      sortBy,
-      sortOrder,
-      ...filters,
-    });
-    if (selectedServerId !== "all") {
-      params.set("serverId", selectedServerId);
-    }
-    const listKey = listCacheKeyFor("/api/media/movies", params);
-    // A refetch of the list already on screen (a sync added or removed items)
-    // swaps the new list in whole where the old one stands: no skeleton, and
-    // no first screenful standing in for the whole library meanwhile.
-    const refresh = shown.begin(listKey);
-    if (!refresh) {
-      setLoading(true);
-      setLoadingRest(true);
-    }
-    try {
-      // Paint the first screenful, then fill in the rest behind it — the whole
-      // library in one response meant nothing rendered until all of it landed.
-      let firstChunk = true;
-      await fetchListProgressively<MediaListItem>(
-        "/api/media/movies",
-        params,
-        (loaded, done) => {
-          if (!latest.isCurrent(token)) return;
-          // Only the whole list counts as shown: a refresh started while the rest
-          // is still loading would otherwise skip the loading state, and if it
-          // failed leave the first screenful up with `loadingRest` stuck on.
-          if (done) shown.markShown(listKey);
-          const apply = () => {
-            setItems(loaded);
-            setLoading(false);
-            if (done) setLoadingRest(false);
-          };
-          // The screenful the user is waiting for renders as a normal update; a
-          // transition renders in interruptible slices and only delayed it. The
-          // rest of the library stays a transition so it never blocks input.
-          if (firstChunk && !refresh) apply();
-          else startTransition(apply);
-          firstChunk = false;
-        },
-        { quiet: refresh },
-      );
-    } catch (error) {
-      console.error("Failed to fetch movies:", error);
-      // A failed refresh leaves the list on screen as it was.
-      if (!refresh && latest.isCurrent(token)) {
-        setLoading(false);
-        setLoadingRest(false);
-      }
-    }
-  }, [filters, sortBy, sortOrder, selectedServerId, latest, shown]);
-
-  useLibrarySyncRefetch({ types: "MOVIE", serverId: selectedServerId }, fetchMovies);
-
-  // No debounce on changes: this page has always refetched at once.
-  useListFetch(fetchMovies, 0);
 
   const openMovie = useCallback(
     (item: MediaListItem) => {

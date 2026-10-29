@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useMemo, useTransition } from "react";
+import { useCallback, useMemo } from "react";
 import { useChipColors } from "@/components/chip-color-provider";
 import { QualityChips } from "@/components/quality-chips";
 import { qualityChips, qualitySegments } from "@/lib/media/quality-chips";
@@ -9,6 +9,7 @@ import { MediaFilters } from "@/components/media-filters";
 import { MediaCard } from "@/components/media-card";
 import { MediaHoverPopover, hoverDataFromSeriesGroup } from "@/components/media-hover-popover";
 import { useServers } from "@/hooks/use-servers";
+import { useLibraryList } from "@/hooks/use-library-list";
 import { LibraryToolbar } from "@/components/library-toolbar";
 import { AlphabetFilter } from "@/components/alphabet-filter";
 import { Tv, Layers, List, HardDrive } from "lucide-react";
@@ -27,13 +28,8 @@ import { VirtualCardGrid, type GridCardContext } from "@/components/virtual-card
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
 import { useLibraryListState } from "@/hooks/use-library-list-state";
 import { useFilterPanelReset } from "@/hooks/use-filter-panel-reset";
-import { useLatestRequest } from "@/hooks/use-latest-request";
-import { useListFetch } from "@/hooks/use-list-fetch";
-import { useShownList } from "@/hooks/use-shown-list";
-import { useLibrarySyncRefetch } from "@/hooks/use-library-sync-refetch";
 import { useVirtualPosterGrid, POSTER_ASPECT } from "@/hooks/use-virtual-poster-grid";
 import { LIBRARY_CARD_CONTENT_HEIGHT, useLibraryAlphabet } from "@/hooks/use-library-grid";
-import { listCacheKeyFor, loadCachedList } from "@/lib/media/list-cache";
 
 interface GroupedSeries {
   parentTitle: string;
@@ -56,7 +52,6 @@ interface GroupedSeries {
   audienceRatingImage?: string | null;
   year?: number | null;
 }
-
 
 const SORT_OPTIONS = [
   { value: "parentTitle", label: "Name" },
@@ -138,12 +133,12 @@ function seriesTableHover(s: GroupedSeries) {
   );
 }
 
+const selectSeries = (body: { series?: GroupedSeries[] }) => body.series;
+
 export default function SeriesPage() {
   const router = useRouter();
   const { getHex } = useChipColors();
   const { show, showServers, setVisible, prefs } = useCardDisplay("SERIES");
-  const [seriesList, setSeriesList] = useState<GroupedSeries[]>([]);
-  const [loading, setLoading] = useState(true);
   const {
     viewMode,
     setViewMode,
@@ -158,13 +153,30 @@ export default function SeriesPage() {
     hasFilters,
   } = useLibraryListState("series", "parentTitle", { filtersKey: "filters-/library/series" });
   const filterPanel = useFilterPanelReset(externalFilters, clearFilters);
-  const [, startTransition] = useTransition();
   const { size, setSize, columns } = useCardSize();
   const { servers, selectedServerId, setSelectedServerId } = useServers();
-  // Guards against a stale slow response landing after a quick sort/server
-  // flip and overwriting state with the wrong items.
-  const latest = useLatestRequest();
-  const shown = useShownList();
+  const listParams = new URLSearchParams();
+  listParams.set("sortBy", sortBy);
+  listParams.set("sortOrder", sortOrder);
+  listParams.set("limit", "0");
+  if (selectedServerId !== "all") {
+    listParams.set("serverId", selectedServerId);
+  }
+  // Every filter goes to the server. This page used to send none and
+  // filter on the client for resolution, dates and search only, so the
+  // rest of the panel — Episode Count, Watched %, Last Episode Aired,
+  // Watchlisted (which the route already implements), genre, year, codecs
+  // — showed an active chip over an unfiltered list.
+  for (const [key, value] of Object.entries(filters)) {
+    if (value) listParams.set(key, value);
+  }
+  const { items: seriesList, loading, refetch: fetchSeries } = useLibraryList({
+    url: "/api/media/series/grouped",
+    params: listParams,
+    mode: "grouped",
+    select: selectSeries,
+    syncScope: { types: "SERIES", serverId: selectedServerId },
+  });
 
   const grid = useVirtualPosterGrid({
     count: seriesList.length,
@@ -179,56 +191,6 @@ export default function SeriesPage() {
     getFirstVisibleIndex: grid.getFirstVisibleIndex,
     scrollToIndex: grid.scrollToIndex,
   });
-
-  const fetchSeries = useCallback(async () => {
-    const token = latest.begin();
-    const params = new URLSearchParams();
-    params.set("sortBy", sortBy);
-    params.set("sortOrder", sortOrder);
-    params.set("limit", "0");
-    if (selectedServerId !== "all") {
-      params.set("serverId", selectedServerId);
-    }
-    // Every filter goes to the server. This page used to send none and
-    // filter on the client for resolution, dates and search only, so the
-    // rest of the panel — Episode Count, Watched %, Last Episode Aired,
-    // Watchlisted (which the route already implements), genre, year, codecs
-    // — showed an active chip over an unfiltered list.
-    for (const [key, value] of Object.entries(filters)) {
-      if (value) params.set(key, value);
-    }
-    const listKey = listCacheKeyFor("/api/media/series/grouped", params);
-    // A refetch of the list already on screen (a sync added or removed items)
-    // swaps the new list in where the old one stands, with no skeleton.
-    const refresh = shown.begin(listKey);
-    if (!refresh) setLoading(true);
-    // Set once this request's list is on screen, from the cache or the server.
-    let applied = false;
-    try {
-      // Through the tab's list cache: a list loaded in the last minute is
-      // shown at once, an older one shown and then refreshed behind it.
-      await loadCachedList<{ series?: GroupedSeries[] }>("/api/media/series/grouped", params, (data) => {
-        if (!latest.isCurrent(token)) return;
-        applied = true;
-        shown.markShown(listKey);
-        startTransition(() => {
-          setSeriesList(data.series || []);
-          setLoading(false);
-        });
-      });
-    } catch (error) {
-      console.error("Failed to fetch series:", error);
-      // A failed load with nothing shown for it empties the list, as it did
-      // before the cache: the previous list under the new filters would read
-      // as their result. A failed refresh leaves the list on screen as it was.
-      if (!applied && !refresh && latest.isCurrent(token)) setSeriesList([]);
-      if (latest.isCurrent(token)) setLoading(false);
-    }
-  }, [sortBy, sortOrder, selectedServerId, filters, latest, shown]);
-
-  useLibrarySyncRefetch({ types: "SERIES", serverId: selectedServerId }, fetchSeries);
-
-  useListFetch(fetchSeries);
 
   const alphabetItems = useMemo(() => seriesList.map((s) => ({ title: s.parentTitle })), [seriesList]);
   const alphabet = useLibraryAlphabet(alphabetItems, grid, viewMode);

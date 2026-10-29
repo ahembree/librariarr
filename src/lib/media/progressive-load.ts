@@ -83,6 +83,11 @@ export async function fetchListProgressively<T>(
  * The first screenful, then everything after it. `onFirst` sees the first
  * screenful (with `done` when it was the whole list); the result is the whole
  * list either way.
+ *
+ * Without `onFirst` nobody is waiting on the first screenful alone (a refresh
+ * behind a list already on screen), so the rest is asked for at the same time,
+ * from the offset a full first page ends at: one round trip instead of two,
+ * through the same two URLs — the keys the server's response cache holds.
  */
 async function fetchBothPasses<T>(
   url: string,
@@ -93,10 +98,21 @@ async function fetchBothPasses<T>(
   firstParams.delete("offset");
   firstParams.set("page", "1");
   firstParams.set("limit", String(FIRST_CHUNK_SIZE));
+  const restUrl = (offset: number) => {
+    const restParams = new URLSearchParams(params);
+    restParams.delete("page");
+    restParams.set("limit", "0");
+    restParams.set("offset", String(offset));
+    return `${url}?${restParams}`;
+  };
 
-  const firstResponse = await fetch(`${url}?${firstParams}`);
-  if (!firstResponse.ok) throw new Error(`HTTP ${firstResponse.status}`);
-  const firstBody = (await firstResponse.json()) as ListResponse<T>;
+  const firstPage = fetchPage<T>(`${url}?${firstParams}`);
+  const earlyRest = onFirst ? undefined : fetchPage<T>(restUrl(FIRST_CHUNK_SIZE));
+  // Awaited below, or dropped when the first page turns out to be the whole
+  // list; a rejection must not surface as unhandled meanwhile.
+  earlyRest?.catch(() => {});
+
+  const firstBody = await firstPage;
   const firstItems = firstBody.items ?? [];
 
   // Trust hasMore when the endpoint sends it; fall back to a short page.
@@ -104,13 +120,15 @@ async function fetchBothPasses<T>(
   onFirst?.(firstItems, !hasMore);
   if (!hasMore) return { items: firstItems, firstWasAll: true };
 
-  const restParams = new URLSearchParams(params);
-  restParams.delete("page");
-  restParams.set("limit", "0");
-  restParams.set("offset", String(firstItems.length));
-
-  const restResponse = await fetch(`${url}?${restParams}`);
-  if (!restResponse.ok) throw new Error(`HTTP ${restResponse.status}`);
-  const restBody = (await restResponse.json()) as ListResponse<T>;
+  // A first page with more after it is always FIRST_CHUNK_SIZE long; one that
+  // is not is followed up from its own end rather than leave a gap.
+  const restBody =
+    earlyRest && firstItems.length === FIRST_CHUNK_SIZE ? await earlyRest : await fetchPage<T>(restUrl(firstItems.length));
   return { items: [...firstItems, ...(restBody.items ?? [])], firstWasAll: false };
+}
+
+async function fetchPage<T>(href: string): Promise<ListResponse<T>> {
+  const response = await fetch(href);
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return (await response.json()) as ListResponse<T>;
 }
