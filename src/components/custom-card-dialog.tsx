@@ -49,6 +49,7 @@ import {
   type CustomDimension,
   type TimelineBin,
 } from "@/lib/dashboard/card-registry";
+import { CustomCardSlot } from "@/components/dashboard/custom-card-slot";
 
 const CHART_TYPES: { type: CustomChartType; label: string; icon: typeof BarChart3 }[] = [
   { type: "bar", label: "Bar", icon: BarChart3 },
@@ -69,6 +70,10 @@ interface CustomCardDialogProps {
   onOpenChange: (open: boolean) => void;
   onConfirm: (config: CustomCardConfig) => void;
   initialConfig?: CustomCardConfig;
+  /** The dashboard's server and type selection, which the preview is drawn for. */
+  serverId?: string;
+  filterType?: "MOVIE" | "SERIES" | "MUSIC";
+  availableTypes?: string[];
 }
 
 export function CustomCardDialog({
@@ -76,6 +81,9 @@ export function CustomCardDialog({
   onOpenChange,
   onConfirm,
   initialConfig,
+  serverId,
+  filterType,
+  availableTypes,
 }: CustomCardDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -84,6 +92,9 @@ export function CustomCardDialog({
           initialConfig={initialConfig}
           onConfirm={onConfirm}
           onCancel={() => onOpenChange(false)}
+          serverId={serverId}
+          filterType={filterType}
+          availableTypes={availableTypes}
         />
       )}
     </Dialog>
@@ -95,10 +106,16 @@ function CustomCardDialogContent({
   initialConfig,
   onConfirm,
   onCancel,
+  serverId,
+  filterType,
+  availableTypes,
 }: {
   initialConfig?: CustomCardConfig;
   onConfirm: (config: CustomCardConfig) => void;
   onCancel: () => void;
+  serverId?: string;
+  filterType?: "MOVIE" | "SERIES" | "MUSIC";
+  availableTypes?: string[];
 }) {
   const [chartType, setChartType] = useState<CustomChartType>(
     initialConfig?.chartType ?? "bar"
@@ -152,27 +169,43 @@ function CustomCardDialogContent({
 
   const isEditing = !!initialConfig;
   const isTimeline = chartType === "timeline";
-  const canSubmit = isSubmittableCustomCard(chartType, dimension, dimension2);
   const dimensionMeta = dimension ? getDimensionMeta(dimension) : undefined;
+  // A second dimension picked for another chart type, or before the first
+  // dimension changed, may be one this chart cannot use: its select no longer
+  // offers it (so it showed blank) and the card could not be added. Read it as
+  // unset, so the select shows its placeholder and the card can be added.
+  const dimension2Meta = dimension2 ? getDimensionMeta(dimension2) : undefined;
+  const usableDimension2: CustomDimension | "" = !dimension2Meta
+    ? ""
+    : isTimeline
+      ? (supportsTimelineBreakdown(dimension2Meta) ? dimension2 : "")
+      : chartType === "heatmap" && dimensionMeta && !canCrossTabulate(dimensionMeta, dimension2Meta)
+        ? ""
+        : dimension2;
+  const canSubmit = isSubmittableCustomCard(chartType, dimension, usableDimension2);
+
+  // The config the form describes, or null until it can be submitted. The
+  // preview draws this same object, so what it shows is what Add saves.
+  const draftConfig: CustomCardConfig | null = canSubmit
+    ? {
+        chartType,
+        dimension: dimension as CustomDimension,
+        ...((chartType === "heatmap" || isTimeline) && usableDimension2 ? { dimension2: usableDimension2 } : {}),
+        ...(chartType === "heatmap" ? { heatmapGradient } : {}),
+        ...(title.trim() ? { title: title.trim() } : {}),
+        ...(chartType !== "count" ? { topN } : {}),
+        ...(chartType === "count" && countValues.size > 0 ? { countValues: Array.from(countValues) } : {}),
+        ...(isTimeline ? { timelineBin } : {}),
+        ...(icon ? { icon } : {}),
+      }
+    : null;
 
   function handleSubmit() {
-    if (!canSubmit) return;
-    onConfirm({
-      chartType,
-      dimension: dimension as CustomDimension,
-      ...(chartType === "heatmap" && dimension2 ? { dimension2: dimension2 as CustomDimension } : {}),
-      ...(isTimeline && dimension2 ? { dimension2: dimension2 as CustomDimension } : {}),
-      ...(chartType === "heatmap" ? { heatmapGradient } : {}),
-      ...(title.trim() ? { title: title.trim() } : {}),
-      ...(chartType !== "count" ? { topN } : {}),
-      ...(chartType === "count" && countValues.size > 0 ? { countValues: Array.from(countValues) } : {}),
-      ...(isTimeline ? { timelineBin } : {}),
-      ...(icon ? { icon } : {}),
-    });
+    if (draftConfig) onConfirm(draftConfig);
   }
 
   return (
-    <DialogContent className="sm:max-w-md">
+    <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-4xl">
       <DialogHeader>
         <DialogTitle>{isEditing ? "Edit Custom Card" : "Add Custom Card"}</DialogTitle>
         <DialogDescription>
@@ -180,7 +213,8 @@ function CustomCardDialogContent({
         </DialogDescription>
       </DialogHeader>
 
-      <div className="space-y-5 py-2">
+      <div className="grid gap-6 py-2 md:grid-cols-2">
+      <div className="min-w-0 space-y-5">
         {/* Chart type selector */}
         <div className="space-y-2">
           <Label>Chart Type</Label>
@@ -208,7 +242,13 @@ function CustomCardDialogContent({
           <Label>{isTimeline ? "Date Field" : "Dimension"}</Label>
           <Select
             value={dimension}
-            onValueChange={(val) => setDimension(val as CustomDimension)}
+            onValueChange={(val) => {
+              // A count card's selected values belong to the dimension they
+              // were picked from; kept, the card counted values the new
+              // dimension never has and showed 0.
+              if (val !== dimension) setCountValues(new Set());
+              setDimension(val as CustomDimension);
+            }}
           >
             <SelectTrigger className="w-full">
               <SelectValue placeholder={isTimeline ? "Select a date field..." : "Select a data dimension..."} />
@@ -254,7 +294,7 @@ function CustomCardDialogContent({
           <div className="space-y-2">
             <Label>Color By <span className="text-muted-foreground font-normal">(optional)</span></Label>
             <Select
-              value={dimension2 || "__none__"}
+              value={usableDimension2 || "__none__"}
               onValueChange={(val) => setDimension2(val === "__none__" ? "" : val as CustomDimension)}
             >
               <SelectTrigger className="w-full">
@@ -285,7 +325,7 @@ function CustomCardDialogContent({
           <div className="space-y-2">
             <Label>Second Dimension (Y-Axis)</Label>
             <Select
-              value={dimension2}
+              value={usableDimension2}
               onValueChange={(val) => setDimension2(val as CustomDimension)}
             >
               <SelectTrigger className="w-full">
@@ -342,7 +382,7 @@ function CustomCardDialogContent({
         )}
 
         {/* Top N (not applicable to count cards; timeline only when breakdown is set) */}
-        {chartType !== "count" && (!isTimeline || dimension2) && <div className="space-y-2">
+        {chartType !== "count" && (!isTimeline || usableDimension2) && <div className="space-y-2">
           <Label>Show Items</Label>
           <Select
             value={topN === null ? "all" : String(topN)}
@@ -453,6 +493,33 @@ function CustomCardDialogContent({
             ))}
           </div>
         </div>
+      </div>
+
+      {/* Live preview of the card being configured */}
+      <div className="min-w-0 space-y-2 md:sticky md:top-0 md:self-start">
+        <Label>Preview</Label>
+        <div className="h-96">
+          {draftConfig ? (
+            <CustomCardSlot
+              // Legend items hidden by a click name one dimension's values;
+              // a new dimension starts with every value shown.
+              key={`${draftConfig.dimension}:${draftConfig.dimension2 ?? ""}`}
+              config={draftConfig}
+              filterType={filterType}
+              serverId={serverId}
+              availableTypes={availableTypes}
+            />
+          ) : (
+            <div className="flex h-full items-center justify-center rounded-xl border border-dashed px-6 text-center text-sm text-muted-foreground">
+              {chartType === "heatmap" && dimension
+                ? "Choose a second dimension to see a preview."
+                : isTimeline
+                  ? "Choose a date field to see a preview."
+                  : "Choose a dimension to see a preview."}
+            </div>
+          )}
+        </div>
+      </div>
       </div>
 
       <DialogFooter>
