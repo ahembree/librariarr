@@ -162,6 +162,59 @@ test.describe("dashboard custom cards", () => {
     await expect(dialog.getByText("My Resolutions")).toBeVisible();
   });
 
+  test("a second dimension the new chart type cannot use is dropped", async ({ page }) => {
+    await stubLayout(page, []);
+    const dialog = await openCustomCardDialog(page);
+
+    // Genre can be a heatmap's second dimension but cannot colour a timeline.
+    await dialog.getByRole("button", { name: "Heatmap", exact: true }).click();
+    await dialog.getByRole("combobox").first().click();
+    await page.getByRole("option", { name: "Resolution", exact: true }).click();
+    await dialog.getByRole("combobox").nth(1).click();
+    await page.getByRole("option", { name: "Genre", exact: true }).click();
+
+    await dialog.getByRole("button", { name: "Timeline", exact: true }).click();
+    await dialog.getByRole("combobox").first().click();
+    await page.getByRole("option", { name: "Added Date", exact: true }).click();
+
+    await expect(dialog.getByRole("combobox").nth(2)).toHaveText("None");
+    await expect(dialog.getByRole("button", { name: "Add Card" })).toBeEnabled();
+    await expect(dialog.getByText("Added Date Timeline")).toBeVisible();
+  });
+
+  test("a count card does not keep values picked for another dimension", async ({ page }) => {
+    await stubLayout(page, []);
+    await page.route(
+      (url) => url.pathname === "/api/media/stats/custom",
+      (route: Route) => {
+        const dimension = new URL(route.request().url()).searchParams.get("dimension");
+        const value = dimension === "resolution" ? "4K" : "h264";
+        return route.fulfill({ json: { breakdown: [{ value, type: "MOVIE", _count: 3 }] } });
+      },
+    );
+    const saves: { main: { config?: Record<string, unknown> }[] }[] = [];
+    page.on("request", (req) => {
+      if (new URL(req.url()).pathname === "/api/settings/dashboard-layout" && req.method() === "PUT") {
+        saves.push(req.postDataJSON().layout);
+      }
+    });
+    const dialog = await openCustomCardDialog(page);
+
+    await dialog.getByRole("button", { name: "Count", exact: true }).click();
+    await dialog.getByRole("combobox").first().click();
+    await page.getByRole("option", { name: "Resolution", exact: true }).click();
+    await dialog.getByRole("button", { name: "4K", exact: true }).click();
+    await dialog.getByRole("combobox").first().click();
+    await page.getByRole("option", { name: "Video Codec", exact: true }).click();
+    await expect(dialog.getByRole("button", { name: "h264", exact: true })).toBeVisible();
+    await dialog.getByRole("button", { name: "Add Card" }).click();
+
+    await expect.poll(() => saves.length).toBeGreaterThan(0);
+    const config = saves.at(-1)!.main.at(-1)!.config!;
+    expect(config.dimension).toBe("videoCodec");
+    expect(config.countValues).toBeUndefined();
+  });
+
   test("an edit that fails to load does not keep the old data under the new title", async ({ page }) => {
     await stubLayout(page, [
       {
