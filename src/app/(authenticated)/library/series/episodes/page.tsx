@@ -124,7 +124,10 @@ export default function AllEpisodesPage() {
         params,
         (loaded, done) => {
           if (!latest.isCurrent(token)) return;
-          shown.markShown(listKey);
+          // Only the whole list counts as shown: a refresh started while the rest
+          // is still loading would otherwise skip the loading state, and if it
+          // failed leave the first screenful up with `loadingRest` stuck on.
+          if (done) shown.markShown(listKey);
           const apply = () => {
             setItems(loaded);
             setLoading(false);
