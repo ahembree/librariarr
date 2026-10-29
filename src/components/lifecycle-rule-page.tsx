@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { getServerTypeLabel } from "@/lib/server-styles";
 import { ServerTypeChip } from "@/components/server-type-chip";
 import { ColorChip } from "@/components/color-chip";
+import { RuleSetRail, RuleSetSwitcherBar, type RuleSetNavigatorProps } from "@/components/rule-set-navigator";
 import { findScrollContainer } from "@/lib/scroll-utils";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -163,14 +164,6 @@ function legacyToGroups(rules: LifecycleRule[] | LifecycleRuleGroup[]): Lifecycl
   return legacyRulesToEditorGroups(rules, generateId);
 }
 
-function countRules(rules: LifecycleRule[] | LifecycleRuleGroup[]): number {
-  if (rules.length === 0) return 0;
-  if ("rules" in rules[0]) {
-    return countAllRules(rules as LifecycleRuleGroup[]);
-  }
-  return rules.length;
-}
-
 interface RuleSetExport {
   version: 1;
   type: string;
@@ -283,27 +276,6 @@ function DiffSection({
         </div>
       )}
     </div>
-  );
-}
-
-/** Tinted chip for rule-set capability flags in the saved list. */
-function FeatureChip({
-  tone,
-  children,
-}: {
-  tone: "green" | "amber" | "sky" | "purple" | "cyan" | "muted";
-  children: React.ReactNode;
-}) {
-  const tones: Record<string, string> = {
-    green: "border-green/30 bg-green-dim text-green",
-    amber: "border-amber/30 bg-amber-dim text-amber",
-    sky: "border-sky/30 bg-sky-dim text-sky",
-    purple: "border-purple-400/30 bg-purple-400/15 text-purple-400",
-    cyan: "border-cyan-400/30 bg-cyan-400/15 text-cyan-400",
-    muted: "border-border bg-muted/40 text-muted-foreground",
-  };
-  return (
-    <ColorChip className={`text-[10px] font-medium ${tones[tone]}`}>{children}</ColorChip>
   );
 }
 
@@ -1260,17 +1232,26 @@ export function LifecycleRulePage({
 
   const toggleRuleSetEnabled = async (id: string, currentEnabled: boolean) => {
     try {
-      await fetch(`/api/lifecycle/rules/${id}`, {
+      const res = await fetch(`/api/lifecycle/rules/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enabled: !currentEnabled }),
       });
+      if (!res.ok) {
+        toast.error(`Failed to ${currentEnabled ? "disable" : "enable"} rule set`);
+        return;
+      }
       if (activeRuleSetId === id) {
         setEnabled(!currentEnabled);
+        // The toggle saved this value, so it is not an unsaved edit: moving
+        // only the form left the rule set reading as dirty, and switching
+        // away asked to discard changes that did not exist.
+        setSnapshot((s) => (s ? { ...s, enabled: !currentEnabled } : s));
       }
       await refreshRuleSets();
     } catch (error) {
       console.error("Failed to toggle rule set:", error);
+      toast.error(`Failed to ${currentEnabled ? "disable" : "enable"} rule set`);
     }
   };
 
@@ -1423,6 +1404,52 @@ export function LifecycleRulePage({
     }
   };
 
+  // Switching rule sets replaces the editor's contents, and the switcher is
+  // one tap away while scrolled anywhere in the editor, so unsaved edits are
+  // confirmed before they are thrown away.
+  const hasUnsavedEdits = snapshot ? isDirty : name.trim() !== "" || groups.length > 0;
+  const [pendingSwitch, setPendingSwitch] = useState<(() => void) | null>(null);
+  const editorTopRef = useRef<HTMLDivElement>(null);
+  const runSwitch = (action: () => void) => {
+    action();
+    // A switch made from the pinned bar or rail lands at the top of the
+    // editor, where the new rule set's name and servers are.
+    // Measured against the box that scrolls the page, not the window: the
+    // shell's header sits above it, so an editor top hidden under the header
+    // is still below the window's top.
+    const el = editorTopRef.current;
+    const scrollerTop = findScrollContainer()?.getBoundingClientRect().top ?? 0;
+    if (el && el.getBoundingClientRect().top < scrollerTop) {
+      el.scrollIntoView({ block: "start", behavior: "instant" });
+    }
+  };
+  const requestSwitch = (action: () => void) => {
+    if (hasUnsavedEdits) {
+      setPendingSwitch(() => action);
+      return;
+    }
+    runSwitch(action);
+  };
+  const navigatorProps: RuleSetNavigatorProps = {
+    ruleSets: savedRuleSets,
+    activeId: activeRuleSetId,
+    scopeLabels: scopeConfig
+      ? { enabled: scopeConfig.ruleSetEnabledLabel, disabled: scopeConfig.ruleSetDisabledLabel }
+      : undefined,
+    onSelect: (ruleSet) => {
+      if (ruleSet.id === activeRuleSetId) return;
+      requestSwitch(() => void loadRuleSet(ruleSet));
+    },
+    onToggleEnabled: (id, currentEnabled) => void toggleRuleSetEnabled(id, currentEnabled),
+    onDelete: (ruleSet) => {
+      setDeleteConfirmId(ruleSet.id);
+      setDeleteConfirmName(ruleSet.name);
+      setDeleteConfirmHasCollection(!!ruleSet.collectionId);
+      setDeleteConfirmAddTags(ruleSet.addArrTags ?? []);
+      setDeleteConfirmCleanupTags(false);
+    },
+  };
+
   // The builder and its logic preview, as one element kept while what they
   // read is unchanged: React skips re-rendering an element it has already
   // rendered, so typing a name, a collection or a delay no longer re-renders
@@ -1456,7 +1483,7 @@ export function LifecycleRulePage({
       {!embedded && (
         <div className="mb-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
           <h1 className="text-2xl sm:text-3xl font-bold font-display tracking-tight">{pageTitle}</h1>
-          <Button variant="outline" onClick={newRuleSet}>
+          <Button variant="outline" onClick={() => requestSwitch(newRuleSet)}>
             <FileText className="mr-2 h-4 w-4" />
             New Rule Set
           </Button>
@@ -1464,96 +1491,20 @@ export function LifecycleRulePage({
       )}
       {embedded && (
         <div className="mb-6 flex justify-end">
-          <Button variant="outline" onClick={newRuleSet}>
+          <Button variant="outline" onClick={() => requestSwitch(newRuleSet)}>
             <FileText className="mr-2 h-4 w-4" />
             New Rule Set
           </Button>
         </div>
       )}
 
-      {/* Saved LifecycleRule Sets */}
-      {savedRuleSets.length > 0 && (
-        <Card className="mb-6">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-base">
-              <FileText className="h-4 w-4" />
-              Saved Rule Sets
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="grid gap-2">
-              {savedRuleSets.map((ruleSet) => (
-                <div
-                  key={ruleSet.id}
-                  className={`flex items-center justify-between rounded-lg border p-3 transition-colors ${
-                    activeRuleSetId === ruleSet.id
-                      ? "border-primary bg-primary/5"
-                      : "cursor-pointer hover:bg-muted/50"
-                  } ${!ruleSet.enabled ? "opacity-50" : ""}`}
-                  onClick={() => loadRuleSet(ruleSet)}
-                >
-                  <div className="flex items-center gap-3">
-                    <Switch
-                      checked={ruleSet.enabled}
-                      onCheckedChange={() => toggleRuleSetEnabled(ruleSet.id, ruleSet.enabled)}
-                      onClick={(e) => e.stopPropagation()}
-                      className="shrink-0"
-                    />
-                    <div>
-                      <p className="font-medium truncate">{ruleSet.name}</p>
-                      <div className="mt-1 flex flex-wrap items-center gap-1">
-                        <span className="mr-1 font-mono text-[10.5px] text-faint">
-                          {countRules(ruleSet.rules)} rule{countRules(ruleSet.rules) !== 1 && "s"}
-                        </span>
-                        {ruleSet.enabled ? (
-                          <FeatureChip tone="green">Enabled</FeatureChip>
-                        ) : (
-                          <FeatureChip tone="muted">Disabled</FeatureChip>
-                        )}
-                        {ruleSet.enabled && ruleSet.actionEnabled && (
-                          <FeatureChip tone="amber">Action</FeatureChip>
-                        )}
-                        {ruleSet.enabled && !!ruleSet.collectionId && (
-                          <FeatureChip tone="sky">Collection</FeatureChip>
-                        )}
-                        {ruleSet.enabled && (ruleSet.addArrTags?.length > 0 || ruleSet.removeArrTags?.length > 0) && (
-                          <FeatureChip tone="purple">Tags</FeatureChip>
-                        )}
-                        {scopeConfig && (
-                          <FeatureChip tone="muted">
-                            {ruleSet.seriesScope !== false ? scopeConfig.ruleSetEnabledLabel : scopeConfig.ruleSetDisabledLabel}
-                          </FeatureChip>
-                        )}
-                        {ruleSet.serverIds?.length > 0 && (
-                          <FeatureChip tone="cyan">
-                            {ruleSet.serverIds.length} server{ruleSet.serverIds.length !== 1 ? "s" : ""}
-                          </FeatureChip>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    aria-label={`Delete rule set ${ruleSet.name}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setDeleteConfirmId(ruleSet.id);
-                      setDeleteConfirmName(ruleSet.name);
-                      setDeleteConfirmHasCollection(!!ruleSet.collectionId);
-                      setDeleteConfirmAddTags(ruleSet.addArrTags ?? []);
-                      setDeleteConfirmCleanupTags(false);
-                    }}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </div>
-              ))}
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
+      {/* Saved rule sets: a hover-to-open rail beside the editor on wide
+          screens with a pointer, a pinned switcher bar + bottom sheet
+          everywhere else (touch screens cannot hover). */}
+      <div className={savedRuleSets.length > 0 ? "rail:flex rail:items-start rail:gap-4" : undefined}>
+      {savedRuleSets.length > 0 && <RuleSetRail {...navigatorProps} />}
+      <div ref={editorTopRef} className="min-w-0 flex-1 scroll-mt-4">
+      {savedRuleSets.length > 0 && <RuleSetSwitcherBar {...navigatorProps} />}
       {/* Rule Builder */}
       <Card>
         <CardHeader>
@@ -2436,6 +2387,8 @@ export function LifecycleRulePage({
           onItemClick={openDetailPanel}
         />
       )}
+      </div>
+      </div>
 
       <ExportRuleSetDialog open={showExportDialog} onOpenChange={setShowExportDialog} json={exportJson} />
 
@@ -2450,6 +2403,26 @@ export function LifecycleRulePage({
         serverIds={serverIds}
         arrInstanceId={arrInstanceId}
         ruleSetId={activeRuleSetId}
+      />
+
+      {/* Unsaved edits: confirm before switching rule sets */}
+      <ConfirmDialog
+        open={pendingSwitch !== null}
+        onOpenChange={(open) => { if (!open) setPendingSwitch(null); }}
+        title="Discard unsaved changes?"
+        description={
+          activeRuleSetId
+            ? `Your edits to "${snapshot?.name ?? name}" have not been saved.`
+            : "This new rule set has not been saved."
+        }
+        cancelLabel="Keep editing"
+        confirmLabel="Discard changes"
+        destructive
+        onConfirm={() => {
+          const action = pendingSwitch;
+          setPendingSwitch(null);
+          if (action) runSwitch(action);
+        }}
       />
 
       {/* Delete Confirmation Dialog */}
