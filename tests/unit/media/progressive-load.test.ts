@@ -203,14 +203,14 @@ describe("fetchListProgressively", () => {
     const cache = createListCache({}, () => now);
     const first = Array.from({ length: FIRST_CHUNK_SIZE }, (_, i) => item(i));
     const firstLoad = stubFetch([{ body: { items: first } }, { body: { items: [item(1000)] } }]);
-    await fetchListProgressively("/api/media/movies", new URLSearchParams("sortBy=title"), () => {}, cache);
+    await fetchListProgressively("/api/media/movies", new URLSearchParams("sortBy=title"), () => {}, { cache });
     now = LIST_FRESH_MS + 1;
     const refreshed = Array.from({ length: FIRST_CHUNK_SIZE }, (_, i) => item(i + 5000));
     const refreshUrls = stubFetch([{ body: { items: refreshed } }, { body: { items: [item(9999)] } }]);
     const chunks: Array<{ n: number; done: boolean }> = [];
     await fetchListProgressively("/api/media/movies", new URLSearchParams("sortBy=title"), (items, done) =>
       chunks.push({ n: items.length, done }),
-    cache);
+    { cache });
     // The same URLs the first load asked for — the keys the server cached.
     expect(refreshUrls).toEqual(firstLoad);
     // The stale list at once, then the refreshed whole list; never a first screenful.
@@ -218,5 +218,32 @@ describe("fetchListProgressively", () => {
       { n: FIRST_CHUNK_SIZE + 1, done: true },
       { n: FIRST_CHUNK_SIZE + 1, done: true },
     ]);
+  });
+
+  it("hands a quiet refresh over once, complete — never the first screenful alone", async () => {
+    const first = Array.from({ length: FIRST_CHUNK_SIZE }, (_, i) => item(i));
+    const urls = stubFetch([
+      { body: { items: first, pagination: { hasMore: true } } },
+      { body: { items: [item(1000)], pagination: { hasMore: false } } },
+    ]);
+    const chunks: Array<{ n: number; done: boolean }> = [];
+    await fetchListProgressively(
+      "/api/media/movies",
+      new URLSearchParams(),
+      (items, done) => chunks.push({ n: items.length, done }),
+      { quiet: true },
+    );
+    // Still the two requests a first load makes.
+    expect(urls).toHaveLength(2);
+    expect(chunks).toEqual([{ n: FIRST_CHUNK_SIZE + 1, done: true }]);
+  });
+
+  it("hands a quiet refresh of a short list over once", async () => {
+    stubFetch([{ body: { items: [item(1)], pagination: { hasMore: false } } }]);
+    const chunks: boolean[] = [];
+    await fetchListProgressively("/api/media/movies", new URLSearchParams(), (_, done) => chunks.push(done), {
+      quiet: true,
+    });
+    expect(chunks).toEqual([true]);
   });
 });

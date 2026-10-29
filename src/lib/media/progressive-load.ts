@@ -34,6 +34,9 @@ interface ListResponse<T> {
  * `params` are ignored — callers spread user-controlled filters in, and a stray
  * `offset` riding along would silently skip rows out of the first pass.
  *
+ * With `quiet`, only the complete list is handed over — for a refresh of a
+ * list already on screen.
+ *
  * Rejects if the first pass fails. A failed second pass also rejects, but the
  * first chunk has already been handed over, so the caller keeps a usable list.
  */
@@ -41,7 +44,7 @@ export async function fetchListProgressively<T>(
   url: string,
   params: URLSearchParams,
   onChunk: (items: T[], done: boolean) => void,
-  cache: ListCache = libraryListCache,
+  { cache = libraryListCache, quiet = false }: { cache?: ListCache; quiet?: boolean } = {},
 ): Promise<void> {
   // A list this tab loaded recently is shown whole at once (see
   // `list-cache.ts`); one past fresh is then refreshed behind it through the
@@ -67,9 +70,13 @@ export async function fetchListProgressively<T>(
     return;
   }
 
-  const { items, firstWasAll } = await fetchBothPasses<T>(url, params, onChunk);
+  // `quiet`: the page already shows this list and is refreshing it (a sync
+  // added or removed items). A first screenful would replace the whole list
+  // on screen with its first 100 rows until the rest arrived, so the refresh
+  // is handed over once, complete.
+  const { items, firstWasAll } = await fetchBothPasses<T>(url, params, quiet ? undefined : onChunk);
   cache.set(key, items, generation);
-  if (!firstWasAll) onChunk(items, true);
+  if (quiet || !firstWasAll) onChunk(items, true);
 }
 
 /**

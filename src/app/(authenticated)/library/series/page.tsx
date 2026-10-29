@@ -29,10 +29,11 @@ import { useLibraryListState } from "@/hooks/use-library-list-state";
 import { useFilterPanelReset } from "@/hooks/use-filter-panel-reset";
 import { useLatestRequest } from "@/hooks/use-latest-request";
 import { useListFetch } from "@/hooks/use-list-fetch";
+import { useShownList } from "@/hooks/use-shown-list";
 import { useLibrarySyncRefetch } from "@/hooks/use-library-sync-refetch";
 import { useVirtualPosterGrid, POSTER_ASPECT } from "@/hooks/use-virtual-poster-grid";
 import { LIBRARY_CARD_CONTENT_HEIGHT, useLibraryAlphabet } from "@/hooks/use-library-grid";
-import { loadCachedList } from "@/lib/media/list-cache";
+import { listCacheKeyFor, loadCachedList } from "@/lib/media/list-cache";
 
 interface GroupedSeries {
   parentTitle: string;
@@ -163,6 +164,7 @@ export default function SeriesPage() {
   // Guards against a stale slow response landing after a quick sort/server
   // flip and overwriting state with the wrong items.
   const latest = useLatestRequest();
+  const shown = useShownList();
 
   const grid = useVirtualPosterGrid({
     count: seriesList.length,
@@ -180,30 +182,35 @@ export default function SeriesPage() {
 
   const fetchSeries = useCallback(async () => {
     const token = latest.begin();
-    setLoading(true);
+    const params = new URLSearchParams();
+    params.set("sortBy", sortBy);
+    params.set("sortOrder", sortOrder);
+    params.set("limit", "0");
+    if (selectedServerId !== "all") {
+      params.set("serverId", selectedServerId);
+    }
+    // Every filter goes to the server. This page used to send none and
+    // filter on the client for resolution, dates and search only, so the
+    // rest of the panel — Episode Count, Watched %, Last Episode Aired,
+    // Watchlisted (which the route already implements), genre, year, codecs
+    // — showed an active chip over an unfiltered list.
+    for (const [key, value] of Object.entries(filters)) {
+      if (value) params.set(key, value);
+    }
+    const listKey = listCacheKeyFor("/api/media/series/grouped", params);
+    // A refetch of the list already on screen (a sync added or removed items)
+    // swaps the new list in where the old one stands, with no skeleton.
+    const refresh = shown.begin(listKey);
+    if (!refresh) setLoading(true);
     // Set once this request's list is on screen, from the cache or the server.
     let applied = false;
     try {
-      const params = new URLSearchParams();
-      params.set("sortBy", sortBy);
-      params.set("sortOrder", sortOrder);
-      params.set("limit", "0");
-      if (selectedServerId !== "all") {
-        params.set("serverId", selectedServerId);
-      }
-      // Every filter goes to the server. This page used to send none and
-      // filter on the client for resolution, dates and search only, so the
-      // rest of the panel — Episode Count, Watched %, Last Episode Aired,
-      // Watchlisted (which the route already implements), genre, year, codecs
-      // — showed an active chip over an unfiltered list.
-      for (const [key, value] of Object.entries(filters)) {
-        if (value) params.set(key, value);
-      }
       // Through the tab's list cache: a list loaded in the last minute is
       // shown at once, an older one shown and then refreshed behind it.
       await loadCachedList<{ series?: GroupedSeries[] }>("/api/media/series/grouped", params, (data) => {
         if (!latest.isCurrent(token)) return;
         applied = true;
+        shown.markShown(listKey);
         startTransition(() => {
           setSeriesList(data.series || []);
           setLoading(false);
@@ -213,11 +220,11 @@ export default function SeriesPage() {
       console.error("Failed to fetch series:", error);
       // A failed load with nothing shown for it empties the list, as it did
       // before the cache: the previous list under the new filters would read
-      // as their result.
-      if (!applied && latest.isCurrent(token)) setSeriesList([]);
+      // as their result. A failed refresh leaves the list on screen as it was.
+      if (!applied && !refresh && latest.isCurrent(token)) setSeriesList([]);
       if (latest.isCurrent(token)) setLoading(false);
     }
-  }, [sortBy, sortOrder, selectedServerId, filters, latest]);
+  }, [sortBy, sortOrder, selectedServerId, filters, latest, shown]);
 
   useLibrarySyncRefetch({ types: "SERIES", serverId: selectedServerId }, fetchSeries);
 

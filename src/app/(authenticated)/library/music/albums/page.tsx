@@ -16,6 +16,7 @@ import { useCardSize } from "@/hooks/use-card-size";
 import { useCardDisplay, TOGGLE_CONFIGS } from "@/hooks/use-card-display";
 import { useServers } from "@/hooks/use-servers";
 import { useListFetch } from "@/hooks/use-list-fetch";
+import { useShownList } from "@/hooks/use-shown-list";
 import { useLibraryListState } from "@/hooks/use-library-list-state";
 import { useFilterPanelReset } from "@/hooks/use-filter-panel-reset";
 import { useLatestRequest } from "@/hooks/use-latest-request";
@@ -30,7 +31,7 @@ import { MediaGridSkeleton } from "@/components/skeletons";
 import { LibraryTabs, MUSIC_TABS } from "@/components/library-tabs";
 import { VirtualCardGrid, type GridCardContext } from "@/components/virtual-card-grid";
 import { useScrollRestoration } from "@/hooks/use-scroll-restoration";
-import { loadCachedList } from "@/lib/media/list-cache";
+import { listCacheKeyFor, loadCachedList } from "@/lib/media/list-cache";
 
 interface AlbumEntry {
   albumTitle: string;
@@ -136,6 +137,7 @@ export default function AllAlbumsPage() {
   // Guards against a stale slow response landing after a quick
   // sort/filter/server flip and showing the wrong items for the selection.
   const latest = useLatestRequest();
+  const shown = useShownList();
 
   const grid = useVirtualPosterGrid({
     count: albums.length,
@@ -153,25 +155,30 @@ export default function AllAlbumsPage() {
 
   const fetchAlbums = useCallback(async () => {
     const token = latest.begin();
-    setLoading(true);
+    const params = new URLSearchParams();
+    params.set("limit", "0");
+    params.set("sortBy", sortBy);
+    params.set("sortOrder", sortOrder);
+    if (selectedServerId !== "all") {
+      params.set("serverId", selectedServerId);
+    }
+    for (const [key, value] of Object.entries(filters)) {
+      if (value) params.set(key, value);
+    }
+    const listKey = listCacheKeyFor("/api/media/music/albums/all", params);
+    // A refetch of the list already on screen (a sync added or removed items)
+    // swaps the new list in where the old one stands, with no skeleton.
+    const refresh = shown.begin(listKey);
+    if (!refresh) setLoading(true);
     // Set once this request's list is on screen, from the cache or the server.
     let applied = false;
     try {
-      const params = new URLSearchParams();
-      params.set("limit", "0");
-      params.set("sortBy", sortBy);
-      params.set("sortOrder", sortOrder);
-      if (selectedServerId !== "all") {
-        params.set("serverId", selectedServerId);
-      }
-      for (const [key, value] of Object.entries(filters)) {
-        if (value) params.set(key, value);
-      }
       // Through the tab's list cache: a list loaded in the last minute is
       // shown at once, an older one shown and then refreshed behind it.
       await loadCachedList<{ albums?: AlbumEntry[] }>("/api/media/music/albums/all", params, (data) => {
         if (!latest.isCurrent(token)) return;
         applied = true;
+        shown.markShown(listKey);
         setAlbums(data.albums || []);
         setLoading(false);
       });
@@ -179,12 +186,12 @@ export default function AllAlbumsPage() {
       console.error("Failed to fetch albums:", error);
       // A failed load with nothing shown for it empties the list, as it did
       // before the cache: the previous list under the new filters would read
-      // as their result.
-      if (!applied && latest.isCurrent(token)) setAlbums([]);
+      // as their result. A failed refresh leaves the list on screen as it was.
+      if (!applied && !refresh && latest.isCurrent(token)) setAlbums([]);
     } finally {
       if (latest.isCurrent(token)) setLoading(false);
     }
-  }, [filters, sortBy, sortOrder, selectedServerId, latest]);
+  }, [filters, sortBy, sortOrder, selectedServerId, latest, shown]);
 
   useListFetch(fetchAlbums);
 
