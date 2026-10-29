@@ -251,17 +251,24 @@ export function DataTable<T>({
     }
   }, []);
 
+  // Where the table starts in the scroll element's content. Re-measured
+  // whenever that content resizes: anything above the table (the paused-pins
+  // note re-wrapping on rotation, a page's progress bar) moves it.
   useLayoutEffect(() => {
     const scrollEl = scrollElementRef.current;
     const tableEl = tableContainerRef.current;
-    if (scrollEl && tableEl) {
-      const margin = Math.round(
+    if (!scrollEl || !tableEl) return;
+    const update = () => {
+      setScrollMargin(Math.round(
         tableEl.getBoundingClientRect().top - scrollEl.getBoundingClientRect().top + scrollEl.scrollTop
-      );
-      setScrollMargin(margin);
-    }
-    // The paused-pins note above the table (phones) moves where it starts.
-  }, [data.length, layout.suspended.size]);
+      ));
+    };
+    update();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(update);
+    for (const child of Array.from(scrollEl.children)) observer.observe(child);
+    return () => observer.disconnect();
+  }, [data.length]);
 
   // --- Sticky horizontal scrollbar ---
   // The table's own scrollbar sits below its last row, out of reach on a long
@@ -356,15 +363,19 @@ export function DataTable<T>({
     else if (e.clientX > thumbRect.right) container.scrollBy({ left: page, behavior: "smooth" });
   };
 
+  // Stable: the virtualizer rebuilds every row's measurement when it changes.
+  const getItemKey = useCallback((index: number) => keyExtractor(sortedData[index]), [keyExtractor, sortedData]);
+
   const virtualizer = useVirtualizer({
     count: sortedData.length,
     getScrollElement: () => scrollElementRef.current,
     estimateSize: () => 37,
-    // Rows are measured: a two-line cell (a show's or an episode's title)
-    // makes a row taller than the estimate, and unmeasured the padding rows
-    // and the real rows disagreed, so the list jumped as rows scrolled in.
-    // Keyed by item so a re-sort does not apply one row's height to another.
-    getItemKey: (index) => keyExtractor(sortedData[index]),
+    // Rows are measured: a cell stacking two lines (the Query title column's
+    // title and episode line) makes a row taller than the estimate, and
+    // unmeasured the padding rows and the real rows disagreed, so the list
+    // jumped as rows scrolled in. Keyed by item so a re-sort does not apply
+    // one row's height to another.
+    getItemKey,
     overscan: 15,
     scrollMargin,
   });
