@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.34.0](https://github.com/ahembree/librariarr/compare/v0.33.0...v0.34.0) (2026-10-29)
+
+
+### Features
+
+* add live preview to custom card dialog ([#504](https://github.com/ahembree/librariarr/issues/504)) ([0acff49](https://github.com/ahembree/librariarr/commit/0acff495a031135dd68cb0c9ffc1be5d0383f4d4))
+
+
+### Bug Fixes
+
+* **query:** measure table rows so long lists stop jumping while scrolling ([#494](https://github.com/ahembree/librariarr/issues/494)) ([f7bae8c](https://github.com/ahembree/librariarr/commit/f7bae8c326c29e89ab08e0f49b651ac0571d6545))
+
 ## [0.33.0](https://github.com/ahembree/librariarr/compare/v0.32.0...v0.33.0) (2026-10-29)
 
 
