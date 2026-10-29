@@ -260,7 +260,8 @@ export function DataTable<T>({
       );
       setScrollMargin(margin);
     }
-  }, [data.length]);
+    // The paused-pins note above the table (phones) moves where it starts.
+  }, [data.length, layout.suspended.size]);
 
   // --- Sticky horizontal scrollbar ---
   // The table's own scrollbar sits below its last row, out of reach on a long
@@ -359,6 +360,11 @@ export function DataTable<T>({
     count: sortedData.length,
     getScrollElement: () => scrollElementRef.current,
     estimateSize: () => 37,
+    // Rows are measured: a two-line cell (a show's or an episode's title)
+    // makes a row taller than the estimate, and unmeasured the padding rows
+    // and the real rows disagreed, so the list jumped as rows scrolled in.
+    // Keyed by item so a re-sort does not apply one row's height to another.
+    getItemKey: (index) => keyExtractor(sortedData[index]),
     overscan: 15,
     scrollMargin,
   });
@@ -508,6 +514,7 @@ export function DataTable<T>({
             const tableRow = (
               <tr
                 key={key}
+                ref={virtualizer.measureElement}
                 data-index={virtualRow.index}
                 data-clickable={onRowClick ? "" : undefined}
                 className={cn(
