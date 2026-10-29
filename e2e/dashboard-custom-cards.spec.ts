@@ -8,9 +8,10 @@ import { storeDashboardLayout } from "./seed";
  *
  * Covers: the dialog only offering combinations the routes accept (a timeline
  * "Color By" the route can express, a heatmap pair the cross-tab can cross),
- * every card's data arriving in one batch request, and a card whose data
- * fails to load showing an error rather than "No data" or the previous
- * config's data under its new title.
+ * every card's data arriving in one batch request, the dialog previewing the
+ * card it is configuring, and a card whose data fails to load showing an
+ * error rather than "No data" or the previous config's data under its new
+ * title.
  */
 
 type Layout = { main: unknown[]; movies: unknown[]; series: unknown[]; music: unknown[] };
@@ -139,6 +140,28 @@ test.describe("dashboard custom cards", () => {
     await expect(page.getByText("No data available")).toHaveCount(0);
   });
 
+  test("the dialog previews the card before it is added", async ({ page }) => {
+    await stubLayout(page, []);
+    await stubCardData(page, (card) =>
+      card.kind === "custom" && card.dimension === "resolution"
+        ? { status: 200, body: { breakdown: [{ value: "4K", type: "MOVIE", _count: 7 }, { value: "1080P", type: "MOVIE", _count: 31 }] } }
+        : { status: 200, body: {} },
+    );
+    const dialog = await openCustomCardDialog(page);
+    await expect(dialog.getByText("Choose a dimension to see a preview.")).toBeVisible();
+
+    await dialog.getByRole("combobox").first().click();
+    await page.getByRole("option", { name: "Resolution", exact: true }).click();
+
+    await expect(dialog.getByText("Resolution Breakdown")).toBeVisible();
+    await expect(dialog.getByText("1080P (31)")).toBeVisible();
+    await expect(dialog.getByText("4K (7)")).toBeVisible();
+
+    // Presentation options redraw the preview without asking again.
+    await dialog.getByPlaceholder("Auto-generated from dimension").fill("My Resolutions");
+    await expect(dialog.getByText("My Resolutions")).toBeVisible();
+  });
+
   test("an edit that fails to load does not keep the old data under the new title", async ({ page }) => {
     await stubLayout(page, [
       {
@@ -147,17 +170,18 @@ test.describe("dashboard custom cards", () => {
         config: { chartType: "heatmap", dimension: "resolution", dimension2: "videoCodec" },
       },
     ]);
-    let calls = 0;
+    // The saved config loads; the edited one fails — in the dialog's preview
+    // and on the card once saved.
     await stubCardData(page, (card) => {
       if (card.kind !== "crossTab") return { status: 200, body: {} };
-      calls++;
       // Resolution comes back as its display bin, as `computeCrossTab` maps it.
-      return calls === 1
+      return card.dimension2 === "videoCodec"
         ? { status: 200, body: { rows: [{ dim1: "1080P", dim2: "h264", type: "MOVIE", _count: 42 }] } }
         : { status: 500, body: { error: "boom" } };
     });
     await page.goto("/");
-    const card = page.locator('[data-slot="card"]', { hasText: "custom chart" });
+    // The grid's card, not the dialog's preview (the dialog portals outside <main>).
+    const card = page.locator("main").locator('[data-slot="card"]', { hasText: "custom chart" });
     await expect(card.getByText("Resolution vs Video Codec")).toBeVisible();
     // The first load drew the heatmap (its gradient legend renders only with cells).
     await expect(card.getByText("High", { exact: true })).toBeVisible();
@@ -167,12 +191,13 @@ test.describe("dashboard custom cards", () => {
     const dialog = page.getByRole("dialog");
     await dialog.getByRole("combobox").nth(1).click();
     await page.getByRole("option", { name: "Audio Codec", exact: true }).click();
+    await expect(dialog.getByText("Couldn't load this chart")).toBeVisible();
     await dialog.getByRole("button", { name: "Save" }).click();
+    await expect(dialog).toHaveCount(0);
 
     await expect(card.getByText("Resolution vs Audio Codec")).toBeVisible();
     await expect(card.getByText("Couldn't load this chart")).toBeVisible();
     // …and the previous config's heatmap is gone with it.
     await expect(card.getByText("High", { exact: true })).toHaveCount(0);
-    expect(calls).toBe(2);
   });
 });
