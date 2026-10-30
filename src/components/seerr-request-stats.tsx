@@ -36,7 +36,7 @@ import {
 import { cn } from "@/lib/utils";
 import { UserAvatar } from "@/components/user-avatar";
 import { Skeleton } from "@/components/ui/skeleton";
-import { SeerrUserRequestsDialog } from "@/components/seerr-user-requests-dialog";
+import { lazyComponent } from "@/components/lazy-component";
 
 interface UserStats {
   userKey: string;
@@ -191,6 +191,13 @@ function sortValue(u: UserStats, col: SortColumn): number | string {
   }
 }
 
+// The per-user drill-down loads when a user is first opened: it is most of
+// this card's code, and the card is on the dashboard by default.
+const SeerrUserRequestsDialog = lazyComponent(
+  () => import("@/components/seerr-user-requests-dialog").then((m) => m.SeerrUserRequestsDialog),
+  () => null,
+);
+
 export function SeerrRequestStats() {
   const [data, setData] = useState<Response | null>(null);
   const [loading, setLoading] = useState(true);
@@ -199,6 +206,9 @@ export function SeerrRequestStats() {
   const [sortColumn, setSortColumn] = useState<SortColumn>("total");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [openUserKey, setOpenUserKey] = useState<string | null>(null);
+  // Mounted from the first open on, so its closing animation plays.
+  const [dialogUsed, setDialogUsed] = useState(false);
+  if (openUserKey !== null && !dialogUsed) setDialogUsed(true);
 
   useEffect(() => {
     let cancelled = false;
@@ -389,13 +399,13 @@ export function SeerrRequestStats() {
     );
   }
 
-  const dialog = (
+  const dialog = dialogUsed ? (
     <SeerrUserRequestsDialog
       userKey={openUserKey}
       open={openUserKey !== null}
       onClose={() => setOpenUserKey(null)}
     />
-  );
+  ) : null;
 
   if (showAll) {
     return (

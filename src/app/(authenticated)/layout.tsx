@@ -1,10 +1,12 @@
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { getRequestSession, loadShellSettings } from "@/lib/settings/shell-settings";
 import { ChipColorProvider } from "@/components/chip-color-provider";
 import { ShellSettingsProvider } from "@/components/shell-settings-provider";
 import { AuthenticatedShell } from "@/components/authenticated-shell";
+import { MobileGuessProvider } from "@/components/mobile-guess-provider";
+import { isLikelyPhone } from "@/lib/device";
 
 export const dynamic = "force-dynamic";
 
@@ -35,12 +37,20 @@ export default async function AuthenticatedLayout({
   const cookieStore = await cookies();
   const sidebarCollapsed = cookieStore.get("sidebar-collapsed")?.value === "1";
 
+  // Lay a phone out as a phone before hydration: the server cannot see the
+  // screen, and the desktop sidebar took most of a phone's width until the
+  // page had hydrated (see `isLikelyPhone`).
+  const requestHeaders = await headers();
+  const likelyPhone = isLikelyPhone(requestHeaders.get("user-agent"), requestHeaders.get("sec-ch-ua-mobile"));
+
   return (
     <ShellSettingsProvider initial={settings}>
       <ChipColorProvider>
-        <AuthenticatedShell initialSidebarCollapsed={sidebarCollapsed}>
-          {children}
-        </AuthenticatedShell>
+        <MobileGuessProvider guess={likelyPhone}>
+          <AuthenticatedShell initialSidebarCollapsed={sidebarCollapsed}>
+            {children}
+          </AuthenticatedShell>
+        </MobileGuessProvider>
       </ChipColorProvider>
     </ShellSettingsProvider>
   );

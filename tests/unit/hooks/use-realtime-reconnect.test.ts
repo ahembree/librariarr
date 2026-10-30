@@ -52,6 +52,12 @@ class FakeEventSource {
     this.readyState = FakeEventSource.OPEN;
     this.onopen?.();
   }
+
+  /** The route's first event, as the stream sends it. */
+  fireConnected(data: unknown) {
+    const event = new MessageEvent("connected", { data: typeof data === "string" ? data : JSON.stringify(data) });
+    for (const fn of this.listeners.get("connected") ?? []) fn(event);
+  }
 }
 
 const fetchMock = vi.fn();
@@ -233,5 +239,84 @@ describe("useRealtime reconnect machinery", () => {
     expect((first as unknown as FakeEventSource).closed).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
     expect((first as unknown as FakeEventSource).closed).toBe(true);
+  });
+
+  describe("resyncIfEventsSince — a page rendered with its data on the server", () => {
+    const RENDERED_AT = 1_000_000;
+
+    function connectedStream() {
+      const source = subscribe() as unknown as FakeEventSource;
+      source.fireOpen();
+      return source;
+    }
+
+    it("resyncs once the stream reports an event since the render", () => {
+      const resyncs: number[] = [];
+      mod.__testing.registerResync(() => resyncs.push(1));
+      mod.resyncIfEventsSince(RENDERED_AT);
+      const source = connectedStream();
+      expect(resyncs).toHaveLength(0);
+
+      source.fireConnected({ timestamp: RENDERED_AT + 900, lastEventAt: RENDERED_AT + 400 });
+      expect(resyncs).toHaveLength(1);
+    });
+
+    it("an event at the render's own millisecond counts", () => {
+      const resyncs: number[] = [];
+      mod.__testing.registerResync(() => resyncs.push(1));
+      mod.resyncIfEventsSince(RENDERED_AT);
+      connectedStream().fireConnected({ timestamp: RENDERED_AT + 900, lastEventAt: RENDERED_AT });
+      expect(resyncs).toHaveLength(1);
+    });
+
+    it("does nothing when the last event predates the render, or there was none", () => {
+      const resyncs: number[] = [];
+      mod.__testing.registerResync(() => resyncs.push(1));
+      mod.resyncIfEventsSince(RENDERED_AT);
+      connectedStream().fireConnected({ timestamp: RENDERED_AT + 900, lastEventAt: RENDERED_AT - 1 });
+      expect(resyncs).toHaveLength(0);
+    });
+
+    it("does nothing when the server has emitted nothing since it started", () => {
+      const resyncs: number[] = [];
+      mod.__testing.registerResync(() => resyncs.push(1));
+      mod.resyncIfEventsSince(RENDERED_AT);
+      connectedStream().fireConnected({ timestamp: RENDERED_AT + 900, lastEventAt: null });
+      expect(resyncs).toHaveLength(0);
+    });
+
+    it("resyncs when it cannot tell (no lastEventAt, unreadable data)", () => {
+      const resyncs: number[] = [];
+      mod.__testing.registerResync(() => resyncs.push(1));
+      mod.resyncIfEventsSince(RENDERED_AT);
+      connectedStream().fireConnected({ timestamp: RENDERED_AT + 900 });
+      expect(resyncs).toHaveLength(1);
+    });
+
+    it("checks only the first connected event after the render", async () => {
+      const resyncs: number[] = [];
+      mod.__testing.registerResync(() => resyncs.push(1));
+      mod.resyncIfEventsSince(RENDERED_AT);
+      const source = connectedStream();
+      source.fireConnected({ timestamp: RENDERED_AT + 900, lastEventAt: null });
+      await vi.advanceTimersByTimeAsync(10_000);
+      source.fireConnected({ timestamp: RENDERED_AT + 20_000, lastEventAt: RENDERED_AT + 15_000 });
+      expect(resyncs).toHaveLength(0);
+    });
+
+    it("a page with no server-rendered data never resyncs on the first connected event", () => {
+      const resyncs: number[] = [];
+      mod.__testing.registerResync(() => resyncs.push(1));
+      connectedStream().fireConnected({ timestamp: RENDERED_AT + 900, lastEventAt: RENDERED_AT + 400 });
+      expect(resyncs).toHaveLength(0);
+    });
+
+    it("resyncs at once when the stream is already delivering", () => {
+      const resyncs: number[] = [];
+      mod.__testing.registerResync(() => resyncs.push(1));
+      connectedStream().fireConnected({ timestamp: RENDERED_AT, lastEventAt: null });
+      mod.resyncIfEventsSince(RENDERED_AT);
+      expect(resyncs).toHaveLength(1);
+    });
   });
 });

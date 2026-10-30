@@ -254,12 +254,53 @@ async function checkAuthFailure(): Promise<boolean> {
   }
 }
 
+// The server time a page's server-rendered data was read at, until the
+// stream's first `connected` event says whether anything was emitted since
+// (see `resyncIfEventsSince`).
+let pendingSnapshotAt: number | null = null;
+
+/**
+ * For a page whose server render carried its data (the dashboard): that data
+ * was read at `serverTime`, before this tab's stream existed, so an event
+ * emitted between the two reached nobody. The stream's first `connected` event
+ * names the server's last event; if it is that late or later, every subscriber
+ * refetches once, as on a reconnect. A page that fetched its own data on mount
+ * never needs this — the stream opens before its answers arrive.
+ */
+export function resyncIfEventsSince(serverTime: number): void {
+  if (liveState) {
+    // Already delivering: the `connected` event that would have answered has
+    // gone by, so the gap cannot be checked.
+    fireResync();
+    return;
+  }
+  pendingSnapshotAt = pendingSnapshotAt === null ? serverTime : Math.min(pendingSnapshotAt, serverTime);
+}
+
+/** Whether a `connected` event's `lastEventAt` reports an event at or after `since`. */
+function eventsSince(e: Event, since: number): boolean {
+  try {
+    const { lastEventAt } = JSON.parse((e as MessageEvent).data) as { lastEventAt?: unknown };
+    // null: the server has emitted nothing since it started.
+    if (lastEventAt === null) return false;
+    return typeof lastEventAt !== "number" || lastEventAt >= since;
+  } catch {
+    // Unreadable: refetch rather than trust data that may be stale.
+    return true;
+  }
+}
+
 function createSource(): EventSource | null {
   try {
     const source = new EventSource("/api/events/stream");
-    source.addEventListener("connected", () => {
+    source.addEventListener("connected", (e) => {
       setConnected(true);
       setLive(true);
+      if (pendingSnapshotAt !== null) {
+        const since = pendingSnapshotAt;
+        pendingSnapshotAt = null;
+        if (eventsSince(e, since)) fireResync();
+      }
     });
     source.onopen = () => {
       // Successful (re)open — reset backoff.

@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useId, useState, useRef } from "react";
-import Link from "next/link";
+import { useEffect, useId, useState, useRef, memo } from "react";
+import { DeferredPrefetchLink } from "@/components/deferred-prefetch-link";
 import type { LucideIcon } from "lucide-react";
 import { ArrowUpRight, Film, HardDrive, Music, Tv } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -9,6 +9,8 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { formatBytesNum, formatDurationLarge } from "@/lib/format";
 import { useRealtime } from "@/hooks/use-realtime";
 import { buildSparkPoints, type SparkPoint } from "@/lib/dashboard/sparkline";
+import { libraryTileTypes, sparklinesUrl } from "@/lib/dashboard/seed-urls";
+import { useCountFormat, useDashboardSeed, useRenderNow } from "@/components/dashboard/dashboard-seed";
 
 /** "2026-03" → "Mar 2026" for the hover tooltip. */
 function formatMonth(bucket: string): string {
@@ -39,6 +41,29 @@ interface LibraryStats {
 
 /** Months of addedAt history shown in each tile's growth sparkline. */
 const SPARK_MONTHS = 12;
+
+interface SparklinesBody {
+  series?: Record<string, { date: string; total: number }[]>;
+}
+
+/** Every tile's sparkline from `/api/media/stats/sparklines`, keyed by type and `ALL`. */
+function sparksFrom(
+  data: SparklinesBody | null,
+  types: readonly string[],
+  now?: number,
+): Record<string, SparkPoint[]> {
+  const entries = [...types, "ALL"].map((key) => {
+    // The totals tile charts library size over time: per-month byte
+    // sums, accumulated so each point is the size at that month.
+    const points = buildSparkPoints(data?.series?.[key] ?? [], {
+      cumulative: key === "ALL",
+      months: SPARK_MONTHS,
+      now: now === undefined ? undefined : new Date(now),
+    });
+    return [key, points] as const;
+  });
+  return Object.fromEntries(entries);
+}
 
 /** Per-month sparkline (area + line, brand-tinted). Hovering snaps a
  *  cursor line + dot to the nearest month and shows a tooltip with the
@@ -237,9 +262,9 @@ function LibraryTile({
 
   if (href) {
     return (
-      <Link href={href} className={className}>
+      <DeferredPrefetchLink href={href} className={className}>
         {body}
-      </Link>
+      </DeferredPrefetchLink>
     );
   }
   return <div className={className}>{body}</div>;
@@ -251,7 +276,7 @@ function LibraryTile({
  * totals tile. Replaces both the old stats card and the per-type
  * dashboard tabs.
  */
-export function LibraryTiles({
+export const LibraryTiles = memo(function LibraryTiles({
   stats,
   availableTypes,
   serverId,
@@ -265,52 +290,50 @@ export function LibraryTiles({
   availableTypes: string[];
   serverId?: string;
 }) {
-  const [sparks, setSparks] = useState<Record<string, SparkPoint[]>>({});
+  const types = libraryTileTypes(availableTypes);
+  const show = {
+    movie: types.includes("MOVIE"),
+    series: types.includes("SERIES"),
+    music: types.includes("MUSIC"),
+  };
+  // One request for every tile: they asked one timeline each, four of the
+  // requests the dashboard makes on load.
+  const url = sparklinesUrl(types, serverId);
+
+  // On the dashboard's page load the server render read the sparklines (the
+  // same URL), so they are in its HTML and the first request is skipped.
+  const renderNow = useRenderNow();
+  const formatCount = useCountFormat();
+  const seeded = useDashboardSeed<SparklinesBody>(url);
+  const seededUrl = useRef(seeded === undefined ? null : url);
+  const [sparks, setSparks] = useState<Record<string, SparkPoint[]>>(() =>
+    seeded === undefined ? {} : sparksFrom(seeded, types, renderNow),
+  );
   // The headline counts refresh after a sync; the sparklines must too, or the
   // tile shows a new total over a chart that has not caught up with it.
   const [refreshKey, setRefreshKey] = useState(0);
   useRealtime("sync:completed", () => setRefreshKey((k) => k + 1));
 
-  const showAll = availableTypes.length === 0;
-  const show = {
-    movie: showAll || availableTypes.includes("MOVIE"),
-    series: showAll || availableTypes.includes("SERIES"),
-    music: showAll || availableTypes.includes("MUSIC"),
-  };
-
   useEffect(() => {
-    const types = [
-      ...(show.movie ? ["MOVIE"] : []),
-      ...(show.series ? ["SERIES"] : []),
-      ...(show.music ? ["MUSIC"] : []),
-    ];
+    if (seededUrl.current === url) {
+      seededUrl.current = null;
+      return;
+    }
     let cancelled = false;
-
-    // One request for every tile: they asked one timeline each, four of the
-    // requests the dashboard makes on load.
-    const params = new URLSearchParams({ types: types.join(",") });
-    if (serverId) params.set("serverId", serverId);
-    fetch(`/api/media/stats/sparklines?${params}`)
+    const requested = types;
+    fetch(url)
       .then((res) => (res.ok ? res.json() : null))
       .catch(() => null)
-      .then((data: { series?: Record<string, { date: string; total: number }[]> } | null) => {
-        if (cancelled) return;
-        const entries = [...types, "ALL"].map((key) => {
-          // The totals tile charts library size over time: per-month byte
-          // sums, accumulated so each point is the size at that month.
-          const points = buildSparkPoints(data?.series?.[key] ?? [], {
-            cumulative: key === "ALL",
-            months: SPARK_MONTHS,
-          });
-          return [key, points] as const;
-        });
-        setSparks(Object.fromEntries(entries));
+      .then((data: SparklinesBody | null) => {
+        if (!cancelled) setSparks(sparksFrom(data, requested));
       });
 
     return () => {
       cancelled = true;
     };
-  }, [serverId, show.movie, show.series, show.music, refreshKey]);
+    // `url` carries the types and the server.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [url, refreshKey]);
 
   const visibleCount = Number(show.movie) + Number(show.series) + Number(show.music) + 1;
   const gridCols =
@@ -327,7 +350,7 @@ export function LibraryTiles({
           href="/library/movies"
           icon={Film}
           label="Movies"
-          value={stats && stats.movieCount.toLocaleString()}
+          value={stats && formatCount(stats.movieCount)}
           spark={sparks.MOVIE}
           rows={[
             { label: "Size", value: stats && formatBytesNum(Number(stats.movieSize)) },
@@ -340,8 +363,8 @@ export function LibraryTiles({
           href="/library/series"
           icon={Tv}
           label="Series"
-          value={stats && stats.seriesCount.toLocaleString()}
-          sub={stats && `${stats.seasonCount.toLocaleString()} seasons · ${stats.episodeCount.toLocaleString()} episodes`}
+          value={stats && formatCount(stats.seriesCount)}
+          sub={stats && `${formatCount(stats.seasonCount)} seasons · ${formatCount(stats.episodeCount)} episodes`}
           spark={sparks.SERIES}
           rows={[
             { label: "Size", value: stats && formatBytesNum(Number(stats.seriesSize)) },
@@ -354,8 +377,8 @@ export function LibraryTiles({
           href="/library/music"
           icon={Music}
           label="Music"
-          value={stats && stats.musicCount.toLocaleString()}
-          sub={stats && `${stats.artistCount.toLocaleString()} artists · ${stats.albumCount.toLocaleString()} albums`}
+          value={stats && formatCount(stats.musicCount)}
+          sub={stats && `${formatCount(stats.artistCount)} artists · ${formatCount(stats.albumCount)} albums`}
           spark={sparks.MUSIC}
           rows={[
             { label: "Size", value: stats && formatBytesNum(Number(stats.musicSize)) },
@@ -381,4 +404,4 @@ export function LibraryTiles({
       />
     </div>
   );
-}
+});

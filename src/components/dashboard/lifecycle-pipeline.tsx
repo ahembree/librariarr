@@ -1,14 +1,16 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, memo } from "react";
 import { useRealtime } from "@/hooks/use-realtime";
-import Link from "next/link";
+import { DeferredPrefetchLink } from "@/components/deferred-prefetch-link";
 import { ChevronRight, Recycle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { formatBytesNum, formatUntil } from "@/lib/format";
 import type { ScheduleInfo } from "@/components/dashboard/types";
 import { pipelineStateFrom, type PipelineState } from "@/lib/dashboard/pipeline";
+import { LIFECYCLE_SUMMARY_URL } from "@/lib/dashboard/seed-urls";
+import { useCountFormat, useDashboardSeed, useRenderNow } from "@/components/dashboard/dashboard-seed";
 
 function Stage({
   href,
@@ -24,7 +26,7 @@ function Stage({
   arrow?: boolean;
 }) {
   return (
-    <Link
+    <DeferredPrefetchLink
       href={href}
       className="group relative flex flex-col gap-1 rounded-[10px] px-4 py-3 transition-colors hover:bg-surface-2/50"
     >
@@ -36,7 +38,7 @@ function Stage({
       {arrow && (
         <ChevronRight className="absolute top-1/2 -right-[15px] hidden h-4 w-4 -translate-y-1/2 text-faint lg:block" />
       )}
-    </Link>
+    </DeferredPrefetchLink>
   );
 }
 
@@ -46,19 +48,28 @@ function Stage({
  * Each stage deep-links to its lifecycle page. Shows a create-your-first-rule
  * CTA when no rule sets exist yet.
  */
-export function LifecyclePipeline({ scheduleInfo }: { scheduleInfo: ScheduleInfo | null }) {
+export const LifecyclePipeline = memo(function LifecyclePipeline({ scheduleInfo }: { scheduleInfo: ScheduleInfo | null }) {
+  // On the dashboard's page load the server render read the summary: it is
+  // in the HTML, and the first load is skipped.
+  const seeded = useDashboardSeed<Parameters<typeof pipelineStateFrom>[0]>(LIFECYCLE_SUMMARY_URL);
+  const summarySeeded = useRef(seeded !== undefined);
   // null while the first load runs; every load replaces the whole state.
-  const [state, setState] = useState<PipelineState | null>(null);
+  const [state, setState] = useState<PipelineState | null>(() =>
+    seeded === undefined ? null : pipelineStateFrom(seeded),
+  );
+  const now = useRenderNow();
+  const formatCount = useCountFormat();
 
   const load = useCallback(async () => {
     // A request that fails or rejects reads as null.
-    const summary = await fetch("/api/lifecycle/summary")
+    const summary = await fetch(LIFECYCLE_SUMMARY_URL)
       .then((r) => (r.ok ? r.json() : null))
       .catch(() => null);
     setState(pipelineStateFrom(summary));
   }, []);
 
   useEffect(() => {
+    if (summarySeeded.current) return;
     void (async () => { await load(); })();
   }, [load]);
 
@@ -96,7 +107,7 @@ export function LifecyclePipeline({ scheduleInfo }: { scheduleInfo: ScheduleInfo
           </p>
         </div>
         <Button asChild size="sm" variant="outline" className="shrink-0">
-          <Link href="/lifecycle/rules">Create a rule set</Link>
+          <DeferredPrefetchLink href="/lifecycle/rules">Create a rule set</DeferredPrefetchLink>
         </Button>
       </div>
     );
@@ -110,17 +121,17 @@ export function LifecyclePipeline({ scheduleInfo }: { scheduleInfo: ScheduleInfo
         <Stage
           href="/lifecycle/rules"
           label="Rule sets"
-          value={data.ruleEnabled.toLocaleString()}
-          sub={`${data.ruleTotal.toLocaleString()} total · ${data.ruleEnabled.toLocaleString()} enabled`}
+          value={formatCount(data.ruleEnabled)}
+          sub={`${formatCount(data.ruleTotal)} total · ${formatCount(data.ruleEnabled)} enabled`}
           arrow
         />
         <Stage
           href="/lifecycle/matches"
           label="Matches"
-          value={data.matchCount.toLocaleString()}
+          value={formatCount(data.matchCount)}
           sub={
             data.matchCount > 0
-              ? `across ${data.matchRuleSets.toLocaleString()} rule set${data.matchRuleSets === 1 ? "" : "s"}`
+              ? `across ${formatCount(data.matchRuleSets)} rule set${data.matchRuleSets === 1 ? "" : "s"}`
               : "nothing matched yet"
           }
           arrow
@@ -128,11 +139,11 @@ export function LifecyclePipeline({ scheduleInfo }: { scheduleInfo: ScheduleInfo
         <Stage
           href="/lifecycle/pending"
           label="Pending actions"
-          value={data.pendingCount.toLocaleString()}
+          value={formatCount(data.pendingCount)}
           sub={
             data.pendingCount > 0
-              ? `${formatBytesNum(data.pendingBytes)} · runs ${formatUntil(nextExecution)}`
-              : `next run ${formatUntil(nextExecution)}`
+              ? `${formatBytesNum(data.pendingBytes)} · runs ${formatUntil(nextExecution, now)}`
+              : `next run ${formatUntil(nextExecution, now)}`
           }
           arrow
         />
@@ -140,9 +151,9 @@ export function LifecyclePipeline({ scheduleInfo }: { scheduleInfo: ScheduleInfo
           href="/lifecycle/pending"
           label="Reclaimed"
           value={formatBytesNum(data.reclaimedBytes)}
-          sub={`${data.reclaimedActions.toLocaleString()} completed action${data.reclaimedActions === 1 ? "" : "s"}`}
+          sub={`${formatCount(data.reclaimedActions)} completed action${data.reclaimedActions === 1 ? "" : "s"}`}
         />
       </div>
     </div>
   );
-}
+});

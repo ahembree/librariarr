@@ -10,7 +10,7 @@ import { Logo } from "@/components/logo";
 import { Button } from "@/components/ui/button";
 import { BackToTop } from "@/components/back-to-top";
 import { ReauthDialogHost } from "@/components/reauth-dialog-host";
-import { WhatsNewDialog } from "@/components/whats-new-dialog";
+import { lazyComponent } from "@/components/lazy-component";
 import { findScrollContainer } from "@/lib/scroll-utils";
 import { useScrollToTop } from "@/hooks/use-scroll-to-top";
 import { beforeRealtimeEvents, useRealtime } from "@/hooks/use-realtime";
@@ -40,6 +40,13 @@ beforeRealtimeEvents(
 );
 
 
+// Loaded only when the layout says release notes are owed (or could not say):
+// it renders nothing otherwise, and its code was part of every page's script.
+const WhatsNewDialog = lazyComponent(
+  () => import("@/components/whats-new-dialog").then((m) => m.WhatsNewDialog),
+  () => null,
+);
+
 interface UnreachableServer {
   id: string;
   name: string;
@@ -62,6 +69,9 @@ export function AuthenticatedShell({
     () => shell?.getSnapshot().maintenanceActive ?? false,
   );
   const maintenanceKnown = useRef(shell !== null);
+  // Read once: recording the notes as seen clears it, and the dialog must stay
+  // mounted to close.
+  const [whatsNewDue] = useState(() => shell === null || shell.getSnapshot().whatsNewDue);
   const [unreachableServers, setUnreachableServers] = useState<UnreachableServer[]>([]);
   useScrollToTop();
 
@@ -194,7 +204,7 @@ export function AuthenticatedShell({
       {/* The "Confirm it's you" prompt behind fetchWithReauth. */}
       <ReauthDialogHost />
       {/* Once per upgrade: the release notes since the last version seen. */}
-      <WhatsNewDialog />
+      {whatsNewDue && <WhatsNewDialog />}
     </div>
   );
 }

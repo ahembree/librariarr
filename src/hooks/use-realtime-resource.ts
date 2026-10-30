@@ -108,11 +108,18 @@ const noValue = () => null;
  * `needsRefresh()` says so. The caller subscribes `resource.refresh` to the
  * resource's events with `useRealtime` (hooks cannot be called in a loop).
  * Null on the server render and until the first read answers.
+ *
+ * `seed` is a value the server render read (the dashboard's): it is the
+ * answer on the server render and the render hydrating it, and the store
+ * takes it on mount unless it already holds one. Taken once.
  */
-export function useRealtimeResource<T>(resource: RealtimeResource<T>): T | null {
+export function useRealtimeResource<T>(resource: RealtimeResource<T>, seed?: T | null): T | null {
   const value = useSyncExternalStore(resource.subscribe, resource.getSnapshot, noValue);
   useEffect(() => {
+    if (seed != null) resource.seed(seed);
     if (resource.needsRefresh()) void resource.refresh();
+    // The seed is taken once, on mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [resource]);
-  return value;
+  return value ?? seed ?? null;
 }

@@ -185,4 +185,28 @@ describe("AppEventBus", () => {
 
     unsubscribe();
   });
+
+  it("records when the last event went out, the time delivered events carry", async () => {
+    const { eventBus } = await createEventBus();
+    const listener = vi.fn();
+    const unsubscribe = eventBus.subscribe(listener);
+
+    eventBus.emit({ type: "sync:completed", userId: "user1" });
+
+    const delivered = listener.mock.calls[0][0] as { timestamp: number };
+    expect(eventBus.lastEventAt).toBe(delivered.timestamp);
+    unsubscribe();
+  });
+
+  it("records the time even when no one is subscribed", async () => {
+    const { eventBus } = await createEventBus();
+    vi.useFakeTimers({ now: 5_000_000 });
+    try {
+      eventBus.emit({ type: "server:changed", userId: "user1" });
+      expect(eventBus.lastEventAt).toBe(5_000_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
+

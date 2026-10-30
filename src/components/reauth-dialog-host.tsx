@@ -1,20 +1,21 @@
 "use client";
 
-import { useEffect, useSyncExternalStore } from "react";
-import { ShieldCheck } from "lucide-react";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { ReauthPanel } from "@/components/reauth-panel";
+import { useEffect, useState, useSyncExternalStore } from "react";
+import { lazyComponent } from "@/components/lazy-component";
 import {
   getReauthRequest,
   registerReauthHost,
   subscribeReauth,
 } from "@/lib/auth/reauth-client";
+
+// The prompt and its sign-in methods (the Plex and OIDC flows) load when a
+// prompt is first asked for: mounted in the shell, they were part of the
+// script every page ran before it was interactive, for a prompt most visits
+// never see.
+const ReauthDialog = lazyComponent(
+  () => import("@/components/reauth-dialog").then((m) => m.ReauthDialog),
+  () => null,
+);
 
 /**
  * Shows the prompt `confirmIdentity` / `fetchWithReauth` ask for. Mounted
@@ -22,35 +23,11 @@ import {
  */
 export function ReauthDialogHost() {
   const request = useSyncExternalStore(subscribeReauth, getReauthRequest, () => null);
+  // Kept mounted after the first prompt, so its closing animation plays.
+  const [asked, setAsked] = useState(false);
+  if (request !== null && !asked) setAsked(true);
 
   useEffect(() => registerReauthHost(), []);
 
-  return (
-    <Dialog
-      open={request !== null}
-      onOpenChange={(open) => {
-        if (!open) request?.resolve(false);
-      }}
-    >
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <ShieldCheck className="h-5 w-5 text-primary" />
-            Confirm it&rsquo;s you
-          </DialogTitle>
-          <DialogDescription>
-            This can give lasting access to your account, so it needs a sign-in from the last 15
-            minutes. Sign in again here and it goes ahead — you stay signed in.
-          </DialogDescription>
-        </DialogHeader>
-        {request && (
-          <ReauthPanel
-            key={request.id}
-            methods={request.methods}
-            onConfirmed={() => request.resolve(true)}
-          />
-        )}
-      </DialogContent>
-    </Dialog>
-  );
+  return asked ? <ReauthDialog request={request} /> : null;
 }

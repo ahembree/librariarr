@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo, useRef, memo, type ComponentProps } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef, memo, startTransition, type ComponentProps } from "react";
 import {
   Card,
   CardContent,
@@ -27,6 +27,8 @@ import { ServerTypeChip } from "@/components/server-type-chip";
 import { LazyMediaHoverPopover } from "@/components/lazy-media-hover-popover";
 import { useLibrarySyncRefetch } from "@/hooks/use-library-sync-refetch";
 import { hoverDataFromRecord, type MediaHoverData } from "@/components/media-hover-popover";
+import { useDashboardSeed } from "@/components/dashboard/dashboard-seed";
+import { RECENTLY_ADDED_LIMIT, recentlyAddedUrl } from "@/lib/dashboard/seed-urls";
 
 interface RecentItem {
   id: string;
@@ -91,7 +93,12 @@ interface RecentlyAddedProps {
 }
 
 /** How many items the shelf fetches (scrolled horizontally, no paging). */
-const SHELF_LIMIT = 24;
+const SHELF_LIMIT = RECENTLY_ADDED_LIMIT;
+
+interface RecentlyAddedBody {
+  items?: RecentItem[];
+  total?: number;
+}
 
 const TYPE_ICONS = { MOVIE: Film, SERIES: Tv, MUSIC: Music } as const;
 
@@ -241,7 +248,7 @@ const ShelfEntry = memo(function ShelfEntry({ item, onOpen }: { item: RecentItem
   );
 });
 
-export function RecentlyAdded({
+export const RecentlyAdded = memo(function RecentlyAdded({
   filterType,
   lockedFilterType,
   serverId,
@@ -253,9 +260,22 @@ export function RecentlyAdded({
   onSeasonClick,
   onAlbumClick,
 }: RecentlyAddedProps) {
-  const [items, setItems] = useState<RecentItem[]>([]);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
+  // On the dashboard's page load the server render read the shelf (the same
+  // URL): it is shown once the page has hydrated, without a request.
+  const initialUrl = recentlyAddedUrl(filterType, serverId);
+  const seeded = useDashboardSeed<RecentlyAddedBody>(initialUrl);
+  const seededUrl = useRef(seeded === undefined ? null : initialUrl);
+  const [items, setItems] = useState<RecentItem[]>(() => seeded?.items ?? []);
+  const [total, setTotal] = useState(() => seeded?.total ?? 0);
+  const [loading, setLoading] = useState(seeded === undefined);
+  // The tiles' "2h ago" and the count are the browser's to write: shown once
+  // mounted, so the server's HTML (an hour or a time zone away) never has to
+  // match them. In a transition, so 24 tiles are not part of the update that
+  // ends hydration — one long task on a phone.
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => {
+    startTransition(() => setMounted(true));
+  }, []);
   const [localType, setLocalType] = useState<"MOVIE" | "SERIES" | "MUSIC" | undefined>(filterType);
   const [localServerId, setLocalServerId] = useState<string | undefined>(undefined);
   const shelfRef = useRef<HTMLDivElement>(null);
@@ -283,10 +303,7 @@ export function RecentlyAdded({
   const fetchData = useCallback(async () => {
     const token = ++reqToken.current;
     try {
-      const params = new URLSearchParams({ limit: String(SHELF_LIMIT) });
-      if (effectiveType) params.set("type", effectiveType);
-      if (effectiveServerId) params.set("serverId", effectiveServerId);
-      const res = await fetch(`/api/media/recently-added?${params}`);
+      const res = await fetch(recentlyAddedUrl(effectiveType, effectiveServerId));
       if (!res.ok || token !== reqToken.current) return;
       const data = await res.json();
       if (token !== reqToken.current) return;
@@ -300,8 +317,13 @@ export function RecentlyAdded({
   }, [effectiveType, effectiveServerId]);
 
   useEffect(() => {
+    if (seededUrl.current === recentlyAddedUrl(effectiveType, effectiveServerId)) {
+      seededUrl.current = null;
+      return;
+    }
+    seededUrl.current = null;
     void (async () => { await fetchData(); })();
-  }, [fetchData]);
+  }, [fetchData, effectiveType, effectiveServerId]);
 
   // Refresh when a sync lands new media, so the shelf reflects the library
   // without a page reload. `sync:completed` is emitted by both the full and the
@@ -375,7 +397,7 @@ export function RecentlyAdded({
               <Clock className="h-4 w-4" />
               Recently Added
             </span>
-            {total > 0 && (
+            {mounted && total > 0 && (
               <span className="font-mono text-[11px] font-normal text-faint">
                 {Math.min(items.length, SHELF_LIMIT)} of {total.toLocaleString()}
               </span>
@@ -454,7 +476,7 @@ export function RecentlyAdded({
         </div>
       </CardHeader>
       <CardContent className="flex-1 min-h-0">
-        {loading ? (
+        {loading || !mounted ? (
           <div className="flex gap-3 overflow-hidden">
             {Array.from({ length: 9 }).map((_, i) => (
               <div key={i} className="w-28 shrink-0">
@@ -483,4 +505,4 @@ export function RecentlyAdded({
       </CardContent>
     </Card>
   );
-}
+});

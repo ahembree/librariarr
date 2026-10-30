@@ -64,6 +64,20 @@ describe("GET /api/events/stream — the SSE body", () => {
     expect(typeof connected.data.timestamp).toBe("number");
   });
 
+  it("names the server's last event in the connected event", async () => {
+    // A page rendered with its data on the server compares this with its
+    // render time (`resyncIfEventsSince`).
+    eventBus.emit({ type: "settings:changed", userId: "user-1" });
+    const lastEventAt = eventBus.lastEventAt;
+    expect(typeof lastEventAt).toBe("number");
+
+    setMockSession({ userId: "user-1", isLoggedIn: true });
+    const res = await GET();
+    reader = res.body!.getReader();
+    const [connected] = parseEvents((await readChunk(reader))!);
+    expect(connected.data.lastEventAt).toBe(lastEventAt);
+  });
+
   it("forwards only the session user's events, with their meta", async () => {
     setMockSession({ userId: "user-1", isLoggedIn: true });
     const res = await GET();

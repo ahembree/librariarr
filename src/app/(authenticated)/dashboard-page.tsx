@@ -1,0 +1,752 @@
+"use client";
+
+import { useState, useEffect, useCallback, useMemo, useRef, useSyncExternalStore, startTransition } from "react";
+import { useRouter } from "next/navigation";
+import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { DashboardCardGrid } from "@/components/dashboard-card-grid";
+import { SyncIndicator } from "@/components/sync-indicator";
+import { StatusStrip } from "@/components/dashboard/status-strip";
+import { LibraryTiles } from "@/components/dashboard/library-tiles";
+import { LifecyclePipeline } from "@/components/dashboard/lifecycle-pipeline";
+import { RecentlyAdded } from "@/components/recently-added";
+import type { ScheduleInfo } from "@/components/dashboard/types";
+import {
+  resolveLayout,
+  getDefaultLayout,
+  getCardDefinition,
+  isCustomCardId,
+  CUSTOM_CARD_DEFINITION,
+  type CardEntry,
+  type DashboardLayout,
+  type CustomCardConfig,
+} from "@/lib/dashboard/card-registry";
+import { lazyComponent } from "@/components/lazy-component";
+import { AlertCircle, Check, Film, Music, Pencil, Server, Tv } from "lucide-react";
+import { EmptyState } from "@/components/empty-state";
+import { generateId } from "@/lib/utils";
+import { getDuplicateServerNames } from "@/lib/server-styles";
+import { ServerTypeChip } from "@/components/server-type-chip";
+import { InsightsSkeleton, LibraryTilesSkeleton } from "@/components/skeletons";
+import { isRealtimeLive, useRealtime, useRealtimeEvents } from "@/hooks/use-realtime";
+import { serversResource, useServers } from "@/hooks/use-servers";
+import { libraryTypesResource, useLibraryTypes } from "@/hooks/use-library-types";
+import { fetchJsonShared, fetchShared } from "@/lib/shared-fetch";
+import { useShellSettings, useShellSnapshot } from "@/components/shell-settings-provider";
+import { useDashboardSeed, useServerClock } from "@/components/dashboard/dashboard-seed";
+import { SCHEDULE_INFO_URL, SERVERS_URL } from "@/lib/dashboard/seed-urls";
+import {
+  ALL_SERVERS,
+  ALL_TYPES,
+  dashboardStatsUrl,
+  reconcileSelectedServer,
+  reconcileSelectedType,
+  selectableServers,
+  type DashboardServer,
+} from "@/lib/dashboard/server-selection";
+
+interface Stats {
+  movieCount: number;
+  seriesCount: number;
+  seasonCount: number;
+  musicCount: number;
+  artistCount: number;
+  albumCount: number;
+  episodeCount: number;
+  totalSize: string;
+  movieSize: string;
+  seriesSize: string;
+  musicSize: string;
+  movieDuration: number;
+  seriesDuration: number;
+  musicDuration: number;
+  qualityBreakdown: {
+    resolution: string | null;
+    type: string;
+    _count: number;
+  }[];
+  topMovies: {
+    id: string;
+    title: string;
+    year: number | null;
+    playCount: number;
+  }[];
+  topSeries: {
+    parentTitle: string;
+    totalPlays: number;
+    mediaItemId: string | null;
+  }[];
+  topMusic: {
+    parentTitle: string;
+    totalPlays: number;
+    mediaItemId: string | null;
+  }[];
+  videoCodecBreakdown: {
+    videoCodec: string | null;
+    type: string;
+    _count: number;
+  }[];
+  audioCodecBreakdown: {
+    audioCodec: string | null;
+    type: string;
+    _count: number;
+  }[];
+  contentRatingBreakdown: {
+    contentRating: string | null;
+    type: string;
+    _count: number;
+  }[];
+  dynamicRangeBreakdown: {
+    dynamicRange: string | null;
+    type: string;
+    _count: number;
+  }[];
+  audioChannelsBreakdown: {
+    audioChannels: number | null;
+    type: string;
+    _count: number;
+  }[];
+  genreBreakdown: {
+    value: string | null;
+    type: string;
+    _count: number;
+  }[];
+}
+
+// Needed only while customizing: the add-card menu while editing, the custom
+// card dialog once a custom card is edited. Both load then, rather than with
+// every dashboard.
+const AddCardDropdown = lazyComponent(
+  () => import("@/components/add-card-dropdown").then((m) => m.AddCardDropdown),
+  () => null,
+);
+const CustomCardDialog = lazyComponent(
+  () => import("@/components/custom-card-dialog").then((m) => m.CustomCardDialog),
+  () => null,
+);
+
+// Cards that became fixed dashboard zones — excluded from the customizable
+// Insights grid (and from its add-card dropdown).
+const FIXED_ZONE_CARDS = ["stats", "sync-status", "recently-added"];
+
+/** Zone heading: mono eyebrow label + optional right-aligned controls. */
+function SectionHeader({ label, children }: { label: string; children?: React.ReactNode }) {
+  return (
+    <div className="mb-3 flex min-h-8 flex-wrap items-center justify-between gap-2">
+      <h2 className="eyebrow">{label}</h2>
+      {children && <div className="flex flex-wrap items-center gap-2">{children}</div>}
+    </div>
+  );
+}
+
+const subscribeNothing = () => () => {};
+
+const NO_TYPES: string[] = [];
+
+/** How often the figures refresh while a sync runs. */
+const LIVE_STATS_INTERVAL_MS = 10_000;
+
+/** Events after which only the figures may have moved (see `refresh`). */
+const FIGURE_EVENTS = ["sync:failed", "server:changed", "watch-history:updated"] as const;
+/** Events after which only the schedule may have moved. */
+const LIFECYCLE_RUN_EVENTS = ["lifecycle:detection-completed", "lifecycle:action-executed"] as const;
+
+export function DashboardPage() {
+  const router = useRouter();
+  // False only on the render that hydrates server HTML: the visit the layout
+  // was rendered for. A client-side navigation renders the page without the
+  // layout being read again, so the layout's figures are as old as the page
+  // load and a later visit asks for its own.
+  const hydrated = useSyncExternalStore(subscribeNothing, () => true, () => false);
+  // The saved layout and the user's name, read by the server layout. Null
+  // outside it or when that read failed: both are then fetched as before.
+  const shell = useShellSettings();
+  const shellSnapshot = useShellSnapshot();
+  // What the server render read, on the visit it rendered (see `page.tsx`):
+  // those figures are in its HTML, and are not asked for again on mount.
+  const seededStats = useDashboardSeed<Stats>(dashboardStatsUrl(ALL_SERVERS));
+  const seededSchedule = useDashboardSeed<ScheduleInfo>(SCHEDULE_INFO_URL);
+  const seededServers = useDashboardSeed<unknown>(SERVERS_URL);
+  const statsSeeded = useRef(seededStats !== undefined);
+  const scheduleSeeded = useRef(seededSchedule !== undefined);
+  const [stats, setStats] = useState<Stats | null>(() => seededStats ?? null);
+  // Whether the latest stats request failed. The page-level error is keyed on
+  // this, not on the first load having settled: the server selector is on
+  // screen during that load, and a pick made then drops the first answer, so
+  // "settled with no stats" would read a request still in flight as a failure.
+  const [statsFailed, setStatsFailed] = useState(false);
+  // Inside the shell the layout is the store's, so a save in another tab or on
+  // another device shows here as soon as the store refreshes.
+  const [fetchedLayout, setLayout] = useState<DashboardLayout | null>(null);
+  const layout = shellSnapshot ? shellSnapshot.dashboardLayout : fetchedLayout;
+  // Whether the saved layout and the library types have been answered (or
+  // failed). The zones that depend on them wait for them; nothing else does.
+  const [layoutSettled, setLayoutSettled] = useState(shell !== null);
+  // The library types come from the tab's store (`useLibraryTypes`): seeded
+  // with the layout's read, which the visit the layout rendered takes as it
+  // is, and kept current by `server:changed` and `sync:completed`. The layout's
+  // own copy is never re-read, so a later visit trusts the store only while
+  // the stream is delivering those events and has not marked it stale;
+  // otherwise it is re-read before the zones that depend on it mount, as this
+  // page re-read the types on every later visit.
+  const libraryTypes = useLibraryTypes();
+  const availableTypes = libraryTypes?.types ?? NO_TYPES;
+  const [typesSettled, setTypesSettled] = useState(() =>
+    hydrated ? isRealtimeLive() && !libraryTypesResource.needsRefresh() : libraryTypes !== null,
+  );
+  const [scheduleInfo, setScheduleInfo] = useState<ScheduleInfo | null>(() => seededSchedule ?? null);
+  const [editMode, setEditMode] = useState(false);
+  // The tab's server list (`useServers`), re-read on `server:changed` — and
+  // shared with every library page's picker instead of fetched on each visit
+  // and on every sync and lifecycle event.
+  const { servers: serverList } = useServers(seededServers);
+  const servers = useMemo<DashboardServer[]>(() => selectableServers(serverList), [serverList]);
+  const [selectedServerId, setSelectedServerId] = useState<string>(ALL_SERVERS);
+  const [selectedMediaType, setSelectedMediaType] = useState<string>(ALL_TYPES);
+  const [editingCustomCard, setEditingCustomCard] = useState<{ cardId: string; config: CustomCardConfig } | null>(null);
+  const [customCardDialogUsed, setCustomCardDialogUsed] = useState(false);
+  const [insightsMountable, setInsightsMountable] = useState(false);
+  useEffect(() => {
+    startTransition(() => setInsightsMountable(true));
+  }, []);
+  if (editingCustomCard !== null && !customCardDialogUsed) setCustomCardDialogUsed(true);
+
+  // A deleted or disabled selection falls back to every server, and a type
+  // filter whose type has left the library to every type, whenever the list
+  // they were picked from changes.
+  const [serversSeen, setServersSeen] = useState(servers);
+  if (serversSeen !== servers) {
+    setServersSeen(servers);
+    setSelectedServerId((prev) => reconcileSelectedServer(prev, servers));
+  }
+  const [typesSeen, setTypesSeen] = useState(availableTypes);
+  if (typesSeen !== availableTypes) {
+    setTypesSeen(availableTypes);
+    setSelectedMediaType((prev) => reconcileSelectedType(prev, availableTypes));
+  }
+  // The server's date and hour until hydration has finished: the browser's
+  // time zone can put the greeting or the date on another side of a boundary,
+  // and a render that disagrees with the server's HTML fails hydration and
+  // rebuilds the page. The browser's own follows straight after.
+  const serverClock = useServerClock();
+  const [fetchedUserName, setUserName] = useState<string>("");
+  const userName = shellSnapshot?.user.username ?? fetchedUserName;
+  const userKnown = useRef(shell !== null);
+
+  useEffect(() => {
+    if (userKnown.current) return;
+    fetch("/api/auth/me")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => { if (data?.username) setUserName(data.username); })
+      .catch(() => {});
+  }, []);
+
+  // Monotonic token guards against out-of-order responses when the server
+  // filter flips quickly (a stale slow response must not win).
+  const statsReqToken = useRef(0);
+  // When the last stats request was sent: the live refresh during a sync is
+  // throttled against every stats request, not only its own.
+  const lastStatsAtRef = useRef(0);
+
+  // The ONE place the stats are asked for — on load, on a server pick, on the
+  // events below, and while a sync runs. The sync indicator used to ask on its
+  // own 10 s throttle and again when it saw a sync end, beside this page's own
+  // `sync:completed` refetch, so every sync ended in two identical requests
+  // (and the Library Sync card had a copy of the same logic).
+  const fetchStats = useCallback(async () => {
+    const token = ++statsReqToken.current;
+    lastStatsAtRef.current = Date.now();
+    // Shared by every refresh asked for in one event's callbacks (a
+    // reconnect's resync runs them all at once).
+    const res = await fetchShared<Stats>(dashboardStatsUrl(selectedServerId));
+    if (token !== statsReqToken.current) return;
+    // An error body ({error}) is truthy — setting it as stats would crash the
+    // tiles. Leave stats as they were (null on first load, so the retry
+    // empty-state renders).
+    if (!res.ok || !res.body) {
+      if (res.status === 0) console.error("Failed to fetch stats");
+      setStatsFailed(true);
+      return;
+    }
+    setStats(res.body);
+    setStatsFailed(false);
+  }, [selectedServerId]);
+
+  // The realtime callbacks are stable, but their stats refresh must honour the
+  // CURRENT server filter: fetching unfiltered stats there replaced one
+  // server's figures with every server's on each sync or lifecycle event while
+  // the selector still named the one server.
+  const fetchStatsRef = useRef(fetchStats);
+  useEffect(() => {
+    fetchStatsRef.current = fetchStats;
+  }, [fetchStats]);
+
+  // The saved layout is read once. Re-reading it on every realtime refresh
+  // could land a GET issued before an in-flight layout PUT and revert the edit
+  // the user just made on screen. Marked when the read is ISSUED: the zones no
+  // longer wait for it, so a refresh can land while it is still in flight.
+  // Inside the shell the store owns the layout and keeps it current.
+  const layoutReadRef = useRef(shell !== null);
+
+  const readLayout = useCallback(async () => {
+    if (layoutReadRef.current) return;
+    layoutReadRef.current = true;
+    try {
+      const res = await fetch("/api/settings/dashboard-layout");
+      if (res.ok) {
+        const data = await res.json();
+        setLayout(data.layout);
+        return;
+      }
+    } catch (error) {
+      console.error("Failed to fetch dashboard layout:", error);
+    } finally {
+      setLayoutSettled(true);
+    }
+    // A failed read is retried by the next refresh.
+    layoutReadRef.current = false;
+  }, []);
+
+  const fetchScheduleInfo = useCallback(() => {
+    void fetchJsonShared<ScheduleInfo>("/api/settings/schedule-info").then((data) => {
+      if (data) setScheduleInfo(data);
+    });
+  }, []);
+
+  // What each event can move. A sync moves the figures and the next scheduled
+  // run; a failed sync, a server change or new plays move the figures; a
+  // lifecycle run moves only the schedule (deleted media leaves the library
+  // through the sync it triggers). The server list and the library types are
+  // their stores' own (`server:changed`; `server:changed` and
+  // `sync:completed`) — this page fetched both, and the schedule and the
+  // stats, on every one of these events.
+  const refresh = useCallback(
+    (parts: { stats?: boolean; schedule?: boolean }) => {
+      if (parts.stats) void fetchStatsRef.current();
+      if (parts.schedule) fetchScheduleInfo();
+      void readLayout();
+    },
+    [fetchScheduleInfo, readLayout],
+  );
+  const onSyncCompleted = useCallback(() => refresh({ stats: true, schedule: true }), [refresh]);
+  const onFiguresChanged = useCallback(() => refresh({ stats: true }), [refresh]);
+  const onLifecycleRun = useCallback(() => refresh({ schedule: true }), [refresh]);
+  useRealtime("sync:completed", onSyncCompleted);
+  // Play data feeds the watch-derived tiles and charts; `watch-history:updated`
+  // fires about once per backfill slice, not per imported page. A failed sync
+  // settles what it wrote before announcing the failure.
+  useRealtimeEvents(FIGURE_EVENTS, onFiguresChanged);
+  useRealtimeEvents(LIFECYCLE_RUN_EVENTS, onLifecycleRun);
+
+  // While a sync runs the indicator reports each check that finds it running;
+  // the figures beside it refresh at most every LIVE_STATS_INTERVAL_MS.
+  const onSyncActive = useCallback(() => {
+    if (Date.now() - lastStatsAtRef.current < LIVE_STATS_INTERVAL_MS) return;
+    void fetchStatsRef.current();
+  }, []);
+  // The end of a sync the stream did not announce (it is down): what
+  // `sync:completed` would have done, plus the types its store would have
+  // re-read.
+  const onUnannouncedSyncEnd = useCallback(() => {
+    onSyncCompleted();
+    void libraryTypesResource.refresh();
+  }, [onSyncCompleted]);
+
+  // Each response is applied as it lands. The page used to wait for all of
+  // them (the stats among them, the slowest by far on a cold cache) before
+  // drawing anything, and only then mounted the zones — which started their
+  // own requests a full round trip late.
+  useEffect(() => {
+    void (async () => {
+      await Promise.all([
+        statsSeeded.current ? undefined : fetchStatsRef.current(),
+        scheduleSeeded.current ? undefined : fetchScheduleInfo(),
+        readLayout(),
+      ]);
+    })();
+  }, [fetchScheduleInfo, readLayout]);
+
+  // A later visit whose store copy of the types cannot be vouched for re-reads
+  // it; the zones that depend on the types wait for that (see above).
+  useEffect(() => {
+    if (typesSettled) return;
+    let active = true;
+    void libraryTypesResource.refresh().finally(() => {
+      if (active) setTypesSettled(true);
+    });
+    return () => {
+      active = false;
+    };
+    // Decided once, for the visit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const retry = () => {
+    setStatsFailed(false);
+    void fetchStats();
+    fetchScheduleInfo();
+    void serversResource.refresh();
+    void libraryTypesResource.refresh();
+  };
+
+  // Re-fetch stats when the server filter changes. Keyed on the selection the
+  // last fetch was for, not on the first load having finished: the selector is
+  // on screen while that load runs, and a pick made then must still refetch
+  // (the request token drops the first load's answer).
+  const statsServerRef = useRef(selectedServerId);
+  useEffect(() => {
+    if (statsServerRef.current === selectedServerId) return;
+    statsServerRef.current = selectedServerId;
+    void (async () => { await fetchStats(); })();
+  }, [selectedServerId, fetchStats]);
+
+  const resolvedLayout = resolveLayout(layout) ?? getDefaultLayout();
+  // The Insights grid is the customizable remainder of the old "main" tab
+  // layout; cards that became fixed zones above it are filtered out.
+  const insightCards = resolvedLayout.main.filter((c) => !FIXED_ZONE_CARDS.includes(c.id));
+
+  const updateInsights = useCallback(
+    (newCards: CardEntry[]) => {
+      const newLayout = {
+        ...resolvedLayout,
+        main: newCards,
+      };
+
+      // A rejected save (e.g. layout-size cap) would otherwise look applied
+      // and silently evaporate on reload.
+      if (shell) {
+        // The store shows it at once and saves it against the revision it
+        // holds; one another tab or device has moved past is refused, and the
+        // store then loads the newer layout in place of this edit.
+        void shell.saveDashboardLayout(newLayout).then((outcome) => {
+          if (outcome === "conflict") {
+            toast.error("The dashboard layout was changed in another tab or on another device. The current one has been loaded; make the change again.");
+          } else if (outcome === "failed") {
+            toast.error("Failed to save dashboard layout");
+          }
+        });
+        return;
+      }
+
+      setLayout(newLayout);
+      fetch("/api/settings/dashboard-layout", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ layout: newLayout }),
+      })
+        .then((res) => {
+          if (!res.ok) toast.error("Failed to save dashboard layout");
+        })
+        .catch(() => {
+          toast.error("Failed to save dashboard layout");
+        });
+    },
+    [resolvedLayout, shell]
+  );
+
+  const handleMovieClick = useCallback((movieId: string) => {
+    router.push(`/library/movies/${movieId}`);
+  }, [router]);
+
+  const handleSeriesClick = useCallback(
+    (_seriesName: string, mediaItemId?: string) => {
+      if (mediaItemId) {
+        router.push(`/library/series/show/${mediaItemId}`);
+      } else {
+        router.push(`/library/series`);
+      }
+    },
+    [router]
+  );
+
+  const handleArtistClick = useCallback((mediaItemId: string) => {
+    router.push(`/library/music/artist/${mediaItemId}`);
+  }, [router]);
+
+  const handleEpisodeClick = useCallback((episodeId: string) => {
+    router.push(`/library/series/episode/${episodeId}`);
+  }, [router]);
+
+  const handleTrackClick = useCallback((trackId: string) => {
+    router.push(`/library/music/track/${trackId}`);
+  }, [router]);
+
+  // Collapsed Recently Added tiles stand for a whole season / album, so they
+  // open that rather than the member row representing them.
+  const handleSeasonClick = useCallback((mediaItemId: string) => {
+    router.push(`/library/series/season/${mediaItemId}`);
+  }, [router]);
+
+  const handleAlbumClick = useCallback((mediaItemId: string) => {
+    router.push(`/library/music/album/${mediaItemId}`);
+  }, [router]);
+
+  const handleAddCustom = useCallback(
+    (config: CustomCardConfig) => {
+      const id = `custom-${generateId()}`;
+      updateInsights([
+        ...insightCards,
+        { id, size: CUSTOM_CARD_DEFINITION.defaultSize, config },
+      ]);
+    },
+    [insightCards, updateInsights]
+  );
+
+  const handleConfigChange = useCallback(
+    (cardId: string, config: CustomCardConfig) => {
+      if (isCustomCardId(cardId)) {
+        setEditingCustomCard({ cardId, config });
+      }
+    },
+    []
+  );
+
+  const handleConfigSave = useCallback(
+    (newConfig: CustomCardConfig) => {
+      if (!editingCustomCard) return;
+      updateInsights(insightCards.map((c) =>
+        c.id === editingCustomCard.cardId ? { ...c, config: newConfig } : c
+      ));
+      setEditingCustomCard(null);
+    },
+    [editingCustomCard, insightCards, updateInsights]
+  );
+
+  if (!stats && statsFailed) {
+    return (
+      <div className="p-4 sm:p-6 lg:p-8">
+        <EmptyState
+          icon={AlertCircle}
+          title="Failed to load dashboard"
+          description="We couldn't fetch your library statistics. Check the server connection or try again."
+          action={
+            <Button variant="outline" size="sm" onClick={retry}>
+              Retry
+            </Button>
+          }
+        />
+      </div>
+    );
+  }
+
+  const serverId = selectedServerId !== ALL_SERVERS ? selectedServerId : undefined;
+  // The Insights cards read the saved layout and the type filter; mounting
+  // them before either is known would render (and fetch for) the wrong cards.
+  const insightsReady = layoutSettled && typesSettled;
+
+  return (
+    <div className="p-4 sm:p-6 lg:p-8">
+      {/* ── Header ── */}
+      <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <p className="eyebrow">
+            {(() => {
+              const now = new Date();
+              const weekday = serverClock?.weekday ?? now.toLocaleDateString(undefined, { weekday: "long" });
+              const md = serverClock?.monthDay ?? now.toLocaleDateString(undefined, { month: "long", day: "numeric" });
+              const serverPart = servers.length
+                ? ` · ${servers.length} server${servers.length > 1 ? "s" : ""}`
+                : "";
+              return `${weekday} · ${md}${serverPart}`;
+            })()}
+          </p>
+          <h1 className="mt-1.5 text-2xl sm:text-3xl font-bold font-display tracking-tight">
+            {(() => {
+              const hour = serverClock?.hour ?? new Date().getHours();
+              const greeting = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+              return (
+                <>
+                  {greeting}
+                  {userName && (
+                    <>
+                      , <span className="text-brand-bright">{userName}</span>
+                    </>
+                  )}
+                </>
+              );
+            })()}
+          </h1>
+          <p className="text-muted-foreground mt-1">
+            Your library, lifecycle pipeline, and activity at a glance.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          <SyncIndicator onSyncActive={onSyncActive} onSyncComplete={onUnannouncedSyncEnd} />
+          {servers.length > 1 && (() => {
+            const dupeNames = getDuplicateServerNames(servers);
+            return (
+              <Select
+                value={selectedServerId}
+                onValueChange={setSelectedServerId}
+              >
+                <SelectTrigger className="h-9 w-full sm:w-50 text-sm">
+                  <Server className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
+                  <SelectValue placeholder="All Servers" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ALL_SERVERS}>All Servers</SelectItem>
+                  {servers.map((server) => (
+                    <SelectItem key={server.id} value={server.id}>
+                      <span className="inline-flex items-center gap-1.5">
+                        {server.name}
+                        {dupeNames.has(server.name) && (
+                          <ServerTypeChip type={server.type} />
+                        )}
+                      </span>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            );
+          })()}
+        </div>
+      </div>
+
+      {/* The zones are memoised: this page re-renders when hydration ends
+          (the greeting and date switch to the browser's clock), and each zone
+          re-rendering with it cost the phone a long task for nothing. */}
+      <div className="space-y-8">
+        {/* ── Zone 1: operational status ── */}
+        <StatusStrip scheduleInfo={scheduleInfo} />
+
+        {/* ── Zone 2: library overview ── */}
+        <section>
+          <SectionHeader label="Library" />
+          {/* Which tiles show depends on the library types; their figures
+              fill in when the stats arrive. */}
+          {typesSettled ? (
+            <LibraryTiles stats={stats} availableTypes={availableTypes} serverId={serverId} />
+          ) : (
+            <LibraryTilesSkeleton />
+          )}
+        </section>
+
+        {/* ── Zone 3: lifecycle pipeline ── */}
+        <section>
+          <SectionHeader label="Lifecycle pipeline" />
+          <LifecyclePipeline scheduleInfo={scheduleInfo} />
+        </section>
+
+        {/* ── Zone 4: recently added (component carries its own card title) ── */}
+        <section>
+          <RecentlyAdded
+            serverId={serverId}
+            servers={servers}
+            availableTypes={availableTypes}
+            onMovieClick={handleMovieClick}
+            onEpisodeClick={handleEpisodeClick}
+            onTrackClick={handleTrackClick}
+            onSeasonClick={handleSeasonClick}
+            onAlbumClick={handleAlbumClick}
+          />
+        </section>
+
+        {/* ── Zone 5: customizable insights ── */}
+        <section>
+          <SectionHeader label="Insights">
+            {insightsReady && (availableTypes.length === 0 || availableTypes.length > 1) && (
+              <Select
+                value={selectedMediaType}
+                onValueChange={setSelectedMediaType}
+              >
+                <SelectTrigger className="h-8 w-36 text-sm">
+                  {selectedMediaType === "MOVIE" ? (
+                    <Film className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
+                  ) : selectedMediaType === "SERIES" ? (
+                    <Tv className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
+                  ) : selectedMediaType === "MUSIC" ? (
+                    <Music className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
+                  ) : null}
+                  <SelectValue placeholder="All Types" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ALL_TYPES}>All Types</SelectItem>
+                  {(availableTypes.length === 0 || availableTypes.includes("MOVIE")) && (
+                    <SelectItem value="MOVIE">Movies</SelectItem>
+                  )}
+                  {(availableTypes.length === 0 || availableTypes.includes("SERIES")) && (
+                    <SelectItem value="SERIES">Series</SelectItem>
+                  )}
+                  {(availableTypes.length === 0 || availableTypes.includes("MUSIC")) && (
+                    <SelectItem value="MUSIC">Music</SelectItem>
+                  )}
+                </SelectContent>
+              </Select>
+            )}
+            {editMode && (
+              <AddCardDropdown
+                tab="main"
+                existingCards={[...insightCards.map((c) => c.id), ...FIXED_ZONE_CARDS]}
+                onAdd={(cardId) => {
+                  const def = getCardDefinition(cardId);
+                  updateInsights([
+                    ...insightCards,
+                    { id: cardId, size: def?.defaultSize ?? 12 },
+                  ]);
+                }}
+                onAddCustom={handleAddCustom}
+              />
+            )}
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={!insightsReady}
+              onClick={() => setEditMode(!editMode)}
+            >
+              {editMode ? (
+                <Check className="mr-2 h-4 w-4" />
+              ) : (
+                <Pencil className="mr-2 h-4 w-4" />
+              )}
+              {editMode ? "Done" : "Customize"}
+            </Button>
+          </SectionHeader>
+          {/* Rendered after hydration, in a transition: below the fold, and
+              its cards fetch their own data and format numbers and dates the
+              browser's way, so the server's HTML gains nothing from them —
+              and mounted in the update that ends hydration, the grid held the
+              phone's main thread for one long task. */}
+          {!stats || !insightsReady || !insightsMountable ? (
+            <InsightsSkeleton />
+          ) : (
+          <DashboardCardGrid
+            cards={insightCards}
+            stats={stats}
+            editMode={editMode}
+            filterType={selectedMediaType !== ALL_TYPES ? selectedMediaType as "MOVIE" | "SERIES" | "MUSIC" : undefined}
+            serverId={serverId}
+            servers={servers}
+            availableTypes={availableTypes}
+            onLayoutChange={updateInsights}
+            onMovieClick={handleMovieClick}
+            onSeriesClick={handleSeriesClick}
+            onArtistClick={handleArtistClick}
+            onEpisodeClick={handleEpisodeClick}
+            onTrackClick={handleTrackClick}
+            onSeasonClick={handleSeasonClick}
+            onAlbumClick={handleAlbumClick}
+            onConfigChange={handleConfigChange}
+          />
+          )}
+        </section>
+      </div>
+
+      {/* Edit custom card dialog — mounted from the first edit on */}
+      {customCardDialogUsed && (
+        <CustomCardDialog
+          open={editingCustomCard !== null}
+          onOpenChange={(open) => { if (!open) setEditingCustomCard(null); }}
+          onConfirm={handleConfigSave}
+          initialConfig={editingCustomCard?.config}
+        />
+      )}
+    </div>
+  );
+}

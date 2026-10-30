@@ -125,9 +125,9 @@ export function formatDateOnly(
  * "in 2d", "in 1w". Returns "now" for past or imminent (<1 minute) dates
  * and "-" for null (e.g. manual-only schedules).
  */
-export function formatUntil(dateStr: string | null): string {
+export function formatUntil(dateStr: string | null, now: number = Date.now()): string {
   if (!dateStr) return "-";
-  const diffMs = new Date(dateStr).getTime() - Date.now();
+  const diffMs = new Date(dateStr).getTime() - now;
   if (diffMs < 60_000) return "now";
   const diffMin = Math.floor(diffMs / 60000);
   if (diffMin < 60) return `in ${diffMin}m`;
@@ -145,6 +145,12 @@ export interface RelativeDateOptions {
    * age is read against the schedule, which runs in hours and days.
    */
   largestUnit?: "day";
+  /**
+   * The time to measure from (epoch ms), the current time by default. A
+   * server-rendered page passes its render time until it has hydrated, so the
+   * two renders agree.
+   */
+  now?: number;
 }
 
 /**
@@ -153,10 +159,10 @@ export interface RelativeDateOptions {
  */
 export function formatRelativeDate(dateStr: string | Date, options: RelativeDateOptions = {}): string {
   const date = new Date(dateStr);
-  const now = new Date();
+  const now = options.now ?? Date.now();
   // Clamped: a timestamp from a server whose clock runs ahead of the browser's
   // is "in the future" here, and floored negatives rendered it as "-1d ago".
-  const diffMs = Math.max(0, now.getTime() - date.getTime());
+  const diffMs = Math.max(0, now - date.getTime());
   const diffSec = Math.floor(diffMs / 1000);
   const diffMin = Math.floor(diffSec / 60);
   const diffHour = Math.floor(diffMin / 60);

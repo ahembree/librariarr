@@ -1,7 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import Link from "next/link";
+import { useCallback, useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import {
   LogOut,
@@ -21,7 +20,20 @@ import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import { useIsMobile } from "@/hooks/use-is-mobile";
 import { useSidebarData, type NavItem, type CurrentUser } from "@/hooks/use-sidebar-data";
 import { Logo } from "@/components/logo";
-import { SearchPalette } from "@/components/search-palette";
+import { lazyComponent } from "@/components/lazy-component";
+import { createModuleLoader } from "@/lib/module-loader";
+import { DeferredPrefetchLink } from "@/components/deferred-prefetch-link";
+
+// The search palette (its dialog and cmdk) loads when it is first opened, or
+// when the pointer or focus reaches the search button: it was ~20 KB of the
+// script every page had to run before it was interactive, for a dialog most
+// visits never open.
+const searchPaletteModule = createModuleLoader(() => import("@/components/search-palette"));
+const preloadSearchPalette = () => void searchPaletteModule.load().catch(() => {});
+const SearchPalette = lazyComponent(
+  () => searchPaletteModule.load().then((m) => m.SearchPalette),
+  () => null,
+);
 
 function NavItemLink({
   item,
@@ -96,14 +108,16 @@ function NavItemLink({
   );
 
   const link = (
-    <Link
+    <DeferredPrefetchLink
       href={item.href}
       // Full prefetch, not the default: every page under (authenticated) is
       // dynamic (the layout checks the session), so the default prefetch stops
       // at the loading boundary and a click still waits on a server round-trip
       // plus the page's JS before anything of the page renders. The page
       // segments are client components that fetch their own data, so the full
-      // payload is small and holds nothing that goes stale.
+      // payload is small and holds nothing that goes stale. Deferred until the
+      // page the tab opened on has loaded, so the prefetches do not compete
+      // with its hydration.
       prefetch
       className={cn(
         "group relative flex items-center rounded-[9px] text-[13.5px] font-medium transition-[color,background-color,transform] duration-150 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
@@ -115,7 +129,7 @@ function NavItemLink({
       )}
     >
       {linkContent}
-    </Link>
+    </DeferredPrefetchLink>
   );
 
   if (isCollapsed) {
@@ -161,12 +175,12 @@ function UserChip({
     return (
       <Tooltip>
         <TooltipTrigger asChild>
-          <Link
+          <DeferredPrefetchLink
             href="/settings#authentication"
             className="flex justify-center rounded-[9px] py-1.5 transition-colors hover:bg-surface-2"
           >
             {avatar}
-          </Link>
+          </DeferredPrefetchLink>
         </TooltipTrigger>
         <TooltipContent side="right">
           {user?.username ?? "Account"}
@@ -178,7 +192,7 @@ function UserChip({
 
   return (
     <div className="flex items-center gap-2.5 rounded-[9px] py-1.5 pr-1 pl-2 transition-colors hover:bg-surface-2">
-      <Link href="/settings#authentication" className="flex min-w-0 flex-1 items-center gap-2.5">
+      <DeferredPrefetchLink href="/settings#authentication" className="flex min-w-0 flex-1 items-center gap-2.5">
         {avatar}
         <span className="flex min-w-0 flex-col leading-tight">
           <span className="truncate text-[13px] font-semibold">{user?.username ?? "Admin"}</span>
@@ -186,7 +200,7 @@ function UserChip({
             Admin · {user?.authMethod ?? "Plex"}
           </span>
         </span>
-      </Link>
+      </DeferredPrefetchLink>
       {(() => {
         const logoutButton = (
           <button
@@ -221,6 +235,13 @@ export function Sidebar({ mobileOpen, onMobileOpenChange, initialCollapsed = fal
   const isMobile = useIsMobile();
   const { navigation, collapsed, setCollapsed, handleLogout, user } = useSidebarData(initialCollapsed);
   const [searchOpen, setSearchOpen] = useState(false);
+  // Mounted from the first open on, so its code is not loaded before then and
+  // its closing animation still plays after.
+  const [searchUsed, setSearchUsed] = useState(false);
+  const openSearch = useCallback(() => {
+    setSearchUsed(true);
+    setSearchOpen(true);
+  }, []);
 
   // Auto-close mobile drawer on navigation
   useEffect(() => {
@@ -232,12 +253,12 @@ export function Sidebar({ mobileOpen, onMobileOpenChange, initialCollapsed = fal
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
-        setSearchOpen(true);
+        openSearch();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [openSearch]);
 
   const sidebarInner = (forceExpanded: boolean) => {
     const isCollapsed = forceExpanded ? false : collapsed;
@@ -267,8 +288,10 @@ export function Sidebar({ mobileOpen, onMobileOpenChange, initialCollapsed = fal
           type="button"
           onClick={() => {
             if (forceExpanded) onMobileOpenChange(false);
-            setSearchOpen(true);
+            openSearch();
           }}
+          onPointerEnter={preloadSearchPalette}
+          onFocus={preloadSearchPalette}
           className={cn(
             "mx-3.5 mt-1 mb-2 flex h-9 items-center gap-2 rounded-[9px] border border-border bg-surface-0 text-[13px] text-muted-foreground transition-colors hover:border-border-strong",
             isCollapsed ? "justify-center px-0" : "px-[11px]"
@@ -357,7 +380,7 @@ export function Sidebar({ mobileOpen, onMobileOpenChange, initialCollapsed = fal
   if (isMobile) {
     return (
       <>
-        <SearchPalette open={searchOpen} onOpenChange={setSearchOpen} />
+        {searchUsed && <SearchPalette open={searchOpen} onOpenChange={setSearchOpen} />}
         <Sheet open={mobileOpen} onOpenChange={onMobileOpenChange}>
           <SheetContent
             side="left"
@@ -387,7 +410,7 @@ export function Sidebar({ mobileOpen, onMobileOpenChange, initialCollapsed = fal
   // Desktop: render as permanent sidebar
   return (
     <TooltipProvider>
-      <SearchPalette open={searchOpen} onOpenChange={setSearchOpen} />
+      {searchUsed && <SearchPalette open={searchOpen} onOpenChange={setSearchOpen} />}
       <div
         className={cn(
           "relative flex h-dvh flex-col overflow-hidden border-r bg-sidebar transition-[width] duration-300 ease-out",

@@ -102,15 +102,28 @@ const EVENT_KEY = "app-event";
 
 class AppEventBus {
   private emitter: EventEmitter;
+  private lastEmittedAt: number | null = null;
 
   constructor() {
     this.emitter = new EventEmitter();
     this.emitter.setMaxListeners(50);
   }
 
+  /**
+   * When the last event was emitted (epoch ms), null before the first. The
+   * stream sends it with its `connected` event: a page the server rendered
+   * with its data (the dashboard) asks whether anything happened between that
+   * render and the stream opening, which no event can tell it.
+   */
+  get lastEventAt(): number | null {
+    return this.lastEmittedAt;
+  }
+
   emit(event: Omit<AppEvent, "timestamp">) {
+    const timestamp = Date.now();
+    this.lastEmittedAt = timestamp;
     try {
-      this.emitter.emit(EVENT_KEY, { ...event, timestamp: Date.now() });
+      this.emitter.emit(EVENT_KEY, { ...event, timestamp });
     } catch {
       // Fire-and-forget — never let event emission break the caller
     }
