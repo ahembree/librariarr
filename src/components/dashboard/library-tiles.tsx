@@ -10,7 +10,7 @@ import { formatBytesNum, formatDurationLarge } from "@/lib/format";
 import { useRealtime } from "@/hooks/use-realtime";
 import { buildSparkPoints, type SparkPoint } from "@/lib/dashboard/sparkline";
 import { libraryTileTypes, sparklinesUrl } from "@/lib/dashboard/seed-urls";
-import { useCountFormat, useDashboardSeed, useRenderNow } from "@/components/dashboard/dashboard-seed";
+import { useCountFormat, useDashboardSeed, useServerClock } from "@/components/dashboard/dashboard-seed";
 
 /** "2026-03" → "Mar 2026" for the hover tooltip. */
 function formatMonth(bucket: string): string {
@@ -50,7 +50,7 @@ interface SparklinesBody {
 function sparksFrom(
   data: SparklinesBody | null,
   types: readonly string[],
-  now?: number,
+  currentMonth?: string,
 ): Record<string, SparkPoint[]> {
   const entries = [...types, "ALL"].map((key) => {
     // The totals tile charts library size over time: per-month byte
@@ -58,7 +58,7 @@ function sparksFrom(
     const points = buildSparkPoints(data?.series?.[key] ?? [], {
       cumulative: key === "ALL",
       months: SPARK_MONTHS,
-      now: now === undefined ? undefined : new Date(now),
+      now: currentMonth,
     });
     return [key, points] as const;
   });
@@ -302,12 +302,14 @@ export const LibraryTiles = memo(function LibraryTiles({
 
   // On the dashboard's page load the server render read the sparklines (the
   // same URL), so they are in its HTML and the first request is skipped.
-  const renderNow = useRenderNow();
+  // The month the server's charts end at: a phone in another time zone can be
+  // in the next month already, which would draw another chart than the HTML.
+  const serverMonth = useServerClock()?.month;
   const formatCount = useCountFormat();
   const seeded = useDashboardSeed<SparklinesBody>(url);
   const seededUrl = useRef(seeded === undefined ? null : url);
   const [sparks, setSparks] = useState<Record<string, SparkPoint[]>>(() =>
-    seeded === undefined ? {} : sparksFrom(seeded, types, renderNow),
+    seeded === undefined ? {} : sparksFrom(seeded, types, serverMonth),
   );
   // The headline counts refresh after a sync; the sparklines must too, or the
   // tile shows a new total over a chart that has not caught up with it.

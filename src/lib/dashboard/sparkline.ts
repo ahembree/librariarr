@@ -5,7 +5,8 @@ export interface SparkPoint {
   total: number;
 }
 
-function monthLabel(d: Date): string {
+/** "YYYY-MM" of `d` in the local time zone. */
+export function monthLabel(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
@@ -14,15 +15,17 @@ function monthLabel(d: Date): string {
  * gaps only between its first and last non-empty buckets, so without this a
  * library that added nothing recently charted the months ending at its last
  * addition under a "last 12mo" caption. `carry` repeats the last value (a
- * running size) instead of padding with zero additions.
+ * running size) instead of padding with zero additions. `now` is the current
+ * time, or the current month's label when it must be another clock's (the
+ * server render's, which the render hydrating it has to repeat).
  */
 export function extendToCurrentMonth(
   points: SparkPoint[],
   carry: boolean,
-  now: Date = new Date(),
+  now: Date | string = new Date(),
 ): SparkPoint[] {
   if (points.length === 0) return points;
-  const current = monthLabel(now);
+  const current = typeof now === "string" ? now : monthLabel(now);
   const last = points[points.length - 1];
   const [y, m] = last.date.split("-").map(Number);
   if (!y || !m) return points;
@@ -47,7 +50,7 @@ export function extendToCurrentMonth(
  */
 export function buildSparkPoints(
   raw: { date: string; total: number }[],
-  { cumulative, months, now }: { cumulative: boolean; months: number; now?: Date },
+  { cumulative, months, now }: { cumulative: boolean; months: number; now?: Date | string },
 ): SparkPoint[] {
   let points = raw.map((p) => ({ date: p.date, total: p.total }));
   if (cumulative) {

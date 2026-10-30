@@ -12,6 +12,7 @@ import {
   sparklinesUrl,
 } from "@/lib/dashboard/seed-urls";
 import type { DashboardSeed, ServerClock } from "@/lib/dashboard/dashboard-seed-types";
+import { monthLabel } from "@/lib/dashboard/sparkline";
 import { GET as getStats } from "@/app/api/media/stats/route";
 import { GET as getSparklines } from "@/app/api/media/stats/sparklines/route";
 import { GET as getRecentlyAdded } from "@/app/api/media/recently-added/route";
@@ -96,5 +97,6 @@ export function serverClock(now = new Date()): ServerClock {
     hour: now.getHours(),
     weekday: now.toLocaleDateString(undefined, { weekday: "long" }),
     monthDay: now.toLocaleDateString(undefined, { month: "long", day: "numeric" }),
+    month: monthLabel(now),
   };
 }

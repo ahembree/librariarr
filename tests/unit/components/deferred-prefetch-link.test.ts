@@ -40,6 +40,22 @@ describe("usePrefetchReady", () => {
     expect(result.current).toBe(true);
   });
 
+  it("stops waiting for load after a few seconds", async () => {
+    // A slow image holds `load` back for as long as it takes.
+    const readyState = vi.spyOn(document, "readyState", "get").mockReturnValue("interactive");
+    vi.stubGlobal("requestIdleCallback", undefined);
+    const { result } = renderHook(() => usePrefetchReady());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(4000);
+    });
+    expect(result.current).toBe(false);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1500);
+    });
+    expect(result.current).toBe(true);
+    readyState.mockRestore();
+  });
+
   it("stays allowed for the rest of the tab", async () => {
     vi.stubGlobal("requestIdleCallback", undefined);
     renderHook(() => usePrefetchReady());

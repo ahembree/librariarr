@@ -96,6 +96,7 @@ describe("serverClock", () => {
       hour: 15,
       weekday: now.toLocaleDateString(undefined, { weekday: "long" }),
       monthDay: now.toLocaleDateString(undefined, { month: "long", day: "numeric" }),
+      month: "2026-03",
     });
   });
 });

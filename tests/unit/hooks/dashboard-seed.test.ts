@@ -12,7 +12,7 @@ vi.mock("@/hooks/use-realtime", () => ({ resyncIfEventsSince: realtime.resyncIfE
 let mod: typeof import("@/components/dashboard/dashboard-seed");
 
 const RENDERED_AT = Date.parse("2026-03-10T12:00:00Z");
-const clock: ServerClock = { at: RENDERED_AT, hour: 12, weekday: "Tuesday", monthDay: "March 10" };
+const clock: ServerClock = { at: RENDERED_AT, hour: 12, weekday: "Tuesday", monthDay: "March 10", month: "2026-03" };
 
 function seedOf(bodies: Record<string, unknown>): DashboardSeed {
   return { at: RENDERED_AT, bodies };

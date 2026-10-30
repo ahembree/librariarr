@@ -30,4 +30,6 @@ export interface ServerClock {
   weekday: string;
   /** "October 30", in the server's time zone and locale. */
   monthDay: string;
+  /** "2026-10", in the server's time zone: the month the sparklines end at. */
+  month: string;
 }

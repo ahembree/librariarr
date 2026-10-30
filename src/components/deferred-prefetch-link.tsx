@@ -8,6 +8,11 @@ import Link from "next/link";
 const IDLE_TIMEOUT_MS = 2000;
 /** Safari has no `requestIdleCallback`: wait this long after `load` instead. */
 const NO_IDLE_CALLBACK_DELAY_MS = 500;
+/**
+ * The longest prefetching waits for `load`, which a slow image (a poster the
+ * media server is still resizing) holds back for as long as it takes.
+ */
+const LOAD_WAIT_CAP_MS = 5000;
 
 let ready = false;
 let armed = false;
@@ -22,15 +27,23 @@ function markReady() {
 function arm() {
   if (armed) return;
   armed = true;
+  let waited = false;
   const whenIdle = () => {
+    if (waited) return;
+    waited = true;
+    window.removeEventListener("load", whenIdle);
     if (typeof window.requestIdleCallback === "function") {
       window.requestIdleCallback(markReady, { timeout: IDLE_TIMEOUT_MS });
     } else {
       setTimeout(markReady, NO_IDLE_CALLBACK_DELAY_MS);
     }
   };
-  if (document.readyState === "complete") whenIdle();
-  else window.addEventListener("load", whenIdle, { once: true });
+  if (document.readyState === "complete") {
+    whenIdle();
+  } else {
+    window.addEventListener("load", whenIdle, { once: true });
+    setTimeout(whenIdle, LOAD_WAIT_CAP_MS);
+  }
 }
 
 function subscribe(listener: () => void) {

@@ -21,19 +21,18 @@ import { useIsMobile } from "@/hooks/use-is-mobile";
 import { useSidebarData, type NavItem, type CurrentUser } from "@/hooks/use-sidebar-data";
 import { Logo } from "@/components/logo";
 import { lazyComponent } from "@/components/lazy-component";
-import { createModuleLoader } from "@/lib/module-loader";
-import { DeferredPrefetchLink } from "@/components/deferred-prefetch-link";
+import { DeferredPrefetchLink, usePrefetchReady } from "@/components/deferred-prefetch-link";
 
-// The search palette (its dialog and cmdk) loads when it is first opened, or
-// when the pointer or focus reaches the search button: it was ~20 KB of the
-// script every page had to run before it was interactive, for a dialog most
-// visits never open.
-const searchPaletteModule = createModuleLoader(() => import("@/components/search-palette"));
-const preloadSearchPalette = () => void searchPaletteModule.load().catch(() => {});
+// The search palette (its dialog and cmdk) loads once the page is idle, when
+// the pointer or focus reaches the search button, or when it is first opened:
+// it was ~20 KB of the script every page had to run before it was
+// interactive. Loaded by the time it is opened, it mounts in the tap's own
+// update, so a phone's keyboard comes up for its input.
 const SearchPalette = lazyComponent(
-  () => searchPaletteModule.load().then((m) => m.SearchPalette),
+  () => import("@/components/search-palette").then((m) => m.SearchPalette),
   () => null,
 );
+const preloadSearchPalette = () => void SearchPalette.preload().catch(() => {});
 
 function NavItemLink({
   item,
@@ -242,6 +241,10 @@ export function Sidebar({ mobileOpen, onMobileOpenChange, initialCollapsed = fal
     setSearchUsed(true);
     setSearchOpen(true);
   }, []);
+  const prefetchReady = usePrefetchReady();
+  useEffect(() => {
+    if (prefetchReady) preloadSearchPalette();
+  }, [prefetchReady]);
 
   // Auto-close mobile drawer on navigation
   useEffect(() => {

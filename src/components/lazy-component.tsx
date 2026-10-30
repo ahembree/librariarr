@@ -16,12 +16,13 @@ const RETRY_DELAYS_MS = [1_000, 3_000, 10_000];
  * Suspense fallback, and once React has shown one it holds the real content
  * back for its 300 ms reveal throttle — a chunk that arrives in 20 ms would
  * still cost 300. A state update has no such delay. Once loaded, every later
- * mount renders the component straight away.
+ * mount renders the component straight away — `preload()` loads it ahead of
+ * the first, so that one does too.
  */
 export function lazyComponent<P extends object>(
   load: () => Promise<ComponentType<P>>,
   Fallback: ComponentType,
-): ComponentType<P> {
+): ComponentType<P> & { preload: () => Promise<ComponentType<P>> } {
   const loader = createModuleLoader(load);
 
   function LazyComponent(props: P) {
@@ -52,5 +53,5 @@ export function lazyComponent<P extends object>(
     return Component ? <Component {...props} /> : <Fallback />;
   }
 
-  return LazyComponent;
+  return Object.assign(LazyComponent, { preload: () => loader.load() });
 }

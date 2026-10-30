@@ -359,13 +359,17 @@ export const RecentlyAdded = memo(function RecentlyAdded({
   }, [effectiveType, effectiveServerId]);
 
   // Recompute chevron state when content or container size changes (the shelf
-  // can resize without a window resize — e.g. sidebar collapse).
+  // can resize without a window resize — e.g. sidebar collapse). The shelf
+  // itself mounts only once neither skeleton shows: with seeded items those
+  // are in place before `mounted` turns true, so the observer must be attached
+  // then too.
+  const shelfShown = !loading && mounted;
   useEffect(() => {
     updateScroll();
     const observer = new ResizeObserver(updateScroll);
     if (shelfRef.current) observer.observe(shelfRef.current);
     return () => observer.disconnect();
-  }, [items, updateScroll]);
+  }, [items, shelfShown, updateScroll]);
 
   const scrollShelf = (dir: 1 | -1) => {
     const el = shelfRef.current;
