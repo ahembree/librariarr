@@ -5,7 +5,7 @@ Thanks for your interest in contributing! This guide will help you get started.
 ## Prerequisites
 
 - [Docker](https://docs.docker.com/get-docker/) and Docker Compose
-- [Node.js](https://nodejs.org/) 22.13+
+- [Node.js](https://nodejs.org/) 22.18+
 - [pnpm](https://pnpm.io/) 12 (`npm install -g pnpm`)
 
 ## Development Setup
