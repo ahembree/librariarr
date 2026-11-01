@@ -76,7 +76,7 @@
     "cmdk": "^1.1.1",
     "cron-parser": "^5.10.2",
     "embla-carousel-react": "^8.6.0",
-    "graphile-worker": "^0.17.3",
+    "graphile-worker": "^0.18.0",
     "iron-session": "^9.0.1",
     "lucide-react": "^1.52.0",
     "next": "16.4.2",
