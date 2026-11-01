@@ -22,6 +22,10 @@ interface AddCardDropdownProps {
   existingCards: string[];
   onAdd: (cardId: string) => void;
   onAddCustom: (config: CustomCardConfig) => void;
+  /** The dashboard's selection, which the custom card preview is drawn for. */
+  serverId?: string;
+  filterType?: "MOVIE" | "SERIES" | "MUSIC";
+  availableTypes?: string[];
 }
 
 export function AddCardDropdown({
@@ -29,6 +33,9 @@ export function AddCardDropdown({
   existingCards,
   onAdd,
   onAddCustom,
+  serverId,
+  filterType,
+  availableTypes,
 }: AddCardDropdownProps) {
   const [dialogOpen, setDialogOpen] = useState(false);
 
@@ -90,6 +97,9 @@ export function AddCardDropdown({
           onAddCustom(config);
           setDialogOpen(false);
         }}
+        serverId={serverId}
+        filterType={filterType}
+        availableTypes={availableTypes}
       />
     </>
   );
