@@ -107,7 +107,7 @@
     "@types/ws": "^8.18.2",
     "@vitest/coverage-v8": "^4.1.12",
     "eslint": "^10.13.0",
-    "eslint-config-next": "16.4.2",
+    "eslint-config-next": "16.4.3",
     "happy-dom": "^21.0.1",
     "husky": "^9.1.7",
     "prisma": "^7.10.1",
