@@ -2,13 +2,16 @@ import { NextRequest } from "next/server";
 import { GET as appGet, POST as appPost, DELETE as appDelete } from "@/app/api/lifecycle/exceptions/route";
 import { withApiKey } from "@/lib/api-keys/guard";
 import { removeExceptionsCharged } from "@/lib/api-keys/exception-removal";
+import { withoutServerInternals } from "@/lib/api-keys/trim-internals";
 import { validateRequest, apiExceptionDeleteSchema } from "@/lib/validation";
 
 // Public API mirror of /api/lifecycle/exceptions — same parameters and response.
 // It has no paging, so each read is charged as a full listing.
-export const GET = withApiKey("lifecycle:read", appGet, { fullListing: true });
+// Trimmed: each exception row carries the owner's user id.
+export const GET = withApiKey("lifecycle:read", withoutServerInternals(appGet), { fullListing: true });
 // Adding an exception only ever protects media.
-export const POST = withApiKey("lifecycle:write", appPost);
+// Trimmed too: an individual-scope add answers with the exception row.
+export const POST = withApiKey("lifecycle:write", withoutServerInternals(appPost));
 // Removing one lifts that protection, after which the rules can match the item
 // and the executor delete it — so it needs the destructive scope, not
 // `lifecycle:write`, or that scope could get protected media deleted. For the

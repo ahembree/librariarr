@@ -38,3 +38,10 @@ export const API_DESTRUCTIVE_WINDOW_MS = 60 * 60 * 1000;
  */
 export const FULL_LISTING_REQUEST_COST = 20;
 
+/**
+ * Longest `q` `GET /media/search` accepts; longer is a 400. It becomes an
+ * ILIKE pattern over every title of the type, and the public API reaches the
+ * route, where nothing else bounded it but the request line. Here so
+ * `openapi.ts` quotes the same number the route enforces.
+ */
+export const MAX_SEARCH_QUERY_LENGTH = 200;

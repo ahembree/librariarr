@@ -35,6 +35,7 @@ vi.mock("@/lib/plex/client", () => ({
 // Import route handlers AFTER mocks
 import { logger } from "@/lib/logger";
 import { _resetFirstSeen } from "@/lib/media-server/session-first-seen";
+import { runAsApiKey, type ApiKeyPrincipal } from "@/lib/api-keys/principal";
 import { GET } from "@/app/api/tools/sessions/route";
 import { POST } from "@/app/api/tools/sessions/terminate/route";
 import { _resetSessionsSnapshot } from "@/app/api/tools/sessions/snapshot";
@@ -280,6 +281,26 @@ describe("Tools sessions endpoints", () => {
         "Bad Server",
         "Good Server",
       ]);
+    });
+  });
+
+  // Through `/api/v1/tools/sessions` the route runs under an API-key principal
+  // (the guard sets it and the session mock mirrors the real `getSession`). A
+  // key may send 600 requests a minute, each once a round trip per server; it
+  // reads through the same shared poll as every other reader.
+  describe("GET /api/tools/sessions under an API key", () => {
+    it("shares one poll of the servers between reads a moment apart", async () => {
+      const user = await createTestUser();
+      await createTestServer(user.id, { name: "Server 1" });
+      await createTestServer(user.id, { name: "Server 2" });
+      const principal: ApiKeyPrincipal = { keyId: "k1", userId: user.id, name: "poller", prefix: "lbr_abcdef", scopes: ["streams:read"] };
+
+      for (let i = 0; i < 5; i++) {
+        const response = await runAsApiKey(principal, () => callRoute(GET, { url: "/api/v1/tools/sessions" }));
+        const body = await expectJson<{ sessions: unknown[] }>(response, 200);
+        expect(body.sessions).toHaveLength(2);
+      }
+      expect(mockGetSessions).toHaveBeenCalledTimes(2);
     });
   });
 
